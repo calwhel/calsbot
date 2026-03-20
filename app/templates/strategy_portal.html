@@ -1870,7 +1870,7 @@ function dismissTgBanner(){
 <div id="build" class="page">
   <!-- Build mode selector -->
   <div class="build-modes">
-    <button class="build-mode-btn" id="bm-indicator" onclick="switchBuildMode('indicator')">✨ Generate Indicator</button>
+    <button class="build-mode-btn" id="bm-indicator" onclick="switchBuildMode('pine')">✨ Generate from Indicator</button>
     <button class="build-mode-btn active" id="bm-wizard" onclick="switchBuildMode('wizard')">🧙 Step Wizard</button>
     <button class="build-mode-btn" id="bm-chat" onclick="switchBuildMode('chat')">💬 Chat Builder</button>
     <button class="build-mode-btn" id="bm-pine" onclick="switchBuildMode('pine')">🌲 PineScript{% if not is_pro %} <span style="font-size:10px;opacity:.6">🔒</span>{% endif %}</button>
@@ -2037,8 +2037,8 @@ function dismissTgBanner(){
         <div class="pine-card">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
             <div>
-              <div style="font-size:16px;font-weight:700;letter-spacing:-.3px">🌲 PineScript Import</div>
-              <div style="font-size:12px;color:var(--muted);margin-top:2px">Paste any open-source PineScript indicator or strategy from TradingView</div>
+              <div style="font-size:16px;font-weight:700;letter-spacing:-.3px">✨ Generate Strategy from Indicator</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px">Paste any PineScript <b style="color:var(--text)">indicator()</b> or <b style="color:var(--text)">strategy()</b> from TradingView — AI reads the logic and builds your strategy automatically</div>
             </div>
           </div>
           <div class="pine-label">Strategy name</div>
@@ -2047,8 +2047,8 @@ function dismissTgBanner(){
             onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border2)'">
           <div class="pine-label">PineScript code</div>
           <textarea class="pine-textarea" id="pine-code"
-            placeholder="//@version=5&#10;strategy(&quot;My Strategy&quot;, overlay=true)&#10;rsiValue = ta.rsi(close, 14)&#10;longCondition = rsiValue &lt; 30&#10;if longCondition&#10;    strategy.entry(&quot;Long&quot;, strategy.long)&#10;strategy.close(&quot;Long&quot;, when=rsiValue &gt; 70)"></textarea>
-          <button class="pine-analyse-btn" id="pine-analyse-btn" onclick="pineAnalyse()">Analyse Script →</button>
+            placeholder="Paste any PineScript code here — indicator() or strategy() scripts both work.&#10;&#10;Example indicator:&#10;//@version=5&#10;indicator('Trend Magic', overlay=true)&#10;cciValue = ta.cci(close, 20)&#10;...&#10;alertcondition(trendDirection == 1, 'Bullish Trend')&#10;&#10;Example strategy:&#10;//@version=5&#10;strategy('RSI Strategy')&#10;if ta.rsi(close,14) &lt; 30&#10;    strategy.entry('Long', strategy.long)"></textarea>
+          <button class="pine-analyse-btn" id="pine-analyse-btn" onclick="pineAnalyse()">Generate Strategy →</button>
         </div>
 
         <!-- Results panel (shown after analysis) -->
@@ -5259,14 +5259,17 @@ let currentBuildMode = 'wizard';
 
 function switchBuildMode(mode) {
   currentBuildMode = mode;
-  document.getElementById('bm-indicator').classList.toggle('active', mode === 'indicator');
+  // 'pine' can be reached from both the "Generate from Indicator" tab and the "PineScript" tab.
+  // Both tabs light up when pine panel is open; the indicator tab is the front door to pine.
+  const isPine = mode === 'pine';
+  document.getElementById('bm-indicator').classList.toggle('active', isPine);
   document.getElementById('bm-wizard').classList.toggle('active', mode === 'wizard');
   document.getElementById('bm-chat').classList.toggle('active', mode === 'chat');
-  document.getElementById('bm-pine').classList.toggle('active', mode === 'pine');
-  document.getElementById('build-indicator-panel').style.display = mode === 'indicator' ? '' : 'none';
+  document.getElementById('bm-pine').classList.toggle('active', isPine);
+  document.getElementById('build-indicator-panel').style.display = 'none';
   document.getElementById('build-wizard-panel').style.display = mode === 'wizard' ? '' : 'none';
   document.getElementById('build-chat-panel').style.display = mode === 'chat' ? '' : 'none';
-  document.getElementById('build-pine-panel').style.display = mode === 'pine' ? '' : 'none';
+  document.getElementById('build-pine-panel').style.display = isPine ? '' : 'none';
   if (mode === 'chat') {
     if (!IS_PRO) {
       cbSyncUsage(0, 0, false);

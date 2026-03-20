@@ -455,33 +455,48 @@ async def compile_strategy_from_conversation(
 # PineScript compiler
 # ─────────────────────────────────────────────────────────────────────────────
 
-PINESCRIPT_COMPILER_PROMPT = f"""You are an expert at reading TradingView PineScript indicator and strategy code and translating the entry/exit logic into a structured JSON strategy config.
+PINESCRIPT_COMPILER_PROMPT = f"""You are an expert at reading TradingView PineScript code — both strategy() scripts and indicator() scripts — and translating their signal logic into a structured JSON strategy config.
 
-You will receive a PineScript source file. Your job is to:
-1. Identify entry and exit conditions encoded in the Pine code (strategy.entry, strategy.close, indicator crossovers, etc.)
-2. Map recognised indicators (RSI, MACD, EMA, Bollinger Bands, VWAP, SuperTrend, Stochastic, ADX, ATR, Keltner, Williams %R, CCI, OBV, Heikin Ashi, Ichimoku, Squeeze Momentum, etc.) to the platform's supported condition types below.
-3. Infer direction (LONG / SHORT / BOTH) from the Pine entry logic.
-4. Infer reasonable risk defaults (leverage, TP %, SL %) from any strategy() parameters or plot levels present; use sensible defaults if none.
-5. Flag any parts that could NOT be mapped as strings in a "_pine_notes" array field inside the config JSON.
-6. Flag multi-timeframe security() calls as unsupported in _pine_notes.
-7. Ignore alerts, plots, labels — focus only on signal logic.
+You will receive a PineScript source file. It may be declared with indicator() OR strategy(). Both are valid input.
+
+=== HOW TO HANDLE INDICATOR() SCRIPTS ===
+Indicator scripts don't have strategy.entry/strategy.close calls. Instead, find the signals by:
+1. Look for alertcondition() calls — these reveal the intended long/short signals. e.g. alertcondition(trendDirection == 1 ...) → LONG entry.
+2. Look for ta.crossover / ta.crossunder on key values — these are the natural entry triggers.
+3. Look for plotshape / plotarrow calls that mark signal points — these tell you when entries occur.
+4. Look for how the script defines bullish vs bearish states (e.g. trendDirection > 0 = bullish).
+5. Map the underlying math to the closest supported condition types (CCI, ATR/SuperTrend, EMA crossovers, etc).
+
+Example: "Trend Magic" uses CCI(20) + ATR(5)×2.0 to build a trailing support/resistance line, then detects when price crosses above (bullish) or below (bearish). This maps to:
+  - CCI oversold/overbought condition for the CCI component
+  - SuperTrend condition (bullish_flip / bearish_flip) for the ATR-trailing-line crossover
+
+=== YOUR TASK ===
+1. Identify entry signals — from strategy.entry(), alertcondition(), crossovers, or plotshape() markers.
+2. Map recognised indicators to the platform's supported condition types (full schema below).
+3. Infer direction (LONG / SHORT / BOTH) from the entry logic.
+4. Infer risk defaults (leverage, TP %, SL %) from strategy() params or sensible defaults.
+5. Summarise what was mapped and any approximations in "_pine_notes".
+6. Flag anything unsupported (e.g. security() multi-timeframe calls) in "_pine_warnings".
+7. Ignore visual elements — plots, labels, colors, fills — focus only on signal logic.
 
 {CONDITION_SCHEMA}
 
 {STRATEGY_SCHEMA}
 
 OUTPUT FORMAT — return ONLY valid JSON, no markdown fences, no explanation outside the JSON.
-Add two extra top-level fields to the config JSON:
-  "_pine_notes": ["string", ...]   — human-readable list of what was mapped and what wasn't
-  "_pine_warnings": ["string", ...] — issues that require user attention (e.g. unsupported security() calls, custom indicators with no equivalent)
+Add two extra top-level fields:
+  "_pine_notes": ["string", ...]    — what was mapped and how (plain English)
+  "_pine_warnings": ["string", ...]  — anything unsupported or approximated
 
 RULES:
-- Always include at least one entry condition even if the Pine code uses a custom formula — map it to the closest supported type and note the approximation in _pine_notes.
+- Always produce at least one entry condition, even if the script uses a fully custom formula. Map to the closest supported type and note the approximation.
 - Never set stop_loss_pct > take_profit_pct.
-- Default leverage to 10 unless Pine strategy() parameters indicate otherwise.
-- Default direction to BOTH unless the Pine code only has strategy.entry("Long", ...) or only strategy.entry("Short", ...).
-- If the script uses security() for multi-timeframe data, add a warning in _pine_warnings.
-- Keep _pine_notes to plain English: "Mapped RSI(14) < 30 → entry condition rsi lt 30 on 15m", "EMA 9/21 crossover → ema golden_cross", "Custom 'squeeze_pro' indicator → not supported, approximated with squeeze momentum firing condition".
+- Default leverage to 10 unless script parameters indicate otherwise.
+- Default direction to BOTH unless signals are clearly one-sided.
+- Use timeframe from the script if specified; default to 15m if not.
+- For custom composite indicators (e.g. Trend Magic, Hull Suite, Lux Algo signals): decompose into their underlying math (ATR, CCI, EMA, etc.) and map each component.
+- _pine_notes examples: "Mapped CCI(20) crossover of 0 → cci condition on 15m", "ATR trailing line crossover → supertrend bullish_flip/bearish_flip", "alertcondition Bullish Trend → LONG entry signal".
 """
 
 
