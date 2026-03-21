@@ -1600,10 +1600,27 @@ async def api_marketplace(
             .filter(StrategyPurchase.buyer_id == user.id, StrategyPurchase.status == "active").all()
         }
 
+        from app.strategy_models import StrategyExecution
         result = []
         for m in listings:
             perf   = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == m.strategy_id).first()
             author = db.query(User).filter(User.id == m.author_id).first()
+            # Build equity curve from last 30 closed trades (cumulative P&L %)
+            closed_trades = (
+                db.query(StrategyExecution.pnl_pct)
+                .filter(
+                    StrategyExecution.strategy_id == m.strategy_id,
+                    StrategyExecution.outcome.in_(["WIN", "LOSS", "BREAKEVEN"]),
+                    StrategyExecution.pnl_pct.isnot(None),
+                )
+                .order_by(StrategyExecution.fired_at.asc())
+                .limit(30).all()
+            )
+            equity = []
+            cum = 0.0
+            for (pnl,) in closed_trades:
+                cum += float(pnl)
+                equity.append(round(cum, 2))
             result.append({
                 "id":               m.id,
                 "strategy_id":      m.strategy_id,
@@ -1625,6 +1642,7 @@ async def api_marketplace(
                 "live_win_rate":    round(perf.win_rate, 1) if perf and perf.total_trades >= 3 else None,
                 "live_pnl":         round(perf.total_pnl_pct, 2) if perf and perf.total_trades >= 3 else None,
                 "live_trades":      perf.total_trades if perf else 0,
+                "equity_curve":     equity,
                 "author_name":      (author.first_name or author.username or "Anonymous") if author else "Anonymous",
                 "author_uid":       author.uid if author else None,
                 "is_owned":         m.id in my_purchases or (m.pricing_model or "free") == "free",
