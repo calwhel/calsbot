@@ -267,6 +267,20 @@ _SESSION_HOURS = {
 }
 
 
+def _check_trading_days(filters: Dict) -> bool:
+    """Return True if today is an allowed trading day (Mon=0 … Sun=6)."""
+    allowed = filters.get("trading_days")
+    if not allowed:
+        return True
+    day_map = {
+        "monday": 0, "tuesday": 1, "wednesday": 2,
+        "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6,
+    }
+    today = datetime.utcnow().weekday()
+    allowed_nums = {day_map[d.lower()] for d in allowed if d.lower() in day_map}
+    return today in allowed_nums
+
+
 def _check_time_filter(filters: Dict) -> bool:
     hour = datetime.utcnow().hour
 
@@ -1329,6 +1343,8 @@ async def evaluate_and_fire(
     universe = config.get("universe", {})
     direction_pref = config.get("direction", "LONG")
 
+    if not _check_trading_days(filters):
+        return
     if not _check_time_filter(filters):
         return
     if not _check_btc_regime(filters):

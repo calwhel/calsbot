@@ -3563,7 +3563,7 @@ const WZ={
   primaryType:null,primaryCfg:{},confirms:[],
   tp1:3,tp2:null,sl:1.5,trailing:null,
   leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,noDuplicateSymbol:false,
-  sessions:[],coins:'all',specificCoins:'',singleCoin:'',
+  sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',
   timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,
   name:'',category:'general',pricing:'free',price:null,
 };
@@ -3761,6 +3761,9 @@ function wzChipClick(group,val,multi){
   if(group==='sessions'){
     if(WZ.sessions.includes(val))WZ.sessions=WZ.sessions.filter(s=>s!==val);
     else WZ.sessions.push(val);
+  } else if(group==='tradingDays'){
+    if(WZ.tradingDays.includes(val))WZ.tradingDays=WZ.tradingDays.filter(d=>d!==val);
+    else WZ.tradingDays.push(val);
   } else if(group==='coins'){
     WZ.coins=val;
   } else if(group.startsWith('pc.')){
@@ -4456,6 +4459,15 @@ function renderStep6(){
     ${WZ.sessions.length?`<div class="opt-chip" onclick="WZ.sessions=[];renderCurrentStep()">✕ Clear</div>`:''}</div>
   </div>
   <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">📅</div>Trading Days</div>
+    <div class="hint" style="margin-bottom:10px">Only enter trades on selected days. Leave all unchecked to trade every day including weekends.</div>
+    <div class="opt-chips">
+      ${['monday','tuesday','wednesday','thursday','friday','saturday','sunday'].map(d=>`<div class="opt-chip ${WZ.tradingDays.includes(d)?'active':''}" onclick="wzChipClick('tradingDays','${d}',true)">${d.charAt(0).toUpperCase()+d.slice(1,3)}</div>`).join('')}
+      ${WZ.tradingDays.length?`<div class="opt-chip" onclick="WZ.tradingDays=[];renderCurrentStep()">✕ Clear</div>`:''}
+    </div>
+    ${WZ.tradingDays.length&&!WZ.tradingDays.includes('saturday')&&!WZ.tradingDays.includes('sunday')?`<div class="hint" style="color:var(--accent);margin-top:6px">⚡ Weekdays only — no weekend trading</div>`:''}
+  </div>
+  <div class="section-card">
     <div class="sc-title"><div class="sc-icon">🌐</div>Which Coins?</div>
     <div class="opt-chips" style="margin-bottom:10px">
       ${wzChip('all',     'All altcoins',    'coins',WZ.coins)}
@@ -4953,7 +4965,7 @@ function wzBack(){
 function resetWizard(){
   compiledConfig=null;
   _wzLastStep=1;
-  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null});
+  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null});
   renderCurrentStep();
 }
 
@@ -5045,6 +5057,7 @@ function buildWizardDescription(){
   lines.push(`\nCandle timeframe: ${WZ.timeframe}. All signals should be evaluated on this timeframe.`);
 
   if(WZ.sessions.length)lines.push(`\nOnly trade during: ${WZ.sessions.join(', ')} session(s).`);
+  if(WZ.tradingDays&&WZ.tradingDays.length)lines.push(`Only trade on: ${WZ.tradingDays.join(', ')}.`);
   if(WZ.coins==='single'&&WZ.singleCoin){
     const sym=WZ.singleCoin.trim().toUpperCase();
     lines.push(`Universe: SINGLE COIN FOCUS — only trade ${sym.endsWith('USDT')?sym:sym+'USDT'}. Do not scan any other coins.`);
@@ -5135,6 +5148,7 @@ async function buildStrategy(){
     // ── Filters ────────────────────────────────────────────────────────
     if(!data.config.filters)data.config.filters={};
     if(WZ.sessions&&WZ.sessions.length)data.config.filters.session={type:'session',sessions:WZ.sessions};
+    if(WZ.tradingDays&&WZ.tradingDays.length)data.config.filters.trading_days=WZ.tradingDays;
     if(WZ.htfFilter)data.config.filters.htf_trend=true;
     if(WZ.btcRegime&&WZ.btcRegime!=='any')data.config.filters.btc_regime=WZ.btcRegime;
     data.config._timeframe=WZ.timeframe||'5m';
@@ -5186,6 +5200,7 @@ function formatConfig(cfg,warnings,riskRating){
       if(f.htf_trend)tags.push('🔭 HTF trend filter ON');
       if(f.btc_regime)tags.push(`₿ BTC must be: <strong>${f.btc_regime}</strong>`);
       if(f.session?.sessions?.length)tags.push(`🕐 Sessions: ${f.session.sessions.join(', ')}`);
+      if(f.trading_days?.length)tags.push(`📅 Days: ${f.trading_days.map(d=>d.charAt(0).toUpperCase()+d.slice(1,3)).join(', ')}`);
       return tags.length?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${tags.map(t=>`<span style="font-size:11px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:4px 8px">${t}</span>`).join('')}</div>`:'';
     })()}
     ${warn}</div>`;
@@ -5322,6 +5337,7 @@ function applyTemplate(tpl){
   if(tpl.name)             WZ.name=tpl.name;
   if(tpl.category)         WZ.category=tpl.category;
   if(tpl.sessions&&tpl.sessions.length) WZ.sessions=tpl.sessions;
+  if(tpl.trading_days&&tpl.trading_days.length) WZ.tradingDays=tpl.trading_days;
   if(tpl.single_coin){
     WZ.coins='single';
     WZ.singleCoin=tpl.single_coin;

@@ -3282,6 +3282,9 @@ async def api_put_settings(request: Request, uid: str = Query(...)):
             portal = StrategyPortalSettings(user_id=user.id)
             db.add(portal)
 
+        # Capture Bitunix UID before the pref_map loop mutates it
+        _old_buid = prefs.bitunix_uid or ""
+
         # UserPreference fields
         pref_map = {
             "position_size_percent":  "position_size_percent",
@@ -3337,10 +3340,9 @@ async def api_put_settings(request: Request, uid: str = Query(...)):
 
         # Detect Bitunix UID change → notify admin
         new_buid = body.get("bitunix_uid", "").strip() if "bitunix_uid" in body else None
-        old_buid = prefs.bitunix_uid or ""
         db.commit()
 
-        if new_buid and new_buid != old_buid:
+        if new_buid and new_buid != _old_buid:
             import asyncio as _aio3
             _aio3.create_task(_notify_admin_uid_connected(
                 user_name=user.first_name or user.username or "User",
