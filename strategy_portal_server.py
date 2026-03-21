@@ -3355,6 +3355,40 @@ async def api_put_settings(request: Request, uid: str = Query(...)):
         db.close()
 
 
+@app.get("/api/settings/test-exchange")
+async def api_test_exchange(uid: str = Query(...)):
+    """Test Bitunix API keys by fetching account balance.
+    Returns {ok, balance, currency} on success or {ok, error} on failure.
+    """
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        from app.models import UserPreference
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.bitunix_api_key or not prefs.bitunix_api_secret:
+            return JSONResponse({"ok": False, "error": "No API keys saved. Enter and save your Bitunix API keys first."})
+        from app.services.bitunix_trader import BitunixTrader
+        import httpx, asyncio
+        async with httpx.AsyncClient(timeout=10) as client:
+            trader = BitunixTrader(prefs.bitunix_api_key, prefs.bitunix_api_secret)
+            trader.client = client
+            try:
+                balance = await asyncio.wait_for(trader.get_account_balance(), timeout=9)
+                return JSONResponse({"ok": True, "balance": round(float(balance), 2), "currency": "USDT"})
+            except asyncio.TimeoutError:
+                return JSONResponse({"ok": False, "error": "Connection timed out — check your API keys and Bitunix account."})
+            except Exception as e:
+                err = str(e)
+                if "401" in err or "403" in err or "invalid" in err.lower() or "auth" in err.lower():
+                    return JSONResponse({"ok": False, "error": "Authentication failed — double-check your API key and secret."})
+                return JSONResponse({"ok": False, "error": f"Connection failed: {err[:120]}"})
+    finally:
+        db.close()
+
+
 @app.put("/api/settings/password")
 async def api_set_password(request: Request, uid: str = Query(...)):
     """Set or change the account password.
