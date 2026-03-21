@@ -4120,49 +4120,49 @@ function renderSignalCfg(type,cfg,pfx){
     case 'obv':return`${tf}
       <div class="opt-label">OBV Condition</div>
       <div class="opt-chips">
-        ${wzChip('rising','OBV Rising (accumulation)',\`${pfx}condition\`,cfg.condition||'rising','green')}
-        ${wzChip('falling','OBV Falling (distribution)',\`${pfx}condition\`,cfg.condition||'rising','red')}
-        ${wzChip('cross_up','OBV crossed above signal',\`${pfx}condition\`,cfg.condition||'rising','green')}
-        ${wzChip('cross_down','OBV crossed below signal',\`${pfx}condition\`,cfg.condition||'rising','red')}
+        ${wzChip('rising','OBV Rising (accumulation)',pfx+'condition',cfg.condition||'rising','green')}
+        ${wzChip('falling','OBV Falling (distribution)',pfx+'condition',cfg.condition||'rising','red')}
+        ${wzChip('cross_up','OBV crossed above signal',pfx+'condition',cfg.condition||'rising','green')}
+        ${wzChip('cross_down','OBV crossed below signal',pfx+'condition',cfg.condition||'rising','red')}
       </div>
       <div class="hint">OBV tracks buying/selling pressure by adding/subtracting volume each candle. Rising OBV confirms upward price moves; use as a confirmer to filter fake breakouts.</div>`;
     case 'heikin_ashi':return`${tf}
       <div class="opt-label">Candle Pattern</div>
       <div class="opt-chips">
-        ${wzChip('bullish','All green HA candles (uptrend confirmed)',\`${pfx}condition\`,cfg.condition||'bullish','green')}
-        ${wzChip('bearish','All red HA candles (downtrend confirmed)',\`${pfx}condition\`,cfg.condition||'bullish','red')}
-        ${wzChip('no_lower_shadow','No lower shadow (strong bull momentum)',\`${pfx}condition\`,cfg.condition||'bullish','green')}
-        ${wzChip('no_upper_shadow','No upper shadow (strong bear momentum)',\`${pfx}condition\`,cfg.condition||'bullish','red')}
-        ${wzChip('doji','Doji / indecision (reversal possible)',\`${pfx}condition\`,cfg.condition||'bullish')}
+        ${wzChip('bullish','All green HA candles (uptrend confirmed)',pfx+'condition',cfg.condition||'bullish','green')}
+        ${wzChip('bearish','All red HA candles (downtrend confirmed)',pfx+'condition',cfg.condition||'bullish','red')}
+        ${wzChip('no_lower_shadow','No lower shadow (strong bull momentum)',pfx+'condition',cfg.condition||'bullish','green')}
+        ${wzChip('no_upper_shadow','No upper shadow (strong bear momentum)',pfx+'condition',cfg.condition||'bullish','red')}
+        ${wzChip('doji','Doji / indecision (reversal possible)',pfx+'condition',cfg.condition||'bullish')}
       </div>
       <div class="hint">Heikin Ashi candles smooth out noise. "All green with no lower shadow" is the cleanest uptrend signal. Great for Trend Follower & Momentum styles.</div>`;
     case 'ichimoku':return`${tf}
       <div class="opt-label">Ichimoku Signal</div>
       <div class="opt-chips">
-        ${wzChip('above_cloud','Price above Cloud (bullish trend)',\`${pfx}condition\`,cfg.condition||'above_cloud','green')}
-        ${wzChip('below_cloud','Price below Cloud (bearish trend)',\`${pfx}condition\`,cfg.condition||'above_cloud','red')}
-        ${wzChip('tk_cross_up','TK Cross Up (bullish — Tenkan above Kijun)',\`${pfx}condition\`,cfg.condition||'above_cloud','green')}
-        ${wzChip('tk_cross_down','TK Cross Down (bearish — Tenkan below Kijun)',\`${pfx}condition\`,cfg.condition||'above_cloud','red')}
-        ${wzChip('kumo_breakout_up','Kumo Breakout Up (price exits cloud upward)',\`${pfx}condition\`,cfg.condition||'above_cloud','green')}
-        ${wzChip('kumo_breakout_down','Kumo Breakout Down (price exits cloud downward)',\`${pfx}condition\`,cfg.condition||'above_cloud','red')}
+        ${wzChip('above_cloud','Price above Cloud (bullish trend)',pfx+'condition',cfg.condition||'above_cloud','green')}
+        ${wzChip('below_cloud','Price below Cloud (bearish trend)',pfx+'condition',cfg.condition||'above_cloud','red')}
+        ${wzChip('tk_cross_up','TK Cross Up (bullish — Tenkan above Kijun)',pfx+'condition',cfg.condition||'above_cloud','green')}
+        ${wzChip('tk_cross_down','TK Cross Down (bearish — Tenkan below Kijun)',pfx+'condition',cfg.condition||'above_cloud','red')}
+        ${wzChip('kumo_breakout_up','Kumo Breakout Up (price exits cloud upward)',pfx+'condition',cfg.condition||'above_cloud','green')}
+        ${wzChip('kumo_breakout_down','Kumo Breakout Down (price exits cloud downward)',pfx+'condition',cfg.condition||'above_cloud','red')}
       </div>
       <div class="hint">Ichimoku is a complete trend system. "Above Cloud" = strong uptrend context. "TK Cross" = entry timing. Use "Above Cloud + TK Cross Up" together for highest quality longs.</div>`;
     case 'mfi':return`${tf}
       <div class="opt-label">MFI Condition</div>
       <div class="opt-chips">
-        ${wzChip('oversold','Oversold (MFI below 20) — long signal',\`${pfx}condition\`,cfg.condition||'oversold','green')}
-        ${wzChip('overbought','Overbought (MFI above 80) — short signal',\`${pfx}condition\`,cfg.condition||'oversold','red')}
-        ${wzChip('rising','MFI Rising — money flowing in',\`${pfx}condition\`,cfg.condition||'oversold','green')}
-        ${wzChip('falling','MFI Falling — money flowing out',\`${pfx}condition\`,cfg.condition||'oversold','red')}
+        ${wzChip('oversold','Oversold (MFI below 20) — long signal',pfx+'condition',cfg.condition||'oversold','green')}
+        ${wzChip('overbought','Overbought (MFI above 80) — short signal',pfx+'condition',cfg.condition||'oversold','red')}
+        ${wzChip('rising','MFI Rising — money flowing in',pfx+'condition',cfg.condition||'oversold','green')}
+        ${wzChip('falling','MFI Falling — money flowing out',pfx+'condition',cfg.condition||'oversold','red')}
       </div>
       <div class="hint">MFI (Money Flow Index) is a volume-weighted RSI. More reliable than RSI alone as it factors in volume. Oversold below 20 with rising price = strong buy signal.</div>`;
     case 'donchian':return`${tf}
       <div class="opt-label">Donchian Signal</div>
       <div class="opt-chips">
-        ${wzChip('upper_break','Price breaks upper band (bullish breakout)',\`${pfx}condition\`,cfg.condition||'upper_break','green')}
-        ${wzChip('lower_break','Price breaks lower band (bearish breakdown)',\`${pfx}condition\`,cfg.condition||'upper_break','red')}
-        ${wzChip('near_upper','Near upper band (overbought)',\`${pfx}condition\`,cfg.condition||'upper_break','red')}
-        ${wzChip('near_lower','Near lower band (oversold)',\`${pfx}condition\`,cfg.condition||'upper_break','green')}
+        ${wzChip('upper_break','Price breaks upper band (bullish breakout)',pfx+'condition',cfg.condition||'upper_break','green')}
+        ${wzChip('lower_break','Price breaks lower band (bearish breakdown)',pfx+'condition',cfg.condition||'upper_break','red')}
+        ${wzChip('near_upper','Near upper band (overbought)',pfx+'condition',cfg.condition||'upper_break','red')}
+        ${wzChip('near_lower','Near lower band (oversold)',pfx+'condition',cfg.condition||'upper_break','green')}
       </div>
       <div class="opt-label">Channel Period <span id="${pfx}dcp-d" style="color:var(--accent)">${cfg.period||20}</span></div>
       <input type="range" id="${pfx}dcp" min="5" max="100" value="${cfg.period||20}" step="1" oninput="wzSl('${pfx}dcp','${pfx}dcp-d','','${pfx}period')" style="width:100%;accent-color:var(--accent)">
@@ -4170,20 +4170,20 @@ function renderSignalCfg(type,cfg,pfx){
     case 'aroon':return`${tf}
       <div class="opt-label">Aroon Signal</div>
       <div class="opt-chips">
-        ${wzChip('bullish','Aroon Up > 70 (new highs being made)',\`${pfx}condition\`,cfg.condition||'bullish','green')}
-        ${wzChip('bearish','Aroon Down > 70 (new lows being made)',\`${pfx}condition\`,cfg.condition||'bullish','red')}
-        ${wzChip('cross_up','Aroon Up crossed above Aroon Down',\`${pfx}condition\`,cfg.condition||'bullish','green')}
-        ${wzChip('cross_down','Aroon Down crossed above Aroon Up',\`${pfx}condition\`,cfg.condition||'bullish','red')}
+        ${wzChip('bullish','Aroon Up > 70 (new highs being made)',pfx+'condition',cfg.condition||'bullish','green')}
+        ${wzChip('bearish','Aroon Down > 70 (new lows being made)',pfx+'condition',cfg.condition||'bullish','red')}
+        ${wzChip('cross_up','Aroon Up crossed above Aroon Down',pfx+'condition',cfg.condition||'bullish','green')}
+        ${wzChip('cross_down','Aroon Down crossed above Aroon Up',pfx+'condition',cfg.condition||'bullish','red')}
       </div>
       <div class="hint">Aroon measures how recently the highest high / lowest low occurred. "Aroon Up > 70" = strong uptrend. "Cross Up" = trend change confirmation. Great for Swing & Trend styles.</div>`;
     case 'roc':return`${tf}
       <div class="opt-label">ROC Condition</div>
       <div class="opt-chips">
-        ${wzChip('positive','ROC positive (price higher than N bars ago)',\`${pfx}condition\`,cfg.condition||'positive','green')}
-        ${wzChip('negative','ROC negative (price lower than N bars ago)',\`${pfx}condition\`,cfg.condition||'positive','red')}
-        ${wzChip('cross_up','ROC crossed above zero (gaining momentum)',\`${pfx}condition\`,cfg.condition||'positive','green')}
-        ${wzChip('cross_down','ROC crossed below zero (losing momentum)',\`${pfx}condition\`,cfg.condition||'positive','red')}
-        ${wzChip('accelerating','ROC accelerating (momentum strengthening)',\`${pfx}condition\`,cfg.condition||'positive','green')}
+        ${wzChip('positive','ROC positive (price higher than N bars ago)',pfx+'condition',cfg.condition||'positive','green')}
+        ${wzChip('negative','ROC negative (price lower than N bars ago)',pfx+'condition',cfg.condition||'positive','red')}
+        ${wzChip('cross_up','ROC crossed above zero (gaining momentum)',pfx+'condition',cfg.condition||'positive','green')}
+        ${wzChip('cross_down','ROC crossed below zero (losing momentum)',pfx+'condition',cfg.condition||'positive','red')}
+        ${wzChip('accelerating','ROC accelerating (momentum strengthening)',pfx+'condition',cfg.condition||'positive','green')}
       </div>
       <div class="opt-label">Lookback Period <span id="${pfx}rocp-d" style="color:var(--accent)">${cfg.period||10}</span></div>
       <input type="range" id="${pfx}rocp" min="2" max="100" value="${cfg.period||10}" step="1" oninput="wzSl('${pfx}rocp','${pfx}rocp-d','','${pfx}period')" style="width:100%;accent-color:var(--accent)">
