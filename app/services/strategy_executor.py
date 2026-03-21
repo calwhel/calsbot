@@ -1531,6 +1531,14 @@ async def evaluate_and_fire(
                         )
                     except Exception:
                         pass
+                # Still propagate to subscriber copies even when the owner's
+                # live order failed — subscribers should receive a paper signal.
+                if not config.get("_locked"):
+                    asyncio.create_task(_propagate_to_subscribers(
+                        source_strategy_id=strategy.id,
+                        source_execution_id=execution.id,
+                        http_client=http_client,
+                    ))
                 break  # paper execution is now open — stop processing matches
 
             if order_id:
