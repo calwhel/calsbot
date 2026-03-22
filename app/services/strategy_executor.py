@@ -1606,7 +1606,36 @@ async def evaluate_and_fire(
                 )
             except Exception as e:
                 logger.error(f"[Strategy {strategy.id}] Order error: {e}")
-                # Don't cancel — flip to paper so the signal's ROI is still tracked.
+
+                # Price-past-TP: market moved through TP before order placed.
+                # Cancel entirely — no paper fallback, opportunity is gone.
+                if "PRICE_PAST_TP" in str(e):
+                    execution.outcome = "CANCELLED"
+                    execution.notes   = f"Cancelled: {str(e)[:200]}"
+                    db.commit()
+                    logger.warning(
+                        f"[Strategy {strategy.id}] {symbol} signal cancelled — "
+                        f"live price already past TP before order placed."
+                    )
+                    tg_id_ex = _telegram_int_id(user)
+                    if tg_id_ex:
+                        try:
+                            coin = symbol.replace("USDT", "")
+                            await _tg_send(
+                                tg_id_ex,
+                                f"🚫 <b>Signal cancelled — price already at TP</b>\n"
+                                f"Strategy: <b>{strategy.name}</b>\n"
+                                f"Signal: {coin} {direction} {leverage}×\n"
+                                f"TP: <code>${tp_price:,.4f}</code>\n\n"
+                                f"<i>By the time the order reached Bitunix, the market had "
+                                f"already moved to/past your take-profit. The trade was "
+                                f"cancelled — no position opened.</i>"
+                            )
+                        except Exception:
+                            pass
+                    break  # execution cancelled — stop processing matches
+
+                # All other errors: flip to paper so the signal's ROI is still tracked.
                 execution.is_paper = True
                 execution.notes    = f"Live→Paper fallback (order exception): {str(e)[:200]}"
                 db.commit()

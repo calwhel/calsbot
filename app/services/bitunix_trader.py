@@ -798,35 +798,41 @@ class BitunixTrader:
             
             # Note: TP is set via separate reduce orders for dual TP support
             # Single TP trades still use tpPrice parameter.
-            # Guard: if the market has already moved past TP (fast-moving coin),
-            # Bitunix rejects the order. Fetch live price and skip TP if invalid.
+            # Guard: if the market has already blown past TP (fast-moving coin),
+            # Bitunix would reject the order. Cancel the trade entirely instead —
+            # the opportunity is gone and there is no point entering.
             if take_profit:
                 try:
                     live_price = await self.get_current_price(symbol)
-                    tp_valid = True
                     if live_price and live_price > 0:
                         if direction.upper() == 'SHORT' and take_profit >= live_price:
                             logger.warning(
-                                f"⚠️ {symbol} SHORT TP ${take_profit} >= live price ${live_price:.8f} "
-                                f"(market already moved past TP) — skipping TP to avoid Bitunix rejection"
+                                f"🚫 {symbol} SHORT cancelled — live price ${live_price:.8f} already "
+                                f"at/below TP ${take_profit} before order placed"
                             )
-                            tp_valid = False
+                            raise RuntimeError(
+                                f"PRICE_PAST_TP: {symbol} SHORT live price ${live_price:.8f} "
+                                f"already at/below TP ${take_profit} — trade cancelled"
+                            )
                         elif direction.upper() == 'LONG' and take_profit <= live_price:
                             logger.warning(
-                                f"⚠️ {symbol} LONG TP ${take_profit} <= live price ${live_price:.8f} "
-                                f"(market already moved past TP) — skipping TP to avoid Bitunix rejection"
+                                f"🚫 {symbol} LONG cancelled — live price ${live_price:.8f} already "
+                                f"at/above TP ${take_profit} before order placed"
                             )
-                            tp_valid = False
+                            raise RuntimeError(
+                                f"PRICE_PAST_TP: {symbol} LONG live price ${live_price:.8f} "
+                                f"already at/above TP ${take_profit} — trade cancelled"
+                            )
+                except RuntimeError:
+                    raise  # propagate the PRICE_PAST_TP signal
                 except Exception as tp_check_err:
-                    logger.warning(f"⚠️ TP price check failed for {symbol}: {tp_check_err} — including TP anyway")
-                    tp_valid = True
+                    logger.warning(f"⚠️ TP price check failed for {symbol}: {tp_check_err} — proceeding anyway")
 
-                if tp_valid:
-                    order_params.update({
-                        'tpPrice': str(take_profit),
-                        'tpStopType': 'MARK',
-                        'tpOrderType': 'MARKET'
-                    })
+                order_params.update({
+                    'tpPrice': str(take_profit),
+                    'tpStopType': 'MARK',
+                    'tpOrderType': 'MARKET'
+                })
             
             if stop_loss:
                 order_params.update({
