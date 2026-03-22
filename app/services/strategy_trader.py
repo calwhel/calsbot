@@ -8,8 +8,7 @@ from typing import Optional, Dict
 
 logger = logging.getLogger(__name__)
 
-BUFFER_PCT = 0.1   # 0.1% clearance added to TP so Bitunix accepts it
-SLIP_PCT   = 0.10  # conservative 0.10% slippage estimate used in fallback only
+BUFFER_PCT = 0.10   # 0.10 % clearance added to TP so Bitunix accepts it
 
 
 async def place_bitunix_order_for_user(
@@ -17,29 +16,32 @@ async def place_bitunix_order_for_user(
     symbol: str,
     direction: str,
     leverage: int,
-    entry_price: float,
+    entry_price: float,   # shared ref price from executor (already includes slippage buffer)
     tp_pct: float,
     sl_pct: float,
     risk_pct: float = 5.0,
     risk_usd: Optional[float] = None,
 ) -> Optional[Dict]:
     """
-    Place a single market order on Bitunix for a user running a custom strategy.
+    Place a single market order on Bitunix for a user running a custom strategy,
+    then set TP/SL from the shared signal reference price.
 
-    Strategy:
-      1. Place a bare MARKET order (no TP/SL embedded in the order).
-      2. Wait briefly for the fill, then fetch the position's actual avgOpenPrice.
-      3. Calculate TP/SL from the REAL fill price — not the pre-order signal price.
-      4. Set TP/SL on the position via a separate API call.
-      5. If position fetch fails, fall back to signal price + slippage estimate.
+    All users on the same signal receive the SAME entry_price (the executor
+    computes current_price + 0.10 % slippage buffer and passes it here).
+    This guarantees identical TP/SL levels across every subscriber so they
+    all exit together, while keeping TP and SL symmetric at 1:1 configs.
 
-    This eliminates the SL > TP asymmetry that occurs when TP/SL are anchored to
-    the pre-order last-trade price while the MARKET order fills at the ask (LONG)
-    or bid (SHORT).
+    Flow:
+      1. Place bare MARKET order (no TP/SL embedded — avoids Bitunix
+         rejections and keeps the fill clean).
+      2. Wait briefly for the fill, then set TP/SL on the position via a
+         separate place_position_tpsl() call anchored to entry_price.
+      3. Retry position fetch up to 3× if the position isn't visible yet.
+      4. Fall back to update_position_stop_loss() if tpsl placement fails.
 
-    Returns a dict:
+    Returns:
       { "order_id": str, "fill_price": float, "tp_price": float, "sl_price": float }
-    or raises RuntimeError on failure.
+    Raises RuntimeError on failure.
     """
     try:
         from app.database import SessionLocal
@@ -92,14 +94,22 @@ async def place_bitunix_order_for_user(
                 position_size_usd = max(balance * (risk_pct / 100), 5.0)
                 logger.info(f"[StrategyTrader] {symbol} pct size {risk_pct}% of ${balance:.2f} = ${position_size_usd:.2f}")
 
+            # ── TP/SL prices from shared reference price ──────────────────────
+            # entry_price already includes a slippage buffer applied by the
+            # executor, so TP and SL are equally spaced from expected fill.
+            if direction.upper() == "LONG":
+                tp_price = entry_price * (1 + (tp_pct + BUFFER_PCT) / 100)
+                sl_price = entry_price * (1 - sl_pct / 100)
+            else:
+                tp_price = entry_price * (1 - (tp_pct + BUFFER_PCT) / 100)
+                sl_price = entry_price * (1 + sl_pct / 100)
+
             logger.info(
-                f"[StrategyTrader] {symbol} {direction} {leverage}x | signal_price={entry_price:.6g} "
-                f"| tp={tp_pct}% sl={sl_pct}% | placing bare market order..."
+                f"[StrategyTrader] {symbol} {direction} {leverage}x | ref={entry_price:.6g} "
+                f"| TP={tp_price:.6g} (+{tp_pct}%) SL={sl_price:.6g} (-{sl_pct}%)"
             )
 
-            # ── Step 1: Place bare MARKET order — no TP/SL ───────────────────
-            # TP/SL set AFTER we know the actual fill price so they are
-            # perfectly symmetric relative to where we actually entered.
+            # ── Step 1: Place bare MARKET order — no TP/SL in order params ───
             result = await trader.place_trade(
                 symbol             = symbol,
                 direction          = direction,
@@ -118,12 +128,11 @@ async def place_bitunix_order_for_user(
             order_id = str(result.get("orderId") or result.get("order_id") or "ok")
             logger.info(f"[StrategyTrader] ✅ Market order placed for user {user.id}: {symbol} {direction} {leverage}x — {order_id}")
 
-            # ── Step 2: Wait for fill then fetch actual entry price ───────────
+            # ── Step 2: Wait for fill, then set TP/SL on the position ─────────
             await asyncio.sleep(2.0)
 
-            bitunix_sym   = symbol.replace("/", "").upper()
-            actual_fill   = None
-            position_id   = None
+            bitunix_sym = symbol.replace("/", "").upper()
+            position_id = None
 
             for attempt in range(3):
                 try:
@@ -133,47 +142,16 @@ async def place_bitunix_order_for_user(
                             p for p in positions
                             if str(p.get("symbol", "")).upper().replace("/", "") == bitunix_sym
                             and p.get("hold_side", "").upper() == direction.upper()
-                            and p.get("entry_price", 0) > 0
                         ),
                         None,
                     )
                     if pos:
-                        actual_fill = pos["entry_price"]
                         position_id = pos.get("position_id", "")
                         break
                 except Exception as fe:
                     logger.warning(f"[StrategyTrader] Position fetch attempt {attempt + 1}/3 failed: {fe}")
                 await asyncio.sleep(1.0)
 
-            # ── Step 3: Calculate TP/SL from actual fill price ───────────────
-            if actual_fill and actual_fill > 0:
-                fill_price = actual_fill
-                logger.info(
-                    f"[StrategyTrader] {symbol} fill confirmed: ${fill_price:.6g} "
-                    f"(signal was ${entry_price:.6g}, diff={100 * (fill_price / entry_price - 1):+.3f}%)"
-                )
-            else:
-                # Fallback: signal price + conservative slippage estimate
-                slip = SLIP_PCT / 100
-                fill_price = entry_price * (1 + slip) if direction.upper() == "LONG" else entry_price * (1 - slip)
-                logger.warning(
-                    f"[StrategyTrader] {symbol} position not found after fill — "
-                    f"using estimated fill ${fill_price:.6g} (signal ${entry_price:.6g} ± {SLIP_PCT}%)"
-                )
-
-            if direction.upper() == "LONG":
-                tp_price = fill_price * (1 + (tp_pct + BUFFER_PCT) / 100)
-                sl_price = fill_price * (1 - sl_pct / 100)
-            else:
-                tp_price = fill_price * (1 - (tp_pct + BUFFER_PCT) / 100)
-                sl_price = fill_price * (1 + sl_pct / 100)
-
-            logger.info(
-                f"[StrategyTrader] {symbol} TP/SL from fill: "
-                f"TP={tp_price:.6g} (+{tp_pct}%) SL={sl_price:.6g} (-{sl_pct}%)"
-            )
-
-            # ── Step 4: Set TP/SL on the position ────────────────────────────
             try:
                 await trader.place_position_tpsl(
                     symbol      = symbol,
@@ -181,13 +159,16 @@ async def place_bitunix_order_for_user(
                     sl_price    = sl_price,
                     tp_price    = tp_price,
                 )
-                logger.info(f"[StrategyTrader] ✅ TP/SL set on position for {symbol}")
+                logger.info(
+                    f"[StrategyTrader] ✅ TP/SL set for {symbol}: "
+                    f"TP={tp_price:.6g} SL={sl_price:.6g}"
+                )
             except Exception as tpsl_err:
                 logger.warning(f"[StrategyTrader] TP/SL placement failed for {symbol}: {tpsl_err}")
 
             return {
                 "order_id":   order_id,
-                "fill_price": fill_price,
+                "fill_price": entry_price,   # shared ref price (same for all users)
                 "tp_price":   tp_price,
                 "sl_price":   sl_price,
             }
