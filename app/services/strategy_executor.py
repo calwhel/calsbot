@@ -1280,26 +1280,46 @@ async def run_live_position_monitor():
                         hist_entry   = float(close_hist.get("entry_price", 0))
                         close_type   = close_hist.get("close_type", "")
 
+                        forced_outcome = None  # set if stale-history force-close path fires
                         if hist_entry > 0 and ex.entry_price and ex.entry_price > 0:
                             entry_diff_pct = abs(hist_entry - ex.entry_price) / ex.entry_price
                             if entry_diff_pct > 0.02:
-                                logger.warning(
-                                    f"[live-monitor] {ex.symbol} id={ex.id} — history entry "
-                                    f"{hist_entry} differs from ours {ex.entry_price} by "
-                                    f"{entry_diff_pct*100:.2f}% — stale, skipping"
-                                )
-                                _reconcile_missing.pop(ex.id, None)
-                                continue
+                                # Close history belongs to a different position (different entry).
+                                # Keep the miss counter running — do NOT reset it to 0.
+                                # After 8+ consecutive misses with stale history, force-close
+                                # via TP/SL distance as best effort, since Bitunix clearly
+                                # no longer holds this position open.
+                                if miss_count >= 8 and ex.tp_price and ex.sl_price:
+                                    logger.warning(
+                                        f"[live-monitor] {ex.symbol} id={ex.id} — stale history "
+                                        f"for {miss_count} sweeps, force-closing via TP/SL distance "
+                                        f"(stale entry={hist_entry}, ours={ex.entry_price})"
+                                    )
+                                    dist_tp = abs(exit_price - ex.tp_price)
+                                    dist_sl = abs(exit_price - ex.sl_price)
+                                    forced_outcome = "WIN" if dist_tp <= dist_sl else "LOSS"
+                                    _reconcile_missing.pop(ex.id, None)
+                                else:
+                                    logger.warning(
+                                        f"[live-monitor] {ex.symbol} id={ex.id} — history entry "
+                                        f"{hist_entry} differs from ours {ex.entry_price} by "
+                                        f"{entry_diff_pct*100:.2f}% — stale (miss {miss_count}), skipping"
+                                    )
+                                    continue
 
-                        _reconcile_missing.pop(ex.id, None)
+                        if forced_outcome is None:
+                            _reconcile_missing.pop(ex.id, None)
 
                         # Determine outcome — priority order:
-                        # 1. close_type from Bitunix (most reliable when set)
-                        # 2. TP/SL distance (reliable; accounts for SHORT direction)
-                        # 3. Direction-adjusted realized_pnl (can be negative for SHORT wins
+                        # 1. forced_outcome already set by stale force-close path above
+                        # 2. close_type from Bitunix (most reliable when set)
+                        # 3. TP/SL distance (reliable; accounts for SHORT direction)
+                        # 4. Direction-adjusted realized_pnl (can be negative for SHORT wins
                         #    if Bitunix reports raw price-diff × size without direction flip)
-                        # 4. direction vs entry/exit price fallback
-                        if "TAKE" in close_type or close_type in ("TP", "TAKE_PROFIT"):
+                        # 5. direction vs entry/exit price fallback
+                        if forced_outcome is not None:
+                            outcome = forced_outcome
+                        elif "TAKE" in close_type or close_type in ("TP", "TAKE_PROFIT"):
                             outcome = "WIN"
                         elif "STOP" in close_type or "LIQUID" in close_type or close_type in ("SL", "STOP_LOSS"):
                             outcome = "LOSS"
