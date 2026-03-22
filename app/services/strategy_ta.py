@@ -688,13 +688,16 @@ async def eval_indicator(
 async def eval_price_momentum(
     cond: Dict, symbol: str, http_client, cache: Dict
 ) -> Tuple[bool, str]:
-    window   = int(cond.get("window_minutes", 10))
-    op       = cond.get("operator", "gt")
-    val      = float(cond.get("value", 5))
-    req_dir  = cond.get("direction", "any")
-    interval = "1m" if window <= 15 else "5m"
-    limit    = max(window + 2, 15)
-    klines   = await _get_klines(symbol, interval, limit, http_client, cache)
+    window       = int(cond.get("window_minutes", 10))
+    op           = cond.get("operator", "gt")
+    val          = float(cond.get("value", 5))
+    req_dir      = cond.get("direction", "any")
+    interval     = "1m" if window <= 15 else "5m"
+    interval_mins = 1 if window <= 15 else 5
+    # Number of candles needed to cover exactly `window` minutes
+    # e.g. window=30, interval=5m → ceil(30/5)+2 = 8 candles = ~40 min
+    n_candles    = max((window + interval_mins - 1) // interval_mins + 2, 4)
+    klines       = await _get_klines(symbol, interval, n_candles, http_client, cache)
     if not klines or len(klines) < 2: return False, "Momentum: not enough candles"
     open_p  = float(klines[0][1])
     close_p = float(klines[-1][4])
