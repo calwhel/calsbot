@@ -1461,36 +1461,21 @@ async def evaluate_and_fire(
             rsi = price_data.get("rsi", 50)
             direction = "LONG" if rsi > 50 else "SHORT"
 
-        # For live orders the MARKET fill lands at ask (LONG) or bid (SHORT) —
-        # slightly worse than current_price (mid/last).  Anchoring TP/SL to the
-        # raw signal price makes SL wider than TP on 1:1 configs.
-        # Fix: all users on the same signal share one reference price that
-        # already includes a typical spread/slippage buffer so TP == SL at 1:1.
-        # Paper trades fill at signal price with no spread — keep current_price.
-        _LIVE_SLIP_PCT = 0.10   # 0.10 % typical MARKET-order slippage on Bitunix
-        if is_paper:
-            ref_for_tpsl = current_price
-        else:
-            if direction == "LONG":
-                ref_for_tpsl = current_price * (1 + _LIVE_SLIP_PCT / 100)
-            else:
-                ref_for_tpsl = current_price * (1 - _LIVE_SLIP_PCT / 100)
-
         if direction == "LONG":
-            tp_price  = ref_for_tpsl * (1 + tp_pct  / 100)
-            sl_price  = ref_for_tpsl * (1 - sl_pct  / 100)
-            tp2_price = ref_for_tpsl * (1 + float(tp2_pct) / 100) if tp2_pct else None
+            tp_price  = current_price * (1 + tp_pct  / 100)
+            sl_price  = current_price * (1 - sl_pct  / 100)
+            tp2_price = current_price * (1 + float(tp2_pct) / 100) if tp2_pct else None
         else:
-            tp_price  = ref_for_tpsl * (1 - tp_pct  / 100)
-            sl_price  = ref_for_tpsl * (1 + sl_pct  / 100)
-            tp2_price = ref_for_tpsl * (1 - float(tp2_pct) / 100) if tp2_pct else None
+            tp_price  = current_price * (1 - tp_pct  / 100)
+            sl_price  = current_price * (1 + sl_pct  / 100)
+            tp2_price = current_price * (1 - float(tp2_pct) / 100) if tp2_pct else None
 
         execution = StrategyExecution(
             strategy_id    = strategy.id,
             user_id        = user.id,
             symbol         = symbol,
             direction      = direction,
-            entry_price    = ref_for_tpsl,
+            entry_price    = current_price,
             tp_price       = tp_price,
             tp2_price      = tp2_price,
             sl_price       = sl_price,
@@ -1549,22 +1534,17 @@ async def evaluate_and_fire(
             try:
                 from app.services.strategy_trader import place_bitunix_order_for_user
                 ps_type = risk.get("position_size_type", "pct")
-                trade_result = await place_bitunix_order_for_user(
+                order_id = await place_bitunix_order_for_user(
                     user        = user,
                     symbol      = symbol,
                     direction   = direction,
                     leverage    = leverage,
-                    entry_price = ref_for_tpsl,   # shared slippage-adjusted ref price
+                    entry_price = current_price,
                     tp_pct      = tp_pct,
                     sl_pct      = sl_pct,
                     risk_pct    = float(risk.get("position_size_pct", 5)),
                     risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None,
                 )
-                # trade_result is a dict: {order_id, fill_price, tp_price, sl_price}
-                if isinstance(trade_result, dict):
-                    order_id = trade_result.get("order_id")
-                else:
-                    order_id = trade_result  # legacy string fallback
             except Exception as e:
                 logger.error(f"[Strategy {strategy.id}] Order error: {e}")
                 # Don't cancel — flip to paper so the signal's ROI is still tracked.
@@ -1608,15 +1588,13 @@ async def evaluate_and_fire(
                 tg_id_live = _telegram_int_id(user)
                 if tg_id_live:
                     try:
-                        # Use actual fill price if available, else signal price
-                        display_entry = getattr(execution, "entry_price", None) or current_price
                         await _tg_send(
                             tg_id_live,
                             _fmt_open_card(
                                 strategy_name = strategy.name,
                                 symbol        = symbol,
                                 direction     = direction,
-                                entry         = display_entry,
+                                entry         = current_price,
                                 tp_price      = tp_price,
                                 tp_pct        = tp_pct,
                                 tp2_price     = tp2_price,
@@ -1841,7 +1819,7 @@ async def _propagate_to_subscribers(
                 try:
                     from app.services.strategy_trader import place_bitunix_order_for_user
                     ps_type  = sub_risk.get("position_size_type", "pct")
-                    _trade_result = await place_bitunix_order_for_user(
+                    order_id = await place_bitunix_order_for_user(
                         user        = sub_user,
                         symbol      = symbol,
                         direction   = direction,
@@ -1852,7 +1830,6 @@ async def _propagate_to_subscribers(
                         risk_pct    = float(sub_risk.get("position_size_pct", 5)),
                         risk_usd    = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None,
                     )
-                    order_id = _trade_result.get("order_id") if isinstance(_trade_result, dict) else _trade_result
                 except Exception as _e:
                     logger.error(f"[Propagate] Order error for strategy {sub_strategy.id}: {_e}")
                     sub_exec.is_paper = True
