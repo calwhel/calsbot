@@ -597,6 +597,29 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
     ex.pnl_pct    = pnl_pct
     ex.closed_at  = closed_at
 
+    # Clear the "open · unrealised..." note and replace with a proper close note.
+    pnl_sign   = "+" if pnl_pct >= 0 else ""
+    if outcome == "WIN":
+        close_note = f"TP hit · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
+    elif outcome == "LOSS":
+        close_note = f"SL hit · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
+    elif outcome == "CANCELLED":
+        close_note = "Expired · no TP/SL hit within hold period"
+    else:
+        close_note = f"Closed · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
+    try:
+        db.execute(
+            _text("UPDATE strategy_executions SET notes=:n WHERE id=:id"),
+            {"n": close_note, "id": ex.id},
+        )
+        db.commit()
+        ex.notes = close_note
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
     _update_performance(ex.strategy_id, db)
 
     # Telegram DM notification for paper closes
