@@ -1375,6 +1375,101 @@ async def eval_trend_reversal(
         )
 
 
+# ─── 19. SUSTAINED TREND ──────────────────────────────────────────────────────
+
+async def eval_sustained_trend(
+    cond: Dict, symbol: str, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """
+    Detects coins that have been consistently pumping or dumping over multiple
+    candle periods (days, 4h, 1h, etc.).
+
+    Useful for:
+      - Continuation longs/shorts — coin already in a strong multi-day trend
+      - Exhaustion plays          — coin has been pumping/dumping for many days → fade
+      - Relief bounce setups      — coin dumped hard for days → look for a bounce
+
+    Config keys:
+      trend_dir      : "pump" | "dump"
+      timeframe      : "1h" | "2h" | "4h" | "1d"  (default "1d")
+      periods        : int  — number of closed periods to examine (default 3)
+      min_total_pct  : float — min total % move across the window (default 10.0)
+      min_consistent : float — min % of periods in trend direction (0–100, default 65)
+      require_active : 0|1  — current candle must also be in trend direction (default 1)
+    """
+    trend_dir      = cond.get("trend_dir", "pump")
+    tf_raw         = str(cond.get("timeframe", "1d"))
+    periods        = max(2, int(cond.get("periods", 3)))
+    min_total_pct  = float(cond.get("min_total_pct", 10.0))
+    min_consistent = float(cond.get("min_consistent", 65.0)) / 100.0
+    require_active = str(cond.get("require_active", 1)) not in ("0", "false", "False")
+
+    # Normalise timeframe string
+    tf_map = {"1h": "1h", "2h": "2h", "4h": "4h", "1d": "1d", "day": "1d", "daily": "1d"}
+    interval = tf_map.get(tf_raw, "1d")
+
+    # Fetch enough candles: periods for analysis + 2 buffer
+    n = periods + 3
+    klines = await _get_klines(symbol, interval, n, http_client, cache)
+    if not klines or len(klines) < periods + 1:
+        return False, f"SustainedTrend: not enough {interval} candles (got {len(klines) if klines else 0})"
+
+    # Exclude the current (still-forming) candle — use the last `periods` closed candles
+    closed = klines[-(periods + 1):-1]   # periods fully closed candles
+    if len(closed) < periods:
+        return False, "SustainedTrend: insufficient closed candles"
+
+    # ── Total % move across the whole window ─────────────────────────────────
+    window_open  = float(closed[0][1])   # open of oldest candle
+    window_close = float(closed[-1][4])  # close of newest closed candle
+    if window_open <= 0:
+        return False, "SustainedTrend: invalid open price"
+    total_pct = (window_close - window_open) / window_open * 100
+
+    # ── Consistency: fraction of periods that went in the trend direction ─────
+    in_direction = sum(
+        1 for k in closed
+        if (trend_dir == "pump" and float(k[4]) > float(k[1]))
+        or (trend_dir == "dump" and float(k[4]) < float(k[1]))
+    )
+    consistent = in_direction / periods
+
+    # ── Higher-highs / lower-lows structural check ────────────────────────────
+    highs = [float(k[2]) for k in closed]
+    lows  = [float(k[3]) for k in closed]
+    if trend_dir == "pump":
+        structure_ok = highs[-1] > highs[0]  # at least overall higher high
+    else:
+        structure_ok = lows[-1] < lows[0]    # at least overall lower low
+
+    # ── Current candle still-active check ────────────────────────────────────
+    cur = klines[-1]
+    cur_o, cur_c = float(cur[1]), float(cur[4])
+    if trend_dir == "pump":
+        active = cur_c >= cur_o
+    else:
+        active = cur_c <= cur_o
+
+    # ── Decision ─────────────────────────────────────────────────────────────
+    pass_direction  = (total_pct > 0) if trend_dir == "pump" else (total_pct < 0)
+    pass_total      = abs(total_pct) >= min_total_pct
+    pass_consistent = consistent >= min_consistent
+    pass_active     = (not require_active) or active
+
+    passed = pass_direction and pass_total and pass_consistent and pass_active
+
+    label = "📈 PUMP" if trend_dir == "pump" else "📉 DUMP"
+    detail = (
+        f"SustainedTrend({label}) {periods}×{interval}: "
+        f"total={total_pct:+.1f}% (need {min_total_pct:.0f}%) "
+        f"consistent={consistent*100:.0f}% (need {min_consistent*100:.0f}%) "
+        f"struct={'✓' if structure_ok else '✗'} "
+        f"active={'✓' if active else '✗'} "
+        f"{'HIT' if passed else 'miss'}"
+    )
+    return passed, detail
+
+
 # ─── Master evaluator ─────────────────────────────────────────────────────────
 
 async def evaluate_strategy_conditions(
@@ -1467,6 +1562,9 @@ async def evaluate_strategy_conditions(
 
             elif ctype == "trend_reversal":
                 passed, detail = await eval_trend_reversal(cond, symbol, price, http_client, cache)
+
+            elif ctype == "sustained_trend":
+                passed, detail = await eval_sustained_trend(cond, symbol, http_client, cache)
 
             else:
                 passed, detail = False, f"Unknown condition type: {ctype}"

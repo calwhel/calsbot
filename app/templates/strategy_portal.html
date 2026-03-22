@@ -3556,6 +3556,7 @@ function condHtml(c){
   else if(t==='volume_spike')desc=`Volume spike ${c.multiplier||'?'}× normal`;
   else if(t==='support_resistance')desc=`S/R: ${(c.condition||'').replace(/_/g,' ')} (±${c.tolerance_pct||1}%)`;
   else if(t==='fvg')desc=`${c.direction||''} FVG — ${(c.condition||'').replace(/_/g,' ')} on ${c.timeframe||'?'}`;
+  else if(t==='sustained_trend'){const dir=c.trend_dir==='dump'?'📉 dumping':'📈 pumping';desc=`${dir} for ${c.periods||3}+ ${c.timeframe||'1d'} periods (${c.min_total_pct||10}%+ total, ${c.min_consistent||65}% consistent)`;}
   else desc=JSON.stringify(c);
   return`<div class="cond-item"><span class="cond-type">${t.replace(/_/g,' ')}</span><span style="flex:1">${desc}</span></div>`;
 }
@@ -3616,6 +3617,7 @@ const SIGNAL_META={
   keltner:         {icon:'🔲',label:'Keltner Channel',  desc:'Channel squeeze or expansion breakout'},
   williams_r:      {icon:'🎰',label:'Williams %R',      desc:'Momentum oscillator — oversold / overbought'},
   trend_reversal:  {icon:'🔃',label:'Trend Reversal',   desc:'Change of direction — EMA + RSI confirmation'},
+  sustained_trend: {icon:'📊',label:'Sustained Trend',  desc:'Coin has been pumping or dumping for multiple days/hours'},
   cci:             {icon:'🌀',label:'CCI',              desc:'Trend direction or extreme levels, with optional MA smoothing'},
   obv:             {icon:'📦',label:'OBV',              desc:'On-Balance Volume — accumulation or divergence'},
   heikin_ashi:     {icon:'🏯',label:'Heikin Ashi',      desc:'Smoothed candle pattern — flip or strength filter'},
@@ -3637,6 +3639,7 @@ const SIGNAL_FREQ={
   order_block:'low', fibonacci:'low', divergence:'low', funding_rate:'low',
   fvg:'low', open_interest:'low', liquidation:'low', session_level:'low',
   trend_reversal:'low', heikin_ashi:'low', ichimoku:'low', aroon:'low',
+  sustained_trend:'low',
 };
 const FREQ_STYLE={
   high:{label:'High',color:'#16a34a',bg:'rgba(22,163,74,.12)',title:'Fires often — high trade volume'},
@@ -3746,9 +3749,9 @@ function updateMktPreview(){
 const STYLE_SIGNALS={
   scalp:    ['rsi','stoch_rsi','macd','ema','volume_spike','candlestick','consecutive_candles'],
   swing:    ['ema','supertrend','rsi','cci','fibonacci','divergence','macd','atr_volatility'],
-  momentum: ['price_momentum','volume_spike','macd','consecutive_candles','open_interest','ema','cci'],
-  reversal: ['trend_reversal','rsi','divergence','candlestick','stoch_rsi','bb','market_structure','williams_r','cci'],
-  pump:     ['price_momentum','volume_spike','open_interest','liquidation','consecutive_candles','atr_volatility'],
+  momentum: ['price_momentum','volume_spike','macd','consecutive_candles','open_interest','ema','cci','sustained_trend'],
+  reversal: ['trend_reversal','rsi','divergence','candlestick','stoch_rsi','bb','market_structure','williams_r','cci','sustained_trend'],
+  pump:     ['price_momentum','volume_spike','open_interest','liquidation','consecutive_candles','atr_volatility','sustained_trend'],
   dip:      ['rsi','stoch_rsi','bb','vwap_deviation','session_level','divergence','williams_r','cci'],
   smc:      ['order_block','market_structure','fvg','fibonacci','divergence','session_level'],
   range:    ['support_resistance','bb','adx_filter','rsi','stoch_rsi','vwap_deviation','session_level','keltner'],
@@ -3833,6 +3836,7 @@ function getDefaultCfg(type){
     keltner:          {timeframe:tf,condition:'squeeze'},
     williams_r:       {timeframe:tf,condition:'oversold'},
     trend_reversal:   {timeframe:tf,condition:'bullish'},
+    sustained_trend:  {timeframe:'1d',trend_dir:'pump',periods:3,min_total_pct:10,min_consistent:65,require_active:1},
     cci:              {timeframe:tf,condition:'bullish',period:20,ma_type:'none',ma_period:3},
     obv:              {timeframe:tf,condition:'bullish',lookback:5},
     heikin_ashi:      {timeframe:tf,condition:'bullish'},
@@ -4100,6 +4104,44 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('bearish','Bearish (uptrend reversing down)',`${pfx}condition`,cfg.condition||'bullish','red')}
       </div>
       <div class="hint">Detects a change of direction using EMA21 trend slope, RSI turning, and candle confirmation. Works best on 15m–1h timeframes.</div>`;
+    case 'sustained_trend':{
+      const tdir=cfg.trend_dir||'pump';
+      const cons=cfg.min_consistent??65;
+      const useDaily=cfg.timeframe==='1d'||!cfg.timeframe;
+      return`
+      <div class="opt-label">Trend Direction</div>
+      <div class="opt-chips">
+        ${wzChip('pump','Sustained Pump 📈',`${pfx}trend_dir`,tdir,'green')}
+        ${wzChip('dump','Sustained Dump 📉',`${pfx}trend_dir`,tdir,'red')}
+      </div>
+      <div class="hint" style="margin-top:6px">Pump = coin has been climbing for days/hours. Dump = coin has been falling. Use with a short trade for exhaustion plays, or with the trend direction for continuation.</div>
+      <div class="opt-label" style="margin-top:12px">Timeframe</div>
+      <div class="opt-chips">
+        ${wzChip('1h','1H',`${pfx}timeframe`,cfg.timeframe||'1d')}
+        ${wzChip('2h','2H',`${pfx}timeframe`,cfg.timeframe||'1d')}
+        ${wzChip('4h','4H',`${pfx}timeframe`,cfg.timeframe||'1d')}
+        ${wzChip('1d','Daily',`${pfx}timeframe`,cfg.timeframe||'1d','green')}
+      </div>
+      <div class="hint">Daily = multi-day trend. 4H = multi-session trend. 1H = intraday trend over several hours.</div>
+      <div class="opt-label" style="margin-top:12px">Number of Periods <span id="${pfx}stp-d" style="color:var(--accent)">${cfg.periods||3}</span></div>
+      <input type="range" id="${pfx}stp" min="2" max="14" value="${cfg.periods||3}" step="1"
+        oninput="wzSl('${pfx}stp','${pfx}stp-d','','${pfx}periods')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">How many periods (days/candles) must show the trend. 3 days = coin has been pumping/dumping for at least 3 days.</div>
+      <div class="opt-label" style="margin-top:12px">Min Total Move <span id="${pfx}stm-d" style="color:var(--accent)">${cfg.min_total_pct||10}%</span></div>
+      <input type="range" id="${pfx}stm" min="2" max="200" value="${cfg.min_total_pct||10}" step="1"
+        oninput="wzSl('${pfx}stm','${pfx}stm-d','%','${pfx}min_total_pct')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Minimum total % move across the whole window. Filters out weak/choppy action. 10% = coin moved at least 10% total over N days.</div>
+      <div class="opt-label" style="margin-top:12px">Consistency <span id="${pfx}stc-d" style="color:var(--accent)">${cons}%</span></div>
+      <input type="range" id="${pfx}stc" min="50" max="100" value="${cons}" step="5"
+        oninput="wzSl('${pfx}stc','${pfx}stc-d','%','${pfx}min_consistent')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">What % of periods must close in the trend direction. 65% = most days green/red. 100% = every single day must be in the trend direction (strict).</div>
+      <div class="opt-label" style="margin-top:12px">Still Active Right Now</div>
+      <div class="opt-chips">
+        ${wzChip(1,'Yes — current candle also in trend direction',`${pfx}require_active`,+(cfg.require_active??1),'green')}
+        ${wzChip(0,'No — historical pattern only',`${pfx}require_active`,+(cfg.require_active??1))}
+      </div>
+      <div class="hint">If enabled, the current forming candle must also be moving in the trend direction. Keeps the signal fresh.</div>`;
+    }
     case 'cci':return`${tf}
       <div class="opt-label">Condition</div>
       <div class="opt-chips">
@@ -5020,6 +5062,7 @@ function buildWizardDescription(){
       case 'williams_r':sig=`Williams %R ${cfg.condition||'oversold'} on ${tf}`;break;
       case 'cci':{const sm=cfg.ma_type&&cfg.ma_type!=='none'?` (${cfg.ma_type}${cfg.ma_period||3} smoothed)`:'';sig=`CCI(${cfg.period||20})${sm} is ${cond(cfg.condition||'bullish')} on ${tf}`;break;}
       case 'trend_reversal':sig=`${cfg.condition||'bullish'} trend reversal (EMA + RSI change of direction) on ${tf}`;break;
+      case 'sustained_trend':{const d=cfg.trend_dir==='dump'?'dumping':'pumping';sig=`Coin has been ${d} for ${cfg.periods||3}+ consecutive ${cfg.timeframe||'1d'} periods with at least ${cfg.min_total_pct||10}% total move and ${cfg.min_consistent||65}%+ of candles in that direction`;break;}
     }
     lines.push(`\nPrimary entry signal: ${sig}.`);
   }
@@ -5058,6 +5101,7 @@ function buildWizardDescription(){
         case 'keltner':cfm=`Keltner ${cfg.condition||'squeeze'} on ${tf}`;break;
         case 'williams_r':cfm=`Williams %R ${cfg.condition||'oversold'} on ${tf}`;break;
         case 'trend_reversal':cfm=`${cfg.condition||'bullish'} trend reversal on ${tf}`;break;
+        case 'sustained_trend':{const d=cfg.trend_dir==='dump'?'dump':'pump';cfm=`${cfg.periods||3}-period sustained ${d} on ${cfg.timeframe||'1d'} (${cfg.min_total_pct||10}%+ total, ${cfg.min_consistent||65}%+ consistent)`;break;}
         case 'cci':{const sm=cfg.ma_type&&cfg.ma_type!=='none'?` + ${cfg.ma_type}(${cfg.ma_period||3}) smoothing`:'';cfm=`CCI(${cfg.period||20}) ${cfg.condition||'bullish'}${sm} on ${tf}`;break;}
         default:cfm=`${c.type} confirmed on ${tf}`;
       }

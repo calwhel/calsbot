@@ -784,6 +784,72 @@ def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
                     and cur_close < cur_open and rsi > 50
                     and rsi < rsi_prev and cur_close < prev_close)
 
+    # ── Sustained Trend ───────────────────────────────────────────────────────────
+    if ctype == "sustained_trend":
+        trend_dir      = cond.get("trend_dir", "pump")
+        tf_raw         = str(cond.get("timeframe", "1d"))
+        periods        = max(2, int(cond.get("periods", 3)))
+        min_total_pct  = float(cond.get("min_total_pct", 10.0))
+        min_consistent = float(cond.get("min_consistent", 65.0)) / 100.0
+        require_active = str(cond.get("require_active", 1)) not in ("0", "false", "False")
+
+        # Map timeframe to hourly candle count per period
+        tf_hours = {"1h": 1, "2h": 2, "4h": 4, "1d": 24, "day": 24, "daily": 24}
+        candles_per = tf_hours.get(tf_raw, 24)
+
+        # Bucket klines (1h) into higher-timeframe periods
+        total_needed = (periods + 2) * candles_per
+        if len(klines) < total_needed:
+            return False
+
+        # Build period-OHLC from the most recent windows (exclude current forming period)
+        buckets = []
+        work = list(klines)
+        # Most recent incomplete period = last `candles_per` candles (skip it)
+        work = work[:-candles_per] if len(work) > candles_per else work
+        # Now extract `periods` complete buckets from the tail
+        for _ in range(periods):
+            if len(work) < candles_per:
+                break
+            chunk = work[-candles_per:]
+            work  = work[:-candles_per]
+            o = float(chunk[0][1])
+            c = float(chunk[-1][4])
+            buckets.append((o, c))
+        buckets.reverse()  # oldest first
+
+        if len(buckets) < periods:
+            return False
+
+        # Total move
+        window_open  = buckets[0][0]
+        window_close = buckets[-1][1]
+        if window_open <= 0:
+            return False
+        total_pct = (window_close - window_open) / window_open * 100
+
+        # Consistency
+        in_dir = sum(
+            1 for (o, c) in buckets
+            if (trend_dir == "pump" and c > o) or (trend_dir == "dump" and c < o)
+        )
+        consistent = in_dir / periods
+
+        # Direction check
+        pass_direction  = (total_pct > 0) if trend_dir == "pump" else (total_pct < 0)
+        pass_total      = abs(total_pct) >= min_total_pct
+        pass_consistent = consistent >= min_consistent
+
+        # Current candle direction
+        if require_active and len(klines) >= 2:
+            cur_o = float(klines[-1][1])
+            cur_c = float(klines[-1][4])
+            pass_active = (cur_c >= cur_o) if trend_dir == "pump" else (cur_c <= cur_o)
+        else:
+            pass_active = True
+
+        return pass_direction and pass_total and pass_consistent and pass_active
+
     # Genuinely unsupported types (need real-time external data feeds):
     #   open_interest  — requires historical OI snapshots (Coinglass API)
     #   liquidation    — requires historical liquidation feed
