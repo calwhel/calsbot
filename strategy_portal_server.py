@@ -1530,19 +1530,49 @@ async def api_delete_strategy(strategy_id: int, uid: str = Query(...)):
         if not strategy:
             raise HTTPException(status_code=404)
 
-        # Null out FK references in strategy_purchases so the delete doesn't fail
-        # when this strategy was previously listed on the marketplace and purchased.
+        # Clean up all FK-constrained child records before deleting the strategy.
+        # Use raw SQL to handle non-nullable FKs and complex dependency chains.
+        from sqlalchemy import text
         try:
-            from app.strategy_marketplace_ext import StrategyPurchase, StrategyListing
-            db.query(StrategyPurchase).filter(
-                StrategyPurchase.cloned_strategy_id == strategy_id
-            ).update({"cloned_strategy_id": None}, synchronize_session=False)
-            # Delist from marketplace if still active
-            db.query(StrategyListing).filter(
-                StrategyListing.strategy_id == strategy_id
-            ).update({"is_active": False}, synchronize_session=False)
-        except Exception:
-            pass  # marketplace tables may not exist in all environments
+            # 1) Delete earnings_transactions tied to purchases of this strategy
+            db.execute(text("""
+                DELETE FROM earnings_transactions
+                WHERE purchase_id IN (
+                    SELECT id FROM strategy_purchases WHERE strategy_id = :sid
+                )
+            """), {"sid": strategy_id})
+
+            # 2) Delete purchases where this strategy was the source listing
+            db.execute(text(
+                "DELETE FROM strategy_purchases WHERE strategy_id = :sid"
+            ), {"sid": strategy_id})
+
+            # 3) Null out cloned_strategy_id for subscriptions that cloned this strategy
+            db.execute(text("""
+                UPDATE strategy_purchases
+                SET cloned_strategy_id = NULL
+                WHERE cloned_strategy_id = :sid
+            """), {"sid": strategy_id})
+
+            # 4) Delete ratings tied to this strategy's marketplace listing
+            db.execute(text("""
+                DELETE FROM strategy_ratings
+                WHERE listing_id IN (
+                    SELECT id FROM strategy_marketplace WHERE strategy_id = :sid
+                )
+            """), {"sid": strategy_id})
+
+            # 5) Delete the marketplace listing itself
+            db.execute(text(
+                "DELETE FROM strategy_marketplace WHERE strategy_id = :sid"
+            ), {"sid": strategy_id})
+
+            # 6) Delete strategy offers
+            db.execute(text(
+                "DELETE FROM strategy_offers WHERE strategy_id = :sid"
+            ), {"sid": strategy_id})
+        except Exception as _clean_err:
+            logger.warning(f"[DeleteStrategy] Cleanup warning (non-fatal): {_clean_err}")
 
         db.delete(strategy)
         db.commit()
