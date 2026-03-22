@@ -4411,103 +4411,147 @@ async def strategy_advisor(request: Request):
         # ── Build trade analytics ─────────────────────────────────────────────
         DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-        def session(h):
-            if h < 6:   return "Night (00–06 UTC)"
-            if h < 12:  return "Morning (06–12 UTC)"
-            if h < 18:  return "Afternoon (12–18 UTC)"
-            return "Evening (18–24 UTC)"
+        def _session(h):
+            if h < 6:   return "Night (00-06 UTC)"
+            if h < 12:  return "Morning (06-12 UTC)"
+            if h < 18:  return "Afternoon (12-18 UTC)"
+            return "Evening (18-24 UTC)"
 
-        hour_stats = {}   # hour → {win, loss}
-        dow_stats  = {}   # dow  → {win, loss}
-        sess_stats = {}   # session → {win, loss}
-        coin_stats = {}   # coin → {win, loss, pnl}
-
-        for ex in execs:
-            is_win  = ex.outcome == "WIN"
-            is_loss = ex.outcome == "LOSS"
-            coin = (ex.symbol or "").replace("USDT", "")
-
-            if ex.fired_at:
-                h = ex.fired_at.hour
-                d = ex.fired_at.weekday()
-                sn = session(h)
-
-                if h  not in hour_stats: hour_stats[h]  = {"win": 0, "loss": 0}
-                if d  not in dow_stats:  dow_stats[d]   = {"win": 0, "loss": 0}
-                if sn not in sess_stats: sess_stats[sn] = {"win": 0, "loss": 0}
-
-                if is_win:  hour_stats[h]["win"]  += 1; dow_stats[d]["win"]  += 1; sess_stats[sn]["win"]  += 1
-                if is_loss: hour_stats[h]["loss"] += 1; dow_stats[d]["loss"] += 1; sess_stats[sn]["loss"] += 1
-
-            if coin:
-                if coin not in coin_stats: coin_stats[coin] = {"win": 0, "loss": 0, "pnl": 0.0}
-                if is_win:  coin_stats[coin]["win"]  += 1
-                if is_loss: coin_stats[coin]["loss"] += 1
-                if ex.pnl_pct: coin_stats[coin]["pnl"] += float(ex.pnl_pct)
-
-        def wr(s):
+        def _wr(s):
             tot = s["win"] + s["loss"]
             return f"{round(s['win']/tot*100)}% ({s['win']}W/{s['loss']}L)" if tot else "no data"
 
-        # Session breakdown
-        sess_lines = []
-        for sn in ["Night (00–06 UTC)", "Morning (06–12 UTC)", "Afternoon (12–18 UTC)", "Evening (18–24 UTC)"]:
-            if sn in sess_stats:
-                sess_lines.append(f"  {sn}: {wr(sess_stats[sn])}")
-        session_block = "\n".join(sess_lines) if sess_lines else "  No session data yet"
+        hour_stats = {}
+        dow_stats  = {}
+        sess_stats = {}
+        coin_stats = {}
 
-        # Day-of-week breakdown
-        dow_lines = []
-        for d in range(7):
-            if d in dow_stats:
-                dow_lines.append(f"  {DOW[d]}: {wr(dow_stats[d])}")
-        dow_block = "\n".join(dow_lines) if dow_lines else "  No day-of-week data yet"
+        session_block = "  No session data yet"
+        dow_block     = "  No day-of-week data yet"
+        best_coins    = "not enough data"
+        worst_coins   = "none negative yet"
+        trade_log     = "  No trades yet"
 
-        # Best / worst coins
-        coin_sorted = sorted(coin_stats.items(), key=lambda x: x[1]["pnl"], reverse=True)
-        best_coins  = ", ".join(f"{c} ({v['win']}W/{v['loss']}L, {v['pnl']:+.0f}%)" for c, v in coin_sorted[:5])
-        worst_coins = ", ".join(f"{c} ({v['win']}W/{v['loss']}L, {v['pnl']:+.0f}%)" for c, v in coin_sorted[-5:] if v["pnl"] < 0)
+        try:
+            for ex in execs:
+                is_win  = ex.outcome == "WIN"
+                is_loss = ex.outcome == "LOSS"
+                coin = (ex.symbol or "").replace("USDT", "")
 
-        # Recent trade log (last 25)
-        recent_lines = []
-        for ex in reversed(execs[:25]):
-            dt   = ex.fired_at.strftime("%m/%d %H:%M") if ex.fired_at else "?"
-            coin = (ex.symbol or "?").replace("USDT", "")
-            pnl  = f"{ex.pnl_pct:+.1f}%" if ex.pnl_pct is not None else "?"
-            dur  = ""
-            if ex.fired_at and ex.closed_at:
-                mins = int((ex.closed_at - ex.fired_at).total_seconds() / 60)
-                dur  = f" {mins}m"
-            recent_lines.append(f"  {dt} | {coin} {ex.direction or ''} | {ex.outcome}{dur} | {pnl}")
-        trade_log = "\n".join(recent_lines) if recent_lines else "  No trades yet"
+                if ex.fired_at:
+                    h  = ex.fired_at.hour
+                    d  = ex.fired_at.weekday()
+                    sn = _session(h)
+
+                    if h  not in hour_stats: hour_stats[h]  = {"win": 0, "loss": 0}
+                    if d  not in dow_stats:  dow_stats[d]   = {"win": 0, "loss": 0}
+                    if sn not in sess_stats: sess_stats[sn] = {"win": 0, "loss": 0}
+
+                    if is_win:
+                        hour_stats[h]["win"]  += 1
+                        dow_stats[d]["win"]   += 1
+                        sess_stats[sn]["win"] += 1
+                    if is_loss:
+                        hour_stats[h]["loss"]  += 1
+                        dow_stats[d]["loss"]   += 1
+                        sess_stats[sn]["loss"] += 1
+
+                if coin:
+                    if coin not in coin_stats: coin_stats[coin] = {"win": 0, "loss": 0, "pnl": 0.0}
+                    if is_win:  coin_stats[coin]["win"]  += 1
+                    if is_loss: coin_stats[coin]["loss"] += 1
+                    if ex.pnl_pct is not None:
+                        coin_stats[coin]["pnl"] += float(ex.pnl_pct)
+
+            # Session breakdown
+            sess_lines = []
+            for sn in ["Night (00-06 UTC)", "Morning (06-12 UTC)", "Afternoon (12-18 UTC)", "Evening (18-24 UTC)"]:
+                if sn in sess_stats:
+                    sess_lines.append(f"  {sn}: {_wr(sess_stats[sn])}")
+            if sess_lines:
+                session_block = "\n".join(sess_lines)
+
+            # Day-of-week breakdown
+            dow_lines = []
+            for d in range(7):
+                if d in dow_stats:
+                    dow_lines.append(f"  {DOW[d]}: {_wr(dow_stats[d])}")
+            if dow_lines:
+                dow_block = "\n".join(dow_lines)
+
+            # Best / worst coins
+            coin_sorted = sorted(coin_stats.items(), key=lambda x: x[1]["pnl"], reverse=True)
+            if coin_sorted:
+                best_coins  = ", ".join(
+                    f"{c} ({v['win']}W/{v['loss']}L, {v['pnl']:+.0f}%)"
+                    for c, v in coin_sorted[:5]
+                )
+                negatives = [(c, v) for c, v in coin_sorted[-5:] if v["pnl"] < 0]
+                if negatives:
+                    worst_coins = ", ".join(
+                        f"{c} ({v['win']}W/{v['loss']}L, {v['pnl']:+.0f}%)"
+                        for c, v in negatives
+                    )
+
+            # Recent trade log (last 25)
+            recent_lines = []
+            for ex in reversed(execs[:25]):
+                try:
+                    dt   = ex.fired_at.strftime("%m/%d %H:%M") if ex.fired_at else "?"
+                    coin = (ex.symbol or "?").replace("USDT", "")
+                    pnl  = f"{ex.pnl_pct:+.1f}%" if ex.pnl_pct is not None else "?"
+                    dur  = ""
+                    if ex.fired_at and ex.closed_at:
+                        # strip tz info to avoid naive/aware mismatch
+                        fa = ex.fired_at.replace(tzinfo=None)
+                        ca = ex.closed_at.replace(tzinfo=None)
+                        mins = int((ca - fa).total_seconds() / 60)
+                        dur  = f" {mins}m"
+                    recent_lines.append(
+                        f"  {dt} | {coin} {ex.direction or ''} | {ex.outcome}{dur} | {pnl}"
+                    )
+                except Exception:
+                    continue
+            if recent_lines:
+                trade_log = "\n".join(recent_lines)
+
+        except Exception as analytics_err:
+            logger.warning(f"Strategy advisor analytics error (non-fatal): {analytics_err}")
 
         # Strategy config summary
-        cfg  = strategy.config or {}
-        strat_dir  = cfg.get("direction", "BOTH")
-        strat_tf   = cfg.get("timeframe", "?")
-        tp_pct     = cfg.get("take_profit_pct", "?")
-        sl_pct     = cfg.get("stop_loss_pct", "?")
-        lev        = cfg.get("leverage", "?")
-        max_trades = cfg.get("max_trades_per_day", "?")
-        conditions = cfg.get("entry_conditions", [])
-        cond_lines = []
-        for c in conditions:
-            ctype = c.get("type", "?")
-            cond_lines.append(f"  - {ctype}: {c}")
-        cond_block = "\n".join(cond_lines) if cond_lines else "  (no conditions set)"
+        try:
+            cfg  = strategy.config or {}
+            strat_dir  = cfg.get("direction", "BOTH")
+            strat_tf   = cfg.get("timeframe", "?")
+            tp_pct     = cfg.get("take_profit_pct", "?")
+            sl_pct     = cfg.get("stop_loss_pct", "?")
+            lev        = cfg.get("leverage", "?")
+            max_trades = cfg.get("max_trades_per_day", "?")
+            conditions = cfg.get("entry_conditions", [])
+            cond_lines = []
+            for c in (conditions or []):
+                ctype = c.get("type", "?") if isinstance(c, dict) else str(c)
+                cond_lines.append(f"  - {ctype}: {c}")
+            cond_block = "\n".join(cond_lines) if cond_lines else "  (no conditions set)"
+        except Exception:
+            strat_dir = strat_tf = tp_pct = sl_pct = lev = max_trades = "?"
+            cond_block = "  (error reading config)"
 
         # Overall perf summary
-        if perf and perf.total_trades:
-            wr_overall = round(perf.win_rate or 0, 1)
-            pnl_total  = round(perf.total_pnl_pct or 0, 2)
-            avg_win    = round(perf.avg_win_pct or 0, 1)
-            avg_loss   = round(perf.avg_loss_pct or 0, 1)
-            perf_block = (
-                f"Total trades: {perf.total_trades} | Win rate: {wr_overall}% | "
-                f"Total P&L: {pnl_total:+}% | Avg win: +{avg_win}% | Avg loss: {avg_loss}%"
-            )
-        else:
-            perf_block = "No closed trades yet."
+        try:
+            if perf and perf.total_trades:
+                wr_overall = round(perf.win_rate or 0, 1)
+                pnl_total  = round(perf.total_pnl_pct or 0, 2)
+                avg_win    = round(perf.avg_win_pct or 0, 1)
+                avg_loss   = round(perf.avg_loss_pct or 0, 1)
+                perf_block = (
+                    f"Total trades: {perf.total_trades} | Win rate: {wr_overall}% | "
+                    f"Total P&L: {pnl_total:+}% | Avg win: +{avg_win}% | Avg loss: {avg_loss}%"
+                )
+            else:
+                perf_block = "No closed trades yet."
+        except Exception:
+            perf_block = "Performance data unavailable."
 
         system_prompt = f"""You are an expert crypto trading strategy analyst embedded in TradeHub Markets.
 
