@@ -3,9 +3,15 @@ Strategy Trader — standalone order placement for user strategies.
 Wraps the existing BitunixTrader without modifying bitunix_trader.py.
 """
 import logging
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ── Balance cache ──────────────────────────────────────────────────────────────
+# Avoids a fresh Bitunix API call on every signal when balance changes rarely.
+_balance_cache: dict = {}   # {user_id: (balance_float, fetched_at_timestamp)}
+_BALANCE_TTL = 60           # seconds before re-fetching
 
 
 async def place_bitunix_order_for_user(
@@ -67,19 +73,26 @@ async def place_bitunix_order_for_user(
                 position_size_usd = float(risk_usd)
                 logger.info(f"[StrategyTrader] {symbol} fixed size ${position_size_usd}")
             else:
-                balance = await trader.get_account_balance()
-                # NOTE: use `is None` not `not balance` — balance==0.0 is falsy
-                # and must be caught as a separate "$0 balance" case.
-                if balance is None or balance < 0:
-                    raise RuntimeError(
-                        "Could not fetch Bitunix account balance — check your API key "
-                        "has Futures read permission (or re-enter your API keys)."
-                    )
-                if balance == 0:
-                    raise RuntimeError(
-                        "Bitunix Futures balance is $0. Transfer USDT from your Spot "
-                        "wallet to your Futures wallet on Bitunix (Assets → Transfer)."
-                    )
+                # Use cached balance if fresh enough — avoids an API round-trip per signal
+                cached = _balance_cache.get(user.id)
+                if cached and (time.time() - cached[1]) < _BALANCE_TTL:
+                    balance = cached[0]
+                    logger.info(f"[StrategyTrader] {symbol} using cached balance ${balance:.2f}")
+                else:
+                    balance = await trader.get_account_balance()
+                    # NOTE: use `is None` not `not balance` — balance==0.0 is falsy
+                    # and must be caught as a separate "$0 balance" case.
+                    if balance is None or balance < 0:
+                        raise RuntimeError(
+                            "Could not fetch Bitunix account balance — check your API key "
+                            "has Futures read permission (or re-enter your API keys)."
+                        )
+                    if balance == 0:
+                        raise RuntimeError(
+                            "Bitunix Futures balance is $0. Transfer USDT from your Spot "
+                            "wallet to your Futures wallet on Bitunix (Assets → Transfer)."
+                        )
+                    _balance_cache[user.id] = (balance, time.time())
                 position_size_usd = max(balance * (risk_pct / 100), 5.0)
                 logger.info(f"[StrategyTrader] {symbol} pct size {risk_pct}% of ${balance:.2f} = ${position_size_usd:.2f}")
 

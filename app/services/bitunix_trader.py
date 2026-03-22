@@ -18,6 +18,10 @@ _subscription_expiry_notified = set()
 # Track recent trade failures to avoid spamming admin (symbol -> last_notified_time)
 _trade_failure_notified = {}
 
+# Cache: skip margin-mode + leverage API calls if already confirmed within 5 min
+# Key: (api_key_suffix, symbol, leverage)  Value: last_confirmed_timestamp
+_PLACE_TRADE_SETUP_CACHE: dict = {}
+
 class RetryableError(Exception):
     """Error that can be retried (API timeout, connection error, rate limit)"""
     pass
@@ -758,34 +762,65 @@ class BitunixTrader:
             leverage: Leverage multiplier
         """
         try:
-            # CRITICAL: Set margin mode to CROSS before placing order
-            await self.set_margin_mode(symbol, "CROSS")
-            
-            # Set leverage BEFORE placing order (best-effort — already-set or minor errors don't abort)
-            leverage_set = await self.set_leverage(symbol, leverage)
-            if not leverage_set:
-                logger.warning(f"[place_trade] Leverage set returned False for {symbol} {leverage}x — continuing anyway (may already be set)")
-            
+            import asyncio as _asyncio
+
             bitunix_symbol = symbol.replace('/', '')
-            
+
+            # ── Parallel pre-flight: margin mode, leverage, position limits, live price ──
+            # All four are independent — run them concurrently instead of sequentially
+            # to cut ~600ms of serial HTTP latency down to one round-trip window.
+            #
+            # Setup calls (margin/leverage) are skipped if already sent for this
+            # symbol+leverage in the last 5 minutes (they don't change between signals).
+            _setup_key = (self.api_key[-8:], bitunix_symbol, leverage)
+            _now = time.time()
+            _setup_fresh = (
+                _setup_key in _PLACE_TRADE_SETUP_CACHE
+                and (_now - _PLACE_TRADE_SETUP_CACHE[_setup_key]) < 300
+            )
+
+            async def _ensure_setup():
+                if _setup_fresh:
+                    return
+                await _asyncio.gather(
+                    self.set_margin_mode(symbol, "CROSS"),
+                    self.set_leverage(symbol, leverage),
+                    return_exceptions=True,
+                )
+                _PLACE_TRADE_SETUP_CACHE[_setup_key] = time.time()
+
+            setup_task    = _asyncio.ensure_future(_ensure_setup())
+            limits_task   = _asyncio.ensure_future(self.get_max_position_size(symbol))
+            price_task    = _asyncio.ensure_future(self.get_current_price(symbol))
+
+            _, limits, live_price = await _asyncio.gather(
+                setup_task, limits_task, price_task,
+                return_exceptions=True,
+            )
+
+            # Unwrap exceptions from gather (treat as None for non-critical calls)
+            if isinstance(limits, Exception):
+                limits = None
+            if isinstance(live_price, Exception):
+                live_price = None
+
             quantity = (position_size_usdt * leverage) / entry_price
-            
+
             # Check max position size from Bitunix and cap if needed
-            limits = await self.get_max_position_size(symbol)
-            if limits:
+            if limits and not isinstance(limits, Exception):
                 max_qty = limits['max_market_order']
                 min_qty = limits['min_trade_volume']
-                
+
                 if quantity > max_qty:
                     logger.warning(f"⚠️ {symbol} quantity {quantity:.4f} exceeds max {max_qty} - CAPPING to max")
-                    quantity = max_qty * 0.95  # Use 95% of max to be safe
-                
+                    quantity = max_qty * 0.95
+
                 if quantity < min_qty:
                     logger.error(f"❌ {symbol} quantity {quantity:.8f} below min {min_qty} - trade too small")
                     return None
-            
+
             logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {quantity:.4f} qty")
-            
+
             order_params = {
                 'symbol': bitunix_symbol,
                 'side': 'BUY' if direction.upper() == 'LONG' else 'SELL',
@@ -795,38 +830,30 @@ class BitunixTrader:
                 'effect': 'GTC',
                 'clientId': f"bot_{int(time.time() * 1000)}"
             }
-            
-            # Note: TP is set via separate reduce orders for dual TP support
-            # Single TP trades still use tpPrice parameter.
-            # Guard: if the market has already blown past TP (fast-moving coin),
-            # Bitunix would reject the order. Cancel the trade entirely instead —
-            # the opportunity is gone and there is no point entering.
+
+            # ── TP price validity check (uses live_price already fetched above) ──
+            # If market has already blown past TP before the order is placed,
+            # cancel the trade — the opportunity is gone.
             if take_profit:
-                try:
-                    live_price = await self.get_current_price(symbol)
-                    if live_price and live_price > 0:
-                        if direction.upper() == 'SHORT' and take_profit >= live_price:
-                            logger.warning(
-                                f"🚫 {symbol} SHORT cancelled — live price ${live_price:.8f} already "
-                                f"at/below TP ${take_profit} before order placed"
-                            )
-                            raise RuntimeError(
-                                f"PRICE_PAST_TP: {symbol} SHORT live price ${live_price:.8f} "
-                                f"already at/below TP ${take_profit} — trade cancelled"
-                            )
-                        elif direction.upper() == 'LONG' and take_profit <= live_price:
-                            logger.warning(
-                                f"🚫 {symbol} LONG cancelled — live price ${live_price:.8f} already "
-                                f"at/above TP ${take_profit} before order placed"
-                            )
-                            raise RuntimeError(
-                                f"PRICE_PAST_TP: {symbol} LONG live price ${live_price:.8f} "
-                                f"already at/above TP ${take_profit} — trade cancelled"
-                            )
-                except RuntimeError:
-                    raise  # propagate the PRICE_PAST_TP signal
-                except Exception as tp_check_err:
-                    logger.warning(f"⚠️ TP price check failed for {symbol}: {tp_check_err} — proceeding anyway")
+                if live_price and live_price > 0:
+                    if direction.upper() == 'SHORT' and take_profit >= live_price:
+                        logger.warning(
+                            f"🚫 {symbol} SHORT cancelled — live price ${live_price:.8f} already "
+                            f"at/below TP ${take_profit} before order placed"
+                        )
+                        raise RuntimeError(
+                            f"PRICE_PAST_TP: {symbol} SHORT live price ${live_price:.8f} "
+                            f"already at/below TP ${take_profit} — trade cancelled"
+                        )
+                    elif direction.upper() == 'LONG' and take_profit <= live_price:
+                        logger.warning(
+                            f"🚫 {symbol} LONG cancelled — live price ${live_price:.8f} already "
+                            f"at/above TP ${take_profit} before order placed"
+                        )
+                        raise RuntimeError(
+                            f"PRICE_PAST_TP: {symbol} LONG live price ${live_price:.8f} "
+                            f"already at/above TP ${take_profit} — trade cancelled"
+                        )
 
                 order_params.update({
                     'tpPrice': str(take_profit),
