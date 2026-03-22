@@ -4497,10 +4497,15 @@ function renderStep6(){
       <div class="hint" style="margin-bottom:8px">Enter multiple coins separated by commas. Great for watching a curated watchlist.</div>
       <input type="text" id="wz-coins" value="${WZ.specificCoins}" placeholder="BTCUSDT, ETHUSDT, SOLUSDT, FARTCOINUSDT" oninput="WZ.specificCoins=this.value">
     `:''}
-    ${(WZ.coins==='gainers'||WZ.coins==='losers')?`
-      <div class="opt-label">Minimum ${WZ.coins==='gainers'?'gain':'loss'} in 24h <span id="wz-ct-d" style="color:var(--accent)">${WZ.coinsThreshold||5}%</span></div>
+    ${WZ.coins==='gainers'?`
+      <div class="opt-label">How many top gainers to scan <span id="wz-ct-d" style="color:var(--accent)">Top ${WZ.coinsThreshold||30}</span></div>
+      <input type="range" id="wz-ct" min="10" max="50" value="${WZ.coinsThreshold||30}" step="5" oninput="WZ.coinsThreshold=Number(this.value);document.getElementById('wz-ct-d').textContent='Top '+this.value" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Scans the top movers on Bitunix by 24h % gain — always the actual biggest gainers of the day, no fixed threshold.</div>
+    `:''}
+    ${WZ.coins==='losers'?`
+      <div class="opt-label">Minimum loss in 24h <span id="wz-ct-d" style="color:var(--accent)">${WZ.coinsThreshold||5}%</span></div>
       <input type="range" id="wz-ct" min="1" max="50" value="${WZ.coinsThreshold||5}" step="1" oninput="WZ.coinsThreshold=Number(this.value);document.getElementById('wz-ct-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
-      <div class="hint">${WZ.coins==='gainers'?'Only scan coins that have already pumped this much — then look for the continuation.':'Only scan coins that have already dropped this much — ideal for short entries or reversal longs.'}</div>
+      <div class="hint">Only scan coins that have already dropped this much — ideal for short entries or reversal longs.</div>
     `:''}
     ${WZ.coins==='all'?`
       <div class="form-row" style="margin-top:10px">
@@ -5136,8 +5141,7 @@ async function buildStrategy(){
     } else if(WZ.coins==='specific'&&WZ.specificCoins){
       data.config.universe={type:'specific',symbols:WZ.specificCoins.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean)};
     } else if(WZ.coins==='gainers'){
-      if(!data.config.universe)data.config.universe={};
-      data.config.universe.min_24h_change=WZ.coinsThreshold||5;
+      data.config.universe={type:'top_gainers',top_n:WZ.coinsThreshold||30,exclude_slow_highcap:true,min_volume_usd:500000};
     } else if(WZ.coins==='losers'){
       if(!data.config.universe)data.config.universe={};
       data.config.universe.max_24h_change=-(WZ.coinsThreshold||5);
@@ -5201,6 +5205,7 @@ function formatConfig(cfg,warnings,riskRating){
     ${(()=>{const u=cfg.universe||{};const f=cfg.filters||{};const tags=[];
       if(u.single_coin&&u.symbols?.length)tags.push(`🎯 Single coin: <strong>${u.symbols[0]}</strong>`);
       else if(u.type==='specific'&&u.symbols?.length)tags.push(`📋 Watchlist: <strong>${u.symbols.slice(0,3).join(', ')}${u.symbols.length>3?' +more':''}</strong>`);
+      else if(u.type==='top_gainers')tags.push(`📈 Top ${u.top_n||30} gainers on Bitunix`);
       else if(u.min_24h_change)tags.push(`📈 Top gainers ≥${u.min_24h_change}%`);
       else if(u.max_24h_change)tags.push(`📉 Top losers ≤${u.max_24h_change}%`);
       if(f.htf_trend)tags.push('🔭 HTF trend filter ON');
@@ -6208,8 +6213,8 @@ async function giCreateStrategy() {
       .map(s => s.endsWith('USDT') ? s : s + 'USDT');
     universe = coins.length ? { type: 'specific', symbols: coins } : { type: 'all' };
   } else if (_giUniMode === 'gainers') {
-    const th = parseFloat(document.getElementById('gi-uni-threshold-range')?.value) || 5;
-    universe = { type: 'all', min_24h_change: th };
+    const th = parseFloat(document.getElementById('gi-uni-threshold-range')?.value) || 30;
+    universe = { type: 'top_gainers', top_n: th, exclude_slow_highcap: true, min_volume_usd: 500000 };
   } else if (_giUniMode === 'losers') {
     const th = parseFloat(document.getElementById('gi-uni-threshold-range')?.value) || 5;
     universe = { type: 'all', max_24h_change: -th };
@@ -6496,8 +6501,8 @@ async function pineSave() {
       .map(s => s.endsWith('USDT') ? s : s + 'USDT');
     _pineCompiledConfig.universe = coins.length ? { type: 'specific', symbols: coins } : { type: 'all' };
   } else if (_pineUniMode === 'gainers') {
-    const th = parseFloat(document.getElementById('pine-uni-threshold-range').value) || 5;
-    _pineCompiledConfig.universe = { type: 'all', min_24h_change: th };
+    const th = parseFloat(document.getElementById('pine-uni-threshold-range').value) || 30;
+    _pineCompiledConfig.universe = { type: 'top_gainers', top_n: th, exclude_slow_highcap: true, min_volume_usd: 500000 };
   } else if (_pineUniMode === 'losers') {
     const th = parseFloat(document.getElementById('pine-uni-threshold-range').value) || 5;
     _pineCompiledConfig.universe = { type: 'all', max_24h_change: -th };

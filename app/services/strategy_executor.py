@@ -203,6 +203,31 @@ async def _get_eligible_symbols(
             pinned_found.append(sym)
         return pinned_found
 
+    # ── top_gainers: return top-N Bitunix coins ranked by 24h % gain ─────────
+    # This is a dynamic ranking — always the highest movers of the day,
+    # regardless of whether any cross a fixed percentage threshold.
+    if sym_type == "top_gainers":
+        top_n = int(universe.get("top_n", 30))
+        ranked = []
+        for t in tickers:
+            sym = t.get("symbol", "")
+            if not sym.endswith("USDT"):
+                continue
+            if sym not in bitunix_symbols:
+                continue
+            base = sym.replace("USDT", "")
+            if base in FIAT_STABLE_BLOCKED:
+                continue
+            if excl_slow and base in SLOW_HIGHCAP_BLOCKED:
+                continue
+            vol = float(t.get("quoteVolume", 0))
+            if vol < min_vol:
+                continue
+            chg = float(t.get("priceChangePercent", 0))
+            ranked.append((sym, chg))
+        ranked.sort(key=lambda x: x[1], reverse=True)
+        return [sym for sym, _ in ranked[:top_n]]
+
     symbols = []
     for t in tickers:
         sym = t.get("symbol", "")
