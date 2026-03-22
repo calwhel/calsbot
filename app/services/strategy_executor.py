@@ -1534,7 +1534,7 @@ async def evaluate_and_fire(
             try:
                 from app.services.strategy_trader import place_bitunix_order_for_user
                 ps_type = risk.get("position_size_type", "pct")
-                order_id = await place_bitunix_order_for_user(
+                trade_result = await place_bitunix_order_for_user(
                     user        = user,
                     symbol      = symbol,
                     direction   = direction,
@@ -1545,6 +1545,23 @@ async def evaluate_and_fire(
                     risk_pct    = float(risk.get("position_size_pct", 5)),
                     risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None,
                 )
+                # trade_result is a dict: {order_id, fill_price, tp_price, sl_price}
+                if isinstance(trade_result, dict):
+                    order_id  = trade_result.get("order_id")
+                    # Update execution record and local vars with actual fill prices
+                    if trade_result.get("fill_price"):
+                        fill_price = trade_result["fill_price"]
+                        execution.entry_price = fill_price
+                        execution.tp_price    = trade_result.get("tp_price", tp_price)
+                        execution.sl_price    = trade_result.get("sl_price", sl_price)
+                        tp_price = execution.tp_price
+                        sl_price = execution.sl_price
+                        # Recompute display pcts from actual fill
+                        tp_pct = abs(tp_price / fill_price - 1) * 100
+                        sl_pct = abs(sl_price / fill_price - 1) * 100
+                        db.commit()
+                else:
+                    order_id = trade_result  # legacy string fallback
             except Exception as e:
                 logger.error(f"[Strategy {strategy.id}] Order error: {e}")
                 # Don't cancel — flip to paper so the signal's ROI is still tracked.
@@ -1588,13 +1605,15 @@ async def evaluate_and_fire(
                 tg_id_live = _telegram_int_id(user)
                 if tg_id_live:
                     try:
+                        # Use actual fill price if available, else signal price
+                        display_entry = getattr(execution, "entry_price", None) or current_price
                         await _tg_send(
                             tg_id_live,
                             _fmt_open_card(
                                 strategy_name = strategy.name,
                                 symbol        = symbol,
                                 direction     = direction,
-                                entry         = current_price,
+                                entry         = display_entry,
                                 tp_price      = tp_price,
                                 tp_pct        = tp_pct,
                                 tp2_price     = tp2_price,
