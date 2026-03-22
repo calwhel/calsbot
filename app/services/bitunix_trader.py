@@ -797,13 +797,36 @@ class BitunixTrader:
             }
             
             # Note: TP is set via separate reduce orders for dual TP support
-            # Single TP trades still use tpPrice parameter
+            # Single TP trades still use tpPrice parameter.
+            # Guard: if the market has already moved past TP (fast-moving coin),
+            # Bitunix rejects the order. Fetch live price and skip TP if invalid.
             if take_profit:
-                order_params.update({
-                    'tpPrice': str(take_profit),
-                    'tpStopType': 'MARK',
-                    'tpOrderType': 'MARKET'
-                })
+                try:
+                    live_price = await self.get_current_price(symbol)
+                    tp_valid = True
+                    if live_price and live_price > 0:
+                        if direction.upper() == 'SHORT' and take_profit >= live_price:
+                            logger.warning(
+                                f"⚠️ {symbol} SHORT TP ${take_profit} >= live price ${live_price:.8f} "
+                                f"(market already moved past TP) — skipping TP to avoid Bitunix rejection"
+                            )
+                            tp_valid = False
+                        elif direction.upper() == 'LONG' and take_profit <= live_price:
+                            logger.warning(
+                                f"⚠️ {symbol} LONG TP ${take_profit} <= live price ${live_price:.8f} "
+                                f"(market already moved past TP) — skipping TP to avoid Bitunix rejection"
+                            )
+                            tp_valid = False
+                except Exception as tp_check_err:
+                    logger.warning(f"⚠️ TP price check failed for {symbol}: {tp_check_err} — including TP anyway")
+                    tp_valid = True
+
+                if tp_valid:
+                    order_params.update({
+                        'tpPrice': str(take_profit),
+                        'tpStopType': 'MARK',
+                        'tpOrderType': 'MARKET'
+                    })
             
             if stop_loss:
                 order_params.update({
