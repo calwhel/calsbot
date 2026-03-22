@@ -1270,18 +1270,34 @@ async def run_live_position_monitor():
 
                         _reconcile_missing.pop(ex.id, None)
 
-                        if realized_pnl > 0:
+                        # Determine outcome — priority order:
+                        # 1. close_type from Bitunix (most reliable when set)
+                        # 2. TP/SL distance (reliable; accounts for SHORT direction)
+                        # 3. Direction-adjusted realized_pnl (can be negative for SHORT wins
+                        #    if Bitunix reports raw price-diff × size without direction flip)
+                        # 4. direction vs entry/exit price fallback
+                        if "TAKE" in close_type or close_type in ("TP", "TAKE_PROFIT"):
                             outcome = "WIN"
-                        elif realized_pnl < 0:
+                        elif "STOP" in close_type or "LIQUID" in close_type or close_type in ("SL", "STOP_LOSS"):
                             outcome = "LOSS"
                         elif ex.tp_price and ex.sl_price:
                             dist_tp = abs(exit_price - ex.tp_price)
                             dist_sl = abs(exit_price - ex.sl_price)
                             outcome = "WIN" if dist_tp <= dist_sl else "LOSS"
-                        elif ex.direction == "LONG":
-                            outcome = "WIN" if exit_price >= ex.entry_price else "LOSS"
                         else:
-                            outcome = "WIN" if exit_price <= ex.entry_price else "LOSS"
+                            # Adjust realized_pnl for SHORT direction before using its sign
+                            if ex.direction == "SHORT":
+                                dir_pnl = -realized_pnl
+                            else:
+                                dir_pnl = realized_pnl
+                            if dir_pnl > 0:
+                                outcome = "WIN"
+                            elif dir_pnl < 0:
+                                outcome = "LOSS"
+                            elif ex.direction == "LONG":
+                                outcome = "WIN" if exit_price >= ex.entry_price else "LOSS"
+                            else:
+                                outcome = "WIN" if exit_price <= ex.entry_price else "LOSS"
 
                         logger.info(
                             f"[live-monitor] {ex.symbol} id={ex.id} → {outcome} "
