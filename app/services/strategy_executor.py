@@ -1295,9 +1295,17 @@ async def run_live_position_monitor():
                                         f"for {miss_count} sweeps, force-closing via TP/SL distance "
                                         f"(stale entry={hist_entry}, ours={ex.entry_price})"
                                     )
+                                    # Use our own TP/SL prices as the exit — NOT the stale
+                                    # close_price from Bitunix which belongs to a different
+                                    # position and would produce wildly wrong PnL (e.g. -601%).
                                     dist_tp = abs(exit_price - ex.tp_price)
                                     dist_sl = abs(exit_price - ex.sl_price)
-                                    forced_outcome = "WIN" if dist_tp <= dist_sl else "LOSS"
+                                    if dist_tp <= dist_sl:
+                                        forced_outcome = "WIN"
+                                        exit_price = ex.tp_price   # use our TP as exit
+                                    else:
+                                        forced_outcome = "LOSS"
+                                        exit_price = ex.sl_price   # use our SL as exit
                                     _reconcile_missing.pop(ex.id, None)
                                 else:
                                     logger.warning(
