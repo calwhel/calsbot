@@ -4384,7 +4384,7 @@ async def strategy_advisor(request: Request):
         if not _is_portal_pro(sub):
             return {"reply": None, "pro_required": True}
 
-        from app.strategy_models import UserStrategy, StrategyPerformance
+        from app.strategy_models import UserStrategy, StrategyPerformance, StrategyExecution
         strategy = db.query(UserStrategy).filter(
             UserStrategy.id == strategy_id,
             UserStrategy.user_id == user.id
@@ -4396,28 +4396,153 @@ async def strategy_advisor(request: Request):
             StrategyPerformance.strategy_id == strategy_id
         ).first()
 
-        perf_summary = "No trades run yet."
+        # ── Fetch last 100 closed executions ─────────────────────────────────
+        execs = (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.strategy_id == strategy_id,
+                StrategyExecution.outcome.in_(["WIN", "LOSS", "BREAKEVEN"]),
+            )
+            .order_by(StrategyExecution.fired_at.desc())
+            .limit(100)
+            .all()
+        )
+
+        # ── Build trade analytics ─────────────────────────────────────────────
+        DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+        def session(h):
+            if h < 6:   return "Night (00–06 UTC)"
+            if h < 12:  return "Morning (06–12 UTC)"
+            if h < 18:  return "Afternoon (12–18 UTC)"
+            return "Evening (18–24 UTC)"
+
+        hour_stats = {}   # hour → {win, loss}
+        dow_stats  = {}   # dow  → {win, loss}
+        sess_stats = {}   # session → {win, loss}
+        coin_stats = {}   # coin → {win, loss, pnl}
+
+        for ex in execs:
+            is_win  = ex.outcome == "WIN"
+            is_loss = ex.outcome == "LOSS"
+            coin = (ex.symbol or "").replace("USDT", "")
+
+            if ex.fired_at:
+                h = ex.fired_at.hour
+                d = ex.fired_at.weekday()
+                sn = session(h)
+
+                if h  not in hour_stats: hour_stats[h]  = {"win": 0, "loss": 0}
+                if d  not in dow_stats:  dow_stats[d]   = {"win": 0, "loss": 0}
+                if sn not in sess_stats: sess_stats[sn] = {"win": 0, "loss": 0}
+
+                if is_win:  hour_stats[h]["win"]  += 1; dow_stats[d]["win"]  += 1; sess_stats[sn]["win"]  += 1
+                if is_loss: hour_stats[h]["loss"] += 1; dow_stats[d]["loss"] += 1; sess_stats[sn]["loss"] += 1
+
+            if coin:
+                if coin not in coin_stats: coin_stats[coin] = {"win": 0, "loss": 0, "pnl": 0.0}
+                if is_win:  coin_stats[coin]["win"]  += 1
+                if is_loss: coin_stats[coin]["loss"] += 1
+                if ex.pnl_pct: coin_stats[coin]["pnl"] += float(ex.pnl_pct)
+
+        def wr(s):
+            tot = s["win"] + s["loss"]
+            return f"{round(s['win']/tot*100)}% ({s['win']}W/{s['loss']}L)" if tot else "no data"
+
+        # Session breakdown
+        sess_lines = []
+        for sn in ["Night (00–06 UTC)", "Morning (06–12 UTC)", "Afternoon (12–18 UTC)", "Evening (18–24 UTC)"]:
+            if sn in sess_stats:
+                sess_lines.append(f"  {sn}: {wr(sess_stats[sn])}")
+        session_block = "\n".join(sess_lines) if sess_lines else "  No session data yet"
+
+        # Day-of-week breakdown
+        dow_lines = []
+        for d in range(7):
+            if d in dow_stats:
+                dow_lines.append(f"  {DOW[d]}: {wr(dow_stats[d])}")
+        dow_block = "\n".join(dow_lines) if dow_lines else "  No day-of-week data yet"
+
+        # Best / worst coins
+        coin_sorted = sorted(coin_stats.items(), key=lambda x: x[1]["pnl"], reverse=True)
+        best_coins  = ", ".join(f"{c} ({v['win']}W/{v['loss']}L, {v['pnl']:+.0f}%)" for c, v in coin_sorted[:5])
+        worst_coins = ", ".join(f"{c} ({v['win']}W/{v['loss']}L, {v['pnl']:+.0f}%)" for c, v in coin_sorted[-5:] if v["pnl"] < 0)
+
+        # Recent trade log (last 25)
+        recent_lines = []
+        for ex in reversed(execs[:25]):
+            dt   = ex.fired_at.strftime("%m/%d %H:%M") if ex.fired_at else "?"
+            coin = (ex.symbol or "?").replace("USDT", "")
+            pnl  = f"{ex.pnl_pct:+.1f}%" if ex.pnl_pct is not None else "?"
+            dur  = ""
+            if ex.fired_at and ex.closed_at:
+                mins = int((ex.closed_at - ex.fired_at).total_seconds() / 60)
+                dur  = f" {mins}m"
+            recent_lines.append(f"  {dt} | {coin} {ex.direction or ''} | {ex.outcome}{dur} | {pnl}")
+        trade_log = "\n".join(recent_lines) if recent_lines else "  No trades yet"
+
+        # Strategy config summary
+        cfg  = strategy.config or {}
+        strat_dir  = cfg.get("direction", "BOTH")
+        strat_tf   = cfg.get("timeframe", "?")
+        tp_pct     = cfg.get("take_profit_pct", "?")
+        sl_pct     = cfg.get("stop_loss_pct", "?")
+        lev        = cfg.get("leverage", "?")
+        max_trades = cfg.get("max_trades_per_day", "?")
+        conditions = cfg.get("entry_conditions", [])
+        cond_lines = []
+        for c in conditions:
+            ctype = c.get("type", "?")
+            cond_lines.append(f"  - {ctype}: {c}")
+        cond_block = "\n".join(cond_lines) if cond_lines else "  (no conditions set)"
+
+        # Overall perf summary
         if perf and perf.total_trades:
-            wr = round(perf.win_rate or 0, 1)
-            pnl = round(perf.total_pnl_pct or 0, 2)
-            perf_summary = f"{perf.total_trades} trades | {wr}% win rate | {pnl}% total P&L"
+            wr_overall = round(perf.win_rate or 0, 1)
+            pnl_total  = round(perf.total_pnl_pct or 0, 2)
+            avg_win    = round(perf.avg_win_pct or 0, 1)
+            avg_loss   = round(perf.avg_loss_pct or 0, 1)
+            perf_block = (
+                f"Total trades: {perf.total_trades} | Win rate: {wr_overall}% | "
+                f"Total P&L: {pnl_total:+}% | Avg win: +{avg_win}% | Avg loss: {avg_loss}%"
+            )
+        else:
+            perf_block = "No closed trades yet."
 
-        system_prompt = f"""You are an expert crypto trading strategy analyst inside TradeHub.
+        system_prompt = f"""You are an expert crypto trading strategy analyst embedded in TradeHub Markets.
 
-The user is asking about their strategy called "{strategy.name}".
+The user is asking about their strategy: "{strategy.name}"
+Description: {strategy.description or "none"}
 
-Strategy description:
-{strategy.description or "No description provided."}
+━━ STRATEGY CONFIG ━━
+Direction: {strat_dir} | Timeframe: {strat_tf} | TP: {tp_pct}% | SL: {sl_pct}% | Leverage: {lev}x | Max trades/day: {max_trades}
+Entry conditions:
+{cond_block}
 
-Performance:
-{perf_summary}
+━━ OVERALL PERFORMANCE ━━
+{perf_block}
 
-Your job:
-- Give honest, specific, actionable advice
-- Point out real weaknesses if they exist — don't be generic
-- Suggest concrete improvements: better confirmation signals, tighter/wider SL, TP targets, market conditions it works best in
-- Keep responses concise (2-4 sentences max)
-- Be conversational, not bullet-list heavy"""
+━━ WIN RATE BY SESSION (UTC) ━━
+{session_block}
+
+━━ WIN RATE BY DAY OF WEEK ━━
+{dow_block}
+
+━━ BEST COINS ━━
+{best_coins or "not enough data"}
+
+━━ WORST COINS ━━
+{worst_coins or "none negative yet"}
+
+━━ LAST 25 TRADES (oldest→newest) ━━
+{trade_log}
+
+━━ YOUR JOB ━━
+- You have the REAL trade data above — use it to give specific, data-driven answers
+- Call out exactly which sessions / days / coins are underperforming with the actual numbers
+- Give concrete suggestions: add a filter for a specific time window, avoid certain coins, tighten SL on weekends, etc.
+- Be direct and concise — 2-5 sentences, no generic advice
+- Never say you don't have access to trade data — you have it all above"""
 
         api_messages = [{"role": m["role"], "content": m["content"]} for m in messages]
 
@@ -4428,7 +4553,7 @@ Your job:
         client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         resp = await client.messages.create(
             model="claude-sonnet-4-5-20250929",
-            max_tokens=350,
+            max_tokens=500,
             system=system_prompt,
             messages=api_messages,
         )
