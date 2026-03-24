@@ -2624,6 +2624,16 @@ function dismissTgBanner(){
           <label>Specific Coins (blank = all)</label>
           <input type="text" id="cfg-coins" placeholder="BTCUSDT, ETHUSDT…">
         </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label>Trading Sessions <span style="font-size:11px;color:var(--muted);font-weight:400">· all times UTC · leave blank to trade 24/7</span></label>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px" id="cfg-sessions-chips">
+            <div class="opt-chip" id="cfgSes-asian"    onclick="toggleCfgSession('asian')">🌏 Asian <span style="font-size:10px;color:var(--muted);margin-left:2px">0–8 UTC</span></div>
+            <div class="opt-chip" id="cfgSes-london"   onclick="toggleCfgSession('london')">🇬🇧 London <span style="font-size:10px;color:var(--muted);margin-left:2px">7–16 UTC</span></div>
+            <div class="opt-chip" id="cfgSes-new_york" onclick="toggleCfgSession('new_york')">🇺🇸 US / New York <span style="font-size:10px;color:var(--muted);margin-left:2px">13–22 UTC</span></div>
+            <div class="opt-chip" id="cfgSes-overlap"  onclick="toggleCfgSession('overlap')">⚡ London/US Overlap <span style="font-size:10px;color:var(--muted);margin-left:2px">13–16 UTC</span></div>
+          </div>
+          <div class="hint" style="margin-top:6px">Select one or more sessions to restrict when trades fire. Multiple selections are OR — a trade fires if the current time falls in <em>any</em> selected session.</div>
+        </div>
       </div>
 
       <!-- Analytics -->
@@ -3021,7 +3031,14 @@ const UID="{{ uid }}";
 const IS_PRO = {{ 'true' if is_pro else 'false' }};
 let mktSort='top',mktCat='all',mktPrice='all',mktSearch='';
 let lbMetric='win_rate',buildDir='LONG',buildMode='live',settingsDir='LONG';
-let cfgStrategyId=null,cfgStatus='paper',cfgDir='LONG',cfgStatusChanged=false,cfgIsLocked=false;
+let cfgStrategyId=null,cfgStatus='paper',cfgDir='LONG',cfgStatusChanged=false,cfgIsLocked=false,cfgSessions=[];
+function toggleCfgSession(s){
+  const idx=cfgSessions.indexOf(s);
+  if(idx>-1)cfgSessions.splice(idx,1);else cfgSessions.push(s);
+  ['asian','london','new_york','overlap'].forEach(id=>{
+    const el=$('cfgSes-'+id);if(el)el.classList.toggle('active',cfgSessions.includes(id));
+  });
+}
 let ratingListingId=null,ratingStars=0;
 let compiledConfig=null,searchTimeout=null;
 let templatesVisible=false,templates=[];
@@ -3425,6 +3442,14 @@ async function openConfigure(strategyId){
   $('cfg-nodup').checked=!!risk.no_duplicate_symbol;
   const uni=cfg.universe||{};
   $('cfg-coins').value=Array.isArray(uni.symbols)?uni.symbols.join(', '):'';
+
+  // Trading sessions
+  const _filters=cfg.filters||{};
+  cfgSessions=(_filters.session?.sessions||[]).map(s=>s.toLowerCase());
+  ['asian','london','new_york','overlap'].forEach(id=>{
+    const el=$('cfgSes-'+id);if(el)el.classList.toggle('active',cfgSessions.includes(id));
+  });
+
   const perf=s.performance||{};
   $('cfg-perf').textContent=perf.total_trades>0?`${perf.total_trades} trades · ${perf.win_rate}% WR · ${pS(perf.total_pnl)}`:'No trades yet';
 
@@ -3512,6 +3537,7 @@ async function saveCfg(){
       max_trades_per_day:Number($('cfg-mtd').value),
       cooldown_minutes:Number($('cfg-cd').value),
       no_duplicate_symbol:$('cfg-nodup').checked,
+      sessions:cfgSessions,
     });
   }else{
     // Own strategy — full update
@@ -3531,6 +3557,7 @@ async function saveCfg(){
       max_trades_per_day:Number($('cfg-mtd').value),cooldown_minutes:Number($('cfg-cd').value),
       no_duplicate_symbol:$('cfg-nodup').checked,
       universe:symbols.length?{type:'specific',symbols}:{type:'all'},
+      sessions:cfgSessions,
     });
   }
 

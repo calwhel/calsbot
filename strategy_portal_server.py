@@ -3167,6 +3167,16 @@ async def api_update_strategy(strategy_id: int, request: Request):
                 if k in body:
                     risk[k] = body[k]
             config["risk"] = risk
+            # Sessions are a user preference, not creator IP — allow for locked strategies too.
+            if "sessions" in body:
+                _valid_sessions = {"asian", "london", "new_york", "overlap", "tokyo", "europe", "ny"}
+                sess = [s for s in (body["sessions"] or []) if s in _valid_sessions]
+                filters = dict(config.get("filters", {}))
+                if sess:
+                    filters["session"] = {"type": "session", "sessions": sess}
+                else:
+                    filters.pop("session", None)
+                config["filters"] = filters
             prev_status = s.status
             if "status" in body and body["status"] in ("draft", "active", "paused", "paper"):
                 if body["status"] == "active":
@@ -3223,6 +3233,17 @@ async def api_update_strategy(strategy_id: int, request: Request):
             config["direction"] = body["direction"]
         if "universe" in body:
             config["universe"] = body["universe"]
+
+        # Session time filter — user preference, always updateable
+        if "sessions" in body:
+            _valid_sessions = {"asian", "london", "new_york", "overlap", "tokyo", "europe", "ny"}
+            sess = [sv for sv in (body["sessions"] or []) if sv in _valid_sessions]
+            filters = dict(config.get("filters", {}))
+            if sess:
+                filters["session"] = {"type": "session", "sessions": sess}
+            else:
+                filters.pop("session", None)
+            config["filters"] = filters
 
         # Status change — fire admin alert when going live
         prev_status = s.status
