@@ -2,6 +2,7 @@
 Strategy Trader — standalone order placement for user strategies.
 Wraps the existing BitunixTrader without modifying bitunix_trader.py.
 """
+import hashlib
 import logging
 import time
 from typing import Optional
@@ -12,6 +13,28 @@ logger = logging.getLogger(__name__)
 # Avoids a fresh Bitunix API call on every signal when balance changes rarely.
 _balance_cache: dict = {}   # {user_id: (balance_float, fetched_at_timestamp)}
 _BALANCE_TTL = 60           # seconds before re-fetching
+
+# ── Trader instance cache ──────────────────────────────────────────────────────
+# BitunixTrader holds an httpx.AsyncClient with a connection pool.
+# Re-using the same instance across trades means TCP connections to Bitunix
+# are kept alive and reused, eliminating the TLS handshake overhead on every trade.
+# Key: sha256(api_key + api_secret)[:16]   Value: BitunixTrader instance
+_trader_cache: dict = {}
+
+
+def _trader_cache_key(api_key: str, api_secret: str) -> str:
+    return hashlib.sha256(f"{api_key}:{api_secret}".encode()).hexdigest()[:16]
+
+
+def _get_or_create_trader(api_key: str, api_secret: str):
+    from app.services.bitunix_trader import BitunixTrader
+    key = _trader_cache_key(api_key, api_secret)
+    trader = _trader_cache.get(key)
+    if trader is None:
+        trader = BitunixTrader(api_key=api_key, api_secret=api_secret)
+        _trader_cache[key] = trader
+        logger.debug(f"[StrategyTrader] Created new BitunixTrader (cache miss, key={key})")
+    return trader
 
 
 async def place_bitunix_order_for_user(
@@ -27,8 +50,9 @@ async def place_bitunix_order_for_user(
 ) -> Optional[str]:
     """
     Place a single market order on Bitunix for a user running a custom strategy.
-    Accepts TP/SL as percentages and fetches a fresh price right before ordering
-    so the calculated TP/SL levels are always valid (not stale from signal-fire time).
+    Accepts TP/SL as percentages. The entry_price (already fetched by the executor
+    scan cycle) is passed as a live_price_hint to place_trade() so a redundant
+    Bitunix get_current_price() call is skipped.
 
     Position sizing:
       risk_usd  — fixed dollar amount (overrides risk_pct when provided)
@@ -39,7 +63,6 @@ async def place_bitunix_order_for_user(
     try:
         from app.database import SessionLocal
         from app.models import UserPreference
-        from app.services.bitunix_trader import BitunixTrader
 
         db = SessionLocal()
         try:
@@ -66,7 +89,8 @@ async def place_bitunix_order_for_user(
             if not api_key or len(api_key) < 10:
                 raise RuntimeError("Bitunix API key appears invalid (too short). Please re-enter your API credentials.")
 
-            trader = BitunixTrader(api_key=api_key, api_secret=api_secret)
+            # Reuse the cached trader (and its underlying HTTP connection pool)
+            trader = _get_or_create_trader(api_key, api_secret)
 
             # Fixed-size mode skips the balance fetch entirely
             if risk_usd and risk_usd > 0:
@@ -124,6 +148,7 @@ async def place_bitunix_order_for_user(
                 take_profit        = tp_price,
                 position_size_usdt = position_size_usd,
                 leverage           = leverage,
+                live_price_hint    = ref_price,  # skip redundant Bitunix price fetch
             )
 
             if result and result.get("success"):

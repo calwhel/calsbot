@@ -22,6 +22,11 @@ _trade_failure_notified = {}
 # Key: (api_key_suffix, symbol, leverage)  Value: last_confirmed_timestamp
 _PLACE_TRADE_SETUP_CACHE: dict = {}
 
+# Cache: position size limits per symbol — these change very rarely (daily at most)
+# Key: symbol_str  Value: (limits_dict, fetched_at_timestamp)
+_POSITION_LIMITS_CACHE: dict = {}
+_POSITION_LIMITS_TTL = 600   # 10 minutes
+
 class RetryableError(Exception):
     """Error that can be retried (API timeout, connection error, rate limit)"""
     pass
@@ -179,7 +184,9 @@ class BitunixTrader:
         self.api_key = api_key
         self.api_secret = api_secret
         self.base_url = "https://fapi.bitunix.com"
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=5.0)
+        )
         
         # 🔍 DEBUG: Log both key lengths
         key_len = len(api_key) if api_key else 0
@@ -708,10 +715,16 @@ class BitunixTrader:
         """Get max position size limits for a symbol from Bitunix API
         
         Returns dict with maxMarketOrderVolume, minTradeVolume, etc.
+        Results are cached per symbol for 10 minutes — these limits change very rarely.
         """
         try:
             bitunix_symbol = symbol.replace('/', '')
-            
+
+            # ── Fast path: return cached limits if still fresh ──────────────────
+            _cached = _POSITION_LIMITS_CACHE.get(bitunix_symbol)
+            if _cached and (time.time() - _cached[1]) < _POSITION_LIMITS_TTL:
+                return _cached[0]
+
             url = f"{self.base_url}/api/v1/futures/market/trading_pairs"
             params = {"symbols": bitunix_symbol}
             
@@ -726,11 +739,13 @@ class BitunixTrader:
                     
                     logger.info(f"📊 {symbol} position limits: max={max_market}, min={min_trade}")
                     
-                    return {
+                    result = {
                         'max_market_order': max_market,
                         'min_trade_volume': min_trade,
                         'max_leverage': int(pair_info.get('maxLeverage', 125))
                     }
+                    _POSITION_LIMITS_CACHE[bitunix_symbol] = (result, time.time())
+                    return result
             
             logger.warning(f"⚠️ Could not get position limits for {symbol}, using defaults")
             return None
@@ -747,7 +762,8 @@ class BitunixTrader:
         stop_loss: float,
         take_profit: float,
         position_size_usdt: float,
-        leverage: int = 10
+        leverage: int = 10,
+        live_price_hint: Optional[float] = None,
     ) -> Optional[Dict]:
         """
         Place a leveraged futures trade on Bitunix
@@ -760,15 +776,18 @@ class BitunixTrader:
             take_profit: Take profit price
             position_size_usdt: Position size in USDT
             leverage: Leverage multiplier
+            live_price_hint: Optional already-fetched current price — if provided,
+                             the Bitunix get_current_price() call is skipped entirely,
+                             saving one HTTP round-trip on every trade.
         """
         try:
             import asyncio as _asyncio
 
             bitunix_symbol = symbol.replace('/', '')
 
-            # ── Parallel pre-flight: margin mode, leverage, position limits, live price ──
-            # All four are independent — run them concurrently instead of sequentially
-            # to cut ~600ms of serial HTTP latency down to one round-trip window.
+            # ── Parallel pre-flight: margin mode, leverage, position limits ──
+            # (and live price only when no hint was supplied)
+            # All are independent — run them concurrently to cut serial HTTP latency.
             #
             # Setup calls (margin/leverage) are skipped if already sent for this
             # symbol+leverage in the last 5 minutes (they don't change between signals).
@@ -789,14 +808,22 @@ class BitunixTrader:
                 )
                 _PLACE_TRADE_SETUP_CACHE[_setup_key] = time.time()
 
-            setup_task    = _asyncio.ensure_future(_ensure_setup())
-            limits_task   = _asyncio.ensure_future(self.get_max_position_size(symbol))
-            price_task    = _asyncio.ensure_future(self.get_current_price(symbol))
-
-            _, limits, live_price = await _asyncio.gather(
-                setup_task, limits_task, price_task,
-                return_exceptions=True,
-            )
+            if live_price_hint is not None:
+                # Price already known — skip the Bitunix get_current_price() call
+                _, limits = await _asyncio.gather(
+                    _ensure_setup(),
+                    self.get_max_position_size(symbol),
+                    return_exceptions=True,
+                )
+                live_price = live_price_hint
+            else:
+                setup_task  = _asyncio.ensure_future(_ensure_setup())
+                limits_task = _asyncio.ensure_future(self.get_max_position_size(symbol))
+                price_task  = _asyncio.ensure_future(self.get_current_price(symbol))
+                _, limits, live_price = await _asyncio.gather(
+                    setup_task, limits_task, price_task,
+                    return_exceptions=True,
+                )
 
             # Unwrap exceptions from gather (treat as None for non-critical calls)
             if isinstance(limits, Exception):
