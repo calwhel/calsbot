@@ -1824,8 +1824,21 @@ async def _propagate_to_subscribers(
             if not (sub_user.is_admin or sub_user.grandfathered or _has_pro):
                 continue
 
-            sub_config = dict(sub_strategy.config or {})
-            sub_risk   = sub_config.get("risk", {})
+            sub_config  = dict(sub_strategy.config or {})
+            sub_risk    = sub_config.get("risk", {})
+            sub_filters = sub_config.get("filters", {})
+
+            # Session / time-of-day filter — subscriber can restrict when copies fire
+            if not _check_time_filter(sub_filters):
+                logger.debug(
+                    f"[Propagate] Strategy {sub_strategy.id} blocked by session/time filter"
+                )
+                continue
+            if not _check_trading_days(sub_filters):
+                logger.debug(
+                    f"[Propagate] Strategy {sub_strategy.id} blocked by trading-day filter"
+                )
+                continue
 
             # Daily limit
             if _daily_execution_count(sub_strategy.id, _sub_db) >= int(sub_risk.get("max_trades_per_day", 3)):

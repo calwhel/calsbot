@@ -2632,7 +2632,7 @@ function dismissTgBanner(){
             <div class="opt-chip" id="cfgSes-new_york" onclick="toggleCfgSession('new_york')">🇺🇸 US / New York <span style="font-size:10px;color:var(--muted);margin-left:2px">13–22 UTC</span></div>
             <div class="opt-chip" id="cfgSes-overlap"  onclick="toggleCfgSession('overlap')">⚡ London/US Overlap <span style="font-size:10px;color:var(--muted);margin-left:2px">13–16 UTC</span></div>
           </div>
-          <div class="hint" style="margin-top:6px">Select one or more sessions to restrict when trades fire. Multiple selections are OR — a trade fires if the current time falls in <em>any</em> selected session.</div>
+          <div class="hint" style="margin-top:6px">Select one or more sessions to restrict when trades fire. Multiple = OR (fires if current time is in <em>any</em> selected session). Hours are UTC — London 7–16 UTC means 7 AM–4 PM London time (GMT) or 8 AM–5 PM (BST, summer). <strong>Each strategy must be configured separately.</strong></div>
         </div>
       </div>
 
