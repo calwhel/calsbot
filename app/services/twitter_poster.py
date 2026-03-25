@@ -1972,15 +1972,13 @@ def clear_account_cache():
     _account_posters = {}
 
 
-def get_all_twitter_accounts():
-    """Get all active Twitter accounts from database"""
+def _query_twitter_accounts_once():
+    """Single DB attempt — returns list of active TwitterAccount objects."""
     from app.database import SessionLocal
     from app.models import TwitterAccount
-    
     db = SessionLocal()
     try:
         accounts = db.query(TwitterAccount).filter(TwitterAccount.is_active == True).all()
-        # Expunge all to keep them accessible after session closes
         for account in accounts:
             db.expunge(account)
         return accounts
@@ -1988,32 +1986,63 @@ def get_all_twitter_accounts():
         db.close()
 
 
-def get_account_for_post_type(post_type: str):
-    """Get the account assigned to a specific post type"""
-    from app.database import SessionLocal
-    from app.models import TwitterAccount
-    
-    db = SessionLocal()
+def get_all_twitter_accounts():
+    """Get all active Twitter accounts from database (retries once on SSL drop)."""
     try:
-        accounts = db.query(TwitterAccount).filter(TwitterAccount.is_active == True).all()
-        
-        selected_account = None
-        for account in accounts:
-            if post_type in account.get_post_types():
-                selected_account = account
-                break
-        
-        # If no account assigned, return the first active one (fallback)
-        if not selected_account and accounts:
-            selected_account = accounts[0]
-        
-        # Expunge to keep object accessible after session closes
-        if selected_account:
-            db.expunge(selected_account)
-        
-        return selected_account
-    finally:
-        db.close()
+        return _query_twitter_accounts_once()
+    except Exception as e:
+        if "SSL" in str(e) or "connection" in str(e).lower() or "closed" in str(e).lower():
+            logger.warning(f"DB connection error getting twitter accounts, retrying: {e}")
+            try:
+                from app.database import engine
+                engine.dispose()
+            except Exception:
+                pass
+            try:
+                return _query_twitter_accounts_once()
+            except Exception as e2:
+                logger.error(f"DB retry also failed: {e2}")
+                return []
+        raise
+
+
+def get_account_for_post_type(post_type: str):
+    """Get the account assigned to a specific post type (retries once on SSL drop)."""
+    def _query():
+        from app.database import SessionLocal
+        from app.models import TwitterAccount
+        db = SessionLocal()
+        try:
+            accounts = db.query(TwitterAccount).filter(TwitterAccount.is_active == True).all()
+            selected_account = None
+            for account in accounts:
+                if post_type in account.get_post_types():
+                    selected_account = account
+                    break
+            if not selected_account and accounts:
+                selected_account = accounts[0]
+            if selected_account:
+                db.expunge(selected_account)
+            return selected_account
+        finally:
+            db.close()
+
+    try:
+        return _query()
+    except Exception as e:
+        if "SSL" in str(e) or "connection" in str(e).lower() or "closed" in str(e).lower():
+            logger.warning(f"DB connection error getting account for post_type, retrying: {e}")
+            try:
+                from app.database import engine
+                engine.dispose()
+            except Exception:
+                pass
+            try:
+                return _query()
+            except Exception as e2:
+                logger.error(f"DB retry also failed: {e2}")
+                return None
+        raise
 
 
 def add_twitter_account(name: str, handle: str, consumer_key: str, consumer_secret: str,

@@ -13,10 +13,17 @@ Base = declarative_base()
 _db_url = settings.get_database_url()
 _connect_args: dict = {
     "connect_timeout": 30,
-    "options": "-c statement_timeout=60000"
+    "options": "-c statement_timeout=60000",
 }
 if "neon" in _db_url or "neondb" in _db_url:
+    # Neon closes idle SSL connections after ~5 minutes.
+    # keepalives keep the TCP socket alive; pool_recycle < 300 s ensures
+    # the pool never hands out a connection older than Neon's idle timeout.
     _connect_args["sslmode"] = "require"
+    _connect_args["keepalives"] = 1
+    _connect_args["keepalives_idle"] = 30
+    _connect_args["keepalives_interval"] = 10
+    _connect_args["keepalives_count"] = 5
 
 engine = create_engine(
     _db_url,
@@ -24,7 +31,7 @@ engine = create_engine(
     pool_size=3,
     max_overflow=5,
     pool_timeout=20,
-    pool_recycle=600,
+    pool_recycle=240,        # recycle every 4 min — well under Neon's 5-min idle limit
     pool_pre_ping=True,
     connect_args=_connect_args,
 )
