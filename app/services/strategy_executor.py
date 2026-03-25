@@ -54,10 +54,14 @@ def _user_can_live_trade(user, db) -> bool:
     Pre-flight check: return True only if the user has Bitunix auto-trading
     enabled AND API keys saved.  Live strategies silently downgrade to paper
     for this signal when this returns False — so no signal is ever dropped.
+
+    Retries once with a fresh SessionLocal on any DB/SSL error so that a
+    transient Neon connection drop doesn't silently send a subscriber to paper.
     """
-    try:
-        from app.models import UserPreference
-        prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
+    from app.models import UserPreference
+
+    def _check(session) -> bool:
+        prefs = session.query(UserPreference).filter_by(user_id=user.id).first()
         if not prefs:
             return False
         if not getattr(prefs, "auto_trading_enabled", False):
@@ -67,8 +71,29 @@ def _user_can_live_trade(user, db) -> bool:
         if not getattr(prefs, "bitunix_api_secret", None):
             return False
         return True
-    except Exception:
-        return False  # safe default — track as paper
+
+    try:
+        return _check(db)
+    except Exception as _e1:
+        logger.warning(
+            f"[_user_can_live_trade] DB error for user {user.id}, retrying with fresh session: {_e1}"
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            from app.database import SessionLocal as _SL
+            _fresh = _SL()
+            try:
+                return _check(_fresh)
+            finally:
+                _fresh.close()
+        except Exception as _e2:
+            logger.error(
+                f"[_user_can_live_trade] Retry also failed for user {user.id}: {_e2} — defaulting to paper"
+            )
+            return False
 
 
 # ─── Bitunix symbol cache ────────────────────────────────────────────────────
@@ -597,7 +622,8 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
     ex.pnl_pct    = pnl_pct
     ex.closed_at  = closed_at
 
-    # Clear the "open · unrealised..." note and replace with a proper close note.
+    # Append close note — preserve any original open-time context (e.g. Live→Paper
+    # fallback reason) so the history is auditable after close.
     pnl_sign   = "+" if pnl_pct >= 0 else ""
     if outcome == "WIN":
         close_note = f"TP hit · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
@@ -607,6 +633,11 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
         close_note = "Expired · no TP/SL hit within hold period"
     else:
         close_note = f"Closed · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
+    # If there's an existing note that isn't just the live-monitor "open · unrealised" noise,
+    # keep it prepended so we can always see why a trade went paper even after it closes.
+    existing = (ex.notes or "").strip()
+    if existing and not existing.startswith("open ·"):
+        close_note = f"{existing} | {close_note}"
     try:
         db.execute(
             _text("UPDATE strategy_executions SET notes=:n WHERE id=:id"),
@@ -1862,7 +1893,20 @@ async def _propagate_to_subscribers(
             # Use subscriber's own leverage & size but source's price/symbol/direction
             leverage   = int(sub_risk.get("leverage", 10))
             _wants_live = sub_strategy.status == "active"
-            is_paper    = not _user_can_live_trade(sub_user, _sub_db) if _wants_live else True
+            if _wants_live:
+                _can_live = _user_can_live_trade(sub_user, _sub_db)
+                is_paper  = not _can_live
+                if is_paper:
+                    logger.info(
+                        f"[Propagate] Strategy {sub_strategy.id} (user {sub_user.username}) "
+                        f"downgraded to PAPER — auto_trading disabled or Bitunix keys missing"
+                    )
+            else:
+                is_paper = True
+
+            _open_note = None
+            if is_paper and _wants_live:
+                _open_note = "Live→Paper: auto_trading off or Bitunix keys not configured"
 
             sub_exec = StrategyExecution(
                 strategy_id    = sub_strategy.id,
@@ -1878,6 +1922,7 @@ async def _propagate_to_subscribers(
                 conditions_met = [f"✅ Copied from source strategy #{source_strategy_id} @ {entry:.6g}"],
                 fired_at       = _now,
                 is_paper       = is_paper,
+                notes          = _open_note,
             )
             _sub_db.add(sub_exec)
             _sub_db.commit()
