@@ -157,7 +157,75 @@ async def place_bitunix_order_for_user(
                     f"[StrategyTrader] ✅ Order placed for user {user.id}: "
                     f"{symbol} {direction} {leverage}x — {order_id}"
                 )
-                return order_id
+
+                # ── Post-fill: fetch actual fill price and correct TP/SL on Bitunix ──
+                # Market orders fill at market price, which can differ from signal price.
+                # For SHORTs on rapidly-moving coins the price may already be pulling back
+                # by 0.5–1% by the time the order hits, making TP only 2% gain instead of
+                # 3% from the actual fill — costing ~20% ROI at 20x leverage.
+                # Fix: wait for fill, read avgOpenPrice, and push corrected TP/SL.
+                actual_fill = None
+                try:
+                    import asyncio as _aio
+                    await _aio.sleep(1.2)  # let the market order settle
+                    open_positions = await trader.get_open_positions()
+                    bitunix_sym = symbol.replace("/", "")
+                    matching = [
+                        p for p in open_positions
+                        if str(p.get("symbol", "")) == bitunix_sym
+                        and p.get("hold_side", "").upper() == direction.upper()
+                    ]
+                    if matching:
+                        fill_price = float(matching[0].get("entry_price") or 0)
+                        if fill_price > 0:
+                            drift = abs(fill_price - ref_price) / ref_price
+                            actual_fill = fill_price
+                            if drift > 0.0005:  # >0.05% — worth correcting
+                                if direction.upper() == "LONG":
+                                    new_tp = fill_price * (1 + (tp_pct + BUFFER) / 100)
+                                    new_sl = fill_price * (1 - sl_pct / 100)
+                                else:
+                                    new_tp = fill_price * (1 - (tp_pct + BUFFER) / 100)
+                                    new_sl = fill_price * (1 + sl_pct / 100)
+                                position_id = str(matching[0].get("position_id") or "")
+                                if position_id:
+                                    ok = await trader.modify_position_sl(
+                                        symbol=symbol,
+                                        position_id=position_id,
+                                        new_sl_price=new_sl,
+                                        existing_tp_price=new_tp,
+                                    )
+                                    if ok:
+                                        logger.info(
+                                            f"[StrategyTrader] ✅ TP/SL corrected for {symbol} {direction}"
+                                            f" | signal={ref_price:.6g} fill={fill_price:.6g}"
+                                            f" drift={drift*100:.3f}%"
+                                            f" | new TP={new_tp:.6g} SL={new_sl:.6g}"
+                                        )
+                                    else:
+                                        logger.warning(
+                                            f"[StrategyTrader] TP/SL correction API failed for {symbol} "
+                                            f"(fill={fill_price:.6g})"
+                                        )
+                                else:
+                                    logger.warning(
+                                        f"[StrategyTrader] No position_id for {symbol} — "
+                                        f"cannot push corrected TP/SL (fill={fill_price:.6g})"
+                                    )
+                            else:
+                                logger.info(
+                                    f"[StrategyTrader] {symbol} fill={fill_price:.6g} within 0.05% of"
+                                    f" signal={ref_price:.6g} — no TP/SL adjustment needed"
+                                )
+                    else:
+                        logger.warning(
+                            f"[StrategyTrader] No open {direction} {symbol} position found after fill"
+                            f" wait — skipping TP/SL correction"
+                        )
+                except Exception as _fe:
+                    logger.warning(f"[StrategyTrader] Post-fill TP/SL correction error for {symbol}: {_fe}")
+
+                return {"order_id": order_id, "actual_fill": actual_fill}
             else:
                 # Propagate the actual Bitunix error so the executor can show the right message
                 err = (result or {}).get("error") or "Order rejected by Bitunix (no error detail)"

@@ -1628,11 +1628,12 @@ async def evaluate_and_fire(
                 logger.warning(f"Paper DM failed: {e}")
         else:
             # Live trade: place on Bitunix
-            order_id = None
+            order_id    = None
+            actual_fill = None
             try:
                 from app.services.strategy_trader import place_bitunix_order_for_user
-                ps_type = risk.get("position_size_type", "pct")
-                order_id = await place_bitunix_order_for_user(
+                ps_type      = risk.get("position_size_type", "pct")
+                order_result = await place_bitunix_order_for_user(
                     user        = user,
                     symbol      = symbol,
                     direction   = direction,
@@ -1643,6 +1644,9 @@ async def evaluate_and_fire(
                     risk_pct    = float(risk.get("position_size_pct", 5)),
                     risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None,
                 )
+                if order_result:
+                    order_id    = order_result.get("order_id")
+                    actual_fill = order_result.get("actual_fill")
             except Exception as e:
                 logger.error(f"[Strategy {strategy.id}] Order error: {e}")
 
@@ -1711,7 +1715,19 @@ async def evaluate_and_fire(
 
             if order_id:
                 execution.bitunix_order_id = str(order_id)
+                if (
+                    actual_fill
+                    and actual_fill > 0
+                    and execution.entry_price
+                    and abs(actual_fill - execution.entry_price) / execution.entry_price > 0.0005
+                ):
+                    logger.info(
+                        f"[Strategy {strategy.id}] entry_price updated: "
+                        f"signal={execution.entry_price:.6g} → fill={actual_fill:.6g}"
+                    )
+                    execution.entry_price = actual_fill
                 db.commit()
+                display_entry = actual_fill if actual_fill else current_price
                 tg_id_live = _telegram_int_id(user)
                 if tg_id_live:
                     try:
@@ -1721,7 +1737,7 @@ async def evaluate_and_fire(
                                 strategy_name = strategy.name,
                                 symbol        = symbol,
                                 direction     = direction,
-                                entry         = current_price,
+                                entry         = display_entry,
                                 tp_price      = tp_price,
                                 tp_pct        = tp_pct,
                                 tp2_price     = tp2_price,
@@ -1969,11 +1985,12 @@ async def _propagate_to_subscribers(
                         logger.warning(f"[Propagate] Paper DM failed for strategy {sub_strategy.id}: {_e}")
             else:
                 # Live — place Bitunix order
-                order_id = None
+                order_id    = None
+                actual_fill = None
                 try:
                     from app.services.strategy_trader import place_bitunix_order_for_user
-                    ps_type  = sub_risk.get("position_size_type", "pct")
-                    order_id = await place_bitunix_order_for_user(
+                    ps_type      = sub_risk.get("position_size_type", "pct")
+                    order_result = await place_bitunix_order_for_user(
                         user        = sub_user,
                         symbol      = symbol,
                         direction   = direction,
@@ -1984,6 +2001,9 @@ async def _propagate_to_subscribers(
                         risk_pct    = float(sub_risk.get("position_size_pct", 5)),
                         risk_usd    = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None,
                     )
+                    if order_result:
+                        order_id    = order_result.get("order_id")
+                        actual_fill = order_result.get("actual_fill")
                 except Exception as _e:
                     logger.error(f"[Propagate] Order error for strategy {sub_strategy.id}: {_e}")
                     sub_exec.is_paper = True
@@ -2007,7 +2027,19 @@ async def _propagate_to_subscribers(
 
                 if order_id:
                     sub_exec.bitunix_order_id = str(order_id)
+                    if (
+                        actual_fill
+                        and actual_fill > 0
+                        and sub_exec.entry_price
+                        and abs(actual_fill - sub_exec.entry_price) / sub_exec.entry_price > 0.0005
+                    ):
+                        logger.info(
+                            f"[Propagate] Strategy {sub_strategy.id} entry_price updated: "
+                            f"signal={sub_exec.entry_price:.6g} → fill={actual_fill:.6g}"
+                        )
+                        sub_exec.entry_price = actual_fill
                     _sub_db.commit()
+                    display_entry = actual_fill if actual_fill else entry
                     if tg_id:
                         try:
                             await _tg_send(
@@ -2016,7 +2048,7 @@ async def _propagate_to_subscribers(
                                     strategy_name = sub_strategy.name,
                                     symbol        = symbol,
                                     direction     = direction,
-                                    entry         = entry,
+                                    entry         = display_entry,
                                     tp_price      = tp_price,
                                     tp_pct        = round(tp_pct_raw, 2),
                                     tp2_price     = tp2_price,
