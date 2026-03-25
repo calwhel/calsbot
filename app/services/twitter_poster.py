@@ -2448,36 +2448,27 @@ async def auto_post_loop():
 
 def _maybe_strategy_cta(tweet_text: str) -> str:
     """
-    Append a brief tradehubmarkets.com strategy callout to any market post.
-    Uses varied, natural-sounding language. Skips if the tweet is already near
-    the 280-char limit to avoid truncation.
+    Append a guaranteed tradehubmarkets.com strategy callout to any market post.
+    Always included — trims the tweet body if needed to stay under 278 chars.
     """
     ctas = [
-        "\n\nrunning automated strategies on moves like this → tradehubmarkets.com",
-        "\n\nhave a strategy watching this. build yours free → tradehubmarkets.com",
-        "\n\nautomated strategy tracking this. leaderboard live → tradehubmarkets.com",
-        "\n\nbeen catching these setups with an algo. try it → tradehubmarkets.com",
-        "\n\nmy strategy bot already flagged this one → tradehubmarkets.com",
-        "\n\nstrategy running on exactly this type of move → tradehubmarkets.com",
-        "\n\nour strategy leaderboard catches these early → tradehubmarkets.com",
-        "\n\nautomated plays on setups like this → tradehubmarkets.com",
-        "\n\nbuild a strategy to catch these moves free → tradehubmarkets.com",
-        "\n\nseeing this in the strategy scanner too → tradehubmarkets.com",
-        "\n\nthis is why I automate → tradehubmarkets.com",
-        "\n\nstrategy already in → tradehubmarkets.com",
+        "\n\nautomating moves like this at tradehubmarkets.com — build yours free",
+        "\n\nrunning a strategy on exactly this type of move → tradehubmarkets.com",
+        "\n\nbuild a strategy to catch these. free at tradehubmarkets.com",
+        "\n\nmy algo already flagged this. build yours → tradehubmarkets.com",
+        "\n\nthis is why I automate. leaderboard live → tradehubmarkets.com",
+        "\n\nautomated plays on moves like this → tradehubmarkets.com",
+        "\n\nstrategy bot caught this early. try it free → tradehubmarkets.com",
+        "\n\nhave a strategy running on setups like this → tradehubmarkets.com",
+        "\n\nbeen catching these with an algo. build one free → tradehubmarkets.com",
+        "\n\nstrategy leaderboard is tracking these → tradehubmarkets.com",
+        "\n\nthis is exactly what I automate → tradehubmarkets.com",
+        "\n\ncatching these moves automatically now → tradehubmarkets.com",
     ]
     cta = random.choice(ctas)
-    if len(tweet_text) + len(cta) <= 278:
-        return tweet_text + cta
-    # Tight on space — try a shorter version
-    short_ctas = [
-        " tradehubmarkets.com",
-        "\ntradehubmarkets.com",
-    ]
-    short = random.choice(short_ctas)
-    if len(tweet_text) + len(short) <= 278:
-        return tweet_text + short
-    return tweet_text
+    max_body = 278 - len(cta)
+    body = tweet_text if len(tweet_text) <= max_body else tweet_text[:max_body - 3] + "..."
+    return body + cta
 
 
 async def post_with_account(account_poster: MultiAccountPoster, main_poster, post_type: str) -> Optional[Dict]:
@@ -3552,37 +3543,34 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
         vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
         
         tl = _pick_tweet_length()
-        
+
         if tl == 'ultra_short':
             templates = [
-                f"${symbol}. early",
-                f"${symbol} starting to move",
-                f"${symbol} on my scanner",
-                f"${symbol}. {change:.1f}%. watching",
+                f"${symbol} +{change:.1f}% — on my strategy scanner. tradehubmarkets.com",
+                f"${symbol} early mover today. +{change:.1f}%. watching. tradehubmarkets.com",
+                f"${symbol} up {change:.1f}% with volume. strategy bot flagged this → tradehubmarkets.com",
             ]
         elif tl == 'short':
             templates = [
-                f"${symbol} catching my attention. +{change:.1f}% on real volume",
-                f"${symbol} waking up. {change:.1f}% so far at {price_str}",
-                f"${symbol} quietly up {change:.1f}%. not a lot of people talking about this yet",
-                f"spotted ${symbol} early. +{change:.1f}% with {vol_str} behind it",
-                f"${symbol} +{change:.1f}% at {price_str}. interesting",
+                f"${symbol} up +{change:.1f}% on {vol_str} volume. early and moving clean. building strategies for exactly this at tradehubmarkets.com",
+                f"spotted ${symbol} early. +{change:.1f}% at {price_str}. the kind of move our strategies are built to catch → tradehubmarkets.com",
+                f"${symbol} +{change:.1f}% on real volume. strategy already watching this. build yours free → tradehubmarkets.com",
+                f"${symbol} quietly moving +{change:.1f}%. not many people talking yet. automate these early catches → tradehubmarkets.com",
             ]
         elif tl == 'long':
             templates = [
-                f"${symbol} showed up on my scanner this morning and I almost scrolled past it. +{change:.1f}% on {vol_str} volume at {price_str}.\n\nbut something about the price action made me stop. the move is steady, not spiky. volume is distributed evenly not concentrated in one candle. thats usually what real accumulation looks like.\n\nnot saying its a lock but its on my list now",
-                f"found ${symbol} early today at {price_str}. up {change:.1f}% with {vol_str} volume.\n\nthe thing I like about early movers like this is the risk reward is still favorable. you haven't missed the bulk of the move yet and if it fails you know quickly. thats the kind of trade I want",
+                f"${symbol} up {change:.1f}% at {price_str} on {vol_str} volume.\n\nsteady move, not a spike. volume distributed across candles — thats real accumulation not a pump.\n\nbeen automating catches like this on tradehubmarkets.com — free, no code needed",
+                f"${symbol} showed up on my scanner. +{change:.1f}% at {price_str}.\n\nearly movers like this are the best risk/reward. you haven't missed the move yet and stops are tight.\n\nrunning a strategy for this at tradehubmarkets.com",
             ]
         else:
             templates = [
-                f"spotted ${symbol} early today. up {change:.1f}% with {vol_str} volume at {price_str}. the kind of move I like to catch before it trends",
-                f"${symbol} catching my attention. +{change:.1f}% on {vol_str} volume. still early if momentum holds. {price_str}",
-                f"been watching ${symbol} for a bit. finally making its move at {change:.1f}% with volume confirming. {price_str}",
-                f"interesting price action on ${symbol}. up {change:.1f}% on real volume. {price_str}. on the watchlist now",
+                f"${symbol} +{change:.1f}% at {price_str} on {vol_str}. early move with volume backing it. automate setups like this → tradehubmarkets.com",
+                f"spotted ${symbol} early. +{change:.1f}% and still moving. strategy is live on tradehubmarkets.com catching these",
+                f"${symbol} on the scanner. +{change:.1f}% on real volume at {price_str}. build a strategy for moves like this free → tradehubmarkets.com",
             ]
-        
+
         tweet_text = random.choice(templates) + _get_hashtag_style()
-        
+
         result = account_poster.post_tweet(tweet_text)
         
         if result and result.get('success'):
@@ -3596,273 +3584,103 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
 
 
 async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
-    """Post Solana memecoin using DexScreener's trending data"""
-    import httpx
-    
+    """Post about a trending meme coin from CoinGecko top gainers with a tradehubmarkets.com CTA."""
+    MEME_COINS = {
+        'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO',
+        'NEIRO', 'BOME', 'BRETT', 'MOG', 'POPCAT', 'BABYDOGE', 'ELON',
+        'WOJAK', 'LADYS', 'MONG', 'BOB', 'TOSHI', 'SPX', 'GROK', 'COQ',
+        'MYRO', 'SLERF', 'WEN', 'BODEN', 'PORK', 'BILLY', 'MAGA', 'TRUMP',
+        'MELANIA', 'FARTCOIN', 'PONKE', 'MICHI', 'GOAT', 'ACT', 'MOODENG',
+        'PNUT', 'CHILLGUY', 'VIRTUAL', 'GRIFFAIN',
+    }
+
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-        }
-        
-        candidates = []
-        
-        async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
-            # Method 1: Get boosted/trending tokens from DexScreener (Solana only)
-            try:
-                resp = await client.get('https://api.dexscreener.com/token-boosts/top/v1')
-                if resp.status_code == 200:
-                    data = resp.json()
-                    for token in data[:30]:
-                        if token.get('chainId') == 'solana':
-                            ca = token.get('tokenAddress', '')
-                            if ca:
-                                is_pump = 'pump' in ca.lower() or 'pump.fun' in str(token.get('links', []))
-                                candidates.append({
-                                    'ca': ca,
-                                    'name': '',
-                                    'symbol': '',
-                                    'market_cap': 0,
-                                    'complete': True,
-                                    'source': 'boosted',
-                                    'is_pump': is_pump
-                                })
-            except Exception as e:
-                logger.debug(f"DexScreener boosts fetch failed: {e}")
-            
-            # Method 2: Search for pump.fun tokens specifically
-            try:
-                resp = await client.get('https://api.dexscreener.com/latest/dex/search?q=solana%20pump')
-                if resp.status_code == 200:
-                    data = resp.json()
-                    pairs = data.get('pairs', [])
-                    for pair in pairs[:20]:
-                        if pair.get('chainId') == 'solana':
-                            ca = pair.get('baseToken', {}).get('address', '')
-                            fdv = float(pair.get('fdv', 0) or 0)
-                            volume = float(pair.get('volume', {}).get('h24', 0) or 0)
-                            if ca and fdv >= 50000 and volume >= 10000 and ca not in [c['ca'] for c in candidates]:
-                                candidates.append({
-                                    'ca': ca,
-                                    'name': pair.get('baseToken', {}).get('name', ''),
-                                    'symbol': pair.get('baseToken', {}).get('symbol', ''),
-                                    'market_cap': fdv,
-                                    'complete': True,
-                                    'source': 'search',
-                                    'is_pump': 'pump' in ca.lower()
-                                })
-            except Exception as e:
-                logger.debug(f"DexScreener search failed: {e}")
-            
-            # Method 3: Get trending Solana pairs
-            try:
-                resp = await client.get('https://api.dexscreener.com/latest/dex/pairs/solana')
-                if resp.status_code == 200:
-                    data = resp.json()
-                    pairs = data.get('pairs', [])
-                    for pair in pairs[:30]:
-                        ca = pair.get('baseToken', {}).get('address', '')
-                        fdv = float(pair.get('fdv', 0) or 0)
-                        volume = float(pair.get('volume', {}).get('h24', 0) or 0)
-                        if ca and fdv >= 50000 and volume >= 20000 and ca not in [c['ca'] for c in candidates]:
-                            candidates.append({
-                                'ca': ca,
-                                'name': pair.get('baseToken', {}).get('name', ''),
-                                'symbol': pair.get('baseToken', {}).get('symbol', ''),
-                                'market_cap': fdv,
-                                'complete': True,
-                                'source': 'trending',
-                                'is_pump': 'pump' in ca.lower()
-                            })
-            except Exception as e:
-                logger.debug(f"DexScreener trending failed: {e}")
-        
-        if not candidates:
-            return {'success': False, 'error': 'No Solana memecoins found'}
-        
-        # Score each candidate by traction metrics using DexScreener
-        scored_candidates = []
-        
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            for coin in candidates[:25]:  # Check top 25 candidates
-                try:
-                    resp = await client.get(f'https://api.dexscreener.com/latest/dex/tokens/{coin["ca"]}')
-                    if resp.status_code != 200:
-                        continue
-                    
-                    token_data = resp.json()
-                    pairs = token_data.get('pairs', [])
-                    if not pairs:
-                        continue
-                    
-                    pair = pairs[0]
-                    
-                    # Extract traction metrics
-                    volume_24h = float(pair.get('volume', {}).get('h24', 0) or 0)
-                    volume_6h = float(pair.get('volume', {}).get('h6', 0) or 0)
-                    volume_1h = float(pair.get('volume', {}).get('h1', 0) or 0)
-                    txns = pair.get('txns', {})
-                    buys_24h = int(txns.get('h24', {}).get('buys', 0) or 0)
-                    sells_24h = int(txns.get('h24', {}).get('sells', 0) or 0)
-                    buys_1h = int(txns.get('h1', {}).get('buys', 0) or 0)
-                    sells_1h = int(txns.get('h1', {}).get('sells', 0) or 0)
-                    change_5m = float(pair.get('priceChange', {}).get('m5', 0) or 0)
-                    change_1h = float(pair.get('priceChange', {}).get('h1', 0) or 0)
-                    liquidity = float(pair.get('liquidity', {}).get('usd', 0) or 0)
-                    fdv = float(pair.get('fdv', 0) or 0)
-                    price = float(pair.get('priceUsd', 0) or 0)
-                    
-                    # Calculate traction score (higher = more engagement/community)
-                    traction_score = 0
-                    
-                    # Volume velocity - recent volume vs older (momentum)
-                    if volume_6h > 0:
-                        vol_velocity = (volume_1h * 6) / volume_6h  # 1h extrapolated vs 6h
-                        traction_score += min(vol_velocity * 20, 40)  # Max 40 pts for accelerating volume
-                    
-                    # Buy pressure - more buys than sells = community accumulating
-                    total_txns_1h = buys_1h + sells_1h
-                    if total_txns_1h > 0:
-                        buy_ratio = buys_1h / total_txns_1h
-                        traction_score += buy_ratio * 30  # Max 30 pts for buy pressure
-                    
-                    # Transaction count - more txns = more engagement
-                    traction_score += min(total_txns_1h / 10, 20)  # Max 20 pts for txn count
-                    
-                    # Volume size bonus
-                    if volume_1h >= 50000:
-                        traction_score += 15
-                    elif volume_1h >= 20000:
-                        traction_score += 10
-                    elif volume_1h >= 5000:
-                        traction_score += 5
-                    
-                    # Positive momentum bonus
-                    if change_1h > 10:
-                        traction_score += 10
-                    elif change_1h > 5:
-                        traction_score += 5
-                    
-                    # Graduated bonus (made it through the gauntlet)
-                    if coin.get('complete'):
-                        traction_score += 15
-                    
-                    # Close to bonding bonus (FOMO territory)
-                    elif coin['market_cap'] >= 50000:
-                        traction_score += 10
-                    
-                    # Get symbol/name from pair data if not already set
-                    base_token = pair.get('baseToken', {})
-                    if not coin.get('symbol') or coin['symbol'] == '':
-                        coin['symbol'] = base_token.get('symbol', 'UNKNOWN')
-                    if not coin.get('name') or coin['name'] == '':
-                        coin['name'] = base_token.get('name', 'Unknown')
-                    
-                    # Store scored candidate
-                    coin['traction_score'] = traction_score
-                    coin['volume_24h'] = volume_24h
-                    coin['volume_1h'] = volume_1h
-                    coin['buys_1h'] = buys_1h
-                    coin['sells_1h'] = sells_1h
-                    coin['change_5m'] = change_5m
-                    coin['change_1h'] = change_1h
-                    coin['price'] = price
-                    coin['liquidity'] = liquidity
-                    coin['fdv'] = fdv
-                    coin['market_cap'] = fdv
-                    
-                    scored_candidates.append(coin)
-                    
-                except Exception as e:
-                    logger.debug(f"Failed to score {coin['ca'][:8]}: {e}")
-                    continue
-        
-        if not scored_candidates:
-            return {'success': False, 'error': 'Failed to score any candidates'}
-        
-        # Sort by traction score (highest first)
-        scored_candidates.sort(key=lambda x: x.get('traction_score', 0), reverse=True)
-        
-        # Pick from top 3 highest traction (some randomness for variety)
-        top_picks = scored_candidates[:3]
-        chosen = random.choice(top_picks)
-        
-        # Determine status based on coin state
-        if chosen.get('complete'):
-            status = "just graduated"
-        elif chosen['market_cap'] >= 50000:
-            bonding_pct = min(99, int((chosen['market_cap'] / 69000) * 100))
-            status = f"~{bonding_pct}% to bonding"
+        import httpx as _httpx
+        # Fetch top 100 coins by 24h gain — then filter for known memes
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                "https://api.coingecko.com/api/v3/coins/markets",
+                params={
+                    "vs_currency": "usd",
+                    "order": "percent_change_24h_desc",
+                    "per_page": 100,
+                    "page": 1,
+                    "sparkline": False,
+                }
+            )
+
+        if r.status_code != 200:
+            return {'success': False, 'error': f'CoinGecko error {r.status_code}'}
+
+        all_coins = r.json()
+        # Prefer known meme coins that are actually moving; fall back to any top gainer
+        meme_gainers = [
+            c for c in all_coins
+            if c.get("symbol", "").upper() in MEME_COINS
+            and (c.get("price_change_percentage_24h") or 0) >= 3
+            and (c.get("total_volume") or 0) >= 5_000_000
+            and check_global_coin_cooldown(c["symbol"].upper(), max_per_day=1)
+        ]
+        if not meme_gainers:
+            meme_gainers = [
+                c for c in all_coins
+                if c.get("symbol", "").upper() in MEME_COINS
+                and check_global_coin_cooldown(c["symbol"].upper(), max_per_day=1)
+            ][:5]
+        if not meme_gainers:
+            meme_gainers = [all_coins[0]] if all_coins else []
+
+        if not meme_gainers:
+            return {'success': False, 'error': 'No meme coin data'}
+
+        coin    = random.choice(meme_gainers[:5])
+        symbol  = coin.get("symbol", "").upper()
+        change  = coin.get("price_change_percentage_24h") or 0
+        price   = coin.get("current_price") or 0
+        volume  = coin.get("total_volume") or 0
+        sign    = "+" if change >= 0 else ""
+        price_str = f"${price:,.6f}" if price < 0.01 else f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+        vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
+
+        tl = _pick_tweet_length()
+
+        if tl == 'ultra_short':
+            templates = [
+                f"${symbol} {sign}{change:.1f}%. meme szn. automate it → tradehubmarkets.com",
+                f"${symbol} moving {sign}{change:.1f}%. strategy watching → tradehubmarkets.com",
+                f"${symbol} {sign}{change:.1f}% today. tradehubmarkets.com",
+            ]
+        elif tl == 'short':
+            templates = [
+                f"${symbol} up {sign}{change:.1f}% at {price_str}. {vol_str} volume. have a strategy catching meme moves like this → tradehubmarkets.com",
+                f"${symbol} {sign}{change:.1f}% and people are noticing. automate plays like this free at tradehubmarkets.com",
+                f"${symbol} running {sign}{change:.1f}% on {vol_str} volume. the kind of move I build strategies for → tradehubmarkets.com",
+                f"${symbol} catching attention. {sign}{change:.1f}% at {price_str}. strategy already running on this at tradehubmarkets.com",
+            ]
+        elif tl == 'long':
+            templates = [
+                f"${symbol} up {sign}{change:.1f}% at {price_str} on {vol_str} volume.\n\nmeme coins move fast. either you have an algo watching or you miss it.\n\nbuild a strategy to automate these free at tradehubmarkets.com",
+                f"${symbol} making a move. {sign}{change:.1f}% with {vol_str} behind it.\n\nthis is the stuff I automate. no point watching charts 24/7 when a strategy can do it for you.\n\ntradehubmarkets.com — free to build",
+            ]
         else:
-            status = "gaining traction"
-        
-        ca = chosen['ca']
-        symbol = chosen['symbol']
-        name = chosen['name']
-        market_cap = chosen['market_cap']
-        price = chosen.get('price', 0)
-        volume_24h = chosen.get('volume_24h', 0)
-        volume_1h = chosen.get('volume_1h', 0)
-        buys_1h = chosen.get('buys_1h', 0)
-        sells_1h = chosen.get('sells_1h', 0)
-        change_5m = chosen.get('change_5m', 0)
-        change_1h = chosen.get('change_1h', 0)
-        traction_score = chosen.get('traction_score', 0)
-        
-        logger.info(f"Selected memecoin ${symbol} with traction score {traction_score:.1f} (vol_1h: ${volume_1h:.0f}, buys: {buys_1h}, sells: {sells_1h})")
-        
-        # Format values
-        price_str = f"${price:.10f}" if price < 0.0001 else f"${price:.6f}" if price < 0.01 else f"${price:.4f}"
-        mc_str = f"${market_cap/1e6:.2f}M" if market_cap >= 1e6 else f"${market_cap/1e3:.1f}K"
-        vol_str = f"${volume_24h/1e6:.1f}M" if volume_24h >= 1e6 else f"${volume_24h/1e3:.0f}K" if volume_24h >= 1000 else "low"
-        
-        sign_5m = "+" if change_5m >= 0 else ""
-        sign_1h = "+" if change_1h >= 0 else ""
-        
-        # Super human-like Solana memecoin tweets - casual degen style
-        is_pump = chosen.get('is_pump', False)
-        
-        # Trending/boosted coin templates
-        trending_templates = [
-            f"yo ${symbol} popping off rn\n\n{ca}\n\nmight be nothing might be something idk",
-            f"${symbol} looking interesting ngl\n\nchart actually looks clean for once\n\n{ca}",
-            f"ok ${symbol} hasnt rugged yet thats already better than most\n\n{ca}",
-            f"this ${symbol} thing keeps showing up\n\n{ca}\n\ncould be early could be exit liquidity who knows",
-            f"${symbol} getting attention lately\n\n{ca}",
-            f"another one on the radar\n\n${symbol}\n\n{ca}\n\nnot in yet just watching",
-            f"${symbol} volume looking real\n\n{ca}\n\nnfa obviously",
-        ]
-        
-        # General discovery templates  
-        general_templates = [
-            f"found ${symbol} while doomscrolling at 2am as one does\n\n{ca}",
-            f"${symbol} popped up on my feed\n\nidk if im early or late but the chart looks decent\n\n{ca}",
-            f"someone in the gc mentioned ${symbol}\n\n{ca}\n\ndoing my own research now",
-            f"${symbol}\n\n{ca}\n\nnot advice just what im looking at",
-            f"this ${symbol} thing keeps showing up\n\n{ca}\n\nmight throw a small bag at it idk",
-            f"${symbol}\n\n{ca}\n\nchart doesnt look terrible which is rare",
-            f"saw someone ape ${symbol} so naturally i had to look\n\n{ca}\n\nits giving early vibes but ive been fooled before",
-            f"${symbol} caught my attention\n\n{ca}\n\nthe volume is actually real for once",
-            f"ok hear me out\n\n${symbol}\n\n{ca}\n\ncould be the one or could be nothing",
-            f"${symbol} looking like it might do something\n\n{ca}\n\nnot financial advice im literally just a guy on the internet",
-            f"${symbol} on solana\n\n{ca}\n\nwatching this one",
-            f"stumbled onto ${symbol}\n\n{ca}\n\ncommunity seems active idk",
-        ]
-        
-        # Pick random template
-        all_templates = trending_templates + general_templates
-        tweet = random.choice(all_templates)
-        
-        import asyncio
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, account_poster.post_tweet, tweet)
-        
-    except httpx.TimeoutException:
-        logger.error("Pump.fun API timeout")
-        return {'success': False, 'error': 'API timeout'}
+            templates = [
+                f"${symbol} {sign}{change:.1f}% at {price_str}. {vol_str} volume. exactly the kind of move I automate on tradehubmarkets.com",
+                f"${symbol} running {sign}{change:.1f}%. meme momentum is real right now. strategy catching this at tradehubmarkets.com",
+                f"${symbol} up {sign}{change:.1f}%. built a strategy to catch meme moves like this. free to use → tradehubmarkets.com",
+            ]
+
+        tweet_text = random.choice(templates) + _get_hashtag_style()
+        result = account_poster.post_tweet(tweet_text)
+
+        if result and result.get('success'):
+            record_global_coin_post(symbol)
+
+        return result
+
     except Exception as e:
         logger.error(f"Error posting memecoin: {e}")
         return {'success': False, 'error': str(e)}
+
 
 
 async def post_whale_alert(account_poster: MultiAccountPoster, main_poster) -> Optional[Dict]:
@@ -4142,55 +3960,53 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
             
             if tl == 'ultra_short':
                 templates = [
-                    f"${symbol}. {rsi_note}",
-                    f"${symbol} looking {'clean' if trend == 'bullish' else 'choppy' if trend == 'neutral' else 'heavy'}",
-                    f"${symbol} chart. interesting",
+                    f"${symbol} {sign}{change:.1f}%. {rsi_note}. strategy watching → tradehubmarkets.com",
+                    f"${symbol} {sign}{change:.1f}%. {trend_note}. automating this → tradehubmarkets.com",
+                    f"${symbol} chart. {rsi_note}. build a strategy for this → tradehubmarkets.com",
                 ]
             elif tl == 'short':
                 templates = [
-                    f"${symbol} at {price_str}. {rsi_note}. {trend_note}",
-                    f"pulled up ${symbol}. {sign}{change:.1f}%. {rsi_note}",
-                    f"${symbol} {sign}{change:.1f}% at {price_str}. {trend_note}",
-                    f"quick look at ${symbol}. {rsi_note}. {trend_note}. nothing more to add",
+                    f"${symbol} at {price_str}. {sign}{change:.1f}%. {rsi_note}. {trend_note}. have a strategy running on this at tradehubmarkets.com",
+                    f"pulled up ${symbol}. {sign}{change:.1f}%. {rsi_note}. {trend_note}. automate setups like this → tradehubmarkets.com",
+                    f"${symbol} {sign}{change:.1f}% at {price_str}. {rsi_note}. built a strategy around moves like this → tradehubmarkets.com",
                 ]
             elif tl == 'long':
                 templates = [
-                    f"spent some time looking at ${symbol} tonight. {price_str} after a {sign}{change:.1f}% day.\n\n{rsi_note}. {trend_note}. the thing that stands out to me is how {'clean the structure is right now. higher lows, volume on the pushes' if trend == 'bullish' else 'indecisive the price action is. no clear direction yet which usually resolves with a big move either way' if trend == 'neutral' else 'methodically the sellers are pushing it down. lower highs on every bounce'}.\n\nnot making any moves tonight but this is on my list for tomorrow",
-                    f"${symbol} technical breakdown:\n\n{rsi_note} - {'careful here, momentum is extended' if rsi > 70 else 'could see a bounce from these levels' if rsi < 30 else 'nothing extreme which is actually what you want'}\n\n{trend_note}. sitting at {price_str} ({sign}{change:.1f}%).\n\nthe numbers dont lie. {'setup looks solid' if trend == 'bullish' and rsi < 65 else 'waiting for more confirmation' if trend == 'neutral' else 'patience is the play here'}",
+                    f"${symbol} at {price_str} after {sign}{change:.1f}%.\n\n{rsi_note}. {trend_note}. {'structure is clean — higher lows with volume' if trend == 'bullish' else 'waiting for direction — usually resolves with a sharp move' if trend == 'neutral' else 'lower highs on every bounce — methodical selling'}.\n\nrunning an automated strategy for this at tradehubmarkets.com",
+                    f"${symbol} {sign}{change:.1f}%. quick TA:\n{rsi_note}. {trend_note}.\n\n{'solid setup right now' if trend == 'bullish' and rsi < 65 else 'waiting for confirmation' if trend == 'neutral' else 'patience here'}.\n\nbuild a strategy like mine at tradehubmarkets.com — free",
                 ]
             else:
                 templates = [
-                    f"pulled up ${symbol}. {sign}{change:.1f}% at {price_str}. {rsi_note}. {trend_note}. {'I like what im seeing' if trend == 'bullish' and rsi < 65 else 'watching for a setup' if trend == 'neutral' else 'not my favorite chart but keeping an eye on it'}",
-                    f"${symbol} at {price_str}. {sign}{change:.1f}% today. {rsi_note} and {trend_note}. chart tells the story",
-                    f"been studying ${symbol}. {price_str} with {rsi_note}. {trend_note}. {'clean setup' if trend == 'bullish' else 'needs more time' if trend == 'neutral' else 'caution here'}",
-                    f"${symbol} {sign}{change:.1f}% at {price_str}. {rsi_note}. {trend_note}. the data speaks for itself",
+                    f"${symbol} {sign}{change:.1f}% at {price_str}. {rsi_note}. {trend_note}. strategy automated for moves like this → tradehubmarkets.com",
+                    f"pulled up ${symbol}. {rsi_note} and {trend_note}. {'like what im seeing' if trend == 'bullish' and rsi < 65 else 'watching' if trend == 'neutral' else 'cautious but watching'}. build yours → tradehubmarkets.com",
+                    f"${symbol} at {price_str}. {sign}{change:.1f}%. {rsi_note}. {trend_note}. running an automated strategy on this type of setup at tradehubmarkets.com",
                 ]
         else:
             if tl == 'ultra_short':
                 templates = [
-                    f"${symbol}. watching",
-                    f"${symbol} has my eye",
+                    f"${symbol} {sign}{change:.1f}%. watching. build a strategy → tradehubmarkets.com",
+                    f"${symbol} has my attention. {sign}{change:.1f}%. tradehubmarkets.com",
                 ]
             elif tl == 'long':
                 templates = [
-                    f"${symbol} at {price_str} after {sign}{change:.1f}% today.\n\ndont have the full technical picture on this one yet but the price action alone caught my attention. gonna pull up the chart properly later but wanted to note this while its fresh. sometimes the best trades start as a screenshot on your phone",
+                    f"${symbol} at {price_str} after {sign}{change:.1f}%.\n\nprice action alone caught my attention. the kind of move I want an algo watching 24/7.\n\nbuild a strategy for setups like this free at tradehubmarkets.com",
                 ]
             else:
                 templates = [
-                    f"${symbol} looking interesting at {price_str}. {sign}{change:.1f}% today. keeping an eye on this",
-                    f"checking in on ${symbol}. {sign}{change:.1f}% at {price_str}. something about this chart",
-                    f"${symbol} on my radar. {price_str} after {sign}{change:.1f}%",
+                    f"${symbol} {sign}{change:.1f}% at {price_str}. interesting chart. have a strategy running on this type of move → tradehubmarkets.com",
+                    f"checking in on ${symbol}. {sign}{change:.1f}% at {price_str}. automating plays like this at tradehubmarkets.com",
+                    f"${symbol} {sign}{change:.1f}%. caught this with an algo. build one free → tradehubmarkets.com",
                 ]
-        
+
         tweet_text = random.choice(templates) + _get_hashtag_style()
-        
+
         result = account_poster.post_tweet(tweet_text)
-        
+
         if result and result.get('success'):
             record_global_coin_post(symbol)
-        
+
         return result
-        
+
     except Exception as e:
         logger.error(f"Error posting quick TA: {e}")
         return {'success': False, 'error': str(e)}
@@ -4830,7 +4646,7 @@ async def _fetch_leaderboard_strategies(limit: int = 3) -> List[Dict]:
 
 
 async def post_tradehub_promo(account_poster) -> Optional[Dict]:
-    """Post a branded TradeHub leaderboard card with live strategy stats."""
+    """Post a branded TradeHub leaderboard card with live strategy stats and a hot ticker hook."""
     try:
         strategies = await _fetch_leaderboard_strategies(3)
 
@@ -4840,6 +4656,30 @@ async def post_tradehub_promo(account_poster) -> Optional[Dict]:
 
         # ── Build image card ─────────────────────────────────────────────────
         image_bytes = await asyncio.to_thread(generate_tradehub_card_image, strategies)
+
+        # ── Fetch live top gainer as the attention hook ───────────────────────
+        hook_symbol = None
+        hook_change = None
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=8.0) as _cl:
+                r = await _cl.get(
+                    "https://api.coingecko.com/api/v3/coins/markets",
+                    params={"vs_currency": "usd", "order": "percent_change_24h_desc",
+                            "per_page": 10, "page": 1, "sparkline": False}
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    for coin in data:
+                        chg = coin.get("price_change_percentage_24h", 0) or 0
+                        sym = coin.get("symbol", "").upper()
+                        vol = coin.get("total_volume", 0) or 0
+                        if chg >= 3 and vol >= 20_000_000 and sym not in ("USDT", "USDC", "BUSD"):
+                            hook_symbol = sym
+                            hook_change = chg
+                            break
+        except Exception:
+            pass
 
         # ── Collect tickers from top strategies ──────────────────────────────
         all_tickers = []
@@ -4855,30 +4695,37 @@ async def post_tradehub_promo(account_poster) -> Optional[Dict]:
         top_wr   = top["win_rate"]
         pnl_sign = "+" if top_pnl >= 0 else ""
 
+        # ── Hook prefix using live gainer ─────────────────────────────────────
+        hook = ""
+        if hook_symbol and hook_change:
+            hooks = [
+                f"${hook_symbol} up +{hook_change:.1f}% right now.",
+                f"${hook_symbol} +{hook_change:.1f}% today.",
+                f"${hook_symbol} moving +{hook_change:.1f}%.",
+            ]
+            hook = random.choice(hooks) + " "
+
         # ── AI-generated tweet ───────────────────────────────────────────────
         tl = _pick_tweet_length()
+        hook_context = f"The coin ${hook_symbol} is up +{hook_change:.1f}% right now — use this as the opening hook. " if hook_symbol else ""
         ai_prompt = (
-            f"Write a natural, human Twitter post (no hashtag spam, no emojis overload) "
-            f"promoting the TradeHub strategy leaderboard at tradehubmarkets.com. "
-            f"The top strategy right now is '{top_name}' with a {top_wr}% win rate and "
-            f"{pnl_sign}{top_pnl}% all-time P&L. "
-            f"Mention the relevant crypto tickers: {ticker_str}. "
-            f"The platform lets anyone build automated crypto trading strategies for free "
-            f"and publish to earn 80% revenue. "
-            f"Length style: {tl}. Keep it under 240 chars. "
-            f"Include tradehubmarkets.com at the end. "
-            f"Sound like a real trader sharing something cool, not an ad."
+            f"Write a natural, human Twitter post (no hashtag spam, no emoji overload) "
+            f"promoting tradehubmarkets.com — a free platform to build automated crypto strategies. "
+            f"{hook_context}"
+            f"The top strategy on the leaderboard is '{top_name}' — {pnl_sign}{top_pnl:.1f}% P&L, {top_wr:.0f}% win rate. "
+            f"Mention {ticker_str}. Anyone can build a strategy free and earn 80% revenue selling it. "
+            f"Length: {tl}. Max 240 chars. Include tradehubmarkets.com. Sound like a real trader, not an ad."
         )
         tweet_text = await _call_grok_tweet(ai_prompt, max_chars=240, label="tradehub_promo")
 
         # ── Fallback tweet templates ─────────────────────────────────────────
         if not tweet_text:
             templates = [
-                f"top strategy on the leaderboard right now is up {pnl_sign}{top_pnl:.1f}% all time with a {top_wr:.0f}% win rate. {ticker_str}. built for free on tradehubmarkets.com",
-                f"strategy leaderboard is looking good. {ticker_str} traders killing it. {pnl_sign}{top_pnl:.1f}% on the #1 spot. build yours free at tradehubmarkets.com",
-                f"if you trade {ticker_str} you need to check this. automated strategies, live leaderboard, free to build. tradehubmarkets.com",
-                f"running automated strategies on {ticker_str} and posting results publicly. leaderboard is live at tradehubmarkets.com. build yours free.",
-                f"leaderboard update. {top_name} sitting at {pnl_sign}{top_pnl:.1f}% with {top_wr:.0f}% win rate. {ticker_str} traders building on tradehubmarkets.com",
+                f"{hook}built a strategy to catch moves like this. leaderboard #1 is {pnl_sign}{top_pnl:.1f}% all time. {ticker_str}. build yours free → tradehubmarkets.com",
+                f"{hook}strategy leaderboard is running. {top_name} at {pnl_sign}{top_pnl:.1f}% with {top_wr:.0f}% win rate. {ticker_str}. build yours at tradehubmarkets.com",
+                f"{hook}my algo catches moves like this automatically. top strategy: {pnl_sign}{top_pnl:.1f}% all-time. free to build at tradehubmarkets.com",
+                f"if you trade {ticker_str} you need this. automated strategies, live leaderboard, 80% revenue share. free to build → tradehubmarkets.com",
+                f"{hook}this is exactly what I automate. strategy leaderboard is live. build one for free → tradehubmarkets.com",
             ]
             tweet_text = random.choice(templates)
 
