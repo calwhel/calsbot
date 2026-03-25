@@ -4640,7 +4640,22 @@ async def get_live_tickers_for_campaign() -> Dict:
 
 
 def generate_tradehub_card_image(strategies: List[Dict]) -> Optional[bytes]:
-    """Generate a branded leaderboard promo card for Twitter using the new card generator."""
+    """Generate a leaderboard card that looks exactly like the TradeHub website.
+
+    Primary: cairosvg SVG card (no browser required).
+    Fallback: PIL-drawn promo card.
+    """
+    # ── Primary: cairosvg SVG card ───────────────────────────────────────────
+    try:
+        from app.services.screenshot_card import screenshot_leaderboard_card_sync
+        png = screenshot_leaderboard_card_sync(strategies)
+        if png:
+            logger.info(f"[generate_tradehub_card_image] cairosvg SVG card OK — {len(png):,} bytes")
+            return png
+    except Exception as e:
+        logger.warning(f"[generate_tradehub_card_image] cairosvg card failed: {e}")
+
+    # ── Fallback: PIL card ────────────────────────────────────────────────────
     try:
         from app.services.tweet_card_generator import make_promo_card
         # Build stats from top strategies
@@ -4660,127 +4675,7 @@ def generate_tradehub_card_image(strategies: List[Dict]) -> Optional[bytes]:
             cta="Build & automate your strategy free — tradehubmarkets.com",
         )
     except Exception as e:
-        logger.error(f"Failed to generate TradeHub card image (new style): {e}")
-    # Fallback: old hand-drawn PIL implementation
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-
-        W, H = 1200, 630
-        BG       = (10, 14, 20)
-        CARD_BG  = (18, 24, 33)
-        BORDER   = (30, 41, 59)
-        BLUE     = (59, 130, 246)
-        GREEN    = (0, 211, 149)
-        GOLD     = (251, 191, 36)
-        SILVER   = (148, 163, 184)
-        BRONZE   = (180, 120, 60)
-        WHITE    = (255, 255, 255)
-        MUTED    = (100, 116, 139)
-        RED      = (239, 68, 68)
-
-        img  = Image.new("RGB", (W, H), BG)
-        draw = ImageDraw.Draw(img)
-
-        FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        try:
-            f_huge   = ImageFont.truetype(FONT_PATH, 52)
-            f_large  = ImageFont.truetype(FONT_PATH, 34)
-            f_medium = ImageFont.truetype(FONT_PATH, 26)
-            f_small  = ImageFont.truetype(FONT_PATH, 21)
-            f_tiny   = ImageFont.truetype(FONT_PATH, 18)
-        except Exception:
-            f_huge = f_large = f_medium = f_small = f_tiny = ImageFont.load_default()
-
-        # ── Top blue accent bar ──────────────────────────────────────────────
-        draw.rectangle([(0, 0), (W, 5)], fill=BLUE)
-
-        # ── TH badge ────────────────────────────────────────────────────────
-        badge_x, badge_y = 40, 30
-        draw.rounded_rectangle([(badge_x, badge_y), (badge_x + 56, badge_y + 56)],
-                                radius=12, fill=BLUE)
-        draw.text((badge_x + 10, badge_y + 8), "TH", font=f_large, fill=WHITE)
-
-        # ── Header text ─────────────────────────────────────────────────────
-        draw.text((112, 30), "TradeHub Strategy Leaderboard", font=f_large, fill=WHITE)
-        draw.text((113, 72), "Live Performance  ·  tradehubmarkets.com", font=f_small, fill=MUTED)
-
-        # ── Divider ─────────────────────────────────────────────────────────
-        draw.rectangle([(40, 105), (W - 40, 107)], fill=BORDER)
-
-        # ── Column headers ───────────────────────────────────────────────────
-        draw.text((40,  118), "#",          font=f_tiny, fill=MUTED)
-        draw.text((90,  118), "Strategy",   font=f_tiny, fill=MUTED)
-        draw.text((730, 118), "Trades",     font=f_tiny, fill=MUTED)
-        draw.text((870, 118), "Win Rate",   font=f_tiny, fill=MUTED)
-        draw.text((1040,118), "All-time P&L", font=f_tiny, fill=MUTED)
-
-        # ── Strategy rows ────────────────────────────────────────────────────
-        rank_colors  = [GOLD, SILVER, BRONZE]
-        rank_medals  = ["🥇", "🥈", "🥉"]
-        row_y_start  = 148
-        row_height   = 120
-
-        for i, strat in enumerate(strategies[:3]):
-            ry = row_y_start + i * row_height
-
-            # Card background
-            draw.rounded_rectangle([(38, ry), (W - 38, ry + row_height - 8)],
-                                    radius=12, fill=CARD_BG, outline=BORDER, width=1)
-
-            rc = rank_colors[i]
-
-            # Rank number
-            draw.rounded_rectangle([(52, ry + 18), (84, ry + 58)],
-                                    radius=8, fill=rc)
-            rank_txt = str(i + 1)
-            draw.text((58 if i < 9 else 52, ry + 24), rank_txt, font=f_medium, fill=(10, 14, 20))
-
-            # Strategy name
-            name = strat.get("name", "Unnamed")[:32]
-            draw.text((100, ry + 14), name, font=f_medium, fill=WHITE)
-
-            # Coin tags extracted from name or symbol field
-            tickers = strat.get("tickers", [])
-            tag_x = 100
-            tag_y = ry + 52
-            for ticker in tickers[:4]:
-                tag_w = len(ticker) * 11 + 16
-                draw.rounded_rectangle([(tag_x, tag_y), (tag_x + tag_w, tag_y + 26)],
-                                        radius=6, fill=(30, 41, 59))
-                draw.text((tag_x + 8, tag_y + 4), f"${ticker}", font=f_tiny, fill=BLUE)
-                tag_x += tag_w + 8
-
-            # Trades
-            trades = strat.get("total_trades", 0)
-            draw.text((730, ry + 30), str(trades), font=f_medium, fill=WHITE)
-
-            # Win rate
-            win_rate = strat.get("win_rate", 0)
-            wr_color = GREEN if win_rate >= 55 else (WHITE if win_rate >= 45 else RED)
-            draw.text((870, ry + 30), f"{win_rate:.1f}%", font=f_medium, fill=wr_color)
-
-            # P&L
-            pnl = strat.get("total_pnl", 0)
-            pnl_color = GREEN if pnl >= 0 else RED
-            pnl_sign  = "+" if pnl >= 0 else ""
-            draw.text((1040, ry + 30), f"{pnl_sign}{pnl:.1f}%", font=f_large, fill=pnl_color)
-
-        # ── Footer CTA ───────────────────────────────────────────────────────
-        draw.rectangle([(0, H - 72), (W, H - 67)], fill=BORDER)
-        draw.rectangle([(0, H - 67), (W, H)], fill=(14, 20, 28))
-
-        cta = "Build your own automated strategy for free  →  tradehubmarkets.com"
-        draw.text((40, H - 50), cta, font=f_small, fill=MUTED)
-
-        # ── Bottom blue accent bar ───────────────────────────────────────────
-        draw.rectangle([(0, H - 4), (W, H)], fill=BLUE)
-
-        buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        return buf.getvalue()
-
-    except Exception as e:
-        logger.error(f"Failed to generate TradeHub card image: {e}")
+        logger.error(f"Failed to generate TradeHub card image (PIL fallback): {e}")
         return None
 
 
@@ -4788,7 +4683,8 @@ async def _fetch_leaderboard_strategies(limit: int = 3) -> List[Dict]:
     """Fetch top strategies from DB for the promo card."""
     try:
         from app.database import SessionLocal
-        from app.strategy_models import StrategyPerformance, UserStrategy
+        from app.strategy_models import StrategyPerformance, UserStrategy, StrategyExecution
+        import json as _json
 
         db = SessionLocal()
         try:
@@ -4816,12 +4712,52 @@ async def _fetch_leaderboard_strategies(limit: int = 3) -> List[Dict]:
                 found = [t for t in KNOWN_TICKERS if t in name_upper]
                 if not found:
                     found = ["CRYPTO"]
+
+                # Pull direction / leverage / tp / sl from config JSON
+                direction, leverage, tp_pct, sl_pct = "", "", "", ""
+                try:
+                    cfg = _json.loads(strat.config_json or "{}")
+                    direction = cfg.get("direction", "")
+                    leverage  = cfg.get("leverage", "")
+                    risk      = cfg.get("risk_management", {})
+                    tp_pct    = risk.get("tp_pct", cfg.get("tp_pct", ""))
+                    sl_pct    = risk.get("sl_pct", cfg.get("sl_pct", ""))
+                except Exception:
+                    pass
+
+                # Recent WIN/LOSS tags — last 5 closed executions
+                recent_tags = []
+                try:
+                    recent_execs = (
+                        db.query(StrategyExecution)
+                        .filter(
+                            StrategyExecution.strategy_id == strat.id,
+                            StrategyExecution.outcome.in_(["WIN", "LOSS"]),
+                            StrategyExecution.pnl_pct.isnot(None),
+                        )
+                        .order_by(StrategyExecution.closed_at.desc())
+                        .limit(5)
+                        .all()
+                    )
+                    for ex in recent_execs:
+                        ticker = ex.symbol.replace("USDT", "") if ex.symbol else "?"
+                        pnl    = ex.pnl_pct or 0
+                        sign   = "+" if pnl >= 0 else ""
+                        recent_tags.append(f"{ticker} {sign}{pnl:.0f}%")
+                except Exception:
+                    pass
+
                 result.append({
                     "name":         name,
                     "tickers":      found[:3],
                     "total_trades": perf.total_trades,
                     "win_rate":     round(perf.win_rate, 1),
                     "total_pnl":    round(perf.total_pnl_pct, 2),
+                    "direction":    direction,
+                    "leverage":     leverage,
+                    "tp_pct":       tp_pct,
+                    "sl_pct":       sl_pct,
+                    "recent_tags":  recent_tags,
                 })
             return result
         finally:
