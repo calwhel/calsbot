@@ -3261,6 +3261,39 @@ async def api_update_strategy(strategy_id: int, request: Request):
         s.config = config
         db.commit()
 
+        # If this is a source (non-locked) strategy and the owner just changed sessions,
+        # automatically push the same session filter to every locked marketplace copy so
+        # subscribers always inherit the creator's time-of-day restrictions.
+        if "sessions" in body and not (s.config or {}).get("_locked"):
+            from app.strategy_models import UserStrategy as _US2
+            from sqlalchemy import text as _t2
+            copies = db.query(_US2).filter(
+                _US2.id != s.id
+            ).all()
+            _new_filters = dict(config.get("filters", {}))
+            synced = 0
+            for cp in copies:
+                cp_cfg = dict(cp.config or {})
+                if not cp_cfg.get("_locked"):
+                    continue
+                if cp_cfg.get("_source_strategy_id") != s.id:
+                    continue
+                cp_filters = dict(cp_cfg.get("filters", {}))
+                # Copy only the session key from the source; leave the subscriber's
+                # own time_filter, btc_regime, trading_days intact.
+                if _new_filters.get("session"):
+                    cp_filters["session"] = _new_filters["session"]
+                else:
+                    cp_filters.pop("session", None)
+                cp_cfg["filters"] = cp_filters
+                cp.config = cp_cfg
+                synced += 1
+            if synced:
+                db.commit()
+                logger.info(
+                    f"[Strategy {s.id}] Session filter pushed to {synced} locked copies"
+                )
+
         # Notify admin via Telegram whenever a strategy is promoted to live
         if s.status == "active" and prev_status != "active":
             import asyncio
