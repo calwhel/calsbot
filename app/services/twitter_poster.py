@@ -2513,7 +2513,7 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
 
         if is_social_account(account_poster.name):
             logger.info(f"[CryptoSocial] Using social-powered posts for {account_poster.name}")
-            return await post_for_social_account(account_poster, post_type)
+            return await post_for_social_account(account_poster, post_type, main_poster)
         
         if post_type == 'featured_coin':
             # Get gainers and pick one randomly that's not overposted
@@ -3541,72 +3541,105 @@ async def post_market_pulse(account_poster: MultiAccountPoster) -> Optional[Dict
         return None
 
 
+def _try_attach_card(account_poster: MultiAccountPoster, image_bytes: bytes) -> Optional[list]:
+    """Upload image_bytes to Twitter v1 and return [media_id], or None on failure."""
+    try:
+        if hasattr(account_poster, 'api_v1') and account_poster.api_v1:
+            media = account_poster.api_v1.media_upload(
+                filename="tradehub_card.png", file=io.BytesIO(image_bytes)
+            )
+            return [str(media.media_id)]
+    except Exception as e:
+        logger.warning(f"Card image upload failed (non-fatal): {e}")
+    return None
+
+
 async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_poster) -> Optional[Dict]:
     """Post early gainer for standard accounts with chart - human-like varied posts"""
     try:
         gainers = await main_poster.get_top_gainers_data(20)
         if not gainers:
             return {'success': False, 'error': 'No gainers data'}
-        
-        # Find early gainers (3-15% range with good volume)
+
+        # Find early gainers (3–20% range with real volume)
         early_gainers = [
-            g for g in gainers 
-            if 3 <= g.get('change', 0) <= 15 
+            g for g in gainers
+            if 3 <= g.get('change', 0) <= 20
             and g.get('volume', 0) >= 3_000_000
             and check_global_coin_cooldown(g['symbol'], max_per_day=1)
         ]
-        
         if not early_gainers:
             early_gainers = [g for g in gainers if g.get('change', 0) >= 3][:3]
-        
         if not early_gainers:
             return {'success': False, 'error': 'No suitable early gainers'}
-        
-        coin = random.choice(early_gainers[:5])
+
+        coin   = random.choice(early_gainers[:5])
         symbol = coin['symbol']
         change = coin.get('change', 0)
-        price = coin.get('price', 0)
+        price  = coin.get('price', 0)
         volume = coin.get('volume', 0)
-        
-        price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
-        vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
-        
+        mcap   = coin.get('market_cap', 0)
+        rank   = early_gainers.index(coin) + 1
+
+        if price < 0.01:
+            price_str = f"${price:.6f}"
+        elif price < 1:
+            price_str = f"${price:.4f}"
+        elif price < 100:
+            price_str = f"${price:,.3f}"
+        else:
+            price_str = f"${price:,.2f}"
+
+        vol_str  = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.2f}B"
+        mcap_str = f"${mcap/1e9:.2f}B"   if mcap >= 1e9 else (f"${mcap/1e6:.0f}M" if mcap > 0 else "")
+        cap_note = f" | mcap {mcap_str}" if mcap_str else ""
+
+        # ── generate and attach card ──────────────────────────────────────────
+        try:
+            from app.services.tweet_card_generator import make_gainer_card_auto
+            card_bytes = await asyncio.to_thread(
+                make_gainer_card_auto, symbol, price, change, volume, mcap, rank
+            )
+            media_ids = _try_attach_card(account_poster, card_bytes)
+        except Exception as ce:
+            logger.warning(f"Gainer card generation failed: {ce}")
+            media_ids = None
+
         tl = _pick_tweet_length()
 
         if tl == 'ultra_short':
             templates = [
-                f"${symbol} +{change:.1f}% — on my strategy scanner. tradehubmarkets.com",
-                f"${symbol} early mover today. +{change:.1f}%. watching. tradehubmarkets.com",
-                f"${symbol} up {change:.1f}% with volume. strategy bot flagged this → tradehubmarkets.com",
+                f"${symbol} +{change:.1f}% at {price_str}. strategy scanner flagged this early → tradehubmarkets.com",
+                f"${symbol} up {change:.1f}% on {vol_str} volume. watching. tradehubmarkets.com",
+                f"${symbol} +{change:.1f}%. on the radar. build a strategy → tradehubmarkets.com",
             ]
         elif tl == 'short':
             templates = [
-                f"${symbol} up +{change:.1f}% on {vol_str} volume. early and moving clean. building strategies for exactly this at tradehubmarkets.com",
-                f"spotted ${symbol} early. +{change:.1f}% at {price_str}. the kind of move our strategies are built to catch → tradehubmarkets.com",
-                f"${symbol} +{change:.1f}% on real volume. strategy already watching this. build yours free → tradehubmarkets.com",
-                f"${symbol} quietly moving +{change:.1f}%. not many people talking yet. automate these early catches → tradehubmarkets.com",
+                f"${symbol} +{change:.1f}% at {price_str} · {vol_str} volume{cap_note}. early mover with real buying behind it. automating catches like this → tradehubmarkets.com",
+                f"spotted ${symbol} early. +{change:.1f}% at {price_str} · vol {vol_str}. the kind of move my strategy is built to catch → tradehubmarkets.com",
+                f"${symbol} quietly up {change:.1f}% on {vol_str}. price {price_str}{cap_note}. not many talking yet. automate the early entry → tradehubmarkets.com",
+                f"${symbol} moving. +{change:.1f}% at {price_str} · {vol_str} behind it. strategy already running on this at tradehubmarkets.com",
             ]
         elif tl == 'long':
             templates = [
-                f"${symbol} up {change:.1f}% at {price_str} on {vol_str} volume.\n\nsteady move, not a spike. volume distributed across candles — thats real accumulation not a pump.\n\nbeen automating catches like this on tradehubmarkets.com — free, no code needed",
-                f"${symbol} showed up on my scanner. +{change:.1f}% at {price_str}.\n\nearly movers like this are the best risk/reward. you haven't missed the move yet and stops are tight.\n\nrunning a strategy for this at tradehubmarkets.com",
+                f"${symbol} up {change:.1f}% at {price_str} · {vol_str} volume{cap_note}.\n\nsteady climb, not a spike. volume distributed across candles — real accumulation pattern, not a pump-and-dump.\n\nbeen automating early catches like this on tradehubmarkets.com — free, no code needed",
+                f"${symbol} showed up on my scanner. +{change:.1f}% at {price_str} · {vol_str}.\n\nearly movers like this are the best r/r. you haven't missed the move yet and stops are clean.\n\nrunning an automated strategy for setups like this at tradehubmarkets.com",
             ]
         else:
             templates = [
-                f"${symbol} +{change:.1f}% at {price_str} on {vol_str}. early move with volume backing it. automate setups like this → tradehubmarkets.com",
-                f"spotted ${symbol} early. +{change:.1f}% and still moving. strategy is live on tradehubmarkets.com catching these",
-                f"${symbol} on the scanner. +{change:.1f}% on real volume at {price_str}. build a strategy for moves like this free → tradehubmarkets.com",
+                f"${symbol} +{change:.1f}% at {price_str} · {vol_str} 24h volume{cap_note}. early move with volume backing it. automate entries like this → tradehubmarkets.com",
+                f"spotted ${symbol} early. +{change:.1f}% at {price_str} and still climbing. strategy live on tradehubmarkets.com catching these moves",
+                f"${symbol} on the scanner. +{change:.1f}% · price {price_str} · vol {vol_str}. build a strategy for moves like this free → tradehubmarkets.com",
             ]
 
         tweet_text = random.choice(templates) + _get_hashtag_style()
+        result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
 
-        result = account_poster.post_tweet(tweet_text)
-        
         if result and result.get('success'):
             record_global_coin_post(symbol)
-        
+
         return result
-        
+
     except Exception as e:
         logger.error(f"Error posting early gainer standard: {e}")
         return {'success': False, 'error': str(e)}
@@ -3667,39 +3700,68 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
         change  = coin.get("price_change_percentage_24h") or 0
         price   = coin.get("current_price") or 0
         volume  = coin.get("total_volume") or 0
+        mcap    = coin.get("market_cap") or 0
         sign    = "+" if change >= 0 else ""
-        price_str = f"${price:,.6f}" if price < 0.01 else f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
-        vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
+
+        if price < 0.000001:
+            price_str = f"${price:.10f}"
+        elif price < 0.01:
+            price_str = f"${price:.8f}"
+        elif price < 1:
+            price_str = f"${price:.6f}"
+        else:
+            price_str = f"${price:,.4f}"
+
+        vol_str  = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
+        mcap_str = f"${mcap/1e9:.2f}B" if mcap >= 1e9 else (f"${mcap/1e6:.0f}M" if mcap > 0 else "")
+        cap_note = f" · mcap {mcap_str}" if mcap_str else ""
+
+        # ── generate and attach memecoin card ─────────────────────────────────
+        meme_media_ids = None
+        try:
+            from app.services.tweet_card_generator import make_memecoin_card
+            taglines = [
+                "strategy running on this",
+                "algo watching 24/7",
+                "meme szn is real",
+                "caught it early",
+            ]
+            card_bytes = await asyncio.to_thread(
+                make_memecoin_card, symbol, price, change, volume, random.choice(taglines)
+            )
+            meme_media_ids = _try_attach_card(account_poster, card_bytes)
+        except Exception as ce:
+            logger.warning(f"Memecoin card generation failed: {ce}")
 
         tl = _pick_tweet_length()
 
         if tl == 'ultra_short':
             templates = [
-                f"${symbol} {sign}{change:.1f}%. meme szn. automate it → tradehubmarkets.com",
-                f"${symbol} moving {sign}{change:.1f}%. strategy watching → tradehubmarkets.com",
-                f"${symbol} {sign}{change:.1f}% today. tradehubmarkets.com",
+                f"${symbol} {sign}{change:.1f}% at {price_str}. meme szn. strategy watching → tradehubmarkets.com",
+                f"${symbol} {sign}{change:.1f}% · {vol_str} volume. automate it → tradehubmarkets.com",
+                f"${symbol} moving {sign}{change:.1f}%. on the radar. tradehubmarkets.com",
             ]
         elif tl == 'short':
             templates = [
-                f"${symbol} up {sign}{change:.1f}% at {price_str}. {vol_str} volume. have a strategy catching meme moves like this → tradehubmarkets.com",
-                f"${symbol} {sign}{change:.1f}% and people are noticing. automate plays like this free at tradehubmarkets.com",
-                f"${symbol} running {sign}{change:.1f}% on {vol_str} volume. the kind of move I build strategies for → tradehubmarkets.com",
-                f"${symbol} catching attention. {sign}{change:.1f}% at {price_str}. strategy already running on this at tradehubmarkets.com",
+                f"${symbol} {sign}{change:.1f}% at {price_str} · {vol_str} volume{cap_note}. meme momentum is real right now. strategy catching this → tradehubmarkets.com",
+                f"${symbol} up {sign}{change:.1f}% on {vol_str}. price {price_str}{cap_note}. have a strategy running on meme moves like this at tradehubmarkets.com",
+                f"${symbol} catching attention. {sign}{change:.1f}% · vol {vol_str}. the kind of move I automate → tradehubmarkets.com",
+                f"${symbol} {sign}{change:.1f}% at {price_str} and still moving. built a strategy for exactly this → tradehubmarkets.com",
             ]
         elif tl == 'long':
             templates = [
-                f"${symbol} up {sign}{change:.1f}% at {price_str} on {vol_str} volume.\n\nmeme coins move fast. either you have an algo watching or you miss it.\n\nbuild a strategy to automate these free at tradehubmarkets.com",
-                f"${symbol} making a move. {sign}{change:.1f}% with {vol_str} behind it.\n\nthis is the stuff I automate. no point watching charts 24/7 when a strategy can do it for you.\n\ntradehubmarkets.com — free to build",
+                f"${symbol} {sign}{change:.1f}% at {price_str} · {vol_str} volume{cap_note}.\n\nmeme coins move fast. either you have an algo watching or you miss it.\n\nbuild a strategy to automate these entries free at tradehubmarkets.com",
+                f"${symbol} making a move. {sign}{change:.1f}% with {vol_str} behind it{cap_note}.\n\nthis is the stuff I automate. no point watching charts 24/7 when a strategy catches it for you.\n\ntradehubmarkets.com — free to build",
             ]
         else:
             templates = [
-                f"${symbol} {sign}{change:.1f}% at {price_str}. {vol_str} volume. exactly the kind of move I automate on tradehubmarkets.com",
-                f"${symbol} running {sign}{change:.1f}%. meme momentum is real right now. strategy catching this at tradehubmarkets.com",
-                f"${symbol} up {sign}{change:.1f}%. built a strategy to catch meme moves like this. free to use → tradehubmarkets.com",
+                f"${symbol} {sign}{change:.1f}% at {price_str} · {vol_str}{cap_note}. meme move with volume behind it. automating plays like this → tradehubmarkets.com",
+                f"${symbol} running {sign}{change:.1f}% at {price_str}. {vol_str} volume{cap_note}. strategy catching this at tradehubmarkets.com",
+                f"${symbol} {sign}{change:.1f}% · {vol_str} · price {price_str}. built a strategy for meme moves. free to copy → tradehubmarkets.com",
             ]
 
         tweet_text = random.choice(templates) + _get_hashtag_style()
-        result = account_poster.post_tweet(tweet_text)
+        result = account_poster.post_tweet(tweet_text, media_ids=meme_media_ids)
 
         if result and result.get('success'):
             record_global_coin_post(symbol)
@@ -3952,14 +4014,20 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
         sign = "+" if change >= 0 else ""
         
         chart_analysis = None
+        ohlcv_closes = []
         try:
             exchange = ccxt.binance({'enableRateLimit': True})
             ohlcv = await exchange.fetch_ohlcv(f"{symbol}/USDT", '1h', limit=48)
             await exchange.close()
             if ohlcv and len(ohlcv) >= 20:
                 closes = [c[4] for c in ohlcv]
-                ema9 = sum(closes[-9:]) / 9
-                ema21 = sum(closes[-21:]) / 21
+                ohlcv_closes = closes
+                highs  = [c[2] for c in ohlcv]
+                lows   = [c[3] for c in ohlcv]
+                vols   = [c[5] for c in ohlcv]
+                ema9   = sum(closes[-9:])  / 9
+                ema21  = sum(closes[-21:]) / 21
+                ema50  = sum(closes[-50:]) / min(50, len(closes))
                 gains, losses = [], []
                 for i in range(1, min(15, len(closes))):
                     diff = closes[i] - closes[i-1]
@@ -3969,12 +4037,69 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
                 avg_loss = sum(losses) / len(losses) if losses else 0.0001
                 rsi_val = 100 - (100 / (1 + avg_gain / avg_loss))
                 trend_val = "bullish" if ema9 > ema21 else "bearish" if ema9 < ema21 else "neutral"
-                chart_analysis = {'rsi': round(rsi_val, 1), 'trend': trend_val}
+                # Volume vs 10-period average
+                avg_vol = sum(vols[-10:]) / 10 if len(vols) >= 10 else 0
+                vol_surge = vols[-1] > avg_vol * 1.3 if avg_vol > 0 else False
+                # 24h high/low range
+                h24 = max(highs[-24:]) if len(highs) >= 24 else max(highs)
+                l24 = min(lows[-24:])  if len(lows)  >= 24 else min(lows)
+                chart_analysis = {
+                    'rsi': round(rsi_val, 1),
+                    'trend': trend_val,
+                    'ema9': round(ema9, 6),
+                    'ema21': round(ema21, 6),
+                    'vol_surge': vol_surge,
+                    'h24': h24,
+                    'l24': l24,
+                }
         except Exception as e:
             logger.warning(f"TA analysis failed: {e}")
-        
+
+        volume = coin.get('volume', 0)
+
+        # ── generate and attach TA card ───────────────────────────────────────
+        ta_media_ids = None
+        try:
+            from app.services.tweet_card_generator import make_ta_card
+            rsi_v  = chart_analysis.get('rsi', 50) if chart_analysis else 50
+            trend_v = chart_analysis.get('trend', 'neutral') if chart_analysis else 'neutral'
+            vs_v   = chart_analysis.get('vol_surge', False) if chart_analysis else False
+            h24    = chart_analysis.get('h24', 0) if chart_analysis else 0
+            l24    = chart_analysis.get('l24', 0) if chart_analysis else 0
+            bias_v = 'BULLISH' if trend_v == 'bullish' else ('BEARISH' if trend_v == 'bearish' else 'NEUTRAL')
+            # Build human-readable TA bullet points
+            ta_bullets = []
+            if chart_analysis:
+                if rsi_v > 70:
+                    ta_bullets.append(f"RSI {rsi_v:.0f} — overbought, watch for reversal")
+                elif rsi_v < 30:
+                    ta_bullets.append(f"RSI {rsi_v:.0f} — oversold, bounce territory")
+                else:
+                    ta_bullets.append(f"RSI {rsi_v:.0f} — neutral momentum")
+                if trend_v == 'bullish':
+                    ta_bullets.append("EMA9 above EMA21 — short-term uptrend intact")
+                elif trend_v == 'bearish':
+                    ta_bullets.append("EMA9 below EMA21 — short-term downtrend")
+                else:
+                    ta_bullets.append("EMA9 ≈ EMA21 — no clear trend yet")
+                if vs_v:
+                    ta_bullets.append("Volume surge detected — above 10-period avg")
+                if h24 > 0 and l24 > 0:
+                    rng_pct = (h24 - l24) / l24 * 100
+                    if price < 1:
+                        ta_bullets.append(f"24h range: ${l24:.6f} – ${h24:.6f} ({rng_pct:.1f}%)")
+                    else:
+                        ta_bullets.append(f"24h range: ${l24:,.2f} – ${h24:,.2f} ({rng_pct:.1f}%)")
+                ta_bullets.append(f"Price {sign}{change:.1f}% · strategy running on tradehubmarkets.com")
+            card_bytes = await asyncio.to_thread(
+                make_ta_card, symbol, price, change, volume, ta_bullets or None, bias_v
+            )
+            ta_media_ids = _try_attach_card(account_poster, card_bytes)
+        except Exception as ce:
+            logger.warning(f"TA card generation failed: {ce}")
+
         tl = _pick_tweet_length()
-        
+
         if chart_analysis:
             rsi = chart_analysis.get('rsi', 50)
             trend = chart_analysis.get('trend', 'neutral')
@@ -4029,7 +4154,7 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
 
         tweet_text = random.choice(templates) + _get_hashtag_style()
 
-        result = account_poster.post_tweet(tweet_text)
+        result = account_poster.post_tweet(tweet_text, media_ids=ta_media_ids)
 
         if result and result.get('success'):
             record_global_coin_post(symbol)
@@ -4047,55 +4172,66 @@ def is_social_account(account_name: str) -> bool:
     return 'social' in name_lower or 'cryptosocial' in name_lower
 
 
-async def post_for_social_account(account_poster: MultiAccountPoster, post_type: str) -> Optional[Dict]:
+async def post_for_social_account(
+    account_poster: MultiAccountPoster, post_type: str, main_poster=None
+) -> Optional[Dict]:
     """Handle posting for Crypto Social account - NEWS & EARLY GAINERS focus"""
     # Direct mapping for manual post buttons
     if post_type == 'breaking_news':
         return await post_social_news(account_poster)
-    
+
     elif post_type == 'early_gainer':
+        if main_poster:
+            return await post_early_gainer_standard(account_poster, main_poster)
         return await post_early_gainers(account_poster)
-    
+
+    elif post_type == 'quick_ta':
+        if main_poster:
+            return await post_quick_ta(account_poster, main_poster)
+        return await post_early_gainers(account_poster)
+
+    elif post_type == 'tradehub_promo':
+        return await post_tradehub_promo(account_poster)
+
+    elif post_type == 'memecoin':
+        return await post_memecoin(account_poster)
+
     elif post_type == 'momentum_shift':
         return await post_momentum_shift(account_poster)
-    
+
     elif post_type == 'volume_surge':
         return await post_volume_surge(account_poster)
-    
+
     elif post_type == 'market_pulse':
         return await post_market_pulse(account_poster)
-    
+
     # Map standard post types to social-specific functions
     elif post_type == 'featured_coin':
-        # Rotate between news and early gainers
         social_posts = [
             post_social_news,
             post_early_gainers,
             post_momentum_shift,
         ]
         return await random.choice(social_posts)(account_poster)
-    
+
     elif post_type == 'market_summary':
         return await post_market_pulse(account_poster)
-    
+
     elif post_type == 'top_gainers':
         return await post_early_gainers(account_poster)
-    
+
     elif post_type == 'btc_update':
         return await post_social_news(account_poster)
-    
+
     elif post_type == 'altcoin_movers':
         return await post_momentum_shift(account_poster)
-    
+
     elif post_type == 'daily_recap':
         return await post_volume_surge(account_poster)
-    
-    elif post_type == 'memecoin':
-        return await post_memecoin(account_poster)
-    
+
     elif post_type == 'bitunix_campaign':
         return await post_bitunix_campaign(account_poster)
-    
+
     else:
         funcs = [post_social_news, post_early_gainers, post_momentum_shift, post_volume_surge]
         return await random.choice(funcs)(account_poster)
@@ -4504,7 +4640,28 @@ async def get_live_tickers_for_campaign() -> Dict:
 
 
 def generate_tradehub_card_image(strategies: List[Dict]) -> Optional[bytes]:
-    """Generate a branded leaderboard card image for Twitter using PIL."""
+    """Generate a branded leaderboard promo card for Twitter using the new card generator."""
+    try:
+        from app.services.tweet_card_generator import make_promo_card
+        # Build stats from top strategies
+        stats = []
+        if strategies:
+            top = strategies[0]
+            pnl_sign = "+" if top.get("total_pnl", 0) >= 0 else ""
+            stats = [
+                ("Top P&L", f"{pnl_sign}{top.get('total_pnl', 0):.1f}%"),
+                ("Win Rate", f"{top.get('win_rate', 0):.0f}%"),
+                ("Active Strats", str(len(strategies))),
+            ]
+        return make_promo_card(
+            feature_headline="TradeHub Strategy Leaderboard",
+            sub="Automated strategies · Live P&L · 80% revenue share",
+            stats=stats,
+            cta="Build & automate your strategy free — tradehubmarkets.com",
+        )
+    except Exception as e:
+        logger.error(f"Failed to generate TradeHub card image (new style): {e}")
+    # Fallback: old hand-drawn PIL implementation
     try:
         from PIL import Image, ImageDraw, ImageFont
 
