@@ -92,42 +92,72 @@ async def place_bitunix_order_for_user(
             # Reuse the cached trader (and its underlying HTTP connection pool)
             trader = _get_or_create_trader(api_key, api_secret)
 
-            # Fixed-size mode skips the balance fetch entirely
+            import asyncio as _aio_st
+
+            # ── Fetch balance + live price concurrently (zero extra latency) ────────
+            # Live price is fetched alongside balance to recalculate TP/SL from the
+            # actual market price at order time — not the scan price from seconds ago.
+            # This prevents "SL price must be less than last price" Bitunix rejections
+            # that occur when price drifts between signal detection and order placement.
+            async def _get_balance_and_price():
+                """Returns (balance_or_None, live_price_or_None) in parallel."""
+                cached = _balance_cache.get(user.id)
+                if cached and (time.time() - cached[1]) < _BALANCE_TTL:
+                    # Balance is cached — only need to fetch live price
+                    bal, lp = await _aio_st.gather(
+                        _aio_st.sleep(0),                    # noop placeholder
+                        trader.get_current_price(symbol),
+                        return_exceptions=True,
+                    )
+                    return cached[0], (lp if not isinstance(lp, Exception) else None)
+                else:
+                    bal, lp = await _aio_st.gather(
+                        trader.get_account_balance(),
+                        trader.get_current_price(symbol),
+                        return_exceptions=True,
+                    )
+                    return (
+                        (bal if not isinstance(bal, Exception) else None),
+                        (lp  if not isinstance(lp, Exception)  else None),
+                    )
+
+            balance, live_price_now = await _get_balance_and_price()
+
+            # Fixed-size mode skips the balance entirely
             if risk_usd and risk_usd > 0:
                 position_size_usd = float(risk_usd)
                 logger.info(f"[StrategyTrader] {symbol} fixed size ${position_size_usd}")
             else:
-                # Use cached balance if fresh enough — avoids an API round-trip per signal
-                cached = _balance_cache.get(user.id)
-                if cached and (time.time() - cached[1]) < _BALANCE_TTL:
-                    balance = cached[0]
-                    logger.info(f"[StrategyTrader] {symbol} using cached balance ${balance:.2f}")
-                else:
-                    balance = await trader.get_account_balance()
-                    # NOTE: use `is None` not `not balance` — balance==0.0 is falsy
-                    # and must be caught as a separate "$0 balance" case.
-                    if balance is None or balance < 0:
-                        raise RuntimeError(
-                            "Could not fetch Bitunix account balance — check your API key "
-                            "has Futures read permission (or re-enter your API keys)."
-                        )
-                    if balance == 0:
-                        raise RuntimeError(
-                            "Bitunix Futures balance is $0. Transfer USDT from your Spot "
-                            "wallet to your Futures wallet on Bitunix (Assets → Transfer)."
-                        )
-                    _balance_cache[user.id] = (balance, time.time())
+                # Validate balance
+                if balance is None or balance < 0:
+                    raise RuntimeError(
+                        "Could not fetch Bitunix account balance — check your API key "
+                        "has Futures read permission (or re-enter your API keys)."
+                    )
+                if balance == 0:
+                    raise RuntimeError(
+                        "Bitunix Futures balance is $0. Transfer USDT from your Spot "
+                        "wallet to your Futures wallet on Bitunix (Assets → Transfer)."
+                    )
+                _balance_cache[user.id] = (balance, time.time())
                 position_size_usd = max(balance * (risk_pct / 100), 5.0)
                 logger.info(f"[StrategyTrader] {symbol} pct size {risk_pct}% of ${balance:.2f} = ${position_size_usd:.2f}")
 
-            # Use the signal price (entry_price) as the TP/SL reference.
-            # All users in the same scan cycle share the same signal price, so their
-            # TP/SL targets are IDENTICAL — preventing divergent outcomes where one
-            # user hits TP and another hits SL due to a stale per-user live price.
-            # The market order on Bitunix fills at whatever the market price is at
-            # placement time; the TP/SL are anchored to the signal trigger price.
+            # ── Compute TP/SL from the freshest available price ──────────────────────
+            # If the live price has drifted from the signal scan price, recalculate
+            # TP/SL from the actual market price so Bitunix accepts the order.
             BUFFER = 0.1  # 0.1% buffer to ensure Bitunix accepts the TP/SL
-            ref_price = entry_price  # same for every user on this signal
+            ref_price = entry_price  # default: signal scan price
+            if live_price_now and live_price_now > 0:
+                drift_pct = abs(live_price_now - entry_price) / entry_price * 100
+                if drift_pct >= 0.05:  # >0.05% drift — recalculate from live price
+                    logger.info(
+                        f"[StrategyTrader] {symbol} price drifted {drift_pct:.2f}% since scan "
+                        f"(signal=${entry_price:.6g} → live=${live_price_now:.6g}) — "
+                        f"recalculating TP/SL from live price"
+                    )
+                    ref_price = live_price_now
+
             if direction.upper() == "LONG":
                 tp_price = ref_price * (1 + (tp_pct + BUFFER) / 100)
                 sl_price = ref_price * (1 - sl_pct / 100)
@@ -148,7 +178,7 @@ async def place_bitunix_order_for_user(
                 take_profit        = tp_price,
                 position_size_usdt = position_size_usd,
                 leverage           = leverage,
-                live_price_hint    = ref_price,  # skip redundant Bitunix price fetch
+                live_price_hint    = live_price_now or ref_price,
             )
 
             if result and result.get("success"):
@@ -180,42 +210,41 @@ async def place_bitunix_order_for_user(
                         if fill_price > 0:
                             drift = abs(fill_price - ref_price) / ref_price
                             actual_fill = fill_price
-                            if drift > 0.0005:  # >0.05% — worth correcting
-                                if direction.upper() == "LONG":
-                                    new_tp = fill_price * (1 + (tp_pct + BUFFER) / 100)
-                                    new_sl = fill_price * (1 - sl_pct / 100)
-                                else:
-                                    new_tp = fill_price * (1 - (tp_pct + BUFFER) / 100)
-                                    new_sl = fill_price * (1 + sl_pct / 100)
-                                position_id = str(matching[0].get("position_id") or "")
-                                if position_id:
-                                    ok = await trader.modify_position_sl(
-                                        symbol=symbol,
-                                        position_id=position_id,
-                                        new_sl_price=new_sl,
-                                        existing_tp_price=new_tp,
+                            # Always push corrected TP/SL anchored to actual fill price.
+                            # This is especially important when the SL was temporarily
+                            # clamped by the SL validity guard in place_trade(), since
+                            # the clamped SL (e.g. 0.1% below live) is much tighter
+                            # than the strategy's intended stop (e.g. 3.1% below fill).
+                            if direction.upper() == "LONG":
+                                new_tp = fill_price * (1 + (tp_pct + BUFFER) / 100)
+                                new_sl = fill_price * (1 - sl_pct / 100)
+                            else:
+                                new_tp = fill_price * (1 - (tp_pct + BUFFER) / 100)
+                                new_sl = fill_price * (1 + sl_pct / 100)
+                            position_id = str(matching[0].get("position_id") or "")
+                            if position_id:
+                                ok = await trader.modify_position_sl(
+                                    symbol=symbol,
+                                    position_id=position_id,
+                                    new_sl_price=new_sl,
+                                    existing_tp_price=new_tp,
+                                )
+                                if ok:
+                                    logger.info(
+                                        f"[StrategyTrader] ✅ TP/SL set from fill for {symbol} {direction}"
+                                        f" | ref={ref_price:.6g} fill={fill_price:.6g}"
+                                        f" drift={drift*100:.3f}%"
+                                        f" | TP={new_tp:.6g} SL={new_sl:.6g}"
                                     )
-                                    if ok:
-                                        logger.info(
-                                            f"[StrategyTrader] ✅ TP/SL corrected for {symbol} {direction}"
-                                            f" | signal={ref_price:.6g} fill={fill_price:.6g}"
-                                            f" drift={drift*100:.3f}%"
-                                            f" | new TP={new_tp:.6g} SL={new_sl:.6g}"
-                                        )
-                                    else:
-                                        logger.warning(
-                                            f"[StrategyTrader] TP/SL correction API failed for {symbol} "
-                                            f"(fill={fill_price:.6g})"
-                                        )
                                 else:
                                     logger.warning(
-                                        f"[StrategyTrader] No position_id for {symbol} — "
-                                        f"cannot push corrected TP/SL (fill={fill_price:.6g})"
+                                        f"[StrategyTrader] TP/SL correction API failed for {symbol} "
+                                        f"(fill={fill_price:.6g})"
                                     )
                             else:
-                                logger.info(
-                                    f"[StrategyTrader] {symbol} fill={fill_price:.6g} within 0.05% of"
-                                    f" signal={ref_price:.6g} — no TP/SL adjustment needed"
+                                logger.warning(
+                                    f"[StrategyTrader] No position_id for {symbol} — "
+                                    f"cannot push corrected TP/SL (fill={fill_price:.6g})"
                                 )
                     else:
                         logger.warning(

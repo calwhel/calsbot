@@ -889,8 +889,29 @@ class BitunixTrader:
                 })
             
             if stop_loss:
+                # ── SL validity guard ──────────────────────────────────────────────
+                # For LONG: SL must be strictly below the current market price.
+                # For SHORT: SL must be strictly above the current market price.
+                # If the SL is on the wrong side (price moved since scan), clamp it
+                # to 0.1% beyond the live price so Bitunix always accepts the order.
+                # The post-fill TP/SL correction in strategy_trader.py will then fix
+                # it to the correct percentage-based level from the actual fill price.
+                adjusted_sl = stop_loss
+                if live_price and live_price > 0:
+                    if direction.upper() == 'LONG' and stop_loss >= live_price:
+                        adjusted_sl = live_price * 0.999  # 0.1% below live price
+                        logger.warning(
+                            f"⚠️ {symbol} LONG SL ${stop_loss:.8f} >= live ${live_price:.8f} "
+                            f"— clamping to ${adjusted_sl:.8f} (will be corrected post-fill)"
+                        )
+                    elif direction.upper() == 'SHORT' and stop_loss <= live_price:
+                        adjusted_sl = live_price * 1.001  # 0.1% above live price
+                        logger.warning(
+                            f"⚠️ {symbol} SHORT SL ${stop_loss:.8f} <= live ${live_price:.8f} "
+                            f"— clamping to ${adjusted_sl:.8f} (will be corrected post-fill)"
+                        )
                 order_params.update({
-                    'slPrice': str(stop_loss),
+                    'slPrice': str(adjusted_sl),
                     'slStopType': 'MARK',
                     'slOrderType': 'MARKET'
                 })
