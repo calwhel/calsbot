@@ -3,496 +3,568 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#08090f">
+<meta name="theme-color" content="#0a0b10">
 <title>CallyX — Precision Trading</title>
-<meta name="description" content="Precision trading. Real results. AI-powered automation, live signals, and systematic strategies.">
+<meta name="description" content="Systematic crypto trading. 400+ active traders. AI-powered automation and live strategies on Bitunix.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
-  :root {
-    --bg:        #08090f;
-    --bg2:       #0f1018;
-    --bg3:       #13141f;
-    --border:    rgba(255,255,255,0.07);
-    --border-hi: rgba(99,179,237,0.35);
-    --accent:    #63b3ed;
-    --accent2:   #4f8eff;
-    --text:      #e2e8f0;
-    --muted:     #718096;
-    --glow:      rgba(99,179,237,0.18);
-    --glow-hi:   rgba(99,179,237,0.35);
-    --radius:    16px;
-    --radius-sm: 10px;
+:root{
+  --bg:        #0a0b10;
+  --surface:   #0f1016;
+  --surface2:  #13141c;
+  --border:    rgba(255,255,255,0.06);
+  --border-md: rgba(255,255,255,0.10);
+  --accent:    #4f7fff;
+  --accent-lo: rgba(79,127,255,0.10);
+  --accent-hi: rgba(79,127,255,0.22);
+  --green:     #22d39a;
+  --green-lo:  rgba(34,211,154,0.10);
+  --text:      #e8eaf2;
+  --text2:     #8890aa;
+  --muted:     #555d75;
+  --font:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+html{scroll-behavior:smooth}
+
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--font);
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  overflow-x:hidden;
+}
+
+/* subtle dot grid */
+body::before{
+  content:'';
+  position:fixed;
+  inset:0;
+  background-image:radial-gradient(rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size:28px 28px;
+  pointer-events:none;
+  z-index:0;
+}
+
+/* top accent line */
+body::after{
+  content:'';
+  position:fixed;
+  top:0;left:0;right:0;
+  height:2px;
+  background:linear-gradient(90deg, transparent 0%, var(--accent) 40%, var(--green) 60%, transparent 100%);
+  z-index:10;
+}
+
+.page{
+  position:relative;
+  z-index:1;
+  width:100%;
+  max-width:440px;
+  padding:52px 20px 60px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+}
+
+/* ── HEADER ── */
+.header{
+  width:100%;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  margin-bottom:40px;
+}
+
+.logo-row{
+  display:flex;
+  align-items:center;
+  gap:11px;
+  margin-bottom:14px;
+}
+
+.logo-mark{
+  width:40px;
+  height:40px;
+  background:#0f1829;
+  border:1px solid rgba(79,127,255,0.30);
+  border-radius:10px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-shrink:0;
+}
+
+.logo-name{
+  font-size:26px;
+  font-weight:800;
+  letter-spacing:-0.8px;
+  color:#fff;
+}
+
+.header-tag{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  font-size:11.5px;
+  font-weight:600;
+  color:var(--green);
+  background:var(--green-lo);
+  border:1px solid rgba(34,211,154,0.20);
+  border-radius:100px;
+  padding:5px 13px;
+  letter-spacing:0.2px;
+  margin-bottom:14px;
+}
+
+.dot{
+  width:5px;height:5px;border-radius:50%;
+  background:var(--green);
+  animation:blink 2.4s ease-in-out infinite;
+}
+
+@keyframes blink{
+  0%,100%{opacity:1}
+  50%{opacity:0.35}
+}
+
+.header-h{
+  font-size:22px;
+  font-weight:700;
+  color:#fff;
+  text-align:center;
+  letter-spacing:-0.5px;
+  line-height:1.35;
+  margin-bottom:8px;
+}
+
+.header-sub{
+  font-size:13px;
+  color:var(--text2);
+  text-align:center;
+  line-height:1.65;
+  max-width:300px;
+}
+
+/* ── SOCIAL PROOF ROW ── */
+.social-row{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:14px;
+  width:100%;
+  margin-bottom:32px;
+  padding:14px 0;
+  border-top:1px solid var(--border);
+  border-bottom:1px solid var(--border);
+}
+
+.sp-item{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:2px;
+}
+
+.sp-val{
+  font-size:17px;
+  font-weight:800;
+  color:#fff;
+  letter-spacing:-0.4px;
+  line-height:1;
+}
+
+.sp-val.accent{color:var(--accent)}
+.sp-val.green{color:var(--green)}
+
+.sp-lbl{
+  font-size:10px;
+  font-weight:500;
+  color:var(--muted);
+  letter-spacing:0.3px;
+  white-space:nowrap;
+}
+
+.sp-divider{
+  width:1px;height:28px;
+  background:var(--border-md);
+}
+
+/* ── CARDS ── */
+.cards{
+  width:100%;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  margin-bottom:28px;
+}
+
+.card{
+  width:100%;
+  display:flex;
+  align-items:center;
+  gap:14px;
+  padding:16px 18px;
+  border-radius:12px;
+  border:1px solid var(--border);
+  background:var(--surface);
+  text-decoration:none;
+  color:var(--text);
+  cursor:pointer;
+  transition:border-color 0.18s, background 0.18s, transform 0.16s;
+  position:relative;
+  overflow:hidden;
+  -webkit-tap-highlight-color:transparent;
+}
+
+.card:active{transform:scale(0.985)}
+
+@media(hover:hover){
+  .card:hover{
+    border-color:var(--border-md);
+    background:var(--surface2);
+    transform:translateY(-1px);
   }
+}
 
-  html { scroll-behavior: smooth; }
+/* icon */
+.icon{
+  width:40px;height:40px;
+  border-radius:9px;
+  display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;
+  background:var(--surface2);
+  border:1px solid var(--border);
+  color:var(--text2);
+  transition:color 0.18s;
+}
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
-    min-height: 100vh;
-    min-height: -webkit-fill-available;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: flex-start;
-    padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
-    -webkit-font-smoothing: antialiased;
-    overflow-x: hidden;
+/* body */
+.card-body{flex:1;min-width:0}
+
+.card-title{
+  font-size:14.5px;
+  font-weight:700;
+  color:#fff;
+  margin-bottom:2px;
+  letter-spacing:-0.2px;
+}
+
+.card-sub{
+  font-size:12px;
+  color:var(--text2);
+  line-height:1.4;
+}
+
+/* arrow */
+.arrow{
+  color:var(--muted);
+  flex-shrink:0;
+  transition:transform 0.18s, color 0.18s;
+}
+
+.card:hover .arrow{
+  transform:translateX(3px);
+  color:var(--text2);
+}
+
+/* badge */
+.badge{
+  position:absolute;
+  top:10px;right:12px;
+  font-size:9.5px;
+  font-weight:700;
+  letter-spacing:0.6px;
+  text-transform:uppercase;
+  border-radius:20px;
+  padding:2px 8px;
+}
+
+/* === CARD VARIANTS === */
+
+/* Signals - green */
+.card-signals{
+  border-color:rgba(34,211,154,0.15);
+}
+.card-signals .icon{
+  background:var(--green-lo);
+  border-color:rgba(34,211,154,0.18);
+  color:var(--green);
+}
+@media(hover:hover){
+  .card-signals:hover{
+    border-color:rgba(34,211,154,0.28);
+    background:rgba(34,211,154,0.03);
   }
+}
 
-  /* ── Background ambient glow ── */
-  body::before {
-    content: '';
-    position: fixed;
-    top: -120px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 600px;
-    height: 400px;
-    background: radial-gradient(ellipse at center, rgba(79,142,255,0.10) 0%, transparent 70%);
-    pointer-events: none;
-    z-index: 0;
+/* Automation - blue PRIMARY */
+.card-auto{
+  background:#0c1122;
+  border-color:rgba(79,127,255,0.28);
+  box-shadow:0 0 0 1px rgba(79,127,255,0.10) inset;
+}
+.card-auto .icon{
+  background:var(--accent-lo);
+  border-color:rgba(79,127,255,0.25);
+  color:var(--accent);
+}
+.card-auto .badge{
+  background:rgba(79,127,255,0.12);
+  border:1px solid rgba(79,127,255,0.28);
+  color:var(--accent);
+}
+@media(hover:hover){
+  .card-auto:hover{
+    border-color:rgba(79,127,255,0.48);
+    background:#0c1528;
+    box-shadow:0 8px 32px rgba(79,127,255,0.12);
   }
+}
 
-  /* ── Container ── */
-  .page {
-    position: relative;
-    z-index: 1;
-    width: 100%;
-    max-width: 480px;
-    padding: 40px 20px 56px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0;
+/* Builder - purple */
+.card-builder{
+  border-color:rgba(160,120,255,0.14);
+}
+.card-builder .icon{
+  background:rgba(160,120,255,0.08);
+  border-color:rgba(160,120,255,0.18);
+  color:#b39dff;
+}
+@media(hover:hover){
+  .card-builder:hover{
+    border-color:rgba(160,120,255,0.28);
+    background:rgba(160,120,255,0.03);
   }
+}
 
-  /* ── Brand header ── */
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 6px;
+/* Bitunix - amber */
+.card-bitunix{
+  border-color:rgba(251,146,60,0.18);
+}
+.card-bitunix .icon{
+  background:rgba(251,146,60,0.08);
+  border-color:rgba(251,146,60,0.20);
+  color:#fb923c;
+}
+.card-bitunix .badge{
+  background:rgba(251,146,60,0.10);
+  border:1px solid rgba(251,146,60,0.25);
+  color:#fb923c;
+}
+.card-bitunix .card-title{color:#fed7aa}
+@media(hover:hover){
+  .card-bitunix:hover{
+    border-color:rgba(251,146,60,0.36);
+    background:rgba(251,146,60,0.03);
   }
+}
 
-  .brand-icon {
-    width: 38px;
-    height: 38px;
-    border-radius: 10px;
-    background: linear-gradient(135deg, #4f8eff 0%, #63b3ed 100%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 0 20px rgba(79,142,255,0.45);
-    flex-shrink: 0;
-  }
+/* ── METRICS GRID ── */
+.metrics{
+  width:100%;
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:8px;
+  margin-bottom:28px;
+}
 
-  .brand-icon svg { display: block; }
+.metric{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:4px;
+  padding:14px 8px;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:10px;
+  text-align:center;
+}
 
-  .brand-name {
-    font-size: 30px;
-    font-weight: 800;
-    letter-spacing: -0.5px;
-    background: linear-gradient(135deg, #fff 30%, #63b3ed 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
+.metric-val{
+  font-size:15px;
+  font-weight:800;
+  color:#fff;
+  letter-spacing:-0.3px;
+  line-height:1;
+}
 
-  .tagline {
-    font-size: 15px;
-    font-weight: 500;
-    color: var(--accent);
-    letter-spacing: 0.3px;
-    margin-bottom: 10px;
-    text-align: center;
-  }
+.metric-lbl{
+  font-size:10px;
+  font-weight:500;
+  color:var(--muted);
+  line-height:1.3;
+  letter-spacing:0.2px;
+}
 
-  .subtext {
-    font-size: 13.5px;
-    color: var(--muted);
-    text-align: center;
-    line-height: 1.6;
-    max-width: 340px;
-    margin-bottom: 36px;
-  }
+/* ── FOOTER ── */
+.foot{
+  font-size:11px;
+  color:var(--muted);
+  text-align:center;
+  letter-spacing:0.3px;
+  line-height:1.7;
+}
 
-  /* ── Divider ── */
-  .divider {
-    width: 40px;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, var(--accent2), transparent);
-    border-radius: 2px;
-    margin-bottom: 36px;
-  }
-
-  /* ── CTA section ── */
-  .cta-stack {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin-bottom: 36px;
-  }
-
-  .cta-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 1.2px;
-    text-align: center;
-    margin-bottom: 4px;
-  }
-
-  /* ── Card base ── */
-  .card {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 18px 20px;
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    background: var(--bg2);
-    text-decoration: none;
-    color: var(--text);
-    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-    position: relative;
-    overflow: hidden;
-  }
-
-  .card::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: rgba(255,255,255,0);
-    transition: background 0.15s;
-    border-radius: inherit;
-    pointer-events: none;
-  }
-
-  .card:active::after { background: rgba(255,255,255,0.04); }
-
-  @media (hover: hover) {
-    .card:hover {
-      transform: translateY(-2px);
-    }
-    .card-secondary:hover {
-      border-color: rgba(255,255,255,0.14);
-      box-shadow: 0 6px 24px rgba(0,0,0,0.4);
-    }
-    .card-tertiary:hover {
-      border-color: rgba(255,255,255,0.14);
-      box-shadow: 0 6px 24px rgba(0,0,0,0.4);
-    }
-  }
-
-  /* ── Card icon ── */
-  .card-icon {
-    width: 44px;
-    height: 44px;
-    border-radius: var(--radius-sm);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    font-size: 20px;
-  }
-
-  /* ── Card text ── */
-  .card-body { flex: 1; min-width: 0; }
-
-  .card-title {
-    font-size: 15.5px;
-    font-weight: 700;
-    margin-bottom: 2px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .card-desc {
-    font-size: 12.5px;
-    color: var(--muted);
-    line-height: 1.4;
-  }
-
-  .card-arrow {
-    flex-shrink: 0;
-    color: var(--muted);
-    transition: transform 0.18s, color 0.18s;
-    opacity: 0.6;
-  }
-
-  .card:hover .card-arrow { transform: translateX(3px); opacity: 1; }
-
-  /* ── SECONDARY card (Join Free Signals) ── */
-  .card-secondary .card-icon {
-    background: rgba(49,196,141,0.12);
-    color: #38e09e;
-  }
-
-  /* ── PRIMARY card (Start Automation) ── */
-  .card-primary {
-    border-color: var(--border-hi);
-    background: linear-gradient(135deg, #0f1829 0%, #111827 100%);
-    box-shadow: 0 0 0 1px rgba(99,179,237,0.18), 0 8px 32px rgba(79,142,255,0.14);
-    position: relative;
-  }
-
-  .card-primary::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    background: linear-gradient(135deg, rgba(79,142,255,0.06) 0%, rgba(99,179,237,0.02) 100%);
-    pointer-events: none;
-  }
-
-  .card-primary .card-icon {
-    background: linear-gradient(135deg, #4f8eff22 0%, #63b3ed22 100%);
-    border: 1px solid rgba(99,179,237,0.25);
-    color: var(--accent);
-  }
-
-  .card-primary .card-title { color: #fff; }
-  .card-primary .card-arrow { color: var(--accent); opacity: 0.9; }
-
-  .primary-badge {
-    position: absolute;
-    top: 10px;
-    right: 12px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.8px;
-    color: var(--accent);
-    background: rgba(99,179,237,0.12);
-    border: 1px solid rgba(99,179,237,0.25);
-    border-radius: 20px;
-    padding: 2px 8px;
-    text-transform: uppercase;
-  }
-
-  @media (hover: hover) {
-    .card-primary:hover {
-      border-color: rgba(99,179,237,0.55);
-      box-shadow: 0 0 0 1px rgba(99,179,237,0.3), 0 12px 40px rgba(79,142,255,0.22);
-    }
-  }
-
-  /* ── TERTIARY card (Strategy Builder) ── */
-  .card-tertiary .card-icon {
-    background: rgba(139,92,246,0.12);
-    color: #a78bfa;
-  }
-
-  /* ── BITUNIX card ── */
-  .card-bitunix {
-    border-color: rgba(251,146,60,0.28);
-    background: linear-gradient(135deg, #140f08 0%, #111010 100%);
-    box-shadow: 0 0 0 1px rgba(251,146,60,0.12), 0 4px 20px rgba(251,146,60,0.08);
-  }
-
-  .card-bitunix .card-icon {
-    background: rgba(251,146,60,0.12);
-    border: 1px solid rgba(251,146,60,0.2);
-  }
-
-  .card-bitunix .card-title { color: #fed7aa; }
-  .card-bitunix .card-desc  { color: #c2813a; }
-  .card-bitunix .card-arrow { color: #fb923c; opacity: 0.8; }
-
-  @media (hover: hover) {
-    .card-bitunix:hover {
-      border-color: rgba(251,146,60,0.50);
-      box-shadow: 0 0 0 1px rgba(251,146,60,0.25), 0 8px 30px rgba(251,146,60,0.15);
-      transform: translateY(-2px);
-    }
-  }
-
-  .bitunix-badge {
-    position: absolute;
-    top: 10px;
-    right: 12px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.6px;
-    color: #fb923c;
-    background: rgba(251,146,60,0.12);
-    border: 1px solid rgba(251,146,60,0.28);
-    border-radius: 20px;
-    padding: 2px 8px;
-    text-transform: uppercase;
-    white-space: nowrap;
-  }
-
-  /* ── Trust bar ── */
-  .trust-bar {
-    width: 100%;
-    border-top: 1px solid var(--border);
-    padding-top: 28px;
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-  }
-
-  .trust-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 14px 8px;
-    border-radius: var(--radius-sm);
-    background: var(--bg3);
-    border: 1px solid var(--border);
-  }
-
-  .trust-icon {
-    font-size: 18px;
-    margin-bottom: 2px;
-  }
-
-  .trust-value {
-    font-size: 16px;
-    font-weight: 800;
-    color: #fff;
-    letter-spacing: -0.3px;
-    line-height: 1;
-  }
-
-  .trust-label {
-    font-size: 10.5px;
-    color: var(--muted);
-    text-align: center;
-    line-height: 1.3;
-    letter-spacing: 0.2px;
-  }
-
-  /* ── Footer ── */
-  .footer {
-    margin-top: 28px;
-    font-size: 11.5px;
-    color: rgba(113,128,150,0.6);
-    text-align: center;
-    letter-spacing: 0.3px;
-  }
-
-  /* ── Pulse animation on primary card icon ── */
-  @keyframes pulse-ring {
-    0%   { box-shadow: 0 0 0 0 rgba(99,179,237,0.35); }
-    70%  { box-shadow: 0 0 0 8px rgba(99,179,237,0); }
-    100% { box-shadow: 0 0 0 0 rgba(99,179,237,0); }
-  }
-
-  .card-primary .card-icon {
-    animation: pulse-ring 2.8s ease-out infinite;
-  }
-
-  /* ── Ripple on tap ── */
-  .card { user-select: none; }
+.foot a{
+  color:var(--text2);
+  text-decoration:none;
+}
 </style>
 </head>
 <body>
 
 <div class="page">
 
-  <!-- ── Brand ── -->
-  <div class="brand">
-    <div class="brand-icon">
-      <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-        <path d="M4 16 L8 8 L11 13 L14 6 L18 16" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="18" cy="16" r="1.8" fill="#fff"/>
-      </svg>
+  <!-- HEADER -->
+  <div class="header">
+    <div class="logo-row">
+      <div class="logo-mark">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <polyline points="2,15 6,8 9,12 13,5 18,15" stroke="#4f7fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="18" cy="15" r="1.6" fill="#22d39a"/>
+        </svg>
+      </div>
+      <span class="logo-name">CallyX</span>
     </div>
-    <span class="brand-name">CallyX</span>
+
+    <div class="header-tag">
+      <span class="dot"></span>
+      400+ active traders
+    </div>
+
+    <h1 class="header-h">Systematic crypto trading.<br>Built for edge, not luck.</h1>
+    <p class="header-sub">Automated strategies running 24/7 on Bitunix. Real signals. Verified results.</p>
   </div>
 
-  <p class="tagline">Precision trading. Real results.</p>
+  <!-- SOCIAL PROOF -->
+  <div class="social-row">
+    <div class="sp-item">
+      <span class="sp-val green">400+</span>
+      <span class="sp-lbl">Traders</span>
+    </div>
+    <div class="sp-divider"></div>
+    <div class="sp-item">
+      <span class="sp-val">24/7</span>
+      <span class="sp-lbl">Automation</span>
+    </div>
+    <div class="sp-divider"></div>
+    <div class="sp-item">
+      <span class="sp-val accent">Bitunix</span>
+      <span class="sp-lbl">Exchange</span>
+    </div>
+    <div class="sp-divider"></div>
+    <div class="sp-item">
+      <span class="sp-val">Free</span>
+      <span class="sp-lbl">To start</span>
+    </div>
+  </div>
 
-  <p class="subtext">Systematic, automated strategies built for consistency — not luck. Skip the noise. Trade with an edge.</p>
+  <!-- CARDS -->
+  <div class="cards">
 
-  <div class="divider"></div>
-
-  <!-- ── CTAs ── -->
-  <div class="cta-stack">
-
-    <!-- 1 · Free Signals -->
-    <a class="card card-secondary" href="https://t.me/bu11dogg?text=Hi%20I%20came%20from%20CallyX%0A%0ALooking%20to%20join%20the%20free%20signals%20and%20would%20like%20more%20info%20on%20the%20Strategy%20Builder" target="_blank" rel="noopener">
-      <div class="card-icon">📡</div>
+    <!-- 1. Free Signals -->
+    <a class="card card-signals" href="https://t.me/bu11dogg?text=Hi%20I%20came%20from%20CallyX%0A%0ALooking%20to%20join%20the%20free%20signals%20and%20would%20like%20more%20info%20on%20the%20Strategy%20Builder" target="_blank" rel="noopener">
+      <div class="icon">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <path d="M9 2v2M9 14v2M2 9H4M14 9h2M4.22 4.22l1.42 1.42M12.36 12.36l1.42 1.42M4.22 13.78l1.42-1.42M12.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          <circle cx="9" cy="9" r="2.5" stroke="currentColor" stroke-width="1.6"/>
+        </svg>
+      </div>
       <div class="card-body">
         <div class="card-title">Get Free Signals</div>
-        <div class="card-desc">Live calls, market reads &amp; trade setups — no cost</div>
+        <div class="card-sub">Live calls, market reads &amp; trade setups</div>
       </div>
-      <svg class="card-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none">
-        <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <svg class="arrow" width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M5.5 3l4 4.5-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </a>
 
-    <!-- 2 · Start Automation  (PRIMARY) -->
-    <a class="card card-primary" href="https://t.me/bu11dogg?text=Hi%20I%20came%20from%20CallyX%0A%0AI%20want%20to%20start%20automation%20with%20CallyX%20%E2%80%94%20can%20you%20walk%20me%20through%20it%3F" target="_blank" rel="noopener">
-      <span class="primary-badge">Recommended</span>
-      <div class="card-icon">⚡</div>
+    <!-- 2. Start Automation (PRIMARY) -->
+    <a class="card card-auto" href="https://t.me/bu11dogg?text=Hi%20I%20came%20from%20CallyX%0A%0AI%20want%20to%20start%20automation%20with%20CallyX%20%E2%80%94%20can%20you%20walk%20me%20through%20it%3F" target="_blank" rel="noopener">
+      <span class="badge">Recommended</span>
+      <div class="icon">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <path d="M9 2L11.5 7H16L12 10.5L13.5 16L9 13L4.5 16L6 10.5L2 7H6.5L9 2Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
       <div class="card-body">
         <div class="card-title">Start Automation</div>
-        <div class="card-desc">AI-powered strategies running 24/7 — hands-free</div>
+        <div class="card-sub">Strategies running 24/7 — completely hands-free</div>
       </div>
-      <svg class="card-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none">
-        <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <svg class="arrow" width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M5.5 3l4 4.5-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </a>
 
-    <!-- 3 · Strategy Builder -->
-    <a class="card card-tertiary" href="https://tradehubmarkets.com" target="_blank" rel="noopener">
-      <div class="card-icon">🧠</div>
+    <!-- 3. Strategy Builder -->
+    <a class="card card-builder" href="https://tradehubmarkets.com" target="_blank" rel="noopener">
+      <div class="icon">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <rect x="2" y="10" width="3" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
+          <rect x="7.5" y="6" width="3" height="10" rx="1" stroke="currentColor" stroke-width="1.5"/>
+          <rect x="13" y="2" width="3" height="14" rx="1" stroke="currentColor" stroke-width="1.5"/>
+        </svg>
+      </div>
       <div class="card-body">
         <div class="card-title">Strategy Builder</div>
-        <div class="card-desc">Build, backtest &amp; automate your own strategies</div>
+        <div class="card-sub">Build, backtest &amp; automate your own strategies</div>
       </div>
-      <svg class="card-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none">
-        <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <svg class="arrow" width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M5.5 3l4 4.5-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </a>
 
-    <!-- 4 · Bitunix sign-up -->
+    <!-- 4. Bitunix -->
     <a class="card card-bitunix" href="https://www.bitunix.com/register?vipCode=tradehubsave" target="_blank" rel="noopener">
-      <span class="bitunix-badge">Save 70% on fees</span>
-      <div class="card-icon">🔥</div>
+      <span class="badge">Save 70% on fees</span>
+      <div class="icon">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <path d="M9 1.5L16 5v8L9 16.5 2 13V5L9 1.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          <path d="M6.5 9h5M9 6.5v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
       <div class="card-body">
         <div class="card-title">Open Bitunix Account</div>
-        <div class="card-desc">Exclusive link — 70% fee discount, instant access</div>
+        <div class="card-sub">Exclusive link — 70% fee discount, instant access</div>
       </div>
-      <svg class="card-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none">
-        <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <svg class="arrow" width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M5.5 3l4 4.5-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </a>
 
   </div>
 
-  <!-- ── Trust bar ── -->
-  <div class="trust-bar">
-    <div class="trust-item">
-      <span class="trust-icon">👥</span>
-      <span class="trust-value">2,400+</span>
-      <span class="trust-label">Active traders</span>
+  <!-- METRICS -->
+  <div class="metrics">
+    <div class="metric">
+      <span class="metric-val">80%</span>
+      <span class="metric-lbl">Creator revenue share</span>
     </div>
-    <div class="trust-item">
-      <span class="trust-icon">🤖</span>
-      <span class="trust-value">24/7</span>
-      <span class="trust-label">Automation</span>
+    <div class="metric">
+      <span class="metric-val">Free</span>
+      <span class="metric-lbl">No upfront cost</span>
     </div>
-    <div class="trust-item">
-      <span class="trust-icon">🎯</span>
-      <span class="trust-value">AI-Driven</span>
-      <span class="trust-label">Signal engine</span>
+    <div class="metric">
+      <span class="metric-val">AES-256</span>
+      <span class="metric-lbl">Key encryption</span>
     </div>
   </div>
 
-  <p class="footer">CallyX · Powered by TradeHub Markets</p>
+  <!-- FOOTER -->
+  <p class="foot">
+    CallyX · Powered by <a href="https://tradehubmarkets.com">TradeHub Markets</a><br>
+    <a href="https://tradehubmarkets.com/terms">Terms &amp; Conditions</a>
+  </p>
 
 </div>
 
