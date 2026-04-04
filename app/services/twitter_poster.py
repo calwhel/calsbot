@@ -2326,6 +2326,39 @@ POSTED_SLOTS = set()
 LAST_POSTED_DAY = None
 SLOT_OFFSETS = {}  # Store fixed random offsets per slot per day
 
+# ── Persist posted slots across restarts so a reboot never causes duplicates ──
+_SLOTS_STATE_FILE = '/tmp/twitter_posted_slots.json'
+
+
+def _load_posted_slots_from_disk() -> set:
+    """Load today's posted slots from disk. Returns empty set if file is stale or missing."""
+    import json as _json
+    try:
+        with open(_SLOTS_STATE_FILE) as _f:
+            _data = _json.load(_f)
+        if _data.get('date') == datetime.utcnow().date().isoformat():
+            _slots = set(_data.get('slots', []))
+            _offsets = _data.get('offsets', {})
+            logger.info(f"🐦 Loaded {len(_slots)} posted slots from disk (restart-safe)")
+            return _slots, _offsets
+    except Exception:
+        pass
+    return set(), {}
+
+
+def _save_posted_slots_to_disk(slots: set, offsets: dict):
+    """Save today's posted slots to disk so restarts don't cause duplicate posts."""
+    import json as _json
+    try:
+        with open(_SLOTS_STATE_FILE, 'w') as _f:
+            _json.dump({
+                'date': datetime.utcnow().date().isoformat(),
+                'slots': list(slots),
+                'offsets': offsets,
+            }, _f)
+    except Exception as _e:
+        logger.warning(f"Could not save posted slots to disk: {_e}")
+
 
 def get_twitter_schedule() -> Dict:
     """Get the full posting schedule and next post info"""
@@ -2410,7 +2443,12 @@ async def auto_post_loop():
     logger.info("=" * 50)
     logger.info("🐦 AUTO-POST LOOP INITIALIZING...")
     logger.info("=" * 50)
-    
+
+    # Restore today's posted slots from disk so restarts don't trigger duplicates
+    _restored_slots, _restored_offsets = _load_posted_slots_from_disk()
+    POSTED_SLOTS.update(_restored_slots)
+    SLOT_OFFSETS.update(_restored_offsets)
+
     # Wait a bit for database to be ready
     await asyncio.sleep(5)
     
@@ -2464,6 +2502,7 @@ async def auto_post_loop():
                 POSTED_SLOTS.clear()
                 SLOT_OFFSETS.clear()
                 LAST_POSTED_DAY = current_day
+                _save_posted_slots_to_disk(POSTED_SLOTS, SLOT_OFFSETS)
             
             if LAST_POSTED_DAY is None:
                 LAST_POSTED_DAY = current_day
@@ -2534,16 +2573,19 @@ async def auto_post_loop():
                             logger.info(f"✅ [{account.name}] Auto-posted {post_type} at {slot_key}")
                             POSTED_SLOTS.add(account_slot_key)
                             posted_any = True
+                            _save_posted_slots_to_disk(POSTED_SLOTS, SLOT_OFFSETS)
                             await notify_admin_post_result(account.name, post_type, True)
                         else:
                             error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
                             logger.warning(f"⚠️ [{account.name}] Failed to auto-post {post_type}: {error_msg}")
                             POSTED_SLOTS.add(account_slot_key)  # Mark as attempted
+                            _save_posted_slots_to_disk(POSTED_SLOTS, SLOT_OFFSETS)
                             await notify_admin_post_result(account.name, post_type, False, error_msg)
                     
                     # Mark the base slot as done if any account posted
                     if posted_any:
                         POSTED_SLOTS.add(slot_key)
+                        _save_posted_slots_to_disk(POSTED_SLOTS, SLOT_OFFSETS)
                     
                     break
             
