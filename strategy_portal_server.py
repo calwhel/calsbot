@@ -707,10 +707,18 @@ body{background:#efefef;font-family:'Inter',-apple-system,BlinkMacSystemFont,san
 </body>
 </html>"""
 
+_cd_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "templates", "cryptodictator.html")
+try:
+    os.makedirs(os.path.dirname(_cd_file), exist_ok=True)
+    with open(_cd_file, "w", encoding="utf-8") as _fh:
+        _fh.write(_CRYPTODICTATOR_HTML)
+except Exception as _e:
+    logger.warning(f"Could not write cryptodictator.html: {_e}")
+
 @app.get("/cryptodictator", response_class=HTMLResponse)
 @app.get("/cd", response_class=HTMLResponse)
 async def cryptodictator_page():
-    return FileResponse("app/templates/cryptodictator.html", media_type="text/html")
+    return FileResponse(_cd_file, media_type="text/html")
 
 
 @app.post("/login")
