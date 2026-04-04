@@ -16740,32 +16740,25 @@ async def telegram_conflict_watcher():
 async def start_bot():
     logger.info("Starting Telegram bot...")
     
-    # 🔓 CRITICAL: Clear any stuck advisory locks AND idle transactions from previous crashes
+    # Clean up idle transactions (safe — does NOT release advisory locks)
     try:
         from app.database import SessionLocal
         from sqlalchemy import text
         db = SessionLocal()
-        
-        # Clear advisory locks
-        db.execute(text("SELECT pg_advisory_unlock_all()"))
-        db.commit()
-        logger.info("✅ Cleared all stuck advisory locks")
-        
-        # Kill idle transactions (prevents connection pool exhaustion)
         result = db.execute(text("""
-            SELECT pg_terminate_backend(pid) 
-            FROM pg_stat_activity 
-            WHERE state = 'idle in transaction' 
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
+            WHERE state = 'idle in transaction'
             AND datname = current_database()
             AND pid != pg_backend_pid()
         """))
         db.commit()
-        killed_count = result.rowcount if hasattr(result, 'rowcount') else 0
-        logger.info(f"✅ Killed {killed_count} idle transactions")
-        
+        killed = result.rowcount if hasattr(result, 'rowcount') else 0
+        if killed:
+            logger.info(f"✅ Cleaned up {killed} idle transactions")
         db.close()
     except Exception as e:
-        logger.warning(f"Could not clear database locks/connections: {e}")
+        logger.warning(f"Could not clean idle transactions: {e}")
     
     # Pre-warm top coins cache
     try:
@@ -16775,23 +16768,12 @@ async def start_bot():
     except Exception as e:
         logger.warning(f"Top coins cache warm failed: {e}")
 
-    # Initialize instance manager
+    # Initialize instance manager and acquire DB advisory lock.
+    # acquire_lock() blocks (with 30s retries) until this instance wins —
+    # the other server's lock is released automatically when it restarts or dies.
     from app.services.bot_instance_manager import get_instance_manager
     manager = get_instance_manager(bot)
-    
-    # Try to acquire lock (prevent multiple instances)
-    if not await manager.acquire_lock():
-        logger.error("❌ Another bot instance is running. Attempting force stop...")
-        # Try to force stop other instances
-        if await manager.force_stop_other_instances():
-            logger.info("✅ Forced stop successful, acquiring lock...")
-            if not await manager.acquire_lock():
-                logger.critical("❌ Could not acquire lock even after force stop. Exiting...")
-                return
-        else:
-            logger.critical("❌ Could not force stop other instances. Exiting...")
-            logger.critical("💡 Use /force_stop command via Telegram to resolve conflicts")
-            return
+    await manager.acquire_lock()   # always returns True once lock is held
     
     # Start conflict monitoring
     manager.monitor_task = asyncio.create_task(manager.start_conflict_monitor())

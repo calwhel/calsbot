@@ -3,12 +3,28 @@ print("🚀 CRYPTO BOT STARTING...", flush=True)
 print("=" * 50, flush=True)
 
 import asyncio
+import os
 import uvicorn
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 print("✅ Core imports loaded", flush=True)
+
+# In deployed production REPLIT_DEPLOYMENT is set to "1".
+# In the Replit IDE (dev) it is absent.
+# Dev should NOT poll Telegram — it would conflict with the live production bot.
+# Set FORCE_BOT_POLL=1 in the IDE environment to override this for local testing.
+_IS_PRODUCTION = bool(os.environ.get("REPLIT_DEPLOYMENT"))
+_FORCE_BOT_POLL = bool(os.environ.get("FORCE_BOT_POLL"))
+_START_BOT_POLLING = _IS_PRODUCTION or _FORCE_BOT_POLL
+
+if _IS_PRODUCTION:
+    print("🌐 PRODUCTION environment detected — bot polling ENABLED", flush=True)
+elif _FORCE_BOT_POLL:
+    print("⚠️  FORCE_BOT_POLL override — bot polling ENABLED (dev mode)", flush=True)
+else:
+    print("🛠️  DEV environment — bot polling DISABLED (set FORCE_BOT_POLL=1 to override)", flush=True)
 
 from app.services.bot import start_bot
 print("✅ Bot module loaded", flush=True)
@@ -52,8 +68,13 @@ async def lifespan(app: FastAPI):
     from app.services.twitter_poster import migrate_env_account_to_database
     migrate_env_account_to_database()
     
-    # Start bot and OxaPay payment poller
-    bot_task = asyncio.create_task(start_bot())
+    # Only poll Telegram in production (or when FORCE_BOT_POLL=1 override is set).
+    # This prevents the dev IDE instance from conflicting with the live production bot.
+    if _START_BOT_POLLING:
+        bot_task = asyncio.create_task(start_bot())
+    else:
+        bot_task = None
+        logging.info("🛠️  DEV mode — Telegram polling skipped (production bot handles it)")
     
     # Start OxaPay automatic payment verification
     from app.services.oxapay_poller import poll_oxapay_payments
@@ -66,13 +87,15 @@ async def lifespan(app: FastAPI):
     yield
     
     # Cleanup
-    bot_task.cancel()
+    if bot_task:
+        bot_task.cancel()
     poller_task.cancel()
     twitter_task.cancel()
-    try:
-        await bot_task
-    except asyncio.CancelledError:
-        pass
+    if bot_task:
+        try:
+            await bot_task
+        except asyncio.CancelledError:
+            pass
     try:
         await poller_task
     except asyncio.CancelledError:
