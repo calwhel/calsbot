@@ -589,6 +589,15 @@ async def terms_page():
     return FileResponse("app/templates/terms.html", media_type="text/html")
 
 
+# ── CallyX brand landing page ─────────────────────────────────────────────────
+# Isolated: only accessible via /start or /callyx — no impact on any other route.
+
+@app.get("/start", response_class=HTMLResponse)
+@app.get("/callyx", response_class=HTMLResponse)
+async def callyx_page():
+    return FileResponse("app/templates/callyx.html", media_type="text/html")
+
+
 @app.post("/login")
 async def login_submit(request: Request):
     """Verify UID. Two-step: first call validates UID and signals whether a password

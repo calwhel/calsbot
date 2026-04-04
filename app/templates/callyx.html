@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#08090f">
+<title>CallyX — Precision Trading</title>
+<meta name="description" content="Precision trading. Real results. AI-powered automation, live signals, and systematic strategies.">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #08090f;
+    --bg2:       #0f1018;
+    --bg3:       #13141f;
+    --border:    rgba(255,255,255,0.07);
+    --border-hi: rgba(99,179,237,0.35);
+    --accent:    #63b3ed;
+    --accent2:   #4f8eff;
+    --text:      #e2e8f0;
+    --muted:     #718096;
+    --glow:      rgba(99,179,237,0.18);
+    --glow-hi:   rgba(99,179,237,0.35);
+    --radius:    16px;
+    --radius-sm: 10px;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    min-height: -webkit-fill-available;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* ── Background ambient glow ── */
+  body::before {
+    content: '';
+    position: fixed;
+    top: -120px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 600px;
+    height: 400px;
+    background: radial-gradient(ellipse at center, rgba(79,142,255,0.10) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Container ── */
+  .page {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 480px;
+    padding: 40px 20px 56px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+
+  /* ── Brand header ── */
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+
+  .brand-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #4f8eff 0%, #63b3ed 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 20px rgba(79,142,255,0.45);
+    flex-shrink: 0;
+  }
+
+  .brand-icon svg { display: block; }
+
+  .brand-name {
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #fff 30%, #63b3ed 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .tagline {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--accent);
+    letter-spacing: 0.3px;
+    margin-bottom: 10px;
+    text-align: center;
+  }
+
+  .subtext {
+    font-size: 13.5px;
+    color: var(--muted);
+    text-align: center;
+    line-height: 1.6;
+    max-width: 340px;
+    margin-bottom: 36px;
+  }
+
+  /* ── Divider ── */
+  .divider {
+    width: 40px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent2), transparent);
+    border-radius: 2px;
+    margin-bottom: 36px;
+  }
+
+  /* ── CTA section ── */
+  .cta-stack {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 36px;
+  }
+
+  .cta-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    text-align: center;
+    margin-bottom: 4px;
+  }
+
+  /* ── Card base ── */
+  .card {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 20px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg2);
+    text-decoration: none;
+    color: var(--text);
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(255,255,255,0);
+    transition: background 0.15s;
+    border-radius: inherit;
+    pointer-events: none;
+  }
+
+  .card:active::after { background: rgba(255,255,255,0.04); }
+
+  @media (hover: hover) {
+    .card:hover {
+      transform: translateY(-2px);
+    }
+    .card-secondary:hover {
+      border-color: rgba(255,255,255,0.14);
+      box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+    }
+    .card-tertiary:hover {
+      border-color: rgba(255,255,255,0.14);
+      box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+    }
+  }
+
+  /* ── Card icon ── */
+  .card-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 20px;
+  }
+
+  /* ── Card text ── */
+  .card-body { flex: 1; min-width: 0; }
+
+  .card-title {
+    font-size: 15.5px;
+    font-weight: 700;
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .card-desc {
+    font-size: 12.5px;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+
+  .card-arrow {
+    flex-shrink: 0;
+    color: var(--muted);
+    transition: transform 0.18s, color 0.18s;
+    opacity: 0.6;
+  }
+
+  .card:hover .card-arrow { transform: translateX(3px); opacity: 1; }
+
+  /* ── SECONDARY card (Join Free Signals) ── */
+  .card-secondary .card-icon {
+    background: rgba(49,196,141,0.12);
+    color: #38e09e;
+  }
+
+  /* ── PRIMARY card (Start Automation) ── */
+  .card-primary {
+    border-color: var(--border-hi);
+    background: linear-gradient(135deg, #0f1829 0%, #111827 100%);
+    box-shadow: 0 0 0 1px rgba(99,179,237,0.18), 0 8px 32px rgba(79,142,255,0.14);
+    position: relative;
+  }
+
+  .card-primary::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(135deg, rgba(79,142,255,0.06) 0%, rgba(99,179,237,0.02) 100%);
+    pointer-events: none;
+  }
+
+  .card-primary .card-icon {
+    background: linear-gradient(135deg, #4f8eff22 0%, #63b3ed22 100%);
+    border: 1px solid rgba(99,179,237,0.25);
+    color: var(--accent);
+  }
+
+  .card-primary .card-title { color: #fff; }
+  .card-primary .card-arrow { color: var(--accent); opacity: 0.9; }
+
+  .primary-badge {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: var(--accent);
+    background: rgba(99,179,237,0.12);
+    border: 1px solid rgba(99,179,237,0.25);
+    border-radius: 20px;
+    padding: 2px 8px;
+    text-transform: uppercase;
+  }
+
+  @media (hover: hover) {
+    .card-primary:hover {
+      border-color: rgba(99,179,237,0.55);
+      box-shadow: 0 0 0 1px rgba(99,179,237,0.3), 0 12px 40px rgba(79,142,255,0.22);
+    }
+  }
+
+  /* ── TERTIARY card (Strategy Builder) ── */
+  .card-tertiary .card-icon {
+    background: rgba(139,92,246,0.12);
+    color: #a78bfa;
+  }
+
+  /* ── Trust bar ── */
+  .trust-bar {
+    width: 100%;
+    border-top: 1px solid var(--border);
+    padding-top: 28px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .trust-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 14px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--bg3);
+    border: 1px solid var(--border);
+  }
+
+  .trust-icon {
+    font-size: 18px;
+    margin-bottom: 2px;
+  }
+
+  .trust-value {
+    font-size: 16px;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: -0.3px;
+    line-height: 1;
+  }
+
+  .trust-label {
+    font-size: 10.5px;
+    color: var(--muted);
+    text-align: center;
+    line-height: 1.3;
+    letter-spacing: 0.2px;
+  }
+
+  /* ── Footer ── */
+  .footer {
+    margin-top: 28px;
+    font-size: 11.5px;
+    color: rgba(113,128,150,0.6);
+    text-align: center;
+    letter-spacing: 0.3px;
+  }
+
+  /* ── Pulse animation on primary card icon ── */
+  @keyframes pulse-ring {
+    0%   { box-shadow: 0 0 0 0 rgba(99,179,237,0.35); }
+    70%  { box-shadow: 0 0 0 8px rgba(99,179,237,0); }
+    100% { box-shadow: 0 0 0 0 rgba(99,179,237,0); }
+  }
+
+  .card-primary .card-icon {
+    animation: pulse-ring 2.8s ease-out infinite;
+  }
+
+  /* ── Ripple on tap ── */
+  .card { user-select: none; }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <!-- ── Brand ── -->
+  <div class="brand">
+    <div class="brand-icon">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+        <path d="M4 16 L8 8 L11 13 L14 6 L18 16" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="18" cy="16" r="1.8" fill="#fff"/>
+      </svg>
+    </div>
+    <span class="brand-name">CallyX</span>
+  </div>
+
+  <p class="tagline">Precision trading. Real results.</p>
+
+  <p class="subtext">Systematic, automated strategies built for consistency — not luck. Skip the noise. Trade with an edge.</p>
+
+  <div class="divider"></div>
+
+  <!-- ── CTAs ── -->
+  <div class="cta-stack">
+
+    <!-- 1 · Free Signals -->
+    <a class="card card-secondary" href="https://t.me/YOUR_TELEGRAM_GROUP" target="_blank" rel="noopener">
+      <div class="card-icon">📡</div>
+      <div class="card-body">
+        <div class="card-title">Join Free Signals</div>
+        <div class="card-desc">Live calls, market reads &amp; trade setups — no cost</div>
+      </div>
+      <svg class="card-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </a>
+
+    <!-- 2 · Start Automation  (PRIMARY) -->
+    <a class="card card-primary" href="https://t.me/YOUR_TELEGRAM_USERNAME?text=I+want+to+start+automation+with+CallyX" target="_blank" rel="noopener">
+      <span class="primary-badge">Recommended</span>
+      <div class="card-icon">⚡</div>
+      <div class="card-body">
+        <div class="card-title">Start Automation</div>
+        <div class="card-desc">AI-powered strategies running 24/7 — hands-free</div>
+      </div>
+      <svg class="card-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </a>
+
+    <!-- 3 · Strategy Builder -->
+    <a class="card card-tertiary" href="https://tradehubmarkets.com" target="_blank" rel="noopener">
+      <div class="card-icon">🧠</div>
+      <div class="card-body">
+        <div class="card-title">Strategy Builder</div>
+        <div class="card-desc">Build, backtest &amp; automate your own strategies</div>
+      </div>
+      <svg class="card-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </a>
+
+  </div>
+
+  <!-- ── Trust bar ── -->
+  <div class="trust-bar">
+    <div class="trust-item">
+      <span class="trust-icon">👥</span>
+      <span class="trust-value">2,400+</span>
+      <span class="trust-label">Active traders</span>
+    </div>
+    <div class="trust-item">
+      <span class="trust-icon">🤖</span>
+      <span class="trust-value">24/7</span>
+      <span class="trust-label">Automation</span>
+    </div>
+    <div class="trust-item">
+      <span class="trust-icon">🎯</span>
+      <span class="trust-value">AI-Driven</span>
+      <span class="trust-label">Signal engine</span>
+    </div>
+  </div>
+
+  <p class="footer">CallyX · Powered by TradeHub Markets</p>
+
+</div>
+
+</body>
+</html>
