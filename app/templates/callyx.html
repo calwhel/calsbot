@@ -291,6 +291,46 @@
     color: #a78bfa;
   }
 
+  /* ── BITUNIX card ── */
+  .card-bitunix {
+    border-color: rgba(251,146,60,0.28);
+    background: linear-gradient(135deg, #140f08 0%, #111010 100%);
+    box-shadow: 0 0 0 1px rgba(251,146,60,0.12), 0 4px 20px rgba(251,146,60,0.08);
+  }
+
+  .card-bitunix .card-icon {
+    background: rgba(251,146,60,0.12);
+    border: 1px solid rgba(251,146,60,0.2);
+  }
+
+  .card-bitunix .card-title { color: #fed7aa; }
+  .card-bitunix .card-desc  { color: #c2813a; }
+  .card-bitunix .card-arrow { color: #fb923c; opacity: 0.8; }
+
+  @media (hover: hover) {
+    .card-bitunix:hover {
+      border-color: rgba(251,146,60,0.50);
+      box-shadow: 0 0 0 1px rgba(251,146,60,0.25), 0 8px 30px rgba(251,146,60,0.15);
+      transform: translateY(-2px);
+    }
+  }
+
+  .bitunix-badge {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    color: #fb923c;
+    background: rgba(251,146,60,0.12);
+    border: 1px solid rgba(251,146,60,0.28);
+    border-radius: 20px;
+    padding: 2px 8px;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
   /* ── Trust bar ── */
   .trust-bar {
     width: 100%;
@@ -412,6 +452,19 @@
       <div class="card-body">
         <div class="card-title">Strategy Builder</div>
         <div class="card-desc">Build, backtest &amp; automate your own strategies</div>
+      </div>
+      <svg class="card-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </a>
+
+    <!-- 4 · Bitunix sign-up -->
+    <a class="card card-bitunix" href="https://www.bitunix.com/register?vipCode=tradehubsave" target="_blank" rel="noopener">
+      <span class="bitunix-badge">Save 70% on fees</span>
+      <div class="card-icon">🔥</div>
+      <div class="card-body">
+        <div class="card-title">Open Bitunix Account</div>
+        <div class="card-desc">Exclusive link — 70% fee discount, instant access</div>
       </div>
       <svg class="card-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none">
         <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
