@@ -601,7 +601,9 @@ async def callyx_page():
 @app.get("/cryptodictator", response_class=HTMLResponse)
 @app.get("/cd", response_class=HTMLResponse)
 async def cryptodictator_page():
-    return FileResponse("app/templates/cryptodictator.html", media_type="text/html")
+    _f = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "templates", "cryptodictator.html")
+    with open(_f, "r", encoding="utf-8") as _fh:
+        return HTMLResponse(content=_fh.read(), status_code=200)
 
 
 @app.post("/login")
