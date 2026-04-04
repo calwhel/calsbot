@@ -3,568 +3,434 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#0a0b10">
-<title>CallyX — Precision Trading</title>
-<meta name="description" content="Systematic crypto trading. 400+ active traders. AI-powered automation and live strategies on Bitunix.">
+<meta name="theme-color" content="#080808">
+<title>CallyX</title>
+<meta name="description" content="Follow my live trades. Systematic crypto strategies on Bitunix. 400+ traders.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-
-:root{
-  --bg:        #0a0b10;
-  --surface:   #0f1016;
-  --surface2:  #13141c;
-  --border:    rgba(255,255,255,0.06);
-  --border-md: rgba(255,255,255,0.10);
-  --accent:    #4f7fff;
-  --accent-lo: rgba(79,127,255,0.10);
-  --accent-hi: rgba(79,127,255,0.22);
-  --green:     #22d39a;
-  --green-lo:  rgba(34,211,154,0.10);
-  --text:      #e8eaf2;
-  --text2:     #8890aa;
-  --muted:     #555d75;
-  --font:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-}
-
-html{scroll-behavior:smooth}
-
+html{height:100%}
 body{
-  background:var(--bg);
-  color:var(--text);
-  font-family:var(--font);
-  min-height:100vh;
+  background:#080808;
+  color:#e0e0e0;
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+  min-height:100%;
   -webkit-font-smoothing:antialiased;
-  -moz-osx-font-smoothing:grayscale;
   display:flex;
-  flex-direction:column;
-  align-items:center;
+  justify-content:center;
   overflow-x:hidden;
 }
 
-/* subtle dot grid */
-body::before{
-  content:'';
-  position:fixed;
-  inset:0;
-  background-image:radial-gradient(rgba(255,255,255,0.025) 1px, transparent 1px);
-  background-size:28px 28px;
-  pointer-events:none;
-  z-index:0;
-}
-
-/* top accent line */
-body::after{
-  content:'';
-  position:fixed;
-  top:0;left:0;right:0;
-  height:2px;
-  background:linear-gradient(90deg, transparent 0%, var(--accent) 40%, var(--green) 60%, transparent 100%);
-  z-index:10;
-}
-
-.page{
-  position:relative;
-  z-index:1;
+/* ── LAYOUT ── */
+.wrap{
   width:100%;
-  max-width:440px;
-  padding:52px 20px 60px;
+  max-width:400px;
+  padding:56px 22px 64px;
   display:flex;
   flex-direction:column;
-  align-items:center;
 }
 
-/* ── HEADER ── */
-.header{
-  width:100%;
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  margin-bottom:40px;
+/* ── AVATAR / BRAND ── */
+.av{
+  width:60px;height:60px;
+  border-radius:16px;
+  background:#111;
+  border:1px solid #222;
+  display:flex;align-items:center;justify-content:center;
+  margin-bottom:18px;
 }
 
-.logo-row{
-  display:flex;
-  align-items:center;
-  gap:11px;
-  margin-bottom:14px;
-}
-
-.logo-mark{
-  width:40px;
-  height:40px;
-  background:#0f1829;
-  border:1px solid rgba(79,127,255,0.30);
-  border-radius:10px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  flex-shrink:0;
-}
-
-.logo-name{
-  font-size:26px;
+.name{
+  font-size:28px;
   font-weight:800;
-  letter-spacing:-0.8px;
   color:#fff;
+  letter-spacing:-1px;
+  margin-bottom:6px;
+  line-height:1;
 }
 
-.header-tag{
-  display:inline-flex;
-  align-items:center;
-  gap:7px;
-  font-size:11.5px;
-  font-weight:600;
-  color:var(--green);
-  background:var(--green-lo);
-  border:1px solid rgba(34,211,154,0.20);
-  border-radius:100px;
-  padding:5px 13px;
-  letter-spacing:0.2px;
-  margin-bottom:14px;
-}
-
-.dot{
-  width:5px;height:5px;border-radius:50%;
-  background:var(--green);
-  animation:blink 2.4s ease-in-out infinite;
-}
-
-@keyframes blink{
-  0%,100%{opacity:1}
-  50%{opacity:0.35}
-}
-
-.header-h{
-  font-size:22px;
-  font-weight:700;
-  color:#fff;
-  text-align:center;
-  letter-spacing:-0.5px;
-  line-height:1.35;
-  margin-bottom:8px;
-}
-
-.header-sub{
+.handle{
   font-size:13px;
-  color:var(--text2);
-  text-align:center;
+  font-weight:400;
+  color:#555;
+  margin-bottom:20px;
+  letter-spacing:0.1px;
+}
+
+.bio{
+  font-size:14px;
+  color:#888;
   line-height:1.65;
-  max-width:300px;
+  margin-bottom:28px;
+  max-width:320px;
 }
 
-/* ── SOCIAL PROOF ROW ── */
-.social-row{
+.bio strong{
+  color:#c8c8c8;
+  font-weight:600;
+}
+
+/* ── STAT ROW ── */
+.stats{
   display:flex;
   align-items:center;
-  justify-content:center;
-  gap:14px;
-  width:100%;
-  margin-bottom:32px;
-  padding:14px 0;
-  border-top:1px solid var(--border);
-  border-bottom:1px solid var(--border);
+  gap:0;
+  margin-bottom:36px;
+  border:1px solid #1c1c1c;
+  border-radius:10px;
+  overflow:hidden;
 }
 
-.sp-item{
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  gap:2px;
+.stat{
+  flex:1;
+  text-align:center;
+  padding:13px 8px;
+  border-right:1px solid #1c1c1c;
 }
 
-.sp-val{
-  font-size:17px;
-  font-weight:800;
+.stat:last-child{border-right:none}
+
+.sv{
+  font-size:16px;
+  font-weight:700;
   color:#fff;
   letter-spacing:-0.4px;
   line-height:1;
+  margin-bottom:4px;
 }
 
-.sp-val.accent{color:var(--accent)}
-.sp-val.green{color:var(--green)}
+.sv.hi{color:#4ade80}
 
-.sp-lbl{
+.sl{
   font-size:10px;
   font-weight:500;
-  color:var(--muted);
+  color:#444;
   letter-spacing:0.3px;
-  white-space:nowrap;
+  text-transform:uppercase;
 }
 
-.sp-divider{
-  width:1px;height:28px;
-  background:var(--border-md);
-}
-
-/* ── CARDS ── */
-.cards{
-  width:100%;
+/* ── LINKS ── */
+.links{
   display:flex;
   flex-direction:column;
-  gap:10px;
-  margin-bottom:28px;
+  gap:8px;
+  margin-bottom:40px;
 }
 
-.card{
-  width:100%;
+.link{
   display:flex;
   align-items:center;
   gap:14px;
-  padding:16px 18px;
-  border-radius:12px;
-  border:1px solid var(--border);
-  background:var(--surface);
+  padding:15px 16px;
+  border-radius:11px;
+  border:1px solid #1e1e1e;
+  background:#0e0e0e;
   text-decoration:none;
-  color:var(--text);
-  cursor:pointer;
-  transition:border-color 0.18s, background 0.18s, transform 0.16s;
-  position:relative;
-  overflow:hidden;
+  color:#d4d4d4;
+  font-size:14px;
+  font-weight:600;
+  letter-spacing:-0.1px;
+  transition:border-color 0.15s, background 0.15s;
   -webkit-tap-highlight-color:transparent;
+  cursor:pointer;
+  position:relative;
 }
 
-.card:active{transform:scale(0.985)}
+.link:active{opacity:0.7}
 
 @media(hover:hover){
-  .card:hover{
-    border-color:var(--border-md);
-    background:var(--surface2);
-    transform:translateY(-1px);
+  .link:hover{
+    border-color:#333;
+    background:#141414;
   }
 }
 
-/* icon */
-.icon{
-  width:40px;height:40px;
-  border-radius:9px;
+.li{
+  width:34px;height:34px;
+  border-radius:8px;
+  background:#161616;
+  border:1px solid #222;
   display:flex;align-items:center;justify-content:center;
   flex-shrink:0;
-  background:var(--surface2);
-  border:1px solid var(--border);
-  color:var(--text2);
-  transition:color 0.18s;
+  color:#666;
 }
 
-/* body */
-.card-body{flex:1;min-width:0}
+.ltext{flex:1;min-width:0}
 
-.card-title{
-  font-size:14.5px;
-  font-weight:700;
-  color:#fff;
-  margin-bottom:2px;
-  letter-spacing:-0.2px;
+.ltitle{
+  font-size:14px;
+  font-weight:600;
+  color:#e0e0e0;
+  display:block;
+  margin-bottom:1px;
 }
 
-.card-sub{
-  font-size:12px;
-  color:var(--text2);
-  line-height:1.4;
+.lsub{
+  font-size:11.5px;
+  color:#555;
+  display:block;
+  font-weight:400;
 }
 
-/* arrow */
-.arrow{
-  color:var(--muted);
+.lchev{
+  color:#333;
   flex-shrink:0;
-  transition:transform 0.18s, color 0.18s;
+  transition:transform 0.15s, color 0.15s;
 }
 
-.card:hover .arrow{
-  transform:translateX(3px);
-  color:var(--text2);
+.link:hover .lchev{
+  transform:translateX(2px);
+  color:#555;
 }
 
-/* badge */
-.badge{
+/* pill tags */
+.pill{
   position:absolute;
-  top:10px;right:12px;
+  top:50%;right:52px;
+  transform:translateY(-50%);
   font-size:9.5px;
   font-weight:700;
-  letter-spacing:0.6px;
+  letter-spacing:0.5px;
   text-transform:uppercase;
+  padding:3px 8px;
   border-radius:20px;
-  padding:2px 8px;
 }
 
-/* === CARD VARIANTS === */
-
-/* Signals - green */
-.card-signals{
-  border-color:rgba(34,211,154,0.15);
+/* FREE */
+.link-free{
+  border-color:#1a2a1a;
+  background:#0a0f0a;
 }
-.card-signals .icon{
-  background:var(--green-lo);
-  border-color:rgba(34,211,154,0.18);
-  color:var(--green);
+.link-free .li{
+  background:#0d1a0d;
+  border-color:#1a2a1a;
+  color:#4ade80;
+}
+.link-free .ltitle{color:#e8ffe8}
+.link-free .pill{
+  background:#0f2010;
+  border:1px solid #1e3a1e;
+  color:#4ade80;
 }
 @media(hover:hover){
-  .card-signals:hover{
-    border-color:rgba(34,211,154,0.28);
-    background:rgba(34,211,154,0.03);
+  .link-free:hover{
+    border-color:#253525;
+    background:#0c130c;
   }
 }
 
-/* Automation - blue PRIMARY */
-.card-auto{
-  background:#0c1122;
-  border-color:rgba(79,127,255,0.28);
-  box-shadow:0 0 0 1px rgba(79,127,255,0.10) inset;
+/* AUTOMATION */
+.link-auto{
+  border-color:#1a1f2e;
+  background:#0a0c14;
 }
-.card-auto .icon{
-  background:var(--accent-lo);
-  border-color:rgba(79,127,255,0.25);
-  color:var(--accent);
+.link-auto .li{
+  background:#0d1020;
+  border-color:#1a2240;
+  color:#6b9fff;
 }
-.card-auto .badge{
-  background:rgba(79,127,255,0.12);
-  border:1px solid rgba(79,127,255,0.28);
-  color:var(--accent);
+.link-auto .ltitle{color:#eef0ff}
+.link-auto .pill{
+  background:#0d1228;
+  border:1px solid #1e2a50;
+  color:#6b9fff;
 }
 @media(hover:hover){
-  .card-auto:hover{
-    border-color:rgba(79,127,255,0.48);
-    background:#0c1528;
-    box-shadow:0 8px 32px rgba(79,127,255,0.12);
+  .link-auto:hover{
+    border-color:#252d45;
+    background:#0c0e1a;
   }
 }
 
-/* Builder - purple */
-.card-builder{
-  border-color:rgba(160,120,255,0.14);
-}
-.card-builder .icon{
-  background:rgba(160,120,255,0.08);
-  border-color:rgba(160,120,255,0.18);
-  color:#b39dff;
-}
-@media(hover:hover){
-  .card-builder:hover{
-    border-color:rgba(160,120,255,0.28);
-    background:rgba(160,120,255,0.03);
-  }
-}
+/* BUILDER */
+.link-builder{}
 
-/* Bitunix - amber */
-.card-bitunix{
-  border-color:rgba(251,146,60,0.18);
+/* BITUNIX */
+.link-bitunix{
+  border-color:#221a10;
+  background:#0d0a06;
 }
-.card-bitunix .icon{
-  background:rgba(251,146,60,0.08);
-  border-color:rgba(251,146,60,0.20);
+.link-bitunix .li{
+  background:#1a1108;
+  border-color:#2a1e0a;
   color:#fb923c;
 }
-.card-bitunix .badge{
-  background:rgba(251,146,60,0.10);
-  border:1px solid rgba(251,146,60,0.25);
+.link-bitunix .ltitle{color:#fde8cc}
+.link-bitunix .pill{
+  background:#1a1006;
+  border:1px solid #2a1a08;
   color:#fb923c;
 }
-.card-bitunix .card-title{color:#fed7aa}
 @media(hover:hover){
-  .card-bitunix:hover{
-    border-color:rgba(251,146,60,0.36);
-    background:rgba(251,146,60,0.03);
+  .link-bitunix:hover{
+    border-color:#302010;
+    background:#0f0c06;
   }
 }
 
-/* ── METRICS GRID ── */
-.metrics{
-  width:100%;
-  display:grid;
-  grid-template-columns:repeat(3,1fr);
-  gap:8px;
-  margin-bottom:28px;
-}
-
-.metric{
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  gap:4px;
-  padding:14px 8px;
-  background:var(--surface);
-  border:1px solid var(--border);
-  border-radius:10px;
-  text-align:center;
-}
-
-.metric-val{
-  font-size:15px;
-  font-weight:800;
-  color:#fff;
-  letter-spacing:-0.3px;
-  line-height:1;
-}
-
-.metric-lbl{
-  font-size:10px;
-  font-weight:500;
-  color:var(--muted);
-  line-height:1.3;
-  letter-spacing:0.2px;
+/* ── DIVIDER ── */
+.divider{
+  height:1px;
+  background:#1a1a1a;
+  margin-bottom:32px;
 }
 
 /* ── FOOTER ── */
 .foot{
-  font-size:11px;
-  color:var(--muted);
-  text-align:center;
-  letter-spacing:0.3px;
-  line-height:1.7;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
 }
 
-.foot a{
-  color:var(--text2);
+.foot-brand{
+  font-size:12px;
+  color:#333;
+  font-weight:500;
+}
+
+.foot-brand a{
+  color:#444;
   text-decoration:none;
 }
+
+.foot-brand a:hover{color:#666}
+
+.foot-links{
+  display:flex;
+  gap:16px;
+}
+
+.foot-links a{
+  font-size:11px;
+  color:#333;
+  text-decoration:none;
+}
+.foot-links a:hover{color:#555}
 </style>
 </head>
 <body>
 
-<div class="page">
+<div class="wrap">
 
-  <!-- HEADER -->
-  <div class="header">
-    <div class="logo-row">
-      <div class="logo-mark">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-          <polyline points="2,15 6,8 9,12 13,5 18,15" stroke="#4f7fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="18" cy="15" r="1.6" fill="#22d39a"/>
-        </svg>
-      </div>
-      <span class="logo-name">CallyX</span>
-    </div>
-
-    <div class="header-tag">
-      <span class="dot"></span>
-      400+ active traders
-    </div>
-
-    <h1 class="header-h">Systematic crypto trading.<br>Built for edge, not luck.</h1>
-    <p class="header-sub">Automated strategies running 24/7 on Bitunix. Real signals. Verified results.</p>
+  <!-- BRAND -->
+  <div class="av">
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+      <path d="M4 21 L9 11 L13 17 L18 7 L24 21" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
   </div>
 
-  <!-- SOCIAL PROOF -->
-  <div class="social-row">
-    <div class="sp-item">
-      <span class="sp-val green">400+</span>
-      <span class="sp-lbl">Traders</span>
+  <h1 class="name">CallyX</h1>
+  <p class="handle">@callyx · Crypto Trader</p>
+  <p class="bio">Systematic futures trading on Bitunix.<br><strong>400+ traders</strong> following live. Real trades, real results — no noise.</p>
+
+  <!-- STATS -->
+  <div class="stats">
+    <div class="stat">
+      <div class="sv hi">400+</div>
+      <div class="sl">Traders</div>
     </div>
-    <div class="sp-divider"></div>
-    <div class="sp-item">
-      <span class="sp-val">24/7</span>
-      <span class="sp-lbl">Automation</span>
+    <div class="stat">
+      <div class="sv">24/7</div>
+      <div class="sl">Live</div>
     </div>
-    <div class="sp-divider"></div>
-    <div class="sp-item">
-      <span class="sp-val accent">Bitunix</span>
-      <span class="sp-lbl">Exchange</span>
+    <div class="stat">
+      <div class="sv">Bitunix</div>
+      <div class="sl">Exchange</div>
     </div>
-    <div class="sp-divider"></div>
-    <div class="sp-item">
-      <span class="sp-val">Free</span>
-      <span class="sp-lbl">To start</span>
+    <div class="stat">
+      <div class="sv">Free</div>
+      <div class="sl">To start</div>
     </div>
   </div>
 
-  <!-- CARDS -->
-  <div class="cards">
+  <!-- LINKS -->
+  <div class="links">
 
-    <!-- 1. Free Signals -->
-    <a class="card card-signals" href="https://t.me/bu11dogg?text=Hi%20I%20came%20from%20CallyX%0A%0ALooking%20to%20join%20the%20free%20signals%20and%20would%20like%20more%20info%20on%20the%20Strategy%20Builder" target="_blank" rel="noopener">
-      <div class="icon">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-          <path d="M9 2v2M9 14v2M2 9H4M14 9h2M4.22 4.22l1.42 1.42M12.36 12.36l1.42 1.42M4.22 13.78l1.42-1.42M12.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-          <circle cx="9" cy="9" r="2.5" stroke="currentColor" stroke-width="1.6"/>
+    <!-- Follow my trades — free group -->
+    <a class="link link-free" href="https://t.me/callyx" target="_blank" rel="noopener">
+      <span class="pill">Free</span>
+      <div class="li">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M8 2C4.69 2 2 4.69 2 8s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6Z" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M5 8.5l2 2 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
-      <div class="card-body">
-        <div class="card-title">Get Free Signals</div>
-        <div class="card-sub">Live calls, market reads &amp; trade setups</div>
+      <div class="ltext">
+        <span class="ltitle">Follow My Trades</span>
+        <span class="lsub">Free group — live calls &amp; setups</span>
       </div>
-      <svg class="arrow" width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M5.5 3l4 4.5-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      <svg class="lchev" width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </a>
 
-    <!-- 2. Start Automation (PRIMARY) -->
-    <a class="card card-auto" href="https://t.me/bu11dogg?text=Hi%20I%20came%20from%20CallyX%0A%0AI%20want%20to%20start%20automation%20with%20CallyX%20%E2%80%94%20can%20you%20walk%20me%20through%20it%3F" target="_blank" rel="noopener">
-      <span class="badge">Recommended</span>
-      <div class="icon">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-          <path d="M9 2L11.5 7H16L12 10.5L13.5 16L9 13L4.5 16L6 10.5L2 7H6.5L9 2Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Start Automation -->
+    <a class="link link-auto" href="https://t.me/callyx" target="_blank" rel="noopener">
+      <span class="pill">Pro</span>
+      <div class="li">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M8 1.5L10 6H14.5L11 9L12.5 14L8 11L3.5 14L5 9L1.5 6H6L8 1.5Z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
-      <div class="card-body">
-        <div class="card-title">Start Automation</div>
-        <div class="card-sub">Strategies running 24/7 — completely hands-free</div>
+      <div class="ltext">
+        <span class="ltitle">Start Automation</span>
+        <span class="lsub">Your trades run 24/7, hands-free</span>
       </div>
-      <svg class="arrow" width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M5.5 3l4 4.5-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      <svg class="lchev" width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </a>
 
-    <!-- 3. Strategy Builder -->
-    <a class="card card-builder" href="https://tradehubmarkets.com" target="_blank" rel="noopener">
-      <div class="icon">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-          <rect x="2" y="10" width="3" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
-          <rect x="7.5" y="6" width="3" height="10" rx="1" stroke="currentColor" stroke-width="1.5"/>
-          <rect x="13" y="2" width="3" height="14" rx="1" stroke="currentColor" stroke-width="1.5"/>
+    <!-- Strategy Builder -->
+    <a class="link link-builder" href="https://tradehubmarkets.com" target="_blank" rel="noopener">
+      <div class="li">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <rect x="1.5" y="9.5" width="3" height="5" rx="0.8" stroke="currentColor" stroke-width="1.4"/>
+          <rect x="6.5" y="5.5" width="3" height="9" rx="0.8" stroke="currentColor" stroke-width="1.4"/>
+          <rect x="11.5" y="1.5" width="3" height="13" rx="0.8" stroke="currentColor" stroke-width="1.4"/>
         </svg>
       </div>
-      <div class="card-body">
-        <div class="card-title">Strategy Builder</div>
-        <div class="card-sub">Build, backtest &amp; automate your own strategies</div>
+      <div class="ltext">
+        <span class="ltitle">Strategy Builder</span>
+        <span class="lsub">Build &amp; backtest your own strategies</span>
       </div>
-      <svg class="arrow" width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M5.5 3l4 4.5-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      <svg class="lchev" width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </a>
 
-    <!-- 4. Bitunix -->
-    <a class="card card-bitunix" href="https://www.bitunix.com/register?vipCode=tradehubsave" target="_blank" rel="noopener">
-      <span class="badge">Save 70% on fees</span>
-      <div class="icon">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-          <path d="M9 1.5L16 5v8L9 16.5 2 13V5L9 1.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-          <path d="M6.5 9h5M9 6.5v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    <!-- Bitunix -->
+    <a class="link link-bitunix" href="https://www.bitunix.com/register?vipCode=tradehubsave" target="_blank" rel="noopener">
+      <span class="pill">−70% fees</span>
+      <div class="li">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M8 1L14.5 4.5V11.5L8 15L1.5 11.5V4.5L8 1Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+          <path d="M5.5 8H10.5M8 5.5V10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
         </svg>
       </div>
-      <div class="card-body">
-        <div class="card-title">Open Bitunix Account</div>
-        <div class="card-sub">Exclusive link — 70% fee discount, instant access</div>
+      <div class="ltext">
+        <span class="ltitle">Open Bitunix Account</span>
+        <span class="lsub">Exclusive — 70% off trading fees</span>
       </div>
-      <svg class="arrow" width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M5.5 3l4 4.5-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      <svg class="lchev" width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </a>
 
   </div>
 
-  <!-- METRICS -->
-  <div class="metrics">
-    <div class="metric">
-      <span class="metric-val">80%</span>
-      <span class="metric-lbl">Creator revenue share</span>
-    </div>
-    <div class="metric">
-      <span class="metric-val">Free</span>
-      <span class="metric-lbl">No upfront cost</span>
-    </div>
-    <div class="metric">
-      <span class="metric-val">AES-256</span>
-      <span class="metric-lbl">Key encryption</span>
-    </div>
-  </div>
+  <div class="divider"></div>
 
   <!-- FOOTER -->
-  <p class="foot">
-    CallyX · Powered by <a href="https://tradehubmarkets.com">TradeHub Markets</a><br>
-    <a href="https://tradehubmarkets.com/terms">Terms &amp; Conditions</a>
-  </p>
+  <div class="foot">
+    <span class="foot-brand">CallyX · <a href="https://tradehubmarkets.com">TradeHub Markets</a></span>
+    <div class="foot-links">
+      <a href="https://tradehubmarkets.com/terms">Terms</a>
+      <a href="https://tradehubmarkets.com">tradehubmarkets.com</a>
+    </div>
+  </div>
 
 </div>
 
