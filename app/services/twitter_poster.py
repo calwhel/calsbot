@@ -17,7 +17,6 @@ import random
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 import tweepy
-import ccxt.async_support as ccxt
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +26,86 @@ _gainers_cache = {
     'timestamp': None,
     'ttl': 300  # 5 minutes cache
 }
+
+# ── Daily gainers ticker cache (injected into every post for discoverability) ─
+_DAILY_GAINERS_TICKERS: List[str] = []
+_DAILY_GAINERS_RESET = None
+
+
+def _update_daily_gainers(tickers: List[Dict]):
+    """Update the daily top-gainer tickers used to append to all posts."""
+    global _DAILY_GAINERS_TICKERS, _DAILY_GAINERS_RESET
+    today = datetime.utcnow().date()
+    if _DAILY_GAINERS_RESET != today:
+        _DAILY_GAINERS_TICKERS = []
+        _DAILY_GAINERS_RESET = today
+    _DAILY_GAINERS_TICKERS = [t['symbol'] for t in tickers[:10] if t.get('volume', 0) >= 1_000_000]
+
+
+def get_daily_gainers_str(max_tickers: int = 5, exclude: Optional[str] = None) -> str:
+    """Return a space-separated string of today's top gainer tickers."""
+    syms = [s for s in _DAILY_GAINERS_TICKERS if s != exclude][:max_tickers]
+    return " ".join(f"${s}" for s in syms) if syms else ""
+
+
+async def _fetch_mexc_tickers() -> List[Dict]:
+    """
+    Fetch all USDT spot tickers from MEXC (not Binance — geoblocked on Replit).
+    Returns list sorted by 24h % change descending: {symbol, price, change, volume}
+    """
+    import httpx as _httpx
+    async with _httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.get("https://api.mexc.com/api/v3/ticker/24hr")
+        r.raise_for_status()
+        raw = r.json()
+
+    stables = {'USDC', 'BUSD', 'DAI', 'TUSD', 'USDP', 'FDUSD', 'USDE', 'PYUSD', 'USDD', 'USDJ'}
+    result = []
+    for t in raw:
+        sym = t.get('symbol', '')
+        if not sym.endswith('USDT'):
+            continue
+        base = sym[:-4]
+        if base in stables or 'USD' in base or len(base) < 2:
+            continue
+        try:
+            change = float(t.get('priceChangePercent', 0))
+            last   = float(t.get('lastPrice', 0))
+            vol    = float(t.get('quoteVolume', 0))
+        except (ValueError, TypeError):
+            continue
+        if last <= 0 or vol < 100_000:
+            continue
+        result.append({'symbol': base, 'price': last, 'change': change, 'volume': vol})
+
+    result.sort(key=lambda x: x['change'], reverse=True)
+    return result
+
+
+async def _fetch_mexc_ohlcv(symbol: str, interval: str = '1h', limit: int = 48) -> List:
+    """
+    Fetch OHLCV candles from MEXC spot API.
+    Returns [[openTime, open, high, low, close, volume, closeTime, quoteVolume, ...], ...]
+
+    MEXC interval map: 1m, 5m, 15m, 30m, 60m, 4h, 1d, 1W, 1M
+    Accepts standard aliases (1h→60m, 2h→120m, 1d stays 1d).
+    """
+    _interval_map = {'1h': '60m', '2h': '120m', '3h': '180m', '6h': '360m', '12h': '720m'}
+    mexc_interval = _interval_map.get(interval, interval)
+    import httpx as _httpx
+    mexc_sym = f"{symbol.upper()}USDT" if not symbol.upper().endswith('USDT') else symbol.upper()
+    try:
+        async with _httpx.AsyncClient(timeout=12.0) as client:
+            r = await client.get(
+                "https://api.mexc.com/api/v3/klines",
+                params={"symbol": mexc_sym, "interval": mexc_interval, "limit": limit}
+            )
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        logger.debug(f"MEXC OHLCV fetch failed for {symbol}: {e}")
+        return []
+
 
 # Telegram bot token for notifications
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -252,14 +331,13 @@ def get_followup_style() -> str:
 
 
 async def get_market_sentiment() -> Dict[str, str]:
-    """Get current market sentiment based on BTC for tone adjustment"""
+    """Get current market sentiment based on BTC (via MEXC — Binance is geoblocked)"""
     try:
-        import ccxt
-        exchange = ccxt.binance({'enableRateLimit': True})
-        btc = await exchange.fetch_ticker('BTC/USDT')
-        await exchange.close()
-        
-        change = btc.get('percentage', 0) or 0
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get("https://api.mexc.com/api/v3/ticker/24hr", params={"symbol": "BTCUSDT"})
+            btc = r.json()
+        change = float(btc.get('priceChangePercent', 0) or 0)
         
         if change >= 5:
             return {
@@ -617,6 +695,9 @@ async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Opt
         )
 
         # User prompt: the actual task
+        _gainers_ctx = get_daily_gainers_str(max_tickers=5, exclude=symbol)
+        _gainers_line = f"top movers today: {_gainers_ctx}" if _gainers_ctx else ""
+
         prompt = f"""PERSONALITY: {personality['name']}
 {personality['voice']}
 
@@ -626,6 +707,7 @@ VOICE EXAMPLES (write in this register, not as a copy):
 COIN CONTEXT (use selectively — not all of it):
 ${symbol} | price: {price_str} | today: {sign}{change:.1f}% | {tech_context}
 volume today: {vol_str} | time: {time_ctx['period']}, {day_ctx['day']}
+{_gainers_line}
 
 LENGTH: {length_instruction}
 OPENING STYLE: {opening_style}
@@ -1038,72 +1120,47 @@ class TwitterPoster:
             return None
     
     async def get_top_gainers_data(self, limit: int = 5) -> List[Dict]:
-        """Fetch top gaining coins from Binance with caching fallback"""
+        """Fetch top gaining coins from MEXC (Binance is geoblocked on Replit)"""
         global _gainers_cache
-        
+
         try:
-            exchange = ccxt.binance({'enableRateLimit': True})
-            tickers = await exchange.fetch_tickers()
-            await exchange.close()
-            
-            # Filter USDT pairs and sort by % change
-            usdt_tickers = []
-            for symbol, data in tickers.items():
-                if symbol.endswith('/USDT') and data.get('percentage'):
-                    # Skip stablecoins
-                    base = symbol.replace('/USDT', '')
-                    if base in ['USDC', 'BUSD', 'DAI', 'TUSD', 'USDP']:
-                        continue
-                    
-                    usdt_tickers.append({
-                        'symbol': base,
-                        'price': data['last'],
-                        'change': data['percentage'],
-                        'volume': data.get('quoteVolume', 0)
-                    })
-            
-            # Sort by change and return top gainers
-            usdt_tickers.sort(key=lambda x: x['change'], reverse=True)
-            
-            # Update cache on success
-            if usdt_tickers:
-                _gainers_cache['data'] = usdt_tickers[:100]  # Cache top 100
+            all_tickers = await _fetch_mexc_tickers()
+
+            if all_tickers:
+                _gainers_cache['data']      = all_tickers[:100]
                 _gainers_cache['timestamp'] = datetime.utcnow()
-                logger.debug(f"Updated gainers cache with {len(usdt_tickers)} coins")
-            
-            return usdt_tickers[:limit]
-            
+                _update_daily_gainers(all_tickers)
+                logger.debug(f"MEXC tickers: {len(all_tickers)} coins fetched")
+
+            return all_tickers[:limit]
+
         except Exception as e:
             logger.error(f"Failed to fetch top gainers: {e}")
-            
-            # Fallback to cache if available and not too old
+
             if _gainers_cache['data'] and _gainers_cache['timestamp']:
                 cache_age = (datetime.utcnow() - _gainers_cache['timestamp']).total_seconds()
-                if cache_age < 600:  # Use cache up to 10 minutes old
+                if cache_age < 1800:
                     logger.info(f"Using cached gainers data ({cache_age:.0f}s old)")
                     return _gainers_cache['data'][:limit]
-            
+
             return []
     
     async def get_market_summary(self) -> Dict:
-        """Get BTC and overall market summary"""
+        """Get BTC and ETH market summary via MEXC (Binance geoblocked on Replit)"""
         try:
-            exchange = ccxt.binance({'enableRateLimit': True})
-            
-            # Get BTC and ETH
-            btc = await exchange.fetch_ticker('BTC/USDT')
-            eth = await exchange.fetch_ticker('ETH/USDT')
-            
-            await exchange.close()
-            
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                rb = await client.get("https://api.mexc.com/api/v3/ticker/24hr", params={"symbol": "BTCUSDT"})
+                re = await client.get("https://api.mexc.com/api/v3/ticker/24hr", params={"symbol": "ETHUSDT"})
+            btc = rb.json()
+            eth = re.json()
             return {
-                'btc_price': btc['last'],
-                'btc_change': btc['percentage'] or 0,
-                'eth_price': eth['last'],
-                'eth_change': eth['percentage'] or 0,
-                'timestamp': datetime.utcnow()
+                'btc_price':  float(btc.get('lastPrice', 0)),
+                'btc_change': float(btc.get('priceChangePercent', 0) or 0),
+                'eth_price':  float(eth.get('lastPrice', 0)),
+                'eth_change': float(eth.get('priceChangePercent', 0) or 0),
+                'timestamp':  datetime.utcnow()
             }
-            
         except Exception as e:
             logger.error(f"Failed to fetch market summary: {e}")
             return {}
@@ -1222,24 +1279,11 @@ class TwitterPoster:
     async def post_top_losers(self) -> Optional[Dict]:
         """Post top losing coins with human-like variety"""
         try:
-            exchange = ccxt.binance({'enableRateLimit': True})
-            tickers = await exchange.fetch_tickers()
-            await exchange.close()
-            
-            usdt_tickers = []
-            for symbol, data in tickers.items():
-                if symbol.endswith('/USDT') and data.get('percentage'):
-                    base = symbol.replace('/USDT', '')
-                    if base in ['USDC', 'BUSD', 'DAI', 'TUSD', 'USDP']:
-                        continue
-                    usdt_tickers.append({
-                        'symbol': base,
-                        'price': data['last'],
-                        'change': data['percentage'],
-                    })
-            
-            usdt_tickers.sort(key=lambda x: x['change'])
-            losers = usdt_tickers[:5]
+            all_tickers = await _fetch_mexc_tickers()
+            # Losers = sort ascending by change, filter reasonable volume
+            losers_all = [t for t in all_tickers if t.get('volume', 0) >= 1_000_000]
+            losers_all.sort(key=lambda x: x['change'])
+            losers = losers_all[:5]
             
             style = random.randint(1, 6)
             
@@ -1286,20 +1330,21 @@ class TwitterPoster:
     async def post_btc_update(self) -> Optional[Dict]:
         """Post BTC update with human-like variety"""
         try:
-            exchange = ccxt.binance({'enableRateLimit': True})
-            btc = await exchange.fetch_ticker('BTC/USDT')
-            ohlcv = await exchange.fetch_ohlcv('BTC/USDT', '1h', limit=24)
-            await exchange.close()
-            
-            price = btc['last']
-            change = btc['percentage'] or 0
-            high = btc['high']
-            low = btc['low']
-            volume = btc['quoteVolume'] or 0
-            sign = "+" if change >= 0 else ""
-            
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=10.0) as _cl:
+                rb = await _cl.get("https://api.mexc.com/api/v3/ticker/24hr", params={"symbol": "BTCUSDT"})
+            btc_t = rb.json()
+            ohlcv = await _fetch_mexc_ohlcv('BTC', interval='1h', limit=24)
+
+            price  = float(btc_t.get('lastPrice', 0))
+            change = float(btc_t.get('priceChangePercent', 0) or 0)
+            high   = float(btc_t.get('highPrice', 0))
+            low    = float(btc_t.get('lowPrice', 0))
+            volume = float(btc_t.get('quoteVolume', 0))
+            sign   = "+" if change >= 0 else ""
+
             if ohlcv and len(ohlcv) >= 14:
-                closes = [c[4] for c in ohlcv]
+                closes = [float(c[4]) for c in ohlcv]
                 gains = [max(0, closes[i] - closes[i-1]) for i in range(1, len(closes))]
                 losses = [max(0, closes[i-1] - closes[i]) for i in range(1, len(closes))]
                 avg_gain = sum(gains[-14:]) / 14
@@ -1359,27 +1404,12 @@ class TwitterPoster:
             return None
     
     async def post_altcoin_movers(self) -> Optional[Dict]:
-        """Post altcoin movements with human-like variety"""
+        """Post altcoin movements with human-like variety (via MEXC)"""
         try:
-            exchange = ccxt.binance({'enableRateLimit': True})
-            tickers = await exchange.fetch_tickers()
-            await exchange.close()
-            
-            alts = []
-            exclude = ['BTC', 'ETH', 'USDC', 'BUSD', 'DAI', 'TUSD', 'USDP', 'USDT']
-            
-            for symbol, data in tickers.items():
-                if symbol.endswith('/USDT') and data.get('percentage'):
-                    base = symbol.replace('/USDT', '')
-                    if base in exclude:
-                        continue
-                    vol = data.get('quoteVolume', 0) or 0
-                    if vol >= 10_000_000:
-                        alts.append({
-                            'symbol': base,
-                            'change': data['percentage'],
-                            'volume': vol
-                        })
+            all_tickers = await _fetch_mexc_tickers()
+
+            exclude = {'BTC', 'ETH', 'USDC', 'BUSD', 'DAI', 'TUSD', 'USDP', 'USDT'}
+            alts = [t for t in all_tickers if t['symbol'] not in exclude and t.get('volume', 0) >= 10_000_000]
             
             alts.sort(key=lambda x: abs(x['change']), reverse=True)
             top_movers = alts[:6]
@@ -1471,21 +1501,18 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
         record_global_coin_post(symbol)
     
     async def _get_chart_analysis(self, symbol: str) -> Dict:
-        """Get technical analysis data for more insightful posts"""
+        """Get technical analysis data via MEXC OHLCV (Binance geoblocked on Replit)"""
         try:
-            exchange = ccxt.binance({'enableRateLimit': True})
-            
-            # Get OHLCV data for analysis
-            ohlcv = await exchange.fetch_ohlcv(f"{symbol}/USDT", '1h', limit=48)
-            await exchange.close()
-            
+            ohlcv = await _fetch_mexc_ohlcv(symbol, interval='1h', limit=48)
+
             if not ohlcv or len(ohlcv) < 20:
                 return {}
-            
-            closes = [c[4] for c in ohlcv]
-            highs = [c[2] for c in ohlcv]
-            lows = [c[3] for c in ohlcv]
-            volumes = [c[5] for c in ohlcv]
+
+            # MEXC klines: [openTime, open, high, low, close, volume, ...]
+            closes  = [float(c[4]) for c in ohlcv]
+            highs   = [float(c[2]) for c in ohlcv]
+            lows    = [float(c[3]) for c in ohlcv]
+            volumes = [float(c[5]) for c in ohlcv]
             
             current_price = closes[-1]
             
@@ -3261,31 +3288,18 @@ Write ONLY the tweet. No quotes, no explanation:"""
 
 
 async def post_early_gainers(account_poster: MultiAccountPoster) -> Optional[Dict]:
-    """Post coins gaining traction early with human-like variety"""
+    """Post coins gaining traction early with human-like variety (via MEXC)"""
     try:
-        exchange = ccxt.binance({'enableRateLimit': True})
-        tickers = await exchange.fetch_tickers()
-        await exchange.close()
-        
-        early_movers = []
-        for symbol, data in tickers.items():
-            if not symbol.endswith('/USDT') or not data.get('percentage'):
-                continue
-            
-            base = symbol.replace('/USDT', '')
-            if base in ['USDC', 'BUSD', 'DAI', 'TUSD', 'USDP', 'USDD']:
-                continue
-            
-            change = data['percentage']
-            volume = data.get('quoteVolume', 0)
-            
-            if 3 <= change <= 12 and volume >= 5_000_000 and check_global_coin_cooldown(base, max_per_day=1):
-                early_movers.append({
-                    'symbol': base,
-                    'change': change,
-                    'volume': volume,
-                    'price': data.get('last', 0)
-                })
+        all_tickers = await _fetch_mexc_tickers()
+
+        _eg_excl = {'USDC', 'BUSD', 'DAI', 'TUSD', 'USDP', 'USDD'}
+        early_movers = [
+            t for t in all_tickers
+            if 3 <= t['change'] <= 12
+            and t.get('volume', 0) >= 5_000_000
+            and t['symbol'] not in _eg_excl
+            and check_global_coin_cooldown(t['symbol'], max_per_day=1)
+        ]
         
         if not early_movers:
             return None
@@ -3349,33 +3363,18 @@ async def post_early_gainers(account_poster: MultiAccountPoster) -> Optional[Dic
 
 
 async def post_momentum_shift(account_poster: MultiAccountPoster) -> Optional[Dict]:
-    """Post coins showing momentum shifts with human-like variety"""
+    """Post coins showing momentum shifts with human-like variety (via MEXC)"""
     try:
-        exchange = ccxt.binance({'enableRateLimit': True})
-        tickers = await exchange.fetch_tickers()
-        await exchange.close()
-        
-        movers = []
-        for symbol, data in tickers.items():
-            if not symbol.endswith('/USDT') or not data.get('percentage'):
-                continue
-            
-            base = symbol.replace('/USDT', '')
-            if base in ['USDC', 'BUSD', 'DAI', 'TUSD', 'USDP']:
-                continue
-            
-            change = data['percentage']
-            volume = data.get('quoteVolume', 0)
-            
-            if change >= 5 and volume >= 10_000_000 and check_global_coin_cooldown(base, max_per_day=1):
-                movers.append({
-                    'symbol': base,
-                    'change': change,
-                    'volume': volume,
-                    'price': data.get('last', 0),
-                    'high': data.get('high', 0),
-                    'low': data.get('low', 0)
-                })
+        all_tickers = await _fetch_mexc_tickers()
+
+        _ms_excl = {'USDC', 'BUSD', 'DAI', 'TUSD', 'USDP'}
+        movers = [
+            t for t in all_tickers
+            if t['change'] >= 5
+            and t.get('volume', 0) >= 10_000_000
+            and t['symbol'] not in _ms_excl
+            and check_global_coin_cooldown(t['symbol'], max_per_day=1)
+        ]
         
         if not movers:
             return None
@@ -3438,33 +3437,17 @@ async def post_momentum_shift(account_poster: MultiAccountPoster) -> Optional[Di
 
 
 async def post_volume_surge(account_poster: MultiAccountPoster) -> Optional[Dict]:
-    """Post coins with unusual volume - often precedes big moves"""
+    """Post coins with unusual volume (via MEXC — Binance geoblocked on Replit)"""
     try:
-        exchange = ccxt.binance({'enableRateLimit': True})
-        tickers = await exchange.fetch_tickers()
-        await exchange.close()
-        
-        # Find high volume coins (check global cooldown)
-        high_volume = []
-        for symbol, data in tickers.items():
-            if not symbol.endswith('/USDT'):
-                continue
-            
-            base = symbol.replace('/USDT', '')
-            if base in ['USDC', 'BUSD', 'DAI', 'TUSD', 'BTC', 'ETH']:
-                continue
-            
-            volume = data.get('quoteVolume', 0)
-            change = data.get('percentage', 0) or 0
-            
-            # High volume altcoins (check cooldown to avoid same tickers)
-            if volume >= 50_000_000 and check_global_coin_cooldown(base, max_per_day=1):
-                high_volume.append({
-                    'symbol': base,
-                    'change': change,
-                    'volume': volume,
-                    'price': data.get('last', 0)
-                })
+        all_tickers = await _fetch_mexc_tickers()
+
+        _vs_excl = {'USDC', 'BUSD', 'DAI', 'TUSD', 'BTC', 'ETH'}
+        high_volume = [
+            t for t in all_tickers
+            if t.get('volume', 0) >= 50_000_000
+            and t['symbol'] not in _vs_excl
+            and check_global_coin_cooldown(t['symbol'], max_per_day=1)
+        ]
         
         if not high_volume:
             return None
@@ -3529,24 +3512,19 @@ async def post_volume_surge(account_poster: MultiAccountPoster) -> Optional[Dict
 async def post_market_pulse(account_poster: MultiAccountPoster) -> Optional[Dict]:
     """Post overall market pulse with BTC + top alts"""
     try:
-        exchange = ccxt.binance({'enableRateLimit': True})
-        btc = await exchange.fetch_ticker('BTC/USDT')
-        eth = await exchange.fetch_ticker('ETH/USDT')
-        tickers = await exchange.fetch_tickers()
-        await exchange.close()
-        
-        btc_change = btc.get('percentage', 0) or 0
-        eth_change = eth.get('percentage', 0) or 0
-        
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=10.0) as _cl:
+            rb = await _cl.get("https://api.mexc.com/api/v3/ticker/24hr", params={"symbol": "BTCUSDT"})
+            re = await _cl.get("https://api.mexc.com/api/v3/ticker/24hr", params={"symbol": "ETHUSDT"})
+        btc_t = rb.json(); eth_t = re.json()
+        btc_change = float(btc_t.get('priceChangePercent', 0) or 0)
+        eth_change = float(eth_t.get('priceChangePercent', 0) or 0)
+
+        all_tickers = await _fetch_mexc_tickers()
+
         # Count green vs red
-        green = 0
-        red = 0
-        for symbol, data in tickers.items():
-            if symbol.endswith('/USDT') and data.get('percentage'):
-                if data['percentage'] > 0:
-                    green += 1
-                else:
-                    red += 1
+        green = sum(1 for t in all_tickers if t.get('change', 0) > 0)
+        red   = sum(1 for t in all_tickers if t.get('change', 0) < 0)
         
         total = green + red
         green_pct = (green / total * 100) if total > 0 else 50
@@ -3935,26 +3913,25 @@ This is the kind of thing I watch for"""
 
 
 async def post_funding_extreme(account_poster: MultiAccountPoster) -> Optional[Dict]:
-    """Post about extreme funding rates - human-like"""
+    """Post about extreme funding rates via MEXC (Binance geoblocked on Replit)"""
     try:
-        import ccxt.async_support as ccxt_async
-        exchange = ccxt_async.binance({'options': {'defaultType': 'future'}})
-        
-        funding = await exchange.fetch_funding_rates()
-        await exchange.close()
-        
-        if not funding:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=12.0) as _cl:
+            resp = await _cl.get("https://contract.mexc.com/api/v1/contract/funding_rate")
+        raw = resp.json()
+        funding_list = raw.get('data', []) if isinstance(raw, dict) else raw
+        if not funding_list:
             return {'success': False, 'error': 'No funding data'}
-        
+
         # Find extreme funding rates
         extremes = []
-        for symbol, data in funding.items():
-            rate = data.get('fundingRate', 0) or 0
-            if abs(rate) >= 0.0005:  # 0.05% or higher
-                base = symbol.replace('/USDT:USDT', '').replace('USDT', '')
+        for item in funding_list:
+            rate = float(item.get('fundingRate', 0) or 0)
+            if abs(rate) >= 0.0005:
+                base = item.get('symbol', '').replace('_USDT', '')
                 extremes.append({
                     'symbol': base,
-                    'rate': rate * 100,  # Convert to percentage
+                    'rate': rate * 100,
                     'direction': 'LONG' if rate > 0 else 'SHORT'
                 })
         
@@ -4071,15 +4048,13 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
         chart_analysis = None
         ohlcv_closes = []
         try:
-            exchange = ccxt.binance({'enableRateLimit': True})
-            ohlcv = await exchange.fetch_ohlcv(f"{symbol}/USDT", '1h', limit=48)
-            await exchange.close()
+            ohlcv = await _fetch_mexc_ohlcv(symbol, interval='1h', limit=48)
             if ohlcv and len(ohlcv) >= 20:
-                closes = [c[4] for c in ohlcv]
+                closes = [float(c[4]) for c in ohlcv]
                 ohlcv_closes = closes
-                highs  = [c[2] for c in ohlcv]
-                lows   = [c[3] for c in ohlcv]
-                vols   = [c[5] for c in ohlcv]
+                highs  = [float(c[2]) for c in ohlcv]
+                lows   = [float(c[3]) for c in ohlcv]
+                vols   = [float(c[5]) for c in ohlcv]
                 ema9   = sum(closes[-9:])  / 9
                 ema21  = sum(closes[-21:]) / 21
                 ema50  = sum(closes[-50:]) / min(50, len(closes))
@@ -4874,9 +4849,12 @@ async def post_market_take(account_poster) -> Optional[Dict]:
         time_ctx = get_time_context()
         day_ctx  = get_day_context()
 
+        _mt_gainers = get_daily_gainers_str(max_tickers=4)
+        _mt_gainers_ctx = f"Top movers today: {_mt_gainers}. " if _mt_gainers else ""
+
         angle_prompts = {
             "market_cycle_take": (
-                f"{btc_ctx}Write a tweet with your current read on where we are in the market cycle. "
+                f"{btc_ctx}{_mt_gainers_ctx}Write a tweet with your current read on where we are in the market cycle. "
                 f"Not a prediction — an observation. Something you've noticed in the data, the sentiment, "
                 f"or the behavior of other market participants. Time: {time_ctx['period']} on a {day_ctx['day']}."
             ),
@@ -4895,7 +4873,7 @@ async def post_market_take(account_poster) -> Optional[Dict]:
                 f"Not preachy. Just an observation that makes people think."
             ),
             "narrative_shift": (
-                f"{btc_ctx}Write a tweet about a narrative in crypto that is either gaining or losing momentum right now. "
+                f"{btc_ctx}{_mt_gainers_ctx}Write a tweet about a narrative in crypto that is either gaining or losing momentum right now. "
                 f"What changed? Who's wrong? What does the market actually seem to care about vs what CT says it cares about?"
             ),
             "discipline_take": (
@@ -5022,28 +5000,41 @@ async def post_tradehub_promo(account_poster) -> Optional[Dict]:
         second_pnl  = second["total_pnl"] if second else None
         second_name = second["name"]     if second else None
 
-        # Live market hook (optional)
+        # Live market hook — try MEXC first (reliable), CoinGecko as secondary
         hook_symbol = None
         hook_change = None
         try:
-            import httpx as _httpx
-            async with _httpx.AsyncClient(timeout=8.0) as _cl:
-                r = await _cl.get(
-                    "https://api.coingecko.com/api/v3/coins/markets",
-                    params={"vs_currency": "usd", "order": "percent_change_24h_desc",
-                            "per_page": 10, "page": 1, "sparkline": False}
-                )
-                if r.status_code == 200:
-                    for coin in r.json():
-                        chg = coin.get("price_change_percentage_24h", 0) or 0
-                        sym = coin.get("symbol", "").upper()
-                        vol = coin.get("total_volume", 0) or 0
-                        if chg >= 3 and vol >= 20_000_000 and sym not in ("USDT", "USDC", "BUSD"):
-                            hook_symbol = sym
-                            hook_change = chg
-                            break
+            _mx = await _fetch_mexc_tickers()
+            _mx_candidates = [t for t in _mx if t.get('change', 0) >= 3 and t.get('volume', 0) >= 20_000_000
+                              and t['symbol'] not in ('USDT', 'USDC', 'BUSD', 'DAI')]
+            if _mx_candidates:
+                _h = random.choice(_mx_candidates[:5])
+                hook_symbol = _h['symbol']
+                hook_change = _h['change']
         except Exception:
             pass
+
+        if not hook_symbol:
+            # CoinGecko as fallback
+            try:
+                import httpx as _httpx
+                async with _httpx.AsyncClient(timeout=8.0) as _cl:
+                    r = await _cl.get(
+                        "https://api.coingecko.com/api/v3/coins/markets",
+                        params={"vs_currency": "usd", "order": "percent_change_24h_desc",
+                                "per_page": 10, "page": 1, "sparkline": False}
+                    )
+                    if r.status_code == 200:
+                        for coin in r.json():
+                            chg = coin.get("price_change_percentage_24h", 0) or 0
+                            sym = coin.get("symbol", "").upper()
+                            vol = coin.get("total_volume", 0) or 0
+                            if chg >= 3 and vol >= 20_000_000 and sym not in ("USDT", "USDC", "BUSD"):
+                                hook_symbol = sym
+                                hook_change = chg
+                                break
+            except Exception:
+                pass
 
         # Build image card
         image_bytes = await asyncio.to_thread(generate_tradehub_card_image, strategies)
