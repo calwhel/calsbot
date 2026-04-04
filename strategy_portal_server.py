@@ -592,10 +592,18 @@ async def terms_page():
 # ── CallyX brand landing page ─────────────────────────────────────────────────
 # Isolated: only accessible via /start or /callyx — no impact on any other route.
 
+@app.get("/lp-test", response_class=HTMLResponse)
+async def lp_test():
+    return HTMLResponse("<h1>CallyX route works</h1>", status_code=200)
+
 @app.get("/start", response_class=HTMLResponse)
 @app.get("/callyx", response_class=HTMLResponse)
 async def callyx_page():
-    return FileResponse("app/templates/callyx.html", media_type="text/html")
+    import os
+    path = "app/templates/callyx.html"
+    if not os.path.exists(path):
+        return HTMLResponse("<h1>CallyX</h1><p>Template file missing in deployment.</p>", status_code=200)
+    return FileResponse(path, media_type="text/html")
 
 
 @app.post("/login")
