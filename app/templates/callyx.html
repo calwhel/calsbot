@@ -3,434 +3,417 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#080808">
+<meta name="theme-color" content="#0d0d0d">
 <title>CallyX</title>
-<meta name="description" content="Follow my live trades. Systematic crypto strategies on Bitunix. 400+ traders.">
+<meta name="description" content="Follow my live trades. 400+ traders. Systematic crypto on Bitunix.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html{height:100%}
+
 body{
-  background:#080808;
-  color:#e0e0e0;
+  background:#0d0d0d;
   font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
-  min-height:100%;
   -webkit-font-smoothing:antialiased;
+  min-height:100vh;
   display:flex;
   justify-content:center;
-  overflow-x:hidden;
 }
 
-/* ── LAYOUT ── */
-.wrap{
+.page{
   width:100%;
-  max-width:400px;
-  padding:56px 22px 64px;
+  max-width:420px;
+  padding:48px 20px 56px;
   display:flex;
   flex-direction:column;
+  gap:0;
 }
 
-/* ── AVATAR / BRAND ── */
-.av{
-  width:60px;height:60px;
-  border-radius:16px;
-  background:#111;
-  border:1px solid #222;
-  display:flex;align-items:center;justify-content:center;
-  margin-bottom:18px;
+/* ── HERO ── */
+.hero{
+  margin-bottom:32px;
 }
 
-.name{
-  font-size:28px;
-  font-weight:800;
+.wordmark{
+  font-size:52px;
+  font-weight:900;
+  letter-spacing:-2.5px;
   color:#fff;
-  letter-spacing:-1px;
-  margin-bottom:6px;
   line-height:1;
+  margin-bottom:10px;
 }
 
-.handle{
-  font-size:13px;
+.wordmark span{
+  color:#00e676;
+}
+
+.hero-line{
+  font-size:15px;
   font-weight:400;
-  color:#555;
+  color:#666;
+  line-height:1.5;
   margin-bottom:20px;
+}
+
+.hero-line strong{
+  color:#aaa;
+  font-weight:600;
+}
+
+/* stat chip */
+.stat-chip{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  background:#141414;
+  border:1px solid #222;
+  border-radius:100px;
+  padding:7px 14px 7px 10px;
+}
+
+.chip-dot{
+  width:7px;height:7px;border-radius:50%;
+  background:#00e676;
+  box-shadow:0 0 8px #00e676;
+  animation:pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes pulse{
+  0%,100%{opacity:1;box-shadow:0 0 8px #00e676}
+  50%{opacity:.5;box-shadow:0 0 3px #00e676}
+}
+
+.chip-text{
+  font-size:13px;
+  font-weight:600;
+  color:#ccc;
   letter-spacing:0.1px;
 }
 
-.bio{
-  font-size:14px;
-  color:#888;
-  line-height:1.65;
-  margin-bottom:28px;
-  max-width:320px;
-}
-
-.bio strong{
-  color:#c8c8c8;
-  font-weight:600;
-}
-
-/* ── STAT ROW ── */
-.stats{
-  display:flex;
-  align-items:center;
-  gap:0;
-  margin-bottom:36px;
-  border:1px solid #1c1c1c;
-  border-radius:10px;
-  overflow:hidden;
-}
-
-.stat{
-  flex:1;
-  text-align:center;
-  padding:13px 8px;
-  border-right:1px solid #1c1c1c;
-}
-
-.stat:last-child{border-right:none}
-
-.sv{
-  font-size:16px;
+.chip-text b{
+  color:#00e676;
   font-weight:700;
-  color:#fff;
-  letter-spacing:-0.4px;
-  line-height:1;
-  margin-bottom:4px;
-}
-
-.sv.hi{color:#4ade80}
-
-.sl{
-  font-size:10px;
-  font-weight:500;
-  color:#444;
-  letter-spacing:0.3px;
-  text-transform:uppercase;
-}
-
-/* ── LINKS ── */
-.links{
-  display:flex;
-  flex-direction:column;
-  gap:8px;
-  margin-bottom:40px;
-}
-
-.link{
-  display:flex;
-  align-items:center;
-  gap:14px;
-  padding:15px 16px;
-  border-radius:11px;
-  border:1px solid #1e1e1e;
-  background:#0e0e0e;
-  text-decoration:none;
-  color:#d4d4d4;
-  font-size:14px;
-  font-weight:600;
-  letter-spacing:-0.1px;
-  transition:border-color 0.15s, background 0.15s;
-  -webkit-tap-highlight-color:transparent;
-  cursor:pointer;
-  position:relative;
-}
-
-.link:active{opacity:0.7}
-
-@media(hover:hover){
-  .link:hover{
-    border-color:#333;
-    background:#141414;
-  }
-}
-
-.li{
-  width:34px;height:34px;
-  border-radius:8px;
-  background:#161616;
-  border:1px solid #222;
-  display:flex;align-items:center;justify-content:center;
-  flex-shrink:0;
-  color:#666;
-}
-
-.ltext{flex:1;min-width:0}
-
-.ltitle{
-  font-size:14px;
-  font-weight:600;
-  color:#e0e0e0;
-  display:block;
-  margin-bottom:1px;
-}
-
-.lsub{
-  font-size:11.5px;
-  color:#555;
-  display:block;
-  font-weight:400;
-}
-
-.lchev{
-  color:#333;
-  flex-shrink:0;
-  transition:transform 0.15s, color 0.15s;
-}
-
-.link:hover .lchev{
-  transform:translateX(2px);
-  color:#555;
-}
-
-/* pill tags */
-.pill{
-  position:absolute;
-  top:50%;right:52px;
-  transform:translateY(-50%);
-  font-size:9.5px;
-  font-weight:700;
-  letter-spacing:0.5px;
-  text-transform:uppercase;
-  padding:3px 8px;
-  border-radius:20px;
-}
-
-/* FREE */
-.link-free{
-  border-color:#1a2a1a;
-  background:#0a0f0a;
-}
-.link-free .li{
-  background:#0d1a0d;
-  border-color:#1a2a1a;
-  color:#4ade80;
-}
-.link-free .ltitle{color:#e8ffe8}
-.link-free .pill{
-  background:#0f2010;
-  border:1px solid #1e3a1e;
-  color:#4ade80;
-}
-@media(hover:hover){
-  .link-free:hover{
-    border-color:#253525;
-    background:#0c130c;
-  }
-}
-
-/* AUTOMATION */
-.link-auto{
-  border-color:#1a1f2e;
-  background:#0a0c14;
-}
-.link-auto .li{
-  background:#0d1020;
-  border-color:#1a2240;
-  color:#6b9fff;
-}
-.link-auto .ltitle{color:#eef0ff}
-.link-auto .pill{
-  background:#0d1228;
-  border:1px solid #1e2a50;
-  color:#6b9fff;
-}
-@media(hover:hover){
-  .link-auto:hover{
-    border-color:#252d45;
-    background:#0c0e1a;
-  }
-}
-
-/* BUILDER */
-.link-builder{}
-
-/* BITUNIX */
-.link-bitunix{
-  border-color:#221a10;
-  background:#0d0a06;
-}
-.link-bitunix .li{
-  background:#1a1108;
-  border-color:#2a1e0a;
-  color:#fb923c;
-}
-.link-bitunix .ltitle{color:#fde8cc}
-.link-bitunix .pill{
-  background:#1a1006;
-  border:1px solid #2a1a08;
-  color:#fb923c;
-}
-@media(hover:hover){
-  .link-bitunix:hover{
-    border-color:#302010;
-    background:#0f0c06;
-  }
 }
 
 /* ── DIVIDER ── */
-.divider{
+.rule{
   height:1px;
-  background:#1a1a1a;
-  margin-bottom:32px;
+  background:linear-gradient(90deg, #222 0%, #2a2a2a 50%, #222 100%);
+  margin-bottom:24px;
+}
+
+/* ── BUTTONS ── */
+.btns{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  margin-bottom:24px;
+}
+
+/* Base button */
+.btn{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:18px 20px;
+  border-radius:14px;
+  text-decoration:none;
+  cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+  transition:filter 0.15s, transform 0.12s;
+  position:relative;
+  overflow:hidden;
+}
+
+.btn:active{transform:scale(0.97);filter:brightness(0.9)}
+
+.btn-left{
+  display:flex;
+  align-items:center;
+  gap:14px;
+}
+
+.btn-icon{
+  width:40px;height:40px;
+  border-radius:10px;
+  display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;
+}
+
+.btn-text{}
+
+.btn-title{
+  font-size:15px;
+  font-weight:700;
+  display:block;
+  margin-bottom:2px;
+  letter-spacing:-0.2px;
+}
+
+.btn-sub{
+  font-size:12px;
+  font-weight:400;
+  display:block;
+  opacity:0.7;
+}
+
+.btn-right{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex-shrink:0;
+}
+
+.btn-badge{
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:0.5px;
+  text-transform:uppercase;
+  padding:3px 9px;
+  border-radius:20px;
+}
+
+/* ── FOLLOW MY TRADES — green ── */
+.btn-follow{
+  background:#0a1f12;
+  border:1.5px solid #00e676;
+}
+
+.btn-follow .btn-icon{
+  background:#00e67618;
+  color:#00e676;
+}
+
+.btn-follow .btn-title{color:#e8ffee}
+.btn-follow .btn-sub{color:#4ade80}
+
+.btn-follow .btn-badge{
+  background:#00e67618;
+  border:1px solid #00e67640;
+  color:#00e676;
+}
+
+.btn-follow .chev{color:#00e676;opacity:0.7}
+
+@media(hover:hover){
+  .btn-follow:hover{
+    border-color:#00e676cc;
+    filter:brightness(1.08);
+  }
+}
+
+/* ── START AUTOMATION — white/light ── */
+.btn-auto{
+  background:#f4f4f4;
+  border:1.5px solid transparent;
+}
+
+.btn-auto .btn-icon{
+  background:#00000012;
+  color:#111;
+}
+
+.btn-auto .btn-title{color:#0d0d0d}
+.btn-auto .btn-sub{color:#555}
+
+.btn-auto .btn-badge{
+  background:#0000000f;
+  border:1px solid #00000018;
+  color:#333;
+}
+
+.btn-auto .chev{color:#333}
+
+@media(hover:hover){
+  .btn-auto:hover{filter:brightness(0.96)}
+}
+
+/* ── STRATEGY BUILDER — subtle ── */
+.btn-builder{
+  background:#141414;
+  border:1.5px solid #222;
+}
+
+.btn-builder .btn-icon{
+  background:#1e1e1e;
+  color:#888;
+}
+
+.btn-builder .btn-title{color:#ccc}
+.btn-builder .btn-sub{color:#555}
+.btn-builder .chev{color:#444}
+
+@media(hover:hover){
+  .btn-builder:hover{
+    border-color:#333;
+    background:#181818;
+  }
+}
+
+/* ── BITUNIX — amber ── */
+.btn-bitunix{
+  background:#110e08;
+  border:1.5px solid #f59e0b44;
+}
+
+.btn-bitunix .btn-icon{
+  background:#f59e0b14;
+  color:#f59e0b;
+}
+
+.btn-bitunix .btn-title{color:#fde68a}
+.btn-bitunix .btn-sub{color:#a16207}
+
+.btn-bitunix .btn-badge{
+  background:#f59e0b14;
+  border:1px solid #f59e0b30;
+  color:#f59e0b;
+}
+
+.btn-bitunix .chev{color:#f59e0b;opacity:0.6}
+
+@media(hover:hover){
+  .btn-bitunix:hover{
+    border-color:#f59e0b88;
+    filter:brightness(1.05);
+  }
 }
 
 /* ── FOOTER ── */
 .foot{
-  display:flex;
-  flex-direction:column;
-  gap:10px;
-}
-
-.foot-brand{
-  font-size:12px;
-  color:#333;
-  font-weight:500;
-}
-
-.foot-brand a{
-  color:#444;
-  text-decoration:none;
-}
-
-.foot-brand a:hover{color:#666}
-
-.foot-links{
-  display:flex;
-  gap:16px;
-}
-
-.foot-links a{
+  text-align:center;
   font-size:11px;
   color:#333;
-  text-decoration:none;
+  margin-top:8px;
+  line-height:1.8;
 }
-.foot-links a:hover{color:#555}
+
+.foot a{color:#444;text-decoration:none}
+.foot a:hover{color:#666}
 </style>
 </head>
 <body>
 
-<div class="wrap">
+<div class="page">
 
-  <!-- BRAND -->
-  <div class="av">
-    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-      <path d="M4 21 L9 11 L13 17 L18 7 L24 21" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-  </div>
-
-  <h1 class="name">CallyX</h1>
-  <p class="handle">@callyx · Crypto Trader</p>
-  <p class="bio">Systematic futures trading on Bitunix.<br><strong>400+ traders</strong> following live. Real trades, real results — no noise.</p>
-
-  <!-- STATS -->
-  <div class="stats">
-    <div class="stat">
-      <div class="sv hi">400+</div>
-      <div class="sl">Traders</div>
-    </div>
-    <div class="stat">
-      <div class="sv">24/7</div>
-      <div class="sl">Live</div>
-    </div>
-    <div class="stat">
-      <div class="sv">Bitunix</div>
-      <div class="sl">Exchange</div>
-    </div>
-    <div class="stat">
-      <div class="sv">Free</div>
-      <div class="sl">To start</div>
+  <!-- HERO -->
+  <div class="hero">
+    <div class="wordmark">Cally<span>X</span></div>
+    <p class="hero-line">Systematic futures trading on Bitunix.<br><strong>Real trades. No noise.</strong></p>
+    <div class="stat-chip">
+      <span class="chip-dot"></span>
+      <span class="chip-text"><b>400+ traders</b> following live</span>
     </div>
   </div>
 
-  <!-- LINKS -->
-  <div class="links">
+  <div class="rule"></div>
 
-    <!-- Follow my trades — free group -->
-    <a class="link link-free" href="https://t.me/bu11dogg?text=Hey%2C%20I%20found%20you%20through%20CallyX.%20I%27d%20like%20to%20follow%20your%20live%20trades%20%E2%80%94%20how%20do%20I%20get%20access%20to%20the%20free%20group%3F" target="_blank" rel="noopener">
-      <span class="pill">Free</span>
-      <div class="li">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M8 2C4.69 2 2 4.69 2 8s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6Z" stroke="currentColor" stroke-width="1.4"/>
-          <path d="M5 8.5l2 2 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- BUTTONS -->
+  <div class="btns">
+
+    <!-- Follow My Trades -->
+    <a class="btn btn-follow"
+       href="https://t.me/bu11dogg?text=Hey%2C%20I%20found%20you%20through%20CallyX.%20I%27d%20like%20to%20follow%20your%20live%20trades%20%E2%80%94%20how%20do%20I%20get%20access%20to%20the%20free%20group%3F"
+       target="_blank" rel="noopener">
+      <div class="btn-left">
+        <div class="btn-icon">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M3 13L7 7.5L10 11L13 6L17 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="17" cy="11" r="1.5" fill="currentColor"/>
+          </svg>
+        </div>
+        <div class="btn-text">
+          <span class="btn-title">Follow My Trades</span>
+          <span class="btn-sub">Free group — live calls &amp; setups</span>
+        </div>
+      </div>
+      <div class="btn-right">
+        <span class="btn-badge">Free</span>
+        <svg class="chev" width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
-      <div class="ltext">
-        <span class="ltitle">Follow My Trades</span>
-        <span class="lsub">Free group — live calls &amp; setups</span>
-      </div>
-      <svg class="lchev" width="14" height="14" viewBox="0 0 14 14" fill="none">
-        <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
     </a>
 
     <!-- Start Automation -->
-    <a class="link link-auto" href="https://t.me/bu11dogg?text=Hey%2C%20I%20came%20across%20CallyX%20and%20want%20to%20get%20my%20trades%20running%20on%20automation.%20What%20do%20I%20need%20to%20get%20started%3F" target="_blank" rel="noopener">
-      <span class="pill">Pro</span>
-      <div class="li">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M8 1.5L10 6H14.5L11 9L12.5 14L8 11L3.5 14L5 9L1.5 6H6L8 1.5Z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <a class="btn btn-auto"
+       href="https://t.me/bu11dogg?text=Hey%2C%20I%20came%20across%20CallyX%20and%20want%20to%20get%20my%20trades%20running%20on%20automation.%20What%20do%20I%20need%20to%20get%20started%3F"
+       target="_blank" rel="noopener">
+      <div class="btn-left">
+        <div class="btn-icon">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <circle cx="9" cy="9" r="6.5" stroke="currentColor" stroke-width="1.7"/>
+            <path d="M7 6.5L12 9L7 11.5V6.5Z" fill="currentColor"/>
+          </svg>
+        </div>
+        <div class="btn-text">
+          <span class="btn-title">Start Automation</span>
+          <span class="btn-sub">Trades run 24/7, completely hands-free</span>
+        </div>
+      </div>
+      <div class="btn-right">
+        <svg class="chev" width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
-      <div class="ltext">
-        <span class="ltitle">Start Automation</span>
-        <span class="lsub">Your trades run 24/7, hands-free</span>
-      </div>
-      <svg class="lchev" width="14" height="14" viewBox="0 0 14 14" fill="none">
-        <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
     </a>
 
     <!-- Strategy Builder -->
-    <a class="link link-builder" href="https://tradehubmarkets.com" target="_blank" rel="noopener">
-      <div class="li">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <rect x="1.5" y="9.5" width="3" height="5" rx="0.8" stroke="currentColor" stroke-width="1.4"/>
-          <rect x="6.5" y="5.5" width="3" height="9" rx="0.8" stroke="currentColor" stroke-width="1.4"/>
-          <rect x="11.5" y="1.5" width="3" height="13" rx="0.8" stroke="currentColor" stroke-width="1.4"/>
+    <a class="btn btn-builder"
+       href="https://tradehubmarkets.com"
+       target="_blank" rel="noopener">
+      <div class="btn-left">
+        <div class="btn-icon">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <rect x="2" y="10" width="3" height="6" rx="0.8" stroke="currentColor" stroke-width="1.5"/>
+            <rect x="7.5" y="6" width="3" height="10" rx="0.8" stroke="currentColor" stroke-width="1.5"/>
+            <rect x="13" y="2" width="3" height="14" rx="0.8" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+        </div>
+        <div class="btn-text">
+          <span class="btn-title">Strategy Builder</span>
+          <span class="btn-sub">Build &amp; backtest your own strategies</span>
+        </div>
+      </div>
+      <div class="btn-right">
+        <svg class="chev" width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
-      <div class="ltext">
-        <span class="ltitle">Strategy Builder</span>
-        <span class="lsub">Build &amp; backtest your own strategies</span>
-      </div>
-      <svg class="lchev" width="14" height="14" viewBox="0 0 14 14" fill="none">
-        <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
     </a>
 
     <!-- Bitunix -->
-    <a class="link link-bitunix" href="https://www.bitunix.com/register?vipCode=tradehubsave" target="_blank" rel="noopener">
-      <span class="pill">−70% fees</span>
-      <div class="li">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M8 1L14.5 4.5V11.5L8 15L1.5 11.5V4.5L8 1Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-          <path d="M5.5 8H10.5M8 5.5V10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+    <a class="btn btn-bitunix"
+       href="https://www.bitunix.com/register?vipCode=tradehubsave"
+       target="_blank" rel="noopener">
+      <div class="btn-left">
+        <div class="btn-icon">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M9 1.5L16 5v8L9 16.5 2 13V5L9 1.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M6 9h6M9 6v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="btn-text">
+          <span class="btn-title">Open Bitunix Account</span>
+          <span class="btn-sub">Exclusive — 70% off trading fees</span>
+        </div>
+      </div>
+      <div class="btn-right">
+        <span class="btn-badge">−70% fees</span>
+        <svg class="chev" width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
-      <div class="ltext">
-        <span class="ltitle">Open Bitunix Account</span>
-        <span class="lsub">Exclusive — 70% off trading fees</span>
-      </div>
-      <svg class="lchev" width="14" height="14" viewBox="0 0 14 14" fill="none">
-        <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
     </a>
 
   </div>
 
-  <div class="divider"></div>
-
   <!-- FOOTER -->
-  <div class="foot">
-    <span class="foot-brand">CallyX · <a href="https://tradehubmarkets.com">TradeHub Markets</a></span>
-    <div class="foot-links">
-      <a href="https://tradehubmarkets.com/terms">Terms</a>
-      <a href="https://tradehubmarkets.com">tradehubmarkets.com</a>
-    </div>
-  </div>
+  <p class="foot">
+    CallyX · <a href="https://tradehubmarkets.com">TradeHub Markets</a><br>
+    <a href="https://tradehubmarkets.com/terms">Terms &amp; Conditions</a>
+  </p>
 
 </div>
 
