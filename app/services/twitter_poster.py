@@ -2264,8 +2264,10 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
     from app.database import SessionLocal
     from app.models import TwitterAccount
     
-    valid_types = ['featured_coin', 'market_summary', 'top_gainers', 'btc_update', 
-                   'altcoin_movers', 'daily_recap', 'top_losers']
+    valid_types = ['featured_coin', 'market_summary', 'top_gainers', 'btc_update',
+                   'altcoin_movers', 'daily_recap', 'top_losers', 'early_gainer',
+                   'memecoin', 'quick_ta', 'tradehub_promo', 'market_take',
+                   'bitunix_campaign', 'free_telegram']
     
     # Validate post types
     invalid = [t for t in post_types if t not in valid_types]
@@ -2295,7 +2297,7 @@ POST_SCHEDULE = [
     # Strategy/leaderboard promo every ~3h; market content fills the rest.
     # Every market post also appends a subtle strategy CTA (see _maybe_strategy_cta).
     (0, 30, 'featured_coin'),
-    (1, 45, 'tradehub_promo'),      # promo 1 - Asia night
+    (1, 45, 'free_telegram'),       # free signals promo - Asia night
     (3, 0, 'quick_ta'),
     (4, 30, 'tradehub_promo'),      # promo 2 - Asia early morning
     (5, 15, 'early_gainer'),
@@ -2306,7 +2308,7 @@ POST_SCHEDULE = [
     (10, 30, 'market_take'),        # hot take - EU morning
     (11, 0, 'early_gainer'),
     (12, 15, 'memecoin'),
-    (13, 30, 'tradehub_promo'),     # promo 5 - EU midday / US pre-market
+    (13, 30, 'free_telegram'),      # free signals promo - EU midday / US pre-market
     (14, 45, 'featured_coin'),
     (15, 30, 'early_gainer'),
     (16, 0, 'tradehub_promo'),      # promo 6 - US morning
@@ -2317,7 +2319,7 @@ POST_SCHEDULE = [
     (21, 15, 'early_gainer'),
     (22, 0, 'tradehub_promo'),      # promo 8 - US evening
     (22, 30, 'quick_ta'),
-    (23, 30, 'featured_coin'),
+    (23, 30, 'free_telegram'),      # free signals promo - late US
 ]
 
 POSTED_SLOTS = set()
@@ -2343,6 +2345,7 @@ def get_twitter_schedule() -> Dict:
         'bitunix_campaign': '💰 Bitunix Campaign',
         'tradehub_promo': '🏆 TradeHub Leaderboard',
         'market_take': '💭 Market Hot Take',
+        'free_telegram': '📲 Free Telegram Promo',
     }
     
     schedule_info = []
@@ -2584,7 +2587,7 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
     try:
         # For every market post, append a strategy/website CTA so every tweet
         # drives traffic to tradehubmarkets.com — skip promo types that already do this.
-        if post_type not in ('tradehub_promo', 'market_take', 'bitunix_campaign'):
+        if post_type not in ('tradehub_promo', 'market_take', 'bitunix_campaign', 'free_telegram'):
             _orig_pt = account_poster.post_tweet
             def _cta_pt(text, media_ids=None, _o=_orig_pt):
                 return _o(_maybe_strategy_cta(text), media_ids)
@@ -2860,7 +2863,10 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
 
         elif post_type == 'bitunix_campaign':
             return await post_bitunix_campaign(account_poster)
-        
+
+        elif post_type == 'free_telegram':
+            return await post_free_telegram_promo(account_poster)
+
         elif post_type == 'daily_recap':
             market = await main_poster.get_market_summary()
             gainers = await main_poster.get_top_gainers_data(3)
@@ -3633,16 +3639,8 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
         mcap_str = f"${mcap/1e9:.2f}B"   if mcap >= 1e9 else (f"${mcap/1e6:.0f}M" if mcap > 0 else "")
         cap_note = f" | mcap {mcap_str}" if mcap_str else ""
 
-        # ── generate and attach card ──────────────────────────────────────────
-        try:
-            from app.services.tweet_card_generator import make_gainer_card_auto
-            card_bytes = await asyncio.to_thread(
-                make_gainer_card_auto, symbol, price, change, volume, mcap, rank
-            )
-            media_ids = _try_attach_card(account_poster, card_bytes)
-        except Exception as ce:
-            logger.warning(f"Gainer card generation failed: {ce}")
-            media_ids = None
+        # AI-generated card images disabled — text-only posts
+        media_ids = None
 
         tl = _pick_tweet_length()
 
@@ -3755,22 +3753,8 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
         mcap_str = f"${mcap/1e9:.2f}B" if mcap >= 1e9 else (f"${mcap/1e6:.0f}M" if mcap > 0 else "")
         cap_note = f" · mcap {mcap_str}" if mcap_str else ""
 
-        # ── generate and attach memecoin card ─────────────────────────────────
+        # AI-generated card images disabled — text-only posts
         meme_media_ids = None
-        try:
-            from app.services.tweet_card_generator import make_memecoin_card
-            taglines = [
-                "strategy running on this",
-                "algo watching 24/7",
-                "meme szn is real",
-                "caught it early",
-            ]
-            card_bytes = await asyncio.to_thread(
-                make_memecoin_card, symbol, price, change, volume, random.choice(taglines)
-            )
-            meme_media_ids = _try_attach_card(account_poster, card_bytes)
-        except Exception as ce:
-            logger.warning(f"Memecoin card generation failed: {ce}")
 
         tl = _pick_tweet_length()
 
@@ -4093,46 +4077,8 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
 
         volume = coin.get('volume', 0)
 
-        # ── generate and attach TA card ───────────────────────────────────────
+        # AI-generated card images disabled — text-only posts
         ta_media_ids = None
-        try:
-            from app.services.tweet_card_generator import make_ta_card
-            rsi_v  = chart_analysis.get('rsi', 50) if chart_analysis else 50
-            trend_v = chart_analysis.get('trend', 'neutral') if chart_analysis else 'neutral'
-            vs_v   = chart_analysis.get('vol_surge', False) if chart_analysis else False
-            h24    = chart_analysis.get('h24', 0) if chart_analysis else 0
-            l24    = chart_analysis.get('l24', 0) if chart_analysis else 0
-            bias_v = 'BULLISH' if trend_v == 'bullish' else ('BEARISH' if trend_v == 'bearish' else 'NEUTRAL')
-            # Build human-readable TA bullet points
-            ta_bullets = []
-            if chart_analysis:
-                if rsi_v > 70:
-                    ta_bullets.append(f"RSI {rsi_v:.0f} — overbought, watch for reversal")
-                elif rsi_v < 30:
-                    ta_bullets.append(f"RSI {rsi_v:.0f} — oversold, bounce territory")
-                else:
-                    ta_bullets.append(f"RSI {rsi_v:.0f} — neutral momentum")
-                if trend_v == 'bullish':
-                    ta_bullets.append("EMA9 above EMA21 — short-term uptrend intact")
-                elif trend_v == 'bearish':
-                    ta_bullets.append("EMA9 below EMA21 — short-term downtrend")
-                else:
-                    ta_bullets.append("EMA9 ≈ EMA21 — no clear trend yet")
-                if vs_v:
-                    ta_bullets.append("Volume surge detected — above 10-period avg")
-                if h24 > 0 and l24 > 0:
-                    rng_pct = (h24 - l24) / l24 * 100
-                    if price < 1:
-                        ta_bullets.append(f"24h range: ${l24:.6f} – ${h24:.6f} ({rng_pct:.1f}%)")
-                    else:
-                        ta_bullets.append(f"24h range: ${l24:,.2f} – ${h24:,.2f} ({rng_pct:.1f}%)")
-                ta_bullets.append(f"Price {sign}{change:.1f}% · strategy running on tradehubmarkets.com")
-            card_bytes = await asyncio.to_thread(
-                make_ta_card, symbol, price, change, volume, ta_bullets or None, bias_v
-            )
-            ta_media_ids = _try_attach_card(account_poster, card_bytes)
-        except Exception as ce:
-            logger.warning(f"TA card generation failed: {ce}")
 
         tl = _pick_tweet_length()
 
@@ -4275,13 +4221,72 @@ async def post_for_social_account(
     elif post_type == 'bitunix_campaign':
         return await post_bitunix_campaign(account_poster)
 
+    elif post_type == 'free_telegram':
+        return await post_free_telegram_promo(account_poster)
+
     else:
         funcs = [post_social_news, post_early_gainers, post_momentum_shift, post_volume_surge]
         return await random.choice(funcs)(account_poster)
 
 
+async def post_free_telegram_promo(account_poster) -> Optional[Dict]:
+    """
+    Promote the free Telegram signals group using today's top gainer tickers.
+    Posts like a KOL sharing what they're watching, then pointing to the free group.
+    No images. Links to tradehubmarkets.com/start.
+    """
+    try:
+        gainers = await _fetch_mexc_tickers()
+        top = [g for g in gainers if g.get('volume', 0) >= 2_000_000][:8]
+
+        if len(top) >= 3:
+            picks = random.sample(top[:8], min(4, len(top)))
+        elif top:
+            picks = top
+        else:
+            picks = []
+
+        tickers = " ".join(f"${g['symbol']}" for g in picks) if picks else "$BTC $ETH $SOL"
+
+        tl = _pick_tweet_length()
+
+        if tl == 'ultra_short':
+            templates = [
+                f"trading {tickers} today. signals are free in my Telegram → tradehubmarkets.com/start",
+                f"on {tickers} right now. free signals in the group → tradehubmarkets.com/start",
+                f"watching {tickers}. every trade I take goes to the free group → tradehubmarkets.com/start",
+            ]
+        elif tl == 'short':
+            templates = [
+                f"current watchlist: {tickers}\n\nevery signal I take gets posted in my free Telegram group — entry, TP, SL. nothing held back → tradehubmarkets.com/start",
+                f"these are moving today: {tickers}\n\nI share the exact trades I'm taking in the free group. join before the next signal → tradehubmarkets.com/start",
+                f"{tickers} on the radar right now\n\nif you want the actual trades with entries — free Telegram group → tradehubmarkets.com/start",
+            ]
+        elif tl == 'long':
+            templates = [
+                f"watchlist for today:\n{tickers}\n\nI post every trade I take in my free Telegram group — exact entry, TP, SL. no paid tier, no upsell. just the signals.\n\njoin free → tradehubmarkets.com/start",
+                f"currently watching {tickers} for entries\n\nI run a free Telegram group where I share every signal I take myself — entry price, TP levels, stop loss. all live.\n\ntradehubmarkets.com/start",
+            ]
+        else:
+            templates = [
+                f"watching {tickers} today\n\nsharing every trade in the free Telegram group — entry, TP, SL posted live → tradehubmarkets.com/start",
+                f"{tickers} are moving. sharing live trades in the free group → tradehubmarkets.com/start",
+                f"on {tickers} right now. all my signals are free in Telegram — tradehubmarkets.com/start",
+            ]
+
+        tweet_text = random.choice(templates)
+        result = account_poster.post_tweet(tweet_text)
+        if result and result.get('success'):
+            logger.info(f"Free Telegram promo posted with tickers: {tickers}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Error posting free telegram promo: {e}")
+        return {'success': False, 'error': str(e)}
+
+
 BITUNIX_CAMPAIGN_IMAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                                       "attached_assets", "IMG_1209_1775291809770.jpeg")
+                                       "attached_assets", "IMG_1289_1775309555183.png")
 BITUNIX_CAMPAIGN_LINK = "https://www.bitunix.com/activity/basic/1774508484?vipCode=fgq74890"
 BITUNIX_CAMPAIGN_START = datetime(2026, 3, 27)
 BITUNIX_CAMPAIGN_END = datetime(2026, 4, 26, 23, 59, 59)
@@ -4987,8 +4992,8 @@ async def post_tradehub_promo(account_poster) -> Optional[Dict]:
             except Exception:
                 pass
 
-        # Build image card
-        image_bytes = await asyncio.to_thread(generate_tradehub_card_image, strategies)
+        # AI-generated card images disabled — text-only posts
+        image_bytes = None
 
         # ── Pick one of 8 organic angles ─────────────────────────────────────
         angles = [
@@ -5156,9 +5161,21 @@ async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
             **live_tickers
         )
         
-        if len(tweet_text) > 280:
+        # Twitter shortens all URLs to 23 chars — use that count when checking length
+        import re as _re
+        def _tw_len(t: str) -> int:
+            count = 0
+            last = 0
+            for m in _re.finditer(r'https?://\S+', t):
+                count += m.start() - last
+                count += 23
+                last = m.end()
+            count += len(t) - last
+            return count
+
+        if _tw_len(tweet_text) > 280:
             lines = tweet_text.split('\n')
-            while len('\n'.join(lines)) > 280 and len(lines) > 3:
+            while _tw_len('\n'.join(lines)) > 280 and len(lines) > 3:
                 removed = False
                 for i in range(len(lines) - 1, -1, -1):
                     line = lines[i].strip()
@@ -5175,6 +5192,26 @@ async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
                     else:
                         break
             tweet_text = '\n'.join(lines)
+
+        # Strip any accidentally injected strategy CTA — campaign link must be the final word
+        _cta_markers = [
+            "automating moves like this at tradehubmarkets",
+            "running a strategy on exactly this",
+            "build a strategy to catch these",
+            "my algo already flagged this",
+            "this is why I automate",
+            "automated plays on moves like this",
+            "strategy bot caught this early",
+            "have a strategy running on setups",
+            "been catching these with an algo",
+            "strategy leaderboard is tracking",
+            "this is exactly what I automate",
+            "catching these moves automatically",
+        ]
+        for _marker in _cta_markers:
+            _idx = tweet_text.lower().find(_marker.lower())
+            if _idx != -1:
+                tweet_text = tweet_text[:_idx].rstrip()
         
         media_id = None
         if os.path.exists(BITUNIX_CAMPAIGN_IMAGE):

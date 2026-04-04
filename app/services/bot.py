@@ -7094,6 +7094,9 @@ async def cb_twitter_account_settings(callback: types.CallbackQuery):
                 InlineKeyboardButton(text="🔥 High Viewing", callback_data=f"tw_manual_{account_id}_high_viewing"),
                 InlineKeyboardButton(text="💰 Campaign", callback_data=f"tw_manual_{account_id}_bitunix_campaign")
             ])
+            buttons.append([
+                InlineKeyboardButton(text="📲 Free Telegram", callback_data=f"tw_manual_{account_id}_free_telegram"),
+            ])
         
         toggle_text = "❌ Disable Account" if account.is_active else "✅ Enable Account"
         buttons.append([InlineKeyboardButton(text=toggle_text, callback_data=f"tw_toggle_{account_id}")])
@@ -7505,7 +7508,8 @@ async def cb_twitter_manual_post(callback: types.CallbackQuery):
             'altcoin_movers': 'Altcoin Movers',
             'daily_recap': 'Daily Recap',
             'high_viewing': 'High Viewing',
-            'bitunix_campaign': 'Bitunix Campaign'
+            'bitunix_campaign': 'Bitunix Campaign',
+            'free_telegram': 'Free Telegram Promo',
         }
         
         await callback.answer(f"Posting {type_names.get(post_type, post_type)}...")
