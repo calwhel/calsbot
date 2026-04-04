@@ -560,7 +560,7 @@ async def _startup_background():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "ts": int(__import__("time").time())}
+    return {"status": "ok", "ts": int(__import__("time").time()), "v": "callyx-live"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
