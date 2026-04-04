@@ -6856,13 +6856,34 @@ async function startUpgrade() {
   btn.disabled    = true;
   btn.textContent = '⏳ Creating invoice…';
 
+  // Open the window SYNCHRONOUSLY (direct click response) so browsers don't
+  // block it as a popup. We'll redirect it once the payment URL arrives.
+  const payWin = window.open('', '_blank');
+  if (payWin) {
+    payWin.document.write(
+      '<html><body style="font-family:sans-serif;padding:40px;text-align:center;background:#f7f9ff">'
+      + '<h2 style="color:#3b5bdb">⏳ Generating payment link…</h2>'
+      + '<p style="color:#555">Please wait a moment, you\'ll be redirected to the payment page.</p>'
+      + '</body></html>'
+    );
+  }
+
   try {
     const r = await fetch('/api/portal/checkout', { method: 'POST' });
     const d = await r.json();
-    if (!r.ok || !d.payLink) throw new Error(d.detail || 'Failed to create invoice');
+    if (!r.ok || !d.payLink) {
+      if (payWin && !payWin.closed) payWin.close();
+      throw new Error(d.detail || 'Failed to create invoice');
+    }
 
-    // Open OxaPay payment page in new tab
-    window.open(d.payLink, '_blank');
+    // Redirect the already-open tab to the real payment URL
+    if (payWin && !payWin.closed) {
+      payWin.location.href = d.payLink;
+    } else {
+      // Fallback: popup was blocked — show inline link
+      waiting.innerHTML = `<a href="${d.payLink}" target="_blank" style="color:var(--accent);font-weight:600">Click here to open payment page →</a>`;
+      waiting.style.display = 'block';
+    }
 
     btn.textContent    = '✓ Payment page opened';
     waiting.style.display = 'block';
@@ -6883,6 +6904,7 @@ async function startUpgrade() {
     }, 8000);
 
   } catch(e) {
+    if (payWin && !payWin.closed) payWin.close();
     toast(e.message || 'Payment setup failed. Please try again.', 'error');
     btn.disabled    = false;
     btn.textContent = 'Pay with Crypto — $50/mo';
