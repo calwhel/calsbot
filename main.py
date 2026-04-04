@@ -8,6 +8,7 @@ import uvicorn
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.responses import FileResponse, HTMLResponse
 
 print("✅ Core imports loaded", flush=True)
 
@@ -107,6 +108,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# CallyX brand landing page — must be registered before the "/" mount below
+# so it takes priority. Accessible at /start and /callyx on every server.
+@app.get("/start", response_class=HTMLResponse)
+@app.get("/callyx", response_class=HTMLResponse)
+async def callyx_page():
+    return FileResponse("app/templates/callyx.html", media_type="text/html")
+
 app.mount("/", subscription_api)
 
 
