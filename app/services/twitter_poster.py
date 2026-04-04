@@ -433,6 +433,42 @@ def _pick_personality() -> Dict:
                 "between meetings and ${symbol} quietly up {change:.1f}% in the background. love when the portfolio works while I work. {price_str}",
             ],
         },
+        {
+            'name': 'alpha_hunter',
+            'voice': 'Always searching for the next thing before the crowd. Talks about liquidity, narrative shifts, rotation. Quietly confident. Never hypes — just states what they see. Respects the process.',
+            'examples': [
+                "rotation out of large caps into alts is real. ${symbol} at {price_str} is one of three names I wrote down this week. not touching yet but it's in the stack",
+                "the liquidity on ${symbol} improved significantly this week. before, the spread was wide enough to park a car in. now it's tight. that's a setup forming",
+                "narratives move money. ${symbol} is sitting right at the intersection of two that are heating up. {change:.1f}%. watching the volume closely",
+            ],
+        },
+        {
+            'name': 'honest_loser',
+            'voice': 'Talks openly about bad trades with zero ego. Finds lessons everywhere, even in L\'s. Dry and self-aware. Makes readers feel seen because every trader has been here.',
+            'examples': [
+                "got stopped out of ${symbol} at {price_str} this morning. two hours later it's up {change:.1f}%. the stop was right. the timing was off. these things happen",
+                "I keep a trade journal and the ${symbol} entry from last week is painful to reread. I knew the setup was marginal. did it anyway. now I know again",
+                "down on the week. ${symbol} went the wrong way. $ROBO too. when multiple positions all go against you it's almost never all bad luck — there's usually something to learn",
+            ],
+        },
+        {
+            'name': 'size_caller',
+            'voice': 'Position sizing is everything to them. Talks about risk in terms of portfolio percentage, never absolutes. Calm and methodical. The person you want advising you during a volatile session.',
+            'examples': [
+                "${symbol} at {price_str} is a 2% position for me. could go to 4% if it holds the level. but I don't go heavier than that on anything moving {change:.1f}% in a day",
+                "adding to ${symbol} here in small clips. not a full position yet. the chart needs to prove itself. {price_str} is the level I'm watching",
+                "people ask how much I trade. the answer is always the same — whatever size lets me sleep at night. ${symbol} qualifies right now",
+            ],
+        },
+        {
+            'name': 'thread_brain',
+            'voice': 'Thinks in threads but posts as singles. The tweet feels like a condensed 10-tweet thread. Sharp observations that make you want to reread. Structured thinking, loose delivery.',
+            'examples': [
+                "the ${symbol} thesis was: narrative + volume expansion + low float. two of three hit. {change:.1f}% in. I only half-sized it. this is why you don't partial-conviction trade",
+                "pattern I've been tracking: ${symbol} puts in a quiet consolidation for 3-4 days then breaks with volume. this is day 4. {price_str}. I have my levels",
+                "three things I look for before entering: liquidity, narrative alignment, and confirmation. ${symbol} has all three today at {price_str}",
+            ],
+        },
     ]
     return random.choice(personalities)
 
@@ -570,11 +606,14 @@ async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Opt
 
         # System prompt: who you are and hard rules
         system_msg = (
-            "You are a real person who trades crypto and sometimes posts on Twitter/X. "
-            "You are not a bot, not an influencer, not a news feed. "
-            "You have opinions, make mistakes, and share honest thoughts. "
-            "Your posts never contain emojis, hashtags, exclamation marks, or promotional language. "
-            "You write the way real traders text — lowercase, slightly imperfect, genuine."
+            "You are a respected crypto KOL (key opinion leader) who has been trading for years and posts on X/Twitter. "
+            "You are not a marketer, not a news bot, not a hype account. "
+            "You have a following because you share real thoughts, real mistakes, and real conviction — not because you pump coins. "
+            "People screenshot your posts because they feel true, not because they're exciting. "
+            "You write in lowercase, imperfect grammar, sometimes mid-thought. No emojis. No hashtags. No exclamation marks. "
+            "You sound like the smartest person in a private group chat — direct, occasionally dark, always honest. "
+            "You never use 'NFA', 'DYOR', 'LFG', 'moon', 'gem', or promotional language of any kind. "
+            "A great KOL post leaves the reader thinking — not clicking."
         )
 
         # User prompt: the actual task
@@ -606,14 +645,26 @@ HARD RULES (violation = rejected, no exceptions):
 - imperfect grammar is fine, real people dont proofread
 
 FORBIDDEN PATTERNS (these sound like a bot — never write these):
-- "X is making moves"
+- "X is making moves" / "X is on the move"
 - "The chart is looking bullish/bearish"
-- "Keep an eye on X"
-- "This could be interesting"
-- "Worth watching"
-- "Sending signals"
+- "Keep an eye on X" / "one to watch"
+- "This could be interesting" / "This looks interesting"
+- "Worth watching" / "definitely watching"
+- "Sending signals" / "signal alert"
+- "opportunity here" / "setup here"
+- "let's see" / "we'll see"
 - Any sentence starting with "In the world of crypto..."
+- Any sentence starting with "Noticed that..."
 - Any sentence ending with "...what do you think?"
+- Any sentence starting with "As a trader..."
+- Calling yourself a trader in the third person
+
+WHAT MAKES A GREAT KOL POST:
+- Has a specific point of view, not just a fact
+- Reader learns something or feels something — they don't just see information
+- Sounds like it was typed fast, not written carefully
+- The opinion is clear even if the data is thin
+- It ends when the thought ends — not when you run out of words
 
 Write ONLY the tweet text. No quotes. No label. No explanation."""
 
@@ -2225,7 +2276,7 @@ POST_SCHEDULE = [
     (7, 30, 'tradehub_promo'),      # promo 3 - Asia morning / EU pre-market
     (8, 30, 'quick_ta'),
     (9, 45, 'featured_coin'),
-    (10, 30, 'tradehub_promo'),     # promo 4 - EU morning
+    (10, 30, 'market_take'),        # hot take - EU morning
     (11, 0, 'early_gainer'),
     (12, 15, 'memecoin'),
     (13, 30, 'tradehub_promo'),     # promo 5 - EU midday / US pre-market
@@ -2234,7 +2285,7 @@ POST_SCHEDULE = [
     (16, 0, 'tradehub_promo'),      # promo 6 - US morning
     (16, 45, 'quick_ta'),
     (17, 30, 'memecoin'),
-    (18, 45, 'tradehub_promo'),     # promo 7 - US afternoon
+    (18, 45, 'market_take'),        # hot take - US afternoon
     (20, 0, 'featured_coin'),
     (21, 15, 'early_gainer'),
     (22, 0, 'tradehub_promo'),      # promo 8 - US evening
@@ -2264,6 +2315,7 @@ def get_twitter_schedule() -> Dict:
         'high_viewing': '🔥 High Viewing',
         'bitunix_campaign': '💰 Bitunix Campaign',
         'tradehub_promo': '🏆 TradeHub Leaderboard',
+        'market_take': '💭 Market Hot Take',
     }
     
     schedule_info = []
@@ -2505,7 +2557,7 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
     try:
         # For every market post, append a strategy/website CTA so every tweet
         # drives traffic to tradehubmarkets.com — skip promo types that already do this.
-        if post_type not in ('tradehub_promo', 'bitunix_campaign'):
+        if post_type not in ('tradehub_promo', 'market_take', 'bitunix_campaign'):
             _orig_pt = account_poster.post_tweet
             def _cta_pt(text, media_ids=None, _o=_orig_pt):
                 return _o(_maybe_strategy_cta(text), media_ids)
@@ -2769,6 +2821,9 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
         
         elif post_type == 'tradehub_promo':
             return await post_tradehub_promo(account_poster)
+
+        elif post_type == 'market_take':
+            return await post_market_take(account_poster)
 
         elif post_type == 'bitunix_campaign':
             return await post_bitunix_campaign(account_poster)
@@ -4193,6 +4248,9 @@ async def post_for_social_account(
     elif post_type == 'tradehub_promo':
         return await post_tradehub_promo(account_poster)
 
+    elif post_type == 'market_take':
+        return await post_market_take(account_poster)
+
     elif post_type == 'memecoin':
         return await post_memecoin(account_poster)
 
@@ -4767,19 +4825,204 @@ async def _fetch_leaderboard_strategies(limit: int = 3) -> List[Dict]:
         return []
 
 
+async def post_market_take(account_poster) -> Optional[Dict]:
+    """
+    Post a pure KOL hot take about the current market — no specific coin required.
+    Covers macro observations, trading psychology, market structure, cycle sentiment.
+    These are the posts KOLs are known for: opinionated, conversational, screenshot-worthy.
+    """
+    try:
+        # Fetch BTC price and 24h change for context
+        btc_price = None
+        btc_change = None
+        dominance = None
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=8.0) as _cl:
+                r = await _cl.get(
+                    "https://api.coingecko.com/api/v3/coins/markets",
+                    params={"vs_currency": "usd", "ids": "bitcoin", "sparkline": False}
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    if data:
+                        btc_price  = data[0].get("current_price", 0)
+                        btc_change = data[0].get("price_change_percentage_24h", 0)
+        except Exception:
+            pass
+
+        # Pick a topic angle
+        topic_angles = [
+            "market_cycle_take",    # where are we in the cycle
+            "trading_psychology",   # a real lesson about trader behavior
+            "risk_reality",         # hard truth about risk / sizing
+            "crypto_vs_stock",      # contrast with tradfi
+            "narrative_shift",      # which narratives are changing
+            "discipline_take",      # something about rules vs feelings
+            "market_structure",     # observation about current price action
+            "patience_lesson",      # waiting for the setup
+            "contrarian_view",      # against the crowd take
+            "late_night_thought",   # philosophical / reflective
+        ]
+        angle = random.choice(topic_angles)
+
+        btc_ctx = ""
+        if btc_price and btc_change is not None:
+            sign = "+" if btc_change >= 0 else ""
+            btc_ctx = f"BTC is at ${btc_price:,.0f}, {sign}{btc_change:.1f}% in the last 24h. "
+
+        time_ctx = get_time_context()
+        day_ctx  = get_day_context()
+
+        angle_prompts = {
+            "market_cycle_take": (
+                f"{btc_ctx}Write a tweet with your current read on where we are in the market cycle. "
+                f"Not a prediction — an observation. Something you've noticed in the data, the sentiment, "
+                f"or the behavior of other market participants. Time: {time_ctx['period']} on a {day_ctx['day']}."
+            ),
+            "trading_psychology": (
+                f"{btc_ctx}Write a tweet about a specific pattern in trader psychology you've observed — "
+                f"how people behave near tops, near bottoms, or during sideways chop. "
+                f"Something real, not a motivational quote. Make it specific and a little uncomfortable."
+            ),
+            "risk_reality": (
+                f"{btc_ctx}Write a tweet with a hard, specific truth about risk management that most people "
+                f"either don't know or refuse to apply. Not generic advice. An actual position on something."
+            ),
+            "crypto_vs_stock": (
+                f"{btc_ctx}Write a tweet contrasting something about crypto markets vs traditional finance. "
+                f"Something you've genuinely noticed — in volatility, behavior, timing, or sentiment. "
+                f"Not preachy. Just an observation that makes people think."
+            ),
+            "narrative_shift": (
+                f"{btc_ctx}Write a tweet about a narrative in crypto that is either gaining or losing momentum right now. "
+                f"What changed? Who's wrong? What does the market actually seem to care about vs what CT says it cares about?"
+            ),
+            "discipline_take": (
+                f"{btc_ctx}Write a tweet about trading discipline — what it actually means in practice, "
+                f"not what it sounds like in productivity content. A real moment or rule you've come to rely on."
+            ),
+            "market_structure": (
+                f"{btc_ctx}Write a tweet about something you're seeing in the current market structure. "
+                f"Could be liquidity, ranging, compression, or a breakout setup in the macro. "
+                f"Technical but conversational — like texting someone who trades."
+            ),
+            "patience_lesson": (
+                f"{btc_ctx}Write a tweet about the cost of impatience in trading. "
+                f"Not a lesson — a specific observation about what happens when you don't wait for the setup. "
+                f"Make it personal or relatable. Time: {time_ctx['period']}."
+            ),
+            "contrarian_view": (
+                f"{btc_ctx}Write a tweet with a view that goes against the current consensus in crypto Twitter. "
+                f"Not contrarian for the sake of it — something you actually believe that most people disagree with. "
+                f"Back it up in one sentence."
+            ),
+            "late_night_thought": (
+                f"{btc_ctx}It's {time_ctx['period']}. Write a reflective, honest tweet about trading — "
+                f"what it actually takes, what you got wrong, what surprised you. "
+                f"The kind of thought that comes when the market is quiet and you have time to think. "
+                f"Not inspirational. Just real."
+            ),
+        }
+
+        market_take_system = (
+            "You are a crypto KOL — someone with years of experience who posts honest, opinionated takes on X/Twitter. "
+            "You are not a news account, not a signals provider, not a coach. "
+            "People follow you because you say things they were already thinking but couldn't articulate. "
+            "Your posts are lowercase, never use hashtags or emojis, never end with a question for engagement. "
+            "You write the way someone talks to themselves — direct, slightly tired of the noise, occasionally sharp. "
+            "A great market take post: says one specific thing clearly, has an actual opinion, sounds like it was typed in 60 seconds."
+        )
+
+        ai_prompt = f"""{angle_prompts[angle]}
+
+HARD RULES:
+- No hashtags, no emojis, no exclamation marks
+- No "NFA", "DYOR", "LFG", "gm", "ngmi"
+- No engagement bait ("what do you think?", "agree?", "follow for more")
+- No generic motivational language ("stay disciplined", "trust the process")
+- Lowercase except $BTC and other coin tickers
+- Max 240 characters — stop when the thought is complete
+- One clear opinion, not a list of observations
+- Sound like a person with a point of view, not a content creator
+
+WHAT SEPARATES GREAT FROM MEDIOCRE:
+- Great: says something specific and slightly uncomfortable
+- Mediocre: says something vague that could apply to any market at any time
+- Great: the reader feels seen or challenged
+- Mediocre: the reader nods and scrolls
+
+Write ONLY the tweet text."""
+
+        tweet_text = await _call_grok_tweet(
+            ai_prompt, max_chars=240,
+            label=f"market_take/{angle}",
+            system=market_take_system,
+        )
+
+        # Fallback takes — opinionated, not generic
+        if not tweet_text:
+            fallbacks = [
+                f"{btc_ctx or 'market is quiet. '}the people panicking have the same portfolio as the people celebrating. different entry prices, same coins. sizing is everything",
+                f"the most expensive trade isn't the one you lost. it's the one you sized too big on and had to close too early because you couldn't breathe",
+                f"crypto twitter has a consensus opinion on every coin at any given time. the consensus is wrong at inflection points more often than it's right",
+                f"there's a version of 'doing your research' that's just reading other people's takes until you feel confident. that's not research",
+                f"the market doesn't care about your cost basis. this is obvious and yet it shapes almost every bad decision people make",
+                f"most people enter positions based on conviction and exit based on emotion. that's the whole game in one sentence",
+                f"{btc_ctx or ''}the alts that lead the next leg up almost never come from the names everyone is talking about right now",
+                f"patience in a ranging market is a skill. it's also incredibly boring. the two things are related",
+            ]
+            tweet_text = random.choice(fallbacks)
+
+        result = account_poster.post_tweet(tweet_text)
+
+        if result and result.get('success'):
+            logger.info(f"✅ Market take [{angle}] posted: {tweet_text[:60]}...")
+        else:
+            logger.warning(f"Market take post failed: {result}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error posting market take: {e}")
+        return {'success': False, 'error': str(e)}
+
+
 async def post_tradehub_promo(account_poster) -> Optional[Dict]:
-    """Post a branded TradeHub leaderboard card with live strategy stats and a hot ticker hook."""
+    """
+    Post organic-sounding KOL content about automated strategy performance.
+    Each post picks a random angle — results, builder story, leaderboard observation,
+    automation take, honest review, or contrarian — and sounds like a real trader
+    who uses the platform, not an ad.
+    """
     try:
         strategies = await _fetch_leaderboard_strategies(3)
-
         if not strategies:
-            logger.warning("No strategies available for TradeHub promo post")
+            logger.warning("No strategies for tradehub promo post")
             return None
 
-        # ── Build image card ─────────────────────────────────────────────────
-        image_bytes = await asyncio.to_thread(generate_tradehub_card_image, strategies)
+        top = strategies[0]
+        top_name = top["name"]
+        top_pnl  = top["total_pnl"]
+        top_wr   = top["win_rate"]
+        top_trades = top.get("total_trades", 0)
+        pnl_sign = "+" if top_pnl >= 0 else ""
 
-        # ── Fetch live top gainer as the attention hook ───────────────────────
+        # Collect tickers used by top strategies
+        all_tickers = []
+        for s in strategies:
+            for t in s.get("tickers", []):
+                if t != "CRYPTO" and t not in all_tickers:
+                    all_tickers.append(t)
+        ticker_list = [f"${t}" for t in all_tickers[:4]]
+        ticker_str  = " ".join(ticker_list)
+
+        # Second/third strategy stats for comparison posts
+        second = strategies[1] if len(strategies) > 1 else None
+        second_pnl  = second["total_pnl"] if second else None
+        second_name = second["name"]     if second else None
+
+        # Live market hook (optional)
         hook_symbol = None
         hook_change = None
         try:
@@ -4791,8 +5034,7 @@ async def post_tradehub_promo(account_poster) -> Optional[Dict]:
                             "per_page": 10, "page": 1, "sparkline": False}
                 )
                 if r.status_code == 200:
-                    data = r.json()
-                    for coin in data:
+                    for coin in r.json():
                         chg = coin.get("price_change_percentage_24h", 0) or 0
                         sym = coin.get("symbol", "").upper()
                         vol = coin.get("total_volume", 0) or 0
@@ -4803,55 +5045,126 @@ async def post_tradehub_promo(account_poster) -> Optional[Dict]:
         except Exception:
             pass
 
-        # ── Collect tickers from top strategies ──────────────────────────────
-        all_tickers = []
-        for s in strategies:
-            for t in s.get("tickers", []):
-                if t != "CRYPTO" and t not in all_tickers:
-                    all_tickers.append(t)
-        ticker_str = " ".join(f"${t}" for t in all_tickers[:5])
+        # Build image card
+        image_bytes = await asyncio.to_thread(generate_tradehub_card_image, strategies)
 
-        top = strategies[0]
-        top_name = top["name"]
-        top_pnl  = top["total_pnl"]
-        top_wr   = top["win_rate"]
-        pnl_sign = "+" if top_pnl >= 0 else ""
+        # ── Pick one of 8 organic angles ─────────────────────────────────────
+        angles = [
+            "algo_result",         # my algo caught this while I was offline
+            "builder_story",       # built a strategy and watched it run
+            "leaderboard_data",    # observing leaderboard with genuine curiosity
+            "automation_take",     # opinion on why automation beats manual
+            "honest_stats",        # real numbers, good and bad
+            "revenue_observation", # someone is earning from their strategy
+            "contrarian_pitch",    # signal groups vs rule-based automation
+            "comparison_take",     # two strategies, different approaches
+        ]
+        # Weighted — some angles are more natural/common
+        weights = [20, 15, 15, 12, 12, 10, 10, 6]
+        angle = random.choices(angles, weights=weights, k=1)[0]
 
-        # ── Hook prefix using live gainer ─────────────────────────────────────
-        hook = ""
-        if hook_symbol and hook_change:
-            hooks = [
-                f"${hook_symbol} up +{hook_change:.1f}% right now.",
-                f"${hook_symbol} +{hook_change:.1f}% today.",
-                f"${hook_symbol} moving +{hook_change:.1f}%.",
-            ]
-            hook = random.choice(hooks) + " "
+        coin_hook_ctx = f"${hook_symbol} is up +{hook_change:.1f}% right now. " if hook_symbol and hook_change else ""
+        ticker_hook   = f"${hook_symbol}" if hook_symbol else (ticker_list[0] if ticker_list else "$BTC")
 
-        # ── AI-generated tweet ───────────────────────────────────────────────
-        tl = _pick_tweet_length()
-        hook_context = f"The coin ${hook_symbol} is up +{hook_change:.1f}% right now — use this as the opening hook. " if hook_symbol else ""
-        ai_prompt = (
-            f"Write a natural, human Twitter post (no hashtag spam, no emoji overload) "
-            f"promoting tradehubmarkets.com — a free platform to build automated crypto strategies. "
-            f"{hook_context}"
-            f"The top strategy on the leaderboard is '{top_name}' — {pnl_sign}{top_pnl:.1f}% P&L, {top_wr:.0f}% win rate. "
-            f"Mention {ticker_str}. Anyone can build a strategy free and earn 80% revenue selling it. "
-            f"Length: {tl}. Max 240 chars. Include tradehubmarkets.com. Sound like a real trader, not an ad."
+        angle_contexts = {
+            "algo_result": (
+                f"Context: {coin_hook_ctx}Your automated strategy '{top_name}' caught moves like this while you were offline. "
+                f"It's currently at {pnl_sign}{top_pnl:.1f}% P&L across {top_trades} trades, {top_wr:.0f}% win rate. "
+                f"Write a tweet that shares this result the way you'd text a friend — not a product pitch, just a real moment. "
+                f"Mention tradehubmarkets.com casually at the end, like you would if someone asked where you built it."
+            ),
+            "builder_story": (
+                f"Context: You spent time building an automated strategy on tradehubmarkets.com and it's been running since. "
+                f"'{top_name}': {pnl_sign}{top_pnl:.1f}% P&L, {top_wr:.0f}% win rate, {top_trades} trades. "
+                f"Write a tweet about the psychology of trusting a system you built — watching it make decisions without you. "
+                f"It can be reflective, slightly philosophical. Mention tradehubmarkets.com once, naturally. Not an ad."
+            ),
+            "leaderboard_data": (
+                f"Context: There's a public leaderboard of automated strategies at tradehubmarkets.com and you find it genuinely interesting. "
+                f"Top strategy '{top_name}': {pnl_sign}{top_pnl:.1f}%, {top_wr:.0f}% win rate, {top_trades} trades. "
+                f"Tickers it trades: {ticker_str}. "
+                f"Write a tweet that's observational and data-curious — like you noticed something worth sharing. "
+                f"Not a pitch. Just: 'here's what I saw in the data and what I think about it'."
+            ),
+            "automation_take": (
+                f"Context: {coin_hook_ctx}You have a hot take about why automated rule-based strategies beat discretionary trading on certain setups. "
+                f"Your strategy has done {pnl_sign}{top_pnl:.1f}% across {top_trades} trades. "
+                f"Write a tweet with a clear, specific opinion. No both-sidesing. Pick a lane and argue it. "
+                f"Mention tradehubmarkets.com as the platform you use, like a practical recommendation."
+            ),
+            "honest_stats": (
+                f"Context: You're sharing real numbers from your automated strategy, including the losses. "
+                f"'{top_name}': {pnl_sign}{top_pnl:.1f}% overall, {top_wr:.0f}% win rate — which means {100-top_wr:.0f}% of trades lose. "
+                f"Write a tweet that's transparent about both the wins and the losses. "
+                f"Real traders respect honesty. Mention tradehubmarkets.com once, factually."
+            ),
+            "revenue_observation": (
+                f"Context: On tradehubmarkets.com, when someone copies your strategy, you earn 80% of their subscription fee. "
+                f"The top strategy '{top_name}' has {top_trades} trades at {pnl_sign}{top_pnl:.1f}%. "
+                f"Write a tweet observing this dynamic — someone built a thing that works, and now it generates income for them passively. "
+                f"Frame it as an interesting market observation, not a sales pitch."
+            ),
+            "contrarian_pitch": (
+                f"Context: {coin_hook_ctx}Most crypto traders use paid signal groups or manual discretion. "
+                f"You use automated rule-based strategies on tradehubmarkets.com. "
+                f"'{top_name}': {pnl_sign}{top_pnl:.1f}%, {top_wr:.0f}% win rate. "
+                f"Write a tweet that makes the case for rule-based over signals — from a position of experience, not superiority. "
+                f"Contrarian but not preachy. Specific but not exhaustive."
+            ),
+            "comparison_take": (
+                f"Context: You're watching two strategies on tradehubmarkets.com and the contrast is interesting. "
+                f"'{top_name}': {pnl_sign}{top_pnl:.1f}%, {top_wr:.0f}% win rate. "
+                + (f"'{second_name}': {'+' if second_pnl >= 0 else ''}{second_pnl:.1f}%. " if second else "")
+                + f"Both trade {ticker_str}. "
+                f"Write a tweet about what the difference tells you — different rules, different outcomes, same market. "
+                f"Genuine data observation. Mention tradehubmarkets.com as where the leaderboard lives."
+            ),
+        }
+
+        promo_system = (
+            "You are a crypto trader and KOL who has been using tradehubmarkets.com to build and run automated strategies. "
+            "You post on X/Twitter in a voice that is direct, lowercase, slightly dry, never hype. "
+            "When you mention tradehubmarkets.com, it sounds like a recommendation from someone who genuinely uses it. "
+            "You never use hashtags, emojis, or exclamation marks. You never sound like an ad. "
+            "Your posts are read by serious traders who will immediately dismiss anything that feels manufactured. "
+            "Write the way you'd text someone in a private group — honest, specific, occasionally self-deprecating."
         )
-        tweet_text = await _call_grok_tweet(ai_prompt, max_chars=240, label="tradehub_promo")
 
-        # ── Fallback tweet templates ─────────────────────────────────────────
+        ai_prompt = f"""{angle_contexts[angle]}
+
+HARD RULES:
+- No hashtags, no emojis, no exclamation marks
+- No "don't miss", "huge", "moon", "gem", "NFA", "DYOR", "LFG"
+- No engagement bait ("what do you think?", "follow for more")
+- Lowercase except $TICKERS and tradehubmarkets.com
+- Max 240 characters
+- One mention of tradehubmarkets.com — that's it
+- Sound like a real person, not a marketing team
+- End when the thought ends
+
+Write ONLY the tweet text."""
+
+        tweet_text = await _call_grok_tweet(
+            ai_prompt, max_chars=240,
+            label=f"tradehub_promo/{angle}",
+            system=promo_system,
+        )
+
+        # Fallback templates — still organic, not ad-copy
         if not tweet_text:
-            templates = [
-                f"{hook}built a strategy to catch moves like this. leaderboard #1 is {pnl_sign}{top_pnl:.1f}% all time. {ticker_str}. build yours free → tradehubmarkets.com",
-                f"{hook}strategy leaderboard is running. {top_name} at {pnl_sign}{top_pnl:.1f}% with {top_wr:.0f}% win rate. {ticker_str}. build yours at tradehubmarkets.com",
-                f"{hook}my algo catches moves like this automatically. top strategy: {pnl_sign}{top_pnl:.1f}% all-time. free to build at tradehubmarkets.com",
-                f"if you trade {ticker_str} you need this. automated strategies, live leaderboard, 80% revenue share. free to build → tradehubmarkets.com",
-                f"{hook}this is exactly what I automate. strategy leaderboard is live. build one for free → tradehubmarkets.com",
-            ]
-            tweet_text = random.choice(templates)
+            fallbacks = {
+                "algo_result":         f"{coin_hook_ctx}my strategy already had this flagged. {pnl_sign}{top_pnl:.1f}% running all-time. tradehubmarkets.com",
+                "builder_story":       f"built '{top_name}' months ago and let it run. {pnl_sign}{top_pnl:.1f}% later. trusting your own rules is the hardest skill. tradehubmarkets.com",
+                "leaderboard_data":    f"leaderboard at tradehubmarkets.com has some interesting data. top strategy: {pnl_sign}{top_pnl:.1f}% across {top_trades} trades, {top_wr:.0f}% win rate. not a fund. just rules",
+                "automation_take":     f"discretionary trading is a full-time job. my algo on tradehubmarkets.com works when I don't. {pnl_sign}{top_pnl:.1f}% all-time",
+                "honest_stats":        f"{pnl_sign}{top_pnl:.1f}% overall. {top_wr:.0f}% win rate means {100-top_wr:.0f}% lose. that's what real strategy data looks like. tradehubmarkets.com",
+                "revenue_observation": f"someone built '{top_name}' on tradehubmarkets.com. {pnl_sign}{top_pnl:.1f}% P&L. others copy it, creator earns 80%. interesting model",
+                "contrarian_pitch":    f"signal groups sell calls. tradehubmarkets.com lets you build rules that execute automatically. fundamentally different. {pnl_sign}{top_pnl:.1f}% leaderboard top right now",
+                "comparison_take":     f"two strategies on tradehubmarkets.com, same coins, different rules, different outcomes. the gap in the data is the interesting part",
+            }
+            tweet_text = fallbacks.get(angle, fallbacks["leaderboard_data"])
 
-        # ── Upload image and post ────────────────────────────────────────────
+        # Upload image and post
         media_id = None
         if image_bytes:
             try:
@@ -4868,7 +5181,7 @@ async def post_tradehub_promo(account_poster) -> Optional[Dict]:
         result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
 
         if result and result.get('success'):
-            logger.info(f"✅ TradeHub promo posted — {top_name} {pnl_sign}{top_pnl:.1f}% | tickers: {ticker_str}")
+            logger.info(f"✅ TradeHub promo [{angle}] posted — {top_name} {pnl_sign}{top_pnl:.1f}%")
         else:
             logger.warning(f"TradeHub promo post failed: {result}")
 
