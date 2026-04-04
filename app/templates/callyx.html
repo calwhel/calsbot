@@ -130,7 +130,7 @@ body{
   -webkit-tap-highlight-color:transparent;
   overflow:hidden;
   transition:box-shadow 0.15s, transform 0.12s;
-  min-height:72px;
+  min-height:82px;
 }
 
 .link:active{transform:scale(0.977)}
@@ -157,8 +157,10 @@ body{
   flex:1;
   padding:0 12px;
   display:flex;
+  flex-direction:column;
   align-items:center;
   justify-content:center;
+  gap:3px;
 }
 
 .link-title{
@@ -168,6 +170,14 @@ body{
   text-align:center;
   letter-spacing:-0.2px;
   line-height:1.3;
+}
+
+.link-sub{
+  font-size:12px;
+  font-weight:400;
+  color:#888;
+  text-align:center;
+  line-height:1.4;
 }
 
 /* three dots */
@@ -250,6 +260,7 @@ body{
       </div>
       <div class="link-body">
         <span class="link-title">Follow My Trades (Free)</span>
+        <span class="link-sub">Live calls, trade setups &amp; real-time market reads</span>
       </div>
       <div class="dots">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor">
@@ -270,6 +281,7 @@ body{
       </div>
       <div class="link-body">
         <span class="link-title">Start Automation</span>
+        <span class="link-sub">AI strategies run 24/7 — no manual trading needed</span>
       </div>
       <div class="dots">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" color="#bbb">
@@ -291,6 +303,7 @@ body{
       </div>
       <div class="link-body">
         <span class="link-title">Strategy Builder</span>
+        <span class="link-sub">Build, backtest &amp; automate your own strategies</span>
       </div>
       <div class="dots">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" color="#bbb">
@@ -311,6 +324,7 @@ body{
       </div>
       <div class="link-body">
         <span class="link-title">Open Bitunix — Save 70% on Fees</span>
+        <span class="link-sub">Exclusive affiliate link — lower fees, instant signup</span>
       </div>
       <div class="dots">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" color="#bbb">
