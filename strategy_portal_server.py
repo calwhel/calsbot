@@ -707,10 +707,12 @@ body{background:#efefef;font-family:'Inter',-apple-system,BlinkMacSystemFont,san
 </body>
 </html>"""
 
-@app.get("/cryptodictator", response_class=HTMLResponse)
-@app.get("/cd", response_class=HTMLResponse)
+@app.get("/cryptodictator")
+@app.get("/cd")
 async def cryptodictator_page():
-    return HTMLResponse(content=_CRYPTODICTATOR_HTML, status_code=200)
+    from fastapi.responses import Response as _R
+    return _R(content=_CRYPTODICTATOR_HTML, media_type="text/html; charset=utf-8",
+              headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 
 @app.post("/login")
