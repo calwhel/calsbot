@@ -1782,6 +1782,37 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...)):
             StrategyPurchase.status == "active",
         ).first()
         if existing:
+            # If the purchase exists but the cloned strategy was never created
+            # (e.g. old purchases from before this flow was added, or DB errors),
+            # create the strategy now so the user can actually use it.
+            if not existing.cloned_strategy_id:
+                original = db.query(UserStrategy).filter(UserStrategy.id == listing.strategy_id).first()
+                if original:
+                    locked_config = {
+                        "name":                listing.title or original.name,
+                        "direction":           original.config.get("direction", "LONG"),
+                        "risk":                original.config.get("risk", {}),
+                        "exit":                original.config.get("exit", {}),
+                        "filters":             original.config.get("filters", {}),
+                        "universe":            original.config.get("universe", {}),
+                        "_locked":             True,
+                        "_source_strategy_id": listing.strategy_id,
+                        "_listing_id":         listing_id,
+                    }
+                    recovered = UserStrategy(
+                        user_id=user.id,
+                        name=listing.title or original.name,
+                        description=original.description,
+                        config=locked_config,
+                        status="paper",
+                    )
+                    db.add(recovered)
+                    db.commit()
+                    db.refresh(recovered)
+                    from app.strategy_models import StrategyPerformance
+                    db.add(StrategyPerformance(strategy_id=recovered.id))
+                    existing.cloned_strategy_id = recovered.id
+                    db.commit()
             return JSONResponse({"already_owned": True, "cloned_strategy_id": existing.cloned_strategy_id})
 
         if (listing.pricing_model or "free") != "free" and (listing.price_usdt or 0) > 0:
