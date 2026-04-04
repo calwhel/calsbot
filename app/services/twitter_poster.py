@@ -2847,6 +2847,12 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
             return await post_quick_ta(account_poster, main_poster)
         
         elif post_type == 'tradehub_promo':
+            # While the Bitunix campaign is active, every other promo slot
+            # posts a campaign tweet instead so the campaign gets good coverage.
+            _now = datetime.utcnow()
+            _campaign_active = BITUNIX_CAMPAIGN_START <= _now <= BITUNIX_CAMPAIGN_END
+            if _campaign_active and random.random() < 0.5:
+                return await post_bitunix_campaign(account_poster)
             return await post_tradehub_promo(account_poster)
 
         elif post_type == 'market_take':
@@ -4221,6 +4227,10 @@ async def post_for_social_account(
         return await post_early_gainers(account_poster)
 
     elif post_type == 'tradehub_promo':
+        _now = datetime.utcnow()
+        _campaign_active = BITUNIX_CAMPAIGN_START <= _now <= BITUNIX_CAMPAIGN_END
+        if _campaign_active and random.random() < 0.5:
+            return await post_bitunix_campaign(account_poster)
         return await post_tradehub_promo(account_poster)
 
     elif post_type == 'market_take':
@@ -4270,256 +4280,197 @@ async def post_for_social_account(
         return await random.choice(funcs)(account_poster)
 
 
-BITUNIX_CAMPAIGN_IMAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 
-                                       "attached_assets", "IMG_0697_1771526385489.jpeg")
-BITUNIX_CAMPAIGN_LINK = "https://www.bitunix.com/activity/basic/1771470735?vipCode=fgq7"
-BITUNIX_CAMPAIGN_START = datetime(2026, 2, 20)
-BITUNIX_CAMPAIGN_END = datetime(2026, 3, 19, 23, 59, 59)
+BITUNIX_CAMPAIGN_IMAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                                       "attached_assets", "IMG_1209_1775291809770.jpeg")
+BITUNIX_CAMPAIGN_LINK = "https://www.bitunix.com/activity/basic/1774508484?vipCode=fgq74890"
+BITUNIX_CAMPAIGN_START = datetime(2026, 3, 27)
+BITUNIX_CAMPAIGN_END = datetime(2026, 4, 26, 23, 59, 59)
 
 CAMPAIGN_TEMPLATES = [
     {
-        'id': 'launch_fomo',
-        'text': """Bitunix x TradeHub Markets just went LIVE and slots are already disappearing
+        'id': 'low_barrier_entry',
+        'text': """$100 deposit on Bitunix = $100 USDT position voucher free
 
-While {ticker1} {ticker2} {ticker3} are pumping, smart traders are also grabbing deposit bonuses
+100 slots. First come first served.
 
-Up to $400 deposit bonus + $6,000 volume rewards
+Bitunix x TradeHub Markets running until April 26
+Trading {ticker1} {ticker2} anyway — might as well claim it
 
-Only 50 slots at the low tier. 20 at the top. No restock.
-
-{link}
-
-{hashtags}"""
+{link}"""
     },
     {
-        'id': 'urgency_tickers',
-        'text': """People longing {ticker1} and {ticker2} on Bitunix right now are also stacking deposit bonuses
+        'id': 'top_tier_math',
+        'text': """Deposit $2,000 on Bitunix = $1,000 USDT in position vouchers
 
-$400 free on deposits + $6,000 in volume rewards
+That's a 50% bonus just for depositing and holding 9 days
 
-Bitunix x TradeHub Markets
-Slots filling fast. Don't find out when it's too late.
+Only 20 slots at the top tier. No restock.
 
-{link}
+Bitunix x TradeHub Markets — ends April 26
 
-{hashtags}"""
+{link}"""
     },
     {
-        'id': 'fomo_math',
-        'text': """Quick math while {ticker1} pumps:
+        'id': 'volume_rewards_breakdown',
+        'text': """If you're already running volume on {ticker1} {ticker2} {ticker3} perps you're leaving free money on the table
 
-Deposit $1,000 on Bitunix = $200 bonus
-Trade $5M volume = another $300
+$10K vol = 200 USDT BTC voucher
+$50K vol = 300 USDT BTC voucher
+$100K vol = 15 USDT futures bonus
 
-That's $500 FREE on top of your {ticker1} gains
+Bitunix x TradeHub Markets. Ends April 26.
 
-Bitunix x TradeHub Markets
-Deposit slots almost gone. Ends Mar 19.
-
-{link}
-
-{hashtags}"""
+{link}"""
     },
     {
-        'id': 'volume_flex',
-        'text': """If you're already doing volume on {ticker1} {ticker2} {ticker3} perps you're literally leaving money on the table
+        'id': 'stack_both',
+        'text': """Deposit bonus + volume rewards on Bitunix stack independently
 
-250K vol = $20
-5M vol = $300
-50M vol = $3,000
-100M vol = $6,000
+Put in $1,000 = 2×250 USDT vouchers
+Run $50K volume = another 300 USDT BTC voucher
+
+You're already trading {ticker1}. Both rewards apply at once.
 
 Bitunix x TradeHub Markets
-Stop trading for free.
 
-{link}
-
-{hashtags}"""
+{link}"""
     },
     {
-        'id': 'social_proof',
-        'text': """Traders already claimed 60%+ of the deposit bonus slots on Bitunix
+        'id': 'scarcity_slots',
+        'text': """Slot count for the Bitunix x TradeHub campaign:
 
-$400 deposit match + $6,000 volume rewards
+$100 tier = 100 slots
+$500 tier = 50 slots
+$1,000 tier = 30 slots
+$2,000 tier = 20 slots
 
-While you're watching {ticker1} charts, others are getting paid to trade it.
+Slots are the constraint here, not the end date.
+{ticker1} {ticker2} traders already moving in.
 
-Bitunix x TradeHub Markets
-Ends Mar 19. Top tiers almost full.
-
-{link}
-
-{hashtags}"""
+{link}"""
     },
     {
-        'id': 'perps_angle',
-        'text': """You're already trading {ticker1} and {ticker2} perps
+        'id': 'fomo_ticker_hook',
+        'text': """{ticker1} up {pct1}% and {ticker2} up {pct2}% today
 
-Why not get paid an extra $400 deposit bonus + $6,000 volume rewards for doing the same thing
+Traders catching those moves on Bitunix are also collecting deposit bonuses on top
 
-Bitunix x TradeHub Markets
-Limited slots. First come first served.
+Up to $1,000 USDT in vouchers for new deposits
+Volume rewards on top of that
 
-{link}
+Bitunix x TradeHub Markets — April 26
 
-{hashtags}"""
+{link}"""
     },
     {
-        'id': 'regret_fomo',
-        'text': """Every day you wait is a day someone else takes your deposit bonus slot
+        'id': 'perps_trader_angle',
+        'text': """You're already longing {ticker1} and {ticker2} perps somewhere
 
-$2,000 tier = $400 free (only 20 slots left)
-$1,000 tier = $200 free (going fast)
+If it's Bitunix, you qualify for up to $1,000 USDT in deposit vouchers this month
 
-Plus up to $6,000 volume rewards on top
+New user deposit campaign live now — 27 March to 26 April
 
 Bitunix x TradeHub Markets
-Don't be the one saying I should've signed up
 
-{link}
-
-{hashtags}"""
+{link}"""
     },
     {
-        'id': 'whale_degen',
-        'text': """Degen or whale doesn't matter
+        'id': 'low_barrier_v2',
+        'text': """Entry level on this campaign is $100
 
-$100 deposit = $20 bonus
-$2,000 deposit = $400 bonus
-Volume rewards scale to $6,000
+Hold it 3 days. Get a 100 USDT BTC position voucher back.
 
-{ticker1} {ticker2} {ticker3} all tradeable on Bitunix with up to 125x leverage
+There are 100 slots at that tier. Not "limited" as marketing. Literally 100.
 
 Bitunix x TradeHub Markets
-Slots are first come. No extensions.
+{ticker1} {ticker2} both tradeable on there.
 
-{link}
+{link}"""
+    },
+    {
+        'id': 'btc_voucher_angle',
+        'text': """The volume rewards on this Bitunix campaign pay out in BTC position vouchers
 
-{hashtags}"""
+$10K in volume = 200 USDT BTC voucher
+$50K in volume = 300 USDT BTC voucher
+
+Meaning you get leveraged BTC exposure for free just by trading {ticker1} {ticker2} {ticker3}
+
+Ends April 26. Bitunix x TradeHub Markets
+
+{link}"""
+    },
+    {
+        'id': 'regret_frame',
+        'text': """The 20 slots at the $2,000 deposit tier go first every campaign
+
+$1,000 USDT in position vouchers for one deposit and a 9 day hold
+
+When those slots go they're gone. No waitlist. No second round.
+
+Bitunix x TradeHub Markets — runs until April 26
+
+{link}"""
     },
     {
         'id': 'night_grind',
-        'text': """3am degen session trading {ticker1}?
+        'text': """grinding {ticker1} positions at 3am anyway
 
-Might as well collect $400 in deposit bonuses and $6,000 in volume rewards while you're at it
+might as well be collecting deposit bonuses and volume rewards at the same time
 
-Bitunix x TradeHub Markets
-Campaign ends Mar 19. Slots won't last.
+Bitunix x TradeHub Markets. $100 minimum. 100 slots at that tier. ends April 26
 
-{link}
-
-{hashtags}"""
+{link}"""
     },
     {
-        'id': 'countdown_panic',
-        'text': """Campaign clock is ticking and deposit slots keep disappearing
+        'id': 'comparison_exchange',
+        'text': """Other exchanges take fees to trade {ticker1}
 
-$400 bonus slots = almost gone
-$200 bonus slots = going fast
-Volume rewards up to $6,000 = still available
+Bitunix is paying new users to trade it
 
-{ticker1} traders are already in. Are you?
+$100 minimum deposit. Volume rewards on top. Campaign runs through April 26.
 
-Bitunix x TradeHub Markets
-Ends March 19. No extensions.
+Bitunix x TradeHub Markets — limited slots across all tiers
 
-{link}
-
-{hashtags}"""
+{link}"""
     },
     {
-        'id': 'comparison_brutal',
-        'text': """Your current exchange charges you fees to trade {ticker1}
+        'id': 'honest_observation',
+        'text': """I usually ignore exchange campaigns
 
-Bitunix is PAYING you to trade it
+This one is different because the volume rewards apply to trades you'd be doing anyway
 
-$400 deposit bonus + $6,000 volume rewards
+$10K vol on {ticker1} {ticker2} perps = 200 USDT BTC voucher. No extra steps.
 
-Bitunix x TradeHub Markets
-Switch now before slots run out.
+Bitunix x TradeHub Markets — ends April 26
 
-{link}
-
-{hashtags}"""
+{link}"""
     },
     {
-        'id': 'stack_rewards',
-        'text': """The rewards stack and it's insane
+        'id': 'whale_tier',
+        'text': """For the bigger accounts running volume on Bitunix:
 
-Deposit $2,000 = $400 bonus
-Trade your way to $6,000 more
+$500K volume = 30 USDT futures bonus
+$1M volume = 60 USDT futures bonus
+$5M volume = 300 USDT futures bonus
 
-That's $6,400 FREE on top of your {ticker1} and {ticker2} PnL
+Plus deposit rewards on top if you haven't claimed those
 
-Bitunix x TradeHub Markets
-Limited time. Limited slots. No second chances.
+Bitunix x TradeHub Markets. {ticker1} {ticker2} {ticker3} all there.
 
-{link}
-
-{hashtags}"""
+{link}"""
     },
     {
-        'id': 'scarcity',
-        'text': """Slot count update:
+        'id': 'simple_cta',
+        'text': """Bitunix x TradeHub Markets campaign is live
 
-$2,000 tier ($400 bonus) = only 20 slots total
-$1,000 tier ($200 bonus) = 30 slots
-$500 tier ($100 bonus) = 50 slots
+Deposit rewards up to $1,000 USDT in vouchers
+Volume rewards up to $300 USDT BTC position
 
-These are filling every day. Not a drill.
+{ticker1} {ticker2} {ticker3} all available on there
+Runs until April 26. Slots fill by tier.
 
-Trade {ticker1} {ticker2} {ticker3} on Bitunix and get rewarded
-
-{link}
-
-{hashtags}"""
-    },
-    {
-        'id': 'gains_angle',
-        'text': """{ticker1} up {pct1}% today
-{ticker2} up {pct2}% today
-
-Imagine catching those moves AND getting a $400 deposit bonus on top
-
-Bitunix x TradeHub Markets
-$6,000 volume rewards still up for grabs
-
-Slots running out. Don't sleep.
-
-{link}
-
-{hashtags}"""
-    },
-    {
-        'id': 'no_brainer_v2',
-        'text': """This shouldn't even be a question
-
-Deposit on Bitunix = free money ($400 max)
-Trade on Bitunix = more free money ($6,000 max)
-
-{ticker1} {ticker2} {ticker3} all available with leverage
-
-Bitunix x TradeHub Markets
-Campaign ends Mar 19. Claim your slot NOW.
-
-{link}
-
-{hashtags}"""
-    },
-    {
-        'id': 'last_call',
-        'text': """Last call for the good tiers
-
-$400 deposit bonus slots almost gone
-$6,000 volume rewards still available
-
-If you're trading {ticker1} or {ticker2} anywhere else you're doing it wrong
-
-Bitunix x TradeHub Markets
-
-{link}
-
-{hashtags}"""
+{link}"""
     },
 ]
 
