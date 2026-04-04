@@ -3,17 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#f4f6f8">
+<meta name="theme-color" content="#efefef">
 <title>CallyX</title>
 <meta name="description" content="Follow my live trades. 400+ traders. Systematic crypto on Bitunix.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
 body{
-  background:#f4f6f8;
+  background:#efefef;
   font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
   -webkit-font-smoothing:antialiased;
   min-height:100vh;
@@ -23,332 +23,298 @@ body{
 
 .page{
   width:100%;
-  max-width:400px;
-  padding:60px 20px 64px;
+  max-width:480px;
+  padding:44px 16px 64px;
   display:flex;
   flex-direction:column;
+  align-items:center;
 }
 
-/* ── HEADER ── */
-.header{
-  margin-bottom:44px;
+/* ── PROFILE ── */
+.avatar{
+  width:88px;height:88px;
+  border-radius:50%;
+  background:#fff;
+  border:3px solid #fff;
+  box-shadow:0 2px 12px rgba(0,0,0,0.10);
+  display:flex;align-items:center;justify-content:center;
+  margin-bottom:14px;
+  flex-shrink:0;
 }
 
-.wordmark{
-  font-size:42px;
-  font-weight:900;
-  letter-spacing:-2px;
-  color:#0f172a;
-  line-height:1;
+.name{
+  font-size:26px;
+  font-weight:800;
+  color:#111;
+  letter-spacing:-0.6px;
+  text-align:center;
   margin-bottom:10px;
+  line-height:1.2;
 }
 
-.tagline{
-  font-size:16px;
+.bio{
+  font-size:14px;
   font-weight:400;
-  color:#64748b;
-  line-height:1.5;
-  margin-bottom:20px;
+  color:#555;
+  text-align:center;
+  line-height:1.6;
+  max-width:300px;
+  margin-bottom:18px;
 }
 
-.tagline strong{
-  color:#0f172a;
-  font-weight:600;
-}
-
+/* live count */
 .live{
   display:inline-flex;
   align-items:center;
-  gap:8px;
-  font-size:13.5px;
+  gap:6px;
+  font-size:13px;
   font-weight:500;
-  color:#475569;
+  color:#555;
+  margin-bottom:28px;
 }
 
 .live-dot{
-  width:8px;height:8px;border-radius:50%;
-  background:#16a34a;
+  width:7px;height:7px;border-radius:50%;
+  background:#22c55e;
   flex-shrink:0;
-  animation:livepulse 2.4s ease-in-out infinite;
+  animation:blink 2.4s ease-in-out infinite;
 }
 
-@keyframes livepulse{
-  0%,100%{opacity:1}
-  50%{opacity:0.45}
+@keyframes blink{
+  0%,100%{opacity:1}50%{opacity:.4}
 }
 
-.live strong{
-  color:#16a34a;
-  font-weight:700;
+.live strong{color:#16a34a;font-weight:700}
+
+/* social icons */
+.socials{
+  display:flex;
+  gap:18px;
+  margin-bottom:32px;
 }
 
-/* ── CARDS ── */
-.cards{
+.soc-icon{
+  width:36px;height:36px;
+  border-radius:50%;
+  background:#fff;
+  box-shadow:0 1px 4px rgba(0,0,0,0.10);
+  display:flex;align-items:center;justify-content:center;
+  color:#333;
+  text-decoration:none;
+  transition:box-shadow 0.15s, transform 0.12s;
+}
+
+.soc-icon:active{transform:scale(0.92)}
+@media(hover:hover){
+  .soc-icon:hover{box-shadow:0 3px 10px rgba(0,0,0,0.16)}
+}
+
+/* ── LINK CARDS ── */
+.links{
+  width:100%;
   display:flex;
   flex-direction:column;
-  gap:14px;
-  margin-bottom:48px;
+  gap:12px;
 }
 
-.card{
+.link{
+  width:100%;
   display:flex;
   align-items:center;
-  gap:16px;
-  padding:20px 20px;
-  border-radius:16px;
   background:#fff;
-  border:1px solid #e2e8f0;
-  box-shadow:0 1px 3px rgba(15,23,42,0.06), 0 1px 2px rgba(15,23,42,0.04);
+  border-radius:16px;
+  box-shadow:0 1px 4px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
   text-decoration:none;
   color:inherit;
   cursor:pointer;
   -webkit-tap-highlight-color:transparent;
-  transition:box-shadow 0.15s, transform 0.12s, border-color 0.15s;
+  overflow:hidden;
+  transition:box-shadow 0.15s, transform 0.12s;
+  min-height:72px;
 }
 
-.card:active{transform:scale(0.977)}
+.link:active{transform:scale(0.977)}
 
 @media(hover:hover){
-  .card:hover{
-    border-color:#cbd5e1;
-    box-shadow:0 4px 12px rgba(15,23,42,0.10), 0 1px 3px rgba(15,23,42,0.06);
+  .link:hover{
+    box-shadow:0 4px 14px rgba(0,0,0,0.13), 0 1px 4px rgba(0,0,0,0.06);
   }
 }
 
-/* icon */
-.c-icon{
-  width:44px;height:44px;
-  border-radius:12px;
-  background:#f8fafc;
-  border:1px solid #e2e8f0;
-  display:flex;align-items:center;justify-content:center;
+/* thumbnail */
+.thumb{
+  width:72px;
+  height:72px;
   flex-shrink:0;
-  color:#64748b;
-}
-
-/* text */
-.c-body{flex:1;min-width:0}
-
-.c-title{
-  font-size:15.5px;
-  font-weight:700;
-  color:#0f172a;
-  letter-spacing:-0.3px;
-  display:block;
-  margin-bottom:3px;
-}
-
-.c-sub{
-  font-size:13px;
-  color:#94a3b8;
-  font-weight:400;
-  display:block;
-  line-height:1.4;
-}
-
-/* right */
-.c-right{
   display:flex;
   align-items:center;
-  gap:8px;
-  flex-shrink:0;
+  justify-content:center;
+  border-radius:14px 0 0 14px;
 }
 
-.c-badge{
-  font-size:10.5px;
+/* title area */
+.link-body{
+  flex:1;
+  padding:0 12px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.link-title{
+  font-size:15px;
   font-weight:700;
-  letter-spacing:0.4px;
-  text-transform:uppercase;
-  padding:4px 10px;
-  border-radius:20px;
+  color:#111;
+  text-align:center;
+  letter-spacing:-0.2px;
+  line-height:1.3;
 }
 
-.chev{
-  color:#cbd5e1;
+/* three dots */
+.dots{
+  width:44px;
   flex-shrink:0;
-  transition:transform 0.15s, color 0.15s;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:#bbb;
 }
 
-.card:hover .chev{
-  transform:translateX(2px);
-  color:#94a3b8;
-}
-
-/* ── CARD OVERRIDES ── */
-
-/* Follow My Trades — one green accent only on badge + dot */
-.card-follow .c-icon{
-  background:#f0fdf4;
-  border-color:#bbf7d0;
-  color:#16a34a;
-}
-
-.card-follow .c-badge{
-  background:#f0fdf4;
-  border:1px solid #bbf7d0;
-  color:#16a34a;
-}
-
-/* Start Automation — dark card */
-.card-auto{
-  background:#0f172a;
-  border-color:#0f172a;
-  box-shadow:0 4px 16px rgba(15,23,42,0.22), 0 1px 4px rgba(15,23,42,0.12);
-}
-
-.card-auto .c-icon{
-  background:rgba(255,255,255,0.07);
-  border-color:rgba(255,255,255,0.10);
-  color:#94a3b8;
-}
-
-.card-auto .c-title{color:#f8fafc}
-.card-auto .c-sub{color:#475569}
-.card-auto .chev{color:#334155}
-
-@media(hover:hover){
-  .card-auto:hover{
-    background:#1e293b;
-    border-color:#1e293b;
-  }
-  .card-auto:hover .chev{color:#475569}
-}
-
-/* Strategy Builder — default white, no overrides needed */
-
-/* Bitunix — white, muted amber border only */
-.card-bitunix{
-  border-color:#fde68a;
-}
-
-.card-bitunix .c-icon{
-  background:#fffbeb;
-  border-color:#fde68a;
-  color:#ca8a04;
-}
-
-.card-bitunix .c-badge{
-  background:#fefce8;
-  border:1px solid #fde68a;
-  color:#ca8a04;
-}
+/* ── THUMBNAIL COLOURS ── */
+.thumb-green { background:#dcfce7 }
+.thumb-dark  { background:#1e293b }
+.thumb-blue  { background:#eff6ff }
+.thumb-amber { background:#fef9c3 }
 
 /* ── FOOTER ── */
 .foot{
+  margin-top:36px;
+  font-size:11.5px;
+  color:#aaa;
   text-align:center;
-  font-size:12px;
-  color:#94a3b8;
-  line-height:2;
+  line-height:1.9;
 }
 
-.foot a{
-  color:#64748b;
-  text-decoration:none;
-}
-
-.foot a:hover{color:#0f172a}
+.foot a{color:#888;text-decoration:none}
+.foot a:hover{color:#555}
 </style>
 </head>
 <body>
 
 <div class="page">
 
-  <!-- HEADER -->
-  <div class="header">
-    <div class="wordmark">CallyX</div>
-    <p class="tagline">Systematic futures trading on Bitunix.<br><strong>Real trades. No noise.</strong></p>
-    <div class="live">
-      <span class="live-dot"></span>
-      <span><strong>400+ traders</strong> following live</span>
-    </div>
+  <!-- PROFILE -->
+  <div class="avatar">
+    <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+      <rect width="48" height="48" rx="24" fill="#f0fdf4"/>
+      <path d="M8 34L16 18L22 27L30 12L40 26" stroke="#16a34a" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="40" cy="26" r="3" fill="#16a34a"/>
+    </svg>
   </div>
 
-  <!-- CARDS -->
-  <div class="cards">
+  <h1 class="name">CallyX</h1>
+
+  <p class="bio">Systematic futures trading on Bitunix.<br>Real trades. No noise.</p>
+
+  <div class="live">
+    <span class="live-dot"></span>
+    <span><strong>400+ traders</strong> following live</span>
+  </div>
+
+  <!-- SOCIAL ICONS -->
+  <div class="socials">
+    <a class="soc-icon" href="https://x.com" target="_blank" rel="noopener" aria-label="X / Twitter">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M12.6 1h2.4L9.8 6.8 16 15h-4.6l-3.6-4.7L3.5 15H1l5.6-6.4L0 1h4.7l3.3 4.3L12.6 1Zm-.8 12.6h1.3L4.2 2.3H2.8l9 11.3Z"/>
+      </svg>
+    </a>
+    <a class="soc-icon" href="https://t.me/bu11dogg" target="_blank" rel="noopener" aria-label="Telegram">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 0C3.58 0 0 3.58 0 8s3.58 8 8 8 8-3.58 8-8-3.58-8-8-8Zm3.92 5.4-1.36 6.4c-.1.45-.37.56-.74.35L8.1 10.6l-.88.85c-.1.1-.18.18-.37.18l.13-1.87 3.4-3.07c.15-.13-.03-.2-.23-.07L4.33 9.94 2.68 9.43c-.36-.11-.37-.36.08-.53l7.67-2.96c.3-.11.56.07.49.46Z"/>
+      </svg>
+    </a>
+  </div>
+
+  <!-- LINK CARDS -->
+  <div class="links">
 
     <!-- Follow My Trades -->
-    <a class="card card-follow"
+    <a class="link"
        href="https://t.me/bu11dogg?text=Hey%2C%20I%20found%20you%20through%20CallyX.%20I%27d%20like%20to%20follow%20your%20live%20trades%20%E2%80%94%20how%20do%20I%20get%20access%20to%20the%20free%20group%3F"
        target="_blank" rel="noopener">
-      <div class="c-icon">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-          <path d="M2.5 15L7 8L10.5 12.5L14 6L18 12" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="18" cy="12" r="1.8" fill="currentColor"/>
+      <div class="thumb thumb-green">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <path d="M4 21L9 12L13.5 18L19 8L24 18" stroke="#16a34a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="24" cy="18" r="2.2" fill="#16a34a"/>
         </svg>
       </div>
-      <div class="c-body">
-        <span class="c-title">Follow My Trades</span>
-        <span class="c-sub">Free group — live calls &amp; setups</span>
+      <div class="link-body">
+        <span class="link-title">Follow My Trades (Free)</span>
       </div>
-      <div class="c-right">
-        <span class="c-badge">Free</span>
-        <svg class="chev" width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M6 3.5l4.5 4.5L6 12.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <div class="dots">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor">
+          <circle cx="9" cy="4" r="1.5"/><circle cx="9" cy="9" r="1.5"/><circle cx="9" cy="14" r="1.5"/>
         </svg>
       </div>
     </a>
 
     <!-- Start Automation -->
-    <a class="card card-auto"
+    <a class="link"
        href="https://t.me/bu11dogg?text=Hey%2C%20I%20came%20across%20CallyX%20and%20want%20to%20get%20my%20trades%20running%20on%20automation.%20What%20do%20I%20need%20to%20get%20started%3F"
        target="_blank" rel="noopener">
-      <div class="c-icon">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-          <circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.8"/>
-          <path d="M8 7.5L13.5 10L8 12.5V7.5Z" fill="currentColor"/>
+      <div class="thumb thumb-dark">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <circle cx="14" cy="14" r="9" stroke="#94a3b8" stroke-width="2"/>
+          <path d="M11.5 10.5L19 14L11.5 17.5V10.5Z" fill="#e2e8f0"/>
         </svg>
       </div>
-      <div class="c-body">
-        <span class="c-title">Start Automation</span>
-        <span class="c-sub">Trades run 24/7, completely hands-free</span>
+      <div class="link-body">
+        <span class="link-title">Start Automation</span>
       </div>
-      <div class="c-right">
-        <svg class="chev" width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M6 3.5l4.5 4.5L6 12.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <div class="dots">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" color="#bbb">
+          <circle cx="9" cy="4" r="1.5"/><circle cx="9" cy="9" r="1.5"/><circle cx="9" cy="14" r="1.5"/>
         </svg>
       </div>
     </a>
 
     <!-- Strategy Builder -->
-    <a class="card card-builder"
+    <a class="link"
        href="https://tradehubmarkets.com"
        target="_blank" rel="noopener">
-      <div class="c-icon">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-          <rect x="2" y="12" width="4" height="6" rx="1" stroke="currentColor" stroke-width="1.6"/>
-          <rect x="8" y="7.5" width="4" height="10.5" rx="1" stroke="currentColor" stroke-width="1.6"/>
-          <rect x="14" y="2" width="4" height="16" rx="1" stroke="currentColor" stroke-width="1.6"/>
+      <div class="thumb thumb-blue">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <rect x="3" y="17" width="5" height="8" rx="1.2" stroke="#3b82f6" stroke-width="1.8"/>
+          <rect x="11.5" y="11" width="5" height="14" rx="1.2" stroke="#3b82f6" stroke-width="1.8"/>
+          <rect x="20" y="4" width="5" height="21" rx="1.2" stroke="#3b82f6" stroke-width="1.8"/>
         </svg>
       </div>
-      <div class="c-body">
-        <span class="c-title">Strategy Builder</span>
-        <span class="c-sub">Build &amp; backtest your own strategies</span>
+      <div class="link-body">
+        <span class="link-title">Strategy Builder</span>
       </div>
-      <div class="c-right">
-        <svg class="chev" width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M6 3.5l4.5 4.5L6 12.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <div class="dots">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" color="#bbb">
+          <circle cx="9" cy="4" r="1.5"/><circle cx="9" cy="9" r="1.5"/><circle cx="9" cy="14" r="1.5"/>
         </svg>
       </div>
     </a>
 
     <!-- Bitunix -->
-    <a class="card card-bitunix"
+    <a class="link"
        href="https://www.bitunix.com/register?vipCode=tradehubsave"
        target="_blank" rel="noopener">
-      <div class="c-icon">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-          <path d="M10 1.5L18 5.5v9L10 18.5 2 14.5v-9L10 1.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-          <path d="M7 10h6M10 7v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <div class="thumb thumb-amber">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <path d="M14 2.5L24 7.5v13L14 25.5 4 20.5v-13L14 2.5Z" stroke="#d97706" stroke-width="1.8" stroke-linejoin="round"/>
+          <path d="M9.5 14h9M14 9.5V18.5" stroke="#d97706" stroke-width="1.8" stroke-linecap="round"/>
         </svg>
       </div>
-      <div class="c-body">
-        <span class="c-title">Open Bitunix Account</span>
-        <span class="c-sub">Exclusive — 70% off trading fees</span>
+      <div class="link-body">
+        <span class="link-title">Open Bitunix — Save 70% on Fees</span>
       </div>
-      <div class="c-right">
-        <span class="c-badge">−70% fees</span>
-        <svg class="chev" width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M6 3.5l4.5 4.5L6 12.5" stroke="#fde68a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <div class="dots">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" color="#bbb">
+          <circle cx="9" cy="4" r="1.5"/><circle cx="9" cy="9" r="1.5"/><circle cx="9" cy="14" r="1.5"/>
         </svg>
       </div>
     </a>
