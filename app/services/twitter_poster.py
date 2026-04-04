@@ -552,13 +552,16 @@ def _pick_personality() -> Dict:
 
 
 def _get_hashtag_style() -> str:
-    """Get varied hashtag usage - sometimes none at all"""
+    """Append top-gainer tickers so every post gets coin exposure for discoverability."""
+    tickers = get_daily_gainers_str(max_tickers=3)
+    ticker_line = f"\n\n{tickers}" if tickers else ""
+    # Occasionally mix in a hashtag, but always lead with the coin tickers
     styles = [
-        '',
-        '',
-        '',
-        f"\n\n#Crypto",
-        f"\n\n#{random.choice(['BTC', 'Altcoins', 'Trading', 'Crypto'])}",
+        ticker_line,
+        ticker_line,
+        ticker_line,
+        f"{ticker_line}\n\n#Crypto",
+        f"{ticker_line}\n\n#{random.choice(['BTC', 'Altcoins', 'Trading', 'Crypto'])}",
     ]
     return random.choice(styles)
 
@@ -575,7 +578,8 @@ async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "",
         if not _api_key:
             return None
         client = _anthropic.Anthropic(base_url=_base_url, api_key=_api_key) if _base_url else _anthropic.Anthropic(api_key=_api_key)
-        max_tokens = min(max(40, max_chars // 2), 220)
+        # Allow enough tokens to generate a full tweet — we'll trim cleanly if needed
+        max_tokens = max(80, min(400, max_chars * 2))
         full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
         response = await asyncio.to_thread(
             client.messages.create,
@@ -585,10 +589,22 @@ async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "",
         )
         candidate = (response.content[0].text or "").strip().strip('"').strip("'").strip('```').strip()
         candidate = candidate.replace('**', '').replace('*', '')
-        if candidate and 5 < len(candidate) <= max_chars:
-            logger.info(f"🐦 Claude tweet{' [' + label + ']' if label else ''}: {candidate[:70]}...")
-            return candidate
-        return None
+        if not candidate or len(candidate) < 5:
+            return None
+        # Trim to max_chars at a clean boundary — never mid-word
+        if len(candidate) > max_chars:
+            trimmed = candidate[:max_chars]
+            # Prefer cutting at a sentence boundary
+            for sep in ('. ', '.\n', '! ', '? ', '\n\n', '\n'):
+                idx = trimmed.rfind(sep)
+                if idx > max_chars * 0.55:
+                    candidate = trimmed[:idx + 1].rstrip()
+                    break
+            else:
+                # Fall back to last word boundary
+                candidate = trimmed.rsplit(' ', 1)[0].rstrip()
+        logger.info(f"🐦 Claude tweet{' [' + label + ']' if label else ''}: {candidate[:70]}...")
+        return candidate
     except Exception as e:
         logger.warning(f"Claude tweet generation failed: {e}")
         return None
@@ -781,7 +797,7 @@ Write ONLY the tweet text. No quotes. No label. No explanation."""
             claude_key = os.getenv('ANTHROPIC_API_KEY')
             if claude_key:
                 client = anthropic.Anthropic(api_key=claude_key)
-                mtok = 40 if tweet_length == 'ultra_short' else 80 if tweet_length == 'short' else 200 if tweet_length == 'long' else 130
+                mtok = max(80, min(400, max_chars * 2))
                 response = await asyncio.to_thread(
                     lambda: client.messages.create(
                         model="claude-sonnet-4-20250514",
@@ -791,7 +807,16 @@ Write ONLY the tweet text. No quotes. No label. No explanation."""
                     )
                 )
                 tweet = response.content[0].text.strip().strip('"').strip("'").strip('```').strip().replace('**', '').replace('*', '')
-                if tweet and 5 < len(tweet) <= max_chars:
+                if tweet and len(tweet) > 5:
+                    if len(tweet) > max_chars:
+                        trimmed = tweet[:max_chars]
+                        for sep in ('. ', '.\n', '! ', '? ', '\n\n', '\n'):
+                            idx = trimmed.rfind(sep)
+                            if idx > max_chars * 0.55:
+                                tweet = trimmed[:idx + 1].rstrip()
+                                break
+                        else:
+                            tweet = trimmed.rsplit(' ', 1)[0].rstrip()
                     logger.info(f"Claude tweet [{personality['name']}/{tweet_length}] ${symbol}: {tweet[:60]}...")
                     return tweet
         except Exception as e:
@@ -2601,8 +2626,8 @@ async def auto_post_loop():
 
 def _maybe_strategy_cta(tweet_text: str) -> str:
     """
-    Append a guaranteed tradehubmarkets.com strategy callout to any market post.
-    Always included — trims the tweet body if needed to stay under 278 chars.
+    Append a tradehubmarkets.com strategy callout to any market post.
+    Only appended if the full tweet still fits in 280 chars — never truncates the body.
     """
     ctas = [
         "\n\nautomating moves like this at tradehubmarkets.com — build yours free",
@@ -2618,10 +2643,13 @@ def _maybe_strategy_cta(tweet_text: str) -> str:
         "\n\nthis is exactly what I automate → tradehubmarkets.com",
         "\n\ncatching these moves automatically now → tradehubmarkets.com",
     ]
+    # Twitter counts URLs as 23 chars — use raw length as conservative proxy
+    TWITTER_LIMIT = 280
     cta = random.choice(ctas)
-    max_body = 278 - len(cta)
-    body = tweet_text if len(tweet_text) <= max_body else tweet_text[:max_body - 3] + "..."
-    return body + cta
+    if len(tweet_text) + len(cta) <= TWITTER_LIMIT:
+        return tweet_text + cta
+    # Body too long to fit CTA — return tweet intact, no truncation
+    return tweet_text
 
 
 async def post_with_account(account_poster: MultiAccountPoster, main_poster, post_type: str) -> Optional[Dict]:
@@ -4950,6 +4978,11 @@ Write ONLY the tweet text."""
             ]
             tweet_text = random.choice(fallbacks)
 
+        # Append top-gainer tickers for discoverability
+        tickers = get_daily_gainers_str(max_tickers=3)
+        if tickers and len(tweet_text) + len(tickers) + 2 <= 278:
+            tweet_text = tweet_text + "\n\n" + tickers
+
         result = account_poster.post_tweet(tweet_text)
 
         if result and result.get('success'):
@@ -5152,6 +5185,11 @@ Write ONLY the tweet text."""
                 "comparison_take":     f"two strategies on tradehubmarkets.com, same coins, different rules, different outcomes. the gap in the data is the interesting part",
             }
             tweet_text = fallbacks.get(angle, fallbacks["leaderboard_data"])
+
+        # Append top-gainer tickers for discoverability
+        tickers = get_daily_gainers_str(max_tickers=3)
+        if tickers and len(tweet_text) + len(tickers) + 2 <= 278:
+            tweet_text = tweet_text + "\n\n" + tickers
 
         # Upload image and post
         media_id = None
