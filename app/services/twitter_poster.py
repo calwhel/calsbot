@@ -2731,41 +2731,35 @@ async def auto_post_loop():
 
 def _maybe_strategy_cta(tweet_text: str) -> str:
     """
-    Append a tradehubmarkets.com strategy callout to any market post.
-    Only appended if the full tweet still fits in 280 chars — never truncates the body.
+    Optionally append one tradehubmarkets.com CTA to a post.
+    Short, confident, not salesy. Only added if it fits within 280 chars.
     """
     ctas = [
-        "\n\nautomating moves like this at tradehubmarkets.com — build yours free",
-        "\n\nrunning a strategy on exactly this type of move → tradehubmarkets.com",
-        "\n\nbuild a strategy to catch these. free at tradehubmarkets.com",
-        "\n\nmy algo already flagged this. build yours → tradehubmarkets.com",
-        "\n\nthis is why I automate. leaderboard live → tradehubmarkets.com",
-        "\n\nautomated plays on moves like this → tradehubmarkets.com",
-        "\n\nstrategy bot caught this early. try it free → tradehubmarkets.com",
-        "\n\nhave a strategy running on setups like this → tradehubmarkets.com",
-        "\n\nbeen catching these with an algo. build one free → tradehubmarkets.com",
-        "\n\nstrategy leaderboard is tracking these → tradehubmarkets.com",
-        "\n\nthis is exactly what I automate → tradehubmarkets.com",
-        "\n\ncatching these moves automatically now → tradehubmarkets.com",
+        "\n\ntradehubmarkets.com — I automate plays like this",
+        "\n\nrunning a strategy on this at tradehubmarkets.com",
+        "\n\nmy algo flags these automatically → tradehubmarkets.com",
+        "\n\nbuild your own strategy free → tradehubmarkets.com",
+        "\n\nstrategy leaderboard live → tradehubmarkets.com",
+        "\n\nautomating this. tradehubmarkets.com",
+        "\n\ntradehubmarkets.com — strategy builder, free",
     ]
-    # Twitter counts URLs as 23 chars — use raw length as conservative proxy
-    TWITTER_LIMIT = 280
+    TWITTER_LIMIT = 275  # conservative buffer
     cta = random.choice(ctas)
     if len(tweet_text) + len(cta) <= TWITTER_LIMIT:
         return tweet_text + cta
-    # Body too long to fit CTA — return tweet intact, no truncation
     return tweet_text
 
 
 async def post_with_account(account_poster: MultiAccountPoster, main_poster, post_type: str) -> Optional[Dict]:
     """Post using a specific account - generates content from main poster, posts with account"""
     try:
-        # For every market post, append a strategy/website CTA so every tweet
-        # drives traffic to tradehubmarkets.com — skip promo types that already do this.
+        # 25% of market posts get a tradehubmarkets.com CTA appended.
+        # Promo/campaign types already embed it — skip them to avoid doubles.
         if post_type not in ('tradehub_promo', 'market_take', 'bitunix_campaign', 'free_telegram'):
             _orig_pt = account_poster.post_tweet
-            def _cta_pt(text, media_ids=None, _o=_orig_pt):
-                return _o(_maybe_strategy_cta(text), media_ids)
+            _add_cta = random.random() < 0.25
+            def _cta_pt(text, media_ids=None, _o=_orig_pt, _do=_add_cta):
+                return _o(_maybe_strategy_cta(text) if _do else text, media_ids)
             account_poster.post_tweet = _cta_pt
 
         if is_social_account(account_poster.name):
@@ -3502,36 +3496,36 @@ async def post_early_gainers(account_poster: MultiAccountPoster) -> Optional[Dic
         
         if tl == 'ultra_short':
             templates = [
-                f"${sym} early. watching",
-                f"${sym} starting to move",
-                f"${sym} on my radar",
-                f"${sym}. early stages",
+                f"${sym} early. I see it.",
+                f"${sym} +{chg:.1f}%. quiet, for now.",
+                f"${sym} on the radar. +{chg:.1f}%.",
+                f"${sym}. early stages. watching.",
             ]
         elif tl == 'short':
             templates = [
-                f"${sym} quietly up {chg:.1f}%. something might be brewing",
-                f"noticing ${sym} starting to move. +{chg:.1f}% on decent volume",
-                f"${sym} +{chg:.1f}% and nobody is talking about it yet",
-                f"found ${sym} early. +{chg:.1f}% with {vol_str} volume behind it",
-                f"${sym} waking up. {chg:.1f}% so far",
+                f"${sym} up {chg:.1f}% and nobody's talking about it. that's usually when I'm most interested.",
+                f"${sym} +{chg:.1f}% on {vol_str} volume. flagged this one before it was loud.",
+                f"${sym} +{chg:.1f}%. the ones nobody's tweeting about are always the ones worth watching.",
+                f"caught ${sym} early. +{chg:.1f}%. {vol_str} volume. I don't wait for confirmation from twitter.",
+                f"${sym} waking up. +{chg:.1f}%. I was already watching.",
             ]
         elif tl == 'long':
             templates = [
-                f"spotted ${sym} on my scanner this morning at +{chg:.1f}% with {vol_str} volume.\n\nthe thing about early movers is you never know if its the start of something or a one day pop. but the volume profile on this one looks different. not the usual pump and dump pattern.\n\nkeeping a close eye",
-                f"${sym} is one of those coins that hasnt made anyones list yet. +{chg:.1f}% today on real volume.\n\nI like finding these before twitter starts talking about them. sometimes they fade. sometimes they 5x from here. either way im watching",
+                f"${sym} +{chg:.1f}% on {vol_str} volume and twitter hasn't noticed yet.\n\nvolume profile looks different to a normal pump — steady accumulation across multiple candles.\n\nI've been here a while. this is what early looks like.",
+                f"${sym} up {chg:.1f}% today.\n\nthis is the one that hasn't made anyone's list. I like finding these before the crowd does. sometimes they fade, sometimes they run 5x. either way — I was early.\n\n{vol_str} volume. real.",
             ]
         else:
             templates = [
-                f"${sym} gaining steam at +{chg:.1f}%. early stages but {vol_str} volume looks real. the kind of move I like to catch before it trends",
-                f"${sym} +{chg:.1f}% and building momentum. not making headlines yet which is usually a good sign",
-                f"under the radar today: ${sym} up {chg:.1f}% on {vol_str} volume. watching this one closely",
-                f"found ${sym} on my morning scan. +{chg:.1f}% with volume confirming. early but the setup is there",
+                f"${sym} +{chg:.1f}% on {vol_str} volume. still early. the kind of move I catch before it's a thread.",
+                f"${sym} +{chg:.1f}% and gaining. not making headlines yet — that's the point.",
+                f"under the radar: ${sym} up {chg:.1f}% on {vol_str}. found it before the tweet storm.",
+                f"${sym} on my scanner. +{chg:.1f}%. volume confirming. early but the setup is there.",
             ]
-        
+
         if len(early_movers) >= 3 and random.random() < 0.3:
             list_templates = [
-                f"early movers catching my eye:\n\n" + "\n".join([f"${m['symbol']} +{m['change']:.1f}%" for m in early_movers[:4]]) + "\n\nstill early on all of these",
-                f"coins starting to move this morning:\n\n" + "\n".join([f"${m['symbol']} +{m['change']:.1f}%" for m in early_movers[:3]]) + "\n\nvolume looks real",
+                f"things catching my eye right now:\n\n" + "\n".join([f"${m['symbol']} +{m['change']:.1f}%" for m in early_movers[:4]]) + "\n\nstill early on all of these. I'm watching.",
+                f"early movers before twitter notices:\n\n" + "\n".join([f"${m['symbol']} +{m['change']:.1f}%" for m in early_movers[:3]]) + "\n\nvolume is real on all three.",
             ]
             templates = list_templates
         
@@ -3821,27 +3815,31 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
 
         if tl == 'ultra_short':
             templates = [
-                f"${symbol} +{change:.1f}% at {price_str}. strategy scanner flagged this early → tradehubmarkets.com",
-                f"${symbol} up {change:.1f}% on {vol_str} volume. watching. tradehubmarkets.com",
-                f"${symbol} +{change:.1f}%. on the radar. build a strategy → tradehubmarkets.com",
+                f"${symbol} +{change:.1f}%. flagged this early. I don't miss these.",
+                f"${symbol} waking up. +{change:.1f}% at {price_str}. I'm watching.",
+                f"${symbol} +{change:.1f}%. already on it.",
+                f"${symbol}. {price_str}. +{change:.1f}%. early.",
             ]
         elif tl == 'short':
             templates = [
-                f"${symbol} +{change:.1f}% at {price_str} · {vol_str} volume{cap_note}. early mover with real buying behind it. automating catches like this → tradehubmarkets.com",
-                f"spotted ${symbol} early. +{change:.1f}% at {price_str} · vol {vol_str}. the kind of move my strategy is built to catch → tradehubmarkets.com",
-                f"${symbol} quietly up {change:.1f}% on {vol_str}. price {price_str}{cap_note}. not many talking yet. automate the early entry → tradehubmarkets.com",
-                f"${symbol} moving. +{change:.1f}% at {price_str} · {vol_str} behind it. strategy already running on this at tradehubmarkets.com",
+                f"${symbol} +{change:.1f}% at {price_str} · {vol_str} volume. flagged this before it moved. volume confirms it's real.",
+                f"caught ${symbol} early. +{change:.1f}% at {price_str} on {vol_str}. the kind of setup I live for.",
+                f"${symbol} quietly up {change:.1f}%. {price_str}{cap_note}. nobody's talking about it yet. I am.",
+                f"${symbol} +{change:.1f}% at {price_str}. {vol_str} behind it. not a coincidence.",
+                f"${symbol} moving. +{change:.1f}%. got this one early. {vol_str} volume tells you it's not retail.",
             ]
         elif tl == 'long':
             templates = [
-                f"${symbol} up {change:.1f}% at {price_str} · {vol_str} volume{cap_note}.\n\nsteady climb, not a spike. volume distributed across candles — real accumulation pattern, not a pump-and-dump.\n\nbeen automating early catches like this on tradehubmarkets.com — free, no code needed",
-                f"${symbol} showed up on my scanner. +{change:.1f}% at {price_str} · {vol_str}.\n\nearly movers like this are the best r/r. you haven't missed the move yet and stops are clean.\n\nrunning an automated strategy for setups like this at tradehubmarkets.com",
+                f"${symbol} +{change:.1f}% at {price_str} · {vol_str} volume{cap_note}.\n\nsteady climb, not a spike. volume distributed across candles — that's accumulation, not a pump.\n\nmy scanner caught this before twitter started talking. that's the edge.",
+                f"${symbol} on my radar since it was quiet. now it's +{change:.1f}% at {price_str} on {vol_str}.\n\nearly movers are the best r/r setups. stop is clean. upside still open.\n\nthis is the work most people skip.",
+                f"${symbol} up {change:.1f}% at {price_str}{cap_note}.\n\n{vol_str} in 24h. real buyers. not a tweet-driven pump.\n\nbeen watching this one for a while. patience paid off.",
             ]
         else:
             templates = [
-                f"${symbol} +{change:.1f}% at {price_str} · {vol_str} 24h volume{cap_note}. early move with volume backing it. automate entries like this → tradehubmarkets.com",
-                f"spotted ${symbol} early. +{change:.1f}% at {price_str} and still climbing. strategy live on tradehubmarkets.com catching these moves",
-                f"${symbol} on the scanner. +{change:.1f}% · price {price_str} · vol {vol_str}. build a strategy for moves like this free → tradehubmarkets.com",
+                f"${symbol} +{change:.1f}% at {price_str} · {vol_str}. early mover with volume behind it. I flagged this before the crowd noticed.",
+                f"caught ${symbol} early. +{change:.1f}% at {price_str}. still climbing. the entry was clean.",
+                f"${symbol} on my scanner. +{change:.1f}% · {price_str} · {vol_str}. real move. not noise.",
+                f"${symbol} +{change:.1f}% at {price_str}{cap_note}. volume backing it up. this is what early looks like.",
             ]
 
         tweet_text = random.choice(templates) + _get_hashtag_style()
@@ -3935,27 +3933,29 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
 
         if tl == 'ultra_short':
             templates = [
-                f"${symbol} {sign}{change:.1f}% at {price_str}. meme szn. strategy watching → tradehubmarkets.com",
-                f"${symbol} {sign}{change:.1f}% · {vol_str} volume. automate it → tradehubmarkets.com",
-                f"${symbol} moving {sign}{change:.1f}%. on the radar. tradehubmarkets.com",
+                f"${symbol} {sign}{change:.1f}%. I'm in.",
+                f"${symbol} {sign}{change:.1f}% at {price_str}. meme szn is back.",
+                f"${symbol} moving. {sign}{change:.1f}%. volume is real.",
+                f"${symbol} {sign}{change:.1f}%. already knew.",
             ]
         elif tl == 'short':
             templates = [
-                f"${symbol} {sign}{change:.1f}% at {price_str} · {vol_str} volume{cap_note}. meme momentum is real right now. strategy catching this → tradehubmarkets.com",
-                f"${symbol} up {sign}{change:.1f}% on {vol_str}. price {price_str}{cap_note}. have a strategy running on meme moves like this at tradehubmarkets.com",
-                f"${symbol} catching attention. {sign}{change:.1f}% · vol {vol_str}. the kind of move I automate → tradehubmarkets.com",
-                f"${symbol} {sign}{change:.1f}% at {price_str} and still moving. built a strategy for exactly this → tradehubmarkets.com",
+                f"${symbol} {sign}{change:.1f}% at {price_str} · {vol_str} volume{cap_note}. meme moves don't wait. either you're ready or you're watching from the sideline.",
+                f"${symbol} {sign}{change:.1f}% on {vol_str}. {price_str}{cap_note}. I was positioned before this got loud.",
+                f"${symbol} catching bids. {sign}{change:.1f}% · {vol_str}. this is how meme season starts — quiet volume, then everyone piles in.",
+                f"${symbol} {sign}{change:.1f}% at {price_str}. {vol_str} behind it. I don't chase. I was already here.",
             ]
         elif tl == 'long':
             templates = [
-                f"${symbol} {sign}{change:.1f}% at {price_str} · {vol_str} volume{cap_note}.\n\nmeme coins move fast. either you have an algo watching or you miss it.\n\nbuild a strategy to automate these entries free at tradehubmarkets.com",
-                f"${symbol} making a move. {sign}{change:.1f}% with {vol_str} behind it{cap_note}.\n\nthis is the stuff I automate. no point watching charts 24/7 when a strategy catches it for you.\n\ntradehubmarkets.com — free to build",
+                f"${symbol} {sign}{change:.1f}% at {price_str} · {vol_str}{cap_note}.\n\nmeme coins move in minutes, not hours. you either have a system or you're always a step behind.\n\nI caught this one before the timeline did.",
+                f"${symbol} making a move. {sign}{change:.1f}% with {vol_str} behind it{cap_note}.\n\nnobody was talking about this at open. I was watching it. that's the difference.\n\nconsistency beats luck every time.",
+                f"${symbol} {sign}{change:.1f}% today{cap_note}.\n\n{vol_str} volume. not a rumor-driven pump — actual buyers moving size.\n\nI flagged this when it was still quiet.",
             ]
         else:
             templates = [
-                f"${symbol} {sign}{change:.1f}% at {price_str} · {vol_str}{cap_note}. meme move with volume behind it. automating plays like this → tradehubmarkets.com",
-                f"${symbol} running {sign}{change:.1f}% at {price_str}. {vol_str} volume{cap_note}. strategy catching this at tradehubmarkets.com",
-                f"${symbol} {sign}{change:.1f}% · {vol_str} · price {price_str}. built a strategy for meme moves. free to copy → tradehubmarkets.com",
+                f"${symbol} {sign}{change:.1f}% at {price_str} · {vol_str}{cap_note}. real volume, real move. I was watching this before it ran.",
+                f"${symbol} running {sign}{change:.1f}% at {price_str}. {vol_str}{cap_note}. positioned before the noise started.",
+                f"${symbol} {sign}{change:.1f}%. {vol_str} · {price_str}. memes move fast. had this on my radar.",
             ]
 
         tweet_text = random.choice(templates) + _get_hashtag_style()
@@ -4260,53 +4260,63 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
         if chart_analysis:
             rsi = chart_analysis.get('rsi', 50)
             trend = chart_analysis.get('trend', 'neutral')
-            
-            if rsi > 70: rsi_note = random.choice([f"RSI at {rsi:.0f} stretched", f"RSI running hot at {rsi:.0f}", f"overbought territory RSI {rsi:.0f}"])
-            elif rsi < 30: rsi_note = random.choice([f"RSI oversold at {rsi:.0f}", f"RSI compressed at {rsi:.0f}", f"bounce territory RSI at {rsi:.0f}"])
-            else: rsi_note = random.choice([f"RSI at {rsi:.0f}", f"RSI sitting at {rsi:.0f}", f"RSI neutral at {rsi:.0f}"])
-            
-            if trend == 'bullish': trend_note = random.choice(["uptrend intact", "buyers in control", "structure looks good", "higher lows holding"])
-            elif trend == 'bearish': trend_note = random.choice(["sellers in control", "downtrend active", "lower highs forming", "bears have it"])
-            else: trend_note = random.choice(["no clear direction yet", "ranging", "choppy", "waiting for a break"])
-            
+
+            if rsi > 70:
+                rsi_note = random.choice([f"RSI {rsi:.0f} — stretched", f"RSI at {rsi:.0f}, running hot", f"overbought at RSI {rsi:.0f}"])
+            elif rsi < 30:
+                rsi_note = random.choice([f"RSI {rsi:.0f} — oversold", f"RSI compressed at {rsi:.0f}", f"RSI {rsi:.0f}, bounce territory"])
+            else:
+                rsi_note = random.choice([f"RSI {rsi:.0f}", f"RSI sitting at {rsi:.0f}", f"RSI neutral {rsi:.0f}"])
+
+            if trend == 'bullish':
+                trend_note = random.choice(["buyers in control", "uptrend intact", "higher lows holding", "structure is clean"])
+            elif trend == 'bearish':
+                trend_note = random.choice(["sellers in control", "downtrend active", "lower highs forming", "bears have it right now"])
+            else:
+                trend_note = random.choice(["no clear direction", "ranging — waiting for a break", "consolidating", "choppy"])
+
+            bias = "I like this" if trend == 'bullish' and rsi < 65 else "still watching" if trend == 'neutral' else "not touching it yet"
+
             if tl == 'ultra_short':
                 templates = [
-                    f"${symbol} {sign}{change:.1f}%. {rsi_note}. strategy watching → tradehubmarkets.com",
-                    f"${symbol} {sign}{change:.1f}%. {trend_note}. automating this → tradehubmarkets.com",
-                    f"${symbol} chart. {rsi_note}. build a strategy for this → tradehubmarkets.com",
+                    f"${symbol} {sign}{change:.1f}%. {rsi_note}. {trend_note}.",
+                    f"${symbol} {sign}{change:.1f}% at {price_str}. {trend_note}. {bias}.",
+                    f"${symbol}. {rsi_note}. {trend_note}. noted.",
                 ]
             elif tl == 'short':
                 templates = [
-                    f"${symbol} at {price_str}. {sign}{change:.1f}%. {rsi_note}. {trend_note}. have a strategy running on this at tradehubmarkets.com",
-                    f"pulled up ${symbol}. {sign}{change:.1f}%. {rsi_note}. {trend_note}. automate setups like this → tradehubmarkets.com",
-                    f"${symbol} {sign}{change:.1f}% at {price_str}. {rsi_note}. built a strategy around moves like this → tradehubmarkets.com",
+                    f"${symbol} at {price_str}. {sign}{change:.1f}%. {rsi_note}. {trend_note}. {bias}.",
+                    f"pulled up ${symbol}. {sign}{change:.1f}%. {rsi_note}. {trend_note}. I know what this setup does.",
+                    f"${symbol} {sign}{change:.1f}% at {price_str}. {rsi_note}. {trend_note}.",
+                    f"${symbol} — {sign}{change:.1f}%. {rsi_note}. {trend_note}. {bias}.",
                 ]
             elif tl == 'long':
                 templates = [
-                    f"${symbol} at {price_str} after {sign}{change:.1f}%.\n\n{rsi_note}. {trend_note}. {'structure is clean — higher lows with volume' if trend == 'bullish' else 'waiting for direction — usually resolves with a sharp move' if trend == 'neutral' else 'lower highs on every bounce — methodical selling'}.\n\nrunning an automated strategy for this at tradehubmarkets.com",
-                    f"${symbol} {sign}{change:.1f}%. quick TA:\n{rsi_note}. {trend_note}.\n\n{'solid setup right now' if trend == 'bullish' and rsi < 65 else 'waiting for confirmation' if trend == 'neutral' else 'patience here'}.\n\nbuild a strategy like mine at tradehubmarkets.com — free",
+                    f"${symbol} at {price_str} after {sign}{change:.1f}%.\n\n{rsi_note}. {trend_note}. {'structure is clean — higher lows confirmed with volume. I want to see one more candle close.' if trend == 'bullish' else 'waiting for direction — these setups usually resolve fast and violently. patience.' if trend == 'neutral' else 'lower highs on every bounce. methodical selling. I stay out when sellers are in control.'}",
+                    f"${symbol} {sign}{change:.1f}% at {price_str}.\n\nquick read:\n{rsi_note}. {trend_note}.\n\n{'solid setup. the kind I build strategies around.' if trend == 'bullish' and rsi < 65 else 'waiting for confirmation before I commit.' if trend == 'neutral' else 'not my setup right now. discipline is knowing when to sit.'}",
                 ]
             else:
                 templates = [
-                    f"${symbol} {sign}{change:.1f}% at {price_str}. {rsi_note}. {trend_note}. strategy automated for moves like this → tradehubmarkets.com",
-                    f"pulled up ${symbol}. {rsi_note} and {trend_note}. {'like what im seeing' if trend == 'bullish' and rsi < 65 else 'watching' if trend == 'neutral' else 'cautious but watching'}. build yours → tradehubmarkets.com",
-                    f"${symbol} at {price_str}. {sign}{change:.1f}%. {rsi_note}. {trend_note}. running an automated strategy on this type of setup at tradehubmarkets.com",
+                    f"${symbol} {sign}{change:.1f}% at {price_str}. {rsi_note}. {trend_note}. {bias}.",
+                    f"pulled up ${symbol}. {rsi_note} · {trend_note}. {bias}. watching.",
+                    f"${symbol} at {price_str}. {sign}{change:.1f}%. {rsi_note}. {trend_note}.",
                 ]
         else:
             if tl == 'ultra_short':
                 templates = [
-                    f"${symbol} {sign}{change:.1f}%. watching. build a strategy → tradehubmarkets.com",
-                    f"${symbol} has my attention. {sign}{change:.1f}%. tradehubmarkets.com",
+                    f"${symbol} {sign}{change:.1f}%. interesting. watching.",
+                    f"${symbol} has my attention. {sign}{change:.1f}% at {price_str}.",
                 ]
             elif tl == 'long':
                 templates = [
-                    f"${symbol} at {price_str} after {sign}{change:.1f}%.\n\nprice action alone caught my attention. the kind of move I want an algo watching 24/7.\n\nbuild a strategy for setups like this free at tradehubmarkets.com",
+                    f"${symbol} at {price_str} after {sign}{change:.1f}%.\n\nprice action caught my eye. clean move, not a pump. going to sit with this one and let it tell me what it wants to do.",
+                    f"${symbol} {sign}{change:.1f}%.\n\nnot everything needs a thread. sometimes a move speaks for itself and you either see it or you don't.",
                 ]
             else:
                 templates = [
-                    f"${symbol} {sign}{change:.1f}% at {price_str}. interesting chart. have a strategy running on this type of move → tradehubmarkets.com",
-                    f"checking in on ${symbol}. {sign}{change:.1f}% at {price_str}. automating plays like this at tradehubmarkets.com",
-                    f"${symbol} {sign}{change:.1f}%. caught this with an algo. build one free → tradehubmarkets.com",
+                    f"${symbol} {sign}{change:.1f}% at {price_str}. chart caught my eye. watching.",
+                    f"checking ${symbol}. {sign}{change:.1f}% at {price_str}. price action telling a story.",
+                    f"${symbol} {sign}{change:.1f}%. setup forming. I'm interested.",
                 ]
 
         tweet_text = random.choice(templates) + _get_hashtag_style()
@@ -5035,12 +5045,16 @@ async def post_market_take(account_poster) -> Optional[Dict]:
         }
 
         market_take_system = (
-            "You are a crypto KOL — someone with years of experience who posts honest, opinionated takes on X/Twitter. "
-            "You are not a news account, not a signals provider, not a coach. "
-            "People follow you because you say things they were already thinking but couldn't articulate. "
-            "Your posts are lowercase, never use hashtags or emojis, never end with a question for engagement. "
-            "You write the way someone talks to themselves — direct, slightly tired of the noise, occasionally sharp. "
-            "A great market take post: says one specific thing clearly, has an actual opinion, sounds like it was typed in 60 seconds."
+            "You are a confident, slightly arrogant crypto trader with a strong track record. "
+            "You post on X/Twitter because you have something to say, not because you're trying to build an audience. "
+            "You are not a coach, not a signals provider, not a news account. "
+            "You've seen multiple bull and bear cycles. You know when others are wrong and you say so — "
+            "not rudely, but with the quiet certainty of someone who has been right before. "
+            "You sometimes brag, but only about things you can back up. "
+            "You are direct, occasionally dismissive of the crowd, and always specific. "
+            "Your posts are lowercase, no hashtags, no emojis, no engagement bait. "
+            "You write the way you'd text a fellow trader — fast, honest, no fluff. "
+            "A great post: one specific take, delivered with authority, ends when the point is made."
         )
 
         ai_prompt = f"""{angle_prompts[angle]}
@@ -5069,17 +5083,19 @@ Write ONLY the tweet text."""
             system=market_take_system,
         )
 
-        # Fallback takes — opinionated, not generic
+        # Fallback takes — confident, arrogant, specific
         if not tweet_text:
             fallbacks = [
-                f"{btc_ctx or 'market is quiet. '}the people panicking have the same portfolio as the people celebrating. different entry prices, same coins. sizing is everything",
-                f"the most expensive trade isn't the one you lost. it's the one you sized too big on and had to close too early because you couldn't breathe",
-                f"crypto twitter has a consensus opinion on every coin at any given time. the consensus is wrong at inflection points more often than it's right",
-                f"there's a version of 'doing your research' that's just reading other people's takes until you feel confident. that's not research",
-                f"the market doesn't care about your cost basis. this is obvious and yet it shapes almost every bad decision people make",
-                f"most people enter positions based on conviction and exit based on emotion. that's the whole game in one sentence",
-                f"{btc_ctx or ''}the alts that lead the next leg up almost never come from the names everyone is talking about right now",
-                f"patience in a ranging market is a skill. it's also incredibly boring. the two things are related",
+                f"{btc_ctx or ''}I've been early on more moves than most accounts posting charts right now. the difference isn't tools. it's patience and position sizing.",
+                f"the most expensive trade isn't the one you lost. it's the one you sized too big on and had to close too early because you couldn't breathe.",
+                f"crypto twitter has a consensus opinion on every coin at any given time. the consensus is wrong at inflection points. every time. I trade against it.",
+                f"I don't have 'research'. I have a process. I run it every day whether or not the market is moving. that's the edge.",
+                f"the market doesn't care about your cost basis. this is obvious and yet it shapes almost every bad decision people make. I cut early and I sleep fine.",
+                f"most people enter positions based on conviction and exit based on emotion. I enter based on process and exit based on plan. the difference is the P&L.",
+                f"{btc_ctx or ''}the alts that lead the next leg almost never come from the names everyone is already talking about. I'm not looking where you're looking.",
+                f"patience in a ranging market is underrated. I've made more money waiting than trading. most people can't sit still long enough to find out.",
+                f"I've been wrong before. the difference is I was wrong in small size and right in large size. that's not luck. that's risk management.",
+                f"people ask me how I stay calm when the market drops 15% in a day. position sizing. always position sizing. nothing else matters as much.",
             ]
             tweet_text = random.choice(fallbacks)
 
@@ -5249,12 +5265,13 @@ async def post_tradehub_promo(account_poster) -> Optional[Dict]:
         }
 
         promo_system = (
-            "You are a crypto trader and KOL who has been using tradehubmarkets.com to build and run automated strategies. "
-            "You post on X/Twitter in a voice that is direct, lowercase, slightly dry, never hype. "
-            "When you mention tradehubmarkets.com, it sounds like a recommendation from someone who genuinely uses it. "
-            "You never use hashtags, emojis, or exclamation marks. You never sound like an ad. "
-            "Your posts are read by serious traders who will immediately dismiss anything that feels manufactured. "
-            "Write the way you'd text someone in a private group — honest, specific, occasionally self-deprecating."
+            "You are a confident, slightly arrogant crypto trader who has been using tradehubmarkets.com to run automated strategies. "
+            "You have a real track record and you know it. You're not boastful for show — you're matter-of-fact about results. "
+            "You post on X/Twitter because you have something to say, not to get followers. "
+            "When you mention tradehubmarkets.com, it sounds like something you actually use, not something you're promoting. "
+            "Lowercase, no hashtags, no emojis, no exclamation marks, never sounds like an ad. "
+            "You are dismissive of people who trade on gut feeling. You trust your system. Your system makes money. "
+            "Write the way you'd text a fellow trader who already knows you're good — no need to sell yourself."
         )
 
         ai_prompt = f"""{angle_contexts[angle]}
@@ -5277,17 +5294,17 @@ Write ONLY the tweet text."""
             system=promo_system,
         )
 
-        # Fallback templates — still organic, not ad-copy
+        # Fallback templates — confident, matter-of-fact
         if not tweet_text:
             fallbacks = {
-                "algo_result":         f"{coin_hook_ctx}my strategy already had this flagged. {pnl_sign}{top_pnl:.1f}% running all-time. tradehubmarkets.com",
-                "builder_story":       f"built '{top_name}' months ago and let it run. {pnl_sign}{top_pnl:.1f}% later. trusting your own rules is the hardest skill. tradehubmarkets.com",
-                "leaderboard_data":    f"leaderboard at tradehubmarkets.com has some interesting data. top strategy: {pnl_sign}{top_pnl:.1f}% across {top_trades} trades, {top_wr:.0f}% win rate. not a fund. just rules",
-                "automation_take":     f"discretionary trading is a full-time job. my algo on tradehubmarkets.com works when I don't. {pnl_sign}{top_pnl:.1f}% all-time",
-                "honest_stats":        f"{pnl_sign}{top_pnl:.1f}% overall. {top_wr:.0f}% win rate means {100-top_wr:.0f}% lose. that's what real strategy data looks like. tradehubmarkets.com",
-                "revenue_observation": f"someone built '{top_name}' on tradehubmarkets.com. {pnl_sign}{top_pnl:.1f}% P&L. others copy it, creator earns 80%. interesting model",
-                "contrarian_pitch":    f"signal groups sell calls. tradehubmarkets.com lets you build rules that execute automatically. fundamentally different. {pnl_sign}{top_pnl:.1f}% leaderboard top right now",
-                "comparison_take":     f"two strategies on tradehubmarkets.com, same coins, different rules, different outcomes. the gap in the data is the interesting part",
+                "algo_result":         f"{coin_hook_ctx}I flagged this before it ran. strategy already had it. {pnl_sign}{top_pnl:.1f}% all-time. tradehubmarkets.com",
+                "builder_story":       f"built '{top_name}' and let it run without touching it. {pnl_sign}{top_pnl:.1f}% later. discipline is not interfering with your own rules. tradehubmarkets.com",
+                "leaderboard_data":    f"checked the leaderboard at tradehubmarkets.com. top strategy: {pnl_sign}{top_pnl:.1f}% across {top_trades} trades, {top_wr:.0f}% win rate. I built mine. it works.",
+                "automation_take":     f"my strategy on tradehubmarkets.com doesn't sleep, doesn't panic, doesn't revenge trade. {pnl_sign}{top_pnl:.1f}% all-time. I do.",
+                "honest_stats":        f"{pnl_sign}{top_pnl:.1f}% overall. {top_wr:.0f}% win rate. {100-top_wr:.0f}% of trades lost money. real data is messy. that's what makes it real. tradehubmarkets.com",
+                "revenue_observation": f"'{top_name}' on tradehubmarkets.com — {pnl_sign}{top_pnl:.1f}% P&L, people copying it, creator taking 80% of the cut. interesting incentive structure.",
+                "contrarian_pitch":    f"everyone in a signal group is getting the same entry at the same time. tradehubmarkets.com lets you build your own rules and run them automatically. different game entirely.",
+                "comparison_take":     f"two strategies on tradehubmarkets.com, same coins, different rules. one at {pnl_sign}{top_pnl:.1f}%. the rules are the edge.",
             }
             tweet_text = fallbacks.get(angle, fallbacks["leaderboard_data"])
 
