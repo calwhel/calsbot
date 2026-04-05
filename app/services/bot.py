@@ -761,7 +761,7 @@ def _is_admin_direct(telegram_id: str) -> bool:
     if not url:
         return False
     try:
-        conn = psycopg2.connect(url, options="-c statement_timeout=6000 -c connect_timeout=5")
+        conn = psycopg2.connect(url, connect_timeout=5, options="-c statement_timeout=6000")
         cur = conn.cursor()
         cur.execute(
             "SELECT is_admin FROM users WHERE telegram_id = %s LIMIT 1",
