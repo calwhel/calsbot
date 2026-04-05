@@ -79,11 +79,6 @@ input::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
 .back-link{text-align:center;margin-top:18px;font-size:13px;color:var(--muted)}
 .back-link a{color:var(--accent);font-weight:600}
 
-.tg-btn-wrap{display:flex;justify-content:center;margin-bottom:4px}
-.tg-btn-wrap iframe{border-radius:10px!important;overflow:hidden}
-.tg-loading{width:100%;padding:13px;border-radius:10px;background:#2b5278;border:none;color:#fff;font-size:15px;font-weight:700;cursor:pointer;font-family:var(--font);display:flex;align-items:center;justify-content:center;gap:10px;transition:opacity .2s}
-.tg-loading:hover{opacity:.88}
-.tg-loading svg{flex-shrink:0}
 </style>
 </head>
 <body>
@@ -177,15 +172,6 @@ input::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
         <button class="btn btn-primary" id="uid-enterpw-btn" onclick="doLoginWithPassword()">Sign In →</button>
       </div>
 
-      <div class="divider">or use Telegram login</div>
-
-      <div class="tg-btn-wrap" id="tg-widget-wrap">
-        <button class="tg-loading" id="tg-placeholder" disabled>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.932z"/></svg>
-          Loading…
-        </button>
-      </div>
-      <p class="hint" style="text-align:center;margin-top:8px">Sign in instantly with your Telegram account</p>
     </div>
 
     <!-- ── SIGN IN (email/password) ── -->
@@ -402,60 +388,9 @@ async function doRegister(){
   }catch{ showErr('reg-err','Connection error — please try again.'); btn.disabled=false; btn.textContent='Create Account →'; }
 }
 
-// ── Telegram Login Widget callback ─────────────────────────────────────────────
-async function onTelegramAuth(user){
-  document.getElementById('si-err').style.display='none';
-  try{
-    const r = await fetch('/login/telegram',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(user)
-    });
-    const d = await r.json();
-    if(r.ok && d.redirect){
-      window.location.href = d.redirect;
-    } else {
-      showErr('code-err', d.detail || 'Telegram login failed. Please try another method.');
-    }
-  } catch {
-    showErr('code-err','Connection error — please try again.');
-  }
-}
-
-// Load Telegram widget script after page is ready
+// Focus name field on load (register is default tab)
 window.addEventListener('load', function(){
-  const script = document.createElement('script');
-  script.src = 'https://telegram.org/js/telegram-widget.js?22';
-  script.setAttribute('data-telegram-login', 'AISIGNALPERPBOT');
-  script.setAttribute('data-size', 'large');
-  script.setAttribute('data-onauth', 'onTelegramAuth(user)');
-  script.setAttribute('data-request-access', 'write');
-  script.setAttribute('data-userpic', 'false');
-  script.async = true;
-  script.onload = function(){
-    setTimeout(()=>{
-      const placeholder = document.getElementById('tg-placeholder');
-      if(placeholder) placeholder.style.display='none';
-    }, 800);
-  };
-  script.onerror = function(){
-    const placeholder = document.getElementById('tg-placeholder');
-    if(placeholder) placeholder.style.display='none';
-  };
-  const wrap = document.getElementById('tg-widget-wrap');
-  if(wrap) wrap.appendChild(script);
-
-  // Failsafe: if Telegram widget never loads within 5s, hide the spinner so users
-  // can still log in via Bot Code or Email — never leave them stuck on a spinner.
-  setTimeout(function(){
-    const placeholder = document.getElementById('tg-placeholder');
-    if(placeholder && placeholder.style.display !== 'none'){
-      placeholder.style.display = 'none';
-    }
-  }, 5000);
-
-  // Focus UID input on load (bot code is default tab)
-  if(!_refCode) document.getElementById('uid-input').focus();
+  if(!_refCode) document.getElementById('reg-name').focus();
 });
 </script>
 </body>
