@@ -2065,7 +2065,8 @@ class MultiAccountPoster:
             return {
                 'success': True,
                 'tweet_id': tweet_id,
-                'account': self.name
+                'account': self.name,
+                'text': text[:280] if text else ''
             }
             
         except Exception as e:
@@ -2486,6 +2487,328 @@ def _save_slot_to_db(slot_key: str):
         logger.warning(f"Could not save slot to DB: {_e}")
 
 
+# ═══════════════════════════════════════════════════════════════════
+# ENGAGEMENT TRACKING + X TRENDING SYSTEM
+# ═══════════════════════════════════════════════════════════════════
+
+_POST_METRICS_TABLE_READY = False
+
+def _ensure_post_metrics_table():
+    """Create twitter_post_metrics table if it doesn't exist."""
+    global _POST_METRICS_TABLE_READY
+    if _POST_METRICS_TABLE_READY:
+        return
+    try:
+        import os, psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return
+        conn = psycopg2.connect(url)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS twitter_post_metrics (
+                id               SERIAL PRIMARY KEY,
+                tweet_id         TEXT UNIQUE NOT NULL,
+                account_name     TEXT NOT NULL,
+                post_type        TEXT NOT NULL,
+                tweet_text       TEXT,
+                impressions      INTEGER,
+                likes            INTEGER,
+                retweets         INTEGER,
+                replies          INTEGER,
+                quotes           INTEGER,
+                metrics_fetched  BOOLEAN DEFAULT FALSE,
+                fetch_attempts   INTEGER DEFAULT 0,
+                posted_at        TIMESTAMPTZ DEFAULT NOW(),
+                metrics_fetched_at TIMESTAMPTZ
+            )
+        """)
+        cur.close()
+        conn.close()
+        _POST_METRICS_TABLE_READY = True
+        logger.info("✅ twitter_post_metrics table ready")
+    except Exception as _e:
+        logger.warning(f"Could not ensure twitter_post_metrics table: {_e}")
+
+
+def _save_post_to_metrics_db(tweet_id: str, account_name: str, post_type: str, tweet_text: str = ""):
+    """Save a newly posted tweet to the metrics table (metrics fetched later)."""
+    _ensure_post_metrics_table()
+    try:
+        import os, psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return
+        conn = psycopg2.connect(url)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO twitter_post_metrics (tweet_id, account_name, post_type, tweet_text)
+               VALUES (%s, %s, %s, %s) ON CONFLICT (tweet_id) DO NOTHING""",
+            (tweet_id, account_name, post_type, tweet_text[:500] if tweet_text else "")
+        )
+        cur.close()
+        conn.close()
+        logger.info(f"📊 Saved tweet {tweet_id} ({post_type}) for metrics tracking")
+    except Exception as _e:
+        logger.warning(f"Could not save post to metrics DB: {_e}")
+
+
+def _fetch_pending_tweet_metrics():
+    """
+    Fetch engagement metrics from X API for tweets older than 24h that haven't been
+    measured yet. Uses batch GET /2/tweets endpoint — up to 100 per request.
+    Returns count of tweets updated.
+    """
+    _ensure_post_metrics_table()
+    try:
+        import os, psycopg2, tweepy
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return 0
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        # Get tweets older than 24h, not yet fetched, and attempted fewer than 3 times
+        cur.execute("""
+            SELECT tweet_id FROM twitter_post_metrics
+            WHERE metrics_fetched = FALSE
+              AND fetch_attempts < 3
+              AND posted_at < NOW() - INTERVAL '24 hours'
+            ORDER BY posted_at DESC
+            LIMIT 100
+        """)
+        rows = cur.fetchall()
+        if not rows:
+            cur.close()
+            conn.close()
+            return 0
+
+        tweet_ids = [r[0] for r in rows]
+        logger.info(f"📊 Fetching X metrics for {len(tweet_ids)} tweets...")
+
+        # Increment attempt counter for all
+        cur.execute(
+            "UPDATE twitter_post_metrics SET fetch_attempts = fetch_attempts + 1 WHERE tweet_id = ANY(%s)",
+            (tweet_ids,)
+        )
+        conn.commit()
+
+        # X API v2 lookup — bearer token is fine for public_metrics
+        bearer = os.environ.get("TWITTER_BEARER_TOKEN")
+        if not bearer:
+            cur.close()
+            conn.close()
+            return 0
+
+        client = tweepy.Client(bearer_token=bearer, wait_on_rate_limit=False)
+        response = client.get_tweets(
+            ids=tweet_ids,
+            tweet_fields=["public_metrics", "created_at"]
+        )
+
+        if not response or not response.data:
+            cur.close()
+            conn.close()
+            return 0
+
+        updated = 0
+        for tweet in response.data:
+            pm = tweet.public_metrics or {}
+            cur.execute("""
+                UPDATE twitter_post_metrics SET
+                    impressions        = %s,
+                    likes              = %s,
+                    retweets           = %s,
+                    replies            = %s,
+                    quotes             = %s,
+                    metrics_fetched    = TRUE,
+                    metrics_fetched_at = NOW()
+                WHERE tweet_id = %s
+            """, (
+                pm.get("impression_count"),
+                pm.get("like_count", 0),
+                pm.get("retweet_count", 0),
+                pm.get("reply_count", 0),
+                pm.get("quote_count", 0),
+                str(tweet.id)
+            ))
+            updated += 1
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"📊 Updated metrics for {updated} tweets")
+        return updated
+    except Exception as _e:
+        logger.warning(f"Could not fetch tweet metrics: {_e}")
+        return 0
+
+
+_TRENDING_CACHE: dict = {"topics": [], "ts": 0.0}
+_TRENDING_TTL = 1800  # 30 minutes
+
+
+async def _fetch_x_trending_crypto() -> list:
+    """
+    Search X for high-engagement recent crypto tweets to find what topics are
+    trending and getting views right now. Returns list of topic dicts:
+      {"topic": "$BTC", "avg_likes": 142, "avg_impressions": 8400, "sample": "...tweet text..."}
+    Results cached for 30 minutes.
+    """
+    import time, os, tweepy, asyncio
+    from collections import defaultdict
+
+    now = time.time()
+    if now - _TRENDING_CACHE["ts"] < _TRENDING_TTL and _TRENDING_CACHE["topics"]:
+        return _TRENDING_CACHE["topics"]
+
+    try:
+        bearer = os.environ.get("TWITTER_BEARER_TOKEN")
+        if not bearer:
+            return []
+
+        client = tweepy.Client(bearer_token=bearer, wait_on_rate_limit=False)
+
+        # Search for high-quality crypto tweets — recent, no retweets, English
+        query = (
+            '(crypto OR bitcoin OR ethereum OR altcoin OR "crypto trading" OR "on-chain") '
+            'lang:en -is:retweet -is:reply has:cashtags min_faves:20'
+        )
+        response = await asyncio.to_thread(
+            client.search_recent_tweets,
+            query=query,
+            max_results=50,
+            tweet_fields=["public_metrics", "text", "created_at"],
+            sort_order="relevancy"
+        )
+
+        if not response or not response.data:
+            return []
+
+        # Aggregate by cashtag/topic
+        topic_data = defaultdict(lambda: {"likes": [], "impressions": [], "samples": []})
+
+        for tweet in response.data:
+            pm = tweet.public_metrics or {}
+            text = tweet.text or ""
+            likes = pm.get("like_count", 0)
+            impressions = pm.get("impression_count") or 0
+
+            # Extract $TICKER mentions
+            import re
+            tickers = re.findall(r'\$([A-Z]{2,8})\b', text)
+            stablecoins = {"USDT", "USDC", "BUSD", "DAI", "USD", "EUR"}
+            tickers = [t for t in tickers if t not in stablecoins]
+
+            if not tickers:
+                tickers = ["CRYPTO"]
+
+            for ticker in tickers[:3]:
+                topic_data[f"${ticker}"]["likes"].append(likes)
+                if impressions:
+                    topic_data[f"${ticker}"]["impressions"].append(impressions)
+                if len(topic_data[f"${ticker}"]["samples"]) < 2:
+                    topic_data[f"${ticker}"]["samples"].append(text[:120])
+
+        # Build sorted results
+        results = []
+        for topic, data in topic_data.items():
+            if len(data["likes"]) < 2:
+                continue
+            avg_likes = sum(data["likes"]) / len(data["likes"])
+            avg_imp = sum(data["impressions"]) / max(len(data["impressions"]), 1)
+            results.append({
+                "topic": topic,
+                "avg_likes": round(avg_likes, 1),
+                "avg_impressions": round(avg_imp),
+                "mentions": len(data["likes"]),
+                "sample": data["samples"][0] if data["samples"] else ""
+            })
+
+        results.sort(key=lambda x: x["avg_likes"], reverse=True)
+        results = results[:10]
+
+        _TRENDING_CACHE["topics"] = results
+        _TRENDING_CACHE["ts"] = now
+
+        if results:
+            logger.info(f"🔥 X trending topics fetched: {[r['topic'] for r in results[:5]]}")
+        return results
+
+    except Exception as _e:
+        logger.warning(f"Could not fetch X trending topics: {_e}")
+        return []
+
+
+def _get_engagement_insights() -> str:
+    """
+    Query twitter_post_metrics to return a formatted summary of which post types
+    are getting the most views and engagement. Used to inform AI post generation.
+    """
+    _ensure_post_metrics_table()
+    try:
+        import os, psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return ""
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        # Last 30 days, only fetched metrics
+        cur.execute("""
+            SELECT post_type,
+                   COUNT(*) AS posts,
+                   ROUND(AVG(impressions))   AS avg_impressions,
+                   ROUND(AVG(likes))         AS avg_likes,
+                   ROUND(AVG(retweets))      AS avg_retweets,
+                   MAX(impressions)          AS best_impressions
+            FROM twitter_post_metrics
+            WHERE metrics_fetched = TRUE
+              AND posted_at > NOW() - INTERVAL '30 days'
+              AND impressions IS NOT NULL
+            GROUP BY post_type
+            ORDER BY avg_impressions DESC NULLS LAST
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        if not rows:
+            return ""
+
+        lines = ["YOUR PAST 30-DAY POST PERFORMANCE (use this to write posts that actually get views):"]
+        for pt, posts, avg_imp, avg_likes, avg_rt, best_imp in rows:
+            imp_str = f"{avg_imp:,}" if avg_imp else "n/a"
+            lines.append(
+                f"  {pt}: {posts} posts — avg {imp_str} impressions, {avg_likes or 0} likes, "
+                f"{avg_rt or 0} retweets | best post: {best_imp:,} impressions"
+            )
+        # Identify top performer
+        best = rows[0]
+        lines.append(
+            f"\nTop performer: '{best[0]}' at {best[2]:,} avg impressions. "
+            f"Write posts that match the tone and specificity of what's working."
+        )
+        return "\n".join(lines)
+    except Exception as _e:
+        logger.warning(f"Could not get engagement insights: {_e}")
+        return ""
+
+
+async def tweet_metrics_fetcher_loop():
+    """Background loop — every 2 hours, fetch X API engagement metrics for posts older than 24h."""
+    _ensure_post_metrics_table()
+    await asyncio.sleep(300)  # 5 min delay on startup
+    while True:
+        try:
+            updated = await asyncio.to_thread(_fetch_pending_tweet_metrics)
+            if updated:
+                logger.info(f"📊 Tweet metrics loop: updated {updated} posts")
+        except Exception as _e:
+            logger.warning(f"Tweet metrics loop error: {_e}")
+        await asyncio.sleep(7200)  # every 2 hours
+
+
 def get_twitter_schedule() -> Dict:
     """Get the full posting schedule and next post info"""
     now = datetime.utcnow()
@@ -2607,6 +2930,10 @@ async def auto_post_loop():
         logger.error(traceback.format_exc())
         return
     
+    # Start background engagement metrics fetcher
+    asyncio.create_task(tweet_metrics_fetcher_loop())
+    logger.info("📊 Tweet engagement metrics fetcher started")
+
     loop_count = 0
     while True:
         try:
@@ -2703,6 +3030,13 @@ async def auto_post_loop():
                             POSTED_SLOTS.add(account_slot_key)
                             posted_any = True
                             _save_posted_slots_to_disk(POSTED_SLOTS, SLOT_OFFSETS)
+                            # Save tweet_id for engagement tracking
+                            _tid = result.get('tweet_id')
+                            if _tid:
+                                _save_post_to_metrics_db(
+                                    str(_tid), account.name, post_type,
+                                    result.get('text', '')
+                                )
                             await notify_admin_post_result(account.name, post_type, True)
                         else:
                             error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
@@ -4993,6 +5327,19 @@ async def post_market_take(account_poster) -> Optional[Dict]:
         _mt_gainers = get_daily_gainers_str(max_tickers=4)
         _mt_gainers_ctx = f"Top movers today: {_mt_gainers}. " if _mt_gainers else ""
 
+        # Fetch X trending topics + our own engagement performance data
+        _x_trending = await _fetch_x_trending_crypto()
+        _trending_ctx = ""
+        if _x_trending:
+            top5 = _x_trending[:5]
+            _trending_ctx = (
+                "RIGHT NOW ON X — topics getting the most engagement in crypto: "
+                + ", ".join(f"{t['topic']} ({t['avg_likes']:.0f} avg likes)" for t in top5)
+                + ". Use this to stay relevant, not to repeat what's already been said."
+            )
+
+        _engagement_insights = await asyncio.to_thread(_get_engagement_insights)
+
         angle_prompts = {
             "market_cycle_take": (
                 f"{btc_ctx}{_mt_gainers_ctx}Write a tweet with your current read on where we are in the market cycle. "
@@ -5057,7 +5404,10 @@ async def post_market_take(account_poster) -> Optional[Dict]:
             "A great post: one specific take, delivered with authority, ends when the point is made."
         )
 
-        ai_prompt = f"""{angle_prompts[angle]}
+        _trending_block = f"\n\n{_trending_ctx}" if _trending_ctx else ""
+        _insights_block = f"\n\n{_engagement_insights}" if _engagement_insights else ""
+
+        ai_prompt = f"""{angle_prompts[angle]}{_trending_block}{_insights_block}
 
 HARD RULES:
 - No hashtags, no emojis, no exclamation marks
@@ -5274,7 +5624,20 @@ async def post_tradehub_promo(account_poster) -> Optional[Dict]:
             "Write the way you'd text a fellow trader who already knows you're good — no need to sell yourself."
         )
 
-        ai_prompt = f"""{angle_contexts[angle]}
+        # Trending + engagement insights for better AI context
+        _promo_trending = await _fetch_x_trending_crypto()
+        _promo_trending_ctx = ""
+        if _promo_trending:
+            top5 = _promo_trending[:5]
+            _promo_trending_ctx = (
+                "\n\nRIGHT NOW ON X — topics getting the most engagement in crypto: "
+                + ", ".join(f"{t['topic']} ({t['avg_likes']:.0f} avg likes)" for t in top5)
+                + ". Reference relevant trends naturally where it fits the angle."
+            )
+        _promo_insights = await asyncio.to_thread(_get_engagement_insights)
+        _promo_insights_ctx = f"\n\n{_promo_insights}" if _promo_insights else ""
+
+        ai_prompt = f"""{angle_contexts[angle]}{_promo_trending_ctx}{_promo_insights_ctx}
 
 HARD RULES:
 - No hashtags, no emojis, no exclamation marks
