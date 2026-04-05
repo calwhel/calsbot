@@ -3077,25 +3077,43 @@ async def _discover_daily_trends() -> dict:
     try:
         client = tweepy.Client(bearer_token=bearer, wait_on_rate_limit=False)
 
-        # ── Search 1: high-engagement crypto tweets last 24h ─────────────
-        # min_faves:30 filters noise; -is:retweet keeps original voices
+        # ── Search queries focused on low-cap / memecoin viral content ──────
+        # We deliberately skip BTC/ETH dominant searches — they always appear
+        # and drown out the small caps that are actually going viral.
+        # min_faves thresholds kept at 15-25 to catch emerging moves early.
         searches = [
-            '(crypto OR bitcoin OR altcoin OR "bull run") lang:en -is:retweet has:cashtags min_faves:30',
-            '(defi OR memecoin OR "on-chain" OR "whale alert") lang:en -is:retweet min_faves:20',
-            '($BTC OR $ETH OR $SOL OR $XRP) lang:en -is:retweet min_faves:25',
+            # Memecoins and gems going viral right now
+            '(memecoin OR meme OR "low cap" OR gem OR "hidden gem") lang:en -is:retweet has:cashtags min_faves:15',
+            # Altcoin season / rotate / new coin narratives
+            '(altcoin OR "alt season" OR "rotate" OR narrative OR "new listing" OR "just launched") lang:en -is:retweet has:cashtags min_faves:15',
+            # Price action viral posts — 10x / 100x / mooning / pumping
+            '("10x" OR "100x" OR mooning OR pumping OR "up only" OR parabolic) lang:en -is:retweet has:cashtags min_faves:20',
+            # On-chain / degen / ape narratives (low cap discovery ground)
+            '(defi OR "on-chain" OR degen OR aping OR "ape in" OR "aped") lang:en -is:retweet has:cashtags min_faves:15',
+            # KOL-style alpha sharing (where low caps get discovered)
+            '("early" OR "alpha" OR "next" OR "sleeping" OR "undervalued") lang:en -is:retweet has:cashtags min_faves:25',
         ]
 
         coin_data:  dict = defaultdict(lambda: {"likes": [], "impressions": [], "samples": []})
         topic_data: dict = defaultdict(lambda: {"likes": [], "impressions": [], "samples": []})
 
-        STABLES = {"USDT", "USDC", "BUSD", "DAI", "USD", "EUR", "GBP", "USDS"}
+        # Coins to exclude from trending output — too dominant to be useful signals
+        LARGE_CAPS = {"BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "AVAX", "LINK",
+                      "DOT", "MATIC", "LTC", "BCH", "ATOM", "UNI", "NEAR", "FIL"}
+        STABLES = {"USDT", "USDC", "BUSD", "DAI", "USD", "EUR", "GBP", "USDS", "FDUSD", "PYUSD"}
         TOPIC_KEYWORDS = {
-            "bitcoin": "Bitcoin", "btc": "Bitcoin", "ethereum": "Ethereum", "eth": "Ethereum",
-            "solana": "Solana", "defi": "DeFi", "memecoin": "Memecoins", "nft": "NFTs",
-            "altcoin": "Altcoins", "bull run": "Bull Run", "bear market": "Bear Market",
+            "memecoin": "Memecoins", "meme coin": "Memecoins", "meme": "Memecoins",
+            "altcoin": "Altcoins", "alt season": "Alt Season", "alt szn": "Alt Season",
+            "gem": "Gems", "hidden gem": "Gems", "low cap": "Low Caps",
+            "100x": "100x Plays", "10x": "10x Plays", "parabolic": "Parabolic Moves",
+            "mooning": "Mooning Coins", "pumping": "Pumping Coins",
+            "alpha": "Alpha Calls", "early": "Early Plays", "undervalued": "Undervalued",
+            "degen": "Degen Plays", "aping": "Ape Plays", "narrative": "Narratives",
+            "defi": "DeFi", "on-chain": "On-Chain", "nft": "NFTs",
             "whale": "Whale Alert", "regulation": "Regulation", "etf": "ETF",
-            "on-chain": "On-Chain", "liquidation": "Liquidations", "funding": "Funding Rates",
-            "breakout": "Breakouts", "ath": "All-Time High", "short": "Shorts",
+            "breakout": "Breakouts", "liquidation": "Liquidations",
+            "new listing": "New Listings", "just launched": "New Launches",
+            "rotate": "Rotation Plays", "sleeping": "Sleeping Giants",
         }
 
         for query in searches:
@@ -3116,15 +3134,16 @@ async def _discover_daily_trends() -> dict:
                     likes = pm.get("like_count", 0)
                     imps  = pm.get("impression_count") or 0
 
-                    # Extract $TICKER coins
+                    # Extract $TICKER coins — skip stables AND large caps
                     tickers = re.findall(r'\$([A-Z]{2,10})\b', text)
                     for t in tickers:
-                        if t not in STABLES and len(t) <= 8:
-                            coin_data[t]["likes"].append(likes)
-                            if imps:
-                                coin_data[t]["impressions"].append(imps)
-                            if len(coin_data[t]["samples"]) < 2:
-                                coin_data[t]["samples"].append(text[:150])
+                        if t in STABLES or t in LARGE_CAPS or len(t) > 8:
+                            continue
+                        coin_data[t]["likes"].append(likes)
+                        if imps:
+                            coin_data[t]["impressions"].append(imps)
+                        if len(coin_data[t]["samples"]) < 2:
+                            coin_data[t]["samples"].append(text[:150])
 
                     # Extract topic keywords
                     text_lower = text.lower()
@@ -3140,17 +3159,19 @@ async def _discover_daily_trends() -> dict:
                 logger.warning(f"Trend search error: {_se}")
                 continue
 
-        # ── Score and rank coins ────────────────────────────────────────
-        STABLECOINS = {"USDT", "USDC", "BUSD", "DAI", "USD", "EUR", "USDS"}
+        # ── Score and rank coins (low caps only — large caps already filtered above) ──
         coins_ranked = []
         for sym, d in coin_data.items():
-            if len(d["likes"]) < 2 or sym in STABLECOINS:
+            if len(d["likes"]) < 2:
                 continue
             avg_l = sum(d["likes"]) / len(d["likes"])
             avg_i = sum(d["impressions"]) / max(len(d["impressions"]), 1)
             mentions = len(d["likes"])
             # trend_score = engagement density × reach
-            score = round(avg_l * (1 + mentions / 10) + avg_i / 1000, 2)
+            # Low caps (ticker ≤ 5 chars) get a 1.3× boost — they're rarer in tweets
+            # so even modest mentions signal real interest
+            low_cap_boost = 1.3 if len(sym) <= 5 else 1.0
+            score = round((avg_l * (1 + mentions / 10) + avg_i / 1000) * low_cap_boost, 2)
             coins_ranked.append({
                 "symbol":       sym,
                 "trend_score":  score,
