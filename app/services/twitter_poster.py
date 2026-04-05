@@ -2998,6 +2998,377 @@ async def account_growth_tracker_loop():
         await asyncio.sleep(21600)  # every 6 hours
 
 
+# ═══════════════════════════════════════════════════════════════════
+# DAILY TREND DISCOVERY + AUTO-OPTIMISATION ENGINE
+#
+# Every 4 hours, searches X for what crypto/finance topics are
+# actually getting engagement RIGHT NOW. Posts are then generated
+# about those specific trending coins/topics rather than random picks.
+# After enough engagement data is collected the posting schedule
+# automatically shifts slots toward the best-performing formats.
+# ═══════════════════════════════════════════════════════════════════
+
+_DAILY_TRENDS_CACHE: dict = {"date": "", "coins": [], "topics": [], "ts": 0.0}
+_TRENDS_TTL = 14400  # 4 hours
+
+
+def _ensure_daily_trends_table():
+    try:
+        import os, psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return
+        conn = psycopg2.connect(url)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS twitter_daily_trends (
+                id           SERIAL PRIMARY KEY,
+                trend_date   DATE NOT NULL,
+                symbol       TEXT,
+                topic        TEXT,
+                kind         TEXT NOT NULL DEFAULT 'coin',   -- 'coin' | 'topic'
+                trend_score  FLOAT DEFAULT 0,
+                avg_likes    FLOAT DEFAULT 0,
+                mentions     INTEGER DEFAULT 0,
+                sample_tweet TEXT,
+                discovered_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_daily_trends_date
+            ON twitter_daily_trends (trend_date DESC)
+        """)
+        cur.close()
+        conn.close()
+    except Exception as _e:
+        logger.warning(f"Could not ensure daily_trends table: {_e}")
+
+
+async def _discover_daily_trends() -> dict:
+    """
+    Search X for what's actually getting engagement in crypto/finance TODAY.
+    Returns {'coins': [...], 'topics': [...]} sorted by trend_score desc.
+
+    coins  — list of {'symbol', 'trend_score', 'avg_likes', 'mentions', 'sample'}
+    topics — list of {'topic', 'trend_score', 'avg_likes', 'mentions', 'sample'}
+
+    Refreshed every 4 hours, cached in memory and DB.
+    """
+    import time, os, tweepy, re, asyncio
+    from collections import defaultdict
+
+    now = time.time()
+    today_str = datetime.utcnow().date().isoformat()
+
+    # Return cached result if fresh
+    if (now - _DAILY_TRENDS_CACHE["ts"] < _TRENDS_TTL
+            and _DAILY_TRENDS_CACHE["date"] == today_str
+            and _DAILY_TRENDS_CACHE["coins"]):
+        return {"coins": _DAILY_TRENDS_CACHE["coins"], "topics": _DAILY_TRENDS_CACHE["topics"]}
+
+    bearer = os.environ.get("TWITTER_BEARER_TOKEN")
+    if not bearer:
+        return {"coins": [], "topics": []}
+
+    logger.info("🔍 Discovering today's trending crypto topics on X...")
+    _ensure_daily_trends_table()
+
+    try:
+        client = tweepy.Client(bearer_token=bearer, wait_on_rate_limit=False)
+
+        # ── Search 1: high-engagement crypto tweets last 24h ─────────────
+        # min_faves:30 filters noise; -is:retweet keeps original voices
+        searches = [
+            '(crypto OR bitcoin OR altcoin OR "bull run") lang:en -is:retweet has:cashtags min_faves:30',
+            '(defi OR memecoin OR "on-chain" OR "whale alert") lang:en -is:retweet min_faves:20',
+            '($BTC OR $ETH OR $SOL OR $XRP) lang:en -is:retweet min_faves:25',
+        ]
+
+        coin_data:  dict = defaultdict(lambda: {"likes": [], "impressions": [], "samples": []})
+        topic_data: dict = defaultdict(lambda: {"likes": [], "impressions": [], "samples": []})
+
+        STABLES = {"USDT", "USDC", "BUSD", "DAI", "USD", "EUR", "GBP", "USDS"}
+        TOPIC_KEYWORDS = {
+            "bitcoin": "Bitcoin", "btc": "Bitcoin", "ethereum": "Ethereum", "eth": "Ethereum",
+            "solana": "Solana", "defi": "DeFi", "memecoin": "Memecoins", "nft": "NFTs",
+            "altcoin": "Altcoins", "bull run": "Bull Run", "bear market": "Bear Market",
+            "whale": "Whale Alert", "regulation": "Regulation", "etf": "ETF",
+            "on-chain": "On-Chain", "liquidation": "Liquidations", "funding": "Funding Rates",
+            "breakout": "Breakouts", "ath": "All-Time High", "short": "Shorts",
+        }
+
+        for query in searches:
+            try:
+                resp = await asyncio.to_thread(
+                    client.search_recent_tweets,
+                    query=query,
+                    max_results=50,
+                    tweet_fields=["public_metrics", "text"],
+                    sort_order="relevancy"
+                )
+                if not resp or not resp.data:
+                    continue
+
+                for tweet in resp.data:
+                    pm    = tweet.public_metrics or {}
+                    text  = tweet.text or ""
+                    likes = pm.get("like_count", 0)
+                    imps  = pm.get("impression_count") or 0
+
+                    # Extract $TICKER coins
+                    tickers = re.findall(r'\$([A-Z]{2,10})\b', text)
+                    for t in tickers:
+                        if t not in STABLES and len(t) <= 8:
+                            coin_data[t]["likes"].append(likes)
+                            if imps:
+                                coin_data[t]["impressions"].append(imps)
+                            if len(coin_data[t]["samples"]) < 2:
+                                coin_data[t]["samples"].append(text[:150])
+
+                    # Extract topic keywords
+                    text_lower = text.lower()
+                    for kw, canonical in TOPIC_KEYWORDS.items():
+                        if kw in text_lower:
+                            topic_data[canonical]["likes"].append(likes)
+                            if imps:
+                                topic_data[canonical]["impressions"].append(imps)
+                            if len(topic_data[canonical]["samples"]) < 2:
+                                topic_data[canonical]["samples"].append(text[:150])
+
+            except Exception as _se:
+                logger.warning(f"Trend search error: {_se}")
+                continue
+
+        # ── Score and rank coins ────────────────────────────────────────
+        STABLECOINS = {"USDT", "USDC", "BUSD", "DAI", "USD", "EUR", "USDS"}
+        coins_ranked = []
+        for sym, d in coin_data.items():
+            if len(d["likes"]) < 2 or sym in STABLECOINS:
+                continue
+            avg_l = sum(d["likes"]) / len(d["likes"])
+            avg_i = sum(d["impressions"]) / max(len(d["impressions"]), 1)
+            mentions = len(d["likes"])
+            # trend_score = engagement density × reach
+            score = round(avg_l * (1 + mentions / 10) + avg_i / 1000, 2)
+            coins_ranked.append({
+                "symbol":       sym,
+                "trend_score":  score,
+                "avg_likes":    round(avg_l, 1),
+                "avg_impressions": round(avg_i),
+                "mentions":     mentions,
+                "sample":       d["samples"][0] if d["samples"] else "",
+            })
+        coins_ranked.sort(key=lambda x: x["trend_score"], reverse=True)
+        coins_ranked = coins_ranked[:20]
+
+        # ── Score and rank topics ───────────────────────────────────────
+        topics_ranked = []
+        for topic, d in topic_data.items():
+            if len(d["likes"]) < 3:
+                continue
+            avg_l = sum(d["likes"]) / len(d["likes"])
+            avg_i = sum(d["impressions"]) / max(len(d["impressions"]), 1)
+            mentions = len(d["likes"])
+            score = round(avg_l * (1 + mentions / 15) + avg_i / 1000, 2)
+            topics_ranked.append({
+                "topic":        topic,
+                "trend_score":  score,
+                "avg_likes":    round(avg_l, 1),
+                "avg_impressions": round(avg_i),
+                "mentions":     mentions,
+                "sample":       d["samples"][0] if d["samples"] else "",
+            })
+        topics_ranked.sort(key=lambda x: x["trend_score"], reverse=True)
+        topics_ranked = topics_ranked[:10]
+
+        # ── Persist to DB ───────────────────────────────────────────────
+        try:
+            import psycopg2
+            url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+            conn = psycopg2.connect(url)
+            conn.autocommit = True
+            cur = conn.cursor()
+            today = datetime.utcnow().date()
+            # Clear old today entries (refresh)
+            cur.execute("DELETE FROM twitter_daily_trends WHERE trend_date = %s", (today,))
+            for c in coins_ranked:
+                cur.execute("""
+                    INSERT INTO twitter_daily_trends
+                        (trend_date, symbol, kind, trend_score, avg_likes, mentions, sample_tweet)
+                    VALUES (%s, %s, 'coin', %s, %s, %s, %s)
+                """, (today, c["symbol"], c["trend_score"], c["avg_likes"], c["mentions"], c["sample"][:300]))
+            for t in topics_ranked:
+                cur.execute("""
+                    INSERT INTO twitter_daily_trends
+                        (trend_date, topic, kind, trend_score, avg_likes, mentions, sample_tweet)
+                    VALUES (%s, %s, 'topic', %s, %s, %s, %s)
+                """, (today, t["topic"], t["trend_score"], t["avg_likes"], t["mentions"], t["sample"][:300]))
+            cur.close()
+            conn.close()
+        except Exception as _de:
+            logger.warning(f"Could not persist daily trends: {_de}")
+
+        # ── Update memory cache ─────────────────────────────────────────
+        _DAILY_TRENDS_CACHE.update({
+            "date":   today_str,
+            "coins":  coins_ranked,
+            "topics": topics_ranked,
+            "ts":     now,
+        })
+
+        top_coins = [c["symbol"] for c in coins_ranked[:8]]
+        top_topics = [t["topic"] for t in topics_ranked[:5]]
+        logger.info(f"🔥 Today's trending coins on X: {top_coins}")
+        logger.info(f"🔥 Today's trending topics on X: {top_topics}")
+        return {"coins": coins_ranked, "topics": topics_ranked}
+
+    except Exception as _e:
+        logger.warning(f"Daily trend discovery failed: {_e}")
+        return {"coins": [], "topics": []}
+
+
+def get_todays_trending_coins(top_n: int = 15) -> list:
+    """
+    Return today's cached trending coins list (non-async).
+    Falls back to DB if memory cache is empty.
+    """
+    today_str = datetime.utcnow().date().isoformat()
+    if _DAILY_TRENDS_CACHE["date"] == today_str and _DAILY_TRENDS_CACHE["coins"]:
+        return _DAILY_TRENDS_CACHE["coins"][:top_n]
+
+    # Try DB fallback
+    try:
+        import os, psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return []
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        today = datetime.utcnow().date()
+        cur.execute("""
+            SELECT symbol, trend_score, avg_likes, mentions, sample_tweet
+            FROM twitter_daily_trends
+            WHERE trend_date = %s AND kind = 'coin'
+            ORDER BY trend_score DESC LIMIT %s
+        """, (today, top_n))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [{"symbol": r[0], "trend_score": r[1], "avg_likes": r[2],
+                 "mentions": r[3], "sample": r[4] or ""} for r in rows]
+    except Exception:
+        return []
+
+
+def get_todays_trending_topics(top_n: int = 5) -> list:
+    """Return today's cached trending topic list (non-async)."""
+    today_str = datetime.utcnow().date().isoformat()
+    if _DAILY_TRENDS_CACHE["date"] == today_str and _DAILY_TRENDS_CACHE["topics"]:
+        return _DAILY_TRENDS_CACHE["topics"][:top_n]
+
+    try:
+        import os, psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return []
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        today = datetime.utcnow().date()
+        cur.execute("""
+            SELECT topic, trend_score, avg_likes, mentions, sample_tweet
+            FROM twitter_daily_trends
+            WHERE trend_date = %s AND kind = 'topic'
+            ORDER BY trend_score DESC LIMIT %s
+        """, (today, top_n))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [{"topic": r[0], "trend_score": r[1], "avg_likes": r[2],
+                 "mentions": r[3], "sample": r[4] or ""} for r in rows]
+    except Exception:
+        return []
+
+
+def _get_auto_weighted_post_type(original_type: str) -> str:
+    """
+    Based on actual engagement data from the last 14 days, optionally swap
+    a low-performing post type for a high-performing one.
+
+    Only activates when there's enough data (7+ measured posts per type).
+    Keeps the schedule diverse — won't replace every slot with one type.
+    """
+    try:
+        import os, psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return original_type
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT post_type, AVG(impressions) AS avg_imp, COUNT(*) AS posts
+            FROM twitter_post_metrics
+            WHERE metrics_fetched = TRUE
+              AND posted_at > NOW() - INTERVAL '14 days'
+              AND impressions IS NOT NULL
+            GROUP BY post_type
+            HAVING COUNT(*) >= 7
+            ORDER BY avg_imp DESC
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        if len(rows) < 3:
+            return original_type  # not enough data yet
+
+        # Build perf map
+        perf = {r[0]: float(r[1]) for r in rows}
+        if original_type not in perf:
+            return original_type
+
+        orig_imp = perf[original_type]
+        best_type, best_imp = rows[0][0], float(rows[0][1])
+
+        # Only swap if: original is underperforming by >50%, there's a clear winner,
+        # and the swap type is in the market content group (no promos)
+        market_types = {"featured_coin", "quick_ta", "market_take", "memecoin",
+                        "early_gainer", "top_gainers"}
+        if (original_type in market_types
+                and best_type in market_types
+                and best_type != original_type
+                and best_imp > orig_imp * 1.5):
+            # 30% chance to upgrade to best-performing type
+            if random.random() < 0.30:
+                logger.info(
+                    f"⚡ Auto-weight: swapping {original_type} → {best_type} "
+                    f"({orig_imp:.0f} → {best_imp:.0f} avg impressions)"
+                )
+                return best_type
+
+        return original_type
+    except Exception:
+        return original_type
+
+
+async def trend_discovery_loop():
+    """
+    Background loop — discovers trending coins/topics on X every 4 hours.
+    First run is immediate (after a 60s startup delay).
+    """
+    _ensure_daily_trends_table()
+    await asyncio.sleep(60)  # brief startup delay
+    while True:
+        try:
+            result = await _discover_daily_trends()
+            top = [c["symbol"] for c in result.get("coins", [])[:6]]
+            if top:
+                logger.info(f"🔥 Trend discovery complete — top coins today: {top}")
+        except Exception as _e:
+            logger.warning(f"Trend discovery loop error: {_e}")
+        await asyncio.sleep(_TRENDS_TTL)  # every 4 hours
+
+
 def get_twitter_schedule() -> Dict:
     """Get the full posting schedule and next post info"""
     now = datetime.utcnow()
@@ -3127,6 +3498,10 @@ async def auto_post_loop():
     asyncio.create_task(account_growth_tracker_loop())
     logger.info("📈 Account growth tracker started")
 
+    # Start daily trend discovery (runs every 4h — finds what's trending on X)
+    asyncio.create_task(trend_discovery_loop())
+    logger.info("🔥 Daily trend discovery loop started")
+
     loop_count = 0
     while True:
         try:
@@ -3213,7 +3588,9 @@ async def auto_post_loop():
                         result = None
                         try:
                             account_poster = get_account_poster(account)
-                            result = await post_with_account(account_poster, main_poster, post_type)
+                            # Auto-weight: swap underperforming types for better ones
+                            effective_type = _get_auto_weighted_post_type(post_type)
+                            result = await post_with_account(account_poster, main_poster, effective_type)
                         except Exception as e:
                             logger.error(f"Error posting for {account.name}: {e}")
                             result = {'success': False, 'error': str(e)}
@@ -3294,37 +3671,42 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
             return await post_for_social_account(account_poster, post_type, main_poster)
         
         if post_type == 'featured_coin':
-            # Get gainers and pick one randomly that's not overposted
-            gainers = await main_poster.get_top_gainers_data(20)
+            # Get gainers and pick one — prioritise coins trending on X today
+            gainers = await main_poster.get_top_gainers_data(30)
             if not gainers:
                 return None
-            
-            # Collect ALL valid coins first, then pick randomly
-            # Max 1 post per coin per day for maximum variety
+
+            # Today's X trending coins (high-engagement on X right now)
+            trending_symbols = {c["symbol"] for c in get_todays_trending_coins(15)}
+
             valid_coins = []
             for coin in gainers:
                 symbol = coin['symbol']
                 has_volume = coin.get('volume', 0) >= 5_000_000
                 not_overposted = check_global_coin_cooldown(symbol, max_per_day=1)
-                
                 if has_volume and not_overposted:
                     valid_coins.append(coin)
                 elif not not_overposted:
                     logger.info(f"[MultiAccount] Skipping ${symbol} - already posted today (1x max)")
-            
-            # Pick RANDOMLY from valid coins (not first one!)
-            if valid_coins:
+
+            # ── Tier 1: trending on X AND pumping in price ──────────────
+            tier1 = [c for c in valid_coins if c['symbol'] in trending_symbols]
+            # ── Tier 2: valid price gainers not in X trends ─────────────
+            tier2 = [c for c in valid_coins if c['symbol'] not in trending_symbols]
+
+            if tier1:
+                featured = random.choice(tier1)
+                logger.info(f"[MultiAccount] 🔥 Trend+price pick: ${featured['symbol']} (trending on X today)")
+            elif tier2:
+                featured = random.choice(tier2)
+                logger.info(f"[MultiAccount] Price pick: ${featured['symbol']} from {len(tier2)} valid coins")
+            elif valid_coins:
                 featured = random.choice(valid_coins)
-                logger.info(f"[MultiAccount] Randomly selected {featured['symbol']} from {len(valid_coins)} valid coins")
+                logger.info(f"[MultiAccount] Fallback pick: ${featured['symbol']}")
             else:
-                # Fallback: collect any coins not overposted (allow 2 if we run out)
                 fallback_coins = [c for c in gainers if check_global_coin_cooldown(c['symbol'], max_per_day=1)]
-                if fallback_coins:
-                    featured = random.choice(fallback_coins)
-                    logger.info(f"[MultiAccount] Fallback: randomly selected {featured['symbol']}")
-                else:
-                    featured = random.choice(gainers)
-                    logger.info(f"[MultiAccount] Last resort: randomly selected {featured['symbol']} (all coins posted today)")
+                featured = random.choice(fallback_coins) if fallback_coins else random.choice(gainers)
+                logger.info(f"[MultiAccount] Last resort: ${featured['symbol']}")
             
             symbol = featured['symbol']
             change = featured.get('change', 0)
@@ -4713,23 +5095,31 @@ When funding gets this extreme, reversals tend to be violent"""
 
 
 async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Optional[Dict]:
-    """Post quick technical analysis with human-like personality"""
+    """Post quick technical analysis — picks coins trending on X today first"""
     try:
-        gainers = await main_poster.get_top_gainers_data(15)
+        gainers = await main_poster.get_top_gainers_data(30)
         if not gainers:
             return {'success': False, 'error': 'No data'}
-        
+
         candidates = [
-            g for g in gainers 
+            g for g in gainers
             if 2 <= abs(g.get('change', 0)) <= 20
             and g.get('volume', 0) >= 5_000_000
             and check_global_coin_cooldown(g['symbol'], max_per_day=1)
         ]
-        
+
         if not candidates:
             return {'success': False, 'error': 'No suitable coins for TA'}
-        
-        coin = random.choice(candidates[:5])
+
+        # Prioritise coins that are also trending on X today
+        trending_symbols = {c["symbol"] for c in get_todays_trending_coins(15)}
+        trending_candidates = [c for c in candidates if c['symbol'] in trending_symbols]
+        if trending_candidates:
+            coin = random.choice(trending_candidates)
+            logger.info(f"[QuickTA] 🔥 Picked ${coin['symbol']} — trending on X today")
+        else:
+            coin = random.choice(candidates[:5])
+            logger.info(f"[QuickTA] Picked ${coin['symbol']} from top movers")
         symbol = coin['symbol']
         change = coin.get('change', 0)
         price = coin.get('price', 0)
@@ -5520,15 +5910,38 @@ async def post_market_take(account_poster) -> Optional[Dict]:
         _mt_gainers = get_daily_gainers_str(max_tickers=4)
         _mt_gainers_ctx = f"Top movers today: {_mt_gainers}. " if _mt_gainers else ""
 
-        # Fetch X trending topics + our own engagement performance data
-        _x_trending = await _fetch_x_trending_crypto()
+        # Fetch today's trending data — coins AND topics getting engagement on X
+        _daily_topics  = get_todays_trending_topics(5)   # from daily discovery (4h refresh)
+        _daily_coins   = get_todays_trending_coins(8)    # from daily discovery
+        # Supplement with real-time X search (30-min cache)
+        _rt_trending   = await _fetch_x_trending_crypto()
+
         _trending_ctx = ""
-        if _x_trending:
-            top5 = _x_trending[:5]
+        if _daily_topics or _daily_coins or _rt_trending:
+            parts = []
+            if _daily_topics:
+                parts.append(
+                    "TODAY'S MOST-DISCUSSED TOPICS ON X: "
+                    + ", ".join(f"{t['topic']} ({t['avg_likes']:.0f} avg likes, {t['mentions']} posts)"
+                                for t in _daily_topics[:4])
+                )
+            if _daily_coins:
+                parts.append(
+                    "COINS PEOPLE ARE TALKING ABOUT TODAY: "
+                    + ", ".join(f"${c['symbol']} ({c['avg_likes']:.0f} avg likes)"
+                                for c in _daily_coins[:5])
+                )
+            if _rt_trending and not _daily_topics:
+                parts.append(
+                    "RIGHT NOW ON X: "
+                    + ", ".join(f"{t['topic']} ({t['avg_likes']:.0f} avg likes)"
+                                for t in _rt_trending[:4])
+                )
             _trending_ctx = (
-                "RIGHT NOW ON X — topics getting the most engagement in crypto: "
-                + ", ".join(f"{t['topic']} ({t['avg_likes']:.0f} avg likes)" for t in top5)
-                + ". Use this to stay relevant, not to repeat what's already been said."
+                "\n\n".join(parts)
+                + "\n\nWrite your take on something FROM THIS LIST — "
+                  "these are the conversations already happening on X. "
+                  "Your angle should be different from the obvious consensus take."
             )
 
         _engagement_insights = await asyncio.to_thread(_get_engagement_insights)
