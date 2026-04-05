@@ -2634,6 +2634,19 @@ function dismissTgBanner(){
           </div>
           <div class="hint" style="margin-top:6px">Select one or more sessions to restrict when trades fire. Multiple = OR (fires if current time is in <em>any</em> selected session). Hours are UTC — London 7–16 UTC means 7 AM–4 PM London time (GMT) or 8 AM–5 PM (BST, summer). <strong>Each strategy must be configured separately.</strong></div>
         </div>
+        <div class="form-group" style="margin-bottom:0;margin-top:14px">
+          <label>Trading Days <span style="font-size:11px;color:var(--muted);font-weight:400">· leave blank to trade every day</span></label>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px" id="cfg-days-chips">
+            <div class="opt-chip" id="cfgDay-monday"    onclick="toggleCfgDay('monday')">Mon</div>
+            <div class="opt-chip" id="cfgDay-tuesday"   onclick="toggleCfgDay('tuesday')">Tue</div>
+            <div class="opt-chip" id="cfgDay-wednesday" onclick="toggleCfgDay('wednesday')">Wed</div>
+            <div class="opt-chip" id="cfgDay-thursday"  onclick="toggleCfgDay('thursday')">Thu</div>
+            <div class="opt-chip" id="cfgDay-friday"    onclick="toggleCfgDay('friday')">Fri</div>
+            <div class="opt-chip" id="cfgDay-saturday"  onclick="toggleCfgDay('saturday')">Sat</div>
+            <div class="opt-chip" id="cfgDay-sunday"    onclick="toggleCfgDay('sunday')">Sun</div>
+          </div>
+          <div class="hint" style="margin-top:6px">Restrict trading to specific days of the week. Recommended: deselect <strong>Sat &amp; Sun</strong> to avoid low-liquidity weekend volatility.</div>
+        </div>
       </div>
 
       <!-- Analytics -->
@@ -3031,12 +3044,19 @@ const UID="{{ uid }}";
 const IS_PRO = {{ 'true' if is_pro else 'false' }};
 let mktSort='top',mktCat='all',mktPrice='all',mktSearch='';
 let lbMetric='win_rate',buildDir='LONG',buildMode='live',settingsDir='LONG';
-let cfgStrategyId=null,cfgStatus='paper',cfgDir='LONG',cfgStatusChanged=false,cfgIsLocked=false,cfgSessions=[];
+let cfgStrategyId=null,cfgStatus='paper',cfgDir='LONG',cfgStatusChanged=false,cfgIsLocked=false,cfgSessions=[],cfgTradingDays=[];
 function toggleCfgSession(s){
   const idx=cfgSessions.indexOf(s);
   if(idx>-1)cfgSessions.splice(idx,1);else cfgSessions.push(s);
   ['asian','london','new_york','overlap'].forEach(id=>{
     const el=$('cfgSes-'+id);if(el)el.classList.toggle('active',cfgSessions.includes(id));
+  });
+}
+function toggleCfgDay(d){
+  const idx=cfgTradingDays.indexOf(d);
+  if(idx>-1)cfgTradingDays.splice(idx,1);else cfgTradingDays.push(d);
+  ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'].forEach(id=>{
+    const el=$('cfgDay-'+id);if(el)el.classList.toggle('active',cfgTradingDays.includes(id));
   });
 }
 let ratingListingId=null,ratingStars=0;
@@ -3450,6 +3470,12 @@ async function openConfigure(strategyId){
     const el=$('cfgSes-'+id);if(el)el.classList.toggle('active',cfgSessions.includes(id));
   });
 
+  // Trading days
+  cfgTradingDays=(_filters.trading_days||[]).map(d=>d.toLowerCase());
+  ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'].forEach(id=>{
+    const el=$('cfgDay-'+id);if(el)el.classList.toggle('active',cfgTradingDays.includes(id));
+  });
+
   const perf=s.performance||{};
   $('cfg-perf').textContent=perf.total_trades>0?`${perf.total_trades} trades · ${perf.win_rate}% WR · ${pS(perf.total_pnl)}`:'No trades yet';
 
@@ -3538,6 +3564,7 @@ async function saveCfg(){
       cooldown_minutes:Number($('cfg-cd').value),
       no_duplicate_symbol:$('cfg-nodup').checked,
       sessions:cfgSessions,
+      trading_days:cfgTradingDays,
     });
   }else{
     // Own strategy — full update
@@ -3558,6 +3585,7 @@ async function saveCfg(){
       no_duplicate_symbol:$('cfg-nodup').checked,
       universe:symbols.length?{type:'specific',symbols}:{type:'all'},
       sessions:cfgSessions,
+      trading_days:cfgTradingDays,
     });
   }
 

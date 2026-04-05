@@ -3324,7 +3324,7 @@ async def api_update_strategy(strategy_id: int, request: Request):
                 if k in body:
                     risk[k] = body[k]
             config["risk"] = risk
-            # Sessions are a user preference, not creator IP — allow for locked strategies too.
+            # Sessions and trading_days are user preferences, not creator IP — allow for locked strategies too.
             if "sessions" in body:
                 _valid_sessions = {"asian", "london", "new_york", "overlap", "tokyo", "europe", "ny"}
                 sess = [s for s in (body["sessions"] or []) if s in _valid_sessions]
@@ -3333,6 +3333,15 @@ async def api_update_strategy(strategy_id: int, request: Request):
                     filters["session"] = {"type": "session", "sessions": sess}
                 else:
                     filters.pop("session", None)
+                config["filters"] = filters
+            if "trading_days" in body:
+                _valid_days = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+                days = [d for d in (body["trading_days"] or []) if d.lower() in _valid_days]
+                filters = dict(config.get("filters", {}))
+                if days:
+                    filters["trading_days"] = [d.lower() for d in days]
+                else:
+                    filters.pop("trading_days", None)
                 config["filters"] = filters
             prev_status = s.status
             if "status" in body and body["status"] in ("draft", "active", "paused", "paper"):
@@ -3402,6 +3411,17 @@ async def api_update_strategy(strategy_id: int, request: Request):
                 filters.pop("session", None)
             config["filters"] = filters
 
+        # Trading days — user preference, always updateable
+        if "trading_days" in body:
+            _valid_days = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+            days = [d for d in (body["trading_days"] or []) if d.lower() in _valid_days]
+            filters = dict(config.get("filters", {}))
+            if days:
+                filters["trading_days"] = [d.lower() for d in days]
+            else:
+                filters.pop("trading_days", None)
+            config["filters"] = filters
+
         # Status change — fire admin alert when going live
         prev_status = s.status
         if "status" in body and body["status"] in ("draft", "active", "paused", "paper"):
@@ -3418,38 +3438,53 @@ async def api_update_strategy(strategy_id: int, request: Request):
         s.config = config
         db.commit()
 
-        # If this is a source (non-locked) strategy and the owner just changed sessions,
-        # automatically push the same session filter to every locked marketplace copy so
-        # subscribers always inherit the creator's time-of-day restrictions.
-        if "sessions" in body and not (s.config or {}).get("_locked"):
+        # If this is a source (non-locked) strategy, push certain shared fields to
+        # marketplace copies and update the listing title.
+        if not (s.config or {}).get("_locked"):
             from app.strategy_models import UserStrategy as _US2
-            from sqlalchemy import text as _t2
-            copies = db.query(_US2).filter(
-                _US2.id != s.id
-            ).all()
-            _new_filters = dict(config.get("filters", {}))
-            synced = 0
-            for cp in copies:
-                cp_cfg = dict(cp.config or {})
-                if not cp_cfg.get("_locked"):
-                    continue
-                if cp_cfg.get("_source_strategy_id") != s.id:
-                    continue
-                cp_filters = dict(cp_cfg.get("filters", {}))
-                # Copy only the session key from the source; leave the subscriber's
-                # own time_filter, btc_regime, trading_days intact.
-                if _new_filters.get("session"):
-                    cp_filters["session"] = _new_filters["session"]
-                else:
-                    cp_filters.pop("session", None)
-                cp_cfg["filters"] = cp_filters
-                cp.config = cp_cfg
-                synced += 1
-            if synced:
-                db.commit()
-                logger.info(
-                    f"[Strategy {s.id}] Session filter pushed to {synced} locked copies"
-                )
+
+            # — Update marketplace listing title if name changed —
+            if "name" in body:
+                _listing = db.query(StrategyMarketplace).filter(
+                    StrategyMarketplace.strategy_id == s.id
+                ).first()
+                if _listing:
+                    _listing.title = s.name
+                    db.commit()
+                    logger.info(f"[Strategy {s.id}] Marketplace listing title updated to '{s.name}'")
+
+            # — Push sessions and/or trading_days to all locked copies —
+            _push_sessions = "sessions" in body
+            _push_days     = "trading_days" in body
+            if _push_sessions or _push_days:
+                copies = db.query(_US2).filter(_US2.id != s.id).all()
+                _new_filters = dict(config.get("filters", {}))
+                synced = 0
+                for cp in copies:
+                    cp_cfg = dict(cp.config or {})
+                    if not cp_cfg.get("_locked"):
+                        continue
+                    if cp_cfg.get("_source_strategy_id") != s.id:
+                        continue
+                    cp_filters = dict(cp_cfg.get("filters", {}))
+                    if _push_sessions:
+                        if _new_filters.get("session"):
+                            cp_filters["session"] = _new_filters["session"]
+                        else:
+                            cp_filters.pop("session", None)
+                    if _push_days:
+                        if _new_filters.get("trading_days"):
+                            cp_filters["trading_days"] = _new_filters["trading_days"]
+                        else:
+                            cp_filters.pop("trading_days", None)
+                    cp_cfg["filters"] = cp_filters
+                    cp.config = cp_cfg
+                    synced += 1
+                if synced:
+                    db.commit()
+                    logger.info(
+                        f"[Strategy {s.id}] Filters (sessions/trading_days) pushed to {synced} locked copies"
+                    )
 
         # Notify admin via Telegram whenever a strategy is promoted to live
         if s.status == "active" and prev_status != "active":

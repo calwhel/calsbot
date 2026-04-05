@@ -4379,7 +4379,7 @@ async def post_free_telegram_promo(account_poster) -> Optional[Dict]:
 
 
 BITUNIX_CAMPAIGN_IMAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                                       "attached_assets", "IMG_1289_1775309555183.png")
+                                       "attached_assets", "IMG_1209_1775372269740.jpeg")
 BITUNIX_CAMPAIGN_LINK = "https://www.bitunix.com/activity/basic/1774508484?vipCode=fgq74890"
 BITUNIX_CAMPAIGN_START = datetime(2026, 3, 27)
 BITUNIX_CAMPAIGN_END = datetime(2026, 4, 26, 23, 59, 59)
