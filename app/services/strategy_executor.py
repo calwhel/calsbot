@@ -143,6 +143,9 @@ FIAT_STABLE_BLOCKED = {
     "XAUT", "PAXG", "WBTC",
 }
 
+# ── Globally banned symbols — never traded by any strategy ───────────────────
+SYMBOL_BLACKLIST = {"META", "ONT"}
+
 async def _get_raw_tickers(http_client: httpx.AsyncClient) -> Optional[list]:
     """
     Fetch the full MEXC/Binance ticker list once per TTL window.
@@ -243,6 +246,8 @@ async def _get_eligible_symbols(
             base = sym.replace("USDT", "")
             if base in FIAT_STABLE_BLOCKED:
                 continue
+            if base in SYMBOL_BLACKLIST:
+                continue
             if excl_slow and base in SLOW_HIGHCAP_BLOCKED:
                 continue
             vol = float(t.get("quoteVolume", 0))
@@ -265,6 +270,8 @@ async def _get_eligible_symbols(
             continue
         base = sym.replace("USDT", "")
         if base in FIAT_STABLE_BLOCKED:
+            continue
+        if base in SYMBOL_BLACKLIST:
             continue
         if excl_slow and base in SLOW_HIGHCAP_BLOCKED:
             continue

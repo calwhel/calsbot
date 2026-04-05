@@ -1157,7 +1157,30 @@ class TwitterPoster:
                 _update_daily_gainers(all_tickers)
                 logger.debug(f"MEXC tickers: {len(all_tickers)} coins fetched")
 
-            return all_tickers[:limit]
+            top = all_tickers[:limit]
+
+            # ── Enhance with multi-day OHLCV change so tweets reflect the
+            # full move, not just the rolling 24h window which misses pumps
+            # that started 25+ hours ago.
+            import asyncio as _aio
+            async def _enrich(coin: Dict) -> Dict:
+                try:
+                    klines = await _fetch_mexc_ohlcv(coin['symbol'], interval='4h', limit=18)
+                    if klines and len(klines) >= 4:
+                        first_open = float(klines[0][1])
+                        last_close = float(klines[-1][4])
+                        if first_open > 0:
+                            multi_day = (last_close - first_open) / first_open * 100
+                            coin['change_7d'] = round(multi_day, 1)
+                            if multi_day > coin['change']:
+                                coin['change'] = round(multi_day, 1)
+                except Exception:
+                    pass
+                return coin
+
+            top = list(await _aio.gather(*[_enrich(c) for c in top], return_exceptions=False))
+
+            return top
 
         except Exception as e:
             logger.error(f"Failed to fetch top gainers: {e}")
