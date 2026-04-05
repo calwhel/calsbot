@@ -754,6 +754,66 @@ async def cmd_cleardb(message: types.Message):
         db.close()
 
 
+@dp.message(Command("growth"))
+async def cmd_growth(message: types.Message):
+    """Show Twitter account growth stats — admin only"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user or not user.is_admin:
+            await message.answer("❌ Admin only")
+            return
+
+        from app.services.twitter_poster import get_account_growth_summary
+        summary = get_account_growth_summary(days=7)
+
+        if not summary:
+            await message.answer(
+                "📈 <b>Account Growth Tracker</b>\n\n"
+                "No data yet — first snapshot taken 2 minutes after bot start, "
+                "then every 6 hours.\n\n"
+                "Check back after the next snapshot.",
+                parse_mode="HTML"
+            )
+            return
+
+        lines = ["📈 <b>X Account Growth — Last 7 Days</b>\n"]
+        for s in summary:
+            handle = s.get("handle", "?")
+            acc    = s.get("account_name", "?")
+            cur_f  = s.get("current_followers")
+            gained = s.get("gained")
+            pct    = s.get("pct_change")
+            apd    = s.get("avg_per_day")
+            tweets = s.get("current_tweets")
+
+            f_str  = f"{cur_f:,}" if cur_f is not None else "?"
+            if gained is not None:
+                sign = "+" if gained >= 0 else ""
+                g_str = f"{sign}{gained:,} ({sign}{pct:.1f}%)" if pct is not None else f"{sign}{gained:,}"
+                apd_str = f"{sign}{apd}/day" if apd is not None else ""
+            else:
+                g_str   = "not enough data yet"
+                apd_str = ""
+
+            tweet_line = f"  Tweets: {tweets:,}\n" if tweets is not None else ""
+            lines.append(
+                f"<b>@{handle}</b> ({acc})\n"
+                f"  Followers: {f_str}\n"
+                f"  7d change: {g_str}\n"
+                f"  Avg: {apd_str}\n"
+                f"{tweet_line}"
+            )
+
+        lines.append("\n<i>Snapshots every 6h via X API</i>")
+        await message.answer("\n".join(lines), parse_mode="HTML")
+
+    except Exception as e:
+        await message.answer(f"❌ Error: {str(e)[:200]}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     # Track message for health monitor

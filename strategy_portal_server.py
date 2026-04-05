@@ -4251,6 +4251,86 @@ async def executor_force_start(request: Request):
         return {"status": "error", "message": str(e)}
 
 
+@app.get("/api/admin/twitter/growth")
+async def twitter_growth_stats(request: Request, days: int = 7):
+    """
+    Admin endpoint — returns account growth snapshots from X API tracking.
+    Query param: days (default 7, max 90)
+    """
+    secret = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if secret != "tradehub-portal-secret-2025":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    days = max(1, min(90, days))
+    try:
+        from app.services.twitter_poster import get_account_growth_summary, get_all_twitter_accounts
+        summary = get_account_growth_summary(days=days)
+        return {
+            "status": "ok",
+            "days": days,
+            "accounts": summary,
+            "total_accounts": len(summary),
+        }
+    except Exception as e:
+        logger.error(f"[twitter/growth] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/twitter/post-metrics")
+async def twitter_post_metrics_stats(request: Request, days: int = 30):
+    """
+    Admin endpoint — returns aggregated tweet performance by post type.
+    Query param: days (default 30, max 90)
+    """
+    secret = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if secret != "tradehub-portal-secret-2025":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    days = max(1, min(90, days))
+    try:
+        import psycopg2, os
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT post_type,
+                   COUNT(*) AS posts,
+                   ROUND(AVG(impressions))   AS avg_impressions,
+                   ROUND(AVG(likes))         AS avg_likes,
+                   ROUND(AVG(retweets))      AS avg_retweets,
+                   MAX(impressions)          AS best_impressions,
+                   SUM(impressions)          AS total_impressions,
+                   SUM(likes)                AS total_likes
+            FROM twitter_post_metrics
+            WHERE metrics_fetched = TRUE
+              AND posted_at > NOW() - INTERVAL '1 day' * %s
+              AND impressions IS NOT NULL
+            GROUP BY post_type
+            ORDER BY avg_impressions DESC NULLS LAST
+        """, (days,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        result = []
+        for row in rows:
+            pt, posts, avg_imp, avg_likes, avg_rt, best_imp, total_imp, total_likes = row
+            result.append({
+                "post_type":         pt,
+                "posts":             posts,
+                "avg_impressions":   int(avg_imp) if avg_imp else 0,
+                "avg_likes":         int(avg_likes) if avg_likes else 0,
+                "avg_retweets":      int(avg_rt) if avg_rt else 0,
+                "best_impressions":  int(best_imp) if best_imp else 0,
+                "total_impressions": int(total_imp) if total_imp else 0,
+                "total_likes":       int(total_likes) if total_likes else 0,
+            })
+        return {"status": "ok", "days": days, "by_post_type": result}
+    except Exception as e:
+        logger.error(f"[twitter/post-metrics] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Upgrade to Pro (admin grant or payment webhook) ─────────
 @app.post("/api/portal/upgrade")
 async def portal_upgrade(request: Request):

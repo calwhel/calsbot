@@ -2809,6 +2809,195 @@ async def tweet_metrics_fetcher_loop():
         await asyncio.sleep(7200)  # every 2 hours
 
 
+# ═══════════════════════════════════════════════════════════════════
+# ACCOUNT GROWTH TRACKER
+# Snapshots follower/following/tweet counts every 6 hours via X API
+# ═══════════════════════════════════════════════════════════════════
+
+_GROWTH_TABLE_READY = False
+
+
+def _ensure_growth_table():
+    """Create twitter_account_growth table if it doesn't exist."""
+    global _GROWTH_TABLE_READY
+    if _GROWTH_TABLE_READY:
+        return
+    try:
+        import os, psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return
+        conn = psycopg2.connect(url)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS twitter_account_growth (
+                id              SERIAL PRIMARY KEY,
+                account_name    TEXT NOT NULL,
+                handle          TEXT NOT NULL,
+                followers       INTEGER,
+                following       INTEGER,
+                tweet_count     INTEGER,
+                listed_count    INTEGER,
+                checked_at      TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        # Index for fast time-series queries
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_growth_account_time
+            ON twitter_account_growth (account_name, checked_at DESC)
+        """)
+        cur.close()
+        conn.close()
+        _GROWTH_TABLE_READY = True
+        logger.info("✅ twitter_account_growth table ready")
+    except Exception as _e:
+        logger.warning(f"Could not ensure twitter_account_growth table: {_e}")
+
+
+def _take_account_growth_snapshot():
+    """
+    Fetch follower/following/tweet counts for all active accounts from X API v2
+    and store a snapshot in the DB. Called every 6 hours.
+    """
+    _ensure_growth_table()
+    try:
+        import os, psycopg2, tweepy
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        bearer = os.environ.get("TWITTER_BEARER_TOKEN")
+        if not url or not bearer:
+            return
+
+        accounts = get_all_twitter_accounts()
+        if not accounts:
+            return
+
+        client = tweepy.Client(bearer_token=bearer, wait_on_rate_limit=False)
+        conn = psycopg2.connect(url)
+        conn.autocommit = True
+        cur = conn.cursor()
+
+        snapped = 0
+        for acc in accounts:
+            if not acc.is_active:
+                continue
+            handle = (acc.handle or "").lstrip("@").strip()
+            if not handle:
+                continue
+            try:
+                resp = client.get_user(
+                    username=handle,
+                    user_fields=["public_metrics"]
+                )
+                if not resp or not resp.data:
+                    continue
+                pm = resp.data.public_metrics or {}
+                cur.execute("""
+                    INSERT INTO twitter_account_growth
+                        (account_name, handle, followers, following, tweet_count, listed_count)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (
+                    acc.name,
+                    handle,
+                    pm.get("followers_count"),
+                    pm.get("following_count"),
+                    pm.get("tweet_count"),
+                    pm.get("listed_count", 0),
+                ))
+                snapped += 1
+                logger.info(
+                    f"📈 Growth snapshot: @{handle} — "
+                    f"{pm.get('followers_count', '?')} followers, "
+                    f"{pm.get('tweet_count', '?')} tweets"
+                )
+            except Exception as _ae:
+                logger.warning(f"Could not snapshot @{handle}: {_ae}")
+
+        cur.close()
+        conn.close()
+        logger.info(f"📈 Growth tracker: snapped {snapped} accounts")
+    except Exception as _e:
+        logger.warning(f"Growth snapshot error: {_e}")
+
+
+def get_account_growth_summary(days: int = 7) -> list:
+    """
+    Return a growth summary for all tracked accounts over the last N days.
+    Each item: {account_name, handle, current_followers, followers_N_days_ago,
+                 gained, pct_change, current_tweets, avg_followers_per_day}
+    """
+    _ensure_growth_table()
+    try:
+        import os, psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return []
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        cur.execute("""
+            WITH latest AS (
+                SELECT DISTINCT ON (account_name)
+                    account_name, handle, followers, tweet_count, checked_at
+                FROM twitter_account_growth
+                ORDER BY account_name, checked_at DESC
+            ),
+            earliest AS (
+                SELECT DISTINCT ON (account_name)
+                    account_name, followers AS old_followers, checked_at AS old_ts
+                FROM twitter_account_growth
+                WHERE checked_at >= NOW() - INTERVAL '1 day' * %s
+                ORDER BY account_name, checked_at ASC
+            )
+            SELECT
+                l.account_name,
+                l.handle,
+                l.followers          AS current_followers,
+                e.old_followers      AS followers_then,
+                l.tweet_count        AS current_tweets,
+                l.checked_at         AS last_checked
+            FROM latest l
+            LEFT JOIN earliest e USING (account_name)
+            ORDER BY l.followers DESC NULLS LAST
+        """, (days,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        results = []
+        for row in rows:
+            acc_name, handle, cur_f, old_f, cur_t, last_chk = row
+            gained = (cur_f - old_f) if (cur_f is not None and old_f is not None) else None
+            pct = round((gained / old_f * 100), 2) if (gained is not None and old_f and old_f > 0) else None
+            apd = round(gained / days, 1) if gained is not None else None
+            results.append({
+                "account_name":        acc_name,
+                "handle":              handle,
+                "current_followers":   cur_f,
+                "followers_then":      old_f,
+                "gained":              gained,
+                "pct_change":          pct,
+                "current_tweets":      cur_t,
+                "avg_per_day":         apd,
+                "last_checked":        str(last_chk) if last_chk else None,
+            })
+        return results
+    except Exception as _e:
+        logger.warning(f"Could not get growth summary: {_e}")
+        return []
+
+
+async def account_growth_tracker_loop():
+    """Background loop — takes follower/growth snapshots every 6 hours."""
+    _ensure_growth_table()
+    await asyncio.sleep(120)  # 2 min delay on startup — let accounts init first
+    while True:
+        try:
+            await asyncio.to_thread(_take_account_growth_snapshot)
+        except Exception as _e:
+            logger.warning(f"Account growth tracker loop error: {_e}")
+        await asyncio.sleep(21600)  # every 6 hours
+
+
 def get_twitter_schedule() -> Dict:
     """Get the full posting schedule and next post info"""
     now = datetime.utcnow()
@@ -2933,6 +3122,10 @@ async def auto_post_loop():
     # Start background engagement metrics fetcher
     asyncio.create_task(tweet_metrics_fetcher_loop())
     logger.info("📊 Tweet engagement metrics fetcher started")
+
+    # Start account growth tracker (follower snapshots every 6h)
+    asyncio.create_task(account_growth_tracker_loop())
+    logger.info("📈 Account growth tracker started")
 
     loop_count = 0
     while True:
