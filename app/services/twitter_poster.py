@@ -2932,7 +2932,7 @@ def get_account_growth_summary(days: int = 7) -> list:
         url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
         if not url:
             return []
-        conn = psycopg2.connect(url)
+        conn = psycopg2.connect(url, options="-c statement_timeout=8000 -c connect_timeout=5")
         cur = conn.cursor()
         cur.execute("""
             WITH latest AS (

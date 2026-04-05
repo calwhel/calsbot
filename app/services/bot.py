@@ -754,13 +754,33 @@ async def cmd_cleardb(message: types.Message):
         db.close()
 
 
+def _is_admin_direct(telegram_id: str) -> bool:
+    """Fast admin check via raw psycopg2 with a short timeout — avoids the shared ORM pool."""
+    import os, psycopg2
+    url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not url:
+        return False
+    try:
+        conn = psycopg2.connect(url, options="-c statement_timeout=6000 -c connect_timeout=5")
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT is_admin FROM users WHERE telegram_id = %s LIMIT 1",
+            (telegram_id,)
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return bool(row and row[0])
+    except Exception:
+        return False
+
+
 @dp.message(Command("trends"))
 async def cmd_trends(message: types.Message):
     """Show today's trending crypto coins and topics discovered from X — admin only"""
-    db = SessionLocal()
     try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user or not user.is_admin:
+        is_admin = await asyncio.to_thread(_is_admin_direct, str(message.from_user.id))
+        if not is_admin:
             await message.answer("❌ Admin only")
             return
 
@@ -839,17 +859,14 @@ async def cmd_trends(message: types.Message):
 
     except Exception as e:
         await message.answer(f"❌ Error: {str(e)[:300]}")
-    finally:
-        db.close()
 
 
 @dp.message(Command("growth"))
 async def cmd_growth(message: types.Message):
     """Show Twitter account growth stats — admin only"""
-    db = SessionLocal()
     try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user or not user.is_admin:
+        is_admin = await asyncio.to_thread(_is_admin_direct, str(message.from_user.id))
+        if not is_admin:
             await message.answer("❌ Admin only")
             return
 
@@ -899,8 +916,6 @@ async def cmd_growth(message: types.Message):
 
     except Exception as e:
         await message.answer(f"❌ Error: {str(e)[:200]}")
-    finally:
-        db.close()
 
 
 @dp.message(Command("start"))
