@@ -754,6 +754,95 @@ async def cmd_cleardb(message: types.Message):
         db.close()
 
 
+@dp.message(Command("trends"))
+async def cmd_trends(message: types.Message):
+    """Show today's trending crypto coins and topics discovered from X — admin only"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user or not user.is_admin:
+            await message.answer("❌ Admin only")
+            return
+
+        from app.services.twitter_poster import (
+            get_todays_trending_coins, get_todays_trending_topics,
+            _DAILY_TRENDS_CACHE
+        )
+
+        import time as _time
+        cache_date = _DAILY_TRENDS_CACHE.get("date", "")
+        today_str  = __import__("datetime").datetime.utcnow().date().isoformat()
+        cache_age  = ""
+        _ts = _DAILY_TRENDS_CACHE.get("ts", 0)
+        if _ts:
+            secs_old = int(_time.time() - _ts)
+            if secs_old < 3600:
+                cache_age = f"{secs_old // 60}m ago"
+            else:
+                cache_age = f"{secs_old // 3600}h ago"
+
+        coins  = get_todays_trending_coins(15)
+        topics = get_todays_trending_topics(8)
+
+        if not coins and not topics:
+            await message.answer(
+                "🔥 <b>Today's X Trends</b>\n\n"
+                "No trend data yet.\n\n"
+                "<b>Source:</b> X API — searches crypto posts with 20+ likes from last 24h\n"
+                "Discovery runs 60s after bot start, then every 4 hours.\n\n"
+                "Check back shortly or send /trends again in a few minutes.",
+                parse_mode="HTML"
+            )
+            return
+
+        fresh = "✅ fresh" if cache_date == today_str else "⚠️ stale"
+        header = (
+            f"🔥 <b>Today's X Trends</b>  <i>({fresh}"
+            + (f", updated {cache_age}" if cache_age else "") + ")</i>\n"
+            f"<i>Source: X API search — crypto posts with 20+ likes / 24h</i>\n\n"
+        )
+
+        coins_block = ""
+        if coins:
+            coins_block = "<b>🪙 Trending Coins</b>\n"
+            for i, c in enumerate(coins[:12], 1):
+                bar = "█" * min(int(c.get("trend_score", 0) / 20), 10)
+                coins_block += (
+                    f"{i}. <b>${c['symbol']}</b>  "
+                    f"score {c.get('trend_score', 0):.0f}  "
+                    f"❤️ {c.get('avg_likes', 0):.0f} avg  "
+                    f"📢 {c.get('mentions', 0)} posts\n"
+                )
+
+        topics_block = ""
+        if topics:
+            topics_block = "\n<b>💬 Trending Topics</b>\n"
+            for i, t in enumerate(topics[:6], 1):
+                topics_block += (
+                    f"{i}. <b>{t['topic']}</b>  "
+                    f"score {t.get('trend_score', 0):.0f}  "
+                    f"❤️ {t.get('avg_likes', 0):.0f} avg  "
+                    f"📢 {t.get('mentions', 0)} posts\n"
+                )
+
+        if _ts:
+            mins_left = max(0, 240 - int((_time.time() - _ts) / 60))
+            refresh_str = f"{mins_left}m"
+        else:
+            refresh_str = "4h"
+        footer = (
+            "\n<i>Posts automatically pick coins from this list.\n"
+            f"Refreshes every 4h. Next refresh in ~{refresh_str}.</i>"
+        )
+
+        await message.answer(header + coins_block + topics_block + footer, parse_mode="HTML")
+
+    except Exception as e:
+        await message.answer(f"❌ Error: {str(e)[:300]}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("growth"))
 async def cmd_growth(message: types.Message):
     """Show Twitter account growth stats — admin only"""
