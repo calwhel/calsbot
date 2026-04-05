@@ -2408,6 +2408,84 @@ def _save_posted_slots_to_disk(slots: set, offsets: dict):
         logger.warning(f"Could not save posted slots to disk: {_e}")
 
 
+# ── DB-backed slot persistence (survives restarts even if /tmp is cleared) ────
+_TWITTER_SLOTS_TABLE_READY = False
+
+def _ensure_twitter_slots_table():
+    """Create the twitter_schedule_slots table if it doesn't exist."""
+    global _TWITTER_SLOTS_TABLE_READY
+    if _TWITTER_SLOTS_TABLE_READY:
+        return
+    try:
+        import os, psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return
+        conn = psycopg2.connect(url)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS twitter_schedule_slots (
+                id          SERIAL PRIMARY KEY,
+                slot_date   DATE NOT NULL,
+                slot_key    TEXT NOT NULL,
+                created_at  TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (slot_date, slot_key)
+            )
+        """)
+        cur.close()
+        conn.close()
+        _TWITTER_SLOTS_TABLE_READY = True
+    except Exception as _e:
+        logger.warning(f"Could not ensure twitter_schedule_slots table: {_e}")
+
+
+def _load_posted_slots_from_db() -> set:
+    """Load today's posted slot keys from the database. Restart-safe."""
+    _ensure_twitter_slots_table()
+    try:
+        import os, psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return set()
+        today = datetime.utcnow().date().isoformat()
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        cur.execute("SELECT slot_key FROM twitter_schedule_slots WHERE slot_date = %s", (today,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        slots = {r[0] for r in rows}
+        if slots:
+            logger.info(f"🐦 Loaded {len(slots)} posted slots from DB (restart-safe)")
+        return slots
+    except Exception as _e:
+        logger.warning(f"Could not load posted slots from DB: {_e}")
+        return set()
+
+
+def _save_slot_to_db(slot_key: str):
+    """Persist a posted slot key to the database."""
+    _ensure_twitter_slots_table()
+    try:
+        import os, psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return
+        today = datetime.utcnow().date().isoformat()
+        conn = psycopg2.connect(url)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO twitter_schedule_slots (slot_date, slot_key) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (today, slot_key)
+        )
+        cur.close()
+        conn.close()
+    except Exception as _e:
+        logger.warning(f"Could not save slot to DB: {_e}")
+
+
 def get_twitter_schedule() -> Dict:
     """Get the full posting schedule and next post info"""
     now = datetime.utcnow()
@@ -2492,10 +2570,13 @@ async def auto_post_loop():
     logger.info("🐦 AUTO-POST LOOP INITIALIZING...")
     logger.info("=" * 50)
 
-    # Restore today's posted slots from disk so restarts don't trigger duplicates
+    # Restore today's posted slots — DB is authoritative, /tmp/ is fast cache
     _restored_slots, _restored_offsets = _load_posted_slots_from_disk()
     POSTED_SLOTS.update(_restored_slots)
     SLOT_OFFSETS.update(_restored_offsets)
+    # Also load from DB (survives /tmp/ being cleared on restarts)
+    _db_slots = _load_posted_slots_from_db()
+    POSTED_SLOTS.update(_db_slots)
 
     # Wait a bit for database to be ready
     await asyncio.sleep(5)
@@ -2630,11 +2711,12 @@ async def auto_post_loop():
                             _save_posted_slots_to_disk(POSTED_SLOTS, SLOT_OFFSETS)
                             await notify_admin_post_result(account.name, post_type, False, error_msg)
                     
-                    # Mark the base slot as done if any account posted
-                    if posted_any:
-                        POSTED_SLOTS.add(slot_key)
-                        _save_posted_slots_to_disk(POSTED_SLOTS, SLOT_OFFSETS)
-                    
+                    # Always mark the base slot as done — prevents re-firing on the next
+                    # loop cycle even if all accounts failed or skipped this slot.
+                    POSTED_SLOTS.add(slot_key)
+                    _save_slot_to_db(slot_key)          # DB — survives restarts
+                    _save_posted_slots_to_disk(POSTED_SLOTS, SLOT_OFFSETS)  # /tmp/ cache
+
                     break
             
             # Check every 2 minutes
@@ -2943,11 +3025,11 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
             return await post_quick_ta(account_poster, main_poster)
         
         elif post_type == 'tradehub_promo':
-            # While the Bitunix campaign is active, every other promo slot
-            # posts a campaign tweet instead so the campaign gets good coverage.
+            # While the Bitunix campaign is active, ~1-in-4 promo slots becomes
+            # a campaign tweet. Keeps coverage without flooding the timeline.
             _now = datetime.utcnow()
             _campaign_active = BITUNIX_CAMPAIGN_START <= _now <= BITUNIX_CAMPAIGN_END
-            if _campaign_active and random.random() < 0.5:
+            if _campaign_active and random.random() < 0.25:
                 return await post_bitunix_campaign(account_poster)
             return await post_tradehub_promo(account_poster)
 
@@ -4268,7 +4350,7 @@ async def post_for_social_account(
     elif post_type == 'tradehub_promo':
         _now = datetime.utcnow()
         _campaign_active = BITUNIX_CAMPAIGN_START <= _now <= BITUNIX_CAMPAIGN_END
-        if _campaign_active and random.random() < 0.5:
+        if _campaign_active and random.random() < 0.25:
             return await post_bitunix_campaign(account_poster)
         return await post_tradehub_promo(account_poster)
 
