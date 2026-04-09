@@ -591,11 +591,12 @@ async def terms_page():
 
 # ── CallyX brand landing page ─────────────────────────────────────────────────
 # Isolated: only accessible via /start or /callyx — no impact on any other route.
+_callyx_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "templates", "callyx.html")
 
 @app.get("/start", response_class=HTMLResponse)
 @app.get("/callyx", response_class=HTMLResponse)
 async def callyx_page():
-    return FileResponse("app/templates/callyx.html", media_type="text/html")
+    return FileResponse(_callyx_file, media_type="text/html")
 
 
 _CRYPTODICTATOR_HTML = """<!DOCTYPE html>
@@ -716,10 +717,12 @@ async def cryptodictator_page():
 
 
 # ── LarkNexus affiliate landing page ──────────────────────────────────────────
+_ln_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "templates", "larknexus.html")
+
 @app.get("/larknexus", response_class=HTMLResponse)
 @app.get("/ln", response_class=HTMLResponse)
 async def larknexus_page():
-    return FileResponse("app/templates/larknexus.html", media_type="text/html")
+    return FileResponse(_ln_file, media_type="text/html")
 
 
 @app.post("/login")
