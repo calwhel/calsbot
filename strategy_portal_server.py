@@ -724,8 +724,11 @@ except Exception:
     _LARKNEXUS_HTML = "<html><body><h1>LarkNexus</h1></body></html>"
 
 @app.get("/larknexus", response_class=HTMLResponse)
-@app.get("/ln", response_class=HTMLResponse)
 async def larknexus_page():
+    return HTMLResponse(content=_LARKNEXUS_HTML, status_code=200)
+
+@app.get("/ln", response_class=HTMLResponse)
+async def larknexus_page_short():
     return HTMLResponse(content=_LARKNEXUS_HTML, status_code=200)
 
 
