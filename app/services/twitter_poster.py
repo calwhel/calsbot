@@ -5779,6 +5779,38 @@ HIGH_VIEWING_COINS = MEME_COINS | {
     'ICP', 'HBAR', 'TRX', 'ETC', 'BCH',
 }
 
+# Coins confirmed/highly likely to be listed on Yubit USDT perpetuals.
+# Used to filter top-gainer picks so campaign posts only reference
+# coins traders can actually open on Yubit.
+YUBIT_LISTED_SYMBOLS = {
+    # Layer 1 majors
+    'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOT', 'TRX',
+    'LTC', 'BCH', 'ETC', 'ATOM', 'NEAR', 'ICP', 'HBAR', 'FIL', 'VET',
+    'ALGO', 'XLM', 'EGLD', 'FLOW', 'THETA', 'XTZ', 'EOS', 'ZIL',
+    # Layer 2 / Ethereum ecosystem
+    'ARB', 'OP', 'MATIC', 'IMX', 'LRC', 'METIS', 'BOBA', 'ZKJ',
+    # DeFi blue chips
+    'UNI', 'AAVE', 'MKR', 'CRV', 'SNX', 'COMP', 'SUSHI', 'BAL',
+    'YFI', '1INCH', 'RUNE', 'CAKE', 'DYDX', 'GMX', 'PENDLE', 'ENA',
+    # AI / infra
+    'FET', 'RENDER', 'WLD', 'TAO', 'OCEAN', 'GRT', 'LINK', 'API3',
+    'BAND', 'ONDO', 'IO',
+    # Move / new L1
+    'SUI', 'APT', 'SEI', 'INJ', 'TIA', 'LAYER', 'STRK',
+    # Popular alts
+    'STX', 'GALA', 'SAND', 'MANA', 'AXS', 'ENJ', 'CHZ', 'AUDIO',
+    'BLUR', 'IMX', 'MAGIC', 'LDO', 'RPL', 'SSV', 'ETHFI',
+    'JUP', 'JTO', 'WEN', 'RAY', 'PYTH', 'DRIFT', 'W',
+    'ORDI', 'SATS', 'RATS', 'MEME', 'NOT', 'TON',
+    # Meme coins commonly listed on perp DEXes/CEXes
+    'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'BOME', 'POPCAT',
+    'TURBO', 'BRETT', 'NEIRO', 'MOG', 'DOGS',
+    # Other high-volume alts
+    'FTM', 'KAVA', 'ZEC', 'DASH', 'IOTA', 'NEO', 'ONT', 'QTUM',
+    'ICX', 'ZRX', 'BAT', 'KNC', 'RSR', 'ANKR', 'SKL', 'NMR',
+    'CELR', 'CELO', 'ACH', 'CTSI', 'ORN', 'LQTY', 'SPELL', 'RNDR',
+}
+
 
 async def get_live_tickers_for_campaign() -> Dict:
     """Fetch actual top gainers of the day for campaign posts.
@@ -5799,7 +5831,7 @@ async def get_live_tickers_for_campaign() -> Dict:
     MIN_VOLUME_USD = 2_000_000  # $2M minimum 24h volume
 
     def pick_actual_gainers(raw: list) -> list:
-        """Sort by % gain, filter by volume, skip garbage."""
+        """Sort by % gain, filter by volume + Yubit listing, skip garbage."""
         candidates = []
         for g in raw:
             sym = g.get('symbol', '').upper()
@@ -5810,6 +5842,9 @@ async def get_live_tickers_for_campaign() -> Dict:
             if vol < MIN_VOLUME_USD:
                 continue
             if sym in _SKIP:
+                continue
+            # Must be a coin actually listed on Yubit so the post is accurate
+            if sym not in YUBIT_LISTED_SYMBOLS:
                 continue
             # Skip obvious leveraged token names (contain digits adjacent to L/S)
             import re as _re
