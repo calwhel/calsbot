@@ -4920,7 +4920,7 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
 
         vol_str  = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
         mcap_str = f"${mcap/1e9:.2f}B" if mcap >= 1e9 else (f"${mcap/1e6:.0f}M" if mcap > 0 else "")
-        cap_note = f" · mcap {mcap_str}" if mcap_str else ""
+        cap_note = f" (mcap {mcap_str})" if mcap_str else ""
 
         # AI-generated card images disabled — text-only posts
         meme_media_ids = None
@@ -4998,69 +4998,18 @@ async def post_whale_alert(account_poster: MultiAccountPoster, main_poster) -> O
         price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
         sign = "+" if change >= 0 else ""
         
-        style = random.randint(1, 8)
-        if style == 1:
-            tweet_text = f"""Interesting... ${symbol} just did {vol_str} in volume
+        templates = [
+            f"something unusual happening with ${symbol}. {vol_str} in volume today — that's not normal activity for this coin. price is {sign}{change:.1f}% at {price_str}. when volume spikes like this, someone usually knows something.",
+            f"the volume on ${symbol} caught me off guard. {vol_str} in 24h and the price is {sign}{change:.1f}% at {price_str}. this kind of volume doesn't show up randomly.",
+            f"${symbol} is trading {vol_str} in volume today and I can't ignore it. price is sitting at {price_str}, {sign}{change:.1f}% on the day. either there's positioning happening or news I haven't seen yet.",
+            f"been watching ${symbol} and the volume just told me something. {vol_str} in 24 hours — that's real size moving. price is {sign}{change:.1f}% at {price_str}. I always pay attention when volume does this.",
+            f"${symbol} volume alert. {vol_str} traded today. price at {price_str}, {sign}{change:.1f}% on the day. smart money tends to be early — and this much volume doesn't come from retail.\n\nsomething is happening here.",
+            f"can't ignore {vol_str} in volume on ${symbol}. the price is {sign}{change:.1f}% at {price_str} and the volume profile looks nothing like a normal day.\n\nwhen I see this pattern I stop and pay attention.",
+            f"{vol_str} in volume on ${symbol} today. that's not retail buying.\n\nprice is {sign}{change:.1f}% at {price_str} and the move came with enough size that someone with serious capital was involved. watching closely.",
+            f"spotted unusual activity on ${symbol} — {vol_str} in 24h volume, price at {price_str} ({sign}{change:.1f}%). this is exactly the kind of setup I track. nothing moves like this without a reason.",
+        ]
 
-That's not normal activity for this coin
-
-Price {sign}{change:.1f}% at {price_str}
-
-When volume spikes like this, someone usually knows something"""
-        elif style == 2:
-            tweet_text = f"""${symbol} volume is through the roof today
-
-{vol_str} traded in 24h
-Currently {sign}{change:.1f}%
-
-This kind of volume doesn't happen randomly
-
-Worth keeping an eye on"""
-        elif style == 3:
-            tweet_text = f"""Big money moving into ${symbol}
-
-{vol_str} volume (way above average)
-Price: {price_str} ({sign}{change:.1f}%)
-
-Either whales know something or someone's accumulating"""
-        elif style == 4:
-            tweet_text = f"""The volume on ${symbol} right now is insane
-
-{vol_str} in 24 hours
-{sign}{change:.1f}% on the day
-
-I always pay attention when volume spikes like this"""
-        elif style == 5:
-            tweet_text = f"""${symbol} showing serious accumulation signs
-
-Volume: {vol_str}
-Price: {price_str}
-24h: {sign}{change:.1f}%
-
-Smart money tends to be early"""
-        elif style == 6:
-            tweet_text = f"""Can't ignore this ${symbol} volume
-
-{vol_str} traded today - that's massive for this coin
-
-Currently trading at {price_str}
-
-Something's brewing here"""
-        elif style == 7:
-            tweet_text = f"""${symbol} whale activity detected
-
-{vol_str} volume isn't retail buying
-{sign}{change:.1f}% move
-
-When you see volume like this, pay attention"""
-        else:
-            tweet_text = f"""Spotted unusual activity on ${symbol}
-
-Volume just hit {vol_str}
-Price sitting at {price_str} ({sign}{change:.1f}%)
-
-This is the kind of thing I watch for"""
-        
+        tweet_text = random.choice(templates)
         result = account_poster.post_tweet(tweet_text)
         
         if result and result.get('success'):
@@ -5112,63 +5061,31 @@ async def post_funding_extreme(account_poster: MultiAccountPoster) -> Optional[D
         is_long_crowded = top['rate'] > 0
         rate_str = f"{abs(top['rate']):.3f}%"
         
-        style = random.randint(1, 6)
-        if style == 1:
-            if is_long_crowded:
-                tweet_text = f"""${top['symbol']} funding rate just hit {rate_str}
+        funding_sign = '+' if is_long_crowded else '-'
+        crowd_side   = "longs" if is_long_crowded else "shorts"
+        other_side   = "shorts" if is_long_crowded else "longs"
+        squeeze_type = "short squeeze" if not is_long_crowded else "long squeeze"
 
-That's a lot of longs paying shorts right now
-
-When everyone's on one side of the trade... you know what usually happens
-
-Be careful out there"""
-            else:
-                tweet_text = f"""${top['symbol']} funding rate at -{rate_str}
-
-Shorts are paying longs heavily
-
-Could be setting up for a squeeze if price starts moving up
-
-Interesting setup to watch"""
-        elif style == 2:
-            crowd = "long" if is_long_crowded else "short"
-            tweet_text = f"""Everyone's {crowd} on ${top['symbol']} right now
-
-Funding: {'+' if is_long_crowded else '-'}{rate_str}
-
-These crowded trades have a way of reversing when you least expect it"""
-        elif style == 3:
-            tweet_text = f"""${top['symbol']} funding is getting extreme
-
-{'+' if is_long_crowded else '-'}{rate_str} per 8 hours
-
-The market has a way of punishing overcrowded positions
-
-Not saying it'll happen now but worth noting"""
-        elif style == 4:
-            direction = "bullish" if is_long_crowded else "bearish"
-            opposite = "longs" if is_long_crowded else "shorts"
-            tweet_text = f"""Traders are extremely {direction} on ${top['symbol']}
-
-Funding at {'+' if is_long_crowded else '-'}{rate_str}
-
-If this reverses, a lot of {opposite} could get caught"""
-        elif style == 5:
-            tweet_text = f"""Funding rate alert: ${top['symbol']}
-
-Currently at {'+' if is_long_crowded else '-'}{rate_str}
-
-This is one of the highest I've seen in a while
-
-Usually means the crowd is about to be wrong"""
+        if is_long_crowded:
+            templates = [
+                f"${top['symbol']} funding rate hit {rate_str}. that's a lot of longs paying shorts every 8 hours. when everyone's on one side of the trade, you know what usually happens — the market finds a way to embarrass the crowd.",
+                f"everyone's long on ${top['symbol']} right now. funding at {funding_sign}{rate_str}. these crowded positions have a way of reversing when you least expect it. not a prediction, just an observation worth tracking.",
+                f"${top['symbol']} funding at {rate_str} is getting uncomfortable for the longs. that cost adds up fast. if buyers don't follow through soon, the unwind can be brutal.",
+                f"${top['symbol']} funding is at {rate_str}. one of the higher readings I've seen recently. when the crowd is this unanimously long, the market usually finds a reason to prove them wrong.",
+                f"been watching the funding on ${top['symbol']} and it's at {rate_str} now. longs are paying heavily. the market has a way of punishing overcrowded positions — not always immediately, but eventually.",
+                f"funding rate on ${top['symbol']}: {rate_str}. the {crowd_side} are paying up to hold their positions. historically this kind of reading tends to precede some turbulence. watching carefully.",
+            ]
         else:
-            squeeze_type = "short squeeze" if not is_long_crowded else "long squeeze"
-            tweet_text = f"""${top['symbol']} looking ripe for a {squeeze_type}
+            templates = [
+                f"${top['symbol']} funding is at -{rate_str} — shorts are paying longs every 8 hours. that's a real cost for holding short. if price starts moving up, the unwind could be fast.",
+                f"everyone's short on ${top['symbol']} right now. funding at {funding_sign}{rate_str}. short squeezes from these setups can be violent because the cost of staying short keeps climbing.",
+                f"${top['symbol']} funding at -{rate_str}. shorts are extremely crowded here. it's not always wrong to be in the crowd — but it's always worth knowing when you are.",
+                f"noticed ${top['symbol']} funding is at -{rate_str}. that's significant short-side crowding. the crowd might be right about direction but the funding cost makes it expensive to stay in this trade.",
+                f"funding rate alert on ${top['symbol']}: -{rate_str}. {crowd_side} are paying to hold. if buyers step in, the {other_side} who've been holding here could see a nasty reversal.",
+                f"${top['symbol']} is looking like a potential {squeeze_type} setup. funding at -{rate_str} means {crowd_side} are paying up. one good catalyst and this gets violent.",
+            ]
 
-Funding: {'+' if is_long_crowded else '-'}{rate_str}
-
-When funding gets this extreme, reversals tend to be violent"""
-        
+        tweet_text = random.choice(templates)
         result = account_poster.post_tweet(tweet_text)
         
         if result and result.get('success'):
