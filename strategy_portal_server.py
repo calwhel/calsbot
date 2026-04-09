@@ -596,6 +596,7 @@ _callyx_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "
 @app.get("/start", response_class=HTMLResponse)
 @app.get("/callyx", response_class=HTMLResponse)
 async def callyx_page():
+    logger.info(f"[callyx] serving from {_callyx_file}, exists={os.path.exists(_callyx_file)}")
     return FileResponse(_callyx_file, media_type="text/html")
 
 
@@ -722,6 +723,7 @@ _ln_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "temp
 @app.get("/larknexus", response_class=HTMLResponse)
 @app.get("/ln", response_class=HTMLResponse)
 async def larknexus_page():
+    logger.info(f"[larknexus] serving from {_ln_file}, exists={os.path.exists(_ln_file)}")
     return FileResponse(_ln_file, media_type="text/html")
 
 
