@@ -28,9 +28,9 @@ if "neon" in _db_url or "neondb" in _db_url:
 engine = create_engine(
     _db_url,
     poolclass=QueuePool,
-    pool_size=3,
-    max_overflow=5,
-    pool_timeout=20,
+    pool_size=5,       # raised from 3 — handles executor + monitors + HTTP concurrently
+    max_overflow=10,   # raised from 5 — short bursts when multiple strategies fire together
+    pool_timeout=10,   # fail fast so a slow DB never blocks the whole server
     pool_recycle=240,        # recycle every 4 min — well under Neon's 5-min idle limit
     pool_pre_ping=True,
     connect_args=_connect_args,
