@@ -14,9 +14,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-SCAN_INTERVAL_SECONDS  = 15    # how often to evaluate strategies
-PAPER_MONITOR_INTERVAL = 30    # how often to check open paper positions (seconds)
-MAX_CONCURRENT         = 5     # parallel strategy evaluations (stay within DB pool)
+SCAN_INTERVAL_SECONDS  = 5     # how often to evaluate strategies
+PAPER_MONITOR_INTERVAL = 15    # how often to check open paper positions (seconds)
+MAX_CONCURRENT         = 10    # parallel strategy evaluations (stay within DB pool)
 PAPER_MAX_HOLD_HOURS   = 168   # auto-expire paper positions after this many hours (7 days)
 
 # ─── Shared API caches ───────────────────────────────────────────────────────
@@ -1070,9 +1070,9 @@ async def run_live_position_monitor():
     from app.strategy_models import StrategyExecution, UserStrategy
     from app.models import User
 
-    logger.info("🔴 Live position monitor started (30s interval)")
+    logger.info("🔴 Live position monitor started (10s interval)")
 
-    LIVE_MONITOR_INTERVAL = 30
+    LIVE_MONITOR_INTERVAL = 10
 
     async def _close_live_execution_and_notify(ex, outcome, exit_price, db, source="price"):
         """Shared helper: commit a live execution close and fire the Telegram DM.
@@ -1517,25 +1517,58 @@ async def evaluate_and_fire(
 
     no_duplicate_symbol = bool(risk.get("no_duplicate_symbol", False))
 
+    # ── Step 1: Fast sync pre-filter (no awaits) ─────────────────────────────
+    # Exclude symbols already fired today or still in cooldown window.
+    candidate_symbols: List[str] = []
     for symbol in symbols[:50]:
         if no_duplicate_symbol and _fired_today_for_symbol(strategy.id, symbol, db):
             continue
-
         last_fired = _last_fired_time(strategy.id, symbol, db)
         if last_fired:
             elapsed_mins = (datetime.utcnow() - last_fired).total_seconds() / 60
             if elapsed_mins < cooldown_mins:
                 continue
+        candidate_symbols.append(symbol)
 
-        price_data = await _fetch_price_and_ta(symbol, http_client)
+    if not candidate_symbols:
+        return
+
+    # ── Step 2: Parallel price + TA fetch for ALL candidates at once ──────────
+    # Turns O(n × fetch_time) → O(fetch_time).  Results are also stored in the
+    # shared _PRICE_TA_CACHE so subsequent calls inside evaluate_strategy_conditions
+    # (which fetches its own klines) benefit from the same warm cache.
+    _price_results = await asyncio.gather(
+        *[_fetch_price_and_ta(sym, http_client) for sym in candidate_symbols],
+        return_exceptions=True,
+    )
+    price_map: Dict[str, Dict] = {
+        sym: res
+        for sym, res in zip(candidate_symbols, _price_results)
+        if isinstance(res, dict) and res
+    }
+
+    # ── Step 3: Parallel HTF trend checks (if filter active) ─────────────────
+    htf_pass: Dict[str, bool] = {}
+    if filters.get("htf_trend") and price_map:
+        _htf_syms    = [s for s in candidate_symbols if s in price_map]
+        _htf_results = await asyncio.gather(
+            *[_check_htf_trend(s, direction_pref, http_client) for s in _htf_syms],
+            return_exceptions=True,
+        )
+        htf_pass = {
+            sym: (res is True)
+            for sym, res in zip(_htf_syms, _htf_results)
+        }
+
+    # ── Step 4: Sequential condition evaluation — price data already cached ───
+    for symbol in candidate_symbols:
+        price_data = price_map.get(symbol)
         if not price_data:
             continue
 
-        # HTF (1H) trend filter — skip if symbol is trending against entry direction
-        if filters.get("htf_trend"):
-            if not await _check_htf_trend(symbol, direction_pref, http_client):
-                logger.debug(f"[Strategy {strategy.id}] HTF trend filter blocked {symbol}")
-                continue
+        if filters.get("htf_trend") and not htf_pass.get(symbol):
+            logger.debug(f"[Strategy {strategy.id}] HTF trend filter blocked {symbol}")
+            continue
 
         enhanced_ta   = price_data.get("enhanced_ta", {})
         current_price = price_data.get("price", 0)
