@@ -717,11 +717,16 @@ async def cryptodictator_page():
 
 # ── LarkNexus affiliate landing page ──────────────────────────────────────────
 _ln_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "templates", "larknexus.html")
+try:
+    with open(_ln_file, "r", encoding="utf-8") as _f:
+        _LARKNEXUS_HTML = _f.read()
+except Exception:
+    _LARKNEXUS_HTML = "<html><body><h1>LarkNexus</h1></body></html>"
 
 @app.get("/larknexus", response_class=HTMLResponse)
 @app.get("/ln", response_class=HTMLResponse)
 async def larknexus_page():
-    return FileResponse(_ln_file, media_type="text/html")
+    return HTMLResponse(content=_LARKNEXUS_HTML, status_code=200)
 
 
 @app.post("/login")
