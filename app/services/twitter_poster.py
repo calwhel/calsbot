@@ -4749,9 +4749,17 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
                     highs  = [float(c[2]) for c in ohlcv]
                     lows   = [float(c[3]) for c in ohlcv]
                     vols   = [float(c[5]) for c in ohlcv]
-                    # EMA using most recent candles
-                    ema9   = sum(closes[-9:]) / 9
-                    ema21  = sum(closes[-21:]) / 21
+                    # True exponential EMA: seed from SMA then walk forward
+                    def _ema(series: list, period: int) -> float:
+                        if len(series) < period:
+                            return sum(series) / len(series)
+                        k = 2.0 / (period + 1)
+                        val = sum(series[:period]) / period  # SMA seed
+                        for price in series[period:]:
+                            val = price * k + val * (1 - k)
+                        return val
+                    ema9   = _ema(closes, 9)
+                    ema21  = _ema(closes, 21)
                     # RSI-14 on the most recent 15 closes (→ 14 deltas)
                     recent_closes = closes[-15:]
                     gains, losses = [], []
@@ -4866,7 +4874,7 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
 
 
 async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
-    """Post about a trending meme coin from CoinGecko top gainers with a tradehubmarkets.com CTA."""
+    """Post about a trending meme coin from CoinGecko top gainers in KOL voice."""
     MEME_COINS = {
         'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO',
         'NEIRO', 'BOME', 'BRETT', 'MOG', 'POPCAT', 'BABYDOGE', 'ELON',
@@ -5685,7 +5693,7 @@ trade 600k volume = 100 USDT reward. trade 900k = 200 USDT
 
 you're probably doing this volume anyway. might as well do it somewhere that pays you for it
 
-Yubit x TradeHub Markets
+yubit x tradehub markets
 
 {link}"""
     },
@@ -5701,7 +5709,7 @@ campaign runs through April 30. total across all tiers is 20,000 USDT
     },
     {
         'id': 'simple_entry',
-        'text': """Yubit x TradeHub Markets welcome campaign
+        'text': """yubit x tradehub markets — welcome campaign
 
 $100 deposit + 30k trading volume → 50 USDT back
 100 slots at this level
@@ -5728,7 +5736,7 @@ deposit and hit a volume target. collect a reward. tiers go from $100 deposit to
 
 smallest tier needs 30k in volume. if you trade at all that's very achievable
 
-Yubit x TradeHub Markets — ends April 30
+yubit x tradehub markets — ends april 30
 
 {link}"""
     },
@@ -5740,7 +5748,7 @@ move that activity to Yubit and you hit the volume targets for their deposit rew
 
 $100 deposit + 30k volume = 50 USDT. scales to 200 USDT at the top tier
 
-Yubit x TradeHub Markets
+yubit x tradehub markets
 
 {link}"""
     },
