@@ -4749,11 +4749,14 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
                     highs  = [float(c[2]) for c in ohlcv]
                     lows   = [float(c[3]) for c in ohlcv]
                     vols   = [float(c[5]) for c in ohlcv]
+                    # EMA using most recent candles
                     ema9   = sum(closes[-9:]) / 9
                     ema21  = sum(closes[-21:]) / 21
+                    # RSI-14 on the most recent 15 closes (→ 14 deltas)
+                    recent_closes = closes[-15:]
                     gains, losses = [], []
-                    for i in range(1, min(15, len(closes))):
-                        diff = closes[i] - closes[i - 1]
+                    for i in range(1, len(recent_closes)):
+                        diff = recent_closes[i] - recent_closes[i - 1]
                         gains.append(max(diff, 0))
                         losses.append(max(-diff, 0))
                     avg_gain = sum(gains) / len(gains) if gains else 0
@@ -4799,7 +4802,18 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
                         f"${symbol} bouncing {change:.1f}% at {price_str} — RSI was at {rsi:.0f} going into this which tells you it was compressed. question is whether the follow-through is there.",
                         f"${symbol} up {change:.1f}% at {price_str}. RSI at {rsi:.0f} and the EMA picture hasn't fully turned yet. could be a real reversal, could be a dead-cat. watching.",
                     ]
-            else:
+            elif tl == 'medium':
+                if trend == 'bullish':
+                    templates = [
+                        f"${symbol} at {price_str}, up {change:.1f}% today. RSI is {rsi:.0f} and the 9 EMA is above the 21 — that's the confirmation I want before I pay attention. volume is {'running hot' if vol_above else 'steady'}. keeping it on my watchlist.",
+                        f"pulled up ${symbol} mid-session. {change:.1f}% on the day, RSI at {rsi:.0f} and trend's intact. 24h range is {l24_str} to {h24_str} — it's near the high of that range but the structure isn't broken.",
+                    ]
+                else:
+                    templates = [
+                        f"${symbol} up {change:.1f}% at {price_str} and I'm curious but cautious. RSI at {rsi:.0f} and the EMAs haven't crossed yet. 24h range {l24_str} to {h24_str}. watching for a close above the high before I commit.",
+                        f"something worth watching on ${symbol} — {change:.1f}% today, RSI at {rsi:.0f}, but trend's not confirmed. could be the start of a turn or just a relief bounce. I'll know more in a few candles.",
+                    ]
+            else:  # long
                 if trend == 'bullish':
                     templates = [
                         f"pulled up ${symbol} and it's doing what I hoped.\n\nup {change:.1f}% at {price_str}, RSI at {rsi:.0f} which still has room, volume is {'running above average' if vol_above else 'steady'}. 24h range from {l24_str} to {h24_str}.\n\nnot chasing. already positioned.",
