@@ -551,6 +551,74 @@ def _pick_personality() -> Dict:
     return random.choice(personalities)
 
 
+def _strip_extra_cashtags(text: str, max_cashtags: int = 1) -> str:
+    """Twitter API limits posts to 1 cashtag ($SYMBOL). Strip extras beyond the first."""
+    import re as _re
+    matches = list(_re.finditer(r'\$[A-Z]{1,10}\b', text))
+    if len(matches) <= max_cashtags:
+        return text
+    result = text
+    for m in reversed(matches[max_cashtags:]):
+        s, e = m.start(), m.end()
+        # If the cashtag is surrounded by spaces (tag-cloud style), remove it + one space
+        if s > 0 and result[s - 1] == ' ':
+            result = result[:s - 1] + result[e:]
+        else:
+            result = result[:s] + result[e:]
+    result = _re.sub(r'\n{3,}', '\n\n', result).strip()
+    return result
+
+
+async def _ai_review_tweet(tweet_text: str, post_type: str, context: dict = None) -> str:
+    """
+    AI pre-post review: reads the tweet and either approves it or rewrites it.
+    Uses Claude Haiku for speed. Times out after 6s and returns original on failure.
+    Never blocks a post — always falls back to original on any error.
+    """
+    try:
+        import anthropic as _anthropic
+        ctx_lines = "\n".join(f"- {k}: {v}" for k, v in (context or {}).items())
+        prompt = (
+            f"You are reviewing a crypto tweet before it goes live on X (Twitter).\n"
+            f"Post type: {post_type}\n"
+            f"Context about this post:\n{ctx_lines}\n\n"
+            f"Tweet to review:\n---\n{tweet_text}\n---\n\n"
+            "Check ONLY these issues:\n"
+            "1. Does it contradict the context? (e.g., claims coin is pumping when context says it's flat/down)\n"
+            "2. Does it sound like a corporate promo or a bot? (Should read like a real trader's personal take)\n"
+            "3. Any obvious internal contradiction within the text itself?\n\n"
+            "If the tweet is good as-is, reply with exactly: APPROVED\n"
+            "If it needs fixing, reply with ONLY the rewritten tweet text — no explanation, no prefix.\n"
+            "Rewrite must stay under 280 chars. Keep the same vibe and length. "
+            "Do not add links, CTAs, or mentions not in the original."
+        )
+        _api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+        _base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
+        client = _anthropic.Anthropic(base_url=_base_url, api_key=_api_key) if _base_url else _anthropic.Anthropic(api_key=_api_key)
+
+        async def _call():
+            return await asyncio.to_thread(
+                client.messages.create,
+                model="claude-haiku-4-5",
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+        response = await asyncio.wait_for(_call(), timeout=6.0)
+        result = (response.content[0].text or "").strip()
+
+        if not result or result == "APPROVED":
+            return tweet_text
+        if len(result) > 350 or len(result) < 10:
+            return tweet_text
+
+        logger.info(f"[AI Reviewer] ✏️ Rewrote {post_type} post ({len(tweet_text)}→{len(result)} chars)")
+        return result
+    except Exception as e:
+        logger.debug(f"[AI Reviewer] Skipped ({type(e).__name__}): {e}")
+        return tweet_text
+
+
 def _get_hashtag_style() -> str:
     """Append top-gainer tickers so every post gets coin exposure for discoverability."""
     tickers = get_daily_gainers_str(max_tickers=3)
@@ -2052,7 +2120,10 @@ class MultiAccountPoster:
         """Post tweet using this account"""
         if not self.client:
             return None
-        
+
+        # Enforce Twitter's 1-cashtag limit globally — prevents 403 on all accounts
+        text = _strip_extra_cashtags(text)
+
         try:
             if media_ids:
                 response = self.client.create_tweet(text=text, media_ids=media_ids)
@@ -4843,6 +4914,10 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
                 ]
 
         tweet_text = random.choice(templates) + _get_hashtag_style()
+        tweet_text = await _ai_review_tweet(tweet_text, 'early_gainer', {
+            'symbol': symbol, 'change': f'{change:+.1f}%', 'price': price_str,
+            'volume': vol_str, 'ta_available': ta is not None,
+        })
         result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
 
         if result and result.get('success'):
@@ -4959,6 +5034,10 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
             ]
 
         tweet_text = random.choice(templates) + _get_hashtag_style()
+        tweet_text = await _ai_review_tweet(tweet_text, 'memecoin', {
+            'symbol': symbol, 'change': f'{sign}{change:.1f}%', 'price': price_str,
+            'volume': vol_str, 'mcap': mcap_str,
+        })
         result = account_poster.post_tweet(tweet_text, media_ids=meme_media_ids)
 
         if result and result.get('success'):
@@ -5014,6 +5093,10 @@ async def post_whale_alert(account_poster: MultiAccountPoster, main_poster) -> O
         ]
 
         tweet_text = random.choice(templates)
+        tweet_text = await _ai_review_tweet(tweet_text, 'whale_alert', {
+            'symbol': symbol, 'change': f'{sign}{change:.1f}%', 'price': price_str,
+            'volume_24h': vol_str, 'signal': 'unusual volume spike',
+        })
         result = account_poster.post_tweet(tweet_text)
         
         if result and result.get('success'):
@@ -5090,6 +5173,11 @@ async def post_funding_extreme(account_poster: MultiAccountPoster) -> Optional[D
             ]
 
         tweet_text = random.choice(templates)
+        tweet_text = await _ai_review_tweet(tweet_text, 'funding_extreme', {
+            'symbol': top['symbol'], 'funding_rate': rate_str,
+            'bias': 'short-heavy' if top.get('fundingRate', 0) < 0 else 'long-heavy',
+            'signal': 'extreme funding rate / potential squeeze setup',
+        })
         result = account_poster.post_tweet(tweet_text)
         
         if result and result.get('success'):
@@ -5289,6 +5377,11 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
                 ]
 
         tweet_text = random.choice(templates) + _get_hashtag_style()
+        tweet_text = await _ai_review_tweet(tweet_text, 'quick_ta', {
+            'symbol': symbol, 'change': f'{sign}{change:.1f}%', 'price': price_str,
+            'rsi': chart_analysis['rsi'] if chart_analysis else 'not computed',
+            'trend': chart_analysis['trend'] if chart_analysis else 'neutral',
+        })
 
         result = account_poster.post_tweet(tweet_text, media_ids=ta_media_ids)
 
@@ -6651,6 +6744,12 @@ async def post_yubit_campaign(account_poster) -> Optional[Dict]:
             logger.warning(f"Yubit campaign image not found: {YUBIT_CAMPAIGN_IMAGE}")
 
         media_ids = [media_id] if media_id else None
+        tweet_text = await _ai_review_tweet(tweet_text, 'yubit_campaign', {
+            'template': template['id'],
+            'exchange': 'Yubit',
+            'ticker1': live_tickers.get('ticker1', ''), 'ticker2': live_tickers.get('ticker2', ''),
+            'campaign': 'deposit + trade volume rewards, ends April 30 2026',
+        })
         result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
 
         if result and result.get('success'):
