@@ -5781,78 +5781,43 @@ HIGH_VIEWING_COINS = MEME_COINS | {
 
 
 async def get_live_tickers_for_campaign() -> Dict:
-    """Fetch high-viewing/trending coin tickers for campaign posts.
-    Prioritizes: meme pumps > extreme movers > high volume attention coins.
+    """Fetch actual top gainers of the day for campaign posts.
+    Picks the real movers by % change — no whitelist filter.
+    Minimum $2M 24h volume to exclude illiquid/scam tokens.
     """
     fallback = {
         'ticker1': '$BTC', 'ticker2': '$ETH', 'ticker3': '$SOL',
         'pct1': '3.2', 'pct2': '2.8',
     }
 
-    def pick_high_viewing(raw_gainers):
-        """Pick the most attention-grabbing coins: memes first, then extreme movers, then volume kings"""
-        meme_pumps = []
-        extreme_movers = []
-        volume_kings = []
+    # Symbols to skip — stablecoins, wrapped tokens, leveraged tokens, garbage
+    _SKIP = {
+        'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'USDP', 'FDUSD', 'USDD',
+        'WBTC', 'WETH', 'WBNB', 'STETH', 'RETH', 'CBETH',
+        'UP', 'DOWN', 'BULL', 'BEAR', '2L', '2S', '3L', '3S',
+    }
+    MIN_VOLUME_USD = 2_000_000  # $2M minimum 24h volume
 
-        for g in raw_gainers:
+    def pick_actual_gainers(raw: list) -> list:
+        """Sort by % gain, filter by volume, skip garbage."""
+        candidates = []
+        for g in raw:
             sym = g.get('symbol', '').upper()
             change = g.get('change', 0)
             vol = g.get('volume', 0)
-            if change <= 0 or sym not in HIGH_VIEWING_COINS:
+            if change <= 0:
                 continue
-            entry = {'symbol': f'${sym}', 'pct': round(change, 1), 'volume': vol}
-
-            if sym in MEME_COINS and change > 3:
-                meme_pumps.append(entry)
-            elif change >= 10:
-                extreme_movers.append(entry)
-            elif vol >= 50_000_000:
-                volume_kings.append(entry)
-
-        meme_pumps.sort(key=lambda x: x['pct'], reverse=True)
-        extreme_movers.sort(key=lambda x: x['pct'], reverse=True)
-        volume_kings.sort(key=lambda x: x['volume'], reverse=True)
-
-        picks = []
-        seen = set()
-        for pool in [meme_pumps, extreme_movers, volume_kings]:
-            for coin in pool:
-                if coin['symbol'] not in seen and len(picks) < 5:
-                    picks.append(coin)
-                    seen.add(coin['symbol'])
-        if len(picks) < 3:
-            leftover = []
-            for g in raw_gainers:
-                sym = g.get('symbol', '').upper()
-                change = g.get('change', 0)
-                vol = g.get('volume', 0)
-                tag = f'${sym}'
-                if change > 0 and sym in HIGH_VIEWING_COINS and tag not in seen:
-                    leftover.append({'symbol': tag, 'pct': round(change, 1), 'volume': vol})
-            leftover.sort(key=lambda x: x['pct'], reverse=True)
-            for coin in leftover:
-                if len(picks) < 3:
-                    picks.append(coin)
-
-        return picks
-
-    try:
-        poster = get_twitter_poster()
-        gainers = await poster.get_top_gainers_data(50)
-
-        if gainers:
-            picks = pick_high_viewing(gainers)
-            if len(picks) >= 3:
-                return {
-                    'ticker1': picks[0]['symbol'],
-                    'ticker2': picks[1]['symbol'],
-                    'ticker3': picks[2]['symbol'],
-                    'pct1': str(picks[0]['pct']),
-                    'pct2': str(picks[1]['pct']),
-                }
-    except Exception as e:
-        logger.error(f"Error fetching high-viewing tickers for campaign: {e}")
+            if vol < MIN_VOLUME_USD:
+                continue
+            if sym in _SKIP:
+                continue
+            # Skip obvious leveraged token names (contain digits adjacent to L/S)
+            import re as _re
+            if _re.search(r'\d[LS]$|^[LS]\d', sym):
+                continue
+            candidates.append({'symbol': f'${sym}', 'pct': round(change, 1), 'volume': vol})
+        candidates.sort(key=lambda x: x['pct'], reverse=True)
+        return candidates[:5]
 
     try:
         import httpx
@@ -5860,26 +5825,25 @@ async def get_live_tickers_for_campaign() -> Dict:
             resp = await client.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=8)
             if resp.status_code == 200:
                 data = resp.json().get('data', [])
-                mexc_raw = []
+                raw = []
                 for t in data:
                     sym = t.get('symbol', '')
                     if not sym.endswith('_USDT'):
                         continue
-                    change = float(t.get('riseFallRate', 0)) * 100
+                    change = float(t.get('riseFallRate', 0) or 0) * 100
                     vol = float(t.get('amount24', 0) or 0)
-                    clean = sym.replace('_USDT', '')
-                    mexc_raw.append({'symbol': clean, 'change': change, 'volume': vol})
-                picks = pick_high_viewing(mexc_raw)
-                if len(picks) >= 3:
+                    raw.append({'symbol': sym.replace('_USDT', ''), 'change': change, 'volume': vol})
+                picks = pick_actual_gainers(raw)
+                if len(picks) >= 2:
                     return {
                         'ticker1': picks[0]['symbol'],
                         'ticker2': picks[1]['symbol'],
-                        'ticker3': picks[2]['symbol'],
+                        'ticker3': picks[2]['symbol'] if len(picks) > 2 else picks[0]['symbol'],
                         'pct1': str(picks[0]['pct']),
                         'pct2': str(picks[1]['pct']),
                     }
     except Exception as e:
-        logger.error(f"MEXC fallback also failed for campaign tickers: {e}")
+        logger.error(f"MEXC top-gainers fetch failed for campaign tickers: {e}")
 
     return fallback
 
