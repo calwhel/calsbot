@@ -715,6 +715,15 @@ async def cryptodictator_page():
     return FileResponse(_cd_file, media_type="text/html")
 
 
+# ── LarkNexus affiliate landing page ──────────────────────────────────────────
+_ln_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "templates", "larknexus.html")
+
+@app.get("/larknexus", response_class=HTMLResponse)
+@app.get("/ln", response_class=HTMLResponse)
+async def larknexus_page():
+    return FileResponse(_ln_file, media_type="text/html")
+
+
 @app.post("/login")
 async def login_submit(request: Request):
     """Verify UID. Two-step: first call validates UID and signals whether a password
