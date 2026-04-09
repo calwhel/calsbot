@@ -3656,25 +3656,7 @@ async def auto_post_loop():
             await asyncio.sleep(60)
 
 
-def _maybe_strategy_cta(tweet_text: str) -> str:
-    """
-    Optionally append one tradehubmarkets.com CTA to a post.
-    Short, confident, not salesy. Only added if it fits within 280 chars.
-    """
-    ctas = [
-        "\n\ntradehubmarkets.com — I automate plays like this",
-        "\n\nrunning a strategy on this at tradehubmarkets.com",
-        "\n\nmy algo flags these automatically → tradehubmarkets.com",
-        "\n\nbuild your own strategy free → tradehubmarkets.com",
-        "\n\nstrategy leaderboard live → tradehubmarkets.com",
-        "\n\nautomating this. tradehubmarkets.com",
-        "\n\ntradehubmarkets.com — strategy builder, free",
-    ]
-    TWITTER_LIMIT = 275  # conservative buffer
-    cta = random.choice(ctas)
-    if len(tweet_text) + len(cta) <= TWITTER_LIMIT:
-        return tweet_text + cta
-    return tweet_text
+
 
 
 async def post_with_account(account_poster: MultiAccountPoster, main_poster, post_type: str) -> Optional[Dict]:
