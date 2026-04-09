@@ -14,7 +14,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-SCAN_INTERVAL_SECONDS  = 5     # how often to evaluate strategies
+SCAN_INTERVAL_SECONDS  = 3     # how often to evaluate strategies
 PAPER_MONITOR_INTERVAL = 15    # how often to check open paper positions (seconds)
 MAX_CONCURRENT         = 10    # parallel strategy evaluations (stay within DB pool)
 PAPER_MAX_HOLD_HOURS   = 168   # auto-expire paper positions after this many hours (7 days)

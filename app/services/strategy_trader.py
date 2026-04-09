@@ -3,9 +3,16 @@ Strategy Trader — Bitunix order placement wrapper for the strategy executor.
 API keys live on UserPreference, not the User model directly.
 """
 import logging
+import time
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# ── Balance cache — avoid a Bitunix round-trip on every trade ────────────────
+# Keyed by user_id. TTL 60s — balance only matters for position sizing,
+# slight staleness is fine and saves 300-500ms per live order.
+_BALANCE_CACHE: Dict[int, tuple] = {}  # user_id -> (balance_float, fetched_at_monotonic)
+_BALANCE_TTL = 60  # seconds
 
 
 async def place_bitunix_order_for_user(
@@ -73,7 +80,15 @@ async def place_bitunix_order_for_user(
         if risk_usd:
             position_size_usdt = float(risk_usd)
         else:
-            balance = await trader.get_account_balance()
+            # Check in-process balance cache first — saves a Bitunix round-trip
+            _cached = _BALANCE_CACHE.get(user.id)
+            if _cached and (time.monotonic() - _cached[1]) < _BALANCE_TTL:
+                balance = _cached[0]
+                logger.debug(f"[strategy_trader] Balance cache hit for user {user.id}: ${balance:.2f}")
+            else:
+                balance = await trader.get_account_balance()
+                if balance and balance > 0:
+                    _BALANCE_CACHE[user.id] = (balance, time.monotonic())
             if not balance or balance <= 0:
                 logger.warning(f"[strategy_trader] Could not get balance for user {user.id}")
                 return None

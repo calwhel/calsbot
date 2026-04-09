@@ -205,7 +205,7 @@ async def _get_klines(
     ]
     for url, params in sources:
         try:
-            resp = await http_client.get(url, params=params, timeout=7)
+            resp = await http_client.get(url, params=params, timeout=3)
             if resp.status_code == 200:
                 klines = resp.json()
                 if klines and isinstance(klines, list):
@@ -1500,81 +1500,67 @@ async def evaluate_strategy_conditions(
 
     results, details = [], []
 
-    for cond in conds:
+    async def _eval_one(cond) -> Tuple[bool, str]:
         ctype = cond.get("type", "")
         try:
             if ctype == "indicator":
-                passed, detail = await eval_indicator(
+                return await eval_indicator(
                     cond, price_data, enhanced_ta, symbol, http_client, cache)
-
             elif ctype == "price_momentum":
-                passed, detail = await eval_price_momentum(cond, symbol, http_client, cache)
-
+                return await eval_price_momentum(cond, symbol, http_client, cache)
             elif ctype == "volume_spike":
-                passed, detail = eval_volume_spike(cond, price_data)
-
+                return eval_volume_spike(cond, price_data)
             elif ctype == "support_resistance":
-                passed, detail = eval_support_resistance(cond, enhanced_ta, price)
-
+                return eval_support_resistance(cond, enhanced_ta, price)
             elif ctype == "fvg":
-                passed, detail = await eval_fvg(cond, symbol, price, http_client, cache)
-
+                return await eval_fvg(cond, symbol, price, http_client, cache)
             elif ctype == "candlestick":
-                passed, detail = await eval_candlestick(cond, symbol, http_client, cache)
-
+                return await eval_candlestick(cond, symbol, http_client, cache)
             elif ctype == "consecutive_candles":
-                passed, detail = await eval_consecutive_candles(cond, symbol, http_client, cache)
-
+                return await eval_consecutive_candles(cond, symbol, http_client, cache)
             elif ctype == "market_structure":
-                passed, detail = await eval_market_structure(cond, symbol, price, http_client, cache)
-
+                return await eval_market_structure(cond, symbol, price, http_client, cache)
             elif ctype == "order_block":
-                passed, detail = await eval_order_block(cond, symbol, price, http_client, cache)
-
+                return await eval_order_block(cond, symbol, price, http_client, cache)
             elif ctype == "fibonacci":
-                passed, detail = await eval_fibonacci(cond, symbol, price, http_client, cache)
-
+                return await eval_fibonacci(cond, symbol, price, http_client, cache)
             elif ctype == "divergence":
-                passed, detail = await eval_divergence(cond, symbol, http_client, cache)
-
+                return await eval_divergence(cond, symbol, http_client, cache)
             elif ctype == "funding_rate":
-                passed, detail = await eval_funding_rate(cond, symbol, http_client)
-
+                return await eval_funding_rate(cond, symbol, http_client)
             elif ctype == "open_interest":
-                passed, detail = await eval_open_interest(cond, symbol, http_client)
-
+                return await eval_open_interest(cond, symbol, http_client)
             elif ctype == "session":
-                passed, detail = eval_session(cond)
-
+                return eval_session(cond)
             elif ctype == "price_relative":
-                passed, detail = await eval_price_relative(cond, symbol, price, http_client, cache)
-
+                return await eval_price_relative(cond, symbol, price, http_client, cache)
             elif ctype == "sentiment":
-                passed, detail = await eval_sentiment(cond, symbol, http_client)
-
+                return await eval_sentiment(cond, symbol, http_client)
             elif ctype == "liquidation":
-                passed, detail = await eval_liquidation(cond, symbol, price, http_client, cache)
-
+                return await eval_liquidation(cond, symbol, price, http_client, cache)
             elif ctype == "supertrend":
-                # Wizard creates type:"supertrend" directly — route into eval_indicator
-                passed, detail = await eval_indicator(
+                return await eval_indicator(
                     {**cond, "name": "supertrend"}, price_data, enhanced_ta, symbol, http_client, cache)
-
             elif ctype == "trend_reversal":
-                passed, detail = await eval_trend_reversal(cond, symbol, price, http_client, cache)
-
+                return await eval_trend_reversal(cond, symbol, price, http_client, cache)
             elif ctype == "sustained_trend":
-                passed, detail = await eval_sustained_trend(cond, symbol, http_client, cache)
-
+                return await eval_sustained_trend(cond, symbol, http_client, cache)
             else:
-                passed, detail = False, f"Unknown condition type: {ctype}"
-
+                return False, f"Unknown condition type: {ctype}"
         except Exception as e:
-            passed, detail = False, f"[ERROR] {ctype}: {e}"
             logger.warning(f"Condition eval error {symbol} {ctype}: {e}")
+            return False, f"[ERROR] {ctype}: {e}"
 
-        results.append(passed)
-        details.append(f"{'✅' if passed else '❌'} {detail}")
+    # Evaluate all conditions in parallel — they are independent of each other
+    raw_results = await asyncio.gather(*[_eval_one(c) for c in conds], return_exceptions=True)
+    for r in raw_results:
+        if isinstance(r, Exception):
+            results.append(False)
+            details.append(f"❌ [ERROR] {r}")
+        else:
+            passed, detail = r
+            results.append(passed)
+            details.append(f"{'✅' if passed else '❌'} {detail}")
 
     if not results:
         return False, ["No conditions defined"]
