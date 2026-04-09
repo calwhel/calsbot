@@ -2316,7 +2316,7 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
     valid_types = ['featured_coin', 'market_summary', 'top_gainers', 'btc_update',
                    'altcoin_movers', 'daily_recap', 'top_losers', 'early_gainer',
                    'memecoin', 'quick_ta', 'tradehub_promo', 'market_take',
-                   'bitunix_campaign', 'free_telegram']
+                   'bitunix_campaign', 'yubit_campaign', 'free_telegram']
     
     # Validate post types
     invalid = [t for t in post_types if t not in valid_types]
@@ -2344,7 +2344,6 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 POST_SCHEDULE = [
     # (hour_utc, minute, post_type)
     # Strategy/leaderboard promo every ~3h; market content fills the rest.
-    # Every market post also appends a subtle strategy CTA (see _maybe_strategy_cta).
     (0, 30, 'featured_coin'),
     (1, 45, 'free_telegram'),       # free signals promo - Asia night
     (3, 0, 'quick_ta'),
@@ -2353,6 +2352,7 @@ POST_SCHEDULE = [
     (6, 0, 'featured_coin'),
     (7, 30, 'tradehub_promo'),      # promo 3 - Asia morning / EU pre-market
     (8, 30, 'quick_ta'),
+    (9, 15, 'yubit_campaign'),      # Yubit campaign - EU morning slot
     (9, 45, 'featured_coin'),
     (10, 30, 'market_take'),        # hot take - EU morning
     (11, 0, 'early_gainer'),
@@ -2364,6 +2364,7 @@ POST_SCHEDULE = [
     (16, 45, 'quick_ta'),
     (17, 30, 'memecoin'),
     (18, 45, 'market_take'),        # hot take - US afternoon
+    (19, 0, 'yubit_campaign'),      # Yubit campaign - US afternoon slot
     (20, 0, 'featured_coin'),
     (21, 15, 'early_gainer'),
     (22, 0, 'tradehub_promo'),      # promo 8 - US evening
@@ -3406,6 +3407,7 @@ def get_twitter_schedule() -> Dict:
         'quick_ta': '📊 Quick TA',
         'high_viewing': '🔥 High Viewing',
         'bitunix_campaign': '💰 Bitunix Campaign',
+        'yubit_campaign': '💰 Yubit Campaign',
         'tradehub_promo': '🏆 TradeHub Leaderboard',
         'market_take': '💭 Market Hot Take',
         'free_telegram': '📲 Free Telegram Promo',
@@ -3678,15 +3680,6 @@ def _maybe_strategy_cta(tweet_text: str) -> str:
 async def post_with_account(account_poster: MultiAccountPoster, main_poster, post_type: str) -> Optional[Dict]:
     """Post using a specific account - generates content from main poster, posts with account"""
     try:
-        # 25% of market posts get a tradehubmarkets.com CTA appended.
-        # Promo/campaign types already embed it — skip them to avoid doubles.
-        if post_type not in ('tradehub_promo', 'market_take', 'bitunix_campaign', 'free_telegram'):
-            _orig_pt = account_poster.post_tweet
-            _add_cta = random.random() < 0.25
-            def _cta_pt(text, media_ids=None, _o=_orig_pt, _do=_add_cta):
-                return _o(_maybe_strategy_cta(text) if _do else text, media_ids)
-            account_poster.post_tweet = _cta_pt
-
         if is_social_account(account_poster.name):
             logger.info(f"[CryptoSocial] Using social-powered posts for {account_poster.name}")
             return await post_for_social_account(account_poster, post_type, main_poster)
@@ -3962,6 +3955,9 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
 
         elif post_type == 'bitunix_campaign':
             return await post_bitunix_campaign(account_poster)
+
+        elif post_type == 'yubit_campaign':
+            return await post_yubit_campaign(account_poster)
 
         elif post_type == 'free_telegram':
             return await post_free_telegram_promo(account_poster)
@@ -4743,34 +4739,104 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
 
         tl = _pick_tweet_length()
 
-        if tl == 'ultra_short':
-            templates = [
-                f"${symbol} +{change:.1f}%. flagged this early. I don't miss these.",
-                f"${symbol} waking up. +{change:.1f}% at {price_str}. I'm watching.",
-                f"${symbol} +{change:.1f}%. already on it.",
-                f"${symbol}. {price_str}. +{change:.1f}%. early.",
-            ]
-        elif tl == 'short':
-            templates = [
-                f"${symbol} +{change:.1f}% at {price_str} · {vol_str} volume. flagged this before it moved. volume confirms it's real.",
-                f"caught ${symbol} early. +{change:.1f}% at {price_str} on {vol_str}. the kind of setup I live for.",
-                f"${symbol} quietly up {change:.1f}%. {price_str}{cap_note}. nobody's talking about it yet. I am.",
-                f"${symbol} +{change:.1f}% at {price_str}. {vol_str} behind it. not a coincidence.",
-                f"${symbol} moving. +{change:.1f}%. got this one early. {vol_str} volume tells you it's not retail.",
-            ]
-        elif tl == 'long':
-            templates = [
-                f"${symbol} +{change:.1f}% at {price_str} · {vol_str} volume{cap_note}.\n\nsteady climb, not a spike. volume distributed across candles — that's accumulation, not a pump.\n\nmy scanner caught this before twitter started talking. that's the edge.",
-                f"${symbol} on my radar since it was quiet. now it's +{change:.1f}% at {price_str} on {vol_str}.\n\nearly movers are the best r/r setups. stop is clean. upside still open.\n\nthis is the work most people skip.",
-                f"${symbol} up {change:.1f}% at {price_str}{cap_note}.\n\n{vol_str} in 24h. real buyers. not a tweet-driven pump.\n\nbeen watching this one for a while. patience paid off.",
-            ]
+        # Fetch 1h OHLCV for TA enrichment (~50% of posts)
+        ta = None
+        if random.random() < 0.5:
+            try:
+                ohlcv = await _fetch_mexc_ohlcv(symbol, interval='1h', limit=48)
+                if ohlcv and len(ohlcv) >= 20:
+                    closes = [float(c[4]) for c in ohlcv]
+                    highs  = [float(c[2]) for c in ohlcv]
+                    lows   = [float(c[3]) for c in ohlcv]
+                    vols   = [float(c[5]) for c in ohlcv]
+                    ema9   = sum(closes[-9:]) / 9
+                    ema21  = sum(closes[-21:]) / 21
+                    gains, losses = [], []
+                    for i in range(1, min(15, len(closes))):
+                        diff = closes[i] - closes[i - 1]
+                        gains.append(max(diff, 0))
+                        losses.append(max(-diff, 0))
+                    avg_gain = sum(gains) / len(gains) if gains else 0
+                    avg_loss = sum(losses) / len(losses) if losses else 0.0001
+                    rsi_val  = round(100 - (100 / (1 + avg_gain / avg_loss)), 1)
+                    trend_val = "bullish" if ema9 > ema21 else "bearish"
+                    avg_vol10 = sum(vols[-10:]) / 10 if len(vols) >= 10 else 0
+                    vol_above_avg = vols[-1] > avg_vol10 * 1.2 if avg_vol10 > 0 else False
+                    h24 = max(highs[-24:]) if len(highs) >= 24 else max(highs)
+                    l24 = min(lows[-24:])  if len(lows)  >= 24 else min(lows)
+                    ta = {
+                        'rsi': rsi_val,
+                        'trend': trend_val,
+                        'vol_above_avg': vol_above_avg,
+                        'h24': h24,
+                        'l24': l24,
+                    }
+            except Exception:
+                pass
+
+        if ta:
+            rsi = ta['rsi']
+            trend = ta['trend']
+            vol_above = ta['vol_above_avg']
+            h24_str = f"${ta['h24']:,.4f}" if ta['h24'] < 1 else f"${ta['h24']:,.2f}"
+            l24_str = f"${ta['l24']:,.4f}" if ta['l24'] < 1 else f"${ta['l24']:,.2f}"
+
+            if tl == 'ultra_short':
+                templates = [
+                    f"${symbol} up {change:.1f}% and RSI's at {rsi:.0f}. not extended yet.",
+                    f"something's moving in ${symbol}. {change:.1f}% today with {trend} structure.",
+                    f"been on ${symbol} for a bit. {change:.1f}% today and the EMA cross is clean.",
+                ]
+            elif tl == 'short':
+                if trend == 'bullish':
+                    templates = [
+                        f"${symbol} up {change:.1f}% at {price_str} and the structure still looks intact. RSI at {rsi:.0f} — not yet in overbought territory, which is the part I actually care about.",
+                        f"been watching ${symbol} and today it moved. {change:.1f}%, price holding above the 9 EMA, RSI around {rsi:.0f}. that's the setup I wait for.",
+                        f"the move on ${symbol} today (+{change:.1f}%) came with volume {'running above the recent average' if vol_above else 'showing up'}. RSI at {rsi:.0f} and trend is with it. I'm interested.",
+                    ]
+                else:
+                    templates = [
+                        f"${symbol} bouncing {change:.1f}% at {price_str} — RSI was at {rsi:.0f} going into this which tells you it was compressed. question is whether the follow-through is there.",
+                        f"${symbol} up {change:.1f}% at {price_str}. RSI at {rsi:.0f} and the EMA picture hasn't fully turned yet. could be a real reversal, could be a dead-cat. watching.",
+                    ]
+            else:
+                if trend == 'bullish':
+                    templates = [
+                        f"pulled up ${symbol} and it's doing what I hoped.\n\nup {change:.1f}% at {price_str}, RSI at {rsi:.0f} which still has room, volume is {'running above average' if vol_above else 'steady'}. 24h range from {l24_str} to {h24_str}.\n\nnot chasing. already positioned.",
+                        f"${symbol} at {price_str} after a {change:.1f}% session.\n\nEMA trend is bullish, RSI sitting at {rsi:.0f} — that's the zone where things can extend without going parabolic. 24h low held at {l24_str}. structure's clean.\n\nwatching the {h24_str} level as the next real test.",
+                    ]
+                else:
+                    templates = [
+                        f"${symbol} up {change:.1f}% at {price_str} and I'm paying attention, but not fully convinced yet.\n\nRSI at {rsi:.0f}, trend's still showing some pressure. if this closes above {h24_str} that changes things. for now I'm watching.",
+                        f"noticed ${symbol} moving — {change:.1f}% today, RSI at {rsi:.0f}. 24h range: {l24_str} to {h24_str}.\n\nnot my cleanest setup but the {'volume spike is worth noting' if vol_above else 'move is real'} and I never ignore something this size without checking the chart.",
+                    ]
         else:
-            templates = [
-                f"${symbol} +{change:.1f}% at {price_str} · {vol_str}. early mover with volume behind it. I flagged this before the crowd noticed.",
-                f"caught ${symbol} early. +{change:.1f}% at {price_str}. still climbing. the entry was clean.",
-                f"${symbol} on my scanner. +{change:.1f}% · {price_str} · {vol_str}. real move. not noise.",
-                f"${symbol} +{change:.1f}% at {price_str}{cap_note}. volume backing it up. this is what early looks like.",
-            ]
+            # No TA — pure human-voice templates
+            if tl == 'ultra_short':
+                templates = [
+                    f"been watching ${symbol}. today it moved. {change:.1f}%.",
+                    f"${symbol} at {price_str}. that's a {change:.1f}% day. noted.",
+                    f"${symbol} woke up. {change:.1f}% and I was already watching.",
+                ]
+            elif tl == 'short':
+                templates = [
+                    f"${symbol} moved {change:.1f}% today on {vol_str} volume. the thing about moves like this is they either continue or they don't — and you usually know by the close.",
+                    f"quiet start, then ${symbol} put in a {change:.1f}% candle at {price_str}. sometimes the boring coins do the best things.",
+                    f"had ${symbol} on my list for a few days. today it did something — up {change:.1f}% at {price_str}.",
+                    f"not every move needs a thread. ${symbol} is up {change:.1f}% at {price_str} and I think it has more to go. that's the whole take.",
+                ]
+            elif tl == 'long':
+                templates = [
+                    f"something to look at today: ${symbol} up {change:.1f}% at {price_str}.\n\n{vol_str} in volume behind it — which is the part that matters. a move with no volume is just noise. this isn't that{cap_note}.",
+                    f"${symbol} at {price_str} after a {change:.1f}% session.\n\nbeen watching this one for a few days. the move today wasn't a surprise but the volume made me take it more seriously than I expected.\n\nstill think there's room from here.",
+                    f"everyone's focused on the same handful of names right now so ${symbol} doing {change:.1f}% at {price_str} is mostly flying under the radar.\n\nthat's usually exactly where I want to be.",
+                ]
+            else:
+                templates = [
+                    f"${symbol} up {change:.1f}% at {price_str} with {vol_str} behind it. the kind of early move I was positioned for.",
+                    f"caught ${symbol} before it started. {change:.1f}% at {price_str} now, and it doesn't look done.",
+                    f"${symbol} at {price_str}, up {change:.1f}% today. the volume ({vol_str}) is what makes this worth paying attention to{cap_note}.",
+                ]
 
         tweet_text = random.choice(templates) + _get_hashtag_style()
         result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
@@ -4863,29 +4929,29 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
 
         if tl == 'ultra_short':
             templates = [
-                f"${symbol} {sign}{change:.1f}%. I'm in.",
-                f"${symbol} {sign}{change:.1f}% at {price_str}. meme szn is back.",
-                f"${symbol} moving. {sign}{change:.1f}%. volume is real.",
-                f"${symbol} {sign}{change:.1f}%. already knew.",
+                f"${symbol} {sign}{change:.1f}% today. meme energy is back.",
+                f"had ${symbol} on my radar. it moved. {sign}{change:.1f}%.",
+                f"${symbol} doing {sign}{change:.1f}%. the memes always find a way.",
+                f"not going to pretend I'm surprised. ${symbol} up {sign}{change:.1f}%.",
             ]
         elif tl == 'short':
             templates = [
-                f"${symbol} {sign}{change:.1f}% at {price_str} · {vol_str} volume{cap_note}. meme moves don't wait. either you're ready or you're watching from the sideline.",
-                f"${symbol} {sign}{change:.1f}% on {vol_str}. {price_str}{cap_note}. I was positioned before this got loud.",
-                f"${symbol} catching bids. {sign}{change:.1f}% · {vol_str}. this is how meme season starts — quiet volume, then everyone piles in.",
-                f"${symbol} {sign}{change:.1f}% at {price_str}. {vol_str} behind it. I don't chase. I was already here.",
+                f"${symbol} up {sign}{change:.1f}% at {price_str} with {vol_str} behind it. that's not retail buying — that's someone with size making a move.",
+                f"been watching ${symbol} since it was quiet. now it's {sign}{change:.1f}% at {price_str}. meme coins move fast when they decide to.",
+                f"${symbol} at {price_str}, up {sign}{change:.1f}%. the volume ({vol_str}) is what got my attention — you don't see that without a reason.",
+                f"the thing about ${symbol} is it was boring for weeks. then {sign}{change:.1f}% in a day{cap_note}. that's how meme season works.",
             ]
         elif tl == 'long':
             templates = [
-                f"${symbol} {sign}{change:.1f}% at {price_str} · {vol_str}{cap_note}.\n\nmeme coins move in minutes, not hours. you either have a system or you're always a step behind.\n\nI caught this one before the timeline did.",
-                f"${symbol} making a move. {sign}{change:.1f}% with {vol_str} behind it{cap_note}.\n\nnobody was talking about this at open. I was watching it. that's the difference.\n\nconsistency beats luck every time.",
-                f"${symbol} {sign}{change:.1f}% today{cap_note}.\n\n{vol_str} volume. not a rumor-driven pump — actual buyers moving size.\n\nI flagged this when it was still quiet.",
+                f"${symbol} up {sign}{change:.1f}% at {price_str} with {vol_str} in 24 hours.\n\nmeme coins are the one asset class where being early matters more than being right. a lot of people are going to see this and wish they were paying attention last week.",
+                f"let's talk about ${symbol} for a second.\n\n{sign}{change:.1f}% today. {vol_str} in volume{cap_note}.\n\nthis is how the runs start — nobody cares until suddenly everyone does. I'd rather be early and wrong occasionally than late and right never.",
+                f"${symbol} is up {sign}{change:.1f}% today and I've seen this pattern before.\n\n{vol_str} of real volume coming in. not a rumor-driven spike — actual buyers moving size. the chart tells you when something's different. this feels different.",
             ]
         else:
             templates = [
-                f"${symbol} {sign}{change:.1f}% at {price_str} · {vol_str}{cap_note}. real volume, real move. I was watching this before it ran.",
-                f"${symbol} running {sign}{change:.1f}% at {price_str}. {vol_str}{cap_note}. positioned before the noise started.",
-                f"${symbol} {sign}{change:.1f}%. {vol_str} · {price_str}. memes move fast. had this on my radar.",
+                f"${symbol} up {sign}{change:.1f}% at {price_str}. {vol_str} in volume confirms this isn't just noise{cap_note}.",
+                f"had ${symbol} marked. today it did {sign}{change:.1f}% at {price_str}. exactly what I was waiting for.",
+                f"${symbol} moving — {sign}{change:.1f}%, {vol_str} behind it{cap_note}. was watching this before it got loud.",
             ]
 
         tweet_text = random.choice(templates) + _get_hashtag_style()
@@ -5198,63 +5264,107 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
         if chart_analysis:
             rsi = chart_analysis.get('rsi', 50)
             trend = chart_analysis.get('trend', 'neutral')
-
-            if rsi > 70:
-                rsi_note = random.choice([f"RSI {rsi:.0f} — stretched", f"RSI at {rsi:.0f}, running hot", f"overbought at RSI {rsi:.0f}"])
-            elif rsi < 30:
-                rsi_note = random.choice([f"RSI {rsi:.0f} — oversold", f"RSI compressed at {rsi:.0f}", f"RSI {rsi:.0f}, bounce territory"])
-            else:
-                rsi_note = random.choice([f"RSI {rsi:.0f}", f"RSI sitting at {rsi:.0f}", f"RSI neutral {rsi:.0f}"])
-
-            if trend == 'bullish':
-                trend_note = random.choice(["buyers in control", "uptrend intact", "higher lows holding", "structure is clean"])
-            elif trend == 'bearish':
-                trend_note = random.choice(["sellers in control", "downtrend active", "lower highs forming", "bears have it right now"])
-            else:
-                trend_note = random.choice(["no clear direction", "ranging — waiting for a break", "consolidating", "choppy"])
-
-            bias = "I like this" if trend == 'bullish' and rsi < 65 else "still watching" if trend == 'neutral' else "not touching it yet"
+            vol_surge = chart_analysis.get('vol_surge', False)
+            h24 = chart_analysis.get('h24', 0)
+            l24 = chart_analysis.get('l24', 0)
+            h24_str = f"${h24:,.4f}" if h24 < 1 else f"${h24:,.2f}"
+            l24_str = f"${l24:,.4f}" if l24 < 1 else f"${l24:,.2f}"
 
             if tl == 'ultra_short':
-                templates = [
-                    f"${symbol} {sign}{change:.1f}%. {rsi_note}. {trend_note}.",
-                    f"${symbol} {sign}{change:.1f}% at {price_str}. {trend_note}. {bias}.",
-                    f"${symbol}. {rsi_note}. {trend_note}. noted.",
-                ]
+                if trend == 'bullish':
+                    templates = [
+                        f"${symbol} {sign}{change:.1f}%. RSI at {rsi:.0f} and trend's still with it.",
+                        f"looking at ${symbol}. {sign}{change:.1f}%, structure is clean.",
+                        f"${symbol} doing what I thought it would. {sign}{change:.1f}%.",
+                    ]
+                elif trend == 'bearish':
+                    templates = [
+                        f"${symbol} {sign}{change:.1f}%. RSI at {rsi:.0f}. I'm watching but not moving yet.",
+                        f"pulled up ${symbol}. {sign}{change:.1f}% today. thinking about it.",
+                        f"${symbol} {sign}{change:.1f}% at {price_str}. chart's got my attention.",
+                    ]
+                else:
+                    templates = [
+                        f"${symbol} {sign}{change:.1f}%. RSI {rsi:.0f} and no clear direction. watching.",
+                        f"${symbol} at {price_str}. {sign}{change:.1f}%. still figuring out what it wants to do.",
+                    ]
             elif tl == 'short':
-                templates = [
-                    f"${symbol} at {price_str}. {sign}{change:.1f}%. {rsi_note}. {trend_note}. {bias}.",
-                    f"pulled up ${symbol}. {sign}{change:.1f}%. {rsi_note}. {trend_note}. I know what this setup does.",
-                    f"${symbol} {sign}{change:.1f}% at {price_str}. {rsi_note}. {trend_note}.",
-                    f"${symbol} — {sign}{change:.1f}%. {rsi_note}. {trend_note}. {bias}.",
-                ]
+                if trend == 'bullish' and rsi < 65:
+                    templates = [
+                        f"pulled up ${symbol} and the setup is actually clean. {sign}{change:.1f}% at {price_str}, RSI at {rsi:.0f} with room left. I like where this is going.",
+                        f"${symbol} at {price_str} after a {sign}{change:.1f}% day. RSI at {rsi:.0f} — trend's intact and it's not overbought. that's the combination I look for.",
+                        f"checked the chart on ${symbol}. {sign}{change:.1f}%, RSI at {rsi:.0f}, higher lows holding. nothing complicated about this one.",
+                    ]
+                elif trend == 'bullish':
+                    templates = [
+                        f"${symbol} {sign}{change:.1f}% at {price_str}. RSI pushing into {rsi:.0f} which is getting stretched, but the trend is still intact. watching for a pullback before I add.",
+                        f"strong move on ${symbol} — {sign}{change:.1f}%. RSI at {rsi:.0f} is extended so I wouldn't chase here, but if this pulls back to support I'm very interested.",
+                    ]
+                elif trend == 'bearish':
+                    templates = [
+                        f"${symbol} moving {sign}{change:.1f}% at {price_str} but the trend structure is still against it. RSI at {rsi:.0f}. probably a bounce rather than a reversal. not chasing.",
+                        f"${symbol} {sign}{change:.1f}% today but the sellers aren't done yet based on the chart. RSI at {rsi:.0f}, trend still showing lower highs. waiting for cleaner confirmation.",
+                    ]
+                else:
+                    templates = [
+                        f"${symbol} at {price_str}, {sign}{change:.1f}% today. RSI {rsi:.0f} and the chart is in no-man's-land. could break either way — watching how it closes.",
+                        f"${symbol} {sign}{change:.1f}% on the day. RSI at {rsi:.0f} and it's been chopping around. I usually don't trade these until they show their hand.",
+                    ]
             elif tl == 'long':
-                templates = [
-                    f"${symbol} at {price_str} after {sign}{change:.1f}%.\n\n{rsi_note}. {trend_note}. {'structure is clean — higher lows confirmed with volume. I want to see one more candle close.' if trend == 'bullish' else 'waiting for direction — these setups usually resolve fast and violently. patience.' if trend == 'neutral' else 'lower highs on every bounce. methodical selling. I stay out when sellers are in control.'}",
-                    f"${symbol} {sign}{change:.1f}% at {price_str}.\n\nquick read:\n{rsi_note}. {trend_note}.\n\n{'solid setup. the kind I build strategies around.' if trend == 'bullish' and rsi < 65 else 'waiting for confirmation before I commit.' if trend == 'neutral' else 'not my setup right now. discipline is knowing when to sit.'}",
-                ]
+                if trend == 'bullish' and rsi < 65:
+                    templates = [
+                        f"took a proper look at ${symbol} today.\n\n{sign}{change:.1f}% at {price_str}. RSI sitting at {rsi:.0f} — that's not overbought, that's momentum without the froth. 24h range from {l24_str} to {h24_str} and it's trading near the top for a reason.\n\ncould be nothing. could be the start of something.",
+                        f"${symbol} at {price_str} after a {sign}{change:.1f}% day.\n\nRSI is {rsi:.0f}, trend is bullish, volume {'is running above average' if vol_surge else 'is steady'}. the setup has the characteristics I want to see. keeping a position and letting it work.",
+                    ]
+                elif trend == 'bearish':
+                    templates = [
+                        f"${symbol} moved {sign}{change:.1f}% today and I looked at the chart.\n\nRSI at {rsi:.0f}. trend's still pointing down — lower highs on every bounce. this kind of move usually gets sold into.\n\nnot touching it until the structure changes. patience is part of the process.",
+                        f"${symbol} {sign}{change:.1f}% at {price_str}. worth noting but the chart isn't clean.\n\nRSI {rsi:.0f}, sellers still in control on the higher timeframe. when the trend flips I'll revisit. until then, sitting on my hands.",
+                    ]
+                else:
+                    templates = [
+                        f"${symbol} at {price_str} today, {sign}{change:.1f}%.\n\nRSI at {rsi:.0f} and the chart is in no-man's-land right now. ranging, waiting for a catalyst. I've seen enough of these to know the break usually comes when you least expect it.\n\nwatching the {h24_str} level as the one that matters.",
+                        f"${symbol} {sign}{change:.1f}% and it's got my attention but I'm not forcing a read.\n\nRSI is {rsi:.0f}, no strong directional bias. sometimes the cleanest move is to wait for the market to tell you what it wants to do instead of guessing.",
+                    ]
             else:
-                templates = [
-                    f"${symbol} {sign}{change:.1f}% at {price_str}. {rsi_note}. {trend_note}. {bias}.",
-                    f"pulled up ${symbol}. {rsi_note} · {trend_note}. {bias}. watching.",
-                    f"${symbol} at {price_str}. {sign}{change:.1f}%. {rsi_note}. {trend_note}.",
-                ]
+                if trend == 'bullish' and rsi < 65:
+                    templates = [
+                        f"${symbol} {sign}{change:.1f}% at {price_str} and the chart is actually clean. RSI at {rsi:.0f} with room to run, trend intact. I like this one.",
+                        f"checked ${symbol}. {sign}{change:.1f}% at {price_str}, RSI {rsi:.0f}, buyers in control. this is the kind of setup I don't second-guess.",
+                    ]
+                elif trend == 'bearish':
+                    templates = [
+                        f"${symbol} {sign}{change:.1f}% today but RSI at {rsi:.0f} and the trend is still against it. I've been burned chasing bounces in downtrends. watching from the sidelines.",
+                        f"looked at ${symbol} after seeing the {sign}{change:.1f}% move. RSI {rsi:.0f} but sellers still have the structure. not my trade right now.",
+                    ]
+                else:
+                    templates = [
+                        f"${symbol} {sign}{change:.1f}% at {price_str}. RSI at {rsi:.0f} and no clear trend yet. could be interesting, could be noise. watching to see how it resolves.",
+                        f"pulled up ${symbol} — {sign}{change:.1f}%, RSI {rsi:.0f}, chart chopping. not moving until it gives me something cleaner.",
+                    ]
         else:
             if tl == 'ultra_short':
                 templates = [
-                    f"${symbol} {sign}{change:.1f}%. interesting. watching.",
-                    f"${symbol} has my attention. {sign}{change:.1f}% at {price_str}.",
+                    f"${symbol} {sign}{change:.1f}% today. watching.",
+                    f"something happening with ${symbol}. {sign}{change:.1f}% at {price_str}.",
+                    f"${symbol} has my attention right now.",
+                ]
+            elif tl == 'short':
+                templates = [
+                    f"${symbol} {sign}{change:.1f}% at {price_str}. the move caught my eye — price action is telling a story and I want to understand it before I react.",
+                    f"checking ${symbol}. {sign}{change:.1f}% today at {price_str}. not going to pretend I have the full picture yet but I'm watching closely.",
+                    f"${symbol} did {sign}{change:.1f}% today. had it on my radar before it started. at {price_str} now and I think there's more here.",
                 ]
             elif tl == 'long':
                 templates = [
-                    f"${symbol} at {price_str} after {sign}{change:.1f}%.\n\nprice action caught my eye. clean move, not a pump. going to sit with this one and let it tell me what it wants to do.",
-                    f"${symbol} {sign}{change:.1f}%.\n\nnot everything needs a thread. sometimes a move speaks for itself and you either see it or you don't.",
+                    f"${symbol} {sign}{change:.1f}% today at {price_str} and I haven't fully made up my mind.\n\nnot every move needs an instant take. sometimes you look at the chart, note the move, and let the next few candles give you information. that's where I am with this one.",
+                    f"pulled up ${symbol} after seeing it move {sign}{change:.1f}%. currently at {price_str}.\n\nthe price action caught my eye — there's something happening here. going to sit with it a bit before I commit to a direction.",
                 ]
             else:
                 templates = [
-                    f"${symbol} {sign}{change:.1f}% at {price_str}. chart caught my eye. watching.",
-                    f"checking ${symbol}. {sign}{change:.1f}% at {price_str}. price action telling a story.",
-                    f"${symbol} {sign}{change:.1f}%. setup forming. I'm interested.",
+                    f"${symbol} {sign}{change:.1f}% at {price_str}. chart caught my eye. not ready to make a call yet but I'm watching.",
+                    f"checking ${symbol}. {sign}{change:.1f}% at {price_str}. price action is saying something, I just need to listen.",
+                    f"${symbol} {sign}{change:.1f}%. something forming here. interested.",
                 ]
 
         tweet_text = random.choice(templates) + _get_hashtag_style()
@@ -5343,6 +5453,9 @@ async def post_for_social_account(
 
     elif post_type == 'bitunix_campaign':
         return await post_bitunix_campaign(account_poster)
+
+    elif post_type == 'yubit_campaign':
+        return await post_yubit_campaign(account_poster)
 
     elif post_type == 'free_telegram':
         return await post_free_telegram_promo(account_poster)
@@ -5604,6 +5717,105 @@ Runs until April 26. Slots fill by tier.
 
 _campaign_post_index = 0
 _campaign_posted_today = set()
+
+
+YUBIT_CAMPAIGN_IMAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                                    "attached_assets", "IMG_1461_1775736677070.jpeg")
+YUBIT_CAMPAIGN_LINK  = "https://www.yubit.com/en-US/rewards-hub?inviteCode=TZQL"
+YUBIT_CAMPAIGN_START = datetime(2026, 4, 9)
+YUBIT_CAMPAIGN_END   = datetime(2026, 4, 30, 23, 59, 59)
+
+YUBIT_CAMPAIGN_TEMPLATES = [
+    {
+        'id': 'low_entry',
+        'text': """the entry level on Yubit's campaign is $100 — but you need to pair it with 30k in trading volume
+
+if you're already in futures markets 30k volume is realistic inside a week. maybe less.
+
+100 slots at that tier. when they go they go.
+
+{link}"""
+    },
+    {
+        'id': 'math_angle',
+        'text': """Yubit's running a deposit and trade reward through April 30
+
+put in $2,000 and trade 900k volume and you get 200 USDT back
+
+the volume requirement sounds big until you realize active futures traders hit that without thinking about it. if that's you, you're leaving money on the table
+
+{link}"""
+    },
+    {
+        'id': 'volume_trader',
+        'text': """if you're already running size on {ticker1} and {ticker2} perps you should look at Yubit's current campaign
+
+trade 600k volume = 100 USDT reward. trade 900k = 200 USDT
+
+you're probably doing this volume anyway. might as well do it somewhere that pays you for it
+
+Yubit x TradeHub Markets
+
+{link}"""
+    },
+    {
+        'id': 'pool_angle',
+        'text': """there's a 19,600 USDT pool for traders who hit 50M in volume on Yubit this month
+
+that's the top tier — for people running serious size already
+
+campaign runs through April 30. total across all tiers is 20,000 USDT
+
+{link}"""
+    },
+    {
+        'id': 'simple_entry',
+        'text': """Yubit x TradeHub Markets welcome campaign
+
+$100 deposit + 30k trading volume → 50 USDT back
+100 slots at this level
+
+that's not marketing language — literally 100 slots, then that tier closes. scales up to 200 USDT at the top tier
+
+{link}"""
+    },
+    {
+        'id': 'fomo_ticker',
+        'text': """{ticker1} up {pct1}% today and people are actively trading it on Yubit right now
+
+Yubit's deposit and trade campaign runs through April 30. rewards go up to 200 USDT depending on your tier
+
+if you're in this market anyway, might as well trade somewhere with a welcome bonus on top
+
+{link}"""
+    },
+    {
+        'id': 'honest_pitch',
+        'text': """not going to pitch this like it's passive income. Yubit's campaign requires you to actually trade
+
+deposit and hit a volume target. collect a reward. tiers go from $100 deposit to $2,000
+
+smallest tier needs 30k in volume. if you trade at all that's very achievable
+
+Yubit x TradeHub Markets — ends April 30
+
+{link}"""
+    },
+    {
+        'id': 'perps_trader',
+        'text': """trading {ticker1} and {ticker2} perps somewhere already?
+
+move that activity to Yubit and you hit the volume targets for their deposit rewards without doing anything different
+
+$100 deposit + 30k volume = 50 USDT. scales to 200 USDT at the top tier
+
+Yubit x TradeHub Markets
+
+{link}"""
+    },
+]
+
+_yubit_post_index = 0
 
 
 async def get_trending_hashtags(main_poster=None) -> str:
@@ -6439,4 +6651,93 @@ async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
         
     except Exception as e:
         logger.error(f"Error posting campaign tweet: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def post_yubit_campaign(account_poster) -> Optional[Dict]:
+    """Post a Yubit campaign tweet with the campaign image, live tickers"""
+    global _yubit_post_index
+
+    now = datetime.utcnow()
+    if now < YUBIT_CAMPAIGN_START or now > YUBIT_CAMPAIGN_END:
+        logger.info("Yubit campaign not active, skipping")
+        return None
+
+    try:
+        template = YUBIT_CAMPAIGN_TEMPLATES[_yubit_post_index % len(YUBIT_CAMPAIGN_TEMPLATES)]
+        _yubit_post_index += 1
+
+        live_tickers = await get_live_tickers_for_campaign()
+
+        tweet_text = template['text'].format(
+            link=YUBIT_CAMPAIGN_LINK,
+            **live_tickers
+        )
+
+        # Twitter shortens all URLs to 23 chars — use that count when checking length
+        import re as _re
+        def _tw_len(t: str) -> int:
+            count = 0
+            last = 0
+            for m in _re.finditer(r'https?://\S+', t):
+                count += m.start() - last
+                count += 23
+                last = m.end()
+            count += len(t) - last
+            return count
+
+        if _tw_len(tweet_text) > 280:
+            lines = tweet_text.split('\n')
+            while _tw_len('\n'.join(lines)) > 280 and len(lines) > 3:
+                removed = False
+                for i in range(len(lines) - 1, -1, -1):
+                    line = lines[i].strip()
+                    if not line:
+                        lines.pop(i)
+                        removed = True
+                        break
+                if not removed:
+                    for i in range(len(lines) - 1, 0, -1):
+                        line = lines[i].strip()
+                        if line and not line.startswith('$') and not line.startswith('http') and 'Yubit' not in line:
+                            lines.pop(i)
+                            break
+                    else:
+                        break
+            tweet_text = '\n'.join(lines)
+
+        media_id = None
+        if os.path.exists(YUBIT_CAMPAIGN_IMAGE):
+            try:
+                with open(YUBIT_CAMPAIGN_IMAGE, 'rb') as f:
+                    image_bytes = f.read()
+
+                if hasattr(account_poster, 'upload_media'):
+                    media_id = account_poster.upload_media(image_bytes)
+                elif hasattr(account_poster, 'api_v1') and account_poster.api_v1:
+                    media = account_poster.api_v1.media_upload(
+                        filename="yubit_campaign.jpeg",
+                        file=io.BytesIO(image_bytes)
+                    )
+                    media_id = str(media.media_id)
+
+                if media_id:
+                    logger.info(f"Yubit campaign image uploaded: {media_id}")
+                else:
+                    logger.warning("Yubit campaign image upload failed, posting without image")
+            except Exception as e:
+                logger.error(f"Error uploading Yubit campaign image: {e}")
+        else:
+            logger.warning(f"Yubit campaign image not found: {YUBIT_CAMPAIGN_IMAGE}")
+
+        media_ids = [media_id] if media_id else None
+        result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
+
+        if result and result.get('success'):
+            logger.info(f"Yubit campaign tweet posted (template: {template['id']})")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error posting Yubit campaign tweet: {e}")
         return {'success': False, 'error': str(e)}
