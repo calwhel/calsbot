@@ -736,159 +736,134 @@ async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Opt
         examples_str = "\n".join([f'  "{e}"' for e in personality['examples']])
 
         if tweet_length == 'ultra_short':
-            length_instruction = "Exactly 1 fragment or bare sentence. Under 55 characters. Like a thought you typed while doing something else."
+            length_instruction = "1 fragment or bare sentence. Under 60 chars. Like a thought you typed mid-scroll."
             max_chars = 80
         elif tweet_length == 'short':
-            length_instruction = "1-2 sentences. 60-130 characters total. Quick and casual, like tapping out a thought on your phone."
-            max_chars = 150
+            length_instruction = "1-2 sentences. 60-140 chars. Tap it out, hit post."
+            max_chars = 155
         elif tweet_length == 'long':
-            length_instruction = "3-5 sentences, 190-270 characters. Use 1-2 line breaks. Tell a small story or observation. Something worth screenshotting."
+            length_instruction = "3-5 sentences with 1-2 line breaks. 190-270 chars. The kind of post people screenshot."
             max_chars = 285
         else:
-            length_instruction = "2-3 sentences. 110-185 characters. A complete thought, not rushed but not overdone."
+            length_instruction = "2-3 sentences. 110-185 chars. One complete thought."
             max_chars = 205
 
-        show_data  = random.random() < 0.55
-        data_note  = (
-            "You can weave in the price or percentage if it feels natural — don't force both."
+        show_data = random.random() < 0.55
+        data_note = (
+            "Use the price or % if it flows naturally. Skip it if it would feel forced."
             if show_data else
-            "Skip the exact price and percentage. Talk about the move in general terms or your feelings about it. Real traders don't always quote numbers."
+            "Skip exact numbers. Talk about the move in feel, not data. Real people don't always quote prices."
         )
 
-        opening_style = random.choice([
-            "Start mid-thought, like you're continuing something you were already thinking",
-            "Open with what you were doing when you checked the chart",
-            "Start with a short time reference (morning, late night, between things)",
-            "Begin with 'honestly', 'ngl', 'look', or another casual opener — if it fits your voice",
-            "Lead with a past mistake or miss that connects to this coin",
-            "Start with a general market observation that lands on this coin",
-            "Just start with the ticker if that feels right for your personality",
-            "Open with something you almost did but didn't",
+        # Randomised human situation — primes the AI with actual context instead of rules
+        situation = random.choice([
+            f"You noticed ${symbol} while checking charts between other things.",
+            f"You almost bought ${symbol} two days ago and didn't. Now you're looking again.",
+            f"Someone in a group chat mentioned ${symbol}. You pulled up the chart.",
+            f"You've had a rough week trading. You're looking at ${symbol} with more caution than usual.",
+            f"You're up on other positions. More relaxed, more willing to sit with uncertainty.",
+            f"You've had ${symbol} on a watchlist for a week with nothing happening. Then this move.",
+            f"It's late. You're tired. You're still checking charts.",
+            f"You closed a ${symbol} trade too early last week. Watching it now with different eyes.",
+            f"You're talking yourself into or out of a ${symbol} position. Haven't decided.",
+            f"You saw the ${symbol} move on your lock screen. Opened the app to check.",
         ])
 
-        # System prompt: who you are and hard rules
+        _gainers_ctx = get_daily_gainers_str(max_tickers=5, exclude=symbol)
+
         system_msg = (
-            "You are a respected crypto KOL (key opinion leader) who has been trading for years and posts on X/Twitter. "
-            "You are not a marketer, not a news bot, not a hype account. "
-            "You have a following because you share real thoughts, real mistakes, and real conviction — not because you pump coins. "
-            "People screenshot your posts because they feel true, not because they're exciting. "
-            "You write in lowercase, imperfect grammar, sometimes mid-thought. No emojis. No hashtags. No exclamation marks. "
-            "You sound like the smartest person in a private group chat — direct, occasionally dark, always honest. "
-            "You never use 'NFA', 'DYOR', 'LFG', 'moon', 'gem', or promotional language of any kind. "
-            "A great KOL post leaves the reader thinking — not clicking."
+            "You are a crypto trader who has been in markets since 2019 and posts on X. "
+            "You're not a brand, not a bot, not a marketer. You type fast and post when something catches your attention. "
+            "Your voice is real — sometimes uncertain, sometimes direct, occasionally dark. "
+            "No emojis. No hashtags. No exclamation marks. No NFA or DYOR. Lowercase when it feels right. "
+            "Write like you're texting, not presenting."
         )
 
-        # User prompt: the actual task
-        _gainers_ctx = get_daily_gainers_str(max_tickers=5, exclude=symbol)
-        _gainers_line = f"top movers today: {_gainers_ctx}" if _gainers_ctx else ""
+        prompt = f"""{personality['name']} voice: {personality['voice']}
 
-        prompt = f"""PERSONALITY: {personality['name']}
-{personality['voice']}
-
-VOICE EXAMPLES (write in this register, not as a copy):
+Examples — match this register exactly, do not copy:
 {examples_str}
 
-COIN CONTEXT (use selectively — not all of it):
-${symbol} | price: {price_str} | today: {sign}{change:.1f}% | {tech_context}
-volume today: {vol_str} | time: {time_ctx['period']}, {day_ctx['day']}
-{_gainers_line}
+---
+Coin: ${symbol} | {sign}{change:.1f}% today | {tech_context}
+Volume: {vol_str} | {time_ctx['period']}, {day_ctx['day']}
+{f"Other movers: {_gainers_ctx}" if _gainers_ctx else ""}
 
-LENGTH: {length_instruction}
-OPENING STYLE: {opening_style}
-DATA: {data_note}
+Situation: {situation}
 
-HARD RULES (violation = rejected, no exceptions):
-- zero emojis
-- zero hashtags
-- zero exclamation marks
-- zero "not financial advice" / NFA / DYOR
-- no ALL CAPS except $TICKER
-- no engagement bait ("what do you think?", "follow for more", "comment below")
-- no promotional words: huge, massive, exploding, moon, gem, hidden gem, must see, dont miss
-- no bullet points or numbered lists
-- $TICKER format for any coin name
-- lowercase preferred, skip unnecessary capitals
-- imperfect grammar is fine, real people dont proofread
+Length: {length_instruction}
+Numbers: {data_note}
 
-FORBIDDEN PATTERNS (these sound like a bot — never write these):
-- "X is making moves" / "X is on the move"
-- "The chart is looking bullish/bearish"
-- "Keep an eye on X" / "one to watch"
-- "This could be interesting" / "This looks interesting"
-- "Worth watching" / "definitely watching"
-- "Sending signals" / "signal alert"
-- "opportunity here" / "setup here"
-- "let's see" / "we'll see"
-- Any sentence starting with "In the world of crypto..."
-- Any sentence starting with "Noticed that..."
-- Any sentence ending with "...what do you think?"
-- Any sentence starting with "As a trader..."
-- Calling yourself a trader in the third person
+Write just the tweet. No quotes, no labels, no explanation."""
 
-WHAT MAKES A GREAT KOL POST:
-- Has a specific point of view, not just a fact
-- Reader learns something or feels something — they don't just see information
-- Sounds like it was typed fast, not written carefully
-- The opinion is clear even if the data is thin
-- It ends when the thought ends — not when you run out of words
-
-Write ONLY the tweet text. No quotes. No label. No explanation."""
-
-        grok_tweet = await _call_grok_tweet(
-            prompt, max_chars,
-            label=f"{personality['name']}/{tweet_length}",
-            system=system_msg,
-        )
-        if grok_tweet:
-            return grok_tweet
-
-        # Fallback 1: Gemini
+        # Primary: Gemini 2.0 Flash — most natural casual voice
         try:
-            from google import genai
-            gemini_key = os.getenv('AI_INTEGRATIONS_GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
-            if gemini_key:
-                client = genai.Client(api_key=gemini_key)
-                full_prompt = system_msg + "\n\n" + prompt
-                response = await asyncio.to_thread(
-                    lambda: client.models.generate_content(model="gemini-2.0-flash", contents=full_prompt)
+            from google import genai as _genai
+            _gemini_key = os.getenv('AI_INTEGRATIONS_GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
+            if _gemini_key:
+                _gclient = _genai.Client(api_key=_gemini_key)
+                _full = system_msg + "\n\n" + prompt
+                _resp = await asyncio.to_thread(
+                    lambda: _gclient.models.generate_content(model="gemini-2.0-flash", contents=_full)
                 )
-                tweet = response.text.strip().strip('"').strip("'").strip('```').strip().replace('**', '').replace('*', '')
-                if tweet and 5 < len(tweet) <= max_chars:
-                    logger.info(f"Gemini tweet [{personality['name']}/{tweet_length}] ${symbol}: {tweet[:60]}...")
-                    return tweet
-        except Exception as e:
-            logger.warning(f"Gemini tweet fallback failed: {e}")
+                _tweet = (_resp.text or "").strip().strip('"').strip("'").strip('```').strip().replace('**', '').replace('*', '')
+                if _tweet and 5 < len(_tweet) <= max_chars:
+                    logger.info(f"🐦 Gemini tweet [{personality['name']}/{tweet_length}] ${symbol}: {_tweet[:70]}...")
+                    return _tweet
+                # Trim if slightly over
+                if _tweet and len(_tweet) > max_chars:
+                    for sep in ('. ', '.\n', '! ', '? ', '\n\n', '\n'):
+                        idx = _tweet[:max_chars].rfind(sep)
+                        if idx > max_chars * 0.5:
+                            _tweet = _tweet[:idx + 1].rstrip()
+                            break
+                    else:
+                        _tweet = _tweet[:max_chars].rsplit(' ', 1)[0].rstrip()
+                    if len(_tweet) > 10:
+                        logger.info(f"🐦 Gemini tweet (trimmed) [{personality['name']}/{tweet_length}] ${symbol}: {_tweet[:70]}...")
+                        return _tweet
+        except Exception as _e:
+            logger.warning(f"Gemini tweet failed: {_e}")
 
-        # Fallback 2: Claude
+        # Fallback 1: Claude Sonnet — higher quality than Haiku
         try:
-            import anthropic
-            claude_key = os.getenv('ANTHROPIC_API_KEY')
-            if claude_key:
-                client = anthropic.Anthropic(api_key=claude_key)
+            import anthropic as _anthropic
+            _sonnet_key = os.getenv('AI_INTEGRATIONS_ANTHROPIC_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
+            _base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
+            if _sonnet_key:
+                _sclient = _anthropic.Anthropic(base_url=_base_url, api_key=_sonnet_key) if _base_url else _anthropic.Anthropic(api_key=_sonnet_key)
                 mtok = max(80, min(400, max_chars * 2))
-                response = await asyncio.to_thread(
-                    lambda: client.messages.create(
-                        model="claude-sonnet-4-20250514",
+                _sresp = await asyncio.to_thread(
+                    lambda: _sclient.messages.create(
+                        model="claude-sonnet-4-5",
                         max_tokens=mtok,
                         system=system_msg,
                         messages=[{"role": "user", "content": prompt}],
                     )
                 )
-                tweet = response.content[0].text.strip().strip('"').strip("'").strip('```').strip().replace('**', '').replace('*', '')
-                if tweet and len(tweet) > 5:
-                    if len(tweet) > max_chars:
-                        trimmed = tweet[:max_chars]
-                        for sep in ('. ', '.\n', '! ', '? ', '\n\n', '\n'):
-                            idx = trimmed.rfind(sep)
-                            if idx > max_chars * 0.55:
-                                tweet = trimmed[:idx + 1].rstrip()
+                _tweet = (_sresp.content[0].text or "").strip().strip('"').strip("'").strip('```').strip().replace('**', '').replace('*', '')
+                if _tweet and len(_tweet) > 5:
+                    if len(_tweet) > max_chars:
+                        for sep in ('. ', '.\n', '? ', '\n\n', '\n'):
+                            idx = _tweet[:max_chars].rfind(sep)
+                            if idx > max_chars * 0.5:
+                                _tweet = _tweet[:idx + 1].rstrip()
                                 break
                         else:
-                            tweet = trimmed.rsplit(' ', 1)[0].rstrip()
-                    logger.info(f"Claude tweet [{personality['name']}/{tweet_length}] ${symbol}: {tweet[:60]}...")
-                    return tweet
-        except Exception as e:
-            logger.warning(f"Claude tweet fallback failed: {e}")
+                            _tweet = _tweet[:max_chars].rsplit(' ', 1)[0].rstrip()
+                    logger.info(f"🐦 Sonnet tweet [{personality['name']}/{tweet_length}] ${symbol}: {_tweet[:70]}...")
+                    return _tweet
+        except Exception as _e:
+            logger.warning(f"Claude Sonnet tweet failed: {_e}")
+
+        # Fallback 2: Claude Haiku (fast, cheap last resort)
+        grok_tweet = await _call_grok_tweet(
+            prompt, max_chars,
+            label=f"haiku/{personality['name']}/{tweet_length}",
+            system=system_msg,
+        )
+        if grok_tweet:
+            return grok_tweet
 
         return None
 
@@ -4291,7 +4266,7 @@ Write ONLY the tweet. No quotes, no explanation:"""
                     max_tokens = 40 if tweet_length == 'ultra_short' else 80 if tweet_length == 'short' else 200 if tweet_length == 'long' else 120
                     resp = await asyncio.to_thread(
                         lambda: _cc.messages.create(
-                            model="claude-sonnet-4-20250514",
+                            model="claude-sonnet-4-5",
                             max_tokens=max_tokens,
                             messages=[{"role": "user", "content": prompt}]
                         )
