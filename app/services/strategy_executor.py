@@ -1596,8 +1596,26 @@ async def evaluate_and_fire(
 
         direction = direction_pref
         if direction == "BOTH":
-            rsi = price_data.get("rsi", 50)
-            direction = "LONG" if rsi > 50 else "SHORT"
+            # Infer direction from directional conditions (FVG, order block, divergence, COD)
+            # before falling back to RSI — a bullish FVG must never produce a SHORT.
+            inferred_dir = None
+            for _cond in config.get("entry_conditions", {}).get("conditions", []):
+                _ct = _cond.get("type", "")
+                _d = None
+                if _ct == "fvg":
+                    _d = _cond.get("direction") or _cond.get("fvg_dir")
+                elif _ct in ("order_block", "ob"):
+                    _d = _cond.get("ob_type") or _cond.get("direction")
+                elif _ct in ("divergence", "cod", "change_of_direction"):
+                    _d = _cond.get("direction")
+                if _d and _d not in ("any", "both"):
+                    inferred_dir = "LONG" if _d == "bullish" else "SHORT"
+                    break
+            if inferred_dir:
+                direction = inferred_dir
+            else:
+                rsi = price_data.get("rsi", 50)
+                direction = "LONG" if rsi > 50 else "SHORT"
 
         if direction == "LONG":
             tp_price  = current_price * (1 + tp_pct  / 100)
