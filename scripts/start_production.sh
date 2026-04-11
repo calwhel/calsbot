@@ -31,14 +31,14 @@ trap cleanup EXIT SIGTERM SIGINT
 while true; do
     echo "[portal] starting..."
     gunicorn \
-        -w 2 \
+        -w 4 \
         -k uvicorn.workers.UvicornWorker \
         --reuse-port \
-        --max-requests 300 \
-        --max-requests-jitter 30 \
+        --max-requests 500 \
+        --max-requests-jitter 50 \
         --bind 0.0.0.0:5000 \
-        --timeout 120 \
-        --graceful-timeout 30 \
+        --timeout 300 \
+        --graceful-timeout 60 \
         --log-level info \
         strategy_portal_server:app
     echo "[portal] exited — restarting in 5s..."
