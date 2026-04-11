@@ -2317,7 +2317,12 @@ def migrate_env_account_to_database():
             logger.info("✅ Successfully migrated ccally account to database!")
             account = db.query(TwitterAccount).filter(TwitterAccount.name == 'ccally').first()
             if account:
-                account.set_post_types(['featured_coin', 'market_summary', 'top_gainers', 'btc_update', 'altcoin_movers', 'quick_ta', 'daily_recap'])
+                account.set_post_types([
+                    'featured_coin', 'market_summary', 'top_gainers', 'btc_update',
+                    'altcoin_movers', 'quick_ta', 'daily_recap', 'bitunix_campaign',
+                    'yubit_campaign', 'tradehub_promo', 'early_gainer', 'memecoin',
+                    'market_take', 'free_telegram',
+                ])
                 db.commit()
                 logger.info("✅ Set default post types for ccally")
         else:
@@ -3624,11 +3629,15 @@ async def auto_post_loop():
                     adjusted_minute += 60
                     adjusted_hour = (hour - 1) % 24
                 
-                # Check if we're within 3 minutes of the adjusted slot
+                # Campaign slots get a 30-min catch-up window (survive restarts).
+                # Regular slots fire within 5 minutes of the adjusted time.
+                _campaign_types = {'yubit_campaign', 'bitunix_campaign'}
+                _window_secs = 1800 if post_type in _campaign_types else 300
+
                 slot_time = now.replace(hour=adjusted_hour, minute=adjusted_minute, second=0, microsecond=0)
-                time_diff = abs((now - slot_time).total_seconds())
-                
-                if time_diff <= 180 and slot_key not in POSTED_SLOTS:
+                time_diff = (now - slot_time).total_seconds()  # positive = we're past the slot
+
+                if 0 <= time_diff <= _window_secs and slot_key not in POSTED_SLOTS:
                     main_poster = get_twitter_poster()
                     posted_any = False
                     
