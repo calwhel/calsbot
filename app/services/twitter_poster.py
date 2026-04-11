@@ -4790,8 +4790,6 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
         # AI-generated card images disabled — text-only posts
         media_ids = None
 
-        tl = _pick_tweet_length()
-
         # Fetch 1h OHLCV for TA enrichment (~50% of posts)
         ta = None
         if random.random() < 0.5:
@@ -4838,82 +4836,21 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
             except Exception:
                 pass
 
+        # Build coin data for AI generation — pass TA if available
+        coin_data_for_ai = {
+            'symbol': symbol, 'change': change, 'price': price,
+            'volume': volume, 'market_cap': mcap if mcap > 0 else None,
+        }
         if ta:
-            rsi = ta['rsi']
-            trend = ta['trend']
-            vol_above = ta['vol_above_avg']
-            h24_str = f"${ta['h24']:,.4f}" if ta['h24'] < 1 else f"${ta['h24']:,.2f}"
-            l24_str = f"${ta['l24']:,.4f}" if ta['l24'] < 1 else f"${ta['l24']:,.2f}"
+            coin_data_for_ai['rsi']   = ta['rsi']
+            coin_data_for_ai['trend'] = ta['trend']
 
-            if tl == 'ultra_short':
-                templates = [
-                    f"${symbol} up {change:.1f}% and RSI's at {rsi:.0f}. not extended yet.",
-                    f"something's moving in ${symbol}. {change:.1f}% today with {trend} structure.",
-                    f"been on ${symbol} for a bit. {change:.1f}% today and the EMA cross is clean.",
-                ]
-            elif tl == 'short':
-                if trend == 'bullish':
-                    templates = [
-                        f"${symbol} up {change:.1f}% at {price_str} and the structure still looks intact. RSI at {rsi:.0f} — not yet in overbought territory, which is the part I actually care about.",
-                        f"been watching ${symbol} and today it moved. {change:.1f}%, price holding above the 9 EMA, RSI around {rsi:.0f}. that's the setup I wait for.",
-                        f"the move on ${symbol} today (+{change:.1f}%) came with volume {'running above the recent average' if vol_above else 'showing up'}. RSI at {rsi:.0f} and trend is with it. I'm interested.",
-                    ]
-                else:
-                    templates = [
-                        f"${symbol} bouncing {change:.1f}% at {price_str} — RSI was at {rsi:.0f} going into this which tells you it was compressed. question is whether the follow-through is there.",
-                        f"${symbol} up {change:.1f}% at {price_str}. RSI at {rsi:.0f} and the EMA picture hasn't fully turned yet. could be a real reversal, could be a dead-cat. watching.",
-                    ]
-            elif tl == 'medium':
-                if trend == 'bullish':
-                    templates = [
-                        f"${symbol} at {price_str}, up {change:.1f}% today. RSI is {rsi:.0f} and the 9 EMA is above the 21 — that's the confirmation I want before I pay attention. volume is {'running hot' if vol_above else 'steady'}. keeping it on my watchlist.",
-                        f"pulled up ${symbol} mid-session. {change:.1f}% on the day, RSI at {rsi:.0f} and trend's intact. 24h range is {l24_str} to {h24_str} — it's near the high of that range but the structure isn't broken.",
-                    ]
-                else:
-                    templates = [
-                        f"${symbol} up {change:.1f}% at {price_str} and I'm curious but cautious. RSI at {rsi:.0f} and the EMAs haven't crossed yet. 24h range {l24_str} to {h24_str}. watching for a close above the high before I commit.",
-                        f"something worth watching on ${symbol} — {change:.1f}% today, RSI at {rsi:.0f}, but trend's not confirmed. could be the start of a turn or just a relief bounce. I'll know more in a few candles.",
-                    ]
-            else:  # long
-                if trend == 'bullish':
-                    templates = [
-                        f"pulled up ${symbol} and it's doing what I hoped.\n\nup {change:.1f}% at {price_str}, RSI at {rsi:.0f} which still has room, volume is {'running above average' if vol_above else 'steady'}. 24h range from {l24_str} to {h24_str}.\n\nnot chasing. already positioned.",
-                        f"${symbol} at {price_str} after a {change:.1f}% session.\n\nEMA trend is bullish, RSI sitting at {rsi:.0f} — that's the zone where things can extend without going parabolic. 24h low held at {l24_str}. structure's clean.\n\nwatching the {h24_str} level as the next real test.",
-                    ]
-                else:
-                    templates = [
-                        f"${symbol} up {change:.1f}% at {price_str} and I'm paying attention, but not fully convinced yet.\n\nRSI at {rsi:.0f}, trend's still showing some pressure. if this closes above {h24_str} that changes things. for now I'm watching.",
-                        f"noticed ${symbol} moving — {change:.1f}% today, RSI at {rsi:.0f}. 24h range: {l24_str} to {h24_str}.\n\nnot my cleanest setup but the {'volume spike is worth noting' if vol_above else 'move is real'} and I never ignore something this size without checking the chart.",
-                    ]
-        else:
-            # No TA — pure human-voice templates
-            if tl == 'ultra_short':
-                templates = [
-                    f"been watching ${symbol}. today it moved. {change:.1f}%.",
-                    f"${symbol} at {price_str}. that's a {change:.1f}% day. noted.",
-                    f"${symbol} woke up. {change:.1f}% and I was already watching.",
-                ]
-            elif tl == 'short':
-                templates = [
-                    f"${symbol} moved {change:.1f}% today on {vol_str} volume. the thing about moves like this is they either continue or they don't — and you usually know by the close.",
-                    f"quiet start, then ${symbol} put in a {change:.1f}% candle at {price_str}. sometimes the boring coins do the best things.",
-                    f"had ${symbol} on my list for a few days. today it did something — up {change:.1f}% at {price_str}.",
-                    f"not every move needs a thread. ${symbol} is up {change:.1f}% at {price_str} and I think it has more to go. that's the whole take.",
-                ]
-            elif tl == 'long':
-                templates = [
-                    f"something to look at today: ${symbol} up {change:.1f}% at {price_str}.\n\n{vol_str} in volume behind it — which is the part that matters. a move with no volume is just noise. this isn't that{cap_note}.",
-                    f"${symbol} at {price_str} after a {change:.1f}% session.\n\nbeen watching this one for a few days. the move today wasn't a surprise but the volume made me take it more seriously than I expected.\n\nstill think there's room from here.",
-                    f"everyone's focused on the same handful of names right now so ${symbol} doing {change:.1f}% at {price_str} is mostly flying under the radar.\n\nthat's usually exactly where I want to be.",
-                ]
-            else:
-                templates = [
-                    f"${symbol} up {change:.1f}% at {price_str} with {vol_str} behind it. the kind of early move I was positioned for.",
-                    f"caught ${symbol} before it started. {change:.1f}% at {price_str} now, and it doesn't look done.",
-                    f"${symbol} at {price_str}, up {change:.1f}% today. the volume ({vol_str}) is what makes this worth paying attention to{cap_note}.",
-                ]
+        tweet_text = await generate_ai_tweet(coin_data_for_ai, 'early_gainer')
+        if not tweet_text:
+            _sign = "+" if change >= 0 else ""
+            tweet_text = f"${symbol} {_sign}{change:.1f}% at {price_str}. watching this one."
 
-        tweet_text = random.choice(templates) + _get_hashtag_style()
+        tweet_text = tweet_text + _get_hashtag_style()
         tweet_text = await _ai_review_tweet(tweet_text, 'early_gainer', {
             'symbol': symbol, 'change': f'{change:+.1f}%', 'price': price_str,
             'volume': vol_str, 'ta_available': ta is not None,
@@ -5004,36 +4941,15 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
         # AI-generated card images disabled — text-only posts
         meme_media_ids = None
 
-        tl = _pick_tweet_length()
+        coin_data_for_ai = {
+            'symbol': symbol, 'change': change, 'price': price,
+            'volume': volume, 'market_cap': mcap if mcap > 0 else None,
+        }
+        tweet_text = await generate_ai_tweet(coin_data_for_ai, 'memecoin')
+        if not tweet_text:
+            tweet_text = f"${symbol} {sign}{change:.1f}% at {price_str}. {vol_str} behind it."
 
-        if tl == 'ultra_short':
-            templates = [
-                f"${symbol} {sign}{change:.1f}% today. meme energy is back.",
-                f"had ${symbol} on my radar. it moved. {sign}{change:.1f}%.",
-                f"${symbol} doing {sign}{change:.1f}%. the memes always find a way.",
-                f"not going to pretend I'm surprised. ${symbol} up {sign}{change:.1f}%.",
-            ]
-        elif tl == 'short':
-            templates = [
-                f"${symbol} up {sign}{change:.1f}% at {price_str} with {vol_str} behind it. that's not retail buying — that's someone with size making a move.",
-                f"been watching ${symbol} since it was quiet. now it's {sign}{change:.1f}% at {price_str}. meme coins move fast when they decide to.",
-                f"${symbol} at {price_str}, up {sign}{change:.1f}%. the volume ({vol_str}) is what got my attention — you don't see that without a reason.",
-                f"the thing about ${symbol} is it was boring for weeks. then {sign}{change:.1f}% in a day{cap_note}. that's how meme season works.",
-            ]
-        elif tl == 'long':
-            templates = [
-                f"${symbol} up {sign}{change:.1f}% at {price_str} with {vol_str} in 24 hours.\n\nmeme coins are the one asset class where being early matters more than being right. a lot of people are going to see this and wish they were paying attention last week.",
-                f"let's talk about ${symbol} for a second.\n\n{sign}{change:.1f}% today. {vol_str} in volume{cap_note}.\n\nthis is how the runs start — nobody cares until suddenly everyone does. I'd rather be early and wrong occasionally than late and right never.",
-                f"${symbol} is up {sign}{change:.1f}% today and I've seen this pattern before.\n\n{vol_str} of real volume coming in. not a rumor-driven spike — actual buyers moving size. the chart tells you when something's different. this feels different.",
-            ]
-        else:
-            templates = [
-                f"${symbol} up {sign}{change:.1f}% at {price_str}. {vol_str} in volume confirms this isn't just noise{cap_note}.",
-                f"had ${symbol} marked. today it did {sign}{change:.1f}% at {price_str}. exactly what I was waiting for.",
-                f"${symbol} moving — {sign}{change:.1f}%, {vol_str} behind it{cap_note}. was watching this before it got loud.",
-            ]
-
-        tweet_text = random.choice(templates) + _get_hashtag_style()
+        tweet_text = tweet_text + _get_hashtag_style()
         tweet_text = await _ai_review_tweet(tweet_text, 'memecoin', {
             'symbol': symbol, 'change': f'{sign}{change:.1f}%', 'price': price_str,
             'volume': vol_str, 'mcap': mcap_str,
@@ -5268,115 +5184,19 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
         # AI-generated card images disabled — text-only posts
         ta_media_ids = None
 
-        tl = _pick_tweet_length()
-
+        # Build coin data for AI generation — pass TA if available
+        coin_data_for_ai = {
+            'symbol': symbol, 'change': change, 'price': price, 'volume': volume,
+        }
         if chart_analysis:
-            rsi = chart_analysis.get('rsi', 50)
-            trend = chart_analysis.get('trend', 'neutral')
-            vol_surge = chart_analysis.get('vol_surge', False)
-            h24 = chart_analysis.get('h24', 0)
-            l24 = chart_analysis.get('l24', 0)
-            h24_str = f"${h24:,.4f}" if h24 < 1 else f"${h24:,.2f}"
-            l24_str = f"${l24:,.4f}" if l24 < 1 else f"${l24:,.2f}"
+            coin_data_for_ai['rsi']   = chart_analysis['rsi']
+            coin_data_for_ai['trend'] = chart_analysis['trend']
 
-            if tl == 'ultra_short':
-                if trend == 'bullish':
-                    templates = [
-                        f"${symbol} {sign}{change:.1f}%. RSI at {rsi:.0f} and trend's still with it.",
-                        f"looking at ${symbol}. {sign}{change:.1f}%, structure is clean.",
-                        f"${symbol} doing what I thought it would. {sign}{change:.1f}%.",
-                    ]
-                elif trend == 'bearish':
-                    templates = [
-                        f"${symbol} {sign}{change:.1f}%. RSI at {rsi:.0f}. I'm watching but not moving yet.",
-                        f"pulled up ${symbol}. {sign}{change:.1f}% today. thinking about it.",
-                        f"${symbol} {sign}{change:.1f}% at {price_str}. chart's got my attention.",
-                    ]
-                else:
-                    templates = [
-                        f"${symbol} {sign}{change:.1f}%. RSI {rsi:.0f} and no clear direction. watching.",
-                        f"${symbol} at {price_str}. {sign}{change:.1f}%. still figuring out what it wants to do.",
-                    ]
-            elif tl == 'short':
-                if trend == 'bullish' and rsi < 65:
-                    templates = [
-                        f"pulled up ${symbol} and the setup is actually clean. {sign}{change:.1f}% at {price_str}, RSI at {rsi:.0f} with room left. I like where this is going.",
-                        f"${symbol} at {price_str} after a {sign}{change:.1f}% day. RSI at {rsi:.0f} — trend's intact and it's not overbought. that's the combination I look for.",
-                        f"checked the chart on ${symbol}. {sign}{change:.1f}%, RSI at {rsi:.0f}, higher lows holding. nothing complicated about this one.",
-                    ]
-                elif trend == 'bullish':
-                    templates = [
-                        f"${symbol} {sign}{change:.1f}% at {price_str}. RSI pushing into {rsi:.0f} which is getting stretched, but the trend is still intact. watching for a pullback before I add.",
-                        f"strong move on ${symbol} — {sign}{change:.1f}%. RSI at {rsi:.0f} is extended so I wouldn't chase here, but if this pulls back to support I'm very interested.",
-                    ]
-                elif trend == 'bearish':
-                    templates = [
-                        f"${symbol} moving {sign}{change:.1f}% at {price_str} but the trend structure is still against it. RSI at {rsi:.0f}. probably a bounce rather than a reversal. not chasing.",
-                        f"${symbol} {sign}{change:.1f}% today but the sellers aren't done yet based on the chart. RSI at {rsi:.0f}, trend still showing lower highs. waiting for cleaner confirmation.",
-                    ]
-                else:
-                    templates = [
-                        f"${symbol} at {price_str}, {sign}{change:.1f}% today. RSI {rsi:.0f} and the chart is in no-man's-land. could break either way — watching how it closes.",
-                        f"${symbol} {sign}{change:.1f}% on the day. RSI at {rsi:.0f} and it's been chopping around. I usually don't trade these until they show their hand.",
-                    ]
-            elif tl == 'long':
-                if trend == 'bullish' and rsi < 65:
-                    templates = [
-                        f"took a proper look at ${symbol} today.\n\n{sign}{change:.1f}% at {price_str}. RSI sitting at {rsi:.0f} — that's not overbought, that's momentum without the froth. 24h range from {l24_str} to {h24_str} and it's trading near the top for a reason.\n\ncould be nothing. could be the start of something.",
-                        f"${symbol} at {price_str} after a {sign}{change:.1f}% day.\n\nRSI is {rsi:.0f}, trend is bullish, volume {'is running above average' if vol_surge else 'is steady'}. the setup has the characteristics I want to see. keeping a position and letting it work.",
-                    ]
-                elif trend == 'bearish':
-                    templates = [
-                        f"${symbol} moved {sign}{change:.1f}% today and I looked at the chart.\n\nRSI at {rsi:.0f}. trend's still pointing down — lower highs on every bounce. this kind of move usually gets sold into.\n\nnot touching it until the structure changes. patience is part of the process.",
-                        f"${symbol} {sign}{change:.1f}% at {price_str}. worth noting but the chart isn't clean.\n\nRSI {rsi:.0f}, sellers still in control on the higher timeframe. when the trend flips I'll revisit. until then, sitting on my hands.",
-                    ]
-                else:
-                    templates = [
-                        f"${symbol} at {price_str} today, {sign}{change:.1f}%.\n\nRSI at {rsi:.0f} and the chart is in no-man's-land right now. ranging, waiting for a catalyst. I've seen enough of these to know the break usually comes when you least expect it.\n\nwatching the {h24_str} level as the one that matters.",
-                        f"${symbol} {sign}{change:.1f}% and it's got my attention but I'm not forcing a read.\n\nRSI is {rsi:.0f}, no strong directional bias. sometimes the cleanest move is to wait for the market to tell you what it wants to do instead of guessing.",
-                    ]
-            else:
-                if trend == 'bullish' and rsi < 65:
-                    templates = [
-                        f"${symbol} {sign}{change:.1f}% at {price_str} and the chart is actually clean. RSI at {rsi:.0f} with room to run, trend intact. I like this one.",
-                        f"checked ${symbol}. {sign}{change:.1f}% at {price_str}, RSI {rsi:.0f}, buyers in control. this is the kind of setup I don't second-guess.",
-                    ]
-                elif trend == 'bearish':
-                    templates = [
-                        f"${symbol} {sign}{change:.1f}% today but RSI at {rsi:.0f} and the trend is still against it. I've been burned chasing bounces in downtrends. watching from the sidelines.",
-                        f"looked at ${symbol} after seeing the {sign}{change:.1f}% move. RSI {rsi:.0f} but sellers still have the structure. not my trade right now.",
-                    ]
-                else:
-                    templates = [
-                        f"${symbol} {sign}{change:.1f}% at {price_str}. RSI at {rsi:.0f} and no clear trend yet. could be interesting, could be noise. watching to see how it resolves.",
-                        f"pulled up ${symbol} — {sign}{change:.1f}%, RSI {rsi:.0f}, chart chopping. not moving until it gives me something cleaner.",
-                    ]
-        else:
-            if tl == 'ultra_short':
-                templates = [
-                    f"${symbol} {sign}{change:.1f}% today. watching.",
-                    f"something happening with ${symbol}. {sign}{change:.1f}% at {price_str}.",
-                    f"${symbol} has my attention right now.",
-                ]
-            elif tl == 'short':
-                templates = [
-                    f"${symbol} {sign}{change:.1f}% at {price_str}. the move caught my eye — price action is telling a story and I want to understand it before I react.",
-                    f"checking ${symbol}. {sign}{change:.1f}% today at {price_str}. not going to pretend I have the full picture yet but I'm watching closely.",
-                    f"${symbol} did {sign}{change:.1f}% today. had it on my radar before it started. at {price_str} now and I think there's more here.",
-                ]
-            elif tl == 'long':
-                templates = [
-                    f"${symbol} {sign}{change:.1f}% today at {price_str} and I haven't fully made up my mind.\n\nnot every move needs an instant take. sometimes you look at the chart, note the move, and let the next few candles give you information. that's where I am with this one.",
-                    f"pulled up ${symbol} after seeing it move {sign}{change:.1f}%. currently at {price_str}.\n\nthe price action caught my eye — there's something happening here. going to sit with it a bit before I commit to a direction.",
-                ]
-            else:
-                templates = [
-                    f"${symbol} {sign}{change:.1f}% at {price_str}. chart caught my eye. not ready to make a call yet but I'm watching.",
-                    f"checking ${symbol}. {sign}{change:.1f}% at {price_str}. price action is saying something, I just need to listen.",
-                    f"${symbol} {sign}{change:.1f}%. something forming here. interested.",
-                ]
+        tweet_text = await generate_ai_tweet(coin_data_for_ai, 'quick_ta')
+        if not tweet_text:
+            tweet_text = f"${symbol} {sign}{change:.1f}% at {price_str}. chart caught my eye."
 
-        tweet_text = random.choice(templates) + _get_hashtag_style()
+        tweet_text = tweet_text + _get_hashtag_style()
         tweet_text = await _ai_review_tweet(tweet_text, 'quick_ta', {
             'symbol': symbol, 'change': f'{sign}{change:.1f}%', 'price': price_str,
             'rsi': chart_analysis['rsi'] if chart_analysis else 'not computed',
