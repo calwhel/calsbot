@@ -620,18 +620,24 @@ async def _ai_review_tweet(tweet_text: str, post_type: str, context: dict = None
 
 
 def _get_hashtag_style() -> str:
-    """Append top-gainer tickers so every post gets coin exposure for discoverability."""
+    """Append today's actual top-gainer cashtags for discoverability."""
     tickers = get_daily_gainers_str(max_tickers=3)
-    ticker_line = f"\n\n{tickers}" if tickers else ""
-    # Occasionally mix in a hashtag, but always lead with the coin tickers
-    styles = [
-        ticker_line,
-        ticker_line,
-        ticker_line,
-        f"{ticker_line}\n\n#Crypto",
-        f"{ticker_line}\n\n#{random.choice(['BTC', 'Altcoins', 'Trading', 'Crypto'])}",
-    ]
-    return random.choice(styles)
+    return f"\n\n{tickers}" if tickers else ""
+
+
+async def _get_ticker_suffix() -> str:
+    """
+    Async version — fetches fresh MEXC top gainers when the cache is cold
+    (e.g. right after a bot restart). Always returns real coin cashtags, never generic hashtags.
+    """
+    if not _DAILY_GAINERS_TICKERS:
+        try:
+            fresh = await _fetch_mexc_tickers()
+            _update_daily_gainers(fresh)
+        except Exception:
+            pass
+    tickers = get_daily_gainers_str(max_tickers=3)
+    return f"\n\n{tickers}" if tickers else ""
 
 
 async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "",
@@ -6458,8 +6464,8 @@ async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
         else:
             logger.warning(f"Campaign image not found: {BITUNIX_CAMPAIGN_IMAGE}")
         
-        # Append top gainer tickers if they fit
-        _bt_tickers = _get_hashtag_style()
+        # Append today's actual top-gainer cashtags — fetch fresh if cache is cold
+        _bt_tickers = await _get_ticker_suffix()
         if _bt_tickers and len(tweet_text + _bt_tickers) <= 280:
             tweet_text = tweet_text + _bt_tickers
 
@@ -6552,8 +6558,8 @@ async def post_yubit_campaign(account_poster) -> Optional[Dict]:
         else:
             logger.warning(f"Yubit campaign image not found: {YUBIT_CAMPAIGN_IMAGE}")
 
-        # Append top gainer tickers for discoverability — only if they fit
-        _tickers_suffix = _get_hashtag_style()
+        # Append today's actual top-gainer cashtags — fetch fresh if cache is cold
+        _tickers_suffix = await _get_ticker_suffix()
         if _tickers_suffix and _tw_len(tweet_text + _tickers_suffix) <= 280:
             tweet_text = tweet_text + _tickers_suffix
 
