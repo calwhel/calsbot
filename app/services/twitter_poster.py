@@ -6458,6 +6458,11 @@ async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
         else:
             logger.warning(f"Campaign image not found: {BITUNIX_CAMPAIGN_IMAGE}")
         
+        # Append top gainer tickers if they fit
+        _bt_tickers = _get_hashtag_style()
+        if _bt_tickers and len(tweet_text + _bt_tickers) <= 280:
+            tweet_text = tweet_text + _bt_tickers
+
         media_ids = [media_id] if media_id else None
         result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
         
@@ -6546,6 +6551,11 @@ async def post_yubit_campaign(account_poster) -> Optional[Dict]:
                 logger.error(f"Error uploading Yubit campaign image: {e}")
         else:
             logger.warning(f"Yubit campaign image not found: {YUBIT_CAMPAIGN_IMAGE}")
+
+        # Append top gainer tickers for discoverability — only if they fit
+        _tickers_suffix = _get_hashtag_style()
+        if _tickers_suffix and _tw_len(tweet_text + _tickers_suffix) <= 280:
+            tweet_text = tweet_text + _tickers_suffix
 
         media_ids = [media_id] if media_id else None
         tweet_text = await _ai_review_tweet(tweet_text, 'yubit_campaign', {
