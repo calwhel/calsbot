@@ -3723,10 +3723,6 @@ async def auto_post_loop():
 async def post_with_account(account_poster: MultiAccountPoster, main_poster, post_type: str) -> Optional[Dict]:
     """Post using a specific account - generates content from main poster, posts with account"""
     try:
-        if is_social_account(account_poster.name):
-            logger.info(f"[CryptoSocial] Using social-powered posts for {account_poster.name}")
-            return await post_for_social_account(account_poster, post_type, main_poster)
-        
         if post_type == 'featured_coin':
             # Get gainers and pick one — prioritise coins trending on X today
             gainers = await main_poster.get_top_gainers_data(30)
@@ -5205,88 +5201,6 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
         return {'success': False, 'error': str(e)}
 
 
-def is_social_account(account_name: str) -> bool:
-    """Check if this is the Crypto Social account"""
-    name_lower = account_name.lower()
-    return 'social' in name_lower or 'cryptosocial' in name_lower
-
-
-async def post_for_social_account(
-    account_poster: MultiAccountPoster, post_type: str, main_poster=None
-) -> Optional[Dict]:
-    """Handle posting for Crypto Social account - NEWS & EARLY GAINERS focus"""
-    # Direct mapping for manual post buttons
-    if post_type == 'breaking_news':
-        return await post_social_news(account_poster)
-
-    elif post_type == 'early_gainer':
-        if main_poster:
-            return await post_early_gainer_standard(account_poster, main_poster)
-        return await post_early_gainers(account_poster)
-
-    elif post_type == 'quick_ta':
-        if main_poster:
-            return await post_quick_ta(account_poster, main_poster)
-        return await post_early_gainers(account_poster)
-
-    elif post_type == 'tradehub_promo':
-        _now = datetime.utcnow()
-        _campaign_active = BITUNIX_CAMPAIGN_START <= _now <= BITUNIX_CAMPAIGN_END
-        if _campaign_active and random.random() < 0.25:
-            return await post_bitunix_campaign(account_poster)
-        return await post_tradehub_promo(account_poster)
-
-    elif post_type == 'market_take':
-        return await post_market_take(account_poster)
-
-    elif post_type == 'memecoin':
-        return await post_memecoin(account_poster)
-
-    elif post_type == 'momentum_shift':
-        return await post_momentum_shift(account_poster)
-
-    elif post_type == 'volume_surge':
-        return await post_volume_surge(account_poster)
-
-    elif post_type == 'market_pulse':
-        return await post_market_pulse(account_poster)
-
-    # Map standard post types to social-specific functions
-    elif post_type == 'featured_coin':
-        social_posts = [
-            post_social_news,
-            post_early_gainers,
-            post_momentum_shift,
-        ]
-        return await random.choice(social_posts)(account_poster)
-
-    elif post_type == 'market_summary':
-        return await post_market_pulse(account_poster)
-
-    elif post_type == 'top_gainers':
-        return await post_early_gainers(account_poster)
-
-    elif post_type == 'btc_update':
-        return await post_social_news(account_poster)
-
-    elif post_type == 'altcoin_movers':
-        return await post_momentum_shift(account_poster)
-
-    elif post_type == 'daily_recap':
-        return await post_volume_surge(account_poster)
-
-    elif post_type == 'bitunix_campaign':
-        return await post_bitunix_campaign(account_poster)
-
-    elif post_type == 'yubit_campaign':
-        return await post_yubit_campaign(account_poster)
-
-    elif post_type == 'free_telegram':
-        return await post_free_telegram_promo(account_poster)
-
-    else:
-        funcs = [post_social_news, post_early_gainers, post_momentum_shift, post_volume_surge]
-        return await random.choice(funcs)(account_poster)
 
 
 async def post_free_telegram_promo(account_poster) -> Optional[Dict]:
