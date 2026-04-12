@@ -731,6 +731,7 @@ _ln_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app", "temp
 
 @app.get("/larknexus", response_class=HTMLResponse)
 @app.get("/ln", response_class=HTMLResponse)
+@app.get("/lark", response_class=HTMLResponse)
 async def larknexus_page():
     return FileResponse(_ln_file, media_type="text/html")
 

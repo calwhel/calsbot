@@ -640,6 +640,23 @@ async def _get_ticker_suffix() -> str:
     return f"\n\n{tickers}" if tickers else ""
 
 
+def _sanitize_tickers(text: str, expected_symbol: str) -> str:
+    """
+    Strip cashtags that don't belong — remove $ prefix from any ticker
+    that isn't the coin we're actually posting about.
+    Prevents AI hallucinating e.g. $TRADOOR when posting about $PEPE.
+    """
+    import re as _re
+    expected = expected_symbol.upper()
+    def _fix(m):
+        ticker = m.group(1).upper()
+        if ticker == expected:
+            return f"${ticker}"
+        # Keep as plain text — readable but not a cashtag link
+        return ticker.lower()
+    return _re.sub(r'\$([A-Za-z]{2,10})\b', _fix, text)
+
+
 def _maybe_yubit_drop() -> str:
     """
     Casually mention the Yubit rewards campaign in ~1-in-4 posts.
@@ -804,7 +821,10 @@ async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Opt
             "You're not a brand, not a bot, not a marketer. You type fast and post when something catches your attention. "
             "Your voice is real — sometimes uncertain, sometimes direct, occasionally dark. "
             "No emojis. No hashtags. No exclamation marks. No NFA or DYOR. Lowercase when it feels right. "
-            "Write like you're texting, not presenting."
+            "Write like you're texting, not presenting. "
+            f"IMPORTANT: The ONLY coin you may reference with a $ cashtag is ${symbol}. "
+            "Do not write any other coin name as a cashtag (no $BTC, $ETH, $SOL etc). "
+            "You may mention other coin names in plain text without a $ prefix if truly natural, but the main cashtag must be the coin above."
         )
 
         prompt = f"""{personality['name']} voice: {personality['voice']}
@@ -836,6 +856,7 @@ Write just the tweet. No quotes, no labels, no explanation."""
                 )
                 _tweet = (_resp.text or "").strip().strip('"').strip("'").strip('```').strip().replace('**', '').replace('*', '')
                 if _tweet and 5 < len(_tweet) <= max_chars:
+                    _tweet = _sanitize_tickers(_tweet, symbol)
                     logger.info(f"🐦 Gemini tweet [{personality['name']}/{tweet_length}] ${symbol}: {_tweet[:70]}...")
                     return _tweet
                 # Trim if slightly over
@@ -848,6 +869,7 @@ Write just the tweet. No quotes, no labels, no explanation."""
                     else:
                         _tweet = _tweet[:max_chars].rsplit(' ', 1)[0].rstrip()
                     if len(_tweet) > 10:
+                        _tweet = _sanitize_tickers(_tweet, symbol)
                         logger.info(f"🐦 Gemini tweet (trimmed) [{personality['name']}/{tweet_length}] ${symbol}: {_tweet[:70]}...")
                         return _tweet
         except Exception as _e:
@@ -879,6 +901,7 @@ Write just the tweet. No quotes, no labels, no explanation."""
                                 break
                         else:
                             _tweet = _tweet[:max_chars].rsplit(' ', 1)[0].rstrip()
+                    _tweet = _sanitize_tickers(_tweet, symbol)
                     logger.info(f"🐦 Sonnet tweet [{personality['name']}/{tweet_length}] ${symbol}: {_tweet[:70]}...")
                     return _tweet
         except Exception as _e:
@@ -891,7 +914,7 @@ Write just the tweet. No quotes, no labels, no explanation."""
             system=system_msg,
         )
         if grok_tweet:
-            return grok_tweet
+            return _sanitize_tickers(grok_tweet, symbol)
 
         return None
 
@@ -6078,239 +6101,134 @@ Write ONLY the tweet text."""
 
 async def post_tradehub_promo(account_poster) -> Optional[Dict]:
     """
-    Post organic-sounding KOL content about automated strategy performance.
-    Each post picks a random angle — results, builder story, leaderboard observation,
-    automation take, honest review, or contrarian — and sounds like a real trader
-    who uses the platform, not an ad.
+    Educational market/Bitcoin post with top gainer tickers.
+    Sharp market observations, BTC reads, and trading insights — no product promotion.
     """
     try:
-        strategies = await _fetch_leaderboard_strategies(3)
-        if not strategies:
-            logger.warning("No strategies for tradehub promo post")
-            return None
-
-        top = strategies[0]
-        top_name = top["name"]
-        top_pnl  = top["total_pnl"]
-        top_wr   = top["win_rate"]
-        top_trades = top.get("total_trades", 0)
-        pnl_sign = "+" if top_pnl >= 0 else ""
-
-        # Collect tickers used by top strategies
-        all_tickers = []
-        for s in strategies:
-            for t in s.get("tickers", []):
-                if t != "CRYPTO" and t not in all_tickers:
-                    all_tickers.append(t)
-        ticker_list = [f"${t}" for t in all_tickers[:4]]
-        ticker_str  = " ".join(ticker_list)
-
-        # Second/third strategy stats for comparison posts
-        second = strategies[1] if len(strategies) > 1 else None
-        second_pnl  = second["total_pnl"] if second else None
-        second_name = second["name"]     if second else None
-
-        # Live market hook — try MEXC first (reliable), CoinGecko as secondary
-        hook_symbol = None
-        hook_change = None
+        # Fetch BTC context
+        btc_price = None
+        btc_change = None
         try:
-            _mx = await _fetch_mexc_tickers()
-            _mx_candidates = [t for t in _mx if t.get('change', 0) >= 3 and t.get('volume', 0) >= 20_000_000
-                              and t['symbol'] not in ('USDT', 'USDC', 'BUSD', 'DAI')]
-            if _mx_candidates:
-                _h = random.choice(_mx_candidates[:5])
-                hook_symbol = _h['symbol']
-                hook_change = _h['change']
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=8.0) as _cl:
+                r = await _cl.get(
+                    "https://api.coingecko.com/api/v3/coins/markets",
+                    params={"vs_currency": "usd", "ids": "bitcoin", "sparkline": False}
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    if data:
+                        btc_price  = data[0].get("current_price", 0)
+                        btc_change = data[0].get("price_change_percentage_24h", 0)
         except Exception:
             pass
 
-        if not hook_symbol:
-            # CoinGecko as fallback
+        # Fresh top gainers for context + appending
+        if not _DAILY_GAINERS_TICKERS:
             try:
-                import httpx as _httpx
-                async with _httpx.AsyncClient(timeout=8.0) as _cl:
-                    r = await _cl.get(
-                        "https://api.coingecko.com/api/v3/coins/markets",
-                        params={"vs_currency": "usd", "order": "percent_change_24h_desc",
-                                "per_page": 10, "page": 1, "sparkline": False}
-                    )
-                    if r.status_code == 200:
-                        for coin in r.json():
-                            chg = coin.get("price_change_percentage_24h", 0) or 0
-                            sym = coin.get("symbol", "").upper()
-                            vol = coin.get("total_volume", 0) or 0
-                            if chg >= 3 and vol >= 20_000_000 and sym not in ("USDT", "USDC", "BUSD"):
-                                hook_symbol = sym
-                                hook_change = chg
-                                break
+                _fresh = await _fetch_mexc_tickers()
+                _update_daily_gainers(_fresh)
             except Exception:
                 pass
+        ticker_str = get_daily_gainers_str(max_tickers=4)
 
-        # AI-generated card images disabled — text-only posts
-        image_bytes = None
+        btc_ctx = ""
+        if btc_price and btc_change is not None:
+            _sign = "+" if btc_change >= 0 else ""
+            btc_ctx = f"BTC is at ${btc_price:,.0f}, {_sign}{btc_change:.1f}% in 24h. "
 
-        # ── Pick one of 8 organic angles ─────────────────────────────────────
         angles = [
-            "algo_result",         # my algo caught this while I was offline
-            "builder_story",       # built a strategy and watched it run
-            "leaderboard_data",    # observing leaderboard with genuine curiosity
-            "automation_take",     # opinion on why automation beats manual
-            "honest_stats",        # real numbers, good and bad
-            "revenue_observation", # someone is earning from their strategy
-            "contrarian_pitch",    # signal groups vs rule-based automation
-            "comparison_take",     # two strategies, different approaches
+            "btc_level",
+            "market_structure",
+            "alt_cycle",
+            "volume_read",
+            "dominance",
+            "risk_lesson",
+            "timing_take",
+            "macro_watch",
         ]
-        # Weighted — some angles are more natural/common
-        weights = [20, 15, 15, 12, 12, 10, 10, 6]
-        angle = random.choices(angles, weights=weights, k=1)[0]
+        angle = random.choice(angles)
+        time_ctx = get_time_context()
 
-        coin_hook_ctx = f"${hook_symbol} is up +{hook_change:.1f}% right now. " if hook_symbol and hook_change else ""
-        ticker_hook   = f"${hook_symbol}" if hook_symbol else (ticker_list[0] if ticker_list else "$BTC")
-
-        angle_contexts = {
-            "algo_result": (
-                f"Context: {coin_hook_ctx}Your automated strategy '{top_name}' caught moves like this while you were offline. "
-                f"It's currently at {pnl_sign}{top_pnl:.1f}% P&L across {top_trades} trades, {top_wr:.0f}% win rate. "
-                f"Write a tweet that shares this result the way you'd text a friend — not a product pitch, just a real moment. "
-                f"Mention tradehubmarkets.com casually at the end, like you would if someone asked where you built it."
+        angle_prompts = {
+            "btc_level": (
+                f"{btc_ctx}Write a tweet about what BTC's current level means right now. "
+                f"Is it at support, resistance, or in no-man's-land? What should a trader be watching? "
+                f"Concrete — not 'BTC could go up or down'."
             ),
-            "builder_story": (
-                f"Context: You spent time building an automated strategy on tradehubmarkets.com and it's been running since. "
-                f"'{top_name}': {pnl_sign}{top_pnl:.1f}% P&L, {top_wr:.0f}% win rate, {top_trades} trades. "
-                f"Write a tweet about the psychology of trusting a system you built — watching it make decisions without you. "
-                f"It can be reflective, slightly philosophical. Mention tradehubmarkets.com once, naturally. Not an ad."
+            "market_structure": (
+                f"{btc_ctx}Write a tweet about something specific in crypto market structure right now. "
+                f"Could be consolidation, a squeeze, a range, or a breakout setup. Technical but conversational."
             ),
-            "leaderboard_data": (
-                f"Context: There's a public leaderboard of automated strategies at tradehubmarkets.com and you find it genuinely interesting. "
-                f"Top strategy '{top_name}': {pnl_sign}{top_pnl:.1f}%, {top_wr:.0f}% win rate, {top_trades} trades. "
-                f"Tickers it trades: {ticker_str}. "
-                f"Write a tweet that's observational and data-curious — like you noticed something worth sharing. "
-                f"Not a pitch. Just: 'here's what I saw in the data and what I think about it'."
+            "alt_cycle": (
+                f"{btc_ctx}Write a tweet about where we are in the alt cycle relative to BTC. "
+                f"Top movers today: {ticker_str or 'mixed'}. What does current BTC dominance mean for alts?"
             ),
-            "automation_take": (
-                f"Context: {coin_hook_ctx}You have a hot take about why automated rule-based strategies beat discretionary trading on certain setups. "
-                f"Your strategy has done {pnl_sign}{top_pnl:.1f}% across {top_trades} trades. "
-                f"Write a tweet with a clear, specific opinion. No both-sidesing. Pick a lane and argue it. "
-                f"Mention tradehubmarkets.com as the platform you use, like a practical recommendation."
+            "volume_read": (
+                f"{btc_ctx}Write a tweet about what volume is telling you right now. "
+                f"A specific observation about current price action and participation, not a generic lesson."
             ),
-            "honest_stats": (
-                f"Context: You're sharing real numbers from your automated strategy, including the losses. "
-                f"'{top_name}': {pnl_sign}{top_pnl:.1f}% overall, {top_wr:.0f}% win rate — which means {100-top_wr:.0f}% of trades lose. "
-                f"Write a tweet that's transparent about both the wins and the losses. "
-                f"Real traders respect honesty. Mention tradehubmarkets.com once, factually."
+            "dominance": (
+                f"{btc_ctx}Write a tweet about BTC dominance and what it means for altcoin traders right now. "
+                f"One concrete implication — rising or falling, what's the trade?"
             ),
-            "revenue_observation": (
-                f"Context: On tradehubmarkets.com, when someone copies your strategy, you earn 80% of their subscription fee. "
-                f"The top strategy '{top_name}' has {top_trades} trades at {pnl_sign}{top_pnl:.1f}%. "
-                f"Write a tweet observing this dynamic — someone built a thing that works, and now it generates income for them passively. "
-                f"Frame it as an interesting market observation, not a sales pitch."
+            "risk_lesson": (
+                f"{btc_ctx}Write a tweet with one real insight about risk management in the current market. "
+                f"Not generic — something specific to what the market is doing right now."
             ),
-            "contrarian_pitch": (
-                f"Context: {coin_hook_ctx}Most crypto traders use paid signal groups or manual discretion. "
-                f"You use automated rule-based strategies on tradehubmarkets.com. "
-                f"'{top_name}': {pnl_sign}{top_pnl:.1f}%, {top_wr:.0f}% win rate. "
-                f"Write a tweet that makes the case for rule-based over signals — from a position of experience, not superiority. "
-                f"Contrarian but not preachy. Specific but not exhaustive."
+            "timing_take": (
+                f"{btc_ctx}Write a tweet about timing in this market — "
+                f"when to wait vs when to act. Based on what the chart is showing, not theory."
             ),
-            "comparison_take": (
-                f"Context: You're watching two strategies on tradehubmarkets.com and the contrast is interesting. "
-                f"'{top_name}': {pnl_sign}{top_pnl:.1f}%, {top_wr:.0f}% win rate. "
-                + (f"'{second_name}': {'+' if second_pnl >= 0 else ''}{second_pnl:.1f}%. " if second else "")
-                + f"Both trade {ticker_str}. "
-                f"Write a tweet about what the difference tells you — different rules, different outcomes, same market. "
-                f"Genuine data observation. Mention tradehubmarkets.com as where the leaderboard lives."
+            "macro_watch": (
+                f"{btc_ctx}Write a tweet about a macro factor (DXY, rates, equities, geopolitics) that's relevant "
+                f"for crypto right now. One sentence of context, one concrete implication."
             ),
         }
 
-        promo_system = (
-            "You are a confident, slightly arrogant crypto trader who has been using tradehubmarkets.com to run automated strategies. "
-            "You have a real track record and you know it. You're not boastful for show — you're matter-of-fact about results. "
-            "You post on X/Twitter because you have something to say, not to get followers. "
-            "When you mention tradehubmarkets.com, it sounds like something you actually use, not something you're promoting. "
-            "Lowercase, no hashtags, no emojis, no exclamation marks, never sounds like an ad. "
-            "You are dismissive of people who trade on gut feeling. You trust your system. Your system makes money. "
-            "Write the way you'd text a fellow trader who already knows you're good — no need to sell yourself."
+        system_msg = (
+            "You are a sharp crypto market analyst who posts on X. "
+            "You've traded through multiple cycles and know how to read market structure. "
+            "Post educational market observations — not advice, not hype, not product mentions. "
+            "Lowercase, no hashtags, no emojis, no NFA/DYOR. Write like a sharp trader texting a colleague. "
+            "Be specific and concrete. Vague market commentary is useless. Max 220 characters."
         )
-
-        # Trending + engagement insights for better AI context
-        _promo_trending = await _fetch_x_trending_crypto()
-        _promo_trending_ctx = ""
-        if _promo_trending:
-            top5 = _promo_trending[:5]
-            _promo_trending_ctx = (
-                "\n\nRIGHT NOW ON X — topics getting the most engagement in crypto: "
-                + ", ".join(f"{t['topic']} ({t['avg_likes']:.0f} avg likes)" for t in top5)
-                + ". Reference relevant trends naturally where it fits the angle."
-            )
-        _promo_insights = await asyncio.to_thread(_get_engagement_insights)
-        _promo_insights_ctx = f"\n\n{_promo_insights}" if _promo_insights else ""
-
-        ai_prompt = f"""{angle_contexts[angle]}{_promo_trending_ctx}{_promo_insights_ctx}
-
-HARD RULES:
-- No hashtags, no emojis, no exclamation marks
-- No "don't miss", "huge", "moon", "gem", "NFA", "DYOR", "LFG"
-- No engagement bait ("what do you think?", "follow for more")
-- Lowercase except $TICKERS and tradehubmarkets.com
-- Max 240 characters
-- One mention of tradehubmarkets.com — that's it
-- Sound like a real person, not a marketing team
-- End when the thought ends
-
-Write ONLY the tweet text."""
 
         tweet_text = await _call_grok_tweet(
-            ai_prompt, max_chars=240,
-            label=f"tradehub_promo/{angle}",
-            system=promo_system,
+            angle_prompts[angle], max_chars=220,
+            label=f"market_edu/{angle}",
+            system=system_msg,
         )
 
-        # Fallback templates — confident, matter-of-fact
         if not tweet_text:
-            fallbacks = {
-                "algo_result":         f"{coin_hook_ctx}I flagged this before it ran. strategy already had it. {pnl_sign}{top_pnl:.1f}% all-time. tradehubmarkets.com",
-                "builder_story":       f"built '{top_name}' and let it run without touching it. {pnl_sign}{top_pnl:.1f}% later. discipline is not interfering with your own rules. tradehubmarkets.com",
-                "leaderboard_data":    f"checked the leaderboard at tradehubmarkets.com. top strategy: {pnl_sign}{top_pnl:.1f}% across {top_trades} trades, {top_wr:.0f}% win rate. I built mine. it works.",
-                "automation_take":     f"my strategy on tradehubmarkets.com doesn't sleep, doesn't panic, doesn't revenge trade. {pnl_sign}{top_pnl:.1f}% all-time. I do.",
-                "honest_stats":        f"{pnl_sign}{top_pnl:.1f}% overall. {top_wr:.0f}% win rate. {100-top_wr:.0f}% of trades lost money. real data is messy. that's what makes it real. tradehubmarkets.com",
-                "revenue_observation": f"'{top_name}' on tradehubmarkets.com — {pnl_sign}{top_pnl:.1f}% P&L, people copying it, creator taking 80% of the cut. interesting incentive structure.",
-                "contrarian_pitch":    f"everyone in a signal group is getting the same entry at the same time. tradehubmarkets.com lets you build your own rules and run them automatically. different game entirely.",
-                "comparison_take":     f"two strategies on tradehubmarkets.com, same coins, different rules. one at {pnl_sign}{top_pnl:.1f}%. the rules are the edge.",
-            }
-            tweet_text = fallbacks.get(angle, fallbacks["leaderboard_data"])
+            fallbacks = [
+                f"{btc_ctx or ''}market structure matters more than price. BTC can be at 80k and still look weak. learn to read structure.",
+                f"volume doesn't lie. price can be manipulated short term but volume tells you who's actually participating.",
+                f"{btc_ctx or ''}the alts that lead a recovery are rarely the ones that led the previous run. new cycle, new leaders.",
+                f"most traders lose not because they're wrong about direction but because they're wrong about timing.",
+                f"{btc_ctx or ''}BTC dominance rising = alts underperform. dominance falling = alt season. simple model that still works.",
+                f"the best entries come from waiting. the worst losses from chasing. discipline in entries is worth more than any indicator.",
+                f"{btc_ctx or ''}if you can't explain your position sizing logic in one sentence, you probably don't have one.",
+                f"ranges resolve. the question is always direction and timing. both are harder than people admit.",
+            ]
+            tweet_text = random.choice(fallbacks)
 
-        # Append top-gainer tickers for discoverability
-        tickers = get_daily_gainers_str(max_tickers=3)
-        if tickers and len(tweet_text) + len(tickers) + 2 <= 278:
-            tweet_text = tweet_text + "\n\n" + tickers
+        # Append top gainer tickers for discoverability
+        if ticker_str and (len(tweet_text) + len(ticker_str) + 2) <= 278:
+            tweet_text = tweet_text + "\n\n" + ticker_str
 
-        # Upload image and post
-        media_id = None
-        if image_bytes:
-            try:
-                if hasattr(account_poster, 'api_v1') and account_poster.api_v1:
-                    media = account_poster.api_v1.media_upload(
-                        filename="tradehub_leaderboard.png",
-                        file=io.BytesIO(image_bytes)
-                    )
-                    media_id = str(media.media_id)
-            except Exception as e:
-                logger.warning(f"TradeHub promo image upload failed: {e}")
-
-        media_ids = [media_id] if media_id else None
-        result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
+        result = account_poster.post_tweet(tweet_text)
 
         if result and result.get('success'):
-            logger.info(f"✅ TradeHub promo [{angle}] posted — {top_name} {pnl_sign}{top_pnl:.1f}%")
+            logger.info(f"✅ Market edu [{angle}] posted")
         else:
-            logger.warning(f"TradeHub promo post failed: {result}")
+            logger.warning(f"Market edu post failed: {result}")
 
         return result
 
     except Exception as e:
-        logger.error(f"Error posting TradeHub promo: {e}")
+        logger.error(f"Error posting market edu: {e}")
         return {'success': False, 'error': str(e)}
-
 
 async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
     """Post a Bitunix campaign tweet with the campaign image, live tickers, and FOMO"""
