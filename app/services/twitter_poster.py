@@ -3619,9 +3619,9 @@ async def auto_post_loop():
                 slot_key = f"{hour}:{minute}"
                 
                 # Get or create fixed random offset for this slot (persists for the day)
-                # ±15 minutes random offset for natural posting
+                # ±5 minutes — small enough that no two adjacent slots ever collide
                 if slot_key not in SLOT_OFFSETS:
-                    SLOT_OFFSETS[slot_key] = random.randint(-15, 15)
+                    SLOT_OFFSETS[slot_key] = random.randint(-5, 5)
                 
                 random_offset = SLOT_OFFSETS[slot_key]
                 adjusted_minute = minute + random_offset
