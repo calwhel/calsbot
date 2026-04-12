@@ -640,6 +640,28 @@ async def _get_ticker_suffix() -> str:
     return f"\n\n{tickers}" if tickers else ""
 
 
+def _maybe_yubit_drop() -> str:
+    """
+    Casually mention the Yubit rewards campaign in ~1-in-4 posts.
+    Only fires while the campaign is live (until April 30 2026).
+    Returns an empty string most of the time so posts feel organic.
+    """
+    if datetime.utcnow() > datetime(2026, 4, 30, 23, 59):
+        return ""
+    if random.random() > 0.25:
+        return ""
+    link = "https://www.yubit.com/en-US/rewards-hub?inviteCode=TZQL"
+    lines = [
+        f"\n\nalso yubit has a rewards campaign running rn if you trade there → {link}",
+        f"\n\nbtw yubit's rewards hub is live atm → {link}",
+        f"\n\noff topic but yubit running a rewards thing worth checking → {link}",
+        f"\n\ntrade on yubit? rewards hub is active → {link}",
+        f"\n\nyubit rewards campaign still going if anyone's on there → {link}",
+        f"\n\nnot related but yubit has something going on their rewards hub → {link}",
+    ]
+    return random.choice(lines)
+
+
 async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "",
                            system: str = "") -> Optional[str]:
     """
@@ -4837,6 +4859,9 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
             tweet_text = f"${symbol} {_sign}{change:.1f}% at {price_str}. watching this one."
 
         tweet_text = tweet_text + _get_hashtag_style()
+        _yd = _maybe_yubit_drop()
+        if _yd and (len(tweet_text + _yd) - 32) <= 280:
+            tweet_text = tweet_text + _yd
         tweet_text = await _ai_review_tweet(tweet_text, 'early_gainer', {
             'symbol': symbol, 'change': f'{change:+.1f}%', 'price': price_str,
             'volume': vol_str, 'ta_available': ta is not None,
@@ -5183,6 +5208,9 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
             tweet_text = f"${symbol} {sign}{change:.1f}% at {price_str}. chart caught my eye."
 
         tweet_text = tweet_text + _get_hashtag_style()
+        _yd = _maybe_yubit_drop()
+        if _yd and (len(tweet_text + _yd) - 32) <= 280:  # -32 corrects for t.co URL shortening
+            tweet_text = tweet_text + _yd
         tweet_text = await _ai_review_tweet(tweet_text, 'quick_ta', {
             'symbol': symbol, 'change': f'{sign}{change:.1f}%', 'price': price_str,
             'rsi': chart_analysis['rsi'] if chart_analysis else 'not computed',
@@ -6029,6 +6057,10 @@ Write ONLY the tweet text."""
         tickers = get_daily_gainers_str(max_tickers=3)
         if tickers and len(tweet_text) + len(tickers) + 2 <= 278:
             tweet_text = tweet_text + "\n\n" + tickers
+
+        _yd = _maybe_yubit_drop()
+        if _yd and (len(tweet_text + _yd) - 32) <= 280:
+            tweet_text = tweet_text + _yd
 
         result = account_poster.post_tweet(tweet_text)
 
