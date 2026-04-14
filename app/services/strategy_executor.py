@@ -102,7 +102,8 @@ _BITUNIX_SYMBOLS_FETCHED_AT: Optional[datetime] = None
 _BITUNIX_CACHE_TTL = 300  # refresh every 5 minutes
 
 async def _get_bitunix_symbols(http_client: httpx.AsyncClient) -> set:
-    """Return the set of USDT-margined perpetual symbols available on Bitunix."""
+    """Return the set of USDT-margined perpetual symbols available on Bitunix.
+    Falls back to MEXC symbol list if Bitunix API is unavailable."""
     global _BITUNIX_SYMBOLS, _BITUNIX_SYMBOLS_FETCHED_AT
     now = datetime.utcnow()
     if _BITUNIX_SYMBOLS and _BITUNIX_SYMBOLS_FETCHED_AT and (now - _BITUNIX_SYMBOLS_FETCHED_AT).seconds < _BITUNIX_CACHE_TTL:
@@ -114,7 +115,7 @@ async def _get_bitunix_symbols(http_client: httpx.AsyncClient) -> set:
         if resp.status_code == 200:
             data = resp.json()
             syms = set()
-            for t in data.get("data", []):
+            for t in (data.get("data") or []):   # guard against null data field
                 sym = t.get("symbol", "")
                 if sym.endswith("USDT"):
                     syms.add(sym)
@@ -122,8 +123,30 @@ async def _get_bitunix_symbols(http_client: httpx.AsyncClient) -> set:
                 _BITUNIX_SYMBOLS = syms
                 _BITUNIX_SYMBOLS_FETCHED_AT = now
                 logger.info(f"Bitunix symbol list refreshed: {len(syms)} USDT perps")
+                return _BITUNIX_SYMBOLS
     except Exception as e:
         logger.warning(f"Could not fetch Bitunix symbol list: {e}")
+
+    # Fallback: Bitunix API broken/changed — use MEXC as proxy.
+    # MEXC lists the same major USDT perpetuals; coins with ≥$1M volume
+    # are almost certainly available on Bitunix too.
+    try:
+        r = await http_client.get("https://api.mexc.com/api/v3/ticker/24hr", timeout=10)
+        if r.status_code == 200:
+            syms = set()
+            for t in r.json():
+                sym = t.get("symbol", "")
+                vol = float(t.get("quoteVolume", 0) or 0)
+                if sym.endswith("USDT") and vol >= 1_000_000:
+                    syms.add(sym)
+            if syms:
+                _BITUNIX_SYMBOLS = syms
+                _BITUNIX_SYMBOLS_FETCHED_AT = now
+                logger.info(f"Bitunix symbol list (MEXC proxy): {len(syms)} USDT pairs")
+                return _BITUNIX_SYMBOLS
+    except Exception as e2:
+        logger.warning(f"MEXC fallback for symbol list failed: {e2}")
+
     return _BITUNIX_SYMBOLS
 
 
