@@ -2445,33 +2445,13 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 
 POST_SCHEDULE = [
     # (hour_utc, minute, post_type)
-    # Strategy/leaderboard promo every ~3h; market content fills the rest.
-    (0, 30, 'featured_coin'),
-    (1, 45, 'free_telegram'),       # free signals promo - Asia night
-    (3, 0, 'quick_ta'),
-    (4, 30, 'tradehub_promo'),      # promo 2 - Asia early morning
-    (5, 15, 'early_gainer'),
-    (6, 0, 'featured_coin'),
-    (7, 30, 'tradehub_promo'),      # promo 3 - Asia morning / EU pre-market
-    (8, 30, 'quick_ta'),
+    # Campaigns only — all regular content paused.
+    (4, 30, 'bitunix_campaign'),    # Asia early morning
+    (7, 30, 'bitunix_campaign'),    # Asia morning / EU pre-market
     (9, 15, 'yubit_campaign'),      # Yubit campaign - EU morning slot
-    (9, 45, 'featured_coin'),
-    (10, 30, 'market_take'),        # hot take - EU morning
-    (11, 0, 'early_gainer'),
-    (12, 15, 'memecoin'),
-    (13, 30, 'free_telegram'),      # free signals promo - EU midday / US pre-market
-    (14, 45, 'featured_coin'),
-    (15, 30, 'early_gainer'),
-    (16, 0, 'tradehub_promo'),      # promo 6 - US morning
-    (16, 45, 'quick_ta'),
-    (17, 30, 'memecoin'),
-    (18, 45, 'market_take'),        # hot take - US afternoon
+    (14, 0, 'bitunix_campaign'),    # EU midday / US pre-market
     (19, 0, 'yubit_campaign'),      # Yubit campaign - US afternoon slot
-    (20, 0, 'featured_coin'),
-    (21, 15, 'early_gainer'),
-    (22, 0, 'tradehub_promo'),      # promo 8 - US evening
-    (22, 30, 'quick_ta'),
-    (23, 30, 'free_telegram'),      # free signals promo - late US
+    (22, 0, 'bitunix_campaign'),    # US evening
 ]
 
 POSTED_SLOTS = set()
