@@ -103,7 +103,7 @@ _BITUNIX_CACHE_TTL = 300  # refresh every 5 minutes
 
 async def _get_bitunix_symbols(http_client: httpx.AsyncClient) -> set:
     """Return the set of USDT-margined perpetual symbols available on Bitunix.
-    Falls back to MEXC symbol list if Bitunix API is unavailable."""
+    Falls back to an empty set — caller should derive from tickers if empty."""
     global _BITUNIX_SYMBOLS, _BITUNIX_SYMBOLS_FETCHED_AT
     now = datetime.utcnow()
     if _BITUNIX_SYMBOLS and _BITUNIX_SYMBOLS_FETCHED_AT and (now - _BITUNIX_SYMBOLS_FETCHED_AT).seconds < _BITUNIX_CACHE_TTL:
@@ -126,26 +126,6 @@ async def _get_bitunix_symbols(http_client: httpx.AsyncClient) -> set:
                 return _BITUNIX_SYMBOLS
     except Exception as e:
         logger.warning(f"Could not fetch Bitunix symbol list: {e}")
-
-    # Fallback: Bitunix API broken/changed — use MEXC as proxy.
-    # MEXC lists the same major USDT perpetuals; coins with ≥$1M volume
-    # are almost certainly available on Bitunix too.
-    try:
-        r = await http_client.get("https://api.mexc.com/api/v3/ticker/24hr", timeout=10)
-        if r.status_code == 200:
-            syms = set()
-            for t in r.json():
-                sym = t.get("symbol", "")
-                vol = float(t.get("quoteVolume", 0) or 0)
-                if sym.endswith("USDT") and vol >= 1_000_000:
-                    syms.add(sym)
-            if syms:
-                _BITUNIX_SYMBOLS = syms
-                _BITUNIX_SYMBOLS_FETCHED_AT = now
-                logger.info(f"Bitunix symbol list (MEXC proxy): {len(syms)} USDT pairs")
-                return _BITUNIX_SYMBOLS
-    except Exception as e2:
-        logger.warning(f"MEXC fallback for symbol list failed: {e2}")
 
     return _BITUNIX_SYMBOLS
 
@@ -228,16 +208,29 @@ async def _get_eligible_symbols(
     max_chg   = universe.get("max_24h_change")
 
     # ── Bitunix availability guard ────────────────────────────────────────────
-    # FAIL-CLOSED: if the Bitunix symbol list is empty (API failed to load),
-    # we cannot verify which coins are tradeable, so we block all coins rather
-    # than letting non-Bitunix coins through.  This prevents phantom alerts on
-    # coins that can never be executed on Bitunix (paper or live).
+    # If the Bitunix API is unreachable, derive the symbol set from the MEXC
+    # tickers that were already fetched successfully. Both exchanges list the
+    # same major USDT perpetuals, so this is a safe proxy. We filter to coins
+    # with ≥$500k volume to avoid including illiquid long-tail tokens.
     if not bitunix_symbols:
-        logger.warning(
-            "[eligible-symbols] Bitunix symbol list is empty — "
-            "skipping evaluation cycle until list is available"
-        )
-        return []
+        derived = set()
+        for t in tickers:
+            sym = t.get("symbol", "")
+            vol = float(t.get("quoteVolume", 0) or 0)
+            if sym.endswith("USDT") and vol >= 500_000:
+                derived.add(sym)
+        if derived:
+            logger.info(
+                f"[eligible-symbols] Bitunix API unavailable — using {len(derived)} "
+                f"liquid MEXC symbols as proxy (strategies will run normally)"
+            )
+            bitunix_symbols = derived
+        else:
+            logger.warning(
+                "[eligible-symbols] Bitunix symbol list empty and no ticker fallback — "
+                "skipping cycle"
+            )
+            return []
 
     # For pinned coins, enforce the Bitunix list strictly.
     if is_pinned and specific:
