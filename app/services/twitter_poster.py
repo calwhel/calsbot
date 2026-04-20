@@ -5710,7 +5710,8 @@ async def get_live_tickers_for_campaign() -> Dict:
     MIN_VOLUME_USD = 2_000_000  # $2M minimum 24h volume
 
     def pick_actual_gainers(raw: list) -> list:
-        """Sort by % gain, filter by volume + Yubit listing, skip garbage."""
+        """Sort by % gain, filter by volume, skip stables/leveraged tokens."""
+        import re as _re
         candidates = []
         for g in raw:
             sym = g.get('symbol', '').upper()
@@ -5722,12 +5723,11 @@ async def get_live_tickers_for_campaign() -> Dict:
                 continue
             if sym in _SKIP:
                 continue
-            # Must be a coin actually listed on Yubit so the post is accurate
-            if sym not in YUBIT_LISTED_SYMBOLS:
-                continue
-            # Skip obvious leveraged token names (contain digits adjacent to L/S)
-            import re as _re
+            # Skip leveraged token names (digits adjacent to L/S)
             if _re.search(r'\d[LS]$|^[LS]\d', sym):
+                continue
+            # Skip tokens with suspiciously long names (usually scam/garbage)
+            if len(sym) > 12:
                 continue
             candidates.append({'symbol': f'${sym}', 'pct': round(change, 1), 'volume': vol})
         candidates.sort(key=lambda x: x['pct'], reverse=True)
