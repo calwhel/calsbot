@@ -5494,14 +5494,14 @@ YUBIT_CAMPAIGN_END   = datetime(2026, 4, 30, 23, 59, 59)
 YUBIT_CAMPAIGN_TEMPLATES = [
     {
         'id': 'double_deal',
-        'text': """🚨 two things happening right now and you should know about both
+        'text': """🚨 two things happening right now — {ticker1} {ticker2} moving and Yubit paying people to trade them
 
-① Yubit's 20,000 USDT campaign — ends april 30
+① 20,000 USDT campaign — ends april 30
    $100 deposit + 30k volume → 50 USDT back
    $2,000 deposit + 900k volume → 200 USDT back
 
 ② sign up via my link + DM me on telegram (link in bio)
-   → i'll give you FREE access to my live trading signals
+   → FREE access to my live trading signals
 
 one link. two rewards. 100 slots left.
 
@@ -5511,48 +5511,48 @@ one link. two rewards. 100 slots left.
         'id': 'fomo_ticker',
         'text': """{ticker1} +{pct1}% ↑  {ticker2} +{pct2}% ↑
 
-while the market moves — Yubit is paying traders to be in it
+Yubit is paying traders to trade moves like this — 20,000 USDT campaign, ends april 30
 
-💰 deposit $100 + trade 30k vol → earn 50 USDT
-💰 deposit $2,000 + trade 900k vol → earn 200 USDT
+💰 $100 deposit + 30k vol → 50 USDT
+💰 $2,000 deposit + 900k vol → 200 USDT
 
 📲 sign up via my link + DM me on telegram (link in bio)
-   and i'll also get you into my free signals group
+   → i'll get you into my free signals group on top
 
-april 30 deadline. limited slots.
+limited slots. don't sleep on it.
 
 {link}"""
     },
     {
         'id': 'stack_both',
-        'text': """here's how to stack two things at once this month
+        'text': """here's how to stack two things at once while {ticker1} and {ticker2} are running
 
-🔹 Yubit rewards campaign (ends april 30)
-   • $100 in + 30k vol traded = 50 USDT reward
-   • $2,000 in + 900k vol traded = 200 USDT reward
-   • 20,000 USDT total pool — 100 entry slots left
+🔹 Yubit rewards (ends april 30)
+   • $100 in + 30k vol = 50 USDT reward
+   • $2,000 in + 900k vol = 200 USDT reward
+   • 100 entry slots left
 
 🔹 free signals from me
-   • sign up via my link below
+   • sign up via my link
    • DM me on telegram (link in bio) after
-   • i'll add you to my live trading signals — free
+   • i'll add you to my live signals — free
 
 {link}"""
     },
     {
         'id': 'straight_offer',
-        'text': """making this simple
+        'text': """making this simple — {ticker1} {ticker2} {ticker3} all on Yubit
 
-sign up on Yubit via my link below
+sign up via my link
 → trade 30k volume before april 30
 → earn 50 USDT from their campaign
 
-then DM me on telegram (link in bio)
-→ i'll get you free access to my trading signals
+DM me on telegram (link in bio) after
+→ free access to my trading signals
 
-that's USDT in your pocket + real trade signals. both free to claim.
+USDT in your pocket + my signals. both free to claim.
 
-go → {link}"""
+{link}"""
     },
     {
         'id': 'countdown',
@@ -5563,17 +5563,16 @@ go → {link}"""
    $1,000 + 300k vol → 120 USDT
    $2,000 + 900k vol → 200 USDT
 
-❷ my free signals offer for new Yubit signups
-   sign up via my link + DM me on telegram (link in bio)
-   and i'll add you before the campaign ends
+❷ my free signals for new Yubit signups
+   sign up via my link + DM me on telegram (link in bio) and i'll add you
 
-don't leave both on the table.
+{ticker1} {ticker2} are moving — don't leave both on the table.
 
 {link}"""
     },
     {
         'id': 'value_stack',
-        'text': """🔥 if you're in futures this month this is for you
+        'text': """🔥 if you're trading {ticker1} {ticker2} perps this month this is for you
 
 Yubit campaign (ends april 30):
 deposit + trade → earn up to 200 USDT cash
@@ -5582,7 +5581,7 @@ deposit + trade → earn up to 200 USDT cash
 PLUS — sign up through my link + DM me on telegram (link in bio):
 i'll get you free access to my live trading signals
 
-you get the campaign rewards AND my signals. both included.
+rewards AND signals. both included.
 
 {link}"""
     },
@@ -5594,24 +5593,23 @@ then this is literally free money — move that volume to Yubit
 
 📈 30k vol = 50 USDT reward
 📈 900k vol = 200 USDT reward
-📊 sign up via my link + DM me on telegram (link in bio) = free signals access
+📲 sign up via my link + DM me on telegram (link in bio) = free signals on top
 
-one move. three wins. april 30 cutoff, 100 entry slots left.
+one move. three wins. april 30 cutoff, 100 slots left.
 
 {link}"""
     },
     {
         'id': 'urgency_close',
-        'text': """last call — april 30 is the hard deadline
+        'text': """last call — {ticker1} {ticker2} pumping and april 30 is the hard deadline
 
-here's everything on the table right now:
+✅ Yubit campaign — 20,000 USDT pool
+   $100 deposit + 30k vol → 50 USDT
+   $2,000 deposit + 900k vol → 200 USDT
 
-✅ Yubit campaign — 20,000 USDT rewards pool
-   from $100 deposit + 30k vol all the way to $2,000 + 900k vol
+✅ free signals — DM me on telegram (link in bio) after signing up via my link
 
-✅ free signals access — DM me on telegram (link in bio) after signing up via my link and i'll add you
-
-both end april 30. entry slots are limited and filling.
+both end april 30. slots filling.
 
 claim it → {link}"""
     },
