@@ -5501,6 +5501,8 @@ YUBIT_CAMPAIGN_TEMPLATES = [
 deposit $100 → trade 30k volume → collect 50 USDT
 deposit $2,000 → trade 900k volume → collect 200 USDT
 
+sign up through my link + DM me on telegram (link in bio) and i'll get you free access to my trading signals
+
 april 30 deadline. this is not a drill.
 
 grab your slot → {link}"""
@@ -5509,37 +5511,39 @@ grab your slot → {link}"""
         'id': 'fomo_ticker',
         'text': """{ticker1} up {pct1}% and {ticker2} up {pct2}% today
 
-while you're watching these run — Yubit is literally paying traders to trade them
+Yubit is literally paying traders to trade moves like this — 20,000 USDT campaign, ends april 30
 
-$100 deposit + 30k volume = 50 USDT cash reward
-$2,000 deposit + 900k volume = 200 USDT cash reward
+$100 deposit + 30k volume = 50 USDT cash
+$2,000 deposit + 900k volume = 200 USDT cash
 
-campaign ends APRIL 30. limited slots.
+sign up via my link + DM me on telegram (link in bio) → free access to my signals included
 
-don't sleep on this → {link}"""
+{link}"""
     },
     {
         'id': 'leaving_money',
         'text': """if you're trading futures right now you are LEAVING MONEY on the table
 
-Yubit is running a 20,000 USDT rewards campaign and most people have no idea
+Yubit's running a 20,000 USDT rewards campaign most people still haven't touched
 
-entry tier: $100 deposit + 30k volume → 50 USDT back
-top tier: $2,000 deposit + 900k volume → 200 USDT back
+entry: $100 deposit + 30k volume → 50 USDT back
+top: $2,000 deposit + 900k volume → 200 USDT back
 
-30k volume in a week of active trading is nothing. the math is free money.
+sign up through my link and DM me on telegram (link in bio) — i'll add you to my free signals
 
-claim it before april 30 → {link}"""
+april 30 cutoff → {link}"""
     },
     {
         'id': 'pool_angle',
-        'text': """19,600 USDT prize pool sitting on Yubit right now
+        'text': """19,600 USDT prize pool on Yubit right now
 
-top volume traders this month split it. 100% cash, paid out USDT.
+top volume traders split it. 100% cash, paid in USDT.
 
-even the entry level is free money — $100 deposit + 30k volume = 50 USDT reward
+entry level: $100 deposit + 30k volume = 50 USDT reward
 
-20,000 USDT total. campaign closes april 30. slots are limited.
+sign up via my link + DM me on telegram (link in bio) and you also get free access to my live trading signals
+
+20,000 USDT total. closes april 30.
 
 🔗 {link}"""
     },
@@ -5547,27 +5551,26 @@ even the entry level is free money — $100 deposit + 30k volume = 50 USDT rewar
         'id': 'countdown',
         'text': """⏰ YUBIT REWARDS — CLOSING APRIL 30
 
-this is your reminder that a 20,000 USDT campaign is running and most people still haven't claimed
+- $100 deposit + 30k volume → 50 USDT
+- $1,000 deposit + 300k volume → 120 USDT
+- $2,000 deposit + 900k volume → 200 USDT
 
-- deposit $100, trade 30k volume → 50 USDT
-- deposit $1,000, trade 300k volume → 120 USDT  
-- deposit $2,000, trade 900k volume → 200 USDT
+sign up through my link + DM me on telegram (link in bio) → i'll get you free access to my trading on top of this
 
-if you're already in futures markets the volume requirement is nothing. stop leaving free USDT on the table.
+stop leaving free money on the table.
 
 {link}"""
     },
     {
         'id': 'simple_math',
-        'text': """the math on Yubit's campaign is stupid simple
+        'text': """the math here is stupid simple
 
-trade futures you were already going to trade
-hit 30k volume (realistic in days for active traders)
-get 50 USDT deposited
+sign up on Yubit via my link → trade 30k volume → collect 50 USDT reward
+then DM me on telegram (link in bio) → i'll add you to my free trading signals
 
-scale up to 900k volume → 200 USDT
+you're getting paid to trade AND getting my signals for free
 
-20,000 USDT total pool. 100 slots at the entry level. april 30 deadline.
+20,000 USDT total pool. 100 slots. april 30 deadline.
 
 get in now → {link}"""
     },
@@ -5575,27 +5578,25 @@ get in now → {link}"""
         'id': 'perps_trader',
         'text': """already trading {ticker1} and {ticker2} perps?
 
-swap your volume to Yubit this month and they PAY YOU for it
+move that volume to Yubit and they PAY YOU for it — 30k vol = 50 USDT, 900k vol = 200 USDT
 
-30k volume = 50 USDT reward
-900k volume = 200 USDT reward
+sign up through my link + DM me on telegram (link in bio) and i'll give you free access to my signals on top
 
-you're doing the volume anyway. 20,000 USDT total campaign pool. april 30 cutoff — limited slots remaining.
+april 30 cutoff. limited slots.
 
 switch and stack → {link}"""
     },
     {
         'id': 'urgency_close',
-        'text': """🔥 Yubit campaign is in its final days
+        'text': """🔥 Yubit campaign final days — and i'm adding something on top
 
-20,000 USDT sitting there for traders who move now
+sign up via my link + DM me on telegram (link in bio) → free access to my live trading signals
 
-entry: $100 deposit + 30k volume → 50 USDT cash
-top: $2,000 deposit + 900k volume → 200 USDT cash
+PLUS the campaign rewards:
+entry: $100 + 30k volume → 50 USDT
+top: $2,000 + 900k volume → 200 USDT
 
-100 slots at the entry tier. people are claiming them daily.
-
-april 30 is the hard cutoff. after that this is gone.
+100 entry slots left. april 30 hard cutoff.
 
 last chance → {link}"""
     },
