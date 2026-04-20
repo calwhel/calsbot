@@ -5693,7 +5693,8 @@ YUBIT_LISTED_SYMBOLS = {
 
 async def get_live_tickers_for_campaign() -> Dict:
     """Fetch actual top gainers of the day for campaign posts.
-    Picks the real movers by % change — no whitelist filter.
+    Picks real movers by % change, filtered to coins listed on Bitunix
+    (used as a live proxy for Yubit's near-identical futures listings).
     Minimum $2M 24h volume to exclude illiquid/scam tokens.
     """
     fallback = {
@@ -5709,9 +5710,10 @@ async def get_live_tickers_for_campaign() -> Dict:
     }
     MIN_VOLUME_USD = 2_000_000  # $2M minimum 24h volume
 
-    def pick_actual_gainers(raw: list) -> list:
-        """Sort by % gain, filter by volume, skip stables/leveraged tokens."""
-        import re as _re
+    import re as _re
+
+    def pick_actual_gainers(raw: list, listed: set) -> list:
+        """Sort by % gain, filter by volume + exchange listing, skip garbage."""
         candidates = []
         for g in raw:
             sym = g.get('symbol', '').upper()
@@ -5723,11 +5725,12 @@ async def get_live_tickers_for_campaign() -> Dict:
                 continue
             if sym in _SKIP:
                 continue
-            # Skip leveraged token names (digits adjacent to L/S)
             if _re.search(r'\d[LS]$|^[LS]\d', sym):
                 continue
-            # Skip tokens with suspiciously long names (usually scam/garbage)
             if len(sym) > 12:
+                continue
+            # Only include coins confirmed listed on the exchange
+            if listed and sym not in listed:
                 continue
             candidates.append({'symbol': f'${sym}', 'pct': round(change, 1), 'volume': vol})
         candidates.sort(key=lambda x: x['pct'], reverse=True)
@@ -5736,6 +5739,27 @@ async def get_live_tickers_for_campaign() -> Dict:
     try:
         import httpx
         async with httpx.AsyncClient() as client:
+            # Step 1: fetch Bitunix symbol list as live proxy for Yubit listings
+            listed_syms: set = set()
+            try:
+                br = await client.get(
+                    "https://fapi.bitunix.com/api/v1/futures/market/tickers", timeout=6
+                )
+                if br.status_code == 200:
+                    bdata = br.json().get('data') or []
+                    for t in bdata:
+                        s = t.get('symbol', '')
+                        if s.endswith('USDT'):
+                            listed_syms.add(s.replace('USDT', ''))
+                    if listed_syms:
+                        logger.debug(f"Yubit proxy: {len(listed_syms)} Bitunix symbols loaded")
+            except Exception as be:
+                logger.warning(f"Bitunix symbol fetch for campaign tickers failed: {be}")
+            # If Bitunix fetch failed, fall back to static list
+            if not listed_syms:
+                listed_syms = YUBIT_LISTED_SYMBOLS
+
+            # Step 2: fetch MEXC top gainers and filter against confirmed listings
             resp = await client.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=8)
             if resp.status_code == 200:
                 data = resp.json().get('data', [])
@@ -5747,7 +5771,7 @@ async def get_live_tickers_for_campaign() -> Dict:
                     change = float(t.get('riseFallRate', 0) or 0) * 100
                     vol = float(t.get('amount24', 0) or 0)
                     raw.append({'symbol': sym.replace('_USDT', ''), 'change': change, 'volume': vol})
-                picks = pick_actual_gainers(raw)
+                picks = pick_actual_gainers(raw, listed_syms)
                 if len(picks) >= 2:
                     return {
                         'ticker1': picks[0]['symbol'],
@@ -5757,7 +5781,7 @@ async def get_live_tickers_for_campaign() -> Dict:
                         'pct2': str(picks[1]['pct']),
                     }
     except Exception as e:
-        logger.error(f"MEXC top-gainers fetch failed for campaign tickers: {e}")
+        logger.error(f"Campaign tickers fetch failed: {e}")
 
     return fallback
 
