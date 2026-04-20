@@ -2446,12 +2446,9 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 POST_SCHEDULE = [
     # (hour_utc, minute, post_type)
     # Campaigns only — all regular content paused.
-    (4, 30, 'bitunix_campaign'),    # Asia early morning
-    (7, 30, 'bitunix_campaign'),    # Asia morning / EU pre-market
     (9, 15, 'yubit_campaign'),      # Yubit campaign - EU morning slot
-    (14, 0, 'bitunix_campaign'),    # EU midday / US pre-market
+    (14, 0, 'bitunix_campaign'),    # Bitunix campaign - EU/US overlap (1 per day)
     (19, 0, 'yubit_campaign'),      # Yubit campaign - US afternoon slot
-    (22, 0, 'bitunix_campaign'),    # US evening
 ]
 
 POSTED_SLOTS = set()
@@ -5496,91 +5493,111 @@ YUBIT_CAMPAIGN_END   = datetime(2026, 4, 30, 23, 59, 59)
 
 YUBIT_CAMPAIGN_TEMPLATES = [
     {
-        'id': 'low_entry',
-        'text': """the entry level on Yubit's campaign is $100 — but you need to pair it with 30k in trading volume
+        'id': 'slots_closing',
+        'text': """🚨 YUBIT CAMPAIGN — SLOTS ARE FILLING FAST
 
-if you're already in futures markets 30k volume is realistic inside a week. maybe less.
+100 slots at the entry tier. once they're gone, that level is CLOSED.
 
-100 slots at that tier. when they go they go.
+deposit $100 → trade 30k volume → collect 50 USDT
+deposit $2,000 → trade 900k volume → collect 200 USDT
 
-{link}"""
-    },
-    {
-        'id': 'math_angle',
-        'text': """Yubit's running a deposit and trade reward through April 30
+april 30 deadline. this is not a drill.
 
-put in $2,000 and trade 900k volume and you get 200 USDT back
-
-the volume requirement sounds big until you realize active futures traders hit that without thinking about it. if that's you, you're leaving money on the table
-
-{link}"""
-    },
-    {
-        'id': 'volume_trader',
-        'text': """if you're already running size on {ticker1} and {ticker2} perps you should look at Yubit's current campaign
-
-trade 600k volume = 100 USDT reward. trade 900k = 200 USDT
-
-you're probably doing this volume anyway. might as well do it somewhere that pays you for it
-
-yubit x tradehub markets
-
-{link}"""
-    },
-    {
-        'id': 'pool_angle',
-        'text': """there's a 19,600 USDT pool for traders who hit 50M in volume on Yubit this month
-
-that's the top tier — for people running serious size already
-
-campaign runs through April 30. total across all tiers is 20,000 USDT
-
-{link}"""
-    },
-    {
-        'id': 'simple_entry',
-        'text': """yubit x tradehub markets — welcome campaign
-
-$100 deposit + 30k trading volume → 50 USDT back
-100 slots at this level
-
-that's not marketing language — literally 100 slots, then that tier closes. scales up to 200 USDT at the top tier
-
-{link}"""
+grab your slot → {link}"""
     },
     {
         'id': 'fomo_ticker',
-        'text': """{ticker1} up {pct1}% today and people are actively trading it on Yubit right now
+        'text': """{ticker1} up {pct1}% and {ticker2} up {pct2}% today
 
-Yubit's deposit and trade campaign runs through April 30. rewards go up to 200 USDT depending on your tier
+while you're watching these run — Yubit is literally paying traders to trade them
 
-if you're in this market anyway, might as well trade somewhere with a welcome bonus on top
+$100 deposit + 30k volume = 50 USDT cash reward
+$2,000 deposit + 900k volume = 200 USDT cash reward
+
+campaign ends APRIL 30. limited slots.
+
+don't sleep on this → {link}"""
+    },
+    {
+        'id': 'leaving_money',
+        'text': """if you're trading futures right now you are LEAVING MONEY on the table
+
+Yubit is running a 20,000 USDT rewards campaign and most people have no idea
+
+entry tier: $100 deposit + 30k volume → 50 USDT back
+top tier: $2,000 deposit + 900k volume → 200 USDT back
+
+30k volume in a week of active trading is nothing. the math is free money.
+
+claim it before april 30 → {link}"""
+    },
+    {
+        'id': 'pool_angle',
+        'text': """19,600 USDT prize pool sitting on Yubit right now
+
+top volume traders this month split it. 100% cash, paid out USDT.
+
+even the entry level is free money — $100 deposit + 30k volume = 50 USDT reward
+
+20,000 USDT total. campaign closes april 30. slots are limited.
+
+🔗 {link}"""
+    },
+    {
+        'id': 'countdown',
+        'text': """⏰ YUBIT REWARDS — CLOSING APRIL 30
+
+this is your reminder that a 20,000 USDT campaign is running and most people still haven't claimed
+
+- deposit $100, trade 30k volume → 50 USDT
+- deposit $1,000, trade 300k volume → 120 USDT  
+- deposit $2,000, trade 900k volume → 200 USDT
+
+if you're already in futures markets the volume requirement is nothing. stop leaving free USDT on the table.
 
 {link}"""
     },
     {
-        'id': 'honest_pitch',
-        'text': """not going to pitch this like it's passive income. Yubit's campaign requires you to actually trade
+        'id': 'simple_math',
+        'text': """the math on Yubit's campaign is stupid simple
 
-deposit and hit a volume target. collect a reward. tiers go from $100 deposit to $2,000
+trade futures you were already going to trade
+hit 30k volume (realistic in days for active traders)
+get 50 USDT deposited
 
-smallest tier needs 30k in volume. if you trade at all that's very achievable
+scale up to 900k volume → 200 USDT
 
-yubit x tradehub markets — ends april 30
+20,000 USDT total pool. 100 slots at the entry level. april 30 deadline.
 
-{link}"""
+get in now → {link}"""
     },
     {
         'id': 'perps_trader',
-        'text': """trading {ticker1} and {ticker2} perps somewhere already?
+        'text': """already trading {ticker1} and {ticker2} perps?
 
-move that activity to Yubit and you hit the volume targets for their deposit rewards without doing anything different
+swap your volume to Yubit this month and they PAY YOU for it
 
-$100 deposit + 30k volume = 50 USDT. scales to 200 USDT at the top tier
+30k volume = 50 USDT reward
+900k volume = 200 USDT reward
 
-yubit x tradehub markets
+you're doing the volume anyway. 20,000 USDT total campaign pool. april 30 cutoff — limited slots remaining.
 
-{link}"""
+switch and stack → {link}"""
+    },
+    {
+        'id': 'urgency_close',
+        'text': """🔥 Yubit campaign is in its final days
+
+20,000 USDT sitting there for traders who move now
+
+entry: $100 deposit + 30k volume → 50 USDT cash
+top: $2,000 deposit + 900k volume → 200 USDT cash
+
+100 slots at the entry tier. people are claiming them daily.
+
+april 30 is the hard cutoff. after that this is gone.
+
+last chance → {link}"""
     },
 ]
 
