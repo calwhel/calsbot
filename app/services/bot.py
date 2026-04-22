@@ -531,7 +531,7 @@ async def cmd_walls(message: types.Message):
             "<code>/walls BTC</code>  — quick scan\n"
             "<code>/walls SOL 1</code>  — only walls within ±1% of price\n"
             "<code>/walls ETH 2 250000</code>  — within ±2%, min $250k size\n\n"
-            "Defaults: ±3% band, min $100k notional, skips orders within ±0.1% (spread).\n"
+            "Defaults: scans up to ±5% in 4 distance bands (immediate / mid / swing / far-out massive), min $100k notional, skips orders within ±0.2% (spread).\n"
             "Sources: Bybit + OKX + MEXC (live order books).",
             parse_mode="HTML",
         )

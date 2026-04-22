@@ -26,13 +26,13 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_BAND_PCT = 3.0
+DEFAULT_MAX_BAND_PCT = 5.0
 DEFAULT_MIN_DISTANCE_PCT = 0.20   # skip orders inside this — that's spread, not a wall
-DEFAULT_TOP_N = 3
+DEFAULT_TOP_N = 4
 DEFAULT_MIN_NOTIONAL_USD = 100_000
 # Pick the biggest wall in each of these distance bands so the top zones are spread across the chart
-# (one nearby pullback, one mid-range, one extreme). Edges in % from mid.
-DEFAULT_DISTANCE_BANDS = [(0.20, 0.60), (0.60, 1.50), (1.50, 3.00)]
+# (one immediate, one mid-pullback, one swing zone, one far-out massive wall). Edges in % from mid.
+DEFAULT_DISTANCE_BANDS = [(0.20, 0.60), (0.60, 1.50), (1.50, 3.00), (3.00, 5.00)]
 HTTP_TIMEOUT = 6.0
 
 
