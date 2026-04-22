@@ -28,8 +28,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BANDS_PCT = [0.25, 0.5, 1.0, 2.0, 3.0]
 DEFAULT_MAX_BAND_PCT = 3.0
+DEFAULT_MIN_DISTANCE_PCT = 0.10   # skip orders inside this band — that's spread, not a wall
 DEFAULT_TOP_N = 3
-DEFAULT_MIN_NOTIONAL_USD = 25_000
+DEFAULT_MIN_NOTIONAL_USD = 100_000
 HTTP_TIMEOUT = 6.0
 
 
@@ -215,8 +216,9 @@ def _mid_price(books: list[dict]) -> float:
 
 def _bucket_size(price: float) -> float:
     """Pick a price-bucket size that groups nearby orders into a 'wall'.
-    ~0.05% of price, but rounded to a sensible tick."""
-    target = price * 0.0005
+    Target ~0.10% of price — anything tighter just clusters adjacent ticks
+    that aren't really separate walls."""
+    target = price * 0.001
     if target <= 0:
         return 0.01
     # Round to a reasonable power-of-ten step
@@ -235,8 +237,10 @@ def _aggregate_walls(
     side: str,                       # "buy" or "sell"
     max_band_pct: float,
     min_notional_usd: float,
+    min_distance_pct: float = DEFAULT_MIN_DISTANCE_PCT,
 ) -> list[Wall]:
-    """Group nearby orders into buckets (walls), aggregate across exchanges, score by USD size."""
+    """Group nearby orders into buckets (walls), aggregate across exchanges, score by USD size.
+    Orders inside ±min_distance_pct of mid are treated as spread/noise and skipped."""
     bucket = _bucket_size(mid)
     # Map: bucket_price → {"size": float, "exchanges": set, "price_weighted": (sum_p*size, sum_size)}
     buckets: dict[float, dict] = {}
@@ -249,6 +253,8 @@ def _aggregate_walls(
             distance_pct = (price - mid) / mid * 100.0
             if abs(distance_pct) > max_band_pct:
                 continue
+            if abs(distance_pct) < min_distance_pct:
+                continue                          # too close to price — that's the spread, not a wall
             if side == "buy" and distance_pct > 0:
                 continue
             if side == "sell" and distance_pct < 0:
@@ -417,6 +423,7 @@ async def scan_walls(
     user_symbol: str,
     max_band_pct: float = DEFAULT_MAX_BAND_PCT,
     min_notional_usd: float = DEFAULT_MIN_NOTIONAL_USD,
+    min_distance_pct: float = DEFAULT_MIN_DISTANCE_PCT,
     top_n: int = DEFAULT_TOP_N,
     use_ai: bool = True,
 ) -> Optional[WallReport]:
@@ -430,8 +437,12 @@ async def scan_walls(
     if mid <= 0:
         return None
 
-    buy_walls = _aggregate_walls(books, mid, "buy", max_band_pct, min_notional_usd)
-    sell_walls = _aggregate_walls(books, mid, "sell", max_band_pct, min_notional_usd)
+    # Make sure min_distance < max_band, otherwise nothing matches
+    if min_distance_pct >= max_band_pct:
+        min_distance_pct = max_band_pct * 0.05
+
+    buy_walls = _aggregate_walls(books, mid, "buy", max_band_pct, min_notional_usd, min_distance_pct)
+    sell_walls = _aggregate_walls(books, mid, "sell", max_band_pct, min_notional_usd, min_distance_pct)
 
     top_buys = buy_walls[:top_n]
     top_sells = sell_walls[:top_n]
