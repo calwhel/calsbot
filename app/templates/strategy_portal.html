@@ -3802,8 +3802,8 @@ function updateMktPreview(){
 
 // ─── Style → recommended signals map ──────────────────────
 const STYLE_SIGNALS={
-  scalp:    ['rsi','stoch_rsi','macd','ema','volume_spike','candlestick','consecutive_candles'],
-  swing:    ['ema','supertrend','rsi','cci','fibonacci','divergence','macd','atr_volatility'],
+  scalp:    ['rsi','stoch_rsi','macd','ema','sma','volume_spike','candlestick','consecutive_candles'],
+  swing:    ['ema','sma','supertrend','rsi','cci','fibonacci','divergence','macd','atr_volatility'],
   momentum: ['price_momentum','volume_spike','macd','consecutive_candles','open_interest','ema','cci','sustained_trend'],
   reversal: ['trend_reversal','rsi','divergence','candlestick','stoch_rsi','bb','market_structure','williams_r','cci','sustained_trend'],
   pump:     ['price_momentum','volume_spike','open_interest','liquidation','consecutive_candles','atr_volatility','sustained_trend'],
@@ -3900,6 +3900,7 @@ function getDefaultCfg(type){
     donchian:         {timeframe:tf,condition:'upper_break',period:20},
     aroon:            {timeframe:tf,condition:'bullish',period:25},
     roc:              {timeframe:tf,condition:'positive',period:14},
+    sma:              {timeframe:'1h',condition:'price_above',period:200,source:'close'},
   }[type]||{timeframe:tf};
 }
 
@@ -3942,6 +3943,24 @@ function renderSignalCfg(type,cfg,pfx){
         ${['3/8','9/21','13/48','20/50','21/55','50/200','100/200'].map(p=>wzChip(p,p,`${pfx}periods`,cfg.periods||'9/21')).join('')}
       </div>
       <div class="hint">Golden/Death cross = the two EMAs cross each other. "Price above/below" = price is on one side of the fast EMA. Use 50/200 for major trend confirmation.</div>`;
+    case 'sma':return`${tf}
+      <div class="opt-label">Condition</div>
+      <div class="opt-chips">
+        ${wzChip('price_above','Price above SMA ↑',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('price_below','Price below SMA ↓',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('above_ribbon','Above full ribbon 🟢',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('below_ribbon','Below full ribbon 🔴',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('inside_ribbon','Inside ribbon (neutral zone)',`${pfx}condition`,cfg.condition)}
+      </div>
+      <div class="opt-label">Source</div>
+      <div class="opt-chips">
+        ${wzChip('close','Close',`${pfx}source`,cfg.source||'close')}
+        ${wzChip('high','High',`${pfx}source`,cfg.source||'close')}
+        ${wzChip('low','Low',`${pfx}source`,cfg.source||'close')}
+      </div>
+      <div class="opt-label">Period <span id="${pfx}smap-d" style="color:var(--accent)">${cfg.period||200}</span></div>
+      <input type="range" id="${pfx}smap" min="5" max="500" value="${cfg.period||200}" step="5" oninput="wzSl('${pfx}smap','${pfx}smap-d','','${pfx}period')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">200 SMA on close = classic long-term trend filter. "Above ribbon" = price is above SMA(high,200), the top of the Rainbow Ribbon. "Inside ribbon" = price is between SMA high and SMA low — avoid trading during consolidation.</div>`;
     case 'bb':return`${tf}
       <div class="opt-label">Condition</div>
       <div class="opt-chips">
@@ -5092,6 +5111,7 @@ function buildWizardDescription(){
       case 'rsi':sig=cfg.condition==='lt'?`RSI is oversold (below 30) on ${tf}`:cfg.condition==='gt'?`RSI is overbought (above 70) on ${tf}`:`RSI crosses custom level ${cfg.value||50} on ${tf}`;break;
       case 'macd':sig=`MACD ${cond(cfg.condition||'bullish_cross')} on ${tf}`;break;
       case 'ema':sig=`EMA ${cfg.periods||'9/21'} ${cond(cfg.condition||'golden_cross')} on ${tf}`;break;
+      case 'sma':sig=`Price ${cond(cfg.condition||'price_above')} SMA(${cfg.period||200}, ${cfg.source||'close'}) on ${tf}`;break;
       case 'bb':sig=`Bollinger Bands ${cond(cfg.condition||'squeeze')} on ${tf}`;break;
       case 'supertrend':sig=`SuperTrend ${cond(cfg.condition||'bullish_flip')} on ${tf}`;break;
       case 'stoch_rsi':sig=`Stochastic RSI ${cond(cfg.condition||'oversold')} on ${tf}`;break;
@@ -5132,6 +5152,7 @@ function buildWizardDescription(){
         case 'rsi':cfm=`RSI ${cfg.condition==='lt'?'oversold':'overbought'} on ${tf}`;break;
         case 'macd':cfm=`MACD ${cond(cfg.condition||'bullish_cross')} on ${tf}`;break;
         case 'ema':cfm=`EMA ${cfg.periods||'9/21'} ${cond(cfg.condition||'golden_cross')} on ${tf}`;break;
+        case 'sma':cfm=`SMA(${cfg.period||200}, ${cfg.source||'close'}) ${cond(cfg.condition||'price_above')} on ${tf}`;break;
         case 'bb':cfm=`BB ${cond(cfg.condition||'squeeze')} on ${tf}`;break;
         case 'volume_spike':cfm=`Volume spike ${cfg.multiplier||2}× on ${tf}`;break;
         case 'supertrend':cfm=`SuperTrend ${cond(cfg.condition||'bullish')} on ${tf}`;break;

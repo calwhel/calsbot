@@ -517,6 +517,10 @@ def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
         mult = float(cond.get("multiplier", 1.5))
         return _vol_ratio(klines, lookback=20) >= mult
 
+    # ── SMA direct type (remapped from wizard primaryType) ─────────────────────
+    if ctype in ("sma", "sma_cross", "sma_ribbon"):
+        return eval_condition_bt({**cond, "type": "indicator", "name": ctype}, klines, interval_min)
+
     # ── Indicator ──────────────────────────────────────────────────────────────
     if ctype == "indicator":
         name    = (cond.get("name") or "").lower()
@@ -1093,7 +1097,7 @@ def _build_primary_cond(primary_type: str, primary_cfg: Dict, direction: str) ->
             "multiplier": float(primary_cfg.get("multiplier", 2.0)),
         }
     # Indicators handled inside eval_condition_bt under the "indicator" branch
-    _INDICATOR_NAMES = {"rsi", "macd", "ema", "bb", "stochrsi", "stoch_rsi", "supertrend", "volume"}
+    _INDICATOR_NAMES = {"rsi", "macd", "ema", "sma", "sma_cross", "sma_ribbon", "bb", "stochrsi", "stoch_rsi", "supertrend", "volume"}
     if primary_type in _INDICATOR_NAMES:
         # Normalise stoch_rsi → stochrsi so the evaluator finds the right branch
         name = "stochrsi" if primary_type == "stoch_rsi" else primary_type
@@ -1119,7 +1123,7 @@ def _build_primary_cond(primary_type: str, primary_cfg: Dict, direction: str) ->
 def _build_confirm_cond(conf: Dict) -> Dict:
     """Normalise a wizard confirmation dict into a backtest condition dict."""
     ctype = conf.get("type", "")
-    _INDICATOR_NAMES = {"rsi", "macd", "ema", "bb", "stochrsi", "stoch_rsi", "supertrend", "volume"}
+    _INDICATOR_NAMES = {"rsi", "macd", "ema", "sma", "sma_cross", "sma_ribbon", "bb", "stochrsi", "stoch_rsi", "supertrend", "volume"}
     if ctype in _INDICATOR_NAMES:
         name = "stochrsi" if ctype == "stoch_rsi" else ctype
         return {"type": "indicator", "name": name, **conf}

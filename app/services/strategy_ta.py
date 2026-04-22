@@ -1612,6 +1612,10 @@ async def evaluate_strategy_conditions(
                 return await eval_sentiment(cond, symbol, http_client)
             elif ctype == "liquidation":
                 return await eval_liquidation(cond, symbol, price, http_client, cache)
+            elif ctype in ("sma", "sma_cross", "sma_ribbon"):
+                return await eval_indicator(
+                    {**cond, "type": "indicator", "name": ctype},
+                    price_data, enhanced_ta, symbol, http_client, cache)
             elif ctype == "supertrend":
                 return await eval_indicator(
                     {**cond, "name": "supertrend"}, price_data, enhanced_ta, symbol, http_client, cache)

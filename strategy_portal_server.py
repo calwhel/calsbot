@@ -478,10 +478,33 @@ async def _maintain_advisory_lock(conn):
             break
 
 
+async def _keepalive_ping_loop():
+    """
+    Ping the app's own health endpoint every 4 minutes so Replit Autoscale
+    never scales to zero while strategies are active.
+    Runs only in production (REPL_DEPLOYMENT=1).
+    """
+    import aiohttp as _aiohttp
+    import os as _os
+    # Resolve the public domain — prefer the custom domain, fall back to replit.app
+    domain = _os.environ.get("PUBLIC_DOMAIN", "tradehubmarkets.com")
+    url = f"https://{domain}/health"
+    await asyncio.sleep(60)   # small initial delay to let the server fully start
+    while True:
+        try:
+            async with _aiohttp.ClientSession() as _sess:
+                async with _sess.get(url, timeout=_aiohttp.ClientTimeout(total=12)) as r:
+                    logger.debug(f"[Keepalive] ✅ ping {url} → {r.status}")
+        except Exception as _e:
+            logger.debug(f"[Keepalive] ping failed (non-critical): {_e}")
+        await asyncio.sleep(240)   # 4-minute interval
+
+
 async def _start_executor_tasks():
     """Import and launch the executor + monitor tasks in this worker."""
     await _cancel_ghost_executions()
     asyncio.create_task(_ghost_cleanup_loop())
+    asyncio.create_task(_keepalive_ping_loop())   # keep Autoscale awake
     from app.services.strategy_executor import (
         run_strategy_executor, run_live_position_monitor,
         backfill_cancelled_paper_trades,
@@ -3909,6 +3932,8 @@ CONDITION REFERENCE (use EXACT type/name/field names from this list):
 • macd_hist  → { type:"indicator", name:"macd_hist", timeframe, operator:"gt"|"lt", value:NUMBER, label }
 • ema        → { type:"indicator", name:"ema", timeframe, condition:"bullish"|"golden_cross"|"bearish"|"death_cross", label }
 • ema_ribbon → { type:"indicator", name:"ema_ribbon", timeframe, periods:[9,21,55,100,200], condition:"aligned_bullish"|"aligned_bearish", label }
+• sma        → { type:"indicator", name:"sma", timeframe, period:INT, source:"close"|"high"|"low", condition:"price_above"|"price_below"|"bullish_cross"|"bearish_cross"|"above_high"|"below_low"|"inside_band", period2:INT(opt), label }
+• sma_ribbon → { type:"indicator", name:"sma_ribbon", timeframe, periods:[20,50,100,200], condition:"aligned_bullish"|"aligned_bearish", label }
 • bb         → { type:"indicator", name:"bb", timeframe, condition:"squeeze"|"above_upper"|"below_lower"|"upper_touch"|"lower_touch"|"overbought"|"oversold"|"mean_reversion", label }
 • vwap       → { type:"indicator", name:"vwap", timeframe, condition:"above"|"below", label }
 • volume     → { type:"indicator", name:"volume", timeframe, operator:"gt"|"lt", value:NUMBER, label }   (value = ratio vs average, e.g. 1.5 = 50% above average)

@@ -45,6 +45,17 @@ Timeframes: 1m | 3m | 5m | 15m | 30m | 1h | 4h | 1d
     {"type":"indicator","name":"ema_ribbon","condition":"aligned_bullish","timeframe":"1h","periods":[9,21,55,100,200]}
     conditions: aligned_bullish | aligned_bearish
 
+  SMA (Simple Moving Average — price vs level, or cross)
+    {"type":"indicator","name":"sma","timeframe":"1h","period":200,"source":"close","condition":"price_above"}
+    {"type":"indicator","name":"sma","timeframe":"1h","period":200,"source":"close","condition":"price_below"}
+    {"type":"indicator","name":"sma","timeframe":"1h","period":50,"source":"close","condition":"bullish_cross","period2":200}
+    {"type":"indicator","name":"sma","timeframe":"1h","period":50,"source":"close","condition":"bearish_cross","period2":200}
+    conditions: price_above | price_below | bullish_cross | bearish_cross | above_high | below_low | inside_band
+    source options: close | high | low  (default: close)
+    → Use "price_above" to filter longs above a key SMA (e.g. 200 SMA trend filter).
+    → Use "bullish_cross" / "bearish_cross" for golden cross / death cross setups (requires period2).
+    → Use name "sma_ribbon" for multi-SMA alignment: {"type":"indicator","name":"sma_ribbon","periods":[20,50,100,200],"condition":"aligned_bullish"}
+
   Bollinger Bands
     {"type":"indicator","name":"bb","condition":"squeeze"}
     conditions: squeeze | above_upper | below_lower | upper_touch | lower_touch |
