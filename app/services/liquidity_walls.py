@@ -26,11 +26,13 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BANDS_PCT = [0.25, 0.5, 1.0, 2.0, 3.0]
 DEFAULT_MAX_BAND_PCT = 3.0
-DEFAULT_MIN_DISTANCE_PCT = 0.10   # skip orders inside this band — that's spread, not a wall
+DEFAULT_MIN_DISTANCE_PCT = 0.20   # skip orders inside this — that's spread, not a wall
 DEFAULT_TOP_N = 3
 DEFAULT_MIN_NOTIONAL_USD = 100_000
+# Pick the biggest wall in each of these distance bands so the top zones are spread across the chart
+# (one nearby pullback, one mid-range, one extreme). Edges in % from mid.
+DEFAULT_DISTANCE_BANDS = [(0.20, 0.60), (0.60, 1.50), (1.50, 3.00)]
 HTTP_TIMEOUT = 6.0
 
 
@@ -286,6 +288,20 @@ def _aggregate_walls(
     return walls
 
 
+def _pick_band_leaders(walls: list[Wall], bands: list[tuple[float, float]]) -> list[Wall]:
+    """From a sorted list of walls, return the BIGGEST wall in each distance band.
+    Result is sorted by distance from price (closest first) so the output reads as a ladder.
+    Bands that contain no qualifying wall are skipped."""
+    chosen: list[Wall] = []
+    for low, high in bands:
+        candidates = [w for w in walls if low <= abs(w.distance_pct) < high]
+        if not candidates:
+            continue
+        chosen.append(max(candidates, key=lambda w: w.size_usd))
+    chosen.sort(key=lambda w: abs(w.distance_pct))
+    return chosen
+
+
 def _pressure(top_buys: list[Wall], top_sells: list[Wall]) -> tuple[str, float]:
     """Compare buy vs sell USD liquidity inside scan band, weighted by inverse distance."""
     def weight(w: Wall) -> float:
@@ -444,8 +460,14 @@ async def scan_walls(
     buy_walls = _aggregate_walls(books, mid, "buy", max_band_pct, min_notional_usd, min_distance_pct)
     sell_walls = _aggregate_walls(books, mid, "sell", max_band_pct, min_notional_usd, min_distance_pct)
 
-    top_buys = buy_walls[:top_n]
-    top_sells = sell_walls[:top_n]
+    # Build distance bands that match the user's max scan range
+    bands = [(low, min(high, max_band_pct)) for low, high in DEFAULT_DISTANCE_BANDS if low < max_band_pct]
+    if not bands:
+        bands = [(min_distance_pct, max_band_pct)]
+
+    # Spread top picks across distance bands so we get a ladder of zones
+    top_buys = _pick_band_leaders(buy_walls, bands)[:top_n]
+    top_sells = _pick_band_leaders(sell_walls, bands)[:top_n]
     pressure_label, pressure_score = _pressure(top_buys, top_sells)
 
     intermediate = {
