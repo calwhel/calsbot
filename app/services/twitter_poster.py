@@ -2445,9 +2445,11 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 
 POST_SCHEDULE = [
     # (hour_utc, minute, post_type)
-    # Campaigns only — all regular content paused.
+    (7, 0,  'top_gainer_ta'),       # Asia morning — top gainer TA
     (9, 15, 'yubit_campaign'),      # Yubit campaign - EU morning slot
+    (12, 30, 'top_gainer_ta'),      # EU midday — top gainer TA
     (14, 0, 'bitunix_campaign'),    # Bitunix campaign - EU/US overlap (1 per day)
+    (17, 45, 'top_gainer_ta'),      # US open — top gainer TA
     (19, 0, 'yubit_campaign'),      # Yubit campaign - US afternoon slot
 ]
 
@@ -3487,6 +3489,7 @@ def get_twitter_schedule() -> Dict:
         'high_viewing': '🔥 High Viewing',
         'bitunix_campaign': '💰 Bitunix Campaign',
         'yubit_campaign': '💰 Yubit Campaign',
+        'top_gainer_ta': '📈 Top Gainer TA',
         'tradehub_promo': '🏆 TradeHub Leaderboard',
         'market_take': '💭 Market Hot Take',
         'free_telegram': '📲 Free Telegram Promo',
@@ -4019,6 +4022,9 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
 
         elif post_type == 'yubit_campaign':
             return await post_yubit_campaign(account_poster)
+
+        elif post_type == 'top_gainer_ta':
+            return await post_top_gainer_ta(account_poster, main_poster)
 
         elif post_type == 'free_telegram':
             return await post_free_telegram_promo(account_poster)
@@ -5229,6 +5235,257 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
         return {'success': False, 'error': str(e)}
 
 
+
+
+_TOP_GAINER_ANGLE_IDX = 0
+
+_TOP_GAINER_ANGLES = [
+    {
+        'id': 'breakout',
+        'instruction': (
+            "Focus on whether this is a genuine breakout or a potential fakeout. "
+            "Reference the price structure and whether volume is confirming the move. "
+            "Be direct and analytical — give your honest read on the setup."
+        ),
+    },
+    {
+        'id': 'rsi_volume',
+        'instruction': (
+            "Lead with the RSI and volume story. Is the move overextended or is there "
+            "still room? What does the volume tell you about conviction behind this move? "
+            "Keep it punchy — one clear read."
+        ),
+    },
+    {
+        'id': 'key_levels',
+        'instruction': (
+            "Give specific price levels. Where is current support, where is resistance, "
+            "what's the level to hold for this move to stay valid. "
+            "Use the 24h range and EMA data. Be precise."
+        ),
+    },
+    {
+        'id': 'momentum',
+        'instruction': (
+            "Talk about momentum — is it accelerating or slowing? Is the EMA structure "
+            "supporting continuation? What's the realistic target if momentum holds? "
+            "Short, confident, technical."
+        ),
+    },
+    {
+        'id': 'context',
+        'instruction': (
+            "Put the move in context — is this a continuation of a trend or a sudden spike? "
+            "Is the volume unusual for this coin? What changed today? "
+            "Read it like someone who's watched this market for years."
+        ),
+    },
+    {
+        'id': 'trade_idea',
+        'instruction': (
+            "Give a clean trade perspective. What the setup looks like, what level you'd "
+            "watch for an entry, where the trade is invalidated. "
+            "Not financial advice framing — just your honest technical read on the chart."
+        ),
+    },
+]
+
+
+async def post_top_gainer_ta(account_poster, main_poster) -> Optional[Dict]:
+    """Post a technical analysis on today's #1 top gainer. 6 rotating analytical angles."""
+    global _TOP_GAINER_ANGLE_IDX
+    try:
+        # ── Pick the #1 top gainer ────────────────────────────────────────────
+        gainers = await main_poster.get_top_gainers_data(40)
+        if not gainers:
+            return {'success': False, 'error': 'No gainers data'}
+
+        _SKIP = {
+            'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'USDP', 'FDUSD',
+            'WBTC', 'WETH', 'STETH', 'RETH',
+        }
+        candidates = [
+            g for g in gainers
+            if g.get('change', 0) >= 3
+            and g.get('volume', 0) >= 2_000_000
+            and g.get('symbol', '') not in _SKIP
+            and check_global_coin_cooldown(g['symbol'], max_per_day=1)
+        ]
+        if not candidates:
+            return {'success': False, 'error': 'No suitable top gainer'}
+
+        coin   = candidates[0]   # highest % gainer
+        symbol = coin['symbol']
+        change = coin.get('change', 0)
+        price  = coin.get('price', 0)
+        volume = coin.get('volume', 0)
+
+        if price < 0.001:
+            price_str = f"${price:.8f}"
+        elif price < 0.01:
+            price_str = f"${price:.6f}"
+        elif price < 1:
+            price_str = f"${price:.4f}"
+        elif price < 100:
+            price_str = f"${price:,.3f}"
+        else:
+            price_str = f"${price:,.2f}"
+
+        vol_str = f"${volume/1e9:.1f}B" if volume >= 1e9 else f"${volume/1e6:.1f}M"
+
+        # ── Fetch OHLCV and compute TA ────────────────────────────────────────
+        rsi_val   = 50.0
+        trend     = "neutral"
+        vol_ratio = 1.0
+        h24 = l24 = price
+        ema9 = ema21 = price
+        ema_gap_pct = 0.0
+
+        try:
+            ohlcv = await _fetch_mexc_ohlcv(symbol, interval='1h', limit=50)
+            if ohlcv and len(ohlcv) >= 20:
+                closes = [float(c[4]) for c in ohlcv]
+                highs  = [float(c[2]) for c in ohlcv]
+                lows   = [float(c[3]) for c in ohlcv]
+                vols   = [float(c[5]) for c in ohlcv]
+
+                # True EMA
+                def _ema(series, period):
+                    if len(series) < period:
+                        return sum(series) / len(series)
+                    k = 2.0 / (period + 1)
+                    val = sum(series[:period]) / period
+                    for p in series[period:]:
+                        val = p * k + val * (1 - k)
+                    return val
+
+                ema9  = _ema(closes, 9)
+                ema21 = _ema(closes, 21)
+                trend = "bullish" if ema9 > ema21 else "bearish" if ema9 < ema21 else "neutral"
+                ema_gap_pct = round(abs(ema9 - ema21) / ema21 * 100, 2) if ema21 else 0
+
+                # RSI 14
+                gains_, losses_ = [], []
+                for i in range(1, min(15, len(closes))):
+                    d = closes[i] - closes[i-1]
+                    gains_.append(max(d, 0))
+                    losses_.append(max(-d, 0))
+                ag = sum(gains_) / len(gains_) if gains_ else 0
+                al = sum(losses_) / len(losses_) if losses_ else 0.0001
+                rsi_val = round(100 - (100 / (1 + ag / al)), 1)
+
+                # Volume vs 10-bar avg
+                avg_vol  = sum(vols[-10:]) / 10 if len(vols) >= 10 else 0
+                vol_ratio = round(vols[-1] / avg_vol, 1) if avg_vol > 0 else 1.0
+
+                # 24h range
+                h24 = max(highs[-24:]) if len(highs) >= 24 else max(highs)
+                l24 = min(lows[-24:]  ) if len(lows)  >= 24 else min(lows)
+        except Exception as te:
+            logger.warning(f"[TopGainerTA] TA calc failed for {symbol}: {te}")
+
+        # Format levels for the AI
+        if price and h24 and l24 and h24 != l24:
+            range_pos = round((price - l24) / (h24 - l24) * 100)
+            range_note = f"trading at {range_pos}% of its 24h range (low {price_str[0]}{ l24:,.4f} → high ${h24:,.4f})"
+        else:
+            range_note = ""
+
+        rsi_read = (
+            "overbought" if rsi_val >= 72
+            else "approaching overbought" if rsi_val >= 65
+            else "healthy" if rsi_val >= 50
+            else "oversold" if rsi_val <= 30
+            else "neutral"
+        )
+
+        # ── Pick rotating angle ───────────────────────────────────────────────
+        angle = _TOP_GAINER_ANGLES[_TOP_GAINER_ANGLE_IDX % len(_TOP_GAINER_ANGLES)]
+        _TOP_GAINER_ANGLE_IDX += 1
+
+        # ── Build AI prompt ───────────────────────────────────────────────────
+        sign = "+" if change >= 0 else ""
+        ta_summary = (
+            f"${symbol} is up {sign}{change:.1f}% today at {price_str}. "
+            f"24h volume: {vol_str}. "
+            f"RSI: {rsi_val} ({rsi_read}). "
+            f"EMA9 vs EMA21: {trend} (gap {ema_gap_pct}%). "
+            f"Volume: {vol_ratio}x the 10-bar average. "
+            + (range_note + ". " if range_note else "")
+        )
+
+        system_prompt = (
+            "You are a crypto trader sharing your chart read on X (Twitter). "
+            "Write exactly ONE tweet — no thread, no numbering, no hashtags. "
+            "Sound like a real trader who's staring at charts, not a bot. "
+            "Use lowercase. Be direct, specific, and technical. "
+            "Max 260 characters. Never say 'NFA', 'DYOR', or 'not financial advice'. "
+            f"Analytical focus: {angle['instruction']}"
+        )
+
+        user_prompt = (
+            f"Write a tweet about ${symbol}.\n\n"
+            f"TA data:\n{ta_summary}\n\n"
+            f"Make the tweet feel like a natural observation from someone watching this move happen live. "
+            f"Include the ticker as ${symbol}. Include the % move naturally."
+        )
+
+        tweet_text = None
+
+        # Try Anthropic first
+        try:
+            import anthropic as _ac
+            _aclient = _ac.Anthropic()
+            resp = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _aclient.messages.create(
+                    model="claude-sonnet-4-5",
+                    max_tokens=120,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                )
+            )
+            tweet_text = resp.content[0].text.strip().strip('"')
+        except Exception as ae:
+            logger.warning(f"[TopGainerTA] Anthropic failed: {ae}")
+
+        # Gemini fallback
+        if not tweet_text:
+            try:
+                import google.generativeai as genai
+                model = genai.GenerativeModel("gemini-2.0-flash")
+                resp = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: model.generate_content(system_prompt + "\n\n" + user_prompt)
+                )
+                tweet_text = resp.text.strip().strip('"')
+            except Exception as ge:
+                logger.warning(f"[TopGainerTA] Gemini failed: {ge}")
+
+        # Hard fallback
+        if not tweet_text:
+            tweet_text = (
+                f"${symbol} up {sign}{change:.1f}% today at {price_str}. "
+                f"RSI {rsi_val} ({rsi_read}), volume {vol_ratio}x avg. "
+                f"watching this one."
+            )
+
+        tweet_text = _sanitize_tickers(tweet_text, symbol)
+        tweet_text = await _ai_review_tweet(tweet_text, 'top_gainer_ta', {
+            'symbol': symbol, 'change': f'{sign}{change:.1f}%',
+            'angle': angle['id'], 'rsi': rsi_val,
+        })
+
+        result = account_poster.post_tweet(tweet_text)
+        if result and result.get('success'):
+            record_global_coin_post(symbol)
+            logger.info(f"✅ TopGainerTA [{angle['id']}] ${symbol} {sign}{change:.1f}% posted")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error posting top gainer TA: {e}")
+        return {'success': False, 'error': str(e)}
 
 
 async def post_free_telegram_promo(account_poster) -> Optional[Dict]:
