@@ -517,6 +517,57 @@ async def cmd_health(message: types.Message):
     await message.answer(f"✅ Bot is alive! Response time: {(time.time() - start)*1000:.0f}ms")
 
 
+@dp.message(Command("walls"))
+async def cmd_walls(message: types.Message):
+    """Liquidity wall scanner. Usage: /walls BTC  or  /walls SOLUSDT [band%] [min_usd]
+    Pulls live order books from Bybit + OKX + MEXC, finds the biggest resting buy/sell walls
+    near current price, and returns an AI summary."""
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.answer(
+            "<b>💧 Liquidity Wall Scanner</b>\n"
+            "Find where the big buy and sell orders are sitting.\n\n"
+            "<b>Usage:</b>\n"
+            "<code>/walls BTC</code>  — quick scan\n"
+            "<code>/walls SOL 1</code>  — only walls within ±1% of price\n"
+            "<code>/walls ETH 2 100000</code>  — within ±2%, min $100k size\n\n"
+            "Defaults: ±3% band, min $25k notional.\n"
+            "Sources: Bybit + OKX + MEXC (live order books).",
+            parse_mode="HTML",
+        )
+        return
+
+    symbol_input = parts[1]
+    try:
+        band_pct = float(parts[2]) if len(parts) > 2 else 3.0
+        min_usd = float(parts[3]) if len(parts) > 3 else 25_000.0
+    except ValueError:
+        await message.answer("❌ Bad number. Example: <code>/walls BTC 1 50000</code>", parse_mode="HTML")
+        return
+
+    band_pct = max(0.1, min(band_pct, 10.0))
+    min_usd = max(1_000.0, min(min_usd, 5_000_000.0))
+
+    loading = await message.answer(f"💧 Scanning order books for <b>{symbol_input.upper()}</b>…", parse_mode="HTML")
+
+    try:
+        from app.services.liquidity_walls import scan_walls, format_telegram
+        report = await scan_walls(symbol_input, max_band_pct=band_pct, min_notional_usd=min_usd)
+        if not report:
+            await loading.edit_text(
+                f"❌ No order book data for <b>{symbol_input.upper()}</b>.\n"
+                "Try a more liquid pair like BTC, ETH, SOL, XRP, DOGE.",
+                parse_mode="HTML",
+            )
+            return
+        text = format_telegram(report)
+        # Telegram caps single messages at 4096 chars — should be well under
+        await loading.edit_text(text[:4090], parse_mode="HTML")
+    except Exception as e:
+        logger.exception(f"/walls failed for {symbol_input}")
+        await loading.edit_text(f"❌ Scanner error: {str(e)[:200]}")
+
+
 @dp.message(Command("briefing"))
 async def cmd_briefing(message: types.Message):
     """Force-fetch a fresh Grok macro + geopolitical briefing and DM it to the admin."""

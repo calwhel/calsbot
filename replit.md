@@ -6,7 +6,8 @@ Web platform at `tradehubmarkets.com` where users build, test, and automate cryp
 ## Deployment Architecture
 Everything runs on Replit (no Railway). Three workflows:
 - **Strategy Portal** — `python3 strategy_portal_server.py` on port 5000 — Main product. Web portal at `tradehubmarkets.com`, strategy executor, marketplace, wizard builder, backtester, AI chat builder.
-- **Telegram Bot** — `python -m uvicorn main:app --host 0.0.0.0 --port 8080` — Minimal companion: Telegram command handling (`/start` shows UID + strategy summary), OxaPay payment poller, strategy trade notifications. **All scanning (social, top gainers, fartcoin, BTC ORB, sweep watcher, funding rates, Twitter) is DISABLED.**
+- **Telegram Bot** — `python -m uvicorn main:app --host 0.0.0.0 --port 8080` — Minimal companion: Telegram command handling (`/start` shows UID + strategy summary), OxaPay payment poller, strategy trade notifications, and the on-demand `/walls` liquidity scanner. **All background scanning (social, top gainers, fartcoin, BTC ORB, sweep watcher, funding rates, Twitter) is DISABLED.**
+- **Liquidity Wall Scanner (`/walls`)**: On-demand Telegram command that pulls live SPOT order books from Bybit + OKX + MEXC + Kraken in parallel, buckets nearby orders into walls, scores cross-exchange confidence, computes a distance-weighted bull/bear pressure score, and returns a Claude-generated trader-style summary. Engine: `app/services/liquidity_walls.py`. Usage: `/walls BTC` or `/walls SOL 1 50000` (symbol, band%, min USD). Bybit returns 403 from Replit IPs — gracefully skipped. WebSocket live books and spoof-detection-with-persistence are intentionally deferred (require background workers).
 - **Trade Tracker** — `python3 tracker_server.py` on port 8000 — Trade performance dashboard.
 
 Database: Neon PostgreSQL (`NEON_DATABASE_URL`) shared by all workflows.

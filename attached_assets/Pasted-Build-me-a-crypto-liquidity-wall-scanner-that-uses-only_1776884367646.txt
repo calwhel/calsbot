@@ -1,0 +1,167 @@
+Build me a crypto liquidity wall scanner that uses only free public data sources. Do not rely on just one exchange. Use the best free sources available and combine them to give me the clearest possible view of where large buy orders and sell orders are sitting.
+
+Main goal:
+I want this app to scan order books and tell me where the biggest nearby buy walls and sell walls are on a coin. I do not want a complicated dashboard-first app. I want a practical scanner that returns simple outputs I can actually use.
+
+Free data sources to use:
+- Binance public market data where available
+- Bybit public order book WebSocket / REST where available
+- OKX public order book WebSocket / REST where available
+- Kraken public order book feed where available
+- Coinbase Exchange public level2 order book feed where available
+- If one source is unavailable for a coin, fall back to the others
+- Create a unified market data layer so the scanner can pull from whichever free exchange has that coin and enough liquidity
+
+Important:
+Use public market data only. No paid APIs. No private keys needed for scanning. WebSockets should be preferred for live market data where possible because they are better for real-time order book monitoring. Coinbase level2 is useful because it is designed for keeping a synced order book. Bybit also recommends WebSockets for market data and their public order book endpoints cover spot and derivatives. OKX also offers free REST and WebSocket market data. Kraken has public market data feeds too. 
+Reference this behavior in the build:
+- Coinbase level2 channel is designed for maintaining a synced order book
+- Bybit public order book provides snapshot and delta logic
+- OKX offers free REST and WebSocket API market data
+- Kraken has public order book feeds
+- Use these exchanges together where possible for broader coverage
+Sources:
+Coinbase docs: https://docs.cdp.coinbase.com/exchange/websocket-feed/overview
+Coinbase channels: https://docs.cdp.coinbase.com/exchange/websocket-feed/channels
+Bybit orderbook WebSocket docs: https://bybit-exchange.github.io/docs/v5/websocket/public/orderbook
+Bybit REST orderbook docs: https://bybit-exchange.github.io/docs/v5/market/orderbook
+OKX API page: https://www.okx.com/okx-api
+
+Core features:
+- Let me enter a ticker or coin symbol and scan it
+- Scan multiple exchanges for that coin if available
+- Find the largest buy walls below current price
+- Find the largest sell walls above current price
+- Show the exact price levels where they are sitting
+- Show the size of each wall in native coin size and estimated USD size
+- Show how far each wall is from current price in percentage
+- Rank the most important nearby liquidity zones
+- Detect whether a wall is stable, getting filled, or disappearing
+- Detect if a wall appears briefly and gets removed fast, and flag it as possible spoofing
+- Give a simple order book pressure score from bullish to bearish
+- Prefer walls within a configurable range such as 0.25%, 0.5%, 1%, 2%, 3% from price
+
+Output style:
+I want the main output to be simple and useful, not geeky.
+For each coin, return:
+
+1. Current price
+2. Biggest nearby buy wall
+3. Biggest nearby sell wall
+4. Top 3 buy support zones
+5. Top 3 sell resistance zones
+6. Whether buy pressure or sell pressure is stronger
+7. Whether any big wall is being pulled or eaten
+8. A short AI summary paragraph in plain English
+
+Example output:
+BTCUSDT
+Current price: 84,250
+Biggest buy wall: 83,900 with $2.4M resting bids
+Biggest sell wall: 84,900 with $1.8M resting asks
+Pressure: Slightly bullish
+Spoof risk: Large sell wall at 85,000 appeared then weakened
+AI summary:
+There is strong buy support sitting just below current price around 83,900, which may act as a bounce zone if price dips. The nearest heavy sell liquidity is around 84,900, so that is the main area to watch if price continues higher. Buyers currently look slightly stronger, but if the 83,900 wall starts getting pulled, downside could open up quickly.
+
+AI paragraph rules:
+- Keep it short and human
+- Explain the important areas to watch
+- Mention where buyers are defending
+- Mention where sellers are stacked
+- Mention whether a wall is strong, weakening, or suspicious
+- Mention what area matters most next
+- Do not overcomplicate the language
+- Make it sound like a smart trader explaining it simply
+
+Scanner logic:
+- Build a unified adapter for each exchange
+- Normalize symbols between exchanges
+- Pull live order book data from free public endpoints
+- Maintain local order books when needed using snapshot + delta logic
+- Calculate wall strength based on size, proximity to price, and persistence over time
+- Track wall persistence over a rolling window, for example 30 seconds, 60 seconds, 5 minutes
+- Flag walls that vanish too quickly as spoof candidates
+- Compare buy-side and sell-side liquidity within selected distance bands
+- Prefer larger and more persistent walls over random one-off spikes
+- Let me set a minimum notional wall size, for example 25k, 50k, 100k, 250k, 500k
+- Let me set the scan distance from current price
+- Let me set how long a wall must persist before it is considered meaningful
+
+Nice-to-have logic:
+- If the same price zone shows heavy liquidity across multiple exchanges, increase confidence
+- If a wall is large on one exchange but not confirmed elsewhere, mark confidence as lower
+- Add an exchange confidence note such as:
+  - confirmed across multiple exchanges
+  - seen mainly on one exchange
+  - weak / unstable liquidity
+
+Telegram alerts:
+Add Telegram alerts for when:
+- a new major buy wall appears near price
+- a new major sell wall appears near price
+- a wall is getting eaten
+- a wall is pulled suddenly
+- pressure flips from bullish to bearish or vice versa
+
+Example Telegram alert:
+SOLUSDT liquidity update
+Buy wall: 139.20 with approx $420k resting bids
+Sell wall: 141.10 with approx $510k resting asks
+Pressure: Neutral to bearish
+Summary: Buyers are defending 139.20 for now, but sellers are stacked overhead at 141.10. If the bid wall weakens, price may slip quickly.
+
+UI:
+- Dark clean trading-style UI
+- Minimal and fast
+- Search box for coin
+- Watchlist panel
+- Results cards
+- Simple wall table
+- AI summary box
+- Optional mini visual ladder or horizontal liquidity bars
+- Mobile friendly
+
+Settings:
+- watchlist coins
+- exchanges to include
+- min wall size
+- scan distance percentages
+- persistence threshold
+- spoof detection threshold
+- Telegram bot token and chat ID in environment variables
+- toggle AI summary on or off
+
+Tech stack:
+- Python preferred
+- FastAPI or Flask backend
+- WebSocket support for live feeds
+- Clean modular architecture
+- Separate exchange adapters
+- Frontend can be simple HTML/CSS/JS
+- Use background tasks for maintaining books
+- Store temporary rolling wall history in memory or lightweight local database
+- Include clear comments and structure so I can expand it later
+
+Important build requirements:
+- Do not make this a generic price app
+- The entire point is to detect where big buy and sell orders are sitting
+- Keep the final output simple and trader-friendly
+- Prioritize useful summaries over too many numbers
+- Make the AI paragraph the main feature of the output so I can instantly understand the key zones to watch
+
+Add a README with:
+- setup steps
+- how the exchange adapters work
+- how wall strength is calculated
+- how spoof detection works
+- how to add more exchanges later
+- how to deploy on Replit
+
+Also include sample default watchlist:
+BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT
+
+Stretch goal:
+Add a “best zone to watch” line that summarizes the single most important area:
+Example:
+Best zone to watch: 141.10 sell wall overhead. If price breaks and holds above it, upside can open fast.
