@@ -3990,12 +3990,30 @@ IMPORTANT INDICATOR MAPPINGS:
 - Market structure breaks: Use market_structure "bos_bullish"/"choch_bullish"
 - CCI zero-cross: Use cci with condition "bullish" (cci > 0) or "bearish" (cci < 0)
 
+━━━ RECOMMENDED RISK LEVELS ━━━
+You MUST also recommend take-profit, stop-loss, leverage, and trade frequency that *fit the indicator's nature*.
+Use these reference profiles as anchors:
+- Scalp (1m–5m, fast oscillators / volume spikes): TP 1.0–2.0%, SL 0.6–1.2%, leverage 10–20x, max 8/day
+- Intraday momentum (15m, RSI/MACD/SuperTrend): TP 2.5–4.0%, SL 1.2–2.0%, leverage 8–15x, max 4/day
+- Swing trend (1h, EMA ribbon / Ichimoku / SMA cross): TP 5–10%, SL 2.5–4%, leverage 5–10x, max 2/day
+- Mean reversion / oversold (BB lower / RSI<30 / Stoch oversold): TP 2–4%, SL 1.5–2.5% (slightly wider than R:R suggests, since reversals chop), leverage 5–10x, max 3/day
+- Breakout (Keltner/BB squeeze fire, BoS): TP 4–8%, SL 1.5–2.5%, leverage 8–15x, max 3/day
+Always keep R:R ≥ 1.3:1 unless the strategy is explicitly mean-reversion.
+If a 2nd TP makes sense (trend following), include "recommended_tp2_pct" at 1.5–2× the first TP.
+
 Return ONLY valid JSON (no markdown, no explanation outside the JSON):
 {
   "timeframe": "15m",
   "direction": "LONG"|"SHORT"|"BOTH",
   "conditions": [ <2-5 condition objects from the list above> ],
-  "explanation": "2-3 sentences explaining what this indicator measures, the specific parameters it uses, and what market condition triggers an entry."
+  "explanation": "2-3 sentences explaining what this indicator measures, the specific parameters it uses, and what market condition triggers an entry.",
+  "recommended_tp_pct": 2.5,
+  "recommended_sl_pct": 1.5,
+  "recommended_tp2_pct": 5.0,
+  "recommended_leverage": 10,
+  "recommended_max_trades_per_day": 4,
+  "recommended_cooldown_minutes": 30,
+  "risk_rationale": "1 sentence on why these levels fit this indicator's volatility / hold-time."
 }"""
 
     user_msg = f"Indicator description:\n{prompt}"

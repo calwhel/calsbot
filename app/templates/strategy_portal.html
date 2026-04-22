@@ -1964,6 +1964,21 @@ function dismissTgBanner(){
             </div>
           </div>
 
+          <!-- AI auto-pick levels toggle -->
+          <div style="background:linear-gradient(135deg,rgba(139,92,246,0.10),rgba(99,102,241,0.06));border:1px solid rgba(139,92,246,0.35);border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px">
+                <span>🤖</span> Let AI pick TP / SL / leverage
+              </div>
+              <div id="gi-ai-rationale" style="font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4">AI will set risk levels that fit your indicator.</div>
+            </div>
+            <label class="switch" style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0">
+              <input type="checkbox" id="gi-ai-levels" checked onchange="giToggleAiLevels()" style="opacity:0;width:0;height:0">
+              <span style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:var(--card2);border:1px solid var(--border);border-radius:24px;transition:.2s" id="gi-ai-levels-track"></span>
+              <span id="gi-ai-levels-knob" style="position:absolute;height:18px;width:18px;left:3px;bottom:2px;background:#fff;border-radius:50%;transition:.2s;transform:translateX(20px)"></span>
+            </label>
+          </div>
+
           <!-- TP / SL -->
           <div class="form-row" style="margin-bottom:12px">
             <div class="form-group" style="margin-bottom:0">
@@ -6193,6 +6208,36 @@ let _giDirection    = 'LONG';
 let _giUniMode      = 'all';
 let _giBtcMode      = 'any';
 let _giTradingMode  = 'paper';
+let _giAiLevels     = null;
+
+function _giSetSlider(id, valueId, value, fmt) {
+  const sl = document.getElementById(id);
+  const lbl = document.getElementById(valueId);
+  if (!sl || value == null) return;
+  sl.value = value;
+  if (lbl) lbl.textContent = (typeof fmt === 'function') ? fmt(value) : (value + '');
+}
+
+function _giApplyAiLevels() {
+  if (!_giAiLevels) return;
+  _giSetSlider('gi-tp',   'gi-tp-val',   _giAiLevels.tp,   v => v + '%');
+  _giSetSlider('gi-sl',   'gi-sl-val',   _giAiLevels.sl,   v => v + '%');
+  _giSetSlider('gi-tp2',  'gi-tp2-val',  _giAiLevels.tp2,  v => parseFloat(v) > 0 ? v + '%' : 'off');
+  _giSetSlider('gi-lev',  'gi-lev-val',  _giAiLevels.lev,  v => v + '×');
+  _giSetSlider('gi-mtd',  'gi-mtd-val',  _giAiLevels.mtd,  v => v);
+  _giSetSlider('gi-cd',   'gi-cd-val',   _giAiLevels.cd,   v => v + 'min');
+}
+
+function giToggleAiLevels() {
+  const cb = document.getElementById('gi-ai-levels');
+  if (!cb) return;
+  // Visual knob
+  const knob  = document.getElementById('gi-ai-levels-knob');
+  const track = document.getElementById('gi-ai-levels-track');
+  if (knob)  knob.style.transform  = cb.checked ? 'translateX(20px)' : 'translateX(0)';
+  if (track) track.style.background = cb.checked ? 'linear-gradient(135deg,#8b5cf6,#6366f1)' : 'var(--card2)';
+  if (cb.checked && _giAiLevels) _giApplyAiLevels();
+}
 
 function setGiDir(dir, btn) {
   _giDirection = dir;
@@ -6270,6 +6315,24 @@ async function giGenerate() {
     }).join('');
 
     document.getElementById('gi-explanation').textContent = d.explanation || '';
+
+    // Stash AI-recommended risk levels and apply them if the toggle is on
+    _giAiLevels = {
+      tp:   parseFloat(d.recommended_tp_pct)    || null,
+      sl:   parseFloat(d.recommended_sl_pct)    || null,
+      tp2:  parseFloat(d.recommended_tp2_pct)   || 0,
+      lev:  parseInt(d.recommended_leverage, 10) || null,
+      mtd:  parseInt(d.recommended_max_trades_per_day, 10) || null,
+      cd:   parseInt(d.recommended_cooldown_minutes, 10)   || null,
+      rationale: d.risk_rationale || '',
+    };
+    const rEl = document.getElementById('gi-ai-rationale');
+    if (rEl) rEl.textContent = _giAiLevels.rationale
+      ? `🤖 ${_giAiLevels.rationale}`
+      : 'AI will set risk levels that fit your indicator.';
+    if (document.getElementById('gi-ai-levels')?.checked) {
+      _giApplyAiLevels();
+    }
 
     // Pre-fill inferred timeframe from AI
     const resTf = document.getElementById('gi-res-tf');
@@ -6350,12 +6413,25 @@ async function giCreateStrategy() {
   const exitCfg = { take_profit_pct: tp, stop_loss_pct: sl };
   if (tp2v > 0) exitCfg.take_profit2_pct = tp2v;
 
+  // Stamp every condition with the chosen timeframe if it's missing one,
+  // so the executor evaluates them on the indicator's intended interval.
+  const stampedConds = (_giGeneratedConditions || []).map(c => {
+    const cc = Object.assign({}, c);
+    if (!cc.timeframe && cc.type !== 'price_momentum' && cc.type !== 'volume_spike' && cc.type !== 'support_resistance') {
+      cc.timeframe = tf;
+    }
+    return cc;
+  });
+
   const config = {
     name,
     description: expl,
     direction:   _giDirection,
-    _timeframe:  tf,
-    conditions:  _giGeneratedConditions,
+    version:     '1.0',
+    entry_conditions: {
+      operator:   'AND',
+      conditions: stampedConds,
+    },
     exit: exitCfg,
     risk: {
       leverage:             lev,
@@ -6363,11 +6439,14 @@ async function giCreateStrategy() {
       max_trades_per_day:   mtd,
       cooldown_minutes:     cd,
       daily_loss_limit_pct: dll,
+      max_open_positions:   3,
+      no_duplicate_symbol:  true,
     },
     universe,
-    filters: { btc_regime: _giBtcMode === 'any' ? null : _giBtcMode },
+    filters: { btc_regime: _giBtcMode === 'any' ? null : _giBtcMode, time_filter: null },
     _build_mode: _giTradingMode,
-    _source: 'indicator_generator',
+    _timeframe:  tf,
+    _source:     'indicator_generator',
   };
 
   try {
