@@ -2371,7 +2371,7 @@ def migrate_env_account_to_database():
                 account.set_post_types([
                     'featured_coin', 'market_summary', 'top_gainers', 'btc_update',
                     'altcoin_movers', 'quick_ta', 'daily_recap', 'bitunix_campaign',
-                    'yubit_campaign', 'tradehub_promo', 'early_gainer', 'memecoin',
+                    'yubit_campaign', 'bydfi_campaign', 'tradehub_promo', 'early_gainer', 'memecoin',
                     'market_take', 'free_telegram',
                 ])
                 db.commit()
@@ -2418,7 +2418,7 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
     valid_types = ['featured_coin', 'market_summary', 'top_gainers', 'btc_update',
                    'altcoin_movers', 'daily_recap', 'top_losers', 'early_gainer',
                    'memecoin', 'quick_ta', 'tradehub_promo', 'market_take',
-                   'bitunix_campaign', 'yubit_campaign', 'free_telegram']
+                   'bitunix_campaign', 'yubit_campaign', 'bydfi_campaign', 'free_telegram']
     
     # Validate post types
     invalid = [t for t in post_types if t not in valid_types]
@@ -2445,12 +2445,12 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 
 POST_SCHEDULE = [
     # (hour_utc, minute, post_type)
-    (7, 0,  'top_gainer_ta'),       # Asia morning — top gainer TA
-    (9, 15, 'yubit_campaign'),      # Yubit campaign - EU morning slot
+    (7, 0,   'top_gainer_ta'),      # Asia morning — top gainer TA
+    (9, 15,  'bydfi_campaign'),     # BYDFi $2000 bonus — EU morning slot
     (12, 30, 'top_gainer_ta'),      # EU midday — top gainer TA
-    (14, 0, 'bitunix_campaign'),    # Bitunix campaign - EU/US overlap (1 per day)
+    (14, 0,  'bydfi_campaign'),     # BYDFi $2000 bonus — EU/US overlap
     (17, 45, 'top_gainer_ta'),      # US open — top gainer TA
-    (19, 0, 'yubit_campaign'),      # Yubit campaign - US afternoon slot
+    (19, 0,  'bydfi_campaign'),     # BYDFi $2000 bonus — US afternoon slot
 ]
 
 POSTED_SLOTS = set()
@@ -3489,6 +3489,7 @@ def get_twitter_schedule() -> Dict:
         'high_viewing': '🔥 High Viewing',
         'bitunix_campaign': '💰 Bitunix Campaign',
         'yubit_campaign': '💰 Yubit Campaign',
+        'bydfi_campaign': '💰 BYDFi Campaign',
         'top_gainer_ta': '📈 Top Gainer TA',
         'tradehub_promo': '🏆 TradeHub Leaderboard',
         'market_take': '💭 Market Hot Take',
@@ -3662,7 +3663,7 @@ async def auto_post_loop():
                 
                 # Campaign slots get a 30-min catch-up window (survive restarts).
                 # Regular slots fire within 5 minutes of the adjusted time.
-                _campaign_types = {'yubit_campaign', 'bitunix_campaign'}
+                _campaign_types = {'yubit_campaign', 'bitunix_campaign', 'bydfi_campaign'}
                 _window_secs = 1800 if post_type in _campaign_types else 300
 
                 slot_time = now.replace(hour=adjusted_hour, minute=adjusted_minute, second=0, microsecond=0)
@@ -4022,6 +4023,9 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
 
         elif post_type == 'yubit_campaign':
             return await post_yubit_campaign(account_poster)
+
+        elif post_type == 'bydfi_campaign':
+            return await post_bydfi_campaign(account_poster)
 
         elif post_type == 'top_gainer_ta':
             return await post_top_gainer_ta(account_poster, main_poster)
@@ -5779,6 +5783,14 @@ YUBIT_CAMPAIGN_LINK  = "https://www.yubit.com/en-US/rewards-hub?inviteCode=TZQL"
 YUBIT_CAMPAIGN_START = datetime(2026, 4, 9)
 YUBIT_CAMPAIGN_END   = datetime(2026, 4, 30, 23, 59, 59)
 
+# ── BYDFi x TradeHub $2000 deposit bonus campaign ─────────────────────────────
+# Period: April 22 – April 30, 2026
+BYDFI_CAMPAIGN_IMAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                                    "attached_assets", "IMG_1885_1776865573041.jpeg")
+BYDFI_CAMPAIGN_LINK  = "https://www.bydfi.com/en/activities/"
+BYDFI_CAMPAIGN_START = datetime(2026, 4, 22)
+BYDFI_CAMPAIGN_END   = datetime(2026, 4, 30, 23, 59, 59)
+
 YUBIT_CAMPAIGN_TEMPLATES = [
     {
         'id': 'double_deal',
@@ -5904,6 +5916,141 @@ claim it → {link}"""
 ]
 
 _yubit_post_index = 0
+
+# ── BYDFi campaign templates — written human/casual, lowercase, light emoji ──
+# Style ref: low-key crypto trader voice, mentions a few real moving tickers as
+# context, casual filler ("rn", "btw", "tbh"), no em dashes, no marketing-speak.
+BYDFI_CAMPAIGN_TEMPLATES = [
+    {
+        'id': 'casual_intro',
+        'text': """💊 $2000 deposit bonus live with BYDFi x TradeHub 💊
+
+been seeing more people trading coins like {ticker1} {ticker2} {ticker3} lately and using these bonuses as extra margin to catch the moves 👀📈
+
+offers right now:
+$100 deposit = $50 bonus
+$500 deposit = $100 bonus
+$1000 deposit = $200 bonus
+
+whale side:
+$5000 = $500
+$10,000 = $1000
+$20,000 = $2000 🐋🔥
+
+a few in the group already redeeming and putting it to work while low caps are active
+
+link if you want in:
+{link}"""
+    },
+    {
+        'id': 'momentum_tie',
+        'text': """market's moving again and BYDFi just dropped a $2000 deposit bonus campaign with us
+
+basically free margin if you were planning to trade {ticker1} {ticker2} this week anyway
+
+how it stacks:
+• $100 in → $50 back
+• $500 in → $100 back
+• $1000 in → $200 back
+• $5k → $500 / $10k → $1000 / $20k → $2000
+
+ends april 30. first deposits only. 72hr hold.
+
+{link}"""
+    },
+    {
+        'id': 'low_cap_play',
+        'text': """if you're chasing low caps like {ticker1} {ticker2} {ticker3} the BYDFi bonus is honestly the move rn
+
+extra margin, no strings beyond a 3 day hold
+
+$100 → $50 bonus
+$500 → $100 bonus
+$1000 → $200 bonus
+whale tier maxes at $2000 on a $20k deposit
+
+period: april 22 to april 30 only
+
+{link}"""
+    },
+    {
+        'id': 'simple_breakdown',
+        'text': """quick one — BYDFi x TradeHub bonus is live til april 30
+
+deposit → bonus paid in USDT-M futures
+$100 = $50
+$500 = $100
+$1000 = $200
+$5000 = $500
+$10k = $1000
+$20k = $2000
+
+{ticker1} {ticker2} are the ones people are putting it into atm
+
+first deposits only. 72hr hold to qualify
+
+{link}"""
+    },
+    {
+        'id': 'group_proof',
+        'text': """few people in the group already redeemed the BYDFi bonus today and used it to size up on {ticker1} and {ticker2}
+
+if you missed it:
+$100 deposit → $50 free margin
+$1000 → $200
+$10k → $1000 (whale tier)
+$20k → $2000 max payout
+
+ends april 30, first deposits only
+
+{link}"""
+    },
+    {
+        'id': 'short_hook',
+        'text': """$2000 in bonus money on BYDFi if you size up
+
+$100 → $50
+$1000 → $200
+$20k → $2000
+
+low caps like {ticker1} {ticker2} running rn so the extra margin actually means something this week
+
+deadline april 30
+
+{link}"""
+    },
+    {
+        'id': 'casual_question',
+        'text': """anyone else stacking the BYDFi bonus this week?
+
+$100 deposit gets $50 back, $1000 gets $200, $20k whale tier maxes at $2000
+
+planning to put mine into {ticker1} or {ticker2} depending on which one breaks first
+
+ends april 30 btw, first deposits only
+
+{link}"""
+    },
+    {
+        'id': 'final_call',
+        'text': """⏰ BYDFi x TradeHub bonus closes april 30
+
+if you trade {ticker1} {ticker2} or any of the low caps moving rn this is basically free margin
+
+$100 → $50
+$500 → $100
+$1000 → $200
+$5000 → $500
+$10,000 → $1000
+$20,000 → $2000 🐋
+
+USDT-M futures only, 72hr hold, first deposits
+
+{link}"""
+    },
+]
+
+_bydfi_post_index = 0
 
 
 async def get_trending_hashtags(main_poster=None) -> str:
@@ -6766,4 +6913,107 @@ async def post_yubit_campaign(account_poster) -> Optional[Dict]:
 
     except Exception as e:
         logger.error(f"Error posting Yubit campaign tweet: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def post_bydfi_campaign(account_poster) -> Optional[Dict]:
+    """Post a BYDFi x TradeHub $2000 deposit bonus campaign tweet — human style."""
+    global _bydfi_post_index
+
+    now = datetime.utcnow()
+    if now < BYDFI_CAMPAIGN_START or now > BYDFI_CAMPAIGN_END:
+        logger.info("BYDFi campaign not active, skipping")
+        return None
+
+    try:
+        template = BYDFI_CAMPAIGN_TEMPLATES[_bydfi_post_index % len(BYDFI_CAMPAIGN_TEMPLATES)]
+        _bydfi_post_index += 1
+
+        live_tickers = await get_live_tickers_for_campaign()
+
+        tweet_text = template['text'].format(
+            link=BYDFI_CAMPAIGN_LINK,
+            **live_tickers
+        )
+
+        # Twitter shortens all URLs to 23 chars — use that count when checking length
+        import re as _re
+        def _tw_len(t: str) -> int:
+            count = 0
+            last = 0
+            for m in _re.finditer(r'https?://\S+', t):
+                count += m.start() - last
+                count += 23
+                last = m.end()
+            count += len(t) - last
+            return count
+
+        if _tw_len(tweet_text) > 280:
+            lines = tweet_text.split('\n')
+            while _tw_len('\n'.join(lines)) > 280 and len(lines) > 3:
+                removed = False
+                for i in range(len(lines) - 1, -1, -1):
+                    line = lines[i].strip()
+                    if not line:
+                        lines.pop(i)
+                        removed = True
+                        break
+                if not removed:
+                    for i in range(len(lines) - 1, 0, -1):
+                        line = lines[i].strip()
+                        if line and not line.startswith('$') and not line.startswith('http') and 'BYDFi' not in line:
+                            lines.pop(i)
+                            break
+                    else:
+                        break
+            tweet_text = '\n'.join(lines)
+
+        media_id = None
+        if os.path.exists(BYDFI_CAMPAIGN_IMAGE):
+            try:
+                with open(BYDFI_CAMPAIGN_IMAGE, 'rb') as f:
+                    image_bytes = f.read()
+
+                if hasattr(account_poster, 'upload_media'):
+                    media_id = account_poster.upload_media(image_bytes)
+                elif hasattr(account_poster, 'api_v1') and account_poster.api_v1:
+                    media = account_poster.api_v1.media_upload(
+                        filename="bydfi_campaign.jpeg",
+                        file=io.BytesIO(image_bytes)
+                    )
+                    media_id = str(media.media_id)
+
+                if media_id:
+                    logger.info(f"BYDFi campaign image uploaded: {media_id}")
+                else:
+                    logger.warning("BYDFi campaign image upload failed, posting without image")
+            except Exception as e:
+                logger.error(f"Error uploading BYDFi campaign image: {e}")
+        else:
+            logger.warning(f"BYDFi campaign image not found: {BYDFI_CAMPAIGN_IMAGE}")
+
+        # Append today's actual top-gainer cashtags — fetch fresh if cache is cold
+        _tickers_suffix = await _get_ticker_suffix()
+        if _tickers_suffix and _tw_len(tweet_text + _tickers_suffix) <= 280:
+            tweet_text = tweet_text + _tickers_suffix
+
+        media_ids = [media_id] if media_id else None
+        tweet_text = await _ai_review_tweet(tweet_text, 'bydfi_campaign', {
+            'template': template['id'],
+            'exchange': 'BYDFi',
+            'ticker1': live_tickers.get('ticker1', ''),
+            'ticker2': live_tickers.get('ticker2', ''),
+            'ticker3': live_tickers.get('ticker3', ''),
+            'campaign': '$2000 deposit bonus, USDT-M futures, ends April 30 2026',
+            'style_note': 'Keep it lowercase and casual like a real trader. No em dashes. No marketing-speak. Keep all dollar amounts and the link intact.',
+        })
+        result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
+
+        if result and result.get('success'):
+            logger.info(f"BYDFi campaign tweet posted (template: {template['id']})")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error posting BYDFi campaign tweet: {e}")
         return {'success': False, 'error': str(e)}
