@@ -5292,11 +5292,13 @@ _TOP_GAINER_ANGLES = [
 
 
 async def post_top_gainer_ta(account_poster, main_poster) -> Optional[Dict]:
-    """Post a technical analysis on today's #1 top gainer. 6 rotating analytical angles."""
+    """Post a technical analysis on today's top gainer. 6 rotating analytical angles.
+    No cooldown gate — intentionally posts about the top mover multiple times/day
+    from different analytical angles. Different angle = different post every time."""
     global _TOP_GAINER_ANGLE_IDX
     try:
-        # ── Pick the #1 top gainer ────────────────────────────────────────────
-        gainers = await main_poster.get_top_gainers_data(40)
+        # ── Pick the top gainer (no cooldown — angle rotation handles variety) ─
+        gainers = await main_poster.get_top_gainers_data(50)
         if not gainers:
             return {'success': False, 'error': 'No gainers data'}
 
@@ -5307,14 +5309,18 @@ async def post_top_gainer_ta(account_poster, main_poster) -> Optional[Dict]:
         candidates = [
             g for g in gainers
             if g.get('change', 0) >= 3
-            and g.get('volume', 0) >= 2_000_000
+            and g.get('volume', 0) >= 1_500_000
             and g.get('symbol', '') not in _SKIP
-            and check_global_coin_cooldown(g['symbol'], max_per_day=1)
         ]
+        # Progressive volume fallback so we always find a coin
+        if not candidates:
+            candidates = [g for g in gainers if g.get('change', 0) >= 2 and g.get('symbol', '') not in _SKIP]
+        if not candidates:
+            candidates = [g for g in gainers if g.get('symbol', '') not in _SKIP][:5]
         if not candidates:
             return {'success': False, 'error': 'No suitable top gainer'}
 
-        coin   = candidates[0]   # highest % gainer
+        coin   = candidates[0]
         symbol = coin['symbol']
         change = coin.get('change', 0)
         price  = coin.get('price', 0)
@@ -5340,6 +5346,7 @@ async def post_top_gainer_ta(account_poster, main_poster) -> Optional[Dict]:
         h24 = l24 = price
         ema9 = ema21 = price
         ema_gap_pct = 0.0
+        got_ta = False
 
         try:
             ohlcv = await _fetch_mexc_ohlcv(symbol, interval='1h', limit=50)
@@ -5349,7 +5356,6 @@ async def post_top_gainer_ta(account_poster, main_poster) -> Optional[Dict]:
                 lows   = [float(c[3]) for c in ohlcv]
                 vols   = [float(c[5]) for c in ohlcv]
 
-                # True EMA
                 def _ema(series, period):
                     if len(series) < period:
                         return sum(series) / len(series)
@@ -5364,7 +5370,6 @@ async def post_top_gainer_ta(account_poster, main_poster) -> Optional[Dict]:
                 trend = "bullish" if ema9 > ema21 else "bearish" if ema9 < ema21 else "neutral"
                 ema_gap_pct = round(abs(ema9 - ema21) / ema21 * 100, 2) if ema21 else 0
 
-                # RSI 14
                 gains_, losses_ = [], []
                 for i in range(1, min(15, len(closes))):
                     d = closes[i] - closes[i-1]
@@ -5374,78 +5379,100 @@ async def post_top_gainer_ta(account_poster, main_poster) -> Optional[Dict]:
                 al = sum(losses_) / len(losses_) if losses_ else 0.0001
                 rsi_val = round(100 - (100 / (1 + ag / al)), 1)
 
-                # Volume vs 10-bar avg
-                avg_vol  = sum(vols[-10:]) / 10 if len(vols) >= 10 else 0
+                avg_vol   = sum(vols[-10:]) / 10 if len(vols) >= 10 else 0
                 vol_ratio = round(vols[-1] / avg_vol, 1) if avg_vol > 0 else 1.0
 
-                # 24h range
                 h24 = max(highs[-24:]) if len(highs) >= 24 else max(highs)
-                l24 = min(lows[-24:]  ) if len(lows)  >= 24 else min(lows)
+                l24 = min(lows[-24:])  if len(lows)  >= 24 else min(lows)
+                got_ta = True
         except Exception as te:
             logger.warning(f"[TopGainerTA] TA calc failed for {symbol}: {te}")
 
-        # Format levels for the AI
-        if price and h24 and l24 and h24 != l24:
-            range_pos = round((price - l24) / (h24 - l24) * 100)
-            range_note = f"trading at {range_pos}% of its 24h range (low {price_str[0]}{ l24:,.4f} → high ${h24:,.4f})"
-        else:
-            range_note = ""
+        # ── Build concise TA fact-sheet for the AI ───────────────────────────
+        sign = "+" if change >= 0 else ""
 
-        rsi_read = (
+        rsi_label = (
             "overbought" if rsi_val >= 72
-            else "approaching overbought" if rsi_val >= 65
+            else "extended" if rsi_val >= 65
             else "healthy" if rsi_val >= 50
             else "oversold" if rsi_val <= 30
             else "neutral"
         )
 
+        # Precise price levels for AI to pick from
+        def _fmt_level(p):
+            if p < 0.001:   return f"${p:.8f}"
+            if p < 0.01:    return f"${p:.6f}"
+            if p < 1:       return f"${p:.4f}"
+            if p < 100:     return f"${p:,.3f}"
+            return f"${p:,.2f}"
+
+        ta_facts = [f"{sign}{change:.1f}% move", f"price {price_str}", f"vol {vol_str}"]
+        if got_ta:
+            ta_facts += [
+                f"RSI {rsi_val} ({rsi_label})",
+                f"EMA9 {'above' if trend == 'bullish' else 'below'} EMA21 ({trend}, gap {ema_gap_pct}%)",
+                f"volume {vol_ratio}x 10-bar avg",
+                f"24h range: {_fmt_level(l24)} – {_fmt_level(h24)}",
+            ]
+
+        ta_block = "\n".join(f"• {f}" for f in ta_facts)
+
         # ── Pick rotating angle ───────────────────────────────────────────────
         angle = _TOP_GAINER_ANGLES[_TOP_GAINER_ANGLE_IDX % len(_TOP_GAINER_ANGLES)]
         _TOP_GAINER_ANGLE_IDX += 1
 
-        # ── Build AI prompt ───────────────────────────────────────────────────
-        sign = "+" if change >= 0 else ""
-        ta_summary = (
-            f"${symbol} is up {sign}{change:.1f}% today at {price_str}. "
-            f"24h volume: {vol_str}. "
-            f"RSI: {rsi_val} ({rsi_read}). "
-            f"EMA9 vs EMA21: {trend} (gap {ema_gap_pct}%). "
-            f"Volume: {vol_ratio}x the 10-bar average. "
-            + (range_note + ". " if range_note else "")
-        )
+        # ── Craft AI prompt — specificity beats vague "sound human" rules ────
+        system_prompt = f"""You are a crypto trader writing a quick tweet about a chart you're looking at.
 
-        system_prompt = (
-            "You are a crypto trader sharing your chart read on X (Twitter). "
-            "Write exactly ONE tweet — no thread, no numbering, no hashtags. "
-            "Sound like a real trader who's staring at charts, not a bot. "
-            "Use lowercase. Be direct, specific, and technical. "
-            "Max 260 characters. Never say 'NFA', 'DYOR', or 'not financial advice'. "
-            f"Analytical focus: {angle['instruction']}"
-        )
+HARD RULES (break any = fail):
+- Output ONLY the tweet. No quotes, no labels, no explanation.
+- All lowercase (ticker ${symbol} stays uppercase cashtag). No sentence-case.
+- Max 240 chars. Count carefully.
+- No hashtags. No "NFA". No "DYOR". No "not financial advice".
+- No em dashes (—). Use a comma or period instead.
+- Do NOT start with: "just", "looks like", "interesting", "it's worth noting", "worth keeping an eye", "keep an eye on", "this is", "the key", "what's", "notably", "i noticed", "noticed that"
+
+HOW TO WRITE LIKE A REAL TRADER:
+- Use fragments. Real people don't write full sentences every time.
+- Use actual numbers from the TA. Specificity = credibility.
+- Lowercase everything except the cashtag.
+- One clear thought. Don't over-explain.
+- End mid-thought sometimes, no filler conclusion needed.
+- You can ask a short question or just state an observation.
+- Mix: sometimes 1 sentence, sometimes 2-3 short lines, sometimes a fragment with a reaction.
+
+GOOD EXAMPLES (style only, don't copy):
+- "$XYZ up 18%, rsi 71 and volume 3.4x avg. extended but still going"
+- "ema9 crossed ema21 on the 1h. $XYZ watching to see if this holds above support"
+- "$XYZ sitting right at the 24h high. either breaks out here or fades hard"
+- "volume 4x on $XYZ. someone knows something"
+- "$XYZ: rsi 68, ema trending up, support held twice. this setup i like"
+
+Analytical angle for this tweet: {angle['instruction']}"""
 
         user_prompt = (
             f"Write a tweet about ${symbol}.\n\n"
-            f"TA data:\n{ta_summary}\n\n"
-            f"Make the tweet feel like a natural observation from someone watching this move happen live. "
-            f"Include the ticker as ${symbol}. Include the % move naturally."
+            f"TA facts:\n{ta_block}\n\n"
+            f"Write one tweet. Lowercase. Use the real numbers above. Under 240 chars."
         )
 
         tweet_text = None
 
-        # Try Anthropic first
+        # Try Anthropic (Sonnet — best for natural voice)
         try:
             import anthropic as _ac
-            _aclient = _ac.Anthropic()
-            resp = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: _aclient.messages.create(
-                    model="claude-sonnet-4-5",
-                    max_tokens=120,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": user_prompt}],
-                )
+            _api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+            _base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
+            _aclient = _ac.Anthropic(base_url=_base_url, api_key=_api_key) if _base_url else _ac.Anthropic(api_key=_api_key)
+            resp = await asyncio.to_thread(
+                _aclient.messages.create,
+                model="claude-sonnet-4-5",
+                max_tokens=150,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
             )
-            tweet_text = resp.content[0].text.strip().strip('"')
+            tweet_text = resp.content[0].text.strip().strip('"').strip("'")
         except Exception as ae:
             logger.warning(f"[TopGainerTA] Anthropic failed: {ae}")
 
@@ -5453,32 +5480,36 @@ async def post_top_gainer_ta(account_poster, main_poster) -> Optional[Dict]:
         if not tweet_text:
             try:
                 import google.generativeai as genai
-                model = genai.GenerativeModel("gemini-2.0-flash")
-                resp = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: model.generate_content(system_prompt + "\n\n" + user_prompt)
+                _gmodel = genai.GenerativeModel("gemini-2.0-flash")
+                resp = await asyncio.to_thread(
+                    _gmodel.generate_content,
+                    system_prompt + "\n\n" + user_prompt
                 )
-                tweet_text = resp.text.strip().strip('"')
+                tweet_text = resp.text.strip().strip('"').strip("'")
             except Exception as ge:
                 logger.warning(f"[TopGainerTA] Gemini failed: {ge}")
 
-        # Hard fallback
+        # Hard fallback — raw but reads naturally
         if not tweet_text:
-            tweet_text = (
-                f"${symbol} up {sign}{change:.1f}% today at {price_str}. "
-                f"RSI {rsi_val} ({rsi_read}), volume {vol_ratio}x avg. "
-                f"watching this one."
-            )
+            if got_ta:
+                tweet_text = f"${symbol} {sign}{change:.1f}% at {price_str}. rsi {rsi_val}, volume {vol_ratio}x avg. {trend} on the hourly"
+            else:
+                tweet_text = f"${symbol} {sign}{change:.1f}% — top gainer right now at {price_str}. vol {vol_str}"
 
         tweet_text = _sanitize_tickers(tweet_text, symbol)
+
+        # Quick post-process: strip any accidental AI prefix like "tweet:" or "here's..."
+        for _bad_prefix in ("tweet:", "here's a tweet:", "here is", "tweet\n"):
+            if tweet_text.lower().startswith(_bad_prefix):
+                tweet_text = tweet_text[len(_bad_prefix):].strip()
+
         tweet_text = await _ai_review_tweet(tweet_text, 'top_gainer_ta', {
             'symbol': symbol, 'change': f'{sign}{change:.1f}%',
-            'angle': angle['id'], 'rsi': rsi_val,
+            'angle': angle['id'], 'rsi': rsi_val, 'trend': trend,
         })
 
         result = account_poster.post_tweet(tweet_text)
         if result and result.get('success'):
-            record_global_coin_post(symbol)
             logger.info(f"✅ TopGainerTA [{angle['id']}] ${symbol} {sign}{change:.1f}% posted")
 
         return result
