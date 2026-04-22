@@ -5787,7 +5787,7 @@ YUBIT_CAMPAIGN_END   = datetime(2026, 4, 30, 23, 59, 59)
 # Period: April 22 – April 30, 2026
 BYDFI_CAMPAIGN_IMAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
                                     "attached_assets", "IMG_1885_1776865573041.jpeg")
-BYDFI_CAMPAIGN_LINK  = "https://www.bydfi.com/en/activities/"
+BYDFI_CAMPAIGN_LINK  = "https://www.bydfi.com/en/activities/view?id=1253770817526616065&ru=tradehub&p=L2VuL2FjdGl2aXRpZXMvdmlldw%3D%3D"
 BYDFI_CAMPAIGN_START = datetime(2026, 4, 22)
 BYDFI_CAMPAIGN_END   = datetime(2026, 4, 30, 23, 59, 59)
 
