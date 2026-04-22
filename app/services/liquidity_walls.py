@@ -304,6 +304,18 @@ def _pressure(top_buys: list[Wall], top_sells: list[Wall]) -> tuple[str, float]:
 
 # ───────────────────────── Output formatting ─────────────────────────
 
+def _size_tier(usd: float) -> tuple[str, str]:
+    """Tag a wall by USD notional. Returns (label, emoji).
+    Tiers calibrated so 'big'+'huge' = walls actually worth fading/shorting into."""
+    if usd >= 5_000_000:
+        return "HUGE", "🐋"
+    if usd >= 1_000_000:
+        return "BIG", "🟦"
+    if usd >= 250_000:
+        return "MEDIUM", "🔹"
+    return "small", "·"
+
+
 def _fmt_usd(v: float) -> str:
     if v >= 1_000_000:
         return f"${v / 1_000_000:.2f}M"
@@ -477,22 +489,31 @@ def format_telegram(report: WallReport) -> str:
 
     if report.biggest_buy:
         b = report.biggest_buy
-        lines.append(f"<b>🟢 Biggest buy wall:</b> {_fmt_price(b.price)} — {_fmt_usd(b.size_usd)} ({_fmt_dist(b.distance_pct)})")
+        tier, emoji = _size_tier(b.size_usd)
+        lines.append(f"<b>🟢 Biggest buy wall:</b> {_fmt_price(b.price)} — {emoji} <b>{tier}</b> {_fmt_usd(b.size_usd)} ({_fmt_dist(b.distance_pct)})")
     if report.biggest_sell:
         s = report.biggest_sell
-        lines.append(f"<b>🔴 Biggest sell wall:</b> {_fmt_price(s.price)} — {_fmt_usd(s.size_usd)} ({_fmt_dist(s.distance_pct)})")
+        tier, emoji = _size_tier(s.size_usd)
+        lines.append(f"<b>🔴 Biggest sell wall:</b> {_fmt_price(s.price)} — {emoji} <b>{tier}</b> {_fmt_usd(s.size_usd)} ({_fmt_dist(s.distance_pct)})")
 
     if report.top_buys:
         lines.append("")
         lines.append("<b>Buy support zones:</b>")
         for w in report.top_buys:
-            lines.append(f"  • {_fmt_price(w.price)} — {_fmt_usd(w.size_usd)} ({_fmt_dist(w.distance_pct)})  <i>{w.confidence}</i>")
+            tier, emoji = _size_tier(w.size_usd)
+            lines.append(f"  {emoji} <b>{tier}</b> {_fmt_price(w.price)} — {_fmt_usd(w.size_usd)} ({_fmt_dist(w.distance_pct)})  <i>{w.confidence}</i>")
 
     if report.top_sells:
         lines.append("")
         lines.append("<b>Sell resistance zones:</b>")
         for w in report.top_sells:
-            lines.append(f"  • {_fmt_price(w.price)} — {_fmt_usd(w.size_usd)} ({_fmt_dist(w.distance_pct)})  <i>{w.confidence}</i>")
+            tier, emoji = _size_tier(w.size_usd)
+            lines.append(f"  {emoji} <b>{tier}</b> {_fmt_price(w.price)} — {_fmt_usd(w.size_usd)} ({_fmt_dist(w.distance_pct)})  <i>{w.confidence}</i>")
+
+    # Quick legend so traders know what the tags mean
+    lines.append("")
+    lines.append("<i>· small &lt;$250k  🔹 MEDIUM $250k-$1M  🟦 BIG $1M-$5M  🐋 HUGE $5M+</i>")
+    lines.append("<i>BIG/HUGE sell walls = potential short fade zones; BIG/HUGE buy walls = potential long bounce zones.</i>")
 
     lines.append("")
     lines.append(f"<b>🎯 Best zone to watch:</b>")
