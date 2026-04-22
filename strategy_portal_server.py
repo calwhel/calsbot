@@ -3924,6 +3924,12 @@ ANALYSIS INSTRUCTIONS:
 - Infer direction: LONG for bullish/bounce setups, SHORT for bearish/breakdown, BOTH for trend-following both ways.
 - Generate 2–5 conditions that capture the CORE logic of the indicator, not generic placeholders.
 
+⚠️ CRITICAL — DIRECTION RULES (the strategy engine evaluates ALL conditions with AND, so they must ALL be true at the same time):
+- If the indicator naturally fires in only ONE direction (oversold long, breakdown short, etc.), set direction to "LONG" or "SHORT" and ONLY include conditions that confirm that side. Never mix bullish AND bearish triggers in the same condition list.
+- If the indicator can fire BOTH ways (e.g. an SMA cross, SuperTrend flip, EMA ribbon flip), pick the SINGLE direction that is most natural for the description and ONLY return conditions for that side. Set direction = "LONG" or "SHORT", NEVER "BOTH". The user can clone the strategy and invert it to cover the other side.
+- Forbidden combinations in the same conditions list: "price_above" + "price_below" of the same MA · "bullish_engulfing" + "bearish_engulfing" · "oversold" + "overbought" · "bullish" + "bearish" of the same indicator · any pair where one rule contradicts another. If you ever feel the urge to include opposing rules, you have picked the wrong direction — pick one side and stop.
+- Direction "BOTH" is reserved for trend-following systems where every condition is direction-neutral (e.g. ATR expanding, ADX > 25, volume > 1.5×). Do NOT use BOTH if any condition has a direction-specific operator or pattern.
+
 CONDITION REFERENCE (use EXACT type/name/field names from this list):
 
 ━━━ TYPE: "indicator" ━━━ (most technical indicators go here — set "name" to one of:)
