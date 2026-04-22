@@ -33,6 +33,10 @@ def _ema(data: List[float], period: int) -> Optional[float]:
     if len(data) < period: return None
     return _ema_list(data, period)[-1]
 
+def _sma(data: List[float], period: int) -> Optional[float]:
+    if len(data) < period: return None
+    return sum(data[-period:]) / period
+
 def _rsi_values(closes: List[float], period: int = 14) -> List[float]:
     if len(closes) < period + 1:
         return []
@@ -587,6 +591,56 @@ def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
 
         if name in ("volume", "volume_spike"):
             return _cmp(_vol_ratio(klines), op, val)
+
+        if name in ("sma", "sma_cross", "sma_ribbon"):
+            period  = int(cond.get("period", 200))
+            period2 = int(cond.get("period2", 0))
+            source  = cond.get("source", "close").lower()
+            sub_c   = cond.get("condition", sub or "price_above")
+
+            def _src_be(kl, s):
+                if s == "high": return [float(k[2]) for k in kl]
+                if s == "low":  return [float(k[3]) for k in kl]
+                return [float(k[4]) for k in kl]
+
+            src_data = _src_be(klines, source)
+            sma_val  = _sma(src_data, period)
+            curr     = float(klines[-1][4])
+
+            if sma_val is None:
+                return False
+
+            if sub_c in ("above", "price_above"):
+                return curr > sma_val
+            if sub_c in ("below", "price_below"):
+                return curr < sma_val
+
+            if sub_c in ("above_ribbon", "above_high"):
+                sma_high = _sma(_src_be(klines, "high"), period)
+                return sma_high is not None and curr > sma_high
+            if sub_c in ("below_ribbon", "below_low"):
+                sma_low = _sma(_src_be(klines, "low"), period)
+                return sma_low is not None and curr < sma_low
+            if sub_c == "inside_ribbon":
+                sma_high = _sma(_src_be(klines, "high"), period)
+                sma_low  = _sma(_src_be(klines, "low"),  period)
+                return (sma_high is not None and sma_low is not None
+                        and sma_low <= curr <= sma_high)
+
+            if sub_c in ("bullish_cross", "crosses_above") and period2:
+                sma_slow = _sma(src_data, period2)
+                prev_f   = _sma(src_data[:-1], period)  if len(src_data) > period  else None
+                prev_s   = _sma(src_data[:-1], period2) if len(src_data) > period2 else None
+                if all(v is not None for v in [sma_val, sma_slow, prev_f, prev_s]):
+                    return prev_f <= prev_s and sma_val > sma_slow
+            if sub_c in ("bearish_cross", "crosses_below") and period2:
+                sma_slow = _sma(src_data, period2)
+                prev_f   = _sma(src_data[:-1], period)  if len(src_data) > period  else None
+                prev_s   = _sma(src_data[:-1], period2) if len(src_data) > period2 else None
+                if all(v is not None for v in [sma_val, sma_slow, prev_f, prev_s]):
+                    return prev_f >= prev_s and sma_val < sma_slow
+
+            return _cmp(sma_val, op, val)
 
         return False  # unsupported indicator sub-type — no fake signals
 

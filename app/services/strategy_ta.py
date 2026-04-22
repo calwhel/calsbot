@@ -278,6 +278,80 @@ async def eval_indicator(
             result = False
         return result, f"EMA ribbon ({','.join(str(p) for p in periods)}) {'aligned' if result else 'not aligned'}"
 
+    # ── SMA (Simple Moving Average) ──────────────────────────────────────────
+    # Supports price_above / price_below / above_ribbon / below_ribbon /
+    # inside_ribbon / bullish_cross / bearish_cross.
+    # source= "close" (default) | "high" | "low"
+    if name in ("sma", "sma_cross", "sma_ribbon"):
+        period  = int(cond.get("period", 200))
+        period2 = int(cond.get("period2", 0))
+        source  = cond.get("source", "close").lower()
+        need    = max(period + 10, period2 + 10 if period2 else 0, 210)
+        klines  = await _get_klines(symbol, tf, need, http_client, cache)
+        if not klines or len(klines) < period:
+            return False, f"SMA({period}) insufficient data ({len(klines) if klines else 0} bars)"
+
+        def _src(kl, s):
+            if s == "high":  return [float(k[2]) for k in kl]
+            if s == "low":   return [float(k[3]) for k in kl]
+            return _closes(kl)
+
+        src_data  = _src(klines, source)
+        sma_val   = _sma(src_data, period)
+        curr      = float(klines[-1][4])
+        sub_c     = cond.get("condition", sub or "price_above")
+
+        def _fmtprice(p):
+            return f"{p:.6f}" if p < 0.01 else f"{p:.4f}" if p < 1 else f"{p:,.3f}"
+
+        if sub_c in ("above", "price_above"):
+            ok = sma_val is not None and curr > sma_val
+            return ok, f"Price {'>' if ok else '<'} SMA({period},{source}) {_fmtprice(curr)} vs {_fmtprice(sma_val or 0)}"
+
+        if sub_c in ("below", "price_below"):
+            ok = sma_val is not None and curr < sma_val
+            return ok, f"Price {'<' if ok else '>'} SMA({period},{source}) {_fmtprice(curr)} vs {_fmtprice(sma_val or 0)}"
+
+        # Ribbon-specific: use SMA(high) and SMA(low) to define the band
+        if sub_c in ("above_ribbon", "above_high"):
+            sma_high = _sma(_src(klines, "high"), period)
+            ok = sma_high is not None and curr > sma_high
+            return ok, f"Price {'above' if ok else 'inside/below'} SMA({period}) ribbon high"
+
+        if sub_c in ("below_ribbon", "below_low"):
+            sma_low = _sma(_src(klines, "low"), period)
+            ok = sma_low is not None and curr < sma_low
+            return ok, f"Price {'below' if ok else 'inside/above'} SMA({period}) ribbon low"
+
+        if sub_c == "inside_ribbon":
+            sma_high = _sma(_src(klines, "high"), period)
+            sma_low  = _sma(_src(klines, "low"),  period)
+            ok = (sma_high is not None and sma_low is not None
+                  and sma_low <= curr <= sma_high)
+            return ok, f"Price {'inside' if ok else 'outside'} SMA({period}) ribbon"
+
+        if sub_c in ("bullish_cross", "crosses_above") and period2:
+            sma_fast = sma_val
+            sma_slow = _sma(src_data, period2)
+            prev_f   = _sma(src_data[:-1], period)  if len(src_data) > period  else None
+            prev_s   = _sma(src_data[:-1], period2) if len(src_data) > period2 else None
+            if all(v is not None for v in [sma_fast, sma_slow, prev_f, prev_s]):
+                ok = prev_f <= prev_s and sma_fast > sma_slow
+                return ok, f"SMA({period}) {'crossed above' if ok else 'below'} SMA({period2})"
+            return False, f"SMA cross insufficient data"
+
+        if sub_c in ("bearish_cross", "crosses_below") and period2:
+            sma_fast = sma_val
+            sma_slow = _sma(src_data, period2)
+            prev_f   = _sma(src_data[:-1], period)  if len(src_data) > period  else None
+            prev_s   = _sma(src_data[:-1], period2) if len(src_data) > period2 else None
+            if all(v is not None for v in [sma_fast, sma_slow, prev_f, prev_s]):
+                ok = prev_f >= prev_s and sma_fast < sma_slow
+                return ok, f"SMA({period}) {'crossed below' if ok else 'above'} SMA({period2})"
+            return False, f"SMA cross insufficient data"
+
+        return _cmp(sma_val or 0, op, val), (f"SMA({period})={_fmtprice(sma_val)}" if sma_val else "SMA unavailable")
+
     # ── Bollinger Bands ──────────────────────────────────────────────────────
     if name in ("bb", "bollinger"):
         bb = enhanced_ta.get("bollinger", {})
