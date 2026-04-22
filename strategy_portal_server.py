@@ -1600,9 +1600,13 @@ async def api_strategies(uid: str = Query(...)):
                 recent_execs = exec_map.get(s.id, [])
 
                 # Fast inline health score
-                wr  = perf.win_rate if perf else 0
-                tot = perf.total_trades if perf else 0
-                pf  = (perf.avg_win_pct * max(perf.wins, 1)) / (abs(perf.avg_loss_pct) * max(perf.losses, 1)) if perf and perf.losses > 0 and perf.avg_loss_pct else 0
+                wr  = (perf.win_rate or 0) if perf else 0
+                tot = (perf.total_trades or 0) if perf else 0
+                _wins   = (perf.wins or 0) if perf else 0
+                _losses = (perf.losses or 0) if perf else 0
+                _avg_w  = (perf.avg_win_pct or 0) if perf else 0
+                _avg_l  = (perf.avg_loss_pct or 0) if perf else 0
+                pf = (_avg_w * max(_wins, 1)) / (abs(_avg_l) * max(_losses, 1)) if (_losses > 0 and _avg_l) else 0
                 health = 0.0
                 if tot >= 3:
                     health += min(wr / 100, 1.0) * 4.0
@@ -1623,22 +1627,22 @@ async def api_strategies(uid: str = Query(...)):
                     "created_at":   s.created_at.isoformat() if s.created_at else None,
                     "health_score": health_score,
                     "performance": {
-                        "total_trades": perf.total_trades if perf else 0,
-                        "wins":         perf.wins if perf else 0,
-                        "losses":       perf.losses if perf else 0,
-                        "win_rate":     round(perf.win_rate, 1) if perf else 0,
-                        "total_pnl":    round(perf.total_pnl_pct, 2) if perf else 0,
-                        "open_trades":  perf.open_trades if perf else 0,
-                        "best_trade":   round(perf.best_trade, 2) if perf else 0,
-                        "worst_trade":  round(perf.worst_trade, 2) if perf else 0,
-                        "avg_win_pct":  round(perf.avg_win_pct, 2) if perf else 0,
-                        "avg_loss_pct": round(perf.avg_loss_pct, 2) if perf else 0,
+                        "total_trades": int(perf.total_trades or 0),
+                        "wins":         int(perf.wins or 0),
+                        "losses":       int(perf.losses or 0),
+                        "win_rate":     round(perf.win_rate or 0, 1),
+                        "total_pnl":    round(perf.total_pnl_pct or 0, 2),
+                        "open_trades":  int(perf.open_trades or 0),
+                        "best_trade":   round(perf.best_trade or 0, 2),
+                        "worst_trade":  round(perf.worst_trade or 0, 2),
+                        "avg_win_pct":  round(perf.avg_win_pct or 0, 2),
+                        "avg_loss_pct": round(perf.avg_loss_pct or 0, 2),
                     } if perf else {},
                     "recent_trades": [{
                         "symbol":    ex.symbol,
                         "direction": ex.direction,
                         "outcome":   ex.outcome,
-                        "pnl_pct":   round(ex.pnl_pct, 2) if ex.pnl_pct else None,
+                        "pnl_pct":   round(ex.pnl_pct, 2) if ex.pnl_pct is not None else None,
                         "fired_at":  ex.fired_at.isoformat() if ex.fired_at else None,
                     } for ex in recent_execs],
                 })
