@@ -33,10 +33,11 @@ SNAPSHOT_LOOKBACK_MINS = 30        # how far back the "previous" snapshot can be
 WATCH_POLL_SECONDS = 75            # background watch loop cadence
 WATCH_ALERT_DEDUPE_MINS = 8        # don't repeat the SAME alert signature within this window
 WATCH_ALERT_HARD_FLOOR_MINS = 3    # never DM the same user about the same symbol more often than this
-WATCH_BIG_WALL_USD = 1_000_000.0   # only alert on walls ≥ this size
+WATCH_BIG_WALL_USD = 2_500_000.0   # FRESH/BROKEN alerts: only "big ones" — $2.5M+
+WATCH_APPROACH_WALL_USD = 1_000_000.0  # approach alerts: $1M+ is enough if price is close
 WATCH_BREAK_BAND_PCT = 0.15        # consider a wall "broken" if price crossed it by this %
-WATCH_APPROACH_PCT = 0.30          # alert when price is within this % of a big wall
-WATCH_APPROACH_MIN_PCT = 0.04      # ...but ignore walls that are essentially at price (already touched)
+WATCH_APPROACH_PCT = 0.15          # only alert when price is within 0.15% of a wall (was 0.30)
+WATCH_APPROACH_MIN_PCT = 0.03      # ignore walls essentially at price (already touched)
 
 
 def _sig_price(p: float) -> str:
@@ -421,27 +422,23 @@ def _build_alert_signature(report) -> tuple[str, str]:
             )
             sig_parts.append(f"brk_{b.get('side')}_{_sig_price(b['price'])}")
 
-    # Iterate top walls. Two trigger types per wall:
-    #   - FRESH big walls (newly appeared)
-    #   - APPROACHING — price is within WATCH_APPROACH_PCT of a $1M+ wall (any behavior)
     for w in (list(getattr(report, "top_buys", []) or []) + list(getattr(report, "top_sells", []) or [])):
-        if w.size_usd < WATCH_BIG_WALL_USD:
-            continue
         key = round(w.price, 8)
         label = behavior.get(key) if isinstance(behavior, dict) else None
         side_lbl = "buy" if w.side == "buy" else "sell"
+        abs_dist = abs(w.distance_pct)
 
-        if label == "FRESH":
+        # FRESH — only fire for genuinely big new walls ($2.5M+)
+        if label == "FRESH" and w.size_usd >= WATCH_BIG_WALL_USD:
             parts.append(
                 f"🆕 fresh {side_lbl} wall @ {w.price:.6g} "
                 f"(${w.size_usd/1e6:.2f}M, {w.distance_pct:+.2f}%)"
             )
             sig_parts.append(f"fresh_{w.side}_{_sig_price(w.price)}")
 
-        # Approaching trigger: |distance| within (MIN, MAX) and the wall is still standing
-        # (SHRINKING walls in approach zone are MORE urgent — flag them too)
-        abs_dist = abs(w.distance_pct)
-        if WATCH_APPROACH_MIN_PCT < abs_dist <= WATCH_APPROACH_PCT:
+        # APPROACHING — only fire when price is genuinely close (within 0.15%) to a $1M+ wall
+        if (w.size_usd >= WATCH_APPROACH_WALL_USD
+                and WATCH_APPROACH_MIN_PCT < abs_dist <= WATCH_APPROACH_PCT):
             tag = ""
             if label == "SHRINKING":
                 tag = " ⚠️ shrinking — likely breaks"
