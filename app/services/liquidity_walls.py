@@ -392,18 +392,48 @@ async def _ai_summary(report: dict, symbol: str) -> str:
         def _w_line(w: Wall) -> str:
             return f"{_fmt_price(w.price)} | {_fmt_usd(w.size_usd)} | {_fmt_dist(w.distance_pct)} | {w.confidence}"
 
+        # Compute nearest walls + liq distances for high-leverage context
+        nearest_buy = top_buys[0] if top_buys else None
+        nearest_sell = top_sells[0] if top_sells else None
+        nearest_buy_dist = abs(nearest_buy.distance_pct) if nearest_buy else None
+        nearest_sell_dist = abs(nearest_sell.distance_pct) if nearest_sell else None
+
+        # At 100x liquidation ≈ 1% adverse move; at 200x ≈ 0.5%
+        liq_warning_lines = []
+        if nearest_buy_dist is not None:
+            liq_warning_lines.append(
+                f"- Nearest buy wall is {nearest_buy_dist:.2f}% below price — "
+                f"a SHORT here gets liquidated at 100x if price moves {1.0:.2f}% against you, "
+                f"so wall sits {'INSIDE' if nearest_buy_dist < 1.0 else 'beyond'} 100x liq distance."
+            )
+        if nearest_sell_dist is not None:
+            liq_warning_lines.append(
+                f"- Nearest sell wall is {nearest_sell_dist:.2f}% above price — "
+                f"a LONG here gets liquidated at 100x if price moves {1.0:.2f}% against you, "
+                f"so wall sits {'INSIDE' if nearest_sell_dist < 1.0 else 'beyond'} 100x liq distance."
+            )
+
         prompt = (
-            f"You are a sharp crypto futures trader. Coin: {symbol}.\n"
+            f"You are a degen crypto futures scalper running 100x-200x leverage on {symbol}.\n"
+            f"At 100x: every 1% move = 100% PnL or full liquidation.\n"
+            f"At 200x: every 0.5% move = 100% PnL or full liquidation.\n"
+            f"Walls are where stops and liquidations cluster — price is magnetized to them.\n\n"
             f"Current price: {_fmt_price(report['price'])}.\n"
-            f"Pressure score: {report['pressure_label']} ({report['pressure_score']:+.2f}).\n\n"
+            f"Order-book pressure: {report['pressure_label']} ({report['pressure_score']:+.2f}).\n\n"
             f"Top buy walls (price | usd | distance | confidence):\n"
             + "\n".join("- " + _w_line(w) for w in top_buys[:3]) + "\n\n"
             f"Top sell walls:\n"
-            + "\n".join("- " + _w_line(w) for w in top_sells[:3]) + "\n\n"
-            "Write a SHORT (3-4 sentences max) plain-English summary for a trader. "
-            "Mention where buyers are defending, where sellers are stacked, which side looks stronger, "
-            "and the single most important level to watch next. Keep it human and direct. "
-            "No emojis. No greeting. No markdown. Just the paragraph."
+            + "\n".join("- " + _w_line(w) for w in top_sells[:3]) + "\n"
+            + ("\nLeverage context:\n" + "\n".join(liq_warning_lines) + "\n" if liq_warning_lines else "")
+            + "\n"
+            "Write a SHORT trade brief (4-5 sentences max) for a 100x-200x scalper. Cover:\n"
+            "1. Which side has the stronger book (buyers defending vs sellers stacked) and the magnet level price is being pulled toward.\n"
+            "2. ONE concrete scalp setup: direction, entry zone, stop placement (just past the opposite wall), and TP at the magnet wall. "
+            "Give actual prices, not vague advice.\n"
+            "3. The R:R and rough % move needed — flag explicitly if the stop distance forces leverage below 100x to be safe, "
+            "or if price would liquidate before reaching the wall.\n"
+            "4. The single 'invalidation' level — if price breaks past it, the setup is dead and you cut.\n"
+            "Tone: sharp, direct, degen-scalper. No fluff, no greetings, no emojis, no markdown. Just the brief."
         )
 
         msg = await client.messages.create(
