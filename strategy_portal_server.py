@@ -1381,6 +1381,98 @@ async def app_page(request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Day Trading page — public BTC chart with order block overlays
+# ─────────────────────────────────────────────────────────────────────────────
+
+TRADE_SYMBOL_WHITELIST = {"BTC": "BTCUSDT"}  # add ETH/SOL/etc here later
+_TRADE_TF_MAP = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h"}
+
+
+@app.get("/trade", response_class=HTMLResponse)
+@app.get("/trade/btc", response_class=HTMLResponse)
+async def trade_page(request: Request):
+    """Public day-trading page — live BTC chart + order block overlays."""
+    return FileResponse("app/templates/trade.html", media_type="text/html")
+
+
+@app.get("/api/trade/walls/{symbol}")
+async def trade_walls(symbol: str, ai: int = 0):
+    """Public wall report for the trade page. Cached ~25s."""
+    sym = (symbol or "").upper().strip()
+    if sym not in TRADE_SYMBOL_WHITELIST:
+        return JSONResponse({"error": "symbol not supported"}, status_code=404)
+
+    pair = TRADE_SYMBOL_WHITELIST[sym]
+    cache_key = f"trade_walls_{pair}_{1 if ai else 0}"
+    cached = _CACHE.get(cache_key)
+    if cached and time.time() < cached[1]:
+        return cached[0]
+
+    try:
+        from dataclasses import asdict
+        from app.services.liquidity_walls import scan_walls
+        report = await scan_walls(pair, use_ai=bool(ai))
+        if not report:
+            return JSONResponse({"error": "no order book data"}, status_code=503)
+        payload = asdict(report)
+        # behavior dict has float keys — JSON needs strings
+        wb = payload.get("wall_behavior") or {}
+        payload["wall_behavior"] = {str(k): v for k, v in wb.items()}
+        _CACHE[cache_key] = (payload, time.time() + 25)
+        return payload
+    except Exception as e:
+        logger.warning(f"trade_walls({sym}) failed: {e}")
+        return JSONResponse({"error": "scan failed"}, status_code=500)
+
+
+@app.get("/api/trade/candles/{symbol}")
+async def trade_candles(symbol: str, tf: str = "5m", limit: int = 300):
+    """Public candle feed for the trade chart. MEXC source. Cached ~5s per (symbol,tf)."""
+    sym = (symbol or "").upper().strip()
+    if sym not in TRADE_SYMBOL_WHITELIST:
+        return JSONResponse({"error": "symbol not supported"}, status_code=404)
+    interval = _TRADE_TF_MAP.get(tf)
+    if not interval:
+        return JSONResponse({"error": "bad timeframe"}, status_code=400)
+    limit = max(50, min(int(limit or 300), 500))
+
+    pair = TRADE_SYMBOL_WHITELIST[sym]
+    cache_key = f"trade_candles_{pair}_{interval}_{limit}"
+    cached = _CACHE.get(cache_key)
+    if cached and time.time() < cached[1]:
+        return cached[0]
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            r = await client.get(
+                "https://api.mexc.com/api/v3/klines",
+                params={"symbol": pair, "interval": interval, "limit": limit},
+            )
+            r.raise_for_status()
+            rows = r.json() or []
+        candles = []
+        for k in rows:
+            try:
+                # Lightweight Charts wants UTC seconds for time
+                candles.append({
+                    "time":  int(k[0]) // 1000,
+                    "open":  float(k[1]),
+                    "high":  float(k[2]),
+                    "low":   float(k[3]),
+                    "close": float(k[4]),
+                })
+            except (TypeError, ValueError, IndexError):
+                continue
+        payload = {"symbol": pair, "tf": interval, "candles": candles}
+        _CACHE[cache_key] = (payload, time.time() + 5)
+        return payload
+    except Exception as e:
+        logger.warning(f"trade_candles({sym},{tf}) failed: {e}")
+        return JSONResponse({"error": "candle fetch failed"}, status_code=502)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Public data APIs (no auth — used by landing page JS)
 # ─────────────────────────────────────────────────────────────────────────────
 
