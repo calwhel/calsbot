@@ -505,18 +505,19 @@ async def _ai_summary(report: dict, symbol: str) -> str:
             + (f"\n{broken_note}" if broken_note else "")
             + ("\nLeverage context:\n" + "\n".join(liq_warning_lines) + "\n" if liq_warning_lines else "")
             + "\n"
-            "Write a trade brief (5-7 sentences max) for a 100x-200x scalper. Cover:\n"
-            "1. Which side has the stronger book and the magnet level price is being pulled toward. "
-            "Weight your read by the FRESH/GROWING/SHRINKING tags — a SHRINKING wall in the path is NOT real defense.\n"
-            "2. ONE concrete scalp setup: direction, entry zone, stop placement (just past the opposite wall), "
-            "and TP at the magnet wall. Give actual prices, not vague advice.\n"
-            "3. The R:R and rough % move needed — flag explicitly if the stop distance forces leverage below 100x to be safe, "
-            "or if price would liquidate before reaching the wall.\n"
-            "4. The single 'invalidation' level — if price breaks past it, the setup is dead and you cut.\n"
-            "5. Probability split for the next significant move: estimate UP% / DOWN% / CHOP% as integers summing to 100, "
-            "based on the order book skew, behavior tags, volume context, and liquidation pressure. Be opinionated — "
-            "default to 33/33/34 only if the data is genuinely indecisive.\n"
-            "Tone: sharp, direct, degen-scalper. No fluff, no greetings, no emojis, no markdown. Just the brief."
+            "Output MUST follow this exact structure with these exact labels — no prose paragraphs, "
+            "no greetings, no emojis, no markdown:\n\n"
+            "BIAS: <one short sentence — which side dominates and the magnet level. "
+            "Weight by FRESH/GROWING/SHRINKING tags — a SHRINKING wall in the path is NOT real defense.>\n"
+            "TRADE: <LONG or SHORT> @ <entry price or tight zone>\n"
+            "STOP: <price> (<distance %>)\n"
+            "TP: <price> (<distance %>)\n"
+            "R:R: <ratio like 1:2.5>\n"
+            "LEVERAGE: <safe lev like '100x ok' or '50x max — stop too tight for 100x' or '200x ok'>\n"
+            "INVALIDATION: <one price level. If price breaks this, setup is dead — cut.>\n"
+            "ODDS: UP <int>% / DOWN <int>% / CHOP <int>%   (must sum to 100, be opinionated, "
+            "only use 33/33/34 if data is truly indecisive)\n"
+            "NOTE: <one short line — biggest risk to the trade or key signal you're weighting most>\n"
         )
 
         msg = await client.messages.create(
@@ -657,149 +658,168 @@ def format_telegram(report: WallReport) -> str:
     safe_summary = html.escape(report.ai_summary or "")
     safe_zone = html.escape(report.best_zone_to_watch or "")
 
-    lines = [
-        f"<b>💧 {safe_symbol} — Liquidity Walls</b>",
-        f"━━━━━━━━━━━━━━━━━━━━",
-        f"<b>Price:</b> {_fmt_price(report.price)}",
-        f"<b>Pressure:</b> {p_emoji} {report.pressure_label} ({report.pressure_score:+.2f})",
-        "",
-    ]
-
-    if report.biggest_buy:
-        b = report.biggest_buy
-        tier, emoji = _size_tier(b.size_usd)
-        lines.append(f"<b>🟢 Biggest buy wall:</b> {_fmt_price(b.price)} — {emoji} <b>{tier}</b> {_fmt_usd(b.size_usd)} ({_fmt_dist(b.distance_pct)})")
-    if report.biggest_sell:
-        s = report.biggest_sell
-        tier, emoji = _size_tier(s.size_usd)
-        lines.append(f"<b>🔴 Biggest sell wall:</b> {_fmt_price(s.price)} — {emoji} <b>{tier}</b> {_fmt_usd(s.size_usd)} ({_fmt_dist(s.distance_pct)})")
-
     behavior = report.wall_behavior or {}
 
     def _behavior_badge(price: float) -> str:
-        lbl = behavior.get(round(price, 8))
-        if not lbl:
-            return ""
+        lbl = behavior.get(round(price, 8)) if isinstance(behavior, dict) else None
         return {
-            "FRESH":     " · 🆕 <b>FRESH</b>",
-            "GROWING":   " · 📈 <b>GROWING</b>",
-            "SHRINKING": " · 📉 <b>SHRINKING</b>",
-            "STABLE":    "",   # too noisy to show "stable" everywhere
+            "FRESH":     " 🆕",
+            "GROWING":   " 📈",
+            "SHRINKING": " 📉",
         }.get(lbl, "")
 
-    if report.top_buys:
-        lines.append("")
-        lines.append("<b>Buy support zones:</b>")
-        for w in report.top_buys:
-            tier, emoji = _size_tier(w.size_usd)
-            lines.append(
-                f"  {emoji} <b>{tier}</b> {_fmt_price(w.price)} — {_fmt_usd(w.size_usd)} "
-                f"({_fmt_dist(w.distance_pct)})  <i>{w.confidence}</i>{_behavior_badge(w.price)}"
-            )
+    # ── HEADER ──
+    lines = [
+        f"<b>💧 {safe_symbol}</b>  ·  {_fmt_price(report.price)}  ·  {p_emoji} {report.pressure_label}",
+    ]
+
+    # ── CONTEXT (compact one-liner) ──
+    ctx_bits = []
+    if report.volume_1h_usd > 0:
+        ctx_bits.append(f"1h vol {_fmt_usd(report.volume_1h_usd)}")
+    if report.volume_24h_usd > 0:
+        ctx_bits.append(f"24h {_fmt_usd(report.volume_24h_usd)}")
+    if report.liq_24h_long_usd > 0 or report.liq_24h_short_usd > 0:
+        ctx_bits.append(
+            f"liqs L {_fmt_usd(report.liq_24h_long_usd)} / S {_fmt_usd(report.liq_24h_short_usd)}"
+        )
+    if ctx_bits:
+        lines.append(f"<i>{' · '.join(ctx_bits)}</i>")
+
+    # ── WALLS (compact two-column-ish list) ──
+    def _wall_line(w: Wall) -> str:
+        tier, emoji = _size_tier(w.size_usd)
+        return (
+            f"  {emoji} {_fmt_price(w.price)}  "
+            f"{_fmt_usd(w.size_usd)} ({_fmt_dist(w.distance_pct)})"
+            f"{_behavior_badge(w.price)}"
+        )
 
     if report.top_sells:
         lines.append("")
-        lines.append("<b>Sell resistance zones:</b>")
-        for w in report.top_sells:
-            tier, emoji = _size_tier(w.size_usd)
-            lines.append(
-                f"  {emoji} <b>{tier}</b> {_fmt_price(w.price)} — {_fmt_usd(w.size_usd)} "
-                f"({_fmt_dist(w.distance_pct)})  <i>{w.confidence}</i>{_behavior_badge(w.price)}"
-            )
+        lines.append("<b>🔴 SELL WALLS (resistance above)</b>")
+        # show nearest-first
+        for w in sorted(report.top_sells, key=lambda x: x.distance_pct):
+            lines.append(_wall_line(w))
 
-    # Recently broken/absorbed walls (from prev snapshot diff)
+    if report.top_buys:
+        lines.append("")
+        lines.append("<b>🟢 BUY WALLS (support below)</b>")
+        for w in sorted(report.top_buys, key=lambda x: x.distance_pct):
+            lines.append(_wall_line(w))
+
+    # ── BROKEN WALLS (only if any) ──
     broken = behavior.get("_broken") if isinstance(behavior, dict) else None
     if broken:
         lines.append("")
-        lines.append("<b>💥 Walls broken or absorbed since last scan:</b>")
+        lines.append("<b>💥 BROKEN / ABSORBED</b>")
         for b in broken[:3]:
-            side_lbl = "buy support" if b.get("side") == "buy" else "sell wall"
+            side_lbl = "buy" if b.get("side") == "buy" else "sell"
             lines.append(
-                f"  · {side_lbl} at {_fmt_price(b['price'])} — was {_fmt_usd(b['size_usd'])}, now gone"
+                f"  · {side_lbl} {_fmt_price(b['price'])} "
+                f"({_fmt_usd(b['size_usd'])}) — gone"
             )
 
-    # Volume + liquidations context
-    ctx_bits = []
-    if report.volume_24h_usd > 0:
-        ctx_bits.append(f"24h vol {_fmt_usd(report.volume_24h_usd)}")
-    if report.volume_1h_usd > 0:
-        ctx_bits.append(f"1h vol {_fmt_usd(report.volume_1h_usd)}")
-    if report.liq_24h_long_usd > 0 or report.liq_24h_short_usd > 0:
-        ctx_bits.append(
-            f"24h liqs L:{_fmt_usd(report.liq_24h_long_usd)} / "
-            f"S:{_fmt_usd(report.liq_24h_short_usd)}"
-        )
-    if ctx_bits:
-        lines.append("")
-        lines.append("<b>📊 Context:</b> " + " · ".join(ctx_bits))
-
-    # Quick legend so traders know what the tags mean
-    lines.append("")
-    lines.append("<i>· small &lt;$250k  🔹 MEDIUM $250k-$1M  🟦 BIG $1M-$5M  🐋 HUGE $5M+</i>")
-    lines.append("<i>BIG/HUGE sell walls = potential short fade zones; BIG/HUGE buy walls = potential long bounce zones.</i>")
-
-    lines.append("")
-    lines.append(f"<b>🎯 Best zone to watch:</b>")
-    lines.append(f"<i>{safe_zone}</i>")
-
-    # ── Possible scenarios: where price could go if it breaks the nearest wall ──
-    # Sort sells ascending by price (nearest above first), buys descending (nearest below first)
-    sells_above = sorted(
-        [w for w in report.top_sells if w.price > report.price],
-        key=lambda w: w.price,
-    )
-    buys_below = sorted(
-        [w for w in report.top_buys if w.price < report.price],
-        key=lambda w: -w.price,
-    )
-
-    scenario_lines = []
-    if len(sells_above) >= 2:
-        first, second = sells_above[0], sells_above[1]
-        move_pct = ((second.price - first.price) / first.price) * 100
-        f_tier, f_emoji = _size_tier(first.size_usd)
-        s_tier, s_emoji = _size_tier(second.size_usd)
-        scenario_lines.append(
-            f"  📈 <b>If price breaks above {_fmt_price(first.price)}</b> "
-            f"({f_emoji} {f_tier} sell wall) → next resistance "
-            f"<b>{_fmt_price(second.price)}</b> ({s_emoji} {s_tier}, +{move_pct:.2f}% move room)"
-        )
-    elif len(sells_above) == 1:
+    # ── KEY LEVELS (combined into a tight scenario block) ──
+    sells_above = sorted([w for w in report.top_sells if w.price > report.price], key=lambda w: w.price)
+    buys_below = sorted([w for w in report.top_buys if w.price < report.price], key=lambda w: -w.price)
+    scen = []
+    if sells_above:
         first = sells_above[0]
-        f_tier, f_emoji = _size_tier(first.size_usd)
-        scenario_lines.append(
-            f"  📈 <b>If price breaks above {_fmt_price(first.price)}</b> "
-            f"({f_emoji} {f_tier} sell wall) → no major resistance left in scanned range, open runway up"
-        )
-
-    if len(buys_below) >= 2:
-        first, second = buys_below[0], buys_below[1]
-        move_pct = ((first.price - second.price) / first.price) * 100
-        f_tier, f_emoji = _size_tier(first.size_usd)
-        s_tier, s_emoji = _size_tier(second.size_usd)
-        scenario_lines.append(
-            f"  📉 <b>If price breaks below {_fmt_price(first.price)}</b> "
-            f"({f_emoji} {f_tier} buy support) → next support "
-            f"<b>{_fmt_price(second.price)}</b> ({s_emoji} {s_tier}, -{move_pct:.2f}% downside)"
-        )
-    elif len(buys_below) == 1:
+        if len(sells_above) >= 2:
+            second = sells_above[1]
+            move = ((second.price - first.price) / first.price) * 100
+            scen.append(
+                f"  📈 break {_fmt_price(first.price)} → {_fmt_price(second.price)} (+{move:.2f}%)"
+            )
+        else:
+            scen.append(f"  📈 break {_fmt_price(first.price)} → open runway up")
+    if buys_below:
         first = buys_below[0]
-        f_tier, f_emoji = _size_tier(first.size_usd)
-        scenario_lines.append(
-            f"  📉 <b>If price breaks below {_fmt_price(first.price)}</b> "
-            f"({f_emoji} {f_tier} buy support) → no major support left in scanned range, fast drop possible"
-        )
-
-    if scenario_lines:
+        if len(buys_below) >= 2:
+            second = buys_below[1]
+            move = ((first.price - second.price) / first.price) * 100
+            scen.append(
+                f"  📉 lose {_fmt_price(first.price)} → {_fmt_price(second.price)} (-{move:.2f}%)"
+            )
+        else:
+            scen.append(f"  📉 lose {_fmt_price(first.price)} → fast drop, no support below")
+    if scen:
         lines.append("")
-        lines.append("<b>🔮 Possible scenarios:</b>")
-        lines.extend(scenario_lines)
+        lines.append("<b>🔮 KEY LEVELS</b>")
+        lines.extend(scen)
 
+    # ── AI TRADE PLAN (parsed structured output) ──
+    plan_block = _format_ai_plan(report.ai_summary or "")
+    if plan_block:
+        lines.append("")
+        lines.append("<b>🧠 TRADE PLAN</b>")
+        lines.append(plan_block)
+    elif safe_summary:
+        # Fallback: AI didn't follow the structure — show raw text in italics
+        lines.append("")
+        lines.append("<b>🧠 AI Read</b>")
+        lines.append(f"<i>{safe_summary}</i>")
+
+    # ── FOOTER ──
     lines.append("")
-    lines.append(f"<b>🧠 AI summary:</b>")
-    lines.append(safe_summary)
-    lines.append("")
-    lines.append(f"<i>Sources: {', '.join(report.exchanges_used)}"
-                 + (f" (failed: {', '.join(report.exchanges_failed)})" if report.exchanges_failed else "")
-                 + "</i>")
+    src = ", ".join(report.exchanges_used) if report.exchanges_used else "n/a"
+    if report.exchanges_failed:
+        src += f" (skipped: {', '.join(report.exchanges_failed)})"
+    lines.append(f"<i>Sources: {src}  ·  small &lt;$250k · 🔹 $250k-1M · 🟦 1M-5M · 🐋 5M+</i>")
     return "\n".join(lines)
+
+
+# ─────────── AI plan parser: turn structured Claude output into clean HTML ───────────
+
+_PLAN_LABELS = ("BIAS", "TRADE", "STOP", "TP", "R:R", "LEVERAGE", "INVALIDATION", "ODDS", "NOTE")
+_PLAN_EMOJI = {
+    "BIAS":         "🎯",
+    "TRADE":        "💼",
+    "STOP":         "🛑",
+    "TP":           "🎁",
+    "R:R":          "⚖️",
+    "LEVERAGE":     "⚡",
+    "INVALIDATION": "❌",
+    "ODDS":         "🎲",
+    "NOTE":         "📝",
+}
+
+
+def _format_ai_plan(raw: str) -> str:
+    """Parse the structured AI output (BIAS:/TRADE:/STOP:/...) into a tidy HTML block.
+    Returns '' if the AI didn't produce a recognizable structure."""
+    if not raw:
+        return ""
+    found: dict[str, str] = {}
+    # Match label at start of line (case-insensitive), allow R:R as a label
+    import re as _re
+    label_pattern = _re.compile(
+        r"^\s*(BIAS|TRADE|STOP|TP|R\s*:\s*R|LEVERAGE|INVALIDATION|ODDS|NOTE)\s*:\s*(.+?)\s*$",
+        _re.IGNORECASE,
+    )
+    for line in raw.splitlines():
+        m = label_pattern.match(line)
+        if not m:
+            continue
+        key = m.group(1).upper().replace(" ", "")
+        if key == "R:R" or key.startswith("R:R") or key == "RR":
+            key = "R:R"
+        val = m.group(2).strip()
+        if key in _PLAN_LABELS and val:
+            found[key] = val
+
+    if not found or "TRADE" not in found and "BIAS" not in found:
+        return ""
+
+    out_lines = []
+    for k in _PLAN_LABELS:
+        if k in found:
+            emoji = _PLAN_EMOJI[k]
+            safe_val = html.escape(found[k])
+            # ODDS gets bold so it pops
+            if k == "ODDS":
+                out_lines.append(f"{emoji} <b>{k}:</b> <b>{safe_val}</b>")
+            else:
+                out_lines.append(f"{emoji} <b>{k}:</b> {safe_val}")
+    return "\n".join(out_lines)

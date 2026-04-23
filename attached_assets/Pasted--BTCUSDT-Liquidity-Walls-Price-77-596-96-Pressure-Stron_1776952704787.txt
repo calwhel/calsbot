@@ -1,0 +1,42 @@
+💧 BTCUSDT — Liquidity Walls
+━━━━━━━━━━━━━━━━━━━━
+Price: 77,596.96
+Pressure: 🔴 Strongly bearish (-0.50)
+
+🟢 Biggest buy wall: 76,587.32 — 🟦 BIG $2.62M (-1.30%)
+🔴 Biggest sell wall: 77,776.43 — 🟦 BIG $2.26M (+0.23%)
+
+Buy support zones:
+  🔹 MEDIUM 77,191.78 — $836k (-0.52%)  seen on two exchanges
+  🟦 BIG 76,587.32 — $2.62M (-1.30%)  seen on two exchanges
+  · small 75,800.92 — $189k (-2.31%)  seen mainly on one exchange
+
+Sell resistance zones:
+  🟦 BIG 77,776.43 — $2.26M (+0.23%)  confirmed across multiple exchanges
+  🟦 BIG 78,508.21 — $1.25M (+1.17%)  seen on two exchanges
+  🔹 MEDIUM 79,493.85 — $322k (+2.44%)  seen mainly on one exchange
+
+📊 Context: 24h vol $381.81M · 1h vol $10.21M
+
+· small <$250k  🔹 MEDIUM $250k-$1M  🟦 BIG $1M-$5M  🐋 HUGE $5M+
+BIG/HUGE sell walls = potential short fade zones; BIG/HUGE buy walls = potential long bounce zones.
+
+🎯 Best zone to watch:
+76,587.32 buy support ($2.62M, -1.30%) — if it cracks, downside opens fast.
+
+🔮 Possible scenarios:
+  📈 If price breaks above 77,776.43 (🟦 BIG sell wall) → next resistance 78,508.21 (🟦 BIG, +0.94% move room)
+  📉 If price breaks below 77,191.78 (🔹 MEDIUM buy support) → next support 76,587.32 (🟦 BIG, -0.78% downside)
+
+🧠 AI summary:
+Book is strongly bearish with the nearest sell wall at 77,776 only 0.23% away and confirmed across multiple exchanges, versus buy support sitting 0.52% down. That tight sell wall is the first magnet. No behavior tags means we're reading static book state, but the -0.50 bearish pressure and proximity of resistance suggests price gets rejected here and pulls down toward 77,191 buy wall first.
+
+LONG scalp setup: Enter 77,191-77,250 zone on the dip into buy wall support. Stop at 77,050 (just below the wall, giving 0.18-0.21% room). TP at 77,700-77,750 targeting the sell wall. That's roughly 0.55-0.65% upside against 0.18-0.21% downside, approximately 3:1 R:R. At 100x you're safe if you enter closer to 77,250 with tight stop, but at 200x the stop distance is uncomfortably tight and one wick takes you out. Use 100x max or size down.
+
+Invalidation is 77,000. If price blows through the 77,191 buy wall and breaks 77k, the support failed and you're wrong.
+
+Probability: 35% UP, 50% DOWN
+
+Sources: kraken, mexc, okx (failed: bybit)
+
+💡 Tip: /walls watch BTCUSDT to get DM alerts.
