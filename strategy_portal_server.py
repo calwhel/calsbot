@@ -1395,6 +1395,7 @@ async def trade_page(request: Request):
     return FileResponse("app/templates/trade.html", media_type="text/html")
 
 
+@app.get("/api/walls/{symbol}")
 @app.get("/api/trade/walls/{symbol}")
 async def trade_walls(symbol: str, ai: int = 0):
     """Public wall report for the trade page. Cached ~25s."""
@@ -1425,6 +1426,7 @@ async def trade_walls(symbol: str, ai: int = 0):
         return JSONResponse({"error": "scan failed"}, status_code=500)
 
 
+@app.get("/api/candles/{symbol}")
 @app.get("/api/trade/candles/{symbol}")
 async def trade_candles(symbol: str, tf: str = "5m", limit: int = 300):
     """Public candle feed for the trade chart. MEXC source. Cached ~5s per (symbol,tf)."""
