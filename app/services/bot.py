@@ -519,9 +519,16 @@ async def cmd_health(message: types.Message):
 
 @dp.message(Command("walls"))
 async def cmd_walls(message: types.Message):
-    """Liquidity wall scanner. Usage: /walls BTC  or  /walls SOLUSDT [band%] [min_usd]
-    Pulls live order books from Bybit + OKX + MEXC, finds the biggest resting buy/sell walls
-    near current price, and returns an AI summary."""
+    """Liquidity wall scanner.
+
+    Usage:
+      /walls BTC                     — quick scan
+      /walls SOL 1                   — within ±1% of price
+      /walls ETH 2 250000            — within ±2%, min $250k size
+      /walls watch BTC               — DM alerts when big walls appear/break/get absorbed
+      /walls unwatch BTC             — stop watching
+      /walls list                    — show what you're watching
+    """
     parts = (message.text or "").split()
     if len(parts) < 2:
         await message.answer(
@@ -531,12 +538,92 @@ async def cmd_walls(message: types.Message):
             "<code>/walls BTC</code>  — quick scan\n"
             "<code>/walls SOL 1</code>  — only walls within ±1% of price\n"
             "<code>/walls ETH 2 250000</code>  — within ±2%, min $250k size\n\n"
-            "Defaults: scans up to ±5% in 4 distance bands (immediate / mid / swing / far-out massive), min $100k notional, skips orders within ±0.2% (spread).\n"
-            "Sources: Bybit + OKX + MEXC (live order books).",
+            "<b>Live alerts:</b>\n"
+            "<code>/walls watch BTC</code>  — DM when a big wall appears or breaks\n"
+            "<code>/walls unwatch BTC</code>\n"
+            "<code>/walls list</code>  — your active watches\n\n"
+            "Defaults: scans up to ±5% in 4 distance bands, min $100k notional, skips orders within ±0.2% (spread).\n"
+            "Sources: Bybit + OKX + MEXC + Kraken (live order books).",
             parse_mode="HTML",
         )
         return
 
+    sub = parts[1].lower()
+
+    # ── /walls list ──
+    if sub == "list":
+        from app.services.wall_intel import list_watches
+        watches = list_watches(message.from_user.id)
+        if not watches:
+            await message.answer(
+                "🛡️ You're not watching any walls yet. Try <code>/walls watch BTC</code>.",
+                parse_mode="HTML",
+            )
+            return
+        body = "\n".join(f"  · <code>{w}</code>" for w in watches)
+        await message.answer(
+            f"🛡️ <b>Your wall watches ({len(watches)}):</b>\n{body}\n\n"
+            f"<i>You'll get a DM when a $1M+ wall appears, breaks, or gets absorbed. "
+            f"Polled roughly every 75s.</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    # ── /walls watch SYMBOL ──
+    if sub == "watch":
+        if len(parts) < 3:
+            await message.answer("Usage: <code>/walls watch BTC</code>", parse_mode="HTML")
+            return
+        from app.services.wall_intel import add_watch, list_watches
+        from app.services.liquidity_walls import _norm_symbol
+        import html as _html
+        import re as _re
+        sym = _norm_symbol(parts[2])
+        # Strict shape check: only A-Z 0-9 underscore/dash, 2-30 chars
+        if not _re.fullmatch(r"[A-Z0-9_\-]{2,30}", sym):
+            await message.answer(
+                "❌ Invalid symbol. Use a ticker like <code>BTC</code>, <code>SOL</code>, <code>FARTCOIN</code>.",
+                parse_mode="HTML",
+            )
+            return
+        sym_safe = _html.escape(sym)
+        # Soft cap so we don't accidentally watch 100 coins per user
+        existing = list_watches(message.from_user.id)
+        if sym not in existing and len(existing) >= 10:
+            await message.answer(
+                "⚠️ You're already watching 10 symbols (the cap). "
+                "Unwatch one first with <code>/walls unwatch SYMBOL</code>.",
+                parse_mode="HTML",
+            )
+            return
+        added = add_watch(message.from_user.id, sym)
+        if added:
+            await message.answer(
+                f"🛡️ Watching <b>{sym_safe}</b>. I'll DM you when a big wall appears, breaks, or gets absorbed.",
+                parse_mode="HTML",
+            )
+        else:
+            await message.answer(f"ℹ️ Already watching <b>{sym_safe}</b>.", parse_mode="HTML")
+        return
+
+    # ── /walls unwatch SYMBOL ──
+    if sub == "unwatch":
+        if len(parts) < 3:
+            await message.answer("Usage: <code>/walls unwatch BTC</code>", parse_mode="HTML")
+            return
+        from app.services.wall_intel import remove_watch
+        from app.services.liquidity_walls import _norm_symbol
+        import html as _html
+        sym = _norm_symbol(parts[2])
+        sym_safe = _html.escape(sym)
+        removed = remove_watch(message.from_user.id, sym)
+        if removed:
+            await message.answer(f"🛡️ No longer watching <b>{sym_safe}</b>.", parse_mode="HTML")
+        else:
+            await message.answer(f"ℹ️ You weren't watching <b>{sym_safe}</b>.", parse_mode="HTML")
+        return
+
+    # ── default: regular scan ──
     symbol_input = parts[1]
     try:
         band_pct = float(parts[2]) if len(parts) > 2 else 3.0
@@ -551,7 +638,8 @@ async def cmd_walls(message: types.Message):
     loading = await message.answer(f"💧 Scanning order books for <b>{symbol_input.upper()}</b>…", parse_mode="HTML")
 
     try:
-        from app.services.liquidity_walls import scan_walls, format_telegram
+        from app.services.liquidity_walls import scan_walls, format_telegram, _norm_symbol
+        from app.services.wall_intel import list_watches
         report = await scan_walls(symbol_input, max_band_pct=band_pct, min_notional_usd=min_usd)
         if not report:
             await loading.edit_text(
@@ -560,7 +648,15 @@ async def cmd_walls(message: types.Message):
                 parse_mode="HTML",
             )
             return
+        # Mark whether this user is currently watching the symbol so format_telegram can show it
+        try:
+            user_watches = set(list_watches(message.from_user.id))
+            report.is_being_watched = _norm_symbol(symbol_input) in user_watches
+        except Exception:
+            pass
         text = format_telegram(report)
+        if not report.is_being_watched:
+            text += f"\n\n<i>💡 Tip: <code>/walls watch {report.symbol}</code> to get DM alerts.</i>"
         # Telegram caps single messages at 4096 chars — should be well under
         await loading.edit_text(text[:4090], parse_mode="HTML")
     except Exception as e:

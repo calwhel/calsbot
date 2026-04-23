@@ -83,6 +83,11 @@ async def lifespan(app: FastAPI):
     # Twitter auto-posting — strategy leaderboard + market content
     from app.services.twitter_poster import auto_post_loop
     twitter_task = asyncio.create_task(auto_post_loop())
+
+    # Wall intel — schema init + background watch alerts
+    from app.services.wall_intel import init_wall_intel_schema, watch_loop
+    init_wall_intel_schema()
+    wall_watch_task = asyncio.create_task(watch_loop())
     
     yield
     
@@ -91,6 +96,11 @@ async def lifespan(app: FastAPI):
         bot_task.cancel()
     poller_task.cancel()
     twitter_task.cancel()
+    wall_watch_task.cancel()
+    try:
+        await wall_watch_task
+    except asyncio.CancelledError:
+        pass
     if bot_task:
         try:
             await bot_task

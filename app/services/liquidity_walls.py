@@ -69,6 +69,14 @@ class WallReport:
     exchanges_failed: list[str]
     ai_summary: str
     best_zone_to_watch: str
+    # Enrichment context (added in v2)
+    volume_24h_usd: float = 0.0
+    volume_1h_usd: float = 0.0
+    liq_24h_long_usd: float = 0.0
+    liq_24h_short_usd: float = 0.0
+    wall_behavior: dict = field(default_factory=dict)   # rounded-price → "FRESH"/"GROWING"/...
+    previous_snapshot_age_secs: Optional[int] = None
+    is_being_watched: bool = False                      # set by /walls handler if user has watch active
 
 
 # ───────────────────────── Symbol normalization ─────────────────────────
@@ -413,26 +421,101 @@ async def _ai_summary(report: dict, symbol: str) -> str:
                 f"so wall sits {'INSIDE' if nearest_sell_dist < 1.0 else 'beyond'} 100x liq distance."
             )
 
+        # Build wall behavior tags (FRESH/GROWING/SHRINKING/STABLE) per top wall
+        behavior = report.get("wall_behavior") or {}
+        snap_age = report.get("previous_snapshot_age_secs")
+
+        def _w_line_with_tag(w: Wall) -> str:
+            tag = ""
+            if isinstance(behavior, dict):
+                lbl = behavior.get(round(w.price, 8))
+                if lbl:
+                    tag = f" [{lbl}]"
+            return _w_line(w) + tag
+
+        # Volume + liquidation context
+        vol_24h = float(report.get("volume_24h_usd", 0))
+        vol_1h = float(report.get("volume_1h_usd", 0))
+        liq_long = float(report.get("liq_24h_long_usd", 0))
+        liq_short = float(report.get("liq_24h_short_usd", 0))
+
+        # Wall vs 1h volume — flags walls that are massive vs flow vs trivial
+        biggest_visible = max(
+            (w.size_usd for w in (top_buys + top_sells)),
+            default=0.0,
+        )
+        wall_vs_vol_note = ""
+        if vol_1h > 0 and biggest_visible > 0:
+            ratio = biggest_visible / vol_1h
+            if ratio >= 1.0:
+                wall_vs_vol_note = (
+                    f"Biggest wall is {ratio:.1f}x the last hour of volume — "
+                    f"genuinely heavy, will absorb meaningful flow."
+                )
+            elif ratio >= 0.25:
+                wall_vs_vol_note = (
+                    f"Biggest wall is {ratio*100:.0f}% of last hour volume — "
+                    f"meaningful but can be eaten in a strong push."
+                )
+            else:
+                wall_vs_vol_note = (
+                    f"Biggest wall is only {ratio*100:.0f}% of last hour volume — "
+                    f"thin vs flow, likely sweeps through."
+                )
+
+        # Broken/absorbed walls from previous snapshot
+        broken = behavior.get("_broken") if isinstance(behavior, dict) else None
+        broken_note = ""
+        if broken:
+            broken_note = "Recent wall changes:\n" + "\n".join(
+                f"- {b['side'].upper()} wall at {_fmt_price(b['price'])} "
+                f"({_fmt_usd(b['size_usd'])}) is GONE — broken or absorbed since last snap"
+                for b in broken[:3]
+            ) + "\n"
+
+        liq_note = ""
+        if liq_long > 0 or liq_short > 0:
+            liq_note = (
+                f"24h liquidations on this coin: longs {_fmt_usd(liq_long)}, "
+                f"shorts {_fmt_usd(liq_short)} "
+                f"({'longs being rekt' if liq_long > liq_short * 1.3 else 'shorts being rekt' if liq_short > liq_long * 1.3 else 'balanced'}).\n"
+            )
+
+        snap_note = ""
+        if snap_age is not None:
+            snap_note = f"Wall behavior tags compare against snapshot from {snap_age // 60}m {snap_age % 60}s ago.\n"
+
         prompt = (
             f"You are a degen crypto futures scalper running 100x-200x leverage on {symbol}.\n"
             f"At 100x: every 1% move = 100% PnL or full liquidation.\n"
             f"At 200x: every 0.5% move = 100% PnL or full liquidation.\n"
-            f"Walls are where stops and liquidations cluster — price is magnetized to them.\n\n"
+            f"Walls are where stops and liquidations cluster — price is magnetized to them.\n"
+            f"FRESH walls just appeared (could be defense or spoof). GROWING means real conviction. "
+            f"SHRINKING means it's getting eaten — about to break.\n\n"
             f"Current price: {_fmt_price(report['price'])}.\n"
-            f"Order-book pressure: {report['pressure_label']} ({report['pressure_score']:+.2f}).\n\n"
-            f"Top buy walls (price | usd | distance | confidence):\n"
-            + "\n".join("- " + _w_line(w) for w in top_buys[:3]) + "\n\n"
+            f"Order-book pressure: {report['pressure_label']} ({report['pressure_score']:+.2f}).\n"
+            f"{snap_note}"
+            f"24h volume: {_fmt_usd(vol_24h)} | last 1h: {_fmt_usd(vol_1h)}.\n"
+            f"{wall_vs_vol_note}\n"
+            f"{liq_note}\n"
+            f"Top buy walls (price | usd | distance | confidence) [behavior]:\n"
+            + "\n".join("- " + _w_line_with_tag(w) for w in top_buys[:3]) + "\n\n"
             f"Top sell walls:\n"
-            + "\n".join("- " + _w_line(w) for w in top_sells[:3]) + "\n"
+            + "\n".join("- " + _w_line_with_tag(w) for w in top_sells[:3]) + "\n"
+            + (f"\n{broken_note}" if broken_note else "")
             + ("\nLeverage context:\n" + "\n".join(liq_warning_lines) + "\n" if liq_warning_lines else "")
             + "\n"
-            "Write a SHORT trade brief (4-5 sentences max) for a 100x-200x scalper. Cover:\n"
-            "1. Which side has the stronger book (buyers defending vs sellers stacked) and the magnet level price is being pulled toward.\n"
-            "2. ONE concrete scalp setup: direction, entry zone, stop placement (just past the opposite wall), and TP at the magnet wall. "
-            "Give actual prices, not vague advice.\n"
+            "Write a trade brief (5-7 sentences max) for a 100x-200x scalper. Cover:\n"
+            "1. Which side has the stronger book and the magnet level price is being pulled toward. "
+            "Weight your read by the FRESH/GROWING/SHRINKING tags — a SHRINKING wall in the path is NOT real defense.\n"
+            "2. ONE concrete scalp setup: direction, entry zone, stop placement (just past the opposite wall), "
+            "and TP at the magnet wall. Give actual prices, not vague advice.\n"
             "3. The R:R and rough % move needed — flag explicitly if the stop distance forces leverage below 100x to be safe, "
             "or if price would liquidate before reaching the wall.\n"
             "4. The single 'invalidation' level — if price breaks past it, the setup is dead and you cut.\n"
+            "5. Probability split for the next significant move: estimate UP% / DOWN% / CHOP% as integers summing to 100, "
+            "based on the order book skew, behavior tags, volume context, and liquidation pressure. Be opinionated — "
+            "default to 33/33/34 only if the data is genuinely indecisive.\n"
             "Tone: sharp, direct, degen-scalper. No fluff, no greetings, no emojis, no markdown. Just the brief."
         )
 
@@ -500,6 +583,23 @@ async def scan_walls(
     top_sells = _pick_band_leaders(sell_walls, bands)[:top_n]
     pressure_label, pressure_score = _pressure(top_buys, top_sells)
 
+    # ── Enrichment: wall behavior history, volume, liquidations (all fail-soft) ──
+    from app.services import wall_intel
+    prev_snapshot = wall_intel.load_previous_snapshot(symbol)
+    all_current_walls = list(top_buys) + list(top_sells)
+    behavior = wall_intel.classify_wall_changes(all_current_walls, prev_snapshot)
+    snap_age = prev_snapshot["age_secs"] if prev_snapshot else None
+
+    vol_ctx, liq_ctx = await asyncio.gather(
+        wall_intel.get_volume_context(symbol),
+        wall_intel.get_liquidation_context(symbol),
+        return_exceptions=True,
+    )
+    if isinstance(vol_ctx, Exception):
+        vol_ctx = {"volume_24h_usd": 0.0, "volume_1h_usd": 0.0}
+    if isinstance(liq_ctx, Exception):
+        liq_ctx = {"liq_24h_long_usd": 0.0, "liq_24h_short_usd": 0.0, "liq_24h_total_usd": 0.0}
+
     intermediate = {
         "price": mid,
         "biggest_buy": buy_walls[0] if buy_walls else None,
@@ -508,9 +608,18 @@ async def scan_walls(
         "top_sells": top_sells,
         "pressure_label": pressure_label,
         "pressure_score": pressure_score,
+        "volume_24h_usd": float(vol_ctx.get("volume_24h_usd", 0)),
+        "volume_1h_usd": float(vol_ctx.get("volume_1h_usd", 0)),
+        "liq_24h_long_usd": float(liq_ctx.get("liq_24h_long_usd", 0)),
+        "liq_24h_short_usd": float(liq_ctx.get("liq_24h_short_usd", 0)),
+        "wall_behavior": behavior,
+        "previous_snapshot_age_secs": snap_age,
     }
 
     ai_text = await _ai_summary(intermediate, symbol) if use_ai else _fallback_summary(intermediate)
+
+    # Persist current snapshot for the next /walls call (best-effort)
+    wall_intel.save_snapshot(symbol, mid, all_current_walls)
 
     return WallReport(
         symbol=symbol,
@@ -525,6 +634,12 @@ async def scan_walls(
         exchanges_failed=failed,
         ai_summary=ai_text,
         best_zone_to_watch=_best_zone(intermediate),
+        volume_24h_usd=intermediate["volume_24h_usd"],
+        volume_1h_usd=intermediate["volume_1h_usd"],
+        liq_24h_long_usd=intermediate["liq_24h_long_usd"],
+        liq_24h_short_usd=intermediate["liq_24h_short_usd"],
+        wall_behavior=behavior,
+        previous_snapshot_age_secs=snap_age,
     )
 
 
@@ -559,19 +674,64 @@ def format_telegram(report: WallReport) -> str:
         tier, emoji = _size_tier(s.size_usd)
         lines.append(f"<b>🔴 Biggest sell wall:</b> {_fmt_price(s.price)} — {emoji} <b>{tier}</b> {_fmt_usd(s.size_usd)} ({_fmt_dist(s.distance_pct)})")
 
+    behavior = report.wall_behavior or {}
+
+    def _behavior_badge(price: float) -> str:
+        lbl = behavior.get(round(price, 8))
+        if not lbl:
+            return ""
+        return {
+            "FRESH":     " · 🆕 <b>FRESH</b>",
+            "GROWING":   " · 📈 <b>GROWING</b>",
+            "SHRINKING": " · 📉 <b>SHRINKING</b>",
+            "STABLE":    "",   # too noisy to show "stable" everywhere
+        }.get(lbl, "")
+
     if report.top_buys:
         lines.append("")
         lines.append("<b>Buy support zones:</b>")
         for w in report.top_buys:
             tier, emoji = _size_tier(w.size_usd)
-            lines.append(f"  {emoji} <b>{tier}</b> {_fmt_price(w.price)} — {_fmt_usd(w.size_usd)} ({_fmt_dist(w.distance_pct)})  <i>{w.confidence}</i>")
+            lines.append(
+                f"  {emoji} <b>{tier}</b> {_fmt_price(w.price)} — {_fmt_usd(w.size_usd)} "
+                f"({_fmt_dist(w.distance_pct)})  <i>{w.confidence}</i>{_behavior_badge(w.price)}"
+            )
 
     if report.top_sells:
         lines.append("")
         lines.append("<b>Sell resistance zones:</b>")
         for w in report.top_sells:
             tier, emoji = _size_tier(w.size_usd)
-            lines.append(f"  {emoji} <b>{tier}</b> {_fmt_price(w.price)} — {_fmt_usd(w.size_usd)} ({_fmt_dist(w.distance_pct)})  <i>{w.confidence}</i>")
+            lines.append(
+                f"  {emoji} <b>{tier}</b> {_fmt_price(w.price)} — {_fmt_usd(w.size_usd)} "
+                f"({_fmt_dist(w.distance_pct)})  <i>{w.confidence}</i>{_behavior_badge(w.price)}"
+            )
+
+    # Recently broken/absorbed walls (from prev snapshot diff)
+    broken = behavior.get("_broken") if isinstance(behavior, dict) else None
+    if broken:
+        lines.append("")
+        lines.append("<b>💥 Walls broken or absorbed since last scan:</b>")
+        for b in broken[:3]:
+            side_lbl = "buy support" if b.get("side") == "buy" else "sell wall"
+            lines.append(
+                f"  · {side_lbl} at {_fmt_price(b['price'])} — was {_fmt_usd(b['size_usd'])}, now gone"
+            )
+
+    # Volume + liquidations context
+    ctx_bits = []
+    if report.volume_24h_usd > 0:
+        ctx_bits.append(f"24h vol {_fmt_usd(report.volume_24h_usd)}")
+    if report.volume_1h_usd > 0:
+        ctx_bits.append(f"1h vol {_fmt_usd(report.volume_1h_usd)}")
+    if report.liq_24h_long_usd > 0 or report.liq_24h_short_usd > 0:
+        ctx_bits.append(
+            f"24h liqs L:{_fmt_usd(report.liq_24h_long_usd)} / "
+            f"S:{_fmt_usd(report.liq_24h_short_usd)}"
+        )
+    if ctx_bits:
+        lines.append("")
+        lines.append("<b>📊 Context:</b> " + " · ".join(ctx_bits))
 
     # Quick legend so traders know what the tags mean
     lines.append("")
