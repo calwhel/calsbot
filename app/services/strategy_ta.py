@@ -299,7 +299,7 @@ async def eval_indicator(
         src_data  = _src(klines, source)
         sma_val   = _sma(src_data, period)
         curr      = float(klines[-1][4])
-        sub_c     = cond.get("condition", sub or "price_above")
+        sub_c     = cond.get("condition", "price_above")
 
         def _fmtprice(p):
             return f"{p:.6f}" if p < 0.01 else f"{p:.4f}" if p < 1 else f"{p:,.3f}"
