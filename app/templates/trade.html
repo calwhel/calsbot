@@ -371,14 +371,28 @@ button{font-family:inherit}
       borderVisible:false,
     });
 
-    new ResizeObserver(()=>{ resizeZones(); drawZones(); }).observe(el);
-    chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{ drawZones(); });
+    new ResizeObserver(()=>{ resizeZones(); zonesDirty = true; }).observe(el);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{ zonesDirty = true; });
     chart.subscribeCrosshairMove(param => {
-      drawZones();
+      zonesDirty = true;
       updateOhlcLegend(param);
     });
     setupZones();
+    // RAF loop — redraws zones whenever marked dirty (or every frame during interaction).
+    // The price scale can auto-rescale without firing any subscription event, so we
+    // also recompute every ~4 frames as a cheap safety net while the tab is visible.
+    let frame = 0;
+    function loop(){
+      frame++;
+      if(zonesDirty || (frame & 3) === 0){
+        zonesDirty = false;
+        drawZones();
+      }
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
   }
+  let zonesDirty = true;
 
   function fmtVol(v){
     v = Number(v) || 0;
@@ -463,24 +477,35 @@ button{font-family:inherit}
       const yTop = candleSeries.priceToCoordinate(w.price + half);
       const yBot = candleSeries.priceToCoordinate(w.price - half);
       if(yTop == null || yBot == null) return;
+      let top = Math.min(yTop, yBot), bot = Math.max(yTop, yBot);
+      // Skip zones entirely outside the visible price range.
+      // (Lightweight Charts still returns coordinates, but they're off-canvas.)
+      if(bot < 0 || top > hpx) return;
+      // Clip to visible chart area so a partially-visible zone shows just its visible slice.
+      top = Math.max(0, top);
+      bot = Math.min(hpx, bot);
+      const bandH = bot - top;
+      // If the zone collapses to less than 1px on screen, don't bother drawing.
+      if(bandH < 1) return;
+
       const isBuy = w.side === 'buy';
-      // Alpha by tier
       const alpha = t === 'huge' ? 0.22 : t === 'big' ? 0.16 : t === 'med' ? 0.10 : 0.07;
       const fill   = isBuy ? `rgba(38,166,154,${alpha})` : `rgba(239,83,80,${alpha})`;
       const stroke = isBuy ? `rgba(38,166,154,${Math.min(1, alpha*3)})` : `rgba(239,83,80,${Math.min(1, alpha*3)})`;
-      const top = Math.min(yTop, yBot), bot = Math.max(yTop, yBot);
-      // Fill
+
       zCtx.fillStyle = fill;
-      zCtx.fillRect(0, top, wpx, bot - top);
-      // Edge lines
-      zCtx.strokeStyle = stroke;
-      zCtx.lineWidth = (t === 'huge' || t === 'big') ? 1.25 : 0.75;
-      zCtx.beginPath();
-      zCtx.moveTo(0, top + 0.5); zCtx.lineTo(wpx, top + 0.5);
-      zCtx.moveTo(0, bot - 0.5); zCtx.lineTo(wpx, bot - 0.5);
-      zCtx.stroke();
-      // Label inside the zone (right edge)
-      if((t === 'huge' || t === 'big') && (bot - top) >= 14){
+      zCtx.fillRect(0, top, wpx, bandH);
+      // Edge lines (only if the band is tall enough to actually have two edges)
+      if(bandH >= 2){
+        zCtx.strokeStyle = stroke;
+        zCtx.lineWidth = (t === 'huge' || t === 'big') ? 1.25 : 0.75;
+        zCtx.beginPath();
+        zCtx.moveTo(0, top + 0.5); zCtx.lineTo(wpx, top + 0.5);
+        zCtx.moveTo(0, bot - 0.5); zCtx.lineTo(wpx, bot - 0.5);
+        zCtx.stroke();
+      }
+      // Label only when there's enough vertical room for it to read clearly.
+      if((t === 'huge' || t === 'big') && bandH >= 16){
         zCtx.fillStyle = isBuy ? '#26a69a' : '#ef5350';
         zCtx.font = '600 10px JetBrains Mono, monospace';
         zCtx.textAlign = 'right';
@@ -763,8 +788,7 @@ button{font-family:inherit}
   });
 
   $('overlay-toggle').addEventListener('change', () => {
-    drawZones();
-    // Also redraw lists with current behavior tags
+    zonesDirty = true;
     if(lastWallsData){
       renderWallList(lastWallsData.top_buys  || [], 'buy');
       renderWallList(lastWallsData.top_sells || [], 'sell');
@@ -787,7 +811,7 @@ button{font-family:inherit}
   document.addEventListener('visibilitychange', () => {
     if(!document.hidden){ tickPrice(); tickCandles(); }
   });
-  window.addEventListener('resize', () => { resizeZones(); drawZones(); });
+  window.addEventListener('resize', () => { resizeZones(); zonesDirty = true; });
 })();
 </script>
 </body>
