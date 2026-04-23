@@ -341,19 +341,80 @@ a{color:inherit;text-decoration:none}
     ro.observe(el);
   }
 
-  async function loadCandles(){
+  let lastCandleTime = 0;
+  let initialLoadDone = false;
+  let loadingTF = null;
+
+  // Initial / TF-switch load: pull a full window of history and replace the series.
+  async function loadCandlesFull(){
+    const tf = currentTF;
+    loadingTF = tf;
     try{
-      const r = await fetch(`/api/trade/candles/${SYMBOL}?tf=${currentTF}&limit=300`);
+      const r = await fetch(`/api/trade/candles/${SYMBOL}?tf=${tf}&limit=300`);
       if(!r.ok) throw new Error('candle fetch');
       const data = await r.json();
+      // Discard if the user switched TF while this was in flight
+      if(loadingTF !== tf) return;
       if(!data.candles || !data.candles.length) return;
       candleSeries.setData(data.candles);
-      $('chart-loading').classList.add('hidden');
-      // Update header price from latest candle close as fallback
       const last = data.candles[data.candles.length-1];
-      if(last && !$('px').dataset.live) $('px').textContent = fmtPx(last.close);
+      lastCandleTime = last.time;
+      $('chart-loading').classList.add('hidden');
+      initialLoadDone = true;
+      if(last) updateHeaderPrice(last.close);
     }catch(e){
-      console.warn('candles failed', e);
+      console.warn('candles full load failed', e);
+    }
+  }
+
+  // Tick poll: only fetch the latest 2 candles and patch the series in-place.
+  // Cheap on bandwidth, no flicker, preserves user zoom/scroll.
+  async function tickCandles(){
+    if(!initialLoadDone || document.hidden) return;
+    const tf = currentTF;
+    try{
+      const r = await fetch(`/api/trade/candles/${SYMBOL}?tf=${tf}&limit=2`);
+      if(!r.ok) return;
+      const data = await r.json();
+      if(loadingTF !== null && loadingTF !== tf) return;
+      const cs = data.candles || [];
+      if(!cs.length) return;
+      // Update or append each candle. Lightweight Charts requires monotonic time order.
+      cs.forEach(c => {
+        if(c.time < lastCandleTime) return;
+        candleSeries.update(c);
+        if(c.time >= lastCandleTime) lastCandleTime = c.time;
+      });
+      const last = cs[cs.length-1];
+      if(last) updateHeaderPrice(last.close);
+    }catch(e){
+      // silent — next tick will retry
+    }
+  }
+
+  // Ticker poll: cheapest possible price refresh (every 2s) for the header.
+  async function tickPrice(){
+    if(document.hidden) return;
+    try{
+      const r = await fetch(`/api/trade/ticker/${SYMBOL}`);
+      if(!r.ok) return;
+      const d = await r.json();
+      if(d.price) updateHeaderPrice(d.price);
+    }catch(e){ /* silent */ }
+  }
+
+  function updateHeaderPrice(p){
+    if(!p) return;
+    const el = $('px');
+    const prev = parseFloat(el.dataset.last || '0');
+    el.textContent = fmtPx(p);
+    el.dataset.last = String(p);
+    el.dataset.live = '1';
+    // Brief flash on direction change
+    if(prev > 0 && Math.abs(p - prev) / prev > 0.00005){
+      el.style.color = p > prev ? '#00e5a0' : '#ff4d72';
+      clearTimeout(el._flashT);
+      el._flashT = setTimeout(() => { el.style.color = ''; }, 350);
     }
   }
 
@@ -519,10 +580,13 @@ a{color:inherit;text-decoration:none}
   $('tf-switch').addEventListener('click', e => {
     const b = e.target.closest('.tf-btn');
     if(!b) return;
+    if(b.dataset.tf === currentTF) return;
     document.querySelectorAll('.tf-btn').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     currentTF = b.dataset.tf;
-    loadCandles();
+    initialLoadDone = false;
+    lastCandleTime = 0;
+    loadCandlesFull();
   });
 
   $('overlay-toggle').addEventListener('change', () => {
@@ -592,10 +656,23 @@ a{color:inherit;text-decoration:none}
 
   // ───── Init + polling ─────
   initChart();
-  loadCandles();
+  loadCandlesFull();
   loadWalls();
-  setInterval(loadCandles, 10_000);
+  tickPrice();
+  // Fast: header price every 2s (tiny payload, instant feel)
+  setInterval(tickPrice, 2_000);
+  // Medium: latest 2 candles every 3s — patches the open candle in place
+  setInterval(tickCandles, 3_000);
+  // Slow: walls every 30s (expensive multi-exchange scan)
   setInterval(loadWalls, 30_000);
+
+  // Pause polling when tab hidden, resume on return
+  document.addEventListener('visibilitychange', () => {
+    if(!document.hidden){
+      tickPrice();
+      tickCandles();
+    }
+  });
 })();
 </script>
 </body>
