@@ -1447,6 +1447,7 @@ async def evaluate_and_fire(
     db,
     http_client: httpx.AsyncClient,
     raw_tickers: Optional[list] = None,
+    gate_stats: Optional[Dict[str, int]] = None,
 ):
     """
     Evaluate one strategy. Fires a trade if conditions are met.
@@ -1454,9 +1455,14 @@ async def evaluate_and_fire(
     raw_tickers — pass the pre-fetched ticker list from the main loop so all
     strategies in one cycle share a single MEXC/Binance fetch instead of each
     making their own request.
+    gate_stats — optional shared counter dict for per-cycle diagnostics.
     """
     from app.services.strategy_ta import evaluate_strategy_conditions
     from app.strategy_models import StrategyExecution, StrategyPortalSettings
+
+    def _bump(key: str):
+        if gate_stats is not None:
+            gate_stats[key] = gate_stats.get(key, 0) + 1
 
     # Determine paper/live upfront.
     # Live strategies automatically downgrade to paper if the user doesn't have
@@ -1490,10 +1496,13 @@ async def evaluate_and_fire(
     direction_pref = config.get("direction", "LONG")
 
     if not _check_trading_days(filters):
+        _bump("blk_trading_days")
         return
     if not _check_time_filter(filters):
+        _bump("blk_time_filter")
         return
     if not _check_btc_regime(filters):
+        _bump("blk_btc_regime")
         return
 
     max_per_day   = int(risk.get("max_trades_per_day", 3))
@@ -1501,8 +1510,10 @@ async def evaluate_and_fire(
     cooldown_mins = int(risk.get("cooldown_minutes", 30))
 
     if _daily_execution_count(strategy.id, db) >= max_per_day:
+        _bump("blk_daily_cap")
         return
     if _open_execution_count(strategy.id, db) >= max_open:
+        _bump("blk_max_open")
         return
 
     # Global cooldown: if ANY symbol fired within cooldown window, pause entire strategy
@@ -1510,6 +1521,7 @@ async def evaluate_and_fire(
     if last_global:
         elapsed_global = (datetime.utcnow() - last_global).total_seconds() / 60
         if elapsed_global < cooldown_mins:
+            _bump("blk_cooldown")
             logger.debug(
                 f"[Strategy {strategy.id}] Global cooldown active — "
                 f"{elapsed_global:.1f}/{cooldown_mins} min elapsed"
@@ -1529,6 +1541,7 @@ async def evaluate_and_fire(
 
     symbols = await _get_eligible_symbols(universe, http_client, raw_tickers=raw_tickers)
     if not symbols:
+        _bump("blk_empty_universe")
         return
 
     no_duplicate_symbol = bool(risk.get("no_duplicate_symbol", False))
@@ -1547,6 +1560,7 @@ async def evaluate_and_fire(
         candidate_symbols.append(symbol)
 
     if not candidate_symbols:
+        _bump("blk_all_in_cooldown")
         return
 
     # ── Step 2: Parallel price + TA fetch for ALL candidates at once ──────────
@@ -1577,13 +1591,17 @@ async def evaluate_and_fire(
         }
 
     # ── Step 4: Sequential condition evaluation — price data already cached ───
+    _had_any_candidate = False
+    _conditions_failed_for_all = True
     for symbol in candidate_symbols:
         price_data = price_map.get(symbol)
         if not price_data:
             continue
+        _had_any_candidate = True
 
         if filters.get("htf_trend") and not htf_pass.get(symbol):
             logger.debug(f"[Strategy {strategy.id}] HTF trend filter blocked {symbol}")
+            _bump("blk_htf_trend_sym")
             continue
 
         enhanced_ta   = price_data.get("enhanced_ta", {})
@@ -1597,6 +1615,8 @@ async def evaluate_and_fire(
         )
         if not passed:
             continue
+        _conditions_failed_for_all = False
+        # break out of "failure tracking" — we have a real fire below
 
         mode_tag = "🧪 [PAPER]" if is_paper else "🎯"
         logger.info(
@@ -1863,6 +1883,13 @@ async def evaluate_and_fire(
             ))
 
         break  # one trade per strategy per scan cycle
+    else:
+        # for-loop completed without break → no fire happened.
+        # Bump a gate so we know WHY the strategy didn't fire.
+        if not _had_any_candidate:
+            _bump("blk_no_price_data")
+        elif _conditions_failed_for_all:
+            _bump("blk_ta_conditions")
 
 
 # ─── Subscriber copy-trade propagation ───────────────────────────────────────
@@ -2265,6 +2292,10 @@ async def run_strategy_executor():
                 # Pre-fetch tickers ONCE for the entire cycle.
                 shared_tickers = await _get_raw_tickers(http_client)
 
+                # Per-cycle gate diagnostics — counts which gate blocks each strategy.
+                # Logged at end of cycle so we can see WHY strategies aren't firing.
+                cycle_gate_stats: Dict[str, int] = {}
+
                 async def _run_one(snap, _tickers=shared_tickers):
                     """Each strategy evaluation runs in its own isolated DB session."""
                     async with sem:
@@ -2303,7 +2334,8 @@ async def run_strategy_executor():
                                 return
                             await evaluate_and_fire(
                                 strategy, user, db_one, http_client,
-                                raw_tickers=_tickers
+                                raw_tickers=_tickers,
+                                gate_stats=cycle_gate_stats,
                             )
                         except Exception as e:
                             logger.error(
@@ -2313,6 +2345,15 @@ async def run_strategy_executor():
                             db_one.close()
 
                 await asyncio.gather(*[_run_one(s) for s in eval_snapshots])
+
+                # Cycle gate diagnostics — shows exactly which gate blocked each strategy.
+                # Helps diagnose "why aren't trades firing?" without spelunking logs.
+                if cycle_gate_stats:
+                    _gate_summary = " ".join(
+                        f"{k.replace('blk_', '')}={v}"
+                        for k, v in sorted(cycle_gate_stats.items(), key=lambda kv: -kv[1])
+                    )
+                    logger.info(f"[Executor] cycle gates → {_gate_summary}")
 
             except Exception as e:
                 logger.error(f"Strategy executor loop error: {e}", exc_info=True)
