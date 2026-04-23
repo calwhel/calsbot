@@ -1533,6 +1533,102 @@ async def trade_ticker(symbol: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Live trade tape — recent big prints from MEXC public trades feed.
+# Powers the scrolling tape panel + chart markers on /trade.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Per-symbol rolling buffer of recent big trades. MEXC's /api/v3/trades returns
+# id=null, so we dedup by (time_ms, price, qty) and use time as the cursor.
+_TAPE_BUF: dict[str, list[dict]] = {}        # values are dicts with synthetic "id" = sequence number
+_TAPE_KEYS: dict[str, set] = {}              # set of (ts, price, qty) for dedup
+_TAPE_SEQ: dict[str, int] = {}               # monotonic sequence so client can use "since"
+
+@app.get("/api/trade/tape/{symbol}")
+async def trade_tape(symbol: str, since: int = 0, min_usd: float = 25_000.0, limit: int = 50):
+    """Return recent BIG trades (>= min_usd) for the live tape on /trade.
+    Pulls MEXC `/api/v3/trades` (id is null on this endpoint, so we dedup by
+    composite key and assign our own sequence id for client-side cursoring).
+    """
+    sym = (symbol or "").upper().strip()
+    if sym not in TRADE_SYMBOL_WHITELIST:
+        return JSONResponse({"error": "symbol not supported"}, status_code=404)
+    pair = TRADE_SYMBOL_WHITELIST[sym]
+    min_usd = max(1_000.0, float(min_usd or 25_000.0))
+    limit = max(1, min(int(limit or 50), 200))
+
+    # 1.5s cached fetch from MEXC so 5-tab spam doesn't hammer them
+    cache_key = f"tape_raw_{pair}"
+    cached = _CACHE.get(cache_key)
+    rows: list = []
+    if cached and time.time() < cached[1]:
+        rows = cached[0]
+    else:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(
+                    "https://api.mexc.com/api/v3/trades",
+                    params={"symbol": pair, "limit": 500},
+                )
+                r.raise_for_status()
+                rows = r.json() or []
+            _CACHE[cache_key] = (rows, time.time() + 1.5)
+        except Exception as e:
+            logger.debug(f"trade_tape({sym}) fetch failed: {e}")
+            rows = cached[0] if cached else []
+
+    buf  = _TAPE_BUF.setdefault(pair, [])
+    keys = _TAPE_KEYS.setdefault(pair, set())
+    seq  = _TAPE_SEQ.get(pair, 0)
+
+    # MEXC returns newest first — process in chronological order so seq numbers ascend with time
+    for t in reversed(rows):
+        try:
+            ts    = int(t.get("time") or 0)
+            price = float(t.get("price") or 0)
+            qty   = float(t.get("qty") or 0)
+            if ts <= 0 or price <= 0 or qty <= 0:
+                continue
+            usd = float(t.get("quoteQty") or (price * qty))
+            if usd < 1_000:
+                continue
+            key = (ts, price, qty)
+            if key in keys:
+                continue
+            keys.add(key)
+            seq += 1
+            # MEXC: isBuyerMaker=True → an aggressive SELL (taker hit the bid).
+            side = "sell" if bool(t.get("isBuyerMaker")) else "buy"
+            buf.append({
+                "id": seq,
+                "ts": ts,
+                "price": price,
+                "qty": qty,
+                "usd": usd,
+                "side": side,
+            })
+        except (TypeError, ValueError):
+            continue
+    _TAPE_SEQ[pair] = seq
+
+    # Trim buffer + key set in lockstep
+    if len(buf) > 400:
+        for old in buf[:-400]:
+            keys.discard((old["ts"], old["price"], old["qty"]))
+        del buf[:-400]
+
+    out = [t for t in buf if t["usd"] >= min_usd and t["id"] > int(since or 0)]
+    out.sort(key=lambda x: x["id"], reverse=True)
+    out = out[:limit]
+    return {
+        "symbol": pair,
+        "trades": out,
+        "last_id": seq,
+        "min_usd": min_usd,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Public data APIs (no auth — used by landing page JS)
 # ─────────────────────────────────────────────────────────────────────────────
 

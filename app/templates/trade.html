@@ -198,6 +198,40 @@ button{font-family:inherit}
 .empty{padding:18px 14px;text-align:center;color:var(--muted);font-size:11px;font-style:italic}
 .foot{padding:8px 12px;font-size:10px;color:var(--muted);display:flex;justify-content:space-between;background:var(--panel)}
 
+/* Live tape */
+.tape{background:var(--panel);border-bottom:1px solid var(--border)}
+.tape-hd{
+  height:30px;padding:0 12px;display:flex;align-items:center;justify-content:space-between;
+  font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--text2);
+  background:var(--panel);border-bottom:1px solid var(--border);
+}
+.tape-hd .live{color:var(--green);margin-right:4px;animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.tape-list{max-height:170px;overflow-y:auto;font-family:var(--mono);font-size:11px}
+.tape-list::-webkit-scrollbar{width:4px}
+.tape-list::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+.tape-row{
+  display:grid;grid-template-columns:38px 1fr auto;gap:8px;padding:3px 12px;
+  border-left:2px solid transparent;align-items:center;
+  animation:tapeIn .25s ease-out;
+}
+@keyframes tapeIn{from{opacity:0;transform:translateX(-3px)}to{opacity:1;transform:none}}
+.tape-row.buy{border-left-color:var(--green);background:rgba(38,166,154,.04)}
+.tape-row.sell{border-left-color:var(--red);background:rgba(239,83,80,.04)}
+.tape-time{color:var(--muted);font-size:10px}
+.tape-px{color:var(--text)}
+.tape-px.buy{color:var(--green)}
+.tape-px.sell{color:var(--red)}
+.tape-usd{color:var(--text);font-weight:600;text-align:right}
+.tape-empty{padding:14px;text-align:center;color:var(--muted);font-size:10px;font-style:italic}
+.tape-thresh{
+  display:inline-flex;align-items:center;gap:4px;color:var(--muted);font-size:9px;font-weight:600;
+}
+.tape-thresh select{
+  background:var(--panel2);color:var(--text);border:1px solid var(--border);
+  border-radius:3px;padding:1px 3px;font-size:9px;font-family:inherit;cursor:pointer;
+}
+
 /* AI panel */
 .ai{background:var(--panel)}
 .ai-toggle{
@@ -268,7 +302,15 @@ button{font-family:inherit}
   </div>
   <div class="toggle-row">
     <label class="toggle"><input type="checkbox" id="overlay-toggle" checked><span class="toggle-slider"></span></label>
-    <span>Order block zones</span>
+    <span>Order blocks</span>
+  </div>
+  <div class="toggle-row">
+    <label class="toggle"><input type="checkbox" id="liq-toggle" checked><span class="toggle-slider"></span></label>
+    <span>Liq heatmap</span>
+  </div>
+  <div class="toggle-row">
+    <label class="toggle"><input type="checkbox" id="tape-toggle" checked><span class="toggle-slider"></span></label>
+    <span>Big prints</span>
   </div>
   <div class="pressure" id="pressure">
     <span class="p-dot"></span>
@@ -315,6 +357,25 @@ button{font-family:inherit}
       <div class="foot">
         <span>Sources: <span id="ex-used">—</span></span>
         <span>refresh 30s</span>
+      </div>
+    </div>
+
+    <div class="tape">
+      <div class="tape-hd">
+        <span><span class="live">●</span>Live tape · big prints</span>
+        <span class="tape-thresh">
+          ≥
+          <select id="tape-min">
+            <option value="10000">$10K</option>
+            <option value="25000" selected>$25K</option>
+            <option value="50000">$50K</option>
+            <option value="100000">$100K</option>
+            <option value="250000">$250K</option>
+          </select>
+        </span>
+      </div>
+      <div class="tape-list" id="tape-list">
+        <div class="tape-empty">Listening for big prints…</div>
       </div>
     </div>
 
@@ -455,9 +516,33 @@ button{font-family:inherit}
     if(!zCtx || !zCanvas) return;
     const wpx = zCanvas.clientWidth, hpx = zCanvas.clientHeight;
     zCtx.clearRect(0,0,wpx,hpx);
-    if(!$('overlay-toggle').checked || !lastWallsData || !candleSeries) return;
-    const price = lastWallsData.price || 0;
+    if(!candleSeries) return;
+    const price = (lastWallsData && lastWallsData.price) || lastPrice || 0;
     if(price <= 0) return;
+
+    // ── PASS 1: Liquidation heatmap (drawn first so walls layer on top) ──
+    // Synthetic estimate: traders cluster at standard leverage tiers (10/25/50/100x).
+    // Long positions liquidate at P × (1 − ~1/lev), shorts at P × (1 + ~1/lev).
+    // Weights skew toward lower leverage (more common). Bands fade with distance.
+    if($('liq-toggle').checked){
+      const tiers = [
+        { lev:100, w:0.18, label:'100x' },
+        { lev:50,  w:0.30, label:'50x'  },
+        { lev:25,  w:0.55, label:'25x'  },
+        { lev:10,  w:0.95, label:'10x'  },
+      ];
+      tiers.forEach(({lev, w, label}) => {
+        const gap = (0.95 / lev);                  // ~5% maint margin haircut
+        const halfPct = Math.max(0.0006, gap * 0.10); // band thickness
+        // Long liqs (orange) below price
+        drawLiqBand(price * (1 - gap), price * halfPct, w, true,  `${label} longs`, wpx, hpx);
+        // Short liqs (purple) above price
+        drawLiqBand(price * (1 + gap), price * halfPct, w, false, `${label} shorts`, wpx, hpx);
+      });
+    }
+
+    // ── PASS 2: Order block walls ──
+    if(!$('overlay-toggle').checked || !lastWallsData) return;
 
     // Bucket size from the engine: ~0.10% of price.
     // Each wall is rendered as a horizontal band; thickness scales with tier so
@@ -621,6 +706,8 @@ button{font-family:inherit}
 
   function updateHeaderPrice(p){
     if(!p) return;
+    lastPrice = p;
+    zonesDirty = true;     // liq heatmap re-paints when price moves meaningfully
     const el = $('px');
     const prev = parseFloat(el.dataset.last || '0');
     el.textContent = fmtPx(p);
@@ -632,9 +719,49 @@ button{font-family:inherit}
     }
   }
 
+  // ───── Liq heatmap helper ─────
+  function drawLiqBand(centerPrice, halfPrice, weight, isLong, label, wpx, hpx){
+    const yTop = candleSeries.priceToCoordinate(centerPrice + halfPrice);
+    const yBot = candleSeries.priceToCoordinate(centerPrice - halfPrice);
+    if(yTop == null || yBot == null) return;
+    let top = Math.min(yTop, yBot), bot = Math.max(yTop, yBot);
+    if(bot < 0 || top > hpx) return;
+    top = Math.max(0, top); bot = Math.min(hpx, bot);
+    const bandH = bot - top;
+    if(bandH < 1) return;
+    // Long liqs = warm orange, short liqs = cool violet
+    const alpha = 0.05 + weight * 0.18;
+    const fill = isLong
+      ? `rgba(255,152,0,${alpha})`
+      : `rgba(186,104,200,${alpha})`;
+    zCtx.fillStyle = fill;
+    zCtx.fillRect(0, top, wpx, bandH);
+    // Center dashed line for the actual liq price
+    const cy = candleSeries.priceToCoordinate(centerPrice);
+    if(cy != null && cy >= 0 && cy <= hpx){
+      zCtx.save();
+      zCtx.setLineDash([3,4]);
+      zCtx.strokeStyle = isLong ? 'rgba(255,152,0,0.55)' : 'rgba(186,104,200,0.55)';
+      zCtx.lineWidth = 1;
+      zCtx.beginPath();
+      zCtx.moveTo(0, cy + 0.5); zCtx.lineTo(wpx, cy + 0.5);
+      zCtx.stroke();
+      zCtx.restore();
+    }
+    // Label only when band is tall enough — kept on the LEFT so it never collides with wall pills
+    if(bandH >= 14 && weight >= 0.25){
+      zCtx.font = '600 9px JetBrains Mono, monospace';
+      zCtx.textAlign = 'left';
+      zCtx.textBaseline = 'middle';
+      zCtx.fillStyle = isLong ? 'rgba(255,152,0,0.95)' : 'rgba(206,147,216,0.95)';
+      zCtx.fillText(label + ' liq', 8, (top + bot) / 2);
+    }
+  }
+
   // ───── Walls ─────
   let lastWallsAt = 0;
   let lastWallsData = null;
+  let lastPrice = 0;   // mirrored from ticker so liq heatmap can paint before walls load
 
   function fmtPx(p){
     if(p == null) return '—';
@@ -818,9 +945,108 @@ button{font-family:inherit}
       renderWallList(lastWallsData.top_sells || [], 'sell');
     }
   });
+  $('liq-toggle').addEventListener('change', () => { zonesDirty = true; });
+  $('tape-toggle').addEventListener('change', () => {
+    if(!$('tape-toggle').checked){
+      candleSeries && candleSeries.setMarkers([]);
+    } else {
+      pushChartMarkers();
+    }
+  });
+  $('tape-min').addEventListener('change', () => {
+    // Wipe local tape state and re-pull from scratch with the new threshold
+    tapeRows = []; tapeSeen = new Set(); tapeLastId = 0;
+    renderTape();
+    candleSeries && candleSeries.setMarkers([]);
+    pollTape(true);
+  });
 
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+  }
+
+  // ───── Live trade tape ─────
+  let tapeRows = [];           // newest-first, capped
+  let tapeSeen = new Set();
+  let tapeLastId = 0;
+  const TAPE_MAX = 60;
+
+  function fmtTime(ms){
+    const d = new Date(ms);
+    const hh = String(d.getHours()).padStart(2,'0');
+    const mm = String(d.getMinutes()).padStart(2,'0');
+    const ss = String(d.getSeconds()).padStart(2,'0');
+    return `${hh}:${mm}:${ss}`;
+  }
+  function tapePxFmt(p){
+    return Number(p).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+  }
+  function renderTape(){
+    const el = $('tape-list');
+    if(!tapeRows.length){
+      el.innerHTML = '<div class="tape-empty">Listening for big prints…</div>';
+      return;
+    }
+    el.innerHTML = tapeRows.map(t => `
+      <div class="tape-row ${t.side}">
+        <div class="tape-time">${fmtTime(t.ts)}</div>
+        <div class="tape-px ${t.side}">${tapePxFmt(t.price)}</div>
+        <div class="tape-usd">${fmtUsd(t.usd)}</div>
+      </div>
+    `).join('');
+  }
+  function pushChartMarkers(){
+    if(!candleSeries || !$('tape-toggle').checked) return;
+    // Aggregate trades to candle resolution so multiple markers don't stack on the same time
+    const tfSec = ({'1m':60,'5m':300,'15m':900,'1h':3600})[currentTF] || 300;
+    const buckets = new Map();   // bucketTime → {buy:{usd,n}, sell:{usd,n}}
+    tapeRows.forEach(t => {
+      const bt = Math.floor(t.ts/1000/tfSec) * tfSec;
+      const b = buckets.get(bt) || { time: bt, buy:{usd:0,n:0}, sell:{usd:0,n:0} };
+      b[t.side].usd += t.usd; b[t.side].n += 1;
+      buckets.set(bt, b);
+    });
+    const markers = [];
+    Array.from(buckets.values()).sort((a,b)=>a.time-b.time).forEach(b => {
+      const dominant = b.buy.usd >= b.sell.usd ? 'buy' : 'sell';
+      const dom = b[dominant];
+      // Size 0–4 from $25k → $500k+ log scale on dominant side only
+      const size = Math.max(0, Math.min(4, Math.round(Math.log10(Math.max(dom.usd, 1) / 25000) + 1)));
+      markers.push({
+        time: b.time,
+        position: dominant === 'buy' ? 'belowBar' : 'aboveBar',
+        color:    dominant === 'buy' ? '#26a69a' : '#ef5350',
+        shape:    dominant === 'buy' ? 'arrowUp' : 'arrowDown',
+        size: size,
+        text: dom.n > 1 ? `${fmtUsd(dom.usd)}×${dom.n}` : fmtUsd(dom.usd),
+      });
+    });
+    // Lightweight Charts caps at ~hundreds — keep last 80
+    candleSeries.setMarkers(markers.slice(-80));
+  }
+  async function pollTape(reset){
+    if(document.hidden) return;
+    const minUsd = parseInt($('tape-min').value || '25000', 10);
+    try{
+      const r = await fetch(`/api/trade/tape/${SYMBOL}?since=${reset ? 0 : tapeLastId}&min_usd=${minUsd}&limit=80`);
+      if(!r.ok) return;
+      const d = await r.json();
+      const trades = (d.trades || []).filter(t => !tapeSeen.has(t.id));
+      if(!trades.length){ if(d.last_id) tapeLastId = Math.max(tapeLastId, d.last_id); return; }
+      // Sort ASCENDING by id, then unshift each — guarantees newest ends up at the top
+      trades.sort((a,b) => a.id - b.id);
+      trades.forEach(t => {
+        tapeSeen.add(t.id);
+        tapeRows.unshift(t);
+        if(tapeRows.length > TAPE_MAX){
+          const dropped = tapeRows.pop();
+          if(dropped) tapeSeen.delete(dropped.id);
+        }
+      });
+      if(d.last_id) tapeLastId = Math.max(tapeLastId, d.last_id);
+      renderTape();
+      pushChartMarkers();
+    }catch(e){ /* silent */ }
   }
 
   // ───── Init + polling ─────
@@ -828,12 +1054,14 @@ button{font-family:inherit}
   loadCandlesFull();
   loadWalls();
   tickPrice();
+  pollTape(true);
   setInterval(tickPrice, 2_000);
   setInterval(tickCandles, 3_000);
   setInterval(loadWalls, 30_000);
+  setInterval(pollTape, 2_000);
 
   document.addEventListener('visibilitychange', () => {
-    if(!document.hidden){ tickPrice(); tickCandles(); }
+    if(!document.hidden){ tickPrice(); tickCandles(); pollTape(); }
   });
   window.addEventListener('resize', () => { resizeZones(); zonesDirty = true; });
 })();
