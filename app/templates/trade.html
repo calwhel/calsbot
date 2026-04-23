@@ -62,9 +62,15 @@ button{font-family:inherit}
 }
 .sym-name{font-weight:700;font-size:14px}
 .sym-sub{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-left:4px}
-.divider{width:1px;height:22px;background:var(--border)}
-.px{font-family:var(--mono);font-size:18px;font-weight:600;letter-spacing:-.3px;transition:color .25s}
-.px-meta{display:flex;flex-direction:column;gap:1px}
+.divider{width:1px;height:26px;background:var(--border)}
+.px-block{display:flex;flex-direction:column;gap:1px;min-width:0}
+.px-row{display:flex;align-items:baseline;gap:10px}
+.px{font-family:var(--mono);font-size:19px;font-weight:600;letter-spacing:-.3px;transition:color .25s;line-height:1}
+.px-chg{font-family:var(--mono);font-size:12px;font-weight:600;line-height:1}
+.px-chg.up{color:var(--green)}
+.px-chg.dn{color:var(--red)}
+.px-stats{display:flex;gap:10px;font-size:10px;color:var(--muted);font-family:var(--mono)}
+.px-stats b{color:var(--text2);font-weight:500}
 .px-src{font-size:10px;color:var(--muted)}
 .tf-switch{display:flex;background:var(--panel);border:1px solid var(--border);border-radius:4px;overflow:hidden;height:28px}
 .tf-btn{
@@ -96,6 +102,27 @@ button{font-family:inherit}
 .chart-wrap{position:relative;background:var(--bg);border-right:1px solid var(--border);overflow:hidden}
 #chart{position:absolute;inset:0}
 #zones{position:absolute;inset:0;pointer-events:none;z-index:2}
+
+/* OHLC legend overlay (top-left of chart) */
+.ohlc{
+  position:absolute;top:10px;left:12px;z-index:4;pointer-events:none;
+  display:flex;align-items:center;gap:11px;
+  font-family:var(--mono);font-size:11px;color:var(--text2);
+  background:rgba(19,23,34,.78);backdrop-filter:blur(4px);
+  padding:6px 10px;border:1px solid var(--border);border-radius:4px;
+}
+.ohlc .lbl{color:var(--muted);font-weight:600;margin-right:3px}
+.ohlc .v{color:var(--text);font-weight:500}
+.ohlc .v.up{color:var(--green)}
+.ohlc .v.dn{color:var(--red)}
+.ohlc .sym-tag{color:var(--text);font-weight:700;letter-spacing:.3px}
+.ohlc .tf-tag{
+  color:var(--text2);font-weight:600;background:var(--panel2);
+  padding:1px 6px;border-radius:3px;font-size:10px;
+}
+@media(max-width:900px){
+  .ohlc{font-size:10px;gap:8px;padding:5px 8px}
+}
 .chart-loading{
   position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   color:var(--muted);font-size:12px;background:var(--bg);z-index:5;font-family:var(--mono);
@@ -221,9 +248,16 @@ button{font-family:inherit}
     <span class="sym-name">BTC</span>
     <span class="sym-sub">USDT · Spot</span>
   </div>
-  <div class="px-meta">
-    <span class="px" id="px">—</span>
-    <span class="px-src" id="px-source">Bybit · OKX · MEXC · Kraken</span>
+  <div class="px-block">
+    <div class="px-row">
+      <span class="px" id="px">—</span>
+      <span class="px-chg" id="px-chg">—</span>
+    </div>
+    <div class="px-stats">
+      <span><b>24h H</b> <span id="hi24">—</span></span>
+      <span><b>L</b> <span id="lo24">—</span></span>
+      <span class="px-src" id="px-source">· Bybit·OKX·MEXC·Kraken</span>
+    </div>
   </div>
   <div class="divider"></div>
   <div class="tf-switch" id="tf-switch">
@@ -246,6 +280,15 @@ button{font-family:inherit}
 <div class="main">
   <div class="chart-wrap">
     <div class="chart-loading" id="chart-loading">Loading chart…</div>
+    <div class="ohlc" id="ohlc">
+      <span class="sym-tag">BTC/USDT</span>
+      <span class="tf-tag" id="ohlc-tf">5m</span>
+      <span><span class="lbl">O</span><span class="v" id="ohlc-o">—</span></span>
+      <span><span class="lbl">H</span><span class="v" id="ohlc-h">—</span></span>
+      <span><span class="lbl">L</span><span class="v" id="ohlc-l">—</span></span>
+      <span><span class="lbl">C</span><span class="v" id="ohlc-c">—</span></span>
+      <span><span class="v" id="ohlc-chg">—</span></span>
+    </div>
     <div id="chart"></div>
     <canvas id="zones"></canvas>
   </div>
@@ -293,14 +336,15 @@ button{font-family:inherit}
   const $ = id => document.getElementById(id);
 
   // ───── Chart ─────
-  let chart, candleSeries, currentTF = '5m';
+  let chart, candleSeries, volumeSeries, currentTF = '5m';
+  let lastCandlesFull = [];   // full series cached for OHLC legend lookups
 
   function initChart(){
     const el = $('chart');
     chart = LightweightCharts.createChart(el, {
       layout:{ background:{type:'solid', color:'#131722'}, textColor:'#9ca3af', fontFamily:'Inter, sans-serif', fontSize:11 },
       grid:{ vertLines:{color:'#1e222d'}, horzLines:{color:'#1e222d'} },
-      rightPriceScale:{ borderColor:'#2a2e39', scaleMargins:{top:0.08, bottom:0.08} },
+      rightPriceScale:{ borderColor:'#2a2e39', scaleMargins:{top:0.08, bottom:0.28} },
       timeScale:{ borderColor:'#2a2e39', timeVisible:true, secondsVisible:false, rightOffset:6 },
       crosshair:{
         mode:1,
@@ -313,11 +357,67 @@ button{font-family:inherit}
       upColor:'#26a69a', downColor:'#ef5350',
       borderUpColor:'#26a69a', borderDownColor:'#ef5350',
       wickUpColor:'#26a69a', wickDownColor:'#ef5350',
+      priceFormat:{type:'price', precision:2, minMove:0.01},
     });
+    // Volume histogram pinned to the bottom 22% of the pane (overlay scale)
+    volumeSeries = chart.addHistogramSeries({
+      priceFormat:{type:'volume'},
+      priceScaleId:'volume_scale',
+      lastValueVisible:false,
+      priceLineVisible:false,
+    });
+    chart.priceScale('volume_scale').applyOptions({
+      scaleMargins:{top:0.78, bottom:0},
+      borderVisible:false,
+    });
+
     new ResizeObserver(()=>{ resizeZones(); drawZones(); }).observe(el);
     chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{ drawZones(); });
-    chart.subscribeCrosshairMove(()=>{ drawZones(); });
+    chart.subscribeCrosshairMove(param => {
+      drawZones();
+      updateOhlcLegend(param);
+    });
     setupZones();
+  }
+
+  function fmtVol(v){
+    v = Number(v) || 0;
+    if(v >= 1e9) return (v/1e9).toFixed(2)+'B';
+    if(v >= 1e6) return (v/1e6).toFixed(2)+'M';
+    if(v >= 1e3) return (v/1e3).toFixed(1)+'K';
+    return v.toFixed(0);
+  }
+
+  function buildVolumeData(candles){
+    return candles.map(c => ({
+      time: c.time,
+      value: c.quote_volume || c.volume || 0,
+      color: (c.close >= c.open) ? 'rgba(38,166,154,0.45)' : 'rgba(239,83,80,0.45)',
+    }));
+  }
+
+  function updateOhlcLegend(param){
+    const candles = lastCandlesFull;
+    if(!candles.length) return;
+    let c;
+    if(param && param.time){
+      c = candles.find(x => x.time === param.time);
+    }
+    if(!c) c = candles[candles.length - 1];
+    if(!c) return;
+    const chg = c.close - c.open;
+    const chgPct = c.open > 0 ? (chg / c.open) * 100 : 0;
+    const up = chg >= 0;
+    const cls = up ? 'up' : 'dn';
+    $('ohlc-o').textContent = fmtPx(c.open);
+    $('ohlc-h').textContent = fmtPx(c.high);
+    $('ohlc-l').textContent = fmtPx(c.low);
+    const closeEl = $('ohlc-c');
+    closeEl.textContent = fmtPx(c.close);
+    closeEl.className = 'v ' + cls;
+    const chgEl = $('ohlc-chg');
+    chgEl.textContent = `${up?'+':''}${chg.toFixed(2)} (${up?'+':''}${chgPct.toFixed(2)}%)`;
+    chgEl.className = 'v ' + cls;
   }
 
   // ───── Zone overlay (canvas) ─────
@@ -396,6 +496,7 @@ button{font-family:inherit}
 
   async function loadCandlesFull(){
     const tf = currentTF; loadingTF = tf;
+    $('ohlc-tf').textContent = tf;
     try{
       const r = await fetch(`/api/trade/candles/${SYMBOL}?tf=${tf}&limit=300`);
       if(!r.ok) throw new Error('candle fetch');
@@ -403,11 +504,14 @@ button{font-family:inherit}
       if(loadingTF !== tf) return;
       if(!data.candles || !data.candles.length) return;
       candleSeries.setData(data.candles);
+      volumeSeries.setData(buildVolumeData(data.candles));
+      lastCandlesFull = data.candles.slice();
       const last = data.candles[data.candles.length-1];
       lastCandleTime = last.time;
       $('chart-loading').classList.add('hidden');
       initialLoadDone = true;
       if(last) updateHeaderPrice(last.close);
+      updateOhlcLegend(null);
       drawZones();
     }catch(e){ console.warn('candles full load failed', e); }
   }
@@ -424,10 +528,26 @@ button{font-family:inherit}
       cs.forEach(c => {
         if(c.time < lastCandleTime) return;
         candleSeries.update(c);
+        volumeSeries.update({
+          time: c.time,
+          value: c.quote_volume || c.volume || 0,
+          color: (c.close >= c.open) ? 'rgba(38,166,154,0.45)' : 'rgba(239,83,80,0.45)',
+        });
+        // Patch the cached series so OHLC legend stays accurate
+        if(lastCandlesFull.length){
+          const lastIdx = lastCandlesFull.length - 1;
+          if(lastCandlesFull[lastIdx].time === c.time){
+            lastCandlesFull[lastIdx] = c;
+          } else if(c.time > lastCandlesFull[lastIdx].time){
+            lastCandlesFull.push(c);
+            if(lastCandlesFull.length > 600) lastCandlesFull.shift();
+          }
+        }
         if(c.time >= lastCandleTime) lastCandleTime = c.time;
       });
       const last = cs[cs.length-1];
       if(last) updateHeaderPrice(last.close);
+      updateOhlcLegend(null);
     }catch(e){ /* silent */ }
   }
 
@@ -438,6 +558,15 @@ button{font-family:inherit}
       if(!r.ok) return;
       const d = await r.json();
       if(d.price) updateHeaderPrice(d.price);
+      // 24h stats
+      const chgEl = $('px-chg');
+      if(d.change_pct !== undefined){
+        const up = d.change_pct >= 0;
+        chgEl.textContent = `${up?'+':''}${Number(d.change_abs||0).toFixed(2)}  (${up?'+':''}${Number(d.change_pct).toFixed(2)}%)`;
+        chgEl.className = 'px-chg ' + (up ? 'up' : 'dn');
+      }
+      if(d.high_24h) $('hi24').textContent = fmtPx(d.high_24h);
+      if(d.low_24h)  $('lo24').textContent = fmtPx(d.low_24h);
     }catch(e){ /* silent */ }
   }
 

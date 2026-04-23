@@ -1458,13 +1458,16 @@ async def trade_candles(symbol: str, tf: str = "5m", limit: int = 300):
         candles = []
         for k in rows:
             try:
-                # Lightweight Charts wants UTC seconds for time
+                # Lightweight Charts wants UTC seconds for time.
+                # MEXC kline shape: [openTime, o, h, l, c, baseVol, closeTime, quoteVol(USD), ...]
                 candles.append({
-                    "time":  int(k[0]) // 1000,
-                    "open":  float(k[1]),
-                    "high":  float(k[2]),
-                    "low":   float(k[3]),
-                    "close": float(k[4]),
+                    "time":   int(k[0]) // 1000,
+                    "open":   float(k[1]),
+                    "high":   float(k[2]),
+                    "low":    float(k[3]),
+                    "close":  float(k[4]),
+                    "volume": float(k[5]) if len(k) > 5 else 0.0,
+                    "quote_volume": float(k[7]) if len(k) > 7 else 0.0,
                 })
             except (TypeError, ValueError, IndexError):
                 continue
@@ -1480,13 +1483,13 @@ async def trade_candles(symbol: str, tf: str = "5m", limit: int = 300):
 @app.get("/api/ticker/{symbol}")
 @app.get("/api/trade/ticker/{symbol}")
 async def trade_ticker(symbol: str):
-    """Ultra-light price tick — used by the trade page header for sub-2s price updates.
-    MEXC bookTicker is the cheapest endpoint. Cached ~1s."""
+    """Live price + 24h stats for the trade page header. MEXC 24hr endpoint.
+    Cached ~2s — keeps header live without hammering MEXC."""
     sym = (symbol or "").upper().strip()
     if sym not in TRADE_SYMBOL_WHITELIST:
         return JSONResponse({"error": "symbol not supported"}, status_code=404)
     pair = TRADE_SYMBOL_WHITELIST[sym]
-    cache_key = f"trade_ticker_{pair}"
+    cache_key = f"trade_ticker24_{pair}"
     cached = _CACHE.get(cache_key)
     if cached and time.time() < cached[1]:
         return cached[0]
@@ -1494,16 +1497,35 @@ async def trade_ticker(symbol: str):
         import httpx
         async with httpx.AsyncClient(timeout=3.0) as client:
             r = await client.get(
-                "https://api.mexc.com/api/v3/ticker/bookTicker",
+                "https://api.mexc.com/api/v3/ticker/24hr",
                 params={"symbol": pair},
             )
             r.raise_for_status()
             d = r.json() or {}
-        bid = float(d.get("bidPrice") or 0)
-        ask = float(d.get("askPrice") or 0)
-        mid = (bid + ask) / 2 if (bid > 0 and ask > 0) else (bid or ask)
-        payload = {"symbol": pair, "bid": bid, "ask": ask, "price": mid, "ts": int(time.time() * 1000)}
-        _CACHE[cache_key] = (payload, time.time() + 1.0)
+
+        def _f(k):
+            try: return float(d.get(k) or 0)
+            except (TypeError, ValueError): return 0.0
+
+        last = _f("lastPrice")
+        bid  = _f("bidPrice")
+        ask  = _f("askPrice")
+        # Prefer last trade price; fall back to mid if MEXC ever returns 0
+        price = last or ((bid + ask) / 2 if (bid > 0 and ask > 0) else (bid or ask))
+        payload = {
+            "symbol": pair,
+            "price": price,
+            "bid": bid, "ask": ask,
+            "change_abs": _f("priceChange"),
+            "change_pct": _f("priceChangePercent"),
+            "open_24h":  _f("openPrice"),
+            "high_24h":  _f("highPrice"),
+            "low_24h":   _f("lowPrice"),
+            "vol_24h_base":  _f("volume"),
+            "vol_24h_quote": _f("quoteVolume"),
+            "ts": int(time.time() * 1000),
+        }
+        _CACHE[cache_key] = (payload, time.time() + 2.0)
         return payload
     except Exception as e:
         logger.debug(f"trade_ticker({sym}) failed: {e}")
