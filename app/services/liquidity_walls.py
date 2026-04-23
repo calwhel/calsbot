@@ -551,6 +551,60 @@ def format_telegram(report: WallReport) -> str:
     lines.append("")
     lines.append(f"<b>🎯 Best zone to watch:</b>")
     lines.append(f"<i>{safe_zone}</i>")
+
+    # ── Possible scenarios: where price could go if it breaks the nearest wall ──
+    # Sort sells ascending by price (nearest above first), buys descending (nearest below first)
+    sells_above = sorted(
+        [w for w in report.top_sells if w.price > report.price],
+        key=lambda w: w.price,
+    )
+    buys_below = sorted(
+        [w for w in report.top_buys if w.price < report.price],
+        key=lambda w: -w.price,
+    )
+
+    scenario_lines = []
+    if len(sells_above) >= 2:
+        first, second = sells_above[0], sells_above[1]
+        move_pct = ((second.price - first.price) / first.price) * 100
+        f_tier, f_emoji = _size_tier(first.size_usd)
+        s_tier, s_emoji = _size_tier(second.size_usd)
+        scenario_lines.append(
+            f"  📈 <b>If price breaks above {_fmt_price(first.price)}</b> "
+            f"({f_emoji} {f_tier} sell wall) → next resistance "
+            f"<b>{_fmt_price(second.price)}</b> ({s_emoji} {s_tier}, +{move_pct:.2f}% move room)"
+        )
+    elif len(sells_above) == 1:
+        first = sells_above[0]
+        f_tier, f_emoji = _size_tier(first.size_usd)
+        scenario_lines.append(
+            f"  📈 <b>If price breaks above {_fmt_price(first.price)}</b> "
+            f"({f_emoji} {f_tier} sell wall) → no major resistance left in scanned range, open runway up"
+        )
+
+    if len(buys_below) >= 2:
+        first, second = buys_below[0], buys_below[1]
+        move_pct = ((first.price - second.price) / first.price) * 100
+        f_tier, f_emoji = _size_tier(first.size_usd)
+        s_tier, s_emoji = _size_tier(second.size_usd)
+        scenario_lines.append(
+            f"  📉 <b>If price breaks below {_fmt_price(first.price)}</b> "
+            f"({f_emoji} {f_tier} buy support) → next support "
+            f"<b>{_fmt_price(second.price)}</b> ({s_emoji} {s_tier}, -{move_pct:.2f}% downside)"
+        )
+    elif len(buys_below) == 1:
+        first = buys_below[0]
+        f_tier, f_emoji = _size_tier(first.size_usd)
+        scenario_lines.append(
+            f"  📉 <b>If price breaks below {_fmt_price(first.price)}</b> "
+            f"({f_emoji} {f_tier} buy support) → no major support left in scanned range, fast drop possible"
+        )
+
+    if scenario_lines:
+        lines.append("")
+        lines.append("<b>🔮 Possible scenarios:</b>")
+        lines.extend(scenario_lines)
+
     lines.append("")
     lines.append(f"<b>🧠 AI summary:</b>")
     lines.append(safe_summary)

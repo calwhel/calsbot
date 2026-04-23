@@ -3721,15 +3721,19 @@ async def auto_post_loop():
                         else:
                             error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
                             logger.warning(f"⚠️ [{account.name}] Failed to auto-post {post_type}: {error_msg}")
-                            POSTED_SLOTS.add(account_slot_key)  # Mark as attempted
-                            _save_posted_slots_to_disk(POSTED_SLOTS, SLOT_OFFSETS)
+                            # NOTE: Do NOT add account_slot_key to POSTED_SLOTS here —
+                            # we want the loop to retry on the next 2-min cycle while still
+                            # inside the slot's posting window. The slot window naturally
+                            # expires after `_window_secs`, so retries are time-bounded.
                             await notify_admin_post_result(account.name, post_type, False, error_msg)
                     
-                    # Always mark the base slot as done — prevents re-firing on the next
-                    # loop cycle even if all accounts failed or skipped this slot.
-                    POSTED_SLOTS.add(slot_key)
-                    _save_slot_to_db(slot_key)          # DB — survives restarts
-                    _save_posted_slots_to_disk(POSTED_SLOTS, SLOT_OFFSETS)  # /tmp/ cache
+                    # Only mark the base slot as "done" if at least one account posted
+                    # successfully. If everyone failed, leave it open so the next loop
+                    # iteration (~2 min later) can try again within the slot window.
+                    if posted_any:
+                        POSTED_SLOTS.add(slot_key)
+                        _save_slot_to_db(slot_key)          # DB — survives restarts
+                        _save_posted_slots_to_disk(POSTED_SLOTS, SLOT_OFFSETS)  # /tmp/ cache
 
                     break
             
