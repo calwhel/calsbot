@@ -504,15 +504,39 @@ button{font-family:inherit}
         zCtx.moveTo(0, bot - 0.5); zCtx.lineTo(wpx, bot - 0.5);
         zCtx.stroke();
       }
-      // Label only when there's enough vertical room for it to read clearly.
-      if((t === 'huge' || t === 'big') && bandH >= 16){
-        zCtx.fillStyle = isBuy ? '#26a69a' : '#ef5350';
-        zCtx.font = '600 10px JetBrains Mono, monospace';
-        zCtx.textAlign = 'right';
-        zCtx.textBaseline = 'middle';
-        const label = `${fmtUsd(w.size_usd)}  ${t.toUpperCase()}`;
-        zCtx.fillText(label, wpx - 70, (top + bot) / 2);
-      }
+      // Label every zone — size is the whole point. For thin bands we shrink the
+      // font and drop the tier tag; for chunky bands we show "$XXk  TIER".
+      const cy = (top + bot) / 2;
+      const big = (t === 'huge' || t === 'big');
+      const fontPx = bandH >= 18 ? 11 : bandH >= 12 ? 10 : 9;
+      const label = (big && bandH >= 16)
+        ? `${fmtUsd(w.size_usd)}  ${t.toUpperCase()}`
+        : fmtUsd(w.size_usd);
+      // Pill background so the number is readable over candles
+      zCtx.font = `600 ${fontPx}px JetBrains Mono, monospace`;
+      zCtx.textAlign = 'right';
+      zCtx.textBaseline = 'middle';
+      const padX = 5, padY = 2;
+      const tw = zCtx.measureText(label).width;
+      const pillH = fontPx + padY * 2;
+      const pillW = tw + padX * 2;
+      const pillRight = wpx - 64;            // keep clear of price axis
+      const pillLeft = pillRight - pillW;
+      // For sub-pixel bands we still want the number — anchor pill at the band centre
+      const pillY = Math.max(pillH / 2 + 1, Math.min(hpx - pillH / 2 - 1, cy));
+      zCtx.fillStyle = isBuy ? 'rgba(38,166,154,0.92)' : 'rgba(239,83,80,0.92)';
+      zCtx.beginPath();
+      const r = 3;
+      const x0 = pillLeft, y0 = pillY - pillH / 2, x1 = pillRight, y1 = pillY + pillH / 2;
+      zCtx.moveTo(x0 + r, y0);
+      zCtx.lineTo(x1 - r, y0); zCtx.quadraticCurveTo(x1, y0, x1, y0 + r);
+      zCtx.lineTo(x1, y1 - r); zCtx.quadraticCurveTo(x1, y1, x1 - r, y1);
+      zCtx.lineTo(x0 + r, y1); zCtx.quadraticCurveTo(x0, y1, x0, y1 - r);
+      zCtx.lineTo(x0, y0 + r); zCtx.quadraticCurveTo(x0, y0, x0 + r, y0);
+      zCtx.closePath();
+      zCtx.fill();
+      zCtx.fillStyle = '#ffffff';
+      zCtx.fillText(label, pillRight - padX, pillY);
     });
   }
 
