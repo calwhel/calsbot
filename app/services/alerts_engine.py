@@ -438,4 +438,13 @@ async def run_alerts_engine() -> None:
                             db.close()
         except Exception as e:
             logger.error(f"alerts_engine loop error: {e}")
+
+        # Piggy-back the auto-trader tick on this loop. It shares the
+        # executor advisory lock so we never double-fire across workers.
+        try:
+            from app.services.auto_trader import tick_auto_strategies
+            await tick_auto_strategies()
+        except Exception as e:
+            logger.error(f"auto_trader tick error: {e}")
+
         await asyncio.sleep(ALERTS_INTERVAL_S)

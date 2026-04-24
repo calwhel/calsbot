@@ -716,3 +716,98 @@ class IndicatorAlert(Base):
     triggered_at = Column(DateTime, nullable=True)
     triggered_price = Column(Float, nullable=True)
     triggered_message = Column(Text, nullable=True)
+
+
+class AutoTradeStrategy(Base):
+    """User-saved chart setup that the auto trader runs in the background.
+
+    Two modes:
+      * 'ai'    — every `cadence_min` minutes the engine calls
+                  generate_ai_trade_read() with the saved chart context. If the
+                  AI plan's ODDS clears `min_odds` and ORDER_TYPE is MARKET,
+                  the engine opens a paper position using the AI's STOP/TP1.
+      * 'rules' — `rules_json` holds a small DSL compiled from the visible
+                  indicators (e.g. fast/slow EMA cross + wall confluence). The
+                  engine evaluates it on every tick.
+    """
+    __tablename__ = "auto_trade_strategies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    name = Column(String, nullable=False, default="Auto strategy")
+    symbol = Column(String, nullable=False, default="BTC")
+    timeframe = Column(String, nullable=False, default="5m")
+
+    # 'ai' or 'rules'
+    mode = Column(String, nullable=False, default="ai", index=True)
+    # JSON snapshot of the chart state at save time (indicators + toggles)
+    chart_state_json = Column(Text, nullable=False, default="{}")
+    # Compiled rule spec — only used when mode='rules'
+    rules_json = Column(Text, nullable=True)
+    # Human-readable summary (for the dashboard)
+    rules_summary = Column(String, nullable=True)
+
+    # AI-mode knobs
+    cadence_min = Column(Integer, nullable=False, default=5)   # how often to ask the AI
+    min_odds = Column(Integer, nullable=False, default=60)      # AI plan must clear this UP/DOWN %
+
+    # Position sizing — paper-only for now
+    notional_usd = Column(Float, nullable=False, default=1000.0)
+    leverage = Column(Integer, nullable=False, default=10)
+
+    # TP/SL source: 'ai' (use AI plan), 'walls' (nearest wall), 'atr' (1 ATR stop, 2x TP)
+    tp_sl_source = Column(String, nullable=False, default="ai")
+
+    # active | paused | archived
+    status = Column(String, nullable=False, default="active", index=True)
+    notify_telegram = Column(Boolean, default=True)
+
+    # Bookkeeping
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    paused_at = Column(DateTime, nullable=True)
+    last_evaluated_at = Column(DateTime, nullable=True)
+    last_signal_at = Column(DateTime, nullable=True)
+
+    # Aggregate stats — incremented atomically by the engine when trades close
+    total_signals = Column(Integer, default=0)
+    wins = Column(Integer, default=0)
+    losses = Column(Integer, default=0)
+    pnl_usd_total = Column(Float, default=0.0)
+
+
+class AutoTradePaperTrade(Base):
+    """Paper position opened by the auto trader. Lives until stop or TP hits.
+
+    No real orders are placed — we just simulate against MEXC candles and DM
+    the user when the position opens and closes.
+    """
+    __tablename__ = "auto_trade_paper_trades"
+
+    id = Column(Integer, primary_key=True, index=True)
+    strategy_id = Column(Integer, ForeignKey("auto_trade_strategies.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    symbol = Column(String, nullable=False)
+    timeframe = Column(String, nullable=False)
+    side = Column(String, nullable=False)        # 'long' | 'short'
+    source = Column(String, nullable=False)      # 'ai' | 'rules'
+    order_type = Column(String, nullable=False, default="MARKET")  # 'MARKET' | 'LIMIT'
+
+    entry_price = Column(Float, nullable=False)
+    stop_price = Column(Float, nullable=False)
+    tp1_price = Column(Float, nullable=False)
+    tp2_price = Column(Float, nullable=True)
+
+    notional_usd = Column(Float, nullable=False, default=1000.0)
+    leverage = Column(Integer, nullable=False, default=10)
+
+    status = Column(String, nullable=False, default="open", index=True)  # open | tp1_hit | tp2_hit | stop_hit | manual_close | expired
+    exit_price = Column(Float, nullable=True)
+    pnl_pct = Column(Float, nullable=True)        # raw price-move %
+    pnl_usd = Column(Float, nullable=True)        # paper P&L on the notional, leverage-applied
+
+    plan_text = Column(Text, nullable=True)       # the AI plan or rule that triggered this
+
+    opened_at = Column(DateTime, default=datetime.utcnow, index=True)
+    closed_at = Column(DateTime, nullable=True)

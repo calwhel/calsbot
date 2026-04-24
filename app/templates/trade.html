@@ -571,6 +571,10 @@ button{font-family:inherit}
     <span class="ico">📂</span> Setups
     <span class="active-name" id="setups-active-name"></span>
   </button>
+  <button class="setups-btn" id="auto-btn" title="Save this chart as an automated paper-trading strategy (Pro)">
+    <span class="ico">🤖</span> Automate
+    <span class="badge zero" id="auto-badge" style="margin-left:4px;background:var(--panel);color:var(--muted);border-radius:10px;font-size:10px;font-weight:500;padding:1px 6px;line-height:1.4">0</span>
+  </button>
   <div class="pressure" id="pressure">
     <span class="p-dot"></span>
     <span id="pressure-text">Loading order book…</span>
@@ -883,6 +887,124 @@ button{font-family:inherit}
       <span class="meta" id="setups-count">—</span>
       <div>
         <button class="btn ghost" id="setups-cancel">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Automate modal ───────────────────────────────────────────────── -->
+<div class="modal-bg" id="auto-modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="auto-modal-title" style="max-width:560px">
+    <div class="modal-hd">
+      <span id="auto-modal-title">🤖 Automate this chart</span>
+      <button class="x" id="auto-modal-close" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <div id="auto-loading" style="color:var(--muted);font-size:12px;padding:14px;text-align:center">
+        Loading…
+      </div>
+
+      <!-- Logged-out state -->
+      <div id="auto-locked" class="alerts-locked" style="display:none">
+        <div style="margin-bottom:6px;font-size:13px;color:var(--text)">Sign in to automate strategies</div>
+        Auto-traded paper strategies need an account so we know where to send the Telegram DMs.<br>
+        <a href="/login?next=/trade">Log in or sign up →</a>
+      </div>
+
+      <!-- Pro-required state -->
+      <div id="auto-pro" class="alerts-locked" style="display:none">
+        <div style="margin-bottom:6px;font-size:13px;color:var(--text)">Pro feature</div>
+        Auto-trader strategies require a Pro subscription.<br>
+        <a href="/app#billing">Upgrade to Pro →</a>
+      </div>
+
+      <!-- Main builder -->
+      <div id="auto-main" style="display:none">
+        <!-- Existing strategies list -->
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">
+          <span id="auto-summary">No active auto strategies</span>
+        </div>
+        <div class="alerts-list" id="auto-list" style="max-height:180px"></div>
+
+        <!-- New strategy form -->
+        <div style="border-top:1px solid var(--border);padding-top:10px;margin-top:6px">
+          <div style="font-size:12px;color:var(--text);font-weight:600;margin-bottom:8px">
+            Save current chart as auto strategy
+          </div>
+
+          <div style="margin-bottom:10px">
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:3px">Name</label>
+            <input type="text" id="auto-name" maxlength="60" placeholder='e.g. "BTC 5m EMA cross + walls"'
+                   style="width:100%;padding:6px 8px;background:var(--panel2);border:1px solid var(--border);border-radius:3px;color:var(--text);font-family:var(--mono);font-size:12px">
+          </div>
+
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <label style="flex:1;display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--border);border-radius:3px;padding:8px 10px;cursor:pointer;font-size:12px" id="auto-mode-ai-lbl">
+              <input type="radio" name="auto-mode" value="ai" id="auto-mode-ai" checked>
+              <span><b>AI mode</b> — Claude reads the chart on a schedule</span>
+            </label>
+            <label style="flex:1;display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--border);border-radius:3px;padding:8px 10px;cursor:pointer;font-size:12px" id="auto-mode-rules-lbl">
+              <input type="radio" name="auto-mode" value="rules" id="auto-mode-rules">
+              <span><b>Rules mode</b> — fixed signal from your indicators</span>
+            </label>
+          </div>
+
+          <!-- AI-mode knobs -->
+          <div id="auto-ai-grid" class="alerts-form-grid" style="margin-bottom:10px">
+            <label class="half">Re-evaluate every</label>
+            <label class="half">Min ODDS to fire</label>
+            <select id="auto-cadence">
+              <option value="1">1 minute</option>
+              <option value="3">3 minutes</option>
+              <option value="5" selected>5 minutes</option>
+              <option value="10">10 minutes</option>
+              <option value="15">15 minutes</option>
+              <option value="30">30 minutes</option>
+              <option value="60">1 hour</option>
+            </select>
+            <select id="auto-min-odds">
+              <option value="50">50% (frequent)</option>
+              <option value="60" selected>60% (balanced)</option>
+              <option value="70">70% (high quality)</option>
+              <option value="80">80% (very selective)</option>
+            </select>
+          </div>
+
+          <!-- Rules-mode preview -->
+          <div id="auto-rules-preview" style="display:none;margin-bottom:10px;padding:9px 11px;background:var(--panel2);border:1px solid var(--border);border-radius:3px;font-size:12px;color:var(--text)">
+            <div style="color:var(--muted);font-size:10.5px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px">Compiled rule</div>
+            <div id="auto-rules-text" style="font-family:var(--mono)">—</div>
+          </div>
+
+          <div class="alerts-form-grid" style="margin-bottom:10px">
+            <label class="half">Paper notional ($)</label>
+            <label class="half">Leverage</label>
+            <input type="number" id="auto-notional" value="1000" min="50" max="100000" step="50">
+            <input type="number" id="auto-leverage" value="10" min="1" max="200" step="1">
+
+            <label class="half">TP/SL source</label>
+            <label class="half">Notify</label>
+            <select id="auto-tpsl">
+              <option value="ai">From AI plan</option>
+              <option value="walls">Nearest walls</option>
+              <option value="atr">1× ATR stop, 2× ATR TP</option>
+            </select>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);padding:6px 0">
+              <input type="checkbox" id="auto-notify" checked>
+              <span>Telegram DM on open & close</span>
+            </label>
+          </div>
+
+          <div id="auto-warn" class="alerts-warn" style="display:none"></div>
+          <div id="auto-err" class="err" style="margin-top:8px;display:none"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <span class="meta" id="auto-count">—</span>
+      <div>
+        <button class="btn ghost" id="auto-cancel">Close</button>
+        <button class="btn primary" id="auto-create" style="display:none">Create strategy</button>
       </div>
     </div>
   </div>
@@ -3765,6 +3887,255 @@ button{font-family:inherit}
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // AUTO TRADER — save the chart as an auto paper-trading strategy
+  // ═══════════════════════════════════════════════════════════════════════
+  let _autoState = null;   // {logged_in, is_pro, strategies: [...]}
+
+  function rulesPreviewFromChart(){
+    // Look at the current indicators[] array (built by Indicator system) and
+    // produce a one-line preview of what rule mode would compile to.
+    if(!Array.isArray(indicators)){ return 'Add some indicators to enable rule mode.'; }
+    const visibleInds = indicators.filter(i => i && i.visible !== false);
+    const mas = visibleInds.filter(i => i.type === 'ema' || i.type === 'sma');
+    const rsi = visibleInds.find(i => i.type === 'rsi');
+    const macd = visibleInds.find(i => i.type === 'macd');
+    const st = visibleInds.find(i => i.type === 'supertrend');
+    const obOn  = $('overlay-toggle') ? $('overlay-toggle').checked : false;
+    const tapeOn= $('tape-toggle')   ? $('tape-toggle').checked   : false;
+    let main = null;
+    if(mas.length >= 2){
+      const periods = mas.map(m => parseInt(m.params.period||0)).filter(p=>p>0).sort((a,b)=>a-b);
+      if(periods.length >= 2 && periods[0] !== periods[1]){
+        main = `${(mas[0].type||'EMA').toUpperCase()}(${periods[0]}) crosses ${(mas[1].type||'EMA').toUpperCase()}(${periods[1]})`;
+      }
+    }
+    if(!main && st)   { main = `SuperTrend(${st.params.period||10},${st.params.mult||3}) flip`; }
+    if(!main && macd) { main = `MACD(${macd.params.fast||12},${macd.params.slow||26},${macd.params.signal||9}) zero-cross`; }
+    if(!main && rsi)  { main = `RSI(${rsi.params.period||14}) reversal at 30/70`; }
+    if(!main){
+      return 'No rule-friendly indicators on the chart. Add 2 EMAs, an RSI, a MACD, or a SuperTrend — or use AI mode.';
+    }
+    const mods = [];
+    if(obOn)   mods.push('near a wall');
+    if(tapeOn) mods.push('flow aligned');
+    return 'Enter when ' + [main].concat(mods).join(' + ');
+  }
+
+  function chartContextForSave(){
+    // Mirrors the body shape used by /api/trade/ai_read
+    const visibleInds = (indicators || []).filter(i => i && i.visible !== false);
+    const cleanInds = visibleInds.map(i => ({
+      type:   i.type, src: i.src || 'close',
+      params: i.params || {},
+    })).filter(i => i.type && i.type !== 'marker');
+    return {
+      indicators: cleanInds,
+      toggles: {
+        order_blocks: $('overlay-toggle') ? $('overlay-toggle').checked : false,
+        liq_heatmap:  $('liq-toggle')     ? $('liq-toggle').checked     : false,
+        big_prints:   $('tape-toggle')    ? $('tape-toggle').checked    : false,
+      },
+    };
+  }
+
+  async function loadAutoState(){
+    try{
+      const r = await fetch('/api/trade/auto/list', {credentials:'same-origin'});
+      if(r.status === 401){
+        _autoState = {logged_in:false, is_pro:false, strategies:[]};
+      } else if(r.status === 402){
+        _autoState = {logged_in:true, is_pro:false, strategies:[]};
+      } else if(r.ok){
+        const d = await r.json();
+        _autoState = {logged_in:true, is_pro:true, strategies:d.strategies || []};
+      } else {
+        _autoState = {logged_in:false, is_pro:false, strategies:[]};
+      }
+      // Update toolbar badge
+      const b = $('auto-badge');
+      const n = (_autoState.strategies || []).filter(s => s.status === 'active').length;
+      b.textContent = n;
+      if(n === 0){
+        b.style.background = 'var(--panel)'; b.style.color = 'var(--muted)'; b.style.fontWeight = '500';
+      } else {
+        b.style.background = 'var(--accent)'; b.style.color = '#0a0d14'; b.style.fontWeight = '700';
+      }
+      if($('auto-modal').classList.contains('open')){ renderAutoModal(); }
+    } catch(e){ /* silent */ }
+  }
+
+  function fmtAutoPnl(usd){
+    if(usd === null || usd === undefined) return '—';
+    const sign = usd >= 0 ? '+' : '';
+    return sign + '$' + Number(usd).toFixed(2);
+  }
+
+  function renderAutoModal(){
+    $('auto-loading').style.display = 'none';
+    if(!_autoState || !_autoState.logged_in){
+      $('auto-locked').style.display = '';
+      $('auto-pro').style.display = 'none';
+      $('auto-main').style.display = 'none';
+      $('auto-create').style.display = 'none';
+      $('auto-count').textContent = '';
+      return;
+    }
+    if(!_autoState.is_pro){
+      $('auto-locked').style.display = 'none';
+      $('auto-pro').style.display = '';
+      $('auto-main').style.display = 'none';
+      $('auto-create').style.display = 'none';
+      $('auto-count').textContent = '';
+      return;
+    }
+    $('auto-locked').style.display = 'none';
+    $('auto-pro').style.display = 'none';
+    $('auto-main').style.display = '';
+    $('auto-create').style.display = '';
+
+    const arr = _autoState.strategies || [];
+    const active = arr.filter(s => s.status === 'active').length;
+    $('auto-count').textContent = `${active}/${10} active`;
+    $('auto-summary').textContent = active
+      ? `${active} active strategy${active===1?'':'ies'} — paper trades, results DM'd to you`
+      : 'No active auto strategies yet';
+
+    const list = $('auto-list');
+    list.innerHTML = '';
+    if(arr.length === 0){
+      list.innerHTML = '<div class="empty">No saved auto strategies yet.</div>';
+    } else {
+      arr.forEach(s => {
+        const row = document.createElement('div');
+        row.className = 'alert-row' + (s.status === 'paused' ? ' triggered' : '');
+        const stats = s.stats || {};
+        const wr = stats.win_rate !== null && stats.win_rate !== undefined ? `${stats.win_rate}% WR` : '—';
+        const pnl = fmtAutoPnl(stats.pnl_usd_total);
+        const last = s.last_trade ? ` · last: ${s.last_trade.side.toUpperCase()} ${s.last_trade.status}` : '';
+        const modeTag = s.mode === 'ai' ? 'AI' : 'RULES';
+        const pauseBtn = s.status === 'active'
+          ? `<button class="a-x" data-act="pause" data-id="${s.id}" title="Pause">⏸</button>`
+          : `<button class="a-x" data-act="resume" data-id="${s.id}" title="Resume" style="color:#7ed957;border-color:rgba(126,217,87,.4)">▶</button>`;
+        row.innerHTML = `
+          <span class="a-tag">${modeTag} ${s.symbol} ${s.tf}</span>
+          <span class="a-lbl" title="${(s.rules_summary||'').replace(/"/g,'&quot;')}">
+            <b>${s.name}</b> · ${stats.total_signals||0} sigs · ${wr} · ${pnl}${last}
+          </span>
+          ${pauseBtn}
+          <button class="a-x" data-act="del" data-id="${s.id}" title="Delete">×</button>
+        `;
+        row.querySelectorAll('button.a-x').forEach(btn => {
+          btn.onclick = () => autoStrategyAction(btn.dataset.act, parseInt(btn.dataset.id));
+        });
+        list.appendChild(row);
+      });
+    }
+
+    // Update rule preview if rule mode is selected
+    syncAutoRulePreview();
+  }
+
+  function syncAutoRulePreview(){
+    const isRules = $('auto-mode-rules').checked;
+    $('auto-rules-preview').style.display = isRules ? '' : 'none';
+    $('auto-ai-grid').style.display = isRules ? 'none' : '';
+    if(isRules){
+      $('auto-rules-text').textContent = rulesPreviewFromChart();
+    }
+    // Default tp_sl_source per mode
+    const tpsl = $('auto-tpsl');
+    if(isRules && tpsl.value === 'ai'){ tpsl.value = 'walls'; }
+    if(!isRules && tpsl.value !== 'ai'){ tpsl.value = 'ai'; }
+  }
+
+  async function autoStrategyAction(act, sid){
+    let url, opts = {credentials:'same-origin'};
+    if(act === 'pause')       { url = `/api/trade/auto/${sid}/pause`;  opts.method='POST'; }
+    else if(act === 'resume') { url = `/api/trade/auto/${sid}/resume`; opts.method='POST'; }
+    else if(act === 'del')    {
+      if(!confirm('Delete this auto strategy? Open paper trades stay in your history.')) return;
+      url = `/api/trade/auto/${sid}`; opts.method='DELETE';
+    } else { return; }
+    try{
+      const r = await fetch(url, opts);
+      if(r.ok) await loadAutoState();
+    } catch(e){ /* silent */ }
+  }
+
+  async function createAutoStrategy(){
+    const btn = $('auto-create');
+    const errEl = $('auto-err'), warnEl = $('auto-warn');
+    errEl.style.display = 'none'; warnEl.style.display = 'none';
+
+    const name = ($('auto-name').value || '').trim() || 'Auto strategy';
+    const mode = $('auto-mode-rules').checked ? 'rules' : 'ai';
+    const ctx = chartContextForSave();
+    const body = {
+      name, symbol: SYMBOL, tf: currentTF || '5m', mode,
+      indicators: ctx.indicators, toggles: ctx.toggles, tape: {},
+      cadence_min:  parseInt($('auto-cadence').value || '5'),
+      min_odds:     parseInt($('auto-min-odds').value || '60'),
+      notional_usd: parseFloat($('auto-notional').value || '1000'),
+      leverage:     parseInt($('auto-leverage').value || '10'),
+      tp_sl_source: $('auto-tpsl').value,
+      notify_telegram: $('auto-notify').checked,
+    };
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try{
+      const r = await fetch('/api/trade/auto/create', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body),
+      });
+      const data = await r.json().catch(()=>({}));
+      if(!r.ok){
+        errEl.style.display = ''; errEl.textContent = data.detail || 'Could not create strategy.';
+        return;
+      }
+      $('auto-name').value = '';
+      warnEl.style.display = '';
+      warnEl.textContent = '✓ Saved. The bot will start evaluating this strategy within ~30 seconds. Results will be DM\'d to you on Telegram.';
+      await loadAutoState();
+    } catch(e){
+      errEl.style.display = ''; errEl.textContent = 'Network error.';
+    } finally {
+      btn.disabled = false; btn.textContent = 'Create strategy';
+    }
+  }
+
+  function openAutoModal(){
+    $('auto-modal').classList.add('open');
+    $('auto-loading').style.display = '';
+    $('auto-locked').style.display = 'none';
+    $('auto-pro').style.display = 'none';
+    $('auto-main').style.display = 'none';
+    $('auto-warn').style.display = 'none';
+    $('auto-err').style.display = 'none';
+    syncAutoRulePreview();
+    loadAutoState().then(renderAutoModal);
+  }
+  function closeAutoModal(){ $('auto-modal').classList.remove('open'); }
+
+  function wireAuto(){
+    if(!$('auto-btn')) return;
+    $('auto-btn').onclick = openAutoModal;
+    $('auto-modal-close').onclick = closeAutoModal;
+    $('auto-cancel').onclick = closeAutoModal;
+    $('auto-modal').addEventListener('click', e => { if(e.target === $('auto-modal')) closeAutoModal(); });
+    $('auto-create').onclick = createAutoStrategy;
+    document.querySelectorAll('input[name="auto-mode"]').forEach(r => {
+      r.addEventListener('change', syncAutoRulePreview);
+    });
+    document.addEventListener('keydown', e => {
+      if(!$('auto-modal').classList.contains('open')) return;
+      if(e.key === 'Escape'){ e.preventDefault(); closeAutoModal(); }
+    });
+    // Polling — refresh badge every 60s in case a strategy fires
+    setInterval(loadAutoState, 60000);
+    loadAutoState();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // SETUPS — save/load/share named indicator layouts (synced to account)
   // ═══════════════════════════════════════════════════════════════════════
   let _setupsShareId = null;  // setup currently shown in the share box
@@ -4035,6 +4406,7 @@ button{font-family:inherit}
   initChart();
   wireModal();
   wireAlerts();
+  wireAuto();
   wireSetups();
   loadStored();
   loadCandlesFull();

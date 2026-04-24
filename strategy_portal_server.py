@@ -341,7 +341,10 @@ def _ensure_tables():
     from app.database import Base
     # Make sure new model classes are imported BEFORE create_all so their
     # tables are registered with the metadata.
-    from app.models import IndicatorAlert, TradeIndicatorSetup  # noqa: F401
+    from app.models import (  # noqa: F401
+        IndicatorAlert, TradeIndicatorSetup,
+        AutoTradeStrategy, AutoTradePaperTrade,
+    )
     init_strategy_tables(engine)
     init_marketplace_ext_tables(engine)
     init_social_tables(engine)
@@ -353,6 +356,13 @@ def _ensure_tables():
         Base.metadata.create_all(bind=engine, tables=[TradeIndicatorSetup.__table__])
     except Exception as e:
         logger.warning(f"_ensure_tables(TradeIndicatorSetup): {e}")
+    try:
+        Base.metadata.create_all(bind=engine, tables=[
+            AutoTradeStrategy.__table__,
+            AutoTradePaperTrade.__table__,
+        ])
+    except Exception as e:
+        logger.warning(f"_ensure_tables(AutoTrade*): {e}")
     # Only ALTER if column is genuinely missing — avoids table locks when both
     # dev and production portals start against the same shared Neon database.
     needed = {
@@ -2038,6 +2048,324 @@ async def trade_alerts_cancel(alert_id: int, request: Request, db: Session = Dep
     if not alert or alert.user_id != user.id:
         raise HTTPException(status_code=404, detail="alert not found")
     alert.status = "cancelled"
+    db.commit()
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Auto-trader — turn the user's chart setup into a paper-trading strategy
+# ─────────────────────────────────────────────────────────────────────────────
+_AUTO_MAX_PER_USER = 10
+_AUTO_VALID_TFS    = {"1m", "5m", "15m", "1h"}
+
+
+def _auto_strategy_to_dict(s, last_trade=None):
+    win_rate = None
+    closed = (s.wins or 0) + (s.losses or 0)
+    if closed > 0:
+        win_rate = round((s.wins or 0) * 100.0 / closed, 1)
+    return {
+        "id": s.id,
+        "name": s.name,
+        "symbol": s.symbol,
+        "tf": s.timeframe,
+        "mode": s.mode,
+        "rules_summary": s.rules_summary,
+        "cadence_min": s.cadence_min,
+        "min_odds": s.min_odds,
+        "notional_usd": s.notional_usd,
+        "leverage": s.leverage,
+        "tp_sl_source": s.tp_sl_source,
+        "status": s.status,
+        "notify_telegram": bool(s.notify_telegram),
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+        "last_evaluated_at": s.last_evaluated_at.isoformat() if s.last_evaluated_at else None,
+        "last_signal_at":    s.last_signal_at.isoformat()    if s.last_signal_at    else None,
+        "stats": {
+            "total_signals": s.total_signals or 0,
+            "wins":   s.wins or 0,
+            "losses": s.losses or 0,
+            "win_rate": win_rate,
+            "pnl_usd_total": round(s.pnl_usd_total or 0.0, 2),
+        },
+        "last_trade": last_trade,
+    }
+
+
+def _auto_trade_to_dict(t):
+    return {
+        "id": t.id,
+        "strategy_id": t.strategy_id,
+        "symbol": t.symbol,
+        "tf": t.timeframe,
+        "side": t.side,
+        "source": t.source,
+        "entry": t.entry_price,
+        "stop":  t.stop_price,
+        "tp1":   t.tp1_price,
+        "tp2":   t.tp2_price,
+        "exit":  t.exit_price,
+        "pnl_pct": t.pnl_pct,
+        "pnl_usd": t.pnl_usd,
+        "status":  t.status,
+        "notional_usd": t.notional_usd,
+        "leverage":     t.leverage,
+        "plan_text":    (t.plan_text or "")[:400],
+        "opened_at": t.opened_at.isoformat() if t.opened_at else None,
+        "closed_at": t.closed_at.isoformat() if t.closed_at else None,
+    }
+
+
+@app.post("/api/trade/auto/create")
+async def trade_auto_create(request: Request, db: Session = Depends(get_db)):
+    """Create an auto-trade strategy from the current chart setup.
+
+    Body shape (mirrors /api/trade/ai_read body):
+        {
+          "name": "BTC 5m EMA cross",
+          "symbol": "BTC",
+          "tf": "5m",
+          "mode": "ai" | "rules",
+          "indicators": [...], "toggles": {...}, "tape": {...},
+          "cadence_min": 5,
+          "min_odds": 60,
+          "notional_usd": 1000,
+          "leverage": 10,
+          "tp_sl_source": "ai" | "walls" | "atr",
+          "notify_telegram": true
+        }
+    """
+    from app.models import AutoTradeStrategy
+    from app.services.auto_trader import compile_rules_from_chart_state
+
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    sub = _get_portal_sub(user.id, db)
+    if not _is_portal_pro(sub):
+        raise HTTPException(status_code=402, detail="Pro subscription required to use Auto Trader")
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    name = (str(body.get("name") or "Auto strategy")).strip()[:60]
+    symbol = (str(body.get("symbol") or "BTC")).upper().strip()
+    if symbol not in TRADE_SYMBOL_WHITELIST:
+        raise HTTPException(status_code=400, detail="symbol not supported")
+    tf = (str(body.get("tf") or "5m")).lower().strip()
+    if tf not in _AUTO_VALID_TFS:
+        raise HTTPException(status_code=400, detail="invalid timeframe")
+    mode = (str(body.get("mode") or "ai")).lower().strip()
+    if mode not in ("ai", "rules"):
+        raise HTTPException(status_code=400, detail="mode must be 'ai' or 'rules'")
+
+    # Quota
+    active_count = (db.query(AutoTradeStrategy)
+                      .filter(AutoTradeStrategy.user_id == user.id,
+                              AutoTradeStrategy.status != "archived")
+                      .count())
+    if active_count >= _AUTO_MAX_PER_USER:
+        raise HTTPException(status_code=400, detail=f"Max {_AUTO_MAX_PER_USER} auto strategies. Pause or delete one first.")
+
+    # Sanitize the chart_state — same shape as the ai_read body
+    raw_indicators = body.get("indicators") or []
+    if not isinstance(raw_indicators, list):
+        raw_indicators = []
+    _ALLOWED_TYPES = {"ema", "sma", "rsi", "macd", "bb", "vwap", "atr", "supertrend", "stochrsi"}
+    _ALLOWED_SRCS  = {"close", "open", "high", "low", "hl2", "hlc3", "ohlc4"}
+    _ALLOWED_PARAM_KEYS = {"period", "fast", "slow", "signal", "mult", "stoch"}
+    indicators: list = []
+    for raw in raw_indicators[:12]:
+        if not isinstance(raw, dict):
+            continue
+        t = str(raw.get("type", "")).lower().strip()
+        if t not in _ALLOWED_TYPES:
+            continue
+        s = str(raw.get("src", "close")).lower().strip()
+        if s not in _ALLOWED_SRCS:
+            s = "close"
+        rp = raw.get("params") or {}
+        if not isinstance(rp, dict):
+            rp = {}
+        clean_params: dict = {}
+        for k, v in rp.items():
+            if k not in _ALLOWED_PARAM_KEYS:
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if fv < 0 or fv > 500:
+                continue
+            clean_params[k] = fv
+        indicators.append({"type": t, "src": s, "params": clean_params})
+    toggles = body.get("toggles") or {}
+    if not isinstance(toggles, dict):
+        toggles = {}
+    # Coerce toggle values to bool
+    toggles = {k: bool(v) for k, v in toggles.items() if isinstance(k, str)}
+    tape = body.get("tape") or {}
+    if not isinstance(tape, dict):
+        tape = {}
+
+    chart_state = {"indicators": indicators, "toggles": toggles, "tape": tape}
+
+    # Numeric knobs (clamped)
+    cadence_min  = max(1,  min(60,   int(float(body.get("cadence_min")  or 5))))
+    min_odds     = max(40, min(95,   int(float(body.get("min_odds")     or 60))))
+    notional_usd = max(50.0, min(100000.0, float(body.get("notional_usd") or 1000.0)))
+    leverage     = max(1,  min(200,  int(float(body.get("leverage")     or 10))))
+    tp_sl_source = (str(body.get("tp_sl_source") or "ai")).lower().strip()
+    if tp_sl_source not in ("ai", "walls", "atr"):
+        tp_sl_source = "ai" if mode == "ai" else "walls"
+
+    rules_json: Optional[str] = None
+    rules_summary: Optional[str] = None
+    if mode == "rules":
+        compiled, summary = compile_rules_from_chart_state(chart_state)
+        if not compiled:
+            # `summary` carries the error reason
+            raise HTTPException(status_code=400, detail=summary)
+        rules_json    = json.dumps(compiled)
+        rules_summary = summary
+    else:
+        rules_summary = "AI reads the chart every "  + f"{cadence_min} min"
+
+    s = AutoTradeStrategy(
+        user_id          = user.id,
+        name             = name,
+        symbol           = symbol,
+        timeframe        = tf,
+        mode             = mode,
+        chart_state_json = json.dumps(chart_state),
+        rules_json       = rules_json,
+        rules_summary    = rules_summary,
+        cadence_min      = cadence_min,
+        min_odds         = min_odds,
+        notional_usd     = notional_usd,
+        leverage         = leverage,
+        tp_sl_source     = tp_sl_source,
+        status           = "active",
+        notify_telegram  = bool(body.get("notify_telegram", True)),
+    )
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return {"ok": True, "strategy": _auto_strategy_to_dict(s)}
+
+
+@app.get("/api/trade/auto/list")
+async def trade_auto_list(request: Request, db: Session = Depends(get_db)):
+    """List the current user's auto strategies (active + paused).
+
+    Pro-gated so the frontend can read the 402 to show the "Pro lock" state
+    in the Automate modal (consistent with /api/trade/auto/create)."""
+    from app.models import AutoTradeStrategy, AutoTradePaperTrade
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    sub = _get_portal_sub(user.id, db)
+    if not _is_portal_pro(sub):
+        raise HTTPException(status_code=402, detail="Pro subscription required to use Auto Trader")
+    rows = (db.query(AutoTradeStrategy)
+              .filter(AutoTradeStrategy.user_id == user.id,
+                      AutoTradeStrategy.status != "archived")
+              .order_by(AutoTradeStrategy.created_at.desc())
+              .all())
+    out = []
+    for s in rows:
+        last = (db.query(AutoTradePaperTrade)
+                  .filter(AutoTradePaperTrade.strategy_id == s.id)
+                  .order_by(AutoTradePaperTrade.opened_at.desc())
+                  .first())
+        out.append(_auto_strategy_to_dict(s, last_trade=_auto_trade_to_dict(last) if last else None))
+    return {"ok": True, "strategies": out}
+
+
+@app.get("/api/trade/auto/{sid}/trades")
+async def trade_auto_trades(sid: int, request: Request, db: Session = Depends(get_db)):
+    """List paper trades for one strategy (newest first, last 100)."""
+    from app.models import AutoTradeStrategy, AutoTradePaperTrade
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    s = db.query(AutoTradeStrategy).filter(AutoTradeStrategy.id == sid).first()
+    if not s or s.user_id != user.id:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    trades = (db.query(AutoTradePaperTrade)
+                .filter(AutoTradePaperTrade.strategy_id == sid)
+                .order_by(AutoTradePaperTrade.opened_at.desc())
+                .limit(100)
+                .all())
+    return {
+        "ok": True,
+        "strategy": _auto_strategy_to_dict(s),
+        "trades": [_auto_trade_to_dict(t) for t in trades],
+    }
+
+
+@app.post("/api/trade/auto/{sid}/pause")
+async def trade_auto_pause(sid: int, request: Request, db: Session = Depends(get_db)):
+    from app.models import AutoTradeStrategy
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    s = db.query(AutoTradeStrategy).filter(AutoTradeStrategy.id == sid).first()
+    if not s or s.user_id != user.id:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    s.status = "paused"
+    s.paused_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True, "status": "paused"}
+
+
+@app.post("/api/trade/auto/{sid}/resume")
+async def trade_auto_resume(sid: int, request: Request, db: Session = Depends(get_db)):
+    from app.models import AutoTradeStrategy
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    s = db.query(AutoTradeStrategy).filter(AutoTradeStrategy.id == sid).first()
+    if not s or s.user_id != user.id:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    s.status = "active"
+    s.paused_at = None
+    db.commit()
+    return {"ok": True, "status": "active"}
+
+
+@app.delete("/api/trade/auto/{sid}")
+async def trade_auto_delete(sid: int, request: Request, db: Session = Depends(get_db)):
+    from app.models import AutoTradeStrategy
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    s = db.query(AutoTradeStrategy).filter(AutoTradeStrategy.id == sid).first()
+    if not s or s.user_id != user.id:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    s.status = "archived"
     db.commit()
     return {"ok": True}
 
