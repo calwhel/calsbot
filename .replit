@@ -95,4 +95,4 @@ DISABLE_EXECUTOR = "1"
 
 [postMerge]
 path = "scripts/post-merge.sh"
-timeoutMs = 120000
+timeoutMs = 60000

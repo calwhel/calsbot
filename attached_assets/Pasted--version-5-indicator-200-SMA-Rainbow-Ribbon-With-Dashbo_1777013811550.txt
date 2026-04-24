@@ -1,0 +1,146 @@
+//@version=5
+indicator("200 SMA Rainbow Ribbon With Dashboard", overlay=true)
+
+// =====================
+// Inputs
+// =====================
+len = input.int(200, "SMA Length", minval=1)
+showLines = input.bool(true, "Show SMA Lines")
+showFill = input.bool(true, "Show Ribbon Fill")
+lineWidth = input.int(2, "Line Width", minval=1, maxval=5)
+showDashboard = input.bool(true, "Show Dashboard")
+
+// =====================
+// Colors
+// =====================
+highColor = input.color(color.fuchsia, "High SMA Color")
+lowColor = input.color(color.aqua, "Low SMA Color")
+closeColor = input.color(color.yellow, "Close SMA Color")
+
+fillColor1 = input.color(color.new(color.fuchsia, 82), "High-Close Fill")
+fillColor2 = input.color(color.new(color.aqua, 82), "Low-Close Fill")
+
+dashBg = input.color(color.black, "Dashboard Background")
+dashText = input.color(color.white, "Dashboard Text")
+
+// =====================
+// 200 SMAs
+// =====================
+smaHigh = ta.sma(high, len)
+smaLow = ta.sma(low, len)
+smaClose = ta.sma(close, len)
+
+// =====================
+// Ribbon plots
+// =====================
+pHigh = plot(showLines ? smaHigh : na, "200 SMA High", color=highColor, linewidth=lineWidth)
+pLow = plot(showLines ? smaLow : na, "200 SMA Low", color=lowColor, linewidth=lineWidth)
+pClose = plot(showLines ? smaClose : na, "200 SMA Close", color=closeColor, linewidth=lineWidth)
+
+fill(pHigh, pClose, color=showFill ? fillColor1 : na, title="High-Close Ribbon")
+fill(pLow, pClose, color=showFill ? fillColor2 : na, title="Low-Close Ribbon")
+
+// =====================
+// Touch checks by timeframe
+// A touch means the bar range crossed the SMA
+// =====================
+h1 = request.security(syminfo.tickerid, "1", low <= ta.sma(high, len) and high >= ta.sma(high, len), barmerge.gaps_off, barmerge.lookahead_off)
+l1 = request.security(syminfo.tickerid, "1", low <= ta.sma(low, len) and high >= ta.sma(low, len), barmerge.gaps_off, barmerge.lookahead_off)
+c1 = request.security(syminfo.tickerid, "1", low <= ta.sma(close, len) and high >= ta.sma(close, len), barmerge.gaps_off, barmerge.lookahead_off)
+
+h3 = request.security(syminfo.tickerid, "3", low <= ta.sma(high, len) and high >= ta.sma(high, len), barmerge.gaps_off, barmerge.lookahead_off)
+l3 = request.security(syminfo.tickerid, "3", low <= ta.sma(low, len) and high >= ta.sma(low, len), barmerge.gaps_off, barmerge.lookahead_off)
+c3 = request.security(syminfo.tickerid, "3", low <= ta.sma(close, len) and high >= ta.sma(close, len), barmerge.gaps_off, barmerge.lookahead_off)
+
+h5 = request.security(syminfo.tickerid, "5", low <= ta.sma(high, len) and high >= ta.sma(high, len), barmerge.gaps_off, barmerge.lookahead_off)
+l5 = request.security(syminfo.tickerid, "5", low <= ta.sma(low, len) and high >= ta.sma(low, len), barmerge.gaps_off, barmerge.lookahead_off)
+c5 = request.security(syminfo.tickerid, "5", low <= ta.sma(close, len) and high >= ta.sma(close, len), barmerge.gaps_off, barmerge.lookahead_off)
+
+h15 = request.security(syminfo.tickerid, "15", low <= ta.sma(high, len) and high >= ta.sma(high, len), barmerge.gaps_off, barmerge.lookahead_off)
+l15 = request.security(syminfo.tickerid, "15", low <= ta.sma(low, len) and high >= ta.sma(low, len), barmerge.gaps_off, barmerge.lookahead_off)
+c15 = request.security(syminfo.tickerid, "15", low <= ta.sma(close, len) and high >= ta.sma(close, len), barmerge.gaps_off, barmerge.lookahead_off)
+
+h30 = request.security(syminfo.tickerid, "30", low <= ta.sma(high, len) and high >= ta.sma(high, len), barmerge.gaps_off, barmerge.lookahead_off)
+l30 = request.security(syminfo.tickerid, "30", low <= ta.sma(low, len) and high >= ta.sma(low, len), barmerge.gaps_off, barmerge.lookahead_off)
+c30 = request.security(syminfo.tickerid, "30", low <= ta.sma(close, len) and high >= ta.sma(close, len), barmerge.gaps_off, barmerge.lookahead_off)
+
+h60 = request.security(syminfo.tickerid, "60", low <= ta.sma(high, len) and high >= ta.sma(high, len), barmerge.gaps_off, barmerge.lookahead_off)
+l60 = request.security(syminfo.tickerid, "60", low <= ta.sma(low, len) and high >= ta.sma(low, len), barmerge.gaps_off, barmerge.lookahead_off)
+c60 = request.security(syminfo.tickerid, "60", low <= ta.sma(close, len) and high >= ta.sma(close, len), barmerge.gaps_off, barmerge.lookahead_off)
+
+h240 = request.security(syminfo.tickerid, "240", low <= ta.sma(high, len) and high >= ta.sma(high, len), barmerge.gaps_off, barmerge.lookahead_off)
+l240 = request.security(syminfo.tickerid, "240", low <= ta.sma(low, len) and high >= ta.sma(low, len), barmerge.gaps_off, barmerge.lookahead_off)
+c240 = request.security(syminfo.tickerid, "240", low <= ta.sma(close, len) and high >= ta.sma(close, len), barmerge.gaps_off, barmerge.lookahead_off)
+
+hD = request.security(syminfo.tickerid, "D", low <= ta.sma(high, len) and high >= ta.sma(high, len), barmerge.gaps_off, barmerge.lookahead_off)
+lD = request.security(syminfo.tickerid, "D", low <= ta.sma(low, len) and high >= ta.sma(low, len), barmerge.gaps_off, barmerge.lookahead_off)
+cD = request.security(syminfo.tickerid, "D", low <= ta.sma(close, len) and high >= ta.sma(close, len), barmerge.gaps_off, barmerge.lookahead_off)
+
+hW = request.security(syminfo.tickerid, "W", low <= ta.sma(high, len) and high >= ta.sma(high, len), barmerge.gaps_off, barmerge.lookahead_off)
+lW = request.security(syminfo.tickerid, "W", low <= ta.sma(low, len) and high >= ta.sma(low, len), barmerge.gaps_off, barmerge.lookahead_off)
+cW = request.security(syminfo.tickerid, "W", low <= ta.sma(close, len) and high >= ta.sma(close, len), barmerge.gaps_off, barmerge.lookahead_off)
+
+// =====================
+// Build timeframe lists
+// =====================
+highList = ""
+highList := h1 ? (str.length(highList) == 0 ? "1m" : highList + ", 1m") : highList
+highList := h3 ? (str.length(highList) == 0 ? "3m" : highList + ", 3m") : highList
+highList := h5 ? (str.length(highList) == 0 ? "5m" : highList + ", 5m") : highList
+highList := h15 ? (str.length(highList) == 0 ? "15m" : highList + ", 15m") : highList
+highList := h30 ? (str.length(highList) == 0 ? "30m" : highList + ", 30m") : highList
+highList := h60 ? (str.length(highList) == 0 ? "1H" : highList + ", 1H") : highList
+highList := h240 ? (str.length(highList) == 0 ? "4H" : highList + ", 4H") : highList
+highList := hD ? (str.length(highList) == 0 ? "D" : highList + ", D") : highList
+highList := hW ? (str.length(highList) == 0 ? "W" : highList + ", W") : highList
+
+lowList = ""
+lowList := l1 ? (str.length(lowList) == 0 ? "1m" : lowList + ", 1m") : lowList
+lowList := l3 ? (str.length(lowList) == 0 ? "3m" : lowList + ", 3m") : lowList
+lowList := l5 ? (str.length(lowList) == 0 ? "5m" : lowList + ", 5m") : lowList
+lowList := l15 ? (str.length(lowList) == 0 ? "15m" : lowList + ", 15m") : lowList
+lowList := l30 ? (str.length(lowList) == 0 ? "30m" : lowList + ", 30m") : lowList
+lowList := l60 ? (str.length(lowList) == 0 ? "1H" : lowList + ", 1H") : lowList
+lowList := l240 ? (str.length(lowList) == 0 ? "4H" : lowList + ", 4H") : lowList
+lowList := lD ? (str.length(lowList) == 0 ? "D" : lowList + ", D") : lowList
+lowList := lW ? (str.length(lowList) == 0 ? "W" : lowList + ", W") : lowList
+
+closeList = ""
+closeList := c1 ? (str.length(closeList) == 0 ? "1m" : closeList + ", 1m") : closeList
+closeList := c3 ? (str.length(closeList) == 0 ? "3m" : closeList + ", 3m") : closeList
+closeList := c5 ? (str.length(closeList) == 0 ? "5m" : closeList + ", 5m") : closeList
+closeList := c15 ? (str.length(closeList) == 0 ? "15m" : closeList + ", 15m") : closeList
+closeList := c30 ? (str.length(closeList) == 0 ? "30m" : closeList + ", 30m") : closeList
+closeList := c60 ? (str.length(closeList) == 0 ? "1H" : closeList + ", 1H") : closeList
+closeList := c240 ? (str.length(closeList) == 0 ? "4H" : closeList + ", 4H") : closeList
+closeList := cD ? (str.length(closeList) == 0 ? "D" : closeList + ", D") : closeList
+closeList := cW ? (str.length(closeList) == 0 ? "W" : closeList + ", W") : closeList
+
+anyList = ""
+anyList := (h1 or l1 or c1) ? (str.length(anyList) == 0 ? "1m" : anyList + ", 1m") : anyList
+anyList := (h3 or l3 or c3) ? (str.length(anyList) == 0 ? "3m" : anyList + ", 3m") : anyList
+anyList := (h5 or l5 or c5) ? (str.length(anyList) == 0 ? "5m" : anyList + ", 5m") : anyList
+anyList := (h15 or l15 or c15) ? (str.length(anyList) == 0 ? "15m" : anyList + ", 15m") : anyList
+anyList := (h30 or l30 or c30) ? (str.length(anyList) == 0 ? "30m" : anyList + ", 30m") : anyList
+anyList := (h60 or l60 or c60) ? (str.length(anyList) == 0 ? "1H" : anyList + ", 1H") : anyList
+anyList := (h240 or l240 or c240) ? (str.length(anyList) == 0 ? "4H" : anyList + ", 4H") : anyList
+anyList := (hD or lD or cD) ? (str.length(anyList) == 0 ? "D" : anyList + ", D") : anyList
+anyList := (hW or lW or cW) ? (str.length(anyList) == 0 ? "W" : anyList + ", W") : anyList
+
+highText = str.length(highList) > 0 ? highList : "None"
+lowText = str.length(lowList) > 0 ? lowList : "None"
+closeText = str.length(closeList) > 0 ? closeList : "None"
+anyText = str.length(anyList) > 0 ? anyList : "None"
+
+// =====================
+// Dashboard
+// =====================
+var table dash = table.new(position.top_right, 1, 5, border_width=1)
+
+dashOn = barstate.islast and showDashboard
+
+table.cell(dash, 0, 0, dashOn ? "200 SMA Touch Dashboard" : "", text_color=color.white, bgcolor=dashBg, text_size=size.small)
+table.cell(dash, 0, 1, dashOn ? "Any Touch: " + anyText : "", text_color=dashText, bgcolor=dashBg, text_size=size.small)
+table.cell(dash, 0, 2, dashOn ? "High SMA: " + highText : "", text_color=highColor, bgcolor=dashBg, text_size=size.small)
+table.cell(dash, 0, 3, dashOn ? "Close SMA: " + closeText : "", text_color=closeColor, bgcolor=dashBg, text_size=size.small)
+table.cell(dash, 0, 4, dashOn ? "Low SMA: " + lowText : "", text_color=lowColor, bgcolor=dashBg, text_size=size.small)
