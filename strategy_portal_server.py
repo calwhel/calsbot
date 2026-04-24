@@ -48,14 +48,26 @@ app.add_middleware(GZipMiddleware, minimum_size=500)
 templates = Jinja2Templates(directory="app/templates")
 
 @app.middleware("http")
-async def redirect_www(request: Request, call_next):
+async def redirect_www_and_log_500(request: Request, call_next):
     host = request.headers.get("host", "")
     if host.startswith("www."):
         url = request.url
         non_www = host[4:]
         redirect_url = str(url).replace(f"://{host}", f"://{non_www}", 1)
         return RedirectResponse(url=redirect_url, status_code=301)
-    return await call_next(request)
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        import traceback as _tb
+        logger.error(
+            "[500] %s %s — %s: %s\n%s",
+            request.method,
+            request.url.path,
+            type(exc).__name__,
+            exc,
+            _tb.format_exc(),
+        )
+        raise
 
 # ─── Session cookie helpers (HMAC-signed, no extra deps) ──────────────────────
 _COOKIE_SECRET = os.getenv("SECRET_KEY", "tradehub-portal-secret-2025")
