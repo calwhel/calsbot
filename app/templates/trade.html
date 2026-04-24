@@ -72,10 +72,11 @@ button{font-family:inherit}
 .px-stats{display:flex;gap:10px;font-size:10px;color:var(--muted);font-family:var(--mono)}
 .px-stats b{color:var(--text2);font-weight:500}
 .px-src{font-size:10px;color:var(--muted)}
-.tf-switch{display:flex;background:var(--panel);border:1px solid var(--border);border-radius:4px;overflow:hidden;height:28px}
+.tf-switch{display:flex;background:var(--panel);border:1px solid var(--border);border-radius:4px;overflow:hidden;height:28px;flex-shrink:0}
 .tf-btn{
-  padding:0 12px;font-size:12px;font-weight:500;color:var(--text2);
+  padding:0 10px;font-size:12px;font-weight:500;color:var(--text2);
   background:transparent;border:none;cursor:pointer;transition:.1s;
+  flex-shrink:0;white-space:nowrap;
 }
 .tf-btn:hover{color:var(--text);background:var(--panel2)}
 .tf-btn.active{background:var(--panel2);color:var(--text)}
