@@ -4065,39 +4065,76 @@ button{font-family:inherit}
   async function createAutoStrategy(){
     const btn = $('auto-create');
     const errEl = $('auto-err'), warnEl = $('auto-warn');
-    errEl.style.display = 'none'; warnEl.style.display = 'none';
-
-    const name = ($('auto-name').value || '').trim() || 'Auto strategy';
-    const mode = $('auto-mode-rules').checked ? 'rules' : 'ai';
-    const ctx = chartContextForSave();
-    const body = {
-      name, symbol: SYMBOL, tf: currentTF || '5m', mode,
-      indicators: ctx.indicators, toggles: ctx.toggles, tape: {},
-      cadence_min:  parseInt($('auto-cadence').value || '5'),
-      min_odds:     parseInt($('auto-min-odds').value || '60'),
-      notional_usd: parseFloat($('auto-notional').value || '1000'),
-      leverage:     parseInt($('auto-leverage').value || '10'),
-      tp_sl_source: $('auto-tpsl').value,
-      notify_telegram: $('auto-notify').checked,
+    const showErr = (msg) => {
+      if(errEl){ errEl.style.display = ''; errEl.textContent = msg; }
+      else { alert(msg); }
     };
+    if(errEl) errEl.style.display = 'none';
+    if(warnEl) warnEl.style.display = 'none';
+
     btn.disabled = true; btn.textContent = 'Saving…';
-    try{
-      const r = await fetch('/api/trade/auto/create', {
-        method:'POST', credentials:'same-origin',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(body),
-      });
-      const data = await r.json().catch(()=>({}));
-      if(!r.ok){
-        errEl.style.display = ''; errEl.textContent = data.detail || 'Could not create strategy.';
+    try {
+      // Build the request body. Wrapped in inner try so any DOM/serialization
+      // error surfaces to the user instead of dying silently.
+      let body;
+      try {
+        const name = ($('auto-name').value || '').trim() || 'Auto strategy';
+        const mode = $('auto-mode-rules').checked ? 'rules' : 'ai';
+        const ctx = chartContextForSave();
+        body = {
+          name, symbol: SYMBOL, tf: currentTF || '5m', mode,
+          indicators: ctx.indicators, toggles: ctx.toggles, tape: {},
+          cadence_min:  parseInt($('auto-cadence').value || '5'),
+          min_odds:     parseInt($('auto-min-odds').value || '60'),
+          notional_usd: parseFloat($('auto-notional').value || '1000'),
+          leverage:     parseInt($('auto-leverage').value || '10'),
+          tp_sl_source: $('auto-tpsl').value,
+          notify_telegram: $('auto-notify').checked,
+        };
+      } catch(prepErr){
+        console.error('auto-create prep failed:', prepErr);
+        showErr('Could not read chart settings: ' + (prepErr && prepErr.message ? prepErr.message : prepErr));
         return;
       }
+
+      let r;
+      try {
+        r = await fetch('/api/trade/auto/create', {
+          method:'POST', credentials:'same-origin',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body),
+        });
+      } catch(netErr){
+        console.error('auto-create network error:', netErr);
+        showErr('Network error — could not reach the server.');
+        return;
+      }
+
+      let data = {};
+      try { data = await r.json(); } catch(_){ /* may be empty */ }
+
+      if(r.status === 401){
+        showErr('You need to log in to create an auto strategy.');
+        return;
+      }
+      if(r.status === 402){
+        showErr('Auto Trader is a Pro feature. Upgrade to Pro to create strategies.');
+        return;
+      }
+      if(!r.ok){
+        showErr((data && data.detail) ? String(data.detail) : ('Could not create strategy (HTTP ' + r.status + ').'));
+        return;
+      }
+
       $('auto-name').value = '';
-      warnEl.style.display = '';
-      warnEl.textContent = '✓ Saved. The bot will start evaluating this strategy within ~30 seconds. Results will be DM\'d to you on Telegram.';
-      await loadAutoState();
+      if(warnEl){
+        warnEl.style.display = '';
+        warnEl.textContent = '✓ Saved. The bot will start evaluating this strategy within ~30 seconds. Results will be DM\'d to you on Telegram.';
+      }
+      try { await loadAutoState(); } catch(_){}
     } catch(e){
-      errEl.style.display = ''; errEl.textContent = 'Network error.';
+      console.error('auto-create unexpected error:', e);
+      showErr('Unexpected error: ' + (e && e.message ? e.message : e));
     } finally {
       btn.disabled = false; btn.textContent = 'Create strategy';
     }
