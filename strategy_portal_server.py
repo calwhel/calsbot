@@ -1405,7 +1405,7 @@ async def app_page(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 
 TRADE_SYMBOL_WHITELIST = {"BTC": "BTCUSDT"}  # add ETH/SOL/etc here later
-_TRADE_TF_MAP = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h"}
+_TRADE_TF_MAP = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "60m"}  # MEXC uses '60m' not '1h'
 
 
 @app.get("/trade", response_class=HTMLResponse)
