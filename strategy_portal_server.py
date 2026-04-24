@@ -111,6 +111,30 @@ def _set_session(response, uid: str, request: Request = None):
     )
 
 
+def _safe_next(value: Optional[str], default: str = "/app") -> str:
+    """Return ``value`` if it's a safe internal path, else ``default``.
+
+    A safe path is a relative URL that begins with a single ``/``, doesn't
+    start with ``//`` (which would be protocol-relative → external host),
+    contains no scheme, no whitespace/CR/LF, and is reasonably short. This
+    keeps post-login redirects from being abused as an open-redirect vector.
+    """
+    if not value or not isinstance(value, str):
+        return default
+    v = value.strip()
+    if not v.startswith("/") or v.startswith("//") or v.startswith("/\\"):
+        return default
+    if len(v) > 512:
+        return default
+    if any(c in v for c in ("\r", "\n", "\t", " ")):
+        return default
+    # Disallow scheme injection like "/http://..." paths
+    low = v.lower()
+    if "://" in low or low.startswith("/javascript:") or low.startswith("/data:"):
+        return default
+    return v
+
+
 def get_db():
     from app.database import SessionLocal
     db = SessionLocal()
@@ -655,7 +679,10 @@ async def landing_page(request: Request):
 async def login_page(request: Request):
     uid = _get_session_uid(request)
     if uid:
-        return RedirectResponse(url="/app", status_code=302)
+        # Honour ?next=/some/path so links from /trade etc. round-trip the user
+        # back to the page they came from.
+        target = _safe_next(request.query_params.get("next"))
+        return RedirectResponse(url=target, status_code=302)
     return FileResponse("app/templates/login.html", media_type="text/html")
 
 
@@ -853,7 +880,7 @@ async def login_submit(request: Request):
     if not ok:
         raise HTTPException(status_code=403, detail="Incorrect password.")
 
-    resp = JSONResponse({"redirect": "/app"})
+    resp = JSONResponse({"redirect": _safe_next(body.get("next"))})
     _set_session(resp, uid, request)
     return resp
 
@@ -895,7 +922,7 @@ async def login_uid_set_password(request: Request):
     if result == "already_set":
         raise HTTPException(status_code=400, detail="Password already set — use Change Password in Settings.")
 
-    resp = JSONResponse({"redirect": "/app"})
+    resp = JSONResponse({"redirect": _safe_next(body.get("next"))})
     _set_session(resp, uid, request)
     return resp
 
@@ -966,7 +993,7 @@ async def login_email_verify(request: Request):
         raise HTTPException(status_code=403, detail="Account not found.")
     if udata["banned"]:
         raise HTTPException(status_code=403, detail="This account has been suspended.")
-    resp = JSONResponse({"redirect": "/app"})
+    resp = JSONResponse({"redirect": _safe_next(body.get("next"))})
     _set_session(resp, udata["uid"], request)
     return resp
 
@@ -1052,7 +1079,7 @@ async def register_submit(request: Request):
             referrer_name=result["referrer"]["name"],
             referrer_uid=result["referrer"]["uid"],
         ))
-    resp = JSONResponse({"redirect": "/app"})
+    resp = JSONResponse({"redirect": _safe_next(body.get("next"))})
     _set_session(resp, result["uid"], request)
     return resp
 
@@ -1106,7 +1133,7 @@ async def login_password(request: Request):
         raise HTTPException(status_code=403, detail="This account has been suspended.")
     if err == "incomplete":
         raise HTTPException(status_code=403, detail="Account setup incomplete. Please contact support.")
-    resp = JSONResponse({"redirect": "/app"})
+    resp = JSONResponse({"redirect": _safe_next(body.get("next"))})
     _set_session(resp, result["uid"], request)
     return resp
 
@@ -1169,7 +1196,7 @@ async def login_telegram(request: Request):
         raise HTTPException(status_code=403, detail="Your account is pending approval.")
 
     logger.info(f"Telegram login: uid={udata['uid']} tg_id={telegram_id} username=@{udata['username']}")
-    resp = JSONResponse({"redirect": "/app"})
+    resp = JSONResponse({"redirect": _safe_next(data.get("next"))})
     _set_session(resp, udata["uid"], request)
     return resp
 

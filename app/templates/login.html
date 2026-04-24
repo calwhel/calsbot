@@ -282,7 +282,7 @@ async function doCode(){
   document.getElementById('uid-create-pw').style.display='none';
   document.getElementById('uid-enter-pw').style.display='none';
   try{
-    const r = await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})});
+    const r = await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_withNext({uid}))});
     const d = await r.json();
     if(!r.ok){ showErr('code-err', d.detail||'Access code not found. Check the bot with /start.'); btn.disabled=false; btn.textContent='Continue →'; return; }
     _loginUid = uid;
@@ -311,7 +311,7 @@ async function doSetPassword(){
   const btn = document.getElementById('uid-setpw-btn');
   btn.disabled=true; btn.textContent='Creating…';
   try{
-    const r = await fetch('/login/uid-set-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_loginUid,password:pw1})});
+    const r = await fetch('/login/uid-set-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_withNext({uid:_loginUid,password:pw1}))});
     const d = await r.json();
     if(r.ok && d.redirect){ window.location.href = d.redirect; }
     else{ showErr('code-err', d.detail||'Failed to set password.'); btn.disabled=false; btn.textContent='Create Password & Sign In →'; }
@@ -325,7 +325,7 @@ async function doLoginWithPassword(){
   const btn = document.getElementById('uid-enterpw-btn');
   btn.disabled=true; btn.textContent='Signing in…';
   try{
-    const r = await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_loginUid,password:pw})});
+    const r = await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_withNext({uid:_loginUid,password:pw}))});
     const d = await r.json();
     if(r.ok && d.redirect){ window.location.href = d.redirect; }
     else{ showErr('code-err', d.detail||'Incorrect password.'); btn.disabled=false; btn.textContent='Sign In →'; }
@@ -343,7 +343,7 @@ async function doSignin(){
   try{
     const r = await fetch('/login/password',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({email,password:pass})
+      body:JSON.stringify(_withNext({email,password:pass}))
     });
     const d = await r.json();
     if(r.ok && d.redirect){ window.location.href = d.redirect; }
@@ -351,8 +351,11 @@ async function doSignin(){
   }catch{ showErr('si-err','Connection error — please try again.'); btn.disabled=false; btn.textContent='Sign In →'; }
 }
 
-// ── Referral code from URL ─────────────────────────────────────────────────────
-const _refCode = (new URLSearchParams(window.location.search)).get('ref') || '';
+// ── Referral code + post-login redirect target from URL ──────────────────────
+const _qs = new URLSearchParams(window.location.search);
+const _refCode = _qs.get('ref') || '';
+const _nextParam = _qs.get('next') || '';
+function _withNext(body){ if(_nextParam) body.next = _nextParam; return body; }
 if(_refCode){
   window.addEventListener('load',()=>{
     switchTab('register');
@@ -378,6 +381,7 @@ async function doRegister(){
   try{
     const body = {name, email, password:pass};
     if(_refCode) body.ref_code = _refCode.toUpperCase();
+    _withNext(body);
     const r = await fetch('/register',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify(body)
