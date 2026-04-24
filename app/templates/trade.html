@@ -1835,24 +1835,96 @@ button{font-family:inherit}
   // ═══════════════════════════════════════════════════════════════════════
   // PINE TRANSLATOR — best-effort regex extractor
   // Catches plot(ta.ema(close, 20), color=...), single-line var bindings,
-  // and friendly errors for unsupported features.
+  // resolves input.int/float/color constants and ternary plots,
+  // and silently skips request.security / table / drawings instead of
+  // hard-failing the whole translation.
   // ═══════════════════════════════════════════════════════════════════════
+  const COLOR_MAP = {
+    red:'#ef5350', green:'#26a69a', blue:'#42a5f5', orange:'#ffb74d',
+    yellow:'#ffee58', purple:'#ab47bc', aqua:'#26c6da', white:'#eee',
+    gray:'#9ca3af', lime:'#66bb6a', maroon:'#7e2424', navy:'#3949ab',
+    olive:'#9e9d24', silver:'#c0c0c0', teal:'#00897b', fuchsia:'#ec407a',
+    black:'#0a0d14', new:'#42a5f5', // color.new(color.x, n) handled separately
+  };
+
   function translatePine(script){
-    const text = script || '';
-    if(!text.trim()) throw new Error('Paste your script first.');
-    const blockers = [
-      [/\bstrategy\s*\(/, 'strategy()'],
-      [/\brequest\.security\s*\(/, 'request.security()'],
-      [/\barray\.\w+/, 'array.* functions'],
-      [/\bmatrix\.\w+/, 'matrix.* functions'],
-      [/\bline\.\w+|\blabel\.\w+|\bbox\.\w+/, 'drawing objects (line/label/box)'],
-      [/\bvar\s+\w+\s*=\s*/, 'var declarations (state-tracking)'],
+    const raw = script || '';
+    if(!raw.trim()) throw new Error('Paste your script first.');
+
+    // ── 1. Soft-skip detection (informational, never aborts translation) ──
+    const softFeatures = [
+      [/\brequest\.security\s*\(/, 'multi-timeframe (request.security)'],
+      [/\btable\.\w+/,             'dashboard tables (table.*)'],
+      [/\barray\.\w+/,             'arrays (array.*)'],
+      [/\bmatrix\.\w+/,            'matrices (matrix.*)'],
+      [/\b(?:line|label|box)\.\w+/, 'drawings (line/label/box)'],
+      [/\bstrategy\s*\(/,          'strategy() entries/exits'],
+      [/\bbgcolor\s*\(/,           'bgcolor()'],
+      [/\bhline\s*\(/,             'horizontal lines (hline)'],
+      [/\bfill\s*\(/,              'ribbon fills (fill)'],
     ];
     const skipped = [];
-    blockers.forEach(([rx, name]) => { if(rx.test(text)) skipped.push(name); });
+    softFeatures.forEach(([rx, name]) => { if(rx.test(raw)) skipped.push(name); });
 
-    // Build symbol table from `name = ta.ema(close, 20)` style assignments
-    // BEFORE plot() lookup so plot(name) can resolve.
+    // ── 2. Strip the noise so it can't confuse the plot/assign extractors.
+    //    We remove balanced-paren calls naïvely (good enough for one-liners).
+    const stripCall = (src, head) => {
+      const rx = new RegExp('\\b' + head + '\\s*\\(', 'g');
+      let out = '';
+      let i = 0;
+      while(i < src.length){
+        rx.lastIndex = i;
+        const m = rx.exec(src);
+        if(!m){ out += src.slice(i); break; }
+        out += src.slice(i, m.index);
+        // Walk the parens
+        let depth = 1; let j = m.index + m[0].length;
+        while(j < src.length && depth > 0){
+          const ch = src[j];
+          if(ch === '(') depth++;
+          else if(ch === ')') depth--;
+          j++;
+        }
+        i = j;  // Skip the whole call (including trailing close-paren)
+      }
+      return out;
+    };
+    let text = raw;
+    ['request\\.security', 'table\\.\\w+', 'fill', 'bgcolor', 'hline',
+     'plotshape', 'plotchar', 'plotarrow'].forEach(name => {
+      text = stripCall(text, name);
+    });
+    // Drop full lines that look like state-tracking / drawing object var decls.
+    text = text.split('\n').filter(line =>
+      !/^\s*var\s+(?:table|line|label|box)\b/.test(line)
+    ).join('\n');
+
+    // ── 3. Build numeric/color symbol table from input.* and `name = literal`
+    const inputs = {};   // name → number
+    const colors = {};   // name → '#hex'
+    // input.int(200, "SMA Length", minval=1)  /  input.float(2.0, …)
+    const inpNumRx = /^\s*([a-zA-Z_][\w]*)\s*=\s*input\.(?:int|float|bool)\s*\(\s*([^,)]+)/gm;
+    let im;
+    while((im = inpNumRx.exec(text)) !== null){
+      const v = Number(im[2]);
+      if(isFinite(v)) inputs[im[1]] = v;
+    }
+    // input.color(color.fuchsia, "...")  /  input.color(color.new(color.red, 80), …)
+    const inpColRx = /^\s*([a-zA-Z_][\w]*)\s*=\s*input\.color\s*\(\s*color\.(\w+)/gm;
+    let icm;
+    while((icm = inpColRx.exec(text)) !== null){
+      const hex = COLOR_MAP[icm[2].toLowerCase()];
+      if(hex) colors[icm[1]] = hex;
+    }
+    // Plain `name = 14`
+    const inpLitRx = /^\s*([a-zA-Z_][\w]*)\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*$/gm;
+    let il;
+    while((il = inpLitRx.exec(text)) !== null){
+      const v = Number(il[2]);
+      if(isFinite(v) && inputs[il[1]] === undefined) inputs[il[1]] = v;
+    }
+
+    // ── 4. Build symbol table from `name = ta.ema(close, 20)` assignments
     const symbols = {};
     const assignRx = /^\s*([a-zA-Z_][\w]*)\s*=\s*(?:ta\.)?(ema|sma|rsi|macd|bb|vwap|atr|supertrend|stochrsi|wma|hma|cci)\s*\(([^)]*)\)/gm;
     let am;
@@ -1860,29 +1932,34 @@ button{font-family:inherit}
       symbols[am[1]] = { fn: am[2].toLowerCase(), args: am[3] };
     }
 
-    // Find plot()/plotchar() calls and extract the inner expression + color.
+    // ── 5. Walk every plot() call, extract its expression + color
     const out = [];
-    const colorRx = /color\s*=\s*color\.(\w+)|color\s*=\s*#([0-9a-fA-F]{3,8})/;
-    const COLOR_MAP = {
-      red:'#ef5350', green:'#26a69a', blue:'#42a5f5', orange:'#ffb74d',
-      yellow:'#ffee58', purple:'#ab47bc', aqua:'#26c6da', white:'#eee',
-      gray:'#9ca3af', lime:'#66bb6a', maroon:'#7e2424', navy:'#3949ab',
-      olive:'#9e9d24', silver:'#c0c0c0', teal:'#00897b', fuchsia:'#ec407a',
-    };
-
-    const plotRx = /\bplot(?:char)?\s*\(\s*([^,)]+)(?:\s*,([^)]*))?\)/g;
+    const colorRx = /color\s*=\s*color\.(\w+)|color\s*=\s*#([0-9a-fA-F]{3,8})|color\s*=\s*([a-zA-Z_][\w]*)/;
+    const plotRx = /\bplot\s*\(\s*([^,)]+(?:\([^)]*\)[^,)]*)?)(?:\s*,([^)]*(?:\([^)]*\)[^)]*)?))?\)/g;
     let pm;
     let usedPalette = 0;
     while((pm = plotRx.exec(text)) !== null){
-      const expr = pm[1].trim();
+      let expr = pm[1].trim();
       const tail = pm[2] || '';
-      const cm = colorRx.exec(tail);
-      const color = cm
-        ? (cm[1] ? (COLOR_MAP[cm[1].toLowerCase()] || PALETTE[usedPalette++ % PALETTE.length])
-                 : ('#' + cm[2]))
-        : PALETTE[usedPalette++ % PALETTE.length];
 
-      // expr might be a symbol or a direct call
+      // Resolve `cond ? a : b` → the non-na branch
+      const tern = /^[^?]+\?\s*([^:]+?)\s*:\s*(.+)$/.exec(expr);
+      if(tern){
+        const a = tern[1].trim(), b = tern[2].trim();
+        expr = (a === 'na' ? b : a);
+      }
+
+      // Color: literal hex / named color / variable
+      const cm = colorRx.exec(tail);
+      let color;
+      if(cm){
+        if(cm[1])      color = COLOR_MAP[cm[1].toLowerCase()];
+        else if(cm[2]) color = '#' + cm[2];
+        else if(cm[3]) color = colors[cm[3]];
+      }
+      if(!color) color = PALETTE[usedPalette++ % PALETTE.length];
+
+      // Expression might be a symbol, or a direct ta.* call
       let resolved = null;
       if(symbols[expr]){
         resolved = symbols[expr];
@@ -1893,7 +1970,15 @@ button{font-family:inherit}
       if(!resolved) continue;
       const fn = resolved.fn;
       if(!PRESETS[fn]) continue;
-      const argsRaw = resolved.args.split(',').map(a => a.trim()).filter(a => a.length);
+
+      // Resolve identifier args via the inputs table (e.g. `len` → 200)
+      const argsRaw = resolved.args.split(',').map(a => {
+        const t = a.trim();
+        if(!t) return t;
+        if(inputs[t] !== undefined) return String(inputs[t]);
+        return t;
+      }).filter(a => a.length);
+
       const def = PRESETS[fn];
       let src = 'close';
       let nums = argsRaw;
@@ -1904,15 +1989,14 @@ button{font-family:inherit}
       const params = {};
       def.params.forEach((p, i) => {
         const v = nums[i] !== undefined ? Number(nums[i]) : p.def;
-        if(isFinite(v)) params[p.key] = v;
-        else params[p.key] = p.def;
+        params[p.key] = isFinite(v) ? v : p.def;
       });
       out.push({ type:fn, params, src, color });
     }
 
     if(!out.length){
       const reason = skipped.length
-        ? `Found unsupported features: ${skipped.join(', ')}.`
+        ? `Couldn't extract any indicators. Pieces I had to skip: ${skipped.join(', ')}.\nTry the Formula tab to add the indicators individually.`
         : `No plot(...) calls recognised. Try the Formula tab to add lines individually.`;
       throw new Error(reason);
     }
