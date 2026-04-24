@@ -1649,6 +1649,188 @@ async def trade_tape(symbol: str, since: int = 0, min_usd: float = 25_000.0, lim
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Chart-aware AI trade read — POST endpoint that consumes the user's full
+# chart context (visible indicators, overlays, recent flow) and returns a
+# structured trade plan from Claude.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hash_ai_read_request(payload: dict) -> str:
+    """Stable cache key for identical chart-context requests."""
+    try:
+        canonical = json.dumps(payload, sort_keys=True, default=str)
+    except Exception:
+        canonical = str(payload)
+    return hashlib.md5(canonical.encode("utf-8")).hexdigest()[:12]
+
+
+@app.post("/api/trade/ai_read/{symbol}")
+async def trade_ai_read(symbol: str, request: Request):
+    """Generate a chart-aware trade plan. Body shape:
+        {
+          "tf": "5m",
+          "indicators": [{"type":"ema","src":"close","params":{"period":20}}, ...],
+          "toggles": {"order_blocks": true, "liq_heatmap": true, "big_prints": true},
+          "tape": {"buy_count": 12, "sell_count": 8, "buy_usd": 1.2e6, "sell_usd": 0.8e6}
+        }
+    Cached 25 s per (symbol, tf, full-payload-hash) to throttle Claude calls.
+    """
+    sym = (symbol or "").upper().strip()
+    if sym not in TRADE_SYMBOL_WHITELIST:
+        return JSONResponse({"error": "symbol not supported"}, status_code=404)
+    pair = TRADE_SYMBOL_WHITELIST[sym]
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    tf = str(body.get("tf") or "5m").lower()
+    if tf not in ("1m", "5m", "15m", "1h"):
+        tf = "5m"
+    raw_indicators = body.get("indicators") or []
+    if not isinstance(raw_indicators, list):
+        raw_indicators = []
+    # Strict whitelist — type/src must match known values; params is a flat dict
+    # of numeric values. Prevents prompt injection via free-form indicator names.
+    _ALLOWED_TYPES = {"ema", "sma", "rsi", "macd", "bb", "vwap", "atr", "supertrend", "stochrsi"}
+    _ALLOWED_SRCS  = {"close", "open", "high", "low", "hl2", "hlc3", "ohlc4"}
+    _ALLOWED_PARAM_KEYS = {"period", "fast", "slow", "signal", "mult", "stoch"}
+    indicators: list = []
+    for raw in raw_indicators[:12]:
+        if not isinstance(raw, dict):
+            continue
+        t = str(raw.get("type", "")).lower().strip()
+        if t not in _ALLOWED_TYPES:
+            continue
+        s = str(raw.get("src", "close")).lower().strip()
+        if s not in _ALLOWED_SRCS:
+            s = "close"
+        rp = raw.get("params") or {}
+        if not isinstance(rp, dict):
+            rp = {}
+        clean_params: dict = {}
+        for k, v in rp.items():
+            if k not in _ALLOWED_PARAM_KEYS:
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            # Cap to sane TA bounds — protects against absurd compute
+            if fv < 0 or fv > 500:
+                continue
+            clean_params[k] = fv
+        indicators.append({"type": t, "src": s, "params": clean_params})
+    toggles = body.get("toggles") or {}
+    if not isinstance(toggles, dict):
+        toggles = {}
+    tape = body.get("tape") or {}
+    if not isinstance(tape, dict):
+        tape = {}
+
+    # Cache identical chart contexts to throttle Claude usage.
+    cache_payload = {"sym": sym, "tf": tf, "ind": indicators, "tg": toggles, "tp": tape}
+    cache_key = f"trade_ai_read_{_hash_ai_read_request(cache_payload)}"
+    cached = _CACHE.get(cache_key)
+    if cached and time.time() < cached[1]:
+        c = dict(cached[0])
+        c["age_secs"] = int(time.time() - c.get("generated_at_ts", time.time()))
+        c["cached"] = True
+        return c
+
+    # Pull candles (server-side fetch; same cached source used by /candles).
+    interval = _TRADE_TF_MAP.get(tf)
+    candles: list = []
+    try:
+        ck_key = f"trade_candles_{pair}_{interval}_300"
+        ck = _CACHE.get(ck_key)
+        if ck and time.time() < ck[1]:
+            candles = (ck[0].get("candles") or [])[:]
+        else:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                r = await client.get(
+                    "https://api.mexc.com/api/v3/klines",
+                    params={"symbol": pair, "interval": interval, "limit": 300},
+                )
+                r.raise_for_status()
+                rows = r.json() or []
+            for k in rows:
+                try:
+                    candles.append({
+                        "time":   int(k[0]) // 1000,
+                        "open":   float(k[1]),
+                        "high":   float(k[2]),
+                        "low":    float(k[3]),
+                        "close":  float(k[4]),
+                        "volume": float(k[5]) if len(k) > 5 else 0.0,
+                    })
+                except (TypeError, ValueError, IndexError):
+                    continue
+    except Exception as e:
+        logger.warning(f"ai_read candle fetch failed for {sym} {tf}: {e}")
+
+    # Pull cached wall report (no AI — we make our own). Tolerate failure.
+    wall_report: Optional[dict] = None
+    try:
+        from dataclasses import asdict
+        from app.services.liquidity_walls import scan_walls
+        wkey = f"trade_walls_{pair}_0"
+        wcache = _CACHE.get(wkey)
+        if wcache and time.time() < wcache[1]:
+            wall_report = wcache[0]
+        else:
+            rep = await scan_walls(pair, use_ai=False)
+            if rep:
+                wall_report = asdict(rep)
+                wb = wall_report.get("wall_behavior") or {}
+                wall_report["wall_behavior"] = {str(k): v for k, v in wb.items()}
+                _CACHE[wkey] = (wall_report, time.time() + 25)
+    except Exception as e:
+        logger.debug(f"ai_read wall fetch failed for {sym}: {e}")
+
+    # If client didn't send tape stats, derive from server buffer (last ~10 min of big prints).
+    if not tape and pair in _TAPE_BUF:
+        cutoff_ms = int(time.time() * 1000) - 10 * 60 * 1000
+        recent = [t for t in _TAPE_BUF[pair] if t["ts"] >= cutoff_ms and t["usd"] >= 25_000]
+        if recent:
+            buys  = [t for t in recent if t["side"] == "buy"]
+            sells = [t for t in recent if t["side"] == "sell"]
+            tape = {
+                "buy_count":  len(buys),
+                "sell_count": len(sells),
+                "buy_usd":    sum(t["usd"] for t in buys),
+                "sell_usd":   sum(t["usd"] for t in sells),
+            }
+
+    try:
+        from app.services.ai_trade_read import generate_ai_trade_read
+        result = await generate_ai_trade_read(
+            symbol=sym, tf=tf, candles=candles,
+            indicators=indicators, toggles=toggles, tape=tape,
+            wall_report=wall_report,
+        )
+    except Exception as e:
+        logger.warning(f"ai_read generation failed for {sym}: {e}")
+        return JSONResponse({"error": "ai read failed"}, status_code=502)
+
+    payload = {
+        "symbol": sym,
+        "tf": tf,
+        "summary": result.get("summary", ""),
+        "fallback": bool(result.get("fallback", False)),
+        "sources_used": result.get("sources_used", []),
+        "generated_at_ts": time.time(),
+        "generated_at": int(time.time()),
+        "age_secs": 0,
+        "cached": False,
+    }
+    _CACHE[cache_key] = (payload, time.time() + 25)
+    return payload
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Indicator alerts API — fires Telegram DM when condition hits
 # ─────────────────────────────────────────────────────────────────────────────
 

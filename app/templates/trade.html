@@ -249,6 +249,24 @@ button{font-family:inherit}
 .ai-key{font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding-top:2px}
 .ai-val{color:var(--text);font-weight:500;word-break:break-word;font-size:12px}
 .ai-loading{padding:10px 0;color:var(--muted);font-size:11px;text-align:center;font-style:italic}
+.ai-head{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:6px 0 8px;border-bottom:1px dashed var(--border);margin-bottom:8px;
+}
+.ai-head-left{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--muted)}
+.ai-head-left .age{font-family:var(--mono);font-weight:600;color:var(--text2)}
+.ai-head-left .sources{font-size:9px;color:var(--muted2,var(--muted));text-transform:uppercase;letter-spacing:.4px}
+.ai-refresh{
+  background:var(--panel2);color:var(--text);border:1px solid var(--border);
+  border-radius:4px;padding:3px 9px;font-size:10px;font-weight:700;
+  cursor:pointer;display:inline-flex;align-items:center;gap:4px;
+}
+.ai-refresh:hover{background:var(--panel)}
+.ai-refresh:disabled{opacity:.5;cursor:wait}
+.ai-fallback{
+  margin:6px 0 8px;padding:6px 8px;background:rgba(239,83,80,.08);border:1px solid rgba(239,83,80,.25);
+  border-radius:4px;font-size:10px;color:#ef9a9a;
+}
 
 /* ───── Indicator UI ───── */
 .ind-btn{
@@ -632,7 +650,18 @@ button{font-family:inherit}
         <span class="arrow">▾</span>
       </button>
       <div class="ai-body" id="ai-body">
-        <div class="ai-loading">Waiting for order book scan…</div>
+        <div class="ai-head">
+          <div class="ai-head-left">
+            <span class="age" id="ai-age">—</span>
+            <span class="sources" id="ai-sources"></span>
+          </div>
+          <button class="ai-refresh" id="ai-refresh" title="Re-read the chart now">
+            <span id="ai-refresh-label">↻ Read chart</span>
+          </button>
+        </div>
+        <div id="ai-content">
+          <div class="ai-loading">Open the panel and click Read chart for an AI trade plan based on your indicators, walls, and big-prints flow.</div>
+        </div>
       </div>
     </div>
   </aside>
@@ -1341,33 +1370,83 @@ button{font-family:inherit}
       updatePressure(d.pressure_label, d.pressure_score);
       updateContext(d);
       drawZones();
-      renderAI(d.ai_summary);
+      // Note: the AI Trade Read panel has its own dedicated, chart-aware
+      // endpoint (/api/trade/ai_read) that consumes indicators + toggles +
+      // walls + flow. It is NOT driven by the wall scanner's AI summary
+      // (which only sees order books).
     }catch(e){
       console.warn('walls failed', e);
     }
   }
 
-  // ───── AI summary ─────
-  function renderAI(text){
-    const body = $('ai-body');
-    if(!text || !String(text).trim()){
-      body.innerHTML = `<div class="ai-loading">No structured plan yet — waiting for the next scan.</div>`;
+  // ═══════════════════════════════════════════════════════════════════════
+  // AI TRADE READ — chart-aware Claude plan
+  // POSTs the user's full visible context (indicators, overlays, recent
+  // big-prints flow) to /api/trade/ai_read and renders a structured plan.
+  // ═══════════════════════════════════════════════════════════════════════
+  let aiLastAt = 0;
+  let aiInFlight = false;
+  let aiAutoTimer = null;
+  let aiSummary = null;            // {summary, fallback, sources_used, generated_at_ts}
+  const AI_AUTO_INTERVAL_MS = 60_000;
+
+  function gatherChartContext(){
+    const inds = (typeof indicators !== 'undefined' ? indicators : [])
+      .filter(i => i.visible)
+      .map(i => ({
+        type: i.type,
+        src:  i.src || 'close',
+        params: i.params || {},
+      }));
+    const toggles = {
+      order_blocks: $('overlay-toggle')?.checked === true,
+      liq_heatmap:  $('liq-toggle')?.checked === true,
+      big_prints:   $('tape-toggle')?.checked === true,
+    };
+    // Roll up the last ~10 minutes of big prints from the tape buffer
+    const cutoffMs = Date.now() - 10 * 60 * 1000;
+    let buyN = 0, sellN = 0, buyUsd = 0, sellUsd = 0;
+    (typeof tapeRows !== 'undefined' ? tapeRows : []).forEach(t => {
+      if(t.ts < cutoffMs || t.usd < 25_000) return;
+      if(t.side === 'buy'){  buyN++;  buyUsd  += t.usd; }
+      else                {  sellN++; sellUsd += t.usd; }
+    });
+    return {
+      tf: currentTF,
+      indicators: inds,
+      toggles,
+      tape: { buy_count: buyN, sell_count: sellN, buy_usd: buyUsd, sell_usd: sellUsd },
+    };
+  }
+
+  function fmtAge(secs){
+    if(secs < 5)  return 'just now';
+    if(secs < 60) return `${secs}s ago`;
+    if(secs < 3600) return `${Math.floor(secs/60)}m ago`;
+    return `${Math.floor(secs/3600)}h ago`;
+  }
+
+  function renderAITradeRead(){
+    const content = $('ai-content');
+    if(!aiSummary){
+      content.innerHTML = `<div class="ai-loading">Open the panel and click Read chart for an AI trade plan based on your indicators, walls, and big-prints flow.</div>`;
       return;
     }
-    // Parse "LABEL: value" lines into key/val pairs.
-    const labels = ['BIAS','TRADE','STOP','TP','TP1','TP2','TP3','R:R','LEVERAGE','INVALIDATION','ODDS','NOTE'];
+    const text = aiSummary.summary || '';
+    const labels = ['BIAS','TRADE','ORDER_TYPE','STOP','TP','TP1','TP2','TP3','R:R','LEVERAGE','INVALIDATION','ODDS','NOTE'];
     const lines = String(text).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     const rows = [];
-    let leftover = [];
+    const leftover = [];
     lines.forEach(l => {
-      const m = l.match(/^([A-Z][A-Z0-9: ]{1,15}):\s*(.+)$/);
+      const m = l.match(/^([A-Z][A-Z0-9_: ]{1,18}):\s*(.+)$/);
       if(m && labels.some(lbl => lbl.toLowerCase() === m[1].trim().toLowerCase())){
-        rows.push({ k: m[1].trim(), v: m[2].trim() });
-      } else {
-        leftover.push(l);
-      }
+        rows.push({ k: m[1].trim().replace(/_/g,' '), v: m[2].trim() });
+      } else { leftover.push(l); }
     });
     let html = '';
+    if(aiSummary.fallback){
+      html += `<div class="ai-fallback">⚠️ AI offline — showing a deterministic fallback plan based on swing structure.</div>`;
+    }
     if(rows.length){
       html += rows.map(r =>
         `<div class="ai-line"><div class="ai-key">${escapeHtml(r.k)}</div><div class="ai-val">${escapeHtml(r.v)}</div></div>`
@@ -1376,12 +1455,99 @@ button{font-family:inherit}
     if(leftover.length){
       html += `<div style="padding-top:8px;font-style:italic;color:var(--text2);font-size:12px;line-height:1.6">${escapeHtml(leftover.join(' '))}</div>`;
     }
-    body.innerHTML = html || `<div class="ai-loading">No plan in this scan.</div>`;
+    if(!html){
+      html = `<div class="ai-loading">No structured plan in this read.</div>`;
+    }
+    content.innerHTML = html;
+    $('ai-sources').textContent = (aiSummary.sources_used || []).join(' · ');
+  }
+
+  function tickAIAge(){
+    if(!aiLastAt){ $('ai-age').textContent = '—'; return; }
+    const s = Math.round((Date.now() - aiLastAt) / 1000);
+    $('ai-age').textContent = fmtAge(s);
+  }
+  setInterval(tickAIAge, 1000);
+
+  async function loadAITradeRead({manual = false} = {}){
+    if(aiInFlight) return;
+    aiInFlight = true;
+    const btn = $('ai-refresh');
+    const lbl = $('ai-refresh-label');
+    btn.disabled = true;
+    lbl.textContent = 'Reading…';
+    if(manual || !aiSummary){
+      $('ai-content').innerHTML = `<div class="ai-loading">Reading the chart… (price action, indicators, walls, flow)</div>`;
+    }
+    try{
+      const ctx = gatherChartContext();
+      const r = await fetch(`/api/trade/ai_read/${SYMBOL}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(ctx),
+      });
+      const d = await r.json();
+      if(!r.ok || d.error){
+        throw new Error(d.error || `HTTP ${r.status}`);
+      }
+      aiSummary = d;
+      aiLastAt = Date.now() - (d.age_secs || 0) * 1000;
+      renderAITradeRead();
+      tickAIAge();
+    }catch(e){
+      console.warn('ai_read failed', e);
+      if(!aiSummary){
+        $('ai-content').innerHTML = `<div class="ai-loading">Couldn't reach the AI service right now. Try again in a moment.</div>`;
+      }
+    }finally{
+      aiInFlight = false;
+      btn.disabled = false;
+      lbl.textContent = '↻ Read chart';
+    }
+  }
+
+  function startAIAuto(){
+    stopAIAuto();
+    aiAutoTimer = setInterval(() => {
+      if(document.hidden) return;
+      // Skip if a request is already in flight — prevents stacking when
+      // Claude takes longer than the auto-refresh interval.
+      if(aiInFlight) return;
+      // Skip if the panel was closed in another tab/event
+      if(!$('ai-body').classList.contains('open')){ stopAIAuto(); return; }
+      // Skip if a fresh read already exists (< 50 s old)
+      if(aiLastAt && (Date.now() - aiLastAt) < 50_000) return;
+      loadAITradeRead();
+    }, AI_AUTO_INTERVAL_MS);
+  }
+  // Stop the timer if the user navigates away (covers tab close, SPA nav, etc.)
+  window.addEventListener('beforeunload', stopAIAuto);
+  document.addEventListener('visibilitychange', () => {
+    if(document.hidden) stopAIAuto();
+    else if($('ai-body').classList.contains('open')) startAIAuto();
+  });
+  function stopAIAuto(){
+    if(aiAutoTimer){ clearInterval(aiAutoTimer); aiAutoTimer = null; }
   }
 
   $('ai-toggle').addEventListener('click', () => {
+    const opening = !$('ai-toggle').classList.contains('open');
     $('ai-toggle').classList.toggle('open');
     $('ai-body').classList.toggle('open');
+    if(opening){
+      // Fire if we have nothing or it's older than 60 s; otherwise reuse cache
+      if(!aiSummary || (Date.now() - aiLastAt) > 60_000){
+        loadAITradeRead();
+      }
+      startAIAuto();
+    } else {
+      stopAIAuto();
+    }
+  });
+
+  $('ai-refresh').addEventListener('click', (e) => {
+    e.stopPropagation();
+    loadAITradeRead({manual: true});
   });
 
   // ───── Refresh-age ticker ─────
