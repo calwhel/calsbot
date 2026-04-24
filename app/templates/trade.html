@@ -717,11 +717,15 @@ button{font-family:inherit}
       <!-- ── PINE TAB ── -->
       <div class="ind-tab-pane" data-pane="pine" style="display:none">
         <label>Paste your Pine Script (best-effort translator)</label>
-        <textarea id="pine-input" placeholder="//@version=5&#10;indicator('My Setup', overlay=true)&#10;ema20 = ta.ema(close, 20)&#10;ema50 = ta.ema(close, 50)&#10;plot(ema20, color=color.aqua)&#10;plot(ema50, color=color.orange)" autocomplete="off" spellcheck="false"></textarea>
+        <textarea id="pine-input" placeholder="//@version=5&#10;indicator('My Setup', overlay=true)&#10;ema20 = ta.ema(close, 20)&#10;ema50 = ta.ema(close, 50)&#10;plot(ema20, color=color.aqua)&#10;plot(ema50, color=color.orange)&#10;plotshape(ta.crossover(ema20, ema50), style=shape.triangleup, location=location.belowbar, color=color.green, text='BUY')" autocomplete="off" spellcheck="false"></textarea>
         <div class="hint">
-          Translates simple <code>plot(ta.ema(close, 20))</code> / <code>plot(ta.rsi(close, 14))</code> style scripts.
-          Unsupported: <code>strategy()</code>, <code>request.security()</code>, arrays, custom functions, drawings.
-          For complex scripts, use the Formula tab to add lines individually.
+          Translates <code>plot(ta.ema(close, 20))</code>, multi-line var bindings, ternary plots,
+          and <code>plotshape</code>/<code>plotarrow</code> conditions to chart markers.
+          Built-ins: <code>ta.ema/sma/rsi/atr/wma/rma/highest/lowest/crossover/crossunder/cross/change/vwap</code>,
+          <code>nz</code>, <code>na</code>, <code>math.abs/min/max/sign/sqrt/pow</code>, plus comparisons,
+          <code>and</code>/<code>or</code>/<code>not</code>, and historical lookback like <code>close[1]</code>.
+          Unsupported: <code>strategy()</code>, <code>request.security()</code>, arrays, drawings — those are
+          listed back to you per-line on failure so you can edit and retry.
         </div>
         <div class="err" id="pine-err"></div>
         <div class="ok"  id="pine-ok"></div>
@@ -1579,7 +1583,7 @@ button{font-family:inherit}
   $('liq-toggle').addEventListener('change', () => { zonesDirty = true; });
   $('tape-toggle').addEventListener('change', () => {
     if(!$('tape-toggle').checked){
-      candleSeries && candleSeries.setMarkers([]);
+      setMarkerSource('tape', []);
     } else {
       pushChartMarkers();
     }
@@ -1588,9 +1592,27 @@ button{font-family:inherit}
     // Wipe local tape state and re-pull from scratch with the new threshold
     tapeRows = []; tapeSeen = new Set(); tapeLastId = 0;
     renderTape();
-    candleSeries && candleSeries.setMarkers([]);
+    setMarkerSource('tape', []);
     pollTape(true);
   });
+
+  // ───── Multi-source chart markers ─────
+  // Tape and translated Pine plotshape/plotarrow indicators each contribute
+  // their own marker list. Lightweight Charts replaces all markers on every
+  // setMarkers() call, so we merge sources and apply once.
+  const _markerSources = new Map();   // sourceKey -> markers[]
+  function setMarkerSource(key, markers){
+    if(!markers || !markers.length) _markerSources.delete(key);
+    else _markerSources.set(key, markers);
+    applyAllMarkers();
+  }
+  function applyAllMarkers(){
+    if(!candleSeries) return;
+    const all = [];
+    _markerSources.forEach(arr => arr.forEach(m => all.push(m)));
+    all.sort((a, b) => (a.time || 0) - (b.time || 0));
+    try{ candleSeries.setMarkers(all); }catch(e){}
+  }
 
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
@@ -1653,7 +1675,7 @@ button{font-family:inherit}
       });
     });
     // Lightweight Charts caps at ~hundreds — keep last 80
-    candleSeries.setMarkers(markers.slice(-80));
+    setMarkerSource('tape', markers.slice(-80));
   }
   async function pollTape(reset){
     if(document.hidden) return;
@@ -1851,6 +1873,7 @@ button{font-family:inherit}
   const PALETTE = ['#ffb74d','#42a5f5','#ab47bc','#ef5350','#26a69a','#ffee58','#ec407a','#7e57c2','#66bb6a','#ff7043','#5c6bc0','#26c6da'];
   const OVERLAY_TYPES = new Set(['ema','sma','vwap','supertrend','bb']);
   const OSC_TYPES     = new Set(['rsi','macd','stochrsi','atr']);
+  const MARKER_TYPES  = new Set(['marker']);
 
   // Spec for preset params + defaults (period values, etc.)
   const PRESETS = {
@@ -1863,12 +1886,19 @@ button{font-family:inherit}
     macd:       { label:'MACD',        params:[{key:'fast', label:'Fast', def:12},{key:'slow', label:'Slow', def:26},{key:'signal', label:'Signal', def:9}], src:true },
     stochrsi:   { label:'StochRSI',    params:[{key:'period', label:'RSI len', def:14},{key:'stoch', label:'Stoch len', def:14},{key:'k', label:'%K', def:3},{key:'d', label:'%D', def:3}], src:true },
     atr:        { label:'ATR',         params:[{key:'period', label:'Period', def:14}], src:false },
+    // 'marker' is a Pine-only pseudo-type produced by the translator for
+    // plotshape() / plotarrow() calls. It has no preset UI — params carry
+    // the precompiled condition + symbol table set by translatePine().
+    marker:     { label:'Marker',      params:[], src:false, hidden:true },
   };
 
   let indicators = []; // {id, type, params, color, src, visible, series:[]}
   let nextIndId = 1;
 
-  function indKind(type){ return OVERLAY_TYPES.has(type) ? 'overlay' : 'oscillator'; }
+  function indKind(type){
+    if(MARKER_TYPES.has(type)) return 'marker';
+    return OVERLAY_TYPES.has(type) ? 'overlay' : 'oscillator';
+  }
 
   // Snapshot of current chart layout in the same shape the server stores.
   function currentSpec(){
@@ -1896,6 +1926,12 @@ button{font-family:inherit}
     while(indicators.length){
       const first = indicators[0];
       first.series.forEach(s => { try{ chart.removeSeries(s); }catch(e){} });
+      // Marker pseudo-indicators have no chart series; their visuals live in
+      // the multi-source marker manager and must be cleared explicitly so a
+      // fresh applySpec() doesn't leave stale arrows/triangles behind.
+      if(first.type === 'marker' && first.id != null){
+        try{ setMarkerSource('ind:' + first.id, []); }catch(e){}
+      }
       indicators.splice(0, 1);
     }
     recomputePanes();
@@ -2065,6 +2101,8 @@ button{font-family:inherit}
     const t = ind.type;
     const c = ind.color || PALETTE[(nextIndId) % PALETTE.length];
     const oscScale = 'osc_' + ind.id;
+    // Marker indicators render via candleSeries.setMarkers — no series needed.
+    if(t === 'marker') return [];
     if(t === 'ema' || t === 'sma' || t === 'vwap'){
       return [chart.addLineSeries({
         color:c, lineWidth:2, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false,
@@ -2116,6 +2154,7 @@ button{font-family:inherit}
   function compute(ind, candles){
     if(!candles || candles.length < 2) return null;
     const t = ind.type, p = ind.params || {};
+    if(t === 'marker') return null;
     const src = ind.src || 'close';
     const vals = TA.pickSrc(candles, src);
     const pack = (arr) => candles.map((c, i) => ({ time:c.time, value:arr[i] })).filter(x => isFinite(x.value));
@@ -2152,9 +2191,37 @@ button{font-family:inherit}
   }
 
   function refreshIndicator(ind){
+    if(ind.type === 'marker'){
+      refreshMarkerIndicator(ind);
+      return;
+    }
     const data = compute(ind, lastCandlesFull);
     if(!data || !data.length) return;
     ind.series.forEach((s, i) => { if(data[i]) s.setData(data[i]); });
+  }
+
+  function markerSourceKey(ind){ return 'ind_' + ind.id; }
+
+  function refreshMarkerIndicator(ind){
+    if(!ind.visible){ setMarkerSource(markerSourceKey(ind), []); return; }
+    const candles = lastCandlesFull;
+    if(!candles || candles.length < 2){ setMarkerSource(markerSourceKey(ind), []); return; }
+    const p = ind.params || {};
+    if(!p.condition || !p.symbols){ return; }
+    let markers;
+    try{
+      markers = PineEval.computeMarkers(candles, p.symbols, p.condition, {
+        color:    ind.color || PALETTE[0],
+        shape:    p.shape    || 'circle',
+        position: p.position || 'aboveBar',
+        text:     p.text     || '',
+      });
+    }catch(e){
+      console.warn('marker compute failed:', e);
+      markers = [];
+    }
+    // Cap to keep Lightweight Charts responsive
+    setMarkerSource(markerSourceKey(ind), markers.slice(-200));
   }
 
   function addIndicator(spec, persist=true, silent=false){
@@ -2188,7 +2255,9 @@ button{font-family:inherit}
   function removeIndicator(id){
     const idx = indicators.findIndex(i => i.id === id);
     if(idx < 0) return;
-    indicators[idx].series.forEach(s => { try{ chart.removeSeries(s); }catch(e){} });
+    const ind = indicators[idx];
+    ind.series.forEach(s => { try{ chart.removeSeries(s); }catch(e){} });
+    if(ind.type === 'marker') setMarkerSource(markerSourceKey(ind), []);
     indicators.splice(idx, 1);
     recomputePanes();
     renderIndStrip();
@@ -2203,7 +2272,11 @@ button{font-family:inherit}
     // recreating would push the indicator on top of newer ones.
     ind.series.forEach(s => { try{ s.applyOptions({ visible: ind.visible }); }catch(e){} });
     recomputePanes();
-    if(ind.visible) refreshIndicator(ind);
+    if(ind.type === 'marker'){
+      refreshMarkerIndicator(ind);
+    } else if(ind.visible){
+      refreshIndicator(ind);
+    }
     renderIndStrip();
     saveStored();
   }
@@ -2217,6 +2290,10 @@ button{font-family:inherit}
     if(T === 'supertrend') return `ST(${p.period|0},${p.mult})`;
     if(T === 'macd') return `MACD(${p.fast|0},${p.slow|0},${p.signal|0})`;
     if(T === 'stochrsi') return `StochRSI(${p.period|0},${p.stoch|0},${p.k|0},${p.d|0})`;
+    if(T === 'marker'){
+      const note = (p.text || p.shape || 'mark');
+      return `▼ ${note.length > 18 ? note.slice(0,18) + '…' : note}`;
+    }
     return T.toUpperCase();
   }
 
@@ -2297,11 +2374,18 @@ button{font-family:inherit}
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // PINE TRANSLATOR — best-effort regex extractor
-  // Catches plot(ta.ema(close, 20), color=...), single-line var bindings,
-  // resolves input.int/float/color constants and ternary plots,
-  // and silently skips request.security / table / drawings instead of
-  // hard-failing the whole translation.
+  // PINE TRANSLATOR — best-effort line classifier + mini expression evaluator
+  //   • Walks the script line-by-line; each line is tagged comment / input /
+  //     assignment / plot / plotshape / skip / unrecognised.
+  //   • A small Pratt-style parser turns Pine expressions into an AST
+  //     (numbers, identifiers, ta.* / nz / math.* calls, comparisons, and/or,
+  //      ternary, indexed lookbacks like close[1]).
+  //   • plotshape() / plotarrow() conditions get evaluated per bar against
+  //     the candle history and contribute marker indicators that share the
+  //     same setMarkers API the live tape uses.
+  //   • The translator always returns whatever it could parse, plus a list
+  //     of soft-skipped features and an explicit "untranslated" line list
+  //     so users know exactly which pieces to edit.
   // ═══════════════════════════════════════════════════════════════════════
   const COLOR_MAP = {
     red:'#ef5350', green:'#26a69a', blue:'#42a5f5', orange:'#ffb74d',
@@ -2311,11 +2395,661 @@ button{font-family:inherit}
     black:'#0a0d14', new:'#42a5f5', // color.new(color.x, n) handled separately
   };
 
+  // ── Pine expression tokenizer + parser + per-bar evaluator ──────────────
+  const PineEval = (function(){
+    function tokenize(src){
+      const t = [];
+      let i = 0, n = src.length;
+      while(i < n){
+        const ch = src[i];
+        if(ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r'){ i++; continue; }
+        // line comment
+        if(ch === '/' && src[i+1] === '/'){ while(i < n && src[i] !== '\n') i++; continue; }
+        // hex color literal
+        if(ch === '#'){
+          let j = i + 1;
+          while(j < n && /[0-9a-fA-F]/.test(src[j])) j++;
+          t.push({type:'hex', value: src.slice(i, j)});
+          i = j; continue;
+        }
+        // number
+        if(/[0-9]/.test(ch) || (ch === '.' && /[0-9]/.test(src[i+1]||''))){
+          let j = i;
+          while(j < n && /[0-9_]/.test(src[j])) j++;
+          if(src[j] === '.'){ j++; while(j < n && /[0-9_]/.test(src[j])) j++; }
+          t.push({type:'num', value: parseFloat(src.slice(i, j).replace(/_/g, ''))});
+          i = j; continue;
+        }
+        // identifier (ta.ema, math.abs etc. read as one token)
+        if(/[a-zA-Z_]/.test(ch)){
+          let j = i;
+          while(j < n && /[a-zA-Z0-9_.]/.test(src[j])) j++;
+          const w = src.slice(i, j);
+          if(w === 'and' || w === 'or' || w === 'not')
+            t.push({type:'op', value: w});
+          else if(w === 'true' || w === 'false')
+            t.push({type:'bool', value: w === 'true'});
+          else if(w === 'na'){
+            // `na` is both a literal and a function. Parser handles both via
+            // an id token; primary node converts bare `na` into {kind:'na'}.
+            t.push({type:'id', value: 'na'});
+          }
+          else
+            t.push({type:'id', value: w});
+          i = j; continue;
+        }
+        // string literal
+        if(ch === '"' || ch === "'"){
+          const q = ch; let j = i + 1;
+          while(j < n && src[j] !== q){ if(src[j] === '\\') j++; j++; }
+          t.push({type:'str', value: src.slice(i+1, j)});
+          i = j + 1; continue;
+        }
+        // multi-char ops
+        const two = src.slice(i, i+2);
+        if(two === '>=' || two === '<=' || two === '==' || two === '!=' || two === '&&' || two === '||'){
+          t.push({type:'op', value: two}); i += 2; continue;
+        }
+        // single-char ops + punctuation
+        if('+-*/%><=!?:,()[]'.indexOf(ch) >= 0){
+          t.push({type:'op', value: ch}); i++; continue;
+        }
+        // unknown char — treat as separator
+        i++;
+      }
+      return t;
+    }
+
+    // Pratt parser
+    function parse(tokens, opts){
+      const ctx = { tokens, pos: 0, opts: opts || {} };
+      const e = parseExpression(ctx, 0);
+      if(ctx.pos < tokens.length){
+        const tok = tokens[ctx.pos];
+        throw new Error('Unexpected token ' + (tok.value !== undefined ? tok.value : tok.type));
+      }
+      return e;
+    }
+
+    function peek(ctx){ return ctx.tokens[ctx.pos]; }
+    function next(ctx){ return ctx.tokens[ctx.pos++]; }
+    function expect(ctx, type, value){
+      const tok = next(ctx);
+      if(!tok || tok.type !== type || (value !== undefined && tok.value !== value))
+        throw new Error('Expected ' + (value !== undefined ? value : type));
+      return tok;
+    }
+
+    // Operator precedences (higher = tighter binding)
+    const BINOPS = {
+      'or': 1, '||': 1,
+      'and': 2, '&&': 2,
+      '==': 3, '!=': 3,
+      '<': 4, '<=': 4, '>': 4, '>=': 4,
+      '+': 5, '-': 5,
+      '*': 6, '/': 6, '%': 6,
+    };
+
+    function parseExpression(ctx, minPrec){
+      let left = parseUnary(ctx);
+      while(true){
+        const tok = peek(ctx);
+        if(!tok || tok.type !== 'op') break;
+        const op = tok.value;
+        // ternary cond ? a : b
+        if(op === '?'){
+          if(minPrec > 0) break;
+          next(ctx);
+          const then = parseExpression(ctx, 0);
+          expect(ctx, 'op', ':');
+          const otherwise = parseExpression(ctx, 0);
+          left = { kind:'tern', cond: left, then, else: otherwise };
+          continue;
+        }
+        const prec = BINOPS[op];
+        if(prec === undefined || prec < minPrec) break;
+        next(ctx);
+        const right = parseExpression(ctx, prec + 1);
+        // Normalise alternates
+        const norm = (op === '&&') ? 'and' : (op === '||') ? 'or' : op;
+        left = { kind:'binop', op: norm, a: left, b: right };
+      }
+      return left;
+    }
+
+    function parseUnary(ctx){
+      const tok = peek(ctx);
+      if(tok && tok.type === 'op' && (tok.value === '-' || tok.value === '+' || tok.value === '!')){
+        next(ctx);
+        const x = parseUnary(ctx);
+        return { kind:'unop', op: tok.value, x };
+      }
+      if(tok && tok.type === 'op' && tok.value === 'not'){
+        next(ctx);
+        const x = parseUnary(ctx);
+        return { kind:'unop', op: 'not', x };
+      }
+      return parsePostfix(ctx, parsePrimary(ctx));
+    }
+
+    function parsePostfix(ctx, node){
+      while(true){
+        const tok = peek(ctx);
+        if(!tok) return node;
+        // historical lookback x[N]
+        if(tok.type === 'op' && tok.value === '['){
+          next(ctx);
+          const off = parseExpression(ctx, 0);
+          expect(ctx, 'op', ']');
+          node = { kind:'idx', x: node, off };
+          continue;
+        }
+        return node;
+      }
+    }
+
+    function parsePrimary(ctx){
+      const tok = next(ctx);
+      if(!tok) throw new Error('Unexpected end of expression');
+      if(tok.type === 'num')  return { kind:'num',  value: tok.value };
+      if(tok.type === 'bool') return { kind:'bool', value: tok.value };
+      if(tok.type === 'str')  return { kind:'str',  value: tok.value };
+      if(tok.type === 'hex')  return { kind:'hex',  value: tok.value };
+      if(tok.type === 'op' && tok.value === '('){
+        const e = parseExpression(ctx, 0);
+        expect(ctx, 'op', ')');
+        return e;
+      }
+      if(tok.type === 'id'){
+        // Bare `na` (not followed by '(') is the literal NaN sentinel.
+        const next0 = peek(ctx);
+        if(tok.value === 'na' && (!next0 || next0.type !== 'op' || next0.value !== '(')){
+          return { kind:'na' };
+        }
+        // Function call?
+        const next1 = peek(ctx);
+        if(next1 && next1.type === 'op' && next1.value === '('){
+          next(ctx); // consume (
+          const args = [];
+          const named = {};
+          if(!(peek(ctx) && peek(ctx).type === 'op' && peek(ctx).value === ')')){
+            while(true){
+              // Look ahead for `name = expr` named arg
+              const here = ctx.pos;
+              const a = ctx.tokens[here];
+              const b = ctx.tokens[here + 1];
+              if(a && a.type === 'id' && b && b.type === 'op' && b.value === '='){
+                ctx.pos += 2;
+                const v = parseExpression(ctx, 0);
+                named[a.value] = v;
+              } else {
+                args.push(parseExpression(ctx, 0));
+              }
+              const sep = peek(ctx);
+              if(sep && sep.type === 'op' && sep.value === ','){ next(ctx); continue; }
+              break;
+            }
+          }
+          expect(ctx, 'op', ')');
+          return { kind:'call', name: tok.value, args, named };
+        }
+        return { kind:'id', name: tok.value };
+      }
+      throw new Error('Unexpected token "' + (tok.value !== undefined ? tok.value : tok.type) + '"');
+    }
+
+    // ── Series helpers (work over arrays of length = candles.length) ──────
+    function rollingMax(arr, n){
+      const out = new Array(arr.length).fill(NaN);
+      for(let i = n - 1; i < arr.length; i++){
+        let m = -Infinity, ok = true;
+        for(let j = i - n + 1; j <= i; j++){
+          const v = arr[j]; if(!isFinite(v)){ ok = false; break; }
+          if(v > m) m = v;
+        }
+        if(ok) out[i] = m;
+      }
+      return out;
+    }
+    function rollingMin(arr, n){
+      const out = new Array(arr.length).fill(NaN);
+      for(let i = n - 1; i < arr.length; i++){
+        let m = Infinity, ok = true;
+        for(let j = i - n + 1; j <= i; j++){
+          const v = arr[j]; if(!isFinite(v)){ ok = false; break; }
+          if(v < m) m = v;
+        }
+        if(ok) out[i] = m;
+      }
+      return out;
+    }
+    function changeSeries(arr, n){
+      n = n|0 || 1;
+      const out = new Array(arr.length).fill(NaN);
+      for(let i = n; i < arr.length; i++){
+        const a = arr[i], b = arr[i - n];
+        if(isFinite(a) && isFinite(b)) out[i] = a - b;
+      }
+      return out;
+    }
+    function crossSeries(a, b, dir){
+      // dir: 'over' (a crossed up through b), 'under' (a crossed down through b)
+      const N = Math.min(a.length, b.length);
+      const out = new Array(N).fill(false);
+      for(let i = 1; i < N; i++){
+        const a0 = a[i-1], a1 = a[i], b0 = b[i-1], b1 = b[i];
+        if(!isFinite(a0) || !isFinite(a1) || !isFinite(b0) || !isFinite(b1)) continue;
+        if(dir === 'over')  out[i] = (a0 <= b0) && (a1 >  b1);
+        if(dir === 'under') out[i] = (a0 >= b0) && (a1 <  b1);
+        if(dir === 'cross') out[i] = ((a0 <= b0) && (a1 > b1)) || ((a0 >= b0) && (a1 < b1));
+      }
+      return out;
+    }
+    function asSeries(v, len){
+      if(Array.isArray(v)) return v;
+      const out = new Array(len);
+      for(let i = 0; i < len; i++) out[i] = v;
+      return out;
+    }
+
+    // Built-in series getters (computed lazily per call)
+    function builtinSeries(ctx, name){
+      const cached = ctx.cache[name];
+      if(cached) return cached;
+      const cs = ctx.candles;
+      let s;
+      switch(name){
+        case 'close':   s = cs.map(c => c.close); break;
+        case 'open':    s = cs.map(c => c.open); break;
+        case 'high':    s = cs.map(c => c.high); break;
+        case 'low':     s = cs.map(c => c.low); break;
+        case 'hl2':     s = cs.map(c => (c.high + c.low) / 2); break;
+        case 'hlc3':    s = cs.map(c => (c.high + c.low + c.close) / 3); break;
+        case 'ohlc4':   s = cs.map(c => (c.open + c.high + c.low + c.close) / 4); break;
+        case 'volume':  s = cs.map(c => c.volume || c.quote_volume || 0); break;
+        case 'time':    s = cs.map(c => c.time); break;
+        case 'bar_index': s = cs.map((_, i) => i); break;
+        default: return null;
+      }
+      ctx.cache[name] = s;
+      return s;
+    }
+
+    // Arithmetic & comparison helpers — broadcast scalar/series
+    function applyBinop(op, a, b){
+      const aIsArr = Array.isArray(a), bIsArr = Array.isArray(b);
+      const len = aIsArr ? a.length : (bIsArr ? b.length : 1);
+      if(!aIsArr && !bIsArr) return scalarOp(op, a, b);
+      const out = new Array(len);
+      for(let i = 0; i < len; i++){
+        const av = aIsArr ? a[i] : a;
+        const bv = bIsArr ? b[i] : b;
+        out[i] = scalarOp(op, av, bv);
+      }
+      return out;
+    }
+    function scalarOp(op, a, b){
+      // Logical short-circuit handled as plain values here
+      if(op === 'and') return !!(a && b);
+      if(op === 'or')  return !!(a || b);
+      if(a === undefined || b === undefined) return NaN;
+      if((op === '+' || op === '-' || op === '*' || op === '/' || op === '%') && (!isFinite(a) || !isFinite(b))) return NaN;
+      switch(op){
+        case '+': return a + b;
+        case '-': return a - b;
+        case '*': return a * b;
+        case '/': return b === 0 ? NaN : a / b;
+        case '%': return b === 0 ? NaN : a % b;
+        case '>': return a >  b;
+        case '<': return a <  b;
+        case '>=': return a >= b;
+        case '<=': return a <= b;
+        case '==': return a === b;
+        case '!=': return a !== b;
+      }
+      return NaN;
+    }
+
+    function applyUnop(op, x){
+      if(Array.isArray(x)) return x.map(v => unop(op, v));
+      return unop(op, x);
+    }
+    function unop(op, v){
+      if(op === '-') return -v;
+      if(op === '+') return +v;
+      if(op === '!' || op === 'not') return !v;
+      return v;
+    }
+
+    // Resolve identifier/series/scalar source from arg
+    function srcArg(arg){
+      // arg may be a series (array) or scalar; pickSrc happens via builtin names
+      return arg;
+    }
+
+    // Function dispatch — returns series or scalar
+    function callFn(name, args, ctx){
+      const need = (k) => { if(args.length < k) throw new Error(name + ' needs ' + k + ' arg(s)'); };
+      const len = ctx.candles.length;
+      const arr = (v) => asSeries(v, len);
+      const scalar = (v) => Array.isArray(v) ? (v[v.length - 1]) : v;
+
+      switch(name){
+        case 'ta.ema': need(2); return TA.ema(arr(srcArg(args[0])), scalar(args[1])|0);
+        case 'ta.sma': need(2); return TA.sma(arr(srcArg(args[0])), scalar(args[1])|0);
+        case 'ta.rma': need(2); {
+          const v = arr(srcArg(args[0])); const p = scalar(args[1])|0;
+          // Wilder smoothing (mirrors TA.rma in TA module)
+          const out = new Array(v.length).fill(NaN); let seed = 0;
+          for(let i = 0; i < v.length; i++){
+            if(i < p - 1){ seed += v[i]; continue; }
+            if(i === p - 1){ seed += v[i]; out[i] = seed / p; continue; }
+            out[i] = (out[i-1] * (p - 1) + v[i]) / p;
+          }
+          return out;
+        }
+        case 'ta.wma': need(2); {
+          const v = arr(srcArg(args[0])); const p = scalar(args[1])|0;
+          const out = new Array(v.length).fill(NaN);
+          const denom = p * (p + 1) / 2;
+          for(let i = p - 1; i < v.length; i++){
+            let sum = 0, ok = true;
+            for(let k = 0; k < p; k++){
+              const x = v[i - k]; if(!isFinite(x)){ ok = false; break; }
+              sum += x * (p - k);
+            }
+            if(ok) out[i] = sum / denom;
+          }
+          return out;
+        }
+        case 'ta.rsi': need(2); return TA.rsi(arr(srcArg(args[0])), scalar(args[1])|0);
+        case 'ta.atr': need(1); return TA.atr(ctx.candles, scalar(args[0])|0);
+        case 'ta.vwap': return TA.vwapSession(ctx.candles);
+        case 'ta.highest': need(2); return rollingMax(arr(srcArg(args[0])), scalar(args[1])|0);
+        case 'ta.lowest':  need(2); return rollingMin(arr(srcArg(args[0])), scalar(args[1])|0);
+        case 'ta.crossover':  need(2); return crossSeries(arr(args[0]), arr(args[1]), 'over');
+        case 'ta.crossunder': need(2); return crossSeries(arr(args[0]), arr(args[1]), 'under');
+        case 'ta.cross':      need(2); return crossSeries(arr(args[0]), arr(args[1]), 'cross');
+        case 'ta.change':  return changeSeries(arr(srcArg(args[0])), args.length > 1 ? scalar(args[1])|0 : 1);
+        case 'ta.tr': return TA.atr(ctx.candles, 1); // TR ≈ atr(n=1)
+        case 'nz': {
+          const x = args[0];
+          const fill = args.length > 1 ? args[1] : 0;
+          const isVal = (v) => typeof v === 'boolean' || isFinite(v);
+          if(Array.isArray(x)){
+            const f = Array.isArray(fill) ? fill : new Array(x.length).fill(fill);
+            return x.map((v, i) => isVal(v) ? v : (isVal(f[i]) ? f[i] : 0));
+          }
+          return isVal(x) ? x : (isVal(scalar(fill)) ? scalar(fill) : 0);
+        }
+        case 'na': {
+          // Booleans are valid Pine values; only NaN / undefined / null is "na".
+          const isNa = (v) => v === null || v === undefined ||
+            (typeof v !== 'boolean' && (typeof v === 'number' ? !isFinite(v) : false));
+          const x = args[0];
+          if(Array.isArray(x)) return x.map(isNa);
+          return isNa(x);
+        }
+        case 'math.abs':   return Array.isArray(args[0]) ? args[0].map(v => Math.abs(v))   : Math.abs(args[0]);
+        case 'math.sign':  return Array.isArray(args[0]) ? args[0].map(v => Math.sign(v))  : Math.sign(args[0]);
+        case 'math.round': return Array.isArray(args[0]) ? args[0].map(v => Math.round(v)) : Math.round(args[0]);
+        case 'math.floor': return Array.isArray(args[0]) ? args[0].map(v => Math.floor(v)) : Math.floor(args[0]);
+        case 'math.ceil':  return Array.isArray(args[0]) ? args[0].map(v => Math.ceil(v))  : Math.ceil(args[0]);
+        case 'math.sqrt':  return Array.isArray(args[0]) ? args[0].map(v => Math.sqrt(v))  : Math.sqrt(args[0]);
+        case 'math.max':   return applyBinopFn((a, b) => Math.max(a, b), args[0], args[1]);
+        case 'math.min':   return applyBinopFn((a, b) => Math.min(a, b), args[0], args[1]);
+        case 'math.pow':   return applyBinopFn((a, b) => Math.pow(a, b), args[0], args[1]);
+      }
+      throw new Error('Unsupported function ' + name + '()');
+    }
+
+    function applyBinopFn(fn, a, b){
+      const aIsArr = Array.isArray(a), bIsArr = Array.isArray(b);
+      const len = aIsArr ? a.length : (bIsArr ? b.length : 1);
+      if(!aIsArr && !bIsArr) return fn(a, b);
+      const out = new Array(len);
+      for(let i = 0; i < len; i++) out[i] = fn(aIsArr ? a[i] : a, bIsArr ? b[i] : b);
+      return out;
+    }
+
+    function evalAST(ast, ctx){
+      if(!ast) return NaN;
+      switch(ast.kind){
+        case 'num':  return ast.value;
+        case 'bool': return ast.value;
+        case 'na':   return NaN;
+        case 'str':  return ast.value;
+        case 'hex':  return ast.value;
+        case 'id': {
+          if(ctx.scalars && ctx.scalars[ast.name] !== undefined) return ctx.scalars[ast.name];
+          if(ctx.series  && ctx.series[ast.name])               return ctx.series[ast.name];
+          const b = builtinSeries(ctx, ast.name);
+          if(b) return b;
+          throw new Error('Unknown identifier "' + ast.name + '"');
+        }
+        case 'unop': return applyUnop(ast.op, evalAST(ast.x, ctx));
+        case 'binop': {
+          const av = evalAST(ast.a, ctx);
+          const bv = evalAST(ast.b, ctx);
+          return applyBinop(ast.op, av, bv);
+        }
+        case 'tern': {
+          const c = evalAST(ast.cond, ctx);
+          const t = evalAST(ast.then, ctx);
+          const e = evalAST(ast.else, ctx);
+          if(Array.isArray(c) || Array.isArray(t) || Array.isArray(e)){
+            const len = ctx.candles.length;
+            const cArr = asSeries(c, len), tArr = asSeries(t, len), eArr = asSeries(e, len);
+            const out = new Array(len);
+            for(let i = 0; i < len; i++) out[i] = cArr[i] ? tArr[i] : eArr[i];
+            return out;
+          }
+          return c ? t : e;
+        }
+        case 'idx': {
+          const x = evalAST(ast.x, ctx);
+          const off = evalAST(ast.off, ctx);
+          const offN = (Array.isArray(off) ? off[off.length - 1] : off) | 0;
+          if(!Array.isArray(x)) return x; // scalar — lookback meaningless
+          const out = new Array(x.length).fill(NaN);
+          for(let i = offN; i < x.length; i++) out[i] = x[i - offN];
+          return out;
+        }
+        case 'call': {
+          const args = ast.args.map(a => evalAST(a, ctx));
+          return callFn(ast.name, args, ctx);
+        }
+      }
+      return NaN;
+    }
+
+    function parseExpr(src){
+      const toks = tokenize(src);
+      if(!toks.length) throw new Error('Empty expression');
+      return parse(toks);
+    }
+
+    // Topological-ish symbol evaluator (assumes definitions in order, which
+    // is how Pine scripts read top-to-bottom anyway).
+    function buildSeriesContext(candles, symbols){
+      const ctx = { candles, cache: {}, series: {}, scalars: {} };
+      (symbols || []).forEach(sym => {
+        try{
+          const v = evalAST(sym.expr, ctx);
+          if(Array.isArray(v)) ctx.series[sym.name] = v;
+          else ctx.scalars[sym.name] = v;
+        }catch(e){
+          // Don't crash the whole indicator on a bad symbol; just record.
+          ctx.scalars[sym.name] = NaN;
+        }
+      });
+      return ctx;
+    }
+
+    function computeMarkers(candles, symbols, conditionAST, opts){
+      const ctx = buildSeriesContext(candles, symbols);
+      const cond = evalAST(conditionAST, ctx);
+      const len = candles.length;
+      const arr = Array.isArray(cond) ? cond : new Array(len).fill(cond);
+      const markers = [];
+      for(let i = 0; i < len; i++){
+        if(!arr[i]) continue;
+        markers.push({
+          time: candles[i].time,
+          position: opts.position || 'aboveBar',
+          color:    opts.color    || '#42a5f5',
+          shape:    opts.shape    || 'circle',
+          text:     opts.text     || '',
+        });
+      }
+      return markers;
+    }
+
+    // Walk an AST and replace bare identifiers that match `subs` with literal
+    // numbers. Used by the translator to bake input.* values into expressions
+    // so the indicator survives a JSON round-trip without needing a runtime
+    // input table. Returns a new AST (does not mutate input).
+    function substituteIds(ast, subs){
+      if(!ast || typeof ast !== 'object') return ast;
+      switch(ast.kind){
+        case 'id':
+          if(Object.prototype.hasOwnProperty.call(subs, ast.name)){
+            return { kind:'num', value: subs[ast.name] };
+          }
+          return ast;
+        case 'unop': return { kind:'unop', op: ast.op, x: substituteIds(ast.x, subs) };
+        case 'binop': return { kind:'binop', op: ast.op,
+          a: substituteIds(ast.a, subs), b: substituteIds(ast.b, subs) };
+        case 'tern': return { kind:'tern',
+          cond: substituteIds(ast.cond, subs),
+          then: substituteIds(ast.then, subs),
+          else: substituteIds(ast.else, subs) };
+        case 'idx': return { kind:'idx',
+          x: substituteIds(ast.x, subs),
+          off: substituteIds(ast.off, subs) };
+        case 'call': return { kind:'call', name: ast.name,
+          args: (ast.args || []).map(a => substituteIds(a, subs)),
+          named: ast.named };
+        default: return ast;
+      }
+    }
+
+    return { tokenize, parse, parseExpr, evalAST, buildSeriesContext, computeMarkers, substituteIds };
+  })();
+
+  // ── Helpers shared by the translator ────────────────────────────────────
+  // Walk balanced parens starting just after an opening paren.
+  function _matchParen(src, openIdx){
+    let depth = 1, j = openIdx + 1;
+    while(j < src.length && depth > 0){
+      const ch = src[j];
+      if(ch === '"' || ch === "'"){
+        const q = ch; j++;
+        while(j < src.length && src[j] !== q){ if(src[j] === '\\') j++; j++; }
+        j++; continue;
+      }
+      if(ch === '/' && src[j+1] === '/'){ while(j < src.length && src[j] !== '\n') j++; continue; }
+      if(ch === '(') depth++;
+      else if(ch === ')') depth--;
+      j++;
+    }
+    return j; // index just past the closing paren
+  }
+
+  // Split a comma-separated arg list at the top level (respects parens & strings).
+  function _splitArgs(s){
+    const args = []; let depth = 0, last = 0;
+    for(let i = 0; i < s.length; i++){
+      const ch = s[i];
+      if(ch === '"' || ch === "'"){
+        const q = ch; i++;
+        while(i < s.length && s[i] !== q){ if(s[i] === '\\') i++; i++; }
+        continue;
+      }
+      if(ch === '(' || ch === '[') depth++;
+      else if(ch === ')' || ch === ']') depth--;
+      else if(ch === ',' && depth === 0){
+        args.push(s.slice(last, i));
+        last = i + 1;
+      }
+    }
+    args.push(s.slice(last));
+    return args.map(a => a.trim()).filter(a => a.length);
+  }
+
+  // Strip Pine line comments — everything after `//` to end of line.
+  function _stripLineComment(line){
+    const sLen = line.length;
+    let inStr = null;
+    for(let i = 0; i < sLen; i++){
+      const ch = line[i];
+      if(inStr){
+        if(ch === '\\') i++;
+        else if(ch === inStr) inStr = null;
+        continue;
+      }
+      if(ch === '"' || ch === "'"){ inStr = ch; continue; }
+      if(ch === '/' && line[i+1] === '/') return line.slice(0, i);
+    }
+    return line;
+  }
+
+  // Pull a complete top-level call `head(...)` out of the joined script,
+  // returning [outerStart, outerEnd, argsString] for each match.
+  function _findCalls(text, head){
+    const rx = new RegExp('(^|[^\\w.])' + head.replace(/\./g, '\\.') + '\\s*\\(', 'g');
+    const out = [];
+    let m;
+    while((m = rx.exec(text)) !== null){
+      const openIdx = m.index + m[0].length - 1;
+      const close = _matchParen(text, openIdx);
+      out.push({ start: m.index + m[1].length, end: close, args: text.slice(openIdx + 1, close - 1) });
+      rx.lastIndex = close;
+    }
+    return out;
+  }
+
+  // Resolve a Pine color expression to a hex string (or null).
+  function _resolveColor(expr, colorVars){
+    if(!expr) return null;
+    expr = expr.trim();
+    let m;
+    if((m = /^#([0-9a-fA-F]{3,8})$/.exec(expr))) return '#' + m[1];
+    if((m = /^color\.(\w+)/.exec(expr))) return COLOR_MAP[m[1].toLowerCase()] || null;
+    if((m = /^([a-zA-Z_][\w]*)/.exec(expr))) return colorVars[m[1]] || null;
+    return null;
+  }
+
+  function _resolveScalar(expr, inputs){
+    if(expr === undefined || expr === null) return undefined;
+    const t = String(expr).trim();
+    if(!t) return undefined;
+    if(/^-?\d+(?:\.\d+)?$/.test(t)) return Number(t);
+    if(inputs[t] !== undefined) return inputs[t];
+    return undefined;
+  }
+
+  // Map a Pine plotshape style/location to Lightweight Chart marker props.
+  function _mapShape(style){
+    const s = (style || '').replace(/^shape\./, '').toLowerCase();
+    if(s === 'arrowup' || s === 'triangleup' || s === 'flag' || s === 'labelup') return 'arrowUp';
+    if(s === 'arrowdown' || s === 'triangledown' || s === 'labeldown')           return 'arrowDown';
+    if(s === 'square' || s === 'diamond')                                        return 'square';
+    return 'circle';
+  }
+  function _mapPosition(loc, defaultPos){
+    const s = (loc || '').replace(/^location\./, '').toLowerCase();
+    if(s === 'abovebar' || s === 'top')    return 'aboveBar';
+    if(s === 'belowbar' || s === 'bottom') return 'belowBar';
+    if(s === 'absolute')                   return 'inBar';
+    return defaultPos || 'aboveBar';
+  }
+
   function translatePine(script){
     const raw = script || '';
     if(!raw.trim()) throw new Error('Paste your script first.');
 
-    // ── 1. Soft-skip detection (informational, never aborts translation) ──
+    // ── 1. Soft-skip features (informational, never aborts) ─────────────
     const softFeatures = [
       [/\brequest\.security\s*\(/, 'multi-timeframe (request.security)'],
       [/\btable\.\w+/,             'dashboard tables (table.*)'],
@@ -2330,141 +3064,316 @@ button{font-family:inherit}
     const skipped = [];
     softFeatures.forEach(([rx, name]) => { if(rx.test(raw)) skipped.push(name); });
 
-    // ── 2. Strip the noise so it can't confuse the plot/assign extractors.
-    //    We remove balanced-paren calls naïvely (good enough for one-liners).
-    const stripCall = (src, head) => {
-      const rx = new RegExp('\\b' + head + '\\s*\\(', 'g');
-      let out = '';
-      let i = 0;
-      while(i < src.length){
-        rx.lastIndex = i;
-        const m = rx.exec(src);
-        if(!m){ out += src.slice(i); break; }
-        out += src.slice(i, m.index);
-        // Walk the parens
-        let depth = 1; let j = m.index + m[0].length;
-        while(j < src.length && depth > 0){
-          const ch = src[j];
-          if(ch === '(') depth++;
-          else if(ch === ')') depth--;
-          j++;
+    // ── 2. Join multi-line statements (Pine uses 4-space indent continuation
+    //       OR explicit line continuation inside parens). We honour both:
+    //       - Lines that start more indented than the previous and don't
+    //         look like a fresh top-level keyword get appended.
+    //       - We always rebalance parens within a logical statement.
+    const rawLines = raw.split(/\r?\n/);
+    const stmts = [];   // array of { lineNo, text } (1-based lineNo of the START line)
+    let buf = '', bufLine = 0, depth = 0;
+    function depthDelta(s){
+      let d = 0, inStr = null;
+      for(let i = 0; i < s.length; i++){
+        const ch = s[i];
+        if(inStr){
+          if(ch === '\\') i++;
+          else if(ch === inStr) inStr = null;
+          continue;
         }
-        i = j;  // Skip the whole call (including trailing close-paren)
+        if(ch === '"' || ch === "'"){ inStr = ch; continue; }
+        if(ch === '/' && s[i+1] === '/') break;
+        if(ch === '(' || ch === '[') d++;
+        else if(ch === ')' || ch === ']') d--;
       }
-      return out;
-    };
-    let text = raw;
-    ['request\\.security', 'table\\.\\w+', 'fill', 'bgcolor', 'hline',
-     'plotshape', 'plotchar', 'plotarrow'].forEach(name => {
-      text = stripCall(text, name);
-    });
-    // Drop full lines that look like state-tracking / drawing object var decls.
-    text = text.split('\n').filter(line =>
-      !/^\s*var\s+(?:table|line|label|box)\b/.test(line)
-    ).join('\n');
+      return d;
+    }
+    for(let i = 0; i < rawLines.length; i++){
+      const line = _stripLineComment(rawLines[i]);
+      if(!buf){
+        if(!line.trim()){ continue; }
+        buf = line; bufLine = i + 1; depth = depthDelta(line);
+      } else {
+        // Continue if previous line had unmatched (, OR this line is indented
+        // continuation of an assignment (rare but Pine allows it inline).
+        if(depth > 0){
+          buf += ' ' + line.trim();
+          depth += depthDelta(line);
+        } else {
+          stmts.push({ lineNo: bufLine, text: buf });
+          buf = ''; depth = 0;
+          if(line.trim()){
+            buf = line; bufLine = i + 1; depth = depthDelta(line);
+          }
+        }
+      }
+    }
+    if(buf) stmts.push({ lineNo: bufLine, text: buf });
 
-    // ── 3. Build numeric/color symbol table from input.* and `name = literal`
-    const inputs = {};   // name → number
-    const colors = {};   // name → '#hex'
-    // input.int(200, "SMA Length", minval=1)  /  input.float(2.0, …)
-    const inpNumRx = /^\s*([a-zA-Z_][\w]*)\s*=\s*input\.(?:int|float|bool)\s*\(\s*([^,)]+)/gm;
-    let im;
-    while((im = inpNumRx.exec(text)) !== null){
-      const v = Number(im[2]);
-      if(isFinite(v)) inputs[im[1]] = v;
-    }
-    // input.color(color.fuchsia, "...")  /  input.color(color.new(color.red, 80), …)
-    const inpColRx = /^\s*([a-zA-Z_][\w]*)\s*=\s*input\.color\s*\(\s*color\.(\w+)/gm;
-    let icm;
-    while((icm = inpColRx.exec(text)) !== null){
-      const hex = COLOR_MAP[icm[2].toLowerCase()];
-      if(hex) colors[icm[1]] = hex;
-    }
-    // Plain `name = 14`
-    const inpLitRx = /^\s*([a-zA-Z_][\w]*)\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*$/gm;
-    let il;
-    while((il = inpLitRx.exec(text)) !== null){
-      const v = Number(il[2]);
-      if(isFinite(v) && inputs[il[1]] === undefined) inputs[il[1]] = v;
+    // ── 3. Walk statements, classify, build symbol/input/marker tables ──
+    const inputs = {};       // identifier → number
+    const colorVars = {};    // identifier → '#hex'
+    const symbolMap = {};    // identifier → AST       (for assignments)
+    const symbolList = [];   // [{name, expr}] in declaration order
+    const plotCalls = [];    // { lineNo, expr, args[] }
+    const markerCalls = [];  // { lineNo, kind, args[] }
+    const untranslated = []; // { lineNo, text, reason }
+
+    const RECOGNIZED_HEADS = new Set([
+      '//@version', '@version', 'indicator', 'study', 'strategy', 'library',
+    ]);
+
+    for(const stmt of stmts){
+      let s = stmt.text.trim();
+      if(!s) continue;
+      // Header / decorator lines we can ignore entirely.
+      if(/^\/\/@version/i.test(s) || /^@version/i.test(s)) continue;
+      if(/^(?:indicator|study|strategy|library)\s*\(/i.test(s)) continue;
+      if(/^import\s+/.test(s)) continue;
+
+      // plot(...) / plotshape(...) / plotarrow(...) at top of statement
+      const callHeadMatch = /^(plot|plotshape|plotarrow|plotchar|plotcandle)\s*\(/.exec(s);
+      if(callHeadMatch){
+        const head = callHeadMatch[1];
+        const open = callHeadMatch[0].length - 1;
+        const close = _matchParen(s, open);
+        const argStr = s.slice(open + 1, close - 1);
+        const args = _splitArgs(argStr);
+        if(head === 'plot') plotCalls.push({ lineNo: stmt.lineNo, args, raw: s });
+        else if(head === 'plotshape' || head === 'plotarrow' || head === 'plotchar')
+          markerCalls.push({ lineNo: stmt.lineNo, kind: head, args, raw: s });
+        // plotcandle isn't supported — leave it as "skipped" via softFeatures-like noise
+        else untranslated.push({ lineNo: stmt.lineNo, text: s, reason: 'plotcandle not supported' });
+        continue;
+      }
+
+      // input.* assignments
+      const inpMatch = /^(?:var\s+)?(?:int\s+|float\s+|bool\s+|color\s+|string\s+)?([a-zA-Z_][\w]*)\s*=\s*input(?:\.(int|float|bool|color|string|source|timeframe))?\s*\(/.exec(s);
+      if(inpMatch){
+        const name = inpMatch[1];
+        const kind = (inpMatch[2] || '').toLowerCase();
+        const open = s.indexOf('(', s.indexOf('input'));
+        const close = _matchParen(s, open);
+        const args = _splitArgs(s.slice(open + 1, close - 1));
+        if(kind === 'color' || kind === ''){
+          const colMatch = /^(?:color\.(\w+))/.exec(args[0] || '');
+          if(colMatch && COLOR_MAP[colMatch[1].toLowerCase()]) colorVars[name] = COLOR_MAP[colMatch[1].toLowerCase()];
+        }
+        if(kind === 'int' || kind === 'float' || kind === 'bool' || kind === ''){
+          const v = Number(args[0]);
+          if(isFinite(v)) inputs[name] = v;
+        }
+        continue;
+      }
+
+      // Generic assignment: name = <expression>
+      const asnMatch = /^(?:var\s+|varip\s+)?(?:int\s+|float\s+|bool\s+|series\s+(?:int\s+|float\s+)?|simple\s+(?:int\s+|float\s+)?)?([a-zA-Z_][\w]*)\s*(?::?=)\s*(.+)$/.exec(s);
+      if(asnMatch){
+        const name = asnMatch[1];
+        const rhs  = asnMatch[2].trim();
+        // Skip drawing-object var declarations (line/label/box/table.new(...))
+        if(/^(?:line|label|box|table)\.new\s*\(/.test(rhs)) continue;
+        try{
+          const ast = PineEval.parseExpr(rhs);
+          symbolMap[name] = ast;
+          symbolList.push({ name, expr: ast });
+        }catch(e){
+          // Allow plain literal assignments to populate the inputs table even
+          // when the rest of the line is unparseable.
+          const lit = /^-?\d+(?:\.\d+)?$/;
+          if(lit.test(rhs)) inputs[name] = Number(rhs);
+          else untranslated.push({ lineNo: stmt.lineNo, text: s, reason: 'could not parse expression' });
+        }
+        continue;
+      }
+
+      // Lines that match a known soft-skipped feature → drop without complaint
+      let softHit = false;
+      for(const [rx] of softFeatures){
+        if(rx.test(s)){ softHit = true; break; }
+      }
+      if(softHit) continue;
+
+      untranslated.push({ lineNo: stmt.lineNo, text: s, reason: 'unrecognized statement' });
     }
 
-    // ── 4. Build symbol table from `name = ta.ema(close, 20)` assignments
-    const symbols = {};
-    const assignRx = /^\s*([a-zA-Z_][\w]*)\s*=\s*(?:ta\.)?(ema|sma|rsi|macd|bb|vwap|atr|supertrend|stochrsi|wma|hma|cci)\s*\(([^)]*)\)/gm;
-    let am;
-    while((am = assignRx.exec(text)) !== null){
-      symbols[am[1]] = { fn: am[2].toLowerCase(), args: am[3] };
-    }
-
-    // ── 5. Walk every plot() call, extract its expression + color
+    // ── 4. Convert plot() calls into preset indicator specs ───────────────
     const out = [];
-    const colorRx = /color\s*=\s*color\.(\w+)|color\s*=\s*#([0-9a-fA-F]{3,8})|color\s*=\s*([a-zA-Z_][\w]*)/;
-    const plotRx = /\bplot\s*\(\s*([^,)]+(?:\([^)]*\)[^,)]*)?)(?:\s*,([^)]*(?:\([^)]*\)[^)]*)?))?\)/g;
-    let pm;
     let usedPalette = 0;
-    while((pm = plotRx.exec(text)) !== null){
-      let expr = pm[1].trim();
-      const tail = pm[2] || '';
 
-      // Resolve `cond ? a : b` → the non-na branch
+    function assignedExprAsPresetSpec(expr){
+      // The original translator only matched `plot(name)` where name was a
+      // ta.* assignment. We keep that for the visible-line-on-chart semantics
+      // (you get an EMA line, not a marker). We support direct ta.foo() too.
+      const name = expr.trim();
+      let resolved = null;
+      if(symbolMap[name] && symbolMap[name].kind === 'call'){
+        const c = symbolMap[name];
+        const fn = (c.name || '').replace(/^ta\./, '');
+        if(PRESETS[fn]){
+          // Read literal-or-input args
+          const argsArr = c.args.map(a => {
+            if(a.kind === 'num') return String(a.value);
+            if(a.kind === 'id'){
+              if(VALID_SRC.has(a.name)) return a.name;
+              if(inputs[a.name] !== undefined) return String(inputs[a.name]);
+              return a.name; // unresolved
+            }
+            return null;
+          });
+          if(argsArr.every(x => x !== null)) resolved = { fn, args: argsArr };
+        }
+      }
+      if(!resolved){
+        const dm = /^(?:ta\.)?(ema|sma|rsi|macd|bb|vwap|atr|supertrend|stochrsi)\s*\(([^)]*)\)$/.exec(name);
+        if(dm){
+          const argsArr = _splitArgs(dm[2]).map(a => {
+            const t = a.trim();
+            return inputs[t] !== undefined ? String(inputs[t]) : t;
+          });
+          resolved = { fn: dm[1], args: argsArr };
+        }
+      }
+      return resolved;
+    }
+
+    for(const p of plotCalls){
+      // First positional arg = expression; remaining can be color=, title=, etc.
+      let expr = p.args[0] || '';
+      // Resolve `cond ? a : b` — keep the non-na branch (matches old behaviour)
       const tern = /^[^?]+\?\s*([^:]+?)\s*:\s*(.+)$/.exec(expr);
       if(tern){
         const a = tern[1].trim(), b = tern[2].trim();
         expr = (a === 'na' ? b : a);
       }
-
-      // Color: literal hex / named color / variable
-      const cm = colorRx.exec(tail);
-      let color;
-      if(cm){
-        if(cm[1])      color = COLOR_MAP[cm[1].toLowerCase()];
-        else if(cm[2]) color = '#' + cm[2];
-        else if(cm[3]) color = colors[cm[3]];
+      // Color: scan named args
+      let color = null;
+      for(let i = 1; i < p.args.length; i++){
+        const am = /^(\w+)\s*=\s*(.+)$/.exec(p.args[i]);
+        if(am && am[1] === 'color'){ color = _resolveColor(am[2], colorVars); break; }
       }
       if(!color) color = PALETTE[usedPalette++ % PALETTE.length];
-
-      // Expression might be a symbol, or a direct ta.* call
-      let resolved = null;
-      if(symbols[expr]){
-        resolved = symbols[expr];
-      } else {
-        const dm = /^(?:ta\.)?(ema|sma|rsi|macd|bb|vwap|atr|supertrend|stochrsi)\s*\(([^)]*)\)$/.exec(expr);
-        if(dm) resolved = { fn: dm[1].toLowerCase(), args: dm[2] };
+      const resolved = assignedExprAsPresetSpec(expr);
+      if(!resolved){
+        untranslated.push({ lineNo: p.lineNo, text: p.raw, reason: `plot(${expr.slice(0,40)}…) — couldn't resolve to a known indicator` });
+        continue;
       }
-      if(!resolved) continue;
       const fn = resolved.fn;
-      if(!PRESETS[fn]) continue;
-
-      // Resolve identifier args via the inputs table (e.g. `len` → 200)
-      const argsRaw = resolved.args.split(',').map(a => {
-        const t = a.trim();
-        if(!t) return t;
-        if(inputs[t] !== undefined) return String(inputs[t]);
-        return t;
-      }).filter(a => a.length);
-
+      if(!PRESETS[fn]){
+        untranslated.push({ lineNo: p.lineNo, text: p.raw, reason: `unsupported indicator "${fn}"` });
+        continue;
+      }
       const def = PRESETS[fn];
       let src = 'close';
-      let nums = argsRaw;
-      if(def.src && argsRaw.length && VALID_SRC.has(argsRaw[0].toLowerCase())){
-        src = argsRaw[0].toLowerCase();
-        nums = argsRaw.slice(1);
+      let nums = resolved.args;
+      if(def.src && nums.length && VALID_SRC.has(String(nums[0]).toLowerCase())){
+        src = String(nums[0]).toLowerCase();
+        nums = nums.slice(1);
       }
       const params = {};
-      def.params.forEach((p, i) => {
-        const v = nums[i] !== undefined ? Number(nums[i]) : p.def;
-        params[p.key] = isFinite(v) ? v : p.def;
+      def.params.forEach((pp, i) => {
+        const v = nums[i] !== undefined ? Number(nums[i]) : pp.def;
+        params[pp.key] = isFinite(v) ? v : pp.def;
       });
-      out.push({ type:fn, params, src, color });
+      out.push({ type: fn, params, src, color });
     }
 
-    if(!out.length){
-      const reason = skipped.length
-        ? `Couldn't extract any indicators. Pieces I had to skip: ${skipped.join(', ')}.\nTry the Formula tab to add the indicators individually.`
-        : `No plot(...) calls recognised. Try the Formula tab to add lines individually.`;
-      throw new Error(reason);
+    // ── 5. Convert plotshape/plotarrow → marker indicators ────────────────
+    for(const m of markerCalls){
+      const condExpr = m.args[0] || '';
+      let astCond;
+      try{
+        astCond = PineEval.parseExpr(condExpr);
+      }catch(e){
+        untranslated.push({ lineNo: m.lineNo, text: m.raw, reason: `${m.kind}(...) condition couldn't be parsed (${e.message})` });
+        continue;
+      }
+      // Pull style / location / color / text from named args (positional too)
+      const named = {};
+      const positional = [];
+      m.args.slice(1).forEach(a => {
+        const am = /^(\w+)\s*=\s*(.+)$/.exec(a);
+        if(am) named[am[1]] = am[2].trim();
+        else positional.push(a);
+      });
+      // For plotshape, positional order is: title, style, location, color, offset, text
+      const pickPos = (i) => positional[i] !== undefined ? positional[i] : undefined;
+      const styleRaw = named.style    || pickPos(1);
+      const locRaw   = named.location || pickPos(2);
+      const colRaw   = named.color    || named.colorup || pickPos(3);
+      const colDownRaw = named.colordown;
+      const txtRaw   = named.text     || pickPos(5);
+
+      // Bake known input scalars (e.g. `length = input.int(20)`) into the
+      // ASTs so the marker spec is fully self-contained — survives JSON
+      // round-trip into localStorage / server sync without needing an
+      // external input table at evaluation time.
+      const bakedSymbols = symbolList.map(sym => ({
+        name: sym.name, expr: PineEval.substituteIds(sym.expr, inputs),
+      }));
+      const bakedAstCond = PineEval.substituteIds(astCond, inputs);
+      const text = txtRaw ? String(txtRaw).replace(/^["']|["']$/g, '') : '';
+
+      if(m.kind === 'plotarrow'){
+        // plotarrow's series is signed: positive → up arrow under the bar,
+        // negative → down arrow above the bar. Emit two marker indicators
+        // (one per direction) so the chart faithfully shows the sign.
+        const upColor   = _resolveColor(colRaw,    colorVars) || '#26a69a';
+        const downColor = _resolveColor(colDownRaw, colorVars) || _resolveColor(colRaw, colorVars) || '#ef5350';
+        const naGuard = { kind:'unop', op:'not', x: { kind:'call', name:'na', args:[ bakedAstCond ] } };
+        const upCond = { kind:'binop', op:'and',
+          a: naGuard,
+          b: { kind:'binop', op:'>', a: bakedAstCond, b: { kind:'num', value: 0 } },
+        };
+        const downCond = { kind:'binop', op:'and',
+          a: naGuard,
+          b: { kind:'binop', op:'<', a: bakedAstCond, b: { kind:'num', value: 0 } },
+        };
+        out.push({
+          type: 'marker',
+          params: { symbols: bakedSymbols, condition: upCond,
+            shape: 'arrowUp', position: 'belowBar', text },
+          src: 'close', color: upColor,
+        });
+        out.push({
+          type: 'marker',
+          params: { symbols: bakedSymbols, condition: downCond,
+            shape: 'arrowDown', position: 'aboveBar', text },
+          src: 'close', color: downColor,
+        });
+      } else {
+        // plotshape: condition is "truthy" — anything non-zero & non-NaN.
+        // For booleans (crossover etc.) `not na(x) and x` is the right gate.
+        const shape    = _mapShape(styleRaw && styleRaw.replace(/^["']|["']$/g, ''));
+        const position = _mapPosition(locRaw, 'aboveBar');
+        const color    = _resolveColor(colRaw, colorVars) || PALETTE[usedPalette++ % PALETTE.length];
+        const conditionAST = { kind:'binop', op:'and',
+          a: { kind:'unop', op:'not', x: { kind:'call', name:'na', args:[ bakedAstCond ] } },
+          b: bakedAstCond,
+        };
+        out.push({
+          type: 'marker',
+          params: { symbols: bakedSymbols, condition: conditionAST,
+            shape, position, text },
+          src: 'close', color,
+        });
+      }
     }
-    return { added: out, skipped };
+
+    // ── 6. Result ────────────────────────────────────────────────────────
+    if(!out.length){
+      const bits = [];
+      if(skipped.length) bits.push(`Pieces I had to skip: ${skipped.join(', ')}.`);
+      if(untranslated.length){
+        const lines = untranslated.slice(0, 6)
+          .map(u => `  • line ${u.lineNo}: ${u.text.slice(0, 80)}${u.text.length > 80 ? '…' : ''}`)
+          .join('\n');
+        bits.push(`Lines I couldn't translate:\n${lines}` + (untranslated.length > 6 ? `\n  …and ${untranslated.length - 6} more.` : ''));
+      }
+      if(!bits.length) bits.push('No plot(...) / plotshape(...) calls found.');
+      throw new Error(bits.join('\n\n') + '\n\nTry the Formula tab to add lines individually.');
+    }
+    return { added: out, skipped, untranslated };
   }
 
   // ═══════════════════════════════════════════════════════════════════════
