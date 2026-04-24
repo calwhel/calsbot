@@ -1398,15 +1398,18 @@ async def _render_portal(request: Request, uid: str):
     if ctx == "banned":
         raise HTTPException(status_code=403, detail="Account banned")
 
-    response = templates.TemplateResponse("strategy_portal.html", {
-        "request":      request,
-        "user":         ctx["user"],
-        "uid":          uid,
-        "strategies":   ctx["strategies"],
-        "portfolio":    ctx["portfolio"],
-        "is_web_user":  ctx["is_web_user"],
-        "is_pro":       ctx["is_pro"],
-    })
+    response = templates.TemplateResponse(
+        request,
+        "strategy_portal.html",
+        {
+            "user":         ctx["user"],
+            "uid":          uid,
+            "strategies":   ctx["strategies"],
+            "portfolio":    ctx["portfolio"],
+            "is_web_user":  ctx["is_web_user"],
+            "is_pro":       ctx["is_pro"],
+        },
+    )
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
