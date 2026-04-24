@@ -1774,6 +1774,18 @@ button{font-family:inherit}
       chip.querySelector('.ind-x').onclick   = () => removeIndicator(ind.id);
       const bell = chip.querySelector('.ind-bell');
       if(bell){ bell.onclick = () => openAlertsModalForIndicator(ind); }
+      // Right-click anywhere on chip → jump straight to the alerts modal
+      // (the bell only renders for alertable indicators; for everything
+      // else this still opens the global alerts dialog so users can see
+      // their existing alerts without hunting for the toolbar button).
+      chip.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        if(alertable && typeof openAlertsModalForIndicator === 'function'){
+          openAlertsModalForIndicator(ind);
+        } else if(typeof openAlertsModal === 'function'){
+          openAlertsModal();
+        }
+      });
       el.appendChild(chip);
     });
     const cnt = $('ind-count');
