@@ -250,6 +250,100 @@ button{font-family:inherit}
 .ai-val{color:var(--text);font-weight:500;word-break:break-word;font-size:12px}
 .ai-loading{padding:10px 0;color:var(--muted);font-size:11px;text-align:center;font-style:italic}
 
+/* ───── Indicator UI ───── */
+.ind-btn{
+  height:24px;padding:0 10px;background:var(--panel2);color:var(--text);
+  border:1px solid var(--border);border-radius:4px;font-size:11px;font-weight:600;
+  cursor:pointer;display:inline-flex;align-items:center;gap:5px;
+}
+.ind-btn:hover{background:#2f3340;border-color:var(--border2)}
+.ind-btn .plus{font-weight:700;color:var(--accent);font-size:14px;line-height:1}
+
+/* Indicator chip strip on top of chart */
+.ind-strip{
+  position:absolute;top:48px;left:12px;z-index:4;
+  display:flex;flex-wrap:wrap;gap:5px;max-width:calc(100% - 24px);
+}
+.ind-chip{
+  display:inline-flex;align-items:center;gap:5px;background:rgba(19,23,34,.85);
+  border:1px solid var(--border);border-radius:3px;padding:3px 5px 3px 8px;
+  font-size:10px;font-family:var(--mono);color:var(--text);backdrop-filter:blur(4px);
+}
+.ind-chip .swatch{width:9px;height:9px;border-radius:2px;flex-shrink:0}
+.ind-chip .ind-tog,.ind-chip .ind-x{
+  background:transparent;border:none;color:var(--muted);cursor:pointer;
+  font-size:11px;padding:1px 4px;line-height:1;border-radius:2px;
+}
+.ind-chip .ind-tog:hover,.ind-chip .ind-x:hover{background:var(--panel2);color:var(--text)}
+.ind-chip.off{opacity:.5}
+.ind-chip.off .swatch{background:var(--muted) !important}
+
+/* Modal */
+.modal-bg{
+  position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:99;
+  display:none;align-items:center;justify-content:center;backdrop-filter:blur(2px);
+}
+.modal-bg.open{display:flex}
+.modal{
+  background:var(--panel);border:1px solid var(--border2);border-radius:6px;
+  width:540px;max-width:calc(100vw - 32px);max-height:calc(100vh - 60px);
+  display:flex;flex-direction:column;overflow:hidden;
+  box-shadow:0 14px 48px rgba(0,0,0,.6);
+}
+.modal-hd{
+  padding:14px 18px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+  font-size:13px;font-weight:700;
+}
+.modal-hd .x{
+  background:transparent;border:none;color:var(--muted);cursor:pointer;
+  font-size:18px;padding:2px 8px;line-height:1;border-radius:3px;
+}
+.modal-hd .x:hover{background:var(--panel2);color:var(--text)}
+.modal-tabs{display:flex;border-bottom:1px solid var(--border);background:var(--panel)}
+.modal-tab{
+  flex:1;padding:9px 8px;background:transparent;border:none;color:var(--muted);
+  font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+  cursor:pointer;border-bottom:2px solid transparent;
+}
+.modal-tab.active{color:var(--text);border-bottom-color:var(--accent);background:var(--panel2)}
+.modal-tab:hover:not(.active){color:var(--text2);background:var(--panel2)}
+.modal-body{padding:16px 18px;overflow-y:auto;font-size:12px}
+.modal-body label{display:block;color:var(--text2);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 5px}
+.modal-body label:first-child{margin-top:0}
+.modal-body input[type=text],.modal-body input[type=number],.modal-body select,.modal-body textarea{
+  width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);
+  border-radius:3px;padding:6px 8px;font-size:12px;font-family:var(--mono);
+}
+.modal-body textarea{min-height:140px;resize:vertical;line-height:1.45}
+.modal-body input:focus,.modal-body select:focus,.modal-body textarea:focus{
+  outline:none;border-color:var(--accent);
+}
+.modal-body .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.modal-body .row3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.modal-body .swatch-row{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.modal-body .swatch-pick{width:22px;height:22px;border-radius:3px;cursor:pointer;border:2px solid transparent;transition:border-color .15s}
+.modal-body .swatch-pick.active{border-color:var(--text)}
+.modal-body .hint{color:var(--muted);font-size:10.5px;margin-top:5px;line-height:1.5}
+.modal-body .hint code{background:var(--bg);padding:1px 5px;border-radius:2px;color:var(--text2);font-family:var(--mono);font-size:10px}
+.modal-body .err{color:var(--red);background:rgba(239,83,80,.08);border:1px solid rgba(239,83,80,.3);padding:8px 10px;border-radius:3px;margin-top:10px;font-size:11px;line-height:1.5;display:none}
+.modal-body .err.show{display:block}
+.modal-body .ok{color:var(--green);background:rgba(38,166,154,.08);border:1px solid rgba(38,166,154,.3);padding:8px 10px;border-radius:3px;margin-top:10px;font-size:11px;line-height:1.5;display:none}
+.modal-body .ok.show{display:block}
+.modal-ft{
+  padding:12px 18px;border-top:1px solid var(--border);background:var(--panel);
+  display:flex;justify-content:space-between;align-items:center;gap:10px;
+}
+.modal-ft .meta{color:var(--muted);font-size:10.5px}
+.modal-ft .btn{
+  height:30px;padding:0 14px;border-radius:4px;font-size:11px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.5px;cursor:pointer;border:none;
+}
+.modal-ft .btn.primary{background:var(--accent);color:#fff}
+.modal-ft .btn.primary:hover{background:#1d4dd8}
+.modal-ft .btn.ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.modal-ft .btn.ghost:hover{color:var(--text);background:var(--panel2)}
+
 /* Responsive */
 @media(max-width:900px){
   .main{grid-template-columns:1fr;height:auto;overflow:visible}
@@ -312,6 +406,10 @@ button{font-family:inherit}
     <label class="toggle"><input type="checkbox" id="tape-toggle" checked><span class="toggle-slider"></span></label>
     <span>Big prints</span>
   </div>
+  <div class="divider"></div>
+  <button class="ind-btn" id="ind-add-btn" title="Add indicator (preset / formula / Pine Script)">
+    <span class="plus">+</span> Indicator
+  </button>
   <div class="pressure" id="pressure">
     <span class="p-dot"></span>
     <span id="pressure-text">Loading order book…</span>
@@ -333,6 +431,7 @@ button{font-family:inherit}
     </div>
     <div id="chart"></div>
     <canvas id="zones"></canvas>
+    <div class="ind-strip" id="ind-strip"></div>
   </div>
 
   <aside class="side">
@@ -389,6 +488,76 @@ button{font-family:inherit}
       </div>
     </div>
   </aside>
+</div>
+
+<div class="modal-bg" id="ind-modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ind-modal-title">
+    <div class="modal-hd">
+      <span id="ind-modal-title">Add indicator</span>
+      <button class="x" id="ind-modal-close" aria-label="Close">×</button>
+    </div>
+    <div class="modal-tabs" id="ind-tabs">
+      <button class="modal-tab active" data-tab="preset">Preset</button>
+      <button class="modal-tab" data-tab="formula">Formula</button>
+      <button class="modal-tab" data-tab="pine">Pine Script</button>
+    </div>
+    <div class="modal-body" id="ind-body">
+      <!-- ── PRESET TAB ── -->
+      <div class="ind-tab-pane" data-pane="preset">
+        <label>Indicator</label>
+        <select id="p-type">
+          <option value="ema">EMA · Exponential Moving Average</option>
+          <option value="sma">SMA · Simple Moving Average</option>
+          <option value="bb">Bollinger Bands</option>
+          <option value="vwap">VWAP (session)</option>
+          <option value="supertrend">SuperTrend</option>
+          <option value="rsi">RSI</option>
+          <option value="macd">MACD</option>
+          <option value="stochrsi">Stochastic RSI</option>
+          <option value="atr">ATR</option>
+        </select>
+        <div id="p-params"></div>
+        <label>Color</label>
+        <div class="swatch-row" id="p-swatch"></div>
+        <div class="hint" id="p-hint"></div>
+      </div>
+
+      <!-- ── FORMULA TAB ── -->
+      <div class="ind-tab-pane" data-pane="formula" style="display:none">
+        <label>Formula</label>
+        <input type="text" id="f-input" placeholder="ema(close, 20)" autocomplete="off">
+        <label>Color</label>
+        <div class="swatch-row" id="f-swatch"></div>
+        <div class="hint">
+          Supported: <code>ema(src, n)</code>, <code>sma(src, n)</code>, <code>rsi(src, n)</code>,
+          <code>macd(src, fast, slow, sig)</code>, <code>bb(src, n, mult)</code>, <code>vwap()</code>,
+          <code>atr(n)</code>, <code>stochrsi(src, n, stoch, k, d)</code>, <code>supertrend(period, mult)</code>.
+          Sources: <code>close</code>, <code>open</code>, <code>high</code>, <code>low</code>, <code>hl2</code>, <code>hlc3</code>, <code>ohlc4</code>.
+        </div>
+        <div class="err" id="f-err"></div>
+      </div>
+
+      <!-- ── PINE TAB ── -->
+      <div class="ind-tab-pane" data-pane="pine" style="display:none">
+        <label>Paste your Pine Script (best-effort translator)</label>
+        <textarea id="pine-input" placeholder="//@version=5&#10;indicator('My Setup', overlay=true)&#10;ema20 = ta.ema(close, 20)&#10;ema50 = ta.ema(close, 50)&#10;plot(ema20, color=color.aqua)&#10;plot(ema50, color=color.orange)" autocomplete="off" spellcheck="false"></textarea>
+        <div class="hint">
+          Translates simple <code>plot(ta.ema(close, 20))</code> / <code>plot(ta.rsi(close, 14))</code> style scripts.
+          Unsupported: <code>strategy()</code>, <code>request.security()</code>, arrays, custom functions, drawings.
+          For complex scripts, use the Formula tab to add lines individually.
+        </div>
+        <div class="err" id="pine-err"></div>
+        <div class="ok"  id="pine-ok"></div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <span class="meta" id="ind-count">0 indicators active</span>
+      <div>
+        <button class="btn ghost" id="ind-cancel">Cancel</button>
+        <button class="btn primary" id="ind-add">Add to chart</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -647,6 +816,7 @@ button{font-family:inherit}
       if(last) updateHeaderPrice(last.close);
       updateOhlcLegend(null);
       drawZones();
+      if(window.__indRecompute) window.__indRecompute('full');
     }catch(e){ console.warn('candles full load failed', e); }
   }
 
@@ -682,6 +852,7 @@ button{font-family:inherit}
       const last = cs[cs.length-1];
       if(last) updateHeaderPrice(last.close);
       updateOhlcLegend(null);
+      if(window.__indRecompute) window.__indRecompute('tick');
     }catch(e){ /* silent */ }
   }
 
@@ -1049,8 +1220,674 @@ button{font-family:inherit}
     }catch(e){ /* silent */ }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // INDICATOR ENGINE
+  // ═══════════════════════════════════════════════════════════════════════
+  // Pure-JS TA primitives. All return arrays of {time, value} aligned with
+  // the candle series (NaN values during warmup are filtered out before
+  // setData). Macd/BB/StochRSI return objects with multiple sub-series.
+  // ═══════════════════════════════════════════════════════════════════════
+  const TA = (function(){
+    function pickSrc(candles, src){
+      switch(src){
+        case 'open':  return candles.map(c => c.open);
+        case 'high':  return candles.map(c => c.high);
+        case 'low':   return candles.map(c => c.low);
+        case 'hl2':   return candles.map(c => (c.high + c.low) / 2);
+        case 'hlc3':  return candles.map(c => (c.high + c.low + c.close) / 3);
+        case 'ohlc4': return candles.map(c => (c.open + c.high + c.low + c.close) / 4);
+        case 'close':
+        default:      return candles.map(c => c.close);
+      }
+    }
+    function sma(values, period){
+      const out = new Array(values.length).fill(NaN);
+      let sum = 0;
+      for(let i = 0; i < values.length; i++){
+        sum += values[i];
+        if(i >= period) sum -= values[i - period];
+        if(i >= period - 1) out[i] = sum / period;
+      }
+      return out;
+    }
+    function ema(values, period){
+      const out = new Array(values.length).fill(NaN);
+      const k = 2 / (period + 1);
+      let seed = 0;
+      for(let i = 0; i < values.length; i++){
+        if(i < period - 1){ seed += values[i]; continue; }
+        if(i === period - 1){ seed += values[i]; out[i] = seed / period; continue; }
+        out[i] = values[i] * k + out[i-1] * (1 - k);
+      }
+      return out;
+    }
+    function rma(values, period){ // Wilder's smoothing
+      const out = new Array(values.length).fill(NaN);
+      let seed = 0;
+      for(let i = 0; i < values.length; i++){
+        if(i < period - 1){ seed += values[i]; continue; }
+        if(i === period - 1){ seed += values[i]; out[i] = seed / period; continue; }
+        out[i] = (out[i-1] * (period - 1) + values[i]) / period;
+      }
+      return out;
+    }
+    function rsi(values, period){
+      const gains = [0], losses = [0];
+      for(let i = 1; i < values.length; i++){
+        const ch = values[i] - values[i-1];
+        gains.push(ch > 0 ? ch : 0);
+        losses.push(ch < 0 ? -ch : 0);
+      }
+      const avgG = rma(gains, period);
+      const avgL = rma(losses, period);
+      return values.map((_, i) => {
+        if(isNaN(avgG[i]) || isNaN(avgL[i])) return NaN;
+        if(avgL[i] === 0) return 100;
+        const rs = avgG[i] / avgL[i];
+        return 100 - 100 / (1 + rs);
+      });
+    }
+    function macd(values, fast, slow, sig){
+      const ef = ema(values, fast);
+      const es = ema(values, slow);
+      const line = values.map((_, i) => (isNaN(ef[i]) || isNaN(es[i])) ? NaN : ef[i] - es[i]);
+      const validLine = line.filter(v => !isNaN(v));
+      const sigSeed = ema(validLine, sig);
+      const offset = line.length - validLine.length;
+      const signal = new Array(line.length).fill(NaN);
+      for(let i = 0; i < sigSeed.length; i++){
+        if(!isNaN(sigSeed[i])) signal[i + offset] = sigSeed[i];
+      }
+      const hist = line.map((v, i) => (isNaN(v) || isNaN(signal[i])) ? NaN : v - signal[i]);
+      return { macd: line, signal, hist };
+    }
+    function bb(values, period, mult){
+      const mid = sma(values, period);
+      const out = { middle: mid, upper: [], lower: [] };
+      for(let i = 0; i < values.length; i++){
+        if(isNaN(mid[i])){ out.upper.push(NaN); out.lower.push(NaN); continue; }
+        let sumSq = 0;
+        for(let j = i - period + 1; j <= i; j++){ const d = values[j] - mid[i]; sumSq += d*d; }
+        const sd = Math.sqrt(sumSq / period);
+        out.upper.push(mid[i] + sd * mult);
+        out.lower.push(mid[i] - sd * mult);
+      }
+      return out;
+    }
+    function vwapSession(candles){
+      // Resets at UTC 00:00 of each calendar day.
+      const out = new Array(candles.length).fill(NaN);
+      let cumPV = 0, cumV = 0, lastDay = null;
+      for(let i = 0; i < candles.length; i++){
+        const c = candles[i];
+        const day = Math.floor(c.time / 86400);
+        if(day !== lastDay){ cumPV = 0; cumV = 0; lastDay = day; }
+        const tp = (c.high + c.low + c.close) / 3;
+        const v = c.volume || c.quote_volume || 0;
+        cumPV += tp * v;
+        cumV  += v;
+        out[i] = cumV > 0 ? cumPV / cumV : NaN;
+      }
+      return out;
+    }
+    function trueRange(candles){
+      return candles.map((c, i) => {
+        if(i === 0) return c.high - c.low;
+        const p = candles[i-1];
+        return Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
+      });
+    }
+    function atr(candles, period){
+      return rma(trueRange(candles), period);
+    }
+    function stochRsi(values, rsiP, stochP, k, d){
+      const rs = rsi(values, rsiP);
+      const out = new Array(values.length).fill(NaN);
+      for(let i = stochP - 1; i < values.length; i++){
+        let lo = Infinity, hi = -Infinity, valid = true;
+        for(let j = i - stochP + 1; j <= i; j++){
+          if(isNaN(rs[j])){ valid = false; break; }
+          if(rs[j] < lo) lo = rs[j];
+          if(rs[j] > hi) hi = rs[j];
+        }
+        if(!valid || hi === lo) continue;
+        out[i] = (rs[i] - lo) / (hi - lo) * 100;
+      }
+      const kLine = sma(out, k);
+      const dLine = sma(kLine, d);
+      return { k: kLine, d: dLine };
+    }
+    function superTrend(candles, period, mult){
+      const a = atr(candles, period);
+      const upper = [], lower = [], dir = [], st = [];
+      for(let i = 0; i < candles.length; i++){
+        const c = candles[i];
+        const hl2 = (c.high + c.low) / 2;
+        if(isNaN(a[i])){ upper.push(NaN); lower.push(NaN); dir.push(0); st.push(NaN); continue; }
+        let bUp = hl2 + mult * a[i];
+        let bDn = hl2 - mult * a[i];
+        if(i > 0 && !isNaN(upper[i-1])){
+          if(bUp > upper[i-1] && candles[i-1].close <= upper[i-1]) bUp = Math.min(bUp, upper[i-1]);
+          if(bDn < lower[i-1] && candles[i-1].close >= lower[i-1]) bDn = Math.max(bDn, lower[i-1]);
+        }
+        upper.push(bUp);
+        lower.push(bDn);
+        let d = i > 0 ? dir[i-1] : 1;
+        if(d <= 0 && c.close > (i > 0 ? upper[i-1] : bUp)) d = 1;
+        else if(d >= 0 && c.close < (i > 0 ? lower[i-1] : bDn)) d = -1;
+        else if(d === 0) d = 1;
+        dir.push(d);
+        st.push(d > 0 ? bDn : bUp);
+      }
+      return { line: st, dir };
+    }
+    return { pickSrc, sma, ema, rsi, macd, bb, vwapSession, atr, stochRsi, superTrend };
+  })();
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // INDICATOR MANAGER
+  // ═══════════════════════════════════════════════════════════════════════
+  const STORAGE_KEY = 'trade_indicators_v1';
+  const PALETTE = ['#ffb74d','#42a5f5','#ab47bc','#ef5350','#26a69a','#ffee58','#ec407a','#7e57c2','#66bb6a','#ff7043','#5c6bc0','#26c6da'];
+  const OVERLAY_TYPES = new Set(['ema','sma','vwap','supertrend','bb']);
+  const OSC_TYPES     = new Set(['rsi','macd','stochrsi','atr']);
+
+  // Spec for preset params + defaults (period values, etc.)
+  const PRESETS = {
+    ema:        { label:'EMA',         params:[{key:'period', label:'Period', min:1, max:500, def:20}], src:true },
+    sma:        { label:'SMA',         params:[{key:'period', label:'Period', min:1, max:500, def:50}], src:true },
+    bb:         { label:'Bollinger',   params:[{key:'period', label:'Period', def:20},{key:'mult', label:'Std dev', def:2, step:0.1}], src:true },
+    vwap:       { label:'VWAP',        params:[], src:false },
+    supertrend: { label:'SuperTrend',  params:[{key:'period', label:'ATR period', def:10},{key:'mult', label:'Multiplier', def:3, step:0.1}], src:false },
+    rsi:        { label:'RSI',         params:[{key:'period', label:'Period', def:14}], src:true },
+    macd:       { label:'MACD',        params:[{key:'fast', label:'Fast', def:12},{key:'slow', label:'Slow', def:26},{key:'signal', label:'Signal', def:9}], src:true },
+    stochrsi:   { label:'StochRSI',    params:[{key:'period', label:'RSI len', def:14},{key:'stoch', label:'Stoch len', def:14},{key:'k', label:'%K', def:3},{key:'d', label:'%D', def:3}], src:true },
+    atr:        { label:'ATR',         params:[{key:'period', label:'Period', def:14}], src:false },
+  };
+
+  let indicators = []; // {id, type, params, color, src, visible, series:[]}
+  let nextIndId = 1;
+
+  function indKind(type){ return OVERLAY_TYPES.has(type) ? 'overlay' : 'oscillator'; }
+
+  function loadStored(){
+    try{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if(!raw) return;
+      const parsed = JSON.parse(raw);
+      if(!Array.isArray(parsed)) return;
+      parsed.forEach(spec => addIndicator(spec, /*persist*/false, /*silent*/true));
+    }catch(e){ /* ignore */ }
+  }
+  function saveStored(){
+    try{
+      const dump = indicators.map(ind => ({
+        type: ind.type, params: ind.params, color: ind.color, src: ind.src, visible: ind.visible,
+      }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(dump));
+    }catch(e){ /* ignore */ }
+  }
+
+  // Recompute scaleMargins so each oscillator gets its own vertical band.
+  function recomputePanes(){
+    if(!chart) return;
+    const oscIds = [...new Set(indicators.filter(i => indKind(i.type)==='oscillator' && i.visible).map(i => 'osc_' + i.id))];
+    const n = oscIds.length;
+    let priceMargins, volMargins, oscBands;
+    if(n === 0){
+      priceMargins = { top:0.08, bottom:0.28 };
+      volMargins   = { top:0.78, bottom:0    };
+      oscBands     = [];
+    } else if(n === 1){
+      priceMargins = { top:0.05, bottom:0.42 };
+      volMargins   = { top:0.60, bottom:0.32 };
+      oscBands     = [{ top:0.72, bottom:0 }];
+    } else if(n === 2){
+      priceMargins = { top:0.05, bottom:0.55 };
+      volMargins   = { top:0.47, bottom:0.42 };
+      oscBands     = [{ top:0.60, bottom:0.22 }, { top:0.80, bottom:0 }];
+    } else {
+      priceMargins = { top:0.05, bottom:0.65 };
+      volMargins   = { top:0.37, bottom:0.55 };
+      oscBands     = [{ top:0.48, bottom:0.36 }, { top:0.66, bottom:0.18 }, { top:0.84, bottom:0 }];
+    }
+    chart.priceScale('right').applyOptions({ scaleMargins: priceMargins });
+    chart.priceScale('volume_scale').applyOptions({ scaleMargins: volMargins });
+    oscIds.slice(0, 3).forEach((id, i) => {
+      chart.priceScale(id).applyOptions({ scaleMargins: oscBands[i], borderVisible:false });
+    });
+    zonesDirty = true;
+  }
+
+  function buildSeries(ind){
+    // Returns array of LightweightCharts series. Order matters for refresh().
+    const t = ind.type;
+    const c = ind.color || PALETTE[(nextIndId) % PALETTE.length];
+    const oscScale = 'osc_' + ind.id;
+    if(t === 'ema' || t === 'sma' || t === 'vwap'){
+      return [chart.addLineSeries({
+        color:c, lineWidth:2, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false,
+      })];
+    }
+    if(t === 'supertrend'){
+      return [chart.addLineSeries({
+        color:c, lineWidth:2, lineStyle:0, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false,
+      })];
+    }
+    if(t === 'bb'){
+      return [
+        chart.addLineSeries({ color:c, lineWidth:1, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false }),
+        chart.addLineSeries({ color:c, lineWidth:1, lineStyle:2, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false }),
+        chart.addLineSeries({ color:c, lineWidth:1, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false }),
+      ];
+    }
+    if(t === 'rsi'){
+      const s = chart.addLineSeries({
+        color:c, lineWidth:2, priceScaleId:oscScale, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false,
+      });
+      s.createPriceLine({ price:70, color:'rgba(239,83,80,0.4)', lineWidth:1, lineStyle:2, axisLabelVisible:false });
+      s.createPriceLine({ price:30, color:'rgba(38,166,154,0.4)', lineWidth:1, lineStyle:2, axisLabelVisible:false });
+      s.createPriceLine({ price:50, color:'rgba(156,163,175,0.25)', lineWidth:1, lineStyle:1, axisLabelVisible:false });
+      return [s];
+    }
+    if(t === 'macd'){
+      return [
+        chart.addHistogramSeries({ color:'rgba(38,166,154,0.55)', priceScaleId:oscScale, priceLineVisible:false, lastValueVisible:false }),
+        chart.addLineSeries({ color:c, lineWidth:2, priceScaleId:oscScale, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false }),
+        chart.addLineSeries({ color:'#ff7043', lineWidth:1, priceScaleId:oscScale, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false }),
+      ];
+    }
+    if(t === 'stochrsi'){
+      const k = chart.addLineSeries({ color:c, lineWidth:2, priceScaleId:oscScale, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false });
+      const d = chart.addLineSeries({ color:'#ff7043', lineWidth:1, priceScaleId:oscScale, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false });
+      k.createPriceLine({ price:80, color:'rgba(239,83,80,0.4)', lineWidth:1, lineStyle:2, axisLabelVisible:false });
+      k.createPriceLine({ price:20, color:'rgba(38,166,154,0.4)', lineWidth:1, lineStyle:2, axisLabelVisible:false });
+      return [k, d];
+    }
+    if(t === 'atr'){
+      return [chart.addLineSeries({
+        color:c, lineWidth:2, priceScaleId:oscScale, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false,
+      })];
+    }
+    return [];
+  }
+
+  function compute(ind, candles){
+    if(!candles || candles.length < 2) return null;
+    const t = ind.type, p = ind.params || {};
+    const src = ind.src || 'close';
+    const vals = TA.pickSrc(candles, src);
+    const pack = (arr) => candles.map((c, i) => ({ time:c.time, value:arr[i] })).filter(x => isFinite(x.value));
+    if(t === 'ema')  return [pack(TA.ema(vals, p.period|0 || 20))];
+    if(t === 'sma')  return [pack(TA.sma(vals, p.period|0 || 50))];
+    if(t === 'vwap') return [pack(TA.vwapSession(candles))];
+    if(t === 'supertrend'){
+      const r = TA.superTrend(candles, p.period|0 || 10, +p.mult || 3);
+      const data = candles.map((c, i) => {
+        if(!isFinite(r.line[i])) return null;
+        return { time:c.time, value:r.line[i], color: r.dir[i] > 0 ? '#26a69a' : '#ef5350' };
+      }).filter(Boolean);
+      return [data];
+    }
+    if(t === 'bb'){
+      const r = TA.bb(vals, p.period|0 || 20, +p.mult || 2);
+      return [pack(r.upper), pack(r.middle), pack(r.lower)];
+    }
+    if(t === 'rsi') return [pack(TA.rsi(vals, p.period|0 || 14))];
+    if(t === 'macd'){
+      const r = TA.macd(vals, p.fast|0 || 12, p.slow|0 || 26, p.signal|0 || 9);
+      const histData = candles.map((c, i) => {
+        if(!isFinite(r.hist[i])) return null;
+        return { time:c.time, value:r.hist[i], color: r.hist[i] >= 0 ? 'rgba(38,166,154,0.55)' : 'rgba(239,83,80,0.55)' };
+      }).filter(Boolean);
+      return [histData, pack(r.macd), pack(r.signal)];
+    }
+    if(t === 'stochrsi'){
+      const r = TA.stochRsi(vals, p.period|0 || 14, p.stoch|0 || 14, p.k|0 || 3, p.d|0 || 3);
+      return [pack(r.k), pack(r.d)];
+    }
+    if(t === 'atr') return [pack(TA.atr(candles, p.period|0 || 14))];
+    return null;
+  }
+
+  function refreshIndicator(ind){
+    const data = compute(ind, lastCandlesFull);
+    if(!data || !data.length) return;
+    ind.series.forEach((s, i) => { if(data[i]) s.setData(data[i]); });
+  }
+
+  function addIndicator(spec, persist=true, silent=false){
+    if(!PRESETS[spec.type]) return null;
+    // Cap oscillators at 3 — the dynamic pane allocator only reserves 3 bands.
+    if(indKind(spec.type) === 'oscillator'){
+      const oscCount = indicators.filter(i => indKind(i.type) === 'oscillator' && i.visible).length;
+      if(oscCount >= 3){
+        if(!silent) throw new Error('Max 3 oscillator panels (RSI / MACD / StochRSI / ATR). Remove one to add another.');
+        return null;
+      }
+    }
+    const ind = {
+      id: nextIndId++,
+      type: spec.type,
+      params: spec.params || {},
+      color: spec.color || PALETTE[(indicators.length) % PALETTE.length],
+      src: spec.src || 'close',
+      visible: spec.visible !== false,
+      series: [],
+    };
+    indicators.push(ind);
+    ind.series = buildSeries(ind);
+    recomputePanes();
+    refreshIndicator(ind);
+    renderIndStrip();
+    if(persist) saveStored();
+    return ind;
+  }
+
+  function removeIndicator(id){
+    const idx = indicators.findIndex(i => i.id === id);
+    if(idx < 0) return;
+    indicators[idx].series.forEach(s => { try{ chart.removeSeries(s); }catch(e){} });
+    indicators.splice(idx, 1);
+    recomputePanes();
+    renderIndStrip();
+    saveStored();
+  }
+
+  function toggleIndicator(id){
+    const ind = indicators.find(i => i.id === id);
+    if(!ind) return;
+    ind.visible = !ind.visible;
+    // Use applyOptions({visible}) so we keep series creation order intact —
+    // recreating would push the indicator on top of newer ones.
+    ind.series.forEach(s => { try{ s.applyOptions({ visible: ind.visible }); }catch(e){} });
+    recomputePanes();
+    if(ind.visible) refreshIndicator(ind);
+    renderIndStrip();
+    saveStored();
+  }
+
+  function indLabel(ind){
+    const p = ind.params || {};
+    const T = ind.type;
+    if(T === 'ema' || T === 'sma' || T === 'rsi' || T === 'atr') return `${T.toUpperCase()}(${p.period|0})`;
+    if(T === 'bb') return `BB(${p.period|0},${p.mult})`;
+    if(T === 'vwap') return 'VWAP';
+    if(T === 'supertrend') return `ST(${p.period|0},${p.mult})`;
+    if(T === 'macd') return `MACD(${p.fast|0},${p.slow|0},${p.signal|0})`;
+    if(T === 'stochrsi') return `StochRSI(${p.period|0},${p.stoch|0},${p.k|0},${p.d|0})`;
+    return T.toUpperCase();
+  }
+
+  function renderIndStrip(){
+    const el = $('ind-strip');
+    el.innerHTML = '';
+    indicators.forEach(ind => {
+      const chip = document.createElement('div');
+      chip.className = 'ind-chip' + (ind.visible ? '' : ' off');
+      chip.innerHTML = `
+        <span class="swatch" style="background:${ind.color}"></span>
+        <span>${indLabel(ind)}</span>
+        <button class="ind-tog" title="${ind.visible?'Hide':'Show'}">${ind.visible?'◉':'○'}</button>
+        <button class="ind-x" title="Remove">×</button>
+      `;
+      chip.querySelector('.ind-tog').onclick = () => toggleIndicator(ind.id);
+      chip.querySelector('.ind-x').onclick   = () => removeIndicator(ind.id);
+      el.appendChild(chip);
+    });
+    const cnt = $('ind-count');
+    if(cnt){
+      const n = indicators.filter(i => i.visible).length;
+      cnt.textContent = `${n} indicator${n===1?'':'s'} active`;
+    }
+  }
+
+  // Hooked from candle load/tick
+  window.__indRecompute = function(){
+    indicators.forEach(ind => { if(ind.visible) refreshIndicator(ind); });
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // FORMULA PARSER — tiny, no eval
+  // Accepts: ema(close, 20)  rsi(close, 14)  macd(close, 12, 26, 9)
+  //          bb(close, 20, 2)  vwap()  atr(14)  supertrend(10, 3)
+  //          stochrsi(close, 14, 14, 3, 3)
+  // ═══════════════════════════════════════════════════════════════════════
+  const VALID_SRC = new Set(['close','open','high','low','hl2','hlc3','ohlc4']);
+  function parseFormula(input){
+    const s = (input || '').trim();
+    const m = /^([a-zA-Z_]+)\s*\(([^)]*)\)\s*$/.exec(s);
+    if(!m) throw new Error(`Could not read formula. Use form like  ema(close, 20)`);
+    const name = m[1].toLowerCase();
+    if(!PRESETS[name]) throw new Error(`Unknown indicator "${name}". Try one of: ${Object.keys(PRESETS).join(', ')}`);
+    const argsRaw = m[2].split(',').map(a => a.trim()).filter(a => a.length);
+    const def = PRESETS[name];
+    let src = 'close';
+    let nums = argsRaw;
+    if(def.src && argsRaw.length && VALID_SRC.has(argsRaw[0].toLowerCase())){
+      src = argsRaw[0].toLowerCase();
+      nums = argsRaw.slice(1);
+    } else if(def.src && argsRaw.length && /^[a-zA-Z]/.test(argsRaw[0])){
+      throw new Error(`Unknown source "${argsRaw[0]}". Use one of: ${[...VALID_SRC].join(', ')}`);
+    }
+    const params = {};
+    def.params.forEach((p, i) => {
+      const v = nums[i] !== undefined ? Number(nums[i]) : p.def;
+      if(!isFinite(v)) throw new Error(`Bad number for ${p.label || p.key}: "${nums[i]}"`);
+      params[p.key] = v;
+    });
+    return { type:name, params, src };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PINE TRANSLATOR — best-effort regex extractor
+  // Catches plot(ta.ema(close, 20), color=...), single-line var bindings,
+  // and friendly errors for unsupported features.
+  // ═══════════════════════════════════════════════════════════════════════
+  function translatePine(script){
+    const text = script || '';
+    if(!text.trim()) throw new Error('Paste your script first.');
+    const blockers = [
+      [/\bstrategy\s*\(/, 'strategy()'],
+      [/\brequest\.security\s*\(/, 'request.security()'],
+      [/\barray\.\w+/, 'array.* functions'],
+      [/\bmatrix\.\w+/, 'matrix.* functions'],
+      [/\bline\.\w+|\blabel\.\w+|\bbox\.\w+/, 'drawing objects (line/label/box)'],
+      [/\bvar\s+\w+\s*=\s*/, 'var declarations (state-tracking)'],
+    ];
+    const skipped = [];
+    blockers.forEach(([rx, name]) => { if(rx.test(text)) skipped.push(name); });
+
+    // Build symbol table from `name = ta.ema(close, 20)` style assignments
+    // BEFORE plot() lookup so plot(name) can resolve.
+    const symbols = {};
+    const assignRx = /^\s*([a-zA-Z_][\w]*)\s*=\s*(?:ta\.)?(ema|sma|rsi|macd|bb|vwap|atr|supertrend|stochrsi|wma|hma|cci)\s*\(([^)]*)\)/gm;
+    let am;
+    while((am = assignRx.exec(text)) !== null){
+      symbols[am[1]] = { fn: am[2].toLowerCase(), args: am[3] };
+    }
+
+    // Find plot()/plotchar() calls and extract the inner expression + color.
+    const out = [];
+    const colorRx = /color\s*=\s*color\.(\w+)|color\s*=\s*#([0-9a-fA-F]{3,8})/;
+    const COLOR_MAP = {
+      red:'#ef5350', green:'#26a69a', blue:'#42a5f5', orange:'#ffb74d',
+      yellow:'#ffee58', purple:'#ab47bc', aqua:'#26c6da', white:'#eee',
+      gray:'#9ca3af', lime:'#66bb6a', maroon:'#7e2424', navy:'#3949ab',
+      olive:'#9e9d24', silver:'#c0c0c0', teal:'#00897b', fuchsia:'#ec407a',
+    };
+
+    const plotRx = /\bplot(?:char)?\s*\(\s*([^,)]+)(?:\s*,([^)]*))?\)/g;
+    let pm;
+    let usedPalette = 0;
+    while((pm = plotRx.exec(text)) !== null){
+      const expr = pm[1].trim();
+      const tail = pm[2] || '';
+      const cm = colorRx.exec(tail);
+      const color = cm
+        ? (cm[1] ? (COLOR_MAP[cm[1].toLowerCase()] || PALETTE[usedPalette++ % PALETTE.length])
+                 : ('#' + cm[2]))
+        : PALETTE[usedPalette++ % PALETTE.length];
+
+      // expr might be a symbol or a direct call
+      let resolved = null;
+      if(symbols[expr]){
+        resolved = symbols[expr];
+      } else {
+        const dm = /^(?:ta\.)?(ema|sma|rsi|macd|bb|vwap|atr|supertrend|stochrsi)\s*\(([^)]*)\)$/.exec(expr);
+        if(dm) resolved = { fn: dm[1].toLowerCase(), args: dm[2] };
+      }
+      if(!resolved) continue;
+      const fn = resolved.fn;
+      if(!PRESETS[fn]) continue;
+      const argsRaw = resolved.args.split(',').map(a => a.trim()).filter(a => a.length);
+      const def = PRESETS[fn];
+      let src = 'close';
+      let nums = argsRaw;
+      if(def.src && argsRaw.length && VALID_SRC.has(argsRaw[0].toLowerCase())){
+        src = argsRaw[0].toLowerCase();
+        nums = argsRaw.slice(1);
+      }
+      const params = {};
+      def.params.forEach((p, i) => {
+        const v = nums[i] !== undefined ? Number(nums[i]) : p.def;
+        if(isFinite(v)) params[p.key] = v;
+        else params[p.key] = p.def;
+      });
+      out.push({ type:fn, params, src, color });
+    }
+
+    if(!out.length){
+      const reason = skipped.length
+        ? `Found unsupported features: ${skipped.join(', ')}.`
+        : `No plot(...) calls recognised. Try the Formula tab to add lines individually.`;
+      throw new Error(reason);
+    }
+    return { added: out, skipped };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // MODAL UI
+  // ═══════════════════════════════════════════════════════════════════════
+  let activeTab = 'preset';
+  let presetColor = PALETTE[0];
+  let formulaColor = PALETTE[1];
+
+  function buildSwatches(host, current, onPick){
+    host.innerHTML = '';
+    PALETTE.forEach(c => {
+      const sw = document.createElement('div');
+      sw.className = 'swatch-pick' + (c === current ? ' active' : '');
+      sw.style.background = c;
+      sw.onclick = () => { onPick(c); buildSwatches(host, c, onPick); };
+      host.appendChild(sw);
+    });
+  }
+
+  function renderPresetParams(){
+    const t = $('p-type').value;
+    const def = PRESETS[t];
+    const host = $('p-params');
+    let html = '';
+    if(def.src){
+      html += `<label>Source</label><select id="p-src">${[...VALID_SRC].map(s => `<option value="${s}">${s}</option>`).join('')}</select>`;
+    }
+    if(def.params.length){
+      html += '<div class="row3">';
+      def.params.forEach(p => {
+        html += `<div><label>${p.label}</label><input type="number" data-pkey="${p.key}" value="${p.def}" min="${p.min||1}" step="${p.step||1}"></div>`;
+      });
+      html += '</div>';
+    }
+    host.innerHTML = html;
+    const hint = $('p-hint');
+    const onPane = OVERLAY_TYPES.has(t) ? 'price chart' : 'separate panel below';
+    hint.innerHTML = `Renders on the <b>${onPane}</b>.`;
+  }
+
+  function readPresetForm(){
+    const type = $('p-type').value;
+    const def = PRESETS[type];
+    const params = {};
+    def.params.forEach(p => {
+      const inp = document.querySelector(`#p-params [data-pkey="${p.key}"]`);
+      params[p.key] = inp ? Number(inp.value) : p.def;
+    });
+    const srcEl = document.getElementById('p-src');
+    return { type, params, src: srcEl ? srcEl.value : 'close', color: presetColor };
+  }
+
+  function openModal(){
+    $('ind-modal').classList.add('open');
+    setTab('preset');
+    renderPresetParams();
+    buildSwatches($('p-swatch'), presetColor, c => presetColor = c);
+    buildSwatches($('f-swatch'), formulaColor, c => formulaColor = c);
+    renderIndStrip(); // updates count
+  }
+  function closeModal(){
+    $('ind-modal').classList.remove('open');
+    $('f-err').classList.remove('show');
+    $('pine-err').classList.remove('show');
+    $('pine-ok').classList.remove('show');
+  }
+  function setTab(name){
+    activeTab = name;
+    document.querySelectorAll('.modal-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+    document.querySelectorAll('.ind-tab-pane').forEach(p => p.style.display = p.dataset.pane === name ? '' : 'none');
+  }
+
+  function wireModal(){
+    $('ind-add-btn').onclick = openModal;
+    $('ind-modal-close').onclick = closeModal;
+    $('ind-cancel').onclick = closeModal;
+    $('ind-modal').addEventListener('click', e => { if(e.target === $('ind-modal')) closeModal(); });
+    document.querySelectorAll('.modal-tab').forEach(b => b.onclick = () => setTab(b.dataset.tab));
+    $('p-type').onchange = renderPresetParams;
+
+    $('ind-add').onclick = () => {
+      try{
+        if(activeTab === 'preset'){
+          addIndicator(readPresetForm());
+          closeModal();
+        } else if(activeTab === 'formula'){
+          $('f-err').classList.remove('show');
+          const spec = parseFormula($('f-input').value);
+          spec.color = formulaColor;
+          addIndicator(spec);
+          $('f-input').value = '';
+          closeModal();
+        } else if(activeTab === 'pine'){
+          $('pine-err').classList.remove('show');
+          $('pine-ok').classList.remove('show');
+          const r = translatePine($('pine-input').value);
+          r.added.forEach(spec => addIndicator(spec));
+          let msg = `Added ${r.added.length} indicator${r.added.length===1?'':'s'}: ${r.added.map(a => a.type.toUpperCase()).join(', ')}.`;
+          if(r.skipped.length) msg += `  Skipped unsupported: ${r.skipped.join(', ')}.`;
+          const ok = $('pine-ok'); ok.textContent = msg; ok.classList.add('show');
+        }
+      }catch(e){
+        const target = activeTab === 'pine' ? $('pine-err') : $('f-err');
+        target.textContent = e.message || String(e);
+        target.classList.add('show');
+      }
+    };
+
+    document.addEventListener('keydown', e => {
+      if(!$('ind-modal').classList.contains('open')) return;
+      if(e.key === 'Escape'){ e.preventDefault(); closeModal(); return; }
+      if(e.key === 'Enter' && activeTab !== 'pine'
+         && document.activeElement && document.activeElement.tagName !== 'TEXTAREA'){
+        e.preventDefault();
+        $('ind-add').click();
+      }
+    });
+  }
+
   // ───── Init + polling ─────
   initChart();
+  wireModal();
+  loadStored();
   loadCandlesFull();
   loadWalls();
   tickPrice();
