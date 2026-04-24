@@ -332,6 +332,86 @@ button{font-family:inherit}
 .alerts-locked a{color:var(--accent);text-decoration:none;font-weight:600}
 .alerts-locked a:hover{text-decoration:underline}
 
+/* ── Setups (saved indicator layouts) ───────────────────────────────── */
+.setups-btn{
+  display:inline-flex;align-items:center;gap:5px;background:var(--panel2);
+  border:1px solid var(--border);border-radius:4px;padding:5px 10px;
+  font-size:11px;color:var(--text);cursor:pointer;font-family:var(--mono);
+}
+.setups-btn:hover{background:#2f3340;border-color:var(--border2)}
+.setups-btn .ico{font-size:12px;line-height:1}
+.setups-btn .active-name{
+  color:var(--text2);max-width:120px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:10.5px;
+}
+.setups-list{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;max-height:240px;overflow-y:auto}
+.setups-list .empty{color:var(--muted);font-size:12px;padding:14px;text-align:center;
+  background:var(--panel2);border:1px dashed var(--border);border-radius:4px}
+.setup-row{
+  display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--panel2);
+  border:1px solid var(--border);border-radius:4px;font-size:12px;
+}
+.setup-row.is-default{border-color:rgba(41,98,255,.55);background:rgba(41,98,255,.06)}
+.setup-row .s-name{flex:1;color:var(--text);font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.setup-row .s-meta{color:var(--muted);font-size:10px;font-family:var(--mono);
+  margin-right:6px}
+.setup-row .s-tag{
+  font-family:var(--mono);font-size:9.5px;text-transform:uppercase;
+  background:rgba(41,98,255,.18);color:#8bb6ff;padding:2px 5px;border-radius:2px;
+  letter-spacing:.4px;
+}
+.setup-row .s-btn{
+  background:transparent;border:1px solid var(--border);color:var(--text2);
+  cursor:pointer;font-size:11px;padding:3px 8px;border-radius:3px;flex-shrink:0;
+  font-family:var(--mono);
+}
+.setup-row .s-btn:hover{background:var(--panel);color:var(--text);border-color:var(--border2)}
+.setup-row .s-btn.danger:hover{background:#3a2222;border-color:#a83d3d;color:#ff6b6b}
+.setup-row .s-btn.primary{color:#8bb6ff;border-color:rgba(41,98,255,.45)}
+.setup-row .s-btn.primary:hover{background:rgba(41,98,255,.15);color:#a8c6ff}
+.setup-share-box{
+  display:flex;gap:6px;margin-top:8px;
+}
+.setup-share-box input{
+  flex:1;font-family:var(--mono);font-size:11px;background:var(--bg);
+  color:var(--text);border:1px solid var(--border);border-radius:3px;padding:6px 8px;
+}
+.setup-save-row{display:flex;gap:6px;margin-top:6px}
+.setup-save-row input{
+  flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);
+  border-radius:3px;padding:6px 9px;font-size:12px;font-family:var(--mono);
+}
+.setup-save-row input:focus{outline:none;border-color:var(--accent)}
+.setup-save-row .btn-save{
+  background:var(--accent);color:#fff;border:none;padding:6px 14px;
+  border-radius:3px;font-size:11px;font-weight:700;letter-spacing:.4px;
+  text-transform:uppercase;cursor:pointer;
+}
+.setup-save-row .btn-save:hover{background:#1d4dd8}
+.setup-save-row .btn-save:disabled{opacity:.5;cursor:not-allowed}
+.shared-banner{
+  position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:6;
+  background:rgba(41,98,255,.16);border:1px solid rgba(41,98,255,.45);
+  color:#cfe0ff;font-size:11.5px;padding:7px 12px;border-radius:4px;
+  display:flex;align-items:center;gap:10px;backdrop-filter:blur(4px);
+  max-width:calc(100% - 24px);
+}
+.shared-banner.hidden{display:none}
+.shared-banner .b-name{font-weight:700;color:#fff;max-width:200px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.shared-banner .b-x{
+  background:transparent;border:none;color:#cfe0ff;font-size:14px;
+  cursor:pointer;line-height:1;padding:0 4px;
+}
+.shared-banner .b-x:hover{color:#fff}
+.shared-banner .b-save{
+  background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);
+  color:#fff;font-size:10.5px;padding:3px 8px;border-radius:3px;cursor:pointer;
+  font-weight:600;text-transform:uppercase;letter-spacing:.4px;
+}
+.shared-banner .b-save:hover{background:rgba(255,255,255,.22)}
+
 /* Modal */
 .modal-bg{
   position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:99;
@@ -468,6 +548,10 @@ button{font-family:inherit}
     <span class="bell">🔔</span> Alerts
     <span class="badge zero" id="alerts-badge">0</span>
   </button>
+  <button class="setups-btn" id="setups-btn" title="Save & switch chart setups (synced to your account)">
+    <span class="ico">📂</span> Setups
+    <span class="active-name" id="setups-active-name"></span>
+  </button>
   <div class="pressure" id="pressure">
     <span class="p-dot"></span>
     <span id="pressure-text">Loading order book…</span>
@@ -490,6 +574,12 @@ button{font-family:inherit}
     <div id="chart"></div>
     <canvas id="zones"></canvas>
     <div class="ind-strip" id="ind-strip"></div>
+    <div class="shared-banner hidden" id="shared-banner">
+      <span>🔗 Viewing shared setup:</span>
+      <span class="b-name" id="shared-banner-name"></span>
+      <button class="b-save" id="shared-banner-save" title="Save this setup to your account">Save copy</button>
+      <button class="b-x" id="shared-banner-close" title="Dismiss">×</button>
+    </div>
   </div>
 
   <aside class="side">
@@ -692,6 +782,73 @@ button{font-family:inherit}
       <div>
         <button class="btn ghost" id="alerts-cancel">Close</button>
         <button class="btn primary" id="alerts-create" style="display:none">Create alert</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Setups modal ─────────────────────────────────────────────────── -->
+<div class="modal-bg" id="setups-modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="setups-modal-title">
+    <div class="modal-hd">
+      <span id="setups-modal-title">📂 Saved chart setups</span>
+      <button class="x" id="setups-modal-close" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body" id="setups-modal-body">
+      <div id="setups-loading" style="color:var(--muted);font-size:12px;padding:14px;text-align:center">
+        Loading setups…
+      </div>
+
+      <!-- Logged-out state -->
+      <div id="setups-locked" class="alerts-locked" style="display:none">
+        <div style="margin-bottom:6px;font-size:13px;color:var(--text)">Sign in to save setups across devices</div>
+        Right now your indicators are saved in this browser only. Log in to sync them
+        to your account and share them with a link.<br>
+        <a href="/login?next=/trade">Log in or sign up →</a>
+      </div>
+
+      <!-- Logged-in state -->
+      <div id="setups-main" style="display:none">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">
+          <span id="setups-summary">No saved setups yet</span>
+        </div>
+        <div class="setups-list" id="setups-list"></div>
+
+        <div style="border-top:1px solid var(--border);padding-top:10px;margin-top:6px">
+          <div style="font-size:12px;color:var(--text);font-weight:600;margin-bottom:6px">
+            Save current layout
+          </div>
+          <div class="setup-save-row">
+            <input type="text" id="setups-name-input" maxlength="60"
+                   placeholder='e.g. "Scalp", "Swing", "Macro"' autocomplete="off">
+            <button class="btn-save" id="setups-save-btn">Save</button>
+          </div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:6px">
+            Re-using a name updates that setup. Your indicators are also auto-saved
+            on every change so they're waiting for you on any device you log into.
+          </div>
+        </div>
+
+        <div id="setups-share-wrap" style="display:none;border-top:1px solid var(--border);padding-top:10px;margin-top:10px">
+          <div style="font-size:12px;color:var(--text);font-weight:600;margin-bottom:6px">
+            Share <span id="setups-share-name">—</span>
+          </div>
+          <div class="setup-share-box">
+            <input type="text" id="setups-share-url" readonly>
+            <button class="s-btn primary" id="setups-share-copy">Copy</button>
+          </div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:6px">
+            Anyone with this link can open the chart pre-loaded with these indicators.
+          </div>
+        </div>
+
+        <div id="setups-err" class="err" style="margin-top:10px"></div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <span class="meta" id="setups-count">—</span>
+      <div>
+        <button class="btn ghost" id="setups-cancel">Close</button>
       </div>
     </div>
   </div>
@@ -1547,22 +1704,163 @@ button{font-family:inherit}
 
   function indKind(type){ return OVERLAY_TYPES.has(type) ? 'overlay' : 'oscillator'; }
 
-  function loadStored(){
+  // Snapshot of current chart layout in the same shape the server stores.
+  function currentSpec(){
+    return indicators.map(ind => ({
+      type: ind.type, params: ind.params, color: ind.color, src: ind.src, visible: ind.visible,
+    }));
+  }
+
+  function readLocalSpec(){
     try{
       const raw = localStorage.getItem(STORAGE_KEY);
-      if(!raw) return;
+      if(!raw) return null;
       const parsed = JSON.parse(raw);
-      if(!Array.isArray(parsed)) return;
-      parsed.forEach(spec => addIndicator(spec, /*persist*/false, /*silent*/true));
-    }catch(e){ /* ignore */ }
+      return Array.isArray(parsed) ? parsed : null;
+    }catch(e){ return null; }
   }
+
+  function writeLocalSpec(spec){
+    try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(spec || [])); }catch(e){}
+  }
+
+  // Wipe all indicators without firing per-removal saves — used when applying
+  // a different setup wholesale.
+  function clearAllIndicators(){
+    while(indicators.length){
+      const first = indicators[0];
+      first.series.forEach(s => { try{ chart.removeSeries(s); }catch(e){} });
+      indicators.splice(0, 1);
+    }
+    recomputePanes();
+    renderIndStrip();
+  }
+
+  function applySpec(spec, opts){
+    opts = opts || {};
+    clearAllIndicators();
+    (spec || []).forEach(s => addIndicator(s, /*persist*/false, /*silent*/true));
+    if(opts.persistLocal !== false){
+      writeLocalSpec(spec || []);
+    }
+    if(opts.syncServer){
+      scheduleSync(true);
+    }
+  }
+
+  // ── Server-sync state ────────────────────────────────────────────────
+  // _setupsState mirrors GET /api/trade/indicators so the toolbar/modal can
+  // read it synchronously. Null until the first fetch completes.
+  let _setupsState = null;
+  let _sharedSpec = null;     // spec currently rendered from a ?setup=token link
+  let _sharedName = null;
+  let _syncTimer = null;
+
+  function scheduleSync(immediate){
+    if(!_setupsState || !_setupsState.logged_in) return;
+    // Don't auto-sync while previewing somebody else's shared setup —
+    // otherwise opening a friend's link clobbers your own auto-saved layout.
+    if(_sharedSpec) return;
+    clearTimeout(_syncTimer);
+    _syncTimer = setTimeout(syncToServer, immediate ? 0 : 800);
+  }
+
+  async function syncToServer(){
+    if(!_setupsState || !_setupsState.logged_in) return;
+    try{
+      await fetch('/api/trade/indicators/sync', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({spec: currentSpec()}),
+      });
+    }catch(e){ /* offline — localStorage still saved a copy */ }
+  }
+
+  // Replaces the original LocalStorage-only loader.
+  // 1) If URL has ?setup=<token>, fetch the shared layout (no auth).
+  // 2) Else if logged in, pull the server default; if blank, migrate any
+  //    existing LocalStorage layout up to the server.
+  // 3) Else fall back to LocalStorage.
+  async function loadStored(){
+    const tokFromUrl = new URLSearchParams(location.search).get('setup');
+
+    // Always fetch user's own setups so the toolbar reflects state regardless
+    // of whether we end up rendering a shared layout.
+    const meReq = fetch('/api/trade/indicators', {credentials:'same-origin'})
+      .then(r => r.ok ? r.json() : {logged_in:false, setups:[], default_spec:null})
+      .catch(() => ({logged_in:false, setups:[], default_spec:null}));
+
+    if(tokFromUrl){
+      try{
+        const r = await fetch('/api/trade/indicators/shared/' + encodeURIComponent(tokFromUrl));
+        if(r.ok){
+          const data = await r.json();
+          _sharedSpec = data.spec || [];
+          _sharedName = data.name || 'Shared setup';
+          applySpec(_sharedSpec, {persistLocal:false});
+          showSharedBanner(_sharedName);
+          _setupsState = await meReq;
+          renderActiveName();
+          return;
+        }
+      }catch(e){ /* fall through */ }
+    }
+
+    const me = await meReq;
+    _setupsState = me;
+    if(me.logged_in){
+      if(Array.isArray(me.default_spec) && me.default_spec.length){
+        applySpec(me.default_spec, {persistLocal:true});
+      } else {
+        // First time logging in on this device — push existing local layout up
+        // to the account so the user doesn't appear to "lose" their indicators.
+        const local = readLocalSpec();
+        if(local && local.length){
+          applySpec(local, {persistLocal:true});
+          scheduleSync(true);
+        }
+      }
+    } else {
+      const local = readLocalSpec();
+      if(local && local.length){
+        applySpec(local, {persistLocal:false});
+      }
+    }
+    renderActiveName();
+  }
+
   function saveStored(){
     try{
-      const dump = indicators.map(ind => ({
-        type: ind.type, params: ind.params, color: ind.color, src: ind.src, visible: ind.visible,
-      }));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(dump));
+      const dump = currentSpec();
+      writeLocalSpec(dump);
+      scheduleSync(false);
     }catch(e){ /* ignore */ }
+  }
+
+  function renderActiveName(){
+    const el = $('setups-active-name');
+    if(!el) return;
+    if(_sharedSpec){
+      el.textContent = '· shared';
+      return;
+    }
+    if(_setupsState && _setupsState.logged_in){
+      const def = (_setupsState.setups || []).find(s => s.is_default);
+      el.textContent = def ? '· ' + def.name : '';
+      return;
+    }
+    el.textContent = '';
+  }
+
+  function showSharedBanner(name){
+    const b = $('shared-banner');
+    if(!b) return;
+    $('shared-banner-name').textContent = name || 'Shared setup';
+    b.classList.remove('hidden');
+  }
+  function hideSharedBanner(){
+    const b = $('shared-banner');
+    if(b) b.classList.add('hidden');
   }
 
   // Recompute scaleMargins so each oscillator gets its own vertical band.
@@ -2390,10 +2688,278 @@ button{font-family:inherit}
     renderAlertConditions();
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // SETUPS — save/load/share named indicator layouts (synced to account)
+  // ═══════════════════════════════════════════════════════════════════════
+  let _setupsShareId = null;  // setup currently shown in the share box
+
+  function shareUrlFor(token){
+    return location.origin + '/trade?setup=' + encodeURIComponent(token);
+  }
+
+  function setSetupsErr(msg){
+    const el = $('setups-err');
+    if(!el) return;
+    if(!msg){ el.classList.remove('show'); el.textContent = ''; return; }
+    el.textContent = msg;
+    el.classList.add('show');
+  }
+
+  async function refreshSetupsState(){
+    try{
+      const r = await fetch('/api/trade/indicators', {credentials:'same-origin'});
+      if(!r.ok) throw new Error('failed');
+      _setupsState = await r.json();
+    }catch(e){
+      _setupsState = {logged_in:false, setups:[], default_spec:null};
+    }
+    renderActiveName();
+  }
+
+  async function openSetupsModal(){
+    $('setups-modal').classList.add('open');
+    $('setups-loading').style.display = '';
+    $('setups-locked').style.display = 'none';
+    $('setups-main').style.display = 'none';
+    $('setups-share-wrap').style.display = 'none';
+    $('setups-name-input').value = '';
+    setSetupsErr(null);
+    _setupsShareId = null;
+    await refreshSetupsState();
+    renderSetupsModal();
+  }
+  function closeSetupsModal(){ $('setups-modal').classList.remove('open'); }
+
+  function renderSetupsModal(){
+    $('setups-loading').style.display = 'none';
+    if(!_setupsState || !_setupsState.logged_in){
+      $('setups-locked').style.display = '';
+      $('setups-main').style.display = 'none';
+      $('setups-count').textContent = '';
+      return;
+    }
+    $('setups-locked').style.display = 'none';
+    $('setups-main').style.display = '';
+
+    const named = (_setupsState.setups || []).filter(s => s.name !== 'Auto-saved');
+    const total = (_setupsState.setups || []).length;
+    $('setups-count').textContent =
+      `${named.length}/${_setupsState.max} saved · ${total ? 'auto-sync on' : 'auto-sync ready'}`;
+    $('setups-summary').textContent =
+      named.length
+        ? `${named.length} saved layout${named.length===1?'':'s'} · current changes auto-sync`
+        : 'No saved layouts yet — your current changes still auto-sync to your account';
+
+    const list = $('setups-list');
+    list.innerHTML = '';
+    if(!_setupsState.setups || _setupsState.setups.length === 0){
+      list.innerHTML = '<div class="empty">No saved setups yet. Save one below to use it on any device.</div>';
+      return;
+    }
+
+    _setupsState.setups.forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'setup-row' + (s.is_default ? ' is-default' : '');
+      const tag = s.is_default ? '<span class="s-tag">Active</span>' : '';
+      row.innerHTML = `
+        ${tag}
+        <span class="s-name" title="${(s.name||'').replace(/"/g,'&quot;')}">${escapeHtml(s.name || '—')}</span>
+        <button class="s-btn primary" data-act="load">Load</button>
+        <button class="s-btn" data-act="share">Share</button>
+        <button class="s-btn danger" data-act="del" title="Delete this setup">×</button>
+      `;
+      row.querySelector('[data-act="load"]').onclick = () => loadSavedSetup(s);
+      row.querySelector('[data-act="share"]').onclick = () => showShareForSetup(s);
+      row.querySelector('[data-act="del"]').onclick = () => deleteSavedSetup(s);
+      list.appendChild(row);
+    });
+  }
+
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+
+  async function loadSavedSetup(s){
+    setSetupsErr(null);
+    try{
+      const r = await fetch('/api/trade/indicators/' + s.id + '/load',
+        {method:'POST', credentials:'same-origin'});
+      const data = await r.json();
+      if(!r.ok) throw new Error(data.detail || 'Could not load setup');
+      // Switching to a saved setup also clears any shared-link preview state.
+      _sharedSpec = null; _sharedName = null; hideSharedBanner();
+      const spec = (data.setup && data.setup.spec) || [];
+      applySpec(spec, {persistLocal:true});
+      // Clean ?setup=<token> off the URL so refreshes don't re-load the share.
+      try{
+        const url = new URL(location.href);
+        if(url.searchParams.has('setup')){
+          url.searchParams.delete('setup');
+          history.replaceState(null, '', url.toString());
+        }
+      }catch(e){}
+      await refreshSetupsState();
+      renderSetupsModal();
+    }catch(e){
+      setSetupsErr(e.message || 'Could not load setup');
+    }
+  }
+
+  function showShareForSetup(s){
+    _setupsShareId = s.id;
+    $('setups-share-name').textContent = s.name || '';
+    $('setups-share-url').value = s.share_token ? shareUrlFor(s.share_token) : '(no token)';
+    $('setups-share-wrap').style.display = '';
+    setTimeout(() => { try{ $('setups-share-url').select(); }catch(e){} }, 30);
+  }
+
+  async function deleteSavedSetup(s){
+    if(!confirm(`Delete saved setup "${s.name}"? This can't be undone.`)) return;
+    setSetupsErr(null);
+    try{
+      const r = await fetch('/api/trade/indicators/' + s.id, {
+        method:'DELETE', credentials:'same-origin',
+      });
+      if(!r.ok){
+        const data = await r.json().catch(() => ({}));
+        throw new Error(data.detail || 'Could not delete setup');
+      }
+      if(_setupsShareId === s.id){
+        _setupsShareId = null;
+        $('setups-share-wrap').style.display = 'none';
+      }
+      await refreshSetupsState();
+      renderSetupsModal();
+    }catch(e){
+      setSetupsErr(e.message || 'Could not delete setup');
+    }
+  }
+
+  async function saveCurrentSetup(){
+    setSetupsErr(null);
+    const nameEl = $('setups-name-input');
+    const name = (nameEl.value || '').trim();
+    if(!name){
+      setSetupsErr('Give the setup a name first (e.g. "Scalp").');
+      nameEl.focus();
+      return;
+    }
+    if(indicators.length === 0){
+      if(!confirm('Your chart has no indicators. Save an empty setup anyway?')) return;
+    }
+    const btn = $('setups-save-btn');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try{
+      const r = await fetch('/api/trade/indicators/save', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({name, spec: currentSpec(), set_default: true}),
+      });
+      const data = await r.json();
+      if(!r.ok) throw new Error(data.detail || 'Could not save setup');
+      // Saving promotes this setup to default — clear any shared-link preview.
+      _sharedSpec = null; _sharedName = null; hideSharedBanner();
+      nameEl.value = '';
+      await refreshSetupsState();
+      renderSetupsModal();
+      // Auto-show the share box for the newly saved setup
+      if(data.setup) showShareForSetup(data.setup);
+    }catch(e){
+      setSetupsErr(e.message || 'Could not save setup');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Save';
+    }
+  }
+
+  async function copyShareUrl(){
+    const inp = $('setups-share-url');
+    if(!inp || !inp.value || inp.value === '(no token)') return;
+    const btn = $('setups-share-copy');
+    const orig = btn.textContent;
+    try{
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        await navigator.clipboard.writeText(inp.value);
+      } else {
+        inp.select(); document.execCommand('copy');
+      }
+      btn.textContent = 'Copied!';
+    }catch(e){
+      btn.textContent = 'Copy failed';
+    }
+    setTimeout(() => { btn.textContent = orig; }, 1400);
+  }
+
+  async function saveSharedAsCopy(){
+    if(!_sharedSpec){ return; }
+    if(!_setupsState || !_setupsState.logged_in){
+      window.location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+      return;
+    }
+    let suggested = _sharedName || 'Shared setup';
+    const name = window.prompt('Save shared setup as:', suggested);
+    if(!name) return;
+    try{
+      const r = await fetch('/api/trade/indicators/save', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({name: name.trim(), spec: _sharedSpec, set_default: true}),
+      });
+      const data = await r.json();
+      if(!r.ok){ alert(data.detail || 'Could not save copy'); return; }
+      _sharedSpec = null; _sharedName = null; hideSharedBanner();
+      writeLocalSpec(currentSpec());
+      try{
+        const url = new URL(location.href);
+        url.searchParams.delete('setup');
+        history.replaceState(null, '', url.toString());
+      }catch(e){}
+      await refreshSetupsState();
+    }catch(e){
+      alert('Could not save copy.');
+    }
+  }
+
+  function wireSetups(){
+    $('setups-btn').onclick = openSetupsModal;
+    $('setups-modal-close').onclick = closeSetupsModal;
+    $('setups-cancel').onclick = closeSetupsModal;
+    $('setups-modal').addEventListener('click', e => { if(e.target === $('setups-modal')) closeSetupsModal(); });
+    $('setups-save-btn').onclick = saveCurrentSetup;
+    $('setups-share-copy').onclick = copyShareUrl;
+    $('setups-name-input').addEventListener('keydown', e => {
+      if(e.key === 'Enter'){ e.preventDefault(); saveCurrentSetup(); }
+    });
+    $('shared-banner-close').onclick = () => {
+      hideSharedBanner();
+      // Clear the shared-preview lock so auto-sync resumes for any further
+      // changes the user makes this session.
+      _sharedSpec = null;
+      _sharedName = null;
+      // Remove the ?setup= param so reloads use the user's own default again.
+      try{
+        const url = new URL(location.href);
+        url.searchParams.delete('setup');
+        history.replaceState(null, '', url.toString());
+      }catch(e){}
+      renderActiveName();
+      // Push whatever's currently on screen up to the user's Auto-saved
+      // buffer so this device's state matches what they see now.
+      scheduleSync(true);
+    };
+    $('shared-banner-save').onclick = saveSharedAsCopy;
+    document.addEventListener('keydown', e => {
+      if(!$('setups-modal').classList.contains('open')) return;
+      if(e.key === 'Escape'){ e.preventDefault(); closeSetupsModal(); }
+    });
+  }
+
   // ───── Init + polling ─────
   initChart();
   wireModal();
   wireAlerts();
+  wireSetups();
   loadStored();
   loadCandlesFull();
   loadWalls();

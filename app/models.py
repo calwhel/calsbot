@@ -655,6 +655,28 @@ class TradeLesson(Base):
     losses_after = Column(Integer, default=0)
 
 
+class TradeIndicatorSetup(Base):
+    """Saved chart indicator setups for the /trade page.
+
+    Each row is one named setup belonging to a user. The user always has at
+    most one row with `is_default=True` — that is what the chart auto-loads
+    on page open and what auto-sync writes to as they tweak indicators.
+    Named setups (Scalp / Swing / Macro) can be created and switched between.
+    Every saved setup also gets a random `share_token` so the user can hand
+    a friend a URL like /trade?setup=<token> that loads the same indicators.
+    """
+    __tablename__ = "trade_indicator_setups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String, nullable=False, default="Auto-saved")
+    json_spec = Column(Text, nullable=False, default="[]")
+    is_default = Column(Boolean, default=False, index=True)
+    share_token = Column(String, unique=True, index=True, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class IndicatorAlert(Base):
     """User-created chart alert: 'price > X', 'RSI(14) crosses 70',
     'price crosses EMA(50)', 'MACD crosses zero', 'SuperTrend flips long'.

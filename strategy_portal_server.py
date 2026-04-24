@@ -341,7 +341,7 @@ def _ensure_tables():
     from app.database import Base
     # Make sure new model classes are imported BEFORE create_all so their
     # tables are registered with the metadata.
-    from app.models import IndicatorAlert  # noqa: F401
+    from app.models import IndicatorAlert, TradeIndicatorSetup  # noqa: F401
     init_strategy_tables(engine)
     init_marketplace_ext_tables(engine)
     init_social_tables(engine)
@@ -349,6 +349,10 @@ def _ensure_tables():
         Base.metadata.create_all(bind=engine, tables=[IndicatorAlert.__table__])
     except Exception as e:
         logger.warning(f"_ensure_tables(IndicatorAlert): {e}")
+    try:
+        Base.metadata.create_all(bind=engine, tables=[TradeIndicatorSetup.__table__])
+    except Exception as e:
+        logger.warning(f"_ensure_tables(TradeIndicatorSetup): {e}")
     # Only ALTER if column is genuinely missing — avoids table locks when both
     # dev and production portals start against the same shared Neon database.
     needed = {
@@ -1854,6 +1858,417 @@ async def trade_alerts_cancel(alert_id: int, request: Request, db: Session = Dep
     alert.status = "cancelled"
     db.commit()
     return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Indicator setup sync — save/load/share /trade chart layouts across devices
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Allowed values mirror the JS PRESETS / VALID_SRC table in trade.html.
+_INDICATOR_TYPES = {"ema", "sma", "bb", "vwap", "supertrend",
+                    "rsi", "macd", "stochrsi", "atr"}
+_INDICATOR_SRC   = {"close", "open", "high", "low", "hl2", "hlc3", "ohlc4"}
+_MAX_INDICATORS_PER_SETUP = 30
+_MAX_SETUPS_PER_USER      = 20
+_MAX_SETUP_NAME           = 60
+
+
+def _sanitize_indicator_spec(spec) -> list:
+    """Strip a client-supplied indicator list down to safe, persistable data.
+
+    Rejects bad shapes outright but silently drops individual unknown items so
+    a single malformed entry can't poison the whole save."""
+    if not isinstance(spec, list):
+        raise HTTPException(status_code=400, detail="spec must be a list")
+    if len(spec) > _MAX_INDICATORS_PER_SETUP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"too many indicators (max {_MAX_INDICATORS_PER_SETUP})",
+        )
+    out = []
+    for item in spec:
+        if not isinstance(item, dict):
+            continue
+        t = (item.get("type") or "").lower().strip()
+        if t not in _INDICATOR_TYPES:
+            continue
+        raw_params = item.get("params") or {}
+        if not isinstance(raw_params, dict):
+            raw_params = {}
+        clean_params: dict = {}
+        for k, v in list(raw_params.items())[:8]:
+            if not isinstance(k, str) or not k or len(k) > 32:
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            # Cap to a sane range — UI clamps these too but defence in depth.
+            if not (-1e6 < fv < 1e6):
+                continue
+            clean_params[k] = fv
+        color = item.get("color") or "#42a5f5"
+        if (not isinstance(color, str) or len(color) > 16
+                or not color.startswith("#")):
+            color = "#42a5f5"
+        src = item.get("src") or "close"
+        if src not in _INDICATOR_SRC:
+            src = "close"
+        visible = item.get("visible", True)
+        out.append({
+            "type":    t,
+            "params":  clean_params,
+            "color":   color,
+            "src":     src,
+            "visible": bool(visible),
+        })
+    return out
+
+
+def _new_share_token() -> str:
+    """Short, URL-safe, hard-to-guess token for share links."""
+    return secrets.token_urlsafe(9)
+
+
+def _setup_to_dict(s, include_spec: bool = False) -> dict:
+    out = {
+        "id":         s.id,
+        "name":       s.name,
+        "is_default": bool(s.is_default),
+        "share_token": s.share_token,
+        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+    }
+    if include_spec:
+        try:
+            out["spec"] = json.loads(s.json_spec or "[]")
+        except Exception:
+            out["spec"] = []
+    return out
+
+
+def _ensure_share_token(db: Session, setup) -> str:
+    """Lazily mint a share token if one isn't set yet."""
+    from app.models import TradeIndicatorSetup
+    if setup.share_token:
+        return setup.share_token
+    # Try a few times in the (extremely unlikely) event of a collision.
+    for _ in range(5):
+        tok = _new_share_token()
+        clash = (db.query(TradeIndicatorSetup)
+                   .filter(TradeIndicatorSetup.share_token == tok)
+                   .first())
+        if not clash:
+            setup.share_token = tok
+            db.commit()
+            return tok
+    raise HTTPException(status_code=500, detail="could not allocate share token")
+
+
+@app.get("/api/trade/indicators")
+async def trade_indicators_list(request: Request, db: Session = Depends(get_db)):
+    """Return all of the logged-in user's saved chart setups + the default spec.
+
+    Logged-out users get {logged_in: false} so the front-end can fall back to
+    the LocalStorage-only flow."""
+    from app.models import TradeIndicatorSetup
+    uid = _get_session_uid(request)
+    if not uid:
+        return {"logged_in": False, "setups": [], "default_spec": None,
+                "max": _MAX_SETUPS_PER_USER}
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        return {"logged_in": False, "setups": [], "default_spec": None,
+                "max": _MAX_SETUPS_PER_USER}
+
+    rows = (db.query(TradeIndicatorSetup)
+              .filter(TradeIndicatorSetup.user_id == user.id)
+              .order_by(TradeIndicatorSetup.is_default.desc(),
+                        TradeIndicatorSetup.updated_at.desc())
+              .limit(_MAX_SETUPS_PER_USER + 5)
+              .all())
+
+    # Lazy-mint share tokens for any legacy rows missing one so every saved
+    # setup is shareable from the UI without an extra round-trip.
+    minted_any = False
+    for r in rows:
+        if not r.share_token:
+            for _ in range(5):
+                tok = _new_share_token()
+                clash = (db.query(TradeIndicatorSetup)
+                           .filter(TradeIndicatorSetup.share_token == tok)
+                           .first())
+                if not clash:
+                    r.share_token = tok
+                    minted_any = True
+                    break
+    if minted_any:
+        db.commit()
+
+    # Default spec = whichever row is currently the working copy. Prefer the
+    # 'Auto-saved' buffer (always reflects the user's last on-screen state);
+    # fall back to the row marked is_default for legacy data.
+    default_spec = None
+    autosave_row = next((r for r in rows if r.name == _AUTO_SAVE_NAME), None)
+    fallback_row = autosave_row or next((r for r in rows if r.is_default), None)
+    if fallback_row:
+        try:
+            default_spec = json.loads(fallback_row.json_spec or "[]")
+        except Exception:
+            default_spec = []
+
+    return {
+        "logged_in":    True,
+        "setups":       [_setup_to_dict(r) for r in rows],
+        "default_spec": default_spec,
+        "max":          _MAX_SETUPS_PER_USER,
+    }
+
+
+_AUTO_SAVE_NAME = "Auto-saved"
+
+
+def _get_or_create_autosave(db: Session, user_id: int):
+    """Return the user's dedicated 'Auto-saved' working-copy row, creating it
+    (with a share token) on first use. Always exists separately from named
+    presets so /sync writes never clobber 'Scalp'/'Swing'/etc."""
+    from app.models import TradeIndicatorSetup
+    row = (db.query(TradeIndicatorSetup)
+             .filter(TradeIndicatorSetup.user_id == user_id,
+                     TradeIndicatorSetup.name == _AUTO_SAVE_NAME)
+             .first())
+    if row:
+        if not row.share_token:
+            _ensure_share_token(db, row)
+        return row
+    # Promote auto-save to default only if no named preset is already default.
+    has_default = (db.query(TradeIndicatorSetup)
+                     .filter(TradeIndicatorSetup.user_id == user_id,
+                             TradeIndicatorSetup.is_default == True)  # noqa: E712
+                     .first())
+    row = TradeIndicatorSetup(
+        user_id=user_id,
+        name=_AUTO_SAVE_NAME,
+        json_spec="[]",
+        is_default=(not has_default),
+        share_token=_new_share_token(),
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+@app.post("/api/trade/indicators/sync")
+async def trade_indicators_sync(request: Request, db: Session = Depends(get_db)):
+    """Auto-save the user's current working layout.
+
+    Body: {spec: [...]}. Always writes to the dedicated 'Auto-saved' row
+    (created on first use with a share token). Named presets like 'Scalp'
+    are never touched here, so tweaking the chart can't overwrite a saved
+    preset the user is treating as immutable."""
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+
+    spec = _sanitize_indicator_spec(body.get("spec") or [])
+
+    setup = _get_or_create_autosave(db, user.id)
+    setup.json_spec = json.dumps(spec)
+    db.commit()
+    return {"ok": True, "count": len(spec)}
+
+
+@app.post("/api/trade/indicators/save")
+async def trade_indicators_save(request: Request, db: Session = Depends(get_db)):
+    """Save the current layout under a name (e.g. 'Scalp', 'Swing').
+
+    Body: {name, spec, set_default?}. If a setup with the same name already
+    exists for this user we overwrite it (so users can hit 'Save' again to
+    update an existing preset). A share token is minted on creation."""
+    from app.models import TradeIndicatorSetup
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+
+    name = (body.get("name") or "").strip()[:_MAX_SETUP_NAME]
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    spec = _sanitize_indicator_spec(body.get("spec") or [])
+    set_default = bool(body.get("set_default", False))
+
+    # Update-in-place if a setup with this exact name exists.
+    existing = (db.query(TradeIndicatorSetup)
+                  .filter(TradeIndicatorSetup.user_id == user.id,
+                          TradeIndicatorSetup.name == name)
+                  .first())
+    if existing:
+        existing.json_spec = json.dumps(spec)
+        if set_default:
+            (db.query(TradeIndicatorSetup)
+                .filter(TradeIndicatorSetup.user_id == user.id,
+                        TradeIndicatorSetup.id != existing.id,
+                        TradeIndicatorSetup.is_default == True)  # noqa: E712
+                .update({"is_default": False}))
+            existing.is_default = True
+        if not existing.share_token:
+            _ensure_share_token(db, existing)
+        # Mirror into Auto-saved buffer so cross-device GET always returns the
+        # spec the user just saved, even before the next debounced /sync runs.
+        if set_default and existing.name != _AUTO_SAVE_NAME:
+            autosave = _get_or_create_autosave(db, user.id)
+            autosave.json_spec = json.dumps(spec)
+            autosave.is_default = False
+        db.commit()
+        db.refresh(existing)
+        return {"ok": True, "setup": _setup_to_dict(existing, include_spec=True)}
+
+    # Quota check — count only user-named presets, never the auto-save buffer.
+    named_count = (db.query(TradeIndicatorSetup)
+                     .filter(TradeIndicatorSetup.user_id == user.id,
+                             TradeIndicatorSetup.name != _AUTO_SAVE_NAME)
+                     .count())
+    if named_count >= _MAX_SETUPS_PER_USER:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Max {_MAX_SETUPS_PER_USER} saved setups. Delete one first.",
+        )
+
+    setup = TradeIndicatorSetup(
+        user_id=user.id,
+        name=name,
+        json_spec=json.dumps(spec),
+        is_default=False,
+    )
+    db.add(setup)
+    db.flush()
+    _ensure_share_token(db, setup)
+    if set_default:
+        (db.query(TradeIndicatorSetup)
+            .filter(TradeIndicatorSetup.user_id == user.id,
+                    TradeIndicatorSetup.id != setup.id,
+                    TradeIndicatorSetup.is_default == True)  # noqa: E712
+            .update({"is_default": False}))
+        setup.is_default = True
+        # Mirror into Auto-saved so other devices see this layout immediately
+        # on next page load (no wait for the debounced sync).
+        autosave = _get_or_create_autosave(db, user.id)
+        autosave.json_spec = json.dumps(spec)
+        autosave.is_default = False
+    db.commit()
+    db.refresh(setup)
+    return {"ok": True, "setup": _setup_to_dict(setup, include_spec=True)}
+
+
+@app.post("/api/trade/indicators/{setup_id}/load")
+async def trade_indicators_load(setup_id: int, request: Request,
+                                db: Session = Depends(get_db)):
+    """Mark a saved setup as the active default + return its spec.
+
+    The chart polls /api/trade/indicators on next load and other devices will
+    pick up the same setup."""
+    from app.models import TradeIndicatorSetup
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+
+    setup = (db.query(TradeIndicatorSetup)
+               .filter(TradeIndicatorSetup.id == setup_id,
+                       TradeIndicatorSetup.user_id == user.id)
+               .first())
+    if not setup:
+        raise HTTPException(status_code=404, detail="setup not found")
+
+    (db.query(TradeIndicatorSetup)
+        .filter(TradeIndicatorSetup.user_id == user.id,
+                TradeIndicatorSetup.id != setup.id,
+                TradeIndicatorSetup.is_default == True)  # noqa: E712
+        .update({"is_default": False}))
+    setup.is_default = True
+
+    # Mirror the loaded spec into the Auto-saved buffer (unless the user is
+    # loading Auto-saved itself) so subsequent tweaks accumulate there
+    # instead of accidentally writing back into the named preset on next
+    # device open.
+    if setup.name != _AUTO_SAVE_NAME:
+        autosave = _get_or_create_autosave(db, user.id)
+        autosave.json_spec = setup.json_spec or "[]"
+
+    db.commit()
+    db.refresh(setup)
+    return {"ok": True, "setup": _setup_to_dict(setup, include_spec=True)}
+
+
+@app.delete("/api/trade/indicators/{setup_id}")
+async def trade_indicators_delete(setup_id: int, request: Request,
+                                  db: Session = Depends(get_db)):
+    """Delete a saved setup. If it was the default, the most recently updated
+    remaining setup is promoted in its place (or none if there are none left)."""
+    from app.models import TradeIndicatorSetup
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+
+    setup = (db.query(TradeIndicatorSetup)
+               .filter(TradeIndicatorSetup.id == setup_id,
+                       TradeIndicatorSetup.user_id == user.id)
+               .first())
+    if not setup:
+        raise HTTPException(status_code=404, detail="setup not found")
+
+    was_default = bool(setup.is_default)
+    db.delete(setup)
+    db.flush()
+
+    if was_default:
+        successor = (db.query(TradeIndicatorSetup)
+                       .filter(TradeIndicatorSetup.user_id == user.id)
+                       .order_by(TradeIndicatorSetup.updated_at.desc())
+                       .first())
+        if successor:
+            successor.is_default = True
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/trade/indicators/shared/{token}")
+async def trade_indicators_shared(token: str, db: Session = Depends(get_db)):
+    """Public — anyone with the link can read a shared setup's indicator list.
+
+    Returns just the name + spec (no owner identity, no setup id). The viewer
+    can then hit /api/trade/indicators/save to keep their own copy if they want."""
+    from app.models import TradeIndicatorSetup
+    tok = (token or "").strip()
+    if not tok or len(tok) > 64:
+        raise HTTPException(status_code=404, detail="setup not found")
+    setup = (db.query(TradeIndicatorSetup)
+               .filter(TradeIndicatorSetup.share_token == tok)
+               .first())
+    if not setup:
+        raise HTTPException(status_code=404, detail="setup not found")
+    try:
+        spec = json.loads(setup.json_spec or "[]")
+    except Exception:
+        spec = []
+    return {"name": setup.name, "spec": spec}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
