@@ -2144,9 +2144,7 @@ async def trade_auto_create(request: Request, db: Session = Depends(get_db)):
     user = _get_user_by_uid(uid, db)
     if not user:
         raise HTTPException(status_code=401, detail="login required")
-    sub = _get_portal_sub(user.id, db)
-    if not _is_portal_pro(sub):
-        raise HTTPException(status_code=402, detail="Pro subscription required to use Auto Trader")
+    # Auto Trader is open to all logged-in users (no subscription gate).
 
     try:
         body = await request.json()
@@ -2265,8 +2263,7 @@ async def trade_auto_create(request: Request, db: Session = Depends(get_db)):
 async def trade_auto_list(request: Request, db: Session = Depends(get_db)):
     """List the current user's auto strategies (active + paused).
 
-    Pro-gated so the frontend can read the 402 to show the "Pro lock" state
-    in the Automate modal (consistent with /api/trade/auto/create)."""
+    Open to any logged-in user — no subscription gate."""
     from app.models import AutoTradeStrategy, AutoTradePaperTrade
     uid = _get_session_uid(request)
     if not uid:
@@ -2274,9 +2271,6 @@ async def trade_auto_list(request: Request, db: Session = Depends(get_db)):
     user = _get_user_by_uid(uid, db)
     if not user:
         raise HTTPException(status_code=401, detail="login required")
-    sub = _get_portal_sub(user.id, db)
-    if not _is_portal_pro(sub):
-        raise HTTPException(status_code=402, detail="Pro subscription required to use Auto Trader")
     rows = (db.query(AutoTradeStrategy)
               .filter(AutoTradeStrategy.user_id == user.id,
                       AutoTradeStrategy.status != "archived")

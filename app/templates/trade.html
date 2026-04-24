@@ -3943,10 +3943,9 @@ button{font-family:inherit}
       const r = await fetch('/api/trade/auto/list', {credentials:'same-origin'});
       if(r.status === 401){
         _autoState = {logged_in:false, is_pro:false, strategies:[]};
-      } else if(r.status === 402){
-        _autoState = {logged_in:true, is_pro:false, strategies:[]};
       } else if(r.ok){
         const d = await r.json();
+        // Auto Trader is open to all logged-in users — no subscription gate.
         _autoState = {logged_in:true, is_pro:true, strategies:d.strategies || []};
       } else {
         _autoState = {logged_in:false, is_pro:false, strategies:[]};
