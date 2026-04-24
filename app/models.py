@@ -653,3 +653,44 @@ class TradeLesson(Base):
     times_applied = Column(Integer, default=0)
     wins_after = Column(Integer, default=0)
     losses_after = Column(Integer, default=0)
+
+
+class IndicatorAlert(Base):
+    """User-created chart alert: 'price > X', 'RSI(14) crosses 70',
+    'price crosses EMA(50)', 'MACD crosses zero', 'SuperTrend flips long'.
+
+    Evaluated by the alerts_engine background loop; fires a Telegram DM and
+    flips status='triggered' when the condition is hit. last_value/last_dir
+    are stored so the loop can detect a *cross* event (not just being on one
+    side of a level).
+    """
+    __tablename__ = "indicator_alerts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    symbol = Column(String, nullable=False, default="BTC")
+    timeframe = Column(String, nullable=False, default="5m")
+
+    # 'price', 'rsi', 'ema_cross', 'macd_cross_zero', 'supertrend_flip'
+    kind = Column(String, nullable=False, index=True)
+    # JSON-encoded params depending on kind: {"period":14}, {"fast":12,"slow":26,"signal":9}, ...
+    params = Column(Text, nullable=False, default="{}")
+    # 'above', 'below', 'crossover', 'crossunder', 'flip'
+    condition = Column(String, nullable=False)
+    # threshold for price/rsi alerts; null for ema_cross / macd_cross_zero / supertrend_flip
+    target = Column(Float, nullable=True)
+    # Human-readable summary, e.g. "RSI(14) > 70  —  BTC 5m"
+    label = Column(String, nullable=True)
+
+    status = Column(String, nullable=False, default="active", index=True)  # active | triggered | cancelled
+
+    # Cross detection state
+    last_value = Column(Float, nullable=True)     # last seen indicator value
+    last_eval_at = Column(DateTime, nullable=True)
+    eval_count = Column(Integer, default=0)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    triggered_at = Column(DateTime, nullable=True)
+    triggered_price = Column(Float, nullable=True)
+    triggered_message = Column(Text, nullable=True)

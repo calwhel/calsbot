@@ -16,7 +16,7 @@ import httpx
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple
 
-from fastapi import FastAPI, Request, HTTPException, Query
+from fastapi import FastAPI, Request, HTTPException, Query, Depends
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.gzip import GZipMiddleware
@@ -338,9 +338,17 @@ async def _send_otp_via_telegram(telegram_id: str, otp: str, name: str):
 
 def _ensure_tables():
     import sqlalchemy as sa
+    from app.database import Base
+    # Make sure new model classes are imported BEFORE create_all so their
+    # tables are registered with the metadata.
+    from app.models import IndicatorAlert  # noqa: F401
     init_strategy_tables(engine)
     init_marketplace_ext_tables(engine)
     init_social_tables(engine)
+    try:
+        Base.metadata.create_all(bind=engine, tables=[IndicatorAlert.__table__])
+    except Exception as e:
+        logger.warning(f"_ensure_tables(IndicatorAlert): {e}")
     # Only ALTER if column is genuinely missing — avoids table locks when both
     # dev and production portals start against the same shared Neon database.
     needed = {
@@ -514,6 +522,14 @@ async def _start_executor_tasks():
     asyncio.create_task(run_live_position_monitor())
     asyncio.create_task(backfill_cancelled_paper_trades(lookback_days=30))
     asyncio.create_task(backfill_ghost_cancelled_executions(lookback_days=7))
+    # Indicator alerts loop — same advisory-lock-protected worker so a
+    # multi-worker gunicorn deploy never double-fires alert DMs.
+    try:
+        from app.services.alerts_engine import run_alerts_engine
+        asyncio.create_task(run_alerts_engine())
+        logger.info("✅ Alerts engine task launched")
+    except Exception as e:
+        logger.error(f"Failed to launch alerts engine: {e}")
 
 
 async def _executor_claim_loop(first_attempt_delay: int = 0):
@@ -1626,6 +1642,218 @@ async def trade_tape(symbol: str, since: int = 0, min_usd: float = 25_000.0, lim
         "last_id": seq,
         "min_usd": min_usd,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Indicator alerts API — fires Telegram DM when condition hits
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Limits + validation
+_MAX_ALERTS_PER_USER = 25
+_ALERT_KINDS = {"price", "rsi", "ema_cross", "macd_cross_zero", "supertrend_flip"}
+_ALERT_CONDITIONS = {"above", "below", "crossover", "crossunder", "flip"}
+_ALERT_TFS = {"1m", "5m", "15m", "1h"}
+
+
+def _alert_to_dict(a) -> dict:
+    return {
+        "id": a.id,
+        "symbol": a.symbol,
+        "timeframe": a.timeframe,
+        "kind": a.kind,
+        "condition": a.condition,
+        "target": a.target,
+        "params": json.loads(a.params or "{}"),
+        "label": a.label,
+        "status": a.status,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
+        "triggered_at": a.triggered_at.isoformat() if a.triggered_at else None,
+        "triggered_message": a.triggered_message,
+        "triggered_price": a.triggered_price,
+    }
+
+
+def _build_alert_label(kind: str, params: dict, condition: str, target, symbol: str) -> str:
+    p = params or {}
+    side = {"above": "above", "below": "below", "crossover": "crosses up",
+            "crossunder": "crosses down", "flip": "flips"}.get(condition, condition)
+    if kind == "price":
+        return f"Price {side} ${float(target):,.2f} · {symbol}"
+    if kind == "rsi":
+        return f"RSI({int(p.get('period', 14))}) {side} {float(target):.1f} · {symbol}"
+    if kind == "ema_cross":
+        return f"Price {side} EMA({int(p.get('period', 50))}) · {symbol}"
+    if kind == "macd_cross_zero":
+        return f"MACD({int(p.get('fast', 12))},{int(p.get('slow', 26))}) {side} zero · {symbol}"
+    if kind == "supertrend_flip":
+        return f"SuperTrend({int(p.get('period', 10))},{p.get('mult', 3)}) flips · {symbol}"
+    return f"{kind} · {symbol}"
+
+
+@app.get("/api/trade/alerts/me")
+async def trade_alerts_me(request: Request, db: Session = Depends(get_db)):
+    """Returns logged-in state + active count. Used by /trade UI to decide
+    whether to show 'Log in to create alerts' or the manage panel."""
+    from app.models import IndicatorAlert
+    uid = _get_session_uid(request)
+    if not uid:
+        return {"logged_in": False, "telegram_linked": False, "active_count": 0, "max": _MAX_ALERTS_PER_USER}
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        return {"logged_in": False, "telegram_linked": False, "active_count": 0, "max": _MAX_ALERTS_PER_USER}
+    active_count = (db.query(IndicatorAlert)
+                      .filter(IndicatorAlert.user_id == user.id,
+                              IndicatorAlert.status == "active")
+                      .count())
+    tg_linked = bool(user.telegram_id) and not str(user.telegram_id).startswith("WEB-")
+    return {
+        "logged_in": True,
+        "telegram_linked": tg_linked,
+        "telegram_id": user.telegram_id if tg_linked else None,
+        "active_count": active_count,
+        "max": _MAX_ALERTS_PER_USER,
+    }
+
+
+@app.get("/api/trade/alerts/list")
+async def trade_alerts_list(request: Request, db: Session = Depends(get_db)):
+    """List the logged-in user's alerts (active + recently triggered)."""
+    from app.models import IndicatorAlert
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    rows = (db.query(IndicatorAlert)
+              .filter(IndicatorAlert.user_id == user.id,
+                      IndicatorAlert.status.in_(["active", "triggered"]))
+              .order_by(IndicatorAlert.id.desc())
+              .limit(60).all())
+    return {"alerts": [_alert_to_dict(a) for a in rows]}
+
+
+@app.post("/api/trade/alerts/create")
+async def trade_alerts_create(request: Request, db: Session = Depends(get_db)):
+    """Create a new alert. Body: {kind, condition, symbol, timeframe, target, params, label?}"""
+    from app.models import IndicatorAlert
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+
+    kind = (body.get("kind") or "").lower().strip()
+    condition = (body.get("condition") or "").lower().strip()
+    symbol = (body.get("symbol") or "BTC").upper().strip()
+    timeframe = (body.get("timeframe") or "5m").lower().strip()
+    target = body.get("target")
+    params = body.get("params") or {}
+    if not isinstance(params, dict):
+        raise HTTPException(status_code=400, detail="params must be object")
+
+    if kind not in _ALERT_KINDS:
+        raise HTTPException(status_code=400, detail=f"unknown kind '{kind}'")
+    if condition not in _ALERT_CONDITIONS:
+        raise HTTPException(status_code=400, detail=f"unknown condition '{condition}'")
+    if symbol not in TRADE_SYMBOL_WHITELIST:
+        raise HTTPException(status_code=400, detail=f"unsupported symbol '{symbol}'")
+    if timeframe not in _ALERT_TFS:
+        raise HTTPException(status_code=400, detail=f"unsupported timeframe '{timeframe}'")
+
+    # Per-kind validation
+    if kind in ("price", "rsi"):
+        if target is None:
+            raise HTTPException(status_code=400, detail=f"{kind} alert requires target value")
+        try:
+            target = float(target)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="target must be a number")
+        if kind == "rsi" and not (0 <= target <= 100):
+            raise HTTPException(status_code=400, detail="RSI target must be 0–100")
+    else:
+        target = None
+
+    # Sane numeric bounds on params
+    def _clamp_int(v, lo, hi, default):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            n = default
+        return max(lo, min(hi, n))
+
+    if kind == "rsi":
+        params = {"period": _clamp_int(params.get("period", 14), 2, 200, 14)}
+    elif kind == "ema_cross":
+        params = {"period": _clamp_int(params.get("period", 50), 2, 500, 50)}
+    elif kind == "macd_cross_zero":
+        params = {
+            "fast":   _clamp_int(params.get("fast", 12),   2, 100, 12),
+            "slow":   _clamp_int(params.get("slow", 26),   3, 200, 26),
+            "signal": _clamp_int(params.get("signal", 9),  2, 100, 9),
+        }
+        if params["fast"] >= params["slow"]:
+            raise HTTPException(status_code=400, detail="MACD fast must be < slow")
+    elif kind == "supertrend_flip":
+        try:
+            mult = float(params.get("mult", 3))
+        except (TypeError, ValueError):
+            mult = 3.0
+        params = {
+            "period": _clamp_int(params.get("period", 10), 2, 100, 10),
+            "mult":   max(0.5, min(20.0, mult)),
+        }
+
+    # Quota
+    active_count = (db.query(IndicatorAlert)
+                      .filter(IndicatorAlert.user_id == user.id,
+                              IndicatorAlert.status == "active")
+                      .count())
+    if active_count >= _MAX_ALERTS_PER_USER:
+        raise HTTPException(status_code=400,
+                            detail=f"Max {_MAX_ALERTS_PER_USER} active alerts. Cancel one first.")
+
+    label = (body.get("label") or "").strip()[:200] or _build_alert_label(kind, params, condition, target, symbol)
+
+    alert = IndicatorAlert(
+        user_id=user.id,
+        symbol=symbol,
+        timeframe=timeframe,
+        kind=kind,
+        params=json.dumps(params),
+        condition=condition,
+        target=target,
+        label=label,
+        status="active",
+    )
+    db.add(alert)
+    db.commit()
+    db.refresh(alert)
+    return {"ok": True, "alert": _alert_to_dict(alert)}
+
+
+@app.post("/api/trade/alerts/{alert_id}/cancel")
+async def trade_alerts_cancel(alert_id: int, request: Request, db: Session = Depends(get_db)):
+    """Cancel (kill) an alert."""
+    from app.models import IndicatorAlert
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    alert = db.query(IndicatorAlert).filter(IndicatorAlert.id == alert_id).first()
+    if not alert or alert.user_id != user.id:
+        raise HTTPException(status_code=404, detail="alert not found")
+    alert.status = "cancelled"
+    db.commit()
+    return {"ok": True}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

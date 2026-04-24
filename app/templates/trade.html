@@ -270,13 +270,67 @@ button{font-family:inherit}
   font-size:10px;font-family:var(--mono);color:var(--text);backdrop-filter:blur(4px);
 }
 .ind-chip .swatch{width:9px;height:9px;border-radius:2px;flex-shrink:0}
-.ind-chip .ind-tog,.ind-chip .ind-x{
+.ind-chip .ind-tog,.ind-chip .ind-x,.ind-chip .ind-bell{
   background:transparent;border:none;color:var(--muted);cursor:pointer;
   font-size:11px;padding:1px 4px;line-height:1;border-radius:2px;
 }
-.ind-chip .ind-tog:hover,.ind-chip .ind-x:hover{background:var(--panel2);color:var(--text)}
+.ind-chip .ind-tog:hover,.ind-chip .ind-x:hover,.ind-chip .ind-bell:hover{background:var(--panel2);color:var(--text)}
+.ind-chip .ind-bell{color:#e2c275}
 .ind-chip.off{opacity:.5}
 .ind-chip.off .swatch{background:var(--muted) !important}
+
+/* ── Alerts ─────────────────────────────────────────────────────────── */
+.alerts-btn{
+  display:inline-flex;align-items:center;gap:5px;background:var(--panel2);
+  border:1px solid var(--border);border-radius:4px;padding:5px 10px;
+  font-size:11px;color:var(--text);cursor:pointer;font-family:var(--mono);
+  position:relative;
+}
+.alerts-btn:hover{background:#2f3340;border-color:var(--border2)}
+.alerts-btn .bell{font-size:13px;line-height:1}
+.alerts-btn .badge{
+  background:var(--accent);color:#0a0d14;border-radius:10px;font-size:10px;
+  font-weight:700;padding:1px 6px;line-height:1.4;
+}
+.alerts-btn .badge.zero{background:var(--panel);color:var(--muted);font-weight:500}
+
+/* Alerts modal — share .modal-bg/.modal styles from indicator modal */
+.alerts-list{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;max-height:240px;overflow-y:auto}
+.alerts-list .empty{color:var(--muted);font-size:12px;padding:14px;text-align:center;
+  background:var(--panel2);border:1px dashed var(--border);border-radius:4px}
+.alert-row{
+  display:flex;align-items:center;gap:8px;padding:7px 9px;background:var(--panel2);
+  border:1px solid var(--border);border-radius:4px;font-size:12px;
+}
+.alert-row .a-tag{
+  font-family:var(--mono);font-size:9.5px;text-transform:uppercase;
+  background:rgba(112,178,255,.15);color:#8bb6ff;padding:2px 5px;border-radius:2px;letter-spacing:.4px;
+}
+.alert-row.triggered .a-tag{background:rgba(255,178,80,.18);color:#ffba66}
+.alert-row .a-lbl{flex:1;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.alert-row .a-x{
+  background:transparent;border:1px solid var(--border);color:var(--muted);
+  cursor:pointer;font-size:11px;padding:2px 7px;border-radius:3px;flex-shrink:0;
+}
+.alert-row .a-x:hover{background:#3a2222;border-color:#a83d3d;color:#ff6b6b}
+.alerts-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;margin-top:4px}
+.alerts-form-grid label{font-size:11px;color:var(--muted);grid-column:span 2;margin-top:4px;margin-bottom:-2px}
+.alerts-form-grid label.half{grid-column:span 1}
+.alerts-form-grid select,.alerts-form-grid input{
+  width:100%;padding:6px 8px;background:var(--panel2);border:1px solid var(--border);
+  border-radius:3px;color:var(--text);font-family:var(--mono);font-size:12px;
+}
+.alerts-warn{
+  font-size:11px;color:#e2c275;background:rgba(226,194,117,.10);
+  border:1px solid rgba(226,194,117,.30);padding:6px 9px;border-radius:3px;margin-top:8px;
+}
+.alerts-warn a{color:#e2c275;text-decoration:underline}
+.alerts-locked{
+  text-align:center;padding:18px 12px;color:var(--muted);font-size:12px;
+  background:var(--panel2);border:1px dashed var(--border);border-radius:4px;
+}
+.alerts-locked a{color:var(--accent);text-decoration:none;font-weight:600}
+.alerts-locked a:hover{text-decoration:underline}
 
 /* Modal */
 .modal-bg{
@@ -409,6 +463,10 @@ button{font-family:inherit}
   <div class="divider"></div>
   <button class="ind-btn" id="ind-add-btn" title="Add indicator (preset / formula / Pine Script)">
     <span class="plus">+</span> Indicator
+  </button>
+  <button class="alerts-btn" id="alerts-btn" title="Manage chart alerts (Telegram DM)">
+    <span class="bell">🔔</span> Alerts
+    <span class="badge zero" id="alerts-badge">0</span>
   </button>
   <div class="pressure" id="pressure">
     <span class="p-dot"></span>
@@ -555,6 +613,85 @@ button{font-family:inherit}
       <div>
         <button class="btn ghost" id="ind-cancel">Cancel</button>
         <button class="btn primary" id="ind-add">Add to chart</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Alerts modal ─────────────────────────────────────────────────── -->
+<div class="modal-bg" id="alerts-modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="alerts-modal-title">
+    <div class="modal-hd">
+      <span id="alerts-modal-title">🔔 Chart alerts</span>
+      <button class="x" id="alerts-modal-close" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body" id="alerts-modal-body">
+      <div id="alerts-loading" style="color:var(--muted);font-size:12px;padding:14px;text-align:center">
+        Loading alerts…
+      </div>
+
+      <!-- Logged-out state -->
+      <div id="alerts-locked" class="alerts-locked" style="display:none">
+        <div style="margin-bottom:6px;font-size:13px;color:var(--text)">Sign in to create alerts</div>
+        Chart alerts are delivered to your Telegram DM.<br>
+        <a href="/login?next=/trade">Log in or sign up →</a>
+      </div>
+
+      <!-- Logged-in state -->
+      <div id="alerts-main" style="display:none">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">
+          <span id="alerts-active-summary">No active alerts</span>
+        </div>
+        <div class="alerts-list" id="alerts-list"></div>
+
+        <div style="border-top:1px solid var(--border);padding-top:10px;margin-top:6px">
+          <div style="font-size:12px;color:var(--text);font-weight:600;margin-bottom:6px">
+            New alert
+          </div>
+          <div class="alerts-form-grid">
+            <label class="half">Symbol</label>
+            <label class="half">Timeframe</label>
+            <select id="alf-symbol">
+              <option value="BTC">BTC</option>
+            </select>
+            <select id="alf-timeframe">
+              <option value="1m">1m</option>
+              <option value="5m" selected>5m</option>
+              <option value="15m">15m</option>
+              <option value="1h">1h</option>
+            </select>
+
+            <label class="half">Type</label>
+            <label class="half">Condition</label>
+            <select id="alf-kind">
+              <option value="price">Price level</option>
+              <option value="rsi">RSI level</option>
+              <option value="ema_cross">Price vs EMA</option>
+              <option value="macd_cross_zero">MACD zero line</option>
+              <option value="supertrend_flip">SuperTrend flip</option>
+            </select>
+            <select id="alf-condition"></select>
+
+            <div id="alf-target-row" style="grid-column:span 2">
+              <label>Target value</label>
+              <input type="number" step="any" id="alf-target" placeholder="e.g. 70000">
+            </div>
+
+            <div id="alf-params-row" style="grid-column:span 2;display:none">
+              <label>Parameters</label>
+              <div id="alf-params"></div>
+            </div>
+          </div>
+
+          <div id="alerts-warn" class="alerts-warn" style="display:none"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <span class="meta" id="alerts-count">—</span>
+      <div>
+        <button class="btn ghost" id="alerts-cancel">Close</button>
+        <button class="btn primary" id="alerts-create" style="display:none">Create alert</button>
       </div>
     </div>
   </div>
@@ -1625,14 +1762,18 @@ button{font-family:inherit}
     indicators.forEach(ind => {
       const chip = document.createElement('div');
       chip.className = 'ind-chip' + (ind.visible ? '' : ' off');
+      const alertable = ['ema','sma','rsi','macd','supertrend'].includes(ind.type);
       chip.innerHTML = `
         <span class="swatch" style="background:${ind.color}"></span>
         <span>${indLabel(ind)}</span>
+        ${alertable ? `<button class="ind-bell" title="Set alert on this indicator">🔔</button>` : ''}
         <button class="ind-tog" title="${ind.visible?'Hide':'Show'}">${ind.visible?'◉':'○'}</button>
         <button class="ind-x" title="Remove">×</button>
       `;
       chip.querySelector('.ind-tog').onclick = () => toggleIndicator(ind.id);
       chip.querySelector('.ind-x').onclick   = () => removeIndicator(ind.id);
+      const bell = chip.querySelector('.ind-bell');
+      if(bell){ bell.onclick = () => openAlertsModalForIndicator(ind); }
       el.appendChild(chip);
     });
     const cnt = $('ind-count');
@@ -1884,18 +2025,290 @@ button{font-family:inherit}
     });
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // ALERTS — server-evaluated chart alerts that DM the user on Telegram
+  // ═══════════════════════════════════════════════════════════════════════
+  const ALERTS_KIND_OPTS = {
+    price:            [['above', 'crosses above'], ['below', 'crosses below']],
+    rsi:              [['crossover', 'crosses above'], ['crossunder', 'crosses below']],
+    ema_cross:        [['crossover', 'price crosses above'], ['crossunder', 'price crosses below']],
+    macd_cross_zero: [['crossover', 'turns positive'], ['crossunder', 'turns negative']],
+    supertrend_flip:  [['flip', 'flips direction']],
+  };
+  const ALERTS_KIND_PARAMS = {
+    price: [],
+    rsi:              [{key:'period', label:'Period', def:14, min:2, max:200, step:1}],
+    ema_cross:        [{key:'period', label:'EMA period', def:50, min:2, max:500, step:1}],
+    macd_cross_zero: [
+      {key:'fast',   label:'Fast', def:12, min:2, max:100, step:1},
+      {key:'slow',   label:'Slow', def:26, min:3, max:200, step:1},
+      {key:'signal', label:'Signal', def:9,  min:2, max:100, step:1},
+    ],
+    supertrend_flip: [
+      {key:'period', label:'Period', def:10, min:2, max:100, step:1},
+      {key:'mult',   label:'Multiplier', def:3, min:0.5, max:20, step:0.5},
+    ],
+  };
+  let _alertsState = null;  // {logged_in, telegram_linked, active_count, max}
+
+  function fmtAlertSummary(a){
+    if(a.kind === 'price'){
+      const dir = (a.condition === 'above' || a.condition === 'crossover') ? '↑' : '↓';
+      return `Price ${dir} $${(a.target||0).toLocaleString()}`;
+    }
+    if(a.kind === 'rsi'){
+      const dir = (a.condition === 'crossover' || a.condition === 'above') ? '↑' : '↓';
+      return `RSI(${a.params.period||14}) ${dir} ${(a.target||0).toFixed(1)}`;
+    }
+    if(a.kind === 'ema_cross'){
+      const dir = a.condition === 'crossover' ? '↑' : '↓';
+      return `Price ${dir} EMA(${a.params.period||50})`;
+    }
+    if(a.kind === 'macd_cross_zero'){
+      const dir = a.condition === 'crossover' ? '↑' : '↓';
+      return `MACD(${a.params.fast||12},${a.params.slow||26}) ${dir} 0`;
+    }
+    if(a.kind === 'supertrend_flip'){
+      return `SuperTrend(${a.params.period||10},${a.params.mult||3}) flips`;
+    }
+    return a.label || a.kind;
+  }
+
+  function renderAlertConditions(){
+    const kind = $('alf-kind').value;
+    const sel = $('alf-condition');
+    sel.innerHTML = '';
+    (ALERTS_KIND_OPTS[kind] || []).forEach(([v, lbl]) => {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = lbl;
+      sel.appendChild(o);
+    });
+    // Show/hide target row based on kind
+    const needsTarget = (kind === 'price' || kind === 'rsi');
+    $('alf-target-row').style.display = needsTarget ? '' : 'none';
+    if(kind === 'rsi'){
+      $('alf-target').placeholder = 'e.g. 70';
+    } else if(kind === 'price'){
+      $('alf-target').placeholder = 'e.g. 70000';
+    }
+    // Build params row
+    const params = ALERTS_KIND_PARAMS[kind] || [];
+    const row = $('alf-params-row');
+    const box = $('alf-params');
+    if(params.length === 0){
+      row.style.display = 'none';
+      box.innerHTML = '';
+    } else {
+      row.style.display = '';
+      box.innerHTML = '';
+      box.style.display = 'grid';
+      box.style.gridTemplateColumns = `repeat(${params.length}, 1fr)`;
+      box.style.gap = '6px';
+      params.forEach(p => {
+        const inp = document.createElement('input');
+        inp.type = 'number'; inp.id = 'alf-p-' + p.key;
+        inp.value = p.def; inp.min = p.min; inp.max = p.max; inp.step = p.step;
+        inp.title = p.label;
+        const wrap = document.createElement('div');
+        const lbl = document.createElement('div');
+        lbl.style.cssText = 'font-size:10px;color:var(--muted);margin-bottom:2px';
+        lbl.textContent = p.label;
+        wrap.appendChild(lbl); wrap.appendChild(inp);
+        box.appendChild(wrap);
+      });
+    }
+  }
+
+  async function loadAlerts(){
+    try{
+      const r = await fetch('/api/trade/alerts/me', {credentials:'same-origin'});
+      const me = await r.json();
+      _alertsState = me;
+      // Update toolbar badge
+      const b = $('alerts-badge');
+      const n = me.active_count || 0;
+      b.textContent = n;
+      b.classList.toggle('zero', n === 0);
+      // If modal is open, refresh contents
+      if($('alerts-modal').classList.contains('open')){
+        await renderAlertsModal();
+      }
+    } catch(e){ /* silent */ }
+  }
+
+  async function renderAlertsModal(){
+    $('alerts-loading').style.display = 'none';
+    if(!_alertsState || !_alertsState.logged_in){
+      $('alerts-locked').style.display = '';
+      $('alerts-main').style.display = 'none';
+      $('alerts-create').style.display = 'none';
+      $('alerts-count').textContent = '';
+      return;
+    }
+    $('alerts-locked').style.display = 'none';
+    $('alerts-main').style.display = '';
+    $('alerts-create').style.display = '';
+    $('alerts-count').textContent = `${_alertsState.active_count}/${_alertsState.max} active`;
+    // Telegram link warning
+    const w = $('alerts-warn');
+    if(!_alertsState.telegram_linked){
+      w.style.display = '';
+      w.innerHTML = 'Heads up: your account is not linked to Telegram. Alerts will fire but DMs can\'t be delivered until you link via the bot. Open <a href="https://t.me/TradeHubMarketsBot" target="_blank" rel="noopener">@TradeHubMarketsBot</a> and send /start to link.';
+    } else {
+      w.style.display = 'none';
+    }
+    // Fetch list
+    try{
+      const r = await fetch('/api/trade/alerts/list', {credentials:'same-origin'});
+      if(!r.ok) throw new Error('failed');
+      const data = await r.json();
+      const list = $('alerts-list');
+      list.innerHTML = '';
+      if(!data.alerts || data.alerts.length === 0){
+        list.innerHTML = '<div class="empty">No alerts yet. Create one below.</div>';
+        $('alerts-active-summary').textContent = 'No active alerts';
+      } else {
+        const active = data.alerts.filter(a => a.status === 'active').length;
+        $('alerts-active-summary').textContent =
+          active ? `${active} active alert${active===1?'':'s'} · evaluated every 30s` : 'No active alerts';
+        data.alerts.forEach(a => {
+          const row = document.createElement('div');
+          row.className = 'alert-row' + (a.status === 'triggered' ? ' triggered' : '');
+          row.innerHTML = `
+            <span class="a-tag">${a.symbol} ${a.timeframe}</span>
+            <span class="a-lbl" title="${(a.label||'').replace(/"/g,'&quot;')}">${fmtAlertSummary(a)}</span>
+            <button class="a-x" data-id="${a.id}">${a.status === 'triggered' ? 'Clear' : 'Cancel'}</button>
+          `;
+          row.querySelector('.a-x').onclick = () => cancelAlert(a.id);
+          list.appendChild(row);
+        });
+      }
+    } catch(e){
+      $('alerts-list').innerHTML = '<div class="empty">Could not load alerts.</div>';
+    }
+  }
+
+  async function cancelAlert(id){
+    try{
+      const r = await fetch(`/api/trade/alerts/${id}/cancel`, {method:'POST', credentials:'same-origin'});
+      if(!r.ok) throw new Error('failed');
+      await loadAlerts();
+    } catch(e){ /* silent */ }
+  }
+
+  async function createAlert(){
+    const btn = $('alerts-create');
+    const kind = $('alf-kind').value;
+    const condition = $('alf-condition').value;
+    const symbol = $('alf-symbol').value;
+    const timeframe = $('alf-timeframe').value;
+    const params = {};
+    (ALERTS_KIND_PARAMS[kind] || []).forEach(p => {
+      const el = $('alf-p-' + p.key);
+      if(el) params[p.key] = parseFloat(el.value);
+    });
+    const body = {kind, condition, symbol, timeframe, params};
+    if(kind === 'price' || kind === 'rsi'){
+      const t = parseFloat($('alf-target').value);
+      if(!isFinite(t)){
+        const w = $('alerts-warn');
+        w.style.display = ''; w.textContent = 'Enter a numeric target.';
+        return;
+      }
+      body.target = t;
+    }
+    btn.disabled = true; btn.textContent = 'Creating…';
+    try{
+      const r = await fetch('/api/trade/alerts/create', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if(!r.ok){
+        const w = $('alerts-warn');
+        w.style.display = ''; w.textContent = data.detail || 'Could not create alert.';
+        return;
+      }
+      // Reset form target only — keep settings
+      $('alf-target').value = '';
+      await loadAlerts();
+    } catch(e){
+      const w = $('alerts-warn');
+      w.style.display = ''; w.textContent = 'Network error.';
+    } finally {
+      btn.disabled = false; btn.textContent = 'Create alert';
+    }
+  }
+
+  function openAlertsModal(){
+    $('alerts-modal').classList.add('open');
+    $('alerts-loading').style.display = '';
+    $('alerts-locked').style.display = 'none';
+    $('alerts-main').style.display = 'none';
+    $('alerts-warn').style.display = 'none';
+    $('alf-timeframe').value = currentTF || '5m';
+    renderAlertConditions();
+    loadAlerts().then(renderAlertsModal);
+  }
+  function closeAlertsModal(){ $('alerts-modal').classList.remove('open'); }
+
+  function openAlertsModalForIndicator(ind){
+    // Map an indicator chip to a sensible alert preset
+    let kind = null, params = {};
+    if(ind.type === 'rsi'){       kind = 'rsi';              params.period = ind.params.period || 14; }
+    else if(ind.type === 'ema' || ind.type === 'sma'){ kind = 'ema_cross'; params.period = ind.params.period || 20; }
+    else if(ind.type === 'macd'){ kind = 'macd_cross_zero';  params.fast = ind.params.fast||12; params.slow=ind.params.slow||26; params.signal=ind.params.signal||9; }
+    else if(ind.type === 'supertrend'){ kind = 'supertrend_flip'; params.period = ind.params.period||10; params.mult = ind.params.mult||3; }
+    if(!kind) return openAlertsModal();
+    openAlertsModal();
+    // After modal opens, seed the form
+    setTimeout(() => {
+      $('alf-kind').value = kind;
+      renderAlertConditions();
+      Object.keys(params).forEach(k => {
+        const el = $('alf-p-' + k);
+        if(el) el.value = params[k];
+      });
+      // Sensible default target for RSI
+      if(kind === 'rsi' && !$('alf-target').value){
+        $('alf-target').value = 70;
+      }
+      // Focus the most important next field
+      const focus = (kind === 'price' || kind === 'rsi') ? $('alf-target') : $('alf-condition');
+      if(focus) focus.focus();
+    }, 30);
+  }
+
+  function wireAlerts(){
+    $('alerts-btn').onclick = openAlertsModal;
+    $('alerts-modal-close').onclick = closeAlertsModal;
+    $('alerts-cancel').onclick = closeAlertsModal;
+    $('alerts-modal').addEventListener('click', e => { if(e.target === $('alerts-modal')) closeAlertsModal(); });
+    $('alf-kind').onchange = renderAlertConditions;
+    $('alerts-create').onclick = createAlert;
+    document.addEventListener('keydown', e => {
+      if(!$('alerts-modal').classList.contains('open')) return;
+      if(e.key === 'Escape'){ e.preventDefault(); closeAlertsModal(); }
+    });
+    renderAlertConditions();
+  }
+
   // ───── Init + polling ─────
   initChart();
   wireModal();
+  wireAlerts();
   loadStored();
   loadCandlesFull();
   loadWalls();
   tickPrice();
   pollTape(true);
+  loadAlerts();
   setInterval(tickPrice, 2_000);
   setInterval(tickCandles, 3_000);
   setInterval(loadWalls, 30_000);
   setInterval(pollTape, 2_000);
+  setInterval(loadAlerts, 45_000);
 
   document.addEventListener('visibilitychange', () => {
     if(!document.hidden){ tickPrice(); tickCandles(); pollTape(); }
