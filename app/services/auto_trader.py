@@ -191,16 +191,24 @@ def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optiona
     # an indicator spec or via the chart's FVG toggle), that's an explicit
     # signal preference, so it wins over MAs/MACD/etc. Indicator-level params
     # take precedence over toggle defaults.
-    # Defaults match the frontend overlay fetch (max_age_bars=200) so what the
-    # user SEES on the chart is what FIRES the rule.
+    # Defaults match the frontend overlay fetch (max_age_bars=200,
+    # min_gap_atr_mult=0.10, disp_atr_mult=0.5) so what the user SEES on the
+    # chart is what FIRES the rule.
     if fvg_ind or toggles.get("fvg"):
         fp = (fvg_ind or {}).get("params") or {}
-        min_gap_pct  = float(fp.get("min_gap_pct", 0.05) or 0.05)
-        max_age_bars = int(fp.get("max_age_bars", 200) or 200)
+        min_gap_pct      = float(fp.get("min_gap_pct", 0.0) or 0.0)
+        min_gap_atr_mult = float(fp.get("min_gap_atr_mult", 0.10) or 0.10)
+        disp_atr_mult    = float(fp.get("disp_atr_mult", 0.5) or 0.5)
+        max_age_bars     = int(fp.get("max_age_bars", 200) or 200)
         rules = {
             "entry": {
                 "kind": "fvg_retest",
-                "params": {"min_gap_pct": min_gap_pct, "max_age_bars": max_age_bars},
+                "params": {
+                    "min_gap_pct":      min_gap_pct,
+                    "min_gap_atr_mult": min_gap_atr_mult,
+                    "disp_atr_mult":    disp_atr_mult,
+                    "max_age_bars":     max_age_bars,
+                },
                 "side": "either",
             },
         }
@@ -333,7 +341,10 @@ def _last_two_supertrend(candles: List[dict], period: int, mult: float) -> Tuple
 
 # ─── Fair-value-gap (FVG) detection ───────────────────────────────────────────
 def detect_fvgs(candles: List[dict], *,
-                min_gap_pct: float = 0.05,
+                min_gap_pct: float = 0.0,
+                min_gap_atr_mult: float = 0.0,
+                disp_atr_mult: float = 0.0,
+                atr_period: int = 14,
                 only_unfilled: bool = True,
                 max_age_bars: int = 200,
                 max_results: int = 30) -> List[Dict[str, Any]]:
@@ -345,15 +356,17 @@ def detect_fvgs(candles: List[dict], *,
     pocket. Bearish FVG is the mirror: ``candles[i-1].low > candles[i+1].high``
     creates a supply/resistance pocket at ``[candles[i+1].high, candles[i-1].low]``.
 
-    Args:
-        candles:      OHLCV dicts in chronological order (oldest first).
-        min_gap_pct:  Discard micro-gaps below this % of the bar's mid price.
-        only_unfilled: If True, drop gaps that any subsequent candle has
-                       traded through (the classic "filled" definition).
-        max_age_bars: Ignore gaps older than this many bars from the latest
-                       candle — old un-mitigated gaps still matter, but the
-                       chart only has so much room.
-        max_results:  Cap on returned gaps. Newest first.
+    Quality filters (any can be disabled by setting to 0):
+
+        * ``min_gap_pct``      — drop gaps narrower than this % of mid price.
+        * ``min_gap_atr_mult`` — drop gaps narrower than this × ATR. ATR-based
+                                 gating is volatility-aware so the same setting
+                                 surfaces meaningful gaps across regimes,
+                                 timeframes, and symbols.
+        * ``disp_atr_mult``    — require the formation (middle) candle's body
+                                 to be ≥ this × ATR. This is the ICT
+                                 "displacement" filter — a real FVG forms
+                                 inside a strong expansion bar, not a doji.
 
     Returns a list of dicts with fields::
         index    : int   — bar index where the gap formed (the middle bar).
@@ -361,22 +374,35 @@ def detect_fvgs(candles: List[dict], *,
         side     : str   — "bull" or "bear".
         top      : float — upper price boundary of the gap.
         bottom   : float — lower price boundary of the gap.
+        mid      : float — 50% / consequent-encroachment price (ICT CE).
         size_pct : float — width / mid_price * 100.
+        size_atr : float — width / ATR (volatility-normalised size).
         filled   : bool  — True if a later candle traded inside the zone.
         filled_at: int|None — UTC seconds of the candle that filled it.
         age_bars : int   — bars between formation and the latest candle.
     """
     if not candles or len(candles) < 3:
         return []
+
+    # Compute ATR up-front when any ATR-aware filter or size_atr is needed.
+    needs_atr = (min_gap_atr_mult > 0) or (disp_atr_mult > 0)
+    atr = _atr(candles, atr_period) if needs_atr else None
+    # If ATR couldn't be computed (not enough bars), disable ATR filters
+    # gracefully rather than rejecting every gap.
+    if needs_atr and (atr is None or atr <= 0):
+        atr = None
+
     out: List[Dict[str, Any]] = []
     n = len(candles)
     start = max(1, n - max_age_bars)
     for i in range(start, n - 1):
+        mid_c  = candles[i]
         prev_c = candles[i - 1]
         next_c = candles[i + 1]
         try:
             ph, pl = float(prev_c["high"]), float(prev_c["low"])
             nh, nl = float(next_c["high"]), float(next_c["low"])
+            mo, mc = float(mid_c["open"]),  float(mid_c["close"])
         except (KeyError, TypeError, ValueError):
             continue
 
@@ -389,12 +415,27 @@ def detect_fvgs(candles: List[dict], *,
         if side is None:
             continue
 
-        mid = (top + bottom) / 2.0
-        if mid <= 0:
+        gap_mid = (top + bottom) / 2.0
+        if gap_mid <= 0:
             continue
-        size_pct = (top - bottom) / mid * 100.0
-        if size_pct < min_gap_pct:
+        width    = top - bottom
+        size_pct = width / gap_mid * 100.0
+
+        # Width filter (% of price)
+        if min_gap_pct > 0 and size_pct < min_gap_pct:
             continue
+
+        # Width filter (× ATR) — only applied when ATR is available.
+        size_atr = (width / atr) if atr else 0.0
+        if atr and min_gap_atr_mult > 0 and size_atr < min_gap_atr_mult:
+            continue
+
+        # ICT displacement filter — formation candle must be a real expansion
+        # bar, not a doji that happened to leave a gap on either side.
+        if atr and disp_atr_mult > 0:
+            disp = abs(mc - mo)
+            if disp < disp_atr_mult * atr:
+                continue
 
         # Walk forward to determine fill status. A fill = any candle whose
         # range overlaps the gap. (Strict ICT definition uses "fully closed
@@ -418,11 +459,13 @@ def detect_fvgs(candles: List[dict], *,
 
         out.append({
             "index":     i,
-            "time":      int(candles[i].get("time") or 0),
+            "time":      int(mid_c.get("time") or 0),
             "side":      side,
             "top":       round(top, 8),
             "bottom":    round(bottom, 8),
+            "mid":       round(gap_mid, 8),
             "size_pct":  round(size_pct, 3),
+            "size_atr":  round(size_atr, 3),
             "filled":    filled,
             "filled_at": filled_at,
             "age_bars":  (n - 1) - i,
@@ -434,13 +477,19 @@ def detect_fvgs(candles: List[dict], *,
 
 
 def _fvg_retest_signal(candles: List[dict], *,
-                       min_gap_pct: float = 0.05,
+                       min_gap_pct: float = 0.0,
+                       min_gap_atr_mult: float = 0.10,
+                       disp_atr_mult: float = 0.5,
                        max_age_bars: int = 200) -> Tuple[Optional[str], str]:
     """Return ('long'|'short'|None, note) when the current bar retests an
     active FVG. Used by evaluate_rules + the AI Read summariser.
 
     Long  = current bar's low dips into an unfilled BULL FVG below price.
     Short = current bar's high pierces an unfilled BEAR FVG above price.
+
+    The detector defaults apply the same volatility-aware width filter and
+    ICT displacement filter the chart overlay uses, so what fires the rule
+    matches what the user sees on screen.
     """
     if not candles or len(candles) < 4:
         return None, ""
@@ -455,6 +504,8 @@ def _fvg_retest_signal(candles: List[dict], *,
     # Look at gaps formed BEFORE the current bar (no lookahead).
     gaps = detect_fvgs(candles[:-1],
                        min_gap_pct=min_gap_pct,
+                       min_gap_atr_mult=min_gap_atr_mult,
+                       disp_atr_mult=disp_atr_mult,
                        only_unfilled=True,
                        max_age_bars=max_age_bars,
                        max_results=20)
@@ -567,12 +618,23 @@ def evaluate_rules(rules: Dict[str, Any], candles: List[dict],
     elif kind == "fvg_retest":
         # ICT-style entry: open a trade only when the current bar wicks back
         # into an unfilled fair-value gap. The gap acts as support (long) or
-        # resistance (short). Default max_age_bars matches the chart overlay
-        # fetch so the visible zones are the eligible ones.
+        # resistance (short). Defaults match the chart overlay fetch so the
+        # visible zones are the eligible ones.
+        # Back-compat: legacy strategies (saved before ATR/displacement
+        # filters existed) only had `min_gap_pct` + `max_age_bars`. If the
+        # new ATR keys are absent we treat the spec as legacy and disable
+        # the new filters so old strategies don't silently get tightened.
+        is_legacy = ("min_gap_pct" in (p or {})
+                     and "min_gap_atr_mult" not in (p or {}))
+        default_atr_mult  = 0.0 if is_legacy else 0.10
+        default_disp_mult = 0.0 if is_legacy else 0.5
+        default_max_age   = 100 if is_legacy else 200
         side, note = _fvg_retest_signal(
             candles,
-            min_gap_pct=float(p.get("min_gap_pct", 0.05) or 0.05),
-            max_age_bars=int(p.get("max_age_bars", 200) or 200),
+            min_gap_pct=float(p.get("min_gap_pct", 0.05 if is_legacy else 0.0) or 0.0),
+            min_gap_atr_mult=float(p.get("min_gap_atr_mult", default_atr_mult) or 0.0),
+            disp_atr_mult=float(p.get("disp_atr_mult", default_disp_mult) or 0.0),
+            max_age_bars=int(p.get("max_age_bars", default_max_age) or default_max_age),
         )
         if side is None:
             return None

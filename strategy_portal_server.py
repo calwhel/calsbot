@@ -3018,7 +3018,9 @@ _FVG_TTL = 25  # seconds
 
 @app.get("/api/trade/fvg/{symbol}")
 async def trade_fvg(symbol: str, tf: str = "5m",
-                    min_gap_pct: float = 0.05,
+                    min_gap_pct: float = 0.0,
+                    min_gap_atr_mult: float = 0.10,
+                    disp_atr_mult: float = 0.5,
                     max_age_bars: int = 200,
                     only_unfilled: int = 1,
                     limit: int = 30):
@@ -3027,6 +3029,14 @@ async def trade_fvg(symbol: str, tf: str = "5m",
     Gaps are ICT-style 3-bar formations and are computed live from the same
     MEXC candles the chart renders. ``only_unfilled=1`` (the default) hides
     any gap a later candle has already traded through.
+
+    Quality filters (default ON):
+      * ``min_gap_atr_mult`` — width must be ≥ this × ATR(14). Volatility-aware,
+        so a single setting works across symbols + timeframes.
+      * ``disp_atr_mult`` — formation candle body must be ≥ this × ATR(14).
+        ICT "displacement" filter — keeps strong-expansion gaps, rejects dojis.
+      * ``min_gap_pct`` — legacy fixed % filter; default 0 (off) since the
+        ATR filters handle width quality.
     """
     sym = (symbol or "").upper()
     if sym not in TRADE_SYMBOL_WHITELIST:
@@ -3036,12 +3046,17 @@ async def trade_fvg(symbol: str, tf: str = "5m",
         return JSONResponse({"error": f"bad tf {tf}"}, status_code=400)
 
     # Clamp inputs.
-    min_gap_pct  = max(0.0, min(5.0, float(min_gap_pct or 0.0)))
-    max_age_bars = max(10, min(500, int(max_age_bars or 200)))
-    limit        = max(1,  min(100, int(limit or 30)))
-    only_unfilled = bool(only_unfilled)
+    min_gap_pct      = max(0.0, min(5.0, float(min_gap_pct or 0.0)))
+    min_gap_atr_mult = max(0.0, min(5.0, float(min_gap_atr_mult or 0.0)))
+    disp_atr_mult    = max(0.0, min(5.0, float(disp_atr_mult or 0.0)))
+    max_age_bars     = max(10, min(500, int(max_age_bars or 200)))
+    limit            = max(1,  min(100, int(limit or 30)))
+    only_unfilled    = bool(only_unfilled)
 
-    cache_key = f"trade_fvg_{pair}_{tf}_{min_gap_pct}_{max_age_bars}_{int(only_unfilled)}_{limit}"
+    cache_key = (
+        f"trade_fvg_{pair}_{tf}_{min_gap_pct}_{min_gap_atr_mult}_"
+        f"{disp_atr_mult}_{max_age_bars}_{int(only_unfilled)}_{limit}"
+    )
     hit = _CACHE.get(cache_key)
     if hit and hit[1] > time.time():
         return hit[0]
@@ -3086,6 +3101,8 @@ async def trade_fvg(symbol: str, tf: str = "5m",
         gaps = detect_fvgs(
             candles,
             min_gap_pct=min_gap_pct,
+            min_gap_atr_mult=min_gap_atr_mult,
+            disp_atr_mult=disp_atr_mult,
             only_unfilled=only_unfilled,
             max_age_bars=max_age_bars,
             max_results=limit,

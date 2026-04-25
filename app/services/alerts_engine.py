@@ -295,10 +295,23 @@ def _eval_alert(alert, candles: List[dict]) -> Optional[Tuple[float, str]]:
             logger.warning(f"alerts_engine: fvg_retest import failed: {e}")
             return None
         wanted = "long" if cond == "bull" else "short"
+        # Back-compat: legacy alerts (created before the ATR/displacement
+        # filters existed) only had `min_gap_pct` + `max_age_bars`. If the
+        # new ATR keys are absent we treat it as a legacy spec and DISABLE
+        # the new filters so an old alert keeps firing the way the user
+        # originally configured it. New alerts (saved with the new keys)
+        # get the volatility-aware quality filtering by default.
+        is_legacy = ("min_gap_pct" in (params or {})
+                     and "min_gap_atr_mult" not in (params or {}))
+        default_atr_mult  = 0.0 if is_legacy else 0.10
+        default_disp_mult = 0.0 if is_legacy else 0.5
+        default_max_age   = 100 if is_legacy else 200
         side, note = _fvg_retest_signal(
             candles,
-            min_gap_pct=float(params.get("min_gap_pct", 0.05) or 0.05),
-            max_age_bars=int(params.get("max_age_bars", 100) or 100),
+            min_gap_pct=float(params.get("min_gap_pct", 0.05 if is_legacy else 0.0) or 0.0),
+            min_gap_atr_mult=float(params.get("min_gap_atr_mult", default_atr_mult) or 0.0),
+            disp_atr_mult=float(params.get("disp_atr_mult", default_disp_mult) or 0.0),
+            max_age_bars=int(params.get("max_age_bars", default_max_age) or default_max_age),
         )
         # `cur` doubles as the bar timestamp so a future re-eval has SOMETHING
         # to compare to. Alerts auto-flip to "triggered" on first fire so this

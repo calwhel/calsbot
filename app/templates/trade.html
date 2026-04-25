@@ -81,6 +81,7 @@ button{font-family:inherit}
 .tf-btn:hover{color:var(--text);background:var(--panel2)}
 .tf-btn.active{background:var(--panel2);color:var(--text)}
 .toggle-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2)}
+.fvg-count{font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:600;color:#888;padding:1px 6px;border-radius:8px;background:rgba(255,255,255,0.05);min-width:34px;text-align:center}
 .toggle{position:relative;display:inline-block;width:32px;height:18px}
 .toggle input{opacity:0;width:0;height:0}
 .toggle-slider{position:absolute;cursor:pointer;inset:0;background:var(--panel2);border:1px solid var(--border2);border-radius:18px;transition:.15s}
@@ -584,7 +585,8 @@ button{font-family:inherit}
   </div>
   <div class="toggle-row">
     <label class="toggle"><input type="checkbox" id="fvg-toggle"><span class="toggle-slider"></span></label>
-    <span title="Fair Value Gaps — ICT 3-candle imbalance zones. Bull (green) = unfilled support; Bear (red) = unfilled resistance.">FVG zones</span>
+    <span title="Fair Value Gaps — ICT 3-candle imbalance zones. Bull (green) = unfilled support; Bear (red) = unfilled resistance. Filtered to displacement gaps ≥ 0.10 × ATR.">FVG zones</span>
+    <span id="fvg-count" class="fvg-count" title="Unfilled FVGs in view (bull / bear)">—</span>
   </div>
   <div class="divider"></div>
   <button class="ind-btn" id="ind-add-btn" title="Add indicator (preset / formula / Pine Script)">
@@ -1474,12 +1476,17 @@ button{font-family:inherit}
 
     // ── PASS 3: Fair Value Gaps (ICT 3-candle imbalance bands) ──
     // Drawn AFTER walls so an unfilled FVG is visible even when it overlaps
-    // a wall. Bull = green (demand), Bear = red (supply). Each band gets a
-    // small left-edge label so multiple gaps stay legible.
+    // a wall. Bull = green (demand), Bear = red (supply). Bands are anchored
+    // to the formation candle (not full chart width) so they look like proper
+    // ICT zones and don't repaint history.
     if($('fvg-toggle')?.checked && lastFvgData && Array.isArray(lastFvgData.gaps)){
       const gaps = lastFvgData.gaps;
-      // Sort small→big so the largest gaps paint on top.
-      const sorted = gaps.slice().sort((a,b) => (a.size_pct||0) - (b.size_pct||0));
+      // Sort small→big so the largest gaps paint on top (better visibility
+      // when multiple gaps overlap).
+      const sorted = gaps.slice().sort(
+        (a,b) => (a.size_atr || a.size_pct || 0) - (b.size_atr || b.size_pct || 0)
+      );
+      const ts = chart.timeScale();
       sorted.forEach(g => {
         const yTop = candleSeries.priceToCoordinate(g.top);
         const yBot = candleSeries.priceToCoordinate(g.bottom);
@@ -1488,34 +1495,73 @@ button{font-family:inherit}
         if(bot < 0 || top > hpx) return;
         top = Math.max(0, top);
         bot = Math.min(hpx, bot);
-        const bandH = bot - top;
-        if(bandH < 1) return;
+        let bandH = bot - top;
+        // Visibility floor: even sub-pixel gaps deserve a visible band.
+        if(bandH < 2){ bandH = 2; }
+
+        // Right-anchored: start at the formation candle's x-coord (or left
+        // edge if it's been scrolled off), extend to the chart's right edge.
+        let xStart = 0;
+        try {
+          const x = (g.time != null) ? ts.timeToCoordinate(g.time) : null;
+          if(typeof x === 'number' && isFinite(x)) xStart = Math.max(0, x);
+        } catch(_){}
+        const xEnd = wpx;
+        const bandW = Math.max(1, xEnd - xStart);
 
         const isBull = g.side === 'bull';
-        // Larger gaps → stronger fill. Cap so colossal gaps don't blow out.
-        const sizeAlpha = Math.min(0.28, 0.10 + (g.size_pct || 0) * 0.04);
+        // Quality-weighted opacity. size_atr is the volatility-normalised
+        // width, so it's a fair quality score across symbols/TFs. Cap so
+        // huge gaps don't blow out the chart. Floor pushed up so users
+        // actually SEE the zones on a dark theme.
+        const q = Math.max(0, Math.min(1.5, (g.size_atr || 0)));
+        const sizeAlpha = Math.min(0.42, 0.22 + q * 0.13);
         const fill   = isBull ? `rgba(38,166,154,${sizeAlpha})`
                               : `rgba(239,83,80,${sizeAlpha})`;
-        const stroke = isBull ? `rgba(38,166,154,0.85)`
-                              : `rgba(239,83,80,0.85)`;
+        const stroke = isBull ? `rgba(38,166,154,0.92)`
+                              : `rgba(239,83,80,0.92)`;
 
         zCtx.fillStyle = fill;
-        zCtx.fillRect(0, top, wpx, bandH);
+        zCtx.fillRect(xStart, top, bandW, bandH);
 
         if(bandH >= 2){
           zCtx.strokeStyle = stroke;
           zCtx.lineWidth = 0.85;
           zCtx.setLineDash([4, 3]);
           zCtx.beginPath();
-          zCtx.moveTo(0, top + 0.5); zCtx.lineTo(wpx, top + 0.5);
-          zCtx.moveTo(0, bot - 0.5); zCtx.lineTo(wpx, bot - 0.5);
+          zCtx.moveTo(xStart, top + 0.5); zCtx.lineTo(xEnd, top + 0.5);
+          zCtx.moveTo(xStart, bot - 0.5); zCtx.lineTo(xEnd, bot - 0.5);
           zCtx.stroke();
           zCtx.setLineDash([]);
         }
 
-        // Left-edge label so price-axis pills (walls) don't fight for space.
+        // ICT consequent-encroachment (CE) — the 50% midline. Most FVGs
+        // only mitigate to 50% before continuing; a touch of CE with no
+        // close-through is the highest-probability reaction zone.
+        if(bandH >= 6){
+          const yMid = candleSeries.priceToCoordinate(g.mid != null
+                                                      ? g.mid
+                                                      : (g.top + g.bottom) / 2);
+          if(typeof yMid === 'number' && yMid >= 0 && yMid <= hpx){
+            zCtx.strokeStyle = isBull ? 'rgba(38,166,154,0.55)'
+                                       : 'rgba(239,83,80,0.55)';
+            zCtx.lineWidth = 0.6;
+            zCtx.setLineDash([2, 4]);
+            zCtx.beginPath();
+            zCtx.moveTo(xStart, yMid); zCtx.lineTo(xEnd, yMid);
+            zCtx.stroke();
+            zCtx.setLineDash([]);
+          }
+        }
+
+        // Left-edge label sits at the band start (formation candle), so
+        // multiple gaps don't stack on top of each other and the user
+        // can see exactly which candle produced the imbalance.
         const fontPx = bandH >= 14 ? 10 : 9;
-        const label = `${isBull ? 'BULL' : 'BEAR'} FVG · ${(g.size_pct||0).toFixed(2)}%`;
+        const sizeStr = (g.size_atr && g.size_atr > 0)
+                        ? `${g.size_atr.toFixed(2)}×ATR`
+                        : `${(g.size_pct||0).toFixed(2)}%`;
+        const label = `${isBull ? 'BULL' : 'BEAR'} FVG · ${sizeStr}`;
         zCtx.font = `600 ${fontPx}px JetBrains Mono, monospace`;
         zCtx.textAlign = 'left';
         zCtx.textBaseline = 'middle';
@@ -1525,7 +1571,12 @@ button{font-family:inherit}
         const pillW = tw + padX * 2;
         const cy = (top + bot) / 2;
         const pillY = Math.max(pillH/2 + 1, Math.min(hpx - pillH/2 - 1, cy));
-        const x0 = 4, y0 = pillY - pillH/2, x1 = x0 + pillW, y1 = pillY + pillH/2;
+        // Anchor the label pill to the formation candle (xStart), with a
+        // small inset so it doesn't touch the band edge.
+        const x0 = Math.max(2, xStart + 4);
+        const y0 = pillY - pillH/2;
+        const x1 = x0 + pillW;
+        const y1 = pillY + pillH/2;
         zCtx.fillStyle = isBull ? 'rgba(38,166,154,0.92)'
                                  : 'rgba(239,83,80,0.92)';
         zCtx.beginPath();
@@ -2011,8 +2062,10 @@ button{font-family:inherit}
   $('fvg-toggle').addEventListener('change', () => {
     zonesDirty = true;
     // Toggling FVG ON triggers an immediate fetch so the user sees zones
-    // without waiting for the 30 s poll tick.
-    if($('fvg-toggle').checked && typeof refreshFvg === 'function'){ refreshFvg(); }
+    // without waiting for the 30 s poll tick. The badge updates inside
+    // refreshFvg either way (off path also clears it).
+    if(typeof refreshFvg === 'function'){ refreshFvg(); }
+    if(typeof updateFvgBadge === 'function'){ updateFvgBadge(); }
   });
   $('tape-toggle').addEventListener('change', () => {
     if(!$('tape-toggle').checked){
@@ -4850,24 +4903,44 @@ button{font-family:inherit}
   let lastFvgData = null;     // { symbol, tf, gaps:[...] } from /api/trade/fvg
   let _fvgTimer = null;
   let _fvgInflight = false;
+  function updateFvgBadge(){
+    const el = $('fvg-count');
+    if(!el) return;
+    if(!$('fvg-toggle')?.checked){ el.textContent = '—'; el.style.color = ''; return; }
+    if(!lastFvgData || !Array.isArray(lastFvgData.gaps)){
+      el.textContent = '…'; el.style.color = ''; return;
+    }
+    const gaps = lastFvgData.gaps;
+    const nb = gaps.filter(g => g.side === 'bull').length;
+    const ns = gaps.filter(g => g.side === 'bear').length;
+    el.textContent = `${nb}↑ ${ns}↓`;
+    el.style.color = (nb + ns) === 0 ? '#888' : '#cfd2d6';
+  }
   async function refreshFvg(){
     if(_fvgInflight) return;
     if(!$('fvg-toggle')?.checked){
       // Toggle off → drop cached data + repaint so old bands disappear.
       if(lastFvgData){ lastFvgData = null; zonesDirty = true; }
+      updateFvgBadge();
       return;
     }
     _fvgInflight = true;
     try {
       const sym = (typeof SYMBOL !== 'undefined' && SYMBOL) || 'BTC';
       const tf  = currentTF || '5m';
-      const r = await fetch(`/api/trade/fvg/${encodeURIComponent(sym)}?tf=${encodeURIComponent(tf)}&limit=20&max_age_bars=200`);
+      // ATR-relative width + ICT displacement filter — keeps the chart from
+      // being spammed with micro-gaps and matches the rule/alert defaults.
+      const url = `/api/trade/fvg/${encodeURIComponent(sym)}?tf=${encodeURIComponent(tf)}`
+                + `&limit=30&max_age_bars=200`
+                + `&min_gap_atr_mult=0.10&disp_atr_mult=0.5`;
+      const r = await fetch(url);
       if(!r.ok) return;
       const d = await r.json();
       // Discard a stale response if the user switched timeframes mid-flight.
       if(d && d.tf && d.tf !== currentTF) return;
       lastFvgData = d;
       zonesDirty = true;
+      updateFvgBadge();
     } catch(_){ /* silent */ }
     finally { _fvgInflight = false; }
   }
