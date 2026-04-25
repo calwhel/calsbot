@@ -516,12 +516,35 @@ button{font-family:inherit}
     <span class="brand-mark">TH</span>
     <span>TradeHub</span>
   </a>
-  <div class="tbar-r">
+  <div class="tbar-r" id="tbar-r">
     <a href="/" class="tb-link">Home</a>
-    <a href="/login?next=/trade" class="tb-link">Log in</a>
-    <a href="/login?next=/trade" class="tb-cta">Get started</a>
+    <span id="tbar-auth-anon" style="display:contents">
+      <a href="/login?next=/trade" class="tb-link">Log in</a>
+      <a href="/login?next=/trade" class="tb-cta">Get started</a>
+    </span>
+    <span id="tbar-auth-user" style="display:none">
+      <a href="/app" class="tb-link" id="tb-me" title="Open dashboard">—</a>
+      <a href="/logout" class="tb-link">Sign out</a>
+    </span>
   </div>
 </div>
+<script>
+  // Auth-aware top bar: probe /api/me once on load and swap nav state.
+  (function(){
+    fetch('/api/me', {credentials:'same-origin', cache:'no-store'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(me){
+        if (!me || !me.logged_in) return;
+        var anon = document.getElementById('tbar-auth-anon');
+        var user = document.getElementById('tbar-auth-user');
+        var label = document.getElementById('tb-me');
+        if (anon) anon.style.display = 'none';
+        if (user) user.style.display = 'contents';
+        if (label) label.textContent = me.display || me.uid || 'Account';
+      })
+      .catch(function(){ /* stay anonymous on error */ });
+  })();
+</script>
 
 <div class="sbar">
   <div class="sym">

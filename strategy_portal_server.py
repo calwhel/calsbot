@@ -374,6 +374,7 @@ async def _send_otp_via_telegram(telegram_id: str, otp: str, name: str):
 
 def _ensure_tables():
     import sqlalchemy as sa
+    import time as _time
     from app.database import Base
     # Make sure new model classes are imported BEFORE create_all so their
     # tables are registered with the metadata.
@@ -381,24 +382,69 @@ def _ensure_tables():
         IndicatorAlert, TradeIndicatorSetup,
         AutoTradeStrategy, AutoTradePaperTrade,
     )
-    init_strategy_tables(engine)
-    init_marketplace_ext_tables(engine)
-    init_social_tables(engine)
+
+    # Each legacy initializer runs in its own try/except so an error in one
+    # cannot prevent the create_all calls below from running.
+    for label, fn in (
+        ("init_strategy_tables", init_strategy_tables),
+        ("init_marketplace_ext_tables", init_marketplace_ext_tables),
+        ("init_social_tables", init_social_tables),
+    ):
+        try:
+            fn(engine)
+        except Exception as e:
+            logger.error(f"_ensure_tables({label}): {e}", exc_info=True)
+
+    def _create_with_retry(label: str, tables: list, attempts: int = 3) -> bool:
+        """Idempotent CREATE TABLE IF NOT EXISTS with retry for transient errors
+        (Neon connection drops, multi-worker startup races, etc.)."""
+        last_err = None
+        for i in range(1, attempts + 1):
+            try:
+                Base.metadata.create_all(bind=engine, tables=tables)
+                return True
+            except Exception as e:
+                last_err = e
+                logger.warning(
+                    f"_ensure_tables({label}) attempt {i}/{attempts}: {type(e).__name__}: {e}"
+                )
+                if i < attempts:
+                    _time.sleep(0.7 * i)
+        logger.error(f"_ensure_tables({label}) FAILED after {attempts} attempts: {last_err}")
+        return False
+
+    _create_with_retry("IndicatorAlert", [IndicatorAlert.__table__])
+    _create_with_retry("TradeIndicatorSetup", [TradeIndicatorSetup.__table__])
+    _create_with_retry("AutoTrade*", [
+        AutoTradeStrategy.__table__,
+        AutoTradePaperTrade.__table__,
+    ])
+
+    # Verification — query pg_tables for the names we expect and shout loudly
+    # if any are still missing so we never silently end up with broken save APIs.
     try:
-        Base.metadata.create_all(bind=engine, tables=[IndicatorAlert.__table__])
+        expected = {
+            "indicator_alerts", "trade_indicator_setups",
+            "auto_trade_strategies", "auto_trade_paper_trades",
+        }
+        with engine.connect() as conn:
+            present = {
+                row[0] for row in conn.execute(sa.text(
+                    "SELECT tablename FROM pg_tables WHERE schemaname='public' "
+                    "AND tablename = ANY(:names)"
+                ), {"names": list(expected)})
+            }
+        missing = expected - present
+        if missing:
+            logger.error(
+                f"_ensure_tables VERIFICATION FAILED — tables still missing after "
+                f"create_all: {sorted(missing)}. Save endpoints WILL 500 until this "
+                f"is resolved."
+            )
+        else:
+            logger.info(f"_ensure_tables: all expected tables present ({len(expected)})")
     except Exception as e:
-        logger.warning(f"_ensure_tables(IndicatorAlert): {e}")
-    try:
-        Base.metadata.create_all(bind=engine, tables=[TradeIndicatorSetup.__table__])
-    except Exception as e:
-        logger.warning(f"_ensure_tables(TradeIndicatorSetup): {e}")
-    try:
-        Base.metadata.create_all(bind=engine, tables=[
-            AutoTradeStrategy.__table__,
-            AutoTradePaperTrade.__table__,
-        ])
-    except Exception as e:
-        logger.warning(f"_ensure_tables(AutoTrade*): {e}")
+        logger.error(f"_ensure_tables verification step error: {e}")
     # Only ALTER if column is genuinely missing — avoids table locks when both
     # dev and production portals start against the same shared Neon database.
     needed = {
@@ -1465,6 +1511,30 @@ _TRADE_TF_MAP = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "60m"}  # MEXC uses
 async def trade_page(request: Request):
     """Public day-trading page — live BTC chart + order block overlays."""
     return FileResponse("app/templates/trade.html", media_type="text/html")
+
+
+@app.get("/api/me")
+async def api_me(request: Request, db: Session = Depends(get_db)):
+    """Lightweight session probe for client-side UI swaps (auth-aware nav, etc.).
+
+    Always returns 200 — anonymous visitors get {"logged_in": false}.
+    Never cached so per-user state can't leak across sessions via intermediaries.
+    """
+    no_cache = {"Cache-Control": "private, no-store", "Pragma": "no-cache"}
+    uid = _get_session_uid(request)
+    if not uid:
+        return JSONResponse({"logged_in": False}, headers=no_cache)
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        return JSONResponse({"logged_in": False}, headers=no_cache)
+    display = (user.username or user.first_name or user.uid or "").strip() or user.uid
+    return JSONResponse({
+        "logged_in": True,
+        "uid": user.uid,
+        "username": user.username,
+        "first_name": user.first_name,
+        "display": display,
+    }, headers=no_cache)
 
 
 @app.get("/api/walls/{symbol}")
