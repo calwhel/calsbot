@@ -799,6 +799,15 @@ button{font-family:inherit}
           <div style="font-size:12px;color:var(--text);font-weight:600;margin-bottom:6px">
             New alert
           </div>
+
+          <!-- Quick alert templates (E) -->
+          <div style="margin-bottom:8px">
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:3px">Quick template</label>
+            <select id="alf-template" style="width:100%;padding:6px 8px;background:var(--panel2);border:1px solid var(--border);border-radius:3px;color:var(--text);font-family:var(--mono);font-size:12px">
+              <option value="">— pick a template (optional) —</option>
+            </select>
+          </div>
+
           <div class="alerts-form-grid">
             <label class="half">Symbol</label>
             <label class="half">Timeframe</label>
@@ -1018,6 +1027,136 @@ button{font-family:inherit}
             </label>
           </div>
 
+          <!-- Risk & guardrails — collapsible -->
+          <details style="margin-bottom:10px;background:var(--panel2);border:1px solid var(--border);border-radius:3px">
+            <summary style="cursor:pointer;padding:8px 10px;font-size:12px;color:var(--text);font-weight:600">
+              Risk caps &amp; guardrails <span style="color:var(--muted);font-weight:400;font-size:11px">— optional, recommended</span>
+            </summary>
+            <div style="padding:10px 12px;border-top:1px solid var(--border)">
+              <div class="alerts-form-grid">
+                <label class="half">Max concurrent open</label>
+                <label class="half">Daily loss limit ($)</label>
+                <input type="number" id="auto-max-concurrent" value="1" min="1" max="5" step="1">
+                <input type="number" id="auto-daily-loss-limit" value="0" min="0" step="10" placeholder="0 = no cap">
+              </div>
+              <div style="font-size:10.5px;color:var(--muted);line-height:1.4;margin-top:6px">
+                When the daily P&amp;L hits the loss cap, the bot stops opening new trades until UTC midnight.
+              </div>
+            </div>
+          </details>
+
+          <!-- Auto sizing -->
+          <details style="margin-bottom:10px;background:var(--panel2);border:1px solid var(--border);border-radius:3px">
+            <summary style="cursor:pointer;padding:8px 10px;font-size:12px;color:var(--text);font-weight:600">
+              Auto position sizing <span style="color:var(--muted);font-weight:400;font-size:11px">— size each trade by risk %</span>
+            </summary>
+            <div style="padding:10px 12px;border-top:1px solid var(--border)">
+              <div class="alerts-form-grid" style="margin-bottom:8px">
+                <label class="half">Sizing mode</label>
+                <label class="half">Risk per trade (%)</label>
+                <select id="auto-sizing-mode">
+                  <option value="fixed" selected>Fixed notional (above)</option>
+                  <option value="risk_pct">% of account at risk</option>
+                </select>
+                <input type="number" id="auto-risk-pct" value="1.0" min="0.1" max="10" step="0.1">
+
+                <label class="half">Account equity ($)</label>
+                <span></span>
+                <input type="number" id="auto-account-equity" value="10000" min="100" step="100">
+                <span></span>
+              </div>
+              <div style="font-size:10.5px;color:var(--muted);line-height:1.4">
+                In <i>risk %</i> mode, position size = (equity × risk%) / |entry − stop|, capped by leverage.
+              </div>
+            </div>
+          </details>
+
+          <!-- Partial TP / breakeven -->
+          <details style="margin-bottom:10px;background:var(--panel2);border:1px solid var(--border);border-radius:3px">
+            <summary style="cursor:pointer;padding:8px 10px;font-size:12px;color:var(--text);font-weight:600">
+              Partial TP1 + breakeven <span style="color:var(--muted);font-weight:400;font-size:11px">— bank profits, lock risk</span>
+            </summary>
+            <div style="padding:10px 12px;border-top:1px solid var(--border)">
+              <div class="alerts-form-grid" style="margin-bottom:8px">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);padding:4px 0;grid-column:span 2">
+                  <input type="checkbox" id="auto-partial-enabled">
+                  <span>Take partial profit at TP1 and move stop to breakeven (entry)</span>
+                </label>
+
+                <label class="half">% to close at TP1</label>
+                <span></span>
+                <input type="number" id="auto-partial-pct" value="50" min="10" max="90" step="5">
+                <span></span>
+              </div>
+            </div>
+          </details>
+
+          <!-- Session / time-of-day filter -->
+          <details style="margin-bottom:10px;background:var(--panel2);border:1px solid var(--border);border-radius:3px">
+            <summary style="cursor:pointer;padding:8px 10px;font-size:12px;color:var(--text);font-weight:600">
+              Session filter <span style="color:var(--muted);font-weight:400;font-size:11px">— only trade during certain hours (UTC)</span>
+            </summary>
+            <div style="padding:10px 12px;border-top:1px solid var(--border)">
+              <div class="alerts-form-grid">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);padding:4px 0;grid-column:span 2">
+                  <input type="checkbox" id="auto-session-enabled">
+                  <span>Restrict to a daily window</span>
+                </label>
+                <label class="half">Start (UTC, HH:MM)</label>
+                <label class="half">End (UTC, HH:MM)</label>
+                <input type="text" id="auto-session-start" value="13:30" placeholder="13:30" maxlength="5">
+                <input type="text" id="auto-session-end" value="20:00" placeholder="20:00" maxlength="5">
+              </div>
+              <div style="font-size:10.5px;color:var(--muted);line-height:1.4;margin-top:6px">
+                Useful for confining the bot to e.g. US-cash-open volatility. Overnight wraps are supported (e.g. 22:00 → 04:00).
+              </div>
+            </div>
+          </details>
+
+          <!-- Cooldown after loss -->
+          <details style="margin-bottom:10px;background:var(--panel2);border:1px solid var(--border);border-radius:3px">
+            <summary style="cursor:pointer;padding:8px 10px;font-size:12px;color:var(--text);font-weight:600">
+              Cooldown after loss <span style="color:var(--muted);font-weight:400;font-size:11px">— pause after a losing streak</span>
+            </summary>
+            <div style="padding:10px 12px;border-top:1px solid var(--border)">
+              <div class="alerts-form-grid">
+                <label class="half">Trigger after N losses in a row</label>
+                <label class="half">Pause for (minutes)</label>
+                <input type="number" id="auto-cooldown-losses" value="0" min="0" max="20" step="1" placeholder="0 = off">
+                <input type="number" id="auto-cooldown-min" value="60" min="5" max="1440" step="5">
+              </div>
+            </div>
+          </details>
+
+          <!-- Position-size calculator (B) — instant, no save -->
+          <details style="margin-bottom:10px;background:var(--panel2);border:1px solid var(--border);border-radius:3px">
+            <summary style="cursor:pointer;padding:8px 10px;font-size:12px;color:var(--text);font-weight:600">
+              📐 Position-size calculator <span style="color:var(--muted);font-weight:400;font-size:11px">— scratch pad, doesn't save</span>
+            </summary>
+            <div style="padding:10px 12px;border-top:1px solid var(--border)">
+              <div class="alerts-form-grid" style="margin-bottom:8px">
+                <label class="half">Account ($)</label>
+                <label class="half">Risk %</label>
+                <input type="number" id="psc-equity" value="10000" min="50" step="50">
+                <input type="number" id="psc-risk" value="1.0" min="0.1" max="20" step="0.1">
+
+                <label class="half">Entry</label>
+                <label class="half">Stop</label>
+                <input type="number" id="psc-entry" placeholder="auto-fill from chart" step="0.01">
+                <input type="number" id="psc-stop"  placeholder="" step="0.01">
+
+                <label class="half">Leverage</label>
+                <label class="half">Side</label>
+                <input type="number" id="psc-lev" value="10" min="1" max="200" step="1">
+                <select id="psc-side"><option value="long">Long</option><option value="short">Short</option></select>
+              </div>
+              <button class="btn" type="button" id="psc-calc-btn" style="width:100%;margin-bottom:6px">Calculate</button>
+              <div id="psc-out" style="font-family:var(--mono);font-size:11.5px;color:var(--text);background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:8px;min-height:34px">
+                <span style="color:var(--muted)">Fill values and hit Calculate.</span>
+              </div>
+            </div>
+          </details>
+
           <div id="auto-warn" class="alerts-warn" style="display:none"></div>
           <div id="auto-err" class="err" style="margin-top:8px;display:none"></div>
         </div>
@@ -1031,6 +1170,68 @@ button{font-family:inherit}
       </div>
     </div>
   </div>
+</div>
+
+<!-- ───────── Per-strategy performance dashboard (L) + backtest (M) ───────── -->
+<div class="modal-bg" id="perf-modal">
+  <div class="modal" style="max-width:780px">
+    <div class="modal-hd">
+      <span id="perf-title">Performance</span>
+      <button class="modal-x" id="perf-close">×</button>
+    </div>
+    <div class="modal-bd">
+      <div id="perf-loading" style="text-align:center;padding:30px;color:var(--muted)">Loading…</div>
+      <div id="perf-body" style="display:none">
+        <div id="perf-summary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px"></div>
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Equity curve</div>
+        <div id="perf-equity" style="background:var(--panel2);border:1px solid var(--border);border-radius:3px;padding:8px;margin-bottom:12px;min-height:160px"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">By UTC hour</div>
+            <div id="perf-by-hour" style="background:var(--panel2);border:1px solid var(--border);border-radius:3px;padding:8px;min-height:120px"></div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">By side</div>
+            <div id="perf-by-side" style="background:var(--panel2);border:1px solid var(--border);border-radius:3px;padding:8px;min-height:120px"></div>
+          </div>
+        </div>
+        <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:12px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <div style="font-size:12px;color:var(--text);font-weight:600">Backtest replay</div>
+            <span style="font-size:10.5px;color:var(--muted)">Rules-mode only</span>
+            <span style="flex:1"></span>
+            <input type="number" id="bt-bars" value="500" min="100" max="1500" step="50"
+                   style="width:80px;padding:4px 6px;background:var(--panel2);border:1px solid var(--border);border-radius:3px;color:var(--text);font-size:11px">
+            <button class="btn primary" type="button" id="bt-run-btn" style="padding:4px 10px;font-size:11px">Run backtest</button>
+          </div>
+          <div id="bt-out" style="font-size:11.5px;color:var(--text);min-height:30px"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <span class="meta" id="perf-meta">—</span>
+      <button class="btn ghost" id="perf-close-2">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ───────── Watchlist sidebar (F) ───────── -->
+<div id="watchlist-fab" title="Watchlist" style="position:fixed;right:14px;bottom:74px;z-index:90;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px;color:var(--text);box-shadow:0 4px 14px rgba(0,0,0,.25);user-select:none">
+  📋 Watchlist
+</div>
+<div id="watchlist-panel" style="display:none;position:fixed;right:14px;bottom:118px;z-index:91;width:240px;max-height:60vh;overflow:auto;background:var(--panel);border:1px solid var(--border);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.4)">
+  <div style="padding:8px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px">
+    <span style="font-size:12px;font-weight:600">Watchlist</span>
+    <span style="flex:1"></span>
+    <span id="watchlist-age" style="font-size:10px;color:var(--muted)">—</span>
+    <button id="watchlist-close" class="modal-x" style="position:static;width:18px;height:18px;font-size:14px;line-height:14px">×</button>
+  </div>
+  <div id="watchlist-rows" style="padding:4px 0"></div>
+</div>
+
+<!-- ───────── Funding/OI badge (C) ───────── -->
+<div id="funding-badge" style="display:none;position:absolute;top:8px;right:8px;z-index:50;background:rgba(20,22,28,.85);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:10.5px;color:var(--text);font-family:var(--mono);pointer-events:none;user-select:none">
+  <span id="fb-funding">FR —</span> · <span id="fb-oi">OI —</span>
 </div>
 
 <script>
@@ -4038,16 +4239,31 @@ button{font-family:inherit}
         const pauseBtn = s.status === 'active'
           ? `<button class="a-x" data-act="pause" data-id="${s.id}" title="Pause">⏸</button>`
           : `<button class="a-x" data-act="resume" data-id="${s.id}" title="Resume" style="color:#7ed957;border-color:rgba(126,217,87,.4)">▶</button>`;
+        // Surface cooldown / DLL pauses so users know why nothing is firing
+        const rt = s.runtime || {};
+        let badge = '';
+        if(rt.cooldown_until && new Date(rt.cooldown_until) > new Date()){
+          badge = ' <span style="color:#ff8b4d" title="Paused due to losing streak">❄ cooldown</span>';
+        } else if(rt.daily_loss_hit){
+          badge = ' <span style="color:#ff4d4d" title="Daily loss limit reached today">⛔ DLL</span>';
+        }
         row.innerHTML = `
           <span class="a-tag">${modeTag} ${s.symbol} ${s.tf}</span>
           <span class="a-lbl" title="${(s.rules_summary||'').replace(/"/g,'&quot;')}">
-            <b>${s.name}</b> · ${stats.total_signals||0} sigs · ${wr} · ${pnl}${last}
+            <b>${s.name}</b> · ${stats.total_signals||0} sigs · ${wr} · ${pnl}${last}${badge}
           </span>
+          <button class="a-x" data-act="stats" data-id="${s.id}" data-name="${(s.name||'').replace(/"/g,'&quot;')}" title="Performance &amp; backtest">📊</button>
           ${pauseBtn}
           <button class="a-x" data-act="del" data-id="${s.id}" title="Delete">×</button>
         `;
         row.querySelectorAll('button.a-x').forEach(btn => {
-          btn.onclick = () => autoStrategyAction(btn.dataset.act, parseInt(btn.dataset.id));
+          btn.onclick = () => {
+            if(btn.dataset.act === 'stats'){
+              openPerfModal(parseInt(btn.dataset.id), btn.dataset.name);
+            } else {
+              autoStrategyAction(btn.dataset.act, parseInt(btn.dataset.id));
+            }
+          };
         });
         list.appendChild(row);
       });
@@ -4112,6 +4328,23 @@ button{font-family:inherit}
           leverage:     parseInt($('auto-leverage').value || '10'),
           tp_sl_source: $('auto-tpsl').value,
           notify_telegram: $('auto-notify').checked,
+          // Risk caps & guardrails (G)
+          max_concurrent_trades: parseInt($('auto-max-concurrent').value || '1') || 1,
+          max_daily_loss_usd:    parseFloat($('auto-daily-loss-limit').value || '0') || null,
+          // Auto sizing (H) — engine reads position_sizing_mode + risk_pct + account_size_usd
+          position_sizing_mode: $('auto-sizing-mode').value || 'fixed',
+          risk_pct:             parseFloat($('auto-risk-pct').value || '1') || null,
+          account_size_usd:     parseFloat($('auto-account-equity').value || '10000') || null,
+          // Partial TP / breakeven (I) — single toggle does both
+          enable_partial_tp1:        $('auto-partial-enabled').checked,
+          move_stop_to_be_after_tp1: $('auto-partial-enabled').checked,
+          partial_tp1_pct:           parseFloat($('auto-partial-pct').value || '50') || 50,
+          // Session filter (J)
+          session_start_utc: ($('auto-session-enabled').checked ? ($('auto-session-start').value || '').trim() : '') || null,
+          session_end_utc:   ($('auto-session-enabled').checked ? ($('auto-session-end').value   || '').trim() : '') || null,
+          // Cooldown (K)
+          max_consecutive_losses:      parseInt($('auto-cooldown-losses').value || '0') || null,
+          cooldown_minutes_after_loss: parseInt($('auto-cooldown-min').value || '60') || 60,
         };
       } catch(prepErr){
         console.error('auto-create prep failed:', prepErr);
@@ -4175,6 +4408,343 @@ button{font-family:inherit}
   }
   function closeAutoModal(){ $('auto-modal').classList.remove('open'); }
 
+  // ───────────────────────────────────────────────────────────────────
+  // Position-size calculator (B) — inline scratch pad
+  // ───────────────────────────────────────────────────────────────────
+  function runPositionCalc(){
+    const out = $('psc-out');
+    const eq    = parseFloat($('psc-equity').value);
+    const rpct  = parseFloat($('psc-risk').value);
+    const entry = parseFloat($('psc-entry').value);
+    const stop  = parseFloat($('psc-stop').value);
+    const lev   = Math.max(1, parseInt($('psc-lev').value) || 1);
+    const side  = $('psc-side').value;
+    if(!isFinite(eq) || !isFinite(rpct) || !isFinite(entry) || !isFinite(stop)){
+      out.innerHTML = '<span style="color:#ff8b4d">Enter equity, risk %, entry, and stop.</span>';
+      return;
+    }
+    const sideOk = (side === 'long' && stop < entry) || (side === 'short' && stop > entry);
+    if(!sideOk){
+      out.innerHTML = '<span style="color:#ff8b4d">Stop must be ' + (side === 'long' ? 'BELOW' : 'ABOVE') + ' entry for a ' + side + '.</span>';
+      return;
+    }
+    const riskUsd = eq * (rpct/100);
+    const dist    = Math.abs(entry - stop);
+    const distPct = (dist / entry) * 100;
+    const qty     = riskUsd / dist;        // units of base asset
+    const notional= qty * entry;            // total exposure
+    const margin  = notional / lev;
+    const liqPct  = (100/lev) * 0.95;       // crude — 95% of leverage band
+    out.innerHTML = `
+      <div>Risk: <b>$${riskUsd.toFixed(2)}</b> on a <b>${distPct.toFixed(2)}%</b> stop</div>
+      <div>Position: <b>${qty.toFixed(6)}</b> units · <b>$${notional.toFixed(2)}</b> notional</div>
+      <div>Margin needed (${lev}×): <b>$${margin.toFixed(2)}</b> · approx liq ~${liqPct.toFixed(1)}% from entry</div>
+    `;
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // Auto-fill calculator entry/stop from current chart price
+  // ───────────────────────────────────────────────────────────────────
+  function prefillCalcFromChart(){
+    try {
+      const px = parseFloat(($('ohlc-c') && $('ohlc-c').textContent || '').replace(/[^\d.]/g,''));
+      if(isFinite(px) && px > 0){
+        if(!$('psc-entry').value) $('psc-entry').value = px.toFixed(2);
+        if(!$('psc-stop').value)  $('psc-stop').value  = (px * 0.99).toFixed(2);
+      }
+    } catch(_){}
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // Quick alert templates (E) — populate the form from a one-click pick
+  // ───────────────────────────────────────────────────────────────────
+  const ALERT_TEMPLATE_DEFS = [
+    {id:"px_above",   label:"Price crosses ABOVE level",      kind:"price",  cond:"above", target:""},
+    {id:"px_below",   label:"Price crosses BELOW level",      kind:"price",  cond:"below", target:""},
+    {id:"rsi_over",   label:"RSI(14) crosses ABOVE 70 (OB)",  kind:"rsi",    cond:"above", target:"70"},
+    {id:"rsi_under",  label:"RSI(14) crosses BELOW 30 (OS)",  kind:"rsi",    cond:"below", target:"30"},
+    {id:"ema_cross_up",   label:"Price crosses ABOVE EMA(21)", kind:"ema_cross", cond:"above", target:""},
+    {id:"ema_cross_down", label:"Price crosses BELOW EMA(21)", kind:"ema_cross", cond:"below", target:""},
+    {id:"macd_bull",  label:"MACD crosses ABOVE zero (bull)", kind:"macd_cross_zero", cond:"above"},
+    {id:"macd_bear",  label:"MACD crosses BELOW zero (bear)", kind:"macd_cross_zero", cond:"below"},
+    {id:"st_up",      label:"SuperTrend flips bullish",       kind:"supertrend_flip", cond:"up"},
+    {id:"st_dn",      label:"SuperTrend flips bearish",       kind:"supertrend_flip", cond:"down"},
+  ];
+  function populateAlertTemplates(){
+    const sel = $('alf-template');
+    if(!sel || sel.dataset.filled) return;
+    ALERT_TEMPLATE_DEFS.forEach(t => {
+      const o = document.createElement('option');
+      o.value = t.id; o.textContent = t.label;
+      sel.appendChild(o);
+    });
+    sel.dataset.filled = '1';
+    sel.addEventListener('change', () => {
+      const t = ALERT_TEMPLATE_DEFS.find(x => x.id === sel.value);
+      if(!t) return;
+      try {
+        $('alf-kind').value = t.kind;
+        if(typeof onAlertKindChange === 'function') onAlertKindChange();
+        else $('alf-kind').dispatchEvent(new Event('change'));
+        // Try to set condition (the dropdown is rebuilt by kind change)
+        setTimeout(() => {
+          const cs = $('alf-condition');
+          if(cs && t.cond){
+            for(const opt of cs.options){
+              if(opt.value === t.cond){ cs.value = t.cond; break; }
+            }
+          }
+          if(t.target !== undefined) $('alf-target').value = t.target;
+        }, 30);
+      } catch(e){ console.warn('template apply failed', e); }
+    });
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // Per-strategy performance dashboard (L) + backtest (M)
+  // ───────────────────────────────────────────────────────────────────
+  let _perfSid = null;
+  function fmtUsd(v){
+    if(v === null || v === undefined || !isFinite(v)) return '—';
+    const sign = v >= 0 ? '+' : '';
+    return sign + '$' + Number(v).toFixed(2);
+  }
+  function statCard(label, value, color){
+    return `<div style="background:var(--panel2);border:1px solid var(--border);border-radius:3px;padding:8px 10px">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">${label}</div>
+      <div style="font-size:14px;font-weight:600;color:${color||'var(--text)'};margin-top:2px">${value}</div>
+    </div>`;
+  }
+  function svgEquityCurve(points, w, h){
+    if(!points || points.length === 0){
+      return '<div style="color:var(--muted);font-size:11px;text-align:center;padding:50px 0">No closed trades yet.</div>';
+    }
+    const ys = points.map(p => p[1]);
+    const yMin = Math.min(0, ...ys);
+    const yMax = Math.max(0, ...ys);
+    const yRange = (yMax - yMin) || 1;
+    const dx = w / Math.max(1, points.length - 1);
+    let d = '';
+    points.forEach((p, i) => {
+      const x = i * dx;
+      const y = h - ((p[1] - yMin) / yRange) * h;
+      d += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1) + ' ';
+    });
+    const zeroY = h - ((0 - yMin) / yRange) * h;
+    const lastY = ys[ys.length-1];
+    const stroke = lastY >= 0 ? '#7ed957' : '#ff4d4d';
+    return `<svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="display:block">
+      <line x1="0" y1="${zeroY}" x2="${w}" y2="${zeroY}" stroke="rgba(255,255,255,.15)" stroke-dasharray="3,3"/>
+      <path d="${d}" fill="none" stroke="${stroke}" stroke-width="1.5"/>
+    </svg>`;
+  }
+  function renderByHour(byHour){
+    const hours = [];
+    for(let h = 0; h < 24; h++){ hours.push(byHour[String(h)] || {wins:0, losses:0, pnl:0}); }
+    const max = Math.max(1, ...hours.map(h => Math.max(h.wins, h.losses)));
+    let html = '<div style="display:flex;align-items:flex-end;gap:1px;height:80px">';
+    hours.forEach((h, i) => {
+      const total = h.wins + h.losses;
+      const wh = (h.wins  / max) * 70;
+      const lh = (h.losses/ max) * 70;
+      const tt = `${i.toString().padStart(2,'0')}:00 — ${h.wins}W / ${h.losses}L · ${fmtUsd(h.pnl)}`;
+      html += `<div title="${tt}" style="flex:1;display:flex;flex-direction:column-reverse;gap:1px;cursor:default">
+        <div style="height:${wh}px;background:#7ed957;opacity:.85"></div>
+        <div style="height:${lh}px;background:#ff4d4d;opacity:.85"></div>
+      </div>`;
+    });
+    html += '</div><div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:4px"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>';
+    return html;
+  }
+  function renderBySide(bs){
+    const mk = (key, color) => {
+      const x = bs[key] || {n:0, wins:0, pnl:0};
+      const wr = x.n ? Math.round(100 * x.wins / x.n) : 0;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0">
+        <span style="display:inline-block;width:50px;font-weight:600;color:${color}">${key.toUpperCase()}</span>
+        <span style="font-size:11px;color:var(--text)">${x.n} trades · ${wr}% WR · ${fmtUsd(x.pnl)}</span>
+      </div>`;
+    };
+    return mk('long', '#7ed957') + mk('short', '#ff4d4d');
+  }
+  async function openPerfModal(sid, name){
+    _perfSid = sid;
+    $('perf-modal').classList.add('open');
+    $('perf-title').textContent = '📊 ' + (name || 'Performance');
+    $('perf-loading').style.display = '';
+    $('perf-body').style.display = 'none';
+    $('perf-meta').textContent = '';
+    $('bt-out').innerHTML = '';
+    try {
+      const r = await fetch(`/api/trade/auto/${sid}/stats`, {credentials:'same-origin'});
+      const d = await r.json();
+      if(!r.ok || !d.ok){
+        $('perf-loading').textContent = (d && d.detail) || 'Failed to load.';
+        return;
+      }
+      const s = d.stats;
+      $('perf-loading').style.display = 'none';
+      $('perf-body').style.display = '';
+      $('perf-summary').innerHTML =
+        statCard('Closed', s.n_closed) +
+        statCard('Win rate', s.win_rate !== null ? s.win_rate + '%' : '—',
+                 s.win_rate !== null ? (s.win_rate >= 50 ? '#7ed957' : '#ff8b4d') : null) +
+        statCard('Total P&L', fmtUsd(s.pnl_total),
+                 s.pnl_total >= 0 ? '#7ed957' : '#ff4d4d') +
+        statCard('Max DD', fmtUsd(s.max_drawdown),
+                 s.max_drawdown < 0 ? '#ff4d4d' : null);
+      $('perf-equity') .innerHTML = svgEquityCurve(s.equity_curve, 700, 140);
+      $('perf-by-hour').innerHTML = renderByHour(s.by_hour || {});
+      $('perf-by-side').innerHTML = renderBySide(s.by_side || {});
+      const rrA = s.rr_achieved_avg, rrP = s.rr_planned_avg;
+      $('perf-meta').textContent =
+        `avg win ${fmtUsd(s.avg_win)} · avg loss ${fmtUsd(s.avg_loss)}` +
+        (rrA !== null ? ` · achieved R ${rrA}` : '') +
+        (rrP !== null ? ` · planned R ${rrP}` : '');
+      // Toggle backtest button by mode
+      const isRules = (d.strategy && d.strategy.mode === 'rules');
+      $('bt-run-btn').disabled = !isRules;
+      $('bt-run-btn').title = isRules ? 'Replay strategy on recent candles'
+                                       : 'Backtest available for rules-mode strategies only';
+    } catch(e){
+      $('perf-loading').textContent = 'Network error: ' + e;
+    }
+  }
+  function closePerfModal(){ $('perf-modal').classList.remove('open'); _perfSid = null; }
+
+  async function runBacktest(){
+    if(!_perfSid) return;
+    const btn = $('bt-run-btn'); const out = $('bt-out');
+    const bars = parseInt($('bt-bars').value || '500');
+    btn.disabled = true; const oldTxt = btn.textContent; btn.textContent = 'Running…';
+    out.innerHTML = '<span style="color:var(--muted)">Walking forward over ' + bars + ' candles…</span>';
+    try {
+      const r = await fetch(`/api/trade/auto/${_perfSid}/backtest`, {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({bars}),
+      });
+      const d = await r.json();
+      if(!r.ok || !d.ok){
+        out.innerHTML = '<span style="color:#ff8b4d">' + ((d && (d.error || d.detail)) || 'Backtest failed.') + '</span>';
+        return;
+      }
+      const sm = d.summary;
+      out.innerHTML =
+        `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px">` +
+          statCard('Bars', sm.bars_replayed) +
+          statCard('Trades', sm.n_trades) +
+          statCard('Win rate', (sm.win_rate !== null ? sm.win_rate + '%' : '—'),
+                   sm.win_rate !== null && sm.win_rate >= 50 ? '#7ed957' : '#ff8b4d') +
+          statCard('P&L', fmtUsd(sm.pnl_usd), sm.pnl_usd >= 0 ? '#7ed957' : '#ff4d4d') +
+        `</div>` +
+        `<div style="font-size:10px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px">Equity</div>` +
+        svgEquityCurve(d.equity_curve.map(p => [p[0], p[1]]), 700, 90) +
+        `<div style="font-size:10px;color:var(--muted);margin-top:6px">Max DD ${fmtUsd(sm.max_drawdown)} · ${sm.wins}W / ${sm.losses}L</div>`;
+    } catch(e){
+      out.innerHTML = '<span style="color:#ff8b4d">Network error: ' + e + '</span>';
+    } finally {
+      btn.disabled = false; btn.textContent = oldTxt;
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // Watchlist sidebar (F)
+  // ───────────────────────────────────────────────────────────────────
+  let _watchlistTimer = null;
+  async function refreshWatchlist(){
+    try {
+      const r = await fetch('/api/trade/watchlist');
+      if(!r.ok) return;
+      const d = await r.json();
+      const rows = $('watchlist-rows');
+      if(!rows) return;
+      rows.innerHTML = '';
+      (d.tickers || []).forEach(t => {
+        const pct = Number(t.pct) || 0;
+        const color = pct >= 0 ? '#7ed957' : '#ff4d4d';
+        const px = (t.price >= 100 ? t.price.toFixed(2) : t.price.toFixed(4));
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 10px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.05);font-size:11.5px;font-family:var(--mono)';
+        row.innerHTML = `
+          <span style="flex:0 0 42px;color:var(--text);font-weight:600">${t.symbol}</span>
+          <span style="flex:1;text-align:right;color:var(--text)">${px}</span>
+          <span style="flex:0 0 56px;text-align:right;color:${color}">${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</span>
+        `;
+        row.onmouseenter = () => row.style.background = 'rgba(255,255,255,.04)';
+        row.onmouseleave = () => row.style.background = '';
+        row.onclick = () => {
+          // Most installs are BTC-only — at least show a hint when clicking other syms
+          if(t.symbol === 'BTC' || (typeof SYMBOL !== 'undefined' && t.symbol === SYMBOL)){
+            $('watchlist-panel').style.display = 'none';
+          } else {
+            row.title = 'BTC is the only chartable symbol on this page right now.';
+          }
+        };
+        rows.appendChild(row);
+      });
+      const age = $('watchlist-age');
+      if(age){
+        const sec = Math.floor((Date.now()/1000) - (d.fetched_at || 0));
+        age.textContent = sec >= 0 ? `${sec}s ago` : 'live';
+      }
+    } catch(_){ /* silent */ }
+  }
+  function wireWatchlist(){
+    const fab = $('watchlist-fab'), pan = $('watchlist-panel'), x = $('watchlist-close');
+    if(!fab) return;
+    fab.onclick = () => {
+      const open = pan.style.display !== 'none';
+      pan.style.display = open ? 'none' : '';
+      if(!open) refreshWatchlist();
+    };
+    if(x) x.onclick = () => pan.style.display = 'none';
+    refreshWatchlist();
+    if(_watchlistTimer) clearInterval(_watchlistTimer);
+    _watchlistTimer = setInterval(refreshWatchlist, 12000);
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // Funding/OI badge (C) — small overlay on the chart
+  // ───────────────────────────────────────────────────────────────────
+  let _fundingTimer = null;
+  function fmtCompactUsd(v){
+    if(!isFinite(v) || v <= 0) return '—';
+    if(v >= 1e9) return '$' + (v/1e9).toFixed(2) + 'B';
+    if(v >= 1e6) return '$' + (v/1e6).toFixed(1) + 'M';
+    if(v >= 1e3) return '$' + (v/1e3).toFixed(0) + 'K';
+    return '$' + v.toFixed(0);
+  }
+  async function refreshFunding(){
+    try {
+      const sym = (typeof SYMBOL !== 'undefined' && SYMBOL) || 'BTC';
+      const r = await fetch('/api/trade/funding/' + encodeURIComponent(sym));
+      if(!r.ok) return;
+      const d = await r.json();
+      const fr = d.funding_rate_pct;
+      const oi = d.open_interest_usd;
+      const fb = $('funding-badge');
+      if(!fb) return;
+      // Only show if we got at least one signal back
+      if(!isFinite(fr) && !isFinite(oi)){ fb.style.display = 'none'; return; }
+      fb.style.display = '';
+      if(isFinite(fr)){
+        const v = Number(fr);
+        const pct = (Math.abs(v) < 1 ? v * 100 : v); // some sources return decimal, some pct
+        const c = pct >= 0 ? '#7ed957' : '#ff4d4d';
+        $('fb-funding').innerHTML = 'FR <span style="color:' + c + '">' + (pct >= 0 ? '+' : '') + pct.toFixed(4) + '%</span>';
+      } else {
+        $('fb-funding').textContent = 'FR —';
+      }
+      $('fb-oi').textContent = 'OI ' + fmtCompactUsd(oi);
+    } catch(_){ /* silent */ }
+  }
+  function wireFundingBadge(){
+    refreshFunding();
+    if(_fundingTimer) clearInterval(_fundingTimer);
+    _fundingTimer = setInterval(refreshFunding, 60000);
+  }
+
   function wireAuto(){
     if(!$('auto-btn')) return;
     $('auto-btn').onclick = openAutoModal;
@@ -4186,9 +4756,42 @@ button{font-family:inherit}
       r.addEventListener('change', syncAutoRulePreview);
     });
     document.addEventListener('keydown', e => {
-      if(!$('auto-modal').classList.contains('open')) return;
-      if(e.key === 'Escape'){ e.preventDefault(); closeAutoModal(); }
+      if($('auto-modal').classList.contains('open') && e.key === 'Escape'){
+        e.preventDefault(); closeAutoModal(); return;
+      }
+      if($('perf-modal') && $('perf-modal').classList.contains('open') && e.key === 'Escape'){
+        e.preventDefault(); closePerfModal(); return;
+      }
     });
+    // Position-size calculator — wire the calc button + prefill from chart on open
+    if($('psc-calc-btn')){
+      $('psc-calc-btn').onclick = runPositionCalc;
+      $('auto-btn').onclick = () => { openAutoModal(); setTimeout(prefillCalcFromChart, 60); };
+    }
+    // Performance dashboard close + backtest
+    if($('perf-close')) $('perf-close').onclick = closePerfModal;
+    if($('perf-close-2')) $('perf-close-2').onclick = closePerfModal;
+    if($('perf-modal')){
+      $('perf-modal').addEventListener('click', e => {
+        if(e.target === $('perf-modal')) closePerfModal();
+      });
+    }
+    if($('bt-run-btn')) $('bt-run-btn').onclick = runBacktest;
+
+    // Quick alert templates dropdown — populates from a static list
+    populateAlertTemplates();
+
+    // Watchlist + funding badge
+    wireWatchlist();
+    wireFundingBadge();
+
+    // Mount the funding badge inside the chart-wrap so it overlays the chart
+    try {
+      const fb = $('funding-badge');
+      const cw = document.querySelector('.chart-wrap');
+      if(fb && cw && fb.parentElement !== cw){ cw.appendChild(fb); }
+    } catch(_){}
+
     // Polling — refresh badge every 60s in case a strategy fires
     setInterval(loadAutoState, 60000);
     loadAutoState();

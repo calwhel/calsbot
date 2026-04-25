@@ -775,6 +775,29 @@ class AutoTradeStrategy(Base):
     losses = Column(Integer, default=0)
     pnl_usd_total = Column(Float, default=0.0)
 
+    # ── Risk caps (G) ──────────────────────────────────────────
+    max_concurrent_trades       = Column(Integer, default=1)
+    max_daily_loss_usd          = Column(Float, nullable=True)        # null = no cap
+    max_consecutive_losses      = Column(Integer, default=0)          # 0 = disabled
+    # ── Position sizing (H) ────────────────────────────────────
+    position_sizing_mode        = Column(String, default="fixed")     # 'fixed' | 'risk_pct'
+    risk_pct                    = Column(Float, nullable=True)        # e.g. 1.0 means risk 1% of account per trade
+    account_size_usd            = Column(Float, default=10000.0)      # paper account baseline for risk_pct sizing
+    # ── Partial TP1 + breakeven (I) ────────────────────────────
+    enable_partial_tp1          = Column(Boolean, default=False)
+    partial_tp1_pct             = Column(Float, default=50.0)         # % of position to close at TP1
+    move_stop_to_be_after_tp1   = Column(Boolean, default=False)
+    # ── Session filter (J) ─────────────────────────────────────
+    session_start_utc           = Column(String, nullable=True)       # "13:30"
+    session_end_utc             = Column(String, nullable=True)       # "20:00"
+    # ── Cooldown after loss (K) ────────────────────────────────
+    cooldown_minutes_after_loss = Column(Integer, default=0)
+    # ── Runtime trackers (set by engine) ───────────────────────
+    consecutive_losses          = Column(Integer, default=0)
+    paused_until                = Column(DateTime, nullable=True)
+    daily_loss_today_usd        = Column(Float, default=0.0)
+    daily_loss_date             = Column(String, nullable=True)       # 'YYYY-MM-DD' (UTC)
+
 
 class AutoTradePaperTrade(Base):
     """Paper position opened by the auto trader. Lives until stop or TP hits.
@@ -811,3 +834,32 @@ class AutoTradePaperTrade(Base):
 
     opened_at = Column(DateTime, default=datetime.utcnow, index=True)
     closed_at = Column(DateTime, nullable=True)
+
+    # ── Partial TP1 + breakeven (I) ────────────────────────────
+    tp1_hit                  = Column(Boolean, default=False)
+    tp1_hit_at               = Column(DateTime, nullable=True)
+    partial_pnl_usd          = Column(Float, default=0.0)        # realised P&L from the TP1 partial leg
+    stop_moved_to_be         = Column(Boolean, default=False)
+    original_notional_usd    = Column(Float, nullable=True)      # snapshot pre-partial; null = same as notional
+    remaining_notional_usd   = Column(Float, nullable=True)      # null = full position still open
+
+
+class TradeDrawing(Base):
+    """User-saved chart drawing on the /trade page (D).
+
+    Each row is one shape (trendline, horizontal S/R line, fib retracement, etc.)
+    keyed by user + symbol. The frontend round-trips the geometry as JSON
+    so this table doesn't need to know about the rendering format.
+    """
+    __tablename__ = "trade_drawings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    symbol = Column(String, nullable=False, index=True)
+    timeframe = Column(String, nullable=True)         # null = applies to all TFs
+    kind = Column(String, nullable=False)             # 'trendline' | 'hline' | 'fib' | 'rect' | 'note'
+    points_json = Column(Text, nullable=False, default="[]")  # array of {time,price} pairs
+    color = Column(String, nullable=True)             # css color
+    label = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow)

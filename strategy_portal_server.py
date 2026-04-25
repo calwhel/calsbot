@@ -380,7 +380,7 @@ def _ensure_tables():
     # tables are registered with the metadata.
     from app.models import (  # noqa: F401
         IndicatorAlert, TradeIndicatorSetup,
-        AutoTradeStrategy, AutoTradePaperTrade,
+        AutoTradeStrategy, AutoTradePaperTrade, TradeDrawing,
     )
 
     # Each legacy initializer runs in its own try/except so an error in one
@@ -419,6 +419,7 @@ def _ensure_tables():
         AutoTradeStrategy.__table__,
         AutoTradePaperTrade.__table__,
     ])
+    _create_with_retry("TradeDrawing", [TradeDrawing.__table__])
 
     # Verification — query pg_tables for the names we expect and shout loudly
     # if any are still missing so we never silently end up with broken save APIs.
@@ -426,6 +427,7 @@ def _ensure_tables():
         expected = {
             "indicator_alerts", "trade_indicator_setups",
             "auto_trade_strategies", "auto_trade_paper_trades",
+            "trade_drawings",
         }
         with engine.connect() as conn:
             present = {
@@ -447,7 +449,7 @@ def _ensure_tables():
         logger.error(f"_ensure_tables verification step error: {e}")
     # Only ALTER if column is genuinely missing — avoids table locks when both
     # dev and production portals start against the same shared Neon database.
-    needed = {
+    user_cols = {
         "email":          "ALTER TABLE users ADD COLUMN email VARCHAR UNIQUE",
         "email_verified": "ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE",
         "password_hash":  "ALTER TABLE users ADD COLUMN password_hash VARCHAR",
@@ -455,24 +457,60 @@ def _ensure_tables():
         "auth_provider":  "ALTER TABLE users ADD COLUMN auth_provider VARCHAR DEFAULT 'telegram'",
         "uid":            "ALTER TABLE users ADD COLUMN uid VARCHAR UNIQUE",
     }
-    try:
-        with engine.connect() as conn:
-            existing = {
-                row[0] for row in conn.execute(sa.text(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name='users' AND table_schema='public'"
-                ))
-            }
-            for col, sql in needed.items():
-                if col not in existing:
-                    try:
-                        conn.execute(sa.text(sql))
-                        logger.info(f"Migration: added users.{col}")
-                    except Exception as ce:
-                        logger.warning(f"Column migration {col}: {ce}")
-            conn.commit()
-    except Exception as e:
-        logger.warning(f"_ensure_tables: {e}")
+
+    # New columns on the auto-trader strategy/trade tables (Phase: do them all).
+    # Each entry is column_name → ALTER SQL. Defaults must be set so existing
+    # rows pick up sensible values without a backfill step.
+    auto_strategy_cols = {
+        "max_concurrent_trades":       "ALTER TABLE auto_trade_strategies ADD COLUMN max_concurrent_trades INTEGER DEFAULT 1",
+        "max_daily_loss_usd":          "ALTER TABLE auto_trade_strategies ADD COLUMN max_daily_loss_usd DOUBLE PRECISION",
+        "max_consecutive_losses":      "ALTER TABLE auto_trade_strategies ADD COLUMN max_consecutive_losses INTEGER DEFAULT 0",
+        "position_sizing_mode":        "ALTER TABLE auto_trade_strategies ADD COLUMN position_sizing_mode VARCHAR DEFAULT 'fixed'",
+        "risk_pct":                    "ALTER TABLE auto_trade_strategies ADD COLUMN risk_pct DOUBLE PRECISION",
+        "account_size_usd":            "ALTER TABLE auto_trade_strategies ADD COLUMN account_size_usd DOUBLE PRECISION DEFAULT 10000",
+        "enable_partial_tp1":          "ALTER TABLE auto_trade_strategies ADD COLUMN enable_partial_tp1 BOOLEAN DEFAULT FALSE",
+        "partial_tp1_pct":             "ALTER TABLE auto_trade_strategies ADD COLUMN partial_tp1_pct DOUBLE PRECISION DEFAULT 50",
+        "move_stop_to_be_after_tp1":   "ALTER TABLE auto_trade_strategies ADD COLUMN move_stop_to_be_after_tp1 BOOLEAN DEFAULT FALSE",
+        "session_start_utc":           "ALTER TABLE auto_trade_strategies ADD COLUMN session_start_utc VARCHAR",
+        "session_end_utc":             "ALTER TABLE auto_trade_strategies ADD COLUMN session_end_utc VARCHAR",
+        "cooldown_minutes_after_loss": "ALTER TABLE auto_trade_strategies ADD COLUMN cooldown_minutes_after_loss INTEGER DEFAULT 0",
+        "consecutive_losses":          "ALTER TABLE auto_trade_strategies ADD COLUMN consecutive_losses INTEGER DEFAULT 0",
+        "paused_until":                "ALTER TABLE auto_trade_strategies ADD COLUMN paused_until TIMESTAMP",
+        "daily_loss_today_usd":        "ALTER TABLE auto_trade_strategies ADD COLUMN daily_loss_today_usd DOUBLE PRECISION DEFAULT 0",
+        "daily_loss_date":             "ALTER TABLE auto_trade_strategies ADD COLUMN daily_loss_date VARCHAR",
+    }
+    auto_trade_cols = {
+        "tp1_hit":                "ALTER TABLE auto_trade_paper_trades ADD COLUMN tp1_hit BOOLEAN DEFAULT FALSE",
+        "tp1_hit_at":             "ALTER TABLE auto_trade_paper_trades ADD COLUMN tp1_hit_at TIMESTAMP",
+        "partial_pnl_usd":        "ALTER TABLE auto_trade_paper_trades ADD COLUMN partial_pnl_usd DOUBLE PRECISION DEFAULT 0",
+        "stop_moved_to_be":       "ALTER TABLE auto_trade_paper_trades ADD COLUMN stop_moved_to_be BOOLEAN DEFAULT FALSE",
+        "original_notional_usd":  "ALTER TABLE auto_trade_paper_trades ADD COLUMN original_notional_usd DOUBLE PRECISION",
+        "remaining_notional_usd": "ALTER TABLE auto_trade_paper_trades ADD COLUMN remaining_notional_usd DOUBLE PRECISION",
+    }
+
+    def _migrate_columns(table: str, needed: dict):
+        try:
+            with engine.connect() as conn:
+                existing = {
+                    row[0] for row in conn.execute(sa.text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name=:t AND table_schema='public'"
+                    ), {"t": table})
+                }
+                for col, sql in needed.items():
+                    if col not in existing:
+                        try:
+                            conn.execute(sa.text(sql))
+                            logger.info(f"Migration: added {table}.{col}")
+                        except Exception as ce:
+                            logger.warning(f"Column migration {table}.{col}: {ce}")
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"_ensure_tables({table}): {e}")
+
+    _migrate_columns("users", user_cols)
+    _migrate_columns("auto_trade_strategies", auto_strategy_cols)
+    _migrate_columns("auto_trade_paper_trades", auto_trade_cols)
 
 
 @app.on_event("startup")
@@ -2201,7 +2239,103 @@ def _auto_strategy_to_dict(s, last_trade=None):
             "pnl_usd_total": round(s.pnl_usd_total or 0.0, 2),
         },
         "last_trade": last_trade,
+        # Risk caps + sizing + partials + session + cooldown (new)
+        "risk": {
+            "max_concurrent_trades":       int(getattr(s, "max_concurrent_trades", 1) or 1),
+            "max_daily_loss_usd":          float(s.max_daily_loss_usd) if s.max_daily_loss_usd else None,
+            "max_consecutive_losses":      int(getattr(s, "max_consecutive_losses", 0) or 0),
+            "position_sizing_mode":        getattr(s, "position_sizing_mode", "fixed") or "fixed",
+            "risk_pct":                    float(s.risk_pct) if s.risk_pct else None,
+            "account_size_usd":            float(getattr(s, "account_size_usd", 10000) or 10000),
+            "enable_partial_tp1":          bool(getattr(s, "enable_partial_tp1", False)),
+            "partial_tp1_pct":             float(getattr(s, "partial_tp1_pct", 50) or 50),
+            "move_stop_to_be_after_tp1":   bool(getattr(s, "move_stop_to_be_after_tp1", False)),
+            "session_start_utc":           getattr(s, "session_start_utc", None),
+            "session_end_utc":             getattr(s, "session_end_utc", None),
+            "cooldown_minutes_after_loss": int(getattr(s, "cooldown_minutes_after_loss", 0) or 0),
+        },
+        "runtime": (lambda _cap=float(getattr(s, "max_daily_loss_usd", 0) or 0),
+                           _today=float(getattr(s, "daily_loss_today_usd", 0) or 0): {
+            "consecutive_losses":   int(getattr(s, "consecutive_losses", 0) or 0),
+            # Frontend-friendly aliases — keep both names so callers don't need
+            # to know about the "paused_until" / "daily_loss_today" internals.
+            "paused_until":         s.paused_until.isoformat() if getattr(s, "paused_until", None) else None,
+            "cooldown_until":       s.paused_until.isoformat() if getattr(s, "paused_until", None) else None,
+            "daily_loss_today_usd": round(_today, 2),
+            "daily_loss_date":      getattr(s, "daily_loss_date", None),
+            "daily_loss_hit":       bool(_cap > 0 and _today <= -abs(_cap)),
+        })(),
     }
+
+
+def _read_risk_fields(body: dict) -> dict:
+    """Pluck and clamp the new risk/sizing/partial/session/cooldown fields out
+    of a create-or-update request body. Centralised so create + update agree."""
+    risk = (body.get("risk") if isinstance(body.get("risk"), dict) else body) or {}
+
+    def _opt_float(v, lo=None, hi=None):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        if lo is not None: f = max(lo, f)
+        if hi is not None: f = min(hi, f)
+        return f
+
+    def _opt_int(v, lo=0, hi=10_000):
+        try:
+            return max(lo, min(hi, int(float(v))))
+        except (TypeError, ValueError):
+            return None
+
+    def _hhmm(v):
+        if v is None: return None
+        s = str(v).strip()
+        if not s: return None
+        try:
+            h, m = s.split(":", 1)
+            h = int(h); m = int(m)
+            if 0 <= h < 24 and 0 <= m < 60:
+                return f"{h:02d}:{m:02d}"
+        except Exception:
+            pass
+        return None
+
+    out: dict = {}
+    if "max_concurrent_trades" in risk:
+        v = _opt_int(risk.get("max_concurrent_trades"), 1, 5)
+        if v is not None: out["max_concurrent_trades"] = v
+    if "max_daily_loss_usd" in risk:
+        v = risk.get("max_daily_loss_usd")
+        out["max_daily_loss_usd"] = (None if v in (None, "", 0)
+                                     else _opt_float(v, 1, 1_000_000))
+    if "max_consecutive_losses" in risk:
+        v = _opt_int(risk.get("max_consecutive_losses"), 0, 50)
+        if v is not None: out["max_consecutive_losses"] = v
+    if "position_sizing_mode" in risk:
+        m = str(risk.get("position_sizing_mode") or "fixed").lower()
+        out["position_sizing_mode"] = "risk_pct" if m == "risk_pct" else "fixed"
+    if "risk_pct" in risk:
+        v = risk.get("risk_pct")
+        out["risk_pct"] = (None if v in (None, "", 0) else _opt_float(v, 0.1, 25))
+    if "account_size_usd" in risk:
+        v = _opt_float(risk.get("account_size_usd"), 100, 10_000_000)
+        if v is not None: out["account_size_usd"] = v
+    if "enable_partial_tp1" in risk:
+        out["enable_partial_tp1"] = bool(risk.get("enable_partial_tp1"))
+    if "partial_tp1_pct" in risk:
+        v = _opt_float(risk.get("partial_tp1_pct"), 1, 99)
+        if v is not None: out["partial_tp1_pct"] = v
+    if "move_stop_to_be_after_tp1" in risk:
+        out["move_stop_to_be_after_tp1"] = bool(risk.get("move_stop_to_be_after_tp1"))
+    if "session_start_utc" in risk:
+        out["session_start_utc"] = _hhmm(risk.get("session_start_utc"))
+    if "session_end_utc" in risk:
+        out["session_end_utc"] = _hhmm(risk.get("session_end_utc"))
+    if "cooldown_minutes_after_loss" in risk:
+        v = _opt_int(risk.get("cooldown_minutes_after_loss"), 0, 24 * 60)
+        if v is not None: out["cooldown_minutes_after_loss"] = v
+    return out
 
 
 def _auto_trade_to_dict(t):
@@ -2365,7 +2499,75 @@ async def trade_auto_create(request: Request, db: Session = Depends(get_db)):
         status           = "active",
         notify_telegram  = bool(body.get("notify_telegram", True)),
     )
+    # Apply optional risk caps / sizing / partial / session / cooldown fields.
+    for k, v in _read_risk_fields(body).items():
+        setattr(s, k, v)
     db.add(s)
+    db.commit()
+    db.refresh(s)
+    return {"ok": True, "strategy": _auto_strategy_to_dict(s)}
+
+
+@app.post("/api/trade/auto/{sid}/update")
+async def trade_auto_update(sid: int, request: Request, db: Session = Depends(get_db)):
+    """Edit a subset of an existing strategy's settings without re-creating it.
+
+    Only the small "knobs" the user typically tunes are mutable here — name,
+    notify, cadence/odds, sizing, risk caps, partial TP, session, cooldown.
+    The chart state, mode, symbol, timeframe are immutable; clone instead.
+    """
+    from app.models import AutoTradeStrategy
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    s = db.query(AutoTradeStrategy).filter(AutoTradeStrategy.id == sid).first()
+    if not s or s.user_id != user.id:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    if "name" in body:
+        s.name = (str(body["name"]) or "").strip()[:60] or s.name
+    if "notify_telegram" in body:
+        s.notify_telegram = bool(body["notify_telegram"])
+    if "cadence_min" in body:
+        try:
+            s.cadence_min = max(1, min(60, int(float(body["cadence_min"]))))
+        except (TypeError, ValueError): pass
+    if "min_odds" in body:
+        try:
+            s.min_odds = max(40, min(95, int(float(body["min_odds"]))))
+        except (TypeError, ValueError): pass
+    if "notional_usd" in body:
+        try:
+            s.notional_usd = max(50.0, min(100000.0, float(body["notional_usd"])))
+        except (TypeError, ValueError): pass
+    if "leverage" in body:
+        try:
+            s.leverage = max(1, min(200, int(float(body["leverage"]))))
+        except (TypeError, ValueError): pass
+    if "tp_sl_source" in body:
+        v = (str(body["tp_sl_source"]) or "").lower().strip()
+        if v in ("ai", "walls", "atr"):
+            s.tp_sl_source = v
+
+    # Risk caps + sizing + partial + session + cooldown fields
+    for k, v in _read_risk_fields(body).items():
+        setattr(s, k, v)
+
+    # Allow user to manually clear an active cooldown ("resume now")
+    if body.get("clear_cooldown") is True:
+        s.paused_until = None
+        s.consecutive_losses = 0
+
     db.commit()
     db.refresh(s)
     return {"ok": True, "strategy": _auto_strategy_to_dict(s)}
@@ -2474,6 +2676,518 @@ async def trade_auto_delete(sid: int, request: Request, db: Session = Depends(ge
     s.status = "archived"
     db.commit()
     return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-strategy performance dashboard (L)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/api/trade/auto/{sid}/stats")
+async def trade_auto_stats(sid: int, request: Request, db: Session = Depends(get_db)):
+    """Return rich performance analytics for one strategy.
+
+    Includes the equity curve (cumulative P&L by close-time), running
+    drawdown vs the running peak, win-rate broken out by side and by
+    UTC hour-of-day, and basic R:R achieved. The frontend renders this
+    as a small dashboard modal — no chart library needed (inline SVG).
+    """
+    from app.models import AutoTradeStrategy, AutoTradePaperTrade
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    s = db.query(AutoTradeStrategy).filter(AutoTradeStrategy.id == sid).first()
+    if not s or s.user_id != user.id:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+    closed = (db.query(AutoTradePaperTrade)
+                .filter(AutoTradePaperTrade.strategy_id == sid,
+                        AutoTradePaperTrade.status.in_(("tp1_hit", "stop_hit",
+                                                        "tp2_hit", "manual_close",
+                                                        "expired")),
+                        AutoTradePaperTrade.closed_at.isnot(None))
+                .order_by(AutoTradePaperTrade.closed_at.asc())
+                .all())
+
+    equity_curve  = []      # list of [iso_ts, cumulative_pnl_usd]
+    drawdown      = []      # list of [iso_ts, dd_usd_from_peak]
+    by_hour       = {}      # hour_int -> {wins, losses, pnl}
+    by_side       = {"long": {"n": 0, "wins": 0, "pnl": 0.0},
+                     "short": {"n": 0, "wins": 0, "pnl": 0.0}}
+    rr_planned: list = []   # planned reward:risk per trade
+    rr_achieved: list = []  # achieved R (price move ÷ risk)
+
+    cum  = 0.0
+    peak = 0.0
+    win_count  = 0
+    loss_count = 0
+    pnl_total  = 0.0
+    for t in closed:
+        pnl = float(t.pnl_usd or 0)
+        cum += pnl
+        peak = max(peak, cum)
+        equity_curve.append([t.closed_at.isoformat(), round(cum, 2)])
+        drawdown.append([t.closed_at.isoformat(), round(cum - peak, 2)])
+        is_win = pnl >= 0
+        if is_win: win_count += 1
+        else:      loss_count += 1
+        pnl_total += pnl
+
+        h = t.closed_at.hour
+        b = by_hour.setdefault(h, {"wins": 0, "losses": 0, "pnl": 0.0})
+        if is_win: b["wins"]   += 1
+        else:      b["losses"] += 1
+        b["pnl"] += pnl
+
+        sd = by_side.get(t.side) or by_side.setdefault(t.side, {"n": 0, "wins": 0, "pnl": 0.0})
+        sd["n"]   += 1
+        sd["pnl"] += pnl
+        if is_win: sd["wins"] += 1
+
+        # R:R math — risk = entry → stop, reward_planned = entry → tp1
+        if t.entry_price and t.stop_price and t.tp1_price:
+            risk    = abs(t.entry_price - t.stop_price)
+            reward  = abs(t.tp1_price - t.entry_price)
+            if risk > 0:
+                rr_planned.append(round(reward / risk, 2))
+                if t.exit_price:
+                    achieved = abs(t.exit_price - t.entry_price)
+                    sign = 1 if (
+                        (t.side == "long"  and t.exit_price >= t.entry_price) or
+                        (t.side == "short" and t.exit_price <= t.entry_price)
+                    ) else -1
+                    rr_achieved.append(round(sign * achieved / risk, 2))
+
+    n = len(closed)
+    avg_win  = round(sum(float(t.pnl_usd or 0) for t in closed if (t.pnl_usd or 0) >  0) / max(1, win_count),  2)
+    avg_loss = round(sum(float(t.pnl_usd or 0) for t in closed if (t.pnl_usd or 0) <= 0) / max(1, loss_count), 2)
+
+    return {
+        "ok": True,
+        "strategy": _auto_strategy_to_dict(s),
+        "stats": {
+            "n_closed":       n,
+            "wins":           win_count,
+            "losses":         loss_count,
+            "win_rate":       round(100.0 * win_count / n, 1) if n else None,
+            "pnl_total":      round(pnl_total, 2),
+            "avg_win":        avg_win,
+            "avg_loss":       avg_loss,
+            "max_drawdown":   round(min((d[1] for d in drawdown), default=0.0), 2),
+            "current_drawdown": round((cum - peak), 2),
+            "peak_equity":    round(peak, 2),
+            "equity_curve":   equity_curve,
+            "drawdown":       drawdown,
+            "by_hour":        {str(k): v for k, v in sorted(by_hour.items())},
+            "by_side":        by_side,
+            "rr_planned_avg": round(sum(rr_planned)  / len(rr_planned),  2) if rr_planned  else None,
+            "rr_achieved_avg":round(sum(rr_achieved) / len(rr_achieved), 2) if rr_achieved else None,
+        },
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Strategy backtest replay (M)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.post("/api/trade/auto/{sid}/backtest")
+async def trade_auto_backtest(sid: int, request: Request, db: Session = Depends(get_db)):
+    """Replay a strategy against the last N candles and return a synthetic
+    equity curve + summary. Only Rules-mode strategies are replayed live —
+    AI-mode strategies are skipped because each scan would cost an LLM call.
+
+    Body:
+        {"bars": 500}   # how many recent candles to walk over (max 1500)
+    """
+    from app.models import AutoTradeStrategy
+    from app.services.auto_trader import (
+        evaluate_rules, derive_stop_tp_from_chart, check_position_close, compute_pnl,
+        _fetch_candles,
+    )
+
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    s = db.query(AutoTradeStrategy).filter(AutoTradeStrategy.id == sid).first()
+    if not s or s.user_id != user.id:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    if s.mode != "rules":
+        return {"ok": False, "error": "Backtest replay currently supports rules-mode strategies only. AI-mode would re-run the LLM on every bar."}
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    bars = max(50, min(1500, int(body.get("bars") or 500)))
+
+    # Pull the same candles the live engine would see — reuse its helper so
+    # we don't duplicate the MEXC request shape or caching logic.
+    try:
+        candles = await _fetch_candles(s.symbol, s.timeframe, limit=bars)
+    except Exception as e:
+        logger.warning(f"backtest candle fetch failed: {e}")
+        raise HTTPException(status_code=503, detail="candle fetch failed")
+    if not candles or len(candles) < 60:
+        return {"ok": False, "error": f"only {len(candles)} candles available — need ≥ 60"}
+
+    rules = json.loads(s.rules_json or "{}")
+    if not rules.get("entry"):
+        return {"ok": False, "error": "strategy has no compiled rules"}
+
+    fills: list = []        # closed simulated trades
+    open_trade            = None
+    cum                   = 0.0
+    peak                  = 0.0
+    equity_curve          = []
+    drawdown              = []
+
+    # Walk forward — at each bar, the engine would have known about candles[:i+1].
+    # Try to open on the close of bar i (no lookahead), then check fill on bars i+1…
+    for i in range(40, len(candles) - 1):
+        window = candles[: i + 1]
+        if open_trade is None:
+            hit = evaluate_rules(rules, window, walls=[], tape={})
+            if hit:
+                side  = hit["side"]
+                entry = hit["entry_price"]
+                stop, tp1, tp2 = derive_stop_tp_from_chart(side, entry, window,
+                                                           walls=None, source="atr")
+                # Sanity: SL/TP must straddle entry for the side
+                if side == "long" and not (stop < entry < tp1):
+                    continue
+                if side == "short" and not (tp1 < entry < stop):
+                    continue
+                open_trade = {
+                    "side": side, "entry": entry, "stop": stop,
+                    "tp1": tp1, "tp2": tp2, "open_idx": i,
+                }
+        else:
+            # Simulate close on the next bar's range
+            class _T:
+                opened_at = datetime.utcfromtimestamp(int(candles[open_trade["open_idx"]]["time"]))
+                side = open_trade["side"]
+                stop_price = open_trade["stop"]
+                tp1_price  = open_trade["tp1"]
+                entry_price= open_trade["entry"]
+            res = check_position_close(_T(), [candles[i + 1]])
+            if res:
+                reason, exit_p = res
+                pnl_pct, pnl_usd = compute_pnl(_T.side, _T.entry_price, exit_p,
+                                               s.notional_usd or 1000, s.leverage or 10)
+                fills.append({
+                    "open_time":  candles[open_trade["open_idx"]]["time"],
+                    "close_time": candles[i + 1]["time"],
+                    "side": _T.side, "entry": _T.entry_price, "exit": exit_p,
+                    "reason": reason, "pnl_usd": round(pnl_usd, 2),
+                })
+                cum  += pnl_usd
+                peak  = max(peak, cum)
+                equity_curve.append([candles[i + 1]["time"], round(cum, 2)])
+                drawdown    .append([candles[i + 1]["time"], round(cum - peak, 2)])
+                open_trade = None
+
+    wins  = sum(1 for f in fills if f["pnl_usd"] >= 0)
+    losses= len(fills) - wins
+    return {
+        "ok": True,
+        "summary": {
+            "bars_replayed": len(candles),
+            "n_trades":      len(fills),
+            "wins":          wins,
+            "losses":        losses,
+            "win_rate":      round(100.0 * wins / len(fills), 1) if fills else None,
+            "pnl_usd":       round(cum, 2),
+            "max_drawdown":  round(min((d[1] for d in drawdown), default=0.0), 2),
+        },
+        "fills":        fills,
+        "equity_curve": equity_curve,
+        "drawdown":     drawdown,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Funding rate + open interest overlay (C) — Coinglass
+# ─────────────────────────────────────────────────────────────────────────────
+_COINGLASS_FUNDING_TTL = 60   # seconds — funding only ticks every 8h, OI every minute
+
+@app.get("/api/trade/funding/{symbol}")
+async def trade_funding(symbol: str):
+    """Pull funding rate + open interest summary for the chart sidebar.
+    Cached aggressively (60s) so frequent polls from the chart don't melt the
+    upstream rate-limit. Returns a flat shape the frontend can render directly.
+    """
+    sym = (symbol or "").upper().strip()
+    if sym not in TRADE_SYMBOL_WHITELIST:
+        return JSONResponse({"error": "symbol not supported"}, status_code=404)
+    cache_key = f"trade_funding_{sym}"
+    cached = _CACHE.get(cache_key)
+    if cached and time.time() < cached[1]:
+        return cached[0]
+
+    api_key = os.getenv("COINGLASS_API_KEY") or ""
+    if not api_key:
+        return JSONResponse({"error": "coinglass key not configured"}, status_code=503)
+
+    pair = sym  # Coinglass uses the bare symbol for `/futures/...`
+    headers = {"CG-API-KEY": api_key, "accept": "application/json"}
+    out: dict = {"symbol": sym, "fetched_at": int(time.time())}
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as cl:
+            # Aggregated funding rate (last value across exchanges)
+            r = await cl.get(
+                "https://open-api-v3.coinglass.com/api/futures/funding-rate/exchange-list",
+                params={"symbol": pair}, headers=headers,
+            )
+            if r.status_code == 200:
+                jd = r.json() or {}
+                rows = (jd.get("data") or [])
+                # Pick the binance/bybit/okx row if present, else first
+                pref = ("Binance", "Bybit", "OKX")
+                pick = next((x for x in rows if x.get("exchangeName") in pref), rows[0] if rows else None)
+                if pick:
+                    fr = pick.get("usdtMargin") or pick.get("rate") or {}
+                    if isinstance(fr, dict):
+                        out["funding_rate_pct"]  = fr.get("rate")
+                        out["next_funding_time"] = fr.get("nextFundingTime")
+                        out["funding_exchange"]  = pick.get("exchangeName")
+                    else:
+                        out["funding_rate_pct"]  = fr
+                        out["funding_exchange"]  = pick.get("exchangeName")
+
+            # Open interest aggregated
+            r2 = await cl.get(
+                "https://open-api-v3.coinglass.com/api/futures/open-interest/exchange-list",
+                params={"symbol": pair}, headers=headers,
+            )
+            if r2.status_code == 200:
+                jd = r2.json() or {}
+                rows = (jd.get("data") or [])
+                # Sum USD OI across exchanges
+                total_oi = 0.0
+                for x in rows:
+                    try:    total_oi += float(x.get("openInterestAmountByCoinMargin", 0) or 0) + float(x.get("openInterestAmountByStableCoinMargin", 0) or 0)
+                    except: pass
+                out["open_interest_usd"] = round(total_oi, 0)
+                # Also surface 24h OI change if available (first row's pct)
+                if rows:
+                    out["oi_change_24h_pct"] = rows[0].get("openInterestChangePercent24h")
+
+    except Exception as e:
+        logger.warning(f"trade_funding({sym}) fetch failed: {e}")
+        return JSONResponse({"error": f"upstream failed: {e}"}, status_code=502)
+
+    _CACHE[cache_key] = (out, time.time() + _COINGLASS_FUNDING_TTL)
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Multi-symbol watchlist (F) — light ticker poll for the sidebar
+# ─────────────────────────────────────────────────────────────────────────────
+_WATCHLIST_PAIRS = [
+    ("BTC",  "BTCUSDT"),
+    ("ETH",  "ETHUSDT"),
+    ("SOL",  "SOLUSDT"),
+    ("BNB",  "BNBUSDT"),
+    ("XRP",  "XRPUSDT"),
+    ("DOGE", "DOGEUSDT"),
+    ("AVAX", "AVAXUSDT"),
+    ("LINK", "LINKUSDT"),
+]
+
+@app.get("/api/trade/watchlist")
+async def trade_watchlist():
+    """Return a small rotating list of futures tickers (last + 24h % change).
+
+    Cached 6s — short enough to look live, long enough to share a single MEXC
+    round-trip across the gunicorn workers.
+    """
+    cache_key = "trade_watchlist_v1"
+    cached = _CACHE.get(cache_key)
+    if cached and time.time() < cached[1]:
+        return cached[0]
+
+    out = []
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=8.0) as cl:
+            r = await cl.get("https://api.mexc.com/api/v3/ticker/24hr")
+            r.raise_for_status()
+            rows = r.json() or []
+        idx = {x.get("symbol"): x for x in rows if isinstance(x, dict)}
+        for sym, pair in _WATCHLIST_PAIRS:
+            t = idx.get(pair)
+            if not t:
+                continue
+            try:
+                out.append({
+                    "symbol": sym,
+                    "pair":   pair,
+                    "price":  float(t.get("lastPrice", 0) or 0),
+                    "pct":    float(t.get("priceChangePercent", 0) or 0),
+                    "vol_quote_usd": float(t.get("quoteVolume", 0) or 0),
+                })
+            except (TypeError, ValueError):
+                continue
+    except Exception as e:
+        logger.warning(f"trade_watchlist failed: {e}")
+        return JSONResponse({"error": "ticker fetch failed"}, status_code=502)
+
+    payload = {"ok": True, "tickers": out, "fetched_at": int(time.time())}
+    _CACHE[cache_key] = (payload, time.time() + 6)
+    return payload
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Persistent chart drawings (D)
+# ─────────────────────────────────────────────────────────────────────────────
+_DRAWING_KINDS = {"trendline", "hline", "fib", "rect", "note"}
+_MAX_DRAWINGS_PER_SYMBOL = 50
+
+def _drawing_to_dict(d):
+    return {
+        "id": d.id,
+        "symbol": d.symbol,
+        "tf": d.timeframe,
+        "kind": d.kind,
+        "points": json.loads(d.points_json or "[]"),
+        "color": d.color,
+        "label": d.label,
+        "created_at": d.created_at.isoformat() if d.created_at else None,
+        "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+    }
+
+
+@app.get("/api/trade/drawings")
+async def trade_drawings_list(request: Request, symbol: str = "BTC",
+                              db: Session = Depends(get_db)):
+    """List the user's saved drawings for a symbol."""
+    from app.models import TradeDrawing
+    uid = _get_session_uid(request)
+    if not uid:
+        return {"ok": True, "drawings": []}      # anonymous → no drawings, no error
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        return {"ok": True, "drawings": []}
+    sym = (symbol or "BTC").upper().strip()
+    rows = (db.query(TradeDrawing)
+              .filter(TradeDrawing.user_id == user.id,
+                      TradeDrawing.symbol == sym)
+              .order_by(TradeDrawing.created_at.desc())
+              .limit(_MAX_DRAWINGS_PER_SYMBOL)
+              .all())
+    return {"ok": True, "drawings": [_drawing_to_dict(d) for d in rows]}
+
+
+@app.post("/api/trade/drawings")
+async def trade_drawings_create(request: Request, db: Session = Depends(get_db)):
+    """Save a drawing. Body: {symbol, tf?, kind, points:[{time,price}], color?, label?}"""
+    from app.models import TradeDrawing
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    sym  = (str(body.get("symbol") or "BTC")).upper().strip()
+    kind = (str(body.get("kind") or "")).lower().strip()
+    if kind not in _DRAWING_KINDS:
+        raise HTTPException(status_code=400, detail=f"kind must be one of {sorted(_DRAWING_KINDS)}")
+    pts  = body.get("points") or []
+    if not isinstance(pts, list) or not pts:
+        raise HTTPException(status_code=400, detail="points required (non-empty list)")
+    # Sanitize points — keep only numeric {time, price}
+    clean: list = []
+    for p in pts[:8]:
+        if not isinstance(p, dict): continue
+        try:
+            clean.append({"time": int(p.get("time")), "price": float(p.get("price"))})
+        except (TypeError, ValueError):
+            continue
+    if not clean:
+        raise HTTPException(status_code=400, detail="all points were invalid")
+
+    # Quota: at most _MAX_DRAWINGS_PER_SYMBOL per symbol
+    cur = (db.query(TradeDrawing)
+             .filter(TradeDrawing.user_id == user.id,
+                     TradeDrawing.symbol == sym)
+             .count())
+    if cur >= _MAX_DRAWINGS_PER_SYMBOL:
+        raise HTTPException(status_code=400, detail=f"max {_MAX_DRAWINGS_PER_SYMBOL} drawings per symbol")
+
+    d = TradeDrawing(
+        user_id     = user.id,
+        symbol      = sym,
+        timeframe   = (str(body.get("tf") or "") or None) and str(body.get("tf"))[:8],
+        kind        = kind,
+        points_json = json.dumps(clean),
+        color       = (str(body.get("color") or "") or None),
+        label       = (str(body.get("label") or "") or None),
+    )
+    db.add(d); db.commit(); db.refresh(d)
+    return {"ok": True, "drawing": _drawing_to_dict(d)}
+
+
+@app.delete("/api/trade/drawings/{did}")
+async def trade_drawings_delete(did: int, request: Request, db: Session = Depends(get_db)):
+    from app.models import TradeDrawing
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="login required")
+    user = _get_user_by_uid(uid, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="login required")
+    d = db.query(TradeDrawing).filter(TradeDrawing.id == did,
+                                      TradeDrawing.user_id == user.id).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="drawing not found")
+    db.delete(d); db.commit()
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Quick alert templates (E) — frontend hits this to populate a dropdown
+# ─────────────────────────────────────────────────────────────────────────────
+_ALERT_TEMPLATES = [
+    {"id": "px_above",   "label": "Price crosses ABOVE level",
+     "expr": "price > {level}", "params": [{"name": "level", "type": "number", "placeholder": "70000"}]},
+    {"id": "px_below",   "label": "Price crosses BELOW level",
+     "expr": "price < {level}", "params": [{"name": "level", "type": "number", "placeholder": "60000"}]},
+    {"id": "rsi_over",   "label": "RSI(14) crosses ABOVE 70 (overbought)",
+     "expr": "rsi(14) > 70", "params": []},
+    {"id": "rsi_under",  "label": "RSI(14) crosses BELOW 30 (oversold)",
+     "expr": "rsi(14) < 30", "params": []},
+    {"id": "vwap_reclm", "label": "Price reclaims VWAP",
+     "expr": "price > vwap", "params": []},
+    {"id": "vwap_lost",  "label": "Price loses VWAP",
+     "expr": "price < vwap", "params": []},
+    {"id": "ema_cross_up",   "label": "Fast EMA(9) crosses ABOVE slow EMA(21)",
+     "expr": "ema(9) > ema(21)", "params": []},
+    {"id": "ema_cross_down", "label": "Fast EMA(9) crosses BELOW slow EMA(21)",
+     "expr": "ema(9) < ema(21)", "params": []},
+    {"id": "macd_bull",  "label": "MACD line crosses ABOVE signal (bullish)",
+     "expr": "macd_line > macd_signal", "params": []},
+    {"id": "macd_bear",  "label": "MACD line crosses BELOW signal (bearish)",
+     "expr": "macd_line < macd_signal", "params": []},
+    {"id": "supertrend_flip_up",   "label": "SuperTrend flips bullish",
+     "expr": "supertrend_dir == 1", "params": []},
+    {"id": "supertrend_flip_down", "label": "SuperTrend flips bearish",
+     "expr": "supertrend_dir == -1", "params": []},
+]
+
+@app.get("/api/trade/alert_templates")
+async def trade_alert_templates():
+    """Return the list of one-click alert templates the UI offers."""
+    return {"ok": True, "templates": _ALERT_TEMPLATES}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -450,35 +450,54 @@ def derive_stop_tp_from_chart(side: str, entry: float, candles: List[dict],
 # ─── Position simulator ───────────────────────────────────────────────────────
 def check_position_close(trade, candles: List[dict]) -> Optional[Tuple[str, float]]:
     """Return (reason, exit_price) if a candle since the trade opened hit
-    stop or TP1. We use TP1 as the close target for v1 — TP2 is informational.
+    stop or TP. v1 closes at TP1; once a partial fired (`tp1_hit=True`) the
+    remaining leg runs to TP2 (or the stop, which may already have been moved
+    to breakeven by the partial handler).
+
+    Critical: when tp1_hit is True we MUST only evaluate candles AFTER the
+    partial fired, otherwise we'd retroactively stop-out the trade on old
+    candles using the new (BE) stop — that's lookahead bias.
 
     `trade` is an AutoTradePaperTrade ORM row.
     """
     if not candles:
         return None
-    open_ts = int(trade.opened_at.timestamp()) if trade.opened_at else 0
-    relevant = [c for c in candles if int(c["time"]) >= open_ts]
-    if not relevant:
-        # Trade was opened after the latest candle — nothing to check yet.
-        relevant = candles[-3:]
 
     side = trade.side
     stop = float(trade.stop_price)
-    tp1  = float(trade.tp1_price)
+
+    # After a partial TP1 fires, the trade is hunting TP2. Use tp2_price
+    # if defined, otherwise the trade simply runs to its (possibly-moved)
+    # stop. Do NOT re-evaluate TP1 — it's already been realised.
+    tp1_already_hit = bool(getattr(trade, "tp1_hit", False))
+    if tp1_already_hit:
+        tp_target = float(getattr(trade, "tp2_price", 0) or 0) or None
+        anchor_dt = getattr(trade, "tp1_hit_at", None) or trade.opened_at
+    else:
+        tp_target = float(trade.tp1_price)
+        anchor_dt = trade.opened_at
+
+    anchor_ts = int(anchor_dt.timestamp()) if anchor_dt else 0
+    relevant = [c for c in candles if int(c["time"]) >= anchor_ts]
+    if not relevant and not tp1_already_hit:
+        # Trade opened after the latest candle — nothing to check yet.
+        relevant = candles[-3:]
+    if not relevant:
+        return None
 
     for c in relevant:
         hi, lo = float(c["high"]), float(c["low"])
         if side == "long":
             # Pessimistic ordering: stop wins on a wick that hit both
             if lo <= stop:
-                return "stop_hit", stop
-            if hi >= tp1:
-                return "tp1_hit", tp1
+                return ("be_stop" if tp1_already_hit else "stop_hit"), stop
+            if tp_target is not None and hi >= tp_target:
+                return ("tp2_hit" if tp1_already_hit else "tp1_hit"), tp_target
         else:
             if hi >= stop:
-                return "stop_hit", stop
-            if lo <= tp1:
-                return "tp1_hit", tp1
+                return ("be_stop" if tp1_already_hit else "stop_hit"), stop
+            if tp_target is not None and lo <= tp_target:
+                return ("tp2_hit" if tp1_already_hit else "tp1_hit"), tp_target
     return None
 
 
@@ -592,6 +611,193 @@ def _walls_flat_list(wall_report: Optional[dict]) -> List[dict]:
     return out
 
 
+# ─── Risk caps / sessions / cooldowns / sizing (G, H, J, K) ──────────────────
+def _today_utc_str() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+
+def _hhmm_to_minutes(s: Optional[str]) -> Optional[int]:
+    """Parse 'HH:MM' (UTC) into minutes-since-midnight; None on failure."""
+    if not s:
+        return None
+    try:
+        h, m = s.strip().split(":", 1)
+        return (int(h) % 24) * 60 + (int(m) % 60)
+    except Exception:
+        return None
+
+
+def _in_session(strategy, now: datetime) -> bool:
+    """J: True if the strategy is allowed to fire at `now` (UTC).
+
+    Both endpoints null/empty → no filter (always allowed). Supports overnight
+    windows (e.g. 22:00 → 04:00 → "during the Asia open").
+    """
+    start = _hhmm_to_minutes(getattr(strategy, "session_start_utc", None))
+    end   = _hhmm_to_minutes(getattr(strategy, "session_end_utc",   None))
+    if start is None or end is None:
+        return True
+    cur = now.hour * 60 + now.minute
+    if start == end:
+        return True              # 24h window
+    if start < end:
+        return start <= cur < end
+    # Overnight wrap (e.g. 22:00 → 04:00)
+    return cur >= start or cur < end
+
+
+def _roll_daily_loss(strategy) -> None:
+    """Reset daily_loss_today_usd whenever we cross into a new UTC day."""
+    today = _today_utc_str()
+    if (strategy.daily_loss_date or "") != today:
+        strategy.daily_loss_date      = today
+        strategy.daily_loss_today_usd = 0.0
+
+
+def _pre_open_gates(strategy, now: datetime) -> Tuple[bool, str]:
+    """G + J + K — return (allowed, reason). Reason is empty string when allowed.
+
+    Called BEFORE any AI/rule evaluation so we don't waste an API call on
+    a strategy that isn't even allowed to open right now.
+    """
+    # K — explicit pause window from a prior cooldown.
+    # Once the pause expires we also reset the consecutive-loss counter so the
+    # bot is genuinely "back in business" — otherwise the streak gate below
+    # would deadlock the strategy forever (no new trades ⇒ no wins ⇒ never
+    # resets). This makes the cooldown the discipline mechanism, not a
+    # permanent ban.
+    paused_until = getattr(strategy, "paused_until", None)
+    if paused_until:
+        if now < paused_until:
+            return False, f"cooldown_until_{paused_until.isoformat(timespec='minutes')}"
+        # Cooldown finished — wipe both flags so we can trade again.
+        strategy.paused_until = None
+        strategy.consecutive_losses = 0
+
+    # J — time-of-day session
+    if not _in_session(strategy, now):
+        return False, "outside_session_window"
+
+    # G — daily loss cap (account for today's realised NET P&L; wins offset
+    # losses so the cap matches the user's intuition that it's the day's bottom
+    # line, not just gross losses).
+    cap = getattr(strategy, "max_daily_loss_usd", None)
+    if cap and cap > 0:
+        _roll_daily_loss(strategy)
+        if (strategy.daily_loss_today_usd or 0.0) <= -abs(cap):
+            return False, f"daily_loss_cap_hit_{abs(cap):.0f}"
+
+    return True, ""
+
+
+def _compute_position_size(strategy, *, side: str, entry: float, stop: float) -> float:
+    """H — return the USD notional to use for this trade.
+
+    Modes:
+      * 'fixed'    — strategy.notional_usd (legacy behaviour)
+      * 'risk_pct' — size so that (entry → stop) move loses exactly
+                     account_size_usd × risk_pct% of equity, given leverage.
+
+    Falls back to fixed if the inputs are degenerate (zero stop distance, etc).
+    """
+    fixed = float(strategy.notional_usd or 1000.0)
+    mode = (getattr(strategy, "position_sizing_mode", "fixed") or "fixed").lower()
+    if mode != "risk_pct":
+        return fixed
+
+    risk_pct = float(getattr(strategy, "risk_pct", 0) or 0)
+    acct     = float(getattr(strategy, "account_size_usd", 0) or 0)
+    lev      = max(1, int(strategy.leverage or 1))
+    if risk_pct <= 0 or acct <= 0 or entry <= 0 or stop <= 0:
+        return fixed
+
+    # Stop distance as a fraction of entry (always positive).
+    if side == "long":
+        if stop >= entry:
+            return fixed
+        stop_frac = (entry - stop) / entry
+    else:
+        if stop <= entry:
+            return fixed
+        stop_frac = (stop - entry) / entry
+    if stop_frac <= 0:
+        return fixed
+
+    risk_usd = acct * (risk_pct / 100.0)
+    # notional × leverage × stop_frac == risk_usd  ⇒  notional = risk_usd / (lev × stop_frac)
+    notional = risk_usd / (lev * stop_frac)
+    # Sanity clamps to avoid degenerate sizes
+    return max(50.0, min(notional, 1_000_000.0))
+
+
+def _maybe_partial_close_and_breakeven(strategy, trade, candles: List[dict],
+                                       db) -> bool:
+    """I — when TP1 prints, optionally realise a partial leg and slide the
+    stop to entry. Returns True if any state changed.
+
+    The trade stays OPEN; the remainder runs to TP2 / final stop. On the
+    final close, `_resolve_open_trades_for` adds `partial_pnl_usd` so the
+    aggregate book matches reality.
+    """
+    if not getattr(strategy, "enable_partial_tp1", False):
+        return False
+    if trade.tp1_hit:
+        return False  # already partialed on a prior tick
+
+    # Check whether TP1 has been touched since the trade opened.
+    open_ts = int(trade.opened_at.timestamp()) if trade.opened_at else 0
+    relevant = [c for c in candles if int(c["time"]) >= open_ts] or candles[-3:]
+    side = trade.side
+    tp1  = float(trade.tp1_price)
+    hit  = False
+    for c in relevant:
+        hi, lo = float(c["high"]), float(c["low"])
+        if side == "long" and hi >= tp1:
+            hit = True; break
+        if side == "short" and lo <= tp1:
+            hit = True; break
+    if not hit:
+        return False
+
+    # Partial leg sizing — close partial_tp1_pct% of the position at TP1.
+    pct = float(strategy.partial_tp1_pct or 50.0)
+    pct = max(1.0, min(99.0, pct)) / 100.0
+    full_notional = float(trade.notional_usd or 0)
+    if full_notional <= 0:
+        return False
+    closed_notional    = full_notional * pct
+    remaining_notional = full_notional - closed_notional
+
+    _, partial_pnl = compute_pnl(side, trade.entry_price, tp1,
+                                 closed_notional, trade.leverage)
+
+    trade.tp1_hit                = True
+    trade.tp1_hit_at             = datetime.utcnow()
+    trade.partial_pnl_usd        = (trade.partial_pnl_usd or 0.0) + partial_pnl
+    trade.original_notional_usd  = full_notional
+    trade.remaining_notional_usd = remaining_notional
+    # The remaining leg trades on the smaller notional from now on.
+    trade.notional_usd           = remaining_notional
+
+    if getattr(strategy, "move_stop_to_be_after_tp1", False):
+        # Slide stop to entry. Slightly inside (+/- 1bp) so a single-tick wick
+        # doesn't immediately ping it.
+        be_buffer = trade.entry_price * 0.0001
+        if side == "long":
+            trade.stop_price       = trade.entry_price + be_buffer
+        else:
+            trade.stop_price       = trade.entry_price - be_buffer
+        trade.stop_moved_to_be = True
+
+    db.commit()
+    logger.info(
+        f"auto_trader strategy #{strategy.id} trade #{trade.id} TP1 partial closed "
+        f"({pct*100:.0f}% = ${closed_notional:.0f}, partial P&L ${partial_pnl:+.2f})"
+        + (" + stop→BE" if trade.stop_moved_to_be else "")
+    )
+    return True
+
+
 # ─── Main per-strategy evaluation ─────────────────────────────────────────────
 async def _resolve_open_trades_for(strategy, db) -> bool:
     """Close any open paper trades that hit stop/TP. Returns True if any closed."""
@@ -608,23 +814,49 @@ async def _resolve_open_trades_for(strategy, db) -> bool:
 
     closed_any = False
     for t in open_trades:
+        # I — first see whether TP1 just printed; if partials are enabled we
+        # realise the partial leg + slide stop to BE without closing the trade.
+        try:
+            _maybe_partial_close_and_breakeven(strategy, t, candles, db)
+        except Exception as e:
+            logger.warning(f"auto_trader partial-TP handler failed for trade #{t.id}: {e}")
+
         result = check_position_close(t, candles)
         if not result:
             continue
         reason, exit_price = result
-        pnl_pct, pnl_usd = compute_pnl(t.side, t.entry_price, exit_price,
+        # The "remaining leg" P&L runs on whatever notional is left after a partial.
+        pnl_pct, leg_pnl = compute_pnl(t.side, t.entry_price, exit_price,
                                        t.notional_usd, t.leverage)
+        # Combine partial + remaining leg for the trade's reported P&L.
+        partial_pnl  = float(t.partial_pnl_usd or 0.0)
+        total_pnl    = leg_pnl + partial_pnl
         t.status     = reason
         t.exit_price = exit_price
         t.pnl_pct    = pnl_pct
-        t.pnl_usd    = pnl_usd
+        t.pnl_usd    = total_pnl
         t.closed_at  = datetime.utcnow()
-        # Bump aggregate stats
-        strategy.pnl_usd_total = (strategy.pnl_usd_total or 0.0) + pnl_usd
-        if pnl_usd >= 0:
-            strategy.wins   = (strategy.wins   or 0) + 1
+
+        # Aggregate stats use the *combined* P&L so the dashboard math matches.
+        strategy.pnl_usd_total = (strategy.pnl_usd_total or 0.0) + total_pnl
+        # G — daily NET P&L tracker. Wins offset losses so the cap reflects
+        # the day's bottom line (matching the user-facing copy).
+        _roll_daily_loss(strategy)
+        strategy.daily_loss_today_usd = (strategy.daily_loss_today_usd or 0.0) + total_pnl
+
+        if total_pnl >= 0:
+            strategy.wins               = (strategy.wins   or 0) + 1
+            strategy.consecutive_losses = 0     # K — winning resets the streak
         else:
-            strategy.losses = (strategy.losses or 0) + 1
+            strategy.losses             = (strategy.losses or 0) + 1
+            strategy.consecutive_losses = (strategy.consecutive_losses or 0) + 1
+            # K — only START cooldown when the user-defined streak threshold
+            # is reached. Otherwise every loss would trigger a pause, which
+            # is way more aggressive than "pause after N losses".
+            max_streak = int(getattr(strategy, "max_consecutive_losses", 0) or 0)
+            cd         = int(getattr(strategy, "cooldown_minutes_after_loss", 0) or 0)
+            if max_streak > 0 and cd > 0 and strategy.consecutive_losses >= max_streak:
+                strategy.paused_until = datetime.utcnow() + timedelta(minutes=cd)
         db.commit()
         closed_any = True
 
@@ -634,7 +866,7 @@ async def _resolve_open_trades_for(strategy, db) -> bool:
             if user and user.telegram_id and not str(user.telegram_id).startswith("WEB-"):
                 try:
                     tg_id = int(user.telegram_id)
-                    await _dm_close(tg_id, strategy.name, t, reason, exit_price, pnl_pct, pnl_usd)
+                    await _dm_close(tg_id, strategy.name, t, reason, exit_price, pnl_pct, total_pnl)
                 except (TypeError, ValueError):
                     pass
     return closed_any
@@ -653,21 +885,28 @@ async def _open_paper_trade(strategy, *, side: str, entry: float, stop: float,
     if side == "short" and not (tp1 < entry < stop):
         return None
 
+    # H — compute the position size; risk_pct mode auto-derives notional from
+    # account size + stop distance, fixed mode keeps the existing behaviour.
+    notional = _compute_position_size(strategy, side=side, entry=entry, stop=stop)
+
     t = AutoTradePaperTrade(
-        strategy_id  = strategy.id,
-        user_id      = strategy.user_id,
-        symbol       = strategy.symbol,
-        timeframe    = strategy.timeframe,
-        side         = side,
-        source       = source,
-        order_type   = "MARKET",
-        entry_price  = entry,
-        stop_price   = stop,
-        tp1_price    = tp1,
-        tp2_price    = tp2,
-        notional_usd = strategy.notional_usd,
-        leverage     = strategy.leverage,
-        plan_text    = plan_text,
+        strategy_id            = strategy.id,
+        user_id                = strategy.user_id,
+        symbol                 = strategy.symbol,
+        timeframe              = strategy.timeframe,
+        side                   = side,
+        source                 = source,
+        order_type             = "MARKET",
+        entry_price            = entry,
+        stop_price             = stop,
+        tp1_price              = tp1,
+        tp2_price              = tp2,
+        notional_usd           = notional,
+        leverage               = strategy.leverage,
+        plan_text              = plan_text,
+        # I — partial-TP bookkeeping starts at "no partial yet"
+        original_notional_usd  = notional,
+        remaining_notional_usd = notional,
     )
     db.add(t)
     strategy.last_signal_at = datetime.utcnow()
@@ -822,18 +1061,26 @@ async def tick_auto_strategies() -> None:
             if row.status != "active":
                 continue
             try:
-                # 1) Resolve any open paper trades first (close on stop/TP)
+                # 1) Resolve any open paper trades first (close on stop/TP).
+                #    This may also bump consecutive_losses / paused_until below.
                 await _resolve_open_trades_for(row, db)
-                # 2) If no open trade, try to open a new one. The check itself
-                #    runs inside the same transaction holding the row lock so
-                #    a second worker (after we commit) sees the freshly-opened
-                #    trade and bails on its own check.
+
+                # 2) Pre-open gates (G/J/K) — bail before spending an AI call
+                #    if cooldown / session / loss-cap forbids opening right now.
+                allowed, reason = _pre_open_gates(row, datetime.utcnow())
+                if not allowed:
+                    logger.debug(f"auto_trader strategy #{row.id} gated: {reason}")
+                    db.commit()
+                    continue
+
+                # 3) Respect max_concurrent_trades (G). Default 1 = legacy behaviour.
                 from app.models import AutoTradePaperTrade
                 has_open = (db.query(AutoTradePaperTrade)
                               .filter(AutoTradePaperTrade.strategy_id == row.id,
                                       AutoTradePaperTrade.status == "open")
                               .count())
-                if has_open == 0:
+                cap = max(1, int(getattr(row, "max_concurrent_trades", 1) or 1))
+                if has_open < cap:
                     if row.mode == "ai":
                         await _maybe_open_ai(row, db)
                     elif row.mode == "rules":
