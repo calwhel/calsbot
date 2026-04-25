@@ -582,6 +582,10 @@ button{font-family:inherit}
     <label class="toggle"><input type="checkbox" id="tape-toggle" checked><span class="toggle-slider"></span></label>
     <span>Big prints</span>
   </div>
+  <div class="toggle-row">
+    <label class="toggle"><input type="checkbox" id="fvg-toggle"><span class="toggle-slider"></span></label>
+    <span title="Fair Value Gaps — ICT 3-candle imbalance zones. Bull (green) = unfilled support; Bear (red) = unfilled resistance.">FVG zones</span>
+  </div>
   <div class="divider"></div>
   <button class="ind-btn" id="ind-add-btn" title="Add indicator (preset / formula / Pine Script)">
     <span class="plus">+</span> Indicator
@@ -829,6 +833,7 @@ button{font-family:inherit}
               <option value="ema_cross">Price vs EMA</option>
               <option value="macd_cross_zero">MACD zero line</option>
               <option value="supertrend_flip">SuperTrend flip</option>
+              <option value="fvg_retest">FVG retest (ICT)</option>
             </select>
             <select id="alf-condition"></select>
 
@@ -1466,6 +1471,76 @@ button{font-family:inherit}
       zCtx.fillStyle = '#ffffff';
       zCtx.fillText(label, pillRight - padX, pillY);
     });
+
+    // ── PASS 3: Fair Value Gaps (ICT 3-candle imbalance bands) ──
+    // Drawn AFTER walls so an unfilled FVG is visible even when it overlaps
+    // a wall. Bull = green (demand), Bear = red (supply). Each band gets a
+    // small left-edge label so multiple gaps stay legible.
+    if($('fvg-toggle')?.checked && lastFvgData && Array.isArray(lastFvgData.gaps)){
+      const gaps = lastFvgData.gaps;
+      // Sort small→big so the largest gaps paint on top.
+      const sorted = gaps.slice().sort((a,b) => (a.size_pct||0) - (b.size_pct||0));
+      sorted.forEach(g => {
+        const yTop = candleSeries.priceToCoordinate(g.top);
+        const yBot = candleSeries.priceToCoordinate(g.bottom);
+        if(yTop == null || yBot == null) return;
+        let top = Math.min(yTop, yBot), bot = Math.max(yTop, yBot);
+        if(bot < 0 || top > hpx) return;
+        top = Math.max(0, top);
+        bot = Math.min(hpx, bot);
+        const bandH = bot - top;
+        if(bandH < 1) return;
+
+        const isBull = g.side === 'bull';
+        // Larger gaps → stronger fill. Cap so colossal gaps don't blow out.
+        const sizeAlpha = Math.min(0.28, 0.10 + (g.size_pct || 0) * 0.04);
+        const fill   = isBull ? `rgba(38,166,154,${sizeAlpha})`
+                              : `rgba(239,83,80,${sizeAlpha})`;
+        const stroke = isBull ? `rgba(38,166,154,0.85)`
+                              : `rgba(239,83,80,0.85)`;
+
+        zCtx.fillStyle = fill;
+        zCtx.fillRect(0, top, wpx, bandH);
+
+        if(bandH >= 2){
+          zCtx.strokeStyle = stroke;
+          zCtx.lineWidth = 0.85;
+          zCtx.setLineDash([4, 3]);
+          zCtx.beginPath();
+          zCtx.moveTo(0, top + 0.5); zCtx.lineTo(wpx, top + 0.5);
+          zCtx.moveTo(0, bot - 0.5); zCtx.lineTo(wpx, bot - 0.5);
+          zCtx.stroke();
+          zCtx.setLineDash([]);
+        }
+
+        // Left-edge label so price-axis pills (walls) don't fight for space.
+        const fontPx = bandH >= 14 ? 10 : 9;
+        const label = `${isBull ? 'BULL' : 'BEAR'} FVG · ${(g.size_pct||0).toFixed(2)}%`;
+        zCtx.font = `600 ${fontPx}px JetBrains Mono, monospace`;
+        zCtx.textAlign = 'left';
+        zCtx.textBaseline = 'middle';
+        const padX = 5, padY = 2;
+        const tw = zCtx.measureText(label).width;
+        const pillH = fontPx + padY * 2;
+        const pillW = tw + padX * 2;
+        const cy = (top + bot) / 2;
+        const pillY = Math.max(pillH/2 + 1, Math.min(hpx - pillH/2 - 1, cy));
+        const x0 = 4, y0 = pillY - pillH/2, x1 = x0 + pillW, y1 = pillY + pillH/2;
+        zCtx.fillStyle = isBull ? 'rgba(38,166,154,0.92)'
+                                 : 'rgba(239,83,80,0.92)';
+        zCtx.beginPath();
+        const r = 3;
+        zCtx.moveTo(x0 + r, y0);
+        zCtx.lineTo(x1 - r, y0); zCtx.quadraticCurveTo(x1, y0, x1, y0 + r);
+        zCtx.lineTo(x1, y1 - r); zCtx.quadraticCurveTo(x1, y1, x1 - r, y1);
+        zCtx.lineTo(x0 + r, y1); zCtx.quadraticCurveTo(x0, y1, x0, y1 - r);
+        zCtx.lineTo(x0, y0 + r); zCtx.quadraticCurveTo(x0, y0, x0 + r, y0);
+        zCtx.closePath();
+        zCtx.fill();
+        zCtx.fillStyle = '#ffffff';
+        zCtx.fillText(label, x0 + padX, pillY);
+      });
+    }
   }
 
   // ───── Candles polling ─────
@@ -1753,6 +1828,7 @@ button{font-family:inherit}
       order_blocks: $('overlay-toggle')?.checked === true,
       liq_heatmap:  $('liq-toggle')?.checked === true,
       big_prints:   $('tape-toggle')?.checked === true,
+      fvg:          $('fvg-toggle')?.checked === true,
     };
     // Roll up the last ~10 minutes of big prints from the tape buffer
     const cutoffMs = Date.now() - 10 * 60 * 1000;
@@ -1918,6 +1994,10 @@ button{font-family:inherit}
     currentTF = b.dataset.tf;
     initialLoadDone = false; lastCandleTime = 0;
     loadCandlesFull();
+    // FVGs are timeframe-specific — drop the cached set and re-pull so the
+    // overlay matches the new candles within ~25 s (server cache TTL).
+    lastFvgData = null;
+    if(typeof refreshFvg === 'function') refreshFvg();
   });
 
   $('overlay-toggle').addEventListener('change', () => {
@@ -1928,6 +2008,12 @@ button{font-family:inherit}
     }
   });
   $('liq-toggle').addEventListener('change', () => { zonesDirty = true; });
+  $('fvg-toggle').addEventListener('change', () => {
+    zonesDirty = true;
+    // Toggling FVG ON triggers an immediate fetch so the user sees zones
+    // without waiting for the 30 s poll tick.
+    if($('fvg-toggle').checked && typeof refreshFvg === 'function'){ refreshFvg(); }
+  });
   $('tape-toggle').addEventListener('change', () => {
     if(!$('tape-toggle').checked){
       setMarkerSource('tape', []);
@@ -3850,6 +3936,8 @@ button{font-family:inherit}
     ema_cross:        [['crossover', 'price crosses above'], ['crossunder', 'price crosses below']],
     macd_cross_zero: [['crossover', 'turns positive'], ['crossunder', 'turns negative']],
     supertrend_flip:  [['flip', 'flips direction']],
+    fvg_retest:       [['bull', 'price retests an unfilled BULL FVG'],
+                       ['bear', 'price retests an unfilled BEAR FVG']],
   };
   const ALERTS_KIND_PARAMS = {
     price: [],
@@ -3863,6 +3951,10 @@ button{font-family:inherit}
     supertrend_flip: [
       {key:'period', label:'Period', def:10, min:2, max:100, step:1},
       {key:'mult',   label:'Multiplier', def:3, min:0.5, max:20, step:0.5},
+    ],
+    fvg_retest: [
+      {key:'min_gap_pct',  label:'Min gap %',  def:0.05, min:0.01, max:5, step:0.01},
+      {key:'max_age_bars', label:'Max age',    def:100,  min:5,    max:500, step:5},
     ],
   };
   let _alertsState = null;  // {logged_in, telegram_linked, active_count, max}
@@ -3886,6 +3978,10 @@ button{font-family:inherit}
     }
     if(a.kind === 'supertrend_flip'){
       return `SuperTrend(${a.params.period||10},${a.params.mult||3}) flips`;
+    }
+    if(a.kind === 'fvg_retest'){
+      const dir = a.condition === 'bull' ? '↑ bull' : '↓ bear';
+      return `Retest unfilled ${dir} FVG (≥${(a.params.min_gap_pct||0.05)}%)`;
     }
     return a.label || a.kind;
   }
@@ -4158,6 +4254,7 @@ button{font-family:inherit}
         order_blocks: $('overlay-toggle') ? $('overlay-toggle').checked : false,
         liq_heatmap:  $('liq-toggle')     ? $('liq-toggle').checked     : false,
         big_prints:   $('tape-toggle')    ? $('tape-toggle').checked    : false,
+        fvg:          $('fvg-toggle')     ? $('fvg-toggle').checked     : false,
       },
     };
   }
@@ -4469,6 +4566,8 @@ button{font-family:inherit}
     {id:"macd_bear",  label:"MACD crosses BELOW zero (bear)", kind:"macd_cross_zero", cond:"below"},
     {id:"st_up",      label:"SuperTrend flips bullish",       kind:"supertrend_flip", cond:"up"},
     {id:"st_dn",      label:"SuperTrend flips bearish",       kind:"supertrend_flip", cond:"down"},
+    {id:"fvg_bull_retest", label:"Price retests an unfilled BULL FVG (long bias)",  kind:"fvg_retest", cond:"bull"},
+    {id:"fvg_bear_retest", label:"Price retests an unfilled BEAR FVG (short bias)", kind:"fvg_retest", cond:"bear"},
   ];
   function populateAlertTemplates(){
     const sel = $('alf-template');
@@ -4745,6 +4844,42 @@ button{font-family:inherit}
     _fundingTimer = setInterval(refreshFunding, 60000);
   }
 
+  // ───────────────────────────────────────────────────────────────────
+  // FVG (Fair Value Gap) overlay — ICT 3-candle imbalance zones
+  // ───────────────────────────────────────────────────────────────────
+  let lastFvgData = null;     // { symbol, tf, gaps:[...] } from /api/trade/fvg
+  let _fvgTimer = null;
+  let _fvgInflight = false;
+  async function refreshFvg(){
+    if(_fvgInflight) return;
+    if(!$('fvg-toggle')?.checked){
+      // Toggle off → drop cached data + repaint so old bands disappear.
+      if(lastFvgData){ lastFvgData = null; zonesDirty = true; }
+      return;
+    }
+    _fvgInflight = true;
+    try {
+      const sym = (typeof SYMBOL !== 'undefined' && SYMBOL) || 'BTC';
+      const tf  = currentTF || '5m';
+      const r = await fetch(`/api/trade/fvg/${encodeURIComponent(sym)}?tf=${encodeURIComponent(tf)}&limit=20&max_age_bars=200`);
+      if(!r.ok) return;
+      const d = await r.json();
+      // Discard a stale response if the user switched timeframes mid-flight.
+      if(d && d.tf && d.tf !== currentTF) return;
+      lastFvgData = d;
+      zonesDirty = true;
+    } catch(_){ /* silent */ }
+    finally { _fvgInflight = false; }
+  }
+  function wireFvg(){
+    // Don't kick off the poller if the toggle is off; refreshFvg() above is
+    // already a cheap no-op in that case but skipping the timer keeps the
+    // network panel quiet.
+    if(_fvgTimer) clearInterval(_fvgTimer);
+    refreshFvg();
+    _fvgTimer = setInterval(refreshFvg, 30000);
+  }
+
   function wireAuto(){
     if(!$('auto-btn')) return;
     $('auto-btn').onclick = openAutoModal;
@@ -4781,9 +4916,10 @@ button{font-family:inherit}
     // Quick alert templates dropdown — populates from a static list
     populateAlertTemplates();
 
-    // Watchlist + funding badge
+    // Watchlist + funding badge + FVG overlay poller
     wireWatchlist();
     wireFundingBadge();
+    wireFvg();
 
     // Mount the funding badge inside the chart-wrap so it overlays the chart
     try {

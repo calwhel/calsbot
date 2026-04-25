@@ -170,7 +170,7 @@ def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optiona
 
     # Find indicators by type (preserve order)
     ma_indicators: List[Dict[str, Any]] = []
-    rsi_ind = macd_ind = st_ind = None
+    rsi_ind = macd_ind = st_ind = fvg_ind = None
     for spec in indicators:
         t = (spec.get("type") or "").lower()
         if t in ("ema", "sma"):
@@ -181,12 +181,37 @@ def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optiona
             macd_ind = spec
         elif t == "supertrend" and not st_ind:
             st_ind = spec
+        elif t == "fvg" and not fvg_ind:
+            fvg_ind = spec
 
     rules: Optional[Dict[str, Any]] = None
     summary_bits: List[str] = []
 
+    # Priority 0: FVG retest — if the user explicitly enabled FVG (either as
+    # an indicator spec or via the chart's FVG toggle), that's an explicit
+    # signal preference, so it wins over MAs/MACD/etc. Indicator-level params
+    # take precedence over toggle defaults.
+    # Defaults match the frontend overlay fetch (max_age_bars=200) so what the
+    # user SEES on the chart is what FIRES the rule.
+    if fvg_ind or toggles.get("fvg"):
+        fp = (fvg_ind or {}).get("params") or {}
+        min_gap_pct  = float(fp.get("min_gap_pct", 0.05) or 0.05)
+        max_age_bars = int(fp.get("max_age_bars", 200) or 200)
+        rules = {
+            "entry": {
+                "kind": "fvg_retest",
+                "params": {"min_gap_pct": min_gap_pct, "max_age_bars": max_age_bars},
+                "side": "either",
+            },
+        }
+        summary_bits.append(
+            f"price retests an unfilled FVG (≥{min_gap_pct:g}% gap, ≤{max_age_bars} bars old)"
+        )
+
     # Priority 1: two MAs of different periods → cross detection
-    if len(ma_indicators) >= 2:
+    # Gated on `rules is None` so an explicit FVG choice (Priority 0) wins
+    # over MAs that happen to be on the chart for visual reference.
+    if rules is None and len(ma_indicators) >= 2:
         a, b = ma_indicators[0], ma_indicators[1]
         pa = float((a.get("params") or {}).get("period") or 0)
         pb = float((b.get("params") or {}).get("period") or 0)
@@ -306,6 +331,161 @@ def _last_two_supertrend(candles: List[dict], period: int, mult: float) -> Tuple
     return int(a[1]), int(b[1])
 
 
+# ─── Fair-value-gap (FVG) detection ───────────────────────────────────────────
+def detect_fvgs(candles: List[dict], *,
+                min_gap_pct: float = 0.05,
+                only_unfilled: bool = True,
+                max_age_bars: int = 200,
+                max_results: int = 30) -> List[Dict[str, Any]]:
+    """ICT-style 3-candle Fair Value Gap detector.
+
+    A bullish FVG forms at bar i when ``candles[i-1].high < candles[i+1].low``
+    — there's a price range no candle traded inside. The gap zone is
+    ``[candles[i-1].high, candles[i+1].low]`` and acts as a demand/support
+    pocket. Bearish FVG is the mirror: ``candles[i-1].low > candles[i+1].high``
+    creates a supply/resistance pocket at ``[candles[i+1].high, candles[i-1].low]``.
+
+    Args:
+        candles:      OHLCV dicts in chronological order (oldest first).
+        min_gap_pct:  Discard micro-gaps below this % of the bar's mid price.
+        only_unfilled: If True, drop gaps that any subsequent candle has
+                       traded through (the classic "filled" definition).
+        max_age_bars: Ignore gaps older than this many bars from the latest
+                       candle — old un-mitigated gaps still matter, but the
+                       chart only has so much room.
+        max_results:  Cap on returned gaps. Newest first.
+
+    Returns a list of dicts with fields::
+        index    : int   — bar index where the gap formed (the middle bar).
+        time     : int   — UTC seconds of the formation bar.
+        side     : str   — "bull" or "bear".
+        top      : float — upper price boundary of the gap.
+        bottom   : float — lower price boundary of the gap.
+        size_pct : float — width / mid_price * 100.
+        filled   : bool  — True if a later candle traded inside the zone.
+        filled_at: int|None — UTC seconds of the candle that filled it.
+        age_bars : int   — bars between formation and the latest candle.
+    """
+    if not candles or len(candles) < 3:
+        return []
+    out: List[Dict[str, Any]] = []
+    n = len(candles)
+    start = max(1, n - max_age_bars)
+    for i in range(start, n - 1):
+        prev_c = candles[i - 1]
+        next_c = candles[i + 1]
+        try:
+            ph, pl = float(prev_c["high"]), float(prev_c["low"])
+            nh, nl = float(next_c["high"]), float(next_c["low"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        side: Optional[str] = None
+        top = bottom = 0.0
+        if ph < nl:
+            side, top, bottom = "bull", nl, ph
+        elif pl > nh:
+            side, top, bottom = "bear", pl, nh
+        if side is None:
+            continue
+
+        mid = (top + bottom) / 2.0
+        if mid <= 0:
+            continue
+        size_pct = (top - bottom) / mid * 100.0
+        if size_pct < min_gap_pct:
+            continue
+
+        # Walk forward to determine fill status. A fill = any candle whose
+        # range overlaps the gap. (Strict ICT definition uses "fully closed
+        # through"; we use "touched" so retests are flagged early — better
+        # for risk management.)
+        filled = False
+        filled_at: Optional[int] = None
+        for j in range(i + 2, n):
+            cj = candles[j]
+            try:
+                hj, lj = float(cj["high"]), float(cj["low"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if lj <= top and hj >= bottom:
+                filled = True
+                filled_at = int(cj.get("time") or 0)
+                break
+
+        if only_unfilled and filled:
+            continue
+
+        out.append({
+            "index":     i,
+            "time":      int(candles[i].get("time") or 0),
+            "side":      side,
+            "top":       round(top, 8),
+            "bottom":    round(bottom, 8),
+            "size_pct":  round(size_pct, 3),
+            "filled":    filled,
+            "filled_at": filled_at,
+            "age_bars":  (n - 1) - i,
+        })
+
+    # Newest first, capped.
+    out.sort(key=lambda g: g["index"], reverse=True)
+    return out[:max_results]
+
+
+def _fvg_retest_signal(candles: List[dict], *,
+                       min_gap_pct: float = 0.05,
+                       max_age_bars: int = 200) -> Tuple[Optional[str], str]:
+    """Return ('long'|'short'|None, note) when the current bar retests an
+    active FVG. Used by evaluate_rules + the AI Read summariser.
+
+    Long  = current bar's low dips into an unfilled BULL FVG below price.
+    Short = current bar's high pierces an unfilled BEAR FVG above price.
+    """
+    if not candles or len(candles) < 4:
+        return None, ""
+    cur = candles[-1]
+    try:
+        cur_high  = float(cur["high"])
+        cur_low   = float(cur["low"])
+        cur_close = float(cur["close"])
+    except (KeyError, TypeError, ValueError):
+        return None, ""
+
+    # Look at gaps formed BEFORE the current bar (no lookahead).
+    gaps = detect_fvgs(candles[:-1],
+                       min_gap_pct=min_gap_pct,
+                       only_unfilled=True,
+                       max_age_bars=max_age_bars,
+                       max_results=20)
+    if not gaps:
+        return None, ""
+
+    # Bullish retest: an unfilled BULL FVG below current close, and the
+    # current bar wicked into it.
+    bull_below = [g for g in gaps if g["side"] == "bull" and g["top"] <= cur_close]
+    if bull_below:
+        nearest = max(bull_below, key=lambda g: g["top"])
+        if cur_low <= nearest["top"]:
+            return "long", (
+                f"price retested bull FVG @ {nearest['bottom']:.2f}–{nearest['top']:.2f} "
+                f"({nearest['size_pct']:.2f}% gap, {nearest['age_bars']} bars old)"
+            )
+
+    # Bearish retest: an unfilled BEAR FVG above current close, current bar
+    # wicked up into it.
+    bear_above = [g for g in gaps if g["side"] == "bear" and g["bottom"] >= cur_close]
+    if bear_above:
+        nearest = min(bear_above, key=lambda g: g["bottom"])
+        if cur_high >= nearest["bottom"]:
+            return "short", (
+                f"price retested bear FVG @ {nearest['bottom']:.2f}–{nearest['top']:.2f} "
+                f"({nearest['size_pct']:.2f}% gap, {nearest['age_bars']} bars old)"
+            )
+
+    return None, ""
+
+
 # ─── Wall confluence ──────────────────────────────────────────────────────────
 def _nearest_wall(walls: List[dict], price: float, side: str) -> Optional[dict]:
     """Side 'long' → look at buy walls (support below). Side 'short' → sell walls."""
@@ -383,6 +563,19 @@ def evaluate_rules(rules: Dict[str, Any], candles: List[dict],
             side, note = "long",  f"RSI bounced out of oversold ({long_below:.0f})"
         elif pr > short_above and cr <= short_above:
             side, note = "short", f"RSI rejected from overbought ({short_above:.0f})"
+
+    elif kind == "fvg_retest":
+        # ICT-style entry: open a trade only when the current bar wicks back
+        # into an unfilled fair-value gap. The gap acts as support (long) or
+        # resistance (short). Default max_age_bars matches the chart overlay
+        # fetch so the visible zones are the eligible ones.
+        side, note = _fvg_retest_signal(
+            candles,
+            min_gap_pct=float(p.get("min_gap_pct", 0.05) or 0.05),
+            max_age_bars=int(p.get("max_age_bars", 200) or 200),
+        )
+        if side is None:
+            return None
 
     if side is None:
         return None

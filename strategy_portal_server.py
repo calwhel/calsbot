@@ -14,7 +14,7 @@ import logging
 import urllib.parse
 import httpx
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 
 from fastapi import FastAPI, Request, HTTPException, Query, Depends
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
@@ -1996,8 +1996,13 @@ async def trade_ai_read(symbol: str, request: Request):
 
 # Limits + validation
 _MAX_ALERTS_PER_USER = 25
-_ALERT_KINDS = {"price", "rsi", "ema_cross", "macd_cross_zero", "supertrend_flip"}
-_ALERT_CONDITIONS = {"above", "below", "crossover", "crossunder", "flip"}
+_ALERT_KINDS = {"price", "rsi", "ema_cross", "macd_cross_zero",
+                "supertrend_flip", "fvg_retest"}
+# "bull" / "bear" are the two sides of an FVG retest — they don't fit the
+# generic above/below verbs since they encode an entire pattern, not a
+# single threshold cross.
+_ALERT_CONDITIONS = {"above", "below", "crossover", "crossunder", "flip",
+                     "bull", "bear"}
 _ALERT_TFS = {"1m", "5m", "15m", "1h"}
 
 
@@ -2033,6 +2038,11 @@ def _build_alert_label(kind: str, params: dict, condition: str, target, symbol: 
         return f"MACD({int(p.get('fast', 12))},{int(p.get('slow', 26))}) {side} zero · {symbol}"
     if kind == "supertrend_flip":
         return f"SuperTrend({int(p.get('period', 10))},{p.get('mult', 3)}) flips · {symbol}"
+    if kind == "fvg_retest":
+        word = "bull" if condition == "bull" else "bear"
+        return (f"Price retests unfilled {word.upper()} FVG "
+                f"(≥{float(p.get('min_gap_pct', 0.05)):g}%, "
+                f"≤{int(p.get('max_age_bars', 100))} bars) · {symbol}")
     return f"{kind} · {symbol}"
 
 
@@ -2155,6 +2165,18 @@ async def trade_alerts_create(request: Request, db: Session = Depends(get_db)):
             "period": _clamp_int(params.get("period", 10), 2, 100, 10),
             "mult":   max(0.5, min(20.0, mult)),
         }
+    elif kind == "fvg_retest":
+        try:
+            mgp = float(params.get("min_gap_pct", 0.05))
+        except (TypeError, ValueError):
+            mgp = 0.05
+        params = {
+            "min_gap_pct":  max(0.01, min(5.0, mgp)),
+            "max_age_bars": _clamp_int(params.get("max_age_bars", 100), 5, 500, 100),
+        }
+        if condition not in ("bull", "bear"):
+            raise HTTPException(status_code=400,
+                                detail="FVG retest condition must be 'bull' or 'bear'")
 
     # Quota
     active_count = (db.query(IndicatorAlert)
@@ -2985,6 +3007,105 @@ async def trade_funding(symbol: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Fair Value Gap (FVG) overlay — ICT 3-candle gap detection for /trade
+# ─────────────────────────────────────────────────────────────────────────────
+# Re-uses the candle source the chart already loads, runs them through the
+# detector in app/services/auto_trader.py (single source of truth so the
+# overlay you SEE matches the rule the Auto Trader EVALUATES), and caches per
+# (pair, tf) for ~25 s to absorb the 30 s frontend poll without melting MEXC.
+
+_FVG_TTL = 25  # seconds
+
+@app.get("/api/trade/fvg/{symbol}")
+async def trade_fvg(symbol: str, tf: str = "5m",
+                    min_gap_pct: float = 0.05,
+                    max_age_bars: int = 200,
+                    only_unfilled: int = 1,
+                    limit: int = 30):
+    """Return active fair-value gaps for the requested symbol/timeframe.
+
+    Gaps are ICT-style 3-bar formations and are computed live from the same
+    MEXC candles the chart renders. ``only_unfilled=1`` (the default) hides
+    any gap a later candle has already traded through.
+    """
+    sym = (symbol or "").upper()
+    if sym not in TRADE_SYMBOL_WHITELIST:
+        return JSONResponse({"error": f"unknown symbol {sym}"}, status_code=400)
+    pair = TRADE_SYMBOL_WHITELIST[sym]
+    if tf not in _TRADE_TF_MAP:
+        return JSONResponse({"error": f"bad tf {tf}"}, status_code=400)
+
+    # Clamp inputs.
+    min_gap_pct  = max(0.0, min(5.0, float(min_gap_pct or 0.0)))
+    max_age_bars = max(10, min(500, int(max_age_bars or 200)))
+    limit        = max(1,  min(100, int(limit or 30)))
+    only_unfilled = bool(only_unfilled)
+
+    cache_key = f"trade_fvg_{pair}_{tf}_{min_gap_pct}_{max_age_bars}_{int(only_unfilled)}_{limit}"
+    hit = _CACHE.get(cache_key)
+    if hit and hit[1] > time.time():
+        return hit[0]
+
+    interval = _TRADE_TF_MAP[tf]
+
+    # Pull a generous window of MEXC klines (same source as /api/trade/candles
+    # so the overlay is byte-identical to what the chart already drew).
+    candles: List[dict] = []
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(
+                "https://api.mexc.com/api/v3/klines",
+                params={"symbol": pair, "interval": interval, "limit": 500},
+            )
+            r.raise_for_status()
+            rows = r.json() or []
+        for k in rows:
+            try:
+                candles.append({
+                    "time":  int(k[0]) // 1000,
+                    "open":  float(k[1]),
+                    "high":  float(k[2]),
+                    "low":   float(k[3]),
+                    "close": float(k[4]),
+                })
+            except (TypeError, ValueError, IndexError):
+                continue
+    except Exception as e:
+        logger.warning(f"trade_fvg({sym}) candles fetch failed: {e}")
+        return JSONResponse({"error": f"upstream failed: {e}"}, status_code=502)
+
+    if not candles:
+        out = {"symbol": sym, "tf": tf, "gaps": [], "count": 0,
+               "ts": int(time.time())}
+        _CACHE[cache_key] = (out, time.time() + _FVG_TTL)
+        return out
+
+    try:
+        from app.services.auto_trader import detect_fvgs
+        gaps = detect_fvgs(
+            candles,
+            min_gap_pct=min_gap_pct,
+            only_unfilled=only_unfilled,
+            max_age_bars=max_age_bars,
+            max_results=limit,
+        )
+    except Exception as e:
+        logger.warning(f"trade_fvg({sym}) detect failed: {e}")
+        return JSONResponse({"error": f"detect failed: {e}"}, status_code=500)
+
+    out = {
+        "symbol": sym,
+        "tf":     tf,
+        "gaps":   gaps,
+        "count":  len(gaps),
+        "ts":     int(time.time()),
+    }
+    _CACHE[cache_key] = (out, time.time() + _FVG_TTL)
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Multi-symbol watchlist (F) — light ticker poll for the sidebar
 # ─────────────────────────────────────────────────────────────────────────────
 _WATCHLIST_PAIRS = [
@@ -3182,6 +3303,13 @@ _ALERT_TEMPLATES = [
      "expr": "supertrend_dir == 1", "params": []},
     {"id": "supertrend_flip_down", "label": "SuperTrend flips bearish",
      "expr": "supertrend_dir == -1", "params": []},
+    # FVG (fair-value-gap) retests — server side resolves these by reading
+    # the unfilled-FVG list and checking whether the latest candle wicked
+    # back into the nearest active gap on the side selected.
+    {"id": "fvg_bull_retest", "label": "Price retests an unfilled BULL FVG (long-bias support)",
+     "expr": "fvg_retest_long", "params": []},
+    {"id": "fvg_bear_retest", "label": "Price retests an unfilled BEAR FVG (short-bias resistance)",
+     "expr": "fvg_retest_short", "params": []},
 ]
 
 @app.get("/api/trade/alert_templates")
@@ -3196,7 +3324,7 @@ async def trade_alert_templates():
 
 # Allowed values mirror the JS PRESETS / VALID_SRC table in trade.html.
 _INDICATOR_TYPES = {"ema", "sma", "bb", "vwap", "supertrend",
-                    "rsi", "macd", "stochrsi", "atr"}
+                    "rsi", "macd", "stochrsi", "atr", "fvg"}
 _INDICATOR_SRC   = {"close", "open", "high", "low", "hl2", "hlc3", "ohlc4"}
 _MAX_INDICATORS_PER_SETUP = 30
 _MAX_SETUPS_PER_USER      = 20
