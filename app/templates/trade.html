@@ -285,19 +285,28 @@ button{font-family:inherit}
   display:flex;flex-wrap:wrap;gap:5px;max-width:calc(100% - 24px);
 }
 .ind-chip{
-  display:inline-flex;align-items:center;gap:5px;background:rgba(19,23,34,.85);
-  border:1px solid var(--border);border-radius:3px;padding:3px 5px 3px 8px;
-  font-size:10px;font-family:var(--mono);color:var(--text);backdrop-filter:blur(4px);
+  display:inline-flex;align-items:center;gap:6px;background:rgba(19,23,34,.92);
+  border:1px solid var(--border);border-radius:4px;padding:4px 4px 4px 9px;
+  font-size:11px;font-family:var(--mono);color:var(--text);backdrop-filter:blur(4px);
 }
 .ind-chip .swatch{width:9px;height:9px;border-radius:2px;flex-shrink:0}
 .ind-chip .ind-tog,.ind-chip .ind-x,.ind-chip .ind-bell{
   background:transparent;border:none;color:var(--muted);cursor:pointer;
-  font-size:11px;padding:1px 4px;line-height:1;border-radius:2px;
+  font-size:13px;padding:2px 6px;line-height:1;border-radius:3px;font-weight:600;
 }
-.ind-chip .ind-tog:hover,.ind-chip .ind-x:hover,.ind-chip .ind-bell:hover{background:var(--panel2);color:var(--text)}
+.ind-chip .ind-tog:hover,.ind-chip .ind-bell:hover{background:var(--panel2);color:var(--text)}
+.ind-chip .ind-x{font-size:15px;color:#e07070}
+.ind-chip .ind-x:hover{background:#3a1414;color:#ff6b6b;border:1px solid #6a1f1f}
 .ind-chip .ind-bell{color:#e2c275}
 .ind-chip.off{opacity:.5}
 .ind-chip.off .swatch{background:var(--muted) !important}
+.ind-clear{
+  display:inline-flex;align-items:center;gap:4px;background:rgba(50,18,18,.85);
+  border:1px solid #5a1f1f;border-radius:4px;padding:4px 9px;font-size:10px;
+  font-family:var(--mono);color:#ff8888;cursor:pointer;backdrop-filter:blur(4px);
+  font-weight:600;letter-spacing:.4px;
+}
+.ind-clear:hover{background:#5a1f1f;color:#ffb0b0}
 
 /* ── Alerts ─────────────────────────────────────────────────────────── */
 .alerts-btn{
@@ -2795,7 +2804,7 @@ button{font-family:inherit}
         <span>${indLabel(ind)}</span>
         ${alertable ? `<button class="ind-bell" title="Set alert on this indicator">🔔</button>` : ''}
         <button class="ind-tog" title="${ind.visible?'Hide':'Show'}">${ind.visible?'◉':'○'}</button>
-        <button class="ind-x" title="Remove">×</button>
+        <button class="ind-x" title="Remove this indicator">×</button>
       `;
       chip.querySelector('.ind-tog').onclick = () => toggleIndicator(ind.id);
       chip.querySelector('.ind-x').onclick   = () => removeIndicator(ind.id);
@@ -2815,6 +2824,21 @@ button{font-family:inherit}
       });
       el.appendChild(chip);
     });
+    // "Clear all" button at the end of the strip — only when ≥1 chip is shown.
+    // Discoverable for users who want a clean chart (e.g. pure-FVG strategy)
+    // without removing each indicator one at a time.
+    if(indicators.length > 0){
+      const clr = document.createElement('button');
+      clr.className = 'ind-clear';
+      clr.title = 'Remove ALL indicators from the chart';
+      clr.textContent = '✕ Clear all';
+      clr.onclick = () => {
+        if(indicators.length > 1 && !confirm(`Remove all ${indicators.length} indicators?`)) return;
+        clearAllIndicators();
+        try{ saveStored(); }catch(e){}
+      };
+      el.appendChild(clr);
+    }
     const cnt = $('ind-count');
     if(cnt){
       const n = indicators.filter(i => i.visible).length;
@@ -4950,7 +4974,7 @@ button{font-family:inherit}
     // network panel quiet.
     if(_fvgTimer) clearInterval(_fvgTimer);
     refreshFvg();
-    _fvgTimer = setInterval(refreshFvg, 30000);
+    _fvgTimer = setInterval(refreshFvg, 10000);  // was 30s — FVG is the user's core edge, scan 3x faster
   }
 
   function wireAuto(){
@@ -5285,11 +5309,14 @@ button{font-family:inherit}
   tickPrice();
   pollTape(true);
   loadAlerts();
+  // Aggressive scan rates — user wants signals as fast as possible.
+  // Server caches absorb the load (tightened to match: candles 4s, walls 10s,
+  // FVG 8s) so we don't hit MEXC/exchange rate limits.
   setInterval(tickPrice, 2_000);
-  setInterval(tickCandles, 3_000);
-  setInterval(loadWalls, 30_000);
+  setInterval(tickCandles, 3_000);   // bound by MEXC; server caches 4s
+  setInterval(loadWalls, 12_000);    // was 30s — wall pressure changes fast
   setInterval(pollTape, 2_000);
-  setInterval(loadAlerts, 45_000);
+  setInterval(loadAlerts, 20_000);   // was 45s — fire alerts ~2x faster
 
   document.addEventListener('visibilitychange', () => {
     if(!document.hidden){ tickPrice(); tickCandles(); pollTape(); }

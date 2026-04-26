@@ -1599,7 +1599,7 @@ async def trade_walls(symbol: str, ai: int = 0):
         # behavior dict has float keys — JSON needs strings
         wb = payload.get("wall_behavior") or {}
         payload["wall_behavior"] = {str(k): v for k, v in wb.items()}
-        _CACHE[cache_key] = (payload, time.time() + 25)
+        _CACHE[cache_key] = (payload, time.time() + 10)  # was 25 — match frontend 12s poll
         return payload
     except Exception as e:
         logger.warning(f"trade_walls({sym}) failed: {e}")
@@ -1652,7 +1652,10 @@ async def trade_candles(symbol: str, tf: str = "5m", limit: int = 300):
             except (TypeError, ValueError, IndexError):
                 continue
         payload = {"symbol": pair, "tf": interval, "candles": candles}
-        ttl = 1.5 if limit <= 5 else 10.0
+        # Frontend polls candles every 3s — keep cache short so each poll
+        # mostly returns fresh data. 1.5s for tick (limit≤5), 4s for full
+        # candle history (was 10s).
+        ttl = 1.5 if limit <= 5 else 4.0
         _CACHE[cache_key] = (payload, time.time() + ttl)
         return payload
     except Exception as e:
@@ -3014,7 +3017,7 @@ async def trade_funding(symbol: str):
 # overlay you SEE matches the rule the Auto Trader EVALUATES), and caches per
 # (pair, tf) for ~25 s to absorb the 30 s frontend poll without melting MEXC.
 
-_FVG_TTL = 25  # seconds
+_FVG_TTL = 8  # seconds — was 25; user wants FVG scanned as fast as possible (frontend polls every 10s)
 
 @app.get("/api/trade/fvg/{symbol}")
 async def trade_fvg(symbol: str, tf: str = "5m",
