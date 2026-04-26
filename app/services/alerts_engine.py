@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # ─── MEXC kline fetch ─────────────────────────────────────────────────────────
 _MEXC_KLINE_URL = "https://api.mexc.com/api/v3/klines"
 # Same map as the trade page route
-_TF_MAP = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "60m"}
+_TF_MAP = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "60m", "4h": "4h"}
 _SYMBOL_PAIR = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT"}
 
 # Per-(symbol, tf) candle cache so multiple alerts with the same symbol/tf

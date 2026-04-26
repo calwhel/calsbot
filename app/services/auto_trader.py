@@ -92,6 +92,67 @@ _AI_TICK_FLOOR_S   = 60   # never call Claude more than once a minute per strate
 # Wall confluence — entry must be within this % of nearest matching wall
 _WALL_PROX_PCT = 0.6
 
+# Symbol-level funding/OI cache shared across all AI-mode strategies so a
+# fleet of bots on the same symbol only hits Coinglass once per minute.
+_FUNDING_CACHE: Dict[str, Tuple[Dict[str, Any], float]] = {}
+_FUNDING_TTL = 60.0
+
+
+async def _fetch_funding_oi(symbol: str) -> Optional[Dict[str, Any]]:
+    """Fetch (and cache) Coinglass funding-rate + open-interest for *symbol*.
+    Returns None when the API key is missing or the upstream fails — callers
+    must tolerate None so the AI run still proceeds."""
+    sym = (symbol or "").upper().strip()
+    cached = _FUNDING_CACHE.get(sym)
+    if cached and time.time() < cached[1]:
+        return cached[0]
+    cg_key = os.getenv("COINGLASS_API_KEY") or ""
+    if not cg_key:
+        return None
+    headers = {"CG-API-KEY": cg_key, "accept": "application/json"}
+    fd: Dict[str, Any] = {"symbol": sym, "fetched_at": int(time.time())}
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as cl:
+            rr, rr2 = await asyncio.gather(
+                cl.get(
+                    "https://open-api-v3.coinglass.com/api/futures/funding-rate/exchange-list",
+                    params={"symbol": sym}, headers=headers,
+                ),
+                cl.get(
+                    "https://open-api-v3.coinglass.com/api/futures/open-interest/exchange-list",
+                    params={"symbol": sym}, headers=headers,
+                ),
+                return_exceptions=True,
+            )
+        if not isinstance(rr, Exception) and rr.status_code == 200:
+            rows = ((rr.json() or {}).get("data") or [])
+            pref = ("Binance", "Bybit", "OKX")
+            pick = next((x for x in rows if x.get("exchangeName") in pref), rows[0] if rows else None)
+            if pick:
+                fr = pick.get("usdtMargin") or pick.get("rate") or {}
+                if isinstance(fr, dict):
+                    fd["funding_rate_pct"] = fr.get("rate")
+                    fd["funding_exchange"] = pick.get("exchangeName")
+                else:
+                    fd["funding_rate_pct"] = fr
+                    fd["funding_exchange"] = pick.get("exchangeName")
+        if not isinstance(rr2, Exception) and rr2.status_code == 200:
+            rows = ((rr2.json() or {}).get("data") or [])
+            total_oi = 0.0
+            for x in rows:
+                try:    total_oi += float(x.get("openInterestAmountByCoinMargin", 0) or 0) + float(x.get("openInterestAmountByStableCoinMargin", 0) or 0)
+                except: pass
+            fd["open_interest_usd"] = round(total_oi, 0)
+            if rows:
+                fd["oi_change_24h_pct"] = rows[0].get("openInterestChangePercent24h")
+    except Exception as e:
+        logger.debug(f"_fetch_funding_oi({sym}) failed: {e}")
+        return None
+    if fd.get("funding_rate_pct") is None and not fd.get("open_interest_usd"):
+        return None
+    _FUNDING_CACHE[sym] = (fd, time.time() + _FUNDING_TTL)
+    return fd
+
 
 # ─── AI plan parser ───────────────────────────────────────────────────────────
 _PLAN_PATTERNS = {
@@ -1196,12 +1257,33 @@ async def _maybe_open_ai(strategy, db) -> bool:
         return False
 
     wall_report = await _fetch_walls_for(strategy.symbol)
+
+    # HTF context (1H + 4H) and funding/OI run concurrently — both are
+    # best-effort enrichment, the AI run still proceeds if any fail.
+    htf_1h: List[dict] = []
+    htf_4h: List[dict] = []
+    funding_data: Optional[Dict[str, Any]] = None
+    try:
+        htf_1h_res, htf_4h_res, funding_res = await asyncio.gather(
+            _fetch_candles(strategy.symbol, "1h", limit=120),
+            _fetch_candles(strategy.symbol, "4h", limit=120),
+            _fetch_funding_oi(strategy.symbol),
+            return_exceptions=True,
+        )
+        if not isinstance(htf_1h_res, Exception): htf_1h = htf_1h_res or []
+        if not isinstance(htf_4h_res, Exception): htf_4h = htf_4h_res or []
+        if not isinstance(funding_res, Exception): funding_data = funding_res
+    except Exception as e:
+        logger.debug(f"auto_trader enrichment fetch failed for #{strategy.id}: {e}")
+
     try:
         from app.services.ai_trade_read import generate_ai_trade_read
         result = await generate_ai_trade_read(
             symbol=strategy.symbol, tf=strategy.timeframe, candles=candles,
             indicators=indicators, toggles=toggles, tape=tape,
             wall_report=wall_report,
+            htf_1h_candles=htf_1h, htf_4h_candles=htf_4h,
+            funding_data=funding_data,
         )
     except Exception as e:
         logger.warning(f"auto_trader AI run failed for #{strategy.id}: {e}")

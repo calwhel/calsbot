@@ -416,9 +416,188 @@ def toggles_block(toggles: Dict[str, Any]) -> str:
         bits.append("Liq Heatmap ON (user is watching where stops cluster)")
     if toggles.get("big_prints"):
         bits.append("Big Prints ON (user is watching aggressive market orders ≥ threshold)")
+    if toggles.get("fvg"):
+        bits.append("FVG Zones ON (user is watching unfilled fair-value gaps as magnets)")
     if not bits:
         return "User has all chart overlays disabled."
     return "User has these overlays ON: " + "; ".join(bits) + "."
+
+
+# ─── FVG context (ICT fair-value gaps + retest detection) ─────────────────────
+def fvg_context_block(candles: List[dict], last_price: float) -> str:
+    """List the nearest unfilled bull FVGs below price (support pockets) and
+    bear FVGs above price (resistance pockets), plus a retest flag if the
+    current bar is wicking into one. Mirrors the on-chart FVG overlay so the
+    AI sees what the user sees."""
+    try:
+        from app.services.auto_trader import detect_fvgs, _fvg_retest_signal
+    except Exception as e:
+        logger.debug(f"fvg_context_block import failed: {e}")
+        return "FVG data unavailable."
+    if not candles or len(candles) < 30:
+        return "Not enough history to detect FVGs."
+    try:
+        gaps = detect_fvgs(
+            candles,
+            min_gap_atr_mult=0.10,
+            disp_atr_mult=0.5,
+            only_unfilled=True,
+            max_age_bars=200,
+            max_results=30,
+        )
+    except Exception as e:
+        logger.debug(f"detect_fvgs failed: {e}")
+        return "FVG detector errored."
+    if not gaps:
+        return "No active (unfilled) FVG zones in the last ~200 bars."
+
+    # Bull FVGs that sit BELOW current price act as support / long magnets.
+    bulls_below = sorted(
+        [g for g in gaps if g["side"] == "bull" and g["top"] <= last_price],
+        key=lambda g: last_price - g["top"],
+    )[:3]
+    # Bear FVGs that sit ABOVE current price act as resistance / short magnets.
+    bears_above = sorted(
+        [g for g in gaps if g["side"] == "bear" and g["bottom"] >= last_price],
+        key=lambda g: g["bottom"] - last_price,
+    )[:3]
+
+    parts: List[str] = []
+    # Active retest is the strongest signal — surface it first.
+    try:
+        side, note = _fvg_retest_signal(candles)
+    except Exception:
+        side, note = None, ""
+    if side:
+        parts.append(f"⚡ ACTIVE FVG RETEST → {side.upper()} bias — {note}")
+
+    if bulls_below:
+        parts.append("Unfilled BULL FVGs below price (support / long magnets):")
+        for g in bulls_below:
+            dist = (last_price - g["top"]) / last_price * 100 if last_price else 0
+            parts.append(
+                f"  - {_fmt_price(g['bottom'])}–{_fmt_price(g['top'])}  "
+                f"(mid {_fmt_price(g['mid'])}, {g['size_pct']:.2f}% wide, "
+                f"{g['size_atr']:.2f}×ATR, {dist:.2f}% below price, "
+                f"{g['age_bars']} bars old)"
+            )
+    if bears_above:
+        parts.append("Unfilled BEAR FVGs above price (resistance / short magnets):")
+        for g in bears_above:
+            dist = (g["bottom"] - last_price) / last_price * 100 if last_price else 0
+            parts.append(
+                f"  - {_fmt_price(g['bottom'])}–{_fmt_price(g['top'])}  "
+                f"(mid {_fmt_price(g['mid'])}, {g['size_pct']:.2f}% wide, "
+                f"{g['size_atr']:.2f}×ATR, {dist:.2f}% above price, "
+                f"{g['age_bars']} bars old)"
+            )
+    if not bulls_below and not bears_above and not side:
+        return "No FVGs near price (closest gaps are stale or already filled)."
+    return "\n".join(parts)
+
+
+# ─── Higher-timeframe trend block ─────────────────────────────────────────────
+def _htf_summary(candles: List[dict], label: str, last_price: float) -> Optional[str]:
+    """Compact HTF read for one timeframe — SMA(20)/SMA(50) stack, slope, and
+    last 5 closed bars' direction string."""
+    if not candles or len(candles) < 55:
+        return None
+    closes = [c["close"] for c in candles]
+    sma20 = _sma(closes, 20)
+    sma50 = _sma(closes, 50)
+    if sma20 is None or sma50 is None:
+        return None
+    # Slope of SMA(50) — compare current vs 5 bars ago. Avoids noise.
+    sma50_5ago = _sma(closes[:-5], 50) if len(closes) > 55 else sma50
+    slope_pct = ((sma50 - (sma50_5ago or sma50)) / (sma50_5ago or sma50) * 100
+                 if sma50_5ago else 0.0)
+    if sma20 > sma50 and slope_pct > 0.05:
+        bias = "BULL stack (SMA20>SMA50, slope rising)"
+    elif sma20 < sma50 and slope_pct < -0.05:
+        bias = "BEAR stack (SMA20<SMA50, slope falling)"
+    else:
+        bias = "RANGE/transition (no clean stack)"
+    px_vs_50 = (last_price - sma50) / sma50 * 100 if sma50 else 0
+    side_word = "above" if px_vs_50 > 0 else "below"
+    # Last 5 HTF candle directions
+    dir_str = ""
+    for c in candles[-5:]:
+        body = c["close"] - c["open"]
+        rng = c["high"] - c["low"]
+        if rng > 0 and abs(body) / rng < 0.1: dir_str += "."
+        elif body > 0: dir_str += "G"
+        else: dir_str += "R"
+    return (f"{label}: {bias}. SMA20={_fmt_price(sma20)}, SMA50={_fmt_price(sma50)} "
+            f"(slope {slope_pct:+.2f}% over 5 bars). Price {abs(px_vs_50):.2f}% "
+            f"{side_word} SMA50. Last 5 bars: {dir_str}")
+
+
+def htf_trend_block(htf_1h: List[dict], htf_4h: List[dict],
+                    last_price: float) -> str:
+    lines: List[str] = []
+    s1 = _htf_summary(htf_1h, "1H", last_price) if htf_1h else None
+    s4 = _htf_summary(htf_4h, "4H", last_price) if htf_4h else None
+    if s1: lines.append(s1)
+    if s4: lines.append(s4)
+    if not lines:
+        return "HTF data unavailable."
+    # Confluence read across timeframes
+    bull_count = sum(1 for s in (s1, s4) if s and "BULL stack" in s)
+    bear_count = sum(1 for s in (s1, s4) if s and "BEAR stack" in s)
+    if bull_count == 2:
+        lines.append("→ HTF CONFLUENCE: both 1H and 4H bullish. Counter-trend shorts are scalps only.")
+    elif bear_count == 2:
+        lines.append("→ HTF CONFLUENCE: both 1H and 4H bearish. Counter-trend longs are scalps only.")
+    elif bull_count == 1 and bear_count == 1:
+        lines.append("→ HTF CONFLICT: 1H and 4H disagree — favour mean-reversion to the conflicted level.")
+    return "\n".join(lines)
+
+
+# ─── Funding rate / open-interest context ─────────────────────────────────────
+def funding_oi_block(funding: Optional[dict]) -> str:
+    """Render Coinglass funding + OI snapshot. The funding_rate_pct value is a
+    raw % per 8h (Binance convention), e.g. 0.012 = +0.012% per 8h."""
+    if not funding:
+        return "Funding/OI data unavailable."
+    fr = funding.get("funding_rate_pct")
+    oi = funding.get("open_interest_usd")
+    oi_chg = funding.get("oi_change_24h_pct")
+    parts: List[str] = []
+    if fr is not None:
+        try:
+            frv = float(fr)
+        except (TypeError, ValueError):
+            frv = 0.0
+        if frv >= 0.05:
+            tag = "EXTREME LONG (over-leveraged longs — squeeze risk)"
+        elif frv >= 0.02:
+            tag = "elevated long bias"
+        elif frv <= -0.03:
+            tag = "EXTREME SHORT (over-leveraged shorts — squeeze risk)"
+        elif frv <= -0.01:
+            tag = "elevated short bias"
+        else:
+            tag = "neutral funding"
+        ex = funding.get("funding_exchange") or "agg"
+        parts.append(f"Funding: {frv:+.4f}% per 8h ({ex}) — {tag}")
+    if oi is not None:
+        try:
+            oiv = float(oi)
+            parts.append(f"Open Interest: ${oiv:,.0f}")
+        except (TypeError, ValueError):
+            pass
+    if oi_chg is not None:
+        try:
+            oc = float(oi_chg)
+            tag = ("rising — fresh positions opening (trend-confirming)" if oc > 5
+                   else "falling — positions closing (de-risking / trend-fading)" if oc < -5
+                   else "flat")
+            parts.append(f"OI 24h Δ: {oc:+.2f}% — {tag}")
+        except (TypeError, ValueError):
+            pass
+    if not parts:
+        return "Funding/OI data unavailable."
+    return "\n".join(parts)
 
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
@@ -431,11 +610,18 @@ async def generate_ai_trade_read(
     toggles: Dict[str, Any],
     tape: Dict[str, Any],
     wall_report: Optional[dict],
+    htf_1h_candles: Optional[List[dict]] = None,
+    htf_4h_candles: Optional[List[dict]] = None,
+    funding_data: Optional[dict] = None,
 ) -> Dict[str, Any]:
     """Compose the prompt, call Claude, return {summary, fallback, sources_used}.
 
     Always returns a structured plan — uses a deterministic fallback if Claude
     is unreachable so the panel never goes blank.
+
+    HTF candles + funding are optional but strongly recommended; without them
+    the prompt loses the macro confluence layer that prevents counter-trend
+    chasing and funding-fade traps.
     """
     if not candles or len(candles) < 30:
         return {
@@ -455,29 +641,64 @@ async def generate_ai_trade_read(
     if not indicator_lines:
         indicator_lines = ["  - (no indicators on the chart)"]
 
+    fvg_text     = fvg_context_block(candles, last_price)
+    htf_text     = htf_trend_block(htf_1h_candles or [], htf_4h_candles or [], last_price)
+    funding_text = funding_oi_block(funding_data)
+
     sources = ["candles", f"{len(indicator_lines)} indicators"]
-    if wall_report: sources.append("walls")
-    if tape:        sources.append("tape")
-    if toggles:     sources.append("toggles")
+    if wall_report:                        sources.append("walls")
+    if tape:                               sources.append("tape")
+    if toggles:                            sources.append("toggles")
+    if "No active" not in fvg_text and "unavailable" not in fvg_text:
+                                           sources.append("fvg")
+    if "unavailable" not in htf_text:      sources.append("htf")
+    if "unavailable" not in funding_text:  sources.append("funding")
 
     prompt = (
-        f"You are a degen crypto futures scalper running 50x-200x leverage on {symbol}.\n"
-        f"You are reading the user's LIVE chart and must give them ONE actionable trade — "
-        f"never 'wait', never 'no setup', never 'flat'. If conditions aren't great for a "
-        f"market entry, give a LIMIT order at the best level (a wall, an indicator, a swing "
-        f"point). Always pick the higher-probability side based on the full picture below.\n\n"
+        f"You are an elite crypto futures trader on {symbol}. You read the user's "
+        f"LIVE chart plus higher-timeframe context, order-book walls, FVG zones, "
+        f"funding/OI, and aggressive tape. You give ONE actionable trade — "
+        f"never 'wait', never 'no setup', never 'flat'. If conditions aren't great "
+        f"for market entry, give a LIMIT order at the best level (an unfilled FVG, "
+        f"a fresh wall, an indicator, a swing). Pick the higher-probability side "
+        f"based on the FULL picture — and you MUST cite which signals drove it.\n\n"
 
-        f"=== PRICE ACTION ({tf} chart) ===\n"
+        f"=== HOW TO WEIGHT SIGNALS (in priority order) ===\n"
+        f"1. ACTIVE FVG RETEST — if price is currently wicking into an unfilled FVG, "
+        f"that side wins unless HTF strongly disagrees. This is the highest-EV setup.\n"
+        f"2. HTF CONFLUENCE — if 1H + 4H both agree, only take WITH them on this TF "
+        f"(counter-trend trades are scalps with tight stops, not full positions).\n"
+        f"3. WALL PROXIMITY — if a fresh BIG wall is within 0.3%, prefer LIMIT entry "
+        f"AT the wall with stop just past it; never market through a wall against you.\n"
+        f"4. FUNDING EXTREMES — if funding is EXTREME LONG, longs need confirmation "
+        f"(no chasing); shorts get a tailwind from squeeze risk. Mirror for short.\n"
+        f"5. OI 24h — rising OI confirms the trending move; falling OI = de-risking, "
+        f"prefer mean-reversion / fade.\n"
+        f"6. INDICATORS + TAPE — tiebreakers, not lead signals.\n"
+        f"Stops should anchor to STRUCTURE (opposite side of FVG, wall, swing) — never "
+        f"a flat % unless nothing structural exists. TPs should target the next FVG, "
+        f"wall, or HTF level — not arbitrary multiples.\n\n"
+
+        f"=== HIGHER-TIMEFRAME TREND ===\n"
+        f"{htf_text}\n\n"
+
+        f"=== PRICE ACTION ({tf} chart — the user's view) ===\n"
         f"Last price: {_fmt_price(pa['last'])}  ({pa['pct_1h']:+.2f}% 1h, {pa['pct_4h']:+.2f}% 4h)\n"
         f"Recent swing high: {_fmt_price(pa['swing_hi'])} ({pa['swing_hi_dist_pct']:+.2f}% from price)\n"
         f"Recent swing low:  {_fmt_price(pa['swing_lo'])} ({-pa['swing_lo_dist_pct']:+.2f}% from price)\n"
         f"Last 8 candles: {pa['recent_dir']}  (G=green R=red .=doji)\n\n"
 
-        f"=== INDICATORS ON CHART ({len(indicator_lines)} active) ===\n"
-        + "\n".join(indicator_lines) + "\n\n"
+        f"=== FAIR VALUE GAPS (ICT — unfilled, ATR-quality-weighted) ===\n"
+        f"{fvg_text}\n\n"
 
         f"=== ORDER BOOK / WALLS ===\n"
         f"{wall_context_block(wall_report)}\n\n"
+
+        f"=== FUNDING / OPEN INTEREST ===\n"
+        f"{funding_text}\n\n"
+
+        f"=== INDICATORS ON CHART ({len(indicator_lines)} active) ===\n"
+        + "\n".join(indicator_lines) + "\n\n"
 
         f"=== AGGRESSIVE FLOW ===\n"
         f"{tape_summary_block(tape)}\n\n"
@@ -488,18 +709,22 @@ async def generate_ai_trade_read(
         f"=== OUTPUT RULES ===\n"
         f"Output MUST follow this EXACT structure with these EXACT labels — no prose paragraphs, "
         f"no greetings, no emojis, no markdown. ALL fields required.\n\n"
-        f"BIAS: <one short sentence — which side dominates and the magnet level. "
-        f"Weight indicator stack + wall pressure + flow.>\n"
+        f"BIAS: <one sentence — which side wins AND name the 2-3 specific signals "
+        f"driving it (e.g. '4H bull stack + active bull FVG retest at 67800 + sell-side "
+        f"wall thin above'). NO generic phrases.>\n"
         f"TRADE: <LONG or SHORT> @ <price>\n"
-        f"ORDER_TYPE: <MARKET — short reason> or <LIMIT — short reason (e.g. 'rest at the FRESH BIG buy wall')>\n"
-        f"STOP: <price> (<distance %>)\n"
-        f"TP1: <price> (<distance %>)\n"
-        f"TP2: <price> (<distance %>)\n"
+        f"ORDER_TYPE: <MARKET — short reason> or <LIMIT — short reason (e.g. "
+        f"'rest at unfilled bull FVG mid 67500' or 'rest at $1.2M buy wall 67200')>\n"
+        f"STOP: <price> (<distance %>) — must anchor to STRUCTURE; name what "
+        f"(e.g. 'below FVG bottom' / 'past the buy wall' / 'under swing low').\n"
+        f"TP1: <price> (<distance %>) — name the target (next FVG / wall / swing / HTF level).\n"
+        f"TP2: <price> (<distance %>) — name the target.\n"
         f"R:R: <ratio like 1:2.5  using TP1>\n"
-        f"LEVERAGE: <safe lev like '100x ok' or '50x max — stop too tight for 100x' or '200x ok'>\n"
+        f"LEVERAGE: <safe lev like '100x ok' or '50x max — stop too wide' or '200x ok'>\n"
         f"INVALIDATION: <one price level. If price breaks this, setup is dead — cut.>\n"
         f"ODDS: UP <int>% / DOWN <int>% / CHOP <int>%   (must sum to 100, be opinionated)\n"
-        f"NOTE: <one short line — the single biggest signal you weighted, or the biggest risk>\n"
+        f"NOTE: <one line — the single biggest signal you weighted AND the single "
+        f"biggest risk. Both required.>\n"
     )
 
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()

@@ -1967,12 +1967,34 @@ async def trade_ai_read(symbol: str, request: Request):
                 "sell_usd":   sum(t["usd"] for t in sells),
             }
 
+    # Fetch HTF candles (1H + 4H) so the AI can weigh higher-timeframe trend.
+    # Uses the alerts_engine cache so concurrent reads share one HTTP call.
+    htf_1h: list = []
+    htf_4h: list = []
+    try:
+        from app.services.alerts_engine import _fetch_candles as _fc_htf
+        htf_1h = await _fc_htf(sym, "1h", limit=120) or []
+        htf_4h = await _fc_htf(sym, "4h", limit=120) or []
+    except Exception as e:
+        logger.debug(f"ai_read HTF fetch failed for {sym}: {e}")
+
+    # Funding/OI snapshot via the shared auto_trader cache (60s TTL) so the
+    # /trade button and the AI auto-trader fleet share one Coinglass call.
+    funding_data: Optional[dict] = None
+    try:
+        from app.services.auto_trader import _fetch_funding_oi
+        funding_data = await _fetch_funding_oi(sym)
+    except Exception as e:
+        logger.debug(f"ai_read funding fetch failed for {sym}: {e}")
+
     try:
         from app.services.ai_trade_read import generate_ai_trade_read
         result = await generate_ai_trade_read(
             symbol=sym, tf=tf, candles=candles,
             indicators=indicators, toggles=toggles, tape=tape,
             wall_report=wall_report,
+            htf_1h_candles=htf_1h, htf_4h_candles=htf_4h,
+            funding_data=funding_data,
         )
     except Exception as e:
         logger.warning(f"ai_read generation failed for {sym}: {e}")
