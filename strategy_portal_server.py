@@ -2230,7 +2230,7 @@ async def trade_alerts_cancel(alert_id: int, request: Request, db: Session = Dep
 # ─────────────────────────────────────────────────────────────────────────────
 # Auto-trader — turn the user's chart setup into a paper-trading strategy
 # ─────────────────────────────────────────────────────────────────────────────
-_AUTO_MAX_PER_USER = 10
+_AUTO_MAX_PER_USER = 30
 _AUTO_VALID_TFS    = {"1m", "5m", "15m", "1h"}
 
 
