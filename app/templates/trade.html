@@ -4290,17 +4290,25 @@ button{font-family:inherit}
 
   function rulesPreviewFromChart(){
     // Look at the current indicators[] array (built by Indicator system) and
-    // produce a one-line preview of what rule mode would compile to.
-    if(!Array.isArray(indicators)){ return 'Add some indicators to enable rule mode.'; }
+    // produce a one-line preview of what rule mode would compile to. Mirrors
+    // the priority order in app/services/auto_trader.compile_rules_from_chart_state
+    // so the preview the user reads == what actually gets saved.
+    if(!Array.isArray(indicators)){ indicators = []; }
     const visibleInds = indicators.filter(i => i && i.visible !== false);
     const mas = visibleInds.filter(i => i.type === 'ema' || i.type === 'sma');
     const rsi = visibleInds.find(i => i.type === 'rsi');
     const macd = visibleInds.find(i => i.type === 'macd');
     const st = visibleInds.find(i => i.type === 'supertrend');
+    const fvgOn = $('fvg-toggle')     ? $('fvg-toggle').checked     : false;
     const obOn  = $('overlay-toggle') ? $('overlay-toggle').checked : false;
-    const tapeOn= $('tape-toggle')   ? $('tape-toggle').checked   : false;
+    const tapeOn= $('tape-toggle')    ? $('tape-toggle').checked    : false;
     let main = null;
-    if(mas.length >= 2){
+    // Priority 0: FVG retest — mirrors backend. Wins over MA/MACD/etc.
+    // because the user explicitly enabled the FVG overlay.
+    if(fvgOn){
+      main = 'price retests an unfilled FVG (ATR-quality + ICT displacement filtered)';
+    }
+    if(!main && mas.length >= 2){
       const periods = mas.map(m => parseInt(m.params.period||0)).filter(p=>p>0).sort((a,b)=>a-b);
       if(periods.length >= 2 && periods[0] !== periods[1]){
         main = `${(mas[0].type||'EMA').toUpperCase()}(${periods[0]}) crosses ${(mas[1].type||'EMA').toUpperCase()}(${periods[1]})`;
@@ -4310,7 +4318,7 @@ button{font-family:inherit}
     if(!main && macd) { main = `MACD(${macd.params.fast||12},${macd.params.slow||26},${macd.params.signal||9}) zero-cross`; }
     if(!main && rsi)  { main = `RSI(${rsi.params.period||14}) reversal at 30/70`; }
     if(!main){
-      return 'No rule-friendly indicators on the chart. Add 2 EMAs, an RSI, a MACD, or a SuperTrend — or use AI mode.';
+      return 'No rule-friendly setup on the chart. Toggle FVG zones ON, or add 2 EMAs / an RSI / a MACD / a SuperTrend — or switch to AI mode.';
     }
     const mods = [];
     if(obOn)   mods.push('near a wall');
@@ -4392,7 +4400,7 @@ button{font-family:inherit}
 
     const arr = _autoState.strategies || [];
     const active = arr.filter(s => s.status === 'active').length;
-    $('auto-count').textContent = `${active}/${10} active`;
+    $('auto-count').textContent = `${active}/${30} active`;
     $('auto-summary').textContent = active
       ? `${active} active strategy${active===1?'':'ies'} — paper trades, results DM'd to you`
       : 'No active auto strategies yet';
