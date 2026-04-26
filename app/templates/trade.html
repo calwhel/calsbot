@@ -3641,6 +3641,16 @@ button{font-family:inherit}
       if(/^(?:indicator|study|strategy|library)\s*\(/i.test(s)) continue;
       if(/^import\s+/.test(s)) continue;
 
+      // Pine allows assigning the result of plot()/plotshape()/etc. to a
+      // variable so it can be referenced later by fill(p1, p2). Pattern is
+      // `pHigh = plot(...)`. The pipe-id has no value to us — we just want
+      // the plot directive itself. Strip the LHS so the existing
+      // callHeadMatch fires on the same statement.
+      const plotAsnMatch = /^(?:var\s+|varip\s+)?[a-zA-Z_]\w*\s*=\s*(?:plot|plotshape|plotarrow|plotchar|plotcandle)\s*\(/.exec(s);
+      if(plotAsnMatch){
+        s = s.slice(s.indexOf('=') + 1).trim();
+      }
+
       // plot(...) / plotshape(...) / plotarrow(...) at top of statement
       const callHeadMatch = /^(plot|plotshape|plotarrow|plotchar|plotcandle)\s*\(/.exec(s);
       if(callHeadMatch){
