@@ -93,58 +93,80 @@ _AI_TICK_FLOOR_S   = 60   # never call Claude more than once a minute per strate
 _WALL_PROX_PCT = 0.6
 
 # Symbol-level funding/OI cache shared across all AI-mode strategies so a
-# fleet of bots on the same symbol only hits Coinglass once per minute.
+# fleet of bots on the same symbol only hits the upstream once per minute.
 _FUNDING_CACHE: Dict[str, Tuple[Dict[str, Any], float]] = {}
 _FUNDING_TTL = 60.0
 
+# OKX symbol mapping — OKX perpetuals use the `<COIN>-USDT-SWAP` convention
+# and the OI history endpoint takes the bare coin code.
+_OKX_INST = {"BTC": "BTC-USDT-SWAP", "ETH": "ETH-USDT-SWAP", "SOL": "SOL-USDT-SWAP"}
+
 
 async def _fetch_funding_oi(symbol: str) -> Optional[Dict[str, Any]]:
-    """Fetch (and cache) Coinglass funding-rate + open-interest for *symbol*.
-    Returns None when the API key is missing or the upstream fails — callers
-    must tolerate None so the AI run still proceeds."""
+    """Fetch (and cache) funding-rate + open-interest for *symbol* from OKX
+    public APIs (no key required, not geoblocked from Replit).
+
+    Pulls three endpoints concurrently:
+      • funding rate                — current 8h rate
+      • open-interest snapshot      — current OI in USD
+      • OI history (1D bars × 2)    — to compute 24h % change
+
+    Returns None only if every call fails. Caller tolerates None so the
+    AI run still proceeds; the prompt block renders an "unavailable" line.
+    """
     sym = (symbol or "").upper().strip()
     cached = _FUNDING_CACHE.get(sym)
     if cached and time.time() < cached[1]:
         return cached[0]
-    cg_key = os.getenv("COINGLASS_API_KEY") or ""
-    if not cg_key:
+    inst_id = _OKX_INST.get(sym)
+    if not inst_id:
         return None
-    headers = {"CG-API-KEY": cg_key, "accept": "application/json"}
+
     fd: Dict[str, Any] = {"symbol": sym, "fetched_at": int(time.time())}
     try:
         async with httpx.AsyncClient(timeout=4.0) as cl:
-            rr, rr2 = await asyncio.gather(
-                cl.get(
-                    "https://open-api-v3.coinglass.com/api/futures/funding-rate/exchange-list",
-                    params={"symbol": sym}, headers=headers,
-                ),
-                cl.get(
-                    "https://open-api-v3.coinglass.com/api/futures/open-interest/exchange-list",
-                    params={"symbol": sym}, headers=headers,
-                ),
+            r_fund, r_oi, r_hist = await asyncio.gather(
+                cl.get("https://www.okx.com/api/v5/public/funding-rate",
+                       params={"instId": inst_id}),
+                cl.get("https://www.okx.com/api/v5/public/open-interest",
+                       params={"instType": "SWAP", "instId": inst_id}),
+                cl.get("https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-volume",
+                       params={"ccy": sym, "period": "1D"}),
                 return_exceptions=True,
             )
-        if not isinstance(rr, Exception) and rr.status_code == 200:
-            rows = ((rr.json() or {}).get("data") or [])
-            pref = ("Binance", "Bybit", "OKX")
-            pick = next((x for x in rows if x.get("exchangeName") in pref), rows[0] if rows else None)
-            if pick:
-                fr = pick.get("usdtMargin") or pick.get("rate") or {}
-                if isinstance(fr, dict):
-                    fd["funding_rate_pct"] = fr.get("rate")
-                    fd["funding_exchange"] = pick.get("exchangeName")
-                else:
-                    fd["funding_rate_pct"] = fr
-                    fd["funding_exchange"] = pick.get("exchangeName")
-        if not isinstance(rr2, Exception) and rr2.status_code == 200:
-            rows = ((rr2.json() or {}).get("data") or [])
-            total_oi = 0.0
-            for x in rows:
-                try:    total_oi += float(x.get("openInterestAmountByCoinMargin", 0) or 0) + float(x.get("openInterestAmountByStableCoinMargin", 0) or 0)
-                except: pass
-            fd["open_interest_usd"] = round(total_oi, 0)
-            if rows:
-                fd["oi_change_24h_pct"] = rows[0].get("openInterestChangePercent24h")
+        # Funding rate — OKX returns a decimal fraction (e.g. 0.0000428 = 0.00428%)
+        # so we multiply by 100 to match the percent convention the prompt uses.
+        if not isinstance(r_fund, Exception) and r_fund.status_code == 200:
+            data = ((r_fund.json() or {}).get("data") or [])
+            if data:
+                try:
+                    fr_dec = float(data[0].get("fundingRate") or 0)
+                    fd["funding_rate_pct"]  = fr_dec * 100.0
+                    fd["funding_exchange"]  = "OKX"
+                    fd["next_funding_time"] = data[0].get("nextFundingTime")
+                except (TypeError, ValueError):
+                    pass
+        # Current OI in USD
+        if not isinstance(r_oi, Exception) and r_oi.status_code == 200:
+            data = ((r_oi.json() or {}).get("data") or [])
+            if data:
+                try:
+                    fd["open_interest_usd"] = round(float(data[0].get("oiUsd") or 0), 0)
+                except (TypeError, ValueError):
+                    pass
+        # 24h OI delta — the history endpoint returns rows
+        # [timestamp_ms, oi_usd, vol_usd] in newest-first order, daily bars.
+        # Compare row[0] (today) vs row[1] (yesterday) for the % change.
+        if not isinstance(r_hist, Exception) and r_hist.status_code == 200:
+            rows = ((r_hist.json() or {}).get("data") or [])
+            if len(rows) >= 2:
+                try:
+                    today = float(rows[0][1])
+                    prev  = float(rows[1][1])
+                    if prev > 0:
+                        fd["oi_change_24h_pct"] = round((today - prev) / prev * 100.0, 2)
+                except (TypeError, ValueError, IndexError):
+                    pass
     except Exception as e:
         logger.debug(f"_fetch_funding_oi({sym}) failed: {e}")
         return None

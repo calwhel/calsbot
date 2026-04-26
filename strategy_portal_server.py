@@ -2956,78 +2956,28 @@ async def trade_auto_backtest(sid: int, request: Request, db: Session = Depends(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Funding rate + open interest overlay (C) — Coinglass
+# Funding rate + open interest overlay (C) — OKX public APIs (no key required)
 # ─────────────────────────────────────────────────────────────────────────────
-_COINGLASS_FUNDING_TTL = 60   # seconds — funding only ticks every 8h, OI every minute
-
 @app.get("/api/trade/funding/{symbol}")
 async def trade_funding(symbol: str):
     """Pull funding rate + open interest summary for the chart sidebar.
-    Cached aggressively (60s) so frequent polls from the chart don't melt the
-    upstream rate-limit. Returns a flat shape the frontend can render directly.
+
+    Uses the shared `_fetch_funding_oi` helper in `auto_trader` so the chart
+    widget, the AI Trade Read button, and the AI-mode auto-trader fleet all
+    share one upstream call (60s in-process cache). Backed by OKX's free
+    public APIs — no key, no subscription, not geoblocked from Replit.
     """
     sym = (symbol or "").upper().strip()
     if sym not in TRADE_SYMBOL_WHITELIST:
         return JSONResponse({"error": "symbol not supported"}, status_code=404)
-    cache_key = f"trade_funding_{sym}"
-    cached = _CACHE.get(cache_key)
-    if cached and time.time() < cached[1]:
-        return cached[0]
-
-    api_key = os.getenv("COINGLASS_API_KEY") or ""
-    if not api_key:
-        return JSONResponse({"error": "coinglass key not configured"}, status_code=503)
-
-    pair = sym  # Coinglass uses the bare symbol for `/futures/...`
-    headers = {"CG-API-KEY": api_key, "accept": "application/json"}
-    out: dict = {"symbol": sym, "fetched_at": int(time.time())}
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as cl:
-            # Aggregated funding rate (last value across exchanges)
-            r = await cl.get(
-                "https://open-api-v3.coinglass.com/api/futures/funding-rate/exchange-list",
-                params={"symbol": pair}, headers=headers,
-            )
-            if r.status_code == 200:
-                jd = r.json() or {}
-                rows = (jd.get("data") or [])
-                # Pick the binance/bybit/okx row if present, else first
-                pref = ("Binance", "Bybit", "OKX")
-                pick = next((x for x in rows if x.get("exchangeName") in pref), rows[0] if rows else None)
-                if pick:
-                    fr = pick.get("usdtMargin") or pick.get("rate") or {}
-                    if isinstance(fr, dict):
-                        out["funding_rate_pct"]  = fr.get("rate")
-                        out["next_funding_time"] = fr.get("nextFundingTime")
-                        out["funding_exchange"]  = pick.get("exchangeName")
-                    else:
-                        out["funding_rate_pct"]  = fr
-                        out["funding_exchange"]  = pick.get("exchangeName")
-
-            # Open interest aggregated
-            r2 = await cl.get(
-                "https://open-api-v3.coinglass.com/api/futures/open-interest/exchange-list",
-                params={"symbol": pair}, headers=headers,
-            )
-            if r2.status_code == 200:
-                jd = r2.json() or {}
-                rows = (jd.get("data") or [])
-                # Sum USD OI across exchanges
-                total_oi = 0.0
-                for x in rows:
-                    try:    total_oi += float(x.get("openInterestAmountByCoinMargin", 0) or 0) + float(x.get("openInterestAmountByStableCoinMargin", 0) or 0)
-                    except: pass
-                out["open_interest_usd"] = round(total_oi, 0)
-                # Also surface 24h OI change if available (first row's pct)
-                if rows:
-                    out["oi_change_24h_pct"] = rows[0].get("openInterestChangePercent24h")
-
+        from app.services.auto_trader import _fetch_funding_oi
+        out = await _fetch_funding_oi(sym)
     except Exception as e:
         logger.warning(f"trade_funding({sym}) fetch failed: {e}")
         return JSONResponse({"error": f"upstream failed: {e}"}, status_code=502)
-
-    _CACHE[cache_key] = (out, time.time() + _COINGLASS_FUNDING_TTL)
+    if not out:
+        return JSONResponse({"error": "funding data unavailable"}, status_code=503)
     return out
 
 
