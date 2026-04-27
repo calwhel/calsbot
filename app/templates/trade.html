@@ -1166,14 +1166,40 @@ button{font-family:inherit}
                 <input type="number" id="auto-fvg-instant-age" value="2" min="1" max="20" step="1">
 
                 <label class="half">Max gap age (bars)</label>
-                <span></span>
+                <label class="half">Min gap size ($) <span style="color:var(--muted);font-weight:400">— absolute</span></label>
                 <input type="number" id="auto-fvg-max-age" value="200" min="5" max="1000" step="5">
-                <span></span>
+                <input type="number" id="auto-fvg-min-gap-usd" value="0" min="0" max="100000" step="10" placeholder="0 = off">
               </div>
               <div style="font-size:10.5px;color:var(--muted);line-height:1.4">
                 <b>Instant entry</b>: when a fresh FVG (≤ N bars old) is at least this × ATR wide, the bot enters immediately in the displacement direction without waiting for a retest. Use this for the runaway parabolic moves you want to catch. Set to <code>0</code> to require a retest only.<br>
                 <b>Direction</b>: locks the bot to one side — handy if you only want to short bear-FVG drops, or only long bull-FVG pumps.<br>
-                <b>Min gap size (× ATR)</b>: floors how meaningful a gap has to be before it counts.
+                <b>Min gap size (× ATR)</b>: floors how meaningful a gap has to be before it counts.<br>
+                <b>Min gap size ($)</b>: hard dollar floor — e.g. set <code>100</code> to require at least $100 of price inside the FVG. <code>0</code> disables.
+              </div>
+            </div>
+          </details>
+
+          <!-- Strategy modifiers — TP/SL floors + trend filter -->
+          <details id="auto-mods-details" style="margin-bottom:10px;background:var(--panel2);border:1px solid var(--border);border-radius:3px">
+            <summary style="cursor:pointer;padding:8px 10px;font-size:12px;color:var(--text);font-weight:600">
+              Strategy modifiers <span style="color:var(--muted);font-weight:400;font-size:11px">— TP/SL floors &amp; trend filter</span>
+            </summary>
+            <div style="padding:10px 12px;border-top:1px solid var(--border)">
+              <div class="alerts-form-grid" style="margin-bottom:8px">
+                <label class="half">Min R:R ratio</label>
+                <label class="half">Min stop distance (%)</label>
+                <input type="number" id="auto-mod-min-rr" value="0" min="0" max="10" step="0.1" placeholder="0 = off">
+                <input type="number" id="auto-mod-min-stop-pct" value="0" min="0" max="10" step="0.05" placeholder="0 = off">
+
+                <label class="half">Trend EMA period</label>
+                <span></span>
+                <input type="number" id="auto-mod-trend-ema" value="0" min="0" max="500" step="1" placeholder="0 = off">
+                <span></span>
+              </div>
+              <div style="font-size:10.5px;color:var(--muted);line-height:1.4">
+                <b>Min R:R ratio</b>: rejects trades whose TP1 is closer than <code>ratio × stop_distance</code>. The bot lifts TP1 (and TP2) to clear the floor — set <code>1.5</code> for a 1.5R minimum target.<br>
+                <b>Min stop distance (%)</b>: floors the stop distance as a % of entry — e.g. <code>0.4</code> means the stop must be at least 0.4% away. The bot widens the stop if the chart-based stop is closer.<br>
+                <b>Trend EMA period</b>: rejects longs when price is below the EMA, shorts when price is above it. Set <code>50</code> for "must be trending with the EMA50". <code>0</code> disables.
               </div>
             </div>
           </details>
@@ -4378,6 +4404,14 @@ button{font-family:inherit}
     const mods = [];
     if(obOn)   mods.push('near a wall');
     if(tapeOn) mods.push('flow aligned');
+    // Strategy modifiers preview — mirror compile_rules so the user sees
+    // exactly which floors will apply to the saved strategy.
+    const minRR    = parseFloat(($('auto-mod-min-rr')       && $('auto-mod-min-rr').value)       || '0');
+    const minStop  = parseFloat(($('auto-mod-min-stop-pct') && $('auto-mod-min-stop-pct').value) || '0');
+    const trendEma = parseInt(  ($('auto-mod-trend-ema')    && $('auto-mod-trend-ema').value)    || '0', 10);
+    if(Number.isFinite(minRR)    && minRR    > 0) mods.push(`R:R ≥ ${minRR}`);
+    if(Number.isFinite(minStop)  && minStop  > 0) mods.push(`stop ≥ ${minStop}%`);
+    if(Number.isFinite(trendEma) && trendEma > 0) mods.push(`trending with EMA${trendEma}`);
     return 'Enter when ' + [main].concat(mods).join(' + ');
   }
 
@@ -4410,12 +4444,25 @@ button{font-family:inherit}
         params: {
           side:                   sideSel,
           min_gap_atr_mult:       num('auto-fvg-min-gap-atr', 0.10),
+          min_gap_usd:            num('auto-fvg-min-gap-usd', 0),
           max_age_bars:           intv('auto-fvg-max-age', 200),
           instant_entry_atr_mult: num('auto-fvg-instant-atr', 4.0),
           instant_entry_max_age:  intv('auto-fvg-instant-age', 2),
         },
       });
     }
+
+    // Strategy-level modifiers (TP/SL floors + trend filter). Each is purely
+    // opt-in — zero/blank means "don't apply". compile_rules picks them up
+    // from chart_state.mods and lifts them onto the top-level rules dict.
+    const numv = (id, dflt) => {
+      const v = parseFloat(($(id) && $(id).value) || '');
+      return Number.isFinite(v) ? v : dflt;
+    };
+    const intvv = (id, dflt) => {
+      const v = parseInt(($(id) && $(id).value) || '', 10);
+      return Number.isFinite(v) ? v : dflt;
+    };
 
     return {
       indicators: cleanInds,
@@ -4424,6 +4471,11 @@ button{font-family:inherit}
         liq_heatmap:  $('liq-toggle')     ? $('liq-toggle').checked     : false,
         big_prints:   $('tape-toggle')    ? $('tape-toggle').checked    : false,
         fvg:          $('fvg-toggle')     ? $('fvg-toggle').checked     : false,
+      },
+      mods: {
+        min_rr_ratio:     numv('auto-mod-min-rr', 0),
+        min_stop_pct:     numv('auto-mod-min-stop-pct', 0),
+        trend_ema_period: intvv('auto-mod-trend-ema', 0),
       },
     };
   }
@@ -4588,6 +4640,7 @@ button{font-family:inherit}
         body = {
           name, symbol: SYMBOL, tf: currentTF || '5m', mode,
           indicators: ctx.indicators, toggles: ctx.toggles, tape: {},
+          mods: ctx.mods || {},
           cadence_min:  parseInt($('auto-cadence').value || '5'),
           min_odds:     parseInt($('auto-min-odds').value || '60'),
           notional_usd: parseFloat($('auto-notional').value || '1000'),

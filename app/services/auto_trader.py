@@ -292,6 +292,10 @@ def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optiona
         min_gap_atr_mult = float(fp.get("min_gap_atr_mult", 0.10) or 0.10)
         disp_atr_mult    = float(fp.get("disp_atr_mult", 0.5) or 0.5)
         max_age_bars     = int(fp.get("max_age_bars", 200) or 200)
+        # Absolute USD floor for FVG width — for users who think in $ terms
+        # ("at least $100 in the FVG"). 0 disables. Width is in price units
+        # which equals dollars for USD-quoted perps (BTCUSDT, ETHUSDT, etc.).
+        min_gap_usd      = float(fp.get("min_gap_usd", 0.0) or 0.0)
         # Strong-displacement instant entry — when a fresh FVG is ≥ this ×
         # ATR wide, fire entry immediately in the displacement direction
         # without waiting for a retest. 0 disables. Default 4.0 catches the
@@ -311,6 +315,7 @@ def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optiona
                     "min_gap_pct":            min_gap_pct,
                     "min_gap_atr_mult":       min_gap_atr_mult,
                     "disp_atr_mult":          disp_atr_mult,
+                    "min_gap_usd":            min_gap_usd,
                     "max_age_bars":           max_age_bars,
                     "instant_entry_atr_mult": instant_atr,
                     "instant_entry_max_age":  instant_max_age,
@@ -411,6 +416,32 @@ def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optiona
         rules["flow_aligned"] = True
         summary_bits.append("flow aligned")
 
+    # Strategy-level modifiers (TP/SL floors + trend filter). Stored on
+    # chart_state.mods so the UI can manage them as one block. Each is purely
+    # opt-in (zero / unset = disabled, identical to legacy behaviour).
+    mods = chart_state.get("mods") or {}
+    try:
+        min_rr = float(mods.get("min_rr_ratio", 0) or 0)
+    except (TypeError, ValueError):
+        min_rr = 0.0
+    if min_rr > 0:
+        rules["min_rr_ratio"] = min_rr
+        summary_bits.append(f"R:R ≥ {min_rr:g}")
+    try:
+        min_stop = float(mods.get("min_stop_pct", 0) or 0)
+    except (TypeError, ValueError):
+        min_stop = 0.0
+    if min_stop > 0:
+        rules["min_stop_pct"] = min_stop
+        summary_bits.append(f"stop ≥ {min_stop:g}%")
+    try:
+        trend_period = int(mods.get("trend_ema_period", 0) or 0)
+    except (TypeError, ValueError):
+        trend_period = 0
+    if trend_period > 0:
+        rules["trend_ema_period"] = trend_period
+        summary_bits.append(f"trending with EMA{trend_period}")
+
     return rules, "Enter when " + " + ".join(summary_bits)
 
 
@@ -458,6 +489,7 @@ def detect_fvgs(candles: List[dict], *,
                 min_gap_pct: float = 0.0,
                 min_gap_atr_mult: float = 0.0,
                 disp_atr_mult: float = 0.0,
+                min_gap_usd: float = 0.0,
                 atr_period: int = 14,
                 only_unfilled: bool = True,
                 max_age_bars: int = 200,
@@ -544,6 +576,13 @@ def detect_fvgs(candles: List[dict], *,
         if atr and min_gap_atr_mult > 0 and size_atr < min_gap_atr_mult:
             continue
 
+        # Width filter (absolute USD) — for users who think in $-terms
+        # ("at least $100 in the FVG itself"). Width is in price units, which
+        # for USD-quoted perp pairs (BTCUSDT, ETHUSDT, etc.) is equivalent
+        # to dollars. For odd quote currencies this is just 'price units'.
+        if min_gap_usd > 0 and width < min_gap_usd:
+            continue
+
         # ICT displacement filter — formation candle must be a real expansion
         # bar, not a doji that happened to leave a gap on either side.
         if atr and disp_atr_mult > 0:
@@ -594,6 +633,7 @@ def _fvg_retest_signal(candles: List[dict], *,
                        min_gap_pct: float = 0.0,
                        min_gap_atr_mult: float = 0.10,
                        disp_atr_mult: float = 0.5,
+                       min_gap_usd: float = 0.0,
                        max_age_bars: int = 200,
                        instant_entry_atr_mult: float = 0.0,
                        instant_entry_max_age: int = 2) -> Tuple[Optional[str], str]:
@@ -629,6 +669,7 @@ def _fvg_retest_signal(candles: List[dict], *,
                        min_gap_pct=min_gap_pct,
                        min_gap_atr_mult=min_gap_atr_mult,
                        disp_atr_mult=disp_atr_mult,
+                       min_gap_usd=min_gap_usd,
                        only_unfilled=True,
                        max_age_bars=max_age_bars,
                        max_results=20)
@@ -784,6 +825,7 @@ def evaluate_rules(rules: Dict[str, Any], candles: List[dict],
             min_gap_pct=float(p.get("min_gap_pct", 0.05 if is_legacy else 0.0) or 0.0),
             min_gap_atr_mult=float(p.get("min_gap_atr_mult", default_atr_mult) or 0.0),
             disp_atr_mult=float(p.get("disp_atr_mult", default_disp_mult) or 0.0),
+            min_gap_usd=float(p.get("min_gap_usd", 0.0) or 0.0),
             max_age_bars=int(p.get("max_age_bars", default_max_age) or default_max_age),
             instant_entry_atr_mult=float(p.get("instant_entry_atr_mult", default_instant) or 0.0),
             instant_entry_max_age=int(p.get("instant_entry_max_age", 2) or 2),
@@ -812,6 +854,22 @@ def evaluate_rules(rules: Dict[str, Any], candles: List[dict],
         if side == "short" and sell_usd < buy_usd:
             return None
 
+    # EMA trend filter — reject signals that fight the prevailing trend.
+    # When the user sets `trend_ema_period` > 0, longs require price >= EMA,
+    # shorts require price <= EMA. A zero value disables the filter so this
+    # is purely opt-in and back-compat with old strategies.
+    trend_period = int(rules.get("trend_ema_period", 0) or 0)
+    if trend_period > 0:
+        ema_now = _ema(closes, trend_period)
+        if ema_now is None:
+            # Not enough bars to compute the EMA — skip safely rather than
+            # opening blind. The strategy will retry on the next tick.
+            return None
+        if side == "long"  and last_price < ema_now:
+            return None
+        if side == "short" and last_price > ema_now:
+            return None
+
     return {"side": side, "entry_price": last_price, "source_note": note}
 
 
@@ -829,7 +887,9 @@ except (TypeError, ValueError):
 
 def derive_stop_tp_from_chart(side: str, entry: float, candles: List[dict],
                               walls: Optional[List[dict]] = None,
-                              source: str = "walls") -> Tuple[float, float, float]:
+                              source: str = "walls",
+                              min_rr_ratio: float = 0.0,
+                              min_stop_pct: float = 0.0) -> Tuple[float, float, float]:
     """Pick (stop, tp1, tp2) for rule-mode entries.
 
     'walls' source: stop = nearest opposite-side wall (or 0.7% fallback);
@@ -840,48 +900,76 @@ def derive_stop_tp_from_chart(side: str, entry: float, candles: List[dict],
     (default 0.5%) so we never open a noise-scalp the moment price wiggles.
     The R:R ratio is preserved (TP2 stays ≥ 1.5× TP1 distance, stop unchanged
     unless tightening it would invert the trade).
+
+    Optional per-strategy floors:
+      * ``min_stop_pct``  — stop must be at least this % away from entry.
+                            Widens (loosens) the stop when needed; never
+                            tightens. Use to enforce a minimum risk distance.
+      * ``min_rr_ratio``  — TP1 must clear ``ratio × stop_distance`` so the
+                            trade has at least N:1 reward-to-risk before fees.
+                            Lifts TP1 (and TP2 stays ≥ 1.5× TP1 distance).
     """
     atr = _atr(candles, 14) or (entry * 0.005)
     min_tp1_dist = entry * (_MIN_TP1_PCT / 100.0)
+    min_stop_dist_floor = entry * (max(0.0, float(min_stop_pct or 0.0)) / 100.0)
 
     if source == "atr" or not walls:
         # Lift the ATR-based target up to the floor when raw ATR is too small.
         tp1_dist = max(atr * 2.0, min_tp1_dist)
         tp2_dist = max(atr * 3.0, tp1_dist * 1.5)
         if side == "long":
-            stop = entry - atr
+            stop_dist = max(atr, min_stop_dist_floor)
+            stop = entry - stop_dist
             tp1  = entry + tp1_dist
             tp2  = entry + tp2_dist
         else:
-            stop = entry + atr
+            stop_dist = max(atr, min_stop_dist_floor)
+            stop = entry + stop_dist
             tp1  = entry - tp1_dist
             tp2  = entry - tp2_dist
-        return stop, tp1, tp2
-
-    # walls source — find the nearest support/resistance on the right side
-    if side == "long":
-        below = [float(w["price"]) for w in walls
-                 if (w.get("side") or "").lower() == "buy" and float(w.get("price") or 0) < entry]
-        above = [float(w["price"]) for w in walls
-                 if (w.get("side") or "").lower() == "sell" and float(w.get("price") or 0) > entry]
-        stop = (max(below) if below else entry - atr)
-        # Make sure the stop isn't too tight (< 0.3% from entry)
-        stop = min(stop, entry - max(atr * 0.5, entry * 0.003))
-        tp1  = (min(above) if above else entry + atr * 2.0)
-        # Enforce minimum TP1 distance — push TP1 further out if walls are
-        # too close to be meaningful.
-        tp1  = max(tp1, entry + min_tp1_dist)
-        tp2  = entry + (tp1 - entry) * 1.6
     else:
-        above = [float(w["price"]) for w in walls
-                 if (w.get("side") or "").lower() == "sell" and float(w.get("price") or 0) > entry]
-        below = [float(w["price"]) for w in walls
-                 if (w.get("side") or "").lower() == "buy" and float(w.get("price") or 0) < entry]
-        stop = (min(above) if above else entry + atr)
-        stop = max(stop, entry + max(atr * 0.5, entry * 0.003))
-        tp1  = (max(below) if below else entry - atr * 2.0)
-        tp1  = min(tp1, entry - min_tp1_dist)
-        tp2  = entry - (entry - tp1) * 1.6
+        # walls source — find the nearest support/resistance on the right side
+        if side == "long":
+            below = [float(w["price"]) for w in walls
+                     if (w.get("side") or "").lower() == "buy" and float(w.get("price") or 0) < entry]
+            above = [float(w["price"]) for w in walls
+                     if (w.get("side") or "").lower() == "sell" and float(w.get("price") or 0) > entry]
+            stop = (max(below) if below else entry - atr)
+            # Make sure the stop isn't too tight (default 0.3%, lifted by user floor)
+            min_stop_dist = max(atr * 0.5, entry * 0.003, min_stop_dist_floor)
+            stop = min(stop, entry - min_stop_dist)
+            tp1  = (min(above) if above else entry + atr * 2.0)
+            # Enforce minimum TP1 distance — push TP1 further out if walls are
+            # too close to be meaningful.
+            tp1  = max(tp1, entry + min_tp1_dist)
+            tp2  = entry + (tp1 - entry) * 1.6
+        else:
+            above = [float(w["price"]) for w in walls
+                     if (w.get("side") or "").lower() == "sell" and float(w.get("price") or 0) > entry]
+            below = [float(w["price"]) for w in walls
+                     if (w.get("side") or "").lower() == "buy" and float(w.get("price") or 0) < entry]
+            stop = (min(above) if above else entry + atr)
+            min_stop_dist = max(atr * 0.5, entry * 0.003, min_stop_dist_floor)
+            stop = max(stop, entry + min_stop_dist)
+            tp1  = (max(below) if below else entry - atr * 2.0)
+            tp1  = min(tp1, entry - min_tp1_dist)
+            tp2  = entry - (entry - tp1) * 1.6
+
+    # ── Final R:R enforcement ────────────────────────────────────────────
+    # If the user requires a minimum reward-to-risk, lift TP1 (and TP2)
+    # so the trade clears `min_rr_ratio × stop_distance`. We never tighten
+    # the stop here — that would invalidate the chart-based stop logic.
+    rr = max(0.0, float(min_rr_ratio or 0.0))
+    if rr > 0:
+        stop_dist = abs(entry - stop)
+        if stop_dist > 0:
+            need = stop_dist * rr
+            if side == "long":
+                tp1 = max(tp1, entry + need)
+                tp2 = max(tp2, entry + (tp1 - entry) * 1.5)
+            else:
+                tp1 = min(tp1, entry - need)
+                tp2 = min(tp2, entry - (entry - tp1) * 1.5)
     return stop, tp1, tp2
 
 
@@ -1526,6 +1614,8 @@ async def _maybe_open_rules(strategy, db) -> bool:
         side, entry, candles,
         walls=walls_flat if walls_flat else None,
         source=strategy.tp_sl_source if strategy.tp_sl_source in ("walls", "atr") else "walls",
+        min_rr_ratio=float(rules.get("min_rr_ratio", 0.0) or 0.0),
+        min_stop_pct=float(rules.get("min_stop_pct", 0.0) or 0.0),
     )
     plan_text = hit.get("source_note") or ""
     t = await _open_paper_trade(

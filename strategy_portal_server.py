@@ -2493,9 +2493,22 @@ async def trade_auto_create(request: Request, db: Session = Depends(get_db)):
     raw_indicators = body.get("indicators") or []
     if not isinstance(raw_indicators, list):
         raw_indicators = []
-    _ALLOWED_TYPES = {"ema", "sma", "rsi", "macd", "bb", "vwap", "atr", "supertrend", "stochrsi"}
+    _ALLOWED_TYPES = {"ema", "sma", "rsi", "macd", "bb", "vwap", "atr", "supertrend", "stochrsi", "fvg"}
     _ALLOWED_SRCS  = {"close", "open", "high", "low", "hl2", "hlc3", "ohlc4"}
     _ALLOWED_PARAM_KEYS = {"period", "fast", "slow", "signal", "mult", "stoch"}
+    # FVG indicator carries its own param vocabulary (gap floors, instant
+    # entry, direction filter, age cap). Numeric bounds clamp to safe ranges
+    # so users can't blow up the detector with absurd values.
+    _ALLOWED_FVG_PARAM_KEYS = {
+        "side": ("str", {"long", "short", "either"}),
+        "min_gap_pct":            ("float", 0.0, 100.0),
+        "min_gap_atr_mult":       ("float", 0.0, 50.0),
+        "min_gap_usd":            ("float", 0.0, 1_000_000.0),
+        "disp_atr_mult":          ("float", 0.0, 50.0),
+        "max_age_bars":           ("int",   1,   10000),
+        "instant_entry_atr_mult": ("float", 0.0, 50.0),
+        "instant_entry_max_age":  ("int",   1,   1000),
+    }
     indicators: list = []
     for raw in raw_indicators[:12]:
         if not isinstance(raw, dict):
@@ -2510,16 +2523,36 @@ async def trade_auto_create(request: Request, db: Session = Depends(get_db)):
         if not isinstance(rp, dict):
             rp = {}
         clean_params: dict = {}
-        for k, v in rp.items():
-            if k not in _ALLOWED_PARAM_KEYS:
-                continue
-            try:
-                fv = float(v)
-            except (TypeError, ValueError):
-                continue
-            if fv < 0 or fv > 500:
-                continue
-            clean_params[k] = fv
+        if t == "fvg":
+            # Per-key validation with FVG-specific bounds + a string side enum.
+            for k, v in rp.items():
+                spec = _ALLOWED_FVG_PARAM_KEYS.get(k)
+                if not spec:
+                    continue
+                if spec[0] == "str":
+                    sv = str(v or "").lower().strip()
+                    if sv in spec[1]:
+                        clean_params[k] = sv
+                else:
+                    try:
+                        fv = float(v)
+                    except (TypeError, ValueError):
+                        continue
+                    lo, hi = spec[1], spec[2]
+                    if fv < lo or fv > hi:
+                        continue
+                    clean_params[k] = int(fv) if spec[0] == "int" else fv
+        else:
+            for k, v in rp.items():
+                if k not in _ALLOWED_PARAM_KEYS:
+                    continue
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    continue
+                if fv < 0 or fv > 500:
+                    continue
+                clean_params[k] = fv
         indicators.append({"type": t, "src": s, "params": clean_params})
     toggles = body.get("toggles") or {}
     if not isinstance(toggles, dict):
@@ -2530,7 +2563,32 @@ async def trade_auto_create(request: Request, db: Session = Depends(get_db)):
     if not isinstance(tape, dict):
         tape = {}
 
-    chart_state = {"indicators": indicators, "toggles": toggles, "tape": tape}
+    # Strategy-level modifiers (TP/SL floors + trend filter). Sanitised here
+    # rather than blindly trusted so a malformed client can't poke arbitrary
+    # keys into compile_rules. Each is opt-in (zero = disabled).
+    raw_mods = body.get("mods") or {}
+    if not isinstance(raw_mods, dict):
+        raw_mods = {}
+    mods: dict = {}
+    def _bounded_float(name: str, lo: float, hi: float) -> None:
+        try:
+            v = float(raw_mods.get(name, 0) or 0)
+        except (TypeError, ValueError):
+            return
+        if lo <= v <= hi:
+            mods[name] = v
+    def _bounded_int(name: str, lo: int, hi: int) -> None:
+        try:
+            v = int(float(raw_mods.get(name, 0) or 0))
+        except (TypeError, ValueError):
+            return
+        if lo <= v <= hi:
+            mods[name] = v
+    _bounded_float("min_rr_ratio",    0.0, 20.0)
+    _bounded_float("min_stop_pct",    0.0, 50.0)
+    _bounded_int(  "trend_ema_period", 0,   1000)
+
+    chart_state = {"indicators": indicators, "toggles": toggles, "tape": tape, "mods": mods}
 
     # Numeric knobs (clamped)
     cadence_min  = max(1,  min(60,   int(float(body.get("cadence_min")  or 5))))
