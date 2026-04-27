@@ -87,9 +87,16 @@ def _supertrend(candles: List[dict], period: int, mult: float) -> Optional[Tuple
 # again by `cadence_min`; rule mode just uses this floor so we don't hammer
 # the candle source.
 _RULE_TICK_FLOOR_S = 25
-_AI_TICK_FLOOR_S   = 300  # cost-protection floor: never call Claude more than once per 5min per strategy
-                          # (even if user sets cadence_min=1, this hard floor wins). At ~$0.005-0.01
-                          # per call this caps a single AI strategy at ~$1.50/day instead of $10.
+# AI cost-protection floor: never call Claude more than once per N seconds per
+# strategy, even if the user sets cadence_min=1. Default 90s = balance between
+# trade-timing responsiveness and API spend (~$0.005-0.01 per call → ≤$10/day
+# per strategy at the floor; user-set cadence_min wins if it's longer). Pair
+# with the auto-pause-on-insufficient-credits logic below — that's the real
+# safety net once credits run dry. Override via env AI_TICK_FLOOR_S to taste.
+try:
+    _AI_TICK_FLOOR_S = max(30, int(os.environ.get("AI_TICK_FLOOR_S", "90")))
+except (TypeError, ValueError):
+    _AI_TICK_FLOOR_S = 90
 
 # Wall confluence — entry must be within this % of nearest matching wall
 _WALL_PROX_PCT = 0.6
@@ -285,21 +292,34 @@ def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optiona
         min_gap_atr_mult = float(fp.get("min_gap_atr_mult", 0.10) or 0.10)
         disp_atr_mult    = float(fp.get("disp_atr_mult", 0.5) or 0.5)
         max_age_bars     = int(fp.get("max_age_bars", 200) or 200)
+        # Strong-displacement instant entry — when a fresh FVG is ≥ this ×
+        # ATR wide, fire entry immediately in the displacement direction
+        # without waiting for a retest. 0 disables. Default 4.0 catches the
+        # parabolic moves where a polite retest never comes.
+        instant_atr      = float(fp.get("instant_entry_atr_mult", 4.0) or 0.0)
+        instant_max_age  = int(fp.get("instant_entry_max_age", 2) or 2)
         rules = {
             "entry": {
                 "kind": "fvg_retest",
                 "params": {
-                    "min_gap_pct":      min_gap_pct,
-                    "min_gap_atr_mult": min_gap_atr_mult,
-                    "disp_atr_mult":    disp_atr_mult,
-                    "max_age_bars":     max_age_bars,
+                    "min_gap_pct":            min_gap_pct,
+                    "min_gap_atr_mult":       min_gap_atr_mult,
+                    "disp_atr_mult":          disp_atr_mult,
+                    "max_age_bars":           max_age_bars,
+                    "instant_entry_atr_mult": instant_atr,
+                    "instant_entry_max_age":  instant_max_age,
                 },
                 "side": "either",
             },
         }
-        summary_bits.append(
-            f"price retests an unfilled FVG (≥{min_gap_pct:g}% gap, ≤{max_age_bars} bars old)"
-        )
+        if instant_atr > 0:
+            summary_bits.append(
+                f"price retests an unfilled FVG (or instant entry on ≥{instant_atr:g}×ATR displacement)"
+            )
+        else:
+            summary_bits.append(
+                f"price retests an unfilled FVG (≥{min_gap_pct:g}% gap, ≤{max_age_bars} bars old)"
+            )
 
     # Priority 1: two MAs of different periods → cross detection
     # Gated on `rules is None` so an explicit FVG choice (Priority 0) wins
@@ -565,7 +585,9 @@ def _fvg_retest_signal(candles: List[dict], *,
                        min_gap_pct: float = 0.0,
                        min_gap_atr_mult: float = 0.10,
                        disp_atr_mult: float = 0.5,
-                       max_age_bars: int = 200) -> Tuple[Optional[str], str]:
+                       max_age_bars: int = 200,
+                       instant_entry_atr_mult: float = 0.0,
+                       instant_entry_max_age: int = 2) -> Tuple[Optional[str], str]:
     """Return ('long'|'short'|None, note) when the current bar retests an
     active FVG. Used by evaluate_rules + the AI Read summariser.
 
@@ -575,6 +597,13 @@ def _fvg_retest_signal(candles: List[dict], *,
     The detector defaults apply the same volatility-aware width filter and
     ICT displacement filter the chart overlay uses, so what fires the rule
     matches what the user sees on screen.
+
+    Strong-displacement instant entry:
+        When ``instant_entry_atr_mult > 0``, a fresh FVG (formed in the last
+        ``instant_entry_max_age`` bars) whose width is ≥ that multiple of ATR
+        triggers an immediate entry in the displacement direction — no retest
+        required. This is for runaway displacements where waiting for a wick
+        back into the gap usually means missing the move entirely.
     """
     if not candles or len(candles) < 4:
         return None, ""
@@ -596,6 +625,30 @@ def _fvg_retest_signal(candles: List[dict], *,
                        max_results=20)
     if not gaps:
         return None, ""
+
+    # Strong-displacement instant entry — checked FIRST so we don't miss
+    # parabolic breakouts while waiting for a polite retest. Only fires on
+    # FVGs formed within the last `instant_entry_max_age` bars (default 2)
+    # so we're trading the displacement, not chasing stale gaps.
+    if instant_entry_atr_mult > 0:
+        fresh_strong = [g for g in gaps
+                        if g.get("age_bars", 999) <= instant_entry_max_age
+                        and g.get("size_atr", 0.0) >= instant_entry_atr_mult]
+        if fresh_strong:
+            # gaps is already sorted newest-first; pick the freshest, then
+            # break ties by largest size_atr.
+            fresh_strong.sort(key=lambda g: (g["age_bars"], -g["size_atr"]))
+            g = fresh_strong[0]
+            if g["side"] == "bull":
+                return "long", (
+                    f"strong bull FVG displacement ({g['size_atr']:.2f}×ATR, "
+                    f"{g['age_bars']}b old) — instant entry"
+                )
+            else:
+                return "short", (
+                    f"strong bear FVG displacement ({g['size_atr']:.2f}×ATR, "
+                    f"{g['age_bars']}b old) — instant entry"
+                )
 
     # Bullish retest: an unfilled BULL FVG below current close, and the
     # current bar wicked into it.
@@ -714,12 +767,17 @@ def evaluate_rules(rules: Dict[str, Any], candles: List[dict],
         default_atr_mult  = 0.0 if is_legacy else 0.10
         default_disp_mult = 0.0 if is_legacy else 0.5
         default_max_age   = 100 if is_legacy else 200
+        # Strong-displacement instant entry: 0 disables, default 4.0 (legacy
+        # specs that pre-date this field default to 0 to preserve behaviour).
+        default_instant = 0.0 if is_legacy else 4.0
         side, note = _fvg_retest_signal(
             candles,
             min_gap_pct=float(p.get("min_gap_pct", 0.05 if is_legacy else 0.0) or 0.0),
             min_gap_atr_mult=float(p.get("min_gap_atr_mult", default_atr_mult) or 0.0),
             disp_atr_mult=float(p.get("disp_atr_mult", default_disp_mult) or 0.0),
             max_age_bars=int(p.get("max_age_bars", default_max_age) or default_max_age),
+            instant_entry_atr_mult=float(p.get("instant_entry_atr_mult", default_instant) or 0.0),
+            instant_entry_max_age=int(p.get("instant_entry_max_age", 2) or 2),
         )
         if side is None:
             return None

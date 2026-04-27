@@ -2375,10 +2375,34 @@ def _read_risk_fields(body: dict) -> dict:
         if v is not None: out["partial_tp1_pct"] = v
     if "move_stop_to_be_after_tp1" in risk:
         out["move_stop_to_be_after_tp1"] = bool(risk.get("move_stop_to_be_after_tp1"))
+    # Session window — strict: if the caller sent a non-empty value but it
+    # didn't parse as HH:MM (UTC), reject the whole save instead of silently
+    # storing None. Silent-None is what made users think their session
+    # filter was on when it actually wasn't, so the bot kept trading 24/7.
     if "session_start_utc" in risk:
-        out["session_start_utc"] = _hhmm(risk.get("session_start_utc"))
+        raw = risk.get("session_start_utc")
+        if raw in (None, ""):
+            out["session_start_utc"] = None
+        else:
+            parsed = _hhmm(raw)
+            if parsed is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"session_start_utc must be HH:MM in 24h UTC (got '{raw}')",
+                )
+            out["session_start_utc"] = parsed
     if "session_end_utc" in risk:
-        out["session_end_utc"] = _hhmm(risk.get("session_end_utc"))
+        raw = risk.get("session_end_utc")
+        if raw in (None, ""):
+            out["session_end_utc"] = None
+        else:
+            parsed = _hhmm(raw)
+            if parsed is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"session_end_utc must be HH:MM in 24h UTC (got '{raw}')",
+                )
+            out["session_end_utc"] = parsed
     if "cooldown_minutes_after_loss" in risk:
         v = _opt_int(risk.get("cooldown_minutes_after_loss"), 0, 24 * 60)
         if v is not None: out["cooldown_minutes_after_loss"] = v
