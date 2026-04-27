@@ -1144,6 +1144,40 @@ button{font-family:inherit}
             </div>
           </details>
 
+          <!-- FVG entry settings — only relevant when FVG zones are toggled ON -->
+          <details id="auto-fvg-details" style="margin-bottom:10px;background:var(--panel2);border:1px solid var(--border);border-radius:3px">
+            <summary style="cursor:pointer;padding:8px 10px;font-size:12px;color:var(--text);font-weight:600">
+              FVG entry settings <span style="color:var(--muted);font-weight:400;font-size:11px">— only used when FVG zones toggle is ON</span>
+            </summary>
+            <div style="padding:10px 12px;border-top:1px solid var(--border)">
+              <div class="alerts-form-grid" style="margin-bottom:8px">
+                <label class="half">Direction</label>
+                <label class="half">Min gap size (× ATR)</label>
+                <select id="auto-fvg-side">
+                  <option value="either" selected>Both — long bull FVG / short bear FVG</option>
+                  <option value="long">Long only (bull FVGs)</option>
+                  <option value="short">Short only (bear FVGs)</option>
+                </select>
+                <input type="number" id="auto-fvg-min-gap-atr" value="0.10" min="0" max="5" step="0.05">
+
+                <label class="half">Instant entry (× ATR)</label>
+                <label class="half">Instant entry max age (bars)</label>
+                <input type="number" id="auto-fvg-instant-atr" value="4.0" min="0" max="20" step="0.1">
+                <input type="number" id="auto-fvg-instant-age" value="2" min="1" max="20" step="1">
+
+                <label class="half">Max gap age (bars)</label>
+                <span></span>
+                <input type="number" id="auto-fvg-max-age" value="200" min="5" max="1000" step="5">
+                <span></span>
+              </div>
+              <div style="font-size:10.5px;color:var(--muted);line-height:1.4">
+                <b>Instant entry</b>: when a fresh FVG (≤ N bars old) is at least this × ATR wide, the bot enters immediately in the displacement direction without waiting for a retest. Use this for the runaway parabolic moves you want to catch. Set to <code>0</code> to require a retest only.<br>
+                <b>Direction</b>: locks the bot to one side — handy if you only want to short bear-FVG drops, or only long bull-FVG pumps.<br>
+                <b>Min gap size (× ATR)</b>: floors how meaningful a gap has to be before it counts.
+              </div>
+            </div>
+          </details>
+
           <!-- Position-size calculator (B) — instant, no save -->
           <details style="margin-bottom:10px;background:var(--panel2);border:1px solid var(--border);border-radius:3px">
             <summary style="cursor:pointer;padding:8px 10px;font-size:12px;color:var(--text);font-weight:600">
@@ -4316,7 +4350,18 @@ button{font-family:inherit}
     // Priority 0: FVG retest — mirrors backend. Wins over MA/MACD/etc.
     // because the user explicitly enabled the FVG overlay.
     if(fvgOn){
-      main = 'price retests an unfilled FVG (ATR-quality + ICT displacement filtered)';
+      const sideSel  = ($('auto-fvg-side') && $('auto-fvg-side').value) || 'either';
+      const sideWord = sideSel === 'long'  ? ' (long-only)'
+                     : sideSel === 'short' ? ' (short-only)'
+                     : '';
+      const instAtr  = parseFloat(($('auto-fvg-instant-atr') && $('auto-fvg-instant-atr').value) || '4.0');
+      const instAge  = parseInt(($('auto-fvg-instant-age') && $('auto-fvg-instant-age').value) || '2', 10);
+      const minGap   = parseFloat(($('auto-fvg-min-gap-atr') && $('auto-fvg-min-gap-atr').value) || '0.10');
+      if(instAtr > 0){
+        main = `price retests an unfilled FVG${sideWord}, OR a fresh FVG (≤${instAge}b old) ≥${instAtr}×ATR wide fires instantly`;
+      } else {
+        main = `price retests an unfilled FVG${sideWord} (gap ≥${minGap}×ATR)`;
+      }
     }
     if(!main && mas.length >= 2){
       const periods = mas.map(m => parseInt(m.params.period||0)).filter(p=>p>0).sort((a,b)=>a-b);
@@ -4343,6 +4388,35 @@ button{font-family:inherit}
       type:   i.type, src: i.src || 'close',
       params: i.params || {},
     })).filter(i => i.type && i.type !== 'marker');
+
+    // When the FVG toggle is ON, inject an explicit `fvg` indicator spec
+    // built from the user's "FVG entry settings" inputs so compile_rules
+    // (backend) honours their custom thresholds + direction filter instead
+    // of falling back to global defaults.
+    const fvgOn = $('fvg-toggle') && $('fvg-toggle').checked;
+    if(fvgOn && !cleanInds.some(i => (i.type || '').toLowerCase() === 'fvg')){
+      const num = (id, dflt) => {
+        const v = parseFloat(($(id) && $(id).value) || '');
+        return Number.isFinite(v) ? v : dflt;
+      };
+      const intv = (id, dflt) => {
+        const v = parseInt(($(id) && $(id).value) || '', 10);
+        return Number.isFinite(v) ? v : dflt;
+      };
+      const sideSel = ($('auto-fvg-side') && $('auto-fvg-side').value) || 'either';
+      cleanInds.push({
+        type: 'fvg',
+        src:  'close',
+        params: {
+          side:                   sideSel,
+          min_gap_atr_mult:       num('auto-fvg-min-gap-atr', 0.10),
+          max_age_bars:           intv('auto-fvg-max-age', 200),
+          instant_entry_atr_mult: num('auto-fvg-instant-atr', 4.0),
+          instant_entry_max_age:  intv('auto-fvg-instant-age', 2),
+        },
+      });
+    }
+
     return {
       indicators: cleanInds,
       toggles: {

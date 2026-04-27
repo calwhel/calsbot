@@ -298,6 +298,12 @@ def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optiona
         # parabolic moves where a polite retest never comes.
         instant_atr      = float(fp.get("instant_entry_atr_mult", 4.0) or 0.0)
         instant_max_age  = int(fp.get("instant_entry_max_age", 2) or 2)
+        # Direction filter — user can lock the strategy to long-only / short-
+        # only / both. The default "either" preserves prior behaviour for any
+        # strategy saved before this field existed.
+        side_filter = (str(fp.get("side", "either") or "either").lower().strip())
+        if side_filter not in ("long", "short", "either"):
+            side_filter = "either"
         rules = {
             "entry": {
                 "kind": "fvg_retest",
@@ -309,16 +315,19 @@ def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optiona
                     "instant_entry_atr_mult": instant_atr,
                     "instant_entry_max_age":  instant_max_age,
                 },
-                "side": "either",
+                "side": side_filter,
             },
         }
+        side_word = {"long": " long-only", "short": " short-only", "either": ""}[side_filter]
         if instant_atr > 0:
             summary_bits.append(
-                f"price retests an unfilled FVG (or instant entry on ≥{instant_atr:g}×ATR displacement)"
+                f"price retests an unfilled FVG{side_word} "
+                f"(or instant entry on ≥{instant_atr:g}×ATR displacement)"
             )
         else:
             summary_bits.append(
-                f"price retests an unfilled FVG (≥{min_gap_pct:g}% gap, ≤{max_age_bars} bars old)"
+                f"price retests an unfilled FVG{side_word} "
+                f"(≥{min_gap_pct:g}% gap, ≤{max_age_bars} bars old)"
             )
 
     # Priority 1: two MAs of different periods → cross detection
@@ -780,6 +789,12 @@ def evaluate_rules(rules: Dict[str, Any], candles: List[dict],
             instant_entry_max_age=int(p.get("instant_entry_max_age", 2) or 2),
         )
         if side is None:
+            return None
+        # Honour the user's direction filter on the entry rule. "either"
+        # (the default + legacy behaviour) takes both sides; "long"/"short"
+        # rejects the opposite side so the bot only trades the user's bias.
+        side_filter = str(entry.get("side", "either") or "either").lower().strip()
+        if side_filter in ("long", "short") and side != side_filter:
             return None
 
     if side is None:
