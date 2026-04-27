@@ -8205,6 +8205,64 @@ async def api_competition_enter(request: Request):
         db.close()
 
 
+@app.post("/admin/auto_trader/archive_by_cadence")
+@app.get("/admin/auto_trader/archive_by_cadence")
+async def admin_archive_fast_auto_strategies(
+    secret: str = Query(...),
+    max_cadence_min: int = Query(1, ge=1, le=60),
+    user_uid: Optional[str] = Query(None),
+):
+    """Admin one-click: bulk-archive AI-mode auto-trader strategies whose
+    cadence is at or below `max_cadence_min`. Used to clean up runaway
+    1-minute strategies that burn Anthropic credits.
+
+    Defaults to `max_cadence_min=1` (only the 1m strategies). Pass
+    `user_uid=TH-XXXXXXXX` to scope to one user, or omit to apply globally.
+    Soft-archives (status='archived') — same as the per-strategy delete UI,
+    so trades already open are unaffected and the row is preserved for stats.
+    """
+    import os
+    if secret != os.environ.get("ADMIN_SECRET", "5603353066"):
+        raise HTTPException(status_code=403)
+
+    from app.database import SessionLocal
+    from app.models import AutoTradeStrategy, User
+    db = SessionLocal()
+    try:
+        q = db.query(AutoTradeStrategy).filter(
+            AutoTradeStrategy.status == "active",
+            AutoTradeStrategy.cadence_min <= max_cadence_min,
+        )
+        if user_uid:
+            u = db.query(User).filter(User.uid == user_uid).first()
+            if not u:
+                raise HTTPException(status_code=404, detail=f"user {user_uid} not found")
+            q = q.filter(AutoTradeStrategy.user_id == u.id)
+
+        rows = q.all()
+        archived = []
+        now = datetime.utcnow()
+        for s in rows:
+            s.status = "archived"
+            s.paused_at = now
+            archived.append({
+                "id": s.id, "user_id": s.user_id, "symbol": s.symbol,
+                "timeframe": s.timeframe, "mode": s.mode,
+                "cadence_min": s.cadence_min,
+                "total_signals": s.total_signals,
+                "wins": s.wins, "losses": s.losses,
+                "pnl_usd_total": float(s.pnl_usd_total or 0),
+            })
+        db.commit()
+        logger.warning(
+            f"[admin] archived {len(archived)} auto-trader strategies "
+            f"(max_cadence_min={max_cadence_min}, user_uid={user_uid or 'all'})"
+        )
+        return {"ok": True, "archived_count": len(archived), "archived": archived}
+    finally:
+        db.close()
+
+
 @app.post("/admin/competition/create")
 async def admin_competition_create(request: Request, secret: str = Query(...)):
     """Admin-only: create a new monthly competition."""

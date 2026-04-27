@@ -87,7 +87,9 @@ def _supertrend(candles: List[dict], period: int, mult: float) -> Optional[Tuple
 # again by `cadence_min`; rule mode just uses this floor so we don't hammer
 # the candle source.
 _RULE_TICK_FLOOR_S = 25
-_AI_TICK_FLOOR_S   = 60   # never call Claude more than once a minute per strategy
+_AI_TICK_FLOOR_S   = 300  # cost-protection floor: never call Claude more than once per 5min per strategy
+                          # (even if user sets cadence_min=1, this hard floor wins). At ~$0.005-0.01
+                          # per call this caps a single AI strategy at ~$1.50/day instead of $10.
 
 # Wall confluence — entry must be within this % of nearest matching wall
 _WALL_PROX_PCT = 0.6
@@ -1313,7 +1315,33 @@ async def _maybe_open_ai(strategy, db) -> bool:
         db.commit()
         return False
 
+    # Cost protection: if Claude ran out of credits, pause the strategy
+    # for 24h instead of hammering the API every cadence_min and racking up
+    # charges that all return 400. The deterministic fallback isn't suitable
+    # for live entries — we'd be opening real (paper) positions on stale data.
+    ai_error = result.get("ai_error")
+    if ai_error == "insufficient_credits":
+        strategy.status = "paused"
+        strategy.paused_at = now
+        strategy.paused_until = now + timedelta(hours=24)
+        strategy.last_evaluated_at = now
+        db.commit()
+        logger.warning(
+            f"auto_trader strategy #{strategy.id} AUTO-PAUSED for 24h — "
+            f"Anthropic credit balance exhausted. Top up credits then resume."
+        )
+        return False
+    if ai_error in ("rate_limit", "auth"):
+        strategy.last_evaluated_at = now
+        db.commit()
+        return False
+
     plan_text = result.get("summary") or ""
+    # Never trade off the deterministic fallback — only act on real Claude output.
+    if result.get("fallback"):
+        strategy.last_evaluated_at = now
+        db.commit()
+        return False
     parsed = parse_ai_plan(plan_text)
     strategy.last_evaluated_at = now
     db.commit()

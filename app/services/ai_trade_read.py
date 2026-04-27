@@ -748,10 +748,22 @@ async def generate_ai_trade_read(
             raise RuntimeError("empty response")
         return {"summary": text, "fallback": False, "sources_used": sources}
     except Exception as e:
-        logger.warning(f"AI trade read failed for {symbol}: {e}")
+        # Surface a structured error so callers (auto_trader) can react. We
+        # specifically flag the "credit balance too low" case so the engine
+        # can auto-pause strategies instead of hammering the API at $0.01/call.
+        err_str = str(e).lower()
+        ai_error = "unknown"
+        if "credit balance" in err_str or "insufficient" in err_str:
+            ai_error = "insufficient_credits"
+        elif "rate" in err_str and "limit" in err_str:
+            ai_error = "rate_limit"
+        elif "401" in err_str or "auth" in err_str:
+            ai_error = "auth"
+        logger.warning(f"AI trade read failed for {symbol} ({ai_error}): {e}")
         return {
             "summary": _fallback_plan(symbol, pa, wall_report),
             "fallback": True,
+            "ai_error": ai_error,
             "sources_used": sources,
         }
 
