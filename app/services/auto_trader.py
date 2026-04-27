@@ -801,6 +801,17 @@ def evaluate_rules(rules: Dict[str, Any], candles: List[dict],
 
 
 # ─── TP/SL helpers (rule mode) ────────────────────────────────────────────────
+# Minimum TP1 distance as a percentage of entry. On low timeframes (1m/3m)
+# raw ATR can be tiny — a 2×ATR TP becomes a sub-0.1% target that real-world
+# fees + spread eat alive. This floor ensures every trade has at least a
+# meaningful edge in price terms before sizing/leverage is even considered.
+# Override via env MIN_TP1_PCT.
+try:
+    _MIN_TP1_PCT = max(0.0, float(os.environ.get("MIN_TP1_PCT", "0.5")))
+except (TypeError, ValueError):
+    _MIN_TP1_PCT = 0.5
+
+
 def derive_stop_tp_from_chart(side: str, entry: float, candles: List[dict],
                               walls: Optional[List[dict]] = None,
                               source: str = "walls") -> Tuple[float, float, float]:
@@ -809,17 +820,27 @@ def derive_stop_tp_from_chart(side: str, entry: float, candles: List[dict],
     'walls' source: stop = nearest opposite-side wall (or 0.7% fallback);
                     tp1 = nearest same-side resistance; tp2 = 1.5× tp1 distance.
     'atr' source: stop = entry ± 1×ATR(14); tp1 = entry ± 2×ATR; tp2 = 3×ATR.
+
+    All paths enforce a minimum TP1 distance of ``_MIN_TP1_PCT`` % of entry
+    (default 0.5%) so we never open a noise-scalp the moment price wiggles.
+    The R:R ratio is preserved (TP2 stays ≥ 1.5× TP1 distance, stop unchanged
+    unless tightening it would invert the trade).
     """
     atr = _atr(candles, 14) or (entry * 0.005)
+    min_tp1_dist = entry * (_MIN_TP1_PCT / 100.0)
+
     if source == "atr" or not walls:
+        # Lift the ATR-based target up to the floor when raw ATR is too small.
+        tp1_dist = max(atr * 2.0, min_tp1_dist)
+        tp2_dist = max(atr * 3.0, tp1_dist * 1.5)
         if side == "long":
             stop = entry - atr
-            tp1  = entry + atr * 2.0
-            tp2  = entry + atr * 3.0
+            tp1  = entry + tp1_dist
+            tp2  = entry + tp2_dist
         else:
             stop = entry + atr
-            tp1  = entry - atr * 2.0
-            tp2  = entry - atr * 3.0
+            tp1  = entry - tp1_dist
+            tp2  = entry - tp2_dist
         return stop, tp1, tp2
 
     # walls source — find the nearest support/resistance on the right side
@@ -832,6 +853,9 @@ def derive_stop_tp_from_chart(side: str, entry: float, candles: List[dict],
         # Make sure the stop isn't too tight (< 0.3% from entry)
         stop = min(stop, entry - max(atr * 0.5, entry * 0.003))
         tp1  = (min(above) if above else entry + atr * 2.0)
+        # Enforce minimum TP1 distance — push TP1 further out if walls are
+        # too close to be meaningful.
+        tp1  = max(tp1, entry + min_tp1_dist)
         tp2  = entry + (tp1 - entry) * 1.6
     else:
         above = [float(w["price"]) for w in walls
@@ -841,6 +865,7 @@ def derive_stop_tp_from_chart(side: str, entry: float, candles: List[dict],
         stop = (min(above) if above else entry + atr)
         stop = max(stop, entry + max(atr * 0.5, entry * 0.003))
         tp1  = (max(below) if below else entry - atr * 2.0)
+        tp1  = min(tp1, entry - min_tp1_dist)
         tp2  = entry - (entry - tp1) * 1.6
     return stop, tp1, tp2
 
@@ -946,15 +971,40 @@ async def _dm_close(user_telegram_id: int, strat_name: str, trade, reason: str,
                     exit_price: float, pnl_pct: float, pnl_usd: float):
     win = pnl_usd >= 0
     head = "✅ <b>TP HIT</b>" if reason == "tp1_hit" else ("🛑 <b>STOPPED OUT</b>" if reason == "stop_hit" else "<b>Closed</b>")
+
+    # When the trade did a partial-TP1 + runner, `pnl_pct` is the FINAL leg's
+    # raw price move (often near 0 for a BE-stop close), which makes the DM
+    # look like "Move +0.01% → +$138" — confusing. Compute the EFFECTIVE
+    # blended move by inverting the leverage formula on the total $ P&L
+    # against the original notional, so the % matches the user's reaction.
+    partial_pnl = float(getattr(trade, "partial_pnl_usd", 0.0) or 0.0)
+    orig_notional = float(getattr(trade, "original_notional_usd", 0) or trade.notional_usd or 0)
+    lev = max(1, int(trade.leverage or 1))
+    if orig_notional > 0:
+        effective_move = pnl_usd / (orig_notional * lev) * 100.0
+    else:
+        effective_move = pnl_pct
+    # 3 decimals when the move is tiny, otherwise 2 — so the user can see
+    # "+0.139%" instead of a confusingly-rounded "+0.14%" or "+0.01%".
+    move_str = (f"{effective_move:+.3f}%" if abs(effective_move) < 0.5
+                else f"{effective_move:+.2f}%")
+
     body = (
         f"{head} — auto strategy paper trade\n"
         f"<i>{strat_name}</i>\n\n"
         f"• {trade.side.upper()} {trade.symbol} {trade.timeframe}\n"
         f"• Entry:  {_fmt_price(trade.entry_price)}\n"
         f"• Exit:   {_fmt_price(exit_price)}\n"
-        f"• Move:   {pnl_pct:+.2f}%\n"
-        f"• P&amp;L:    {'+' if win else ''}${pnl_usd:,.2f} ({trade.leverage}x on ${trade.notional_usd:,.0f})\n"
+        f"• Move:   {move_str}\n"
+        f"• P&amp;L:    {'+' if win else ''}${pnl_usd:,.2f} ({lev}x on ${orig_notional:,.0f})\n"
     )
+    if partial_pnl != 0.0:
+        # Show the breakdown so the user sees which leg paid what.
+        leg_pnl = pnl_usd - partial_pnl
+        body += (
+            f"• Legs:   TP1 partial {'+' if partial_pnl >= 0 else ''}${partial_pnl:,.2f} "
+            f"+ runner {'+' if leg_pnl >= 0 else ''}${leg_pnl:,.2f}\n"
+        )
     try:
         await _tg_send(user_telegram_id, body)
     except Exception as e:
