@@ -2320,52 +2320,86 @@ async def run_strategy_executor():
                 cycle_gate_stats: Dict[str, int] = {}
 
                 async def _run_one(snap, _tickers=shared_tickers):
-                    """Each strategy evaluation runs in its own isolated DB session."""
+                    """Each strategy evaluation runs in its own isolated DB session.
+
+                    Retries once with a fresh session on transient Neon errors
+                    (SSL connection drops or PK-lookup statement timeouts that
+                    occasionally occur during Neon compute scaling/autovacuum).
+                    Permanent errors are logged with traceback as before.
+                    """
+                    from sqlalchemy.exc import OperationalError as _SAOperationalError
                     async with sem:
-                        db_one = SessionLocal()
-                        try:
-                            strategy = db_one.query(UserStrategy).filter(
-                                UserStrategy.id == snap["id"]
-                            ).first()
-                            if not strategy:
-                                return
-                            user = db_one.query(User).filter(
-                                User.id == snap["user_id"]
-                            ).first()
-                            if not user or user.banned:
-                                return
-                            # Only Pro portal subscribers (or admin/grandfathered) get trades
-                            _now = datetime.utcnow()
-                            _has_portal_pro = False
+                        for _attempt in (1, 2):
+                            db_one = SessionLocal()
                             try:
-                                from app.strategy_models import PortalSubscription
-                                _psub = db_one.query(PortalSubscription).filter_by(
-                                    user_id=user.id
+                                strategy = db_one.query(UserStrategy).filter(
+                                    UserStrategy.id == snap["id"]
                                 ).first()
-                                _has_portal_pro = (
-                                    _psub and _psub.tier == "pro"
-                                    and _psub.subscription_end
-                                    and _psub.subscription_end > _now
+                                if not strategy:
+                                    return
+                                user = db_one.query(User).filter(
+                                    User.id == snap["user_id"]
+                                ).first()
+                                if not user or user.banned:
+                                    return
+                                # Only Pro portal subscribers (or admin/grandfathered) get trades
+                                _now = datetime.utcnow()
+                                _has_portal_pro = False
+                                try:
+                                    from app.strategy_models import PortalSubscription
+                                    _psub = db_one.query(PortalSubscription).filter_by(
+                                        user_id=user.id
+                                    ).first()
+                                    _has_portal_pro = (
+                                        _psub and _psub.tier == "pro"
+                                        and _psub.subscription_end
+                                        and _psub.subscription_end > _now
+                                    )
+                                except Exception:
+                                    pass
+                                if not (
+                                    user.is_admin
+                                    or user.grandfathered
+                                    or _has_portal_pro
+                                ):
+                                    return
+                                await evaluate_and_fire(
+                                    strategy, user, db_one, http_client,
+                                    raw_tickers=_tickers,
+                                    gate_stats=cycle_gate_stats,
                                 )
-                            except Exception:
-                                pass
-                            if not (
-                                user.is_admin
-                                or user.grandfathered
-                                or _has_portal_pro
-                            ):
+                                return  # success
+                            except _SAOperationalError as _db_err:
+                                # Most likely a transient Neon SSL drop or a
+                                # PK-lookup statement timeout. Discard this
+                                # session and retry once with a fresh one.
+                                _err_name = type(_db_err.orig).__name__ if getattr(_db_err, "orig", None) else type(_db_err).__name__
+                                if _attempt == 1:
+                                    logger.warning(
+                                        f"[Strategy {snap['id']}] Transient DB error "
+                                        f"({_err_name}) — retrying with fresh session"
+                                    )
+                                    try:
+                                        db_one.rollback()
+                                    except Exception:
+                                        pass
+                                    continue
+                                else:
+                                    logger.warning(
+                                        f"[Strategy {snap['id']}] Skipping cycle — "
+                                        f"DB error persisted after retry ({_err_name})"
+                                    )
+                                    return
+                            except Exception as e:
+                                logger.error(
+                                    f"[Strategy {snap['id']}] Error: {e}", exc_info=True
+                                )
                                 return
-                            await evaluate_and_fire(
-                                strategy, user, db_one, http_client,
-                                raw_tickers=_tickers,
-                                gate_stats=cycle_gate_stats,
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"[Strategy {snap['id']}] Error: {e}", exc_info=True
-                            )
-                        finally:
-                            db_one.close()
+                            finally:
+                                try:
+                                    db_one.close()
+                                except Exception:
+                                    pass
 
                 await asyncio.gather(*[_run_one(s) for s in eval_snapshots])
 

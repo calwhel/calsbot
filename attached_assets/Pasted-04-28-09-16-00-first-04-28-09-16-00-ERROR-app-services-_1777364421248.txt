@@ -1,0 +1,58 @@
+04-28 09:16:00
+).first()
+04-28 09:16:00
+ERROR:app.services.strategy_executor:[Strategy 96] Error: (psycopg2.errors.QueryCanceled) canceling statement due to statement timeout
+04-28 09:16:00
+[SQL: SELECT users.id AS users_id, users.telegram_id AS users_telegram_id, users.uid AS users_uid, users.email AS users_email, users.email_verified AS users_email_verified, users.password_hash AS users_password_hash, users.google_id AS users_google_id, users.auth_provider AS users_auth_provider, users.username AS users_username, users.first_name AS users_first_name, users.subscription_end AS users_subscription_end, users.created_at AS users_created_at, users.is_admin AS users_is_admin, users.banned AS users_banned, users.approved AS users_approved, users.admin_notes AS users_admin_notes, users.grandfathered AS users_grandfathered, users.nowpayments_subscription_id AS users_nowpayments_subscription_id, users.subscription_type AS users_subscription_type, users.trial_started_at AS users_trial_started_at, users.trial_ends_at AS users_trial_ends_at, users.trial_used AS users_trial_used, users.referral_code AS users_referral_code, users.referred_by AS users_referred_by, users.referral_credits AS users_referral_credits, users.referral_earnings AS users_referral_earnings, users.paid_referrals AS users_paid_referrals, users.crypto_wallet AS users_crypto_wallet
+04-28 09:16:00
+The above exception was the direct cause of the following exception:
+04-28 09:16:00
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/query.py", line 2864, in _iter
+04-28 09:16:00
+File "/home/runner/workspace/app/services/strategy_executor.py", line 2334, in _run_one
+04-28 09:16:00
+return self.limit(1)._iter().first() # type: ignore
+04-28 09:16:00
+FROM users
+04-28 09:16:00
+WHERE users.id = %(id_1)s
+04-28 09:17:03
+The above exception was the direct cause of the following exception:
+04-28 09:17:03
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+04-28 09:17:03
+ERROR:app.services.strategy_executor:[Strategy 35] Error: (psycopg2.errors.QueryCanceled) canceling statement due to statement timeout
+04-28 09:17:03
+WHERE users.id = %(id_1)s
+04-28 09:17:03
+self.dialect.do_execute(
+04-28 09:17:03
+psycopg2.errors.QueryCanceled: canceling statement due to statement timeout
+04-28 09:17:03
+[SQL: SELECT users.id AS users_id, users.telegram_id AS users_telegram_id, users.uid AS users_uid, users.email AS users_email, users.email_verified AS users_email_verified, users.password_hash AS users_password_hash, users.google_id AS users_google_id, users.auth_provider AS users_auth_provider, users.username AS users_username, users.first_name AS users_first_name, users.subscription_end AS users_subscription_end, users.created_at AS users_created_at, users.is_admin AS users_is_admin, users.banned AS users_banned, users.approved AS users_approved, users.admin_notes AS users_admin_notes, users.grandfathered AS users_grandfathered, users.nowpayments_subscription_id AS users_nowpayments_subscription_id, users.subscription_type AS users_subscription_type, users.trial_started_at AS users_trial_started_at, users.trial_ends_at AS users_trial_ends_at, users.trial_used AS users_trial_used, users.referral_code AS users_referral_code, users.referred_by AS users_referred_by, users.referral_credits AS users_referral_credits, users.referral_earnings AS users_referral_earnings, users.paid_referrals AS users_paid_referrals, users.crypto_wallet AS users_crypto_wallet
+04-28 09:17:03
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+04-28 09:17:03
+[parameters: {'id_1': 1, 'param_1': 1}]
+04-28 09:17:03
+cursor.execute(statement, parameters)
+04-28 09:17:03
+Traceback (most recent call last):
+04-28 09:17:03
+).first()
+04-28 09:17:03
+LIMIT %(param_1)s]
+04-28 09:17:03
+Traceback (most recent call last):
+04-28 09:17:03
+FROM users
+04-28 09:17:03
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+04-28 09:17:03
+The above exception was the direct cause of the following exception:
+04-28 09:17:03
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+04-28 09:17:03
+ERROR:app.services.strategy_executor:[Strategy 35] Error: (psycopg2.errors.QueryCanceled) canceling statement due to statement timeout
+04-28 09:17:03
+WHERE users.id = %(id_1)s
