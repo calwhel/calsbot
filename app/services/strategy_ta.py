@@ -831,44 +831,232 @@ def eval_support_resistance(
 
 # ─── 5. FVG ───────────────────────────────────────────────────────────────────
 
-def _detect_fvg(klines: List) -> List[Dict]:
-    gaps = []
-    for i in range(1, len(klines) - 1):
-        c1h = float(klines[i-1][2]); c1l = float(klines[i-1][3])
-        c3h = float(klines[i+1][2]); c3l = float(klines[i+1][3])
+def _detect_fvg(
+    klines: List,
+    *,
+    min_gap_pct:      float = 0.0,
+    min_gap_atr_mult: float = 0.0,
+    disp_atr_mult:    float = 0.0,
+    min_gap_usd:      float = 0.0,
+    only_unfilled:    bool  = False,
+    atr_period:       int   = 14,
+) -> List[Dict]:
+    """3-candle FVG detector with ICT-style quality filters.
+
+    All filters default to 0 / False so existing wizard strategies that only
+    pass {direction, condition} keep their original "any 3-candle gap counts"
+    behaviour. Passing any non-zero filter activates ATR-aware gating.
+
+    Each gap dict contains:
+        type       : "bullish" | "bearish"
+        top, bottom: float — price boundaries
+        idx        : int   — index of the formation (middle) bar
+        age        : int   — bars between formation and the latest bar
+        size_pct   : float — width / mid_price * 100
+        size_atr   : float — width / ATR(period); 0 if ATR n/a
+        disp_atr   : float — formation-bar body / ATR; 0 if ATR n/a
+        filled     : bool  — True if a later bar's range overlaps the gap
+    """
+    n = len(klines)
+    if n < 3:
+        return []
+
+    needs_atr = (min_gap_atr_mult > 0) or (disp_atr_mult > 0)
+    atr = _atr(klines, atr_period) if needs_atr else None
+    if needs_atr and (atr is None or atr <= 0):
+        atr = None  # gracefully disable ATR filters when not enough bars
+
+    gaps: List[Dict] = []
+    last_idx = n - 1
+    for i in range(1, n - 1):
+        try:
+            c1h = float(klines[i-1][2]); c1l = float(klines[i-1][3])
+            c3h = float(klines[i+1][2]); c3l = float(klines[i+1][3])
+            mo  = float(klines[i][1]);   mc  = float(klines[i][4])
+        except (IndexError, TypeError, ValueError):
+            continue
+
+        side = None
+        top = bottom = 0.0
         if c1h < c3l:
-            gaps.append({"type": "bullish", "top": c3l, "bottom": c1h, "idx": i})
+            side, top, bottom = "bullish", c3l, c1h
         elif c1l > c3h:
-            gaps.append({"type": "bearish", "top": c1l, "bottom": c3h, "idx": i})
+            side, top, bottom = "bearish", c1l, c3h
+        if side is None:
+            continue
+
+        gap_mid = (top + bottom) / 2.0
+        if gap_mid <= 0:
+            continue
+        width    = top - bottom
+        size_pct = width / gap_mid * 100.0
+
+        # Width filter (% of price)
+        if min_gap_pct > 0 and size_pct < min_gap_pct:
+            continue
+        # Width filter (× ATR) — volatility-aware
+        size_atr = (width / atr) if atr else 0.0
+        if atr and min_gap_atr_mult > 0 and size_atr < min_gap_atr_mult:
+            continue
+        # Width filter (absolute USD floor)
+        if min_gap_usd > 0 and width < min_gap_usd:
+            continue
+        # ICT displacement filter — formation candle body must be a real
+        # expansion bar, not a doji that happened to leave a gap.
+        disp_atr = 0.0
+        if atr and disp_atr_mult > 0:
+            disp_atr = abs(mc - mo) / atr
+            if disp_atr < disp_atr_mult:
+                continue
+
+        # Walk forward to determine fill status.
+        filled = False
+        for j in range(i + 2, n):
+            try:
+                hj = float(klines[j][2]); lj = float(klines[j][3])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if lj <= top and hj >= bottom:
+                filled = True
+                break
+        if only_unfilled and filled:
+            continue
+
+        gaps.append({
+            "type":     side,
+            "top":      top,
+            "bottom":   bottom,
+            "idx":      i,
+            "age":      last_idx - i,
+            "size_pct": size_pct,
+            "size_atr": size_atr,
+            "disp_atr": disp_atr,
+            "filled":   filled,
+        })
     return gaps
+
 
 async def eval_fvg(
     cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
 ) -> Tuple[bool, str]:
-    sub       = cond.get("condition", "price_in_gap")
-    direction = cond.get("direction", "any")
-    tf        = cond.get("timeframe", "15m")
-    lookback  = int(cond.get("lookback", 20)) + 2
-    klines    = await _get_klines(symbol, tf, lookback, http_client, cache)
-    if not klines or len(klines) < 3: return False, "FVG insufficient data"
-    gaps = _detect_fvg(klines)
-    if not gaps: return False, "No FVG found"
-    if direction != "any": gaps = [g for g in gaps if g["type"] == direction]
-    if not gaps: return False, f"No {direction} FVG"
-    gap = gaps[-1]
-    if sub == "gap_exists":   return True, f"{gap['type'].title()} FVG {gap['bottom']:.6g}–{gap['top']:.6g}"
-    if sub == "price_in_gap": return gap["bottom"] <= current_price <= gap["top"], f"Price {'in' if gap['bottom'] <= current_price <= gap['top'] else 'not in'} FVG"
+    """FVG condition evaluator — ICT-style with optional ATR/displacement filters.
+
+    Sub-conditions (`condition` field):
+        gap_exists      → any qualifying FVG present (default)
+        just_formed     → FVG completed in the last 1-2 bars (creation signal —
+                          fires on the strong-displacement bar that left the gap)
+        price_in_gap    → current price is inside the gap zone (mitigation/retest)
+        tap_and_reject  → last bar wicked into the gap and closed outside in
+                          the FVG's bias direction (bull FVG = closed above top,
+                          bear FVG = closed below bottom)
+        approaching     → price within 0.5% of the gap edge
+        gap_filled      → price has fully traded through the gap
+
+    Optional quality filters (zero/unset = disabled, preserves legacy behaviour):
+        min_gap_pct       — minimum width as % of mid price
+        min_gap_atr_mult  — minimum width × ATR(14)  ← e.g. 2.5 = "FVG ≥ 2.5×ATR"
+        disp_atr_mult     — formation-bar body must be ≥ N×ATR (displacement)
+        min_gap_usd       — absolute USD floor on width
+        only_unfilled     — drop FVGs already touched
+        max_age_bars      — only consider FVGs formed within the last N bars
+    """
+    sub                = cond.get("condition", "price_in_gap")
+    direction          = cond.get("direction", "any")
+    tf                 = cond.get("timeframe", "15m")
+    # Legacy default kept at 20 for back-compat with existing wizard
+    # strategies; we only widen the window when ATR-based filters are on.
+    lookback_extra     = int(cond.get("lookback", 20)) + 2
+    min_gap_pct        = float(cond.get("min_gap_pct",      0.0) or 0.0)
+    min_gap_atr_mult   = float(cond.get("min_gap_atr_mult", 0.0) or 0.0)
+    disp_atr_mult      = float(cond.get("disp_atr_mult",    0.0) or 0.0)
+    min_gap_usd        = float(cond.get("min_gap_usd",      0.0) or 0.0)
+    # ``only_unfilled`` may arrive as a real bool (JSON), or as a string
+    # ('true'/'false'/'on'/'off'/'yes'/'no') from the wizard chip helper —
+    # which serialises everything as a quoted string. Parse defensively so
+    # the toggle works end-to-end.
+    _ouf_raw           = cond.get("only_unfilled", False)
+    if isinstance(_ouf_raw, str):
+        only_unfilled  = _ouf_raw.strip().lower() in ("true", "1", "yes", "on")
+    else:
+        only_unfilled  = bool(_ouf_raw)
+    max_age_bars       = int(cond.get("max_age_bars",       0)   or 0)
+
+    # Ensure enough bars for ATR(14) when ATR-based filters are on.
+    needs_atr = (min_gap_atr_mult > 0) or (disp_atr_mult > 0)
+    lookback = max(lookback_extra, 60) if needs_atr else lookback_extra
+
+    klines = await _get_klines(symbol, tf, lookback, http_client, cache)
+    if not klines or len(klines) < 3:
+        return False, "FVG insufficient data"
+
+    gaps = _detect_fvg(
+        klines,
+        min_gap_pct      = min_gap_pct,
+        min_gap_atr_mult = min_gap_atr_mult,
+        disp_atr_mult    = disp_atr_mult,
+        min_gap_usd      = min_gap_usd,
+        only_unfilled    = only_unfilled,
+    )
+    if not gaps:
+        msg = "No FVG"
+        if min_gap_atr_mult or disp_atr_mult or min_gap_pct:
+            msg += " (after quality filters)"
+        return False, msg
+    if direction != "any":
+        gaps = [g for g in gaps if g["type"] == direction]
+        if not gaps:
+            return False, f"No {direction} FVG"
+    if max_age_bars > 0:
+        gaps = [g for g in gaps if g["age"] <= max_age_bars]
+        if not gaps:
+            return False, f"No FVG within last {max_age_bars} bars"
+
+    # Pick the most recent qualifying gap (highest idx).
+    gap = max(gaps, key=lambda g: g["idx"])
+    label_size = f"{gap['size_pct']:.2f}%"
+    if gap["size_atr"]:
+        label_size += f"/{gap['size_atr']:.2f}×ATR"
+    label = (
+        f"{gap['type'].title()} FVG {gap['bottom']:.6g}–{gap['top']:.6g}"
+        f" ({label_size}, {gap['age']}b ago)"
+    )
+
+    if sub == "gap_exists":
+        return True, label
+    if sub == "just_formed":
+        # FVG completed on the most recent 3-candle pattern. The middle bar
+        # (formation) is the second-to-last bar at minimum, so age 0-1.
+        ok = gap["age"] <= 1
+        return ok, (f"✓ Fresh {label}" if ok else f"✗ Stale FVG ({gap['age']}b old)")
+    if sub == "price_in_gap":
+        ok = gap["bottom"] <= current_price <= gap["top"]
+        return ok, f"Price {'inside' if ok else 'not in'} {label}"
+    if sub == "tap_and_reject":
+        # Last bar wicked into the gap zone but closed outside in the FVG's
+        # directional bias. Bull FVG below price = bullish reclaim → long;
+        # Bear FVG above price = bearish rejection → short.
+        try:
+            last_h = float(klines[-1][2])
+            last_l = float(klines[-1][3])
+            last_c = float(klines[-1][4])
+        except (IndexError, TypeError, ValueError):
+            return False, "FVG: bad last candle"
+        wicked_in = (last_l <= gap["top"]) and (last_h >= gap["bottom"])
+        if gap["type"] == "bullish":
+            ok = wicked_in and last_c >= gap["top"]
+        else:
+            ok = wicked_in and last_c <= gap["bottom"]
+        return ok, f"{'✓ Rejection from' if ok else '✗ No rejection at'} {label}"
     if sub == "approaching":
         dist = min(abs(current_price - gap["top"]), abs(current_price - gap["bottom"]))
         near = dist / current_price < 0.005
-        return near, f"Price {'approaching' if near else 'not near'} FVG"
+        return near, f"Price {'approaching' if near else 'not near'} {label}"
     if sub == "gap_filled":
-        # Gap is filled when price has passed completely through it (other side of gap)
         if gap["type"] == "bullish":
-            r = current_price <= gap["bottom"]  # price came back down through the bullish gap
+            r = current_price <= gap["bottom"]
         else:
-            r = current_price >= gap["top"]     # price went back up through the bearish gap
-        return r, f"FVG {'filled ✓' if r else 'unfilled'} ({gap['type']} {gap['bottom']:.6g}–{gap['top']:.6g})"
+            r = current_price >= gap["top"]
+        return r, f"FVG {'filled ✓' if r else 'unfilled'} ({label})"
     return False, f"Unknown FVG sub: {sub}"
 
 

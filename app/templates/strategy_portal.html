@@ -4089,9 +4089,34 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('bullish','Bullish FVG (unfilled gap up — long)',`${pfx}fvg_dir`,cfg.fvg_dir||'bullish','green')}
         ${wzChip('bearish','Bearish FVG (unfilled gap down — short)',`${pfx}fvg_dir`,cfg.fvg_dir||'bullish','red')}
       </div>
-      <div class="opt-label">Min Gap Size <span id="${pfx}fgp-d" style="color:var(--accent)">${cfg.min_gap_pct||0.3}%</span></div>
+      <div class="opt-label">Trigger</div>
+      <div class="opt-chips">
+        ${wzChip('gap_exists','Any qualifying FVG exists',`${pfx}condition`,cfg.condition||'gap_exists')}
+        ${wzChip('just_formed','FVG just formed (creation — strong displacement)',`${pfx}condition`,cfg.condition||'gap_exists','blue')}
+        ${wzChip('price_in_gap','Price inside FVG (mitigation / retest)',`${pfx}condition`,cfg.condition||'gap_exists')}
+        ${wzChip('tap_and_reject','Tap & reject (wick in, close out)',`${pfx}condition`,cfg.condition||'gap_exists','green')}
+        ${wzChip('approaching','Price approaching FVG (within 0.5%)',`${pfx}condition`,cfg.condition||'gap_exists')}
+      </div>
+      <div class="opt-label">Min Gap Size (% of price) <span id="${pfx}fgp-d" style="color:var(--accent)">${cfg.min_gap_pct||0.3}%</span></div>
       <input type="range" id="${pfx}fgp" min="0.1" max="5" value="${cfg.min_gap_pct||0.3}" step="0.1" oninput="wzSl('${pfx}fgp','${pfx}fgp-d','%','${pfx}min_gap_pct')" style="width:100%;accent-color:var(--accent)">
-      <div class="hint">Only fires if the imbalance is larger than this threshold</div>`;
+      <div class="hint">Width as % of mid-price — leave at default for any-size gaps</div>
+
+      <div class="opt-label" style="margin-top:14px">Min Gap × ATR (volatility-aware) <span id="${pfx}fga-d" style="color:var(--accent)">${cfg.min_gap_atr_mult||0}×</span></div>
+      <input type="range" id="${pfx}fga" min="0" max="5" value="${cfg.min_gap_atr_mult||0}" step="0.1" oninput="wzSl('${pfx}fga','${pfx}fga-d','×','${pfx}min_gap_atr_mult')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">e.g. 2.5 = "FVG ≥ 2.5× ATR(14)" — 0 disables. Same setting works across symbols/timeframes.</div>
+
+      <div class="opt-label" style="margin-top:14px">Displacement: formation candle body × ATR <span id="${pfx}fgd-d" style="color:var(--accent)">${cfg.disp_atr_mult||0}×</span></div>
+      <input type="range" id="${pfx}fgd" min="0" max="3" value="${cfg.disp_atr_mult||0}" step="0.1" oninput="wzSl('${pfx}fgd','${pfx}fgd-d','×','${pfx}disp_atr_mult')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">ICT displacement filter — requires the FVG-creating candle to be a real impulse, not a doji. 0 disables.</div>
+
+      <div class="opt-label" style="margin-top:14px">Only unfilled FVGs</div>
+      <div class="opt-chips">
+        ${wzChip('yes','Yes — drop already-mitigated gaps',`${pfx}only_unfilled`,(cfg.only_unfilled==='yes'||cfg.only_unfilled===true)?'yes':'no','green')}
+        ${wzChip('no','No — include filled gaps too',`${pfx}only_unfilled`,(cfg.only_unfilled==='yes'||cfg.only_unfilled===true)?'yes':'no')}
+      </div>
+
+      <div class="opt-label" style="margin-top:10px">Max FVG age (bars; 0 = any age) <span id="${pfx}fga2-d" style="color:var(--accent)">${cfg.max_age_bars||0}</span></div>
+      <input type="range" id="${pfx}fga2" min="0" max="100" value="${cfg.max_age_bars||0}" step="1" oninput="wzSl('${pfx}fga2','${pfx}fga2-d','','${pfx}max_age_bars')" style="width:100%;accent-color:var(--accent)">`;
     case 'open_interest':return`
       <div class="opt-label">OI Change Direction</div>
       <div class="opt-chips">
@@ -5140,7 +5165,17 @@ function buildWizardDescription(){
       case 'volume_spike':sig=`Volume spike of ${cfg.multiplier||2}× the 20-period average`;break;
       case 'funding_rate':sig=`Funding rate is ${cfg.fr_op==='gt'?'above':'below'} ${cfg.fr_val||0.05}%`;break;
       case 'support_resistance':sig=`Price ${cond(cfg.condition||'at_support')} on ${tf}`;break;
-      case 'fvg':sig=`${cfg.fvg_dir||'bullish'} Fair Value Gap (min gap ${cfg.min_gap_pct||0.3}%) on ${tf}`;break;
+      case 'fvg':{
+        const trig=cond(cfg.condition||'gap_exists');
+        const parts=[`${cfg.fvg_dir||'bullish'} Fair Value Gap`,`trigger: ${trig}`,`on ${tf}`];
+        if(+cfg.min_gap_pct>0)      parts.push(`min gap ${cfg.min_gap_pct}%`);
+        if(+cfg.min_gap_atr_mult>0) parts.push(`min gap ${cfg.min_gap_atr_mult}× ATR`);
+        if(+cfg.disp_atr_mult>0)    parts.push(`displacement ≥ ${cfg.disp_atr_mult}× ATR`);
+        if(cfg.only_unfilled==='yes'||cfg.only_unfilled===true) parts.push('only unfilled');
+        if(+cfg.max_age_bars>0)     parts.push(`max age ${cfg.max_age_bars} bars`);
+        sig=parts.join(' — ');
+        break;
+      }
       case 'open_interest':sig=`Open interest ${cfg.oi_dir||'any'} by ${cfg.oi_change_pct||10}%+ in ${cfg.oi_window_min||30} minutes`;break;
       case 'liquidation':sig=`${cfg.liq_side||'long'} liquidation cascade (price move ≥${cfg.liq_threshold_pct||3}%)`;break;
       case 'consecutive_candles':sig=`${cfg.cc_count||3}+ consecutive ${cfg.cc_dir||'bullish'} candles on ${tf}`;break;
@@ -5181,7 +5216,16 @@ function buildWizardDescription(){
         case 'price_momentum':{const d=cfg.pm_dir==='down'?'down':cfg.pm_dir==='either'?'either way':'up';cfm=`Price moved ${d} ${cfg.pm_pct||10}%+ in ${cfg.pm_window||15}min`;break;}
         case 'funding_rate':cfm=`Funding rate ${cfg.fr_op==='gt'?'above':'below'} ${cfg.fr_val||0.05}%`;break;
         case 'support_resistance':cfm=`Price ${cond(cfg.condition||'at_support')} on ${tf}`;break;
-        case 'fvg':cfm=`${cfg.fvg_dir||'bullish'} FVG on ${tf}`;break;
+        case 'fvg':{
+          const trig=cond(cfg.condition||'gap_exists');
+          const parts=[`${cfg.fvg_dir||'bullish'} FVG`,trig,`on ${tf}`];
+          if(+cfg.min_gap_atr_mult>0) parts.push(`≥${cfg.min_gap_atr_mult}× ATR`);
+          if(+cfg.disp_atr_mult>0)    parts.push(`disp ≥${cfg.disp_atr_mult}× ATR`);
+          if(cfg.only_unfilled==='yes'||cfg.only_unfilled===true) parts.push('unfilled only');
+          if(+cfg.max_age_bars>0)     parts.push(`≤${cfg.max_age_bars}b old`);
+          cfm=parts.join(' — ');
+          break;
+        }
         case 'open_interest':cfm=`OI ${cfg.oi_dir||'any'} by ${cfg.oi_change_pct||10}%+ in ${cfg.oi_window_min||30}min`;break;
         case 'liquidation':cfm=`${cfg.liq_side||'long'} liquidation event ≥${cfg.liq_threshold_pct||3}%`;break;
         case 'consecutive_candles':cfm=`${cfg.cc_count||3}+ consecutive ${cfg.cc_dir||'bullish'} candles on ${tf}`;break;

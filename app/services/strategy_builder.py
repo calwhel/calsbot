@@ -150,11 +150,38 @@ direction: up | down | any
 {"type":"support_resistance","condition":"between"}  ← ranging between S and R
 
 ── FAIR VALUE GAP (FVG / Imbalance) ───────────────────────────────────────────
+Sub-conditions (`condition` field):
+  gap_exists      → any qualifying FVG present (default)
+  just_formed     → FVG completed in the last 1-2 bars (CREATION signal —
+                    use this for "detect a strong impulsive move creating an FVG")
+  price_in_gap    → current price is inside the gap zone (retest / mitigation)
+  tap_and_reject  → last bar wicked into the gap and closed outside in the
+                    FVG's directional bias (rejection / liquidity grab)
+  approaching     → price within 0.5% of the gap edge
+  gap_filled      → price has fully traded through the gap
+
+Optional quality filters (omit or set to 0 = disabled — match legacy behaviour):
+  min_gap_pct      → minimum width as % of mid price (e.g. 0.3)
+  min_gap_atr_mult → minimum width × ATR(14)  ← volatility-aware sizing.
+                     e.g. 2.5 = "FVG ≥ 2.5×ATR" (high imbalance)
+  disp_atr_mult    → ICT displacement — formation candle body must be ≥
+                     this × ATR (e.g. 1.5 = strong impulsive bar, no dojis)
+  min_gap_usd      → absolute USD floor on gap width (e.g. 100)
+  only_unfilled    → true → drop FVGs already touched
+  max_age_bars     → only consider FVGs formed within the last N bars
+
+Examples:
 {"type":"fvg","direction":"bullish","condition":"price_in_gap","timeframe":"15m"}
 {"type":"fvg","direction":"bearish","condition":"approaching","timeframe":"5m"}
 {"type":"fvg","direction":"any","condition":"gap_exists","timeframe":"1h"}
-conditions: price_in_gap | approaching | gap_exists | gap_filled
-→ "FVG fill" | "fair value gap" | "imbalance" | "price returning to gap"
+{"type":"fvg","direction":"bearish","condition":"just_formed","timeframe":"5m",
+ "min_gap_atr_mult":2.5,"disp_atr_mult":1.5,"only_unfilled":true}
+{"type":"fvg","direction":"bearish","condition":"tap_and_reject","timeframe":"15m",
+ "min_gap_atr_mult":2.0,"only_unfilled":true,"max_age_bars":20}
+
+→ Triggers: "FVG fill" | "fair value gap" | "imbalance" | "price returning to gap"
+            "FVG ≥ 2.5x ATR" | "high-imbalance FVG" | "ICT displacement creating FVG"
+            "FVG just formed" | "tap into FVG and reject" | "rejection from FVG" | "FVG mitigation"
 
 ── CANDLESTICK PATTERNS ───────────────────────────────────────────────────────
 {"type":"candlestick","pattern":"bullish_engulfing","timeframe":"15m"}
