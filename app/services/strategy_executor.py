@@ -101,6 +101,12 @@ _BITUNIX_SYMBOLS: set = set()
 _BITUNIX_SYMBOLS_FETCHED_AT: Optional[datetime] = None
 _BITUNIX_CACHE_TTL = 300  # refresh every 5 minutes
 
+# Diagnostic log throttle for strategies whose universe resolves to no symbols.
+# Keyed by (strategy_id, minute_bucket) so we get at most one warning per
+# strategy per minute — enough to identify misconfigured strategies without
+# spamming the log when an outage affects many strategies at once.
+_EMPTY_UNI_LOGGED: set = set()
+
 async def _get_bitunix_symbols(http_client: httpx.AsyncClient) -> set:
     """Return the set of USDT-margined perpetual symbols available on Bitunix.
     Falls back to an empty set — caller should derive from tickers if empty."""
@@ -1542,6 +1548,23 @@ async def evaluate_and_fire(
     symbols = await _get_eligible_symbols(universe, http_client, raw_tickers=raw_tickers)
     if not symbols:
         _bump("blk_empty_universe")
+        # Diagnostic: dump the offending universe spec at most once per
+        # strategy per minute. This makes it trivial to spot strategies whose
+        # universe is misconfigured (e.g. type='specific' with no symbols, or
+        # over-restrictive min_24h_change/min_volume_usd) without log spam.
+        try:
+            _now_min = int(datetime.utcnow().timestamp() // 60)
+            _key = (strategy.id, _now_min)
+            if _key not in _EMPTY_UNI_LOGGED:
+                _EMPTY_UNI_LOGGED.add(_key)
+                logger.warning(
+                    f"[Strategy {strategy.id}] '{strategy.name}' empty_universe — "
+                    f"no eligible symbols matched. universe={universe!r}"
+                )
+                if len(_EMPTY_UNI_LOGGED) > 1000:
+                    _EMPTY_UNI_LOGGED.clear()
+        except Exception:
+            pass
         return
 
     no_duplicate_symbol = bool(risk.get("no_duplicate_symbol", False))

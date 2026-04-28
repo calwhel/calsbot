@@ -4932,6 +4932,31 @@ async def api_save_strategy(request: Request):
         if not user or user.banned:
             raise HTTPException(status_code=403)
 
+        # Sanity-check the universe spec — a strategy with type='specific' but no
+        # symbols listed will silently never fire (the executor's eligibility
+        # filter excludes every symbol). This is the single most common bug
+        # class for AI-compiled chat-builder strategies.
+        _uni = config.get("universe") or {}
+        if _uni.get("type") == "specific":
+            _syms = [
+                s.strip().upper()
+                for s in (_uni.get("symbols") or [])
+                if isinstance(s, str) and s.strip()
+            ]
+            if not _syms:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Universe is set to 'specific coins' but no symbols were "
+                        "listed. Either add at least one coin (e.g. BTCUSDT, ETHUSDT) "
+                        "or change the universe type to 'all coins'."
+                    ),
+                )
+            # Normalize so the executor's case/whitespace-sensitive matching
+            # always sees a clean list.
+            _uni["symbols"] = _syms
+            config["universe"] = _uni
+
         # Determine initial status from build mode flag and portal settings
         build_mode = config.get("_build_mode", "live")
         from app.strategy_models import StrategyPortalSettings
