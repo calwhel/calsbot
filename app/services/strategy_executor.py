@@ -100,6 +100,16 @@ def _user_can_live_trade(user, db) -> bool:
 _BITUNIX_SYMBOLS: set = set()
 _BITUNIX_SYMBOLS_FETCHED_AT: Optional[datetime] = None
 _BITUNIX_CACHE_TTL = 300  # refresh every 5 minutes
+# Single-flight lock — when the cache expires and many strategies hit the
+# refresh path simultaneously, we don't want N concurrent identical requests
+# hammering Bitunix (which causes rate-limit failures and the "5 warnings in
+# 5ms" log bursts). The lock ensures only ONE refresh runs at a time; other
+# callers wait briefly and then read the just-refreshed cache.
+_BITUNIX_FETCH_LOCK: Optional[asyncio.Lock] = None
+# How recently a failed refresh ran — suppresses thundering retries when
+# Bitunix is down (only one attempt per CACHE_TTL window after a failure).
+_BITUNIX_LAST_FAIL_AT: Optional[datetime] = None
+_BITUNIX_FAIL_BACKOFF = 30  # seconds — don't re-attempt for this long after a failure
 
 # Diagnostic log throttle for strategies whose universe resolves to no symbols.
 # Keyed by (strategy_id, minute_bucket) so we get at most one warning per
@@ -107,32 +117,106 @@ _BITUNIX_CACHE_TTL = 300  # refresh every 5 minutes
 # spamming the log when an outage affects many strategies at once.
 _EMPTY_UNI_LOGGED: set = set()
 
+# Same throttle pattern for Bitunix-fetch warnings — prevents the 5-warnings-
+# in-5ms bursts when concurrent callers all hit the same outage.
+_BITUNIX_WARN_LAST: Optional[datetime] = None
+_BITUNIX_WARN_INTERVAL = 60  # seconds between warnings
+
 async def _get_bitunix_symbols(http_client: httpx.AsyncClient) -> set:
     """Return the set of USDT-margined perpetual symbols available on Bitunix.
-    Falls back to an empty set — caller should derive from tickers if empty."""
-    global _BITUNIX_SYMBOLS, _BITUNIX_SYMBOLS_FETCHED_AT
-    now = datetime.utcnow()
-    if _BITUNIX_SYMBOLS and _BITUNIX_SYMBOLS_FETCHED_AT and (now - _BITUNIX_SYMBOLS_FETCHED_AT).seconds < _BITUNIX_CACHE_TTL:
-        return _BITUNIX_SYMBOLS
-    try:
-        resp = await http_client.get(
-            "https://fapi.bitunix.com/api/v1/futures/market/tickers", timeout=8
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            syms = set()
-            for t in (data.get("data") or []):   # guard against null data field
-                sym = t.get("symbol", "")
-                if sym.endswith("USDT"):
-                    syms.add(sym)
-            if syms:
-                _BITUNIX_SYMBOLS = syms
-                _BITUNIX_SYMBOLS_FETCHED_AT = now
-                logger.info(f"Bitunix symbol list refreshed: {len(syms)} USDT perps")
-                return _BITUNIX_SYMBOLS
-    except Exception as e:
-        logger.warning(f"Could not fetch Bitunix symbol list: {e}")
 
+    STICKY CACHE: once populated, the previously cached set is returned even
+    when a refresh attempt fails — this prevents transient Bitunix outages
+    (rate limits, timeouts, 5xx) from emptying the strategy universe and
+    halting all trades. Caller should derive from tickers only if the cache
+    has *never* been populated."""
+    global _BITUNIX_SYMBOLS, _BITUNIX_SYMBOLS_FETCHED_AT, _BITUNIX_FETCH_LOCK
+    global _BITUNIX_LAST_FAIL_AT, _BITUNIX_WARN_LAST
+    now = datetime.utcnow()
+
+    # Fast path: cache fresh.
+    if (
+        _BITUNIX_SYMBOLS
+        and _BITUNIX_SYMBOLS_FETCHED_AT
+        and (now - _BITUNIX_SYMBOLS_FETCHED_AT).total_seconds() < _BITUNIX_CACHE_TTL
+    ):
+        return _BITUNIX_SYMBOLS
+
+    # Recently failed — short-circuit to avoid thundering retries.
+    if (
+        _BITUNIX_LAST_FAIL_AT
+        and (now - _BITUNIX_LAST_FAIL_AT).total_seconds() < _BITUNIX_FAIL_BACKOFF
+    ):
+        return _BITUNIX_SYMBOLS  # sticky: empty if never warmed, populated otherwise
+
+    # Lazy-init the lock (must happen inside an event loop).
+    if _BITUNIX_FETCH_LOCK is None:
+        _BITUNIX_FETCH_LOCK = asyncio.Lock()
+
+    async with _BITUNIX_FETCH_LOCK:
+        # Re-check after acquiring the lock — a concurrent caller may have
+        # already refreshed while we were waiting.
+        now = datetime.utcnow()
+        if (
+            _BITUNIX_SYMBOLS
+            and _BITUNIX_SYMBOLS_FETCHED_AT
+            and (now - _BITUNIX_SYMBOLS_FETCHED_AT).total_seconds() < _BITUNIX_CACHE_TTL
+        ):
+            return _BITUNIX_SYMBOLS
+        if (
+            _BITUNIX_LAST_FAIL_AT
+            and (now - _BITUNIX_LAST_FAIL_AT).total_seconds() < _BITUNIX_FAIL_BACKOFF
+        ):
+            return _BITUNIX_SYMBOLS
+
+        _fail_reason: Optional[str] = None
+        try:
+            resp = await http_client.get(
+                "https://fapi.bitunix.com/api/v1/futures/market/tickers", timeout=8
+            )
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except Exception as _je:
+                    _fail_reason = f"invalid JSON ({type(_je).__name__})"
+                    data = None
+                if data is not None:
+                    syms = set()
+                    for t in (data.get("data") or []):   # guard against null data field
+                        sym = t.get("symbol", "")
+                        if sym.endswith("USDT"):
+                            syms.add(sym)
+                    if syms:
+                        _BITUNIX_SYMBOLS = syms
+                        _BITUNIX_SYMBOLS_FETCHED_AT = now
+                        _BITUNIX_LAST_FAIL_AT = None  # clear failure backoff on success
+                        logger.info(f"Bitunix symbol list refreshed: {len(syms)} USDT perps")
+                        return _BITUNIX_SYMBOLS
+                    else:
+                        _data_len = len(data.get("data") or []) if isinstance(data.get("data"), list) else 0
+                        _fail_reason = (
+                            f"empty/no-USDT response (data items={_data_len}, "
+                            f"code={data.get('code')}, msg={data.get('msg')!r})"
+                        )
+            else:
+                _body_snip = (resp.text or "")[:200] if hasattr(resp, "text") else ""
+                _fail_reason = f"HTTP {resp.status_code} ({_body_snip!r})"
+        except Exception as e:
+            _fail_reason = f"{type(e).__name__}: {e or '(no message)'}"
+
+        # Mark failure for backoff and emit a throttled, descriptive warning.
+        _BITUNIX_LAST_FAIL_AT = now
+        if _BITUNIX_WARN_LAST is None or (now - _BITUNIX_WARN_LAST).total_seconds() >= _BITUNIX_WARN_INTERVAL:
+            _BITUNIX_WARN_LAST = now
+            _have = len(_BITUNIX_SYMBOLS)
+            logger.warning(
+                f"Could not refresh Bitunix symbol list: {_fail_reason} "
+                f"— continuing with {_have} cached symbols "
+                f"({'sticky cache' if _have else 'EMPTY — falling back to MEXC tickers'})"
+            )
+
+    # Sticky: returns last good cache if one exists, else empty (caller falls
+    # back to MEXC ticker derivation in _get_eligible_symbols).
     return _BITUNIX_SYMBOLS
 
 
