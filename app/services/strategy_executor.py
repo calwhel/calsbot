@@ -239,13 +239,23 @@ FIAT_STABLE_BLOCKED = {
 # ── Globally banned symbols — never traded by any strategy ───────────────────
 SYMBOL_BLACKLIST = {"META", "ONT"}
 
+_RAW_TICKERS_LAST_FAIL_AT: Optional[datetime] = None
+_RAW_TICKERS_WARN_LAST: Optional[datetime] = None
+_RAW_TICKERS_FAIL_BACKOFF = 15  # short backoff — ticker data goes stale fast
+
 async def _get_raw_tickers(http_client: httpx.AsyncClient) -> Optional[list]:
     """
     Fetch the full MEXC/Binance ticker list once per TTL window.
     All strategies in the same scan cycle share this cached response —
     eliminates N parallel ticker fetches where N = number of active strategies.
+
+    STICKY CACHE: once populated, the previous ticker list is returned even
+    when a refresh attempt fails (httpx PoolTimeout, MEXC outage, etc.).
+    Without this, a single failed refresh makes _get_eligible_symbols return
+    [] for every strategy in the cycle, halting all trades.
     """
     global _RAW_TICKERS_CACHE, _RAW_TICKERS_AT
+    global _RAW_TICKERS_LAST_FAIL_AT, _RAW_TICKERS_WARN_LAST
     now = datetime.utcnow()
     if (
         _RAW_TICKERS_CACHE is not None
@@ -254,6 +264,14 @@ async def _get_raw_tickers(http_client: httpx.AsyncClient) -> Optional[list]:
     ):
         return _RAW_TICKERS_CACHE
 
+    # Recently failed → return whatever we have (sticky cache).
+    if (
+        _RAW_TICKERS_LAST_FAIL_AT
+        and (now - _RAW_TICKERS_LAST_FAIL_AT).total_seconds() < _RAW_TICKERS_FAIL_BACKOFF
+    ):
+        return _RAW_TICKERS_CACHE
+
+    _last_err: Optional[str] = None
     for url in [
         "https://api.mexc.com/api/v3/ticker/24hr",
         "https://fapi.binance.com/fapi/v1/ticker/24hr",
@@ -263,11 +281,26 @@ async def _get_raw_tickers(http_client: httpx.AsyncClient) -> Optional[list]:
             if resp.status_code == 200:
                 _RAW_TICKERS_CACHE = resp.json()
                 _RAW_TICKERS_AT    = now
+                _RAW_TICKERS_LAST_FAIL_AT = None
                 logger.debug(f"Ticker cache refreshed ({len(_RAW_TICKERS_CACHE)} symbols)")
                 return _RAW_TICKERS_CACHE
-        except Exception:
+            else:
+                _last_err = f"{url.split('//')[1].split('/')[0]} HTTP {resp.status_code}"
+        except Exception as e:
+            _last_err = f"{url.split('//')[1].split('/')[0]} {type(e).__name__}: {e or '(no msg)'}"
             continue
-    return None
+
+    # All sources failed — record + throttled warning + sticky fallback.
+    _RAW_TICKERS_LAST_FAIL_AT = now
+    if _RAW_TICKERS_WARN_LAST is None or (now - _RAW_TICKERS_WARN_LAST).total_seconds() >= 60:
+        _RAW_TICKERS_WARN_LAST = now
+        _have = len(_RAW_TICKERS_CACHE) if _RAW_TICKERS_CACHE else 0
+        logger.warning(
+            f"Could not refresh MEXC/Binance ticker list: {_last_err or 'all sources failed'}"
+            f" — continuing with {_have} cached symbols "
+            f"({'sticky cache' if _have else 'NO cache — strategies will be skipped'})"
+        )
+    return _RAW_TICKERS_CACHE  # sticky: last good cache or None if never warmed
 
 
 async def _get_eligible_symbols(
@@ -2307,11 +2340,23 @@ async def run_strategy_executor():
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
 
-    # Explicit timeouts: 15s total, 5s connect — prevents hung requests
-    # from blocking semaphore slots indefinitely.
-    _timeout = httpx.Timeout(15.0, connect=5.0)
+    # Explicit timeouts: 15s total, 5s connect, 8s pool-wait — prevents hung
+    # requests from blocking semaphore slots indefinitely. Pool wait is
+    # explicit so PoolTimeout fails fast rather than blocking the full 15s.
+    _timeout = httpx.Timeout(15.0, connect=5.0, pool=8.0)
 
-    async with httpx.AsyncClient(timeout=_timeout) as http_client:
+    # Connection pool limits — defaults (max=100, keepalive=20) were
+    # exhausted under load (47 strategies × 5-concurrent × per-symbol
+    # kline + ticker queries), causing PoolTimeout cascades that knocked
+    # out the MEXC ticker refresh and cleared every strategy's universe.
+    # 500 connections + 100 keepalive comfortably handles peak bursts.
+    _limits = httpx.Limits(
+        max_connections=500,
+        max_keepalive_connections=100,
+        keepalive_expiry=30.0,
+    )
+
+    async with httpx.AsyncClient(timeout=_timeout, limits=_limits) as http_client:
         # ── Pre-warm the Bitunix symbol cache ─────────────────────────────────
         # Fetch the tradeable symbol list before the first evaluation cycle so
         # the fail-closed guard never blocks trades on a valid coin due to a
