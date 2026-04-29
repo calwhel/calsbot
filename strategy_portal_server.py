@@ -171,14 +171,17 @@ def _is_portal_pro(sub) -> bool:
     return False
 
 
-def _chat_calls_info(sub, db: Session):
-    """Check / reset monthly counter. Returns (allowed, used, limit, is_pro)."""
+def _chat_calls_info(sub, db: Session, user=None):
+    """Check / reset monthly counter. Returns (allowed, used, limit, is_pro).
+
+    Portal admins (``user.is_admin``) are treated as Pro for quota purposes —
+    same intent as every other Pro-gated endpoint in this file."""
     now = datetime.utcnow()
     if sub.chat_calls_reset_at is None or (now - sub.chat_calls_reset_at).days >= 30:
         sub.chat_calls_used = 0
         sub.chat_calls_reset_at = now
         db.commit()
-    pro = _is_portal_pro(sub)
+    pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
     if pro:
         return True, sub.chat_calls_used, -1, True
     allowed = sub.chat_calls_used < FREE_CHAT_LIMIT
@@ -4361,8 +4364,9 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...)):
         from app.strategy_marketplace_ext import StrategyPurchase, CreatorEarnings, EarningsTransaction, init_marketplace_ext_tables, calculate_creator_cut, calculate_platform_cut
 
         # Pro subscription required to copy marketplace strategies
+        # (admins bypass — same intent as every other Pro-gated endpoint).
         _psub = _get_portal_sub(user.id, db)
-        if not _is_portal_pro(_psub):
+        if not _is_portal_pro(_psub) and not getattr(user, "is_admin", False):
             return JSONResponse(
                 {"error": "PRO_REQUIRED",
                  "message": "A Pro subscription ($50/month) is required to copy strategies from the marketplace."},
@@ -6493,7 +6497,7 @@ async def chat_builder_api(request: Request):
         if not user:
             raise HTTPException(status_code=403, detail="Invalid UID")
         sub = _get_portal_sub(user.id, db)
-        allowed, used, limit, is_pro = _chat_calls_info(sub, db)
+        allowed, used, limit, is_pro = _chat_calls_info(sub, db, user)
         if not messages:
             return {
                 "reply": "Hey! 👋 Tell me what you want to trade — long, short, or both? And what kind of signal are you thinking? (e.g. RSI scalp, MACD swing, order block, etc.)",
@@ -6918,7 +6922,7 @@ async def portal_subscription(request: Request):
         if not user:
             raise HTTPException(status_code=403)
         sub = _get_portal_sub(user.id, db)
-        _, used, lim, is_pro = _chat_calls_info(sub, db)
+        _, used, lim, is_pro = _chat_calls_info(sub, db, user)
         return {
             "tier": "pro" if is_pro else "free",
             "is_pro": is_pro,
@@ -7480,7 +7484,7 @@ async def strategy_advisor(request: Request):
         if not user:
             raise HTTPException(status_code=403, detail="Invalid UID")
         sub = _get_portal_sub(user.id, db)
-        if not _is_portal_pro(sub):
+        if not _is_portal_pro(sub) and not getattr(user, "is_admin", False):
             return {"reply": None, "pro_required": True}
 
         from app.strategy_models import UserStrategy, StrategyPerformance, StrategyExecution
