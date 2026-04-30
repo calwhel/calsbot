@@ -481,6 +481,10 @@ def _ensure_tables():
         "paused_until":                "ALTER TABLE auto_trade_strategies ADD COLUMN paused_until TIMESTAMP",
         "daily_loss_today_usd":        "ALTER TABLE auto_trade_strategies ADD COLUMN daily_loss_today_usd DOUBLE PRECISION DEFAULT 0",
         "daily_loss_date":             "ALTER TABLE auto_trade_strategies ADD COLUMN daily_loss_date VARCHAR",
+        # Risk profile (N) — picky vs loose entry behaviour
+        "risk_profile":                "ALTER TABLE auto_trade_strategies ADD COLUMN risk_profile VARCHAR DEFAULT 'medium'",
+        "min_minutes_between_trades":  "ALTER TABLE auto_trade_strategies ADD COLUMN min_minutes_between_trades INTEGER DEFAULT 0",
+        "last_trade_closed_at":        "ALTER TABLE auto_trade_strategies ADD COLUMN last_trade_closed_at TIMESTAMP",
     }
     auto_trade_cols = {
         "tp1_hit":                "ALTER TABLE auto_trade_paper_trades ADD COLUMN tp1_hit BOOLEAN DEFAULT FALSE",
@@ -2303,6 +2307,9 @@ def _auto_strategy_to_dict(s, last_trade=None):
             "session_start_utc":           getattr(s, "session_start_utc", None),
             "session_end_utc":             getattr(s, "session_end_utc", None),
             "cooldown_minutes_after_loss": int(getattr(s, "cooldown_minutes_after_loss", 0) or 0),
+            # N — risk profile + between-trade cooldown
+            "risk_profile":                (getattr(s, "risk_profile", None) or "medium"),
+            "min_minutes_between_trades":  int(getattr(s, "min_minutes_between_trades", 0) or 0),
         },
         "runtime": (lambda _cap=float(getattr(s, "max_daily_loss_usd", 0) or 0),
                            _today=float(getattr(s, "daily_loss_today_usd", 0) or 0): {
@@ -2409,6 +2416,15 @@ def _read_risk_fields(body: dict) -> dict:
     if "cooldown_minutes_after_loss" in risk:
         v = _opt_int(risk.get("cooldown_minutes_after_loss"), 0, 24 * 60)
         if v is not None: out["cooldown_minutes_after_loss"] = v
+    # N — risk profile + between-trade cooldown. The profile lifts engine
+    # floors; the explicit minute value is a per-strategy override (max() of
+    # the two wins).
+    if "risk_profile" in risk:
+        rp = str(risk.get("risk_profile") or "medium").lower().strip()
+        out["risk_profile"] = rp if rp in ("low", "medium", "high") else "medium"
+    if "min_minutes_between_trades" in risk:
+        v = _opt_int(risk.get("min_minutes_between_trades"), 0, 24 * 60)
+        if v is not None: out["min_minutes_between_trades"] = v
     return out
 
 
@@ -2602,10 +2618,15 @@ async def trade_auto_create(request: Request, db: Session = Depends(get_db)):
     if tp_sl_source not in ("ai", "walls", "atr"):
         tp_sl_source = "ai" if mode == "ai" else "walls"
 
+    # N — pull risk profile early so it can flow into the rules compiler
+    # (which lifts mods floors based on profile). Default 'medium' = legacy.
+    raw_profile = str(body.get("risk_profile") or (body.get("risk") or {}).get("risk_profile") or "medium").lower().strip()
+    risk_profile = raw_profile if raw_profile in ("low", "medium", "high") else "medium"
+
     rules_json: Optional[str] = None
     rules_summary: Optional[str] = None
     if mode == "rules":
-        compiled, summary = compile_rules_from_chart_state(chart_state)
+        compiled, summary = compile_rules_from_chart_state(chart_state, risk_profile=risk_profile)
         if not compiled:
             # `summary` carries the error reason
             raise HTTPException(status_code=400, detail=summary)
@@ -2692,8 +2713,30 @@ async def trade_auto_update(sid: int, request: Request, db: Session = Depends(ge
             s.tp_sl_source = v
 
     # Risk caps + sizing + partial + session + cooldown fields
-    for k, v in _read_risk_fields(body).items():
+    risk_fields = _read_risk_fields(body)
+    profile_changed = (
+        "risk_profile" in risk_fields
+        and risk_fields["risk_profile"] != (getattr(s, "risk_profile", None) or "medium")
+    )
+    for k, v in risk_fields.items():
         setattr(s, k, v)
+
+    # N — when a rules-mode strategy's risk_profile changes, recompile its
+    # rules so the new profile floors (R:R, stop, trend EMA) actually take
+    # effect. Without this, a user flipping medium→low would only get the
+    # min_odds + between-trade gates without the modifier lifts.
+    if profile_changed and (s.mode or "") == "rules":
+        try:
+            from app.services.auto_trader import compile_rules_from_chart_state
+            cs = json.loads(s.chart_state_json or "{}")
+            recompiled, summary = compile_rules_from_chart_state(
+                cs, risk_profile=s.risk_profile,
+            )
+            if recompiled:
+                s.rules_json    = json.dumps(recompiled)
+                s.rules_summary = summary
+        except Exception as _e:
+            logger.warning(f"Rules recompile after profile change failed for #{s.id}: {_e}")
 
     # Allow user to manually clear an active cooldown ("resume now")
     if body.get("clear_cooldown") is True:

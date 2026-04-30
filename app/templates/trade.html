@@ -1179,6 +1179,28 @@ button{font-family:inherit}
             </div>
           </details>
 
+          <!-- Risk profile — picky vs loose entry behaviour (N) -->
+          <details id="auto-risk-profile-details" open style="margin-bottom:10px;background:var(--panel2);border:1px solid var(--border);border-radius:3px">
+            <summary style="cursor:pointer;padding:8px 10px;font-size:12px;color:var(--text);font-weight:600">
+              Risk profile <span style="color:var(--muted);font-weight:400;font-size:11px">— how picky the bot should be about setups</span>
+            </summary>
+            <div style="padding:10px 12px;border-top:1px solid var(--border)">
+              <div id="auto-risk-profile-chips" style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+                <button type="button" class="chip" data-profile="low"    style="flex:1;min-width:90px;padding:8px 6px;font-size:12px">🛡️ Low risk</button>
+                <button type="button" class="chip active" data-profile="medium" style="flex:1;min-width:90px;padding:8px 6px;font-size:12px">⚖️ Balanced</button>
+                <button type="button" class="chip" data-profile="high"   style="flex:1;min-width:90px;padding:8px 6px;font-size:12px">🚀 Aggressive</button>
+              </div>
+              <div id="auto-risk-profile-desc" style="font-size:10.5px;color:var(--muted);line-height:1.45;margin-bottom:8px">
+                <b>Balanced</b> (default): no extra floors — uses your settings exactly as you've configured them.
+              </div>
+              <label class="half" style="font-size:11px;color:var(--muted)">Min minutes between trades <span style="color:var(--muted);font-size:10px">(0 = use profile default)</span></label>
+              <input type="number" id="auto-min-between-trades" value="0" min="0" max="1440" step="1" placeholder="0 = use profile default" style="width:100%;margin-top:2px">
+              <div style="font-size:10.5px;color:var(--muted);line-height:1.4;margin-top:6px">
+                Stops the bot from opening another trade <em>immediately</em> after the previous one closes. The effective minimum is <code>max(this value, profile default)</code> — set explicitly if you want a stricter wait than your profile.
+              </div>
+            </div>
+          </details>
+
           <!-- Strategy modifiers — TP/SL floors + trend filter -->
           <details id="auto-mods-details" style="margin-bottom:10px;background:var(--panel2);border:1px solid var(--border);border-radius:3px">
             <summary style="cursor:pointer;padding:8px 10px;font-size:12px;color:var(--text);font-weight:600">
@@ -1199,7 +1221,8 @@ button{font-family:inherit}
               <div style="font-size:10.5px;color:var(--muted);line-height:1.4">
                 <b>Min R:R ratio</b>: rejects trades whose TP1 is closer than <code>ratio × stop_distance</code>. The bot lifts TP1 (and TP2) to clear the floor — set <code>1.5</code> for a 1.5R minimum target.<br>
                 <b>Min stop distance (%)</b>: floors the stop distance as a % of entry — e.g. <code>0.4</code> means the stop must be at least 0.4% away. The bot widens the stop if the chart-based stop is closer.<br>
-                <b>Trend EMA period</b>: rejects longs when price is below the EMA, shorts when price is above it. Set <code>50</code> for "must be trending with the EMA50". <code>0</code> disables.
+                <b>Trend EMA period</b>: rejects longs when price is below the EMA, shorts when price is above it. Set <code>50</code> for "must be trending with the EMA50". <code>0</code> disables.<br>
+                <span style="color:var(--accent)">Note:</span> Low-risk profile lifts these to <b>2.0 R:R / 0.5% stop / EMA200</b> as floors — your higher values still apply.
               </div>
             </div>
           </details>
@@ -4681,6 +4704,9 @@ button{font-family:inherit}
           // Cooldown (K)
           max_consecutive_losses:      parseInt($('auto-cooldown-losses').value || '0') || null,
           cooldown_minutes_after_loss: parseInt($('auto-cooldown-min').value || '60') || 60,
+          // Risk profile (N) — picky vs loose entry behaviour
+          risk_profile:               (window.__autoRiskProfile || 'medium'),
+          min_minutes_between_trades: parseInt($('auto-min-between-trades').value || '0') || 0,
         };
       } catch(prepErr){
         console.error('auto-create prep failed:', prepErr);
@@ -5148,6 +5174,23 @@ button{font-family:inherit}
     $('auto-create').onclick = createAutoStrategy;
     document.querySelectorAll('input[name="auto-mode"]').forEach(r => {
       r.addEventListener('change', syncAutoRulePreview);
+    });
+    // Risk profile chip group (N) — picky vs loose entry behaviour
+    window.__autoRiskProfile = 'medium';
+    const __profileBlurbs = {
+      low: '<b>Low risk</b>: bot waits at least 60 min between trades, requires ≥70% odds, lifts R:R to 2.0, stop floor 0.5%, and only trades with the EMA200 trend. Best for users who got burned by back-to-back losers.',
+      medium: '<b>Balanced</b> (default): no extra floors — uses your settings exactly as you\'ve configured them.',
+      high: '<b>Aggressive</b>: no extra floors. Same as Balanced but signals you\'re OK with frequent trades. Use when scalping a clear range.',
+    };
+    document.querySelectorAll('#auto-risk-profile-chips .chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#auto-risk-profile-chips .chip').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const p = btn.getAttribute('data-profile') || 'medium';
+        window.__autoRiskProfile = p;
+        const desc = document.getElementById('auto-risk-profile-desc');
+        if(desc) desc.innerHTML = __profileBlurbs[p] || __profileBlurbs.medium;
+      });
     });
     document.addEventListener('keydown', e => {
       if($('auto-modal').classList.contains('open') && e.key === 'Escape'){

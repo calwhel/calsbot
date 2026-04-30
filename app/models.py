@@ -792,9 +792,25 @@ class AutoTradeStrategy(Base):
     session_end_utc             = Column(String, nullable=True)       # "20:00"
     # ── Cooldown after loss (K) ────────────────────────────────
     cooldown_minutes_after_loss = Column(Integer, default=0)
+    # ── Risk profile (N) ───────────────────────────────────────
+    # 'low' | 'medium' | 'high'. 'medium' (default) = legacy behaviour with
+    # no extra floors, so existing strategies are unaffected. 'low' lifts
+    # floors (between-trade cooldown, min_odds, R:R, stop distance, trend
+    # filter) so the bot only takes high-quality setups; 'high' relaxes
+    # floors for scalpers. The engine resolves the effective floors via
+    # auto_trader.resolve_risk_floors(strategy).
+    risk_profile                = Column(String, default="medium")
+    # Per-strategy "wait at least N minutes after a close before opening
+    # another trade." 0 = disabled (use risk_profile preset). User-set
+    # values override the preset (max() applies). Fixes the "trading
+    # immediately after the previous one closes" symptom.
+    min_minutes_between_trades  = Column(Integer, default=0)
     # ── Runtime trackers (set by engine) ───────────────────────
     consecutive_losses          = Column(Integer, default=0)
     paused_until                = Column(DateTime, nullable=True)
+    # Set every time the engine closes a paper trade (any outcome). The
+    # between-trade cooldown gate compares against this.
+    last_trade_closed_at        = Column(DateTime, nullable=True)
     daily_loss_today_usd        = Column(Float, default=0.0)
     daily_loss_date             = Column(String, nullable=True)       # 'YYYY-MM-DD' (UTC)
 

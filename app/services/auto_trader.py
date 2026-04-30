@@ -43,6 +43,56 @@ from app.services.alerts_engine import (
 logger = logging.getLogger(__name__)
 
 
+# ─── Risk profile presets (N) ────────────────────────────────────────────────
+# Each profile lifts FLOORS on the per-strategy gates. They never tighten
+# user-set values — `effective = max(user_value, floor)` — so a user can
+# always be MORE picky than their profile, but never less. 'medium' = legacy
+# behaviour (no floors), so every existing strategy is unaffected.
+#
+# Concrete behaviour per profile:
+#   * `min_minutes_between_trades` — wait at least N minutes after a close
+#     before opening another trade (fixes "trades immediately after close").
+#   * `min_odds_floor` — AI plans must clear this, on top of strategy.min_odds.
+#   * `min_rr_ratio_floor`, `min_stop_pct_floor`, `trend_ema_period_floor` —
+#     lifted onto rules-mode rules dict (compile_rules_from_chart_state).
+RISK_PROFILE_DEFAULTS: Dict[str, Dict[str, float]] = {
+    "low": {
+        "min_minutes_between_trades": 60,   # 1h between trades — picky
+        "min_odds_floor":             70,   # AI must be 70%+ confident
+        "min_rr_ratio_floor":         2.0,  # 2:1 R:R minimum
+        "min_stop_pct_floor":         0.5,  # stop ≥ 0.5% from entry
+        "trend_ema_period_floor":     200,  # EMA200 trend filter on
+    },
+    "medium": {
+        "min_minutes_between_trades": 0,
+        "min_odds_floor":             0,
+        "min_rr_ratio_floor":         0.0,
+        "min_stop_pct_floor":         0.0,
+        "trend_ema_period_floor":     0,
+    },
+    "high": {
+        "min_minutes_between_trades": 0,
+        "min_odds_floor":             0,    # take whatever clears strategy.min_odds
+        "min_rr_ratio_floor":         0.0,
+        "min_stop_pct_floor":         0.0,
+        "trend_ema_period_floor":     0,
+    },
+}
+
+
+def resolve_risk_floors(strategy) -> Dict[str, float]:
+    """Resolve the effective floors for a strategy based on its risk_profile.
+
+    Always returns a dict with every key — falls back to 'medium' (no
+    floors) if the field is missing or has an unknown value, so old
+    strategies and bad data both behave identically to today.
+    """
+    profile = (getattr(strategy, "risk_profile", None) or "medium").lower().strip()
+    if profile not in RISK_PROFILE_DEFAULTS:
+        profile = "medium"
+    return dict(RISK_PROFILE_DEFAULTS[profile])
+
+
 # ─── Local TA helpers (kept here so this file isn't tightly coupled to
 # alerts_engine's exact public surface) ───────────────────────────────────────
 def _sma(values: List[float], period: int) -> Optional[float]:
@@ -243,7 +293,10 @@ def parse_ai_plan(plan_text: str) -> Dict[str, Any]:
 
 
 # ─── Rule compiler — reads chart_state and produces a tiny DSL ────────────────
-def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+def compile_rules_from_chart_state(
+    chart_state: Dict[str, Any],
+    risk_profile: Optional[str] = None,
+) -> Tuple[Optional[Dict[str, Any]], str]:
     """Inspect the saved indicators + toggles and return a (rules, summary).
 
     The rules dict has shape:
@@ -420,10 +473,19 @@ def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optiona
     # chart_state.mods so the UI can manage them as one block. Each is purely
     # opt-in (zero / unset = disabled, identical to legacy behaviour).
     mods = chart_state.get("mods") or {}
+    # Risk profile floors lift the modifier minimums when the user picked
+    # 'low'. Effective value = max(user_set, profile_floor) — user can always
+    # be MORE picky than the preset, but never less.
+    profile_key = (risk_profile or "medium").lower().strip()
+    if profile_key not in RISK_PROFILE_DEFAULTS:
+        profile_key = "medium"
+    profile_floors = RISK_PROFILE_DEFAULTS[profile_key]
+
     try:
         min_rr = float(mods.get("min_rr_ratio", 0) or 0)
     except (TypeError, ValueError):
         min_rr = 0.0
+    min_rr = max(min_rr, float(profile_floors.get("min_rr_ratio_floor", 0) or 0))
     if min_rr > 0:
         rules["min_rr_ratio"] = min_rr
         summary_bits.append(f"R:R ≥ {min_rr:g}")
@@ -431,6 +493,7 @@ def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optiona
         min_stop = float(mods.get("min_stop_pct", 0) or 0)
     except (TypeError, ValueError):
         min_stop = 0.0
+    min_stop = max(min_stop, float(profile_floors.get("min_stop_pct_floor", 0) or 0))
     if min_stop > 0:
         rules["min_stop_pct"] = min_stop
         summary_bits.append(f"stop ≥ {min_stop:g}%")
@@ -438,6 +501,7 @@ def compile_rules_from_chart_state(chart_state: Dict[str, Any]) -> Tuple[Optiona
         trend_period = int(mods.get("trend_ema_period", 0) or 0)
     except (TypeError, ValueError):
         trend_period = 0
+    trend_period = max(trend_period, int(profile_floors.get("trend_ema_period_floor", 0) or 0))
     if trend_period > 0:
         rules["trend_ema_period"] = trend_period
         summary_bits.append(f"trending with EMA{trend_period}")
@@ -1225,6 +1289,22 @@ def _pre_open_gates(strategy, now: datetime) -> Tuple[bool, str]:
         strategy.paused_until = None
         strategy.consecutive_losses = 0
 
+    # N — between-trade cooldown. Effective minimum is max(user_set_value,
+    # risk_profile_floor). Setting either to 0 disables that side. This is
+    # what stops a strategy from opening another position the instant the
+    # previous one closes (the "no actual strategy involved" symptom).
+    floors = resolve_risk_floors(strategy)
+    user_min_between = int(getattr(strategy, "min_minutes_between_trades", 0) or 0)
+    profile_min      = int(floors.get("min_minutes_between_trades", 0) or 0)
+    effective_min    = max(user_min_between, profile_min)
+    if effective_min > 0:
+        last_close = getattr(strategy, "last_trade_closed_at", None)
+        if last_close:
+            elapsed_min = (now - last_close).total_seconds() / 60.0
+            if elapsed_min < effective_min:
+                wait_min = int(effective_min - elapsed_min) + 1
+                return False, f"between_trade_cooldown_{wait_min}m"
+
     # J — time-of-day session
     if not _in_session(strategy, now):
         return False, "outside_session_window"
@@ -1394,6 +1474,10 @@ async def _resolve_open_trades_for(strategy, db) -> bool:
         # the day's bottom line (matching the user-facing copy).
         _roll_daily_loss(strategy)
         strategy.daily_loss_today_usd = (strategy.daily_loss_today_usd or 0.0) + total_pnl
+        # N — record the close time so the between-trade cooldown gate can
+        # block immediate re-entries (the "trades right after one closes"
+        # symptom). Set on EVERY close (win or loss) — this is intentional.
+        strategy.last_trade_closed_at = datetime.utcnow()
 
         if total_pnl >= 0:
             strategy.wins               = (strategy.wins   or 0) + 1
@@ -1562,7 +1646,14 @@ async def _maybe_open_ai(strategy, db) -> bool:
     # Gate: AI must want a MARKET entry and reach the user's odds threshold
     if (parsed["order_type"] or "MARKET") != "MARKET":
         return False
-    threshold = strategy.min_odds or 60
+    # Effective threshold = max(user-set min_odds, risk_profile floor). 'low'
+    # profile pushes this to 70+ so only high-conviction AI plans clear; 'high'
+    # leaves it at the user value. Surfaces as a stricter gate in production
+    # without breaking the user's existing slider.
+    floors = resolve_risk_floors(strategy)
+    user_th    = strategy.min_odds or 60
+    profile_th = int(floors.get("min_odds_floor", 0) or 0)
+    threshold  = max(user_th, profile_th)
     side_odds = parsed["odds_up"] if parsed["side"] == "long" else parsed["odds_down"]
     if side_odds is None or side_odds < threshold:
         return False
