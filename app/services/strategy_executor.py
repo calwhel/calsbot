@@ -1662,6 +1662,19 @@ async def evaluate_and_fire(
     else:
         strictness_level = 0
 
+    # User-set risk profile (Low / Medium / High) lifts the strictness floor.
+    # The wizard surfaces this on Step 6 — Low = "only fire when every
+    # confirmation aligns AND the bulk of conditions pass" (sniper), Medium =
+    # "all conditions must pass" (selective), High = legacy behaviour. Always
+    # max() so the existing max_per_day-derived strictness is never lowered.
+    _profile_floor = {
+        "low":    2,
+        "medium": 1,
+        "high":   0,
+    }.get(str(risk.get("risk_profile") or "").lower().strip(), None)
+    if _profile_floor is not None:
+        strictness_level = max(strictness_level, _profile_floor)
+
     symbols = await _get_eligible_symbols(universe, http_client, raw_tickers=raw_tickers)
     if not symbols:
         _bump("blk_empty_universe")

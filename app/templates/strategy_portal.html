@@ -3644,6 +3644,7 @@ const WZ={
   sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',
   timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,
   name:'',category:'general',pricing:'free',price:null,
+  riskProfile:'medium',
 };
 
 const WZ_STEPS=['Your Style','Trade Direction','Entry Signal','Confirmation','Profit & Protection','Risk & Market','Name & Launch'];
@@ -4561,8 +4562,21 @@ function wzToggleExit(which){
 
 function renderStep6(){
   const sessions=[{id:'asian',label:'🌏 Asian',time:'0–8 UTC'},{id:'london',label:'🇬🇧 London',time:'7–16 UTC'},{id:'new_york',label:'🇺🇸 New York',time:'13–22 UTC'}];
+  const _rpDesc={
+    low:'🟢 Low — only fire on top-quality setups (every condition aligned, ~90% pass rate). Fewer trades, higher avg win-rate.',
+    medium:'🟡 Medium — every entry condition must pass. Balanced frequency vs. quality (default).',
+    high:'🔴 High — fires on any matching signal using your AND/OR rules. More trades, more noise.'
+  };
   return`<div class="wz-q">How do you manage risk?</div>
   <div class="wz-sub">Set your risk limits, position sizing, and which coins and sessions you want to trade.</div>
+  <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">🎯</div>Risk Profile <span style="font-size:11px;color:var(--muted);font-weight:500;margin-left:6px">— picky vs. trigger-happy</span></div>
+    <div class="hint" style="margin-bottom:10px">Controls how strict the bot is about entering trades. Stricter = fewer but higher-quality signals.</div>
+    <div class="opt-chips" style="margin-bottom:8px">
+      ${['low','medium','high'].map(p=>`<div class="opt-chip ${WZ.riskProfile===p?'active':''}" onclick="WZ.riskProfile='${p}';renderCurrentStep()" style="text-transform:capitalize">${p==='low'?'🟢 Low':p==='medium'?'🟡 Medium':'🔴 High'}</div>`).join('')}
+    </div>
+    <div class="hint" style="font-size:11px;color:var(--muted);line-height:1.5">${_rpDesc[WZ.riskProfile]||_rpDesc.medium}</div>
+  </div>
   <div class="section-card">
     <div class="sc-title"><div class="sc-icon">⚖️</div>Position & Risk</div>
     <div class="form-row" style="margin-bottom:12px">
@@ -5133,7 +5147,7 @@ function wzBack(){
 function resetWizard(){
   compiledConfig=null;
   _wzLastStep=1;
-  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null});
+  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium'});
   renderCurrentStep();
 }
 
@@ -5309,7 +5323,7 @@ async function buildStrategy(){
     data.config._build_mode=WZ.mode;
     data.config._category=WZ.category;
     const risk=data.config.risk||{};
-    Object.assign(risk,{leverage:WZ.leverage,position_size_type:WZ.posSizeType,position_size_pct:WZ.posSize,position_size_usd:WZ.posSizeType==='fixed'?WZ.posSizeUsd:null,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos,no_duplicate_symbol:WZ.noDuplicateSymbol});
+    Object.assign(risk,{leverage:WZ.leverage,position_size_type:WZ.posSizeType,position_size_pct:WZ.posSize,position_size_usd:WZ.posSizeType==='fixed'?WZ.posSizeUsd:null,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos,no_duplicate_symbol:WZ.noDuplicateSymbol,risk_profile:WZ.riskProfile||'medium'});
     data.config.risk=risk;
     const exit=data.config.exit||{};
     Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null});
@@ -5380,6 +5394,7 @@ function formatConfig(cfg,warnings,riskRating){
       ${exit.take_profit2_pct?`<div>TP2: <strong>${exit.take_profit2_pct}%</strong></div>`:''}
       ${exit.trailing_stop?`<div>Trail: <strong>${exit.trailing_stop_pct}%</strong></div>`:''}
       <div>Cooldown: <strong>${risk.cooldown_minutes}min</strong></div>
+      ${risk.risk_profile?`<div>Risk: <strong>${risk.risk_profile==='low'?'🟢 Low (sniper)':risk.risk_profile==='high'?'🔴 High (loose)':'🟡 Medium'}</strong></div>`:''}
       ${risk.no_duplicate_symbol?`<div style="grid-column:1/-1;font-size:11px;color:var(--accent);font-weight:600">⛔ No duplicate coin per day</div>`:''}
     </div>
     ${(()=>{const u=cfg.universe||{};const f=cfg.filters||{};const tags=[];
