@@ -3484,7 +3484,15 @@ button{font-family:inherit}
       switch(ast.kind){
         case 'id':
           if(Object.prototype.hasOwnProperty.call(subs, ast.name)){
-            return { kind:'num', value: subs[ast.name] };
+            const _val = subs[ast.name];
+            // String inputs are price-source aliases like
+            //   src1 = input(close, title='EMA Source')
+            // Re-bind the identifier so the evaluator's source resolver picks
+            // close/open/high/low/etc. instead of getting num('close')=NaN.
+            if(typeof _val === 'string'){
+              return { kind:'id', name: _val };
+            }
+            return { kind:'num', value: _val };
           }
           return ast;
         case 'unop': return { kind:'unop', op: ast.op, x: substituteIds(ast.x, subs) };
@@ -3742,6 +3750,15 @@ button{font-family:inherit}
         if(kind === 'int' || kind === 'float' || kind === 'bool' || kind === ''){
           const v = Number(args[0]);
           if(isFinite(v)) inputs[name] = v;
+        }
+        // Source inputs:  src1 = input(close, title='EMA Source')
+        //                 src1 = input.source(close, ...)
+        // Stored as a string so the resolver flows it through to ta.ema/sma
+        // as the price source instead of leaving it as an unknown identifier
+        // (which would otherwise fall into the period slot and default to 20).
+        if(kind === 'source' || kind === ''){
+          const raw0 = String(args[0] || '').trim().toLowerCase();
+          if(raw0 && VALID_SRC.has(raw0)) inputs[name] = raw0;
         }
         continue;
       }
