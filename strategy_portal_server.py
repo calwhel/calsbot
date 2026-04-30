@@ -4881,41 +4881,11 @@ async def api_build_strategy(request: Request):
 
     from app.services.strategy_builder import (
         compile_strategy_from_conversation,
-        compile_from_pinescript,
         validate_strategy,
     )
     import asyncio
-    import re as _re
 
-    # If the description is actually a PineScript (pasted into AI chat or the
-    # description box), route it through the dedicated Pine compiler so input.*
-    # variables, ta.ema/sma periods, and multi-MA setups are extracted exactly
-    # instead of being flattened into a one-line "primary signal" summary that
-    # loses the periods (which is why MWhalekiller's 34/21/200 was coming back
-    # as default 20/50/20).
-    _looks_like_pine = bool(
-        _re.search(r"//\s*@version\s*=", desc)
-        or _re.search(r"\b(?:indicator|strategy|study)\s*\(", desc)
-        or _re.search(r"\bta\.(?:ema|sma|rsi|macd|atr|wma|rma|vwap|crossover|crossunder)\s*\(", desc)
-    )
-    config = None
-    pine_notes = []
-    pine_warnings = []
-    if _looks_like_pine:
-        try:
-            config = await asyncio.wait_for(compile_from_pinescript(desc), timeout=90.0)
-        except asyncio.TimeoutError:
-            logger.warning("Pine compile via /api/build-strategy timed out — falling back to NL compiler")
-        except Exception as _e:
-            logger.warning(f"Pine compile via /api/build-strategy errored ({_e}) — falling back to NL compiler")
-        if config:
-            pine_notes    = config.pop("_pine_notes", []) or []
-            pine_warnings = config.pop("_pine_warnings", []) or []
-            config["_pine_source"] = desc
-
-    # Fall back to the conversational compiler if not Pine (or Pine compile failed)
-    if not config:
-        config = await compile_strategy_from_conversation([], f"Strategy name: {name}\n\n{desc}")
+    config = await compile_strategy_from_conversation([], f"Strategy name: {name}\n\n{desc}")
     if not config:
         return JSONResponse({"error": "Could not parse strategy. Try being more specific — e.g. 'SuperTrend bullish flip on 1m, LONG only, 10× leverage, 2% TP, 1% SL'."}, status_code=422)
 
@@ -4936,21 +4906,12 @@ async def api_build_strategy(request: Request):
             "summary": desc, "risk_rating": "MEDIUM",
         }
 
-    # Surface Pine compiler notes (which periods/MAs/etc. were extracted) and
-    # any approximations alongside the validator's warnings so the user can
-    # see exactly what the importer mapped from their script.
-    _all_warnings    = list(pine_warnings) + list(validation.get("warnings", []))
-    _all_suggestions = list(validation.get("suggestions", []))
-    if pine_notes:
-        _all_suggestions = list(pine_notes) + _all_suggestions
-
     return JSONResponse({
         "config":      config,
-        "warnings":    _all_warnings,
-        "suggestions": _all_suggestions,
+        "warnings":    validation.get("warnings", []),
+        "suggestions": validation.get("suggestions", []),
         "risk_rating": validation.get("risk_rating", "MEDIUM"),
         "summary":     validation.get("summary", desc),
-        "pine_notes":  pine_notes,
     })
 
 
@@ -6558,38 +6519,6 @@ async def chat_builder_api(request: Request):
             }
     finally:
         db.close()
-
-    # ── Pine-script short-circuit ────────────────────────────────────────
-    # If the latest user message looks like a Pine indicator/strategy script,
-    # don't waste a Claude turn on free-form summarisation (which strips the
-    # periods and the multi-MA structure). Hand the raw script back as the
-    # "compiled" description — /api/build-strategy will route it through the
-    # dedicated Pine compiler so 34/21/200 stay 34/21/200.
-    last_user = ""
-    for _m in reversed(messages):
-        if _m.get("role") == "user":
-            last_user = (_m.get("content") or "")
-            break
-    import re as _re_pine
-    _is_pine = bool(
-        _re_pine.search(r"//\s*@version\s*=", last_user)
-        or _re_pine.search(r"\b(?:indicator|strategy|study)\s*\([^)]*\)", last_user)
-        or _re_pine.search(r"\bta\.(?:ema|sma|rsi|macd|atr|wma|rma|vwap|crossover|crossunder)\s*\(", last_user)
-    )
-    if _is_pine:
-        return {
-            "reply": (
-                "Got it — that's a PineScript. I'll send it straight through the Pine "
-                "importer so the periods and every MA come across exactly as written "
-                "(no summarisation). Click **Compile** to continue."
-            ),
-            "complete": True,
-            "description": last_user,
-            "pine_routed": True,
-            "calls_used": used,
-            "calls_limit": limit,
-            "is_pro": is_pro,
-        }
 
     system_prompt = """You are a sharp, experienced crypto trading strategist helping a user build their own automated strategy inside TradeHub. You're having a real conversation — not running through a checklist.
 
