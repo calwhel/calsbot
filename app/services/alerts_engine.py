@@ -61,7 +61,7 @@ async def _fetch_candles(symbol: str, tf: str, limit: int = 200) -> List[dict]:
     if cached and time.time() < cached[1]:
         return cached[0]
     try:
-        async with httpx.AsyncClient(timeout=6.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.get(_MEXC_KLINE_URL, params={
                 "symbol": pair, "interval": interval, "limit": limit,
             })
@@ -83,7 +83,10 @@ async def _fetch_candles(symbol: str, tf: str, limit: int = 200) -> List[dict]:
         _CANDLE_CACHE[key] = (candles, time.time() + _CANDLE_TTL)
         return candles
     except Exception as e:
-        logger.warning(f"alerts_engine fetch {key} failed: {e}")
+        logger.warning(
+            f"alerts_engine fetch {key} failed: "
+            f"{type(e).__name__}: {e!r}"
+        )
         return []
 
 
