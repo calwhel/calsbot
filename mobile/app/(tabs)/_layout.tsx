@@ -11,6 +11,7 @@ import { colors, font, glow, radius } from '@/constants/colors';
 const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   index:        'home',
   strategies:   'pulse',
+  trade:        'analytics',
   trades:       'swap-horizontal',
   marketplace:  'storefront',
   settings:     'person-circle',
@@ -19,7 +20,8 @@ const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
 const LABELS: Record<string, string> = {
   index:       'Home',
   strategies:  'Strategies',
-  trades:      'Trades',
+  trade:       'Trade',
+  trades:      'History',
   marketplace: 'Market',
   settings:    'Account',
 };
@@ -114,6 +116,7 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" />
       <Tabs.Screen name="strategies" />
+      <Tabs.Screen name="trade" />
       <Tabs.Screen name="trades" />
       <Tabs.Screen name="marketplace" />
       <Tabs.Screen name="settings" />

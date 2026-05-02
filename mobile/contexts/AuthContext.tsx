@@ -1,6 +1,6 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import { Platform } from 'react-native';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
 import { apiPost, ApiError, type LoginResponse } from '@/lib/api';
 
 const UID_STORE_KEY = 'tradehub_uid';
@@ -36,6 +36,13 @@ export type AuthState = {
   signIn: (uid: string) => Promise<LoginResponse>;
   signInEmail: (email: string, password: string) => Promise<LoginResponse>;
   signOut: () => Promise<void>;
+  /**
+   * Re-fetches the LoginResponse from the backend using the persisted UID.
+   * Use this to pick up subscription changes (e.g. user upgraded to Pro on
+   * the web) without requiring a full sign-out / sign-in cycle.
+   * Returns the fresh payload, or null if there is no signed-in user.
+   */
+  refreshUser: () => Promise<LoginResponse | null>;
 };
 
 const AuthCtx = createContext<AuthState | null>(null);
@@ -92,6 +99,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return fresh;
   }, []);
 
+  const refreshUser = useCallback(async (): Promise<LoginResponse | null> => {
+    const stored = uid || (await storage.get(UID_STORE_KEY));
+    if (!stored) return null;
+    try {
+      const fresh = await apiPost<LoginResponse>('/api/mobile/login', { uid: stored });
+      // Cancellation guard: if the user signed out (or signed in as a
+      // different account) while this request was in flight, drop the result
+      // so we don't accidentally restore the previous session.
+      const currentStored = await storage.get(UID_STORE_KEY);
+      if (currentStored !== fresh.uid) return null;
+      setUser(fresh);
+      setUid(fresh.uid);
+      return fresh;
+    } catch (e) {
+      // Stored UID is invalid (e.g. wiped account) — clear it. Same
+      // cancellation guard applies: only clear if the user hasn't already
+      // signed out themselves.
+      if (e instanceof ApiError && e.status === 403) {
+        const currentStored = await storage.get(UID_STORE_KEY);
+        if (currentStored === stored) {
+          await storage.del(UID_STORE_KEY);
+          setUser(null);
+          setUid(null);
+        }
+      }
+      return null;
+    }
+  }, [uid]);
+
+  // Auto-refresh user payload when the app returns to the foreground. This
+  // catches cases like "user upgraded to Pro on the web" so the mobile UI
+  // reflects the new entitlement without a full sign-out / sign-in cycle.
+  // We throttle to at most once every 15s to avoid hammering /api/mobile/login
+  // on rapid background→foreground toggles.
+  const lastRefreshRef = useRef<number>(0);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
+      if (next !== 'active') return;
+      if (!uid) return;
+      const now = Date.now();
+      if (now - lastRefreshRef.current < 15_000) return;
+      lastRefreshRef.current = now;
+      refreshUser().catch(() => { /* non-fatal */ });
+    });
+    return () => sub.remove();
+  }, [uid, refreshUser]);
+
   const signOut = useCallback(async () => {
     // Best-effort: tell the backend to drop our push token so this device
     // stops receiving notifications for the signed-out user.
@@ -123,7 +177,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [uid]);
 
   return (
-    <AuthCtx.Provider value={{ user, uid, ready, signIn, signInEmail, signOut }}>
+    <AuthCtx.Provider value={{ user, uid, ready, signIn, signInEmail, signOut, refreshUser }}>
       {children}
     </AuthCtx.Provider>
   );

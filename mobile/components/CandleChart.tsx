@@ -18,6 +18,21 @@ export type ChartMarker = {
   direction?: 'LONG' | 'SHORT';
 };
 
+export type ChartZone = {
+  /** Start of the zone in unix seconds (formation/origin candle). */
+  fromTime: number;
+  /** End of the zone in unix seconds. If omitted, extends to the right edge. */
+  toTime?: number;
+  /** Top price of the zone. */
+  top: number;
+  /** Bottom price of the zone. */
+  bottom: number;
+  /** Bull = green-tinted (support); bear = red-tinted (resistance). */
+  side: 'bull' | 'bear';
+  /** Optional dim styling for filled/used zones. */
+  dim?: boolean;
+};
+
 /**
  * Compact native candlestick chart. Renders the most recent N candles with
  * optional entry/exit markers overlayed at their (time, price) coordinates.
@@ -27,6 +42,7 @@ export type ChartMarker = {
 export function CandleChart({
   candles,
   markers = [],
+  zones = [],
   width,
   height = 180,
   symbol,
@@ -34,6 +50,7 @@ export function CandleChart({
 }: {
   candles: Candle[];
   markers?: ChartMarker[];
+  zones?: ChartZone[];
   width: number;
   height?: number;
   symbol?: string;
@@ -132,6 +149,38 @@ export function CandleChart({
               x1={padX} y1={y} x2={width - padX} y2={y}
               stroke={colors.border} strokeWidth={1} strokeDasharray="3,5" opacity={0.5}
             />
+          );
+        })}
+
+        {/* FVG / liquidity zones — drawn UNDER candles so wicks stay visible */}
+        {zones.map((z, i) => {
+          const x1 = xForTime(z.fromTime);
+          const x2 = z.toTime ? xForTime(z.toTime) : (width - padX);
+          const yTop = yForPrice(z.top);
+          const yBot = yForPrice(z.bottom);
+          const x = Math.min(x1, x2);
+          const w = Math.max(Math.abs(x2 - x1), 2);
+          const y = Math.min(yTop, yBot);
+          const h = Math.max(Math.abs(yBot - yTop), 1);
+          const baseFill = z.side === 'bull' ? colors.positive : colors.negative;
+          return (
+            <G key={`z-${i}`}>
+              <Rect
+                x={x} y={y} width={w} height={h}
+                fill={baseFill}
+                opacity={z.dim ? 0.06 : 0.14}
+              />
+              <Line
+                x1={x} y1={yTop} x2={x + w} y2={yTop}
+                stroke={baseFill} strokeWidth={0.75} opacity={z.dim ? 0.25 : 0.55}
+                strokeDasharray="2,3"
+              />
+              <Line
+                x1={x} y1={yBot} x2={x + w} y2={yBot}
+                stroke={baseFill} strokeWidth={0.75} opacity={z.dim ? 0.25 : 0.55}
+                strokeDasharray="2,3"
+              />
+            </G>
           );
         })}
 

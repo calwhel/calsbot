@@ -1,5 +1,6 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Alert, Linking, Platform } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, Alert, Linking, Platform, ActivityIndicator } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -23,8 +24,49 @@ import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, type Portfolio } from '@/lib/api';
 
 export default function SettingsScreen() {
-  const { user, uid, signOut } = useAuth();
+  const { user, uid, signOut, refreshUser } = useAuth();
   const [copied, setCopied] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState<string | null>(null);
+
+  // Re-validate the user payload every time the Account tab regains focus,
+  // so a Pro upgrade made on the web shows up immediately when the user
+  // jumps back to this screen. Throttled by AuthContext (15s window).
+  const lastFocusRefRef = useRef<number>(0);
+  useFocusEffect(
+    useCallback(() => {
+      if (!uid) return;
+      const now = Date.now();
+      if (now - lastFocusRefRef.current < 10_000) return;
+      lastFocusRefRef.current = now;
+      refreshUser().catch(() => {});
+    }, [uid, refreshUser]),
+  );
+
+  const onRefreshStatus = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshNote(null);
+    try {
+      const before = !!user?.is_pro;
+      const fresh = await refreshUser();
+      if (Platform.OS !== 'web') {
+        Haptics.selectionAsync().catch(() => {});
+      }
+      if (fresh) {
+        if (!!fresh.is_pro !== before) {
+          setRefreshNote(fresh.is_pro ? 'Pro plan detected — unlocked!' : 'Plan updated.');
+        } else {
+          setRefreshNote('Account is up to date.');
+        }
+      } else {
+        setRefreshNote("Couldn't reach the server.");
+      }
+    } finally {
+      setRefreshing(false);
+      setTimeout(() => setRefreshNote(null), 3500);
+    }
+  }, [refreshing, user?.is_pro, refreshUser]);
   const heroId = `prof-bg-${React.useId().replace(/:/g, '')}`;
   const orbId = `prof-orb-${heroId}`;
 
@@ -148,6 +190,26 @@ export default function SettingsScreen() {
               </View>
             </View>
           ) : null}
+
+          {/* Refresh-status row — lets a user who just upgraded on the web
+              pull a fresh entitlement payload without signing out. */}
+          <Pressable
+            onPress={onRefreshStatus}
+            disabled={refreshing}
+            style={({ pressed }) => [
+              styles.refreshRow,
+              pressed && !refreshing && { opacity: 0.85 },
+            ]}
+          >
+            {refreshing ? (
+              <ActivityIndicator size="small" color={colors.accent} />
+            ) : (
+              <Ionicons name="refresh" size={14} color={colors.accent} />
+            )}
+            <Text style={styles.refreshLabel}>
+              {refreshing ? 'Checking subscription…' : (refreshNote || 'Refresh subscription status')}
+            </Text>
+          </Pressable>
 
           <Pressable onPress={onCopyUid} style={({ pressed }) => [styles.uidBox, pressed && { opacity: 0.85 }]}>
             <View style={{ flex: 1 }}>
@@ -341,6 +403,25 @@ const styles = StyleSheet.create({
     marginVertical: 6,
   },
 
+  refreshRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: spacing.lg,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    backgroundColor: 'rgba(34,211,238,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(34,211,238,0.18)',
+  },
+  refreshLabel: {
+    color: colors.accent,
+    fontFamily: font.semibold,
+    fontSize: 12,
+    letterSpacing: 0.3,
+    flex: 1,
+  },
   uidBox: {
     flexDirection: 'row',
     alignItems: 'center',
