@@ -1,5 +1,4 @@
 uploads = []
-outputs = []
 
 [[generated]]
 id = "SCtKikNBelW026WFdz3ds"
@@ -12,3 +11,9 @@ id = "aIV8lbglQehpcqftQHK2m"
 uri = "file://mobile/assets/images/splash-icon.png"
 type = "image"
 title = "tradehub splash"
+
+[[outputs]]
+id = "HSzOHfovnc3Y9TKsTkfFU"
+uri = "file://attached_assets/qr/expo_go_tunnel.png"
+type = "image"
+title = "Scan with iPhone Camera to open TradeHub in Expo Go"
