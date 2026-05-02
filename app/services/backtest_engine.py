@@ -1140,27 +1140,71 @@ def _build_confirm_cond(conf: Dict) -> Dict:
     return conf
 
 
-# ── Stats helpers ───────────────────────────────────────────────────────────────
-TAKER_FEE_PCT = 0.05   # 0.05 % per side (Bitunix taker rate)
-ROUND_TRIP_FEE = TAKER_FEE_PCT * 2  # 0.10 % on notional per round trip
+# ── Realism / accuracy constants ────────────────────────────────────────────────
+# All values are conservative defaults that reflect typical Gate.io / Bitunix
+# perpetual-futures conditions. Each is applied symmetrically to LONG and SHORT.
+TAKER_FEE_PCT          = 0.05    # 0.05 % per side (taker market order)
+ROUND_TRIP_FEE         = TAKER_FEE_PCT * 2     # 0.10 % on notional per round trip
+SLIPPAGE_PCT_PER_SIDE  = 0.02    # 0.02 % per side — typical for liquid majors at low size
+ROUND_TRIP_SLIPPAGE    = SLIPPAGE_PCT_PER_SIDE * 2  # 0.04 % on notional per round trip
+FUNDING_RATE_8H_PCT    = 0.01    # 0.01 % per 8 h on notional — typical neutral perp
+MAINTENANCE_MARGIN_PCT = 0.5     # 0.5 % maintenance margin (Gate.io / Bitunix default)
+GAP_SLIPPAGE_PCT       = 0.05    # extra 0.05 % on gap-through-stop fills (worst-case)
+
+def _liq_price(direction: str, entry: float, leverage: int) -> float:
+    """
+    Approximate liquidation price assuming isolated margin.
+    Liq distance from entry = (1 - maint_margin/100) / leverage.
+    Example: 10× leverage, 0.5 % maint → liq ≈ 9.5 % away from entry.
+    """
+    if leverage <= 0:
+        return 0.0 if direction == "LONG" else float("inf")
+    distance_frac = (1.0 - MAINTENANCE_MARGIN_PCT / 100.0) / leverage
+    if direction == "LONG":
+        return entry * max(0.0, 1.0 - distance_frac)
+    return entry * (1.0 + distance_frac)
+
 
 def _compute_pnl(direction: str, entry: float, exit_price: float,
-                 leverage: int, include_fees: bool = True) -> float:
+                 leverage: int, hold_minutes: float = 0.0,
+                 include_fees: bool = True, gap_slippage: bool = False) -> float:
     """
-    Returns P&L as % of margin.
-    Fee drag = ROUND_TRIP_FEE * leverage  (fees are on notional, so they scale with leverage).
-    Example: 5× leverage, 0.10 % round-trip → 0.50 % margin drag per trade.
+    Returns P&L as % of margin, net of fees, slippage and funding.
+
+    All friction items scale with leverage because they're applied to NOTIONAL,
+    not margin. Example: 5× leverage, 0.10 % fees + 0.04 % slippage = 0.70 %
+    margin drag per round trip even before any price movement.
+
+    `hold_minutes`  : duration the position was held (for funding).
+    `gap_slippage` : True when the bar gapped through TP/SL — adds extra
+                     slippage because the actual fill is the gapped open price.
     """
     if direction == "LONG":
         raw = (exit_price - entry) / entry * 100 * leverage
     else:
         raw = (entry - exit_price) / entry * 100 * leverage
+
     if include_fees:
-        raw -= ROUND_TRIP_FEE * leverage
+        raw -= ROUND_TRIP_FEE      * leverage   # exchange fees
+        raw -= ROUND_TRIP_SLIPPAGE * leverage   # market-order slippage
+        if gap_slippage:
+            raw -= GAP_SLIPPAGE_PCT * leverage  # gap-through-stop penalty
+        if hold_minutes > 0:
+            # Funding paid every 8 h on notional value. Approximate as a
+            # continuous accrual: hold_minutes / 480 × rate × leverage.
+            funding_periods = hold_minutes / (8.0 * 60.0)
+            raw -= FUNDING_RATE_8H_PCT * funding_periods * leverage
     return raw
 
 
 def _compute_stats(trades: List[Dict], interval_min: int) -> Dict:
+    """
+    Computes summary stats using MULTIPLICATIVE compounding — equity is treated
+    like a real account where each trade's % return is applied to the balance
+    after the previous trade. This is more accurate than simple sum-of-%
+    because losses asymmetrically reduce the base used for the next trade
+    (a 50 % loss requires a 100 % gain to recover, not another 50 %).
+    """
     closed = [t for t in trades if t["outcome"] in ("WIN", "LOSS")]
     wins   = [t for t in closed if t["outcome"] == "WIN"]
     losses = [t for t in closed if t["outcome"] == "LOSS"]
@@ -1169,20 +1213,25 @@ def _compute_stats(trades: List[Dict], interval_min: int) -> Dict:
         return {
             "total_signals": len(trades), "closed_trades": 0,
             "wins": 0, "losses": 0, "win_rate": 0,
-            "total_pnl": 0, "avg_win": 0, "avg_loss": 0,
+            "total_pnl": 0, "total_pnl_simple": 0, "avg_win": 0, "avg_loss": 0,
             "max_drawdown": 0, "avg_hold_minutes": 0, "profit_factor": 0,
+            "liquidations": 0,
         }
 
-    total_pnl = sum(t["pnl_pct"] for t in closed)
     avg_win   = sum(t["pnl_pct"] for t in wins)   / len(wins)   if wins   else 0
     avg_loss  = sum(t["pnl_pct"] for t in losses) / len(losses) if losses else 0
 
+    # Multiplicative equity — accurately reflects compounded account growth
     equity, peak, max_dd = 100.0, 100.0, 0.0
     for t in closed:
-        equity += t["pnl_pct"]
+        equity *= (1.0 + t["pnl_pct"] / 100.0)
+        equity = max(0.0, equity)  # clamp at zero (account can't go negative)
         if equity > peak: peak = equity
-        dd = (peak - equity) / peak * 100
+        dd = (peak - equity) / peak * 100 if peak > 0 else 0
         if dd > max_dd: max_dd = dd
+
+    total_pnl_compounded = (equity / 100.0 - 1.0) * 100.0
+    total_pnl_simple     = sum(t["pnl_pct"] for t in closed)
 
     avg_hold = sum(t["hold_candles"] for t in closed) / len(closed) * interval_min
 
@@ -1190,28 +1239,35 @@ def _compute_stats(trades: List[Dict], interval_min: int) -> Dict:
     gross_loss   = abs(sum(t["pnl_pct"] for t in losses))
     pf = round(gross_profit / gross_loss, 2) if gross_loss > 0 else (99.0 if gross_profit > 0 else 0.0)
 
+    # Track forced liquidations as a risk-quality signal
+    liqs = sum(1 for t in closed if t.get("exit_reason") == "LIQUIDATION")
+
     return {
         "total_signals":     len(trades),
         "closed_trades":     len(closed),
         "wins":              len(wins),
         "losses":            len(losses),
         "win_rate":          round(len(wins) / len(closed) * 100, 1),
-        "total_pnl":         round(total_pnl, 2),
+        "total_pnl":         round(total_pnl_compounded, 2),
+        "total_pnl_simple":  round(total_pnl_simple, 2),
         "avg_win":           round(avg_win, 2),
         "avg_loss":          round(avg_loss, 2),
         "max_drawdown":      round(max_dd, 2),
         "avg_hold_minutes":  round(avg_hold),
         "profit_factor":     pf,
+        "liquidations":      liqs,
     }
 
 
 def _build_equity_curve(trades: List[Dict]) -> List[Dict]:
+    """Multiplicative compounding — matches `_compute_stats`."""
     equity = 100.0
     points = [{"x": 0, "y": round(equity, 2)}]
     for i, t in enumerate(trades):
         if t["outcome"] == "OPEN":
             continue
-        equity += t["pnl_pct"]
+        equity *= (1.0 + t["pnl_pct"] / 100.0)
+        equity = max(0.0, equity)
         points.append({"x": i + 1, "y": round(equity, 2)})
     return points
 
@@ -1276,6 +1332,7 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
     for i in range(warmup, len(candles)):
         candle     = candles[i]
         curr_ts    = int(candle[0])
+        curr_open  = float(candle[1])
         curr_high  = float(candle[2])
         curr_low   = float(candle[3])
         curr_close = float(candle[4])
@@ -1287,20 +1344,57 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
         kslice        = candles[slice_start: i + 1]
         curr_cond_met = eval_condition_bt(primary_cond, kslice, interval_min)
 
-        # ── Check open trade: timeout / TP / SL ─────────────────────────────────
+        # ── Check open trade: liquidation / timeout / TP / SL ────────────────────
         if open_trade:
-            held     = i - open_trade["entry_idx"]
-            tp_price = open_trade["tp_price"]
-            sl_price = open_trade["sl_price"]
+            held         = i - open_trade["entry_idx"]
+            held_minutes = held * interval_min
+            tp_price     = open_trade["tp_price"]
+            sl_price     = open_trade["sl_price"]
+            liq_price    = open_trade["liq_price"]
+            entry_px     = open_trade["entry_price"]
 
-            # Max hold time: force-close at current close after N candles
+            # ── 1) Liquidation check (HIGHEST priority — happens BEFORE SL/TP) ──
+            # If price reached the liquidation level, the exchange force-closes
+            # the position at maintenance margin. Loss is approximately the full
+            # margin (capped at -100 %) so we model it as a definitive exit.
+            if direction == "LONG":
+                liq_hit = curr_low <= liq_price
+            else:
+                liq_hit = curr_high >= liq_price
+
+            # Only count as liquidation if it would happen BEFORE the SL would
+            # trigger — for sane configs SL is much closer than liq, so this
+            # mostly catches absurd combinations like SL 30 % at 10× leverage.
+            if liq_hit and (
+                (direction == "LONG"  and liq_price >= sl_price) or
+                (direction == "SHORT" and liq_price <= sl_price)
+            ):
+                # Liquidation realises the maintenance-margin loss; PnL clamped at -100 %
+                pnl = max(-100.0, _compute_pnl(direction, entry_px, liq_price,
+                                               leverage, held_minutes,
+                                               gap_slippage=True))
+                trades.append({
+                    "entry_ts":     open_trade["entry_ts"],
+                    "exit_ts":      curr_ts,
+                    "entry_price":  entry_px,
+                    "exit_price":   liq_price,
+                    "outcome":      "LOSS",
+                    "pnl_pct":      round(pnl, 2),
+                    "hold_candles": held,
+                    "exit_reason":  "LIQUIDATION",
+                })
+                open_trade    = None
+                prev_cond_met = curr_cond_met
+                continue
+
+            # ── 2) Max-hold timeout: force close at current close ───────────────
             if held >= max_hold_c:
-                pnl     = _compute_pnl(direction, open_trade["entry_price"], curr_close, leverage)
+                pnl     = _compute_pnl(direction, entry_px, curr_close, leverage, held_minutes)
                 outcome = "WIN" if pnl >= 0 else "LOSS"
                 trades.append({
                     "entry_ts":     open_trade["entry_ts"],
                     "exit_ts":      curr_ts,
-                    "entry_price":  open_trade["entry_price"],
+                    "entry_price":  entry_px,
                     "exit_price":   curr_close,
                     "outcome":      outcome,
                     "pnl_pct":      round(pnl, 2),
@@ -1308,9 +1402,42 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
                     "exit_reason":  "TIMEOUT",
                 })
                 open_trade    = None
-                prev_cond_met = curr_cond_met  # keep state current
+                prev_cond_met = curr_cond_met
                 continue
 
+            # ── 3) Gap-on-open detection: if the bar opened past TP/SL,
+            #       the actual fill is the gapped open price (not the trigger). ──
+            gap_exit = None
+            if direction == "LONG":
+                if curr_open >= tp_price:
+                    gap_exit = ("WIN",  curr_open, "TP_GAP")    # gap up past TP
+                elif curr_open <= sl_price:
+                    gap_exit = ("LOSS", curr_open, "SL_GAP")    # gap down past SL
+            else:  # SHORT
+                if curr_open <= tp_price:
+                    gap_exit = ("WIN",  curr_open, "TP_GAP")    # gap down past TP
+                elif curr_open >= sl_price:
+                    gap_exit = ("LOSS", curr_open, "SL_GAP")    # gap up past SL
+
+            if gap_exit:
+                outcome, exit_price, exit_reason = gap_exit
+                pnl = _compute_pnl(direction, entry_px, exit_price, leverage,
+                                   held_minutes, gap_slippage=True)
+                trades.append({
+                    "entry_ts":     open_trade["entry_ts"],
+                    "exit_ts":      curr_ts,
+                    "entry_price":  entry_px,
+                    "exit_price":   exit_price,
+                    "outcome":      outcome,
+                    "pnl_pct":      round(pnl, 2),
+                    "hold_candles": held,
+                    "exit_reason":  exit_reason,
+                })
+                open_trade    = None
+                prev_cond_met = curr_cond_met
+                continue
+
+            # ── 4) Standard TP / SL hit detection on wick ───────────────────────
             if direction == "LONG":
                 tp_hit = curr_high >= tp_price
                 sl_hit = curr_low  <= sl_price
@@ -1318,22 +1445,47 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
                 tp_hit = curr_low  <= tp_price
                 sl_hit = curr_high >= sl_price
 
-            # Same-candle TP+SL: always assume SL hit first (worst-case / conservative)
+            # Smart same-bar TP+SL resolution using the standard intra-bar
+            # path heuristic (Bulkowski / TradingView convention):
+            #   • Green bar (close > open) → path is OPEN → LOW → HIGH → CLOSE
+            #       (price dipped, bottomed, then rallied to close higher)
+            #   • Red   bar (close < open) → path is OPEN → HIGH → LOW → CLOSE
+            #       (price popped, peaked, then sold off to close lower)
+            #   • Doji (close == open) → fall back to conservative "SL first"
+            #
+            # Apply the path to TP/SL geometry:
+            #   LONG  (TP above, SL below)
+            #     green → low first → SL hit first  → LOSS
+            #     red   → high first → TP hit first → WIN
+            #   SHORT (TP below, SL above)
+            #     green → low first → TP hit first  → WIN
+            #     red   → high first → SL hit first → LOSS
+            outcome = None
+            exit_price = None
             if tp_hit and sl_hit:
-                outcome, exit_price = "LOSS", sl_price
+                green = curr_close > curr_open
+                red   = curr_close < curr_open
+                if direction == "LONG":
+                    if red:
+                        outcome, exit_price = "WIN",  tp_price   # high → low path
+                    else:  # green or doji
+                        outcome, exit_price = "LOSS", sl_price   # low → high path (or conservative)
+                else:  # SHORT
+                    if green:
+                        outcome, exit_price = "WIN",  tp_price   # low → high path → TP (below) hit first
+                    else:  # red or doji
+                        outcome, exit_price = "LOSS", sl_price   # high → low path → SL (above) hit first
             elif tp_hit:
                 outcome, exit_price = "WIN",  tp_price
             elif sl_hit:
                 outcome, exit_price = "LOSS", sl_price
-            else:
-                outcome = None
 
             if outcome:
-                pnl = _compute_pnl(direction, open_trade["entry_price"], exit_price, leverage)
+                pnl = _compute_pnl(direction, entry_px, exit_price, leverage, held_minutes)
                 trades.append({
                     "entry_ts":     open_trade["entry_ts"],
                     "exit_ts":      curr_ts,
-                    "entry_price":  open_trade["entry_price"],
+                    "entry_price":  entry_px,
                     "exit_price":   exit_price,
                     "outcome":      outcome,
                     "pnl_pct":      round(pnl, 2),
@@ -1379,12 +1531,17 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
             tp_price = entry * (1 - tp_pct)
             sl_price = entry * (1 + sl_pct)
 
+        # Pre-compute liquidation price so the trade-management loop can check
+        # it cheaply on every bar (matters for high-leverage configs).
+        liq_price = _liq_price(direction, entry, leverage)
+
         open_trade = {
             "entry_ts":    entry_ts,
             "entry_idx":   entry_idx,
             "entry_price": entry,
             "tp_price":    tp_price,
             "sl_price":    sl_price,
+            "liq_price":   liq_price,
         }
 
     # Close any still-open trade at end of data
@@ -1392,7 +1549,8 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
         last_c     = candles[-1]
         last_close = float(last_c[4])
         held       = len(candles) - 1 - open_trade["entry_idx"]
-        pnl        = _compute_pnl(direction, open_trade["entry_price"], last_close, leverage)
+        pnl        = _compute_pnl(direction, open_trade["entry_price"], last_close,
+                                  leverage, held * interval_min)
         trades.append({
             "entry_ts":     open_trade["entry_ts"],
             "exit_ts":      int(last_c[0]),
@@ -1429,4 +1587,17 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
         "fees_included": True,
         "fee_pct":       ROUND_TRIP_FEE,
         "max_hold_h":    max_hold_h,
+        # Accuracy model — frontend can show this so users know what's modelled
+        "accuracy_model": {
+            "fees_pct_round_trip":     ROUND_TRIP_FEE,
+            "slippage_pct_round_trip": ROUND_TRIP_SLIPPAGE,
+            "gap_slippage_pct":        GAP_SLIPPAGE_PCT,
+            "funding_rate_8h_pct":     FUNDING_RATE_8H_PCT,
+            "maintenance_margin_pct":  MAINTENANCE_MARGIN_PCT,
+            "compounding":             "multiplicative",
+            "entry_fill":              "next_bar_open + slippage",
+            "tp_sl_fill":              "wick_trigger + slippage (gap_open if gapped)",
+            "same_bar_tp_sl":          "bar_color heuristic (green=SL_first for LONG)",
+            "liquidation_modeled":     True,
+        },
     }
