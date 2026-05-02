@@ -1547,14 +1547,35 @@ async def app_page(request: Request):
 # Day Trading page — public BTC chart with order block overlays
 # ─────────────────────────────────────────────────────────────────────────────
 
-TRADE_SYMBOL_WHITELIST = {"BTC": "BTCUSDT"}  # add ETH/SOL/etc here later
+TRADE_SYMBOL_WHITELIST = {
+    "BTC":   "BTCUSDT",
+    "ETH":   "ETHUSDT",
+    "SOL":   "SOLUSDT",
+    "BNB":   "BNBUSDT",
+    "XRP":   "XRPUSDT",
+    "DOGE":  "DOGEUSDT",
+    "AVAX":  "AVAXUSDT",
+    "LINK":  "LINKUSDT",
+    "ADA":   "ADAUSDT",
+    "DOT":   "DOTUSDT",
+    "MATIC": "MATICUSDT",
+    "TON":   "TONUSDT",
+}
 _TRADE_TF_MAP = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "60m"}  # MEXC uses '60m' not '1h'
 
 
 @app.get("/trade", response_class=HTMLResponse)
-@app.get("/trade/btc", response_class=HTMLResponse)
-async def trade_page(request: Request):
-    """Public day-trading page — live BTC chart + order block overlays."""
+async def trade_page_default(request: Request):
+    """Public day-trading page — defaults to BTC."""
+    return FileResponse("app/templates/trade.html", media_type="text/html")
+
+
+@app.get("/trade/{slug}", response_class=HTMLResponse)
+async def trade_page_symbol(slug: str, request: Request):
+    """Public day-trading page for a specific symbol (e.g. /trade/eth)."""
+    sym = (slug or "").upper().strip()
+    if sym not in TRADE_SYMBOL_WHITELIST:
+        return RedirectResponse(url="/trade", status_code=302)
     return FileResponse("app/templates/trade.html", media_type="text/html")
 
 

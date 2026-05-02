@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BTC · Live Order Blocks · TradeHub</title>
-<meta name="description" content="Live BTC chart with cross-exchange order block zones. Real liquidity walls — buy support, sell resistance, refreshed every 30 seconds.">
+<title id="page-title">BTC · Live Order Blocks · TradeHub</title>
+<meta name="description" content="Live crypto charts with cross-exchange order block zones. Real liquidity walls — buy support, sell resistance, refreshed every 30 seconds. BTC, ETH, SOL and more.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -59,8 +59,20 @@ button{font-family:inherit}
 .sym-ico{
   width:22px;height:22px;border-radius:50%;background:#f7931a;
   display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;
+  transition:background .15s;
 }
 .sym-name{font-weight:700;font-size:14px}
+.sym-picker{
+  background:transparent;border:1px solid transparent;color:var(--text);font-weight:700;
+  font-size:14px;font-family:var(--font);padding:3px 22px 3px 4px;border-radius:4px;
+  cursor:pointer;appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 4 L5 7 L8 4' stroke='%239ca3af' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat:no-repeat;background-position:right 4px center;background-size:10px 10px;
+  transition:background-color .12s,border-color .12s;
+}
+.sym-picker:hover{background-color:var(--panel2);border-color:var(--border)}
+.sym-picker:focus{outline:none;border-color:var(--accent)}
+.sym-picker option{background:var(--panel);color:var(--text);font-weight:600}
 .sym-sub{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-left:4px}
 .divider{width:1px;height:26px;background:var(--border)}
 .px-block{display:flex;flex-direction:column;gap:1px;min-width:0}
@@ -558,8 +570,8 @@ button{font-family:inherit}
 
 <div class="sbar">
   <div class="sym">
-    <span class="sym-ico">₿</span>
-    <span class="sym-name">BTC</span>
+    <span class="sym-ico" id="sym-ico">₿</span>
+    <select class="sym-picker" id="sym-picker" title="Switch coin"></select>
     <span class="sym-sub">USDT · Spot</span>
   </div>
   <div class="px-block">
@@ -624,7 +636,7 @@ button{font-family:inherit}
   <div class="chart-wrap">
     <div class="chart-loading" id="chart-loading">Loading chart…</div>
     <div class="ohlc" id="ohlc">
-      <span class="sym-tag">BTC/USDT</span>
+      <span class="sym-tag" id="ohlc-sym-tag">BTC/USDT</span>
       <span class="tf-tag" id="ohlc-tf">5m</span>
       <span><span class="lbl">O</span><span class="v" id="ohlc-o">—</span></span>
       <span><span class="lbl">H</span><span class="v" id="ohlc-h">—</span></span>
@@ -826,9 +838,7 @@ button{font-family:inherit}
           <div class="alerts-form-grid">
             <label class="half">Symbol</label>
             <label class="half">Timeframe</label>
-            <select id="alf-symbol">
-              <option value="BTC">BTC</option>
-            </select>
+            <select id="alf-symbol"></select>
             <select id="alf-timeframe">
               <option value="1m">1m</option>
               <option value="5m" selected>5m</option>
@@ -1335,8 +1345,66 @@ button{font-family:inherit}
 
 <script>
 (function(){
-  const SYMBOL = 'BTC';
+  // Per-coin metadata: icon glyph, brand color, price decimals, minMove for the
+  // chart's price scale. Keep in sync with TRADE_SYMBOL_WHITELIST on the server.
+  const SYMBOL_META = {
+    BTC:  { ico:'₿', color:'#f7931a', dec:2, minMove:0.01    },
+    ETH:  { ico:'Ξ', color:'#627eea', dec:2, minMove:0.01    },
+    SOL:  { ico:'◎', color:'#14f195', dec:3, minMove:0.001   },
+    BNB:  { ico:'B', color:'#f3ba2f', dec:2, minMove:0.01    },
+    XRP:  { ico:'X', color:'#23292f', dec:4, minMove:0.0001  },
+    DOGE: { ico:'Ð', color:'#c2a633', dec:5, minMove:0.00001 },
+    AVAX: { ico:'A', color:'#e84142', dec:3, minMove:0.001   },
+    LINK: { ico:'L', color:'#2a5ada', dec:3, minMove:0.001   },
+    ADA:  { ico:'A', color:'#0033ad', dec:4, minMove:0.0001  },
+    DOT:  { ico:'D', color:'#e6007a', dec:3, minMove:0.001   },
+    MATIC:{ ico:'M', color:'#8247e5', dec:4, minMove:0.0001  },
+    TON:  { ico:'T', color:'#0098ea', dec:3, minMove:0.001   },
+  };
+  const SYMBOL_LIST = Object.keys(SYMBOL_META);
+
+  function detectSymbol(){
+    const m = location.pathname.match(/^\/trade\/([a-zA-Z0-9]+)/);
+    if(m){
+      const s = m[1].toUpperCase();
+      if(SYMBOL_META[s]) return s;
+    }
+    return 'BTC';
+  }
+  const SYMBOL = detectSymbol();
+  const META = SYMBOL_META[SYMBOL];
+
   const $ = id => document.getElementById(id);
+
+  // Apply per-symbol identity to the page chrome (icon, picker, title, OHLC tag).
+  (function applySymbolChrome(){
+    const ico = $('sym-ico');
+    if(ico){ ico.textContent = META.ico; ico.style.background = META.color; }
+    const tag = $('ohlc-sym-tag');
+    if(tag) tag.textContent = SYMBOL + '/USDT';
+    const title = $('page-title');
+    if(title) title.textContent = SYMBOL + ' · Live Order Blocks · TradeHub';
+    const picker = $('sym-picker');
+    if(picker){
+      picker.innerHTML = SYMBOL_LIST.map(s =>
+        `<option value="${s}"${s===SYMBOL?' selected':''}>${s}</option>`
+      ).join('');
+      picker.addEventListener('change', () => {
+        const s = picker.value;
+        if(!s || s === SYMBOL) return;
+        // Full reload on switch — keeps walls/indicators/alerts/drawings/AI in sync
+        // without having to reset every subsystem in JS.
+        location.href = '/trade/' + s.toLowerCase();
+      });
+    }
+    // Populate alerts-modal symbol picker the same way.
+    const alfSym = $('alf-symbol');
+    if(alfSym){
+      alfSym.innerHTML = SYMBOL_LIST.map(s =>
+        `<option value="${s}"${s===SYMBOL?' selected':''}>${s}</option>`
+      ).join('');
+    }
+  })();
 
   // ───── Chart ─────
   let chart, candleSeries, volumeSeries, currentTF = '5m';
@@ -1360,7 +1428,7 @@ button{font-family:inherit}
       upColor:'#26a69a', downColor:'#ef5350',
       borderUpColor:'#26a69a', borderDownColor:'#ef5350',
       wickUpColor:'#26a69a', wickDownColor:'#ef5350',
-      priceFormat:{type:'price', precision:2, minMove:0.01},
+      priceFormat:{type:'price', precision:META.dec, minMove:META.minMove},
     });
     // Volume histogram pinned to the bottom 22% of the pane (overlay scale)
     volumeSeries = chart.addHistogramSeries({
@@ -1828,7 +1896,8 @@ button{font-family:inherit}
 
   function fmtPx(p){
     if(p == null) return '—';
-    return Number(p).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+    const d = META.dec;
+    return Number(p).toLocaleString(undefined, {minimumFractionDigits:d, maximumFractionDigits:d});
   }
   function fmtUsd(n){
     n = Number(n)||0;
@@ -5038,11 +5107,13 @@ button{font-family:inherit}
         row.onmouseenter = () => row.style.background = 'rgba(255,255,255,.04)';
         row.onmouseleave = () => row.style.background = '';
         row.onclick = () => {
-          // Most installs are BTC-only — at least show a hint when clicking other syms
-          if(t.symbol === 'BTC' || (typeof SYMBOL !== 'undefined' && t.symbol === SYMBOL)){
+          // Same coin? just close the panel. Otherwise navigate to that coin's page.
+          if(t.symbol === SYMBOL){
             $('watchlist-panel').style.display = 'none';
+          } else if(SYMBOL_META[t.symbol]){
+            location.href = '/trade/' + String(t.symbol).toLowerCase();
           } else {
-            row.title = 'BTC is the only chartable symbol on this page right now.';
+            row.title = t.symbol + ' is not yet supported as a full chart.';
           }
         };
         rows.appendChild(row);
