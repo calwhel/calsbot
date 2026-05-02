@@ -129,7 +129,7 @@ export default function HomeScreen() {
         />
       ) : data ? (
         data.total_strategies === 0 ? (
-          <QuickstartCard onStart={() => router.push('/wizard')} />
+          <QuickstartCard onStart={() => router.push('/build')} />
         ) : (
           <>
             {/* Premium hero with embedded equity sparkline */}
@@ -160,7 +160,7 @@ export default function HomeScreen() {
                   icon="add"
                   label="New"
                   tone="accent"
-                  onPress={() => router.push('/wizard' as any)}
+                  onPress={() => router.push('/build' as any)}
                 />
                 <ActionTile
                   icon="pulse"

@@ -131,6 +131,67 @@ function AuthGate() {
           presentation: 'modal',
         }}
       />
+      <Stack.Screen
+        name="build/index"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: colors.bg },
+          headerTintColor: colors.text,
+          headerTitleStyle: { color: colors.text, fontWeight: '700' },
+          headerShadowVisible: false,
+          title: 'New strategy',
+          animation: 'slide_from_bottom',
+          presentation: 'modal',
+        }}
+      />
+      <Stack.Screen
+        name="build/chat"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: colors.bg },
+          headerTintColor: colors.text,
+          headerTitleStyle: { color: colors.text, fontWeight: '700' },
+          headerShadowVisible: false,
+          title: 'AI Chat Builder',
+          animation: 'slide_from_right',
+        }}
+      />
+      <Stack.Screen
+        name="build/indicator"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: colors.bg },
+          headerTintColor: colors.text,
+          headerTitleStyle: { color: colors.text, fontWeight: '700' },
+          headerShadowVisible: false,
+          title: 'AI Indicator',
+          animation: 'slide_from_right',
+        }}
+      />
+      <Stack.Screen
+        name="build/pine"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: colors.bg },
+          headerTintColor: colors.text,
+          headerTitleStyle: { color: colors.text, fontWeight: '700' },
+          headerShadowVisible: false,
+          title: 'Pine Script',
+          animation: 'slide_from_right',
+        }}
+      />
+      <Stack.Screen
+        name="build/scanner"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: colors.bg },
+          headerTintColor: colors.text,
+          headerTitleStyle: { color: colors.text, fontWeight: '700' },
+          headerShadowVisible: false,
+          title: 'Best Scanner',
+          animation: 'slide_from_right',
+        }}
+      />
     </Stack>
   );
 }

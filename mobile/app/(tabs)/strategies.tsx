@@ -290,7 +290,7 @@ export default function StrategiesScreen() {
           </Text>
         </View>
         <Pressable
-          onPress={() => router.push('/wizard' as any)}
+          onPress={() => router.push('/build' as any)}
           style={({ pressed }) => [styles.newBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
         >
           <Ionicons name="add" size={18} color={colors.accentText} />
@@ -369,7 +369,7 @@ export default function StrategiesScreen() {
               />
               <View style={{ marginTop: spacing.lg, paddingHorizontal: spacing.lg }}>
                 <Pressable
-                  onPress={() => router.push('/wizard' as any)}
+                  onPress={() => router.push('/build' as any)}
                   style={({ pressed }) => [styles.emptyCta, glow.accent, pressed && { opacity: 0.85, transform: [{ scale: 0.99 }] }]}
                 >
                   <Ionicons name="add-circle" size={20} color={colors.accentText} />
