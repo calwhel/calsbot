@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
   RefreshControl, useWindowDimensions, Alert,
 } from 'react-native';
-import { useLocalSearchParams, Stack } from 'expo-router';
+import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -65,6 +65,7 @@ export default function StrategyDetailScreen() {
   const sid = Number(id);
   const insets = useSafeAreaInsets();
   const { uid } = useAuth();
+  const router = useRouter();
   const { width } = useWindowDimensions();
   const chartW = width - spacing.lg * 2 - spacing.sm * 2;
   const qc = useQueryClient();
@@ -288,6 +289,19 @@ export default function StrategyDetailScreen() {
         {/* How this strategy works — parsed config */}
         <View style={{ marginTop: spacing.lg }}>
           <StrategyConfigCard config={strategy.config} />
+        </View>
+
+        {/* Run backtest CTA — secondary because Activate is the primary action */}
+        <View style={{ marginTop: spacing.lg }}>
+          <PrimaryButton
+            label="Run backtest on this strategy"
+            variant="secondary"
+            onPress={() => router.push(`/backtest/${sid}`)}
+            icon={<Ionicons name="time" size={16} color={colors.text} />}
+          />
+          <Text style={styles.activateHint}>
+            See how this strategy would have performed over the last 30 or 90 days.
+          </Text>
         </View>
 
         {/* Stats */}

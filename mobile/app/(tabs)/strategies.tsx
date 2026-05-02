@@ -59,7 +59,12 @@ function StrategyRow({ s, onPress }: { s: Strategy; onPress: () => void }) {
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && { opacity: 0.85, transform: [{ scale: 0.998 }] }]}
+      style={({ pressed }) => [
+        styles.row,
+        isActive && styles.rowActive,
+        isActive && glow.positive,
+        pressed && { opacity: 0.85, transform: [{ scale: 0.998 }] },
+      ]}
     >
       {/* Left active-state stripe */}
       <View style={[styles.stripe, { backgroundColor: isActive ? colors.positive : colors.border }]} />
@@ -227,6 +232,10 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     padding: spacing.lg,
     overflow: 'hidden',
+  },
+  rowActive: {
+    borderColor: 'rgba(52, 211, 153, 0.32)',
+    backgroundColor: '#141d2c',
   },
   stripe: {
     position: 'absolute',

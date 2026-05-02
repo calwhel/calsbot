@@ -112,6 +112,13 @@ function AuthGate() {
         }}
       />
       <Stack.Screen
+        name="backtest/[id]"
+        options={{
+          headerShown: false,
+          animation: 'slide_from_right',
+        }}
+      />
+      <Stack.Screen
         name="wizard/index"
         options={{
           headerShown: true,

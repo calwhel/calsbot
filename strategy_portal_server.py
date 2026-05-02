@@ -177,6 +177,51 @@ def _get_user_by_uid(uid: str, db: Session):
     return db.query(User).filter(User.uid == uid).first()
 
 
+def _get_user_by_uid_safe(uid: str, db: Session):
+    """Resilient user lookup that survives transient `QueryCanceled` /
+    `OperationalError` failures from Postgres' statement_timeout.
+
+    The user-fetch query is on the heavy-traffic path of every authenticated
+    endpoint and occasionally times out under load. This helper retries once
+    with a fresh session before giving up, mirroring the pattern used in
+    ``app/services/strategy_executor.py``.
+
+    Returns the user row, or ``None`` if the UID is unknown after retry.
+    Raises ``HTTPException(503)`` only when the database is genuinely
+    unreachable so the client gets a clean error instead of a hung worker.
+    """
+    from app.models import User
+    from app.database import SessionLocal as _SL
+    from sqlalchemy.exc import OperationalError as _SAOperationalError
+    try:
+        return db.query(User).filter(User.uid == uid).first()
+    except _SAOperationalError as exc:
+        # Most common cause: psycopg2.errors.QueryCanceled (statement_timeout).
+        # Roll back the dirty transaction on the caller's session, then retry
+        # on a SEPARATE fresh session so we never reuse a poisoned connection.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning(f"[uid lookup] transient DB error, retrying on fresh session: {exc}")
+        import time as _t
+        _t.sleep(0.2)
+        fresh = _SL()
+        try:
+            return fresh.query(User).filter(User.uid == uid).first()
+        except _SAOperationalError as exc2:
+            logger.error(f"[uid lookup] DB error persisted after retry: {exc2}")
+            raise HTTPException(
+                status_code=503,
+                detail="Database is busy — please try again in a moment.",
+            )
+        finally:
+            try:
+                fresh.close()
+            except Exception:
+                pass
+
+
 # ── Portal subscription helpers ────────────────────────────
 FREE_CHAT_LIMIT = 10   # AI messages per month on free tier
 
@@ -6235,6 +6280,113 @@ async def api_strategy_trades(strategy_id: int, uid: str = Query(...)):
         db.close()
 
 
+@app.get("/api/portfolio/trades")
+async def api_portfolio_trades(
+    uid: str = Query(...),
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    filter: str = Query("all"),  # all | live | paper | wins | losses | open
+):
+    """Aggregate trade executions across ALL of the caller's strategies.
+
+    Used by the mobile "Trades" tab. Newest first. Each row carries the
+    parent strategy's id + name so the client can deep-link to the strategy
+    detail screen without an extra round-trip.
+    """
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid_safe(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+
+        from app.strategy_models import UserStrategy, StrategyExecution
+
+        # Build a base query: every execution whose strategy belongs to user.
+        q = (
+            db.query(StrategyExecution, UserStrategy.name, UserStrategy.id)
+            .join(UserStrategy, StrategyExecution.strategy_id == UserStrategy.id)
+            .filter(UserStrategy.user_id == user.id)
+        )
+
+        f = (filter or "all").lower()
+        if f == "live":
+            q = q.filter(StrategyExecution.is_paper == False)  # noqa: E712
+        elif f == "paper":
+            q = q.filter(StrategyExecution.is_paper == True)   # noqa: E712
+        elif f == "wins":
+            q = q.filter(StrategyExecution.outcome == "WIN")
+        elif f == "losses":
+            q = q.filter(StrategyExecution.outcome == "LOSS")
+        elif f == "open":
+            q = q.filter(StrategyExecution.outcome == "OPEN")
+
+        # newest first; OPEN trades sorted by fired_at, closed by closed_at
+        q = q.order_by(
+            func.coalesce(StrategyExecution.closed_at, StrategyExecution.fired_at).desc()
+        )
+
+        total = q.count()
+        rows = q.offset(offset).limit(limit).all()
+
+        # Live prices for any OPEN positions in this page so unrealised P&L
+        # is meaningful in the global feed too.
+        open_symbols = list({e.symbol for e, _, _ in rows if e.outcome == "OPEN"})
+        live_prices: dict = {}
+        if open_symbols:
+            try:
+                async with httpx.AsyncClient() as hc:
+                    from app.services.strategy_executor import _fetch_live_price_batch
+                    live_prices = await _fetch_live_price_batch(open_symbols, hc)
+            except Exception as _lpe:
+                logger.debug(f"live price fetch skipped: {_lpe}")
+
+        out = []
+        for e, sname, sid in rows:
+            dur = None
+            if e.fired_at and e.closed_at:
+                dur = int((e.closed_at - e.fired_at).total_seconds() / 60)
+
+            live_px = live_prices.get(e.symbol) if e.outcome == "OPEN" else None
+            unrealised = None
+            if live_px and e.entry_price and e.outcome == "OPEN":
+                lev = e.leverage or 10
+                if e.direction == "LONG":
+                    unrealised = round((live_px - e.entry_price) / e.entry_price * 100 * lev, 2)
+                else:
+                    unrealised = round((e.entry_price - live_px) / e.entry_price * 100 * lev, 2)
+
+            out.append({
+                "id":             e.id,
+                "strategy_id":    sid,
+                "strategy_name":  sname,
+                "symbol":         e.symbol,
+                "direction":      e.direction,
+                "entry_price":    e.entry_price,
+                "exit_price":     e.exit_price,
+                "leverage":       e.leverage,
+                "outcome":        e.outcome,
+                "pnl_pct":        e.pnl_pct,
+                "is_paper":       e.is_paper,
+                "fired_at":       e.fired_at.isoformat()  if e.fired_at  else None,
+                "closed_at":      e.closed_at.isoformat() if e.closed_at else None,
+                "duration_mins":  dur,
+                "live_price":     live_px,
+                "unrealised_pnl": unrealised,
+            })
+
+        return JSONResponse({
+            "trades":  out,
+            "total":   total,
+            "offset":  offset,
+            "limit":   limit,
+            "filter":  f,
+            "has_more": (offset + len(out)) < total,
+        })
+    finally:
+        db.close()
+
+
 @app.get("/api/strategies/{strategy_id}/export")
 async def api_export_trades(strategy_id: int, uid: str = Query(...)):
     """Download all strategy trades as CSV."""
@@ -8113,13 +8265,16 @@ async def backtest_scan(request: Request):
     from app.database import SessionLocal
     db = SessionLocal()
     try:
-        user = _get_user_by_uid(uid, db)
+        user = _get_user_by_uid_safe(uid, db)
         if not user:
             raise HTTPException(status_code=403, detail="Invalid UID")
         _sub = _get_portal_sub(user.id, db)
         if not _is_portal_pro(_sub) and not getattr(user, "is_admin", False):
-            return {"error": "PRO_REQUIRED",
-                    "message": "A Pro subscription is required to use the Strategy Scanner."}
+            return JSONResponse(
+                status_code=402,
+                content={"error": "PRO_REQUIRED",
+                         "message": "A Pro subscription is required to use the Strategy Scanner."},
+            )
     finally:
         db.close()
 
@@ -8400,7 +8555,24 @@ async def backtest_scan(request: Request):
             for tpl in templates:
                 stage1_jobs.append(_run_one(tpl, tk, sym, tf, DEFAULT_PROFILE))
 
-    outcomes = await asyncio.gather(*stage1_jobs)
+    try:
+        outcomes = await asyncio.wait_for(
+            asyncio.gather(*stage1_jobs),
+            timeout=120,
+        )
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            status_code=408,
+            content={"error": "TIMEOUT",
+                     "message": "Scan timed out — try fewer coins, fewer timeframes, or a 30-day window."},
+        )
+    except Exception as e:
+        logger.exception("backtest scan stage1 failed")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "BACKTEST_FAILED",
+                     "message": str(e) or "Scan failed unexpectedly. Please try again."},
+        )
 
     # ── Score and rank ─────────────────────────────────────────────────────────
     # Stricter trade-count floor prevents sparse-sample strategies (e.g. 1 lucky
@@ -8480,7 +8652,19 @@ async def backtest_scan(request: Request):
                 _run_one(row["tpl"], row["coin"], symbol_for_row, row["timeframe"], profile),
             ))
 
-    opt_results = await asyncio.gather(*[job for _, job in optimisation_jobs])
+    try:
+        opt_results = await asyncio.wait_for(
+            asyncio.gather(*[job for _, job in optimisation_jobs]),
+            timeout=90,
+        )
+    except asyncio.TimeoutError:
+        # Stage 2 is optimisation — if it times out we still have valid stage 1
+        # results, so degrade gracefully instead of failing the whole scan.
+        logger.warning("backtest scan stage2 (TP/SL optimisation) timed out — returning stage1 results")
+        opt_results = []
+    except Exception as e:
+        logger.exception("backtest scan stage2 failed")
+        opt_results = []
 
     # Group all variants per (label, coin, TF) combo, then pick the best
     by_combo: dict = {}
@@ -8592,13 +8776,16 @@ async def run_backtest_endpoint(request: Request):
     from app.database import SessionLocal
     db = SessionLocal()
     try:
-        user = _get_user_by_uid(uid, db)
+        user = _get_user_by_uid_safe(uid, db)
         if not user:
             raise HTTPException(status_code=403, detail="Invalid UID")
         _sub = _get_portal_sub(user.id, db)
         if not _is_portal_pro(_sub) and not getattr(user, "is_admin", False):
-            return {"error": "PRO_REQUIRED",
-                    "message": "A Pro subscription ($50/month) is required to run backtests."}
+            return JSONResponse(
+                status_code=402,
+                content={"error": "PRO_REQUIRED",
+                         "message": "A Pro subscription ($50/month) is required to run backtests."},
+            )
     finally:
         db.close()
 
@@ -8609,13 +8796,25 @@ async def run_backtest_endpoint(request: Request):
 
     try:
         from app.services.backtest_engine import run_backtest
-        result = await asyncio.wait_for(run_backtest(config, days), timeout=60)
+        # Engine has its own ~60s budget; we wrap in 90s as a hard ceiling so
+        # the request can never outlive the worker timeout.
+        result = await asyncio.wait_for(run_backtest(config, days), timeout=90)
         return result
     except asyncio.TimeoutError:
-        return {"error": "Backtest timed out. Try a shorter window (30 days) or a faster timeframe."}
+        # Use 408 so mobile clients can detect the timeout at the HTTP layer
+        # instead of parsing a 200-with-error-key blob.
+        return JSONResponse(
+            status_code=408,
+            content={"error": "TIMEOUT",
+                     "message": "Backtest timed out. Try a shorter window (30 days) or a faster timeframe."},
+        )
     except Exception as exc:
         logger.error(f"[Backtest] error uid={uid}: {exc}", exc_info=True)
-        return {"error": f"Backtest failed: {exc}"}
+        return JSONResponse(
+            status_code=500,
+            content={"error": "BACKTEST_FAILED",
+                     "message": f"Backtest failed: {exc}"},
+        )
 
 
 @app.post("/api/backtest/suggest")

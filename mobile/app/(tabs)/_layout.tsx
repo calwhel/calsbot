@@ -4,12 +4,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { View, Text, Pressable, StyleSheet, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { colors, font, glow, radius } from '@/constants/colors';
 
 const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   index:        'home',
   strategies:   'pulse',
+  trades:       'swap-horizontal',
   marketplace:  'storefront',
   settings:     'person-circle',
 };
@@ -17,6 +19,7 @@ const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
 const LABELS: Record<string, string> = {
   index:       'Home',
   strategies:  'Strategies',
+  trades:      'Trades',
   marketplace: 'Market',
   settings:    'Account',
 };
@@ -69,6 +72,21 @@ function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
               hitSlop={8}
             >
               <View style={[styles.itemInner, focused && styles.itemActive]}>
+                {focused ? (
+                  <Svg
+                    style={styles.activeUnderline}
+                    pointerEvents="none"
+                  >
+                    <Defs>
+                      <SvgLinearGradient id={`tab-und-${idx}`} x1="0" y1="0" x2="1" y2="0">
+                        <Stop offset="0" stopColor="#22d3ee" stopOpacity="0" />
+                        <Stop offset="0.5" stopColor="#22d3ee" stopOpacity="0.95" />
+                        <Stop offset="1" stopColor="#6366f1" stopOpacity="0" />
+                      </SvgLinearGradient>
+                    </Defs>
+                    <Rect width="100%" height="100%" fill={`url(#tab-und-${idx})`} />
+                  </Svg>
+                ) : null}
                 <Ionicons
                   name={iconName}
                   size={focused ? 22 : 21}
@@ -96,6 +114,7 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" />
       <Tabs.Screen name="strategies" />
+      <Tabs.Screen name="trades" />
       <Tabs.Screen name="marketplace" />
       <Tabs.Screen name="settings" />
     </Tabs>
@@ -141,6 +160,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentDim,
     borderWidth: 1,
     borderColor: colors.borderAccent,
+  },
+  activeUnderline: {
+    position: 'absolute',
+    left: 8,
+    right: 8,
+    bottom: -4,
+    height: 2,
+    borderRadius: 1,
   },
   label: {
     color: colors.accent,
