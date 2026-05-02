@@ -14,6 +14,8 @@ import { StatCard } from '@/components/StatCard';
 import { EquityCurve } from '@/components/EquityCurve';
 import { CandleChart, type Candle, type ChartMarker } from '@/components/CandleChart';
 import { PrimaryButton } from '@/components/PrimaryButton';
+import { StrategyConfigCard } from '@/components/StrategyConfigCard';
+import { AutomationCard } from '@/components/AutomationCard';
 import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, apiPost, type Strategy } from '@/lib/api';
@@ -87,12 +89,28 @@ export default function StrategyDetailScreen() {
     enabled: !!uid && !!sid,
   });
 
-  // Pick the symbol to chart: most-recent traded symbol on this strategy.
-  // If the strategy has never fired, we skip the chart entirely.
-  const chartSymbol = useMemo(() => {
+  // Pick the symbol to chart: most-recent traded symbol on this strategy. If
+  // the strategy has never fired, fall back to (a) the first symbol in its
+  // configured universe, or (b) BTCUSDT as a sensible default — so new users
+  // see actual market context instead of a blank section.
+  const chartSymbol = useMemo<string>(() => {
     const trades = tradesQ.data?.trades || [];
-    return trades.length > 0 ? trades[0].symbol : null;
-  }, [tradesQ.data]);
+    if (trades.length > 0) return trades[0].symbol;
+
+    const cfg = (strategy?.config || {}) as Record<string, unknown>;
+    const universe = (cfg.universe || {}) as Record<string, unknown>;
+    if (universe.type === 'specific' && Array.isArray(universe.symbols) && universe.symbols.length > 0) {
+      const first = universe.symbols[0];
+      if (typeof first === 'string' && first.length > 0) return first;
+    }
+    const legacySymbols = (cfg as { symbols?: unknown }).symbols;
+    if (Array.isArray(legacySymbols) && legacySymbols.length > 0 && typeof legacySymbols[0] === 'string') {
+      return legacySymbols[0] as string;
+    }
+    return 'BTCUSDT';
+  }, [tradesQ.data, strategy?.config]);
+
+  const hasFiredHere = (tradesQ.data?.trades || []).length > 0;
 
   const candlesQ = useQuery({
     queryKey: ['candles', chartSymbol],
@@ -259,8 +277,18 @@ export default function StrategyDetailScreen() {
               onPress={() => toggleM.mutate()}
               loading={toggleM.isPending}
             />
+            {!isActive ? (
+              <Text style={styles.activateHint}>
+                While paused, conditions are not checked and no new trades will fire.
+              </Text>
+            ) : null}
           </View>
         )}
+
+        {/* How this strategy works — parsed config */}
+        <View style={{ marginTop: spacing.lg }}>
+          <StrategyConfigCard config={strategy.config} />
+        </View>
 
         {/* Stats */}
         <View style={[styles.statRow, { marginTop: spacing.lg }]}>
@@ -295,31 +323,45 @@ export default function StrategyDetailScreen() {
           />
         </View>
 
-        {/* Price action (candles + entry/exit markers) */}
-        {chartSymbol ? (
-          <View style={{ marginTop: spacing.lg }}>
-            <Text style={styles.sectionLabel}>Last 80 candles · {chartSymbol.replace('USDT', '')}</Text>
-            {candlesQ.isLoading ? (
-              <View style={[styles.card, styles.center, { paddingVertical: spacing.xl }]}>
-                <ActivityIndicator color={colors.accent} />
-              </View>
-            ) : (
-              <CandleChart
-                candles={candlesQ.data?.candles || []}
-                markers={chartMarkers}
-                width={chartW}
-                height={180}
-                symbol={chartSymbol}
-                tf="5m"
-              />
-            )}
+        {/* Price action (candles + entry/exit markers if any). Always shown —
+            even before the strategy has fired — so users get market context. */}
+        <View style={{ marginTop: spacing.lg }}>
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionLabel}>Live price · {chartSymbol.replace('USDT', '')}</Text>
+            {!hasFiredHere ? (
+              <Text style={styles.sectionHint}>preview</Text>
+            ) : null}
           </View>
-        ) : null}
+          {candlesQ.isLoading ? (
+            <View style={[styles.card, styles.center, { paddingVertical: spacing.xl }]}>
+              <ActivityIndicator color={colors.accent} />
+            </View>
+          ) : (
+            <CandleChart
+              candles={candlesQ.data?.candles || []}
+              markers={chartMarkers}
+              width={chartW}
+              height={180}
+              symbol={chartSymbol}
+              tf="5m"
+            />
+          )}
+          {!hasFiredHere ? (
+            <Text style={styles.previewNote}>
+              Showing recent {chartSymbol.replace('USDT', '')} candles. Once this strategy fires, entry and exit markers will plot here automatically.
+            </Text>
+          ) : null}
+        </View>
 
         {/* Equity curve */}
         <View style={{ marginTop: spacing.lg }}>
           <Text style={styles.sectionLabel}>Equity curve</Text>
           <EquityCurve values={equityValues} width={chartW} height={160} />
+        </View>
+
+        {/* How automation works — educational explainer */}
+        <View style={{ marginTop: spacing.lg }}>
+          <AutomationCard />
         </View>
 
         {/* Recent trades */}
@@ -333,7 +375,7 @@ export default function StrategyDetailScreen() {
             <EmptyState
               icon="hourglass-outline"
               title="No trades yet"
-              hint={isActive ? 'This strategy is live but has not fired yet.' : 'Activate this strategy to start collecting trades.'}
+              hint={isActive ? "This strategy is live and watching the market — when conditions match, the first trade will appear here." : 'Activate this strategy above to start collecting trades.'}
             />
           ) : (
             <View style={styles.tradeList}>
@@ -382,7 +424,20 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontFamily: font.black, fontSize: 26, letterSpacing: -0.6 },
   headerMeta: { flexDirection: 'row', gap: 6, marginTop: spacing.sm, flexWrap: 'wrap' },
   desc: { color: colors.textDim, fontFamily: font.regular, fontSize: 14, marginTop: spacing.md, lineHeight: 20 },
+  activateHint: {
+    color: colors.textMute,
+    fontFamily: font.regular,
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: spacing.sm,
+  },
   statRow: { flexDirection: 'row' },
+  sectionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
   sectionLabel: {
     color: colors.textDim,
     fontFamily: font.bold,
@@ -390,6 +445,28 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: 'uppercase',
     marginBottom: spacing.sm,
+  },
+  sectionHint: {
+    color: colors.textMute,
+    fontFamily: font.bold,
+    fontSize: 10,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    marginBottom: spacing.sm,
+  },
+  previewNote: {
+    color: colors.textMute,
+    fontFamily: font.regular,
+    fontSize: 11.5,
+    lineHeight: 16,
+    marginTop: spacing.sm,
+    paddingHorizontal: spacing.xs,
   },
   card: {
     backgroundColor: colors.card,

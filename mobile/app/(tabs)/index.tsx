@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, useWindowDimensions } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
 
@@ -9,6 +10,7 @@ import { StatCard } from '@/components/StatCard';
 import { EquityCurve } from '@/components/EquityCurve';
 import { EmptyState } from '@/components/EmptyState';
 import { Logo } from '@/components/Logo';
+import { QuickstartCard } from '@/components/QuickstartCard';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, type Portfolio } from '@/lib/api';
@@ -25,6 +27,7 @@ function pnlTone(v: number): 'positive' | 'negative' | 'neutral' {
 
 export default function HomeScreen() {
   const { uid, user } = useAuth();
+  const router = useRouter();
   const { width } = useWindowDimensions();
   const chartWidth = width - spacing.lg * 2 - spacing.sm * 2;
 
@@ -56,39 +59,44 @@ export default function HomeScreen() {
           hint={(error as Error)?.message || 'Pull down to retry.'}
         />
       ) : data ? (
-        <>
-          {/* Hero P&L card with gradient + glow */}
-          <HeroCard pnlAll={data.pnl_all} pnl30d={data.pnl_30d} />
+        data.total_strategies === 0 ? (
+          // First-run experience — no charts/stats to show yet, so we surface
+          // a real onboarding card that explains what TradeHub does and gives
+          // an obvious next-step CTA into the wizard.
+          <QuickstartCard onStart={() => router.push('/wizard')} />
+        ) : (
+          <>
+            {/* Hero P&L card with gradient + glow */}
+            <HeroCard pnlAll={data.pnl_all} pnl30d={data.pnl_30d} />
 
-          {/* Equity curve */}
-          <View style={{ marginTop: spacing.lg }}>
-            <SectionHeader label="30-day equity curve" />
-            <EquityCurve values={data.equity_30d?.values || []} width={chartWidth} height={160} />
-          </View>
-
-          {/* Stat grid */}
-          <View style={[styles.statRow, { marginTop: spacing.lg }]}>
-            <StatCard label="7-day P&L" value={fmtPnl(data.pnl_7d)} tone={pnlTone(data.pnl_7d)} />
-            <View style={{ width: spacing.md }} />
-            <StatCard label="Win rate" value={`${data.win_rate.toFixed(1)}%`} sub={`${data.total_trades} closed trades`} />
-          </View>
-          <View style={[styles.statRow, { marginTop: spacing.md }]}>
-            <StatCard label="Active strategies" value={`${data.active_count}`} sub={`of ${data.total_strategies} total`} tone="accent" />
-            <View style={{ width: spacing.md }} />
-            <StatCard label="Open positions" value={`${data.open_trades}`} sub={data.open_trades > 0 ? 'Live now' : 'None right now'} />
-          </View>
-
-          {data.total_strategies === 0 && (
-            <View style={{ marginTop: spacing.xl }}>
-              <EmptyState
-                icon="rocket-outline"
-                title="No strategies yet"
-                hint="Build your first strategy to start seeing data here."
-                tone="accent"
-              />
+            {/* Equity curve */}
+            <View style={{ marginTop: spacing.lg }}>
+              <SectionHeader label="30-day equity curve" />
+              <EquityCurve values={data.equity_30d?.values || []} width={chartWidth} height={160} />
             </View>
-          )}
-        </>
+
+            {/* Stat grid */}
+            <View style={[styles.statRow, { marginTop: spacing.lg }]}>
+              <StatCard label="7-day P&L" value={fmtPnl(data.pnl_7d)} tone={pnlTone(data.pnl_7d)} />
+              <View style={{ width: spacing.md }} />
+              <StatCard label="Win rate" value={`${data.win_rate.toFixed(1)}%`} sub={`${data.total_trades} closed trades`} />
+            </View>
+            <View style={[styles.statRow, { marginTop: spacing.md }]}>
+              <StatCard label="Active strategies" value={`${data.active_count}`} sub={`of ${data.total_strategies} total`} tone="accent" />
+              <View style={{ width: spacing.md }} />
+              <StatCard label="Open positions" value={`${data.open_trades}`} sub={data.open_trades > 0 ? 'Live now' : 'None right now'} />
+            </View>
+
+            {data.active_count === 0 ? (
+              <View style={[styles.tipBanner, { marginTop: spacing.lg }]}>
+                <Ionicons name="information-circle" size={18} color={colors.warning} />
+                <Text style={styles.tipText}>
+                  None of your strategies are active right now. Open one and tap “Activate” to start collecting trades.
+                </Text>
+              </View>
+            ) : null}
+          </>
+        )
       ) : null}
     </Screen>
   );
@@ -215,5 +223,22 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     textTransform: 'uppercase',
     marginBottom: spacing.sm,
+  },
+  tipBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: 'rgba(245,158,11,0.08)',
+    borderColor: 'rgba(245,158,11,0.28)',
+    borderWidth: 1,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+  },
+  tipText: {
+    flex: 1,
+    color: colors.text,
+    fontFamily: font.regular,
+    fontSize: 12.5,
+    lineHeight: 17,
   },
 });
