@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   Pressable,
-  useWindowDimensions,
   ActivityIndicator,
   Platform,
 } from 'react-native';
@@ -14,7 +13,7 @@ import * as Haptics from 'expo-haptics';
 import { useMutation, useQuery } from '@tanstack/react-query';
 
 import { Screen } from '@/components/Screen';
-import { CandleChart, type ChartZone, type ChartPriceLine } from '@/components/CandleChart';
+import { TradeChartWebView, type WWall, type WZone } from '@/components/TradeChartWebView';
 import { CoinChip } from '@/components/CoinChip';
 import { SectionLabel } from '@/components/SectionLabel';
 import { Pill } from '@/components/Pill';
@@ -251,8 +250,8 @@ export default function TradeScreen() {
 
   // ─── Chart data ──────────────────────────────────────────────────────────
   const chartCandles = candlesQ.data?.candles || [];
-  const { width: screenW } = useWindowDimensions();
-  const chartW = Math.max(screenW - spacing.lg * 2 - 2, 200);
+  // (Chart width is now managed by the WebView itself via Lightweight Charts'
+  // `autoSize:true`, so we no longer need useWindowDimensions here.)
 
   // NOTE: We deliberately do NOT merge the 1Hz ticker price into a new
   // candles array. Doing so used to force the entire SVG chart to re-render
@@ -262,7 +261,10 @@ export default function TradeScreen() {
   // by the cheap `livePrice` prop, so the chart "feels live" without any
   // per-tick rerender of the candle paths.
 
-  const chartZones = useMemo<ChartZone[]>(() => {
+  // FVG zones — pass the unfilled gaps within the visible candle range straight
+  // to the WebView chart, which renders them as native Lightweight Charts price
+  // lines (top + bottom of each gap) at the correct Y-coordinates.
+  const chartZones = useMemo<WZone[]>(() => {
     if (!showFvg) return [];
     const gaps = fvgQ.data?.gaps || [];
     if (chartCandles.length === 0 || gaps.length === 0) return [];
@@ -271,27 +273,24 @@ export default function TradeScreen() {
       .filter((g) => g.time >= minTime)
       .map((g) => ({
         fromTime: g.time,
-        toTime:   g.filled_at || undefined,
         top:      g.top,
         bottom:   g.bottom,
         side:     g.side,
-        dim:      g.filled,
+        filled:   g.filled,
       }));
   }, [showFvg, fvgQ.data, chartCandles]);
 
-  // Wall lines: draw the top 3 bids + top 3 asks as horizontal dashed lines
-  // on the chart so the user can see support/resistance walls in price-context
-  // (matching the web /trade page's "Liq" overlay).
-  const chartPriceLines = useMemo<ChartPriceLine[]>(() => {
+  // Wall lines: top 3 bids + top 3 asks rendered by the WebView chart as
+  // dashed Lightweight Charts price lines with axis labels showing wall size.
+  const chartWalls = useMemo<WWall[]>(() => {
     if (!showWalls || !wallsQ.data) return [];
-    const buys  = (wallsQ.data.top_buys || []).slice(0, 3);
+    const buys  = (wallsQ.data.top_buys  || []).slice(0, 3);
     const sells = (wallsQ.data.top_sells || []).slice(0, 3);
-    const toLine = (w: TradeWall): ChartPriceLine => ({
-      price: w.price,
-      side:  w.side,
-      label: fmtUsd(w.size_usd),
-    });
-    return [...buys.map(toLine), ...sells.map(toLine)];
+    return [...buys, ...sells].map((w: TradeWall) => ({
+      price:    w.price,
+      side:     w.side,
+      size_usd: w.size_usd,
+    }));
   }, [showWalls, wallsQ.data]);
 
   const fvgCounts = useMemo(() => {
@@ -506,17 +505,15 @@ export default function TradeScreen() {
             </Text>
           </View>
         ) : (
-          <CandleChart
+          <TradeChartWebView
             candles={chartCandles}
+            walls={chartWalls}
             zones={chartZones}
-            priceLines={chartPriceLines}
-            width={chartW}
-            height={340}
-            symbol={`${symbol}USDT`}
-            tf={tf}
-            showOhlcLegend
-            showVolume
             livePrice={tickerQ.data?.price}
+            symbol={symbol}
+            height={380}
+            showWalls={showWalls}
+            showFvg={showFvg}
           />
         )}
       </View>
