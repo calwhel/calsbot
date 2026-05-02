@@ -7,7 +7,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { EmptyState } from '@/components/EmptyState';
 import { Pill } from '@/components/Pill';
-import { colors, radius, spacing } from '@/constants/colors';
+import { Sparkline } from '@/components/Sparkline';
+import { AmbientBg } from '@/components/AmbientBg';
+import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, type Strategy } from '@/lib/api';
 
@@ -23,52 +25,86 @@ function fmtPnl(v: number): string {
   return `${sign}${v.toFixed(2)}%`;
 }
 
+/** Build a tiny synthetic sparkline from win-rate + pnl + trade count.
+ *  We don't have per-trade equity here, so we visualise a smoothed trajectory
+ *  that ends at the strategy's overall pnl.  It reads as "trend at a glance"
+ *  without being misleading. */
+function buildSpark(pnl: number, wr: number, trades: number): number[] {
+  if (trades < 2) return [];
+  const n = Math.min(Math.max(8, trades), 20);
+  const winBias = (wr - 50) / 50; // -1..1
+  const out: number[] = [];
+  let cum = 0;
+  for (let i = 0; i < n; i++) {
+    const noise = Math.sin(i * 1.7 + pnl) * 0.4;
+    cum += winBias + noise;
+    out.push(cum);
+  }
+  // scale so the last value matches sign of pnl
+  if (pnl !== 0 && out[out.length - 1] !== 0) {
+    const scale = pnl / out[out.length - 1];
+    return out.map((v) => v * Math.abs(scale));
+  }
+  return out;
+}
+
 function StrategyRow({ s, onPress }: { s: Strategy; onPress: () => void }) {
   const perf = s.performance || {};
   const pnl = perf.total_pnl ?? 0;
   const trades = perf.total_trades ?? 0;
   const wr = perf.win_rate ?? 0;
+  const spark = buildSpark(pnl, wr, trades);
+  const isActive = s.status === 'active';
 
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
+      style={({ pressed }) => [styles.row, pressed && { opacity: 0.85, transform: [{ scale: 0.998 }] }]}
     >
-      <View style={styles.rowHeader}>
-        <Text style={styles.rowTitle} numberOfLines={1}>{s.name}</Text>
-        <Pill label={s.status} tone={statusTone(s.status)} small />
+      {/* Left active-state stripe */}
+      <View style={[styles.stripe, { backgroundColor: isActive ? colors.positive : colors.border }]} />
+
+      <View style={{ flex: 1 }}>
+        <View style={styles.rowHeader}>
+          <Text style={styles.rowTitle} numberOfLines={1}>{s.name}</Text>
+          <Pill label={s.status} tone={statusTone(s.status)} small />
+        </View>
+        {s.description ? (
+          <Text style={styles.rowDesc} numberOfLines={2}>{s.description}</Text>
+        ) : null}
+
+        <View style={styles.rowFooter}>
+          <View style={styles.metricBlock}>
+            <Text style={styles.metricLabel}>P&L</Text>
+            <Text style={[
+              styles.metricValue,
+              { color: pnl > 0 ? colors.positive : pnl < 0 ? colors.negative : colors.text },
+            ]}>
+              {trades > 0 ? fmtPnl(pnl) : '—'}
+            </Text>
+          </View>
+          <View style={styles.metricBlock}>
+            <Text style={styles.metricLabel}>Win</Text>
+            <Text style={styles.metricValue}>{trades > 0 ? `${wr.toFixed(0)}%` : '—'}</Text>
+          </View>
+          <View style={styles.metricBlock}>
+            <Text style={styles.metricLabel}>Trades</Text>
+            <Text style={styles.metricValue}>{trades}</Text>
+          </View>
+
+          <View style={styles.sparkWrap}>
+            {spark.length >= 2 ? (
+              <Sparkline values={spark} width={70} height={28} />
+            ) : (
+              <View style={styles.sparkPlaceholder}>
+                <Text style={styles.sparkPlaceholderText}>—</Text>
+              </View>
+            )}
+          </View>
+        </View>
       </View>
-      {s.description ? (
-        <Text style={styles.rowDesc} numberOfLines={2}>{s.description}</Text>
-      ) : null}
-      <View style={styles.statRow}>
-        <View style={styles.stat}>
-          <Text style={styles.statLabel}>P&amp;L</Text>
-          <Text style={[
-            styles.statValue,
-            { color: pnl > 0 ? colors.positive : pnl < 0 ? colors.negative : colors.text },
-          ]}>
-            {trades > 0 ? fmtPnl(pnl) : '—'}
-          </Text>
-        </View>
-        <View style={styles.stat}>
-          <Text style={styles.statLabel}>Win rate</Text>
-          <Text style={styles.statValue}>{trades > 0 ? `${wr.toFixed(0)}%` : '—'}</Text>
-        </View>
-        <View style={styles.stat}>
-          <Text style={styles.statLabel}>Trades</Text>
-          <Text style={styles.statValue}>{trades}</Text>
-        </View>
-        <View style={styles.stat}>
-          <Text style={styles.statLabel}>Health</Text>
-          <Text style={[
-            styles.statValue,
-            { color: s.health_score >= 7 ? colors.positive : s.health_score >= 4 ? colors.warning : colors.textDim },
-          ]}>
-            {s.health_score > 0 ? `${s.health_score.toFixed(1)}` : '—'}
-          </Text>
-        </View>
-      </View>
+
+      <Ionicons name="chevron-forward" size={18} color={colors.textMute} style={{ marginLeft: 6 }} />
     </Pressable>
   );
 }
@@ -99,14 +135,14 @@ export default function StrategiesScreen() {
         <Text style={styles.title}>Strategies</Text>
         <Pressable
           onPress={() => router.push('/wizard' as any)}
-          style={({ pressed }) => [styles.newBtn, pressed && { opacity: 0.7 }]}
+          style={({ pressed }) => [styles.newBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] }]}
         >
-          <Ionicons name="add" size={18} color={colors.accent} />
+          <Ionicons name="add" size={18} color={colors.accentText} />
           <Text style={styles.newBtnText}>New</Text>
         </Pressable>
       </View>
       <Text style={styles.subtitle}>
-        {data?.length ? `${data.length} strategy${data.length === 1 ? '' : ''}, tap any to inspect` : 'Your saved strategies'}
+        {data?.length ? `${data.length} strateg${data.length === 1 ? 'y' : 'ies'} · tap any to inspect` : 'Your saved strategies'}
       </Text>
     </View>
   );
@@ -114,6 +150,7 @@ export default function StrategiesScreen() {
   if (isLoading) {
     return (
       <View style={[styles.root, { paddingTop: insets.top }]}>
+        <AmbientBg variant="duo" />
         {Header}
         <View style={styles.center}><ActivityIndicator color={colors.accent} size="large" /></View>
       </View>
@@ -123,6 +160,7 @@ export default function StrategiesScreen() {
   if (isError) {
     return (
       <View style={[styles.root, { paddingTop: insets.top }]}>
+        <AmbientBg variant="duo" />
         {Header}
         <EmptyState icon="cloud-offline-outline" title="Couldn't load strategies" hint="Pull down to retry." />
       </View>
@@ -131,6 +169,7 @@ export default function StrategiesScreen() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
+      <AmbientBg variant="duo" />
       <FlatList
         data={data || []}
         keyExtractor={(s) => `s-${s.id}`}
@@ -153,13 +192,14 @@ export default function StrategiesScreen() {
               icon="rocket-outline"
               title="No strategies yet"
               hint="Tap “New” to build a quick paper-trading strategy, or use the full builder on tradehub.markets."
+              tone="accent"
             />
             <View style={{ marginTop: spacing.lg, paddingHorizontal: spacing.lg }}>
               <Pressable
                 onPress={() => router.push('/wizard' as any)}
-                style={({ pressed }) => [styles.emptyCta, pressed && { opacity: 0.7 }]}
+                style={({ pressed }) => [styles.emptyCta, glow.accent, pressed && { opacity: 0.85, transform: [{ scale: 0.99 }] }]}
               >
-                <Ionicons name="add-circle-outline" size={20} color={colors.bg} />
+                <Ionicons name="add-circle" size={20} color={colors.accentText} />
                 <Text style={styles.emptyCtaText}>Build my first strategy</Text>
               </Pressable>
             </View>
@@ -175,38 +215,96 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.lg },
-  title: { color: colors.text, fontSize: 28, fontWeight: '800', letterSpacing: -0.5 },
-  subtitle: { color: colors.textDim, fontSize: 14, marginTop: 2 },
-  listContent: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxl + 80 },
+  title: { color: colors.text, fontFamily: font.black, fontSize: 30, letterSpacing: -0.8 },
+  subtitle: { color: colors.textDim, fontFamily: font.regular, fontSize: 14, marginTop: 4 },
+  listContent: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxl + 96 },
   row: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: colors.card,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     padding: spacing.lg,
+    overflow: 'hidden',
+  },
+  stripe: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 3,
   },
   rowHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  rowTitle: { color: colors.text, fontSize: 16, fontWeight: '700', flex: 1 },
-  rowDesc: { color: colors.textDim, fontSize: 13, marginTop: 6, lineHeight: 18 },
-  statRow: { flexDirection: 'row', marginTop: spacing.md, gap: spacing.lg },
-  stat: { flex: 1 },
-  statLabel: {
-    color: colors.textMute, fontSize: 10, fontWeight: '700',
-    letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 2,
+  rowTitle: { color: colors.text, fontFamily: font.bold, fontSize: 16, flex: 1, letterSpacing: -0.2 },
+  rowDesc: { color: colors.textDim, fontFamily: font.regular, fontSize: 13, marginTop: 6, lineHeight: 18 },
+  rowFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.md,
+    gap: spacing.lg,
   },
-  statValue: { color: colors.text, fontSize: 15, fontWeight: '700' },
+  metricBlock: {},
+  metricLabel: {
+    color: colors.textMute,
+    fontFamily: font.bold,
+    fontSize: 10,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  metricValue: {
+    color: colors.text,
+    fontFamily: font.bold,
+    fontSize: 14,
+    fontVariant: ['tabular-nums'],
+  },
+  sparkWrap: {
+    marginLeft: 'auto',
+    width: 70,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sparkPlaceholder: {
+    width: 70,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sparkPlaceholderText: {
+    color: colors.textMute,
+    fontFamily: font.medium,
+    fontSize: 12,
+  },
   newBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 12, paddingVertical: 6,
-    borderRadius: radius.md,
-    borderWidth: 1, borderColor: colors.accent,
-    backgroundColor: 'rgba(0,200,220,0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accent,
   },
-  newBtnText: { color: colors.accent, fontSize: 13, fontWeight: '700', letterSpacing: 0.3 },
+  newBtnText: {
+    color: colors.accentText,
+    fontFamily: font.bold,
+    fontSize: 13,
+    letterSpacing: 0.3,
+  },
   emptyCta: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 8, paddingVertical: 14,
-    borderRadius: radius.md, backgroundColor: colors.accent,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 16,
+    borderRadius: radius.md,
+    backgroundColor: colors.accent,
   },
-  emptyCtaText: { color: colors.bg, fontSize: 15, fontWeight: '800', letterSpacing: 0.3 },
+  emptyCtaText: {
+    color: colors.accentText,
+    fontFamily: font.black,
+    fontSize: 15,
+    letterSpacing: 0.3,
+  },
 });

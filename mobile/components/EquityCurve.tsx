@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Svg, { Path, Line, Defs, LinearGradient, Stop } from 'react-native-svg';
-import { colors, radius, spacing } from '@/constants/colors';
+import { colors, font, radius, spacing } from '@/constants/colors';
 
 /**
  * SVG line chart for cumulative P&L (equity curve).
@@ -18,6 +18,12 @@ export function EquityCurve({
   height?: number;
   title?: string;
 }) {
+  // Hooks must run unconditionally — declare the per-instance ID BEFORE the
+  // early-return guard so React's hook order stays stable between renders
+  // (values can flip between <2 and ≥2 as data loads).
+  const uid = React.useId().replace(/:/g, '');
+  const fillId = `eqfill-${uid}`;
+
   const padX = 8;
   const padY = 14;
   const innerW = Math.max(width - padX * 2, 1);
@@ -64,7 +70,7 @@ export function EquityCurve({
     <View style={styles.wrap}>
       <Svg width={width} height={height}>
         <Defs>
-          <LinearGradient id="eqfill" x1="0" y1="0" x2="0" y2="1">
+          <LinearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
             <Stop offset="0" stopColor={stroke} stopOpacity={0.35} />
             <Stop offset="1" stopColor={stroke} stopOpacity={0.0} />
           </LinearGradient>
@@ -75,7 +81,7 @@ export function EquityCurve({
             stroke={colors.border} strokeWidth={1} strokeDasharray="4,4"
           />
         )}
-        <Path d={fillPath} fill="url(#eqfill)" />
+        <Path d={fillPath} fill={`url(#${fillId})`} />
         <Path d={linePath} fill="none" stroke={stroke} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
       </Svg>
     </View>
@@ -102,6 +108,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     color: colors.textMute,
+    fontFamily: font.regular,
     fontSize: 13,
     textAlign: 'center',
   },

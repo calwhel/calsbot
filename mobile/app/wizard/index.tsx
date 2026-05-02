@@ -10,7 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { Pill } from '@/components/Pill';
-import { colors, radius, spacing } from '@/constants/colors';
+import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiPost, type SaveStrategyResponse } from '@/lib/api';
 
@@ -440,16 +440,16 @@ const styles = StyleSheet.create({
   dot: { width: 30, height: 4, borderRadius: 2, backgroundColor: colors.border },
   dotActive: { backgroundColor: colors.accent },
   dotDone: { backgroundColor: colors.positive },
-  title: { color: colors.text, fontSize: 24, fontWeight: '800', letterSpacing: -0.4 },
-  subtitle: { color: colors.textDim, fontSize: 14, marginTop: 6, lineHeight: 20 },
-  label: { color: colors.text, fontSize: 13, fontWeight: '700', letterSpacing: 0.3, textTransform: 'uppercase' },
-  hint: { color: colors.textMute, fontSize: 12, marginTop: 3, lineHeight: 16 },
+  title: { color: colors.text, fontFamily: font.black, fontSize: 26, letterSpacing: -0.6 },
+  subtitle: { color: colors.textDim, fontFamily: font.regular, fontSize: 14, marginTop: 6, lineHeight: 20 },
+  label: { color: colors.text, fontFamily: font.bold, fontSize: 12, letterSpacing: 0.6, textTransform: 'uppercase' },
+  hint: { color: colors.textMute, fontFamily: font.regular, fontSize: 12, marginTop: 3, lineHeight: 16 },
   input: {
     backgroundColor: colors.card,
     borderWidth: 1, borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md, paddingVertical: 12,
-    color: colors.text, fontSize: 15,
+    color: colors.text, fontFamily: font.medium, fontSize: 15,
   },
   choices: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   choice: {
@@ -460,12 +460,12 @@ const styles = StyleSheet.create({
   },
   choiceActive: {
     borderColor: colors.accent,
-    backgroundColor: 'rgba(0,200,220,0.10)',
+    backgroundColor: colors.accentDim,
   },
-  choiceText: { color: colors.textDim, fontWeight: '700', fontSize: 13, letterSpacing: 0.3 },
+  choiceText: { color: colors.textDim, fontFamily: font.bold, fontSize: 13, letterSpacing: 0.3 },
   choiceTextActive: { color: colors.accent },
   summaryLabel: {
-    color: colors.textDim, fontSize: 12, fontWeight: '700',
+    color: colors.textDim, fontFamily: font.bold, fontSize: 12,
     letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: spacing.sm,
   },
   summaryCard: {
@@ -473,8 +473,8 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
     borderRadius: radius.lg, padding: spacing.lg,
   },
-  summaryName: { color: colors.text, fontSize: 18, fontWeight: '800' },
-  summaryNote: { color: colors.textMute, fontSize: 12, marginTop: spacing.md, lineHeight: 17 },
+  summaryName: { color: colors.text, fontFamily: font.black, fontSize: 19, letterSpacing: -0.3 },
+  summaryNote: { color: colors.textMute, fontFamily: font.regular, fontSize: 12, marginTop: spacing.md, lineHeight: 17 },
   footer: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: spacing.lg, paddingTop: spacing.md,
@@ -483,5 +483,5 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   backBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 4, paddingVertical: 12 },
-  backBtnText: { color: colors.textDim, fontSize: 14, fontWeight: '600', marginLeft: 2 },
+  backBtnText: { color: colors.textDim, fontFamily: font.semibold, fontSize: 14, marginLeft: 2 },
 });

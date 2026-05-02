@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Svg, { Line, Rect, Circle, G } from 'react-native-svg';
-import { colors, radius, spacing } from '@/constants/colors';
+import { colors, font, radius, spacing } from '@/constants/colors';
 
 export type Candle = {
   time: number;     // unix seconds
@@ -202,8 +202,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     marginBottom: 4,
   },
-  legendSym: { color: colors.text, fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
-  legendChange: { fontSize: 12, fontWeight: '700' },
+  legendSym: { color: colors.text, fontFamily: font.bold, fontSize: 12, letterSpacing: 0.5 },
+  legendChange: { fontFamily: font.bold, fontSize: 12, fontVariant: ['tabular-nums'] },
   priceRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -211,8 +211,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     marginTop: 4,
   },
-  priceLabel: { color: colors.textMute, fontSize: 11, fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase' },
-  priceVal: { color: colors.text, fontSize: 13, fontWeight: '700' },
+  priceLabel: { color: colors.textMute, fontFamily: font.semibold, fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase' },
+  priceVal: { color: colors.text, fontFamily: font.bold, fontSize: 13, fontVariant: ['tabular-nums'] },
   empty: {
     backgroundColor: colors.card,
     borderRadius: radius.lg,
@@ -224,6 +224,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     color: colors.textMute,
+    fontFamily: font.regular,
     fontSize: 13,
     textAlign: 'center',
   },

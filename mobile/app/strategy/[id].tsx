@@ -14,7 +14,7 @@ import { StatCard } from '@/components/StatCard';
 import { EquityCurve } from '@/components/EquityCurve';
 import { CandleChart, type Candle, type ChartMarker } from '@/components/CandleChart';
 import { PrimaryButton } from '@/components/PrimaryButton';
-import { colors, radius, spacing } from '@/constants/colors';
+import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, apiPost, type Strategy } from '@/lib/api';
 
@@ -376,17 +376,17 @@ export default function StrategyDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
+  content: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.xxl + 96 },
   center: { alignItems: 'center', justifyContent: 'center', flex: 1, padding: spacing.xl },
   header: { paddingTop: spacing.sm },
-  title: { color: colors.text, fontSize: 24, fontWeight: '800', letterSpacing: -0.4 },
+  title: { color: colors.text, fontFamily: font.black, fontSize: 26, letterSpacing: -0.6 },
   headerMeta: { flexDirection: 'row', gap: 6, marginTop: spacing.sm, flexWrap: 'wrap' },
-  desc: { color: colors.textDim, fontSize: 14, marginTop: spacing.md, lineHeight: 20 },
+  desc: { color: colors.textDim, fontFamily: font.regular, fontSize: 14, marginTop: spacing.md, lineHeight: 20 },
   statRow: { flexDirection: 'row' },
   sectionLabel: {
     color: colors.textDim,
+    fontFamily: font.bold,
     fontSize: 12,
-    fontWeight: '700',
     letterSpacing: 0.6,
     textTransform: 'uppercase',
     marginBottom: spacing.sm,
@@ -408,15 +408,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: spacing.lg, paddingVertical: 12,
   },
-  tradeRowDiv: { borderBottomWidth: 1, borderBottomColor: colors.border },
+  tradeRowDiv: { borderBottomWidth: 1, borderBottomColor: colors.divider },
   tradeLeft: { flex: 1 },
   tradeRight: { alignItems: 'flex-end' },
-  tradeSymbol: { color: colors.text, fontSize: 15, fontWeight: '700' },
+  tradeSymbol: { color: colors.text, fontFamily: font.bold, fontSize: 15 },
   tradeMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
-  tradeTime: { color: colors.textMute, fontSize: 11 },
-  tradePnl: { fontSize: 15, fontWeight: '700' },
+  tradeTime: { color: colors.textMute, fontFamily: font.regular, fontSize: 11 },
+  tradePnl: { fontFamily: font.bold, fontSize: 15, fontVariant: ['tabular-nums'] },
   tradeOutcome: {
-    color: colors.textMute, fontSize: 10, fontWeight: '700',
+    color: colors.textMute, fontFamily: font.bold, fontSize: 10,
     letterSpacing: 0.5, marginTop: 2,
   },
 });

@@ -12,7 +12,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { Pill } from '@/components/Pill';
 import { StatCard } from '@/components/StatCard';
 import { PrimaryButton } from '@/components/PrimaryButton';
-import { colors, radius, spacing } from '@/constants/colors';
+import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, apiPost, ApiError, getApiUrl, type MarketplaceListingDetail, type CloneResponse } from '@/lib/api';
 // Note: `user` is intentionally unread here — entitlement gating is delegated to
@@ -327,29 +327,29 @@ export default function ListingDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
+  content: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.xxl + 96 },
   center: { alignItems: 'center', justifyContent: 'center', flex: 1, padding: spacing.xl },
   header: { paddingTop: spacing.sm },
-  title: { color: colors.text, fontSize: 24, fontWeight: '800', letterSpacing: -0.4 },
-  author: { color: colors.textDim, fontSize: 14, marginTop: 4 },
+  title: { color: colors.text, fontFamily: font.black, fontSize: 26, letterSpacing: -0.6 },
+  author: { color: colors.textDim, fontFamily: font.medium, fontSize: 14, marginTop: 4 },
   headerMeta: { flexDirection: 'row', gap: 6, marginTop: spacing.sm, flexWrap: 'wrap' },
-  summary: { color: colors.textDim, fontSize: 14, marginTop: spacing.md, lineHeight: 20 },
+  summary: { color: colors.textDim, fontFamily: font.regular, fontSize: 14, marginTop: spacing.md, lineHeight: 20 },
   sectionLabel: {
-    color: colors.textDim, fontSize: 12, fontWeight: '700',
+    color: colors.textDim, fontFamily: font.bold, fontSize: 12,
     letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: spacing.sm,
   },
   statRow: { flexDirection: 'row' },
   helpText: {
-    color: colors.textMute, fontSize: 12, marginTop: spacing.sm,
+    color: colors.textMute, fontFamily: font.regular, fontSize: 12, marginTop: spacing.sm,
     lineHeight: 17, textAlign: 'center',
   },
   bannerOwned: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: colors.card,
-    borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg,
+    backgroundColor: colors.positiveDim,
+    borderWidth: 1, borderColor: 'rgba(52,211,153,0.32)', borderRadius: radius.lg,
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
   },
-  bannerText: { color: colors.text, fontSize: 14, fontWeight: '600' },
+  bannerText: { color: colors.text, fontFamily: font.semibold, fontSize: 14 },
   tradeList: {
     backgroundColor: colors.card,
     borderRadius: radius.lg,
@@ -360,9 +360,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: spacing.lg, paddingVertical: 12,
   },
-  tradeRowDiv: { borderBottomWidth: 1, borderBottomColor: colors.border },
-  tradeSymbol: { color: colors.text, fontSize: 15, fontWeight: '700' },
+  tradeRowDiv: { borderBottomWidth: 1, borderBottomColor: colors.divider },
+  tradeSymbol: { color: colors.text, fontFamily: font.bold, fontSize: 15 },
   tradeMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
-  tradeOutcome: { color: colors.textMute, fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
-  tradePnl: { fontSize: 15, fontWeight: '700' },
+  tradeOutcome: { color: colors.textMute, fontFamily: font.bold, fontSize: 11, letterSpacing: 0.5 },
+  tradePnl: { fontFamily: font.bold, fontSize: 15, fontVariant: ['tabular-nums'] },
 });

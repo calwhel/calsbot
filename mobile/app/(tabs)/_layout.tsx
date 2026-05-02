@@ -1,61 +1,151 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Platform } from 'react-native';
-import { colors } from '@/constants/colors';
+import { View, Text, Pressable, StyleSheet, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
+import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { colors, font, glow, radius } from '@/constants/colors';
 
-const ICON_SIZE = 22;
+const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
+  index:        'home',
+  strategies:   'pulse',
+  marketplace:  'storefront',
+  settings:     'person-circle',
+};
+
+const LABELS: Record<string, string> = {
+  index:       'Home',
+  strategies:  'Strategies',
+  marketplace: 'Market',
+  settings:    'Account',
+};
+
+/**
+ * Floating pill-style tab bar. Lifts off the bottom edge with a glow, has a
+ * coloured pill behind the active item, and uses Inter for labels.
+ */
+function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
+  const insets = useSafeAreaInsets();
+  // Honour the safe-area inset on BOTH platforms — Android gesture-nav devices
+  // report `insets.bottom` (~16-24px) and a hardcoded `12` would let the
+  // floating bar overlap the system gesture pill.
+  const bottomPad = Math.max(insets.bottom, 12);
+
+  return (
+    <View
+      style={[styles.outer, { paddingBottom: bottomPad }]}
+      pointerEvents="box-none"
+    >
+      <View style={styles.bar}>
+        {state.routes.map((route, idx) => {
+          const focused = state.index === idx;
+          const { options } = descriptors[route.key];
+          const label = LABELS[route.name] ?? options.title ?? route.name;
+          const iconName = ICONS[route.name] ?? 'ellipse';
+
+          const onPress = () => {
+            const event = navigation.emit({
+              type: 'tabPress',
+              target: route.key,
+              canPreventDefault: true,
+            });
+            if (!focused && !event.defaultPrevented) {
+              if (Platform.OS !== 'web') {
+                Haptics.selectionAsync().catch(() => {});
+              }
+              navigation.navigate(route.name as never);
+            }
+          };
+
+          return (
+            <Pressable
+              key={route.key}
+              accessibilityRole="button"
+              accessibilityState={focused ? { selected: true } : {}}
+              accessibilityLabel={label}
+              onPress={onPress}
+              style={styles.item}
+              hitSlop={8}
+            >
+              <View style={[styles.itemInner, focused && styles.itemActive]}>
+                <Ionicons
+                  name={iconName}
+                  size={focused ? 22 : 21}
+                  color={focused ? colors.accent : colors.textMute}
+                />
+                {focused ? (
+                  <Text style={styles.label} numberOfLines={1}>
+                    {label}
+                  </Text>
+                ) : null}
+              </View>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
 
 export default function TabsLayout() {
   return (
     <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: colors.accent,
-        tabBarInactiveTintColor: colors.textMute,
-        tabBarStyle: {
-          backgroundColor: colors.bgElev,
-          borderTopColor: colors.border,
-          borderTopWidth: 1,
-          height: Platform.OS === 'ios' ? 84 : 64,
-          paddingTop: 6,
-          paddingBottom: Platform.OS === 'ios' ? 28 : 8,
-        },
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '600',
-          marginTop: -2,
-        },
-      }}
+      screenOptions={{ headerShown: false, tabBarHideOnKeyboard: true }}
+      tabBar={(props) => <FloatingTabBar {...props} />}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <Ionicons name="home" size={ICON_SIZE} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="strategies"
-        options={{
-          title: 'Strategies',
-          tabBarIcon: ({ color }) => <Ionicons name="pulse" size={ICON_SIZE} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="marketplace"
-        options={{
-          title: 'Market',
-          tabBarIcon: ({ color }) => <Ionicons name="storefront" size={ICON_SIZE} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: 'Settings',
-          tabBarIcon: ({ color }) => <Ionicons name="person-circle" size={ICON_SIZE} color={color} />,
-        }}
-      />
+      <Tabs.Screen name="index" />
+      <Tabs.Screen name="strategies" />
+      <Tabs.Screen name="marketplace" />
+      <Tabs.Screen name="settings" />
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  outer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 16,
+    backgroundColor: 'transparent',
+  },
+  bar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.glassBg,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    ...glow.card,
+  },
+  item: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itemInner: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    borderRadius: radius.pill,
+  },
+  itemActive: {
+    backgroundColor: colors.accentDim,
+    borderWidth: 1,
+    borderColor: colors.borderAccent,
+  },
+  label: {
+    color: colors.accent,
+    fontFamily: font.bold,
+    fontSize: 12,
+    letterSpacing: 0.3,
+  },
+});
