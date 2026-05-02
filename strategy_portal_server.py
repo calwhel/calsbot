@@ -20,6 +20,7 @@ from fastapi import FastAPI, Request, HTTPException, Query, Depends
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.gzip import GZipMiddleware
+from starlette.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.models import User
@@ -45,6 +46,15 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Strategy Portal", docs_url=None, redoc_url=None)
 app.add_middleware(GZipMiddleware, minimum_size=500)
+# Mobile app (Expo Go) makes cross-origin requests; UID is passed as query
+# param, not via cookie, so we don't need credentials. Open CORS for /api/*.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 templates = Jinja2Templates(directory="app/templates")
 
 @app.middleware("http")
@@ -1628,6 +1638,52 @@ async def trade_page_symbol(slug: str, request: Request):
     if sym not in TRADE_SYMBOL_WHITELIST:
         return RedirectResponse(url="/trade", status_code=302)
     return FileResponse("app/templates/trade.html", media_type="text/html")
+
+
+@app.post("/api/mobile/login")
+async def api_mobile_login(request: Request):
+    """UID-based login for the native mobile app (Expo Go).
+
+    Body: {"uid": "TH-XXXXXXXX"}
+    Returns the resolved user profile or 403 if the UID doesn't match.
+    The mobile client persists the UID in SecureStore and re-validates on launch.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    uid = (body.get("uid") or "").strip().upper()
+    if not uid:
+        raise HTTPException(status_code=400, detail="uid required")
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="invalid UID")
+        display = (user.username or user.first_name or user.uid or "").strip() or user.uid
+        # Best-effort plan/tier info — fall back gracefully if column missing.
+        plan = "free"
+        try:
+            sub = db.query(PortalSubscription).filter(
+                PortalSubscription.user_id == user.id,
+                PortalSubscription.status == "active",
+            ).order_by(PortalSubscription.id.desc()).first()
+            if sub:
+                plan = sub.tier or "pro"
+        except Exception:
+            pass
+        is_admin = (user.uid == "TH-YP0BADA8") or bool(getattr(user, "is_admin", False))
+        return JSONResponse({
+            "uid":      user.uid,
+            "display":  display,
+            "username": user.username,
+            "first_name": user.first_name,
+            "plan":     plan,
+            "is_pro":   plan != "free",
+            "is_admin": is_admin,
+        })
+    finally:
+        db.close()
 
 
 @app.get("/api/me")

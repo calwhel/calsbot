@@ -27,6 +27,10 @@ args = "Strategy Portal"
 task = "workflow.run"
 args = "Telegram Bot"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Mobile App"
+
 [[workflows.workflow]]
 name = "Trade Tracker"
 author = "agent"
@@ -62,6 +66,17 @@ outputType = "console"
 task = "shell.exec"
 args = "python -m uvicorn main:app --host 0.0.0.0 --port 8080"
 
+[[workflows.workflow]]
+name = "Mobile App"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd mobile && CI=1 EXPO_PUBLIC_API_URL=https://$REPLIT_DEV_DOMAIN npx expo start --port 8081 --tunnel"
+
 [[ports]]
 localPort = 5000
 externalPort = 80
@@ -77,6 +92,10 @@ externalPort = 8000
 [[ports]]
 localPort = 8080
 externalPort = 8080
+
+[[ports]]
+localPort = 8081
+externalPort = 8081
 
 [deployment]
 deploymentTarget = "vm"
