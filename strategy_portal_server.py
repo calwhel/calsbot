@@ -1627,6 +1627,20 @@ async def app_page(request: Request):
     return await _render_portal(request, uid)
 
 
+@app.get("/trades", response_class=HTMLResponse)
+async def trades_page(request: Request):
+    """Direct entry point that opens the portal on the global Trades feed.
+
+    Mirrors the mobile app's "Trades" bottom-tab. Reuses the same template +
+    auth gate as /app — the template reads ?p=trades on init and switches
+    pages without a round-trip.
+    """
+    uid = _get_session_uid(request)
+    if not uid:
+        return RedirectResponse(url="/login?next=/trades", status_code=302)
+    return RedirectResponse(url="/app?p=trades", status_code=302)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Day Trading page — public BTC chart with order block overlays
 # ─────────────────────────────────────────────────────────────────────────────
