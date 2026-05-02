@@ -230,18 +230,23 @@ export default function TradeScreen() {
       }),
   });
 
+  // Pull-to-refresh state is intentionally driven by a manual flag — NOT by
+  // any react-query `isFetching`. With the ticker polling every 1 second the
+  // RefreshControl prop would flicker true→false constantly, and iOS reads
+  // that flicker as "spinner is showing" which yanks the ScrollView back to
+  // the top mid-scroll. We flip the flag for ~600ms on user pull and let it
+  // settle independently of background polling.
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const onRefresh = useCallback(() => {
+    setIsRefreshing(true);
     candlesQ.refetch();
     tickerQ.refetch();
     if (showFvg)   fvgQ.refetch();
     if (showTape)  tapeQ.refetch();
     wallsQ.refetch();
     fundingQ.refetch();
+    setTimeout(() => setIsRefreshing(false), 600);
   }, [candlesQ, tickerQ, fvgQ, tapeQ, wallsQ, fundingQ, showFvg, showTape]);
-
-  const isRefreshing =
-    candlesQ.isFetching || tickerQ.isFetching || wallsQ.isFetching ||
-    (showFvg && fvgQ.isFetching) || (showTape && tapeQ.isFetching);
 
   // ─── Chart data ──────────────────────────────────────────────────────────
   const chartCandles = candlesQ.data?.candles || [];
@@ -362,7 +367,7 @@ export default function TradeScreen() {
       title="Trade"
       subtitle="Live charts, FVG zones, walls, tape & AI read."
       ambient="cyan"
-      refreshing={isRefreshing && !candlesQ.isLoading}
+      refreshing={isRefreshing}
       onRefresh={onRefresh}
     >
       {/* ─── Coin picker ──────────────────────────────────────────────── */}
