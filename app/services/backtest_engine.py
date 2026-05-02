@@ -521,6 +521,14 @@ def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
     if ctype in ("sma", "sma_cross", "sma_ribbon"):
         return eval_condition_bt({**cond, "type": "indicator", "name": ctype}, klines, interval_min)
 
+    # ── Named indicator shortcuts (confirms arrive with type = indicator name) ─
+    # This handles the case where _build_confirm_cond passes through a dict whose
+    # "type" key is the indicator name directly (rsi, macd, ema, etc.).
+    _NAMED_INDICATORS = {"rsi", "macd", "ema", "bb", "stochrsi", "supertrend", "volume", "stoch_rsi"}
+    if ctype in _NAMED_INDICATORS:
+        name = "stochrsi" if ctype == "stoch_rsi" else ctype
+        return eval_condition_bt({**cond, "type": "indicator", "name": name}, klines, interval_min)
+
     # ── Indicator ──────────────────────────────────────────────────────────────
     if ctype == "indicator":
         name    = (cond.get("name") or "").lower()
@@ -1126,7 +1134,9 @@ def _build_confirm_cond(conf: Dict) -> Dict:
     _INDICATOR_NAMES = {"rsi", "macd", "ema", "sma", "sma_cross", "sma_ribbon", "bb", "stochrsi", "stoch_rsi", "supertrend", "volume"}
     if ctype in _INDICATOR_NAMES:
         name = "stochrsi" if ctype == "stoch_rsi" else ctype
-        return {"type": "indicator", "name": name, **conf}
+        # Strip "type" from conf before spreading to prevent overwriting "indicator"
+        conf_clean = {k: v for k, v in conf.items() if k != "type"}
+        return {"type": "indicator", "name": name, **conf_clean}
     return conf
 
 

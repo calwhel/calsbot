@@ -7905,40 +7905,101 @@ async def backtest_scan(request: Request):
     # the ranking reflects signal quality rather than raw risk settings.
     _tp, _sl, _lev = (3.0, 1.5, 5) if direction == "LONG" else (3.0, 1.5, 5)
 
-    templates = [
-        {"label": "RSI Oversold · 15m",       "primaryType": "rsi",            "primaryCfg": {"period": 14, "operator": "lt", "value": 30},         "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
-        {"label": "RSI Oversold · 1h",         "primaryType": "rsi",            "primaryCfg": {"period": 14, "operator": "lt", "value": 30},         "timeframe": "1h",  "tp1": _tp, "sl": _sl, "leverage": _lev},
-        {"label": "RSI Momentum · 15m",        "primaryType": "rsi",            "primaryCfg": {"period": 14, "operator": "gt", "value": 55},         "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
-        {"label": "MACD Cross · 15m",          "primaryType": "macd",           "primaryCfg": {"condition": "BULLISH_CROSS"},                        "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
-        {"label": "MACD Cross · 1h",           "primaryType": "macd",           "primaryCfg": {"condition": "BULLISH_CROSS"},                        "timeframe": "1h",  "tp1": _tp, "sl": _sl, "leverage": _lev},
-        {"label": "EMA Cross 9/21 · 15m",      "primaryType": "ema",            "primaryCfg": {"period": 9, "period2": 21, "condition": "cross_up"}, "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
-        {"label": "EMA Cross 9/21 · 1h",       "primaryType": "ema",            "primaryCfg": {"period": 9, "period2": 21, "condition": "cross_up"}, "timeframe": "1h",  "tp1": _tp, "sl": _sl, "leverage": _lev},
-        {"label": "SuperTrend Flip · 15m",     "primaryType": "supertrend",     "primaryCfg": {"condition": "bullish"},                              "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
-        {"label": "SuperTrend Flip · 1h",      "primaryType": "supertrend",     "primaryCfg": {"condition": "bullish"},                              "timeframe": "1h",  "tp1": _tp, "sl": _sl, "leverage": _lev},
-        {"label": "BB Lower Bounce · 15m",     "primaryType": "bb",             "primaryCfg": {"condition": "below_lower"},                          "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
-        {"label": "StochRSI Oversold · 15m",   "primaryType": "stochrsi",       "primaryCfg": {"operator": "lt", "value": 20},                      "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
-        {"label": "Volume Spike · 15m",        "primaryType": "volume_spike",   "primaryCfg": {"multiplier": 2.0},                                   "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
+    def _C(cond: dict) -> dict:
+        """Flip a confirm/primary-cfg condition dict for SHORT direction."""
+        c = dict(cond)
+        t = c.get("type", "")
+        if t == "rsi":
+            if c.get("operator") == "lt":   c["operator"] = "gt"; c["value"] = 70
+            elif c.get("operator") == "gt" and float(c.get("value", 0)) >= 50:
+                c["operator"] = "lt"; c["value"] = 50
+            else:                           c["operator"] = "gt"; c["value"] = 70
+        elif t == "macd":
+            c["condition"] = c.get("condition", "").replace("bullish", "bearish")
+        elif t == "ema":
+            sub = c.get("condition", "")
+            c["condition"] = (sub.replace("bullish_cross", "bearish_cross")
+                                 .replace("above", "below")
+                                 .replace("crosses_above", "crosses_below"))
+        elif t == "supertrend":   c["condition"] = "bearish"
+        elif t == "bb":
+            c["condition"] = (c.get("condition", "")
+                                .replace("below_lower", "above_upper")
+                                .replace("price_below_lower", "price_above_upper")
+                                .replace("price_near_lower", "price_near_upper"))
+        elif t == "stochrsi":
+            if c.get("operator") == "lt":  c["operator"] = "gt"; c["value"] = 80
+        return c
+
+    # ── Singles (correct condition strings for the backtest evaluator) ─────────
+    singles = [
+        {"label": "RSI Oversold · 15m",      "primaryType": "rsi",          "primaryCfg": {"period": 14, "operator": "lt", "value": 30},              "confirms": [], "timeframe": "15m"},
+        {"label": "RSI Oversold · 1h",        "primaryType": "rsi",          "primaryCfg": {"period": 14, "operator": "lt", "value": 30},              "confirms": [], "timeframe": "1h"},
+        {"label": "RSI Momentum · 15m",       "primaryType": "rsi",          "primaryCfg": {"period": 14, "operator": "gt", "value": 55},              "confirms": [], "timeframe": "15m"},
+        {"label": "MACD Cross · 15m",         "primaryType": "macd",         "primaryCfg": {"condition": "bullish_cross"},                             "confirms": [], "timeframe": "15m"},
+        {"label": "MACD Cross · 1h",          "primaryType": "macd",         "primaryCfg": {"condition": "bullish_cross"},                             "confirms": [], "timeframe": "1h"},
+        {"label": "EMA Cross 9/21 · 15m",     "primaryType": "ema",          "primaryCfg": {"period": 9, "period2": 21, "condition": "bullish_cross"}, "confirms": [], "timeframe": "15m"},
+        {"label": "EMA Cross 9/21 · 1h",      "primaryType": "ema",          "primaryCfg": {"period": 9, "period2": 21, "condition": "bullish_cross"}, "confirms": [], "timeframe": "1h"},
+        {"label": "SuperTrend Flip · 15m",    "primaryType": "supertrend",   "primaryCfg": {"condition": "bullish"},                                   "confirms": [], "timeframe": "15m"},
+        {"label": "SuperTrend Flip · 1h",     "primaryType": "supertrend",   "primaryCfg": {"condition": "bullish"},                                   "confirms": [], "timeframe": "1h"},
+        {"label": "BB Lower Bounce · 15m",    "primaryType": "bb",           "primaryCfg": {"condition": "price_below_lower"},                         "confirms": [], "timeframe": "15m"},
+        {"label": "StochRSI Oversold · 15m",  "primaryType": "stochrsi",     "primaryCfg": {"operator": "lt", "value": 20},                           "confirms": [], "timeframe": "15m"},
+        {"label": "Volume Spike · 15m",       "primaryType": "volume_spike", "primaryCfg": {"multiplier": 2.0},                                        "confirms": [], "timeframe": "15m"},
     ]
 
-    # Flip RSI/EMA/MACD conditions for SHORT direction
-    if direction == "SHORT":
-        for t in templates:
-            if t["primaryType"] == "rsi":
-                cfg = t["primaryCfg"]
-                if cfg.get("operator") == "lt":
-                    cfg["operator"] = "gt"; cfg["value"] = 70
-                elif cfg.get("operator") == "gt" and cfg.get("value", 0) < 50:
-                    cfg["operator"] = "lt"; cfg["value"] = 45
-            if t["primaryType"] == "macd":
-                t["primaryCfg"]["condition"] = "BEARISH_CROSS"
-            if t["primaryType"] == "ema":
-                t["primaryCfg"]["condition"] = "cross_down"
-            if t["primaryType"] == "supertrend":
-                t["primaryCfg"]["condition"] = "bearish"
-            if t["primaryType"] == "bb":
-                t["primaryCfg"]["condition"] = "above_upper"
-            if t["primaryType"] == "stochrsi":
-                t["primaryCfg"]["operator"] = "gt"; t["primaryCfg"]["value"] = 80
+    # ── Combos — primary + one confirmation layer ──────────────────────────────
+    combos = [
+        # RSI base + trend/momentum confirm
+        {"label": "RSI Oversold + MACD · 15m",         "primaryType": "rsi",        "primaryCfg": {"period": 14, "operator": "lt", "value": 30},              "confirms": [{"type": "macd",       "condition": "bullish_cross"}],                              "timeframe": "15m"},
+        {"label": "RSI Oversold + SuperTrend · 1h",    "primaryType": "rsi",        "primaryCfg": {"period": 14, "operator": "lt", "value": 30},              "confirms": [{"type": "supertrend", "condition": "bullish"}],                                     "timeframe": "1h"},
+        # EMA cross + volume/momentum confirm
+        {"label": "EMA Cross + Volume Spike · 15m",    "primaryType": "ema",        "primaryCfg": {"period": 9, "period2": 21, "condition": "bullish_cross"}, "confirms": [{"type": "volume_spike", "multiplier": 1.5}],                                       "timeframe": "15m"},
+        {"label": "EMA Cross + RSI > 50 · 15m",        "primaryType": "ema",        "primaryCfg": {"period": 9, "period2": 21, "condition": "bullish_cross"}, "confirms": [{"type": "rsi",        "period": 14, "operator": "gt", "value": 50}],                "timeframe": "15m"},
+        # MACD base + trend confirm
+        {"label": "MACD Cross + EMA Bullish · 15m",    "primaryType": "macd",       "primaryCfg": {"condition": "bullish_cross"},                             "confirms": [{"type": "ema",        "period": 20, "condition": "above"}],                         "timeframe": "15m"},
+        {"label": "MACD Cross + EMA Bullish · 1h",     "primaryType": "macd",       "primaryCfg": {"condition": "bullish_cross"},                             "confirms": [{"type": "ema",        "period": 20, "condition": "above"}],                         "timeframe": "1h"},
+        # SuperTrend base + oscillator confirm
+        {"label": "SuperTrend + MACD · 15m",           "primaryType": "supertrend", "primaryCfg": {"condition": "bullish"},                                   "confirms": [{"type": "macd",       "condition": "bullish_cross"}],                              "timeframe": "15m"},
+        {"label": "SuperTrend + RSI > 50 · 1h",        "primaryType": "supertrend", "primaryCfg": {"condition": "bullish"},                                   "confirms": [{"type": "rsi",        "period": 14, "operator": "gt", "value": 50}],                "timeframe": "1h"},
+        # BB bounce + oversold confirm
+        {"label": "BB Bounce + RSI Oversold · 15m",    "primaryType": "bb",         "primaryCfg": {"condition": "price_below_lower"},                         "confirms": [{"type": "rsi",        "period": 14, "operator": "lt", "value": 35}],                "timeframe": "15m"},
+        # StochRSI base + trend confirm
+        {"label": "StochRSI + MACD · 15m",             "primaryType": "stochrsi",   "primaryCfg": {"operator": "lt", "value": 20},                           "confirms": [{"type": "macd",       "condition": "bullish_cross"}],                              "timeframe": "15m"},
+    ]
+
+    templates = []
+    for base_list in (singles, combos):
+        for t in base_list:
+            entry = {
+                "label":       t["label"],
+                "primaryType": t["primaryType"],
+                "primaryCfg":  dict(t["primaryCfg"]),
+                "confirms":    [dict(c) for c in t.get("confirms", [])],
+                "timeframe":   t["timeframe"],
+                "tp1": _tp, "sl": _sl, "leverage": _lev,
+            }
+            if direction == "SHORT":
+                # Flip primary condition
+                pt = entry["primaryType"]
+                pc = entry["primaryCfg"]
+                if pt == "rsi":
+                    if pc.get("operator") == "lt":        pc["operator"] = "gt"; pc["value"] = 70
+                    elif pc.get("operator") == "gt" and float(pc.get("value", 0)) < 60:
+                        pc["operator"] = "lt"; pc["value"] = 45
+                elif pt == "macd":        pc["condition"] = pc.get("condition", "").replace("bullish", "bearish")
+                elif pt == "ema":
+                    sub = pc.get("condition", "")
+                    pc["condition"] = (sub.replace("bullish_cross", "bearish_cross")
+                                          .replace("crosses_above", "crosses_below"))
+                elif pt == "supertrend":  pc["condition"] = "bearish"
+                elif pt == "bb":          pc["condition"] = pc.get("condition","").replace("price_below_lower", "price_above_upper")
+                elif pt == "stochrsi":
+                    if pc.get("operator") == "lt":        pc["operator"] = "gt"; pc["value"] = 80
+                # Flip each confirm
+                entry["confirms"] = [_C(c) for c in entry["confirms"]]
+                # Update label
+                entry["label"] = entry["label"].replace("Oversold", "Overbought").replace("Bullish", "Bearish").replace("Bounce", "Rejection")
+            templates.append(entry)
 
     from app.services.backtest_engine import run_backtest
 
