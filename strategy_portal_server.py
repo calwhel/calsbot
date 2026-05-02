@@ -8249,12 +8249,33 @@ async def backtest_scan(request: Request):
       coin                — legacy single coin (used if `coins` not given)
       coins               — optional list of tickers, max 5 (multi-coin scan)
       timeframes          — optional list, subset of ["15m","1h","4h"] (multi-TF scan)
+      risk_mode           — "optimised" (default) runs the 2-stage TP/SL search across
+                            4 profiles and returns the historically best variant per
+                            combo. "fixed" pins a single user-supplied TP/SL pair, runs
+                            ONLY stage 1, and skips the optimisation pass entirely.
+      fixed_tp, fixed_sl  — only used when risk_mode=="fixed". Both are percentages
+                            (e.g. 3.0 for 3%). Clamped to sane ranges server-side.
     }
     """
     body      = await request.json()
     uid       = (body.get("uid") or "").strip()
     days      = int(body.get("days", 30))
     direction = (body.get("direction") or "LONG").upper()
+    risk_mode = (body.get("risk_mode") or "optimised").lower()
+    if risk_mode not in ("optimised", "fixed"):
+        risk_mode = "optimised"
+
+    # Parse + clamp fixed TP/SL when in fixed mode. We accept any positive
+    # number but bound it so a fat-finger 9999% can't break the engine.
+    def _clamp_pct(v, lo, hi, default):
+        try:
+            f = float(v)
+            if not (f > 0): return default
+            return max(lo, min(hi, f))
+        except (TypeError, ValueError):
+            return default
+    fixed_tp = _clamp_pct(body.get("fixed_tp"), 0.1, 50.0, 3.0)
+    fixed_sl = _clamp_pct(body.get("fixed_sl"), 0.1, 25.0, 1.5)
 
     # ── Coin universe — accept either single `coin` or list `coins` ────────────
     coins_raw = body.get("coins")
@@ -8541,13 +8562,29 @@ async def backtest_scan(request: Request):
     # Each strategy is first scored at the "Balanced" profile (stage 1), then
     # the top 8 are re-tested with all 4 profiles in stage 2 to find the
     # optimal TP/SL for that specific (strategy, coin, TF) combo.
-    risk_profiles = [
-        {"name": "Tight Scalp", "tp1": 1.5, "sl": 0.75, "leverage": 5, "rr": "2:1"},
-        {"name": "Balanced",    "tp1": 3.0, "sl": 1.5,  "leverage": 5, "rr": "2:1"},
-        {"name": "Wide Swing",  "tp1": 5.0, "sl": 2.0,  "leverage": 5, "rr": "2.5:1"},
-        {"name": "Runner",      "tp1": 8.0, "sl": 2.0,  "leverage": 5, "rr": "4:1"},
-    ]
-    DEFAULT_PROFILE = risk_profiles[1]  # Balanced
+    if risk_mode == "fixed":
+        # User pinned an exact TP/SL — single profile, stage 2 becomes a no-op
+        # because the optimisation loop iterates over `risk_profiles` and skips
+        # DEFAULT_PROFILE, leaving zero variants to test.
+        _rr_ratio = round(fixed_tp / max(fixed_sl, 0.01), 2)
+        risk_profiles = [{
+            "name":     f"Fixed {fixed_tp:g}% / {fixed_sl:g}%",
+            "tp1":      fixed_tp,
+            "sl":       fixed_sl,
+            "leverage": 5,
+            "rr":       f"{_rr_ratio}:1",
+        }]
+        DEFAULT_PROFILE = risk_profiles[0]
+    else:
+        # Optimised mode — historical 4-profile search picks the best variant
+        # per (strategy, coin, TF) combo (stage 2 below).
+        risk_profiles = [
+            {"name": "Tight Scalp", "tp1": 1.5, "sl": 0.75, "leverage": 5, "rr": "2:1"},
+            {"name": "Balanced",    "tp1": 3.0, "sl": 1.5,  "leverage": 5, "rr": "2:1"},
+            {"name": "Wide Swing",  "tp1": 5.0, "sl": 2.0,  "leverage": 5, "rr": "2.5:1"},
+            {"name": "Runner",      "tp1": 8.0, "sl": 2.0,  "leverage": 5, "rr": "4:1"},
+        ]
+        DEFAULT_PROFILE = risk_profiles[1]  # Balanced
 
     # Bound concurrency so we don't blow up CPU when running 600+ backtests.
     # Backtests are synchronous CPU work; async only helps with I/O. We pre-
@@ -8808,6 +8845,9 @@ async def backtest_scan(request: Request):
         "timeframes": tf_list,               # all TFs scanned
         "days":    days,
         "direction": direction,
+        "risk_mode": risk_mode,
+        "fixed_tp":  fixed_tp if risk_mode == "fixed" else None,
+        "fixed_sl":  fixed_sl if risk_mode == "fixed" else None,
         "ranked":  [_clean_row(r, include_full=(i < 5)) for i, r in enumerate(valid[:12])],
         "tested":  len(stage1_jobs),
         "skipped": len(invalid),

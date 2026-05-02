@@ -2496,11 +2496,42 @@ function dismissTgBanner(){
             </div>
           </div>
 
-          <div style="margin-bottom:18px">
+          <div style="margin-bottom:14px">
             <div class="pine-label">Direction</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="scan-dir-chips">
               <button class="dir-btn long active" onclick="setScanDir('LONG',this)">Long</button>
               <button class="dir-btn short" onclick="setScanDir('SHORT',this)">🔴 Short</button>
+            </div>
+          </div>
+
+          <!-- TP / SL mode toggle -->
+          <div style="margin-bottom:18px">
+            <div class="pine-label">Take-profit / Stop-loss
+              <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">
+                — let the engine pick the historical best, or pin your own values
+              </span>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="scan-risk-chips">
+              <button class="opt-chip active" data-mode="optimised"
+                      onclick="setScanRiskMode('optimised',this)">🤖 Optimised (best from past)</button>
+              <button class="opt-chip" data-mode="fixed"
+                      onclick="setScanRiskMode('fixed',this)">🎯 Fixed TP / SL</button>
+            </div>
+            <div id="scan-fixed-row"
+                 style="display:none;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+              <div>
+                <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:4px">Take-profit %</div>
+                <input id="scan-fixed-tp" type="number" min="0.1" max="50" step="0.1" value="3.0"
+                  style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)">
+              </div>
+              <div>
+                <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:4px">Stop-loss %</div>
+                <input id="scan-fixed-sl" type="number" min="0.1" max="25" step="0.1" value="1.5"
+                  style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)">
+              </div>
+              <div style="grid-column:1 / -1;font-size:11px;color:var(--muted);margin-top:-2px">
+                Stage-2 TP/SL optimisation is skipped — every strategy is judged on these exact values.
+              </div>
             </div>
           </div>
 
@@ -6674,7 +6705,16 @@ function switchBuildMode(mode) {
 let _scanDays = 30;
 let _scanDir  = 'LONG';
 let _scanTfs  = ['1h'];   // selected timeframes (15m / 1h / 4h)
+let _scanRiskMode = 'optimised';  // 'optimised' (engine picks best TP/SL) | 'fixed' (user pins it)
 let _scanResult = null;   // last successful scan response
+
+function setScanRiskMode(mode, el) {
+  _scanRiskMode = (mode === 'fixed') ? 'fixed' : 'optimised';
+  document.querySelectorAll('#scan-risk-chips .opt-chip').forEach(b => b.classList.remove('active'));
+  if (el) el.classList.add('active');
+  const row = document.getElementById('scan-fixed-row');
+  if (row) row.style.display = (_scanRiskMode === 'fixed') ? 'grid' : 'none';
+}
 
 function toggleScanTf(tf, el) {
   const idx = _scanTfs.indexOf(tf);
@@ -6776,6 +6816,9 @@ async function runScan() {
         timeframes: _scanTfs,
         days: _scanDays,
         direction: _scanDir,
+        risk_mode: _scanRiskMode,
+        fixed_tp: parseFloat(document.getElementById('scan-fixed-tp')?.value) || 3.0,
+        fixed_sl: parseFloat(document.getElementById('scan-fixed-sl')?.value) || 1.5,
       }),
     });
     const data = await res.json();
@@ -6842,11 +6885,17 @@ function renderScanResults(data) {
     <div style="font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.4px">${s.label}</div>
   </div>`).join('');
 
-  // Risk-profile comparison table — shows what each TP/SL combo produced
+  // Risk-profile comparison table — shows what each TP/SL combo produced.
+  // IMPORTANT: this block is appended via insertAdjacentHTML, so we MUST
+  // remove any previous instance first — otherwise running an Optimised scan
+  // (which inserts the block) followed by a Fixed scan (only 1 variant, no
+  // block) would leave the stale comparison from the previous run on screen.
+  const _staleVariants = document.getElementById('scan-variants-block');
+  if (_staleVariants) _staleVariants.remove();
   const variants = winner.all_risk_variants || [];
   if (variants.length > 1) {
     const variantsHtml = `
-      <div style="background:var(--card2);border-radius:10px;padding:12px;margin-bottom:14px;border:1px solid var(--border)">
+      <div id="scan-variants-block" style="background:var(--card2);border-radius:10px;padding:12px;margin-bottom:14px;border:1px solid var(--border)">
         <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:8px">📊 Risk profile comparison</div>
         <div style="display:grid;grid-template-columns:1.4fr .7fr .8fr .8fr .7fr;gap:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;font-weight:600;padding:4px 8px;border-bottom:1px solid var(--border);margin-bottom:4px">
           <div>Profile</div><div>TP / SL</div><div>Win%</div><div>P&L</div><div style="text-align:right">Trades</div>
