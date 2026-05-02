@@ -1876,6 +1876,7 @@ function dismissTgBanner(){
     <button class="build-mode-btn active" id="bm-wizard" onclick="switchBuildMode('wizard')">🧙 Step Wizard</button>
     <button class="build-mode-btn" id="bm-chat" onclick="switchBuildMode('chat')">💬 Chat Builder</button>
     <button class="build-mode-btn" id="bm-pine" onclick="switchBuildMode('pine')">🌲 PineScript{% if not is_pro %} <span style="font-size:10px;opacity:.6">🔒</span>{% endif %}</button>
+    <button class="build-mode-btn" id="bm-scan" onclick="switchBuildMode('scan')">🔍 Scan Best{% if not is_pro %} <span style="font-size:10px;opacity:.6">🔒</span>{% endif %}</button>
   </div>
 
   <!-- ── GENERATE INDICATOR PANEL ── -->
@@ -2312,6 +2313,109 @@ function dismissTgBanner(){
       </div>
     </div>
   </div>
+
+  <!-- ── SCAN BEST PANEL ── -->
+  <div id="build-scan-panel" style="display:none;padding-bottom:20px">
+    <div class="pine-wrap">
+
+      <!-- Pro gate for free users -->
+      <div id="scan-pro-wall" {% if is_pro %}style="display:none"{% endif %}>
+        <div class="pine-card">
+          <div class="pine-pro-wall">
+            <div class="lw-icon">🔍</div>
+            <div class="lw-title">Pro feature</div>
+            <div class="lw-sub">Strategy Scanner runs 12 strategies against real historical data for any coin and ranks them — so you know which edge actually works before you risk capital.</div>
+            <button class="btn primary" onclick="showModal('modal-upgrade')" style="font-size:14px;padding:11px 24px">Upgrade to Pro — $50/mo</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Config card -->
+      <div id="scan-config-card" {% if not is_pro %}style="display:none"{% endif %}>
+        <div class="pine-card">
+          <div style="margin-bottom:16px">
+            <div style="font-size:16px;font-weight:700;letter-spacing:-.3px">🔍 Strategy Scanner</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:3px">Pick a coin and direction — the AI runs 12 strategy types against real historical data and ranks the best one for you</div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+            <div>
+              <div class="pine-label">Coin</div>
+              <input id="scan-coin" type="text" value="BTC" maxlength="12"
+                style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)"
+                placeholder="BTC, ETH, SOL…">
+            </div>
+            <div>
+              <div class="pine-label">Test window</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:2px" id="scan-days-chips">
+                <button class="opt-chip active" onclick="setScanDays(30,this)">30 days</button>
+                <button class="opt-chip" onclick="setScanDays(90,this)">90 days</button>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-bottom:18px">
+            <div class="pine-label">Direction</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="scan-dir-chips">
+              <button class="dir-btn long active" onclick="setScanDir('LONG',this)">Long</button>
+              <button class="dir-btn short" onclick="setScanDir('SHORT',this)">🔴 Short</button>
+            </div>
+          </div>
+
+          <button class="pine-analyse-btn" id="scan-run-btn" onclick="runScan()">🔍 Scan Strategies →</button>
+        </div>
+
+        <!-- Progress -->
+        <div id="scan-progress" style="display:none">
+          <div class="pine-card" style="text-align:center;padding:28px 20px">
+            <div style="font-size:28px;margin-bottom:10px">⚙️</div>
+            <div style="font-weight:700;font-size:15px;margin-bottom:6px">Running 12 strategies in parallel…</div>
+            <div id="scan-progress-sub" style="font-size:12px;color:var(--muted)">Testing RSI, MACD, EMA cross, SuperTrend, Bollinger Bands and more against real historical data</div>
+            <div style="margin-top:18px;height:5px;background:var(--border);border-radius:99px;overflow:hidden">
+              <div id="scan-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),#818cf8);border-radius:99px;transition:width .4s ease"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Results -->
+        <div id="scan-results" style="display:none">
+          <!-- Winner highlight -->
+          <div class="pine-card" id="scan-winner-card" style="border:1px solid rgba(91,108,247,.4);background:linear-gradient(135deg,rgba(91,108,247,.07),rgba(99,102,241,.04))">
+            <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
+              <div style="font-size:28px;flex-shrink:0">🥇</div>
+              <div style="flex:1">
+                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:2px">Best strategy for <span id="scan-winner-coin">—</span></div>
+                <div style="font-size:18px;font-weight:700;letter-spacing:-.3px" id="scan-winner-label">—</div>
+                <div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5" id="scan-winner-insight"></div>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px" id="scan-winner-stats"></div>
+            <button class="btn primary" style="width:100%;font-size:14px;padding:12px" onclick="createFromScan()">✅ Create This Strategy →</button>
+          </div>
+
+          <!-- Full ranking table -->
+          <div class="pine-card" style="padding:0;overflow:hidden">
+            <div style="padding:12px 16px;border-bottom:1px solid var(--border);font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">All results · ranked by score</div>
+            <div id="scan-table"></div>
+          </div>
+
+          <div style="text-align:center;margin-top:6px">
+            <button class="btn ghost" style="font-size:12px" onclick="resetScan()">← Scan Again</button>
+          </div>
+        </div>
+
+        <!-- Error -->
+        <div id="scan-error" style="display:none">
+          <div class="pine-card">
+            <div style="color:var(--red);font-weight:600;margin-bottom:8px">⚠ Scan failed</div>
+            <div id="scan-error-msg" style="font-size:13px;color:var(--muted)"></div>
+            <button class="btn ghost" style="margin-top:12px" onclick="resetScan()">Try Again</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- ════ PURCHASES ════════════════════════════════════════ -->
@@ -6244,10 +6348,12 @@ function switchBuildMode(mode) {
   document.getElementById('bm-wizard').classList.toggle('active', mode === 'wizard');
   document.getElementById('bm-chat').classList.toggle('active', mode === 'chat');
   document.getElementById('bm-pine').classList.toggle('active', mode === 'pine');
+  document.getElementById('bm-scan').classList.toggle('active', mode === 'scan');
   document.getElementById('build-indicator-panel').style.display = mode === 'indicator' ? '' : 'none';
   document.getElementById('build-wizard-panel').style.display = mode === 'wizard' ? '' : 'none';
   document.getElementById('build-chat-panel').style.display = mode === 'chat' ? '' : 'none';
   document.getElementById('build-pine-panel').style.display = mode === 'pine' ? '' : 'none';
+  document.getElementById('build-scan-panel').style.display = mode === 'scan' ? '' : 'none';
   if (mode === 'chat') {
     if (!IS_PRO) {
       cbSyncUsage(0, 0, false);
@@ -6258,6 +6364,173 @@ function switchBuildMode(mode) {
   if (mode === 'pine') {
     pineInitUI();
   }
+}
+
+// ══════════════════════════════════════════════════════════
+// STRATEGY SCANNER
+// ══════════════════════════════════════════════════════════
+let _scanDays = 30;
+let _scanDir  = 'LONG';
+let _scanResult = null;  // last successful scan response
+
+function setScanDays(days, el) {
+  _scanDays = days;
+  document.querySelectorAll('#scan-days-chips .opt-chip').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+}
+
+function setScanDir(dir, el) {
+  _scanDir = dir;
+  document.querySelectorAll('#scan-dir-chips .dir-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+}
+
+function resetScan() {
+  _scanResult = null;
+  ['scan-progress','scan-results','scan-error'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  const cfg = document.getElementById('scan-config-card');
+  const btn = document.getElementById('scan-run-btn');
+  if (cfg) cfg.querySelector('.pine-card').style.display = '';
+  if (btn) { btn.disabled = false; btn.textContent = '🔍 Scan Strategies →'; }
+  const bar = document.getElementById('scan-bar');
+  if (bar) bar.style.width = '0%';
+}
+
+async function runScan() {
+  if (!IS_PRO) { showModal('modal-upgrade'); return; }
+  const coin = (document.getElementById('scan-coin').value || 'BTC').trim().toUpperCase();
+  if (!coin) return;
+
+  const btn = document.getElementById('scan-run-btn');
+  btn.disabled = true;
+  btn.textContent = 'Scanning…';
+
+  // Hide config card body, show progress
+  document.getElementById('scan-progress').style.display = '';
+  document.getElementById('scan-results').style.display = 'none';
+  document.getElementById('scan-error').style.display = 'none';
+
+  // Animate progress bar during wait
+  const bar = document.getElementById('scan-bar');
+  bar.style.width = '0%';
+  let pct = 0;
+  const barTimer = setInterval(() => {
+    pct = Math.min(pct + (pct < 70 ? 1.2 : 0.3), 92);
+    bar.style.width = pct + '%';
+  }, 600);
+
+  try {
+    const res = await fetch('/api/backtest/scan', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ uid: window._portalUID || '', coin, days: _scanDays, direction: _scanDir }),
+    });
+    const data = await res.json();
+    clearInterval(barTimer);
+    bar.style.width = '100%';
+
+    if (data.error === 'PRO_REQUIRED') { showModal('modal-upgrade'); resetScan(); return; }
+    if (data.error || !data.ok) {
+      document.getElementById('scan-error-msg').textContent = data.message || data.error || 'Unknown error';
+      document.getElementById('scan-progress').style.display = 'none';
+      document.getElementById('scan-error').style.display = '';
+      btn.disabled = false; btn.textContent = '🔍 Scan Strategies →';
+      return;
+    }
+    _scanResult = data;
+    setTimeout(() => renderScanResults(data), 300);
+  } catch(e) {
+    clearInterval(barTimer);
+    document.getElementById('scan-error-msg').textContent = 'Network error — please try again.';
+    document.getElementById('scan-progress').style.display = 'none';
+    document.getElementById('scan-error').style.display = '';
+    btn.disabled = false; btn.textContent = '🔍 Scan Strategies →';
+  }
+}
+
+function renderScanResults(data) {
+  document.getElementById('scan-progress').style.display = 'none';
+  const ranked = data.ranked || [];
+  if (!ranked.length) {
+    document.getElementById('scan-error-msg').textContent = 'No strategy generated enough trades to rank. Try a different coin or 90-day window.';
+    document.getElementById('scan-error').style.display = '';
+    return;
+  }
+  const winner = ranked[0];
+  const ws     = winner.stats || {};
+  const coin   = data.coin || '';
+  const pnlPos = (ws.total_pnl || 0) >= 0;
+
+  document.getElementById('scan-winner-coin').textContent  = coin;
+  document.getElementById('scan-winner-label').textContent = winner.label;
+  const insight = data.winner_insight || '';
+  const insightEl = document.getElementById('scan-winner-insight');
+  insightEl.textContent = insight;
+  insightEl.style.display = insight ? '' : 'none';
+
+  // Winner stat grid
+  const statsEl = document.getElementById('scan-winner-stats');
+  statsEl.innerHTML = [
+    { label:'Win Rate',      val: (ws.win_rate||0).toFixed(1)+'%',       color: (ws.win_rate||0)>=50?'var(--green)':'var(--red)' },
+    { label:'Total P&L',    val: (pnlPos?'+':'')+(ws.total_pnl||0).toFixed(1)+'%', color: pnlPos?'var(--green)':'var(--red)' },
+    { label:'Profit Factor', val: (ws.profit_factor||0).toFixed(2),       color: (ws.profit_factor||0)>=1.2?'var(--green)':'var(--muted)' },
+    { label:'Trades',        val: ws.closed_trades||0,                    color: 'var(--text)' },
+  ].map(s => `<div style="background:var(--card2);border-radius:8px;padding:10px 8px;text-align:center">
+    <div style="font-size:16px;font-weight:800;color:${s.color}">${s.val}</div>
+    <div style="font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.4px">${s.label}</div>
+  </div>`).join('');
+
+  // Full ranking table
+  const tableEl = document.getElementById('scan-table');
+  tableEl.innerHTML = ranked.map((r, i) => {
+    const st  = r.stats || {};
+    const pos = (st.total_pnl || 0) >= 0;
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
+    return `<div style="display:grid;grid-template-columns:1.8fr .8fr .8fr .9fr .7fr;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':''}">
+      <div style="font-weight:600">${medal} ${r.label}</div>
+      <div style="color:${(st.win_rate||0)>=50?'var(--green)':'var(--red)'};">${(st.win_rate||0).toFixed(1)}%</div>
+      <div style="color:${pos?'var(--green)':'var(--red)'};">${pos?'+':''}${(st.total_pnl||0).toFixed(1)}%</div>
+      <div style="color:var(--muted)">PF ${(st.profit_factor||0).toFixed(2)}</div>
+      <div style="color:var(--muted);text-align:right">${st.closed_trades||0} trades</div>
+    </div>`;
+  }).join('') + `<div style="display:grid;grid-template-columns:1.8fr .8fr .8fr .9fr .7fr;padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px">
+    <div>Strategy</div><div>Win%</div><div>P&L</div><div>Prof.Factor</div><div style="text-align:right">Trades</div>
+  </div>`;
+
+  document.getElementById('scan-results').style.display = '';
+  const btn = document.getElementById('scan-run-btn');
+  btn.disabled = false; btn.textContent = '🔍 Scan Strategies →';
+}
+
+function createFromScan() {
+  if (!_scanResult || !_scanResult.ranked || !_scanResult.ranked.length) return;
+  const winner = _scanResult.ranked[0];
+  const cfg    = winner.config || {};
+
+  // Switch to Wizard mode and pre-fill state
+  switchBuildMode('wizard');
+  // Pre-populate wizard values if possible
+  try {
+    WZ.direction   = cfg.direction   || 'LONG';
+    WZ.primaryType = cfg.primaryType || 'rsi';
+    WZ.primaryCfg  = cfg.primaryCfg  || {};
+    WZ.tp1         = cfg.tp1         || 3;
+    WZ.sl          = cfg.sl          || 1.5;
+    WZ.leverage    = cfg.leverage    || 5;
+    WZ.timeframe   = cfg.timeframe   || '15m';
+    WZ.singleCoin  = _scanResult.coin || 'BTC';
+    WZ.name        = `${_scanResult.coin} ${winner.label}`;
+    wzRenderAll && wzRenderAll();
+  } catch(e) { /* wizard may not expose all setters — user can adjust manually */ }
+
+  // Scroll to wizard
+  setTimeout(() => {
+    const el = document.getElementById('build-wizard-panel');
+    if (el) el.scrollIntoView({ behavior:'smooth', block:'start' });
+  }, 150);
 }
 
 // ══════════════════════════════════════════════════════════

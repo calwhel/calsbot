@@ -7865,6 +7865,172 @@ Entry conditions:
         return {"reply": "Sorry, I hit an issue — please try again.", "pro_required": False}
 
 
+@app.post("/api/backtest/scan")
+async def backtest_scan(request: Request):
+    """
+    AI Strategy Scanner — run 12 strategy templates against historical data
+    for one coin in parallel, rank by composite score, return the winner.
+    Pro subscribers only.
+    Body: { uid, coin, days, direction }
+    """
+    body      = await request.json()
+    uid       = (body.get("uid") or "").strip()
+    coin_raw  = (body.get("coin") or "BTC").upper().strip()
+    days      = int(body.get("days", 30))
+    direction = (body.get("direction") or "LONG").upper()
+
+    if days not in (30, 90):
+        days = 30
+    if direction not in ("LONG", "SHORT"):
+        direction = "LONG"
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        _sub = _get_portal_sub(user.id, db)
+        if not _is_portal_pro(_sub) and not getattr(user, "is_admin", False):
+            return {"error": "PRO_REQUIRED",
+                    "message": "A Pro subscription is required to use the Strategy Scanner."}
+    finally:
+        db.close()
+
+    coin   = coin_raw if coin_raw.endswith("USDT") else coin_raw + "USDT"
+    ticker = coin_raw.replace("USDT", "")
+
+    # ── Strategy templates to scan ─────────────────────────────────────────────
+    # All use the same coin/direction/days; TP/SL/leverage kept conservative so
+    # the ranking reflects signal quality rather than raw risk settings.
+    _tp, _sl, _lev = (3.0, 1.5, 5) if direction == "LONG" else (3.0, 1.5, 5)
+
+    templates = [
+        {"label": "RSI Oversold · 15m",       "primaryType": "rsi",            "primaryCfg": {"period": 14, "operator": "lt", "value": 30},         "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
+        {"label": "RSI Oversold · 1h",         "primaryType": "rsi",            "primaryCfg": {"period": 14, "operator": "lt", "value": 30},         "timeframe": "1h",  "tp1": _tp, "sl": _sl, "leverage": _lev},
+        {"label": "RSI Momentum · 15m",        "primaryType": "rsi",            "primaryCfg": {"period": 14, "operator": "gt", "value": 55},         "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
+        {"label": "MACD Cross · 15m",          "primaryType": "macd",           "primaryCfg": {"condition": "BULLISH_CROSS"},                        "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
+        {"label": "MACD Cross · 1h",           "primaryType": "macd",           "primaryCfg": {"condition": "BULLISH_CROSS"},                        "timeframe": "1h",  "tp1": _tp, "sl": _sl, "leverage": _lev},
+        {"label": "EMA Cross 9/21 · 15m",      "primaryType": "ema",            "primaryCfg": {"period": 9, "period2": 21, "condition": "cross_up"}, "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
+        {"label": "EMA Cross 9/21 · 1h",       "primaryType": "ema",            "primaryCfg": {"period": 9, "period2": 21, "condition": "cross_up"}, "timeframe": "1h",  "tp1": _tp, "sl": _sl, "leverage": _lev},
+        {"label": "SuperTrend Flip · 15m",     "primaryType": "supertrend",     "primaryCfg": {"condition": "bullish"},                              "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
+        {"label": "SuperTrend Flip · 1h",      "primaryType": "supertrend",     "primaryCfg": {"condition": "bullish"},                              "timeframe": "1h",  "tp1": _tp, "sl": _sl, "leverage": _lev},
+        {"label": "BB Lower Bounce · 15m",     "primaryType": "bb",             "primaryCfg": {"condition": "below_lower"},                          "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
+        {"label": "StochRSI Oversold · 15m",   "primaryType": "stochrsi",       "primaryCfg": {"operator": "lt", "value": 20},                      "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
+        {"label": "Volume Spike · 15m",        "primaryType": "volume_spike",   "primaryCfg": {"multiplier": 2.0},                                   "timeframe": "15m", "tp1": _tp, "sl": _sl, "leverage": _lev},
+    ]
+
+    # Flip RSI/EMA/MACD conditions for SHORT direction
+    if direction == "SHORT":
+        for t in templates:
+            if t["primaryType"] == "rsi":
+                cfg = t["primaryCfg"]
+                if cfg.get("operator") == "lt":
+                    cfg["operator"] = "gt"; cfg["value"] = 70
+                elif cfg.get("operator") == "gt" and cfg.get("value", 0) < 50:
+                    cfg["operator"] = "lt"; cfg["value"] = 45
+            if t["primaryType"] == "macd":
+                t["primaryCfg"]["condition"] = "BEARISH_CROSS"
+            if t["primaryType"] == "ema":
+                t["primaryCfg"]["condition"] = "cross_down"
+            if t["primaryType"] == "supertrend":
+                t["primaryCfg"]["condition"] = "bearish"
+            if t["primaryType"] == "bb":
+                t["primaryCfg"]["condition"] = "above_upper"
+            if t["primaryType"] == "stochrsi":
+                t["primaryCfg"]["operator"] = "gt"; t["primaryCfg"]["value"] = 80
+
+    from app.services.backtest_engine import run_backtest
+
+    async def _run_one(tpl: dict) -> dict:
+        cfg = {
+            "direction":   direction,
+            "primaryType": tpl["primaryType"],
+            "primaryCfg":  tpl["primaryCfg"],
+            "confirms":    [],
+            "tp1":         tpl["tp1"],
+            "sl":          tpl["sl"],
+            "leverage":    tpl["leverage"],
+            "timeframe":   tpl["timeframe"],
+            "singleCoin":  coin,
+        }
+        try:
+            result = await asyncio.wait_for(run_backtest(cfg, days), timeout=55)
+        except asyncio.TimeoutError:
+            result = {"error": "timeout"}
+        except Exception as exc:
+            result = {"error": str(exc)}
+        return {"label": tpl["label"], "config": cfg, "result": result}
+
+    # Run all templates in parallel
+    outcomes = await asyncio.gather(*[_run_one(t) for t in templates])
+
+    # ── Score and rank ─────────────────────────────────────────────────────────
+    def _score(stats: dict) -> float:
+        trades = stats.get("closed_trades", 0)
+        if trades < 5:
+            return -1.0   # too few trades to trust
+        pf = float(stats.get("profit_factor", 0) or 0)
+        wr = float(stats.get("win_rate", 0) or 0) / 100
+        pnl = float(stats.get("total_pnl", 0) or 0)
+        # Composite: profit factor × win rate, tie-break by total P&L
+        return round(pf * wr + pnl * 0.001, 4)
+
+    ranked = []
+    for o in outcomes:
+        res  = o.get("result") or {}
+        err  = res.get("error")
+        stats = res.get("stats") or {}
+        score = _score(stats) if not err else -1.0
+        ranked.append({
+            "label":   o["label"],
+            "config":  o["config"],
+            "stats":   stats,
+            "score":   score,
+            "error":   err,
+        })
+
+    ranked.sort(key=lambda x: x["score"], reverse=True)
+    # Only return entries that had enough trades
+    valid   = [r for r in ranked if r["score"] >= 0]
+    invalid = [r for r in ranked if r["score"] < 0]
+
+    # ── AI one-liner for the winner ────────────────────────────────────────────
+    winner_insight = ""
+    if valid:
+        w = valid[0]
+        ws = w["stats"]
+        try:
+            import anthropic as _ant
+            _ac = _ant.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+            _msg = await asyncio.wait_for(
+                _ac.messages.create(
+                    model="claude-haiku-4-5",
+                    max_tokens=120,
+                    system="You are a crypto quant analyst. Respond with exactly 1 short sentence (max 20 words) explaining why the winning strategy suits the coin's price behaviour. No markdown.",
+                    messages=[{"role": "user", "content":
+                        f"Strategy '{w['label']}' won the scan for {ticker} over {days} days: "
+                        f"win rate {ws.get('win_rate')}%, P&L {ws.get('total_pnl')}%, "
+                        f"profit factor {ws.get('profit_factor')}, {ws.get('closed_trades')} trades. "
+                        f"Why does this strategy suit {ticker}?"}],
+                ),
+                timeout=12,
+            )
+            winner_insight = _msg.content[0].text.strip()
+        except Exception:
+            pass
+
+    return {
+        "ok":      True,
+        "coin":    ticker,
+        "days":    days,
+        "direction": direction,
+        "ranked":  valid[:8],
+        "skipped": len(invalid),
+        "winner_insight": winner_insight,
+    }
+
+
 @app.post("/api/backtest/run")
 async def run_backtest_endpoint(request: Request):
     """
