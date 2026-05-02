@@ -707,6 +707,20 @@ class IndicatorAlert(Base):
 
     status = Column(String, nullable=False, default="active", index=True)  # active | triggered | cancelled
 
+    # Fire mode controls whether the alert auto-disarms or keeps firing.
+    # 'once'                       — fire one time then status='triggered' (legacy default)
+    # 'every_cross'                — keep status='active', fire on every fresh cross
+    # 'every_cross_with_cooldown'  — same as above but rate-limited by cooldown_minutes / daily_cap
+    fire_mode = Column(String, nullable=False, default="once", index=True)
+    cooldown_minutes = Column(Integer, nullable=False, default=0)  # 0 = no cooldown
+    daily_cap = Column(Integer, nullable=True)                     # None = unlimited per day
+
+    # Repeat-fire bookkeeping (also populated for 'once' alerts so the panel can show stats)
+    fire_count = Column(Integer, nullable=False, default=0)
+    last_fired_at = Column(DateTime, nullable=True)
+    fired_today_count = Column(Integer, nullable=False, default=0)
+    fired_today_date = Column(String, nullable=True)  # ISO 'YYYY-MM-DD' (UTC), reset marker
+
     # Cross detection state
     last_value = Column(Float, nullable=True)     # last seen indicator value
     last_eval_at = Column(DateTime, nullable=True)

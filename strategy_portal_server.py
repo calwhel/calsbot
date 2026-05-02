@@ -486,6 +486,16 @@ def _ensure_tables():
         "min_minutes_between_trades":  "ALTER TABLE auto_trade_strategies ADD COLUMN min_minutes_between_trades INTEGER DEFAULT 0",
         "last_trade_closed_at":        "ALTER TABLE auto_trade_strategies ADD COLUMN last_trade_closed_at TIMESTAMP",
     }
+    indicator_alerts_cols = {
+        "fire_mode":         "ALTER TABLE indicator_alerts ADD COLUMN fire_mode VARCHAR NOT NULL DEFAULT 'once'",
+        "cooldown_minutes":  "ALTER TABLE indicator_alerts ADD COLUMN cooldown_minutes INTEGER NOT NULL DEFAULT 0",
+        "daily_cap":         "ALTER TABLE indicator_alerts ADD COLUMN daily_cap INTEGER",
+        "fire_count":        "ALTER TABLE indicator_alerts ADD COLUMN fire_count INTEGER NOT NULL DEFAULT 0",
+        "last_fired_at":     "ALTER TABLE indicator_alerts ADD COLUMN last_fired_at TIMESTAMP",
+        "fired_today_count": "ALTER TABLE indicator_alerts ADD COLUMN fired_today_count INTEGER NOT NULL DEFAULT 0",
+        "fired_today_date":  "ALTER TABLE indicator_alerts ADD COLUMN fired_today_date VARCHAR",
+    }
+
     auto_trade_cols = {
         "tp1_hit":                "ALTER TABLE auto_trade_paper_trades ADD COLUMN tp1_hit BOOLEAN DEFAULT FALSE",
         "tp1_hit_at":             "ALTER TABLE auto_trade_paper_trades ADD COLUMN tp1_hit_at TIMESTAMP",
@@ -518,6 +528,7 @@ def _ensure_tables():
     _migrate_columns("users", user_cols)
     _migrate_columns("auto_trade_strategies", auto_strategy_cols)
     _migrate_columns("auto_trade_paper_trades", auto_trade_cols)
+    _migrate_columns("indicator_alerts", indicator_alerts_cols)
 
 
 @app.on_event("startup")
@@ -2057,6 +2068,9 @@ _ALERT_KINDS = {"price", "rsi", "ema_cross", "macd_cross_zero",
 _ALERT_CONDITIONS = {"above", "below", "crossover", "crossunder", "flip",
                      "bull", "bear"}
 _ALERT_TFS = {"1m", "5m", "15m", "1h"}
+_ALERT_FIRE_MODES = {"once", "every_cross", "every_cross_with_cooldown"}
+_MAX_ALERT_COOLDOWN_MIN = 24 * 60       # 1 day
+_MAX_ALERT_DAILY_CAP    = 500           # absolute spam ceiling
 
 
 def _alert_to_dict(a) -> dict:
@@ -2074,6 +2088,14 @@ def _alert_to_dict(a) -> dict:
         "triggered_at": a.triggered_at.isoformat() if a.triggered_at else None,
         "triggered_message": a.triggered_message,
         "triggered_price": a.triggered_price,
+        # Repeating-alert fields (Task #10)
+        "fire_mode": getattr(a, "fire_mode", None) or "once",
+        "cooldown_minutes": int(getattr(a, "cooldown_minutes", 0) or 0),
+        "daily_cap": getattr(a, "daily_cap", None),
+        "fire_count": int(getattr(a, "fire_count", 0) or 0),
+        "last_fired_at": a.last_fired_at.isoformat() if getattr(a, "last_fired_at", None) else None,
+        "fired_today_count": int(getattr(a, "fired_today_count", 0) or 0),
+        "fired_today_date": getattr(a, "fired_today_date", None),
     }
 
 
@@ -2231,6 +2253,39 @@ async def trade_alerts_create(request: Request, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400,
                                 detail="FVG retest condition must be 'bull' or 'bear'")
 
+    # Fire mode (Task #10) — backwards compatible: missing/blank → 'once'
+    fire_mode = (body.get("fire_mode") or "once").lower().strip()
+    if fire_mode not in _ALERT_FIRE_MODES:
+        raise HTTPException(status_code=400, detail=f"unknown fire_mode '{fire_mode}'")
+    cooldown_minutes = 0
+    daily_cap = None
+    if fire_mode == "every_cross_with_cooldown":
+        try:
+            cooldown_minutes = int(body.get("cooldown_minutes") or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="cooldown_minutes must be an integer")
+        if cooldown_minutes < 0:
+            cooldown_minutes = 0
+        if cooldown_minutes > _MAX_ALERT_COOLDOWN_MIN:
+            cooldown_minutes = _MAX_ALERT_COOLDOWN_MIN
+        raw_cap = body.get("daily_cap")
+        if raw_cap not in (None, "", 0, "0"):
+            try:
+                daily_cap = int(raw_cap)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="daily_cap must be an integer")
+            if daily_cap < 1:
+                daily_cap = None
+            elif daily_cap > _MAX_ALERT_DAILY_CAP:
+                daily_cap = _MAX_ALERT_DAILY_CAP
+        # Require at least one rate-limit knob so users can't pick the rate-limited
+        # mode then leave both fields blank — that's identical to 'every_cross'.
+        if cooldown_minutes <= 0 and daily_cap is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Set a cooldown (minutes) or a daily cap for rate-limited alerts.",
+            )
+
     # Quota
     active_count = (db.query(IndicatorAlert)
                       .filter(IndicatorAlert.user_id == user.id,
@@ -2252,6 +2307,9 @@ async def trade_alerts_create(request: Request, db: Session = Depends(get_db)):
         target=target,
         label=label,
         status="active",
+        fire_mode=fire_mode,
+        cooldown_minutes=cooldown_minutes,
+        daily_cap=daily_cap,
     )
     db.add(alert)
     db.commit()

@@ -346,9 +346,12 @@ button{font-family:inherit}
 .alert-row .a-tag{
   font-family:var(--mono);font-size:9.5px;text-transform:uppercase;
   background:rgba(112,178,255,.15);color:#8bb6ff;padding:2px 5px;border-radius:2px;letter-spacing:.4px;
+  flex-shrink:0;
 }
 .alert-row.triggered .a-tag{background:rgba(255,178,80,.18);color:#ffba66}
-.alert-row .a-lbl{flex:1;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.alert-row .a-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.alert-row .a-lbl{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.alert-row .a-sub{font-size:10.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .alert-row .a-x{
   background:transparent;border:1px solid var(--border);color:var(--muted);
   cursor:pointer;font-size:11px;padding:2px 7px;border-radius:3px;flex-shrink:0;
@@ -866,6 +869,29 @@ button{font-family:inherit}
             <div id="alf-params-row" style="grid-column:span 2;display:none">
               <label>Parameters</label>
               <div id="alf-params"></div>
+            </div>
+
+            <label style="grid-column:span 2">Fire mode</label>
+            <select id="alf-fire-mode" style="grid-column:span 2">
+              <option value="once" selected>Fire once, then auto-disarm</option>
+              <option value="every_cross">Fire on every cross (stay armed)</option>
+              <option value="every_cross_with_cooldown">Every cross — rate-limited</option>
+            </select>
+
+            <div id="alf-rate-row" style="grid-column:span 2;display:none">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                <div>
+                  <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Cooldown (minutes)</div>
+                  <input type="number" id="alf-cooldown" min="0" max="1440" step="1" placeholder="e.g. 30">
+                </div>
+                <div>
+                  <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Daily cap (fires/day)</div>
+                  <input type="number" id="alf-daily-cap" min="0" max="500" step="1" placeholder="e.g. 10">
+                </div>
+              </div>
+              <div style="font-size:10px;color:var(--muted);margin-top:4px">
+                Set at least one. Cooldown enforces minutes between DMs; daily cap resets at 00:00 UTC.
+              </div>
             </div>
           </div>
 
@@ -4242,6 +4268,42 @@ button{font-family:inherit}
     return a.label || a.kind;
   }
 
+  function fmtFireMode(a){
+    // Compact tag like "↻ every cross · 30m" for repeating alerts.
+    const fm = a.fire_mode || 'once';
+    if(fm === 'once') return '';
+    const bits = ['↻ every cross'];
+    if(fm === 'every_cross_with_cooldown'){
+      if(a.cooldown_minutes && a.cooldown_minutes > 0) bits.push(`${a.cooldown_minutes}m cooldown`);
+      if(a.daily_cap) bits.push(`max ${a.daily_cap}/day`);
+    }
+    return bits.join(' · ');
+  }
+
+  function fmtRelativeTime(iso){
+    if(!iso) return '';
+    const t = Date.parse(iso);
+    if(!isFinite(t)) return '';
+    const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    if(s < 60)        return `${s}s ago`;
+    if(s < 3600)      return `${Math.floor(s/60)}m ago`;
+    if(s < 86400)     return `${Math.floor(s/3600)}h ago`;
+    return `${Math.floor(s/86400)}d ago`;
+  }
+
+  function fmtFireStats(a){
+    // For repeating alerts: "Fired 4× · last 12m ago" (panel sub-line)
+    if((a.fire_mode || 'once') === 'once') return '';
+    const fc = a.fire_count || 0;
+    if(fc === 0) return 'Not yet fired';
+    const last = a.last_fired_at ? `last ${fmtRelativeTime(a.last_fired_at)}` : '';
+    let extra = '';
+    if(a.daily_cap){
+      extra = ` · ${a.fired_today_count||0}/${a.daily_cap} today`;
+    }
+    return `Fired ${fc}× · ${last}${extra}`;
+  }
+
   function renderAlertConditions(){
     const kind = $('alf-kind').value;
     const sel = $('alf-condition');
@@ -4342,9 +4404,20 @@ button{font-family:inherit}
         data.alerts.forEach(a => {
           const row = document.createElement('div');
           row.className = 'alert-row' + (a.status === 'triggered' ? ' triggered' : '');
+          const fmTag = fmtFireMode(a);
+          const stats = fmtFireStats(a);
+          // Repeating alerts display the cooldown/cap chip + a sub-line
+          // showing fire count and last-fired time. Cancel button always works
+          // (kill switch) — same endpoint, same behavior as before.
+          const subLine = (fmTag || stats)
+            ? `<div class="a-sub">${fmTag}${fmTag && stats ? ' · ' : ''}${stats}</div>`
+            : '';
           row.innerHTML = `
             <span class="a-tag">${a.symbol} ${a.timeframe}</span>
-            <span class="a-lbl" title="${(a.label||'').replace(/"/g,'&quot;')}">${fmtAlertSummary(a)}</span>
+            <div class="a-body">
+              <span class="a-lbl" title="${(a.label||'').replace(/"/g,'&quot;')}">${fmtAlertSummary(a)}</span>
+              ${subLine}
+            </div>
             <button class="a-x" data-id="${a.id}">${a.status === 'triggered' ? 'Clear' : 'Cancel'}</button>
           `;
           row.querySelector('.a-x').onclick = () => cancelAlert(a.id);
@@ -4364,18 +4437,25 @@ button{font-family:inherit}
     } catch(e){ /* silent */ }
   }
 
+  function renderFireModeRow(){
+    // Show cooldown/cap inputs only for the rate-limited mode.
+    const fm = $('alf-fire-mode').value;
+    $('alf-rate-row').style.display = (fm === 'every_cross_with_cooldown') ? '' : 'none';
+  }
+
   async function createAlert(){
     const btn = $('alerts-create');
     const kind = $('alf-kind').value;
     const condition = $('alf-condition').value;
     const symbol = $('alf-symbol').value;
     const timeframe = $('alf-timeframe').value;
+    const fireMode = $('alf-fire-mode').value;
     const params = {};
     (ALERTS_KIND_PARAMS[kind] || []).forEach(p => {
       const el = $('alf-p-' + p.key);
       if(el) params[p.key] = parseFloat(el.value);
     });
-    const body = {kind, condition, symbol, timeframe, params};
+    const body = {kind, condition, symbol, timeframe, params, fire_mode: fireMode};
     if(kind === 'price' || kind === 'rsi'){
       const t = parseFloat($('alf-target').value);
       if(!isFinite(t)){
@@ -4384,6 +4464,19 @@ button{font-family:inherit}
         return;
       }
       body.target = t;
+    }
+    if(fireMode === 'every_cross_with_cooldown'){
+      const cd = parseInt($('alf-cooldown').value, 10);
+      const dc = parseInt($('alf-daily-cap').value, 10);
+      const cdOk = isFinite(cd) && cd > 0;
+      const dcOk = isFinite(dc) && dc > 0;
+      if(!cdOk && !dcOk){
+        const w = $('alerts-warn');
+        w.style.display = ''; w.textContent = 'Set a cooldown or a daily cap (or both).';
+        return;
+      }
+      body.cooldown_minutes = cdOk ? cd : 0;
+      body.daily_cap        = dcOk ? dc : null;
     }
     btn.disabled = true; btn.textContent = 'Creating…';
     try{
@@ -4417,6 +4510,7 @@ button{font-family:inherit}
     $('alerts-warn').style.display = 'none';
     $('alf-timeframe').value = currentTF || '5m';
     renderAlertConditions();
+    renderFireModeRow();
     loadAlerts().then(renderAlertsModal);
   }
   function closeAlertsModal(){ $('alerts-modal').classList.remove('open'); }
@@ -4454,6 +4548,7 @@ button{font-family:inherit}
     $('alerts-cancel').onclick = closeAlertsModal;
     $('alerts-modal').addEventListener('click', e => { if(e.target === $('alerts-modal')) closeAlertsModal(); });
     $('alf-kind').onchange = renderAlertConditions;
+    $('alf-fire-mode').onchange = renderFireModeRow;
     $('alerts-create').onclick = createAlert;
     document.addEventListener('keydown', e => {
       if(!$('alerts-modal').classList.contains('open')) return;

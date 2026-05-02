@@ -24,6 +24,18 @@ A `crossover` fires only when the previous evaluation was on the OTHER side and
 the current evaluation is on the requested side (true edge detection). On the
 very first evaluation we just record `last_value` and don't fire — this prevents
 "already true" alerts from spam-firing the moment they're created.
+
+Fire modes (Task #10)
+---------------------
+* `once`                       — legacy default. After the first fire we flip
+                                 status='triggered' and the alert auto-disarms.
+* `every_cross`                — fire on every fresh edge; status stays 'active'.
+* `every_cross_with_cooldown`  — same as every_cross but rate-limited:
+                                 - cooldown_minutes between consecutive fires
+                                 - daily_cap (UTC day) on total fires
+                                 When suppressed by either limit we still update
+                                 last_value so the *next* fresh cross can fire
+                                 once the limit clears (no missed-edge holes).
 """
 from __future__ import annotations
 
@@ -32,7 +44,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -352,13 +364,61 @@ async def _tg_send(telegram_id: int, text: str) -> None:
         logger.warning(f"alerts_engine DM failed for {telegram_id}: {e}")
 
 
-def _fmt_dm(alert, msg: str) -> str:
+def _fmt_dm(alert, msg: str, fire_count: Optional[int] = None) -> str:
+    head = "🔔  <b>Chart alert triggered</b>"
+    # For repeating alerts, include the running fire count so the user knows
+    # this is one of many DMs from the same alert (and can mute/cancel if it's
+    # too noisy).
+    if fire_count and fire_count > 1:
+        head = f"🔔  <b>Chart alert · fire #{fire_count}</b>"
     return (
-        "🔔  <b>Chart alert triggered</b>\n"
+        f"{head}\n"
         f"<i>{alert.label or alert.kind}</i>\n\n"
         f"{msg}\n"
         f"<i>{alert.symbol} · {alert.timeframe}  ·  {datetime.utcnow().strftime('%H:%M UTC')}</i>"
     )
+
+
+def _claim_fire(row, now: datetime) -> Tuple[bool, str]:
+    """Decide whether a fired alert should actually dispatch a DM, and update
+    bookkeeping (fire_count, last_fired_at, fired_today_count, fired_today_date)
+    on the row in-place when allowed.
+
+    Returns (allowed, reason). When allowed is False the loop should still
+    `commit` the updated last_value/last_eval_at so the cross detector keeps
+    advancing — we just skip the DM and don't bump the fire counters.
+    """
+    fire_mode = (getattr(row, "fire_mode", None) or "once").lower()
+    today_iso = now.date().isoformat()
+
+    # Daily-cap roll-over: if we crossed UTC midnight since the last fire, the
+    # per-day counter resets before we evaluate the cap.
+    fired_today_date = getattr(row, "fired_today_date", None)
+    fired_today_count = int(getattr(row, "fired_today_count", 0) or 0)
+    if fired_today_date != today_iso:
+        fired_today_count = 0
+        # Reset on the row even if the fire ends up suppressed — keeps the
+        # stored date in sync with reality so a later fire on the same day
+        # increments from 0 instead of replaying yesterday's count.
+        row.fired_today_date = today_iso
+        row.fired_today_count = 0
+
+    if fire_mode == "every_cross_with_cooldown":
+        cooldown_min = int(getattr(row, "cooldown_minutes", 0) or 0)
+        last_fired = getattr(row, "last_fired_at", None)
+        if cooldown_min > 0 and last_fired is not None:
+            if now - last_fired < timedelta(minutes=cooldown_min):
+                return (False, "cooldown")
+        daily_cap = getattr(row, "daily_cap", None)
+        if daily_cap is not None and fired_today_count >= int(daily_cap):
+            return (False, "daily_cap")
+
+    # Allowed → bump counters
+    row.fire_count = int(getattr(row, "fire_count", 0) or 0) + 1
+    row.last_fired_at = now
+    row.fired_today_count = fired_today_count + 1
+    row.fired_today_date = today_iso
+    return (True, "ok")
 
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
@@ -434,21 +494,39 @@ async def run_alerts_engine() -> None:
                                 db.rollback()
                                 continue
                             cur, msg = result
+                            now = datetime.utcnow()
                             row.last_value = float(cur) if cur is not None else None
-                            row.last_eval_at = datetime.utcnow()
+                            row.last_eval_at = now
                             row.eval_count = (row.eval_count or 0) + 1
                             user_telegram_id = None
+                            fire_count_snapshot = 0
+                            fire_mode = (getattr(row, "fire_mode", None) or "once").lower()
                             if msg:
-                                row.status = "triggered"
-                                row.triggered_at = datetime.utcnow()
-                                row.triggered_price = float(candles[-1]["close"])
-                                row.triggered_message = msg
-                                user = db.query(User).filter(User.id == row.user_id).first()
-                                if user and user.telegram_id and not str(user.telegram_id).startswith("WEB-"):
-                                    try:
-                                        user_telegram_id = int(user.telegram_id)
-                                    except (TypeError, ValueError):
-                                        user_telegram_id = None
+                                allowed, reason = _claim_fire(row, now)
+                                if allowed:
+                                    # 'once' alerts auto-disarm; repeating alerts
+                                    # keep status='active' so the watch loop
+                                    # picks them up again next cycle.
+                                    if fire_mode == "once":
+                                        row.status = "triggered"
+                                    row.triggered_at = now
+                                    row.triggered_price = float(candles[-1]["close"])
+                                    row.triggered_message = msg
+                                    fire_count_snapshot = int(row.fire_count or 0)
+                                    user = db.query(User).filter(User.id == row.user_id).first()
+                                    if user and user.telegram_id and not str(user.telegram_id).startswith("WEB-"):
+                                        try:
+                                            user_telegram_id = int(user.telegram_id)
+                                        except (TypeError, ValueError):
+                                            user_telegram_id = None
+                                else:
+                                    # Suppressed by cooldown / daily-cap. We DO
+                                    # still commit last_value above so the next
+                                    # cross is detected as a fresh edge.
+                                    msg = None
+                                    logger.info(
+                                        f"alerts_engine: alert #{row.id} cross suppressed ({reason})"
+                                    )
                             # Commit FIRST so the row-level lock + status flip
                             # become visible to other workers before we DM.
                             # If the DM crashes after commit, we still won't
@@ -467,7 +545,10 @@ async def run_alerts_engine() -> None:
                                         kind = row_kind_snapshot
                                         symbol = row_symbol_snapshot
                                         timeframe = row_tf_snapshot
-                                    await _tg_send(user_telegram_id, _fmt_dm(_Snap(), msg))
+                                    await _tg_send(
+                                        user_telegram_id,
+                                        _fmt_dm(_Snap(), msg, fire_count=fire_count_snapshot),
+                                    )
                                 except Exception as e:
                                     logger.warning(f"alerts_engine DM dispatch #{a.id}: {e}")
                         except Exception as e:
