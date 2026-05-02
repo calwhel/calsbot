@@ -1559,18 +1559,58 @@ async def app_page(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 
 TRADE_SYMBOL_WHITELIST = {
+    # Top-50 by market-cap (stablecoins & wrapped tokens excluded).
+    # All pairs are MEXC USDT spot.
     "BTC":   "BTCUSDT",
     "ETH":   "ETHUSDT",
-    "SOL":   "SOLUSDT",
     "BNB":   "BNBUSDT",
+    "SOL":   "SOLUSDT",
     "XRP":   "XRPUSDT",
     "DOGE":  "DOGEUSDT",
-    "AVAX":  "AVAXUSDT",
-    "LINK":  "LINKUSDT",
     "ADA":   "ADAUSDT",
-    "DOT":   "DOTUSDT",
-    "MATIC": "MATICUSDT",
+    "TRX":   "TRXUSDT",
     "TON":   "TONUSDT",
+    "AVAX":  "AVAXUSDT",
+    "SHIB":  "SHIBUSDT",
+    "DOT":   "DOTUSDT",
+    "LINK":  "LINKUSDT",
+    "BCH":   "BCHUSDT",
+    "LTC":   "LTCUSDT",
+    "NEAR":  "NEARUSDT",
+    "UNI":   "UNIUSDT",
+    "APT":   "APTUSDT",
+    "OP":    "OPUSDT",
+    "ICP":   "ICPUSDT",
+    "XLM":   "XLMUSDT",
+    "ATOM":  "ATOMUSDT",
+    "FIL":   "FILUSDT",
+    "ETC":   "ETCUSDT",
+    "HBAR":  "HBARUSDT",
+    "ARB":   "ARBUSDT",
+    "VET":   "VETUSDT",
+    "ALGO":  "ALGOUSDT",
+    "MATIC": "MATICUSDT",
+    "GRT":   "GRTUSDT",
+    "FTM":   "FTMUSDT",
+    "AAVE":  "AAVEUSDT",
+    "STX":   "STXUSDT",
+    "THETA": "THETAUSDT",
+    "FLOW":  "FLOWUSDT",
+    "CRV":   "CRVUSDT",
+    "LDO":   "LDOUSDT",
+    "RUNE":  "RUNEUSDT",
+    "INJ":   "INJUSDT",
+    "SUI":   "SUIUSDT",
+    "SEI":   "SEIUSDT",
+    "JUP":   "JUPUSDT",
+    "ENA":   "ENAUSDT",
+    "WIF":   "WIFUSDT",
+    "PEPE":  "PEPEUSDT",
+    "BONK":  "BONKUSDT",
+    "AR":    "ARUSDT",
+    "KAS":   "KASUSDT",
+    "MKR":   "MKRUSDT",
+    "RENDER":"RENDERUSDT",
 }
 _TRADE_TF_MAP = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "60m"}  # MEXC uses '60m' not '1h'
 
@@ -3308,14 +3348,7 @@ async def trade_fvg(symbol: str, tf: str = "5m",
 # Multi-symbol watchlist (F) — light ticker poll for the sidebar
 # ─────────────────────────────────────────────────────────────────────────────
 _WATCHLIST_PAIRS = [
-    ("BTC",  "BTCUSDT"),
-    ("ETH",  "ETHUSDT"),
-    ("SOL",  "SOLUSDT"),
-    ("BNB",  "BNBUSDT"),
-    ("XRP",  "XRPUSDT"),
-    ("DOGE", "DOGEUSDT"),
-    ("AVAX", "AVAXUSDT"),
-    ("LINK", "LINKUSDT"),
+    (sym, pair) for sym, pair in TRADE_SYMBOL_WHITELIST.items()
 ]
 
 @app.get("/api/trade/watchlist")
