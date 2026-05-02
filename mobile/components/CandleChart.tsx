@@ -33,6 +33,15 @@ export type ChartZone = {
   dim?: boolean;
 };
 
+export type ChartPriceLine = {
+  /** Y-axis price level. */
+  price: number;
+  /** 'buy' = green wall (bid), 'sell' = red wall (ask). */
+  side: 'buy' | 'sell';
+  /** Short label rendered at the right edge (e.g. "$2.4M"). */
+  label?: string;
+};
+
 /**
  * Compact native candlestick chart. Renders the most recent N candles with
  * optional entry/exit markers overlayed at their (time, price) coordinates.
@@ -43,18 +52,23 @@ export function CandleChart({
   candles,
   markers = [],
   zones = [],
+  priceLines = [],
   width,
   height = 180,
   symbol,
   tf,
+  showOhlcLegend = false,
 }: {
   candles: Candle[];
   markers?: ChartMarker[];
   zones?: ChartZone[];
+  priceLines?: ChartPriceLine[];
   width: number;
   height?: number;
   symbol?: string;
   tf?: string;
+  /** When true, renders an OHLC info strip overlay in the top-left of the chart. */
+  showOhlcLegend?: boolean;
 }) {
   const padX = 8;
   const padY = 14;
@@ -184,6 +198,21 @@ export function CandleChart({
           );
         })}
 
+        {/* horizontal price lines (order-book walls) — drawn UNDER candles */}
+        {priceLines.map((pl, i) => {
+          const y = yForPrice(pl.price);
+          if (!Number.isFinite(y) || y < padY || y > padY + innerH) return null;
+          const stroke = pl.side === 'buy' ? colors.positive : colors.negative;
+          return (
+            <Line
+              key={`pl-${i}`}
+              x1={padX} y1={y} x2={width - padX} y2={y}
+              stroke={stroke} strokeWidth={1} opacity={0.45}
+              strokeDasharray="4,4"
+            />
+          );
+        })}
+
         {/* candles */}
         {paths.map((p, i) => (
           <G key={`c-${i}`}>
@@ -228,6 +257,52 @@ export function CandleChart({
           );
         })}
       </Svg>
+      {showOhlcLegend ? (
+        <View style={styles.ohlcOverlay} pointerEvents="none">
+          {(() => {
+            const c = candles[candles.length - 1];
+            const up = c.close >= c.open;
+            const tone = up ? colors.positive : colors.negative;
+            const fmt = (n: number) =>
+              n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                        : n.toFixed(n >= 1 ? 3 : n >= 0.01 ? 5 : 8);
+            return (
+              <Text style={styles.ohlcText}>
+                <Text style={{ color: colors.textMute }}>O </Text>
+                <Text style={{ color: tone }}>{fmt(c.open)}  </Text>
+                <Text style={{ color: colors.textMute }}>H </Text>
+                <Text style={{ color: tone }}>{fmt(c.high)}  </Text>
+                <Text style={{ color: colors.textMute }}>L </Text>
+                <Text style={{ color: tone }}>{fmt(c.low)}  </Text>
+                <Text style={{ color: colors.textMute }}>C </Text>
+                <Text style={{ color: tone }}>{fmt(c.close)}</Text>
+              </Text>
+            );
+          })()}
+        </View>
+      ) : null}
+      {/* Right-edge wall labels — overlaid as absolute text so they sit
+          flush with the chart's right gutter without distorting the SVG. */}
+      {priceLines.length > 0 ? (
+        <View style={styles.wallLabelOverlay} pointerEvents="none">
+          {priceLines.map((pl, i) => {
+            const y = yForPrice(pl.price);
+            if (!Number.isFinite(y) || y < padY || y > padY + innerH) return null;
+            const tone = pl.side === 'buy' ? colors.positive : colors.negative;
+            return (
+              <Text
+                key={`pll-${i}`}
+                style={[
+                  styles.wallLabel,
+                  { top: y - 7, color: tone, borderColor: tone },
+                ]}
+              >
+                {pl.label || `$${pl.price.toFixed(pl.price >= 100 ? 0 : 2)}`}
+              </Text>
+            );
+          })}
+        </View>
+      ) : null}
       <View style={styles.priceRow}>
         <Text style={styles.priceLabel}>Last</Text>
         <Text style={styles.priceVal}>${lastClose.toLocaleString(undefined, { maximumFractionDigits: 4 })}</Text>
@@ -276,5 +351,40 @@ const styles = StyleSheet.create({
     fontFamily: font.regular,
     fontSize: 13,
     textAlign: 'center',
+  },
+  ohlcOverlay: {
+    position: 'absolute',
+    top: 30,
+    left: 12,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    backgroundColor: 'rgba(0,0,0,0.32)',
+    borderRadius: 4,
+  },
+  ohlcText: {
+    fontFamily: font.semibold,
+    fontSize: 10,
+    fontVariant: ['tabular-nums'],
+    letterSpacing: 0.2,
+  },
+  wallLabelOverlay: {
+    position: 'absolute',
+    right: 4,
+    top: 24,            // accounts for the legend strip above the SVG
+    bottom: 22,         // accounts for the priceRow strip below the SVG
+    width: 60,
+  },
+  wallLabel: {
+    position: 'absolute',
+    right: 0,
+    fontFamily: font.bold,
+    fontSize: 9,
+    fontVariant: ['tabular-nums'],
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 3,
+    borderWidth: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    overflow: 'hidden',
   },
 });
