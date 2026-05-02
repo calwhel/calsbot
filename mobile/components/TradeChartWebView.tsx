@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { View, StyleSheet, ActivityIndicator, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { colors, font } from '@/constants/colors';
-import { LIGHTWEIGHT_CHARTS_SRC } from '@/assets/vendor/lightweightCharts';
+// Relative path (not the @/ alias) — Expo's Metro asset resolver excludes
+// the `assets/` tree from module resolution, so the alias would fail here.
+import { LIGHTWEIGHT_CHARTS_SRC } from '../assets/vendor/lightweightCharts';
 
 /**
  * TradingView-quality candlestick chart for the mobile Trade tab.
