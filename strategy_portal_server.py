@@ -1720,26 +1720,33 @@ async def trade_page_symbol(slug: str, request: Request):
 def _build_mobile_login_response(user, db) -> dict:
     """Shape the user record into the canonical mobile login payload.
     Shared between UID and email login paths so they return identical fields.
+
+    Uses the SAME pro-tier check as the web portal (`_is_portal_pro` against
+    the row returned by `_get_portal_sub`) so mobile + web can never disagree
+    about a user's plan. Previously this filtered by `status == "active"`
+    which incorrectly classified users with NULL/missing status as free even
+    when their tier was `pro` and subscription_end was in the future.
     """
     display = (user.username or user.first_name or user.uid or "").strip() or user.uid
-    plan = "free"
-    try:
-        sub = db.query(PortalSubscription).filter(
-            PortalSubscription.user_id == user.id,
-            PortalSubscription.status == "active",
-        ).order_by(PortalSubscription.id.desc()).first()
-        if sub:
-            plan = sub.tier or "pro"
-    except Exception:
-        pass
     is_admin = (user.uid == "TH-YP0BADA8") or bool(getattr(user, "is_admin", False))
+    entitled = is_admin   # admins are always treated as Pro for entitlement
+    try:
+        sub = _get_portal_sub(user.id, db)
+        if _is_portal_pro(sub):
+            entitled = True
+    except Exception as exc:
+        logger.warning(f"[mobile login] portal-sub lookup failed for {user.uid}: {exc}")
+    # `plan` is purely informational — never derive entitlement from it.
+    # An expired pro sub keeps tier="pro" but should report as free here so
+    # the UI cannot accidentally unlock paid features off the plan string.
+    plan = "pro" if entitled else "free"
     return {
         "uid":        user.uid,
         "display":    display,
         "username":   user.username,
         "first_name": user.first_name,
         "plan":       plan,
-        "is_pro":     plan != "free",
+        "is_pro":     entitled,
         "is_admin":   is_admin,
     }
 
@@ -8276,21 +8283,54 @@ async def backtest_scan(request: Request):
     if direction not in ("LONG", "SHORT"):
         direction = "LONG"
 
+    # Auth + Pro check — wrapped in a retry-safe block because the User /
+    # PortalSubscription queries occasionally hit Postgres `statement_timeout`
+    # on busy workers, and the previous `[500] OperationalError` would surface
+    # to the UI as a generic "Unknown error" with no recourse.
     from app.database import SessionLocal
-    db = SessionLocal()
-    try:
-        user = _get_user_by_uid_safe(uid, db)
-        if not user:
-            raise HTTPException(status_code=403, detail="Invalid UID")
-        _sub = _get_portal_sub(user.id, db)
-        if not _is_portal_pro(_sub) and not getattr(user, "is_admin", False):
-            return JSONResponse(
-                status_code=402,
-                content={"error": "PRO_REQUIRED",
-                         "message": "A Pro subscription is required to use the Strategy Scanner."},
-            )
-    finally:
-        db.close()
+    from sqlalchemy.exc import OperationalError as _SAOperationalError
+
+    def _auth_check():
+        for attempt in (0, 1):
+            db = SessionLocal()
+            try:
+                user = _get_user_by_uid_safe(uid, db)
+                if not user:
+                    return ("invalid", None)
+                sub = _get_portal_sub(user.id, db)
+                is_pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
+                return ("ok" if is_pro else "not_pro", None)
+            except _SAOperationalError as exc:
+                try: db.rollback()
+                except Exception: pass
+                logger.warning(f"[scan] auth-check DB timeout (attempt {attempt + 1}): {exc}")
+                if attempt == 0:
+                    import time as _t; _t.sleep(0.25)
+                    continue
+                return ("db_busy", str(exc))
+            except HTTPException:
+                # _get_user_by_uid_safe raises 503 on persistent DB failure.
+                return ("db_busy", None)
+            finally:
+                try: db.close()
+                except Exception: pass
+        return ("db_busy", None)
+
+    auth_status, _ = await asyncio.to_thread(_auth_check)
+    if auth_status == "invalid":
+        raise HTTPException(status_code=403, detail="Invalid UID")
+    if auth_status == "not_pro":
+        return JSONResponse(
+            status_code=402,
+            content={"error": "PRO_REQUIRED",
+                     "message": "A Pro subscription is required to use the Strategy Scanner."},
+        )
+    if auth_status == "db_busy":
+        return JSONResponse(
+            status_code=503,
+            content={"error": "DB_BUSY",
+                     "message": "Our database is busy right now — please try again in a few seconds."},
+        )
 
     # Normalised symbols (BTCUSDT etc.) for engine; tickers (BTC) for display
     symbols  = [(c if c.endswith("USDT") else c + "USDT") for c in coin_list]
