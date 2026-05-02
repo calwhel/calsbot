@@ -2335,7 +2335,7 @@ function dismissTgBanner(){
         <div class="pine-card">
           <div style="margin-bottom:16px">
             <div style="font-size:16px;font-weight:700;letter-spacing:-.3px">🔍 Strategy Scanner</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:3px">Pick a coin and direction — the AI runs 22 strategies (singles + multi-indicator combos) against real historical data and ranks the best one for you</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:3px">Pick a coin and direction — the AI runs <b>40 strategies</b> (RSI, MACD, EMA, SMA, SuperTrend, BB, StochRSI, ADX, Williams %R, Breakout, S/R, candlestick patterns, divergence + multi-indicator combos) against real historical data and ranks the best one for you</div>
           </div>
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
@@ -2369,8 +2369,8 @@ function dismissTgBanner(){
         <div id="scan-progress" style="display:none">
           <div class="pine-card" style="text-align:center;padding:28px 20px">
             <div style="font-size:28px;margin-bottom:10px">⚙️</div>
-            <div style="font-weight:700;font-size:15px;margin-bottom:6px">Running 22 strategies in parallel…</div>
-            <div id="scan-progress-sub" style="font-size:12px;color:var(--muted)">Testing RSI, MACD, EMA cross, SuperTrend, BB, StochRSI + combinations with confirms — all against real historical data</div>
+            <div style="font-weight:700;font-size:15px;margin-bottom:6px">Running 40 strategies in parallel…</div>
+            <div id="scan-progress-sub" style="font-size:12px;color:var(--muted)">Testing momentum, trend, mean-reversion, breakout, candlestick patterns, divergence + multi-indicator combos — all against real historical data</div>
             <div style="margin-top:18px;height:5px;background:var(--border);border-radius:99px;overflow:hidden">
               <div id="scan-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),#818cf8);border-radius:99px;transition:width .4s ease"></div>
             </div>
@@ -6483,22 +6483,47 @@ function renderScanResults(data) {
     <div style="font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.4px">${s.label}</div>
   </div>`).join('');
 
+  // Category → badge color map
+  const catColor = {
+    'Momentum':    '#5b6cf7',
+    'Trend':       '#10b981',
+    'Mean Rev':    '#f59e0b',
+    'Volatility':  '#ec4899',
+    'Volume':      '#06b6d4',
+    'Breakout':    '#ef4444',
+    'Price Action':'#8b5cf6',
+    'Divergence':  '#f97316',
+    'Combo':       '#a855f7',
+    'Other':       '#6b7280',
+  };
+
   // Full ranking table
   const tableEl = document.getElementById('scan-table');
-  tableEl.innerHTML = ranked.map((r, i) => {
+  const headerRow = `<div style="display:grid;grid-template-columns:1.7fr .65fr .7fr .8fr .85fr .7fr;padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
+    <div>Strategy</div><div>Type</div><div>Win%</div><div>P&L</div><div>Prof.Factor</div><div style="text-align:right">Trades</div>
+  </div>`;
+  tableEl.innerHTML = headerRow + ranked.map((r, i) => {
     const st  = r.stats || {};
     const pos = (st.total_pnl || 0) >= 0;
     const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
-    return `<div style="display:grid;grid-template-columns:1.8fr .8fr .8fr .9fr .7fr;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':''}">
+    const cat = r.category || 'Other';
+    const cc  = catColor[cat] || catColor['Other'];
+    return `<div style="display:grid;grid-template-columns:1.7fr .65fr .7fr .8fr .85fr .7fr;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':''}">
       <div style="font-weight:600">${medal} ${r.label}</div>
+      <div><span style="background:${cc}22;color:${cc};padding:2px 7px;border-radius:99px;font-size:10px;font-weight:700;letter-spacing:.2px">${cat}</span></div>
       <div style="color:${(st.win_rate||0)>=50?'var(--green)':'var(--red)'};">${(st.win_rate||0).toFixed(1)}%</div>
       <div style="color:${pos?'var(--green)':'var(--red)'};">${pos?'+':''}${(st.total_pnl||0).toFixed(1)}%</div>
       <div style="color:var(--muted)">PF ${(st.profit_factor||0).toFixed(2)}</div>
       <div style="color:var(--muted);text-align:right">${st.closed_trades||0} trades</div>
     </div>`;
-  }).join('') + `<div style="display:grid;grid-template-columns:1.8fr .8fr .8fr .9fr .7fr;padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px">
-    <div>Strategy</div><div>Win%</div><div>P&L</div><div>Prof.Factor</div><div style="text-align:right">Trades</div>
-  </div>`;
+  }).join('');
+
+  // Footer summary: how many tested vs how many ranked
+  if (data.tested) {
+    tableEl.innerHTML += `<div style="padding:10px 16px;font-size:11px;color:var(--muted);text-align:center;background:var(--card2)">
+      Tested <b style="color:var(--text)">${data.tested}</b> strategies · <b style="color:var(--text)">${ranked.length}</b> generated enough trades to rank${data.skipped ? ` · ${data.skipped} skipped (too few trades)` : ''}
+    </div>`;
+  }
 
   document.getElementById('scan-results').style.display = '';
   const btn = document.getElementById('scan-run-btn');

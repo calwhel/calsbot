@@ -7906,7 +7906,11 @@ async def backtest_scan(request: Request):
     _tp, _sl, _lev = (3.0, 1.5, 5) if direction == "LONG" else (3.0, 1.5, 5)
 
     def _C(cond: dict) -> dict:
-        """Flip a confirm/primary-cfg condition dict for SHORT direction."""
+        """Flip a confirm/primary-cfg condition dict for SHORT direction.
+
+        Indicators that are direction-agnostic (adx_filter, atr_volatility,
+        keltner squeeze, volume_spike) are returned unchanged.
+        """
         c = dict(cond)
         t = c.get("type", "")
         if t == "rsi":
@@ -7921,6 +7925,8 @@ async def backtest_scan(request: Request):
             c["condition"] = (sub.replace("bullish_cross", "bearish_cross")
                                  .replace("above", "below")
                                  .replace("crosses_above", "crosses_below"))
+        elif t == "sma":
+            c["condition"] = c.get("condition", "").replace("price_above", "price_below")
         elif t == "supertrend":   c["condition"] = "bearish"
         elif t == "bb":
             c["condition"] = (c.get("condition", "")
@@ -7929,42 +7935,103 @@ async def backtest_scan(request: Request):
                                 .replace("price_near_lower", "price_near_upper"))
         elif t == "stochrsi":
             if c.get("operator") == "lt":  c["operator"] = "gt"; c["value"] = 80
+        elif t == "williams_r":   c["condition"] = "overbought" if c.get("condition") == "oversold" else c.get("condition", "overbought")
+        elif t == "breakout":     c["bo_dir"] = "down" if c.get("bo_dir", "up") == "up" else "up"
+        elif t == "support_resistance":
+            c["condition"] = {"at_support":"at_resistance", "breakout_above":"breakout_below",
+                              "at_resistance":"at_support", "breakout_below":"breakout_above"}.get(c.get("condition","at_support"), "at_resistance")
+        elif t == "candlestick":
+            p = c.get("pattern", c.get("condition", ""))
+            new_p = {"bullish_engulfing":"bearish_engulfing", "hammer":"shooting_star",
+                     "bearish_engulfing":"bullish_engulfing", "shooting_star":"hammer"}.get(p, p)
+            if "pattern" in c: c["pattern"] = new_p
+            else:              c["condition"] = new_p
+        elif t == "divergence":   c["direction"] = "bearish" if c.get("direction") == "bullish" else "bullish"
+        elif t == "order_block":  c["ob_type"]  = "bearish" if c.get("ob_type")  == "bullish" else "bullish"
+        elif t == "fvg":          c["fvg_dir"]  = "bearish" if c.get("fvg_dir")  == "bullish" else "bullish"
+        elif t == "market_structure":
+            c["condition"] = c.get("condition", "").replace("bullish", "bearish")
+        elif t == "consecutive_candles":
+            d = c.get("cc_dir", c.get("direction", "green"))
+            c["cc_dir"] = "red" if d in ("green","bullish","up") else "green"
+        elif t == "vwap_deviation":
+            c["vwap_side"] = "above" if c.get("vwap_side", "below") == "below" else "below"
+        # adx_filter, atr_volatility, volume_spike, keltner squeeze: direction-agnostic
         return c
 
-    # ── Singles (correct condition strings for the backtest evaluator) ─────────
+    # ── Singles — diverse indicator families with parameter variants ───────────
     singles = [
-        {"label": "RSI Oversold · 15m",      "primaryType": "rsi",          "primaryCfg": {"period": 14, "operator": "lt", "value": 30},              "confirms": [], "timeframe": "15m"},
-        {"label": "RSI Oversold · 1h",        "primaryType": "rsi",          "primaryCfg": {"period": 14, "operator": "lt", "value": 30},              "confirms": [], "timeframe": "1h"},
-        {"label": "RSI Momentum · 15m",       "primaryType": "rsi",          "primaryCfg": {"period": 14, "operator": "gt", "value": 55},              "confirms": [], "timeframe": "15m"},
-        {"label": "MACD Cross · 15m",         "primaryType": "macd",         "primaryCfg": {"condition": "bullish_cross"},                             "confirms": [], "timeframe": "15m"},
-        {"label": "MACD Cross · 1h",          "primaryType": "macd",         "primaryCfg": {"condition": "bullish_cross"},                             "confirms": [], "timeframe": "1h"},
-        {"label": "EMA Cross 9/21 · 15m",     "primaryType": "ema",          "primaryCfg": {"period": 9, "period2": 21, "condition": "bullish_cross"}, "confirms": [], "timeframe": "15m"},
-        {"label": "EMA Cross 9/21 · 1h",      "primaryType": "ema",          "primaryCfg": {"period": 9, "period2": 21, "condition": "bullish_cross"}, "confirms": [], "timeframe": "1h"},
-        {"label": "SuperTrend Flip · 15m",    "primaryType": "supertrend",   "primaryCfg": {"condition": "bullish"},                                   "confirms": [], "timeframe": "15m"},
-        {"label": "SuperTrend Flip · 1h",     "primaryType": "supertrend",   "primaryCfg": {"condition": "bullish"},                                   "confirms": [], "timeframe": "1h"},
-        {"label": "BB Lower Bounce · 15m",    "primaryType": "bb",           "primaryCfg": {"condition": "price_below_lower"},                         "confirms": [], "timeframe": "15m"},
-        {"label": "StochRSI Oversold · 15m",  "primaryType": "stochrsi",     "primaryCfg": {"operator": "lt", "value": 20},                           "confirms": [], "timeframe": "15m"},
-        {"label": "Volume Spike · 15m",       "primaryType": "volume_spike", "primaryCfg": {"multiplier": 2.0},                                        "confirms": [], "timeframe": "15m"},
+        # RSI variants (different periods + thresholds)
+        {"label": "RSI 7 Aggressive Oversold",   "category": "Momentum",   "primaryType": "rsi",          "primaryCfg": {"period": 7,  "operator": "lt", "value": 25},              "confirms": []},
+        {"label": "RSI 14 Classic Oversold",     "category": "Momentum",   "primaryType": "rsi",          "primaryCfg": {"period": 14, "operator": "lt", "value": 30},              "confirms": []},
+        {"label": "RSI 21 Swing Oversold",       "category": "Momentum",   "primaryType": "rsi",          "primaryCfg": {"period": 21, "operator": "lt", "value": 35},              "confirms": []},
+        {"label": "RSI Trend Continuation >55",  "category": "Momentum",   "primaryType": "rsi",          "primaryCfg": {"period": 14, "operator": "gt", "value": 55},              "confirms": []},
+        # MACD
+        {"label": "MACD Bullish Cross",          "category": "Momentum",   "primaryType": "macd",         "primaryCfg": {"condition": "bullish_cross"},                             "confirms": []},
+        # EMA crosses (fast/medium/long)
+        {"label": "EMA Fast Cross 9/21",         "category": "Trend",      "primaryType": "ema",          "primaryCfg": {"period": 9,  "period2": 21,  "condition": "bullish_cross"}, "confirms": []},
+        {"label": "EMA Medium Cross 20/50",      "category": "Trend",      "primaryType": "ema",          "primaryCfg": {"period": 20, "period2": 50,  "condition": "bullish_cross"}, "confirms": []},
+        {"label": "EMA Golden Cross 50/200",     "category": "Trend",      "primaryType": "ema",          "primaryCfg": {"period": 50, "period2": 200, "condition": "bullish_cross"}, "confirms": []},
+        # SMA trend filters
+        {"label": "Price Above SMA 50",          "category": "Trend",      "primaryType": "sma",          "primaryCfg": {"period": 50,  "condition": "price_above"},                "confirms": []},
+        {"label": "Price Above SMA 200",         "category": "Trend",      "primaryType": "sma",          "primaryCfg": {"period": 200, "condition": "price_above"},                "confirms": []},
+        # SuperTrend
+        {"label": "SuperTrend Bullish Flip",     "category": "Trend",      "primaryType": "supertrend",   "primaryCfg": {"condition": "bullish"},                                   "confirms": []},
+        # Bollinger
+        {"label": "BB Lower Bounce",             "category": "Mean Rev",   "primaryType": "bb",           "primaryCfg": {"condition": "price_below_lower"},                         "confirms": []},
+        {"label": "BB Squeeze Breakout",         "category": "Volatility", "primaryType": "bb",           "primaryCfg": {"condition": "squeeze"},                                   "confirms": []},
+        # StochRSI
+        {"label": "StochRSI Oversold <20",       "category": "Momentum",   "primaryType": "stochrsi",     "primaryCfg": {"operator": "lt", "value": 20},                            "confirms": []},
+        # Volume
+        {"label": "Volume Spike 2×",             "category": "Volume",     "primaryType": "volume_spike", "primaryCfg": {"multiplier": 2.0},                                        "confirms": []},
+        # Williams %R
+        {"label": "Williams %R Oversold",        "category": "Momentum",   "primaryType": "williams_r",   "primaryCfg": {"condition": "oversold"},                                  "confirms": []},
+        # ADX (trend filter)
+        {"label": "ADX Strong Trend >25",        "category": "Trend",      "primaryType": "adx_filter",   "primaryCfg": {"condition": "trending"},                                  "confirms": []},
+        # Breakouts
+        {"label": "Breakout 20-bar High",        "category": "Breakout",   "primaryType": "breakout",     "primaryCfg": {"bo_lookback": 20, "bo_pct": 1.0, "bo_dir": "up"},          "confirms": []},
+        {"label": "Breakout 50-bar High",        "category": "Breakout",   "primaryType": "breakout",     "primaryCfg": {"bo_lookback": 50, "bo_pct": 0.5, "bo_dir": "up"},          "confirms": []},
+        # S/R bounce
+        {"label": "Support Bounce",              "category": "Price Action","primaryType": "support_resistance", "primaryCfg": {"condition": "at_support"},                          "confirms": []},
+        # Candlestick patterns
+        {"label": "Bullish Engulfing Pattern",   "category": "Price Action","primaryType": "candlestick", "primaryCfg": {"pattern": "bullish_engulfing"},                            "confirms": []},
+        # Divergence
+        {"label": "RSI Bullish Divergence",      "category": "Divergence", "primaryType": "divergence",   "primaryCfg": {"indicator": "rsi", "direction": "bullish"},                "confirms": []},
     ]
 
-    # ── Combos — primary + one confirmation layer ──────────────────────────────
+    # ── Combos — primary + one or two confirmation layers ──────────────────────
     combos = [
-        # RSI base + trend/momentum confirm
-        {"label": "RSI Oversold + MACD · 15m",         "primaryType": "rsi",        "primaryCfg": {"period": 14, "operator": "lt", "value": 30},              "confirms": [{"type": "macd",       "condition": "bullish_cross"}],                              "timeframe": "15m"},
-        {"label": "RSI Oversold + SuperTrend · 1h",    "primaryType": "rsi",        "primaryCfg": {"period": 14, "operator": "lt", "value": 30},              "confirms": [{"type": "supertrend", "condition": "bullish"}],                                     "timeframe": "1h"},
+        # Oscillator + trend confirm
+        {"label": "RSI Oversold + MACD Confirm",          "category": "Combo",      "primaryType": "rsi",        "primaryCfg": {"period": 14, "operator": "lt", "value": 30},              "confirms": [{"type": "macd",         "condition": "bullish_cross"}]},
+        {"label": "RSI Oversold + SuperTrend Confirm",    "category": "Combo",      "primaryType": "rsi",        "primaryCfg": {"period": 14, "operator": "lt", "value": 30},              "confirms": [{"type": "supertrend",   "condition": "bullish"}]},
         # EMA cross + volume/momentum confirm
-        {"label": "EMA Cross + Volume Spike · 15m",    "primaryType": "ema",        "primaryCfg": {"period": 9, "period2": 21, "condition": "bullish_cross"}, "confirms": [{"type": "volume_spike", "multiplier": 1.5}],                                       "timeframe": "15m"},
-        {"label": "EMA Cross + RSI > 50 · 15m",        "primaryType": "ema",        "primaryCfg": {"period": 9, "period2": 21, "condition": "bullish_cross"}, "confirms": [{"type": "rsi",        "period": 14, "operator": "gt", "value": 50}],                "timeframe": "15m"},
-        # MACD base + trend confirm
-        {"label": "MACD Cross + EMA Bullish · 15m",    "primaryType": "macd",       "primaryCfg": {"condition": "bullish_cross"},                             "confirms": [{"type": "ema",        "period": 20, "condition": "above"}],                         "timeframe": "15m"},
-        {"label": "MACD Cross + EMA Bullish · 1h",     "primaryType": "macd",       "primaryCfg": {"condition": "bullish_cross"},                             "confirms": [{"type": "ema",        "period": 20, "condition": "above"}],                         "timeframe": "1h"},
-        # SuperTrend base + oscillator confirm
-        {"label": "SuperTrend + MACD · 15m",           "primaryType": "supertrend", "primaryCfg": {"condition": "bullish"},                                   "confirms": [{"type": "macd",       "condition": "bullish_cross"}],                              "timeframe": "15m"},
-        {"label": "SuperTrend + RSI > 50 · 1h",        "primaryType": "supertrend", "primaryCfg": {"condition": "bullish"},                                   "confirms": [{"type": "rsi",        "period": 14, "operator": "gt", "value": 50}],                "timeframe": "1h"},
-        # BB bounce + oversold confirm
-        {"label": "BB Bounce + RSI Oversold · 15m",    "primaryType": "bb",         "primaryCfg": {"condition": "price_below_lower"},                         "confirms": [{"type": "rsi",        "period": 14, "operator": "lt", "value": 35}],                "timeframe": "15m"},
-        # StochRSI base + trend confirm
-        {"label": "StochRSI + MACD · 15m",             "primaryType": "stochrsi",   "primaryCfg": {"operator": "lt", "value": 20},                           "confirms": [{"type": "macd",       "condition": "bullish_cross"}],                              "timeframe": "15m"},
+        {"label": "EMA Cross + Volume Spike",             "category": "Combo",      "primaryType": "ema",        "primaryCfg": {"period": 9, "period2": 21, "condition": "bullish_cross"}, "confirms": [{"type": "volume_spike", "multiplier": 1.5}]},
+        {"label": "EMA Cross + RSI > 50 Strength",        "category": "Combo",      "primaryType": "ema",        "primaryCfg": {"period": 9, "period2": 21, "condition": "bullish_cross"}, "confirms": [{"type": "rsi",          "period": 14, "operator": "gt", "value": 50}]},
+        # MACD + trend filter
+        {"label": "MACD Cross + EMA20 Bullish",           "category": "Combo",      "primaryType": "macd",       "primaryCfg": {"condition": "bullish_cross"},                             "confirms": [{"type": "ema",          "period": 20, "condition": "above"}]},
+        {"label": "MACD Cross + Above SMA 200",           "category": "Combo",      "primaryType": "macd",       "primaryCfg": {"condition": "bullish_cross"},                             "confirms": [{"type": "sma",          "period": 200, "condition": "price_above"}]},
+        # SuperTrend + oscillator
+        {"label": "SuperTrend + MACD Confirm",            "category": "Combo",      "primaryType": "supertrend", "primaryCfg": {"condition": "bullish"},                                   "confirms": [{"type": "macd",         "condition": "bullish_cross"}]},
+        {"label": "SuperTrend + RSI > 50",                "category": "Combo",      "primaryType": "supertrend", "primaryCfg": {"condition": "bullish"},                                   "confirms": [{"type": "rsi",          "period": 14, "operator": "gt", "value": 50}]},
+        # BB + RSI
+        {"label": "BB Bounce + RSI Oversold Confirm",     "category": "Combo",      "primaryType": "bb",         "primaryCfg": {"condition": "price_below_lower"},                         "confirms": [{"type": "rsi",          "period": 14, "operator": "lt", "value": 35}]},
+        # StochRSI + MACD
+        {"label": "StochRSI + MACD Confirm",              "category": "Combo",      "primaryType": "stochrsi",   "primaryCfg": {"operator": "lt", "value": 20},                            "confirms": [{"type": "macd",         "condition": "bullish_cross"}]},
+        # Breakout + volume/trend
+        {"label": "Breakout + Volume Spike (Classic)",    "category": "Combo",      "primaryType": "breakout",   "primaryCfg": {"bo_lookback": 20, "bo_pct": 1.0, "bo_dir": "up"},          "confirms": [{"type": "volume_spike", "multiplier": 1.8}]},
+        {"label": "Breakout + ADX Trending",              "category": "Combo",      "primaryType": "breakout",   "primaryCfg": {"bo_lookback": 20, "bo_pct": 1.0, "bo_dir": "up"},          "confirms": [{"type": "adx_filter",   "condition": "trending"}]},
+        # ADX trend + EMA momentum
+        {"label": "ADX Trending + EMA Cross",             "category": "Combo",      "primaryType": "adx_filter", "primaryCfg": {"condition": "trending"},                                  "confirms": [{"type": "ema",          "period": 9, "period2": 21, "condition": "bullish_cross"}]},
+        # Reversal pattern + oscillator
+        {"label": "RSI Oversold + Bullish Engulfing",     "category": "Combo",      "primaryType": "rsi",        "primaryCfg": {"period": 14, "operator": "lt", "value": 35},              "confirms": [{"type": "candlestick",  "pattern": "bullish_engulfing"}]},
+        # Pullback in uptrend
+        {"label": "Above SMA 200 + RSI Oversold Pullback","category": "Combo",      "primaryType": "sma",        "primaryCfg": {"period": 200, "condition": "price_above"},                "confirms": [{"type": "rsi",          "period": 14, "operator": "lt", "value": 35}]},
+        # Williams %R + MACD oscillator combo
+        {"label": "Williams %R + MACD Confirm",           "category": "Combo",      "primaryType": "williams_r", "primaryCfg": {"condition": "oversold"},                                  "confirms": [{"type": "macd",         "condition": "bullish_cross"}]},
+        # Divergence + MACD confirmed
+        {"label": "RSI Divergence + MACD Cross",          "category": "Combo",      "primaryType": "divergence", "primaryCfg": {"indicator": "rsi", "direction": "bullish"},                "confirms": [{"type": "macd",         "condition": "bullish_cross"}]},
+        # BB squeeze breakout + volume
+        {"label": "BB Squeeze + Volume Spike",            "category": "Combo",      "primaryType": "bb",         "primaryCfg": {"condition": "squeeze"},                                   "confirms": [{"type": "volume_spike", "multiplier": 1.5}]},
     ]
 
     templates = []
@@ -7972,33 +8039,33 @@ async def backtest_scan(request: Request):
         for t in base_list:
             entry = {
                 "label":       t["label"],
+                "category":    t.get("category", "Other"),
                 "primaryType": t["primaryType"],
                 "primaryCfg":  dict(t["primaryCfg"]),
                 "confirms":    [dict(c) for c in t.get("confirms", [])],
-                "timeframe":   t["timeframe"],
+                "timeframe":   t.get("timeframe", "1h"),
                 "tp1": _tp, "sl": _sl, "leverage": _lev,
             }
             if direction == "SHORT":
-                # Flip primary condition
-                pt = entry["primaryType"]
-                pc = entry["primaryCfg"]
-                if pt == "rsi":
-                    if pc.get("operator") == "lt":        pc["operator"] = "gt"; pc["value"] = 70
-                    elif pc.get("operator") == "gt" and float(pc.get("value", 0)) < 60:
-                        pc["operator"] = "lt"; pc["value"] = 45
-                elif pt == "macd":        pc["condition"] = pc.get("condition", "").replace("bullish", "bearish")
-                elif pt == "ema":
-                    sub = pc.get("condition", "")
-                    pc["condition"] = (sub.replace("bullish_cross", "bearish_cross")
-                                          .replace("crosses_above", "crosses_below"))
-                elif pt == "supertrend":  pc["condition"] = "bearish"
-                elif pt == "bb":          pc["condition"] = pc.get("condition","").replace("price_below_lower", "price_above_upper")
-                elif pt == "stochrsi":
-                    if pc.get("operator") == "lt":        pc["operator"] = "gt"; pc["value"] = 80
+                # Flip primary by wrapping it through _C()
+                primary_as_cond = {"type": entry["primaryType"], **entry["primaryCfg"]}
+                flipped_primary = _C(primary_as_cond)
+                flipped_primary.pop("type", None)
+                entry["primaryCfg"] = flipped_primary
                 # Flip each confirm
                 entry["confirms"] = [_C(c) for c in entry["confirms"]]
-                # Update label
-                entry["label"] = entry["label"].replace("Oversold", "Overbought").replace("Bullish", "Bearish").replace("Bounce", "Rejection")
+                # Cosmetic label adjustments
+                entry["label"] = (entry["label"]
+                                  .replace("Oversold", "Overbought")
+                                  .replace("Bullish", "Bearish")
+                                  .replace("Bounce", "Rejection")
+                                  .replace("Above SMA", "Below SMA")
+                                  .replace("Price Above", "Price Below")
+                                  .replace("Golden Cross", "Death Cross")
+                                  .replace("Engulfing", "Engulfing")
+                                  .replace("Breakout", "Breakdown")
+                                  .replace("High", "Low")
+                                  .replace("Support", "Resistance"))
             templates.append(entry)
 
     from app.services.backtest_engine import run_backtest
@@ -8021,21 +8088,29 @@ async def backtest_scan(request: Request):
             result = {"error": "timeout"}
         except Exception as exc:
             result = {"error": str(exc)}
-        return {"label": tpl["label"], "config": cfg, "result": result}
+        return {"label": tpl["label"], "category": tpl.get("category", "Other"), "config": cfg, "result": result}
 
     # Run all templates in parallel
     outcomes = await asyncio.gather(*[_run_one(t) for t in templates])
 
     # ── Score and rank ─────────────────────────────────────────────────────────
+    # Stricter trade-count floor prevents sparse-sample strategies (e.g. 1 lucky
+    # trade with PF=99) from dominating the ranking. Long windows scale up the
+    # floor proportionally so 90-day scans need more trades to qualify.
+    _min_trades = 8 if days <= 30 else 12
+
     def _score(stats: dict) -> float:
         trades = stats.get("closed_trades", 0)
-        if trades < 5:
-            return -1.0   # too few trades to trust
+        if trades < _min_trades:
+            return -1.0   # too few trades to trust the result
         pf = float(stats.get("profit_factor", 0) or 0)
         wr = float(stats.get("win_rate", 0) or 0) / 100
         pnl = float(stats.get("total_pnl", 0) or 0)
-        # Composite: profit factor × win rate, tie-break by total P&L
-        return round(pf * wr + pnl * 0.001, 4)
+        # Composite: profit factor × win rate × log(trades) so strategies with
+        # MORE trades at the same quality outrank sparse ones; tie-break by P&L.
+        import math
+        sample_weight = math.log(trades + 1) / math.log(20)  # ~1.0 at 19 trades
+        return round(pf * wr * sample_weight + pnl * 0.001, 4)
 
     ranked = []
     for o in outcomes:
@@ -8044,11 +8119,12 @@ async def backtest_scan(request: Request):
         stats = res.get("stats") or {}
         score = _score(stats) if not err else -1.0
         ranked.append({
-            "label":   o["label"],
-            "config":  o["config"],
-            "stats":   stats,
-            "score":   score,
-            "error":   err,
+            "label":    o["label"],
+            "category": o.get("category", "Other"),
+            "config":   o["config"],
+            "stats":    stats,
+            "score":    score,
+            "error":    err,
         })
 
     ranked.sort(key=lambda x: x["score"], reverse=True)
@@ -8086,7 +8162,8 @@ async def backtest_scan(request: Request):
         "coin":    ticker,
         "days":    days,
         "direction": direction,
-        "ranked":  valid[:8],
+        "ranked":  valid[:12],
+        "tested":  len(templates),
         "skipped": len(invalid),
         "winner_insight": winner_insight,
     }
