@@ -170,16 +170,22 @@ export default function TradeScreen() {
   const candlesQ = useQuery({
     queryKey: ['trade-candles', symbol, tf],
     queryFn: () =>
-      apiGet<TradeCandlesResponse>(`/api/trade/candles/${symbol}`, undefined, { tf, limit: 120 }),
-    refetchInterval: 6_000,
-    staleTime: 4_000,
+      apiGet<TradeCandlesResponse>(`/api/trade/candles/${symbol}`, undefined, { tf, limit: 200 }),
+    // Backbone candles only need to refresh every few seconds — the visible
+    // tick of the trailing candle is handled by the 1s ticker poll which is
+    // merged into `liveCandles` below for sub-second-feeling motion.
+    refetchInterval: 4_000,
+    staleTime: 2_000,
   });
 
   const tickerQ = useQuery({
     queryKey: ['trade-ticker', symbol],
     queryFn: () => apiGet<TradeTicker>(`/api/trade/ticker/${symbol}`),
-    refetchInterval: 4_000,
-    staleTime: 2_000,
+    // Poll the lightweight ticker once per second so the chart's trailing
+    // candle ticks visibly — the user asked for "by-the-ms" motion and 1s is
+    // the sweet spot between perceived liveness and exchange rate-limits.
+    refetchInterval: 1_000,
+    staleTime: 500,
   });
 
   const fvgQ = useQuery({
@@ -241,6 +247,22 @@ export default function TradeScreen() {
   const chartCandles = candlesQ.data?.candles || [];
   const { width: screenW } = useWindowDimensions();
   const chartW = Math.max(screenW - spacing.lg * 2 - 2, 200);
+
+  // Merge the live ticker price into the trailing (forming) candle so the
+  // chart visibly ticks every second between full candle refreshes. We only
+  // mutate the last candle's close + extend its high/low — never insert new
+  // candles (that's the timeframe's job).
+  const liveCandles = useMemo(() => {
+    const px = tickerQ.data?.price;
+    if (!chartCandles.length || px == null || !Number.isFinite(px)) return chartCandles;
+    const out = chartCandles.slice();
+    const last = { ...out[out.length - 1] };
+    last.close = px;
+    last.high  = Math.max(last.high, px);
+    last.low   = Math.min(last.low,  px);
+    out[out.length - 1] = last;
+    return out;
+  }, [chartCandles, tickerQ.data?.price]);
 
   const chartZones = useMemo<ChartZone[]>(() => {
     if (!showFvg) return [];
@@ -487,14 +509,15 @@ export default function TradeScreen() {
           </View>
         ) : (
           <CandleChart
-            candles={chartCandles}
+            candles={liveCandles}
             zones={chartZones}
             priceLines={chartPriceLines}
             width={chartW}
-            height={260}
+            height={320}
             symbol={`${symbol}USDT`}
             tf={tf}
             showOhlcLegend
+            livePrice={tickerQ.data?.price}
           />
         )}
       </View>

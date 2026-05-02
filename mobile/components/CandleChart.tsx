@@ -1,7 +1,12 @@
-import React, { useMemo } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import Svg, { Line, Rect, Circle, G } from 'react-native-svg';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { runOnJS, useSharedValue } from 'react-native-reanimated';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, font, radius, spacing } from '@/constants/colors';
+
+const MIN_VISIBLE_CANDLES = 12;
 
 export type Candle = {
   time: number;     // unix seconds
@@ -58,6 +63,8 @@ export function CandleChart({
   symbol,
   tf,
   showOhlcLegend = false,
+  livePrice,
+  interactive = true,
 }: {
   candles: Candle[];
   markers?: ChartMarker[];
@@ -69,16 +76,110 @@ export function CandleChart({
   tf?: string;
   /** When true, renders an OHLC info strip overlay in the top-left of the chart. */
   showOhlcLegend?: boolean;
+  /** When provided, draws a pulsing live-price marker at this y-level. */
+  livePrice?: number;
+  /** When true (default), enables pinch-to-zoom and horizontal pan. */
+  interactive?: boolean;
 }) {
   const padX = 8;
   const padY = 14;
   const innerW = Math.max(width - padX * 2, 1);
   const innerH = Math.max(height - padY * 2, 1);
 
+  // ─── Viewport (pinch-zoom + horizontal pan) ─────────────────────────────
+  // Internally we keep the visible window as (start, count) into the full
+  // candles array. Gestures update these via shared values during the gesture
+  // and commit to React state for redraw.
+  const total = candles?.length || 0;
+  const [viewCount, setViewCount] = useState<number>(total);
+  const [viewStart, setViewStart] = useState<number>(0);
+
+  // Whenever a new symbol / timeframe arrives the upstream candles array's
+  // first-candle time changes — reset the viewport to "show everything".
+  const firstTime = candles?.[0]?.time;
+  const lastResetKey = useRef<string>('');
+  useEffect(() => {
+    const key = `${firstTime}|${total}|${tf || ''}|${symbol || ''}`;
+    // Only reset on symbol/tf change, NOT on every new candle tick.
+    const baseKey = `${tf || ''}|${symbol || ''}`;
+    const lastBase = lastResetKey.current.split('::')[0];
+    if (baseKey !== lastBase) {
+      setViewStart(0);
+      setViewCount(total);
+      lastResetKey.current = `${baseKey}::${key}`;
+    } else if (viewCount === 0 || viewCount > total) {
+      // First-load case where total was 0 then jumped.
+      setViewStart(Math.max(0, total - viewCount || 0));
+      setViewCount(total);
+      lastResetKey.current = `${baseKey}::${key}`;
+    }
+  }, [firstTime, total, tf, symbol, viewCount]);
+
+  const savedCount = useSharedValue(viewCount);
+  const savedStart = useSharedValue(viewStart);
+
+  const commitView = (start: number, count: number) => {
+    setViewStart(start);
+    setViewCount(count);
+  };
+
+  const pinch = Gesture.Pinch()
+    .onStart(() => {
+      savedCount.value = viewCount;
+      savedStart.value = viewStart;
+    })
+    .onUpdate((e) => {
+      if (!interactive || total === 0) return;
+      const nextCount = Math.max(
+        MIN_VISIBLE_CANDLES,
+        Math.min(total, Math.round(savedCount.value / Math.max(0.1, e.scale))),
+      );
+      // Anchor the zoom around the right edge so it feels like price-action zoom.
+      const rightEdge = savedStart.value + savedCount.value;
+      const nextStart = Math.max(0, Math.min(total - nextCount, rightEdge - nextCount));
+      runOnJS(commitView)(nextStart, nextCount);
+    });
+
+  const pan = Gesture.Pan()
+    .minDistance(6)
+    .onStart(() => {
+      savedStart.value = viewStart;
+      savedCount.value = viewCount;
+    })
+    .onUpdate((e) => {
+      if (!interactive || total === 0) return;
+      const candleW = innerW / Math.max(savedCount.value, 1);
+      const dCandle = -e.translationX / Math.max(candleW, 0.1);
+      const nextStart = Math.max(
+        0,
+        Math.min(total - savedCount.value, Math.round(savedStart.value + dCandle)),
+      );
+      if (nextStart !== viewStart) runOnJS(setViewStart)(nextStart);
+    });
+
+  const gesture = Gesture.Simultaneous(pinch, pan);
+
+  // Effective slice we actually render.
+  const visibleCandles = useMemo(() => {
+    if (total === 0) return [];
+    const start = Math.max(0, Math.min(total - 1, viewStart));
+    const count = Math.max(MIN_VISIBLE_CANDLES, Math.min(total - start, viewCount || total));
+    return candles.slice(start, start + count);
+  }, [candles, viewStart, viewCount, total]);
+
+  const isZoomed = viewCount > 0 && viewCount < total;
+
+  const onResetZoom = () => {
+    setViewStart(0);
+    setViewCount(total);
+  };
+
   const { paths, yMin, yMax, xForTime, yForPrice } = useMemo(() => {
-    if (!candles || candles.length === 0) {
+    if (!visibleCandles || visibleCandles.length === 0) {
       return { paths: [] as any[], yMin: 0, yMax: 1, xForTime: () => 0, yForPrice: () => 0 };
     }
+    // Use the visible window for axis scaling so zoom feels useful.
+    const candles = visibleCandles;
     const lows = candles.map((c) => c.low);
     const highs = candles.map((c) => c.high);
     let lo = Math.min(...lows);
@@ -125,7 +226,7 @@ export function CandleChart({
     };
   }, [candles, innerH, innerW, padX, padY]);
 
-  if (!candles || candles.length === 0) {
+  if (total === 0 || visibleCandles.length === 0) {
     return (
       <View style={[styles.empty, { height }]}>
         <Text style={styles.emptyText}>No price data available.</Text>
@@ -133,10 +234,11 @@ export function CandleChart({
     );
   }
 
-  const lastClose = candles[candles.length - 1].close;
-  const firstOpen = candles[0].open;
+  const lastClose = visibleCandles[visibleCandles.length - 1].close;
+  const firstOpen = visibleCandles[0].open;
   const change = lastClose - firstOpen;
   const changePct = (change / firstOpen) * 100;
+  const liveY = livePrice != null ? yForPrice(livePrice) : null;
 
   return (
     <View style={styles.wrap}>
@@ -153,6 +255,7 @@ export function CandleChart({
           </Text>
         </View>
       ) : null}
+      <GestureDetector gesture={gesture}>
       <Svg width={width} height={height}>
         {/* horizontal grid (faint) */}
         {[0.25, 0.5, 0.75].map((f) => {
@@ -182,16 +285,16 @@ export function CandleChart({
               <Rect
                 x={x} y={y} width={w} height={h}
                 fill={baseFill}
-                opacity={z.dim ? 0.06 : 0.14}
+                opacity={z.dim ? 0.10 : 0.22}
               />
               <Line
                 x1={x} y1={yTop} x2={x + w} y2={yTop}
-                stroke={baseFill} strokeWidth={0.75} opacity={z.dim ? 0.25 : 0.55}
+                stroke={baseFill} strokeWidth={1} opacity={z.dim ? 0.4 : 0.85}
                 strokeDasharray="2,3"
               />
               <Line
                 x1={x} y1={yBot} x2={x + w} y2={yBot}
-                stroke={baseFill} strokeWidth={0.75} opacity={z.dim ? 0.25 : 0.55}
+                stroke={baseFill} strokeWidth={1} opacity={z.dim ? 0.4 : 0.85}
                 strokeDasharray="2,3"
               />
             </G>
@@ -207,8 +310,8 @@ export function CandleChart({
             <Line
               key={`pl-${i}`}
               x1={padX} y1={y} x2={width - padX} y2={y}
-              stroke={stroke} strokeWidth={1} opacity={0.45}
-              strokeDasharray="4,4"
+              stroke={stroke} strokeWidth={1.5} opacity={0.75}
+              strokeDasharray="6,4"
             />
           );
         })}
@@ -256,11 +359,37 @@ export function CandleChart({
             </G>
           );
         })}
+        {/* Live-price marker — pulsing dot at the right edge so the user
+            can see the chart "ticking" by the millisecond. */}
+        {liveY != null && Number.isFinite(liveY) && liveY >= padY && liveY <= padY + innerH ? (
+          <G>
+            <Line
+              x1={padX} y1={liveY} x2={width - padX - 4} y2={liveY}
+              stroke={colors.accent} strokeWidth={1} opacity={0.5}
+              strokeDasharray="2,3"
+            />
+            <Circle
+              cx={width - padX - 2} cy={liveY} r={5}
+              fill={colors.accent} opacity={0.25}
+            />
+            <Circle
+              cx={width - padX - 2} cy={liveY} r={2.6}
+              fill={colors.accent}
+            />
+          </G>
+        ) : null}
       </Svg>
+      </GestureDetector>
+      {isZoomed ? (
+        <Pressable onPress={onResetZoom} style={styles.resetBtn} hitSlop={6}>
+          <Ionicons name="contract" size={11} color={colors.accent} />
+          <Text style={styles.resetBtnText}>FIT</Text>
+        </Pressable>
+      ) : null}
       {showOhlcLegend ? (
         <View style={styles.ohlcOverlay} pointerEvents="none">
           {(() => {
-            const c = candles[candles.length - 1];
+            const c = visibleCandles[visibleCandles.length - 1];
             const up = c.close >= c.open;
             const tone = up ? colors.positive : colors.negative;
             const fmt = (n: number) =>
@@ -366,6 +495,26 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontVariant: ['tabular-nums'],
     letterSpacing: 0.2,
+  },
+  resetBtn: {
+    position: 'absolute',
+    top: 30,
+    right: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(34,211,238,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(34,211,238,0.45)',
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  resetBtnText: {
+    color: colors.accent,
+    fontFamily: font.bold,
+    fontSize: 9.5,
+    letterSpacing: 0.6,
   },
   wallLabelOverlay: {
     position: 'absolute',
