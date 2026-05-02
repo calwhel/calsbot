@@ -2463,18 +2463,31 @@ function dismissTgBanner(){
         <div class="pine-card">
           <div style="margin-bottom:16px">
             <div style="font-size:16px;font-weight:700;letter-spacing:-.3px">🔍 Strategy Scanner</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:3px">Test up to <b>5 coins</b> on <b>multiple timeframes</b> with <b>40 strategies</b> each — the engine finds the best (coin, timeframe, strategy, TP/SL) combo across the whole grid.</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:3px">Test up to <b>12 coins</b> on <b>multiple timeframes</b> with <b>40 strategies</b> each — the engine finds the best (coin, timeframe, strategy, TP/SL) combo across the whole grid.</div>
           </div>
 
           <div style="margin-bottom:14px">
-            <div class="pine-label">Coins <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 5</span></div>
-            <input id="scan-coin" type="text" value="BTC" maxlength="80"
+            <div class="pine-label">Coins <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 12 · pick a preset or type your own</span></div>
+            <input id="scan-coin" type="text" value="BTC" maxlength="200"
               style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)"
-              placeholder="BTC, ETH, SOL, AVAX, LINK">
+              placeholder="BTC, ETH, SOL, AVAX, LINK, …">
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="document.getElementById('scan-coin').value='BTC'">BTC only</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="document.getElementById('scan-coin').value='BTC,ETH,SOL'">Top 3</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="document.getElementById('scan-coin').value='BTC,ETH,SOL,AVAX,LINK'">Top 5</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC',this)">BTC only</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH',this)">BTC + ETH</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL',this)">Top 3</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,LINK',this)">Top 5</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,LINK,DOT,MATIC,ATOM,NEAR,ARB',this)">Top 10</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,BNB,XRP,ADA,DOGE,AVAX,DOT,MATIC,LINK,UNI',this)">Top 12 by mcap</button>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+              <div style="font-size:10px;color:var(--muted);align-self:center;margin-right:2px;text-transform:uppercase;letter-spacing:.4px;font-weight:600">Sectors:</div>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,BNB,ADA,DOT',this)">L1s</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('ARB,OP,MATIC,STRK,MNT',this)">L2s</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('UNI,AAVE,MKR,COMP,CRV,SUSHI,LDO',this)">DeFi</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('FET,RNDR,TAO,WLD,AGIX,OCEAN',this)">AI</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('DOGE,SHIB,PEPE,WIF,FLOKI,BONK',this)">Memes</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('AXS,SAND,MANA,IMX,GALA',this)">Gaming</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('LINK,ATOM,FIL,GRT,ICP',this)">Infra</button>
             </div>
           </div>
 
@@ -6734,7 +6747,26 @@ function _parseScanCoins() {
   const raw = (document.getElementById('scan-coin').value || 'BTC');
   const list = raw.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
   const seen = new Set();
-  return list.filter(c => !seen.has(c) && seen.add(c)).slice(0, 5);
+  // Cap matches the server-side limit (12). Going higher risks tripping the
+  // stage-1 backtest timeout on slow candle providers.
+  return list.filter(c => !seen.has(c) && seen.add(c)).slice(0, 12);
+}
+
+// Preset-chip helper: fills the coin input AND nudges the grid-estimator so
+// the user immediately sees the new backtest count under the Run button.
+function _setScanCoins(csv, el) {
+  const input = document.getElementById('scan-coin');
+  if (input) input.value = csv;
+  // Briefly flash the active chip so the user knows which preset they picked.
+  document.querySelectorAll('#scan-config-card .opt-chip').forEach(b => {
+    if (b.getAttribute('data-tf') || b.dataset.mode) return;  // skip TF + risk chips
+    b.classList.remove('active');
+  });
+  if (el) {
+    el.classList.add('active');
+    setTimeout(() => el.classList.remove('active'), 800);
+  }
+  _updateScanGridEst();
 }
 
 function _updateScanGridEst() {

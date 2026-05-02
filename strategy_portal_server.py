@@ -8283,8 +8283,11 @@ async def backtest_scan(request: Request):
         coin_list = [str(c).upper().strip().replace("USDT", "") for c in coins_raw if str(c).strip()]
     else:
         coin_list = [(body.get("coin") or "BTC").upper().strip().replace("USDT", "")]
-    # Dedupe + cap at 5 to keep total backtest count reasonable
-    seen = set(); coin_list = [c for c in coin_list if not (c in seen or seen.add(c))][:5]
+    # Dedupe + cap at 12 to keep total backtest count reasonable. At 12 coins ×
+    # 3 TFs × 40 strategies = 1,440 stage-1 backtests + ~96 stage-2 variants;
+    # bounded by Semaphore(20) + 120s/90s stage timeouts. Going higher than 12
+    # risks tripping the stage-1 timeout on slow candle providers.
+    seen = set(); coin_list = [c for c in coin_list if not (c in seen or seen.add(c))][:12]
     if not coin_list:
         coin_list = ["BTC"]
 
