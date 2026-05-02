@@ -55,6 +55,24 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _mobile_uid_header_to_query(request: Request, call_next):
+    """Translate the mobile-app `X-TradeHub-UID` header into a `?uid=` query
+    param so all existing endpoints (which read `request.query_params.get("uid")`)
+    keep working without per-route changes. Header is preferred over the legacy
+    query param — UIDs in URLs leak into access logs and browser history.
+    The web portal (cookie session) is unaffected.
+    """
+    header_uid = request.headers.get("X-TradeHub-UID") or request.headers.get("x-tradehub-uid")
+    if header_uid and not request.query_params.get("uid"):
+        existing_qs = request.scope.get("query_string", b"") or b""
+        prefix = f"uid={header_uid.strip()}".encode()
+        request.scope["query_string"] = (prefix + b"&" + existing_qs) if existing_qs else prefix
+    return await call_next(request)
+
+
 templates = Jinja2Templates(directory="app/templates")
 
 @app.middleware("http")
@@ -1640,6 +1658,33 @@ async def trade_page_symbol(slug: str, request: Request):
     return FileResponse("app/templates/trade.html", media_type="text/html")
 
 
+def _build_mobile_login_response(user, db) -> dict:
+    """Shape the user record into the canonical mobile login payload.
+    Shared between UID and email login paths so they return identical fields.
+    """
+    display = (user.username or user.first_name or user.uid or "").strip() or user.uid
+    plan = "free"
+    try:
+        sub = db.query(PortalSubscription).filter(
+            PortalSubscription.user_id == user.id,
+            PortalSubscription.status == "active",
+        ).order_by(PortalSubscription.id.desc()).first()
+        if sub:
+            plan = sub.tier or "pro"
+    except Exception:
+        pass
+    is_admin = (user.uid == "TH-YP0BADA8") or bool(getattr(user, "is_admin", False))
+    return {
+        "uid":        user.uid,
+        "display":    display,
+        "username":   user.username,
+        "first_name": user.first_name,
+        "plan":       plan,
+        "is_pro":     plan != "free",
+        "is_admin":   is_admin,
+    }
+
+
 @app.post("/api/mobile/login")
 async def api_mobile_login(request: Request):
     """UID-based login for the native mobile app (Expo Go).
@@ -1660,28 +1705,124 @@ async def api_mobile_login(request: Request):
         user = _get_user_by_uid(uid, db)
         if not user:
             raise HTTPException(status_code=403, detail="invalid UID")
-        display = (user.username or user.first_name or user.uid or "").strip() or user.uid
-        # Best-effort plan/tier info — fall back gracefully if column missing.
-        plan = "free"
+        return JSONResponse(_build_mobile_login_response(user, db))
+    finally:
+        db.close()
+
+
+@app.post("/api/mobile/login/email")
+async def api_mobile_login_email(request: Request):
+    """Email + password login for the native mobile app.
+
+    Body: {"email": "user@example.com", "password": "..."}
+    Returns the same payload as /api/mobile/login (with the resolved UID inside)
+    so the client can persist the UID and use it for all subsequent calls.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    email = (body.get("email") or "").strip().lower()
+    password = (body.get("password") or "").strip()
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="email and password required")
+
+    def _check():
+        db = SessionLocal()
         try:
-            sub = db.query(PortalSubscription).filter(
-                PortalSubscription.user_id == user.id,
-                PortalSubscription.status == "active",
-            ).order_by(PortalSubscription.id.desc()).first()
-            if sub:
-                plan = sub.tier or "pro"
-        except Exception:
-            pass
-        is_admin = (user.uid == "TH-YP0BADA8") or bool(getattr(user, "is_admin", False))
-        return JSONResponse({
-            "uid":      user.uid,
-            "display":  display,
-            "username": user.username,
-            "first_name": user.first_name,
-            "plan":     plan,
-            "is_pro":   plan != "free",
-            "is_admin": is_admin,
-        })
+            u = db.query(User).filter(User.email == email).first()
+            if not u or not u.password_hash:
+                return ("no_account", None, None)
+            if not _verify_password(password, u.password_hash):
+                return ("bad_password", None, None)
+            if getattr(u, "banned", False):
+                return ("banned", None, None)
+            if not u.uid:
+                return ("incomplete", None, None)
+            payload = _build_mobile_login_response(u, db)
+            return ("ok", payload, None)
+        finally:
+            db.close()
+
+    status, payload, _ = await asyncio.to_thread(_check)
+    if status == "no_account":
+        raise HTTPException(status_code=403, detail="No account found for that email.")
+    if status == "bad_password":
+        raise HTTPException(status_code=403, detail="Incorrect password.")
+    if status == "banned":
+        raise HTTPException(status_code=403, detail="This account has been suspended.")
+    if status == "incomplete":
+        raise HTTPException(status_code=403, detail="Account is missing a UID. Finish setup at tradehub.markets.")
+    return JSONResponse(payload)
+
+
+@app.post("/api/mobile/push/register")
+async def api_mobile_push_register(request: Request):
+    """Register an Expo push token for the signed-in mobile user.
+
+    Body: {"token": "ExponentPushToken[...]", "platform": "ios" | "android"}
+    Auth: X-TradeHub-UID header (translated to ?uid= by middleware).
+    Idempotent — re-registering an existing token transfers it to whoever
+    is signed in on this device now.
+    """
+    from app.models import MobilePushToken
+    uid = request.query_params.get("uid", "").strip().upper()
+    if not uid:
+        raise HTTPException(status_code=401, detail="auth required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    token = (body.get("token") or "").strip()
+    platform = (body.get("platform") or "ios").strip().lower()
+    if not token:
+        raise HTTPException(status_code=400, detail="token required")
+    if platform not in ("ios", "android"):
+        platform = "ios"
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="invalid UID")
+        existing = db.query(MobilePushToken).filter(
+            MobilePushToken.token == token
+        ).first()
+        if existing:
+            existing.user_id = user.id
+            existing.platform = platform
+            existing.updated_at = datetime.utcnow()
+        else:
+            db.add(MobilePushToken(
+                user_id=user.id,
+                token=token,
+                platform=platform,
+            ))
+        db.commit()
+        return JSONResponse({"ok": True})
+    finally:
+        db.close()
+
+
+@app.post("/api/mobile/push/unregister")
+async def api_mobile_push_unregister(request: Request):
+    """Remove a push token (called on sign-out so the device stops receiving
+    pushes for the previously-signed-in user)."""
+    from app.models import MobilePushToken
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    token = (body.get("token") or "").strip()
+    if not token:
+        return JSONResponse({"ok": True})  # nothing to do
+    db = SessionLocal()
+    try:
+        db.query(MobilePushToken).filter(
+            MobilePushToken.token == token
+        ).delete()
+        db.commit()
+        return JSONResponse({"ok": True})
     finally:
         db.close()
 

@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { Pill } from '@/components/Pill';
 import { StatCard } from '@/components/StatCard';
 import { EquityCurve } from '@/components/EquityCurve';
+import { CandleChart, type Candle, type ChartMarker } from '@/components/CandleChart';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { colors, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
@@ -86,16 +87,90 @@ export default function StrategyDetailScreen() {
     enabled: !!uid && !!sid,
   });
 
+  // Pick the symbol to chart: most-recent traded symbol on this strategy.
+  // If the strategy has never fired, we skip the chart entirely.
+  const chartSymbol = useMemo(() => {
+    const trades = tradesQ.data?.trades || [];
+    return trades.length > 0 ? trades[0].symbol : null;
+  }, [tradesQ.data]);
+
+  const candlesQ = useQuery({
+    queryKey: ['candles', chartSymbol],
+    queryFn: () => apiGet<{ candles: Candle[]; symbol: string; tf: string }>(
+      `/api/candles/${chartSymbol!.replace('USDT', '')}`,
+      uid,
+      { tf: '5m', limit: 80 },
+    ),
+    enabled: !!uid && !!chartSymbol,
+    staleTime: 60_000,
+    refetchInterval: 60_000, // refresh once per minute
+  });
+
   const toggleM = useMutation({
     mutationFn: () => apiPost<ToggleResponse>(`/api/strategies/${sid}/toggle`, {}, uid),
-    onSuccess: () => {
+    // Optimistic flip — feels instant. The server is the source of truth, so
+    // we still invalidate on success to pick up any side-effects (health
+    // score, status normalisation), and rollback to the snapshot on error.
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ['strategies', uid] });
+      const prev = qc.getQueryData<Strategy[]>(['strategies', uid]);
+      if (prev) {
+        qc.setQueryData<Strategy[]>(
+          ['strategies', uid],
+          prev.map((s) =>
+            s.id === sid
+              ? { ...s, status: s.status === 'active' ? 'paused' : 'active' }
+              : s,
+          ),
+        );
+      }
+      return { prev };
+    },
+    onError: (e, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(['strategies', uid], ctx.prev);
+      Alert.alert('Could not toggle strategy', (e as Error).message || 'Try again.');
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['strategies', uid] });
       qc.invalidateQueries({ queryKey: ['portfolio', uid] });
     },
-    onError: (e) => {
-      Alert.alert('Could not toggle strategy', (e as Error).message || 'Try again.');
-    },
   });
+
+  // Build entry/exit markers for trades whose symbol matches the charted one.
+  const chartMarkers = useMemo<ChartMarker[]>(() => {
+    if (!chartSymbol || !candlesQ.data?.candles?.length) return [];
+    const trades = tradesQ.data?.trades || [];
+    const tMin = candlesQ.data.candles[0].time;
+    const tMax = candlesQ.data.candles[candlesQ.data.candles.length - 1].time;
+    const out: ChartMarker[] = [];
+    for (const t of trades) {
+      if (t.symbol !== chartSymbol) continue;
+      // entry
+      if (t.fired_at && t.entry_price != null) {
+        const ts = Math.floor(new Date(t.fired_at).getTime() / 1000);
+        if (ts >= tMin && ts <= tMax) {
+          out.push({
+            time: ts,
+            price: t.entry_price,
+            kind: 'open',
+            direction: t.direction === 'SHORT' ? 'SHORT' : 'LONG',
+          });
+        }
+      }
+      // exit (only for closed trades within the chart window)
+      if (t.closed_at && t.exit_price != null && t.outcome !== 'OPEN') {
+        const ts = Math.floor(new Date(t.closed_at).getTime() / 1000);
+        if (ts >= tMin && ts <= tMax) {
+          out.push({
+            time: ts,
+            price: t.exit_price,
+            kind: t.outcome === 'WIN' ? 'close-win' : 'close-loss',
+          });
+        }
+      }
+    }
+    return out;
+  }, [chartSymbol, candlesQ.data, tradesQ.data]);
 
   const equityValues = useMemo(() => {
     const trades = tradesQ.data?.trades || [];
@@ -219,6 +294,27 @@ export default function StrategyDetailScreen() {
             compact
           />
         </View>
+
+        {/* Price action (candles + entry/exit markers) */}
+        {chartSymbol ? (
+          <View style={{ marginTop: spacing.lg }}>
+            <Text style={styles.sectionLabel}>Last 80 candles · {chartSymbol.replace('USDT', '')}</Text>
+            {candlesQ.isLoading ? (
+              <View style={[styles.card, styles.center, { paddingVertical: spacing.xl }]}>
+                <ActivityIndicator color={colors.accent} />
+              </View>
+            ) : (
+              <CandleChart
+                candles={candlesQ.data?.candles || []}
+                markers={chartMarkers}
+                width={chartW}
+                height={180}
+                symbol={chartSymbol}
+                tf="5m"
+              />
+            )}
+          </View>
+        ) : null}
 
         {/* Equity curve */}
         <View style={{ marginTop: spacing.lg }}>

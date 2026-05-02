@@ -1871,6 +1871,15 @@ async def evaluate_and_fire(
                             is_paper      = True,
                         ),
                     )
+                # Mobile push (fire-and-forget; never raises)
+                from app.services.expo_push import notify_user_bg
+                _coin = symbol.replace("USDT", "")
+                notify_user_bg(
+                    user.id,
+                    title=f"📝 {strategy.name}",
+                    body=f"Paper trade: {_coin} {direction} {leverage}× @ ${current_price:,.4f}",
+                    data={"type": "trade_open", "strategy_id": strategy.id, "kind": "paper"},
+                )
             except Exception as e:
                 logger.warning(f"Paper DM failed: {e}")
         else:
@@ -1950,6 +1959,18 @@ async def evaluate_and_fire(
                         )
                     except Exception:
                         pass
+                # Mobile push (fire-and-forget)
+                try:
+                    from app.services.expo_push import notify_user_bg
+                    _coin = symbol.replace("USDT", "")
+                    notify_user_bg(
+                        user.id,
+                        title=f"⚠️ {strategy.name}",
+                        body=f"Live order failed → paper: {_coin} {direction} {leverage}×",
+                        data={"type": "trade_open", "strategy_id": strategy.id, "kind": "paper_fallback"},
+                    )
+                except Exception:
+                    pass
                 # Still propagate to subscriber copies even when the owner's
                 # live order failed — subscribers should receive a paper signal.
                 if not config.get("_locked"):
@@ -1996,6 +2017,15 @@ async def evaluate_and_fire(
                                 is_paper      = False,
                                 order_id      = str(order_id),
                             ),
+                        )
+                        # Mobile push (fire-and-forget) — fires for live trades.
+                        from app.services.expo_push import notify_user_bg
+                        _coin = symbol.replace("USDT", "")
+                        notify_user_bg(
+                            user.id,
+                            title=f"🚀 {strategy.name}",
+                            body=f"Live trade: {_coin} {direction} {leverage}× @ ${display_entry:,.4f}",
+                            data={"type": "trade_open", "strategy_id": strategy.id, "kind": "live"},
                         )
                     except Exception as e:
                         logger.warning(f"Live DM failed: {e}")

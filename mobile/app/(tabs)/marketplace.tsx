@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, ActivityIndicator, RefreshControl, Pressable } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -16,10 +17,10 @@ function fmtPnl(v: number | null): string {
   return `${sign}${v.toFixed(1)}%`;
 }
 
-function ListingRow({ m }: { m: MarketplaceListing }) {
+function ListingRow({ m, onPress }: { m: MarketplaceListing; onPress: () => void }) {
   const showLive = m.live_pnl !== null && m.live_trades >= 3;
   return (
-    <Pressable style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}>
       <View style={styles.rowHeader}>
         <View style={{ flex: 1, marginRight: spacing.sm }}>
           <Text style={styles.rowTitle} numberOfLines={1}>{m.title}</Text>
@@ -79,6 +80,7 @@ function ListingRow({ m }: { m: MarketplaceListing }) {
 export default function MarketplaceScreen() {
   const insets = useSafeAreaInsets();
   const { uid } = useAuth();
+  const router = useRouter();
 
   const { data, isLoading, isFetching, refetch, isError } = useQuery({
     queryKey: ['marketplace', uid],
@@ -118,7 +120,9 @@ export default function MarketplaceScreen() {
       <FlatList
         data={data || []}
         keyExtractor={(m) => `m-${m.id}`}
-        renderItem={({ item }) => <ListingRow m={item} />}
+        renderItem={({ item }) => (
+          <ListingRow m={item} onPress={() => router.push(`/listing/${item.id}` as any)} />
+        )}
         ListHeaderComponent={Header}
         ItemSeparatorComponent={() => <View style={{ height: spacing.md }} />}
         contentContainerStyle={styles.listContent}

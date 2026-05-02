@@ -85,6 +85,23 @@ class User(Base):
         return max(0, remaining.days + 1) if remaining.total_seconds() > 0 else 0
 
 
+class MobilePushToken(Base):
+    """Expo push notification tokens for the native mobile app.
+    A user can have multiple tokens (e.g. iPhone + iPad). Tokens are unique
+    across the table — re-registering an existing token updates `user_id` and
+    `updated_at`, transferring it to whichever user is currently signed in on
+    that device.
+    """
+    __tablename__ = "mobile_push_tokens"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    token      = Column(String, unique=True, nullable=False, index=True)
+    platform   = Column(String, default="ios")  # "ios" | "android"
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
 class UserPreference(Base):
     __tablename__ = "user_preferences"
     

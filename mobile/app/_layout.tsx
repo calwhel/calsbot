@@ -7,6 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
+import * as Notifications from 'expo-notifications';
 import {
   useFonts,
   Inter_400Regular,
@@ -44,6 +45,30 @@ function AuthGate() {
     }
   }, [ready, user, inLogin, router]);
 
+  // Tap a push notification → deep link to the strategy detail screen if the
+  // payload carries a strategy_id. Also handles the "cold start" case where
+  // the app was launched from a notification tap.
+  useEffect(() => {
+    if (!user) return;
+    const open = (data: any) => {
+      const sid = data?.strategy_id;
+      if (sid != null) {
+        router.push(`/strategy/${sid}` as any);
+      }
+    };
+    // Cold start
+    Notifications.getLastNotificationResponseAsync().then((resp) => {
+      if (resp?.notification?.request?.content?.data) {
+        open(resp.notification.request.content.data);
+      }
+    }).catch(() => {});
+    // Warm taps
+    const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
+      open(resp.notification.request.content.data);
+    });
+    return () => sub.remove();
+  }, [user, router]);
+
   if (!ready || needsRedirect) {
     return (
       <View style={styles.loadingScreen}>
@@ -72,6 +97,31 @@ function AuthGate() {
           headerShadowVisible: false,
           title: '',
           animation: 'slide_from_right',
+        }}
+      />
+      <Stack.Screen
+        name="listing/[id]"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: colors.bg },
+          headerTintColor: colors.text,
+          headerTitleStyle: { color: colors.text, fontWeight: '700' },
+          headerShadowVisible: false,
+          title: '',
+          animation: 'slide_from_right',
+        }}
+      />
+      <Stack.Screen
+        name="wizard/index"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: colors.bg },
+          headerTintColor: colors.text,
+          headerTitleStyle: { color: colors.text, fontWeight: '700' },
+          headerShadowVisible: false,
+          title: 'New strategy',
+          animation: 'slide_from_bottom',
+          presentation: 'modal',
         }}
       />
     </Stack>

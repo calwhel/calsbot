@@ -34,6 +34,7 @@ export type AuthState = {
   uid: string | null;
   ready: boolean;
   signIn: (uid: string) => Promise<LoginResponse>;
+  signInEmail: (email: string, password: string) => Promise<LoginResponse>;
   signOut: () => Promise<void>;
 };
 
@@ -80,14 +81,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return fresh;
   }, []);
 
+  const signInEmail = useCallback(async (email: string, password: string): Promise<LoginResponse> => {
+    const fresh = await apiPost<LoginResponse>('/api/mobile/login/email', {
+      email: email.trim().toLowerCase(),
+      password,
+    });
+    await storage.set(UID_STORE_KEY, fresh.uid);
+    setUser(fresh);
+    setUid(fresh.uid);
+    return fresh;
+  }, []);
+
   const signOut = useCallback(async () => {
+    // Best-effort: tell the backend to drop our push token so this device
+    // stops receiving notifications for the signed-out user.
+    try {
+      const { unregisterPushToken } = await import('@/lib/notifications');
+      await unregisterPushToken();
+    } catch {
+      // ignore
+    }
     await storage.del(UID_STORE_KEY);
     setUser(null);
     setUid(null);
   }, []);
 
+  // Whenever we have an authenticated UID, register for push notifications.
+  // Idempotent — the helper caches the last registered token in-memory.
+  useEffect(() => {
+    if (!uid) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { registerPushTokenForUid } = await import('@/lib/notifications');
+        if (!cancelled) await registerPushTokenForUid(uid);
+      } catch {
+        // notifications module failed to load — non-fatal
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [uid]);
+
   return (
-    <AuthCtx.Provider value={{ user, uid, ready, signIn, signOut }}>
+    <AuthCtx.Provider value={{ user, uid, ready, signIn, signInEmail, signOut }}>
       {children}
     </AuthCtx.Provider>
   );

@@ -10,33 +10,49 @@ import { ApiError } from '@/lib/api';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { colors, radius, spacing } from '@/constants/colors';
 
+type Mode = 'uid' | 'email';
+
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
-  const { signIn } = useAuth();
+  const { signIn, signInEmail } = useAuth();
+  const [mode, setMode] = useState<Mode>('uid');
   const [uid, setUid] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const onSubmit = useCallback(async () => {
     setError(null);
-    if (!uid.trim()) {
-      setError('Enter your UID to continue.');
-      return;
-    }
     setLoading(true);
     try {
-      await signIn(uid);
+      if (mode === 'uid') {
+        if (!uid.trim()) { setError('Enter your UID to continue.'); return; }
+        await signIn(uid);
+      } else {
+        if (!email.trim() || !password) {
+          setError('Enter your email and password.');
+          return;
+        }
+        await signInEmail(email, password);
+      }
       // AuthGate redirects on user state change.
     } catch (e) {
       if (e instanceof ApiError) {
-        setError(e.status === 403 ? 'That UID was not recognised.' : `Login failed (${e.status}).`);
+        // The backend now returns a real message in `detail` — surface it.
+        setError(e.message || (e.status === 403 ? 'Login failed.' : `Login failed (${e.status}).`));
       } else {
         setError('Could not reach the server. Check your connection and try again.');
       }
     } finally {
       setLoading(false);
     }
-  }, [uid, signIn]);
+  }, [mode, uid, email, password, signIn, signInEmail]);
+
+  const switchMode = (m: Mode) => {
+    setMode(m);
+    setError(null);
+  };
 
   const openSite = () => {
     Linking.openURL('https://tradehub.markets').catch(() => {});
@@ -61,21 +77,64 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.label}>Your UID</Text>
-          <TextInput
-            value={uid}
-            onChangeText={setUid}
-            placeholder="TH-XXXXXXXX"
-            placeholderTextColor={colors.textMute}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            autoComplete="off"
-            style={styles.input}
-            editable={!loading}
-            returnKeyType="go"
-            onSubmitEditing={onSubmit}
-            maxLength={20}
-          />
+          {/* Mode toggle */}
+          <View style={styles.tabs}>
+            <ModeTab label="UID" active={mode === 'uid'} onPress={() => switchMode('uid')} />
+            <ModeTab label="Email" active={mode === 'email'} onPress={() => switchMode('email')} />
+          </View>
+
+          {mode === 'uid' ? (
+            <>
+              <Text style={styles.label}>Your UID</Text>
+              <TextInput
+                value={uid}
+                onChangeText={setUid}
+                placeholder="TH-XXXXXXXX"
+                placeholderTextColor={colors.textMute}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                autoComplete="off"
+                style={[styles.input, styles.inputUid]}
+                editable={!loading}
+                returnKeyType="go"
+                onSubmitEditing={onSubmit}
+                maxLength={20}
+              />
+            </>
+          ) : (
+            <>
+              <Text style={styles.label}>Email</Text>
+              <TextInput
+                value={email}
+                onChangeText={setEmail}
+                placeholder="you@example.com"
+                placeholderTextColor={colors.textMute}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="email"
+                keyboardType="email-address"
+                style={styles.input}
+                editable={!loading}
+                returnKeyType="next"
+              />
+              <View style={{ height: spacing.md }} />
+              <Text style={styles.label}>Password</Text>
+              <TextInput
+                value={password}
+                onChangeText={setPassword}
+                placeholder="••••••••"
+                placeholderTextColor={colors.textMute}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="current-password"
+                secureTextEntry
+                style={styles.input}
+                editable={!loading}
+                returnKeyType="go"
+                onSubmitEditing={onSubmit}
+              />
+            </>
+          )}
 
           {error ? (
             <View style={styles.errorBox}>
@@ -90,16 +149,33 @@ export default function LoginScreen() {
           <Pressable onPress={openSite} style={styles.helpLink}>
             <Ionicons name="help-circle-outline" size={14} color={colors.textDim} />
             <Text style={styles.helpText}>
-              Don't have a UID? Sign up at tradehub.markets
+              {mode === 'uid'
+                ? "Don't have a UID? Sign up at tradehub.markets"
+                : "No account? Sign up at tradehub.markets"}
             </Text>
           </Pressable>
         </View>
 
         <Text style={styles.footer}>
-          Your UID is stored securely on this device only.
+          Your credentials are stored securely on this device only.
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>
+  );
+}
+
+function ModeTab({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.tab,
+        active && styles.tabActive,
+        pressed && !active && { opacity: 0.7 },
+      ]}
+    >
+      <Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -139,6 +215,30 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     padding: spacing.xl,
   },
+  tabs: {
+    flexDirection: 'row',
+    backgroundColor: colors.bgElev,
+    borderRadius: radius.md,
+    padding: 3,
+    marginBottom: spacing.lg,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 9,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+  },
+  tabActive: {
+    backgroundColor: colors.card,
+  },
+  tabText: {
+    color: colors.textDim,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  tabTextActive: {
+    color: colors.text,
+  },
   label: {
     color: colors.textDim,
     fontSize: 11,
@@ -154,10 +254,13 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     color: colors.text,
     fontSize: 16,
-    fontWeight: '600',
-    letterSpacing: 1.2,
+    fontWeight: '500',
     paddingHorizontal: 14,
     paddingVertical: 14,
+  },
+  inputUid: {
+    fontWeight: '600',
+    letterSpacing: 1.2,
   },
   errorBox: {
     flexDirection: 'row',

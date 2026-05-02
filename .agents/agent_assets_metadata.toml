@@ -1,0 +1,14 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "SCtKikNBelW026WFdz3ds"
+uri = "file://mobile/assets/images/icon.png"
+type = "image"
+title = "tradehub icon"
+
+[[generated]]
+id = "aIV8lbglQehpcqftQHK2m"
+uri = "file://mobile/assets/images/splash-icon.png"
+type = "image"
+title = "tradehub splash"

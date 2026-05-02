@@ -95,7 +95,16 @@ export default function StrategiesScreen() {
 
   const Header = (
     <View style={styles.header}>
-      <Text style={styles.title}>Strategies</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Text style={styles.title}>Strategies</Text>
+        <Pressable
+          onPress={() => router.push('/wizard' as any)}
+          style={({ pressed }) => [styles.newBtn, pressed && { opacity: 0.7 }]}
+        >
+          <Ionicons name="add" size={18} color={colors.accent} />
+          <Text style={styles.newBtnText}>New</Text>
+        </Pressable>
+      </View>
       <Text style={styles.subtitle}>
         {data?.length ? `${data.length} strategy${data.length === 1 ? '' : ''}, tap any to inspect` : 'Your saved strategies'}
       </Text>
@@ -139,11 +148,22 @@ export default function StrategiesScreen() {
           />
         }
         ListEmptyComponent={
-          <EmptyState
-            icon="rocket-outline"
-            title="No strategies yet"
-            hint="Build your first strategy on tradehub.markets, then come back here to track it on the go."
-          />
+          <View>
+            <EmptyState
+              icon="rocket-outline"
+              title="No strategies yet"
+              hint="Tap “New” to build a quick paper-trading strategy, or use the full builder on tradehub.markets."
+            />
+            <View style={{ marginTop: spacing.lg, paddingHorizontal: spacing.lg }}>
+              <Pressable
+                onPress={() => router.push('/wizard' as any)}
+                style={({ pressed }) => [styles.emptyCta, pressed && { opacity: 0.7 }]}
+              >
+                <Ionicons name="add-circle-outline" size={20} color={colors.bg} />
+                <Text style={styles.emptyCtaText}>Build my first strategy</Text>
+              </Pressable>
+            </View>
+          </View>
         }
         showsVerticalScrollIndicator={false}
       />
@@ -175,4 +195,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 2,
   },
   statValue: { color: colors.text, fontSize: 15, fontWeight: '700' },
+  newBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.accent,
+    backgroundColor: 'rgba(0,200,220,0.08)',
+  },
+  newBtnText: { color: colors.accent, fontSize: 13, fontWeight: '700', letterSpacing: 0.3 },
+  emptyCta: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, paddingVertical: 14,
+    borderRadius: radius.md, backgroundColor: colors.accent,
+  },
+  emptyCtaText: { color: colors.bg, fontSize: 15, fontWeight: '800', letterSpacing: 0.3 },
 });
