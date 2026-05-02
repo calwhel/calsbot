@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AmbientBg } from '@/components/AmbientBg';
 import { EmptyState } from '@/components/EmptyState';
 import { Pill } from '@/components/Pill';
+import { CoinChip } from '@/components/CoinChip';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -132,7 +133,7 @@ function FilterChips({
 
 // ─── Trade row ─────────────────────────────────────────────────────────────
 
-function TradeRow({ t, onPress }: { t: PortfolioTrade; onPress: () => void }) {
+const TradeRow = React.memo(function TradeRow({ t, onPress }: { t: PortfolioTrade; onPress: () => void }) {
   const pnl =
     t.outcome === 'OPEN' && t.unrealised_pnl !== undefined && t.unrealised_pnl !== null
       ? t.unrealised_pnl
@@ -164,6 +165,11 @@ function TradeRow({ t, onPress }: { t: PortfolioTrade; onPress: () => void }) {
           { backgroundColor: isLong ? colors.positive : colors.negative },
         ]}
       />
+
+      {/* Coin badge */}
+      <View style={styles.coinWrap}>
+        <CoinChip symbol={t.symbol} size={36} />
+      </View>
 
       <View style={{ flex: 1 }}>
         {/* Top row: symbol + outcome pill + pnl */}
@@ -254,7 +260,7 @@ function TradeRow({ t, onPress }: { t: PortfolioTrade; onPress: () => void }) {
       </View>
     </Pressable>
   );
-}
+});
 
 // ─── Section header ────────────────────────────────────────────────────────
 
@@ -621,8 +627,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.cardHi,
     borderColor: colors.border,
     borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    minHeight: 44,
     borderRadius: radius.pill,
   },
   chipActive: {
@@ -690,7 +697,11 @@ const styles = StyleSheet.create({
     width: 3,
     alignSelf: 'stretch',
     borderRadius: 2,
+    marginRight: spacing.sm,
+  },
+  coinWrap: {
     marginRight: spacing.md,
+    alignSelf: 'center',
   },
   rowTop: {
     flexDirection: 'row',

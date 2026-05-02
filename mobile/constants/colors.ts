@@ -43,9 +43,20 @@ export const colors = {
   warning:     '#fbbf24',
   warningDim:  'rgba(251, 191, 36, 0.16)',
 
+  // Extended palette — used for bento tile variety + category chips
+  gold:        '#f5b754',
+  goldDim:     'rgba(245, 183, 84, 0.14)',
+  magenta:     '#f472b6',
+  magentaDim:  'rgba(244, 114, 182, 0.14)',
+  mint:        '#5eead4',
+  mintDim:     'rgba(94, 234, 212, 0.14)',
+  indigo:      '#6366f1',
+  indigoDim:   'rgba(99, 102, 241, 0.16)',
+
   // Misc
   pillBg:    '#1c2338',
   glassBg:   'rgba(20, 26, 44, 0.72)',
+  glassHi:   'rgba(28, 36, 60, 0.78)',
   divider:   'rgba(255, 255, 255, 0.06)',
 } as const;
 
