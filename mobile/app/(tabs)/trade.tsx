@@ -181,9 +181,10 @@ export default function TradeScreen() {
   const tickerQ = useQuery({
     queryKey: ['trade-ticker', symbol],
     queryFn: () => apiGet<TradeTicker>(`/api/trade/ticker/${symbol}`),
-    // Poll the lightweight ticker once per second so the chart's trailing
-    // candle ticks visibly — the user asked for "by-the-ms" motion and 1s is
-    // the sweet spot between perceived liveness and exchange rate-limits.
+    // Poll the lightweight ticker once per second so the chart's right-edge
+    // live-price tag ticks visibly. The tag is the only thing that updates
+    // on each tick — the candle paths themselves only refresh on the slower
+    // candles query so the SVG geometry isn't recomputed at 1Hz.
     refetchInterval: 1_000,
     staleTime: 500,
   });
@@ -253,21 +254,13 @@ export default function TradeScreen() {
   const { width: screenW } = useWindowDimensions();
   const chartW = Math.max(screenW - spacing.lg * 2 - 2, 200);
 
-  // Merge the live ticker price into the trailing (forming) candle so the
-  // chart visibly ticks every second between full candle refreshes. We only
-  // mutate the last candle's close + extend its high/low — never insert new
-  // candles (that's the timeframe's job).
-  const liveCandles = useMemo(() => {
-    const px = tickerQ.data?.price;
-    if (!chartCandles.length || px == null || !Number.isFinite(px)) return chartCandles;
-    const out = chartCandles.slice();
-    const last = { ...out[out.length - 1] };
-    last.close = px;
-    last.high  = Math.max(last.high, px);
-    last.low   = Math.min(last.low,  px);
-    out[out.length - 1] = last;
-    return out;
-  }, [chartCandles, tickerQ.data?.price]);
+  // NOTE: We deliberately do NOT merge the 1Hz ticker price into a new
+  // candles array. Doing so used to force the entire SVG chart to re-render
+  // every second, which (a) jankily reflowed the parent ScrollView (causing
+  // it to snap back to the top mid-scroll) and (b) burned battery. The new
+  // CandleChart already renders a live-ticking right-edge price tag driven
+  // by the cheap `livePrice` prop, so the chart "feels live" without any
+  // per-tick rerender of the candle paths.
 
   const chartZones = useMemo<ChartZone[]>(() => {
     if (!showFvg) return [];
@@ -514,14 +507,15 @@ export default function TradeScreen() {
           </View>
         ) : (
           <CandleChart
-            candles={liveCandles}
+            candles={chartCandles}
             zones={chartZones}
             priceLines={chartPriceLines}
             width={chartW}
-            height={320}
+            height={340}
             symbol={`${symbol}USDT`}
             tf={tf}
             showOhlcLegend
+            showVolume
             livePrice={tickerQ.data?.price}
           />
         )}
