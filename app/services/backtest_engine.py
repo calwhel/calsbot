@@ -952,27 +952,44 @@ def _to_kraken_pair(symbol: str) -> str:
     return _KRAKEN_MAP.get(base, f"{base}USD")
 
 
+# Supported timeframes → (gateio_label, kraken_minutes, seconds_per_candle, minutes_per_candle)
+_TF_TABLE = {
+    "5m":  ("5m",  5,    300,  5),
+    "15m": ("15m", 15,   900,  15),
+    "1h":  ("1h",  60,  3600,  60),
+    "4h":  ("4h",  240, 14400, 240),
+}
+
+def _tf_meta(timeframe: str) -> tuple:
+    """Return (gateio_label, kraken_minutes, seconds_per_candle, minutes_per_candle).
+    Falls back to 1h for any unknown timeframe."""
+    return _TF_TABLE.get((timeframe or "1h").lower(), _TF_TABLE["1h"])
+
+
 async def _fetch_gateio(
     symbol: str,
     days: int,
     http_client: httpx.AsyncClient,
+    timeframe: str = "1h",
 ) -> List:
     """
-    Fetch 1h candles from Gate.io Futures for the given USDT symbol.
+    Fetch OHLCV candles from Gate.io Futures for the given USDT symbol.
     Gate.io returns up to 999 candles per request and honours the `from`
     parameter, making pagination straightforward.
     Returns [] if the symbol isn't listed on Gate.io.
     """
+    gate_label, _, secs_per_candle, _ = _tf_meta(timeframe)
     pair    = _to_gateio_pair(symbol)
     now_s   = int(datetime.now(timezone.utc).timestamp())
     since_s = now_s - days * 86400
     candles: List = []
 
-    for _ in range(10):
+    # Cap iterations so 5m × 90d (~25 920 candles) still completes
+    for _ in range(30):
         try:
             resp = await http_client.get(
                 "https://api.gateio.ws/api/v4/futures/usdt/candlesticks",
-                params={"contract": pair, "interval": "1h", "limit": 999, "from": since_s},
+                params={"contract": pair, "interval": gate_label, "limit": 999, "from": since_s},
                 timeout=15,
             )
         except Exception as exc:
@@ -997,9 +1014,9 @@ async def _fetch_gateio(
             ])
 
         last_ts = int(data[-1]["t"])
-        if last_ts >= now_s - 3600:
+        if last_ts >= now_s - secs_per_candle:
             break   # reached current time
-        since_s = last_ts + 3600
+        since_s = last_ts + secs_per_candle
 
     return candles
 
@@ -1008,21 +1025,23 @@ async def _fetch_kraken(
     symbol: str,
     days: int,
     http_client: httpx.AsyncClient,
+    timeframe: str = "1h",
 ) -> List:
     """
-    Fetch 1h candles from Kraken for the given symbol.
+    Fetch OHLCV candles from Kraken for the given symbol.
     Returns [] if the symbol isn't listed on Kraken.
     """
+    _, kraken_minutes, secs_per_candle, _ = _tf_meta(timeframe)
     pair  = _to_kraken_pair(symbol)
     now_s = int(datetime.now(timezone.utc).timestamp())
     since = now_s - days * 86400
     candles: List = []
 
-    for _ in range(15):
+    for _ in range(20):
         try:
             resp = await http_client.get(
                 "https://api.kraken.com/0/public/OHLC",
-                params={"pair": pair, "interval": 60, "since": since},
+                params={"pair": pair, "interval": kraken_minutes, "since": since},
                 timeout=15,
             )
             d = resp.json()
@@ -1050,7 +1069,7 @@ async def _fetch_kraken(
             ])
 
         last_ts = result.get("last", 0)
-        if not last_ts or last_ts >= now_s - 3600:
+        if not last_ts or last_ts >= now_s - secs_per_candle:
             break
         since = last_ts
 
@@ -1061,9 +1080,10 @@ async def _fetch_historical(
     symbol: str,
     days: int,
     http_client: httpx.AsyncClient,
+    timeframe: str = "1h",
 ) -> tuple:
     """
-    Fetch 1h OHLCV candles for symbol over the past `days` days.
+    Fetch OHLCV candles for `symbol` over the past `days` days at `timeframe`.
 
     Returns (candles, source_label, proxy_used):
       candles      — list of [ts_ms, open, high, low, close, volume]
@@ -1071,16 +1091,16 @@ async def _fetch_historical(
       proxy_used   — always False (we no longer use a BTC proxy)
     """
     # 1. Try Gate.io first — covers virtually all USDT perp pairs
-    candles = await _fetch_gateio(symbol, days, http_client)
+    candles = await _fetch_gateio(symbol, days, http_client, timeframe)
     if len(candles) >= 60:
         base = symbol.upper().replace("USDT", "")
-        return candles, f"{base} · Gate.io", False
+        return candles, f"{base} · Gate.io {timeframe}", False
 
     # 2. Fall back to Kraken for coins not listed on Gate.io
-    candles = await _fetch_kraken(symbol, days, http_client)
+    candles = await _fetch_kraken(symbol, days, http_client, timeframe)
     if len(candles) >= 60:
         base = symbol.upper().replace("USDT", "")
-        return candles, f"{base} · Kraken", False
+        return candles, f"{base} · Kraken {timeframe}", False
 
     return [], symbol, False
 
@@ -1273,7 +1293,12 @@ def _build_equity_curve(trades: List[Dict]) -> List[Dict]:
 
 
 # ── Main entry point ────────────────────────────────────────────────────────────
-async def run_backtest(config: Dict, days: int = 30) -> Dict:
+async def run_backtest(
+    config: Dict,
+    days: int = 30,
+    precomputed_candles: List | None = None,
+    precomputed_source_label: str | None = None,
+) -> Dict:
     """
     Run a full strategy backtest against historical OHLCV data.
 
@@ -1285,8 +1310,13 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
         tp1           take-profit % (float)
         sl            stop-loss % (float)
         leverage      leverage multiplier (int)
-        timeframe     5m | 15m | 1h | ...
+        timeframe     5m | 15m | 1h | 4h
         singleCoin    symbol to test on (e.g. "BTCUSDT"); defaults to BTCUSDT
+        maxHoldHours  optional hard exit time (default 48 h)
+
+    `precomputed_candles` lets callers (e.g. the scanner) fetch each
+    (coin, timeframe) once and reuse the candles across many strategies,
+    avoiding redundant network I/O.
 
     Returns dict with keys: symbol, days, interval, total_candles,
                             trades, stats, equity_curve, [error]
@@ -1295,35 +1325,49 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
     tp_pct       = float(config.get("tp1", 3)) / 100
     sl_pct       = float(config.get("sl", 1.5)) / 100
     leverage     = int(config.get("leverage", 10))
-    timeframe    = config.get("timeframe", "5m")
+    timeframe    = (config.get("timeframe") or "1h").lower()
     primary_type = config.get("primaryType", "price_momentum")
     primary_cfg  = config.get("primaryCfg") or {}
     confirms     = config.get("confirms") or []
 
-    # Backtest always uses 1h candles via Kraken (proper historical pagination)
-    bt_interval  = "1h"
-    interval_min = 60  # minutes per candle
+    # Resolve timeframe to actual minutes per candle (was hardcoded to 60)
+    _, _, _, interval_min = _tf_meta(timeframe)
+    bt_interval  = timeframe
 
     raw_symbol = (config.get("singleCoin") or "BTCUSDT").upper().strip()
     symbol = raw_symbol if raw_symbol.endswith("USDT") else raw_symbol + "USDT"
 
-    try:
-        async with httpx.AsyncClient() as client:
-            candles, source_label, proxy_used = await _fetch_historical(symbol, days, client)
-    except Exception as exc:
-        return {"error": f"Failed to fetch candle data: {exc}"}
+    if precomputed_candles is not None:
+        # NOTE: callers (e.g. the scanner) reuse this list across many
+        # backtests, so the engine MUST treat it as read-only — every loop
+        # below only reads candle[i] / candle[i][k] and never .append/.pop
+        # or mutates a candle row.
+        candles      = precomputed_candles
+        source_label = precomputed_source_label or f"{symbol} · cached {timeframe}"
+        proxy_used   = False
+    else:
+        try:
+            async with httpx.AsyncClient() as client:
+                candles, source_label, proxy_used = await _fetch_historical(
+                    symbol, days, client, timeframe
+                )
+        except Exception as exc:
+            return {"error": f"Failed to fetch candle data: {exc}"}
 
     if len(candles) < 60:
         base = symbol.replace("USDT", "")
         return {"error": f"No historical data found for {base}. Check the symbol name or try a different coin."}
 
-    logger.info(f"[Backtest] {source_label} 1h {days}d: {len(candles)} candles")
+    logger.info(f"[Backtest] {source_label} {timeframe} {days}d: {len(candles)} candles")
 
     warmup = 60
     primary_cond = _build_primary_cond(primary_type, primary_cfg, direction)
     # Max hold: 48 h by default, configurable via config["maxHoldHours"].
+    # FIX: convert hours → CANDLES using the actual interval. Previously
+    # max_hold_c was set to max_hold_h (only correct on 1h candles); on 5m
+    # candles a "48 h" hold would have closed after 48 candles = 4 h.
     max_hold_h = int(config.get("maxHoldHours") or 48)
-    max_hold_c = max(1, max_hold_h)
+    max_hold_c = max(1, int(round(max_hold_h * 60 / interval_min)))
 
     trades: List[Dict] = []
     open_trade    = None
@@ -1579,7 +1623,7 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
     return {
         "symbol":        source_label,
         "days":          days,
-        "interval":      "1h",
+        "interval":      bt_interval,
         "total_candles": len(candles),
         "trades":        display_trades,
         "stats":         stats,

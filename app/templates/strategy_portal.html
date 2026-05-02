@@ -2335,19 +2335,33 @@ function dismissTgBanner(){
         <div class="pine-card">
           <div style="margin-bottom:16px">
             <div style="font-size:16px;font-weight:700;letter-spacing:-.3px">🔍 Strategy Scanner</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:3px">Pick a coin and direction — the AI runs <b>40 strategies</b> (RSI, MACD, EMA, SMA, SuperTrend, BB, StochRSI, ADX, Williams %R, Breakout, S/R, candlestick patterns, divergence + multi-indicator combos) against real historical data and ranks the best one for you</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:3px">Test up to <b>5 coins</b> on <b>multiple timeframes</b> with <b>40 strategies</b> each — the engine finds the best (coin, timeframe, strategy, TP/SL) combo across the whole grid.</div>
           </div>
 
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+          <div style="margin-bottom:14px">
+            <div class="pine-label">Coins <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 5</span></div>
+            <input id="scan-coin" type="text" value="BTC" maxlength="80"
+              style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)"
+              placeholder="BTC, ETH, SOL, AVAX, LINK">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="document.getElementById('scan-coin').value='BTC'">BTC only</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="document.getElementById('scan-coin').value='BTC,ETH,SOL'">Top 3</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="document.getElementById('scan-coin').value='BTC,ETH,SOL,AVAX,LINK'">Top 5</button>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
             <div>
-              <div class="pine-label">Coin</div>
-              <input id="scan-coin" type="text" value="BTC" maxlength="12"
-                style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)"
-                placeholder="BTC, ETH, SOL…">
+              <div class="pine-label">Timeframes <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— pick 1+</span></div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="scan-tf-chips">
+                <button class="opt-chip" data-tf="15m" onclick="toggleScanTf('15m',this)">15m</button>
+                <button class="opt-chip active" data-tf="1h" onclick="toggleScanTf('1h',this)">1h</button>
+                <button class="opt-chip" data-tf="4h" onclick="toggleScanTf('4h',this)">4h</button>
+              </div>
             </div>
             <div>
               <div class="pine-label">Test window</div>
-              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:2px" id="scan-days-chips">
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="scan-days-chips">
                 <button class="opt-chip active" onclick="setScanDays(30,this)">30 days</button>
                 <button class="opt-chip" onclick="setScanDays(90,this)">90 days</button>
               </div>
@@ -2363,14 +2377,15 @@ function dismissTgBanner(){
           </div>
 
           <button class="pine-analyse-btn" id="scan-run-btn" onclick="runScan()">🔍 Scan Strategies →</button>
+          <div id="scan-grid-est" style="font-size:11px;color:var(--muted);text-align:center;margin-top:8px"></div>
         </div>
 
         <!-- Progress -->
         <div id="scan-progress" style="display:none">
           <div class="pine-card" style="text-align:center;padding:28px 20px">
             <div style="font-size:28px;margin-bottom:10px">⚙️</div>
-            <div style="font-weight:700;font-size:15px;margin-bottom:6px">Scanning 40 strategies + optimising TP/SL…</div>
-            <div id="scan-progress-sub" style="font-size:12px;color:var(--muted)">Stage 1: testing 40 strategies (momentum, trend, mean-rev, breakout, patterns, divergence + combos). Stage 2: re-running the top 8 with 4 risk profiles (Tight Scalp, Balanced, Wide Swing, Runner) to find the optimal TP/SL for each.</div>
+            <div style="font-weight:700;font-size:15px;margin-bottom:6px" id="scan-progress-title">Scanning strategies…</div>
+            <div id="scan-progress-sub" style="font-size:12px;color:var(--muted)">Pre-fetching candle data, then running the full strategy × coin × timeframe grid + optimising TP/SL on the top combos.</div>
             <div style="margin-top:18px;height:5px;background:var(--border);border-radius:99px;overflow:hidden">
               <div id="scan-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),#818cf8);border-radius:99px;transition:width .4s ease"></div>
             </div>
@@ -6371,7 +6386,43 @@ function switchBuildMode(mode) {
 // ══════════════════════════════════════════════════════════
 let _scanDays = 30;
 let _scanDir  = 'LONG';
-let _scanResult = null;  // last successful scan response
+let _scanTfs  = ['1h'];   // selected timeframes (15m / 1h / 4h)
+let _scanResult = null;   // last successful scan response
+
+function toggleScanTf(tf, el) {
+  const idx = _scanTfs.indexOf(tf);
+  if (idx >= 0) {
+    if (_scanTfs.length === 1) return;   // never let the user deselect everything
+    _scanTfs.splice(idx, 1);
+    el.classList.remove('active');
+  } else {
+    if (_scanTfs.length >= 3) return;
+    _scanTfs.push(tf);
+    el.classList.add('active');
+  }
+  _updateScanGridEst();
+}
+
+function _parseScanCoins() {
+  const raw = (document.getElementById('scan-coin').value || 'BTC');
+  const list = raw.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+  const seen = new Set();
+  return list.filter(c => !seen.has(c) && seen.add(c)).slice(0, 5);
+}
+
+function _updateScanGridEst() {
+  const el = document.getElementById('scan-grid-est');
+  if (!el) return;
+  const coins = _parseScanCoins();
+  const total = coins.length * _scanTfs.length * 40;
+  const eta = Math.max(8, Math.round(total * 0.08));
+  el.textContent = `${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × 40 strategies = ${total} backtests · ~${eta}s`;
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const coinInput = document.getElementById('scan-coin');
+  if (coinInput) coinInput.addEventListener('input', _updateScanGridEst);
+  _updateScanGridEst();
+});
 
 function setScanDays(days, el) {
   _scanDays = days;
@@ -6401,8 +6452,9 @@ function resetScan() {
 
 async function runScan() {
   if (!IS_PRO) { showModal('modal-upgrade'); return; }
-  const coin = (document.getElementById('scan-coin').value || 'BTC').trim().toUpperCase();
-  if (!coin) return;
+  const coins = _parseScanCoins();
+  if (!coins.length) return;
+  if (!_scanTfs.length) _scanTfs = ['1h'];
 
   const btn = document.getElementById('scan-run-btn');
   btn.disabled = true;
@@ -6413,12 +6465,17 @@ async function runScan() {
   document.getElementById('scan-results').style.display = 'none';
   document.getElementById('scan-error').style.display = 'none';
 
-  // Animate progress bar during wait
+  const total = coins.length * _scanTfs.length * 40;
+  document.getElementById('scan-progress-title').textContent =
+    `Running ${total} backtests · ${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} TF${_scanTfs.length>1?'s':''} × 40 strategies…`;
+
+  // Animate progress bar during wait — slower for bigger grids
   const bar = document.getElementById('scan-bar');
   bar.style.width = '0%';
   let pct = 0;
+  const tickRate = Math.min(1.2, Math.max(0.25, 60 / total));   // slower for bigger jobs
   const barTimer = setInterval(() => {
-    pct = Math.min(pct + (pct < 70 ? 1.2 : 0.3), 92);
+    pct = Math.min(pct + (pct < 70 ? tickRate : tickRate * 0.3), 92);
     bar.style.width = pct + '%';
   }, 600);
 
@@ -6426,7 +6483,13 @@ async function runScan() {
     const res = await fetch('/api/backtest/scan', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ uid: window._portalUID || '', coin, days: _scanDays, direction: _scanDir }),
+      body: JSON.stringify({
+        uid: window._portalUID || '',
+        coins,
+        timeframes: _scanTfs,
+        days: _scanDays,
+        direction: _scanDir,
+      }),
     });
     const data = await res.json();
     clearInterval(barTimer);
@@ -6455,16 +6518,22 @@ function renderScanResults(data) {
   document.getElementById('scan-progress').style.display = 'none';
   const ranked = data.ranked || [];
   if (!ranked.length) {
-    document.getElementById('scan-error-msg').textContent = 'No strategy generated enough trades to rank. Try a different coin or 90-day window.';
+    let msg = 'No strategy generated enough trades to rank. Try different coins, more timeframes or the 90-day window.';
+    if ((data.missing_pairs || []).length) {
+      msg += ` Missing data for: ${data.missing_pairs.map(p => `${p.coin} ${p.timeframe}`).join(', ')}.`;
+    }
+    document.getElementById('scan-error-msg').textContent = msg;
     document.getElementById('scan-error').style.display = '';
     return;
   }
   const winner = ranked[0];
   const ws     = winner.stats || {};
-  const coin   = data.coin || '';
+  const coin   = winner.coin || data.coin || '';
+  const tf     = winner.timeframe || '1h';
   const pnlPos = (ws.total_pnl || 0) >= 0;
 
-  document.getElementById('scan-winner-coin').textContent  = coin;
+  // Header now reflects the WINNING coin + timeframe (could differ from first coin)
+  document.getElementById('scan-winner-coin').textContent  = `${coin} · ${tf}`;
   // Strategy label + optimal risk profile chip
   const wRisk = winner.risk || {};
   const labelEl = document.getElementById('scan-winner-label');
@@ -6524,10 +6593,17 @@ function renderScanResults(data) {
     'Other':       '#6b7280',
   };
 
-  // Full ranking table — now includes the optimal risk profile column
+  // ── Equity curve + trade-by-trade table for the winning combo ────────────
+  // Insert (or replace) a "Winner detail" card after the winner card so the
+  // user can see HOW the winning combo got its number — shape of returns +
+  // every trade with entry/exit/PnL.
+  _renderScanWinnerDetail(winner);
+
+  // Full ranking table — now includes Coin·TF column
   const tableEl = document.getElementById('scan-table');
-  const headerRow = `<div style="display:grid;grid-template-columns:1.5fr .6fr .8fr .55fr .7fr .8fr .65fr;padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
-    <div>Strategy</div><div>Type</div><div>Best Risk</div><div>Win%</div><div>P&L</div><div>PF · Trades</div><div style="text-align:right">TP / SL</div>
+  const cols = '1.4fr .85fr .55fr .9fr .55fr .7fr .8fr';
+  const headerRow = `<div style="display:grid;grid-template-columns:${cols};padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
+    <div>Strategy</div><div>Coin · TF</div><div>Type</div><div>Best Risk · TP/SL</div><div>Win%</div><div>P&L</div><div style="text-align:right">PF · Trades</div>
   </div>`;
   tableEl.innerHTML = headerRow + ranked.map((r, i) => {
     const st    = r.stats || {};
@@ -6536,22 +6612,28 @@ function renderScanResults(data) {
     const cat   = r.category || 'Other';
     const cc    = catColor[cat] || catColor['Other'];
     const rk    = r.risk || {};
-    return `<div style="display:grid;grid-template-columns:1.5fr .6fr .8fr .55fr .7fr .8fr .65fr;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':''}">
+    const rcoin = r.coin || '—';
+    const rtf   = r.timeframe || '1h';
+    return `<div style="display:grid;grid-template-columns:${cols};align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':''}">
       <div style="font-weight:600">${medal} ${r.label}</div>
+      <div style="font-family:var(--mono);font-weight:700;font-size:11.5px"><span>${rcoin}</span> <span style="color:var(--muted);font-weight:500">· ${rtf}</span></div>
       <div><span style="background:${cc}22;color:${cc};padding:2px 7px;border-radius:99px;font-size:10px;font-weight:700;letter-spacing:.2px">${cat}</span></div>
-      <div style="color:var(--accent);font-weight:600;font-size:11px">${rk.name || 'Balanced'}</div>
+      <div style="font-size:11px"><span style="color:var(--accent);font-weight:600">${rk.name || 'Balanced'}</span> <span style="color:var(--muted);font-variant-numeric:tabular-nums">· ${rk.tp1||'-'}% / ${rk.sl||'-'}%</span></div>
       <div style="color:${(st.win_rate||0)>=50?'var(--green)':'var(--red)'};">${(st.win_rate||0).toFixed(1)}%</div>
       <div style="color:${pos?'var(--green)':'var(--red)'};">${pos?'+':''}${(st.total_pnl||0).toFixed(1)}%</div>
-      <div style="color:var(--muted);font-size:11px">PF ${(st.profit_factor||0).toFixed(2)} · ${st.closed_trades||0}t</div>
-      <div style="color:var(--muted);text-align:right;font-variant-numeric:tabular-nums;font-size:11px">${rk.tp1||'-'}% / ${rk.sl||'-'}%</div>
+      <div style="color:var(--muted);text-align:right;font-size:11px">PF ${(st.profit_factor||0).toFixed(2)} · ${st.closed_trades||0}t</div>
     </div>`;
   }).join('');
 
   // Footer summary: how many tested vs how many ranked + optimisation count
   if (data.tested) {
-    tableEl.innerHTML += `<div style="padding:10px 16px;font-size:11px;color:var(--muted);text-align:center;background:var(--card2)">
-      Tested <b style="color:var(--text)">${data.tested}</b> strategies · ran <b style="color:var(--text)">${data.optimisation_jobs||0}</b> extra TP/SL optimisations · <b style="color:var(--text)">${ranked.length}</b> ranked${data.skipped ? ` · ${data.skipped} skipped (too few trades)` : ''}
-    </div>`;
+    const universe = (data.coins || [data.coin]).length;
+    const tfs      = (data.timeframes || ['1h']).length;
+    let footer = `Tested <b style="color:var(--text)">${data.tested}</b> backtests across <b style="color:var(--text)">${universe}</b> coin${universe>1?'s':''} × <b style="color:var(--text)">${tfs}</b> timeframe${tfs>1?'s':''} · <b style="color:var(--text)">${data.optimisation_jobs||0}</b> TP/SL optimisations · <b style="color:var(--text)">${ranked.length}</b> ranked${data.skipped ? ` · ${data.skipped} skipped (too few trades)` : ''}`;
+    if ((data.missing_pairs || []).length) {
+      footer += `<br><span style="color:var(--red)">⚠ no data: ${data.missing_pairs.map(p => `${p.coin} ${p.timeframe}`).join(', ')}</span>`;
+    }
+    tableEl.innerHTML += `<div style="padding:10px 16px;font-size:11px;color:var(--muted);text-align:center;background:var(--card2)">${footer}</div>`;
   }
 
   document.getElementById('scan-results').style.display = '';
@@ -6559,13 +6641,182 @@ function renderScanResults(data) {
   btn.disabled = false; btn.textContent = '🔍 Scan Strategies →';
 }
 
+// ── Equity curve + trade table for the winning combo ────────────────────────
+function _renderScanWinnerDetail(winner) {
+  // Remove any previous detail card so we don't stack them on re-scan
+  const existing = document.getElementById('scan-winner-detail');
+  if (existing) existing.remove();
+
+  const trades = winner.trades || [];
+  const eq     = winner.equity_curve || [];
+  if (!trades.length && !eq.length) return;
+
+  const card = document.createElement('div');
+  card.id = 'scan-winner-detail';
+  card.className = 'pine-card';
+  card.style.padding = '0';
+  card.style.overflow = 'hidden';
+  card.innerHTML = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+      <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">📈 Equity curve · winning combo</div>
+      <div style="font-size:11px;color:var(--muted)">Compounded balance starting at $100 — every trade's % return is applied to the running equity</div>
+    </div>
+    <div style="padding:14px 8px 4px 8px"><canvas id="scan-equity-canvas" height="160" style="width:100%;display:block"></canvas></div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0 16px 14px 16px" id="scan-equity-stats"></div>
+    <div style="padding:12px 16px;border-top:1px solid var(--border);font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:flex;justify-content:space-between;align-items:center">
+      <span>📋 Trade-by-trade · ${trades.length} trades</span>
+      <button class="btn ghost" id="scan-trades-toggle" style="font-size:10.5px;padding:4px 10px" onclick="_toggleScanTrades()">Show all</button>
+    </div>
+    <div id="scan-trades-list"></div>
+  `;
+  document.getElementById('scan-winner-card').insertAdjacentElement('afterend', card);
+
+  // Draw equity curve
+  setTimeout(() => _drawScanEquityCurve(eq), 0);
+
+  // Equity stats row
+  const finalEq = eq.length ? eq[eq.length-1].y : 100;
+  const peakEq  = eq.reduce((m,p) => Math.max(m, p.y), 100);
+  const lowEq   = eq.reduce((m,p) => Math.min(m, p.y), 100);
+  const ddPct   = peakEq > 0 ? ((peakEq - lowEq) / peakEq * 100) : 0;
+  const totalRet = finalEq - 100;
+  const wins     = trades.filter(t => t.outcome === 'WIN').length;
+  const losses   = trades.filter(t => t.outcome === 'LOSS').length;
+  document.getElementById('scan-equity-stats').innerHTML = [
+    {label:'Final equity', val:`$${finalEq.toFixed(2)}`, color: finalEq>=100?'var(--green)':'var(--red)'},
+    {label:'Total return', val:`${totalRet>=0?'+':''}${totalRet.toFixed(1)}%`, color: totalRet>=0?'var(--green)':'var(--red)'},
+    {label:'Peak drawdown', val:`-${ddPct.toFixed(1)}%`, color:'var(--red)'},
+    {label:'Wins / Losses', val:`${wins} / ${losses}`, color:'var(--text)'},
+  ].map(s => `<div style="background:var(--card2);border-radius:8px;padding:8px;text-align:center">
+    <div style="font-size:14px;font-weight:800;color:${s.color}">${s.val}</div>
+    <div style="font-size:9.5px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.4px">${s.label}</div>
+  </div>`).join('');
+
+  // Trade list — show first 10, expand to all on click
+  _scanTradesExpanded = false;
+  _renderScanTradesList(trades, 10);
+}
+
+let _scanTradesExpanded = false;
+function _toggleScanTrades() {
+  if (!_scanResult || !_scanResult.ranked || !_scanResult.ranked[0]) return;
+  _scanTradesExpanded = !_scanTradesExpanded;
+  const tr = _scanResult.ranked[0].trades || [];
+  _renderScanTradesList(tr, _scanTradesExpanded ? tr.length : 10);
+  const btn = document.getElementById('scan-trades-toggle');
+  if (btn) btn.textContent = _scanTradesExpanded ? 'Show top 10' : `Show all ${tr.length}`;
+}
+
+function _renderScanTradesList(trades, limit) {
+  const container = document.getElementById('scan-trades-list');
+  if (!container) return;
+  if (!trades.length) {
+    container.innerHTML = '<div style="padding:14px 16px;color:var(--muted);font-size:12px;text-align:center">No trades</div>';
+    return;
+  }
+  const cols = '.55fr 1.1fr 1.1fr .65fr .55fr .9fr';
+  const header = `<div style="display:grid;grid-template-columns:${cols};padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
+    <div>#</div><div>Entry</div><div>Exit</div><div>Hold</div><div>Result</div><div style="text-align:right">P&L · Reason</div>
+  </div>`;
+  const slice = trades.slice(0, limit);
+  container.innerHTML = header + slice.map((t, i) => {
+    const win = t.outcome === 'WIN';
+    const open = t.outcome === 'OPEN';
+    const colour = win ? 'var(--green)' : open ? 'var(--muted)' : 'var(--red)';
+    const badge  = win ? 'WIN' : open ? 'OPEN' : 'LOSS';
+    const reason = t.exit_reason || '—';
+    const reasonChip = `<span style="background:${colour}1f;color:${colour};padding:1px 6px;border-radius:99px;font-size:9.5px;font-weight:700;letter-spacing:.3px">${reason}</span>`;
+    return `<div style="display:grid;grid-template-columns:${cols};align-items:center;padding:8px 16px;border-bottom:1px solid var(--border);font-size:11.5px">
+      <div style="color:var(--muted);font-variant-numeric:tabular-nums">${i+1}</div>
+      <div style="color:var(--muted);font-family:var(--mono);font-size:10.5px">${t.entry_date || '—'} <span style="color:var(--text)">$${(t.entry_price||0).toFixed(t.entry_price>=100?2:5)}</span></div>
+      <div style="color:var(--muted);font-family:var(--mono);font-size:10.5px">${t.exit_date  || '—'} <span style="color:var(--text)">$${(t.exit_price||0).toFixed(t.exit_price>=100?2:5)}</span></div>
+      <div style="color:var(--muted);font-size:10.5px">${t.hold_candles||0} bars</div>
+      <div><span style="background:${colour}22;color:${colour};padding:2px 6px;border-radius:5px;font-size:10px;font-weight:700">${badge}</span></div>
+      <div style="text-align:right;color:${(t.pnl_pct||0)>=0?'var(--green)':'var(--red)'};font-weight:700">${(t.pnl_pct||0)>=0?'+':''}${(t.pnl_pct||0).toFixed(2)}% ${reasonChip}</div>
+    </div>`;
+  }).join('');
+}
+
+function _drawScanEquityCurve(points) {
+  const cv = document.getElementById('scan-equity-canvas');
+  if (!cv || !points.length) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = cv.clientWidth;
+  const cssH = parseInt(cv.getAttribute('height') || '160', 10);
+  cv.width = cssW * dpr;
+  cv.height = cssH * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  // Padding
+  const padL = 36, padR = 8, padT = 6, padB = 18;
+  const w = cssW - padL - padR;
+  const h = cssH - padT - padB;
+
+  // Y range
+  const ys = points.map(p => p.y);
+  const yMin = Math.min(100, ...ys);
+  const yMax = Math.max(100, ...ys);
+  const yRng = Math.max(1, yMax - yMin);
+  const xN = points.length - 1 || 1;
+
+  // Baseline at 100
+  const baselineY = padT + h - ((100 - yMin) / yRng) * h;
+  ctx.strokeStyle = 'rgba(148,163,184,.25)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(padL, baselineY);
+  ctx.lineTo(padL + w, baselineY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Y-axis labels
+  ctx.fillStyle = 'rgba(148,163,184,.7)';
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('$' + yMax.toFixed(0), padL - 4, padT + 8);
+  ctx.fillText('$100', padL - 4, baselineY + 3);
+  ctx.fillText('$' + yMin.toFixed(0), padL - 4, padT + h);
+
+  // Equity line
+  const finalY = ys[ys.length - 1];
+  const lineColor = finalY >= 100 ? '#10b981' : '#ef4444';
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const x = padL + (i / xN) * w;
+    const y = padT + h - ((p.y - yMin) / yRng) * h;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Fill under the line
+  ctx.lineTo(padL + w, padT + h);
+  ctx.lineTo(padL, padT + h);
+  ctx.closePath();
+  ctx.fillStyle = lineColor + '22';
+  ctx.fill();
+
+  // X-axis: trade count
+  ctx.fillStyle = 'rgba(148,163,184,.7)';
+  ctx.textAlign = 'left';
+  ctx.fillText('1', padL, padT + h + 13);
+  ctx.textAlign = 'right';
+  ctx.fillText(String(points.length), padL + w, padT + h + 13);
+}
+
 function createFromScan() {
   if (!_scanResult || !_scanResult.ranked || !_scanResult.ranked.length) return;
   const winner = _scanResult.ranked[0];
   const cfg    = winner.config || {};
   const risk   = winner.risk   || {};
+  const wcoin  = winner.coin || _scanResult.coin || 'BTC';
+  const wtf    = winner.timeframe || cfg.timeframe || '1h';
 
-  // Switch to Wizard mode and pre-fill state — including the OPTIMAL TP/SL
+  // Switch to Wizard mode and pre-fill state — including the OPTIMAL coin / TF / TP / SL
   switchBuildMode('wizard');
   try {
     WZ.direction   = cfg.direction   || 'LONG';
@@ -6575,9 +6826,9 @@ function createFromScan() {
     WZ.tp1         = risk.tp1 ?? cfg.tp1 ?? 3;
     WZ.sl          = risk.sl  ?? cfg.sl  ?? 1.5;
     WZ.leverage    = risk.leverage ?? cfg.leverage ?? 5;
-    WZ.timeframe   = cfg.timeframe   || '1h';
-    WZ.singleCoin  = _scanResult.coin || 'BTC';
-    WZ.name        = `${_scanResult.coin} ${winner.label} (${risk.name || 'Balanced'})`;
+    WZ.timeframe   = wtf;
+    WZ.singleCoin  = wcoin;
+    WZ.name        = `${wcoin} ${wtf} ${winner.label} (${risk.name || 'Balanced'})`;
     wzRenderAll && wzRenderAll();
   } catch(e) { /* wizard may not expose all setters — user can adjust manually */ }
 

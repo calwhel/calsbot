@@ -7868,16 +7868,45 @@ Entry conditions:
 @app.post("/api/backtest/scan")
 async def backtest_scan(request: Request):
     """
-    AI Strategy Scanner — run 12 strategy templates against historical data
-    for one coin in parallel, rank by composite score, return the winner.
+    AI Strategy Scanner — run 40 strategy templates against historical data
+    across one-or-more coins and one-or-more timeframes in parallel, rank
+    every (strategy, coin, TF) combination by composite score, return the
+    top winners with full trade history & equity curves for charting.
     Pro subscribers only.
-    Body: { uid, coin, days, direction }
+
+    Body: {
+      uid, days, direction,
+      coin                — legacy single coin (used if `coins` not given)
+      coins               — optional list of tickers, max 5 (multi-coin scan)
+      timeframes          — optional list, subset of ["15m","1h","4h"] (multi-TF scan)
+    }
     """
     body      = await request.json()
     uid       = (body.get("uid") or "").strip()
-    coin_raw  = (body.get("coin") or "BTC").upper().strip()
     days      = int(body.get("days", 30))
     direction = (body.get("direction") or "LONG").upper()
+
+    # ── Coin universe — accept either single `coin` or list `coins` ────────────
+    coins_raw = body.get("coins")
+    if isinstance(coins_raw, list) and coins_raw:
+        coin_list = [str(c).upper().strip().replace("USDT", "") for c in coins_raw if str(c).strip()]
+    else:
+        coin_list = [(body.get("coin") or "BTC").upper().strip().replace("USDT", "")]
+    # Dedupe + cap at 5 to keep total backtest count reasonable
+    seen = set(); coin_list = [c for c in coin_list if not (c in seen or seen.add(c))][:5]
+    if not coin_list:
+        coin_list = ["BTC"]
+
+    # ── Timeframes — subset of supported list, default ["1h"] ──────────────────
+    tfs_raw = body.get("timeframes")
+    SUPPORTED_TFS = ["15m", "1h", "4h"]
+    if isinstance(tfs_raw, list) and tfs_raw:
+        tf_list = [t.lower() for t in tfs_raw if t.lower() in SUPPORTED_TFS]
+    else:
+        tf_list = ["1h"]
+    if not tf_list:
+        tf_list = ["1h"]
+    tf_list = list(dict.fromkeys(tf_list))[:3]  # dedupe, max 3
 
     if days not in (30, 90):
         days = 30
@@ -7897,8 +7926,10 @@ async def backtest_scan(request: Request):
     finally:
         db.close()
 
-    coin   = coin_raw if coin_raw.endswith("USDT") else coin_raw + "USDT"
-    ticker = coin_raw.replace("USDT", "")
+    # Normalised symbols (BTCUSDT etc.) for engine; tickers (BTC) for display
+    symbols  = [(c if c.endswith("USDT") else c + "USDT") for c in coin_list]
+    tickers  = coin_list[:]
+    primary_ticker = tickers[0]   # used for AI insight / legacy `coin` field
 
     # ── Strategy templates to scan ─────────────────────────────────────────────
     # All use the same coin/direction/days; TP/SL/leverage kept conservative so
@@ -8068,12 +8099,42 @@ async def backtest_scan(request: Request):
                                   .replace("Support", "Resistance"))
             templates.append(entry)
 
-    from app.services.backtest_engine import run_backtest
+    from app.services.backtest_engine import run_backtest, _fetch_historical
+    import httpx
+
+    # ── Pre-fetch candles for every (coin, timeframe) combo in parallel ────────
+    # The engine accepts precomputed_candles, so we fetch each (coin,TF) once
+    # and reuse the candle array across all 40 strategies × 4 risk profiles.
+    # This converts ~600 redundant HTTP fetches into ~15 fetches.
+    _candle_cache: dict = {}   # (symbol, tf) → (candles, source_label)
+    _missing_pairs: list = []  # (ticker, tf) we couldn't fetch candles for
+
+    async def _prefetch_one(symbol: str, ticker: str, tf: str, client: httpx.AsyncClient):
+        try:
+            candles, label, _ = await _fetch_historical(symbol, days, client, tf)
+            if len(candles) >= 60:
+                _candle_cache[(symbol, tf)] = (candles, label)
+            else:
+                _missing_pairs.append((ticker, tf))
+        except Exception as exc:
+            logger.warning(f"[Scanner] prefetch failed {ticker} {tf}: {exc}")
+            _missing_pairs.append((ticker, tf))
+
+    async with httpx.AsyncClient(timeout=20) as _client:
+        await asyncio.gather(*[
+            _prefetch_one(sym, tk, tf, _client)
+            for sym, tk in zip(symbols, tickers)
+            for tf in tf_list
+        ])
+
+    if not _candle_cache:
+        return {"ok": False, "error": "NO_DATA",
+                "message": "Couldn't fetch candle data for any of the requested coins/timeframes."}
 
     # ── Risk profiles tested on the top strategies in stage 2 ──────────────────
     # Each strategy is first scored at the "Balanced" profile (stage 1), then
     # the top 8 are re-tested with all 4 profiles in stage 2 to find the
-    # optimal TP/SL for that specific strategy on this coin.
+    # optimal TP/SL for that specific (strategy, coin, TF) combo.
     risk_profiles = [
         {"name": "Tight Scalp", "tp1": 1.5, "sl": 0.75, "leverage": 5, "rr": "2:1"},
         {"name": "Balanced",    "tp1": 3.0, "sl": 1.5,  "leverage": 5, "rr": "2:1"},
@@ -8082,9 +8143,23 @@ async def backtest_scan(request: Request):
     ]
     DEFAULT_PROFILE = risk_profiles[1]  # Balanced
 
-    async def _run_one(tpl: dict, risk: dict | None = None) -> dict:
+    # Bound concurrency so we don't blow up CPU when running 600+ backtests.
+    # Backtests are synchronous CPU work; async only helps with I/O. We pre-
+    # fetched all candles, so this is mostly compute. A small semaphore lets
+    # the event loop interleave but keeps memory bounded.
+    _bt_sem = asyncio.Semaphore(20)
+
+    async def _run_one(tpl: dict, ticker: str, symbol: str, tf: str,
+                       risk: dict | None = None) -> dict:
         r = risk or DEFAULT_PROFILE
-        # IMPORTANT: full confirms list passed through (was previously dropped)
+        cached = _candle_cache.get((symbol, tf))
+        if cached is None:
+            return {
+                "label": tpl["label"], "category": tpl.get("category", "Other"),
+                "tpl": tpl, "risk": r, "coin": ticker, "timeframe": tf,
+                "config": {}, "result": {"error": "no candles"},
+            }
+        candles, label = cached
         cfg = {
             "direction":   direction,
             "primaryType": tpl["primaryType"],
@@ -8093,36 +8168,63 @@ async def backtest_scan(request: Request):
             "tp1":         r["tp1"],
             "sl":          r["sl"],
             "leverage":    r["leverage"],
-            "timeframe":   tpl["timeframe"],
-            "singleCoin":  coin,
+            "timeframe":   tf,
+            "singleCoin":  symbol,
         }
-        try:
-            result = await asyncio.wait_for(run_backtest(cfg, days), timeout=55)
-        except asyncio.TimeoutError:
-            result = {"error": "timeout"}
-        except Exception as exc:
-            result = {"error": str(exc)}
+        async with _bt_sem:
+            try:
+                result = await asyncio.wait_for(
+                    run_backtest(cfg, days,
+                                 precomputed_candles=candles,
+                                 precomputed_source_label=label),
+                    timeout=30,
+                )
+            except asyncio.TimeoutError:
+                result = {"error": "timeout"}
+            except Exception as exc:
+                result = {"error": str(exc)}
         return {
             "label":    tpl["label"],
             "category": tpl.get("category", "Other"),
             "tpl":      tpl,
             "risk":     r,
+            "coin":     ticker,
+            "timeframe": tf,
             "config":   cfg,
             "result":   result,
         }
 
-    # ── Stage 1: Run all 40 templates at the Balanced risk profile ────────────
-    outcomes = await asyncio.gather(*[_run_one(t, DEFAULT_PROFILE) for t in templates])
+    # ── Stage 1: Run all templates × coins × TFs at the Balanced profile ──────
+    stage1_jobs = []
+    for sym, tk in zip(symbols, tickers):
+        for tf in tf_list:
+            if (sym, tf) not in _candle_cache:
+                continue
+            for tpl in templates:
+                stage1_jobs.append(_run_one(tpl, tk, sym, tf, DEFAULT_PROFILE))
+
+    outcomes = await asyncio.gather(*stage1_jobs)
 
     # ── Score and rank ─────────────────────────────────────────────────────────
     # Stricter trade-count floor prevents sparse-sample strategies (e.g. 1 lucky
     # trade with PF=99) from dominating the ranking. Long windows scale up the
-    # floor proportionally so 90-day scans need more trades to qualify.
-    _min_trades = 8 if days <= 30 else 12
+    # floor; SLOW timeframes (1h, 4h) scale it DOWN so a clean 4h trend strategy
+    # making 4 quality trades over 30d isn't unfairly discarded vs noisy 15m
+    # strategies. Floor is computed per (TF, days) below in _min_trades_for_tf().
+    def _min_trades_for_tf(tf: str, n_days: int) -> int:
+        # Roughly proportional to the number of candles available in the window.
+        # A strategy that fires once every ~12 hours will hit these floors:
+        #   15m × 30d ≈ 8 trades · 15m × 90d ≈ 14 trades
+        #   1h  × 30d ≈ 6 trades · 1h  × 90d ≈ 10 trades
+        #   4h  × 30d ≈ 4 trades · 4h  × 90d ≈ 7 trades
+        base = {"5m": 10, "15m": 8, "1h": 6, "4h": 4}.get(tf, 6)
+        if n_days >= 90:
+            base = int(round(base * 1.7))
+        return base
 
-    def _score(stats: dict) -> float:
+    def _score(stats: dict, tf: str = "1h") -> float:
         trades = stats.get("closed_trades", 0)
-        if trades < _min_trades:
+        if trades < _min_trades_for_tf(tf, days):
             return -1.0   # too few trades to trust the result
         pf = float(stats.get("profit_factor", 0) or 0)
         wr = float(stats.get("win_rate", 0) or 0) / 100
@@ -8137,16 +8239,20 @@ async def backtest_scan(request: Request):
         res   = o.get("result") or {}
         err   = res.get("error")
         stats = res.get("stats") or {}
-        score = _score(stats) if not err else -1.0
+        score = _score(stats, o.get("timeframe", "1h")) if not err else -1.0
         return {
-            "label":    o["label"],
-            "category": o.get("category", "Other"),
-            "tpl":      o["tpl"],
-            "risk":     o["risk"],
-            "config":   o["config"],
-            "stats":    stats,
-            "score":    score,
-            "error":    err,
+            "label":     o["label"],
+            "category":  o.get("category", "Other"),
+            "tpl":       o["tpl"],
+            "risk":      o["risk"],
+            "coin":      o["coin"],
+            "timeframe": o["timeframe"],
+            "config":    o["config"],
+            "stats":     stats,
+            "trades":    res.get("trades", []),
+            "equity_curve": res.get("equity_curve", []),
+            "score":     score,
+            "error":     err,
         }
 
     ranked_s1 = sorted([_outcome_to_row(o) for o in outcomes],
@@ -8154,33 +8260,42 @@ async def backtest_scan(request: Request):
     valid_s1   = [r for r in ranked_s1 if r["score"] >= 0]
     invalid    = [r for r in ranked_s1 if r["score"] < 0]
 
-    # ── Stage 2: Optimise TP/SL on the top 8 strategies ───────────────────────
-    # For each surviving strategy, re-test it with all 4 risk profiles and
-    # keep the highest-scoring variant. This finds the best TP/SL for that
-    # specific strategy on this coin without ballooning total backtest count.
+    # ── Stage 2: Optimise TP/SL on the top 8 (strategy, coin, TF) combos ─────
+    # For each surviving combo, re-test it with the OTHER 3 risk profiles
+    # (Balanced is already done in stage 1) and keep the highest-scoring
+    # variant. The combo's coin + TF stay locked — only TP/SL/leverage change.
     top_for_optimisation = valid_s1[:8]
     optimisation_jobs = []
+    # Use a stable key per combo so we can group variants back together.
+    # Includes `category` defensively — labels are expected to be unique
+    # within `templates`, but the extra field guarantees no future collision
+    # between two strategies that happen to share a name.
+    def _combo_key(row: dict) -> tuple:
+        return (row["label"], row.get("category", ""), row["coin"], row["timeframe"])
+
     for row in top_for_optimisation:
         for profile in risk_profiles:
             if profile["name"] == DEFAULT_PROFILE["name"]:
-                continue  # already have Balanced result from stage 1
-            optimisation_jobs.append((row["label"], _run_one(row["tpl"], profile)))
+                continue
+            symbol_for_row = row["config"].get("singleCoin")
+            optimisation_jobs.append((
+                _combo_key(row),
+                _run_one(row["tpl"], row["coin"], symbol_for_row, row["timeframe"], profile),
+            ))
 
     opt_results = await asyncio.gather(*[job for _, job in optimisation_jobs])
 
-    # Group all variants per strategy label, then pick the best
-    by_label: dict = {}
-    # Seed with stage-1 Balanced results for the top strategies
+    # Group all variants per (label, coin, TF) combo, then pick the best
+    by_combo: dict = {}
     for row in top_for_optimisation:
-        by_label.setdefault(row["label"], []).append(row)
-    # Add stage-2 variants
-    for (label, _job), o in zip(optimisation_jobs, opt_results):
-        by_label.setdefault(label, []).append(_outcome_to_row(o))
+        by_combo.setdefault(_combo_key(row), []).append(row)
+    for (key, _job), o in zip(optimisation_jobs, opt_results):
+        by_combo.setdefault(key, []).append(_outcome_to_row(o))
 
-    # For each strategy, pick the variant with the best score
+    # For each combo, pick the variant with the best score
     valid = []
     for row in top_for_optimisation:
-        variants = by_label[row["label"]]
+        variants = by_combo[_combo_key(row)]
         best = max(variants, key=lambda v: v["score"])
         # Attach all variant stats so the UI can show the comparison
         best["all_risk_variants"] = [
@@ -8216,12 +8331,13 @@ async def backtest_scan(request: Request):
                 _ac.messages.create(
                     model="claude-haiku-4-5",
                     max_tokens=140,
-                    system="You are a crypto quant analyst. Respond with exactly 1 short sentence (max 25 words) explaining why this strategy + risk profile suits the coin's price behaviour. No markdown.",
+                    system="You are a crypto quant analyst. Respond with exactly 1 short sentence (max 25 words) explaining why this strategy + coin + timeframe + risk combo wins. No markdown.",
                     messages=[{"role": "user", "content":
-                        f"Strategy '{w['label']}' with '{wr['name']}' risk (TP {wr['tp1']}% / SL {wr['sl']}%, R:R {wr['rr']}) "
-                        f"won the scan for {ticker} over {days} days: win rate {ws.get('win_rate')}%, P&L {ws.get('total_pnl')}%, "
+                        f"Scan winner: '{w['label']}' on {w['coin']} {w['timeframe']} with '{wr['name']}' risk "
+                        f"(TP {wr['tp1']}% / SL {wr['sl']}%, R:R {wr['rr']}) over {days} days: "
+                        f"win rate {ws.get('win_rate')}%, P&L {ws.get('total_pnl')}%, "
                         f"profit factor {ws.get('profit_factor')}, {ws.get('closed_trades')} trades. "
-                        f"Why does this strategy + risk combo suit {ticker}?"}],
+                        f"Why does this combo work?"}],
                 ),
                 timeout=12,
             )
@@ -8229,27 +8345,39 @@ async def backtest_scan(request: Request):
         except Exception:
             pass
 
-    # ── Strip non-serialisable bits before returning ──────────────────────────
-    def _clean_row(r: dict) -> dict:
-        return {
+    # ── Strip non-serialisable bits + cap trade lists for response size ───────
+    # We send full equity curves + trades for the top 5 winners (so the UI
+    # can chart them). For ranks 6-12 we drop those to keep the payload small.
+    def _clean_row(r: dict, include_full: bool = False) -> dict:
+        out = {
             "label":            r["label"],
             "category":         r["category"],
+            "coin":             r["coin"],
+            "timeframe":        r["timeframe"],
             "config":           r["config"],
             "stats":            r["stats"],
             "score":            r["score"],
             "risk":             r["risk"],
             "all_risk_variants": r.get("all_risk_variants", []),
         }
+        if include_full:
+            # Cap trades at 200 to bound payload (most scans produce 10-50)
+            out["trades"]       = (r.get("trades") or [])[:200]
+            out["equity_curve"] = r.get("equity_curve") or []
+        return out
 
     return {
         "ok":      True,
-        "coin":    ticker,
+        "coin":    primary_ticker,           # legacy single-coin field
+        "coins":   tickers,                  # full coin universe scanned
+        "timeframes": tf_list,               # all TFs scanned
         "days":    days,
         "direction": direction,
-        "ranked":  [_clean_row(r) for r in valid[:12]],
-        "tested":  len(templates),
+        "ranked":  [_clean_row(r, include_full=(i < 5)) for i, r in enumerate(valid[:12])],
+        "tested":  len(stage1_jobs),
         "skipped": len(invalid),
         "optimisation_jobs": len(optimisation_jobs),
+        "missing_pairs": [{"coin": c, "timeframe": tf} for c, tf in _missing_pairs],
         "winner_insight": winner_insight,
     }
 
