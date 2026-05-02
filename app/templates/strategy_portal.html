@@ -2369,8 +2369,8 @@ function dismissTgBanner(){
         <div id="scan-progress" style="display:none">
           <div class="pine-card" style="text-align:center;padding:28px 20px">
             <div style="font-size:28px;margin-bottom:10px">⚙️</div>
-            <div style="font-weight:700;font-size:15px;margin-bottom:6px">Running 40 strategies in parallel…</div>
-            <div id="scan-progress-sub" style="font-size:12px;color:var(--muted)">Testing momentum, trend, mean-reversion, breakout, candlestick patterns, divergence + multi-indicator combos — all against real historical data</div>
+            <div style="font-weight:700;font-size:15px;margin-bottom:6px">Scanning 40 strategies + optimising TP/SL…</div>
+            <div id="scan-progress-sub" style="font-size:12px;color:var(--muted)">Stage 1: testing 40 strategies (momentum, trend, mean-rev, breakout, patterns, divergence + combos). Stage 2: re-running the top 8 with 4 risk profiles (Tight Scalp, Balanced, Wide Swing, Runner) to find the optimal TP/SL for each.</div>
             <div style="margin-top:18px;height:5px;background:var(--border);border-radius:99px;overflow:hidden">
               <div id="scan-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),#818cf8);border-radius:99px;transition:width .4s ease"></div>
             </div>
@@ -6465,7 +6465,10 @@ function renderScanResults(data) {
   const pnlPos = (ws.total_pnl || 0) >= 0;
 
   document.getElementById('scan-winner-coin').textContent  = coin;
-  document.getElementById('scan-winner-label').textContent = winner.label;
+  // Strategy label + optimal risk profile chip
+  const wRisk = winner.risk || {};
+  const labelEl = document.getElementById('scan-winner-label');
+  labelEl.innerHTML = `${winner.label} <span style="display:inline-block;background:rgba(91,108,247,.15);color:var(--accent);padding:3px 9px;border-radius:99px;font-size:11px;font-weight:700;margin-left:6px;letter-spacing:.2px;vertical-align:middle">${wRisk.name || 'Balanced'} · TP ${wRisk.tp1 || 3}% / SL ${wRisk.sl || 1.5}% · R:R ${wRisk.rr || '2:1'}</span>`;
   const insight = data.winner_insight || '';
   const insightEl = document.getElementById('scan-winner-insight');
   insightEl.textContent = insight;
@@ -6483,6 +6486,30 @@ function renderScanResults(data) {
     <div style="font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.4px">${s.label}</div>
   </div>`).join('');
 
+  // Risk-profile comparison table — shows what each TP/SL combo produced
+  const variants = winner.all_risk_variants || [];
+  if (variants.length > 1) {
+    const variantsHtml = `
+      <div style="background:var(--card2);border-radius:10px;padding:12px;margin-bottom:14px;border:1px solid var(--border)">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:8px">📊 Risk profile comparison</div>
+        <div style="display:grid;grid-template-columns:1.4fr .7fr .8fr .8fr .7fr;gap:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;font-weight:600;padding:4px 8px;border-bottom:1px solid var(--border);margin-bottom:4px">
+          <div>Profile</div><div>TP / SL</div><div>Win%</div><div>P&L</div><div style="text-align:right">Trades</div>
+        </div>
+        ${variants.map(v => {
+          const vp = (v.total_pnl||0) >= 0;
+          const winRowBg = v.is_best ? ';background:rgba(16,185,129,.08);border-radius:6px' : '';
+          return `<div style="display:grid;grid-template-columns:1.4fr .7fr .8fr .8fr .7fr;gap:6px;padding:6px 8px;font-size:12px;align-items:center${winRowBg}">
+            <div style="font-weight:${v.is_best?'700':'500'}">${v.is_best?'✨ ':''}${v.risk_name}</div>
+            <div style="color:var(--muted);font-variant-numeric:tabular-nums">${v.tp1}% / ${v.sl}%</div>
+            <div style="color:${(v.win_rate||0)>=50?'var(--green)':'var(--red)'}">${(v.win_rate||0).toFixed(1)}%</div>
+            <div style="color:${vp?'var(--green)':'var(--red)'};font-weight:${v.is_best?'700':'500'}">${vp?'+':''}${(v.total_pnl||0).toFixed(1)}%</div>
+            <div style="color:var(--muted);text-align:right">${v.closed_trades||0}</div>
+          </div>`;
+        }).join('')}
+      </div>`;
+    statsEl.insertAdjacentHTML('afterend', variantsHtml);
+  }
+
   // Category → badge color map
   const catColor = {
     'Momentum':    '#5b6cf7',
@@ -6497,31 +6524,33 @@ function renderScanResults(data) {
     'Other':       '#6b7280',
   };
 
-  // Full ranking table
+  // Full ranking table — now includes the optimal risk profile column
   const tableEl = document.getElementById('scan-table');
-  const headerRow = `<div style="display:grid;grid-template-columns:1.7fr .65fr .7fr .8fr .85fr .7fr;padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
-    <div>Strategy</div><div>Type</div><div>Win%</div><div>P&L</div><div>Prof.Factor</div><div style="text-align:right">Trades</div>
+  const headerRow = `<div style="display:grid;grid-template-columns:1.5fr .6fr .8fr .55fr .7fr .8fr .65fr;padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
+    <div>Strategy</div><div>Type</div><div>Best Risk</div><div>Win%</div><div>P&L</div><div>PF · Trades</div><div style="text-align:right">TP / SL</div>
   </div>`;
   tableEl.innerHTML = headerRow + ranked.map((r, i) => {
-    const st  = r.stats || {};
-    const pos = (st.total_pnl || 0) >= 0;
+    const st    = r.stats || {};
+    const pos   = (st.total_pnl || 0) >= 0;
     const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
-    const cat = r.category || 'Other';
-    const cc  = catColor[cat] || catColor['Other'];
-    return `<div style="display:grid;grid-template-columns:1.7fr .65fr .7fr .8fr .85fr .7fr;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':''}">
+    const cat   = r.category || 'Other';
+    const cc    = catColor[cat] || catColor['Other'];
+    const rk    = r.risk || {};
+    return `<div style="display:grid;grid-template-columns:1.5fr .6fr .8fr .55fr .7fr .8fr .65fr;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':''}">
       <div style="font-weight:600">${medal} ${r.label}</div>
       <div><span style="background:${cc}22;color:${cc};padding:2px 7px;border-radius:99px;font-size:10px;font-weight:700;letter-spacing:.2px">${cat}</span></div>
+      <div style="color:var(--accent);font-weight:600;font-size:11px">${rk.name || 'Balanced'}</div>
       <div style="color:${(st.win_rate||0)>=50?'var(--green)':'var(--red)'};">${(st.win_rate||0).toFixed(1)}%</div>
       <div style="color:${pos?'var(--green)':'var(--red)'};">${pos?'+':''}${(st.total_pnl||0).toFixed(1)}%</div>
-      <div style="color:var(--muted)">PF ${(st.profit_factor||0).toFixed(2)}</div>
-      <div style="color:var(--muted);text-align:right">${st.closed_trades||0} trades</div>
+      <div style="color:var(--muted);font-size:11px">PF ${(st.profit_factor||0).toFixed(2)} · ${st.closed_trades||0}t</div>
+      <div style="color:var(--muted);text-align:right;font-variant-numeric:tabular-nums;font-size:11px">${rk.tp1||'-'}% / ${rk.sl||'-'}%</div>
     </div>`;
   }).join('');
 
-  // Footer summary: how many tested vs how many ranked
+  // Footer summary: how many tested vs how many ranked + optimisation count
   if (data.tested) {
     tableEl.innerHTML += `<div style="padding:10px 16px;font-size:11px;color:var(--muted);text-align:center;background:var(--card2)">
-      Tested <b style="color:var(--text)">${data.tested}</b> strategies · <b style="color:var(--text)">${ranked.length}</b> generated enough trades to rank${data.skipped ? ` · ${data.skipped} skipped (too few trades)` : ''}
+      Tested <b style="color:var(--text)">${data.tested}</b> strategies · ran <b style="color:var(--text)">${data.optimisation_jobs||0}</b> extra TP/SL optimisations · <b style="color:var(--text)">${ranked.length}</b> ranked${data.skipped ? ` · ${data.skipped} skipped (too few trades)` : ''}
     </div>`;
   }
 
@@ -6534,20 +6563,21 @@ function createFromScan() {
   if (!_scanResult || !_scanResult.ranked || !_scanResult.ranked.length) return;
   const winner = _scanResult.ranked[0];
   const cfg    = winner.config || {};
+  const risk   = winner.risk   || {};
 
-  // Switch to Wizard mode and pre-fill state
+  // Switch to Wizard mode and pre-fill state — including the OPTIMAL TP/SL
   switchBuildMode('wizard');
-  // Pre-populate wizard values if possible
   try {
     WZ.direction   = cfg.direction   || 'LONG';
     WZ.primaryType = cfg.primaryType || 'rsi';
     WZ.primaryCfg  = cfg.primaryCfg  || {};
-    WZ.tp1         = cfg.tp1         || 3;
-    WZ.sl          = cfg.sl          || 1.5;
-    WZ.leverage    = cfg.leverage    || 5;
-    WZ.timeframe   = cfg.timeframe   || '15m';
+    WZ.confirms    = cfg.confirms    || [];
+    WZ.tp1         = risk.tp1 ?? cfg.tp1 ?? 3;
+    WZ.sl          = risk.sl  ?? cfg.sl  ?? 1.5;
+    WZ.leverage    = risk.leverage ?? cfg.leverage ?? 5;
+    WZ.timeframe   = cfg.timeframe   || '1h';
     WZ.singleCoin  = _scanResult.coin || 'BTC';
-    WZ.name        = `${_scanResult.coin} ${winner.label}`;
+    WZ.name        = `${_scanResult.coin} ${winner.label} (${risk.name || 'Balanced'})`;
     wzRenderAll && wzRenderAll();
   } catch(e) { /* wizard may not expose all setters — user can adjust manually */ }
 

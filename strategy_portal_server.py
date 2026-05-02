@@ -8070,15 +8070,29 @@ async def backtest_scan(request: Request):
 
     from app.services.backtest_engine import run_backtest
 
-    async def _run_one(tpl: dict) -> dict:
+    # ── Risk profiles tested on the top strategies in stage 2 ──────────────────
+    # Each strategy is first scored at the "Balanced" profile (stage 1), then
+    # the top 8 are re-tested with all 4 profiles in stage 2 to find the
+    # optimal TP/SL for that specific strategy on this coin.
+    risk_profiles = [
+        {"name": "Tight Scalp", "tp1": 1.5, "sl": 0.75, "leverage": 5, "rr": "2:1"},
+        {"name": "Balanced",    "tp1": 3.0, "sl": 1.5,  "leverage": 5, "rr": "2:1"},
+        {"name": "Wide Swing",  "tp1": 5.0, "sl": 2.0,  "leverage": 5, "rr": "2.5:1"},
+        {"name": "Runner",      "tp1": 8.0, "sl": 2.0,  "leverage": 5, "rr": "4:1"},
+    ]
+    DEFAULT_PROFILE = risk_profiles[1]  # Balanced
+
+    async def _run_one(tpl: dict, risk: dict | None = None) -> dict:
+        r = risk or DEFAULT_PROFILE
+        # IMPORTANT: full confirms list passed through (was previously dropped)
         cfg = {
             "direction":   direction,
             "primaryType": tpl["primaryType"],
             "primaryCfg":  tpl["primaryCfg"],
-            "confirms":    [],
-            "tp1":         tpl["tp1"],
-            "sl":          tpl["sl"],
-            "leverage":    tpl["leverage"],
+            "confirms":    tpl.get("confirms", []),
+            "tp1":         r["tp1"],
+            "sl":          r["sl"],
+            "leverage":    r["leverage"],
             "timeframe":   tpl["timeframe"],
             "singleCoin":  coin,
         }
@@ -8088,10 +8102,17 @@ async def backtest_scan(request: Request):
             result = {"error": "timeout"}
         except Exception as exc:
             result = {"error": str(exc)}
-        return {"label": tpl["label"], "category": tpl.get("category", "Other"), "config": cfg, "result": result}
+        return {
+            "label":    tpl["label"],
+            "category": tpl.get("category", "Other"),
+            "tpl":      tpl,
+            "risk":     r,
+            "config":   cfg,
+            "result":   result,
+        }
 
-    # Run all templates in parallel
-    outcomes = await asyncio.gather(*[_run_one(t) for t in templates])
+    # ── Stage 1: Run all 40 templates at the Balanced risk profile ────────────
+    outcomes = await asyncio.gather(*[_run_one(t, DEFAULT_PROFILE) for t in templates])
 
     # ── Score and rank ─────────────────────────────────────────────────────────
     # Stricter trade-count floor prevents sparse-sample strategies (e.g. 1 lucky
@@ -8112,44 +8133,95 @@ async def backtest_scan(request: Request):
         sample_weight = math.log(trades + 1) / math.log(20)  # ~1.0 at 19 trades
         return round(pf * wr * sample_weight + pnl * 0.001, 4)
 
-    ranked = []
-    for o in outcomes:
-        res  = o.get("result") or {}
-        err  = res.get("error")
+    def _outcome_to_row(o: dict) -> dict:
+        res   = o.get("result") or {}
+        err   = res.get("error")
         stats = res.get("stats") or {}
         score = _score(stats) if not err else -1.0
-        ranked.append({
+        return {
             "label":    o["label"],
             "category": o.get("category", "Other"),
+            "tpl":      o["tpl"],
+            "risk":     o["risk"],
             "config":   o["config"],
             "stats":    stats,
             "score":    score,
             "error":    err,
-        })
+        }
 
-    ranked.sort(key=lambda x: x["score"], reverse=True)
-    # Only return entries that had enough trades
-    valid   = [r for r in ranked if r["score"] >= 0]
-    invalid = [r for r in ranked if r["score"] < 0]
+    ranked_s1 = sorted([_outcome_to_row(o) for o in outcomes],
+                       key=lambda x: x["score"], reverse=True)
+    valid_s1   = [r for r in ranked_s1 if r["score"] >= 0]
+    invalid    = [r for r in ranked_s1 if r["score"] < 0]
+
+    # ── Stage 2: Optimise TP/SL on the top 8 strategies ───────────────────────
+    # For each surviving strategy, re-test it with all 4 risk profiles and
+    # keep the highest-scoring variant. This finds the best TP/SL for that
+    # specific strategy on this coin without ballooning total backtest count.
+    top_for_optimisation = valid_s1[:8]
+    optimisation_jobs = []
+    for row in top_for_optimisation:
+        for profile in risk_profiles:
+            if profile["name"] == DEFAULT_PROFILE["name"]:
+                continue  # already have Balanced result from stage 1
+            optimisation_jobs.append((row["label"], _run_one(row["tpl"], profile)))
+
+    opt_results = await asyncio.gather(*[job for _, job in optimisation_jobs])
+
+    # Group all variants per strategy label, then pick the best
+    by_label: dict = {}
+    # Seed with stage-1 Balanced results for the top strategies
+    for row in top_for_optimisation:
+        by_label.setdefault(row["label"], []).append(row)
+    # Add stage-2 variants
+    for (label, _job), o in zip(optimisation_jobs, opt_results):
+        by_label.setdefault(label, []).append(_outcome_to_row(o))
+
+    # For each strategy, pick the variant with the best score
+    valid = []
+    for row in top_for_optimisation:
+        variants = by_label[row["label"]]
+        best = max(variants, key=lambda v: v["score"])
+        # Attach all variant stats so the UI can show the comparison
+        best["all_risk_variants"] = [
+            {
+                "risk_name": v["risk"]["name"],
+                "tp1":       v["risk"]["tp1"],
+                "sl":        v["risk"]["sl"],
+                "rr":        v["risk"]["rr"],
+                "win_rate":  v["stats"].get("win_rate", 0),
+                "total_pnl": v["stats"].get("total_pnl", 0),
+                "profit_factor": v["stats"].get("profit_factor", 0),
+                "closed_trades": v["stats"].get("closed_trades", 0),
+                "score":     v["score"],
+                "is_best":   v["score"] == best["score"],
+            }
+            for v in sorted(variants, key=lambda v: v["risk"]["tp1"])
+        ]
+        valid.append(best)
+
+    # Re-sort by the best-variant score so the leaderboard reflects optimisation
+    valid.sort(key=lambda x: x["score"], reverse=True)
 
     # ── AI one-liner for the winner ────────────────────────────────────────────
     winner_insight = ""
     if valid:
-        w = valid[0]
+        w  = valid[0]
         ws = w["stats"]
+        wr = w["risk"]
         try:
             import anthropic as _ant
             _ac = _ant.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
             _msg = await asyncio.wait_for(
                 _ac.messages.create(
                     model="claude-haiku-4-5",
-                    max_tokens=120,
-                    system="You are a crypto quant analyst. Respond with exactly 1 short sentence (max 20 words) explaining why the winning strategy suits the coin's price behaviour. No markdown.",
+                    max_tokens=140,
+                    system="You are a crypto quant analyst. Respond with exactly 1 short sentence (max 25 words) explaining why this strategy + risk profile suits the coin's price behaviour. No markdown.",
                     messages=[{"role": "user", "content":
-                        f"Strategy '{w['label']}' won the scan for {ticker} over {days} days: "
-                        f"win rate {ws.get('win_rate')}%, P&L {ws.get('total_pnl')}%, "
+                        f"Strategy '{w['label']}' with '{wr['name']}' risk (TP {wr['tp1']}% / SL {wr['sl']}%, R:R {wr['rr']}) "
+                        f"won the scan for {ticker} over {days} days: win rate {ws.get('win_rate')}%, P&L {ws.get('total_pnl')}%, "
                         f"profit factor {ws.get('profit_factor')}, {ws.get('closed_trades')} trades. "
-                        f"Why does this strategy suit {ticker}?"}],
+                        f"Why does this strategy + risk combo suit {ticker}?"}],
                 ),
                 timeout=12,
             )
@@ -8157,14 +8229,27 @@ async def backtest_scan(request: Request):
         except Exception:
             pass
 
+    # ── Strip non-serialisable bits before returning ──────────────────────────
+    def _clean_row(r: dict) -> dict:
+        return {
+            "label":            r["label"],
+            "category":         r["category"],
+            "config":           r["config"],
+            "stats":            r["stats"],
+            "score":            r["score"],
+            "risk":             r["risk"],
+            "all_risk_variants": r.get("all_risk_variants", []),
+        }
+
     return {
         "ok":      True,
         "coin":    ticker,
         "days":    days,
         "direction": direction,
-        "ranked":  valid[:12],
+        "ranked":  [_clean_row(r) for r in valid[:12]],
         "tested":  len(templates),
         "skipped": len(invalid),
+        "optimisation_jobs": len(optimisation_jobs),
         "winner_insight": winner_insight,
     }
 
