@@ -57,11 +57,16 @@ type Variant = {
 };
 
 type OptimizeResult = {
-  days: 30 | 90;
+  days: 30 | 90 | null;
   baseline: { label: string; stats: BacktestStats; score: number };
   variants: Variant[];
   any_improved: boolean;
+  mode?: 'replay' | 'backtest';
+  trades_replayed?: number;
+  trades_total?: number;
   baseline_zero_trades?: boolean;
+  primary_tunable?: boolean;
+  primary_type?: string;
   total_tested?: number;
   total_attempted?: number;
   ran_at: string;
@@ -442,7 +447,7 @@ export default function OptimizeScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>AI Strategy Tuner</Text>
           <Text style={styles.headerSub}>
-            Tries ~9 parameter tweaks and ranks them by historical performance.
+            Sweeps stop-loss, take-profit, leverage, timeframe, and the entry signal's main parameter — then ranks every variant by backtested score.
           </Text>
         </View>
       </View>
@@ -567,8 +572,18 @@ export default function OptimizeScreen() {
             <Text style={styles.sectionLabel}>Baseline</Text>
             <BaselineCard stats={result.baseline.stats} />
 
+            {result.mode === 'replay' && typeof result.trades_replayed === 'number' && (
+              <View style={styles.modeBadge}>
+                <Ionicons name="time" size={12} color={colors.accent} />
+                <Text style={styles.modeBadgeText}>
+                  Replayed {result.trades_replayed} of your real trades
+                </Text>
+              </View>
+            )}
             <Text style={[styles.sectionLabel, { marginTop: spacing.lg }]}>
-              {typeof result.total_tested === 'number' && typeof result.total_attempted === 'number'
+              {result.mode === 'replay'
+                ? `${result.variants.length} exit variants tested`
+                : typeof result.total_tested === 'number' && typeof result.total_attempted === 'number'
                 ? `Tested ${result.total_tested} of ${result.total_attempted} variations`
                 : `Suggested tweaks (${result.variants.length})`}
             </Text>
@@ -704,6 +719,20 @@ const styles = StyleSheet.create({
   },
   winnerTitle: { color: colors.text, fontSize: 18, fontFamily: font.bold },
   winnerDelta: { color: colors.positive, fontSize: 13, fontFamily: font.semibold, marginTop: 2 },
+
+  modeBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: radius.sm,
+    backgroundColor: colors.cardHi,
+    borderWidth: 1, borderColor: colors.accent,
+    marginTop: spacing.md,
+  },
+  modeBadgeText: {
+    color: colors.accent, fontSize: 11, fontFamily: font.semibold,
+    letterSpacing: 0.3,
+  },
 
   sectionLabel: {
     color: colors.textDim, fontSize: 12, fontFamily: font.medium,

@@ -9985,6 +9985,335 @@ def _generate_optimizer_variants(base_config: dict) -> list[dict]:
     return out
 
 
+def _generate_replay_variants(base_config: dict) -> list[dict]:
+    """Variants for trade-replay mode. Only knobs that affect EXIT logic are
+    sweepable here — entries are fixed (we're replaying real fills), so
+    timeframe / primaryCfg / signal tweaks would be no-ops. We sweep TP, SL,
+    and leverage in a wider grid than the backtest mode because replay is
+    nearly free (no per-variant candle fetch — we share the same candles).
+    """
+    base_tp  = float(base_config.get("tp1") or 3.0)
+    base_sl  = float(base_config.get("sl")  or 2.0)
+    base_lev = int(base_config.get("leverage") or 5)
+
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(label: str, tagline: str, patch: dict):
+        if not patch:
+            return
+        try:
+            key = json.dumps(patch, sort_keys=True, default=str)
+        except Exception:
+            key = repr(sorted(patch.items()))
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({"label": label, "tagline": tagline, "patch": patch})
+
+    # Wider 4×4 SL/TP grid since replay is nearly free
+    sl_mults = [0.5, 0.75, 1.25, 1.75]
+    tp_mults = [0.5, 0.75, 1.25, 2.0]
+    for sm in sl_mults:
+        new_sl = round(base_sl * sm, 2)
+        if new_sl <= 0:
+            continue
+        _add(f"SL ×{sm}", f"SL {base_sl:.1f}% → {new_sl:.1f}%", {"sl": new_sl})
+    for tm in tp_mults:
+        new_tp = round(base_tp * tm, 2)
+        if new_tp <= 0:
+            continue
+        _add(f"TP ×{tm}", f"TP {base_tp:.1f}% → {new_tp:.1f}%", {"tp1": new_tp})
+
+    # Combo cells worth highlighting
+    combos = [
+        (0.5, 1.5, "Better risk/reward",  "Tight SL ×0.5, wide TP ×1.5"),
+        (0.75, 2.0, "Aggressive R:R",     "SL ×0.75, TP ×2.0"),
+        (1.5, 0.75, "Wider stop, quick TP", "Patient SL, fast TP"),
+        (0.75, 0.75, "Tight scalper",     "Both ×0.75"),
+    ]
+    for sm, tm, lbl, tag in combos:
+        patch = {"sl": round(base_sl * sm, 2), "tp1": round(base_tp * tm, 2)}
+        if patch["sl"] > 0 and patch["tp1"] > 0:
+            _add(lbl, tag, patch)
+
+    # Leverage sweeps
+    for delta in (-3, -2, +3, +5):
+        new_lev = max(1, min(25, base_lev + delta))
+        if new_lev != base_lev:
+            _add(f"{new_lev}× leverage",
+                 f"{base_lev}× → {new_lev}×",
+                 {"leverage": new_lev})
+
+    return out
+
+
+def _replay_trade(
+    entry_price: float,
+    direction: str,
+    candles: list,
+    tp_pct: float,
+    sl_pct: float,
+    leverage: int,
+) -> dict:
+    """Replay a single execution against new TP/SL/leverage. Walks the post-entry
+    candles minute-by-minute and decides whether the variant's TP or SL would
+    have hit first.
+
+    Conservative tie-break: when a single candle's high+low both straddle the
+    levels (we can't tell from OHLC which touched first), we assume the SL
+    fired — this avoids over-promising winners. Industry-standard for
+    backtesting against OHLC bars.
+
+    Returns: {outcome, pnl_pct} where pnl_pct already includes leverage.
+    """
+    if entry_price <= 0 or not candles:
+        return {"outcome": "OPEN", "pnl_pct": 0.0}
+
+    is_long = (direction or "LONG").upper() == "LONG"
+    if is_long:
+        tp_price = entry_price * (1 + tp_pct / 100.0)
+        sl_price = entry_price * (1 - sl_pct / 100.0)
+    else:
+        tp_price = entry_price * (1 - tp_pct / 100.0)
+        sl_price = entry_price * (1 + sl_pct / 100.0)
+
+    for c in candles:
+        # candles are (ts, open, high, low, close) tuples
+        try:
+            high = float(c[2]); low = float(c[3])
+        except (IndexError, TypeError, ValueError):
+            continue
+
+        if is_long:
+            sl_hit = low  <= sl_price
+            tp_hit = high >= tp_price
+        else:
+            sl_hit = high >= sl_price
+            tp_hit = low  <= tp_price
+
+        if sl_hit and tp_hit:
+            return {"outcome": "LOSS", "pnl_pct": round(-sl_pct * leverage, 2)}
+        if sl_hit:
+            return {"outcome": "LOSS", "pnl_pct": round(-sl_pct * leverage, 2)}
+        if tp_hit:
+            return {"outcome": "WIN",  "pnl_pct": round( tp_pct * leverage, 2)}
+
+    # Window expired with neither level hit — mark with mark-to-market PnL on
+    # last close so unfinished trades still affect the variant's scoring (a
+    # variant that leaves trades open isn't necessarily neutral — it has
+    # opportunity cost).
+    try:
+        last_close = float(candles[-1][4])
+        raw_pct = ((last_close - entry_price) / entry_price) * 100.0
+        if not is_long:
+            raw_pct = -raw_pct
+        return {"outcome": "OPEN", "pnl_pct": round(raw_pct * leverage, 2)}
+    except Exception:
+        return {"outcome": "OPEN", "pnl_pct": 0.0}
+
+
+def _aggregate_replay(outcomes: list[dict]) -> dict:
+    """Roll up replay results into the same stats shape as run_backtest()."""
+    if not outcomes:
+        return {"total_pnl": 0.0, "win_rate": 0.0, "max_drawdown": 0.0,
+                "closed_trades": 0, "trades": 0, "profit_factor": 0.0,
+                "liquidations": 0}
+
+    pnls   = [o["pnl_pct"] for o in outcomes]
+    closed = [o for o in outcomes if o["outcome"] in ("WIN", "LOSS")]
+    wins   = [o for o in closed if o["outcome"] == "WIN"]
+    losses = [o for o in closed if o["outcome"] == "LOSS"]
+
+    win_rate = (len(wins) / len(closed) * 100.0) if closed else 0.0
+    total_pnl = sum(pnls)
+
+    # Max drawdown via equity-curve walk
+    eq = 0.0; peak = 0.0; max_dd = 0.0
+    for p in pnls:
+        eq += p
+        if eq > peak:
+            peak = eq
+        dd = peak - eq
+        if dd > max_dd:
+            max_dd = dd
+
+    # Profit factor = sum(wins) / |sum(losses)|
+    win_sum  = sum(o["pnl_pct"] for o in wins)
+    loss_sum = abs(sum(o["pnl_pct"] for o in losses))
+    profit_factor = (win_sum / loss_sum) if loss_sum > 0 else (win_sum if win_sum > 0 else 0.0)
+
+    # Liquidations = trades whose loss exceeded ~80% of nominal (proxy)
+    liquidations = sum(1 for p in pnls if p <= -80.0)
+
+    return {
+        "total_pnl":     round(total_pnl, 2),
+        "win_rate":      round(win_rate, 2),
+        # Positive convention to match run_backtest()'s stats — UI's delta_dd
+        # logic in `VariantCard` already inverts the comparison (smaller is
+        # better), so emitting a negative number here would double-invert and
+        # mis-rank variants.
+        "max_drawdown":  round(max_dd, 2),
+        "closed_trades": len(closed),
+        "trades":        len(outcomes),
+        "profit_factor": round(profit_factor, 2),
+        "liquidations":  liquidations,
+    }
+
+
+async def _run_trade_replay_optimizer(
+    base_config: dict,
+    executions: list,
+    strategy_id: int,
+) -> dict | None:
+    """Replay every variant against the user's actual past fills. Returns the
+    same-shape response as the backtest path, or None if we couldn't fetch
+    enough candle data to make the result trustworthy.
+    """
+    import httpx
+    variants = _generate_replay_variants(base_config)
+    if not variants:
+        return None
+
+    # Pre-fetch candles ONCE per execution (shared across all variants — this
+    # is the whole performance unlock vs the backtest path).
+    fetch_concurrency = asyncio.Semaphore(6)
+
+    async def _fetch_for(ex):
+        """Bounded 1m OHLC fetch from `fired_at` to `end_at`.
+
+        Architect-flagged: the upstream `_fetch_candles_since_entry` always
+        fetches up to NOW with no endTime arg, so a 60-day-old execution would
+        page through ~86k candles before we trimmed — multiplied across all
+        executions that blew the 90s replay budget. This bounded version
+        passes endTime to MEXC/Binance directly so we only fetch what we need.
+        """
+        async with fetch_concurrency:
+            try:
+                fired = ex.fired_at or datetime.utcnow()
+                # Window ends at min(closed_at, fired+14d, now).
+                hard_cap = fired + timedelta(days=14)
+                end_at = ex.closed_at or hard_cap
+                if end_at > hard_cap:
+                    end_at = hard_cap
+                now = datetime.utcnow()
+                if end_at > now:
+                    end_at = now
+                if end_at <= fired:
+                    return None
+
+                start_ms = int(fired.timestamp()  * 1000)
+                end_ms   = int(end_at.timestamp() * 1000)
+                # Page through in 900-candle chunks (MEXC safe)
+                all_candles: list = []
+                cursor = start_ms
+                async with httpx.AsyncClient(timeout=8) as client:
+                    while cursor < end_ms:
+                        # 1 candle per minute ⇒ minutes-needed = (end-cursor)/60s
+                        needed = min(900, max(1, int((end_ms - cursor) / 60000) + 1))
+                        sources = [
+                            ("https://api.mexc.com/api/v3/klines",
+                             {"symbol": ex.symbol, "interval": "1m",
+                              "startTime": cursor, "endTime": end_ms, "limit": needed}),
+                            ("https://api.binance.com/api/v3/klines",
+                             {"symbol": ex.symbol, "interval": "1m",
+                              "startTime": cursor, "endTime": end_ms, "limit": needed}),
+                            ("https://fapi.binance.com/fapi/v1/klines",
+                             {"symbol": ex.symbol, "interval": "1m",
+                              "startTime": cursor, "endTime": end_ms, "limit": needed}),
+                        ]
+                        page: list = []
+                        for url, params in sources:
+                            try:
+                                resp = await client.get(url, params=params)
+                                if resp.status_code != 200:
+                                    continue
+                                klines = resp.json()
+                                if not klines:
+                                    continue
+                                for k in klines:
+                                    page.append((int(k[0]), float(k[1]), float(k[2]),
+                                                 float(k[3]), float(k[4])))
+                                break
+                            except Exception:
+                                continue
+                        if not page:
+                            break  # no source returned data — give up gracefully
+                        all_candles.extend(page)
+                        # Advance cursor past the last candle we got
+                        last_ts = page[-1][0]
+                        if last_ts <= cursor:
+                            break  # no progress, prevent infinite loop
+                        cursor = last_ts + 60_000
+                return all_candles or None
+            except Exception as exc:
+                logger.warning(f"[Replay sid={strategy_id}] candles failed for ex={ex.id}: {exc}")
+                return None
+
+    candles_lists = await asyncio.gather(*[_fetch_for(ex) for ex in executions])
+    paired = [(ex, c) for ex, c in zip(executions, candles_lists) if c]
+    if len(paired) < 5:
+        # Couldn't fetch candles for enough trades — fall back to backtest mode.
+        return None
+
+    base_tp  = float(base_config.get("tp1") or 3.0)
+    base_sl  = float(base_config.get("sl")  or 2.0)
+    base_lev = int(base_config.get("leverage") or 5)
+
+    def _replay_variant(patch: dict) -> dict:
+        """Replay all paired trades with the patched TP/SL/lev — returns stats."""
+        tp = float(patch.get("tp1",      base_tp))
+        sl = float(patch.get("sl",       base_sl))
+        lv = int(  patch.get("leverage", base_lev))
+        outs = [_replay_trade(ex.entry_price, ex.direction, candles, tp, sl, lv)
+                for ex, candles in paired]
+        return _aggregate_replay(outs)
+
+    baseline_stats = _replay_variant({})
+    base_score = _optimizer_score(baseline_stats)
+    base_pnl   = float(baseline_stats.get("total_pnl") or 0.0)
+    base_dd    = float(baseline_stats.get("max_drawdown") or 0.0)
+    base_wr    = float(baseline_stats.get("win_rate") or 0.0)
+
+    out_variants: list[dict] = []
+    for v in variants:
+        stats = _replay_variant(v["patch"])
+        score = _optimizer_score(stats)
+        out_variants.append({
+            "label":          v["label"],
+            "tagline":        v["tagline"],
+            "patch":          v["patch"],
+            "stats":          stats,
+            "score":          round(score, 2),
+            "delta_pnl":      round(float(stats.get("total_pnl") or 0.0) - base_pnl, 2),
+            "delta_dd":       round(float(stats.get("max_drawdown") or 0.0) - base_dd, 2),
+            "delta_win_rate": round(float(stats.get("win_rate") or 0.0) - base_wr, 2),
+            "improved":       score > base_score,
+        })
+
+    out_variants.sort(key=lambda v: v["score"], reverse=True)
+    any_improved = any(v["improved"] for v in out_variants)
+
+    return {
+        "mode":                 "replay",
+        "trades_replayed":      len(paired),
+        "trades_total":         len(executions),
+        "days":                 None,
+        "baseline": {
+            "label": "Current settings",
+            "stats": baseline_stats,
+            "score": round(base_score, 2),
+        },
+        "variants":             out_variants,
+        "any_improved":         any_improved,
+        "baseline_zero_trades": False,  # by definition — we have real trades
+        "primary_tunable":      True,
+        "total_tested":         len(out_variants),
+        "total_attempted":      len(out_variants),
+        "ran_at":               datetime.utcnow().isoformat() + "Z",
+    }
+
+
 def _optimizer_score(stats: dict) -> float:
     """Risk-adjusted score: PnL minus half the max drawdown.
 
@@ -10043,8 +10372,57 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
                          "message": "Subscribed strategies can't be optimized — clone it first to make it editable."},
             )
         base_config = dict(s.config or {})
+
+        # ── Try TRADE REPLAY mode first ──────────────────────────────────
+        # Pull the strategy's recent closed executions (paper or live). If
+        # there are enough of them, we can replay the user's actual fills
+        # against each variant's TP/SL/leverage — this works even when the
+        # synthetic backtest fires zero trades, and the answers are concrete:
+        # "if your SL had been 1.5% these specific 8 historical trades would
+        # have been wins instead of losses."
+        from app.strategy_models import StrategyExecution
+        cutoff = datetime.utcnow() - timedelta(days=120)
+        executions = (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.strategy_id == strategy_id,
+                StrategyExecution.user_id == user.id,
+                StrategyExecution.outcome.in_(("WIN", "LOSS", "BREAKEVEN", "OPEN")),
+                StrategyExecution.entry_price.isnot(None),
+                StrategyExecution.fired_at >= cutoff,
+            )
+            .order_by(StrategyExecution.fired_at.desc())
+            .limit(60)
+            .all()
+        )
+        # Detach so we can use them after closing the session
+        executions_detached = [
+            type("ExSnap", (), {
+                "id":          ex.id,
+                "symbol":      ex.symbol,
+                "direction":   ex.direction,
+                "entry_price": ex.entry_price,
+                "leverage":    ex.leverage or 5,
+                "fired_at":    ex.fired_at,
+                "closed_at":   ex.closed_at,
+            })()
+            for ex in executions
+        ]
     finally:
         db.close()
+
+    if len(executions_detached) >= 5:
+        try:
+            replay = await asyncio.wait_for(
+                _run_trade_replay_optimizer(base_config, executions_detached, strategy_id),
+                timeout=90,
+            )
+            if replay:
+                return replay
+        except asyncio.TimeoutError:
+            logger.warning(f"[Optimize sid={strategy_id}] replay timed out, falling back to backtest")
+        except Exception as exc:
+            logger.warning(f"[Optimize sid={strategy_id}] replay failed: {exc}, falling back to backtest")
 
     variants = _generate_optimizer_variants(base_config)
     if not variants:
@@ -10147,6 +10525,16 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
     # a different (more useful) empty state in that case.
     base_trade_count = int(baseline_stats.get("closed_trades") or 0)
     baseline_zero_trades = base_trade_count == 0
+    # Whether this strategy's primary signal has tunable numeric parameters in
+    # the optimizer. macd / bb / supertrend / stoch_rsi / ichimoku are all
+    # hardcoded inside the backtest engine (no period/multiplier args), so
+    # there's literally nothing to sweep on the entry side. The mobile uses
+    # this to show a stronger "switch your signal" message instead of a vague
+    # "well-tuned" one when the strategy isn't firing.
+    _TUNABLE_PRIMARIES = {"rsi", "ema", "sma", "donchian", "cci", "mfi", "roc",
+                          "volume_spike", "price_momentum", "breakout"}
+    primary_type_lc = str(base_config.get("primaryType") or "").lower()
+    primary_tunable = primary_type_lc in _TUNABLE_PRIMARIES
     # How many variants returned actual results (i.e. backtest didn't error
     # out or time out). Useful for the "Tested 18 of 22 variations" copy.
     completed = sum(1 for r in results[1:] if r)
@@ -10158,9 +10546,13 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
             "stats": baseline_stats,
             "score": round(base_score, 2),
         },
+        "mode":                 "backtest",
+        "trades_replayed":      0,
         "variants":             out_variants,
         "any_improved":         any_improved,
         "baseline_zero_trades": baseline_zero_trades,
+        "primary_tunable":      primary_tunable,
+        "primary_type":         primary_type_lc,
         "total_tested":         completed,
         "total_attempted":      len(jobs) - 1,
         "ran_at":               datetime.utcnow().isoformat() + "Z",
