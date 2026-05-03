@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Alert, Linking, Platform, ActivityIndicator, Switch } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -25,6 +25,7 @@ import { apiGet, apiPut, type Portfolio, type PushPrefs } from '@/lib/api';
 
 export default function SettingsScreen() {
   const { user, uid, signOut, refreshUser } = useAuth();
+  const router = useRouter();
   const [copied, setCopied] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
@@ -268,6 +269,20 @@ export default function SettingsScreen() {
         <SectionLabel label="Push notifications" />
       </View>
       <PushPrefsCard uid={uid} />
+
+      {/* Earn — affiliate program */}
+      <View style={{ marginTop: spacing.xl }}>
+        <SectionLabel label="Earn" />
+      </View>
+      <View style={styles.section}>
+        <SettingsLink
+          icon="diamond-outline"
+          tone="warning"
+          label="Affiliate program"
+          hint="Earn 30% of subs + 20% of fees from every referral"
+          onPress={() => router.push('/affiliate' as any)}
+        />
+      </View>
 
       {/* Quick links */}
       <View style={{ marginTop: spacing.xl }}>

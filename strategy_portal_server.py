@@ -497,6 +497,47 @@ def _ensure_tables():
     ])
     _create_with_retry("TradeDrawing", [TradeDrawing.__table__])
 
+    # Affiliate program — applications + per-user affiliate state. Raw CREATE
+    # to avoid registering yet another SQLAlchemy model just for a simple,
+    # mostly-write-once table.
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa.text("""
+                CREATE TABLE IF NOT EXISTS affiliate_applications (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    telegram VARCHAR NOT NULL,
+                    twitter VARCHAR,
+                    instagram VARCHAR,
+                    youtube VARCHAR,
+                    tiktok VARCHAR,
+                    website VARCHAR,
+                    bio TEXT NOT NULL,
+                    plan TEXT NOT NULL,
+                    status VARCHAR NOT NULL DEFAULT 'pending',
+                    sub_share_pct DOUBLE PRECISION DEFAULT 30,
+                    fee_share_pct DOUBLE PRECISION DEFAULT 20,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    reviewed_at TIMESTAMP,
+                    reviewer_note TEXT,
+                    UNIQUE(user_id)
+                )
+            """))
+            conn.execute(sa.text(
+                "CREATE INDEX IF NOT EXISTS idx_affiliate_apps_status ON affiliate_applications(status)"
+            ))
+        logger.info("_ensure_tables: affiliate_applications ready")
+    except Exception as e:
+        # Multi-worker startup race on `CREATE TABLE IF NOT EXISTS` can still
+        # raise DuplicateTable / pg_type unique violation when two workers run
+        # the DDL simultaneously. The table ends up created either way — the
+        # loser's exception is harmless, so log it at info level only.
+        emsg = str(e)
+        if "already exists" in emsg or "duplicate key" in emsg:
+            logger.info("_ensure_tables(affiliate_applications): lost startup race (harmless)")
+        else:
+            logger.error(f"_ensure_tables(affiliate_applications): {e}")
+
     # Verification — query pg_tables for the names we expect and shout loudly
     # if any are still missing so we never silently end up with broken save APIs.
     try:
@@ -10314,6 +10355,213 @@ async def admin_ai_generator_run(uid: str = Query(...), n: int = Query(3)):
     except Exception as e:
         logger.error(f"[AIGen] manual run failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Affiliate program endpoints ─────────────────────────────────────────────
+# Mobile users can apply to become an affiliate, then earn a share of every
+# subscription + trading-fee referral they bring in. Affiliate state is keyed
+# off the existing `users.referral_code` column (auto-minted on first request
+# if missing). Application metadata lives in `affiliate_applications`.
+
+REFERRAL_BASE_URL = os.environ.get("REFERRAL_BASE_URL", "https://tradehub.markets")
+DEFAULT_SUB_SHARE_PCT = 30.0
+DEFAULT_FEE_SHARE_PCT = 20.0
+
+
+def _ensure_referral_code(user, db) -> str:
+    """Mint a referral code for the user if they don't have one yet."""
+    if user.referral_code:
+        return user.referral_code
+    import random as _r
+    chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+    for _ in range(40):
+        code = "".join(_r.choices(chars, k=6))
+        if not db.query(User).filter(User.referral_code == code).first():
+            user.referral_code = code
+            db.commit()
+            return code
+    raise HTTPException(status_code=500, detail="Could not mint referral code")
+
+
+@app.get("/api/affiliates/me")
+async def api_affiliates_me(request: Request):
+    """Return the signed-in user's affiliate status, application, and link.
+
+    Response shape:
+      {
+        "is_affiliate": bool,
+        "status": "none" | "pending" | "approved" | "rejected",
+        "referral_code": str | null,
+        "referral_url": str | null,
+        "sub_share_pct": float,
+        "fee_share_pct": float,
+        "application": { ...latest application... } | null,
+        "stats": { "referrals": int, "earnings_usd": float }
+      }
+    """
+    import sqlalchemy as sa
+    uid = request.query_params.get("uid", "").strip().upper()
+    if not uid:
+        raise HTTPException(status_code=401, detail="auth required")
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="invalid UID")
+
+        row = None
+        with engine.connect() as conn:
+            r = conn.execute(sa.text(
+                "SELECT id, telegram, twitter, instagram, youtube, tiktok, website, "
+                "bio, plan, status, sub_share_pct, fee_share_pct, created_at, "
+                "reviewed_at, reviewer_note "
+                "FROM affiliate_applications WHERE user_id = :uid_pk"
+            ), {"uid_pk": user.id}).first()
+            if r:
+                row = dict(r._mapping)
+            # Count how many users used this referral code (if any)
+            ref_count = 0
+            if user.referral_code:
+                cnt = conn.execute(sa.text(
+                    "SELECT COUNT(*) FROM users WHERE referred_by = :code"
+                ), {"code": user.referral_code}).scalar() or 0
+                ref_count = int(cnt)
+
+        is_approved = bool(row and row["status"] == "approved")
+        # Anyone with an application (even pending) gets a shareable referral
+        # link — full commission only kicks in on approval, but the link is
+        # live so creators can start warming up their audience.
+        ref_code = user.referral_code if row else None
+        ref_url = f"{REFERRAL_BASE_URL}/r/{ref_code}" if (row and ref_code) else None
+        sub_pct = float((row or {}).get("sub_share_pct") or DEFAULT_SUB_SHARE_PCT)
+        fee_pct = float((row or {}).get("fee_share_pct") or DEFAULT_FEE_SHARE_PCT)
+
+        # Serialise app row for JSON
+        app_payload = None
+        if row:
+            app_payload = {
+                k: (v.isoformat() if hasattr(v, "isoformat") else v)
+                for k, v in row.items()
+            }
+
+        return JSONResponse({
+            "is_affiliate": is_approved,
+            "status": (row["status"] if row else "none"),
+            "referral_code": ref_code,
+            "referral_url": ref_url,
+            "sub_share_pct": sub_pct,
+            "fee_share_pct": fee_pct,
+            "application": app_payload,
+            "stats": {
+                "referrals": ref_count,
+                "earnings_usd": 0.0,  # placeholder until commission ledger exists
+            },
+        })
+    finally:
+        db.close()
+
+
+@app.post("/api/affiliates/apply")
+async def api_affiliates_apply(request: Request):
+    """Submit (or re-submit) an affiliate application.
+
+    Body fields: telegram (required), twitter, instagram, youtube, tiktok,
+    website, bio (required), plan (required) — bio is a short "about you"
+    blurb, plan is "how do you intend to promote".
+
+    On success the user receives a referral_code immediately so they can
+    start sharing while their application is being reviewed; full affiliate
+    earnings only kick in once status flips to 'approved' by an admin.
+    """
+    import sqlalchemy as sa
+    uid = request.query_params.get("uid", "").strip().upper()
+    if not uid:
+        raise HTTPException(status_code=401, detail="auth required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    def _clean(s, max_len=200):
+        v = (body.get(s) or "")
+        if not isinstance(v, str): v = str(v)
+        return v.strip()[:max_len]
+
+    telegram = _clean("telegram", 64)
+    bio      = _clean("bio", 1000)
+    plan     = _clean("plan", 1500)
+    if not telegram:
+        raise HTTPException(status_code=400, detail="telegram handle is required")
+    if len(bio) < 20:
+        raise HTTPException(status_code=400, detail="please write at least a short bio (20+ chars)")
+    if len(plan) < 30:
+        raise HTTPException(status_code=400, detail="please describe your promotion plan in a bit more detail (30+ chars)")
+
+    twitter   = _clean("twitter", 200)
+    instagram = _clean("instagram", 200)
+    youtube   = _clean("youtube", 200)
+    tiktok    = _clean("tiktok", 200)
+    website   = _clean("website", 200)
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="invalid UID")
+        # Mint referral code so the user can start sharing right away.
+        ref_code = _ensure_referral_code(user, db)
+
+        # UPSERT application (one-per-user). Re-submitting before approval
+        # overwrites the previous application; once approved we lock it.
+        with engine.begin() as conn:
+            # Atomic UPSERT with a WHERE-guard on the UPDATE branch — we never
+            # touch a row that's already been approved, even if an admin flips
+            # the status between this request and a concurrent one.
+            res = conn.execute(sa.text("""
+                INSERT INTO affiliate_applications
+                  (user_id, telegram, twitter, instagram, youtube, tiktok,
+                   website, bio, plan, status, sub_share_pct, fee_share_pct,
+                   created_at)
+                VALUES
+                  (:u, :tg, :tw, :ig, :yt, :tt, :web, :bio, :plan,
+                   'pending', :sp, :fp, NOW())
+                ON CONFLICT (user_id) DO UPDATE SET
+                  telegram = EXCLUDED.telegram,
+                  twitter = EXCLUDED.twitter,
+                  instagram = EXCLUDED.instagram,
+                  youtube = EXCLUDED.youtube,
+                  tiktok = EXCLUDED.tiktok,
+                  website = EXCLUDED.website,
+                  bio = EXCLUDED.bio,
+                  plan = EXCLUDED.plan,
+                  status = 'pending',
+                  created_at = NOW(),
+                  reviewed_at = NULL,
+                  reviewer_note = NULL
+                WHERE affiliate_applications.status <> 'approved'
+                RETURNING id
+            """), {
+                "u": user.id, "tg": telegram, "tw": twitter, "ig": instagram,
+                "yt": youtube, "tt": tiktok, "web": website, "bio": bio,
+                "plan": plan, "sp": DEFAULT_SUB_SHARE_PCT, "fp": DEFAULT_FEE_SHARE_PCT,
+            })
+            # If RETURNING produced no row, the conflict target hit an already-
+            # approved application and the WHERE-guard skipped the update.
+            if res.first() is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="You're already an approved affiliate.",
+                )
+
+        return JSONResponse({
+            "ok": True,
+            "status": "pending",
+            "referral_code": ref_code,
+            "referral_url": f"{REFERRAL_BASE_URL}/r/{ref_code}",
+            "message": "Application received! We'll review and reach out on Telegram within 48h.",
+        })
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":
