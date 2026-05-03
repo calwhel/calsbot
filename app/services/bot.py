@@ -4748,7 +4748,7 @@ async def process_custom_qt_leverage(message: types.Message, state: FSMContext):
             from app.utils.encryption import decrypt_api_key
             api_key = decrypt_api_key(prefs.bitunix_api_key)
             api_secret = decrypt_api_key(prefs.bitunix_api_secret)
-            trader = BitunixTrader(api_key, api_secret)
+            trader = BitunixTrader(api_key, api_secret, bitunix_uid=getattr(user, "bitunix_uid", None))
             
             current_price = await trader.get_current_price(f"{symbol}USDT")
             if not current_price or current_price <= 0:
@@ -4865,7 +4865,7 @@ async def handle_confirm_trade(callback: CallbackQuery):
             
             api_key = decrypt_api_key(prefs.bitunix_api_key)
             api_secret = decrypt_api_key(prefs.bitunix_api_secret)
-            trader = BitunixTrader(api_key, api_secret)
+            trader = BitunixTrader(api_key, api_secret, bitunix_uid=getattr(user, "bitunix_uid", None))
             
             # Fetch current price
             current_price = await trader.get_current_price(f"{symbol}USDT")
@@ -10629,7 +10629,7 @@ async def cmd_test_autotrader(message: types.Message):
             
             # STEP 3: Connect to Bitunix
             steps.append("3️⃣ Connecting to Bitunix...")
-            trader = BitunixTrader(api_key, api_secret)
+            trader = BitunixTrader(api_key, api_secret, bitunix_uid=getattr(user, "bitunix_uid", None))
             
             # STEP 4: Get balance
             steps.append("4️⃣ Checking balance...")

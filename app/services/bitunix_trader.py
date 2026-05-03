@@ -180,9 +180,16 @@ async def notify_admin_trade_failure(user: User, signal_symbol: str, reason: str
 class BitunixTrader:
     """Handles automated trading on Bitunix Futures exchange"""
     
-    def __init__(self, api_key: str, api_secret: str):
+    def __init__(self, api_key: str, api_secret: str, bitunix_uid: Optional[str] = None):
         self.api_key = api_key
         self.api_secret = api_secret
+        # Bitunix UID for the affiliate-roster gate ("user must be under our master
+        # affiliate to trade live"). Optional kwarg for backward-compat with the
+        # ~16 existing call sites — when None and BITUNIX_REQUIRE_AFFILIATE=1,
+        # place_trade() returns AFFILIATE_GATE error instead of placing the order.
+        # Read-only methods (get_balance, get_open_positions) and close_position
+        # are intentionally NOT gated so users can always check & exit.
+        self.bitunix_uid = bitunix_uid
         self.base_url = "https://fapi.bitunix.com"
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=5.0)
@@ -782,6 +789,35 @@ class BitunixTrader:
         """
         try:
             import asyncio as _asyncio
+
+            # ── Affiliate-roster gate ("user must be under our master to trade live") ──
+            # Centralised here so EVERY live order placed via BitunixTrader is gated,
+            # regardless of which call site (strategy_executor, bot.py manual /trade,
+            # position-coach actions, scanners, etc.) constructed the trader.
+            try:
+                from app.services.bitunix_partner import is_uid_affiliated as _is_uid_aff
+                _aff_ok, _aff_reason = await _is_uid_aff(self.bitunix_uid)
+                if not _aff_ok:
+                    logger.warning(
+                        f"[BitunixTrader.place_trade] AFFILIATE_GATE blocked order — "
+                        f"uid={self.bitunix_uid!r} reason={_aff_reason} symbol={symbol} dir={direction}"
+                    )
+                    return {
+                        "success": False,
+                        "error": f"AFFILIATE_GATE:{_aff_reason}",
+                        "order_id": None,
+                    }
+            except Exception as _aff_exc:
+                # Fail-closed: any unexpected error in the gate routes to "no trade"
+                # rather than letting an unverified user fire live orders.
+                logger.error(
+                    f"[BitunixTrader.place_trade] Affiliate gate threw, fail-closed: {_aff_exc}"
+                )
+                return {
+                    "success": False,
+                    "error": f"AFFILIATE_GATE:check_error:{_aff_exc}",
+                    "order_id": None,
+                }
 
             bitunix_symbol = symbol.replace('/', '')
 
