@@ -37,12 +37,12 @@ export function MiniDonut({
     pct >= 55 ? 'positive' : pct < 40 ? 'negative' : 'warning';
   const finalTone = tone || auto;
 
-  const colorMap = {
-    positive: ['#34d399', '#10b981'] as const,
-    warning:  ['#fbbf24', '#f59e0b'] as const,
-    negative: ['#f87171', '#ef4444'] as const,
-    accent:   ['#67e8f9', '#22d3ee'] as const,
-    neutral:  ['#94a3b8', '#64748b'] as const,
+  const colorMap: Record<typeof finalTone | 'accent' | 'neutral', readonly [string, string]> = {
+    positive: [colors.positive, colors.positive] as const,
+    warning:  [colors.warning, colors.warning] as const,
+    negative: [colors.negative, colors.negative] as const,
+    accent:   [colors.positive, colors.positive] as const,
+    neutral:  [colors.textDim, colors.textDim] as const,
   };
   const [c0, c1] = colorMap[finalTone];
 

@@ -397,7 +397,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   riskChipActive: {
-    backgroundColor: 'rgba(34,211,238,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.10)',
     borderColor: colors.accent,
   },
   riskChipText: {

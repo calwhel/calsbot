@@ -4,19 +4,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, font, spacing } from '@/constants/colors';
 
 /**
- * SectionLabel — uppercase header used between content blocks.
- *
- *   ┃ RECENT TRADES                                        See all  ›
- *   ─────────────────────────────────────────────────────────────────
- *
- * The leading bar is a coloured gradient sliver that reinforces the
- * section's tone (defaults to brand cyan). Optional right-side action
- * link, optional caption underneath.
+ * SectionLabel (modern-dark) — quiet uppercase header. The leading colour
+ * bar has been removed. Right-side action stays, but always renders in the
+ * neutral text-dim tone (no per-tone tinting).
  */
 export function SectionLabel({
   label,
   caption,
-  tone = 'accent',
+  tone: _tone = 'accent',
   actionLabel,
   onActionPress,
 }: {
@@ -26,19 +21,9 @@ export function SectionLabel({
   actionLabel?: string;
   onActionPress?: () => void;
 }) {
-  const accentMap = {
-    accent:   colors.accent,
-    positive: colors.positive,
-    violet:   colors.violet,
-    warning:  colors.warning,
-    neutral:  colors.textDim,
-  };
-  const accent = accentMap[tone];
-
   return (
     <View style={styles.wrap}>
       <View style={styles.row}>
-        <View style={[styles.bar, { backgroundColor: accent }]} />
         <Text style={styles.label} numberOfLines={1}>{label}</Text>
         <View style={{ flex: 1 }} />
         {actionLabel && onActionPress ? (
@@ -47,11 +32,11 @@ export function SectionLabel({
             hitSlop={8}
             style={({ pressed }) => [
               styles.action,
-              pressed && { opacity: 0.65 },
+              pressed && { opacity: 0.6 },
             ]}
           >
-            <Text style={[styles.actionText, { color: accent }]}>{actionLabel}</Text>
-            <Ionicons name="chevron-forward" size={14} color={accent} />
+            <Text style={styles.actionText}>{actionLabel}</Text>
+            <Ionicons name="chevron-forward" size={13} color={colors.textDim} />
           </Pressable>
         ) : null}
       </View>
@@ -67,18 +52,12 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-  },
-  bar: {
-    width: 3,
-    height: 14,
-    borderRadius: 2,
   },
   label: {
-    color: colors.text,
-    fontFamily: font.black,
-    fontSize: 12,
-    letterSpacing: 1.0,
+    color: colors.textDim,
+    fontFamily: font.semibold,
+    fontSize: 11,
+    letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
   action: {
@@ -89,15 +68,15 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   actionText: {
-    fontFamily: font.bold,
+    color: colors.textDim,
+    fontFamily: font.medium,
     fontSize: 12,
-    letterSpacing: 0.2,
+    letterSpacing: 0.1,
   },
   caption: {
     color: colors.textMute,
     fontFamily: font.regular,
     fontSize: 12,
     marginTop: 4,
-    marginLeft: 11,
   },
 });

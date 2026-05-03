@@ -79,7 +79,7 @@ const StrategyCard = React.memo(function StrategyCard({ s, onPress }: { s: Strat
   const uid = React.useId().replace(/:/g, '');
   const haloId = `card-halo-${uid}`;
   const sheenId = `card-sheen-${uid}`;
-  const tonePrimary = pnl > 0 ? '#34d399' : pnl < 0 ? '#f87171' : '#67e8f9';
+  const tonePrimary = pnl > 0 ? colors.positive : pnl < 0 ? colors.negative : colors.textDim;
 
   return (
     <Pressable
@@ -96,8 +96,8 @@ const StrategyCard = React.memo(function StrategyCard({ s, onPress }: { s: Strat
       <Svg style={StyleSheet.absoluteFill} preserveAspectRatio="none" viewBox="0 0 100 100">
         <Defs>
           <SvgLinearGradient id={sheenId} x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0" stopColor="#1c2440" stopOpacity="1" />
-            <Stop offset="1" stopColor="#0f1524" stopOpacity="1" />
+            <Stop offset="0" stopColor={colors.card} stopOpacity="1" />
+            <Stop offset="1" stopColor={colors.card} stopOpacity="1" />
           </SvgLinearGradient>
           <RadialGradient id={haloId} cx="100%" cy="0%" rx="70%" ry="60%">
             <Stop offset="0" stopColor={tonePrimary} stopOpacity={trades > 0 ? '0.18' : '0'} />

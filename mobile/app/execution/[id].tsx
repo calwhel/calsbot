@@ -376,7 +376,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: 'rgba(34,211,238,0.32)',
+    borderColor: 'rgba(255,255,255,0.10)',
     backgroundColor: colors.accentDim,
   },
   openStratText: { color: colors.accent, fontFamily: font.black, fontSize: 12.5, letterSpacing: 0.5 },

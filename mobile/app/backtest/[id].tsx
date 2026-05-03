@@ -101,9 +101,9 @@ function RunningPanel({ days }: { days: 30 | 90 }) {
       <Svg style={StyleSheet.absoluteFill}>
         <Defs>
           <SvgLinearGradient id="bt-running" x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor="#1a2452" />
-            <Stop offset="0.6" stopColor="#13193a" />
-            <Stop offset="1" stopColor="#0a1024" />
+            <Stop offset="0" stopColor={colors.card} />
+            <Stop offset="0.6" stopColor={colors.card} />
+            <Stop offset="1" stopColor={colors.card} />
           </SvgLinearGradient>
         </Defs>
         <Rect width="100%" height="100%" fill="url(#bt-running)" />
@@ -143,9 +143,9 @@ function ProPaywall({ message }: { message?: string }) {
       <Svg style={StyleSheet.absoluteFill}>
         <Defs>
           <SvgLinearGradient id="bt-paywall" x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor="#221a4a" />
-            <Stop offset="0.5" stopColor="#1a1936" />
-            <Stop offset="1" stopColor="#0f1024" />
+            <Stop offset="0" stopColor="#1A1C20" />
+            <Stop offset="0.5" stopColor="#1A1C20" />
+            <Stop offset="1" stopColor="#1A1C20" />
           </SvgLinearGradient>
         </Defs>
         <Rect width="100%" height="100%" fill="url(#bt-paywall)" />
@@ -212,15 +212,9 @@ function ResultsPanel({
         <Svg style={StyleSheet.absoluteFill}>
           <Defs>
             <SvgLinearGradient id="bt-result" x1="0" y1="0" x2="1" y2="1">
-              <Stop
-                offset="0"
-                stopColor={totalPnl >= 0 ? '#0d3a2c' : '#3a161a'}
-              />
-              <Stop
-                offset="0.55"
-                stopColor={totalPnl >= 0 ? '#0a2222' : '#2a121a'}
-              />
-              <Stop offset="1" stopColor="#0a1024" />
+              <Stop offset="0" stopColor={colors.card} />
+              <Stop offset="0.55" stopColor={colors.card} />
+              <Stop offset="1" stopColor={colors.card} />
             </SvgLinearGradient>
           </Defs>
           <Rect width="100%" height="100%" fill="url(#bt-result)" />
@@ -632,7 +626,7 @@ const styles = StyleSheet.create({
   runningCard: {
     borderRadius: radius.xl,
     borderWidth: 1,
-    borderColor: 'rgba(34,211,238,0.18)',
+    borderColor: 'rgba(255,255,255,0.10)',
     overflow: 'hidden',
     backgroundColor: colors.card,
   },
@@ -666,8 +660,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    backgroundColor: 'rgba(34,211,238,0.10)',
-    borderColor: 'rgba(34,211,238,0.28)',
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderColor: 'rgba(255,255,255,0.10)',
     borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 5,
@@ -684,7 +678,7 @@ const styles = StyleSheet.create({
   paywall: {
     borderRadius: radius.xl,
     borderWidth: 1,
-    borderColor: 'rgba(167,139,250,0.32)',
+    borderColor: 'rgba(255,255,255,0.10)',
     overflow: 'hidden',
     backgroundColor: colors.card,
   },
@@ -699,7 +693,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     alignSelf: 'flex-start',
     borderWidth: 1,
-    borderColor: 'rgba(167,139,250,0.36)',
+    borderColor: 'rgba(255,255,255,0.10)',
   },
   paywallBadgeText: {
     color: colors.violet,
@@ -761,7 +755,7 @@ const styles = StyleSheet.create({
   resultHero: {
     borderRadius: radius.xl,
     borderWidth: 1,
-    borderColor: 'rgba(34,211,238,0.18)',
+    borderColor: 'rgba(255,255,255,0.10)',
     overflow: 'hidden',
     backgroundColor: colors.card,
   },

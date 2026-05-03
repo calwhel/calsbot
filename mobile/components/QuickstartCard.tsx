@@ -2,13 +2,11 @@ import React from 'react';
 import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
 
-import { colors, font, glow, radius, spacing } from '@/constants/colors';
+import { colors, font, radius, spacing } from '@/constants/colors';
 
 type Step = {
   icon: React.ComponentProps<typeof Ionicons>['name'];
-  iconColor: string;
   title: string;
   body: string;
 };
@@ -16,35 +14,26 @@ type Step = {
 const STEPS: Step[] = [
   {
     icon: 'construct-outline',
-    iconColor: '#22d3ee',
     title: 'Build a strategy',
     body: "Pick your coins, a trigger condition, and your risk. Takes about 60 seconds.",
   },
   {
     icon: 'pulse-outline',
-    iconColor: '#a78bfa',
     title: 'We watch the markets',
     body: "Our engine scans 24/7 — you don't need to keep the app open.",
   },
   {
     icon: 'notifications-outline',
-    iconColor: '#fbbf24',
     title: 'Get notified instantly',
     body: 'Push notifications + Telegram alerts fire the moment a trade opens or closes.',
   },
 ];
 
 /**
- * First-run welcome card shown on Home when the user has zero strategies. Far
- * more inviting than a generic empty-state — it explains TradeHub in three
- * sentences and gives an obvious next-step CTA.
+ * Modern-dark Quickstart — flat surface, neutral step bubbles, single solid
+ * CTA. No gradients, no shines.
  */
 export function QuickstartCard({ onStart }: { onStart: () => void }) {
-  const uid = React.useId().replace(/:/g, '');
-  const bgId = `qs-bg-${uid}`;
-  const shineId = `qs-shine-${uid}`;
-  const ctaId = `qs-cta-${uid}`;
-
   const handlePress = () => {
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
@@ -53,31 +42,9 @@ export function QuickstartCard({ onStart }: { onStart: () => void }) {
   };
 
   return (
-    <View style={[styles.wrap, glow.accent]}>
-      <Svg style={StyleSheet.absoluteFill}>
-        <Defs>
-          <SvgLinearGradient id={bgId} x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor="#1c2654" />
-            <Stop offset="0.55" stopColor="#141c3b" />
-            <Stop offset="1" stopColor="#0b1226" />
-          </SvgLinearGradient>
-          <SvgLinearGradient id={shineId} x1="0" y1="0" x2="1" y2="0">
-            <Stop offset="0" stopColor="#22d3ee" stopOpacity="0.7" />
-            <Stop offset="0.6" stopColor="#a78bfa" stopOpacity="0.4" />
-            <Stop offset="1" stopColor="#22d3ee" stopOpacity="0" />
-          </SvgLinearGradient>
-        </Defs>
-        <Rect width="100%" height="100%" fill={`url(#${bgId})`} />
-        <Rect width="100%" height="3" fill={`url(#${shineId})`} />
-      </Svg>
-
+    <View style={styles.wrap}>
       <View style={styles.inner}>
-        <View style={styles.eyebrowRow}>
-          <View style={styles.eyebrow}>
-            <Ionicons name="sparkles" size={11} color={colors.accent} />
-            <Text style={styles.eyebrowText}>WELCOME TO TRADEHUB</Text>
-          </View>
-        </View>
+        <Text style={styles.eyebrow}>WELCOME TO TRADEHUB</Text>
         <Text style={styles.title}>Automate any crypto strategy in three steps.</Text>
         <Text style={styles.subtitle}>
           You describe the rules — we watch the markets and tell you the moment something happens.
@@ -86,12 +53,12 @@ export function QuickstartCard({ onStart }: { onStart: () => void }) {
         <View style={{ marginTop: spacing.lg }}>
           {STEPS.map((step, i) => (
             <View key={`q-${i}`} style={styles.stepRow}>
-              <View style={[styles.stepBubble, { backgroundColor: `${step.iconColor}24`, borderColor: `${step.iconColor}55` }]}>
-                <Ionicons name={step.icon} size={18} color={step.iconColor} />
+              <View style={styles.stepBubble}>
+                <Ionicons name={step.icon} size={16} color={colors.textDim} />
               </View>
               <View style={{ flex: 1, paddingLeft: 12 }}>
                 <Text style={styles.stepTitle}>
-                  <Text style={[styles.stepNum, { color: step.iconColor }]}>{i + 1}. </Text>
+                  <Text style={styles.stepNum}>{i + 1}. </Text>
                   {step.title}
                 </Text>
                 <Text style={styles.stepBody}>{step.body}</Text>
@@ -104,22 +71,11 @@ export function QuickstartCard({ onStart }: { onStart: () => void }) {
           onPress={handlePress}
           style={({ pressed }) => [
             styles.cta,
-            pressed && { transform: [{ scale: 0.985 }], opacity: 0.92 },
+            pressed && { opacity: 0.85 },
           ]}
         >
-          <Svg style={StyleSheet.absoluteFill}>
-            <Defs>
-              <SvgLinearGradient id={ctaId} x1="0" y1="0" x2="1" y2="1">
-                <Stop offset="0" stopColor="#22d3ee" />
-                <Stop offset="0.55" stopColor="#0ea5e9" />
-                <Stop offset="1" stopColor="#6366f1" />
-              </SvgLinearGradient>
-            </Defs>
-            <Rect width="100%" height="100%" fill={`url(#${ctaId})`} />
-          </Svg>
-          <Ionicons name="rocket-outline" size={18} color="#fff" />
           <Text style={styles.ctaText}>Build your first strategy</Text>
-          <Ionicons name="arrow-forward" size={16} color="#fff" />
+          <Ionicons name="arrow-forward" size={15} color={colors.bg} />
         </Pressable>
 
         <Text style={styles.fineprint}>
@@ -134,35 +90,23 @@ const styles = StyleSheet.create({
   wrap: {
     borderRadius: radius.xl,
     borderWidth: 1,
-    borderColor: 'rgba(34,211,238,0.18)',
-    overflow: 'hidden',
+    borderColor: colors.border,
     backgroundColor: colors.card,
+    overflow: 'hidden',
   },
   inner: { padding: spacing.xl },
-  eyebrowRow: { flexDirection: 'row' },
   eyebrow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: 'rgba(34,211,238,0.14)',
-    borderColor: 'rgba(34,211,238,0.32)',
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: radius.pill,
-  },
-  eyebrowText: {
-    color: colors.accent,
-    fontFamily: font.bold,
-    fontSize: 10,
-    letterSpacing: 0.7,
+    color: colors.textDim,
+    fontFamily: font.semibold,
+    fontSize: 11,
+    letterSpacing: 0.8,
   },
   title: {
     color: colors.text,
-    fontFamily: font.black,
+    fontFamily: font.semibold,
     fontSize: 22,
     letterSpacing: -0.4,
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
     lineHeight: 27,
   },
   subtitle: {
@@ -178,19 +122,21 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   stepBubble: {
-    width: 34,
-    height: 34,
-    borderRadius: 11,
+    width: 32,
+    height: 32,
+    borderRadius: radius.md,
+    backgroundColor: colors.cardHi,
+    borderWidth: 1,
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
   },
   stepTitle: {
     color: colors.text,
     fontFamily: font.semibold,
     fontSize: 14,
   },
-  stepNum: { fontFamily: font.black },
+  stepNum: { color: colors.textDim, fontFamily: font.semibold },
   stepBody: {
     color: colors.textDim,
     fontFamily: font.regular,
@@ -205,15 +151,15 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: spacing.lg,
     paddingVertical: 14,
-    borderRadius: radius.pill,
-    overflow: 'hidden',
+    borderRadius: radius.md,
+    backgroundColor: colors.text,
     marginTop: spacing.lg,
   },
   ctaText: {
-    color: '#fff',
-    fontFamily: font.bold,
+    color: colors.bg,
+    fontFamily: font.semibold,
     fontSize: 15,
-    letterSpacing: 0.2,
+    letterSpacing: 0.1,
   },
   fineprint: {
     color: colors.textMute,

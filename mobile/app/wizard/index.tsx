@@ -1360,7 +1360,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 10, paddingVertical: 6,
     borderRadius: radius.pill,
-    backgroundColor: colors.accentDim, borderWidth: 1, borderColor: 'rgba(34,211,238,0.32)',
+    backgroundColor: colors.accentDim, borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
   },
   addBtnTxt: { fontFamily: font.semibold, fontSize: 12, color: colors.accent },
   emptyBox: {
@@ -1429,7 +1429,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     marginTop: spacing.sm, paddingVertical: 10,
     borderRadius: radius.md,
-    backgroundColor: colors.violetDim, borderWidth: 1, borderColor: 'rgba(167,139,250,0.32)',
+    backgroundColor: colors.violetDim, borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
   },
   aiIcon:    { fontSize: 14 },
   aiBtnTxt:  { fontFamily: font.semibold, fontSize: 13, color: colors.violet },

@@ -2,24 +2,14 @@ import React from 'react';
 import { View, RefreshControl, StyleSheet, Text, Platform } from 'react-native';
 // IMPORTANT: we use react-native-gesture-handler's ScrollView (not RN's
 // built-in one) so that child gestures wrapped in <GestureDetector> can
-// reliably arbitrate against the parent scroll. With RN's ScrollView the
-// child Pan gesture's `failOffsetY` / `activeOffsetX` are evaluated by the
-// gesture-handler system but iOS's underlying UIScrollView doesn't know to
-// participate, so horizontal-pan-on-chart was being intermittently swallowed.
-// RNGH's ScrollView is a drop-in replacement that wires the native scroll
-// into the same arbitrator the chart uses.
+// reliably arbitrate against the parent scroll.
 import { ScrollView } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AmbientBg } from '@/components/AmbientBg';
 import { colors, font, spacing } from '@/constants/colors';
 
 /**
- * Standard screen container with the ambient gradient backdrop, optional
- * header, and pull-to-refresh ScrollView. Handles safe-area insets correctly.
- *
- * The AmbientBg is fixed (won't scroll) and absolutely positioned so the
- * blob colours stay anchored to the top of the viewport while content scrolls
- * naturally underneath.
+ * Screen (modern-dark) — flat background, refined header type, pull-to-refresh.
+ * AmbientBg is removed entirely; the bg is `colors.bg` only.
  */
 export function Screen({
   children,
@@ -29,12 +19,11 @@ export function Screen({
   refreshing,
   onRefresh,
   scroll = true,
-  ambient = 'duo',
+  ambient: _ambient = 'duo',
 }: {
   children: React.ReactNode;
   title?: string;
   subtitle?: string;
-  /** Optional element rendered to the right of the title row (e.g. button). */
   rightSlot?: React.ReactNode;
   refreshing?: boolean;
   onRefresh?: () => void;
@@ -53,32 +42,21 @@ export function Screen({
           <RefreshControl
             refreshing={!!refreshing}
             onRefresh={onRefresh}
-            tintColor={colors.accent}
-            colors={[colors.accent]}
+            tintColor={colors.textDim}
+            colors={[colors.text]}
             progressBackgroundColor={colors.bgElev}
           />
         ) : undefined,
         showsVerticalScrollIndicator: false,
-        // ── iOS scroll-jump fix ─────────────────────────────────────────
-        // Without these, iOS will auto-adjust contentInset whenever the
-        // status-bar / keyboard / RefreshControl inset wobbles. With our
-        // 1Hz ticker polling causing frequent re-renders, that auto-adjust
-        // surfaces as the page "jolting back to the top" mid-scroll. We
-        // own the safe-area padding via `topPad` and the bottom padding via
-        // `scrollContent.paddingBottom`, so we don't need iOS doing it.
         automaticallyAdjustContentInsets: false,
         contentInsetAdjustmentBehavior: 'never' as const,
         keyboardShouldPersistTaps: 'handled' as const,
-        // Cap the per-frame scroll deceleration so the chart's horizontal
-        // pan can grab a touch even mid-scroll without the inertial scroll
-        // fighting it.
         scrollEventThrottle: 16,
       }
     : { style: [styles.fixed, { paddingTop: topPad }] };
 
   return (
     <View style={styles.root}>
-      <AmbientBg variant={ambient} />
       <Wrapper {...wrapperProps as any}>
         {(title || subtitle) ? (
           <View style={styles.header}>
@@ -119,16 +97,16 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.text,
-    fontFamily: font.black,
-    fontSize: 30,
-    letterSpacing: -0.8,
-    lineHeight: 36,
+    fontFamily: font.semibold,
+    fontSize: 26,
+    letterSpacing: -0.6,
+    lineHeight: 32,
   },
   subtitle: {
     color: colors.textDim,
     fontFamily: font.regular,
-    fontSize: 14,
+    fontSize: 13,
     marginTop: 4,
-    lineHeight: 19,
+    lineHeight: 18,
   },
 });

@@ -113,12 +113,12 @@ const styles = StyleSheet.create({
   iconChip: {
     width: 22,
     height: 22,
-    borderRadius: 7,
+    borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(34,211,238,0.12)',
+    backgroundColor: colors.cardHi,
     borderWidth: 1,
-    borderColor: 'rgba(34,211,238,0.22)',
+    borderColor: colors.border,
   },
   label: {
     color: colors.textDim,

@@ -472,8 +472,8 @@ export function StrategyConfigCard({ config }: { config?: Cfg | null }) {
 
 function Chip({ label, tone = 'neutral' }: { label: string; tone?: 'neutral' | 'accent' | 'violet' }) {
   const fg = tone === 'accent' ? colors.accent : tone === 'violet' ? colors.violet : colors.text;
-  const bg = tone === 'accent' ? 'rgba(34,211,238,0.12)' : tone === 'violet' ? 'rgba(167,139,250,0.14)' : 'rgba(255,255,255,0.05)';
-  const bd = tone === 'accent' ? 'rgba(34,211,238,0.28)' : tone === 'violet' ? 'rgba(167,139,250,0.34)' : colors.border;
+  const bg = tone === 'accent' ? 'rgba(255,255,255,0.10)' : tone === 'violet' ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.05)';
+  const bd = tone === 'accent' ? 'rgba(255,255,255,0.10)' : tone === 'violet' ? 'rgba(255,255,255,0.10)' : colors.border;
   return (
     <View style={[chipStyles.chip, { backgroundColor: bg, borderColor: bd }]}>
       <Text style={[chipStyles.chipText, { color: fg }]}>{label}</Text>

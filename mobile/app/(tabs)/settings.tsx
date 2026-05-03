@@ -114,14 +114,14 @@ export default function SettingsScreen() {
         <Svg style={StyleSheet.absoluteFill} preserveAspectRatio="none" viewBox="0 0 100 100">
           <Defs>
             <SvgLinearGradient id={heroId} x1="0" y1="0" x2="1" y2="1">
-              <Stop offset="0" stopColor="#221c4a" />
-              <Stop offset="0.5" stopColor="#161836" />
-              <Stop offset="1" stopColor="#0a0e22" />
+              <Stop offset="0" stopColor={colors.card} />
+              <Stop offset="0.5" stopColor={colors.card} />
+              <Stop offset="1" stopColor={colors.card} />
             </SvgLinearGradient>
             <RadialGradient id={orbId} cx="100%" cy="0%" rx="65%" ry="65%">
-              <Stop offset="0" stopColor="#a78bfa" stopOpacity="0.42" />
-              <Stop offset="0.55" stopColor="#22d3ee" stopOpacity="0.18" />
-              <Stop offset="1" stopColor="#22d3ee" stopOpacity="0" />
+              <Stop offset="0" stopColor={colors.card} stopOpacity="0" />
+              <Stop offset="0.55" stopColor={colors.card} stopOpacity="0" />
+              <Stop offset="1" stopColor={colors.card} stopOpacity="0" />
             </RadialGradient>
           </Defs>
           <Rect width="100" height="100" fill={`url(#${heroId})`} />
@@ -243,12 +243,11 @@ export default function SettingsScreen() {
           <Svg style={StyleSheet.absoluteFill} preserveAspectRatio="none" viewBox="0 0 100 100">
             <Defs>
               <SvgLinearGradient id="pro-bg" x1="0" y1="0" x2="1" y2="1">
-                <Stop offset="0" stopColor="#22d3ee" stopOpacity="0.22" />
-                <Stop offset="0.6" stopColor="#7c3aed" stopOpacity="0.18" />
-                <Stop offset="1" stopColor="#0a1024" stopOpacity="0.6" />
+                <Stop offset="0" stopColor={colors.cardHi} />
+                <Stop offset="1" stopColor={colors.cardHi} />
               </SvgLinearGradient>
             </Defs>
-            <Rect width="100" height="100" fill="#0f1428" />
+            <Rect width="100" height="100" fill={colors.cardHi} />
             <Rect width="100" height="100" fill="url(#pro-bg)" />
           </Svg>
           <View style={styles.proInner}>
@@ -379,7 +378,7 @@ function PushPrefsCard({ uid }: { uid: string | null | undefined }) {
   return (
     <View style={pushStyles.card}>
       <View style={pushStyles.row}>
-        <View style={[pushStyles.iconWrap, { backgroundColor: colors.violetDim, borderColor: 'rgba(167,139,250,0.32)' }]}>
+        <View style={[pushStyles.iconWrap, { backgroundColor: colors.violetDim, borderColor: 'rgba(255,255,255,0.10)' }]}>
           <Ionicons name="document-text-outline" size={18} color={colors.violet} />
         </View>
         <View style={{ flex: 1 }}>
@@ -390,7 +389,7 @@ function PushPrefsCard({ uid }: { uid: string | null | undefined }) {
           value={paper}
           onValueChange={onTogglePaper}
           disabled={!loaded || saving}
-          trackColor={{ true: colors.violet, false: '#3a3f5c' }}
+          trackColor={{ true: colors.violet, false: '#22252A' }}
           thumbColor="#fff"
         />
       </View>
@@ -409,7 +408,7 @@ function PushPrefsCard({ uid }: { uid: string | null | undefined }) {
           value={live}
           onValueChange={onToggleLive}
           disabled={!loaded || saving}
-          trackColor={{ true: colors.positive, false: '#3a3f5c' }}
+          trackColor={{ true: colors.positive, false: '#22252A' }}
           thumbColor="#fff"
         />
       </View>
@@ -455,8 +454,8 @@ function SettingsLink({
   onPress: () => void;
 }) {
   const palette = {
-    accent:   { color: colors.accent,   bg: colors.accentDim,   border: 'rgba(34,211,238,0.32)' },
-    violet:   { color: colors.violet,   bg: colors.violetDim,   border: 'rgba(167,139,250,0.32)' },
+    accent:   { color: colors.accent,   bg: colors.accentDim,   border: 'rgba(255,255,255,0.10)' },
+    violet:   { color: colors.violet,   bg: colors.violetDim,   border: 'rgba(255,255,255,0.10)' },
     positive: { color: colors.positive, bg: colors.positiveDim, border: 'rgba(52,211,153,0.32)' },
     warning:  { color: colors.warning,  bg: colors.warningDim,  border: 'rgba(251,191,36,0.32)' },
   }[tone];
@@ -486,7 +485,7 @@ const styles = StyleSheet.create({
   profileCard: {
     borderRadius: radius.xl,
     borderWidth: 1,
-    borderColor: 'rgba(167,139,250,0.28)',
+    borderColor: 'rgba(255,255,255,0.10)',
     overflow: 'hidden',
     backgroundColor: colors.card,
     minHeight: 220,
@@ -535,7 +534,7 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   statLabel: {
-    color: '#8b95b3',
+    color: '#9A9BA0',
     fontFamily: font.bold,
     fontSize: 9,
     letterSpacing: 0.7,
@@ -555,9 +554,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: radius.md,
-    backgroundColor: 'rgba(34,211,238,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.10)',
     borderWidth: 1,
-    borderColor: 'rgba(34,211,238,0.18)',
+    borderColor: 'rgba(255,255,255,0.10)',
   },
   refreshLabel: {
     color: colors.accent,
@@ -572,14 +571,14 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     backgroundColor: 'rgba(0,0,0,0.42)',
     borderWidth: 1,
-    borderColor: 'rgba(34,211,238,0.18)',
+    borderColor: 'rgba(255,255,255,0.10)',
     borderRadius: radius.md,
     paddingHorizontal: 14,
     paddingVertical: 12,
     gap: spacing.md,
   },
   uidLabel: {
-    color: '#8b95b3',
+    color: '#9A9BA0',
     fontFamily: font.bold,
     fontSize: 9.5,
     letterSpacing: 0.8,
@@ -599,7 +598,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: 'rgba(34,211,238,0.32)',
+    borderColor: 'rgba(255,255,255,0.10)',
     backgroundColor: colors.accentDim,
   },
   copyChipActive: {
@@ -617,9 +616,9 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     borderRadius: radius.xl,
     borderWidth: 1,
-    borderColor: 'rgba(34,211,238,0.32)',
+    borderColor: colors.border,
     overflow: 'hidden',
-    backgroundColor: '#0f1428',
+    backgroundColor: colors.cardHi,
   },
   proInner: {
     flexDirection: 'row',
@@ -746,7 +745,7 @@ const pushStyles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.32)',
   },
   chipActive: {
-    borderColor: 'rgba(34,211,238,0.48)',
+    borderColor: 'rgba(255,255,255,0.10)',
     backgroundColor: colors.accentDim,
   },
   chipText: {

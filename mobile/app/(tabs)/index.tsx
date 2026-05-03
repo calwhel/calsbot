@@ -832,7 +832,7 @@ const styles = StyleSheet.create({
   },
   rangeChipActive: {
     backgroundColor: colors.accentDim,
-    borderColor: 'rgba(34,211,238,0.45)',
+    borderColor: 'rgba(255,255,255,0.10)',
   },
   rangeChipText: {
     color: colors.textDim,

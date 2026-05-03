@@ -15,25 +15,25 @@ type Step = {
 const STEPS: Step[] = [
   {
     icon: 'scan-outline',
-    iconColor: '#22d3ee',
+    iconColor: colors.textDim,
     title: 'We scan the markets',
     body: 'Every few minutes our engine checks your trigger conditions across the coins you watch.',
   },
   {
     icon: 'flash-outline',
-    iconColor: '#a78bfa',
+    iconColor: colors.textDim,
     title: 'The strategy fires',
     body: "When all conditions match, a paper trade opens at the live price — no exchange account needed to test.",
   },
   {
     icon: 'notifications-outline',
-    iconColor: '#fbbf24',
+    iconColor: colors.textDim,
     title: 'You get notified',
     body: 'A push notification + Telegram message lands instantly so you can copy the trade or just watch.',
   },
   {
     icon: 'flag-outline',
-    iconColor: '#34d399',
+    iconColor: colors.positive,
     title: 'We track the result',
     body: 'Take-profit and stop-loss are watched 24/7. The closed trade lands in your history with full P&L.',
   },
@@ -51,8 +51,8 @@ export function AutomationCard() {
         {STEPS.map((step, i) => (
           <View key={`step-${i}`} style={styles.row}>
             <View style={styles.left}>
-              <View style={[styles.bubble, { backgroundColor: `${step.iconColor}1f`, borderColor: `${step.iconColor}55` }]}>
-                <Ionicons name={step.icon} size={18} color={step.iconColor} />
+              <View style={styles.bubble}>
+                <Ionicons name={step.icon} size={16} color={step.iconColor} />
               </View>
               {i < STEPS.length - 1 ? <View style={styles.connector} /> : null}
             </View>
@@ -79,12 +79,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   bubble: {
-    width: 32,
-    height: 32,
-    borderRadius: 12,
+    width: 30,
+    height: 30,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: colors.cardHi,
     borderWidth: 1,
+    borderColor: colors.border,
   },
   connector: {
     flex: 1,

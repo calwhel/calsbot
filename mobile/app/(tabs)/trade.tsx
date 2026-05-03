@@ -97,9 +97,9 @@ function fmtRelMs(tsMs: number): string {
 
 function pressureColor(score: number): string {
   if (score >  0.30) return colors.positive;
-  if (score >  0.05) return '#7dd3a8';
+  if (score >  0.05) return '#3FB68B';
   if (score < -0.30) return colors.negative;
-  if (score < -0.05) return '#f3a3a3';
+  if (score < -0.05) return '#E5484D';
   return colors.textDim;
 }
 
@@ -1103,7 +1103,7 @@ const styles = StyleSheet.create({
   },
   tickerStatCell: { flex: 1 },
   tickerStatLabel: {
-    color: '#8b95b3',
+    color: '#9A9BA0',
     fontFamily: font.bold,
     fontSize: 9,
     letterSpacing: 0.7,
@@ -1160,7 +1160,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
   },
   overlayToggleActive: {
-    borderColor: 'rgba(34,211,238,0.32)',
+    borderColor: 'rgba(255,255,255,0.10)',
     backgroundColor: colors.accentDim,
   },
   overlayToggleText: {
@@ -1219,7 +1219,7 @@ const styles = StyleSheet.create({
   },
   pressureLeft: { marginBottom: spacing.sm },
   pressureLabel: {
-    color: '#8b95b3',
+    color: '#9A9BA0',
     fontFamily: font.bold,
     fontSize: 9.5,
     letterSpacing: 0.7,
@@ -1246,7 +1246,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentDim,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: 'rgba(34,211,238,0.28)',
+    borderColor: 'rgba(255,255,255,0.10)',
     padding: spacing.md,
   },
   zoneText: {
@@ -1273,7 +1273,7 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
   },
   contextLabel: {
-    color: '#8b95b3',
+    color: '#9A9BA0',
     fontFamily: font.bold,
     fontSize: 9.5,
     letterSpacing: 0.7,
@@ -1298,7 +1298,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.violetDim,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: 'rgba(167,139,250,0.28)',
+    borderColor: 'rgba(255,255,255,0.10)',
     padding: spacing.md,
   },
   aiLoadingCard: {
@@ -1308,7 +1308,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.violetDim,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: 'rgba(167,139,250,0.28)',
+    borderColor: 'rgba(255,255,255,0.10)',
     padding: spacing.lg,
     justifyContent: 'center',
   },
@@ -1316,7 +1316,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: 'rgba(167,139,250,0.32)',
+    borderColor: 'rgba(255,255,255,0.10)',
     padding: spacing.md,
     ...glow.card,
   },
@@ -1396,7 +1396,7 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
   },
   planLabel: {
-    color: '#8b95b3',
+    color: '#9A9BA0',
     fontFamily: font.bold,
     fontSize: 9.5,
     letterSpacing: 0.7,
@@ -1509,7 +1509,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.violetDim,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: 'rgba(167,139,250,0.28)',
+    borderColor: 'rgba(255,255,255,0.10)',
     padding: spacing.md,
   },
   exchPills: {
@@ -1532,7 +1532,7 @@ const styles = StyleSheet.create({
   },
   tapeFlowItem: { flex: 1, alignItems: 'center' },
   tapeFlowLabel: {
-    color: '#8b95b3',
+    color: '#9A9BA0',
     fontFamily: font.bold,
     fontSize: 9.5,
     letterSpacing: 0.7,

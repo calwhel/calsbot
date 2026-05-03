@@ -17,17 +17,9 @@ function fmtPnl(v: number | null | undefined): string {
   return `${sign}${v.toFixed(2)}%`;
 }
 
-function paletteFor(name: string): [string, string] {
-  const palettes: Array<[string, string]> = [
-    ['#a78bfa', '#7c3aed'],
-    ['#22d3ee', '#3b82f6'],
-    ['#34d399', '#10b981'],
-    ['#fbbf24', '#f59e0b'],
-    ['#f472b6', '#db2777'],
-  ];
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return palettes[h % palettes.length];
+function paletteFor(_name: string): [string, string] {
+  // Modern-dark: every creator avatar renders as the same neutral chip.
+  return [colors.cardHi, colors.cardHi];
 }
 
 export default function CreatorProfileScreen() {

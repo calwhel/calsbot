@@ -43,19 +43,9 @@ function fmtPnl(v: number | null): string {
   return `${sign}${v.toFixed(1)}%`;
 }
 
-function avatarPalette(name: string): [string, string] {
-  const palettes: Array<[string, string]> = [
-    ['#a78bfa', '#7c3aed'],
-    ['#22d3ee', '#3b82f6'],
-    ['#34d399', '#10b981'],
-    ['#fbbf24', '#f59e0b'],
-    ['#f472b6', '#db2777'],
-    ['#5eead4', '#22d3ee'],
-    ['#f5b754', '#d97706'],
-  ];
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return palettes[h % palettes.length];
+function avatarPalette(_name: string): [string, string] {
+  // Modern-dark: every avatar renders as the same neutral chip.
+  return [colors.cardHi, colors.cardHi];
 }
 
 const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: MarketplaceListing; onPress: () => void }) {
@@ -70,7 +60,7 @@ const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: Marketp
   const haloId = `mk-halo-${uid}`;
   const avatarId = `mk-av-${uid}`;
   const [c0, c1] = avatarPalette(m.author_name || '?');
-  const tonePrimary = headlinePnl > 0 ? '#34d399' : headlinePnl < 0 ? '#f87171' : '#67e8f9';
+  const tonePrimary = headlinePnl > 0 ? colors.positive : headlinePnl < 0 ? colors.negative : colors.textDim;
 
   const isFree = m.pricing_model === 'free';
 
@@ -86,8 +76,8 @@ const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: Marketp
       <Svg style={StyleSheet.absoluteFill} preserveAspectRatio="none" viewBox="0 0 100 100">
         <Defs>
           <SvgLinearGradient id={sheenId} x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0" stopColor="#1c2440" />
-            <Stop offset="1" stopColor="#0f1524" />
+            <Stop offset="0" stopColor={colors.card} />
+            <Stop offset="1" stopColor={colors.card} />
           </SvgLinearGradient>
           <RadialGradient id={haloId} cx="100%" cy="0%" rx="65%" ry="60%">
             <Stop offset="0" stopColor={tonePrimary} stopOpacity="0.18" />
@@ -100,7 +90,7 @@ const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: Marketp
 
       {m.is_featured ? (
         <View style={styles.ribbon}>
-          <Ionicons name="star" size={10} color="#0a1024" />
+          <Ionicons name="star" size={10} color={colors.bg} />
           <Text style={styles.ribbonText}>FEATURED</Text>
         </View>
       ) : null}
@@ -304,10 +294,10 @@ const LeaderboardCard = React.memo(function LeaderboardCard({
 }: { entry: LeaderboardEntry; onTap: () => void }) {
   const positive = entry.pnl_pct >= 0;
   const rankColor =
-    entry.rank === 1 ? colors.gold :
-    entry.rank === 2 ? '#cbd5e1' :
-    entry.rank === 3 ? '#d97706' :
-    colors.textDim;
+    entry.rank === 1 ? colors.warning :
+    entry.rank === 2 ? colors.text :
+    entry.rank === 3 ? colors.textDim :
+    colors.textMute;
   return (
     <Pressable
       onPress={() => {
@@ -361,7 +351,7 @@ const lbStyles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.bgElev,
   },
-  periodChipActive: { backgroundColor: colors.accentDim, borderColor: 'rgba(34,211,238,0.45)' },
+  periodChipActive: { backgroundColor: colors.accentDim, borderColor: 'rgba(255,255,255,0.10)' },
   periodChipText: { color: colors.textDim, fontFamily: font.bold, fontSize: 9.5, letterSpacing: 0.6 },
   periodChipTextActive: { color: colors.accent },
 
@@ -569,7 +559,7 @@ const styles = StyleSheet.create({
   headerIconWrap: {
     width: 36, height: 36, borderRadius: 10,
     backgroundColor: colors.accentDim,
-    borderWidth: 1, borderColor: 'rgba(34,211,238,0.32)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
     alignItems: 'center', justifyContent: 'center',
   },
   titleHero: { color: colors.text, fontFamily: font.black, fontSize: 30, letterSpacing: -1.0 },
@@ -599,10 +589,10 @@ const styles = StyleSheet.create({
     zIndex: 5,
   },
   ribbonText: {
-    color: '#0a1024',
-    fontFamily: font.black,
+    color: colors.bg,
+    fontFamily: font.bold,
     fontSize: 9,
-    letterSpacing: 1.0,
+    letterSpacing: 0.8,
   },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   avatarWrap: {
@@ -638,7 +628,7 @@ const styles = StyleSheet.create({
   },
   priceBoxPaid: {
     backgroundColor: colors.accentDim,
-    borderColor: 'rgba(34,211,238,0.36)',
+    borderColor: 'rgba(255,255,255,0.10)',
   },
   priceFreeText: {
     color: colors.positive,
@@ -723,7 +713,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.violetDim,
     borderWidth: 1,
-    borderColor: 'rgba(167,139,250,0.32)',
+    borderColor: 'rgba(255,255,255,0.10)',
   },
   metaLabel: {
     color: colors.textMute,
