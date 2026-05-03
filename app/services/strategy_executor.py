@@ -1913,6 +1913,8 @@ async def evaluate_and_fire(
                     title=f"📝 {strategy.name}",
                     body=f"Paper trade: {_coin} {direction} {leverage}× @ ${current_price:,.4f}",
                     data={"type": "trade_open", "strategy_id": strategy.id, "kind": "paper"},
+                    kind="paper",
+                    position_usd=float(risk.get("position_size_usd") or 0) or None,
                 )
             except Exception as e:
                 logger.warning(f"Paper DM failed: {e}")
@@ -2002,6 +2004,8 @@ async def evaluate_and_fire(
                         title=f"⚠️ {strategy.name}",
                         body=f"Live order failed → paper: {_coin} {direction} {leverage}×",
                         data={"type": "trade_open", "strategy_id": strategy.id, "kind": "paper_fallback"},
+                        kind="paper",
+                        position_usd=float(risk.get("position_size_usd") or 0) or None,
                     )
                 except Exception:
                     pass
@@ -2060,6 +2064,8 @@ async def evaluate_and_fire(
                             title=f"🚀 {strategy.name}",
                             body=f"Live trade: {_coin} {direction} {leverage}× @ ${display_entry:,.4f}",
                             data={"type": "trade_open", "strategy_id": strategy.id, "kind": "live"},
+                            kind="live",
+                            position_usd=float(risk.get("position_size_usd") or 0) or None,
                         )
                     except Exception as e:
                         logger.warning(f"Live DM failed: {e}")

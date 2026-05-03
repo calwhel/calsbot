@@ -154,6 +154,13 @@ class UserPreference(Base):
     news_signals_enabled = Column(Boolean, default=True)
     min_news_impact = Column(Integer, default=9)
     min_news_confidence = Column(Integer, default=80)
+
+    # Mobile push notification preferences (filter applied in app/services/expo_push.py).
+    # `push_min_position_usd` = 0 disables the size filter; otherwise notifications
+    # for trades smaller than this notional are suppressed (manual + strategy alike).
+    push_notify_paper      = Column(Boolean, default=True)
+    push_notify_live       = Column(Boolean, default=True)
+    push_min_position_usd  = Column(Float,   default=0.0)
     
     # Partial take profit percentages
     tp1_percent = Column(Integer, default=30)  # % to close at TP1

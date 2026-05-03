@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Alert, Linking, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Alert, Linking, Platform, ActivityIndicator, Switch } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,7 +21,7 @@ import { Logo } from '@/components/Logo';
 import { SectionLabel } from '@/components/SectionLabel';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { apiGet, type Portfolio } from '@/lib/api';
+import { apiGet, apiPut, type Portfolio, type PushPrefs } from '@/lib/api';
 
 export default function SettingsScreen() {
   const { user, uid, signOut, refreshUser } = useAuth();
@@ -264,6 +264,12 @@ export default function SettingsScreen() {
         </Pressable>
       ) : null}
 
+      {/* Push notification preferences */}
+      <View style={{ marginTop: spacing.xl }}>
+        <SectionLabel label="Push notifications" />
+      </View>
+      <PushPrefsCard uid={uid} />
+
       {/* Quick links */}
       <View style={{ marginTop: spacing.xl }}>
         <SectionLabel label="Open in browser" />
@@ -298,6 +304,144 @@ export default function SettingsScreen() {
 
       <Text style={styles.version}>TradeHub Mobile · v1.1.2 · early access</Text>
     </Screen>
+  );
+}
+
+const MIN_USD_OPTIONS = [0, 10, 25, 50, 100] as const;
+
+function PushPrefsCard({ uid }: { uid: string | null | undefined }) {
+  const [paper, setPaper] = useState(true);
+  const [live, setLive]   = useState(true);
+  const [minUsd, setMinUsd] = useState<number>(0);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!uid) return;
+    let cancel = false;
+    (async () => {
+      try {
+        const s = await apiGet<PushPrefs & Record<string, unknown>>('/api/settings', uid);
+        if (cancel) return;
+        setPaper(s.push_notify_paper !== false);
+        setLive(s.push_notify_live !== false);
+        setMinUsd(Number(s.push_min_position_usd) || 0);
+      } catch {
+        // fail-silent — user can still toggle, save will surface errors
+      } finally {
+        if (!cancel) setLoaded(true);
+      }
+    })();
+    return () => { cancel = true; };
+  }, [uid]);
+
+  // Optimistic-update with rollback: each handler captures the previous value
+  // and reverts the local state if the PUT fails so the UI never sticks at an
+  // unsaved value.
+  const persist = useCallback(async (
+    patch: Partial<PushPrefs>,
+    rollback: () => void,
+  ) => {
+    if (!uid) { rollback(); return; }
+    setSaving(true);
+    try {
+      await apiPut('/api/settings', patch, uid);
+      if (Platform.OS !== 'web') {
+        Haptics.selectionAsync().catch(() => {});
+      }
+    } catch (e: any) {
+      rollback();
+      Alert.alert('Could not save', e?.message || 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  }, [uid]);
+
+  const onTogglePaper = useCallback((v: boolean) => {
+    const prev = paper;
+    setPaper(v);
+    persist({ push_notify_paper: v }, () => setPaper(prev));
+  }, [paper, persist]);
+
+  const onToggleLive = useCallback((v: boolean) => {
+    const prev = live;
+    setLive(v);
+    persist({ push_notify_live: v }, () => setLive(prev));
+  }, [live, persist]);
+
+  const onPickMinUsd = useCallback((v: number) => {
+    if (v === minUsd) return;
+    const prev = minUsd;
+    setMinUsd(v);
+    persist({ push_min_position_usd: v }, () => setMinUsd(prev));
+  }, [minUsd, persist]);
+
+  return (
+    <View style={pushStyles.card}>
+      <View style={pushStyles.row}>
+        <View style={[pushStyles.iconWrap, { backgroundColor: colors.violetDim, borderColor: 'rgba(167,139,250,0.32)' }]}>
+          <Ionicons name="document-text-outline" size={18} color={colors.violet} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={pushStyles.label}>Paper trade alerts</Text>
+          <Text style={pushStyles.hint}>Pushes when one of your strategies fires a paper trade.</Text>
+        </View>
+        <Switch
+          value={paper}
+          onValueChange={onTogglePaper}
+          disabled={!loaded || saving}
+          trackColor={{ true: colors.violet, false: '#3a3f5c' }}
+          thumbColor="#fff"
+        />
+      </View>
+
+      <View style={pushStyles.divider} />
+
+      <View style={pushStyles.row}>
+        <View style={[pushStyles.iconWrap, { backgroundColor: colors.positiveDim, borderColor: 'rgba(52,211,153,0.32)' }]}>
+          <Ionicons name="flash" size={18} color={colors.positive} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={pushStyles.label}>Live trade alerts</Text>
+          <Text style={pushStyles.hint}>Pushes when a live order is placed (manual or strategy).</Text>
+        </View>
+        <Switch
+          value={live}
+          onValueChange={onToggleLive}
+          disabled={!loaded || saving}
+          trackColor={{ true: colors.positive, false: '#3a3f5c' }}
+          thumbColor="#fff"
+        />
+      </View>
+
+      <View style={pushStyles.divider} />
+
+      <View style={{ paddingHorizontal: 4 }}>
+        <Text style={pushStyles.label}>Min position size</Text>
+        <Text style={pushStyles.hint}>Skip pushes for trades below this notional. Set to $0 to get every alert.</Text>
+        <View style={pushStyles.chipRow}>
+          {MIN_USD_OPTIONS.map((v) => {
+            const active = v === minUsd;
+            return (
+              <Pressable
+                key={v}
+                onPress={() => onPickMinUsd(v)}
+                disabled={!loaded || saving}
+                style={({ pressed }) => [
+                  pushStyles.chip,
+                  active && pushStyles.chipActive,
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Text style={[pushStyles.chipText, active && pushStyles.chipTextActive]}>
+                  {v === 0 ? 'All' : `$${v}+`}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    </View>
   );
 }
 
@@ -543,5 +687,75 @@ const styles = StyleSheet.create({
     fontSize: 11,
     textAlign: 'center',
     marginTop: spacing.xxl,
+  },
+});
+
+const pushStyles = StyleSheet.create({
+  card: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    ...glow.card,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: 4,
+  },
+  iconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  label: {
+    color: colors.text,
+    fontFamily: font.bold,
+    fontSize: 14,
+    letterSpacing: -0.2,
+  },
+  hint: {
+    color: colors.textMute,
+    fontFamily: font.regular,
+    fontSize: 11.5,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    marginVertical: spacing.md,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: spacing.md,
+  },
+  chip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(0,0,0,0.32)',
+  },
+  chipActive: {
+    borderColor: 'rgba(34,211,238,0.48)',
+    backgroundColor: colors.accentDim,
+  },
+  chipText: {
+    color: colors.textDim,
+    fontFamily: font.bold,
+    fontSize: 12,
+    letterSpacing: 0.3,
+  },
+  chipTextActive: {
+    color: colors.accent,
   },
 });

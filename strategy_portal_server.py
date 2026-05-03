@@ -598,10 +598,18 @@ def _ensure_tables():
         except Exception as e:
             logger.warning(f"_ensure_tables({table}): {e}")
 
+    user_preference_cols = {
+        # Mobile push notification preferences (added with Quick Trade / push prefs feature)
+        "push_notify_paper":      "ALTER TABLE user_preferences ADD COLUMN push_notify_paper BOOLEAN DEFAULT TRUE",
+        "push_notify_live":       "ALTER TABLE user_preferences ADD COLUMN push_notify_live BOOLEAN DEFAULT TRUE",
+        "push_min_position_usd":  "ALTER TABLE user_preferences ADD COLUMN push_min_position_usd DOUBLE PRECISION DEFAULT 0",
+    }
+
     _migrate_columns("users", user_cols)
     _migrate_columns("auto_trade_strategies", auto_strategy_cols)
     _migrate_columns("auto_trade_paper_trades", auto_trade_cols)
     _migrate_columns("indicator_alerts", indicator_alerts_cols)
+    _migrate_columns("user_preferences", user_preference_cols)
 
 
 @app.on_event("startup")
@@ -3729,6 +3737,8 @@ async def trade_quick(request: Request):
                 title=f"⚡ Quick {side} {sym}",
                 body=f"{leverage}× · ${position_usd:.0f} @ ${live_price:,.4f}",
                 data={"type": "quick_trade", "symbol": sym, "side": side},
+                kind="manual",
+                position_usd=float(position_usd),
             )
         except Exception as _push_err:
             logger.debug(f"[quick_trade] push send skipped: {_push_err}")
@@ -7193,6 +7203,10 @@ async def api_get_settings(uid: str = Query(...)):
             "dm_alerts":                prefs.dm_alerts                if prefs else True,
             "max_consecutive_losses":   prefs.max_consecutive_losses   if prefs else 3,
             "cooldown_after_loss":      prefs.cooldown_after_loss      if prefs else 60,
+            # Mobile push notification preferences
+            "push_notify_paper":        prefs.push_notify_paper        if prefs else True,
+            "push_notify_live":         prefs.push_notify_live         if prefs else True,
+            "push_min_position_usd":    prefs.push_min_position_usd    if prefs else 0.0,
             # From StrategyPortalSettings (portal defaults)
             "default_leverage":         portal.default_leverage        if portal else 10,
             "default_position_size":    portal.default_position_size   if portal else 5.0,
@@ -7261,6 +7275,22 @@ async def api_put_settings(request: Request, uid: str = Query(...)):
         for k, attr in pref_map.items():
             if k in body:
                 setattr(prefs, attr, body[k])
+
+        # Push notification prefs — strict coercion + range guards.
+        # Booleans accept actual bools; numeric threshold must be finite & >= 0.
+        import math as _math2
+        if "push_notify_paper" in body:
+            prefs.push_notify_paper = bool(body["push_notify_paper"])
+        if "push_notify_live" in body:
+            prefs.push_notify_live = bool(body["push_notify_live"])
+        if "push_min_position_usd" in body:
+            try:
+                _v = float(body["push_min_position_usd"])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="push_min_position_usd must be numeric")
+            if not _math2.isfinite(_v) or _v < 0 or _v > 1_000_000:
+                raise HTTPException(status_code=400, detail="push_min_position_usd must be a finite value 0-1_000_000")
+            prefs.push_min_position_usd = _v
 
         # API keys — only overwrite if non-empty strings are provided
         api_key    = body.get("bitunix_api_key", "").strip()
