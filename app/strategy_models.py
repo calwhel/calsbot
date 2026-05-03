@@ -133,6 +133,15 @@ class StrategyMarketplace(Base):
     is_featured     = Column(Boolean, default=False)
     is_trending     = Column(Boolean, default=False)
     view_count      = Column(Integer, default=0)
+    # AI Originals — strategies generated, backtested and published autonomously
+    # by the AI Strategy Generator service (app/services/ai_strategy_generator.py).
+    is_ai_generated = Column(Boolean, default=False, index=True)
+    backtest_sharpe = Column(Float, default=0.0)        # snapshot at publish time
+    backtest_pnl_pct = Column(Float, default=0.0)        # snapshot at publish time
+    backtest_trades = Column(Integer, default=0)
+    backtest_win_rate = Column(Float, default=0.0)
+    backtest_max_dd = Column(Float, default=0.0)
+    backtest_days   = Column(Integer, default=0)
 
 
 class StrategyOffer(Base):
@@ -219,13 +228,31 @@ def init_strategy_tables(engine):
                     pass
 
         for col, typ in [
-            ("category", "VARCHAR(50) DEFAULT 'general'"),
-            ("tags",     "TEXT"),
+            ("category",          "VARCHAR(50) DEFAULT 'general'"),
+            ("tags",              "TEXT"),
+            ("is_ai_generated",   "BOOLEAN DEFAULT FALSE"),
+            ("backtest_sharpe",   "FLOAT DEFAULT 0"),
+            ("backtest_pnl_pct",  "FLOAT DEFAULT 0"),
+            ("backtest_trades",   "INTEGER DEFAULT 0"),
+            ("backtest_win_rate", "FLOAT DEFAULT 0"),
+            ("backtest_max_dd",   "FLOAT DEFAULT 0"),
+            ("backtest_days",     "INTEGER DEFAULT 0"),
         ]:
             if ("strategy_marketplace", col) not in existing_cols:
                 try:
                     conn.execute(text(f"ALTER TABLE strategy_marketplace ADD COLUMN {col} {typ}"))
                     conn.commit()
+                    # Index hot filter columns to keep marketplace queries snappy
+                    # as AI Curator publishes thousands of listings.
+                    if col == "is_ai_generated":
+                        try:
+                            conn.execute(text(
+                                "CREATE INDEX IF NOT EXISTS ix_strategy_marketplace_is_ai_generated "
+                                "ON strategy_marketplace(is_ai_generated)"
+                            ))
+                            conn.commit()
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 

@@ -799,6 +799,64 @@ async def _keepalive_then_reclaim(conn):
     asyncio.create_task(_executor_claim_loop(first_attempt_delay=5))
 
 
+# ── AI Strategy Generator advisory lock (mirror of executor pattern) ───────
+_AIGEN_LOCK_ID = 42_424_243
+_aigen_running_in_this_worker = False
+
+
+def _try_acquire_aigen_lock():
+    """Same shape as _try_acquire_executor_lock but for the AI generator."""
+    try:
+        import psycopg2
+        from app.config import settings
+        conn = psycopg2.connect(settings.get_database_url())
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (_AIGEN_LOCK_ID,))
+        acquired = cur.fetchone()[0]
+        cur.close()
+        if acquired:
+            return conn
+        conn.close()
+        return None
+    except Exception as e:
+        logger.warning(f"[AIGen] advisory lock attempt failed: {e}")
+        return None
+
+
+async def _aigen_keepalive_then_reclaim(conn):
+    global _aigen_running_in_this_worker
+    await _maintain_advisory_lock(conn)
+    _aigen_running_in_this_worker = False
+    logger.warning("[AIGen] advisory lock connection lost — re-entering claim loop")
+    asyncio.create_task(_aigen_claim_loop(first_attempt_delay=5))
+
+
+async def _aigen_claim_loop(first_attempt_delay: int = 0):
+    """Same pattern as _executor_claim_loop. Only ONE worker wins."""
+    global _aigen_running_in_this_worker
+    loop = asyncio.get_event_loop()
+    if first_attempt_delay:
+        await asyncio.sleep(first_attempt_delay)
+    while True:
+        if _aigen_running_in_this_worker:
+            return
+        lock_conn = await loop.run_in_executor(None, _try_acquire_aigen_lock)
+        if lock_conn:
+            _aigen_running_in_this_worker = True
+            logger.info("✅ AI Strategy Generator lock acquired — this worker runs the generator")
+            asyncio.create_task(_aigen_keepalive_then_reclaim(lock_conn))
+            try:
+                from app.services.ai_strategy_generator import run_loop as _aigen_loop
+                asyncio.create_task(_aigen_loop())
+            except Exception as e:
+                logger.error(f"[AIGen] failed to start loop: {e}")
+                _aigen_running_in_this_worker = False
+            return
+        else:
+            await asyncio.sleep(60)   # retry every minute (slower than executor — less time-critical)
+
+
 async def _startup_background():
     """Non-critical startup work that runs after the server is already live."""
     import asyncio as _aio
@@ -826,6 +884,20 @@ async def _startup_background():
         asyncio.create_task(_executor_claim_loop(first_attempt_delay=0))
     else:
         logger.info("Strategy executor DISABLED (dev environment — only production runs it)")
+
+    # AI Strategy Generator — autonomous content engine for the marketplace.
+    # Runs only in production (or with ENABLE_AI_GENERATOR=1) so dev never
+    # double-runs against the shared Neon DB. Uses its own advisory lock so
+    # only ONE gunicorn worker runs the loop (LLM spend + dedupe sanity).
+    _aigen_enabled = (
+        _is_production
+        or _os.environ.get("ENABLE_AI_GENERATOR", "").lower() in ("1", "true", "yes")
+    )
+    _aigen_disabled = _os.environ.get("DISABLE_AI_GENERATOR", "").lower() in ("1", "true", "yes")
+    if _aigen_enabled and not _aigen_disabled:
+        asyncio.create_task(_aigen_claim_loop(first_attempt_delay=15))
+    else:
+        logger.info("AI Strategy Generator DISABLED (dev environment)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4611,6 +4683,7 @@ async def api_marketplace(
     category: str = Query("all"),
     pricing:  str = Query("all"),
     search:   str = Query(""),
+    ai_only:  int = Query(0),     # 1 → only AI-generated listings
 ):
     from app.database import SessionLocal, engine
     db = SessionLocal()
@@ -4623,7 +4696,11 @@ async def api_marketplace(
         from app.strategy_marketplace_ext import StrategyPurchase, init_marketplace_ext_tables
 
         q = db.query(StrategyMarketplace)
-        if category != "all":
+        # "ai" is a sentinel category that filters by is_ai_generated rather
+        # than by the category column (which holds scalp/swing/etc).
+        if category == "ai" or ai_only:
+            q = q.filter(StrategyMarketplace.is_ai_generated == True)
+        elif category != "all":
             q = q.filter(StrategyMarketplace.category == category)
         if pricing == "free":
             q = q.filter(StrategyMarketplace.pricing_model == "free")
@@ -4685,6 +4762,11 @@ async def api_marketplace(
                 "is_featured":      m.is_featured,
                 "is_trending":      getattr(m, "is_trending", False),
                 "is_verified":      m.is_verified,
+                "is_ai_generated":  bool(getattr(m, "is_ai_generated", False)),
+                "backtest_sharpe":  round(float(getattr(m, "backtest_sharpe", 0) or 0), 2),
+                "backtest_pnl":     round(float(getattr(m, "backtest_pnl_pct", 0) or 0), 2),
+                "backtest_trades":  int(getattr(m, "backtest_trades", 0) or 0),
+                "backtest_win_rate": round(float(getattr(m, "backtest_win_rate", 0) or 0), 1),
                 "verified_win_rate": round(m.verified_win_rate, 1) if m.is_verified and m.verified_win_rate else None,
                 "verified_pnl":     round(m.verified_pnl, 2) if m.is_verified and m.verified_pnl else None,
                 "live_win_rate":    round(perf.win_rate, 1) if perf and perf.total_trades >= 3 else None,
@@ -9568,6 +9650,47 @@ async def admin_competition_create(request: Request, secret: str = Query(...)):
         return JSONResponse({"success": True, "id": comp.id})
     finally:
         db.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Strategy Generator — admin endpoints (stats + manual trigger)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/api/admin/ai-generator/stats")
+async def admin_ai_generator_stats(uid: str = Query(...)):
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or not getattr(user, "is_admin", False):
+            raise HTTPException(status_code=403, detail="Admin only")
+    finally:
+        db.close()
+    try:
+        from app.services.ai_strategy_generator import get_stats
+        return JSONResponse(get_stats())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/ai-generator/run")
+async def admin_ai_generator_run(uid: str = Query(...), n: int = Query(3)):
+    """Manually trigger one cycle of N specs. Returns when the cycle finishes."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or not getattr(user, "is_admin", False):
+            raise HTTPException(status_code=403, detail="Admin only")
+    finally:
+        db.close()
+    try:
+        from app.services.ai_strategy_generator import run_one_cycle
+        n_clamped = max(1, min(int(n), 12))
+        summary = await run_one_cycle(per_cycle=n_clamped)
+        return JSONResponse(summary)
+    except Exception as e:
+        logger.error(f"[AIGen] manual run failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

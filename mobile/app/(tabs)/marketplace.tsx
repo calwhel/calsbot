@@ -25,9 +25,10 @@ import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, type MarketplaceListing } from '@/lib/api';
 
-type SortKey = 'top' | 'trending' | 'new' | 'price';
+type SortKey = 'top' | 'trending' | 'new' | 'price' | 'ai';
 const SORTS: Array<{ key: SortKey; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
   { key: 'top',      label: 'Top',      icon: 'trophy-outline' },
+  { key: 'ai',       label: 'AI',       icon: 'hardware-chip-outline' },
   { key: 'trending', label: 'Trending', icon: 'flame-outline' },
   { key: 'new',      label: 'New',      icon: 'sparkles-outline' },
   { key: 'price',    label: 'Free',     icon: 'gift-outline' },
@@ -203,6 +204,7 @@ const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: Marketp
 
         {/* Badges row */}
         <View style={styles.badges}>
+          {m.is_ai_generated ? <Pill label="🤖 AI Original" tone="accent" small /> : null}
           <Pill label={m.category} tone="neutral" small />
           {m.is_trending ? <Pill label="🔥 Trending" tone="warning" small /> : null}
           {m.is_verified && !m.is_featured ? <Pill label="✓ Verified" tone="accent" small /> : null}
@@ -254,11 +256,15 @@ export default function MarketplaceScreen() {
   const router = useRouter();
   const [sort, setSort] = useState<SortKey>('top');
 
-  const apiSort = sort === 'price' ? 'top' : sort;
+  const apiSort = sort === 'price' || sort === 'ai' ? 'top' : sort;
+  const aiOnly  = sort === 'ai';
 
   const { data, isLoading, isFetching, refetch, isError } = useQuery({
-    queryKey: ['marketplace', uid, apiSort],
-    queryFn: () => apiGet<MarketplaceListing[]>('/api/marketplace', uid, { sort: apiSort }),
+    queryKey: ['marketplace', uid, apiSort, aiOnly ? '1' : '0'],
+    queryFn: () => apiGet<MarketplaceListing[]>('/api/marketplace', uid, {
+      sort: apiSort,
+      ...(aiOnly ? { ai_only: '1' } : {}),
+    }),
     enabled: !!uid,
   });
 
@@ -267,6 +273,7 @@ export default function MarketplaceScreen() {
   const filtered = useMemo(() => {
     const list = data || [];
     if (sort === 'price') return list.filter((m) => m.pricing_model === 'free');
+    if (sort === 'ai')    return list.filter((m) => m.is_ai_generated);
     return list;
   }, [data, sort]);
 
@@ -349,9 +356,21 @@ export default function MarketplaceScreen() {
         }
         ListEmptyComponent={
           <EmptyState
-            icon={sort === 'price' ? 'gift-outline' : 'storefront-outline'}
-            title={sort === 'price' ? 'No free listings yet' : 'Marketplace is quiet'}
-            hint={sort === 'price' ? 'Switch to Top to browse paid strategies.' : 'Be the first to publish a strategy from the web portal.'}
+            icon={
+              sort === 'price' ? 'gift-outline' :
+              sort === 'ai'    ? 'hardware-chip-outline' :
+              'storefront-outline'
+            }
+            title={
+              sort === 'price' ? 'No free listings yet' :
+              sort === 'ai'    ? 'No AI Originals yet' :
+              'Marketplace is quiet'
+            }
+            hint={
+              sort === 'price' ? 'Switch to Top to browse paid strategies.' :
+              sort === 'ai'    ? 'The AI Curator publishes new strategies hourly. Check back soon.' :
+              'Be the first to publish a strategy from the web portal.'
+            }
           />
         }
         showsVerticalScrollIndicator={false}
