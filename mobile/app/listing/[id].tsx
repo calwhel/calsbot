@@ -260,8 +260,8 @@ export default function ListingDetailScreen() {
             <PrimaryButton
               label={
                 isPaid
-                  ? `Buy & clone — $${m.price_usdt}`
-                  : 'Clone to my strategies'
+                  ? `Buy & copy — $${m.price_usdt}`
+                  : 'Copy to my strategies'
               }
               onPress={() => cloneM.mutate()}
               loading={cloneM.isPending}
@@ -269,7 +269,7 @@ export default function ListingDetailScreen() {
           )}
           {!owned ? (
             <Text style={styles.helpText}>
-              Cloned strategies start in paper-trading mode. You can review and activate
+              Copied strategies start in paper-trading mode. You can review and activate
               them from the Strategies tab.
             </Text>
           ) : null}
@@ -308,7 +308,7 @@ export default function ListingDetailScreen() {
               />
               <View style={{ width: spacing.md }} />
               <StatCard
-                label="Clones"
+                label="Copies"
                 value={`${m.clone_count}`}
                 compact
               />

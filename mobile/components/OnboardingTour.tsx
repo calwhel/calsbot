@@ -41,7 +41,7 @@ const STEPS: Step[] = [
   {
     icon: 'storefront-outline',
     title: 'Discover in the Market',
-    body: 'Browse strategies built by other traders, see real performance, and clone the ones you like with one tap.',
+    body: 'Browse strategies built by other traders, see real performance, and copy the ones you like with one tap.',
   },
   {
     icon: 'shield-checkmark-outline',

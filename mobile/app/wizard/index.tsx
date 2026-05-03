@@ -1157,7 +1157,7 @@ function Step7({
           <SectionHeader
             label="Publish to marketplace"
             icon="🌟"
-            hint="Share your strategy with the TradeHub community — anyone can clone it for free. Paid &amp; subscription pricing can be configured later from the web app."
+            hint="Share your strategy with the TradeHub community — anyone can copy it for free. Paid &amp; subscription pricing can be configured later from the web app."
           />
 
           {publishDone ? (

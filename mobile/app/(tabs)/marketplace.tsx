@@ -179,7 +179,7 @@ const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: Marketp
               <Ionicons name="git-network-outline" size={14} color={colors.violet} />
             </View>
             <View>
-              <Text style={styles.metaLabel}>Clones</Text>
+              <Text style={styles.metaLabel}>Copies</Text>
               <Text style={styles.metaValue}>{m.clone_count}</Text>
             </View>
           </View>
