@@ -9672,6 +9672,57 @@ async def admin_ai_generator_stats(uid: str = Query(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/admin/bitunix/status")
+async def admin_bitunix_status(uid: str = Query(...)):
+    """Snapshot of the Bitunix executor's safety gates + per-user-key coverage."""
+    from app.database import SessionLocal
+    from app.models import User
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or not getattr(user, "is_admin", False):
+            raise HTTPException(status_code=403, detail="Admin only")
+        try:
+            with_keys = (
+                db.query(User)
+                .filter(User.bitunix_api_key.isnot(None))
+                .filter(User.bitunix_api_secret.isnot(None))
+                .count()
+            )
+        except Exception:
+            with_keys = -1
+    finally:
+        db.close()
+    try:
+        from app.services.bitunix_executor import status as _bx_status
+        s = _bx_status()
+        s["users_with_keys_on_file"] = with_keys
+        return JSONResponse(s)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/ai-generator/promote")
+async def admin_ai_generator_promote(uid: str = Query(...)):
+    """Manually trigger one promotion / unpublish pass over AI Curator strategies."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or not getattr(user, "is_admin", False):
+            raise HTTPException(status_code=403, detail="Admin only")
+    finally:
+        db.close()
+    try:
+        from app.services.ai_strategy_generator import run_promotion_cycle
+        loop = asyncio.get_event_loop()
+        summary = await loop.run_in_executor(None, run_promotion_cycle)
+        return JSONResponse(summary)
+    except Exception as e:
+        logger.error(f"[AIGen] manual promote failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/admin/ai-generator/run")
 async def admin_ai_generator_run(uid: str = Query(...), n: int = Query(3)):
     """Manually trigger one cycle of N specs. Returns when the cycle finishes."""

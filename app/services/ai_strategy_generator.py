@@ -42,7 +42,7 @@ def _envi(name: str, default: int) -> int:
     except Exception: return default
 
 GEN_INTERVAL_SEC   = _envi("AIGEN_INTERVAL_SEC", 3600)        # 1h
-GEN_PER_CYCLE      = _envi("AIGEN_PER_CYCLE", 6)
+GEN_PER_CYCLE      = _envi("AIGEN_PER_CYCLE", 3)              # 3/hr (was 6) — cost-tuned
 BT_DAYS            = _envi("AIGEN_BT_DAYS", 60)
 BT_TIMEOUT_SEC     = _envi("AIGEN_BT_TIMEOUT_SEC", 90)
 THRESH_SHARPE      = _envf("AIGEN_MIN_SHARPE", 1.5)
@@ -50,6 +50,22 @@ THRESH_MAX_DD      = _envf("AIGEN_MAX_DD", 15.0)              # absolute % max d
 THRESH_TRADES      = _envi("AIGEN_MIN_TRADES", 30)
 THRESH_WIN_RATE    = _envf("AIGEN_MIN_WIN_RATE", 45.0)
 LOG_FAILURES       = os.environ.get("AIGEN_LOG_FAILURES", "1") not in ("0", "false", "")
+# Cost guard: stop generating once the marketplace already has plenty of AI
+# listings — the promotion loop (Phase 2) thins them out, generation refills.
+MAX_AI_LISTINGS    = _envi("AIGEN_MAX_LISTINGS", 200)
+LLM_MAX_TOKENS     = _envi("AIGEN_LLM_MAX_TOKENS", 500)       # was 700
+
+# ── Phase 2: promotion + unpublish thresholds (post-paper performance) ─────
+PROMOTE_AFTER_DAYS  = _envi("AIGEN_PROMOTE_AFTER_DAYS", 14)
+PROMOTE_MIN_TRADES  = _envi("AIGEN_PROMOTE_MIN_TRADES", 20)
+PROMOTE_WIN_RATE    = _envf("AIGEN_PROMOTE_WIN_RATE", 50.0)
+PROMOTE_MIN_PNL     = _envf("AIGEN_PROMOTE_MIN_PNL_PCT", 5.0)
+UNPUBLISH_MIN_TRADES = _envi("AIGEN_UNPUBLISH_MIN_TRADES", 10)
+UNPUBLISH_WIN_RATE   = _envf("AIGEN_UNPUBLISH_WIN_RATE", 30.0)
+UNPUBLISH_PNL        = _envf("AIGEN_UNPUBLISH_PNL_PCT", -8.0)
+INACTIVE_AFTER_DAYS  = _envi("AIGEN_INACTIVE_DAYS", 30)
+INACTIVE_MAX_TRADES  = _envi("AIGEN_INACTIVE_MAX_TRADES", 5)
+PROMOTE_INTERVAL_SEC = _envi("AIGEN_PROMOTE_INTERVAL_SEC", 86400)  # 24h
 
 # Diverse universe — top liquid USDT perpetuals.
 COIN_UNIVERSE = [
@@ -70,6 +86,7 @@ PRIMARY_HINTS = [
 _STATS = {
     "started_at": None,
     "cycles_run": 0,
+    "cycles_skipped_cap": 0,
     "specs_generated": 0,
     "specs_published": 0,
     "specs_failed_validate": 0,
@@ -78,6 +95,10 @@ _STATS = {
     "last_cycle_at": None,
     "last_cycle_published": 0,
     "last_cycle_generated": 0,
+    "promotion_runs": 0,
+    "promoted_total": 0,
+    "unpublished_total": 0,
+    "last_promotion_at": None,
     "recent": [],   # last 20 outcomes
 }
 
@@ -177,7 +198,9 @@ Aim for Sharpe > {THRESH_SHARPE}, max drawdown < {THRESH_MAX_DD}%, win rate > {T
 Return ONLY the JSON object."""
 
 
-async def _call_anthropic_json(system: str, prompt: str, max_tokens: int = 700) -> Optional[Dict]:
+async def _call_anthropic_json(system: str, prompt: str, max_tokens: int = None) -> Optional[Dict]:
+    if max_tokens is None:
+        max_tokens = LLM_MAX_TOKENS
     try:
         import anthropic
         api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -466,14 +489,38 @@ async def run_one_cycle(per_cycle: int = None) -> Dict:
     """Run a single generation cycle. Returns summary dict."""
     n = per_cycle if per_cycle is not None else GEN_PER_CYCLE
     from app.database import SessionLocal
+    from app.strategy_models import StrategyMarketplace
     summary = {"generated": 0, "published": 0, "failed": 0, "started_at": datetime.utcnow().isoformat()}
 
     db = SessionLocal()
     curator_id = ensure_ai_curator_user(db)
-    db.close()
     if not curator_id:
+        db.close()
         logger.error("[AIGen] no curator user — aborting cycle")
         summary["error"] = "no_curator"
+        return summary
+
+    # Cost guard: don't keep burning LLM credits if the marketplace is full.
+    # The promotion loop will thin out under-performers, then generation resumes.
+    try:
+        active_count = (
+            db.query(StrategyMarketplace)
+            .filter(StrategyMarketplace.is_ai_generated == True)
+            .filter(StrategyMarketplace.author_id == curator_id)
+            .count()
+        )
+    except Exception:
+        active_count = 0
+    db.close()
+
+    if active_count >= MAX_AI_LISTINGS:
+        _STATS["cycles_skipped_cap"] += 1
+        logger.info(
+            f"[AIGen] skipping cycle — {active_count} AI listings already published "
+            f"(cap={MAX_AI_LISTINGS}). Promotion loop will thin them out."
+        )
+        summary["skipped"] = "cap_reached"
+        summary["active_listings"] = active_count
         return summary
 
     for i in range(n):
@@ -569,13 +616,149 @@ def get_stats() -> Dict:
     return s
 
 
+# ── Phase 2: promotion / unpublish cycle ───────────────────────────────────
+def run_promotion_cycle() -> Dict:
+    """
+    Walk all AI Curator strategies that have been live in paper for ≥
+    PROMOTE_AFTER_DAYS days and act on their measured performance:
+
+      - Winners (≥ PROMOTE_MIN_TRADES, win_rate ≥ PROMOTE_WIN_RATE,
+        total_pnl_pct ≥ PROMOTE_MIN_PNL) → mark listing.is_verified
+        + is_featured + record verified_pnl/win_rate (gives them a
+        green-check + featured row treatment in the marketplace).
+      - Losers (≥ UNPUBLISH_MIN_TRADES, AND
+        (win_rate < UNPUBLISH_WIN_RATE OR total_pnl_pct < UNPUBLISH_PNL))
+        → delete the listing + flip strategy.status to 'archived'.
+      - Stagnant (older than INACTIVE_AFTER_DAYS, fewer than
+        INACTIVE_MAX_TRADES trades) → unpublish, archive.
+
+    Idempotent — re-running won't double-promote or double-archive.
+    """
+    from app.database import SessionLocal
+    from app.strategy_models import (
+        UserStrategy, StrategyPerformance, StrategyMarketplace,
+    )
+    from datetime import timedelta
+
+    summary = {"checked": 0, "promoted": 0, "unpublished": 0, "started_at": datetime.utcnow().isoformat()}
+    db = SessionLocal()
+    try:
+        curator_id = ensure_ai_curator_user(db)
+        if not curator_id:
+            return summary
+        cutoff_eligible = datetime.utcnow() - timedelta(days=PROMOTE_AFTER_DAYS)
+        cutoff_inactive = datetime.utcnow() - timedelta(days=INACTIVE_AFTER_DAYS)
+
+        strategies = (
+            db.query(UserStrategy)
+            .filter(UserStrategy.user_id == curator_id)
+            .filter(UserStrategy.created_at <= cutoff_eligible)
+            .filter(UserStrategy.status != "archived")
+            .all()
+        )
+        for s in strategies:
+            summary["checked"] += 1
+            perf = (
+                db.query(StrategyPerformance)
+                .filter(StrategyPerformance.strategy_id == s.id)
+                .first()
+            )
+            listing = (
+                db.query(StrategyMarketplace)
+                .filter(StrategyMarketplace.strategy_id == s.id)
+                .first()
+            )
+            if not listing:
+                continue
+
+            trades = int(getattr(perf, "total_trades", 0) or 0) if perf else 0
+            wr     = float(getattr(perf, "win_rate", 0) or 0) if perf else 0.0
+            pnl    = float(getattr(perf, "total_pnl_pct", 0) or 0) if perf else 0.0
+
+            promote = (
+                trades >= PROMOTE_MIN_TRADES
+                and wr   >= PROMOTE_WIN_RATE
+                and pnl  >= PROMOTE_MIN_PNL
+                and not listing.is_verified
+            )
+            unpublish_loser = (
+                trades >= UNPUBLISH_MIN_TRADES
+                and (wr < UNPUBLISH_WIN_RATE or pnl < UNPUBLISH_PNL)
+            )
+            unpublish_inactive = (
+                s.created_at <= cutoff_inactive
+                and trades < INACTIVE_MAX_TRADES
+            )
+
+            try:
+                if promote:
+                    listing.is_verified      = True
+                    listing.is_featured      = True
+                    listing.verified_win_rate = wr
+                    listing.verified_pnl      = pnl
+                    db.commit()
+                    summary["promoted"] += 1
+                    _STATS["promoted_total"] += 1
+                    logger.info(
+                        f"[AIGen] PROMOTED {s.name} → verified "
+                        f"(trades={trades} wr={wr:.0f}% pnl={pnl:+.1f}%)"
+                    )
+                elif unpublish_loser or unpublish_inactive:
+                    reason = "loser" if unpublish_loser else "inactive"
+                    # Delete child rows first to avoid ForeignKeyViolation if
+                    # any user has cloned or rated this listing. We use raw
+                    # SQL DELETE so we don't need to import the ext models
+                    # (some deploys run before that table exists).
+                    try:
+                        from sqlalchemy import text as _text
+                        db.execute(_text("DELETE FROM strategy_purchases WHERE listing_id=:lid"), {"lid": listing.id})
+                    except Exception:
+                        pass
+                    try:
+                        from sqlalchemy import text as _text
+                        db.execute(_text("DELETE FROM strategy_ratings WHERE listing_id=:lid"), {"lid": listing.id})
+                    except Exception:
+                        pass
+                    try:
+                        from sqlalchemy import text as _text
+                        db.execute(_text("DELETE FROM strategy_offers WHERE listing_id=:lid"), {"lid": listing.id})
+                    except Exception:
+                        pass
+                    db.delete(listing)
+                    s.status = "archived"
+                    db.commit()
+                    summary["unpublished"] += 1
+                    _STATS["unpublished_total"] += 1
+                    logger.info(
+                        f"[AIGen] UNPUBLISHED {s.name} ({reason}) "
+                        f"trades={trades} wr={wr:.0f}% pnl={pnl:+.1f}%"
+                    )
+            except Exception as e:
+                db.rollback()
+                logger.warning(f"[AIGen] promotion action failed for {s.id}: {e}")
+
+        _STATS["promotion_runs"] += 1
+        _STATS["last_promotion_at"] = datetime.utcnow().isoformat()
+    finally:
+        db.close()
+    summary["finished_at"] = datetime.utcnow().isoformat()
+    return summary
+
+
+_LAST_PROMOTION_TS = 0.0  # monotonic wall-clock seconds since last promote pass
+
+
 async def run_loop():
     """Forever-loop. Logs and sleeps between cycles. Catches all errors."""
+    global _LAST_PROMOTION_TS
+    import time as _time
+
     _STATS["started_at"] = datetime.utcnow().isoformat()
     logger.info(
         f"[AIGen] loop starting — every {GEN_INTERVAL_SEC}s, {GEN_PER_CYCLE} specs/cycle, "
         f"{BT_DAYS}d backtest, gates(sharpe>{THRESH_SHARPE} dd<{THRESH_MAX_DD}% "
-        f"trades>={THRESH_TRADES} wr>={THRESH_WIN_RATE}%)"
+        f"trades>={THRESH_TRADES} wr>={THRESH_WIN_RATE}%) cap={MAX_AI_LISTINGS} "
+        f"promote≥{PROMOTE_AFTER_DAYS}d/{PROMOTE_MIN_TRADES}tr/{PROMOTE_WIN_RATE}%wr/{PROMOTE_MIN_PNL}%pnl"
     )
     # Brief delay so startup isn't slowed by the first generation cycle.
     await asyncio.sleep(30)
@@ -586,4 +769,17 @@ async def run_loop():
             raise
         except Exception as e:
             logger.error(f"[AIGen] cycle crashed: {e}", exc_info=True)
+
+        # Promotion / unpublish pass — runs roughly once per PROMOTE_INTERVAL_SEC
+        # (default 24h). Cheap pure-DB operation, no LLM cost.
+        try:
+            now = _time.time()
+            if now - _LAST_PROMOTION_TS >= PROMOTE_INTERVAL_SEC:
+                logger.info("[AIGen] running promotion / unpublish cycle…")
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, run_promotion_cycle)
+                _LAST_PROMOTION_TS = now
+        except Exception as e:
+            logger.error(f"[AIGen] promotion cycle crashed: {e}", exc_info=True)
+
         await asyncio.sleep(GEN_INTERVAL_SEC)
