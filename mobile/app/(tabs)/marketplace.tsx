@@ -25,13 +25,16 @@ import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, type MarketplaceListing } from '@/lib/api';
 
-type SortKey = 'top' | 'trending' | 'new' | 'price' | 'ai';
+type SortKey = 'top' | 'trending' | 'new' | 'price' | 'ai' | 'sharpe' | 'winrate' | 'followers';
 const SORTS: Array<{ key: SortKey; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
-  { key: 'top',      label: 'Top',      icon: 'trophy-outline' },
-  { key: 'ai',       label: 'AI',       icon: 'hardware-chip-outline' },
-  { key: 'trending', label: 'Trending', icon: 'flame-outline' },
-  { key: 'new',      label: 'New',      icon: 'sparkles-outline' },
-  { key: 'price',    label: 'Free',     icon: 'gift-outline' },
+  { key: 'top',       label: 'Top',       icon: 'trophy-outline' },
+  { key: 'ai',        label: 'AI',        icon: 'hardware-chip-outline' },
+  { key: 'trending',  label: 'Trending',  icon: 'flame-outline' },
+  { key: 'new',       label: 'New',       icon: 'sparkles-outline' },
+  { key: 'sharpe',    label: 'Sharpe',    icon: 'analytics-outline' },
+  { key: 'winrate',   label: 'Win rate',  icon: 'ribbon-outline' },
+  { key: 'followers', label: 'Followers', icon: 'people-outline' },
+  { key: 'price',     label: 'Free',      icon: 'gift-outline' },
 ];
 
 function fmtPnl(v: number | null): string {

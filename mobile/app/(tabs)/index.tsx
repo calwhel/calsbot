@@ -181,6 +181,12 @@ export default function HomeScreen() {
                   onPress={() => router.push('/(tabs)/marketplace' as any)}
                 />
                 <ActionTile
+                  icon="sparkles"
+                  label="Coach"
+                  tone="violet"
+                  onPress={() => router.push('/coach' as any)}
+                />
+                <ActionTile
                   icon="person-circle"
                   label="Account"
                   tone="magenta"
@@ -229,6 +235,13 @@ export default function HomeScreen() {
                 />
               </View>
             </View>
+
+            {/* Live Trading status — affiliate badge + paper-vs-live split */}
+            <LiveTradingCard
+              data={data}
+              onPress={() => router.push('/(tabs)/settings' as any)}
+              onPositionsPress={() => router.push('/(tabs)/trades' as any)}
+            />
 
             {/* Top strategies leaderboard */}
             {topStrategies.length > 0 ? (
@@ -413,6 +426,193 @@ function RecentTradeRow({
     </Pressable>
   );
 }
+
+function LiveTradingCard({
+  data,
+  onPress,
+  onPositionsPress,
+}: {
+  data: Portfolio;
+  onPress: () => void;
+  onPositionsPress: () => void;
+}) {
+  const aff = data.affiliate;
+  // Status: green = verified affiliate, yellow = setup needed, red = not affiliated
+  let badgeText: string;
+  let badgeIcon: keyof typeof Ionicons.glyphMap;
+  let badgeColor: string;
+  let badgeBg: string;
+  let badgeBorder: string;
+  let hint: string;
+
+  if (aff.ok) {
+    badgeText = 'Live trading verified';
+    badgeIcon = 'shield-checkmark';
+    badgeColor = colors.positive;
+    badgeBg = 'rgba(52,211,153,0.10)';
+    badgeBorder = 'rgba(52,211,153,0.32)';
+    hint = aff.has_keys ? 'Real orders are placed when signals fire.' : 'Add your Bitunix API keys to enable live orders.';
+  } else if (!aff.has_uid) {
+    badgeText = 'Setup required';
+    badgeIcon = 'alert-circle';
+    badgeColor = colors.warning;
+    badgeBg = 'rgba(245,158,11,0.10)';
+    badgeBorder = 'rgba(245,158,11,0.32)';
+    hint = 'Connect your Bitunix UID to unlock live trading. Until then, every signal runs as paper.';
+  } else {
+    badgeText = 'Paper-only';
+    badgeIcon = 'document-text';
+    badgeColor = colors.textDim;
+    badgeBg = 'rgba(148,163,184,0.10)';
+    badgeBorder = 'rgba(148,163,184,0.28)';
+    hint = aff.reason === 'uid_not_under_master'
+      ? 'Your UID isn\'t under the master affiliate. Re-register via the affiliate link.'
+      : 'Affiliate check unavailable — signals are paper-tracked for now.';
+  }
+
+  const livePnl  = data.live_pnl_30d;
+  const paperPnl = data.paper_pnl_30d;
+  const todayTone = data.pnl_today > 0.01 ? colors.positive : data.pnl_today < -0.01 ? colors.negative : colors.text;
+
+  return (
+    <View style={liveStyles.section}>
+      <SectionLabel label="Live trading" caption="Status, today's P&L, and open exposure" />
+      <View style={liveStyles.card}>
+        {/* Status row */}
+        <Pressable onPress={onPress} style={({ pressed }) => [liveStyles.statusRow, pressed && { opacity: 0.85 }]}>
+          <View style={[liveStyles.badge, { backgroundColor: badgeBg, borderColor: badgeBorder }]}>
+            <Ionicons name={badgeIcon} size={13} color={badgeColor} />
+            <Text style={[liveStyles.badgeText, { color: badgeColor }]}>{badgeText}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.textMute} />
+        </Pressable>
+        <Text style={liveStyles.hint}>{hint}</Text>
+
+        {/* Stats row: today's P&L | live open | paper open */}
+        <View style={liveStyles.statsRow}>
+          <View style={liveStyles.stat}>
+            <Text style={liveStyles.statLabel}>Today's P&L</Text>
+            <Text style={[liveStyles.statValue, { color: todayTone }]}>{fmtPnl(data.pnl_today)}</Text>
+          </View>
+          <View style={liveStyles.statDiv} />
+          <Pressable
+            onPress={onPositionsPress}
+            style={({ pressed }) => [liveStyles.stat, pressed && { opacity: 0.7 }]}
+          >
+            <Text style={liveStyles.statLabel}>Live open</Text>
+            <Text style={[liveStyles.statValue, { color: data.live_open > 0 ? colors.positive : colors.text }]}>
+              {data.live_open}
+            </Text>
+          </Pressable>
+          <View style={liveStyles.statDiv} />
+          <Pressable
+            onPress={onPositionsPress}
+            style={({ pressed }) => [liveStyles.stat, pressed && { opacity: 0.7 }]}
+          >
+            <Text style={liveStyles.statLabel}>Paper open</Text>
+            <Text style={[liveStyles.statValue, { color: data.paper_open > 0 ? colors.accent : colors.text }]}>
+              {data.paper_open}
+            </Text>
+          </Pressable>
+        </View>
+
+        {/* 30-day breakdown — only show if there's any closed history */}
+        {(data.live_closed_30d + data.paper_closed_30d) > 0 ? (
+          <View style={liveStyles.breakdownRow}>
+            <Text style={liveStyles.breakdownText}>
+              <Text style={{ color: colors.textMute }}>30d · </Text>
+              <Text style={{ color: livePnl > 0 ? colors.positive : livePnl < 0 ? colors.negative : colors.textDim }}>
+                Live {fmtPnl(livePnl)} ({data.live_closed_30d})
+              </Text>
+              <Text style={{ color: colors.textMute }}>  ·  </Text>
+              <Text style={{ color: paperPnl > 0 ? colors.positive : paperPnl < 0 ? colors.negative : colors.textDim }}>
+                Paper {fmtPnl(paperPnl)} ({data.paper_closed_30d})
+              </Text>
+            </Text>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+const liveStyles = StyleSheet.create({
+  section: { marginTop: spacing.xl },
+  card: {
+    backgroundColor: colors.card,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    ...glow.card,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  badge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+  },
+  badgeText: {
+    fontFamily: font.bold,
+    fontSize: 11.5,
+    letterSpacing: -0.1,
+  },
+  hint: {
+    color: colors.textDim,
+    fontFamily: font.regular,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: spacing.sm,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
+  stat: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statDiv: {
+    width: 1,
+    height: 28,
+    backgroundColor: colors.divider,
+  },
+  statLabel: {
+    color: colors.textMute,
+    fontFamily: font.medium,
+    fontSize: 10.5,
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+  },
+  statValue: {
+    fontFamily: font.black,
+    fontSize: 16,
+    fontVariant: ['tabular-nums'],
+    letterSpacing: -0.3,
+    marginTop: 3,
+  },
+  breakdownRow: {
+    marginTop: spacing.sm + 2,
+    alignItems: 'center',
+  },
+  breakdownText: {
+    fontFamily: font.medium,
+    fontSize: 11,
+    fontVariant: ['tabular-nums'],
+  },
+});
 
 const styles = StyleSheet.create({
   loading: {

@@ -276,3 +276,24 @@ def init_strategy_tables(engine):
                 conn.commit()
             except Exception:
                 pass
+
+        # Weekly AI Trade Coach reports — cached one-per-(user, week) to keep
+        # Claude Haiku spend bounded. JSONB so we can add fields without ALTERs.
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS weekly_coach_reports (
+                    id           SERIAL PRIMARY KEY,
+                    user_id      INTEGER NOT NULL,
+                    week_start   DATE    NOT NULL,
+                    report_json  JSONB   NOT NULL,
+                    generated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE (user_id, week_start)
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_wcr_user_week "
+                "ON weekly_coach_reports(user_id, week_start DESC)"
+            ))
+            conn.commit()
+        except Exception:
+            pass

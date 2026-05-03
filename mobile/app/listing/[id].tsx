@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
   Alert, Pressable, Linking, useWindowDimensions,
@@ -40,8 +40,15 @@ export default function ListingDetailScreen() {
     enabled: !!uid && !!lid,
   });
 
+  const [riskScale, setRiskScale] = useState<number>(1.0);
+
   const cloneM = useMutation({
-    mutationFn: () => apiPost<CloneResponse>(`/api/marketplace/${lid}/clone`, {}, uid),
+    mutationFn: () => apiPost<CloneResponse>(
+      `/api/marketplace/${lid}/clone`,
+      {},
+      uid,
+      { risk_scale: riskScale },
+    ),
     onSuccess: (resp) => {
       // Backend returns several 200-with-shape responses we must distinguish:
       //   { error: "PRO_REQUIRED", message } — Pro upsell
@@ -181,7 +188,18 @@ export default function ListingDetailScreen() {
         {/* Header */}
         <View style={styles.header}>
           <Text style={styles.title} numberOfLines={3}>{m.title}</Text>
-          <Text style={styles.author}>by {m.author_name}</Text>
+          {m.author_uid ? (
+            <Pressable
+              onPress={() => router.push(`/creator/${m.author_uid}` as any)}
+              hitSlop={8}
+            >
+              <Text style={[styles.author, styles.authorLink]}>
+                by {m.author_name} <Ionicons name="chevron-forward" size={11} color={colors.accent} />
+              </Text>
+            </Pressable>
+          ) : (
+            <Text style={styles.author}>by {m.author_name}</Text>
+          )}
           <View style={styles.headerMeta}>
             {m.is_verified ? <Pill label="✓ Verified" tone="accent" small /> : null}
             <Pill label={m.category} tone="neutral" small />
@@ -196,6 +214,40 @@ export default function ListingDetailScreen() {
             <Text style={styles.summary}>{m.summary}</Text>
           ) : null}
         </View>
+
+        {/* Risk scale — pre-clone position-size multiplier */}
+        {!owned ? (
+          <View style={styles.riskScaleSection}>
+            <Text style={styles.sectionLabel}>Position size</Text>
+            <View style={styles.riskScaleRow}>
+              {[0.25, 0.5, 1.0, 1.5, 2.0].map((rs) => {
+                const active = Math.abs(rs - riskScale) < 0.01;
+                return (
+                  <Pressable
+                    key={`rs-${rs}`}
+                    onPress={() => setRiskScale(rs)}
+                    style={({ pressed }) => [
+                      styles.riskChip,
+                      active && styles.riskChipActive,
+                      pressed && { opacity: 0.85 },
+                    ]}
+                  >
+                    <Text style={[styles.riskChipText, active && styles.riskChipTextActive]}>
+                      {rs === 1.0 ? '1×' : `${rs}×`}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.helpText}>
+              {riskScale === 1.0
+                ? "Author's intended position size."
+                : riskScale < 1
+                  ? `${riskScale}× — smaller than the author's intended size. Lower risk, lower returns.`
+                  : `${riskScale}× — larger than the author's intended size. Higher risk, higher returns.`}
+            </Text>
+          </View>
+        ) : null}
 
         {/* Action */}
         <View style={{ marginTop: spacing.lg }}>
@@ -332,6 +384,31 @@ const styles = StyleSheet.create({
   header: { paddingTop: spacing.sm },
   title: { color: colors.text, fontFamily: font.black, fontSize: 26, letterSpacing: -0.6 },
   author: { color: colors.textDim, fontFamily: font.medium, fontSize: 14, marginTop: 4 },
+  authorLink: { color: colors.accent },
+  riskScaleSection: { marginTop: spacing.lg },
+  riskScaleRow: { flexDirection: 'row', gap: 6, marginBottom: spacing.sm },
+  riskChip: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: radius.lg,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+  },
+  riskChipActive: {
+    backgroundColor: 'rgba(34,211,238,0.12)',
+    borderColor: colors.accent,
+  },
+  riskChipText: {
+    color: colors.textDim,
+    fontFamily: font.bold,
+    fontSize: 14,
+    letterSpacing: -0.2,
+  },
+  riskChipTextActive: {
+    color: colors.accent,
+  },
   headerMeta: { flexDirection: 'row', gap: 6, marginTop: spacing.sm, flexWrap: 'wrap' },
   summary: { color: colors.textDim, fontFamily: font.regular, fontSize: 14, marginTop: spacing.md, lineHeight: 20 },
   sectionLabel: {

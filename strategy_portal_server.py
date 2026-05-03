@@ -4712,6 +4712,20 @@ async def api_marketplace(
             q = q.order_by(StrategyMarketplace.clone_count.desc())
         elif sort == "verified":
             q = q.filter(StrategyMarketplace.is_verified == True).order_by(StrategyMarketplace.verified_win_rate.desc())
+        elif sort == "sharpe":
+            # Sort by backtest Sharpe — only listings that have a Sharpe score
+            q = q.filter(StrategyMarketplace.backtest_sharpe.isnot(None))\
+                 .order_by(StrategyMarketplace.backtest_sharpe.desc())
+        elif sort == "winrate":
+            # Best win rate — prefer verified over backtest, but show both
+            from sqlalchemy import func
+            q = q.order_by(
+                func.coalesce(StrategyMarketplace.verified_win_rate,
+                              StrategyMarketplace.backtest_win_rate, 0).desc()
+            )
+        elif sort == "followers":
+            q = q.order_by(StrategyMarketplace.subscriber_count.desc(),
+                           StrategyMarketplace.clone_count.desc())
         else:
             q = q.order_by(StrategyMarketplace.avg_rating.desc(), StrategyMarketplace.clone_count.desc())
 
@@ -4852,7 +4866,20 @@ async def api_marketplace_detail(listing_id: int, uid: str = Query(...)):
 
 
 @app.post("/api/marketplace/{listing_id}/purchase")
-async def api_purchase_strategy(listing_id: int, uid: str = Query(...)):
+async def api_purchase_strategy(listing_id: int, uid: str = Query(...), risk_scale: float = Query(1.0)):
+    """Clone or purchase a marketplace listing.
+
+    `risk_scale` (0.25 - 2.0) scales the cloned strategy's `position_size_pct`
+    so a follower can copy a strategy at a fraction (or multiple) of the
+    author's intended risk. Leverage is intentionally NOT scaled — that would
+    change the strategy's character (different liquidation distances, fees).
+    """
+    # Clamp to safe bounds — silent clip is fine, no point 400-ing the user.
+    try:
+        risk_scale = max(0.25, min(2.0, float(risk_scale)))
+    except (TypeError, ValueError):
+        risk_scale = 1.0
+
     from app.database import SessionLocal, engine
     db = SessionLocal()
     try:
@@ -4889,16 +4916,26 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...)):
             if not existing.cloned_strategy_id:
                 original = db.query(UserStrategy).filter(UserStrategy.id == listing.strategy_id).first()
                 if original:
+                    _orig_risk = dict(original.config.get("risk", {}) or {})
+                    if risk_scale != 1.0 and "position_size_pct" in _orig_risk:
+                        try:
+                            _scaled = float(_orig_risk["position_size_pct"]) * risk_scale
+                            # Cap at 50% — anything higher is unsafe execution-side
+                            # regardless of what the original strategy specified.
+                            _orig_risk["position_size_pct"] = round(max(0.01, min(50.0, _scaled)), 3)
+                        except (TypeError, ValueError):
+                            pass  # leave original value if it's non-numeric
                     locked_config = {
                         "name":                listing.title or original.name,
                         "direction":           original.config.get("direction", "LONG"),
-                        "risk":                original.config.get("risk", {}),
+                        "risk":                _orig_risk,
                         "exit":                original.config.get("exit", {}),
                         "filters":             original.config.get("filters", {}),
                         "universe":            original.config.get("universe", {}),
                         "_locked":             True,
                         "_source_strategy_id": listing.strategy_id,
                         "_listing_id":         listing_id,
+                        "_risk_scale":         risk_scale,
                     }
                     recovered = UserStrategy(
                         user_id=user.id,
@@ -4929,17 +4966,27 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...)):
         if not original:
             raise HTTPException(status_code=404)
 
+        _orig_risk = dict(original.config.get("risk", {}) or {})
+        if risk_scale != 1.0 and "position_size_pct" in _orig_risk:
+            try:
+                _scaled = float(_orig_risk["position_size_pct"]) * risk_scale
+                # Cap at 50% — anything higher is unsafe execution-side
+                # regardless of what the original strategy specified.
+                _orig_risk["position_size_pct"] = round(max(0.01, min(50.0, _scaled)), 3)
+            except (TypeError, ValueError):
+                pass  # leave original value if it's non-numeric
         # Build a locked stub — no entry_conditions or strategy logic exposed
         locked_config = {
             "name":             listing.title or original.name,
             "direction":        original.config.get("direction", "LONG"),
-            "risk":             original.config.get("risk", {}),
+            "risk":             _orig_risk,
             "exit":             original.config.get("exit", {}),
             "filters":          original.config.get("filters", {}),
             "universe":         original.config.get("universe", {}),
             "_locked":          True,
             "_source_strategy_id": listing.strategy_id,
             "_listing_id":      listing_id,
+            "_risk_scale":      risk_scale,
         }
         new_strategy = UserStrategy(
             user_id=user.id,
@@ -5287,8 +5334,8 @@ async def api_my_purchases(uid: str = Query(...)):
 
 
 @app.post("/api/marketplace/{listing_id}/clone")
-async def api_clone_strategy(listing_id: int, uid: str = Query(...)):
-    return await api_purchase_strategy(listing_id, uid)
+async def api_clone_strategy(listing_id: int, uid: str = Query(...), risk_scale: float = Query(1.0)):
+    return await api_purchase_strategy(listing_id, uid, risk_scale)
 
 
 @app.post("/api/strategies/{strategy_id}/share")
@@ -6565,29 +6612,38 @@ async def api_portfolio(uid: str = Query(...)):
         total_strategies = strat_row.total if strat_row else 0
         active_count     = strat_row.active_count if strat_row else 0
 
+        cutoff_today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
         # Single query: all executions via JOIN (replaces N+1 loop)
         exec_rows = db.execute(text("""
-            SELECT e.outcome, e.pnl_pct,
+            SELECT e.outcome, e.pnl_pct, e.is_paper,
                    COALESCE(e.closed_at, e.fired_at) AS ts
             FROM strategy_executions e
             JOIN user_strategies s ON s.id = e.strategy_id
             WHERE s.user_id = :uid
         """), {"uid": user.id}).fetchall()
 
-        open_trades = sum(1 for r in exec_rows if r.outcome == "OPEN")
-        closed = [(r.pnl_pct, r.ts, r.outcome) for r in exec_rows
+        open_trades  = sum(1 for r in exec_rows if r.outcome == "OPEN")
+        live_open    = sum(1 for r in exec_rows if r.outcome == "OPEN" and not r.is_paper)
+        paper_open   = sum(1 for r in exec_rows if r.outcome == "OPEN" and r.is_paper)
+        closed = [(r.pnl_pct, r.ts, r.outcome, bool(r.is_paper)) for r in exec_rows
                   if r.outcome in ("WIN", "LOSS", "BREAKEVEN") and r.pnl_pct is not None]
         total = len(closed)
-        wins  = sum(1 for _, _, o in closed if o == "WIN")
+        wins  = sum(1 for _, _, o, _ in closed if o == "WIN")
 
-        closed_30d = [(p, ts, o) for p, ts, o in closed if ts and ts > cutoff_30d]
+        closed_30d = [(p, ts, o, ip) for p, ts, o, ip in closed if ts and ts > cutoff_30d]
 
-        pnl_7d  = sum(p for p, ts, _ in closed if ts and ts > cutoff_7d)
-        pnl_30d = sum(p for p, _, _ in closed_30d)
-        pnl_all = sum(p for p, _, _ in closed)
+        pnl_today    = sum(p for p, ts, _, _  in closed if ts and ts > cutoff_today)
+        pnl_7d       = sum(p for p, ts, _, _  in closed if ts and ts > cutoff_7d)
+        pnl_30d      = sum(p for p, _, _, _   in closed_30d)
+        pnl_all      = sum(p for p, _, _, _   in closed)
+        live_pnl_30d  = sum(p for p, _, _, ip in closed_30d if not ip)
+        paper_pnl_30d = sum(p for p, _, _, ip in closed_30d if ip)
+        live_closed_30d  = sum(1 for _, _, _, ip in closed_30d if not ip)
+        paper_closed_30d = sum(1 for _, _, _, ip in closed_30d if ip)
 
         daily = defaultdict(float)
-        for pnl, ts, _ in closed_30d:
+        for pnl, ts, _, _ in closed_30d:
             daily[ts.strftime("%m/%d")] += pnl
 
         cumulative, port_labels, port_values = 0.0, [], []
@@ -6596,19 +6652,74 @@ async def api_portfolio(uid: str = Query(...)):
             port_labels.append(day)
             port_values.append(round(cumulative, 2))
 
+        # Affiliate status — fail-soft, never block portfolio load
+        aff_ok, aff_reason = False, "no_bitunix_uid"
+        try:
+            if user.bitunix_uid:
+                from app.services.bitunix_partner import is_uid_affiliated
+                aff_ok, aff_reason = await is_uid_affiliated(user.bitunix_uid)
+        except Exception as e:
+            aff_reason = f"check_error:{type(e).__name__}"
+
         result = JSONResponse({
             "total_strategies": total_strategies,
             "active_count":     active_count,
             "open_trades":      open_trades,
+            "live_open":        live_open,
+            "paper_open":       paper_open,
             "total_trades":     total,
             "win_rate":         round(wins / total * 100, 1) if total > 0 else 0,
+            "pnl_today":        round(pnl_today, 2),
             "pnl_7d":           round(pnl_7d, 2),
             "pnl_30d":          round(pnl_30d, 2),
             "pnl_all":          round(pnl_all, 2),
+            "live_pnl_30d":     round(live_pnl_30d, 2),
+            "paper_pnl_30d":    round(paper_pnl_30d, 2),
+            "live_closed_30d":  live_closed_30d,
+            "paper_closed_30d": paper_closed_30d,
             "equity_30d":       {"labels": port_labels, "values": port_values},
+            "affiliate": {
+                "ok":          bool(aff_ok),
+                "reason":      aff_reason,
+                "has_uid":     bool(user.bitunix_uid),
+                "has_keys":    bool(getattr(user.preferences, "bitunix_api_key", None)) if hasattr(user, "preferences") else False,
+            },
         })
         _CACHE[cache_key] = (result, time.time() + 30)
         return result
+    finally:
+        db.close()
+
+
+@app.get("/api/coach/weekly")
+async def api_coach_weekly(uid: str = Query(...), force: int = 0):
+    """Weekly AI Trade Coach report.
+
+    - Cached one-per-(user, ISO week) in `weekly_coach_reports` to keep AI cost bounded.
+    - `force=1` bypasses the cache, but is rate-limited to once per 24h via the
+      `generated_at` column to prevent runaway spend.
+    """
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+
+        # Rate-limit forced regeneration: max 1/day per user
+        if force:
+            recent = db.execute(text("""
+                SELECT generated_at FROM weekly_coach_reports
+                WHERE user_id = :uid
+                ORDER BY generated_at DESC LIMIT 1
+            """), {"uid": user.id}).fetchone()
+            if recent and recent.generated_at and \
+               (datetime.utcnow() - recent.generated_at) < timedelta(hours=24):
+                force = 0  # silently fall back to cache — UI shows "cached" badge
+
+        from app.services.ai_trade_coach import get_or_generate_weekly
+        report = await get_or_generate_weekly(user.id, db, force=bool(force))
+        return JSONResponse(report)
     finally:
         db.close()
 
