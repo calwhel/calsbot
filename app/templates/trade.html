@@ -553,6 +553,20 @@ button{font-family:inherit}
 .modal-body .err.show{display:block}
 .modal-body .ok{color:var(--green);background:rgba(38,166,154,.08);border:1px solid rgba(38,166,154,.3);padding:8px 10px;border-radius:3px;margin-top:10px;font-size:11px;line-height:1.5;display:none}
 .modal-body .ok.show{display:block}
+.pine-lib{margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}
+.pine-lib-hd{display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px}
+.pine-lib-hd .meta{font-weight:400;color:var(--muted);font-size:10.5px}
+.pine-lib-save{display:flex;gap:6px;margin-bottom:8px}
+.pine-lib-save input{flex:1;min-width:0}
+.pine-lib-save .btn{flex:0 0 auto;padding:6px 12px;font-size:11px;white-space:nowrap}
+.pine-lib-list{display:flex;flex-direction:column;gap:4px;max-height:160px;overflow-y:auto}
+.pine-lib-empty{color:var(--muted);font-size:11px;padding:8px 4px;text-align:center;font-style:italic}
+.pine-lib-row{display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--panel2);border:1px solid var(--border);border-radius:3px}
+.pine-lib-row .pine-lib-name{flex:1;min-width:0;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pine-lib-row .pine-lib-ts{flex:0 0 auto;font-size:10px;color:var(--muted);font-family:var(--mono)}
+.pine-lib-row button{flex:0 0 auto;background:transparent;border:1px solid var(--border);color:var(--text2);padding:3px 8px;border-radius:2px;font-size:10.5px;cursor:pointer;font-family:inherit}
+.pine-lib-row button:hover{background:var(--bg);color:var(--text)}
+.pine-lib-row button.danger:hover{color:var(--red);border-color:rgba(239,83,80,.5)}
 .modal-ft{
   padding:12px 18px;border-top:1px solid var(--border);background:var(--panel);
   display:flex;justify-content:space-between;align-items:center;gap:10px;
@@ -834,6 +848,22 @@ button{font-family:inherit}
         </div>
         <div class="err" id="pine-err"></div>
         <div class="ok"  id="pine-ok"></div>
+
+        <!-- My Pine scripts library (LocalStorage-backed) -->
+        <div class="pine-lib">
+          <div class="pine-lib-hd">
+            <span>My scripts</span>
+            <span class="meta" id="pine-lib-count">0 saved</span>
+          </div>
+          <div class="pine-lib-save">
+            <input type="text" id="pine-lib-name" placeholder="Name (e.g. EMA cross BUY/SELL)" autocomplete="off" maxlength="60">
+            <button class="btn ghost" id="pine-lib-save-btn" type="button">Save current</button>
+          </div>
+          <div class="pine-lib-list" id="pine-lib-list">
+            <div class="pine-lib-empty" id="pine-lib-empty">No saved scripts yet — paste one above and hit <b>Save current</b>.</div>
+          </div>
+          <div class="hint" style="margin-top:6px">Saved locally in this browser. Loading a script populates the box so you can tweak before adding.</div>
+        </div>
       </div>
     </div>
     <div class="modal-ft">
@@ -4241,7 +4271,116 @@ button{font-family:inherit}
     renderPresetParams();
     buildSwatches($('p-swatch'), presetColor, c => presetColor = c);
     buildSwatches($('f-swatch'), formulaColor, c => formulaColor = c);
+    renderPineLibrary();
     renderIndStrip(); // updates count
+  }
+
+  // ── My Pine scripts library (LocalStorage v1) ────────────────────────
+  const PINE_LIB_KEY = 'pine_snippets_v1';
+  function pineLibLoad(){
+    try{
+      const raw = localStorage.getItem(PINE_LIB_KEY);
+      if(!raw) return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.filter(x => x && typeof x.name === 'string' && typeof x.code === 'string') : [];
+    }catch(_){ return []; }
+  }
+  function pineLibSave(list){
+    try{ localStorage.setItem(PINE_LIB_KEY, JSON.stringify(list)); }catch(_){}
+  }
+  function pineLibFmtTs(ts){
+    try{
+      const d = new Date(ts);
+      const now = new Date();
+      const sameDay = d.toDateString() === now.toDateString();
+      return sameDay
+        ? d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
+        : d.toLocaleDateString([], {month:'short', day:'numeric'});
+    }catch(_){ return ''; }
+  }
+  function renderPineLibrary(){
+    const list = pineLibLoad();
+    const host = $('pine-lib-list');
+    const cnt  = $('pine-lib-count');
+    if(cnt) cnt.textContent = `${list.length} saved`;
+    if(!host) return;
+    if(!list.length){
+      host.innerHTML = '<div class="pine-lib-empty">No saved scripts yet — paste one above and hit <b>Save current</b>.</div>';
+      return;
+    }
+    // Newest first
+    const sorted = list.slice().sort((a,b) => (b.ts||0) - (a.ts||0));
+    host.innerHTML = '';
+    sorted.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'pine-lib-row';
+      const name = document.createElement('div');
+      name.className = 'pine-lib-name';
+      name.textContent = item.name;
+      name.title = item.name;
+      const ts = document.createElement('div');
+      ts.className = 'pine-lib-ts';
+      ts.textContent = pineLibFmtTs(item.ts);
+      const loadBtn = document.createElement('button');
+      loadBtn.type = 'button';
+      loadBtn.textContent = 'Load';
+      loadBtn.onclick = () => {
+        $('pine-input').value = item.code;
+        $('pine-err').classList.remove('show');
+        $('pine-ok').classList.remove('show');
+        $('pine-input').focus();
+      };
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'danger';
+      delBtn.textContent = 'Delete';
+      delBtn.onclick = () => {
+        if(!confirm(`Delete "${item.name}"?`)) return;
+        const next = pineLibLoad().filter(x => x.id !== item.id);
+        pineLibSave(next);
+        renderPineLibrary();
+      };
+      row.appendChild(name);
+      row.appendChild(ts);
+      row.appendChild(loadBtn);
+      row.appendChild(delBtn);
+      host.appendChild(row);
+    });
+  }
+  function pineLibSaveCurrent(){
+    const code = ($('pine-input').value || '').trim();
+    const nameEl = $('pine-lib-name');
+    let name = (nameEl.value || '').trim();
+    if(!code){
+      const err = $('pine-err');
+      err.textContent = 'Paste a Pine script above before saving.';
+      err.classList.add('show');
+      return;
+    }
+    if(!name){
+      name = prompt('Name this script:') || '';
+      name = name.trim();
+      if(!name) return;
+    }
+    const list = pineLibLoad();
+    const existing = list.find(x => x.name.toLowerCase() === name.toLowerCase());
+    if(existing){
+      if(!confirm(`A script named "${existing.name}" already exists. Overwrite?`)) return;
+      existing.code = code;
+      existing.ts   = Date.now();
+    } else {
+      list.push({
+        id: 'p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,7),
+        name, code, ts: Date.now(),
+      });
+    }
+    pineLibSave(list);
+    nameEl.value = '';
+    $('pine-err').classList.remove('show');
+    const ok = $('pine-ok');
+    ok.textContent = `Saved "${name}" to My scripts.`;
+    ok.classList.add('show');
+    renderPineLibrary();
   }
   function closeModal(){
     $('ind-modal').classList.remove('open');
@@ -4262,6 +4401,10 @@ button{font-family:inherit}
     $('ind-modal').addEventListener('click', e => { if(e.target === $('ind-modal')) closeModal(); });
     document.querySelectorAll('.modal-tab').forEach(b => b.onclick = () => setTab(b.dataset.tab));
     $('p-type').onchange = renderPresetParams;
+    $('pine-lib-save-btn').onclick = pineLibSaveCurrent;
+    $('pine-lib-name').addEventListener('keydown', e => {
+      if(e.key === 'Enter'){ e.preventDefault(); pineLibSaveCurrent(); }
+    });
 
     $('ind-add').onclick = () => {
       try{
