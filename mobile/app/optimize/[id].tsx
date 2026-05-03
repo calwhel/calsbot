@@ -41,6 +41,7 @@ type VariantPatch = {
   sl?: number;
   leverage?: number;
   timeframe?: string;
+  primaryCfg?: Record<string, unknown>;
 };
 
 type Variant = {
@@ -60,6 +61,9 @@ type OptimizeResult = {
   baseline: { label: string; stats: BacktestStats; score: number };
   variants: Variant[];
   any_improved: boolean;
+  baseline_zero_trades?: boolean;
+  total_tested?: number;
+  total_attempted?: number;
   ran_at: string;
 };
 
@@ -564,7 +568,9 @@ export default function OptimizeScreen() {
             <BaselineCard stats={result.baseline.stats} />
 
             <Text style={[styles.sectionLabel, { marginTop: spacing.lg }]}>
-              Suggested tweaks ({result.variants.length})
+              {typeof result.total_tested === 'number' && typeof result.total_attempted === 'number'
+                ? `Tested ${result.total_tested} of ${result.total_attempted} variations`
+                : `Suggested tweaks (${result.variants.length})`}
             </Text>
             {result.variants.length === 0 ? (
               <EmptyState
@@ -572,6 +578,21 @@ export default function OptimizeScreen() {
                 title="Couldn't generate variants"
                 hint="None of the parameter tweaks produced a usable backtest. Try the 90-day window."
               />
+            ) : result.baseline_zero_trades ? (
+              // Baseline fired zero trades — every variant is also likely to
+              // be zero-trade. Tweaking SL/TP can't fix this; the user needs
+              // to relax the entry conditions in the wizard.
+              <View style={[styles.card, { borderColor: colors.warning }]}>
+                <Text style={[styles.cardTitle, { color: colors.warning }]}>
+                  Strategy isn't firing
+                </Text>
+                <Text style={styles.cardTagline}>
+                  Your current settings produced zero trades on this window, so the
+                  optimizer has nothing to compare against. Try relaxing the entry
+                  signal in the wizard (e.g. RSI 30 → 40, or a less strict threshold)
+                  before optimizing again.
+                </Text>
+              </View>
             ) : !result.any_improved ? (
               <View style={[styles.card, { borderColor: colors.warning }]}>
                 <Text style={[styles.cardTitle, { color: colors.warning }]}>

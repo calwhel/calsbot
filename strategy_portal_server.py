@@ -9803,20 +9803,103 @@ Respond with ONLY this JSON:
 # Allowlist of config keys the optimizer is permitted to mutate. Anything else
 # (entry signals, universe, filters, etc.) is left untouched so we never silently
 # rewrite the user's strategy logic — only its risk/exit knobs.
-_OPTIMIZER_PATCH_ALLOWED_KEYS = {"tp1", "sl", "leverage", "timeframe"}
+_OPTIMIZER_PATCH_ALLOWED_KEYS = {"tp1", "sl", "leverage", "timeframe", "primaryCfg"}
 _OPTIMIZER_TF_ORDER = ["5m", "15m", "1h", "4h"]
 
 
-def _generate_optimizer_variants(base_config: dict) -> list[dict]:
-    """Return a curated set of single-axis tweaks to try.
+def _signal_param_variants(primary_type: str, primary_cfg: dict) -> list[tuple[str, str, dict]]:
+    """Return (label, tagline, primary_cfg_patch) variants for the strategy's
+    primary signal. The primary signal is usually the single biggest lever on
+    trade-count and win-rate — way bigger than TP/SL knobs — so we MUST try a
+    few values of its main numeric parameter.
 
-    Keep this small (≤ 10) — each variant is a full backtest, and even with
-    parallel execution we have a hard 120s budget for the whole optimize call.
+    Each entry's patch is a partial dict to merge into the existing primaryCfg
+    (NOT a replacement). Returns at most 4 variants per signal type to keep
+    the total budget bounded.
+    """
+    cfg = dict(primary_cfg or {})
+    out: list[tuple[str, str, dict]] = []
+    pt = (primary_type or "").lower()
+
+    if pt == "rsi":
+        base = float(cfg.get("value") or 30)
+        for new in (15, 25, 35, 45, 55, 65, 75, 85):
+            if abs(new - base) >= 5 and 5 <= new <= 95:
+                out.append((f"RSI level {int(new)}", f"RSI {int(base)} → {int(new)}", {"value": new}))
+    elif pt == "ema":
+        cur = str(cfg.get("periods") or "9/21")
+        for p in ("5/13", "9/21", "12/26", "20/50", "50/200"):
+            if p != cur:
+                try:
+                    fast_s, slow_s = p.split("/")
+                    fast, slow = int(fast_s), int(slow_s)
+                except Exception:
+                    continue
+                # Backtest engine's indicator/ema branch reads `period` and
+                # `period2` — NOT the wizard's `periods` string. So we emit
+                # both: `periods` keeps the wizard label valid for the UI,
+                # and `period`/`period2` actually drive the backtest.
+                out.append((f"EMA {p}", f"Periods {cur} → {p}",
+                            {"periods": p, "period": fast, "period2": slow}))
+    elif pt == "volume_spike":
+        base = float(cfg.get("multiplier") or 2)
+        for new in (1.5, 2.5, 3, 4, 5):
+            if abs(new - base) >= 0.4:
+                out.append((f"Volume ×{new}", f"Multiplier ×{base} → ×{new}", {"multiplier": new}))
+    elif pt == "price_momentum":
+        base = float(cfg.get("pm_pct") or 10)
+        for new in (3, 5, 7, 15, 20):
+            if abs(new - base) >= 1:
+                out.append((f"Momentum {new}%", f"Threshold {base}% → {new}%", {"pm_pct": new}))
+    elif pt == "breakout":
+        base = int(cfg.get("bo_lookback") or 20)
+        for new in (10, 30, 50, 100):
+            if new != base:
+                out.append((f"Breakout {new}b", f"Lookback {base} → {new}", {"bo_lookback": new}))
+    elif pt == "sma":
+        base = int(cfg.get("period") or 200)
+        for new in (20, 50, 100, 200):
+            if new != base:
+                out.append((f"SMA {new}", f"Period {base} → {new}", {"period": new}))
+    elif pt == "donchian":
+        base = int(cfg.get("period") or 20)
+        for new in (10, 20, 30, 50, 100):
+            if new != base:
+                out.append((f"Donchian {new}", f"Period {base} → {new}", {"period": new}))
+    elif pt in ("cci", "mfi", "roc"):
+        default_p = 20 if pt == "cci" else 14
+        base = int(cfg.get("period") or default_p)
+        for new in (7, 14, 21, 28):
+            if new != base:
+                out.append((f"{pt.upper()} period {new}", f"Period {base} → {new}", {"period": new}))
+    # Other signal types (macd, bb, supertrend, ichimoku, divergence, stoch_rsi)
+    # are condition-only in the wizard schema — there's no obvious single
+    # numeric knob to sweep, so we leave the signal unchanged and rely on
+    # risk/exit/leverage/timeframe variants instead.
+
+    # Cap per-signal sweeps at 6 — combined with 8 risk/exit + 2 leverage +
+    # 2 timeframe variants, this gives us ~18 total backtests under the
+    # 5-concurrent budget (≈3-4 batches at 50s each = 150-220s worst case).
+    return out[:6]
+
+
+def _generate_optimizer_variants(base_config: dict) -> list[dict]:
+    """Return a broad set of parameter tweaks to test against the baseline.
+
+    v2 (May 2026) — was 9 risk/exit-only tweaks, now ~16-22 variants including:
+      • 8 risk/exit combos (3 SL × 3 TP grid, minus baseline duplicates)
+      • 2 leverage tweaks
+      • 2 timeframe shifts (one step each direction)
+      • Up to 4 primary-signal parameter sweeps (RSI level, EMA periods,
+        SMA period, Donchian period, etc — the actual entry knob, which is
+        the biggest performance lever on most strategies)
     """
     base_tp  = float(base_config.get("tp1") or 3.0)
     base_sl  = float(base_config.get("sl")  or 2.0)
     base_lev = int(base_config.get("leverage") or 5)
     base_tf  = str(base_config.get("timeframe") or "1h")
+    primary_type = str(base_config.get("primaryType") or "")
+    primary_cfg  = dict(base_config.get("primaryCfg") or {})
 
     def _step_tf(direction: int):
         try:
@@ -9829,40 +9912,75 @@ def _generate_optimizer_variants(base_config: dict) -> list[dict]:
         return None
 
     out: list[dict] = []
+    seen_patches: set[str] = set()  # dedupe identical patches
 
     def _add(label: str, tagline: str, patch: dict):
-        # Skip no-op patches (rare — happens if base values are already at a clamp boundary)
         if not patch:
             return
+        # Stable-key dedupe — two variants with the same effective patch waste
+        # a backtest slot. JSON sort-keys gives a deterministic key.
+        try:
+            key = json.dumps(patch, sort_keys=True, default=str)
+        except Exception:
+            key = repr(sorted(patch.items()))
+        if key in seen_patches:
+            return
+        seen_patches.add(key)
         out.append({"label": label, "tagline": tagline, "patch": patch})
 
-    _add("Tighter stop-loss",
-         f"SL {base_sl:.1f}% → {round(base_sl * 0.7, 2):.1f}%",
-         {"sl": round(base_sl * 0.7, 2)})
-    _add("Wider stop-loss",
-         f"SL {base_sl:.1f}% → {round(base_sl * 1.4, 2):.1f}%",
-         {"sl": round(base_sl * 1.4, 2)})
-    _add("Tighter take-profit",
-         f"TP {base_tp:.1f}% → {round(base_tp * 0.7, 2):.1f}%",
-         {"tp1": round(base_tp * 0.7, 2)})
-    _add("Wider take-profit",
-         f"TP {base_tp:.1f}% → {round(base_tp * 1.5, 2):.1f}%",
-         {"tp1": round(base_tp * 1.5, 2)})
-    _add("Better risk/reward",
-         f"TP ×1.5, SL ×0.7",
-         {"tp1": round(base_tp * 1.5, 2), "sl": round(base_sl * 0.7, 2)})
+    # ── Risk/exit grid: 3 SL multipliers × 3 TP multipliers minus identity ──
+    sl_mults = [0.6, 1.0, 1.5]
+    tp_mults = [0.6, 1.0, 1.6]
+    for sm in sl_mults:
+        for tm in tp_mults:
+            if sm == 1.0 and tm == 1.0:
+                continue  # baseline
+            patch: dict = {}
+            if sm != 1.0:
+                patch["sl"] = round(base_sl * sm, 2)
+            if tm != 1.0:
+                patch["tp1"] = round(base_tp * tm, 2)
+            # Friendly label for the 4 corner/notable combos
+            if sm == 0.6 and tm == 1.6:
+                lbl, tag = "Better risk/reward", f"TP ×1.6, SL ×0.6"
+            elif sm == 0.6 and tm == 0.6:
+                lbl, tag = "Tight scalper", f"TP ×0.6, SL ×0.6"
+            elif sm == 1.5 and tm == 1.6:
+                lbl, tag = "Wide swing", f"TP ×1.6, SL ×1.5"
+            elif sm == 1.5 and tm == 0.6:
+                lbl, tag = "Mean-revert risk", f"TP ×0.6, SL ×1.5"
+            elif sm == 1.0:
+                lbl = "Tighter take-profit" if tm < 1 else "Wider take-profit"
+                tag = f"TP {base_tp:.1f}% → {patch.get('tp1', base_tp):.1f}%"
+            elif tm == 1.0:
+                lbl = "Tighter stop-loss" if sm < 1 else "Wider stop-loss"
+                tag = f"SL {base_sl:.1f}% → {patch.get('sl', base_sl):.1f}%"
+            else:
+                lbl = f"SL ×{sm}, TP ×{tm}"
+                tag = f"SL → {patch.get('sl', base_sl):.1f}%, TP → {patch.get('tp1', base_tp):.1f}%"
+            _add(lbl, tag, patch)
+
+    # ── Leverage ──
     if base_lev > 2:
         new_lev = max(1, base_lev - 3)
         _add("Lower leverage", f"{base_lev}× → {new_lev}×", {"leverage": new_lev})
     if base_lev < 25:
         new_lev = min(25, base_lev + 5)
         _add("Higher leverage", f"{base_lev}× → {new_lev}×", {"leverage": new_lev})
+
+    # ── Timeframe ──
     nxt = _step_tf(1)
     if nxt:
         _add("Slower timeframe", f"{base_tf} → {nxt}", {"timeframe": nxt})
     prv = _step_tf(-1)
     if prv:
         _add("Faster timeframe", f"{base_tf} → {prv}", {"timeframe": prv})
+
+    # ── Primary signal parameter sweeps (THE big lever) ──
+    for label, tagline, sub_patch in _signal_param_variants(primary_type, primary_cfg):
+        merged_cfg = dict(primary_cfg)
+        merged_cfg.update(sub_patch)
+        _add(label, tagline, {"primaryCfg": merged_cfg})
 
     return out
 
@@ -9939,8 +10057,9 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
     from app.services.backtest_engine import run_backtest
 
     # Cap concurrency so we don't blow up worker memory / hit Gate.io rate
-    # limits when 10 backtests all request candles at once.
-    concurrency = 3
+    # limits when 20 backtests all request candles at once. Bumped from 3 → 5
+    # in v2 because the variant set grew from ~9 to ~22.
+    concurrency = 5
     sem = asyncio.Semaphore(concurrency)
 
     async def _run_one(cfg: dict) -> dict | None:
@@ -9948,7 +10067,7 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
             try:
                 # run_backtest returns {symbol, days, trades, stats:{...}, equity_curve, ...}
                 # We only care about the stats sub-dict for ranking + the wire payload.
-                full = await asyncio.wait_for(run_backtest(cfg, days), timeout=60)
+                full = await asyncio.wait_for(run_backtest(cfg, days), timeout=50)
                 if not isinstance(full, dict):
                     return None
                 if full.get("error"):
@@ -9973,7 +10092,7 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
     # for 10 jobs × 60s per-job at concurrency=3 → could 408 even when each
     # individual backtest respected its own budget.
     import math
-    outer_timeout = math.ceil(len(jobs) / concurrency) * 60 + 20
+    outer_timeout = math.ceil(len(jobs) / concurrency) * 50 + 20
 
     try:
         results = await asyncio.wait_for(
@@ -10023,6 +10142,15 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
     # was worse" banner without the client recomputing it.
     any_improved = any(v["improved"] for v in out_variants)
 
+    # Diagnostic: if the baseline fired zero trades, the strategy's entry
+    # conditions are too restrictive — tweaking SL/TP can't help. Mobile shows
+    # a different (more useful) empty state in that case.
+    base_trade_count = int(baseline_stats.get("closed_trades") or 0)
+    baseline_zero_trades = base_trade_count == 0
+    # How many variants returned actual results (i.e. backtest didn't error
+    # out or time out). Useful for the "Tested 18 of 22 variations" copy.
+    completed = sum(1 for r in results[1:] if r)
+
     return {
         "days":     days,
         "baseline": {
@@ -10030,9 +10158,12 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
             "stats": baseline_stats,
             "score": round(base_score, 2),
         },
-        "variants":     out_variants,
-        "any_improved": any_improved,
-        "ran_at":       datetime.utcnow().isoformat() + "Z",
+        "variants":             out_variants,
+        "any_improved":         any_improved,
+        "baseline_zero_trades": baseline_zero_trades,
+        "total_tested":         completed,
+        "total_attempted":      len(jobs) - 1,
+        "ran_at":               datetime.utcnow().isoformat() + "Z",
     }
 
 
@@ -10070,6 +10201,15 @@ async def api_strategy_optimize_apply(strategy_id: int, request: Request):
                 continue
         elif k == "timeframe":
             if v not in _OPTIMIZER_TF_ORDER:
+                continue
+        elif k == "primaryCfg":
+            # Must be a dict; we replace the whole primaryCfg block since
+            # different signal types have different keys and a partial merge
+            # could leave stale keys from the old type.
+            if not isinstance(v, dict):
+                continue
+            # Sanity-cap: prevent payload bombs.
+            if len(v) > 32:
                 continue
         clean[k] = v
     if not clean:
