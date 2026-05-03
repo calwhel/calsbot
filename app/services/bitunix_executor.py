@@ -76,11 +76,9 @@ def _headers(api_key: str, api_secret: str, body: str, query: str = "") -> Dict[
 # ── Per-user gate ──────────────────────────────────────────────────────────
 def can_user_trade_live(user) -> tuple[bool, str]:
     """
-    Centralised "should we actually hit Bitunix for this user" check.
-
-    Returns (allowed, reason). Used by the strategy executor and any
-    'place test order' button in Settings to give the user an explicit
-    explanation when paper mode is being enforced.
+    SYNCHRONOUS pre-flight check. Verifies the easy local gates
+    (env flags, API key on file, opt-in). Does NOT hit the partner API —
+    the affiliate-roster check happens in the async wrapper below.
     """
     if DRY_RUN_ALWAYS:
         return False, "dry_run_env"
@@ -90,10 +88,35 @@ def can_user_trade_live(user) -> tuple[bool, str]:
         return False, "no_user"
     if not getattr(user, "bitunix_api_key", None) or not getattr(user, "bitunix_api_secret", None):
         return False, "no_api_key"
-    # Optional explicit opt-in flag — added later as a Settings toggle.
+    if not getattr(user, "bitunix_uid", None):
+        return False, "no_bitunix_uid"
     opt_in = getattr(user, "auto_execute_live", None)
     if opt_in is False:
         return False, "user_opted_out"
+    return True, "ok"
+
+
+async def can_user_trade_live_async(user) -> tuple[bool, str]:
+    """
+    Full gate including the affiliate-roster check. Use this in any path
+    that's about to actually hit the trading API — it enforces the
+    "they have to be under me to trade" rule via the partner API in
+    `bitunix_partner.is_uid_affiliated`.
+
+    Fails CLOSED on partner-API errors (returns False) so a network
+    blip can never let an unverified user trade live.
+    """
+    ok, reason = can_user_trade_live(user)
+    if not ok:
+        return ok, reason
+    try:
+        from app.services.bitunix_partner import is_uid_affiliated
+        affiliated, aff_reason = await is_uid_affiliated(getattr(user, "bitunix_uid", None))
+        if not affiliated:
+            return False, f"affiliate:{aff_reason}"
+    except Exception as e:
+        logger.warning(f"[Bitunix] affiliate check exception (fail-closed): {e}")
+        return False, "affiliate_check_failed"
     return True, "ok"
 
 
@@ -117,7 +140,7 @@ async def place_market_order(
     user equity into `qty_contracts` for the symbol. This module is just
     the broker layer.
     """
-    allowed, reason = can_user_trade_live(user)
+    allowed, reason = await can_user_trade_live_async(user)
     intent = {
         "symbol":       symbol,
         "side":         side,
@@ -175,7 +198,7 @@ async def place_market_order(
 
 async def close_position(user, symbol: str, side: str, qty_contracts: float) -> Dict[str, Any]:
     """Close (reduce-only) an open position. Same safety gates as place_market_order."""
-    allowed, reason = can_user_trade_live(user)
+    allowed, reason = await can_user_trade_live_async(user)
     intent = {"symbol": symbol, "side": side, "qty": qty_contracts, "close": True}
     if not allowed:
         logger.info(f"[Bitunix] DRY-RUN ({reason}) → would close {intent}")

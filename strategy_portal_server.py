@@ -9674,7 +9674,7 @@ async def admin_ai_generator_stats(uid: str = Query(...)):
 
 @app.get("/api/admin/bitunix/status")
 async def admin_bitunix_status(uid: str = Query(...)):
-    """Snapshot of the Bitunix executor's safety gates + per-user-key coverage."""
+    """Combined snapshot: trading executor gates + partner/affiliate API state + per-user-key coverage."""
     from app.database import SessionLocal
     from app.models import User
     db = SessionLocal()
@@ -9689,15 +9689,41 @@ async def admin_bitunix_status(uid: str = Query(...)):
                 .filter(User.bitunix_api_secret.isnot(None))
                 .count()
             )
+            with_uid = (
+                db.query(User)
+                .filter(User.bitunix_uid.isnot(None))
+                .count()
+            )
         except Exception:
-            with_keys = -1
+            with_keys, with_uid = -1, -1
     finally:
         db.close()
     try:
         from app.services.bitunix_executor import status as _bx_status
-        s = _bx_status()
-        s["users_with_keys_on_file"] = with_keys
-        return JSONResponse(s)
+        from app.services.bitunix_partner  import status as _bp_status
+        return JSONResponse({
+            "executor": {**_bx_status(), "users_with_keys_on_file": with_keys, "users_with_bitunix_uid": with_uid},
+            "partner":  _bp_status(),
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/bitunix/affiliates/refresh")
+async def admin_bitunix_affiliates_refresh(uid: str = Query(...)):
+    """Force-refresh the cached affiliate-UID roster from the partner API."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or not getattr(user, "is_admin", False):
+            raise HTTPException(status_code=403, detail="Admin only")
+    finally:
+        db.close()
+    try:
+        from app.services.bitunix_partner import refresh_affiliate_uids
+        uids = await refresh_affiliate_uids(force=True)
+        return JSONResponse({"count": len(uids), "sample": list(uids)[:10]})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
