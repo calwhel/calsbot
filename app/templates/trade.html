@@ -357,6 +357,51 @@ button{font-family:inherit}
   cursor:pointer;font-size:11px;padding:2px 7px;border-radius:3px;flex-shrink:0;
 }
 .alert-row .a-x:hover{background:#3a2222;border-color:#a83d3d;color:#ff6b6b}
+.alert-markers-layer{
+  position:absolute;inset:0;pointer-events:none;z-index:30;overflow:hidden;
+}
+.alert-bell{
+  position:absolute;top:0;left:0;
+  transform:translate(-50%,-50%);
+  pointer-events:auto;cursor:pointer;
+  width:22px;height:22px;line-height:18px;text-align:center;
+  border-radius:50%;background:rgba(255,186,102,.18);
+  border:1.5px solid #ffba66;color:#ffba66;
+  font-size:11px;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 2px 6px rgba(0,0,0,.35);
+  transition:transform .1s ease, background .1s ease, box-shadow .1s ease;
+  user-select:none;
+}
+.alert-bell:hover{
+  background:rgba(255,186,102,.55);
+  transform:translate(-50%,-50%) scale(1.18);
+  box-shadow:0 3px 10px rgba(255,186,102,.35);
+}
+.alert-marker-pop{
+  position:absolute;z-index:40;display:none;min-width:200px;max-width:280px;
+  background:#1c1f2a;border:1px solid #3a3f4d;border-radius:5px;
+  box-shadow:0 6px 18px rgba(0,0,0,.45);
+  padding:9px 10px;font-size:12px;color:var(--text);
+  pointer-events:auto;
+}
+.alert-marker-pop .amp-title{
+  display:flex;align-items:center;gap:6px;font-weight:600;color:#ffba66;margin-bottom:4px;
+}
+.alert-marker-pop .amp-title .amp-icon{font-size:14px}
+.alert-marker-pop .amp-meta{
+  font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-bottom:6px;
+}
+.alert-marker-pop .amp-msg{
+  color:var(--text);margin-bottom:8px;line-height:1.35;word-break:break-word;
+}
+.alert-marker-pop .amp-row{display:flex;gap:6px;justify-content:flex-end}
+.alert-marker-pop button{
+  background:transparent;border:1px solid var(--border);color:var(--muted);
+  cursor:pointer;font-size:11px;padding:3px 9px;border-radius:3px;
+}
+.alert-marker-pop button.amp-del:hover{background:#3a2222;border-color:#a83d3d;color:#ff6b6b}
+.alert-marker-pop button.amp-close:hover{background:var(--panel2);color:var(--text)}
 .alerts-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;margin-top:4px}
 .alerts-form-grid label{font-size:11px;color:var(--muted);grid-column:span 2;margin-top:4px;margin-bottom:-2px}
 .alerts-form-grid label.half{grid-column:span 1}
@@ -649,6 +694,8 @@ button{font-family:inherit}
     </div>
     <div id="chart"></div>
     <canvas id="zones"></canvas>
+    <div class="alert-markers-layer" id="alert-markers-layer"></div>
+    <div class="alert-marker-pop" id="alert-marker-pop"></div>
     <div class="ind-strip" id="ind-strip"></div>
     <div class="shared-banner hidden" id="shared-banner">
       <span>🔗 Viewing shared setup:</span>
@@ -1518,12 +1565,15 @@ button{font-family:inherit}
     // RAF loop — redraws zones whenever marked dirty (or every frame during interaction).
     // The price scale can auto-rescale without firing any subscription event, so we
     // also recompute every ~4 frames as a cheap safety net while the tab is visible.
+    // Alert-marker bells are repositioned in the same loop so they track the
+    // chart's pan/zoom/auto-rescale without dedicated event hooks.
     let frame = 0;
     function loop(){
       frame++;
       if(zonesDirty || (frame & 3) === 0){
         zonesDirty = false;
         drawZones();
+        if(typeof repositionAlertBells === 'function') repositionAlertBells();
       }
       requestAnimationFrame(loop);
     }
@@ -2276,6 +2326,9 @@ button{font-family:inherit}
     // overlay matches the new candles within ~25 s (server cache TTL).
     lastFvgData = null;
     if(typeof refreshFvg === 'function') refreshFvg();
+    // Re-bucket fired-alert markers to the new TF (and dismiss any open popup).
+    if(typeof renderAlertMarkers === 'function') renderAlertMarkers();
+    if(typeof hideAlertMarkerPopup === 'function') hideAlertMarkerPopup();
   });
 
   $('overlay-toggle').addEventListener('change', () => {
@@ -4280,6 +4333,12 @@ button{font-family:inherit}
     ],
   };
   let _alertsState = null;  // {logged_in, telegram_linked, active_count, max}
+  let _alertsListCache = [];   // cached full alert list (for marker rendering)
+  // Map of bell DOM element → {alert, time, price} for repositioning each
+  // frame and binding hover/click directly to the rendered marker.
+  const _alertBells = new Map();
+  let _alertPopupCurrentId = null;   // alert id currently shown in the popup (sticky)
+  let _alertPopupHideTimer = null;
 
   function fmtAlertSummary(a){
     if(a.kind === 'price'){
@@ -4399,12 +4458,178 @@ button{font-family:inherit}
       const n = me.active_count || 0;
       b.textContent = n;
       b.classList.toggle('zero', n === 0);
+      // Pull the full list too so we can drop fired-alert markers on the chart.
+      // Cheap (server caps at 60 rows) and reuses the same poll cadence.
+      // On any failure we clear the cache so a freshly-deleted alert can never
+      // linger on the chart waiting for a later successful poll.
+      if(me.logged_in){
+        let listOk = false;
+        try{
+          const lr = await fetch('/api/trade/alerts/list', {credentials:'same-origin'});
+          if(lr.ok){
+            const ld = await lr.json();
+            _alertsListCache = (ld && ld.alerts) || [];
+            listOk = true;
+          }
+        } catch(e){ /* silent */ }
+        if(!listOk) _alertsListCache = [];
+      } else {
+        _alertsListCache = [];
+      }
+      renderAlertMarkers();
       // If modal is open, refresh contents
       if($('alerts-modal').classList.contains('open')){
         await renderAlertsModal();
       }
     } catch(e){ /* silent */ }
   }
+
+  // ───── Fired-alert markers on the chart ─────
+  // Each fired alert (status='triggered' OR a repeating alert that has fired
+  // at least once) renders as a DOM bell anchored at its actual
+  // triggered_price / triggered_at coordinates. We use DOM rather than
+  // Lightweight Charts series markers because series markers can only
+  // anchor above/below a candle, never at a specific price — and we want
+  // hover/click to bind to the marker itself, not a chart-wide hit test.
+  function _tfBucketSec(){
+    return ({'1m':60,'5m':300,'15m':900,'1h':3600})[currentTF] || 300;
+  }
+  function renderAlertMarkers(){
+    const layer = $('alert-markers-layer');
+    if(!layer || !candleSeries){ return; }
+    // Wipe existing bells; cheap (single-digit count typically) and avoids
+    // tracking add/remove diffs against the alert list.
+    _alertBells.clear();
+    layer.innerHTML = '';
+    const tfSec = _tfBucketSec();
+    (_alertsListCache || []).forEach(a => {
+      // Only render markers for alerts on the symbol currently displayed.
+      if(!a || (a.symbol||'').toUpperCase() !== SYMBOL) return;
+      if(a.triggered_price == null || !a.triggered_at) return;
+      const ms = Date.parse(a.triggered_at);
+      if(!isFinite(ms)) return;
+      // Snap time to the current TF candle bucket so bells sit exactly at the
+      // correct candle anchor when the user switches timeframes.
+      const bucket = Math.floor(ms / 1000 / tfSec) * tfSec;
+      const price = Number(a.triggered_price);
+      if(!isFinite(price) || price <= 0) return;
+      const bell = document.createElement('div');
+      bell.className = 'alert-bell';
+      bell.textContent = '🔔';
+      bell.title = `${fmtAlertSummary(a)} @ ${price}`;
+      bell.dataset.alertId = a.id;
+      // Direct hover/click binding on the marker DOM element itself.
+      bell.addEventListener('mouseenter', () => {
+        if(_alertPopupHideTimer){ clearTimeout(_alertPopupHideTimer); _alertPopupHideTimer = null; }
+        showAlertMarkerPopup(a, bell);
+      });
+      bell.addEventListener('mouseleave', () => scheduleHideAlertMarkerPopup());
+      bell.addEventListener('click', e => {
+        e.stopPropagation();
+        if(_alertPopupHideTimer){ clearTimeout(_alertPopupHideTimer); _alertPopupHideTimer = null; }
+        showAlertMarkerPopup(a, bell);
+      });
+      layer.appendChild(bell);
+      _alertBells.set(bell, {alert: a, time: bucket, price});
+    });
+    repositionAlertBells();
+  }
+
+  // Recompute each bell's left/top from the live time→x and price→y mapping.
+  // Called from the chart RAF loop so bells track pan / zoom / auto-rescale.
+  function repositionAlertBells(){
+    if(!candleSeries || !_alertBells.size) return;
+    const ts = chart && chart.timeScale && chart.timeScale();
+    if(!ts) return;
+    const wrap = $('alert-markers-layer');
+    if(!wrap) return;
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    _alertBells.forEach((meta, bell) => {
+      let x = null, y = null;
+      try{ x = ts.timeToCoordinate(meta.time); }catch(e){}
+      try{ y = candleSeries.priceToCoordinate(meta.price); }catch(e){}
+      // Hide bells whose time has scrolled off-screen or whose price is
+      // outside the visible price scale (priceToCoordinate returns null).
+      if(x == null || y == null || x < 0 || x > w || y < 0 || y > h){
+        bell.style.display = 'none';
+        return;
+      }
+      bell.style.display = 'flex';
+      bell.style.left = x + 'px';
+      bell.style.top  = y + 'px';
+    });
+  }
+
+  function scheduleHideAlertMarkerPopup(){
+    if(_alertPopupHideTimer) clearTimeout(_alertPopupHideTimer);
+    _alertPopupHideTimer = setTimeout(hideAlertMarkerPopup, 220);
+  }
+
+  function showAlertMarkerPopup(a, anchorEl){
+    const pop = $('alert-marker-pop');
+    if(!pop || !a) return;
+    _alertPopupCurrentId = a.id;
+    const summary = fmtAlertSummary(a);
+    const when = a.triggered_at ? new Date(Date.parse(a.triggered_at)).toLocaleString() : '';
+    const price = Number(a.triggered_price);
+    const px = isFinite(price) ? price.toLocaleString(undefined, {maximumFractionDigits:8}) : '';
+    const msg = a.triggered_message ? `<div class="amp-msg">${escapeHtml(a.triggered_message)}</div>` : '';
+    pop.innerHTML = `
+      <div class="amp-title"><span class="amp-icon">🔔</span><span>${escapeHtml(summary)}</span></div>
+      <div class="amp-meta">${escapeHtml(a.symbol)} · ${escapeHtml(a.timeframe)}${px ? ' · @ ' + px : ''}${when ? ' · ' + escapeHtml(when) : ''}</div>
+      ${msg}
+      <div class="amp-row">
+        <button class="amp-close" type="button">Close</button>
+        <button class="amp-del" type="button">Delete</button>
+      </div>
+    `;
+    // Anchor the popup next to the bell so the user's eye stays put.
+    const wrap = pop.parentElement;
+    const wr = wrap.getBoundingClientRect();
+    pop.style.display = 'block';
+    const pw = pop.offsetWidth, ph = pop.offsetHeight;
+    let baseX = 20, baseY = 20;
+    if(anchorEl && anchorEl.getBoundingClientRect){
+      const br = anchorEl.getBoundingClientRect();
+      baseX = (br.left - wr.left) + br.width + 8;
+      baseY = (br.top  - wr.top)  + br.height/2 - 12;
+    }
+    let x = baseX, y = baseY;
+    if(x + pw > wr.width  - 6){
+      // Fall to the left of the bell if it'd overflow on the right
+      if(anchorEl){
+        const br = anchorEl.getBoundingClientRect();
+        x = (br.left - wr.left) - pw - 8;
+      }
+      if(x < 6) x = Math.max(6, wr.width - pw - 6);
+    }
+    if(y + ph > wr.height - 6) y = Math.max(6, wr.height - ph - 6);
+    if(y < 6) y = 6;
+    pop.style.left = x + 'px';
+    pop.style.top  = y + 'px';
+    pop.querySelector('.amp-close').onclick = hideAlertMarkerPopup;
+    pop.querySelector('.amp-del').onclick = async () => {
+      await cancelAlert(a.id);
+      hideAlertMarkerPopup();
+    };
+  }
+  function hideAlertMarkerPopup(){
+    const pop = $('alert-marker-pop');
+    if(pop) pop.style.display = 'none';
+    _alertPopupCurrentId = null;
+    if(_alertPopupHideTimer){ clearTimeout(_alertPopupHideTimer); _alertPopupHideTimer = null; }
+  }
+  // Keep popup alive while the cursor is over it; close once it leaves.
+  // (The script runs at the bottom of <body>, so the popup div is already
+  // in the DOM here — no DOMContentLoaded wait needed.)
+  (function _wireAlertPopupHover(){
+    const pop = document.getElementById('alert-marker-pop');
+    if(!pop) return;
+    pop.addEventListener('mouseenter', () => {
+      if(_alertPopupHideTimer){ clearTimeout(_alertPopupHideTimer); _alertPopupHideTimer = null; }
+    });
+    pop.addEventListener('mouseleave', scheduleHideAlertMarkerPopup);
+  })();
 
   async function renderAlertsModal(){
     $('alerts-loading').style.display = 'none';
