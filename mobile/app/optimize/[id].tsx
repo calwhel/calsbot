@@ -329,6 +329,7 @@ export default function OptimizeScreen() {
   const qc = useQueryClient();
 
   const [days, setDays] = useState<30 | 90>(30);
+  const [autoApply, setAutoApply] = useState(false);
   const [result, setResult] = useState<OptimizeResult | null>(null);
   const [errorBlock, setErrorBlock] = useState<{ kind: 'pro' | 'timeout' | 'locked' | 'other'; msg: string } | null>(null);
   const [applyingLabel, setApplyingLabel] = useState<string | null>(null);
@@ -362,6 +363,12 @@ export default function OptimizeScreen() {
     onSuccess: (data) => {
       setResult(data);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      // Auto-apply path: if the user opted in AND we found at least one
+      // improved variant, immediately apply the top-ranked one without the
+      // confirm dialog. The variants list is already sorted by score desc.
+      if (autoApply && data.any_improved && data.variants.length > 0) {
+        applyMut.mutate(data.variants[0]);
+      }
     },
     onError: (err: { kind: string; msg: string }) => {
       setErrorBlock({ kind: (err.kind as any) || 'other', msg: err.msg || 'Something went wrong' });
@@ -444,6 +451,29 @@ export default function OptimizeScreen() {
         <View style={styles.controlsCard}>
           <Text style={styles.controlsLabel}>Backtest window</Text>
           <PeriodToggle value={days} onChange={setDays} disabled={isRunning} />
+
+          {/* Auto-apply toggle — when ON, the optimizer immediately applies
+              the top-ranked variant if it beats baseline, no extra taps. */}
+          <Pressable
+            onPress={() => {
+              if (isRunning) return;
+              Haptics.selectionAsync();
+              setAutoApply((v) => !v);
+            }}
+            disabled={isRunning}
+            style={[styles.autoRow, isRunning && { opacity: 0.5 }]}
+          >
+            <View style={[styles.checkbox, autoApply && styles.checkboxOn]}>
+              {autoApply && <Ionicons name="checkmark" size={14} color={colors.accentText} />}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.autoTitle}>Apply the winner automatically</Text>
+              <Text style={styles.autoSub}>
+                Skip the confirm step — the best variant is applied as soon as the scan finishes.
+              </Text>
+            </View>
+          </Pressable>
+
           <View style={{ height: spacing.md }} />
           <PrimaryButton
             label={isRunning ? 'Running optimizer…' : result ? 'Run again' : 'Find better settings'}
@@ -453,7 +483,7 @@ export default function OptimizeScreen() {
               isRunning ? (
                 <ActivityIndicator size="small" color={colors.accentText} />
               ) : (
-                <Ionicons name="sparkles" size={16} color={colors.accentText} />
+                <Ionicons name={autoApply ? 'flash' : 'sparkles'} size={16} color={colors.accentText} />
               )
             }
           />
@@ -498,6 +528,38 @@ export default function OptimizeScreen() {
         {/* Results */}
         {result && !isRunning && (
           <>
+            {/* One-tap "apply the winner" CTA — only shown when at least one
+                variant beat the baseline. The variants list is sorted desc by
+                score, so variants[0] is always the winner. */}
+            {result.any_improved && result.variants.length > 0 && (
+              <View style={styles.winnerCard}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: 4 }}>
+                  <Ionicons name="trophy" size={14} color={colors.accent} />
+                  <Text style={styles.winnerLabel}>Best variant found</Text>
+                </View>
+                <Text style={styles.winnerTitle}>{result.variants[0].label}</Text>
+                <Text style={styles.winnerDelta}>
+                  {fmtDelta(result.variants[0].delta_pnl)} P&L vs current
+                  {result.variants[0].delta_win_rate !== 0
+                    ? `  •  ${fmtDelta(result.variants[0].delta_win_rate, 'pp')} win rate`
+                    : ''}
+                </Text>
+                <View style={{ height: spacing.sm }} />
+                <PrimaryButton
+                  label={applyingLabel === result.variants[0].label ? 'Applying…' : 'Apply best variant'}
+                  onPress={() => handleApply(result.variants[0])}
+                  disabled={!!applyingLabel}
+                  icon={
+                    applyingLabel === result.variants[0].label ? (
+                      <ActivityIndicator size="small" color={colors.accentText} />
+                    ) : (
+                      <Ionicons name="flash" size={16} color={colors.accentText} />
+                    )
+                  }
+                />
+              </View>
+            )}
+
             <Text style={styles.sectionLabel}>Baseline</Text>
             <BaselineCard stats={result.baseline.stats} />
 
@@ -592,6 +654,35 @@ const styles = StyleSheet.create({
   toggleBtnActive: { backgroundColor: colors.cardHi },
   toggleTxt:       { color: colors.textDim, fontSize: 13, fontFamily: font.medium },
   toggleTxtActive: { color: colors.text, fontFamily: font.semibold },
+
+  autoRow: {
+    flexDirection: 'row', alignItems: 'flex-start',
+    gap: spacing.sm, marginTop: spacing.md,
+    paddingVertical: 4,
+  },
+  checkbox: {
+    width: 22, height: 22, borderRadius: 6,
+    borderWidth: 1.5, borderColor: colors.borderHi,
+    alignItems: 'center', justifyContent: 'center',
+    marginTop: 1,
+  },
+  checkboxOn: { backgroundColor: colors.accent, borderColor: colors.accent },
+  autoTitle: { color: colors.text, fontSize: 14, fontFamily: font.semibold },
+  autoSub:   { color: colors.textDim, fontSize: 12, fontFamily: font.regular, marginTop: 2, lineHeight: 16 },
+
+  winnerCard: {
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    borderWidth: 1, borderColor: colors.accent,
+    marginBottom: spacing.lg,
+  },
+  winnerLabel: {
+    color: colors.accent, fontSize: 11, fontFamily: font.bold,
+    textTransform: 'uppercase', letterSpacing: 0.5,
+  },
+  winnerTitle: { color: colors.text, fontSize: 18, fontFamily: font.bold },
+  winnerDelta: { color: colors.positive, fontSize: 13, fontFamily: font.semibold, marginTop: 2 },
 
   sectionLabel: {
     color: colors.textDim, fontSize: 12, fontFamily: font.medium,
