@@ -360,6 +360,197 @@ function renderKnobs(
       );
     }
 
+    case 'sma': {
+      const condOpts: ChipOption<string>[] = [
+        { value: 'price_above',    label: 'Price above SMA ↑' },
+        { value: 'price_below',    label: 'Price below SMA ↓' },
+        { value: 'above_ribbon',   label: 'Above full ribbon 🟢' },
+        { value: 'below_ribbon',   label: 'Below full ribbon 🔴' },
+        { value: 'inside_ribbon',  label: 'Inside ribbon (neutral)' },
+      ];
+      const srcOpts: ChipOption<string>[] = [
+        { value: 'close', label: 'Close' },
+        { value: 'high',  label: 'High' },
+        { value: 'low',   label: 'Low' },
+      ];
+      return (
+        <View>
+          <Section label="Condition" compact={compact}>
+            <ChipRow options={condOpts} value={cfg.condition || 'price_above'} onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+          <Section label="Source" compact={compact}>
+            <ChipRow options={srcOpts} value={cfg.source || 'close'} onChange={(v) => set({ source: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="SMA period"
+            value={cfg.period ?? 200}
+            onChange={(v) => set({ period: v })}
+            min={5} max={500} step={5}
+            presets={[20, 50, 100, 200]}
+            hint="200 SMA on close = classic long-term trend filter"
+          />
+        </View>
+      );
+    }
+
+    case 'supertrend': {
+      const opts: ChipOption<string>[] = [
+        { value: 'bullish_flip', label: 'Flipped bullish ↑' },
+        { value: 'bearish_flip', label: 'Flipped bearish ↓' },
+        { value: 'bullish',      label: 'Is bullish' },
+        { value: 'bearish',      label: 'Is bearish' },
+      ];
+      return (
+        <Section label="Signal" compact={compact}>
+          <ChipRow options={opts} value={cfg.condition || 'bullish_flip'} onChange={(v) => set({ condition: v })} size="sm" />
+        </Section>
+      );
+    }
+
+    case 'ichimoku': {
+      const opts: ChipOption<string>[] = [
+        { value: 'above_cloud',        label: 'Price above Cloud' },
+        { value: 'below_cloud',        label: 'Price below Cloud' },
+        { value: 'tk_cross_up',        label: 'TK cross up' },
+        { value: 'tk_cross_down',      label: 'TK cross down' },
+        { value: 'kumo_breakout_up',   label: 'Kumo breakout up' },
+        { value: 'kumo_breakout_down', label: 'Kumo breakout down' },
+      ];
+      return (
+        <Section label="Ichimoku signal" compact={compact}>
+          <ChipRow options={opts} value={cfg.condition || 'above_cloud'} onChange={(v) => set({ condition: v })} size="sm" />
+        </Section>
+      );
+    }
+
+    case 'donchian': {
+      const opts: ChipOption<string>[] = [
+        { value: 'upper_break', label: 'Breaks upper band ↑' },
+        { value: 'lower_break', label: 'Breaks lower band ↓' },
+        { value: 'near_upper',  label: 'Near upper (overbought)' },
+        { value: 'near_lower',  label: 'Near lower (oversold)' },
+      ];
+      return (
+        <View>
+          <Section label="Donchian signal" compact={compact}>
+            <ChipRow options={opts} value={cfg.condition || 'upper_break'} onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="Channel period"
+            value={cfg.period ?? 20}
+            onChange={(v) => set({ period: v })}
+            min={5} max={100} step={1}
+            presets={[10, 20, 50, 100]}
+          />
+        </View>
+      );
+    }
+
+    case 'cci': {
+      const condOpts: ChipOption<string>[] = [
+        { value: 'bullish',    label: 'Trend up (CCI > 0)' },
+        { value: 'bearish',    label: 'Trend down (CCI < 0)' },
+        { value: 'oversold',   label: 'Oversold (< -100)' },
+        { value: 'overbought', label: 'Overbought (> +100)' },
+      ];
+      const maOpts: ChipOption<string>[] = [
+        { value: 'none', label: 'None (raw)' },
+        { value: 'SMA',  label: 'SMA' },
+        { value: 'EMA',  label: 'EMA' },
+        { value: 'SMMA', label: 'SMMA' },
+        { value: 'WMA',  label: 'WMA' },
+        { value: 'VWMA', label: 'VWMA' },
+      ];
+      return (
+        <View>
+          <Section label="Condition" compact={compact}>
+            <ChipRow options={condOpts} value={cfg.condition || 'bullish'} onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="CCI period"
+            value={cfg.period ?? 20}
+            onChange={(v) => set({ period: v })}
+            min={5} max={100} step={1}
+            presets={[10, 14, 20, 50]}
+          />
+          <Section label="MA smoothing (optional)" compact={compact}>
+            <ChipRow options={maOpts} value={cfg.ma_type || 'none'} onChange={(v) => set({ ma_type: v })} size="sm" />
+          </Section>
+          {cfg.ma_type && cfg.ma_type !== 'none' ? (
+            <Stepper
+              label="Smoothing period"
+              value={cfg.ma_period ?? 3}
+              onChange={(v) => set({ ma_period: v })}
+              min={2} max={20} step={1}
+              presets={[3, 5, 9, 14]}
+            />
+          ) : null}
+        </View>
+      );
+    }
+
+    case 'mfi': {
+      const opts: ChipOption<string>[] = [
+        { value: 'oversold',   label: 'Oversold (< 20)' },
+        { value: 'overbought', label: 'Overbought (> 80)' },
+        { value: 'rising',     label: 'Rising (inflow)' },
+        { value: 'falling',    label: 'Falling (outflow)' },
+      ];
+      return (
+        <Section label="MFI condition" compact={compact}>
+          <ChipRow options={opts} value={cfg.condition || 'oversold'} onChange={(v) => set({ condition: v })} size="sm" />
+        </Section>
+      );
+    }
+
+    case 'roc': {
+      const opts: ChipOption<string>[] = [
+        { value: 'positive',     label: 'ROC positive' },
+        { value: 'negative',     label: 'ROC negative' },
+        { value: 'cross_up',     label: 'Crossed above 0' },
+        { value: 'cross_down',   label: 'Crossed below 0' },
+        { value: 'accelerating', label: 'Accelerating' },
+      ];
+      return (
+        <View>
+          <Section label="ROC condition" compact={compact}>
+            <ChipRow options={opts} value={cfg.condition || 'cross_up'} onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="Lookback period"
+            value={cfg.period ?? 10}
+            onChange={(v) => set({ period: v })}
+            min={2} max={100} step={1}
+            presets={[5, 10, 20, 50]}
+          />
+        </View>
+      );
+    }
+
+    case 'divergence': {
+      // Backend `eval_divergence` only supports RSI/MACD + bullish/bearish.
+      // Hidden divergences and stoch_rsi/cci/obv are evaluator-unimplemented,
+      // so we trim the UI to evaluator-safe options to keep saved strategies firing.
+      const indOpts: ChipOption<string>[] = [
+        { value: 'rsi',  label: 'RSI' },
+        { value: 'macd', label: 'MACD' },
+      ];
+      const dirOpts: ChipOption<string>[] = [
+        { value: 'bullish', label: '🟢 Bullish' },
+        { value: 'bearish', label: '🔴 Bearish' },
+      ];
+      return (
+        <View>
+          <Section label="Indicator" compact={compact}>
+            <ChipRow options={indOpts} value={cfg.indicator || 'rsi'} onChange={(v) => set({ indicator: v })} size="sm" />
+          </Section>
+          <Section label="Direction" compact={compact}>
+            <ChipRow options={dirOpts} value={cfg.direction || 'bullish'} onChange={(v) => set({ direction: v })} size="sm" />
+          </Section>
+        </View>
+      );
+    }
+
     default:
       return null;
   }
