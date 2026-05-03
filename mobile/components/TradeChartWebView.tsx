@@ -119,7 +119,18 @@ export function TradeChartWebView({
   }, [payload]);
 
   return (
-    <View style={[styles.wrap, { height }]}>
+    // Claim the responder before the parent ScrollView can — without this
+    // the outer Screen ScrollView swallows pinch/pan touches before the
+    // WebView's TradingView library ever sees them, so the chart appears
+    // "uncontrollable". onMoveShouldSetResponderCapture wins arbitration
+    // against any ancestor scroll view, and onResponderTerminationRequest
+    // false prevents iOS from yanking the touch away mid-gesture.
+    <View
+      style={[styles.wrap, { height }]}
+      onStartShouldSetResponder={() => true}
+      onMoveShouldSetResponderCapture={() => true}
+      onResponderTerminationRequest={() => false}
+    >
       <WebView
         ref={webRef}
         originWhitelist={['*']}
@@ -132,6 +143,9 @@ export function TradeChartWebView({
         scrollEnabled={false}
         overScrollMode="never"
         bounces={false}
+        // Prevent Android from delegating touches up to the parent ScrollView
+        // — the WebView (and the TradingView lib inside it) must own them.
+        nestedScrollEnabled={false}
         // Render a native black bg under the WebView so first-paint isn't white
         style={styles.web}
         containerStyle={styles.webContainer}
@@ -275,7 +289,12 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             vertLine:{color:'#9ca3af', width:1, style:3, labelBackgroundColor:'#363a45'},
             horzLine:{color:'#9ca3af', width:1, style:3, labelBackgroundColor:'#363a45'},
           },
-          handleScroll:{ mouseWheel:true, pressedMouseMove:true, horzTouchDrag:true, vertTouchDrag:false },
+          // Allow BOTH axes to be driven by touch — vertTouchDrag was off in
+          // v1.2 to let page scroll pass through, but the parent ScrollView is
+          // now the responder owner (see TradeChartWebView wrapper) so the
+          // chart can safely consume vertical motion too. This unlocks the
+          // expected TradingView-style "drag in any direction" feel.
+          handleScroll:{ mouseWheel:true, pressedMouseMove:true, horzTouchDrag:true, vertTouchDrag:true },
           handleScale: { axisPressedMouseMove:true, mouseWheel:true, pinch:true },
           autoSize:true,
         });

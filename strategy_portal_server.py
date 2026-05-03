@@ -6652,12 +6652,23 @@ async def api_portfolio(uid: str = Query(...)):
             port_labels.append(day)
             port_values.append(round(cumulative, 2))
 
-        # Affiliate status — fail-soft, never block portfolio load
+        # Affiliate + key status — fail-soft, never block portfolio load.
+        # bitunix_uid + bitunix_api_key live on UserPreference, NOT User.
         aff_ok, aff_reason = False, "no_bitunix_uid"
+        bitunix_uid = None
+        has_keys = False
         try:
-            if user.bitunix_uid:
+            from app.models import UserPreference
+            prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+            if prefs:
+                bitunix_uid = getattr(prefs, "bitunix_uid", None)
+                has_keys = bool(
+                    getattr(prefs, "bitunix_api_key", None)
+                    and getattr(prefs, "bitunix_api_secret", None)
+                )
+            if bitunix_uid:
                 from app.services.bitunix_partner import is_uid_affiliated
-                aff_ok, aff_reason = await is_uid_affiliated(user.bitunix_uid)
+                aff_ok, aff_reason = await is_uid_affiliated(bitunix_uid)
         except Exception as e:
             aff_reason = f"check_error:{type(e).__name__}"
 
@@ -6681,8 +6692,8 @@ async def api_portfolio(uid: str = Query(...)):
             "affiliate": {
                 "ok":          bool(aff_ok),
                 "reason":      aff_reason,
-                "has_uid":     bool(user.bitunix_uid),
-                "has_keys":    bool(getattr(user.preferences, "bitunix_api_key", None)) if hasattr(user, "preferences") else False,
+                "has_uid":     bool(bitunix_uid),
+                "has_keys":    has_keys,
             },
         })
         _CACHE[cache_key] = (result, time.time() + 30)
