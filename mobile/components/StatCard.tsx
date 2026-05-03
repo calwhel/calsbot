@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { colors, font, radius, spacing } from '@/constants/colors';
+import { colors, font, radius, shadow, spacing } from '@/constants/colors';
 
 type Tone = 'neutral' | 'positive' | 'negative' | 'accent' | 'warning';
 
@@ -54,10 +54,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     borderWidth: 1,
     borderColor: colors.border,
-    minHeight: 90,
+    minHeight: 96,
+    ...shadow.card,
   },
   compact: {
-    minHeight: 72,
+    minHeight: 76,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.md,
   },
@@ -65,19 +66,20 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     fontFamily: font.medium,
     fontSize: 11,
-    letterSpacing: 0.4,
+    letterSpacing: 0.5,
     textTransform: 'uppercase',
-    marginBottom: 6,
+    marginBottom: 8,
   },
   value: {
     color: colors.text,
-    fontFamily: font.semibold,
-    fontSize: 22,
-    letterSpacing: -0.4,
+    fontFamily: font.bold,
+    fontSize: 26,
+    letterSpacing: -0.7,
     fontVariant: ['tabular-nums'],
   },
   valueCompact: {
-    fontSize: 18,
+    fontSize: 20,
+    letterSpacing: -0.5,
   },
   sub: {
     color: colors.textMute,

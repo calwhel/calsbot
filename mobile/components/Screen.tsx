@@ -88,8 +88,8 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.lg,
   },
   header: {
-    paddingTop: spacing.md,
-    paddingBottom: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xl,
   },
   headerRow: {
     flexDirection: 'row',
@@ -97,16 +97,16 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.text,
-    fontFamily: font.semibold,
-    fontSize: 26,
-    letterSpacing: -0.6,
-    lineHeight: 32,
+    fontFamily: font.bold,
+    fontSize: 32,
+    letterSpacing: -0.8,
+    lineHeight: 38,
   },
   subtitle: {
     color: colors.textDim,
     fontFamily: font.regular,
-    fontSize: 13,
-    marginTop: 4,
-    lineHeight: 18,
+    fontSize: 14,
+    marginTop: 6,
+    lineHeight: 20,
   },
 });

@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, font, radius, spacing } from '@/constants/colors';
+import { colors, font, radius, shadow, spacing } from '@/constants/colors';
 
 type Tone = 'accent' | 'positive' | 'negative' | 'warning' | 'violet' | 'gold' | 'mint' | 'magenta' | 'indigo' | 'neutral';
 
@@ -98,15 +98,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     padding: spacing.lg,
-    minHeight: 104,
+    minHeight: 116,
     justifyContent: 'space-between',
+    ...shadow.card,
   },
-  tileSm: { minHeight: 86, padding: spacing.md },
-  tileLg: { minHeight: 132, padding: spacing.lg },
+  tileSm: { minHeight: 96, padding: spacing.md },
+  tileLg: { minHeight: 144, padding: spacing.lg },
   iconChip: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
+    width: 28,
+    height: 28,
+    borderRadius: 8,
     backgroundColor: colors.cardHi,
     alignItems: 'center',
     justifyContent: 'center',
@@ -116,20 +117,20 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     fontFamily: font.medium,
     fontSize: 11,
-    letterSpacing: 0.4,
+    letterSpacing: 0.5,
     textTransform: 'uppercase',
     marginTop: spacing.xs,
   },
   value: {
     color: colors.text,
-    fontFamily: font.semibold,
-    fontSize: 22,
-    letterSpacing: -0.5,
+    fontFamily: font.bold,
+    fontSize: 26,
+    letterSpacing: -0.8,
     fontVariant: ['tabular-nums'],
-    marginTop: 4,
+    marginTop: 6,
   },
-  valueSm: { fontSize: 18 },
-  valueLg: { fontSize: 28, letterSpacing: -0.8 },
+  valueSm: { fontSize: 20, letterSpacing: -0.5 },
+  valueLg: { fontSize: 32, letterSpacing: -1 },
   sub: {
     color: colors.textMute,
     fontFamily: font.regular,

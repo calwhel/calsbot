@@ -44,13 +44,13 @@ export function Pill({
 
 const styles = StyleSheet.create({
   pill: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
     alignSelf: 'flex-start',
   },
   pillSmall: {
-    paddingHorizontal: 6,
+    paddingHorizontal: 8,
     paddingVertical: 2,
   },
   text: {

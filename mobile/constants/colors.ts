@@ -19,11 +19,12 @@
  * — no breakage, no rainbow.
  */
 
-// Core palette — neutral graphite, no blue undertone
-const SURFACE_0  = '#0E0F11';   // base background
-const SURFACE_1  = '#15171A';   // elevated section background
+// Core palette — neutral graphite, no blue undertone.
+// Bg is pulled darker so cards lift visibly off the surface.
+const SURFACE_0  = '#08090B';   // base background (near-black)
+const SURFACE_1  = '#101115';   // elevated section background
 const SURFACE_2  = '#1A1C20';   // standard card surface
-const SURFACE_3  = '#22252A';   // hover / pressed / chip surface
+const SURFACE_3  = '#23262C';   // hover / pressed / chip surface
 
 const HAIRLINE   = 'rgba(255,255,255,0.06)';
 const HAIRLINE_2 = 'rgba(255,255,255,0.10)';
@@ -112,9 +113,10 @@ export const gradient = {
 } as const;
 
 /**
- * Soft shadow presets — preserved for API compatibility but with all glow
- * removed. Modern-dark uses borders for elevation, never shadows. Card
- * preset keeps a tiny shadow for tab-bar lift only.
+ * Elevation shadows — these are TRUE shadows (pure black, blurred, low
+ * opacity) for premium card lift. NOT coloured glows. They give depth
+ * without tinting. The tonal `accent` / `positive` presets render no
+ * glow (still flat) — coloured glow is what cheapens dark UIs.
  */
 export const glow = {
   accent: {
@@ -132,11 +134,11 @@ export const glow = {
     elevation: 0,
   },
   card: {
-    shadowColor: 'transparent',
-    shadowOpacity: 0,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 0,
+    shadowColor: '#000000',
+    shadowOpacity: 0.35,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
   },
   pill: {
     shadowColor: 'transparent',
@@ -144,6 +146,22 @@ export const glow = {
     shadowRadius: 0,
     shadowOffset: { width: 0, height: 0 },
     elevation: 0,
+  },
+} as const;
+
+/** Discrete elevation steps — true black shadows, no tint. */
+export const shadow = {
+  none: {
+    shadowColor: 'transparent', shadowOpacity: 0, shadowRadius: 0,
+    shadowOffset: { width: 0, height: 0 }, elevation: 0,
+  },
+  card: {
+    shadowColor: '#000000', shadowOpacity: 0.35, shadowRadius: 18,
+    shadowOffset: { width: 0, height: 6 }, elevation: 4,
+  },
+  lift: {
+    shadowColor: '#000000', shadowOpacity: 0.45, shadowRadius: 28,
+    shadowOffset: { width: 0, height: 12 }, elevation: 8,
   },
 } as const;
 

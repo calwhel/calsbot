@@ -69,18 +69,20 @@ function StaticTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
             >
               <Ionicons
                 name={iconName}
-                size={20}
+                size={22}
                 color={focused ? colors.text : colors.textMute}
               />
               <Text
                 style={[
                   styles.label,
                   { color: focused ? colors.text : colors.textMute },
+                  focused && styles.labelActive,
                 ]}
                 numberOfLines={1}
               >
                 {label}
               </Text>
+              <View style={[styles.dot, focused && styles.dotActive]} />
             </Pressable>
           );
         })}
@@ -120,18 +122,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 4,
-    paddingTop: 8,
+    paddingTop: 10,
   },
   item: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 6,
-    gap: 4,
+    paddingVertical: 4,
+    gap: 3,
   },
   label: {
     fontFamily: font.medium,
     fontSize: 10,
-    letterSpacing: 0.2,
+    letterSpacing: 0.3,
+  },
+  labelActive: {
+    fontFamily: font.semibold,
+  },
+  dot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    marginTop: 2,
+    backgroundColor: 'transparent',
+  },
+  dotActive: {
+    backgroundColor: colors.accent,
   },
 });

@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Path } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, font, radius, spacing } from '@/constants/colors';
+import { colors, font, radius, shadow, spacing } from '@/constants/colors';
 
 /**
  * MeshHero (modern-dark) — flat hero surface for the Home P&L panel.
@@ -72,7 +72,8 @@ export function MeshHero({
       : colors.textDim;
 
   return (
-    <View style={styles.hero}>
+    <View style={styles.heroShadow}>
+      <View style={styles.hero}>
       <View style={styles.heroInner}>
         <View style={styles.heroLabelRow}>
           <Text style={styles.heroLabel}>{label}</Text>
@@ -116,11 +117,17 @@ export function MeshHero({
           </View>
         ) : null}
       </View>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  heroShadow: {
+    borderRadius: radius.xl,
+    backgroundColor: colors.card,
+    ...shadow.card,
+  },
   hero: {
     borderRadius: radius.xl,
     borderWidth: 1,
@@ -129,7 +136,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
   },
   heroInner: {
-    padding: spacing.xl,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
     paddingBottom: spacing.lg,
   },
   heroLabelRow: {
@@ -159,24 +167,25 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   heroValue: {
-    fontFamily: font.semibold,
-    fontSize: 44,
-    letterSpacing: -1.2,
+    fontFamily: font.bold,
+    fontSize: 56,
+    letterSpacing: -1.8,
     marginTop: spacing.md,
     fontVariant: ['tabular-nums'],
-    lineHeight: 50,
+    lineHeight: 60,
   },
   heroFootnote: {
     color: colors.textDim,
     fontFamily: font.regular,
     fontSize: 13,
-    marginTop: 6,
+    marginTop: 8,
     lineHeight: 18,
   },
   sparkRow: {
-    marginTop: spacing.lg,
+    marginTop: spacing.xl,
     marginHorizontal: -spacing.xl,
-    height: 44,
+    marginBottom: -spacing.lg,
+    height: 56,
     overflow: 'hidden',
   },
 });

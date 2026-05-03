@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native';
-import { colors, radius } from '@/constants/colors';
+import { colors, radius, shadow } from '@/constants/colors';
 
 /**
  * GradientCard (modern-dark) — flat surface card with hairline border.
@@ -18,10 +18,19 @@ export function GradientCard({
   glowTone?: 'accent' | 'positive' | 'none';
   highlight?: boolean;
 }) {
-  return <View style={[styles.wrap, style]}>{children}</View>;
+  return (
+    <View style={[styles.shadow, style]}>
+      <View style={styles.wrap}>{children}</View>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
+  shadow: {
+    borderRadius: radius.xl,
+    backgroundColor: colors.card,
+    ...shadow.card,
+  },
   wrap: {
     borderRadius: radius.xl,
     borderWidth: 1,

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, Text, StyleSheet, ActivityIndicator, View, Platform } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { colors, font, radius } from '@/constants/colors';
+import { colors, font, radius, shadow } from '@/constants/colors';
 
 type Variant = 'primary' | 'secondary' | 'destructive' | 'ghost';
 
@@ -57,6 +57,7 @@ export function PrimaryButton({
           borderColor: palette.border,
           borderWidth: variant === 'ghost' || variant === 'secondary' ? 1 : 0,
         },
+        variant === 'primary' && shadow.lift,
         pressed && !isDisabled && { opacity: 0.85 },
         isDisabled && { opacity: 0.5 },
       ]}
@@ -77,21 +78,20 @@ export function PrimaryButton({
 
 const styles = StyleSheet.create({
   btn: {
-    height: 50,
-    borderRadius: radius.md,
+    height: 56,
+    borderRadius: radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingHorizontal: 18,
+    paddingHorizontal: 20,
   },
   text: {
     fontFamily: font.semibold,
-    fontSize: 15,
+    fontSize: 16,
     letterSpacing: 0.1,
   },
 });
