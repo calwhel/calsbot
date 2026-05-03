@@ -8,7 +8,7 @@ high/low is used to detect TP/SL hits so scalp results are realistic.
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 
@@ -55,6 +55,11 @@ def _user_can_live_trade(user, db) -> bool:
     enabled AND API keys saved.  Live strategies silently downgrade to paper
     for this signal when this returns False — so no signal is ever dropped.
 
+    NOTE: This is the LOCAL check only (keys + opt-in). It does NOT enforce
+    the Bitunix affiliate-roster gate. For live-trade decisions inside async
+    code, prefer `_user_can_live_trade_async()` which adds the affiliate
+    check on top.
+
     Retries once with a fresh SessionLocal on any DB/SSL error so that a
     transient Neon connection drop doesn't silently send a subscriber to paper.
     """
@@ -94,6 +99,34 @@ def _user_can_live_trade(user, db) -> bool:
                 f"[_user_can_live_trade] Retry also failed for user {user.id}: {_e2} — defaulting to paper"
             )
             return False
+
+
+async def _user_can_live_trade_async(user, db) -> Tuple[bool, str]:
+    """
+    Async live-trade gate: combines the local sync check (auto_trading_enabled
+    + Bitunix keys present) with the Bitunix Partner / Affiliate roster check
+    ("they have to be under me to trade").
+
+    Returns (allowed, reason). Reason values:
+      ok | gate_off | local_check_failed | no_bitunix_uid_on_user
+      | partner_api_not_configured | uid_not_under_master
+      | partner_api_error:<...> | affiliate_check_error:<...>
+
+    Live strategies silently downgrade to paper when this returns False — no
+    signal is ever dropped, just tracked as paper for ROI accounting.
+    """
+    if not _user_can_live_trade(user, db):
+        return False, "local_check_failed"
+    try:
+        from app.services.bitunix_partner import is_uid_affiliated
+        uid = getattr(user, "bitunix_uid", None)
+        return await is_uid_affiliated(uid)
+    except Exception as _e:
+        logger.warning(
+            f"[_user_can_live_trade_async] Affiliate check threw for user {user.id}: "
+            f"{_e} — defaulting to paper (fail-closed)."
+        )
+        return False, f"affiliate_check_error:{_e}"
 
 
 # ─── Bitunix symbol cache ────────────────────────────────────────────────────
@@ -1592,11 +1625,12 @@ async def evaluate_and_fire(
     # Bitunix auto-trading set up — so every signal is always tracked.
     _wants_live = (strategy.status == "active")
     if _wants_live:
-        is_paper = not _user_can_live_trade(user, db)
+        _live_ok, _live_reason = await _user_can_live_trade_async(user, db)
+        is_paper = not _live_ok
         if is_paper:
             logger.debug(
                 f"[Strategy {strategy.id}] Live strategy downgraded to paper "
-                f"(no Bitunix API keys / auto-trading disabled) — signal will still be tracked."
+                f"(reason={_live_reason}) — signal will still be tracked."
             )
     else:
         is_paper = True   # paper / draft / paused all track as paper
@@ -2193,20 +2227,21 @@ async def _propagate_to_subscribers(
             # Use subscriber's own leverage & size but source's price/symbol/direction
             leverage   = int(sub_risk.get("leverage", 10))
             _wants_live = sub_strategy.status == "active"
+            _live_reason = "ok"
             if _wants_live:
-                _can_live = _user_can_live_trade(sub_user, _sub_db)
+                _can_live, _live_reason = await _user_can_live_trade_async(sub_user, _sub_db)
                 is_paper  = not _can_live
                 if is_paper:
                     logger.info(
                         f"[Propagate] Strategy {sub_strategy.id} (user {sub_user.username}) "
-                        f"downgraded to PAPER — auto_trading disabled or Bitunix keys missing"
+                        f"downgraded to PAPER — reason={_live_reason}"
                     )
             else:
                 is_paper = True
 
             _open_note = None
             if is_paper and _wants_live:
-                _open_note = "Live→Paper: auto_trading off or Bitunix keys not configured"
+                _open_note = f"Live→Paper: {_live_reason}"
 
             sub_exec = StrategyExecution(
                 strategy_id    = sub_strategy.id,
