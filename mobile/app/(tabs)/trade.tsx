@@ -13,6 +13,7 @@ import * as Haptics from 'expo-haptics';
 import { useMutation, useQuery } from '@tanstack/react-query';
 
 import { Screen } from '@/components/Screen';
+import { QuickTradeSheet } from '@/components/QuickTradeSheet';
 import { TradeChartWebView, type WWall, type WZone } from '@/components/TradeChartWebView';
 import { CoinChip } from '@/components/CoinChip';
 import { SectionLabel } from '@/components/SectionLabel';
@@ -164,6 +165,7 @@ export default function TradeScreen() {
   const [showFvg, setShowFvg] = useState<boolean>(true);
   const [showWalls, setShowWalls] = useState<boolean>(true);
   const [showTape, setShowTape] = useState<boolean>(true);
+  const [quickOpen, setQuickOpen] = useState<boolean>(false);
 
   // ─── Data fetches (react-query polling) ──────────────────────────────────
   const candlesQ = useQuery({
@@ -355,6 +357,7 @@ export default function TradeScreen() {
   }, [aiReadM]);
 
   return (
+    <>
     <Screen
       title="Trade"
       subtitle="Live charts, FVG zones, walls, tape & AI read."
@@ -828,8 +831,34 @@ export default function TradeScreen() {
         </>
       ) : null}
 
-      <View style={{ height: spacing.xxl * 2 }} />
+      <View style={{ height: spacing.xxl * 3 }} />
     </Screen>
+    {/* ─── Quick Trade FAB ───────────────────────────────────────────────
+        Rendered as a sibling of Screen so it floats above the scroll
+        view and stays anchored to the bottom-right of the screen. */}
+    <View pointerEvents="box-none" style={styles.fabContainer}>
+      <Pressable
+        onPress={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+          setQuickOpen(true);
+        }}
+        style={({ pressed }) => [
+          styles.fab,
+          pressed && { transform: [{ scale: 0.96 }], opacity: 0.92 },
+        ]}
+      >
+        <Ionicons name="flash" size={20} color={colors.accentText} />
+        <Text style={styles.fabText}>Quick Trade</Text>
+      </Pressable>
+    </View>
+
+    <QuickTradeSheet
+      visible={quickOpen}
+      onClose={() => setQuickOpen(false)}
+      symbol={symbol}
+      livePrice={livePrice || null}
+    />
+    </>
   );
 }
 
@@ -959,6 +988,37 @@ function TapeRow({ trade }: { trade: TradeTapeRow }) {
 }
 
 const styles = StyleSheet.create({
+  // Quick Trade FAB — anchored to bottom-right, floats above scroll
+  fabContainer: {
+    position: 'absolute',
+    right: spacing.lg,
+    bottom: spacing.xl + 8,
+    left: 0,
+    top: 0,
+    justifyContent: 'flex-end',
+    alignItems: 'flex-end',
+  },
+  fab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.accent,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderRadius: 999,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  fabText: {
+    color: colors.accentText,
+    fontFamily: font.bold,
+    fontSize: 13.5,
+    letterSpacing: 0.4,
+  },
+
   // Coin picker
   coinPickerWrap: {
     marginHorizontal: -spacing.lg,

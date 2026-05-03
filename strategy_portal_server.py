@@ -3564,6 +3564,191 @@ async def trade_funding(symbol: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Quick Trade — one-tap manual market order on the mobile Trade tab.
+# Routes through BitunixTrader.place_trade so it reuses the same affiliate gate,
+# margin/leverage/limits pre-flight, and post-fill TP/SL correction as auto trades.
+# Body: {symbol, side: "LONG"|"SHORT", leverage:int, position_usd:float,
+#        tp_pct?:float, sl_pct?:float}
+# Auth: X-TradeHub-UID. Live orders gated by the same env flag + per-user
+# affiliate roster check as every other live trade in the system.
+# ─────────────────────────────────────────────────────────────────────────────
+@app.post("/api/trade/quick")
+async def trade_quick(request: Request):
+    uid = request.query_params.get("uid", "").strip().upper()
+    if not uid:
+        raise HTTPException(status_code=401, detail="auth required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    import math as _math
+    sym  = (body.get("symbol") or "").upper().strip()
+    side = (body.get("side") or "").upper().strip()
+    try:
+        leverage     = int(body.get("leverage") or 10)
+        position_usd = float(body.get("position_usd") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="leverage and position_usd must be numeric")
+    if not _math.isfinite(position_usd):
+        raise HTTPException(status_code=400, detail="position_usd must be a finite number")
+    tp_pct = body.get("tp_pct")
+    sl_pct = body.get("sl_pct")
+    try:
+        tp_pct = float(tp_pct) if tp_pct not in (None, "") else None
+        sl_pct = float(sl_pct) if sl_pct not in (None, "") else None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="tp_pct/sl_pct must be numeric or null")
+    if tp_pct is not None and not _math.isfinite(tp_pct):
+        raise HTTPException(status_code=400, detail="tp_pct must be finite")
+    if sl_pct is not None and not _math.isfinite(sl_pct):
+        raise HTTPException(status_code=400, detail="sl_pct must be finite")
+
+    if sym not in TRADE_SYMBOL_WHITELIST:
+        raise HTTPException(status_code=400, detail="symbol not supported")
+    if side not in ("LONG", "SHORT"):
+        raise HTTPException(status_code=400, detail="side must be LONG or SHORT")
+    if leverage < 1 or leverage > 125:
+        raise HTTPException(status_code=400, detail="leverage out of range (1-125)")
+    if position_usd < 5 or position_usd > 100_000:
+        raise HTTPException(status_code=400, detail="position_usd out of range ($5-$100k)")
+    if tp_pct is not None and (tp_pct <= 0 or tp_pct > 1000):
+        raise HTTPException(status_code=400, detail="tp_pct out of range")
+    if sl_pct is not None and (sl_pct <= 0 or sl_pct >= 100):
+        raise HTTPException(status_code=400, detail="sl_pct out of range (0-100 exclusive)")
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="invalid UID")
+
+        # Bitunix creds + UID live on UserPreference, NOT User. Stored encrypted —
+        # decrypt before passing to BitunixTrader (matches strategy_executor pattern).
+        from app.models import UserPreference
+        from app.utils.encryption import decrypt_api_key
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        enc_key = (getattr(prefs, "bitunix_api_key", None) if prefs else None) or ""
+        enc_sec = (getattr(prefs, "bitunix_api_secret", None) if prefs else None) or ""
+        if not enc_key or not enc_sec:
+            return JSONResponse({
+                "ok": False,
+                "error": "NO_API_KEY",
+                "message": "Add your Bitunix API key in Settings before placing live trades.",
+            }, status_code=400)
+        try:
+            api_key = decrypt_api_key(enc_key)
+            api_sec = decrypt_api_key(enc_sec)
+        except Exception as e:
+            logger.warning(f"[quick_trade] decrypt failed uid={uid}: {e}")
+            return JSONResponse({
+                "ok": False,
+                "error": "KEY_DECRYPT_FAILED",
+                "message": "Could not decrypt your Bitunix API key. Re-enter it in Settings.",
+            }, status_code=500)
+        bitunix_uid_pref = (getattr(prefs, "bitunix_uid", None) if prefs else None) or None
+
+        from app.services.bitunix_trader import BitunixTrader
+        trader = BitunixTrader(api_key=api_key, api_secret=api_sec)
+        # Tag with the user's bitunix_uid so the affiliate gate inside place_trade
+        # can verify this user is under our master account (fail-closed).
+        try:
+            setattr(trader, "bitunix_uid", bitunix_uid_pref)
+        except Exception:
+            pass
+
+        try:
+            live_price = await trader.get_current_price(f"{sym}/USDT")
+        except Exception as e:
+            logger.warning(f"[quick_trade] get_current_price failed: {e}")
+            live_price = None
+        if not live_price or live_price <= 0:
+            return JSONResponse({
+                "ok": False,
+                "error": "PRICE_UNAVAILABLE",
+                "message": f"Could not fetch live price for {sym}.",
+            }, status_code=502)
+
+        # Convert TP/SL pcts → absolute prices using the live price as entry hint.
+        # Direction-aware: LONG TP above / SL below; SHORT inverted.
+        tp_price = None
+        sl_price = None
+        if tp_pct is not None:
+            tp_price = live_price * (1 + tp_pct / 100.0) if side == "LONG" else live_price * (1 - tp_pct / 100.0)
+        if sl_pct is not None:
+            sl_price = live_price * (1 - sl_pct / 100.0) if side == "LONG" else live_price * (1 + sl_pct / 100.0)
+
+        try:
+            result = await trader.place_trade(
+                symbol=f"{sym}/USDT",
+                direction=side,
+                entry_price=live_price,
+                stop_loss=sl_price if sl_price is not None else (
+                    live_price * 0.95 if side == "LONG" else live_price * 1.05
+                ),
+                take_profit=tp_price if tp_price is not None else (
+                    live_price * 1.10 if side == "LONG" else live_price * 0.90
+                ),
+                position_size_usdt=position_usd,
+                leverage=leverage,
+                live_price_hint=live_price,
+            )
+        except Exception as e:
+            logger.error(f"[quick_trade] place_trade exception for uid={uid}: {e}")
+            return JSONResponse({
+                "ok": False,
+                "error": "PLACE_FAILED",
+                "message": str(e)[:240],
+            }, status_code=502)
+        finally:
+            try:
+                await trader.close()
+            except Exception:
+                pass
+
+        if not result or not result.get("success"):
+            err = (result or {}).get("error", "unknown") if result else "no_response"
+            # AFFILIATE_GATE → user not under our master; tell them how to fix it
+            if isinstance(err, str) and err.startswith("AFFILIATE_GATE"):
+                return JSONResponse({
+                    "ok": False,
+                    "error": "AFFILIATE_GATE",
+                    "message": "Your Bitunix UID isn't linked to TradeHub yet. Sign up via the affiliate link in Settings.",
+                }, status_code=403)
+            return JSONResponse({
+                "ok": False,
+                "error": "ORDER_REJECTED",
+                "message": str(err)[:240],
+            }, status_code=502)
+
+        # Success — fire push notification (best-effort).
+        try:
+            from app.services.expo_push import notify_user_bg
+            notify_user_bg(
+                user.id,
+                title=f"⚡ Quick {side} {sym}",
+                body=f"{leverage}× · ${position_usd:.0f} @ ${live_price:,.4f}",
+                data={"type": "quick_trade", "symbol": sym, "side": side},
+            )
+        except Exception as _push_err:
+            logger.debug(f"[quick_trade] push send skipped: {_push_err}")
+
+        return JSONResponse({
+            "ok": True,
+            "order_id": result.get("order_id"),
+            "symbol": sym,
+            "side": side,
+            "leverage": leverage,
+            "entry_price": live_price,
+            "tp_price": tp_price,
+            "sl_price": sl_price,
+            "position_usd": position_usd,
+        })
+    finally:
+        db.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Fair Value Gap (FVG) overlay — ICT 3-candle gap detection for /trade
 # ─────────────────────────────────────────────────────────────────────────────
 # Re-uses the candle source the chart already loads, runs them through the
