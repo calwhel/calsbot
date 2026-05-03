@@ -510,7 +510,7 @@ export default function TradesScreen() {
             t={item}
             onPress={() => {
               Haptics.selectionAsync().catch(() => {});
-              router.push(`/strategy/${item.strategy_id}`);
+              router.push(`/execution/${item.id}` as any);
             }}
           />
         )}

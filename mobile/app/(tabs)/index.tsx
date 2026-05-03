@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   ScrollView,
   Pressable,
+  useWindowDimensions,
 } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
@@ -23,6 +24,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { Logo } from '@/components/Logo';
 import { QuickstartCard } from '@/components/QuickstartCard';
 import { Pill } from '@/components/Pill';
+import { EquityCurve } from '@/components/EquityCurve';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -148,6 +150,9 @@ export default function HomeScreen() {
               spark={data.equity_30d?.values || []}
               tone={pnlTone(data.pnl_all)}
             />
+
+            {/* Equity curve — full-width chart with 7d/30d toggle */}
+            <EquityCurveSection equity30={data.equity_30d?.values || []} />
 
             {/* Quick actions */}
             <View style={styles.quickWrap}>
@@ -782,4 +787,119 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     lineHeight: 17,
   },
+
+  equitySection: { marginTop: spacing.lg },
+  equityHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+    paddingHorizontal: 2,
+  },
+  equityTitle: {
+    color: colors.text,
+    fontFamily: font.black,
+    fontSize: 14,
+    letterSpacing: 0.4,
+  },
+  equityValue: {
+    color: colors.text,
+    fontFamily: font.black,
+    fontSize: 22,
+    fontVariant: ['tabular-nums'],
+    letterSpacing: -0.5,
+  },
+  equityValueRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+    paddingHorizontal: 2,
+    marginBottom: spacing.sm,
+  },
+  equityDelta: {
+    fontFamily: font.bold,
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+  },
+  rangeRow: { flexDirection: 'row', gap: 6 },
+  rangeChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bgElev,
+  },
+  rangeChipActive: {
+    backgroundColor: colors.accentDim,
+    borderColor: 'rgba(34,211,238,0.45)',
+  },
+  rangeChipText: {
+    color: colors.textDim,
+    fontFamily: font.bold,
+    fontSize: 10.5,
+    letterSpacing: 0.6,
+  },
+  rangeChipTextActive: { color: colors.accent },
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Equity curve section — full-width chart with 7d/30d toggle.
+// `equity30` is the cumulative-PnL series from /api/portfolio.equity_30d.values
+// (most recent last). For "7d" we slice the trailing 7 elements; this preserves
+// the cumulative scale (so the line still starts above zero if the user was
+// already in profit before the window).
+// ─────────────────────────────────────────────────────────────────────────
+function EquityCurveSection({ equity30 }: { equity30: number[] }) {
+  const { width } = useWindowDimensions();
+  const [range, setRange] = React.useState<'7d' | '30d'>('30d');
+  const cardW = Math.max(width - spacing.lg * 2, 280);
+  const innerW = Math.max(cardW - spacing.sm * 2, 200);
+
+  const values = React.useMemo(() => {
+    if (!equity30 || equity30.length === 0) return [] as number[];
+    if (range === '7d') return equity30.slice(-7);
+    return equity30;
+  }, [equity30, range]);
+
+  const last  = values.length ? values[values.length - 1] : 0;
+  const first = values.length ? values[0] : 0;
+  const delta = last - first;
+  const deltaColor =
+    delta > 0.001 ? colors.positive : delta < -0.001 ? colors.negative : colors.textDim;
+
+  return (
+    <View style={styles.equitySection}>
+      <View style={styles.equityHead}>
+        <Text style={styles.equityTitle}>EQUITY CURVE</Text>
+        <View style={styles.rangeRow}>
+          {(['7d', '30d'] as const).map((r) => {
+            const active = r === range;
+            return (
+              <Pressable
+                key={r}
+                onPress={() => setRange(r)}
+                style={({ pressed }) => [
+                  styles.rangeChip,
+                  active && styles.rangeChipActive,
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Text style={[styles.rangeChipText, active && styles.rangeChipTextActive]}>
+                  {r.toUpperCase()}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+      <View style={styles.equityValueRow}>
+        <Text style={styles.equityValue}>{fmtPnl(last)}</Text>
+        <Text style={[styles.equityDelta, { color: deltaColor }]}>
+          {delta >= 0 ? '+' : ''}{delta.toFixed(2)}% over {range}
+        </Text>
+      </View>
+      <EquityCurve values={values} width={innerW} height={150} />
+    </View>
+  );
+}

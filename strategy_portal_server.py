@@ -4991,6 +4991,92 @@ async def api_marketplace(
         db.close()
 
 
+@app.get("/api/marketplace/leaderboard")
+async def api_marketplace_leaderboard(
+    uid: str = Query(...),
+    period: str = Query("30d"),       # 7d | 30d | all
+    limit: int  = Query(10, ge=1, le=50),
+):
+    """Top public marketplace strategies ranked by trailing summed pnl_pct.
+
+    Single SQL aggregation over strategy_executions JOIN strategy_marketplace —
+    no N+1 over listings. Powers the mobile leaderboard rail at the top of the
+    Market tab and is cheap enough to call on every refresh."""
+    from app.database import SessionLocal
+    from sqlalchemy import text
+    from datetime import datetime, timedelta
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+
+        if period == "7d":
+            cutoff = datetime.utcnow() - timedelta(days=7)
+        elif period == "all":
+            cutoff = None
+        else:
+            period = "30d"
+            cutoff = datetime.utcnow() - timedelta(days=30)
+
+        cutoff_clause = "AND COALESCE(e.closed_at, e.fired_at) > :cutoff" if cutoff else ""
+        params: dict = {"limit": int(limit)}
+        if cutoff is not None:
+            params["cutoff"] = cutoff
+
+        rows = db.execute(text(f"""
+            SELECT m.id           AS listing_id,
+                   m.title        AS title,
+                   m.author_id    AS author_id,
+                   m.pricing_model AS pricing_model,
+                   m.price_usdt   AS price_usdt,
+                   m.is_verified  AS is_verified,
+                   m.is_ai_generated AS is_ai_generated,
+                   COALESCE(SUM(e.pnl_pct), 0) AS pnl_sum,
+                   COUNT(e.id)              AS trades,
+                   SUM(CASE WHEN e.outcome = 'WIN' THEN 1 ELSE 0 END) AS wins
+            FROM strategy_marketplace m
+            JOIN strategy_executions e ON e.strategy_id = m.strategy_id
+            WHERE e.outcome IN ('WIN', 'LOSS', 'BREAKEVEN')
+              AND e.pnl_pct IS NOT NULL
+              {cutoff_clause}
+            GROUP BY m.id, m.title, m.author_id, m.pricing_model, m.price_usdt,
+                     m.is_verified, m.is_ai_generated
+            HAVING COUNT(e.id) >= 1
+            ORDER BY pnl_sum DESC
+            LIMIT :limit
+        """), params).fetchall()
+
+        # Resolve author display names in one shot
+        author_ids = list({r.author_id for r in rows})
+        names: dict = {}
+        if author_ids:
+            for u in db.query(User).filter(User.id.in_(author_ids)).all():
+                names[u.id] = u.first_name or u.username or "Anonymous"
+
+        entries = []
+        for rank, r in enumerate(rows, 1):
+            trades = int(r.trades or 0)
+            wins   = int(r.wins or 0)
+            wr     = round((wins / trades) * 100, 1) if trades > 0 else 0.0
+            entries.append({
+                "rank":          rank,
+                "listing_id":    r.listing_id,
+                "title":         r.title,
+                "author_name":   names.get(r.author_id, "Anonymous"),
+                "pricing_model": r.pricing_model or "free",
+                "price_usdt":    float(r.price_usdt or 0),
+                "is_verified":   bool(r.is_verified),
+                "is_ai_generated": bool(r.is_ai_generated),
+                "pnl_pct":       round(float(r.pnl_sum or 0), 2),
+                "trades":        trades,
+                "win_rate":      wr,
+            })
+        return JSONResponse({"period": period, "entries": entries})
+    finally:
+        db.close()
+
+
 @app.get("/api/marketplace/{listing_id}")
 async def api_marketplace_detail(listing_id: int, uid: str = Query(...)):
     from app.database import SessionLocal, engine
@@ -6893,6 +6979,129 @@ async def api_portfolio(uid: str = Query(...)):
         })
         _CACHE[cache_key] = (result, time.time() + 30)
         return result
+    finally:
+        db.close()
+
+
+@app.get("/api/executions/{exec_id}")
+async def api_execution_detail(exec_id: int, uid: str = Query(...)):
+    """Full breakdown of a single trade execution — entry/exit, the conditions
+    that fired, and a small kline window around fired_at so the client can
+    render an annotated chart of the moment the trade triggered.
+
+    Powers the mobile "Why did this trade fire?" detail screen. Klines are
+    fetched directly from MEXC (same source as /api/trade/candles) — never
+    blocks the rest of the response if MEXC is down or the symbol isn't on
+    MEXC; we just return `candles.data: []` and the client renders the
+    metadata-only view."""
+    from app.database import SessionLocal
+    from app.strategy_models import StrategyExecution, UserStrategy
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+
+        ex = db.query(StrategyExecution).filter(StrategyExecution.id == exec_id).first()
+        if not ex:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        if ex.user_id != user.id:
+            raise HTTPException(status_code=403, detail="Not your trade")
+
+        strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
+        cfg = (strat.config if strat else None) or {}
+        # Strategy timeframe; falls back to 5m. Mobile TF labels match
+        # _TRADE_TF_MAP keys (1m/5m/15m/1h). Anything else → 5m.
+        tf_raw = str(cfg.get("timeframe") or "5m")
+        interval = _TRADE_TF_MAP.get(tf_raw, "5m")
+
+        candles: list = []
+        sym = (ex.symbol or "").upper().strip()
+        if sym:
+            try:
+                import httpx
+                tf_secs = {"1m": 60, "5m": 300, "15m": 900, "60m": 3600}.get(interval, 300)
+                # Anchor the window on fired_at — this is a "why did it fire?"
+                # view, so the moment of trigger must always be in frame. We
+                # asymmetric-pad: 30 candles BEFORE fired_at (the setup), and
+                # then enough candles AFTER to cover the trade through closed_at
+                # (capped so a multi-day trade doesn't exceed the 200-row limit).
+                fired_at = ex.fired_at or datetime.utcnow()
+                closed_at = ex.closed_at or datetime.utcnow()
+                start_dt  = fired_at - timedelta(seconds=tf_secs * 30)
+                hold_candles = max(0, int((closed_at - fired_at).total_seconds() / tf_secs))
+                # 30 setup + N hold + 10 follow-through, hard-capped at 160
+                # forward candles so total payload stays ≤ 200 rows.
+                forward = min(hold_candles + 10, 160)
+                end_dt2  = fired_at + timedelta(seconds=tf_secs * forward)
+                async with httpx.AsyncClient(timeout=4.0) as client:
+                    r = await client.get(
+                        "https://api.mexc.com/api/v3/klines",
+                        params={
+                            "symbol":    sym,
+                            "interval":  interval,
+                            "startTime": int(start_dt.timestamp() * 1000),
+                            "endTime":   int(end_dt2.timestamp()   * 1000),
+                            "limit":     200,
+                        },
+                    )
+                    r.raise_for_status()
+                    for k in (r.json() or []):
+                        try:
+                            candles.append({
+                                "time":   int(k[0]) // 1000,
+                                "open":   float(k[1]),
+                                "high":   float(k[2]),
+                                "low":    float(k[3]),
+                                "close":  float(k[4]),
+                                "volume": float(k[5]) if len(k) > 5 else 0.0,
+                            })
+                        except (TypeError, ValueError, IndexError):
+                            continue
+            except Exception as e:
+                logger.debug(f"execution_detail({exec_id}) klines failed: {e}")
+
+        # Normalize conditions_met into a flat list of human-readable strings.
+        # Backend stores it as either a list of dicts/strings, or a dict of
+        # {label: bool}; the client only needs labels for chip rendering.
+        conditions: list = []
+        cm = ex.conditions_met
+        if isinstance(cm, list):
+            for c in cm:
+                if isinstance(c, dict):
+                    label = c.get("label") or c.get("type") or c.get("name")
+                    if label:
+                        conditions.append(str(label))
+                elif c:
+                    conditions.append(str(c))
+        elif isinstance(cm, dict):
+            for k, v in cm.items():
+                if v in (True, "true", 1, "1"):
+                    conditions.append(str(k))
+
+        return JSONResponse({
+            "id":            ex.id,
+            "strategy_id":   ex.strategy_id,
+            "strategy_name": (strat.name if strat else "—"),
+            "symbol":        ex.symbol,
+            "direction":     ex.direction,
+            "leverage":      ex.leverage or 0,
+            "is_paper":      bool(ex.is_paper),
+            "entry_price":   ex.entry_price,
+            "exit_price":    ex.exit_price,
+            "tp_price":      ex.tp_price,
+            "tp2_price":     ex.tp2_price,
+            "sl_price":      ex.sl_price,
+            "outcome":       ex.outcome,
+            "pnl_pct":       ex.pnl_pct,
+            "pnl_usd":       ex.pnl_usd,
+            "position_size": ex.position_size,
+            "fired_at":      ex.fired_at.isoformat()  if ex.fired_at  else None,
+            "closed_at":     ex.closed_at.isoformat() if ex.closed_at else None,
+            "notes":         ex.notes,
+            "conditions":    conditions,
+            "candles":       {"tf": tf_raw, "data": candles},
+        })
     finally:
         db.close()
 

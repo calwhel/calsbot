@@ -23,7 +23,7 @@ import { Sparkline } from '@/components/Sparkline';
 import { MiniDonut } from '@/components/MiniDonut';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { apiGet, type MarketplaceListing } from '@/lib/api';
+import { apiGet, type MarketplaceListing, type LeaderboardResponse, type LeaderboardEntry } from '@/lib/api';
 
 type SortKey = 'top' | 'trending' | 'new' | 'price' | 'ai' | 'sharpe' | 'winrate' | 'followers';
 const SORTS: Array<{ key: SortKey; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
@@ -217,6 +217,185 @@ const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: Marketp
   );
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// Leaderboard rail — top 10 marketplace strategies by trailing P&L %.
+// Lives at the top of the Market tab; period chips (7d/30d/All) toggle the
+// window. Cards tap into the existing `/listing/[id]` detail screen.
+// ─────────────────────────────────────────────────────────────────────────
+type LbPeriod = '7d' | '30d' | 'all';
+
+function LeaderboardRail({
+  uid, onTap,
+}: {
+  uid: string | null | undefined;
+  onTap: (listingId: number) => void;
+}) {
+  const [period, setPeriod] = useState<LbPeriod>('30d');
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['marketplace-leaderboard', uid, period],
+    queryFn: () => apiGet<LeaderboardResponse>('/api/marketplace/leaderboard', uid, { period, limit: '10' }),
+    enabled: !!uid,
+    staleTime: 60_000,
+  });
+
+  const entries = data?.entries || [];
+
+  return (
+    <View style={lbStyles.wrap}>
+      <View style={lbStyles.head}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Ionicons name="trophy" size={13} color={colors.gold} />
+          <Text style={lbStyles.title}>LEADERBOARD</Text>
+        </View>
+        <View style={lbStyles.periodRow}>
+          {(['7d', '30d', 'all'] as const).map((p) => {
+            const active = p === period;
+            return (
+              <Pressable
+                key={p}
+                onPress={() => {
+                  if (active) return;
+                  Haptics.selectionAsync().catch(() => {});
+                  setPeriod(p);
+                }}
+                style={({ pressed }) => [
+                  lbStyles.periodChip,
+                  active && lbStyles.periodChipActive,
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Text style={[lbStyles.periodChipText, active && lbStyles.periodChipTextActive]}>
+                  {p === 'all' ? 'ALL' : p.toUpperCase()}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
+      {isLoading ? (
+        <View style={lbStyles.placeholder}>
+          <ActivityIndicator size="small" color={colors.accent} />
+        </View>
+      ) : isError || entries.length === 0 ? (
+        <View style={lbStyles.placeholder}>
+          <Text style={lbStyles.placeholderText}>
+            {isError ? 'Leaderboard unavailable.' : 'No closed trades in this window yet.'}
+          </Text>
+        </View>
+      ) : (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={lbStyles.row}
+        >
+          {entries.map((e) => (
+            <LeaderboardCard key={`lb-${e.listing_id}`} entry={e} onTap={() => onTap(e.listing_id)} />
+          ))}
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
+const LeaderboardCard = React.memo(function LeaderboardCard({
+  entry, onTap,
+}: { entry: LeaderboardEntry; onTap: () => void }) {
+  const positive = entry.pnl_pct >= 0;
+  const rankColor =
+    entry.rank === 1 ? colors.gold :
+    entry.rank === 2 ? '#cbd5e1' :
+    entry.rank === 3 ? '#d97706' :
+    colors.textDim;
+  return (
+    <Pressable
+      onPress={() => {
+        Haptics.selectionAsync().catch(() => {});
+        onTap();
+      }}
+      style={({ pressed }) => [lbStyles.card, pressed && { opacity: 0.88, transform: [{ scale: 0.985 }] }]}
+    >
+      <View style={lbStyles.cardHead}>
+        <Text style={[lbStyles.rank, { color: rankColor }]}>#{entry.rank}</Text>
+        {entry.is_ai_generated ? (
+          <Ionicons name="hardware-chip" size={11} color={colors.accent} />
+        ) : entry.is_verified ? (
+          <Ionicons name="checkmark-circle" size={11} color={colors.accent} />
+        ) : null}
+      </View>
+      <Text style={lbStyles.cardTitle} numberOfLines={2}>{entry.title}</Text>
+      <Text style={lbStyles.cardAuthor} numberOfLines={1}>{entry.author_name}</Text>
+      <View style={lbStyles.cardFoot}>
+        <Text style={[lbStyles.cardPnl, { color: positive ? colors.positive : colors.negative }]}>
+          {positive ? '+' : ''}{entry.pnl_pct.toFixed(1)}%
+        </Text>
+        <Text style={lbStyles.cardSub}>
+          {entry.win_rate.toFixed(0)}% · {entry.trades}t
+        </Text>
+      </View>
+    </Pressable>
+  );
+});
+
+const lbStyles = StyleSheet.create({
+  wrap: { marginTop: spacing.md },
+  head: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.xs,
+  },
+  title: {
+    color: colors.textMute,
+    fontFamily: font.black,
+    fontSize: 10.5,
+    letterSpacing: 1.0,
+  },
+  periodRow: { flexDirection: 'row', gap: 4 },
+  periodChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bgElev,
+  },
+  periodChipActive: { backgroundColor: colors.accentDim, borderColor: 'rgba(34,211,238,0.45)' },
+  periodChipText: { color: colors.textDim, fontFamily: font.bold, fontSize: 9.5, letterSpacing: 0.6 },
+  periodChipTextActive: { color: colors.accent },
+
+  row: { gap: spacing.sm, paddingVertical: 6, paddingRight: spacing.lg },
+  card: {
+    width: 158,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    gap: 4,
+  },
+  cardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  rank: { fontFamily: font.black, fontSize: 13, letterSpacing: 0.5 },
+  cardTitle: { color: colors.text, fontFamily: font.black, fontSize: 13, lineHeight: 16, marginTop: 2 },
+  cardAuthor: { color: colors.textDim, fontFamily: font.semibold, fontSize: 10.5, marginTop: 2 },
+  cardFoot: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+  },
+  cardPnl: { fontFamily: font.black, fontSize: 14, fontVariant: ['tabular-nums'] },
+  cardSub: { color: colors.textDim, fontFamily: font.semibold, fontSize: 10.5, fontVariant: ['tabular-nums'] },
+
+  placeholder: {
+    height: 64,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  placeholderText: { color: colors.textMute, fontFamily: font.regular, fontSize: 12 },
+});
+
 function SortChips({ value, onChange }: { value: SortKey; onChange: (s: SortKey) => void }) {
   return (
     <ScrollView
@@ -295,6 +474,7 @@ export default function MarketplaceScreen() {
           </Text>
         </View>
       </View>
+      <LeaderboardRail uid={uid} onTap={(lid) => router.push(`/listing/${lid}` as any)} />
       <SortChips value={sort} onChange={setSort} />
     </View>
   );
