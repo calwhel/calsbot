@@ -73,6 +73,40 @@ async def _mobile_uid_header_to_query(request: Request, call_next):
     return await call_next(request)
 
 
+@app.on_event("startup")
+async def _warm_neon_db():
+    """Wake the Neon serverless DB on worker boot + keep it warm with a 4-min
+    heartbeat. Neon scales to zero after ~5 min idle, and the cold-wake takes
+    15-30 s — long enough that the mobile app's fetch times out and shows an
+    infinite spinner on the very first login of a session. A `SELECT 1` ping
+    every 4 minutes keeps the compute online with negligible cost.
+    """
+    async def _ping():
+        try:
+            from sqlalchemy import text
+            from app.database import SessionLocal as _SL
+            def _exec():
+                db = _SL()
+                try:
+                    db.execute(text("SELECT 1"))
+                    db.commit()
+                finally:
+                    db.close()
+            await asyncio.to_thread(_exec)
+        except Exception as exc:
+            logger.warning(f"[neon-keepwarm] ping failed: {exc}")
+
+    # Initial wake (fire-and-forget so startup doesn't block worker readiness)
+    asyncio.create_task(_ping())
+
+    async def _loop():
+        while True:
+            await asyncio.sleep(240)  # 4 min — under Neon's 5-min idle cutoff
+            await _ping()
+    asyncio.create_task(_loop())
+    logger.info("[neon-keepwarm] heartbeat scheduled every 240s")
+
+
 templates = Jinja2Templates(directory="app/templates")
 
 @app.middleware("http")
