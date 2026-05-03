@@ -304,6 +304,19 @@ export default function StrategyDetailScreen() {
           </Text>
         </View>
 
+        {/* AI Tuner CTA — runs ~10 backtests over parameter variants and ranks them. */}
+        <View style={{ marginTop: spacing.md }}>
+          <PrimaryButton
+            label="Optimize with AI"
+            variant="secondary"
+            onPress={() => router.push(`/optimize/${sid}`)}
+            icon={<Ionicons name="sparkles" size={16} color={colors.text} />}
+          />
+          <Text style={styles.activateHint}>
+            The tuner tries tighter stops, wider targets, and other tweaks — then suggests the best one.
+          </Text>
+        </View>
+
         {/* Stats */}
         <View style={[styles.statRow, { marginTop: spacing.lg }]}>
           <StatCard

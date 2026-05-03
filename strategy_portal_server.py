@@ -9795,6 +9795,323 @@ Respond with ONLY this JSON:
         return {"error": "AI suggestion service is temporarily unavailable. Try again in a moment."}
 
 
+# ── AI Strategy Tuner ───────────────────────────────────────────────────────────
+# Generates ~9 parameter variants of an existing strategy, backtests them all in
+# parallel, ranks by a (pnl − 0.5×drawdown) score, and lets the user one-tap
+# apply the winning patch. Pro-only because it fans out into many backtests.
+
+# Allowlist of config keys the optimizer is permitted to mutate. Anything else
+# (entry signals, universe, filters, etc.) is left untouched so we never silently
+# rewrite the user's strategy logic — only its risk/exit knobs.
+_OPTIMIZER_PATCH_ALLOWED_KEYS = {"tp1", "sl", "leverage", "timeframe"}
+_OPTIMIZER_TF_ORDER = ["5m", "15m", "1h", "4h"]
+
+
+def _generate_optimizer_variants(base_config: dict) -> list[dict]:
+    """Return a curated set of single-axis tweaks to try.
+
+    Keep this small (≤ 10) — each variant is a full backtest, and even with
+    parallel execution we have a hard 120s budget for the whole optimize call.
+    """
+    base_tp  = float(base_config.get("tp1") or 3.0)
+    base_sl  = float(base_config.get("sl")  or 2.0)
+    base_lev = int(base_config.get("leverage") or 5)
+    base_tf  = str(base_config.get("timeframe") or "1h")
+
+    def _step_tf(direction: int):
+        try:
+            i = _OPTIMIZER_TF_ORDER.index(base_tf)
+            j = i + direction
+            if 0 <= j < len(_OPTIMIZER_TF_ORDER):
+                return _OPTIMIZER_TF_ORDER[j]
+        except ValueError:
+            pass
+        return None
+
+    out: list[dict] = []
+
+    def _add(label: str, tagline: str, patch: dict):
+        # Skip no-op patches (rare — happens if base values are already at a clamp boundary)
+        if not patch:
+            return
+        out.append({"label": label, "tagline": tagline, "patch": patch})
+
+    _add("Tighter stop-loss",
+         f"SL {base_sl:.1f}% → {round(base_sl * 0.7, 2):.1f}%",
+         {"sl": round(base_sl * 0.7, 2)})
+    _add("Wider stop-loss",
+         f"SL {base_sl:.1f}% → {round(base_sl * 1.4, 2):.1f}%",
+         {"sl": round(base_sl * 1.4, 2)})
+    _add("Tighter take-profit",
+         f"TP {base_tp:.1f}% → {round(base_tp * 0.7, 2):.1f}%",
+         {"tp1": round(base_tp * 0.7, 2)})
+    _add("Wider take-profit",
+         f"TP {base_tp:.1f}% → {round(base_tp * 1.5, 2):.1f}%",
+         {"tp1": round(base_tp * 1.5, 2)})
+    _add("Better risk/reward",
+         f"TP ×1.5, SL ×0.7",
+         {"tp1": round(base_tp * 1.5, 2), "sl": round(base_sl * 0.7, 2)})
+    if base_lev > 2:
+        new_lev = max(1, base_lev - 3)
+        _add("Lower leverage", f"{base_lev}× → {new_lev}×", {"leverage": new_lev})
+    if base_lev < 25:
+        new_lev = min(25, base_lev + 5)
+        _add("Higher leverage", f"{base_lev}× → {new_lev}×", {"leverage": new_lev})
+    nxt = _step_tf(1)
+    if nxt:
+        _add("Slower timeframe", f"{base_tf} → {nxt}", {"timeframe": nxt})
+    prv = _step_tf(-1)
+    if prv:
+        _add("Faster timeframe", f"{base_tf} → {prv}", {"timeframe": prv})
+
+    return out
+
+
+def _optimizer_score(stats: dict) -> float:
+    """Risk-adjusted score: PnL minus half the max drawdown.
+
+    Penalising drawdown stops the ranker from promoting a "+200% but blew up
+    twice" variant over a steadier "+80% with 12% DD" one.
+    """
+    try:
+        pnl = float(stats.get("total_pnl") or 0.0)
+        dd  = float(stats.get("max_drawdown") or 0.0)
+        return pnl - 0.5 * abs(dd)
+    except Exception:
+        return -1e9
+
+
+@app.post("/api/strategies/{strategy_id}/optimize")
+async def api_strategy_optimize(strategy_id: int, request: Request):
+    """Run a fan-out backtest sweep over parameter variants of a strategy.
+
+    Body: { uid, days?: 30 | 90 }
+    Returns: { baseline: {label, stats, score}, variants: [{label, tagline, patch, stats, score, delta_pnl, delta_dd, delta_win_rate, improved}], days, ran_at }
+    Pro-gated. Each backtest runs with a 60s budget; whole call capped at 120s.
+    """
+    body = await request.json()
+    uid  = (body.get("uid") or "").strip()
+    days = int(body.get("days") or 30)
+    if days not in (30, 90):
+        days = 30
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid_safe(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        _sub = _get_portal_sub(user.id, db)
+        if not _is_portal_pro(_sub) and not getattr(user, "is_admin", False):
+            return JSONResponse(
+                status_code=402,
+                content={"error": "PRO_REQUIRED",
+                         "message": "A Pro subscription is required to run the AI tuner."},
+            )
+
+        from app.strategy_models import UserStrategy
+        s = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id, UserStrategy.user_id == user.id
+        ).first()
+        if not s:
+            raise HTTPException(status_code=404, detail="strategy not found")
+        # Locked (subscribed-from-marketplace) strategies have IP-protected entry
+        # logic, so we'd be spinning the optimizer over knobs the user can't keep
+        # afterwards. Block early with a clear message.
+        if (s.config or {}).get("_locked"):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "LOCKED",
+                         "message": "Subscribed strategies can't be optimized — clone it first to make it editable."},
+            )
+        base_config = dict(s.config or {})
+    finally:
+        db.close()
+
+    variants = _generate_optimizer_variants(base_config)
+    if not variants:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "NO_VARIANTS",
+                     "message": "Couldn't generate any parameter variants for this strategy."},
+        )
+
+    from app.services.backtest_engine import run_backtest
+
+    # Cap concurrency so we don't blow up worker memory / hit Gate.io rate
+    # limits when 10 backtests all request candles at once.
+    concurrency = 3
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _run_one(cfg: dict) -> dict | None:
+        async with sem:
+            try:
+                # run_backtest returns {symbol, days, trades, stats:{...}, equity_curve, ...}
+                # We only care about the stats sub-dict for ranking + the wire payload.
+                full = await asyncio.wait_for(run_backtest(cfg, days), timeout=60)
+                if not isinstance(full, dict):
+                    return None
+                if full.get("error"):
+                    return None
+                inner = full.get("stats")
+                if not isinstance(inner, dict):
+                    return None
+                return inner
+            except Exception as exc:
+                logger.warning(f"[Optimize sid={strategy_id}] variant failed: {exc}")
+                return None
+
+    # Build the full job list: baseline + each variant config
+    jobs: list[tuple[str, dict, dict | None]] = [("__baseline__", dict(base_config), None)]
+    for v in variants:
+        merged = dict(base_config)
+        merged.update(v["patch"])
+        jobs.append((v["label"], merged, v))
+
+    # Worst-case wall time = ceil(N / concurrency) * per_job_timeout. Add a
+    # small buffer for queueing overhead. Architect-flagged: 120s was too low
+    # for 10 jobs × 60s per-job at concurrency=3 → could 408 even when each
+    # individual backtest respected its own budget.
+    import math
+    outer_timeout = math.ceil(len(jobs) / concurrency) * 60 + 20
+
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(*[_run_one(cfg) for _, cfg, _ in jobs]),
+            timeout=outer_timeout,
+        )
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            status_code=408,
+            content={"error": "TIMEOUT",
+                     "message": "Optimizer timed out. Try again or use a 30-day window."},
+        )
+
+    baseline_stats = results[0]
+    if not baseline_stats:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "BASELINE_FAILED",
+                     "message": "Couldn't backtest the current strategy. The optimizer can't compare without a baseline."},
+        )
+    base_score = _optimizer_score(baseline_stats)
+    base_pnl   = float(baseline_stats.get("total_pnl") or 0.0)
+    base_dd    = float(baseline_stats.get("max_drawdown") or 0.0)
+    base_wr    = float(baseline_stats.get("win_rate") or 0.0)
+
+    out_variants: list[dict] = []
+    for (label, _cfg, vmeta), stats in zip(jobs[1:], results[1:]):
+        if not stats or vmeta is None:
+            continue
+        score = _optimizer_score(stats)
+        out_variants.append({
+            "label":          label,
+            "tagline":        vmeta["tagline"],
+            "patch":          vmeta["patch"],
+            "stats":          stats,
+            "score":          round(score, 2),
+            "delta_pnl":      round(float(stats.get("total_pnl") or 0.0) - base_pnl, 2),
+            "delta_dd":       round(float(stats.get("max_drawdown") or 0.0) - base_dd, 2),
+            "delta_win_rate": round(float(stats.get("win_rate") or 0.0) - base_wr, 2),
+            "improved":       score > base_score,
+        })
+
+    # Best variant first
+    out_variants.sort(key=lambda v: v["score"], reverse=True)
+
+    # Convenience flag for the mobile UI — lets us show a clear "every variant
+    # was worse" banner without the client recomputing it.
+    any_improved = any(v["improved"] for v in out_variants)
+
+    return {
+        "days":     days,
+        "baseline": {
+            "label": "Current settings",
+            "stats": baseline_stats,
+            "score": round(base_score, 2),
+        },
+        "variants":     out_variants,
+        "any_improved": any_improved,
+        "ran_at":       datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@app.post("/api/strategies/{strategy_id}/optimize/apply")
+async def api_strategy_optimize_apply(strategy_id: int, request: Request):
+    """Apply a single optimizer-suggested patch to the strategy's config.
+
+    Body: { uid, patch: { tp1?, sl?, leverage?, timeframe? } }
+    Only allowlisted keys are written; everything else is ignored. Locked
+    (subscribed) strategies cannot be optimized.
+    """
+    body  = await request.json()
+    uid   = (body.get("uid") or "").strip()
+    patch = body.get("patch") or {}
+    if not isinstance(patch, dict) or not patch:
+        raise HTTPException(status_code=400, detail="patch required")
+
+    # Strip anything outside the allowlist BEFORE we touch the DB so a bad
+    # client can't sneak in arbitrary config edits via this endpoint.
+    clean: dict = {}
+    for k, v in patch.items():
+        if k not in _OPTIMIZER_PATCH_ALLOWED_KEYS:
+            continue
+        if k == "leverage":
+            try:
+                v = max(1, min(50, int(v)))
+            except Exception:
+                continue
+        elif k in ("tp1", "sl"):
+            try:
+                v = round(float(v), 2)
+                if v <= 0:
+                    continue
+            except Exception:
+                continue
+        elif k == "timeframe":
+            if v not in _OPTIMIZER_TF_ORDER:
+                continue
+        clean[k] = v
+    if not clean:
+        raise HTTPException(status_code=400, detail="no valid patch keys")
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid_safe(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        # Apply must be Pro-gated for parity with the optimize endpoint —
+        # otherwise a free user could synthesize their own patch and bypass the
+        # paywall by hitting apply directly.
+        _sub = _get_portal_sub(user.id, db)
+        if not _is_portal_pro(_sub) and not getattr(user, "is_admin", False):
+            return JSONResponse(
+                status_code=402,
+                content={"error": "PRO_REQUIRED",
+                         "message": "A Pro subscription is required to apply optimizer suggestions."},
+            )
+
+        from app.strategy_models import UserStrategy
+        s = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id, UserStrategy.user_id == user.id
+        ).first()
+        if not s:
+            raise HTTPException(status_code=404, detail="strategy not found")
+        if (s.config or {}).get("_locked"):
+            raise HTTPException(status_code=400, detail="locked strategy — clone first")
+
+        # SQLAlchemy's JSON column doesn't track in-place mutations, so we
+        # reassign a fresh dict to force the UPDATE.
+        new_config = dict(s.config or {})
+        new_config.update(clean)
+        s.config = new_config
+        db.commit()
+        return {"ok": True, "applied": clean, "config": new_config}
+    finally:
+        db.close()
+
+
 @app.get("/admin/test-bitunix")
 async def admin_test_bitunix(secret: str = Query(...), user_id: int = Query(...)):
     """
