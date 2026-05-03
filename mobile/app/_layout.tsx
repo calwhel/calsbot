@@ -20,6 +20,7 @@ import {
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { queryClient } from '@/lib/queryClient';
 import { colors } from '@/constants/colors';
+import { OnboardingTour } from '@/components/OnboardingTour';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -78,6 +79,7 @@ function AuthGate() {
   }
 
   return (
+    <>
     <Stack
       screenOptions={{
         headerShown: false,
@@ -193,6 +195,10 @@ function AuthGate() {
         }}
       />
     </Stack>
+    {/* First-launch tour — only mounts when the user is signed in so we
+        don't pop a tour over the login screen. Self-hides after first run. */}
+    {user ? <OnboardingTour /> : null}
+    </>
   );
 }
 

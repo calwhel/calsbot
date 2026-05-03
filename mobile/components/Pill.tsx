@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { colors, font, radius } from '@/constants/colors';
 
 type Tone = 'neutral' | 'positive' | 'negative' | 'accent' | 'warning' | 'violet';
@@ -8,15 +9,20 @@ type Tone = 'neutral' | 'positive' | 'negative' | 'accent' | 'warning' | 'violet
  * Pill (modern-dark) — quiet status chip. Borderless, low-contrast surfaces.
  * Tones collapse to: positive (green), negative (red), warning (amber), and
  * neutral. Accent + violet both render as neutral.
+ *
+ * If `onPress` is supplied, the pill becomes a Pressable with light haptic
+ * feedback — used for filter chips. Otherwise renders as a static badge.
  */
 export function Pill({
   label,
   tone = 'neutral',
   small = false,
+  onPress,
 }: {
   label: string;
   tone?: Tone;
   small?: boolean;
+  onPress?: () => void;
 }) {
   const palette = (() => {
     switch (tone) {
@@ -29,15 +35,39 @@ export function Pill({
     }
   })();
 
+  const content = (
+    <Text style={[styles.text, small && styles.textSmall, { color: palette.fg }]}>
+      {label}
+    </Text>
+  );
+
+  if (onPress) {
+    const handle = () => {
+      if (Platform.OS !== 'web') Haptics.selectionAsync().catch(() => {});
+      onPress();
+    };
+    return (
+      <Pressable
+        onPress={handle}
+        style={({ pressed }) => [
+          styles.pill,
+          small && styles.pillSmall,
+          { backgroundColor: palette.bg },
+          pressed && { opacity: 0.7 },
+        ]}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+
   return (
     <View style={[
       styles.pill,
       small && styles.pillSmall,
       { backgroundColor: palette.bg },
     ]}>
-      <Text style={[styles.text, small && styles.textSmall, { color: palette.fg }]}>
-        {label}
-      </Text>
+      {content}
     </View>
   );
 }

@@ -1,6 +1,7 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { colors, font, radius, shadow, spacing } from '@/constants/colors';
 
 type Tone = 'accent' | 'positive' | 'negative' | 'warning' | 'violet' | 'gold' | 'mint' | 'magenta' | 'indigo' | 'neutral';
@@ -46,15 +47,22 @@ export function BentoTile({
   const valueColor = valueColorFor(tone);
   const iconColor = iconColorFor(tone);
 
+  const handlePress = onPress
+    ? () => {
+        if (Platform.OS !== 'web') Haptics.selectionAsync().catch(() => {});
+        onPress();
+      }
+    : undefined;
+
   const Container: any = onPress ? Pressable : View;
   const containerProps = onPress
     ? {
-        onPress,
+        onPress: handlePress,
         style: ({ pressed }: { pressed: boolean }) => [
           styles.tile,
           size === 'sm' && styles.tileSm,
           size === 'lg' && styles.tileLg,
-          pressed && { opacity: 0.85 },
+          pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
         ],
       }
     : {

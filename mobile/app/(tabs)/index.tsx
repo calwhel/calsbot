@@ -21,6 +21,7 @@ import { SectionLabel } from '@/components/SectionLabel';
 import { MiniDonut } from '@/components/MiniDonut';
 import { CoinChip } from '@/components/CoinChip';
 import { EmptyState } from '@/components/EmptyState';
+import { HomeSkeleton } from '@/components/Skeleton';
 import { Logo } from '@/components/Logo';
 import { QuickstartCard } from '@/components/QuickstartCard';
 import { Pill } from '@/components/Pill';
@@ -120,14 +121,14 @@ export default function HomeScreen() {
       ambient="duo"
     >
       {isLoading ? (
-        <View style={styles.loading}>
-          <ActivityIndicator color={colors.accent} size="large" />
-        </View>
+        <HomeSkeleton />
       ) : isError ? (
         <EmptyState
           icon="cloud-offline-outline"
           title="Couldn't load your portfolio"
           hint={(error as Error)?.message || 'Pull down to retry.'}
+          ctaLabel="Try again"
+          onCta={onRefresh}
         />
       ) : data ? (
         data.total_strategies === 0 ? (

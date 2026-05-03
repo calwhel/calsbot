@@ -17,6 +17,7 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, RadialGradient, Stop, R
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { EmptyState } from '@/components/EmptyState';
+import { StrategyListSkeleton } from '@/components/Skeleton';
 import { Pill } from '@/components/Pill';
 import { Sparkline } from '@/components/Sparkline';
 import { AmbientBg } from '@/components/AmbientBg';
@@ -307,7 +308,9 @@ export default function StrategiesScreen() {
       <View style={[styles.root, { paddingTop: insets.top }]}>
         <AmbientBg variant="duo" />
         {Header}
-        <View style={styles.center}><ActivityIndicator color={colors.accent} size="large" /></View>
+        <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md }}>
+          <StrategyListSkeleton count={4} />
+        </View>
       </View>
     );
   }
@@ -329,7 +332,7 @@ export default function StrategiesScreen() {
           }
         >
           {Header}
-          <EmptyState icon="cloud-offline-outline" title="Couldn't load strategies" hint="Pull down to retry." />
+          <EmptyState icon="cloud-offline-outline" title="Couldn't load strategies" hint="Pull down to retry." ctaLabel="Retry" onCta={() => refetch()} />
         </ScrollView>
       </View>
     );

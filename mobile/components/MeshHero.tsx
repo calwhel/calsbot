@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Path } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, font, radius, shadow, spacing } from '@/constants/colors';
@@ -39,6 +39,22 @@ export function MeshHero({
 }) {
   const uid = React.useId().replace(/:/g, '');
   const sparkId = `mh-spark-${uid}`;
+
+  // Subtle pulse on value change — premium "live tick" feel without
+  // being noisy. Skips the very first mount so the initial paint is calm.
+  const pulse = useRef(new Animated.Value(1)).current;
+  const firstRender = useRef(true);
+  useEffect(() => {
+    if (firstRender.current) { firstRender.current = false; return; }
+    Animated.sequence([
+      Animated.timing(pulse, {
+        toValue: 1.04, duration: 180, easing: Easing.out(Easing.ease), useNativeDriver: true,
+      }),
+      Animated.timing(pulse, {
+        toValue: 1, duration: 280, easing: Easing.inOut(Easing.ease), useNativeDriver: true,
+      }),
+    ]).start();
+  }, [value, pulse]);
 
   const valueColor =
     tone === 'positive' ? colors.positive : tone === 'negative' ? colors.negative : colors.text;
@@ -89,9 +105,13 @@ export function MeshHero({
           ) : null}
         </View>
 
-        <Text style={[styles.heroValue, { color: valueColor }]} numberOfLines={1} adjustsFontSizeToFit>
+        <Animated.Text
+          style={[styles.heroValue, { color: valueColor, transform: [{ scale: pulse }] }]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+        >
           {value}
-        </Text>
+        </Animated.Text>
 
         {footnote ? <Text style={styles.heroFootnote}>{footnote}</Text> : null}
 
