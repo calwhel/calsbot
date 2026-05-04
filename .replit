@@ -75,7 +75,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd mobile && while true; do echo '[mobile] starting expo tunnel...'; CI=1 EXPO_PUBLIC_API_URL=https://$REPLIT_DEV_DOMAIN npx expo start --port 8081 --tunnel; echo '[mobile] expo exited (likely ngrok hiccup) — retrying in 5s...'; sleep 5; done"
+args = "cd mobile && while true; do echo '[mobile] starting expo tunnel...'; CI=1 EXPO_PUBLIC_API_URL=https://tradehubmarkets.com npx expo start --port 8081 --tunnel; echo '[mobile] expo exited (likely ngrok hiccup) — retrying in 5s...'; sleep 5; done"
 
 [[ports]]
 localPort = 5000
