@@ -442,7 +442,7 @@ function LiveTradingCard({
   onPress: () => void;
   onPositionsPress: () => void;
 }) {
-  const aff = data.affiliate;
+  const aff = data.affiliate ?? { ok: false, has_uid: false, has_keys: false, reason: 'unavailable' as const };
   // Status: green = verified affiliate, yellow = setup needed, red = not affiliated
   let badgeText: string;
   let badgeIcon: keyof typeof Ionicons.glyphMap;
