@@ -263,17 +263,28 @@ export default function TradeScreen() {
   // by the cheap `livePrice` prop, so the chart "feels live" without any
   // per-tick rerender of the candle paths.
 
-  // FVG zones — pass the unfilled gaps within the visible candle range straight
-  // to the WebView chart, which renders them as native Lightweight Charts price
-  // lines (top + bottom of each gap) at the correct Y-coordinates.
+  // FVG zones — only show UNFILLED gaps that are reasonably close to the
+  // current price, capped to the 3 most relevant. The previous version drew
+  // every gap (filled + far away) which produced a wall of unlabeled lines.
   const chartZones = useMemo<WZone[]>(() => {
     if (!showFvg) return [];
     const gaps = fvgQ.data?.gaps || [];
     if (chartCandles.length === 0 || gaps.length === 0) return [];
     const minTime = chartCandles[0].time;
+    const lastPrice = chartCandles[chartCandles.length - 1].close;
     return gaps
-      .filter((g) => g.time >= minTime)
-      .map((g) => ({
+      .filter((g) => g.time >= minTime && !g.filled)
+      .map((g) => {
+        const mid = (g.top + g.bottom) / 2;
+        const distPct = lastPrice > 0 ? Math.abs(mid - lastPrice) / lastPrice : 1;
+        return { g, distPct };
+      })
+      // Drop gaps further than 3% from current price — those just clutter
+      .filter(({ distPct }) => distPct <= 0.03)
+      // Keep the 3 closest to price
+      .sort((a, b) => a.distPct - b.distPct)
+      .slice(0, 3)
+      .map(({ g }) => ({
         fromTime: g.time,
         top:      g.top,
         bottom:   g.bottom,

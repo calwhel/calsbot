@@ -432,14 +432,31 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 
           (data.zones || []).forEach(function(z){
             var isBull = z.side === 'bull';
-            var col = isBull ? 'rgba(38,166,154,0.55)' : 'rgba(239,83,80,0.55)';
+            // Bull = green (support / buy zone), Bear = red (resistance / sell zone).
+            // Brighter colors + axis labels so each gap is identifiable at a glance.
+            var col       = isBull ? 'rgba(38,166,154,0.85)'  : 'rgba(239,83,80,0.85)';
+            var labelBg   = isBull ? 'rgba(38,166,154,0.95)'  : 'rgba(239,83,80,0.95)';
+            var arrow     = isBull ? '▲' : '▼';
+            var topTitle  = arrow + ' FVG ' + (isBull ? 'support' : 'resistance');
             var top = candleSeries.createPriceLine({
-              price: z.top,    color: col, lineWidth: 1, lineStyle: 1,
-              axisLabelVisible: false, title: isBull ? 'FVG' : 'FVG',
+              price: z.top,
+              color: col,
+              lineWidth: 1,
+              lineStyle: 2,           // dashed so it's distinct from candle wicks
+              axisLabelVisible: true,
+              axisLabelColor: labelBg,
+              axisLabelTextColor: '#ffffff',
+              title: topTitle,
             });
             var bot = candleSeries.createPriceLine({
-              price: z.bottom, color: col, lineWidth: 1, lineStyle: 1,
-              axisLabelVisible: false, title: '',
+              price: z.bottom,
+              color: col,
+              lineWidth: 1,
+              lineStyle: 2,
+              axisLabelVisible: true,
+              axisLabelColor: labelBg,
+              axisLabelTextColor: '#ffffff',
+              title: '',              // bottom shares the band with the top label
             });
             zoneLines.push(top); zoneLines.push(bot);
           });
