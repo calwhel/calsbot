@@ -5,7 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Platform } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Notifications from 'expo-notifications';
 import {
@@ -23,6 +23,26 @@ import { colors } from '@/constants/colors';
 import { OnboardingTour } from '@/components/OnboardingTour';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
+
+if (Platform.OS === 'android') {
+  Notifications.setNotificationChannelAsync('trade-fires', {
+    name: 'Trade Opened',
+    importance: Notifications.AndroidImportance.HIGH,
+    sound: 'default',
+    vibrationPattern: [0, 250, 250, 250],
+  });
+  Notifications.setNotificationChannelAsync('trade-results', {
+    name: 'Trade Results (TP/SL)',
+    importance: Notifications.AndroidImportance.MAX,
+    sound: 'default',
+    vibrationPattern: [0, 400, 200, 400],
+  });
+  Notifications.setNotificationChannelAsync('trade-progress', {
+    name: 'Trade Progress (TP Hit, Breakeven)',
+    importance: Notifications.AndroidImportance.DEFAULT,
+    sound: 'default',
+  });
+}
 
 function AuthGate() {
   const { ready, user } = useAuth();
@@ -52,6 +72,10 @@ function AuthGate() {
   useEffect(() => {
     if (!user) return;
     const open = (data: any) => {
+      if (data?.screen) {
+        router.push(data.screen as any);
+        return;
+      }
       const sid = data?.strategy_id;
       if (sid != null) {
         router.push(`/strategy/${sid}` as any);

@@ -20,12 +20,17 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, Pressable,
   KeyboardAvoidingView, Platform, ActivityIndicator,
+  LayoutAnimation, UIManager, Animated as RNAnimated,
 } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { Pill } from '@/components/Pill';
@@ -129,8 +134,9 @@ export default function WizardScreen() {
 
   const goTo = (n: number) => {
     setStepError(null);
+    LayoutAnimation.configureNext(LayoutAnimation.create(280, 'easeInEaseOut', 'opacity'));
     setS(prev => ({ ...prev, step: Math.max(1, Math.min(7, n)) }));
-    requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: 0, animated: false }));
+    requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: 0, animated: true }));
   };
 
   // ── Style preset application — mirrors web setWzStyle() ────────────────
@@ -310,37 +316,45 @@ export default function WizardScreen() {
         }}
       />
 
-      <View style={styles.dotsRow}>
-        {WZ_STEPS.map((step, i) => {
-          const idx = i + 1;
-          const done = idx < s.step;
-          const active = idx === s.step;
-          return (
-            <Pressable
-              key={step.key}
-              onPress={() => done && goTo(idx)}
-              hitSlop={6}
-              style={styles.dotWrap}
-              accessibilityRole={done ? 'button' : undefined}
-              accessibilityLabel={`Step ${idx}: ${step.label}${active ? ' (current)' : done ? ' (completed)' : ''}`}
-            >
-              <View style={[styles.dot, done && styles.dotDone, active && styles.dotActive]}>
-                <Text style={[styles.dotIcon, (done || active) && styles.dotIconActive]}>
-                  {done ? '✓' : step.icon}
-                </Text>
-              </View>
-              <Text
-                style={[styles.dotLabel, active && styles.dotLabelActive]}
-                numberOfLines={1}
+      <View style={styles.progressWrap}>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${((s.step - 1) / 6) * 100}%` }]} />
+        </View>
+        <View style={styles.dotsRow}>
+          {WZ_STEPS.map((step, i) => {
+            const idx = i + 1;
+            const done = idx < s.step;
+            const active = idx === s.step;
+            return (
+              <Pressable
+                key={step.key}
+                onPress={() => done && goTo(idx)}
+                hitSlop={6}
+                style={styles.dotWrap}
+                accessibilityRole={done ? 'button' : undefined}
+                accessibilityLabel={`Step ${idx}: ${step.label}${active ? ' (current)' : done ? ' (completed)' : ''}`}
               >
-                {step.label}
-              </Text>
-            </Pressable>
-          );
-        })}
+                <View style={[styles.dot, done && styles.dotDone, active && styles.dotActive]}>
+                  <Text style={[styles.dotIcon, (done || active) && styles.dotIconActive]}>
+                    {done ? '✓' : step.icon}
+                  </Text>
+                </View>
+                <Text
+                  style={[styles.dotLabel, active && styles.dotLabelActive]}
+                  numberOfLines={1}
+                >
+                  {step.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
       </View>
 
-      <Text style={styles.summary} numberOfLines={2}>{summary}</Text>
+      <View style={styles.summaryBar}>
+        <Text style={styles.summaryStep}>Step {s.step} of 7</Text>
+        <Text style={styles.summary} numberOfLines={1}>{summary}</Text>
+      </View>
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -744,6 +758,29 @@ function Step5({
             {Number(rr) >= 2 ? 'Strong reward-to-risk' : Number(rr) >= 1.5 ? 'Healthy reward-to-risk' : 'Consider widening TP'}
           </Text>
         </View>
+
+        <View style={styles.rrBarWrap}>
+          <View style={styles.rrBarLabel}>
+            <Text style={[styles.rrBarTxt, { color: colors.negative }]}>SL {s.sl}%</Text>
+            <Text style={[styles.rrBarTxt, { color: colors.textDim }]}>Entry</Text>
+            <Text style={[styles.rrBarTxt, { color: colors.positive }]}>TP1 {s.tp1}%</Text>
+            {s.tp2 != null ? <Text style={[styles.rrBarTxt, { color: colors.accent }]}>TP2 {s.tp2}%</Text> : null}
+          </View>
+          <View style={styles.rrBarTrack}>
+            <View style={[styles.rrBarSeg, { flex: s.sl, backgroundColor: colors.negativeDim, borderTopLeftRadius: 4, borderBottomLeftRadius: 4 }]}>
+              <View style={[styles.rrBarFill, { backgroundColor: colors.negative }]} />
+            </View>
+            <View style={[styles.rrBarEntry, { backgroundColor: colors.text }]} />
+            <View style={[styles.rrBarSeg, { flex: s.tp1, backgroundColor: colors.positiveDim, borderTopRightRadius: s.tp2 ? 0 : 4, borderBottomRightRadius: s.tp2 ? 0 : 4 }]}>
+              <View style={[styles.rrBarFill, { backgroundColor: colors.positive }]} />
+            </View>
+            {s.tp2 != null ? (
+              <View style={[styles.rrBarSeg, { flex: s.tp2 - s.tp1, backgroundColor: colors.accentDim, borderTopRightRadius: 4, borderBottomRightRadius: 4 }]}>
+                <View style={[styles.rrBarFill, { backgroundColor: colors.accent, opacity: 0.6 }]} />
+              </View>
+            ) : null}
+          </View>
+        </View>
       </Card>
 
       <Card>
@@ -813,10 +850,10 @@ function Step5({
         </Card>
       ) : null}
 
-      <View style={styles.riskBadgeRow}>
-        <Text style={styles.riskBadgeLabel}>Strategy risk</Text>
-        <Pill label={risk.label} tone={risk.label === 'CONSERVATIVE' ? 'positive' : risk.label === 'MODERATE' ? 'accent' : risk.label === 'AGGRESSIVE' ? 'warning' : 'negative'} small />
-      </View>
+      <Card>
+        <SectionHeader label="Strategy strength" icon="💪" />
+        <StrengthMeter risk={risk} rr={Number(rr)} hasConfirms={false} hasTrailing={s.trailing != null} hasBE={s.breakeven != null} />
+      </Card>
     </View>
   );
 }
@@ -1086,7 +1123,7 @@ function Step7({
             ['Timeframe', s.timeframe],
             ['Entry',     s.primaryType ? `${SIGNAL_META[s.primaryType].icon} ${SIGNAL_META[s.primaryType].label}` : '—'],
             ['Confirmations', s.confirms.length ? `${s.confirms.length} added` : 'None'],
-            ['TP1 / SL',  `${s.tp1}% / ${s.sl}%${s.tp2 ? ` · TP2 ${s.tp2}%` : ''}${s.trailing ? ` · trail ${s.trailing}%` : ''}`],
+            ['TP1 / SL',  `${s.tp1}% / ${s.sl}%${s.tp2 ? ` · TP2 ${s.tp2}%` : ''}${s.trailing ? ` · trail ${s.trailing}%` : ''}${s.breakeven ? ` · BE @${s.breakeven}%` : ''}`],
             ['Leverage',  `${s.leverage}× · ${risk.label}`],
             ['Position',  s.posSizeType === 'fixed' ? `$${s.posSizeUsd}` : `${s.posSize}% of equity`],
             ['Universe',
@@ -1293,15 +1330,81 @@ function BtStat({ label, value, tone }: { label: string; value: string; tone: 'p
   );
 }
 
+function StrengthMeter({
+  risk, rr, hasConfirms, hasTrailing, hasBE,
+}: {
+  risk: ReturnType<typeof calcRiskLevel>;
+  rr: number;
+  hasConfirms: boolean;
+  hasTrailing: boolean;
+  hasBE: boolean;
+}) {
+  const checks = [
+    { label: 'R:R ratio 2:1+', ok: rr >= 2 },
+    { label: 'Confirmation signals', ok: hasConfirms },
+    { label: 'Trailing stop', ok: hasTrailing },
+    { label: 'Breakeven protection', ok: hasBE },
+    { label: 'Conservative risk', ok: risk.label === 'CONSERVATIVE' || risk.label === 'MODERATE' },
+  ];
+  const score = checks.filter(c => c.ok).length;
+  const pct = (score / checks.length) * 100;
+  const barColor = pct >= 80 ? colors.positive : pct >= 60 ? colors.accent : pct >= 40 ? colors.warning : colors.negative;
+  const grade = pct >= 80 ? 'A' : pct >= 60 ? 'B' : pct >= 40 ? 'C' : 'D';
+
+  return (
+    <View>
+      <View style={strengthStyles.header}>
+        <Text style={[strengthStyles.grade, { color: barColor }]}>{grade}</Text>
+        <View style={{ flex: 1 }}>
+          <View style={strengthStyles.barTrack}>
+            <View style={[strengthStyles.barFill, { width: `${pct}%`, backgroundColor: barColor }]} />
+          </View>
+          <Text style={strengthStyles.pctTxt}>{score}/{checks.length} checks passed</Text>
+        </View>
+      </View>
+      <View style={strengthStyles.list}>
+        {checks.map((c, i) => (
+          <View key={`sc-${i}`} style={strengthStyles.row}>
+            <Text style={{ fontSize: 12 }}>{c.ok ? '✅' : '⬜'}</Text>
+            <Text style={[strengthStyles.rowTxt, c.ok && { color: colors.text }]}>{c.label}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const strengthStyles = StyleSheet.create({
+  header: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
+  grade: { fontFamily: font.bold, fontSize: 28, width: 36, textAlign: 'center' },
+  barTrack: { height: 6, borderRadius: 3, backgroundColor: colors.bgElev, overflow: 'hidden' },
+  barFill: { height: '100%', borderRadius: 3 },
+  pctTxt: { fontFamily: font.medium, fontSize: 11, color: colors.textMute, marginTop: 4 },
+  list: { gap: 4 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  rowTxt: { fontFamily: font.regular, fontSize: 12.5, color: colors.textMute },
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root:    { flex: 1, backgroundColor: colors.bg },
 
+  progressWrap: {
+    paddingHorizontal: spacing.lg, paddingTop: spacing.sm,
+  },
+  progressTrack: {
+    height: 3, borderRadius: 1.5, backgroundColor: colors.bgElev,
+    marginBottom: spacing.sm, overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%', borderRadius: 1.5, backgroundColor: colors.accent,
+  },
+
   dotsRow: {
     flexDirection: 'row', justifyContent: 'space-between',
-    paddingHorizontal: spacing.sm, paddingTop: spacing.sm, paddingBottom: 4,
+    paddingHorizontal: 0, paddingTop: 0, paddingBottom: 4,
   },
   dotWrap: { flex: 1, alignItems: 'center' },
   dot: {
@@ -1316,9 +1419,16 @@ const styles = StyleSheet.create({
   dotLabel:  { fontFamily: font.medium, fontSize: 9.5, color: colors.textMute },
   dotLabelActive: { color: colors.accent, fontFamily: font.semibold },
 
+  summaryBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: spacing.lg, paddingBottom: spacing.sm,
+  },
+  summaryStep: {
+    fontFamily: font.bold, fontSize: 11.5, color: colors.accent,
+  },
   summary: {
     fontFamily: font.medium, fontSize: 11.5, color: colors.textDim,
-    paddingHorizontal: spacing.lg, paddingBottom: spacing.sm, textAlign: 'center',
+    flex: 1,
   },
 
   body:    { paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
@@ -1394,6 +1504,14 @@ const styles = StyleSheet.create({
 
   rrRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
   rrHint:{ fontFamily: font.regular, fontSize: 12, color: colors.textDim },
+
+  rrBarWrap: { marginTop: spacing.md },
+  rrBarLabel: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
+  rrBarTxt: { fontFamily: font.medium, fontSize: 10.5 },
+  rrBarTrack: { flexDirection: 'row', height: 14, borderRadius: 4, overflow: 'hidden', backgroundColor: colors.bgElev },
+  rrBarSeg: { justifyContent: 'center', overflow: 'hidden' },
+  rrBarFill: { height: '100%', opacity: 0.4 },
+  rrBarEntry: { width: 2, height: '100%' },
 
   toggleRow: {
     flexDirection: 'row', alignItems: 'center',

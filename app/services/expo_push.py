@@ -108,6 +108,7 @@ async def notify_user(
     sound: str = "default",
     kind: str = "live",
     position_usd: Optional[float] = None,
+    channel: str = "trade-fires",
 ) -> None:
     """Send a notification to every registered device for `user_id`,
     subject to the user's push preferences. Never raises."""
@@ -125,7 +126,7 @@ async def notify_user(
                 "sound": sound,
                 "data": data or {},
                 "priority": "high",
-                "channelId": "trade-fires",
+                "channelId": channel,
             }
             for tok in tokens
         ]
@@ -141,15 +142,135 @@ def notify_user_bg(
     data: Optional[dict[str, Any]] = None,
     kind: str = "live",
     position_usd: Optional[float] = None,
+    channel: str = "trade-fires",
 ) -> None:
     """Fire-and-forget — schedules `notify_user` on the running event loop.
     Safe to call from sync code that's already inside an async context."""
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            loop.create_task(notify_user(user_id, title, body, data, kind=kind, position_usd=position_usd))
+            loop.create_task(notify_user(user_id, title, body, data, kind=kind, position_usd=position_usd, channel=channel))
         else:
-            # No running loop — fall back to sync run (unusual).
-            loop.run_until_complete(notify_user(user_id, title, body, data, kind=kind, position_usd=position_usd))
+            loop.run_until_complete(notify_user(user_id, title, body, data, kind=kind, position_usd=position_usd, channel=channel))
     except Exception as e:
         logger.warning(f"notify_user_bg({user_id}) scheduling failed: {e}")
+
+
+def notify_trade_close_bg(
+    user_id: int,
+    strategy_name: str,
+    symbol: str,
+    direction: str,
+    outcome: str,
+    pnl_pct: float,
+    leverage: int,
+    entry_price: float,
+    exit_price: float,
+    strategy_id: int = 0,
+    execution_id: int = 0,
+    is_paper: bool = False,
+    duration_mins: int = 0,
+    kind: str = "live",
+    position_usd: Optional[float] = None,
+) -> None:
+    """Push notification when a trade closes (TP/SL hit). Biggest gap previously."""
+    coin = symbol.replace("USDT", "")
+    pnl_sign = "+" if pnl_pct >= 0 else ""
+
+    if outcome == "WIN":
+        icon = "🎯"
+        result_label = "TP HIT"
+    elif outcome == "LOSS":
+        icon = "🛑"
+        result_label = "SL HIT"
+    elif outcome == "BREAKEVEN":
+        icon = "⚖️"
+        result_label = "BREAKEVEN"
+    else:
+        icon = "📊"
+        result_label = outcome
+
+    dur_str = ""
+    if duration_mins > 0:
+        if duration_mins >= 60:
+            dur_str = f" · {duration_mins // 60}h {duration_mins % 60}m"
+        else:
+            dur_str = f" · {duration_mins}m"
+
+    paper_tag = " (Paper)" if is_paper else ""
+    title = f"{icon} {result_label}{paper_tag} — {coin}"
+    body = (
+        f"{strategy_name}: {coin} {direction} {leverage}× "
+        f"→ {pnl_sign}{pnl_pct:.1f}%{dur_str}"
+    )
+
+    data = {
+        "type": "trade_close",
+        "strategy_id": strategy_id,
+        "execution_id": execution_id,
+        "outcome": outcome,
+        "screen": f"/strategy/{strategy_id}",
+    }
+
+    channel = "trade-results" if outcome in ("WIN", "LOSS", "BREAKEVEN") else "trade-fires"
+    notify_user_bg(user_id, title, body, data, kind=kind, position_usd=position_usd, channel=channel)
+
+
+def notify_tp_hit_bg(
+    user_id: int,
+    strategy_name: str,
+    symbol: str,
+    direction: str,
+    tp_level: str,
+    tp_price: float,
+    tp_roi: float,
+    leverage: int,
+    strategy_id: int = 0,
+    execution_id: int = 0,
+    is_paper: bool = False,
+    kind: str = "live",
+    position_usd: Optional[float] = None,
+) -> None:
+    """Push notification when an intermediate TP level (TP1/TP2/TP3) is hit."""
+    coin = symbol.replace("USDT", "")
+    paper_tag = " 📝" if is_paper else ""
+    title = f"🎯 {tp_level} HIT{paper_tag} — {coin}"
+    body = (
+        f"{strategy_name}: {coin} {direction} {leverage}× "
+        f"hit {tp_level} @ ${tp_price:,.4f} ({tp_roi:+.1f}%)"
+    )
+    data = {
+        "type": "tp_hit",
+        "tp_level": tp_level,
+        "strategy_id": strategy_id,
+        "execution_id": execution_id,
+        "screen": f"/strategy/{strategy_id}",
+    }
+    notify_user_bg(user_id, title, body, data, kind=kind, position_usd=position_usd, channel="trade-progress")
+
+
+def notify_breakeven_bg(
+    user_id: int,
+    strategy_name: str,
+    symbol: str,
+    direction: str,
+    leverage: int,
+    current_roi: float,
+    strategy_id: int = 0,
+    execution_id: int = 0,
+    kind: str = "live",
+) -> None:
+    """Push notification when stop loss is moved to breakeven."""
+    coin = symbol.replace("USDT", "")
+    title = f"🛡️ Breakeven — {coin}"
+    body = (
+        f"{strategy_name}: SL moved to entry ({current_roi:+.1f}% ROI). "
+        f"This trade is now risk-free."
+    )
+    data = {
+        "type": "breakeven_moved",
+        "strategy_id": strategy_id,
+        "execution_id": execution_id,
+        "screen": f"/strategy/{strategy_id}",
+    }
+    notify_user_bg(user_id, title, body, data, kind=kind, channel="trade-progress")

@@ -843,25 +843,46 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
         if settings and not settings.dm_paper_alerts:
             return
         strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
+        strat_name = strat.name if strat else "Your Strategy"
         tg_id = _telegram_int_id(user)
-        if not tg_id:
-            return
-        asyncio.create_task(_send_paper_close_dm(
-            tg_id,
-            _fmt_close_card(
-                strategy_name = strat.name if strat else "Your Strategy",
-                symbol        = ex.symbol,
-                direction     = ex.direction,
-                entry         = ex.entry_price,
-                exit_price    = exit_price,
-                outcome       = outcome,
-                pnl_pct       = pnl_pct,
-                leverage      = ex.leverage,
-                fired_at      = ex.fired_at,
-                closed_at     = closed_at,
-                conditions    = ex.conditions_met,
-            ),
-        ))
+        if tg_id:
+            asyncio.create_task(_send_paper_close_dm(
+                tg_id,
+                _fmt_close_card(
+                    strategy_name = strat_name,
+                    symbol        = ex.symbol,
+                    direction     = ex.direction,
+                    entry         = ex.entry_price,
+                    exit_price    = exit_price,
+                    outcome       = outcome,
+                    pnl_pct       = pnl_pct,
+                    leverage      = ex.leverage,
+                    fired_at      = ex.fired_at,
+                    closed_at     = closed_at,
+                    conditions    = ex.conditions_met,
+                    is_paper      = True,
+                ),
+            ))
+        # Mobile push — trade close (paper)
+        from app.services.expo_push import notify_trade_close_bg
+        dur_mins = int((closed_at - ex.fired_at).total_seconds() / 60) if ex.fired_at else 0
+        notify_trade_close_bg(
+            user_id=ex.user_id,
+            strategy_name=strat_name,
+            symbol=ex.symbol,
+            direction=ex.direction,
+            outcome=outcome,
+            pnl_pct=pnl_pct,
+            leverage=ex.leverage or 10,
+            entry_price=ex.entry_price,
+            exit_price=exit_price,
+            strategy_id=ex.strategy_id,
+            execution_id=ex.id,
+            is_paper=True,
+            duration_mins=dur_mins,
+            kind="paper",
+            position_usd=float(ex.position_size) if ex.position_size else None,
+        )
     except Exception:
         pass
 
@@ -914,25 +935,45 @@ def _fmt_close_card(
     entry: float, exit_price: float, outcome: str,
     pnl_pct: float, leverage: int,
     fired_at: datetime = None, closed_at: datetime = None,
-    conditions: list = None,
+    conditions: list = None, is_paper: bool = False,
 ) -> str:
     dir_icon  = "🟢" if direction == "LONG" else "🔴"
-    icon      = "✅" if outcome == "WIN" else "❌"
-    result    = "WIN" if outcome == "WIN" else "LOSS"
     pnl_sign  = "+" if pnl_pct >= 0 else ""
     bar       = "━━━━━━━━━━━━━━━━━━━━"
+    coin      = symbol.replace("USDT", "")
 
-    hit_label = "TP hit 🎯" if outcome == "WIN" else "SL hit 🛑"
+    if outcome == "WIN":
+        icon      = "✅"
+        result    = "WIN"
+        hit_label = "TP hit 🎯"
+    elif outcome == "LOSS":
+        icon      = "🛑"
+        result    = "LOSS"
+        hit_label = "SL hit 🛑"
+    elif outcome == "BREAKEVEN":
+        icon      = "⚖️"
+        result    = "BREAKEVEN"
+        hit_label = "Breakeven ⚖️"
+    else:
+        icon      = "📊"
+        result    = outcome
+        hit_label = f"{outcome}"
 
     duration_line = ""
     if fired_at and closed_at:
         secs  = int((closed_at - fired_at).total_seconds())
-        hours, rem = divmod(secs, 3600)
+        days, rem = divmod(secs, 86400)
+        hours, rem = divmod(rem, 3600)
         mins       = rem // 60
-        if hours:
-            duration_line = f"\nDuration {hours}h {mins}m"
+        if days:
+            duration_line = f"\n⏱ Duration  <b>{days}d {hours}h {mins}m</b>"
+        elif hours:
+            duration_line = f"\n⏱ Duration  <b>{hours}h {mins}m</b>"
         else:
-            duration_line = f"\nDuration {mins}m"
+            duration_line = f"\n⏱ Duration  <b>{mins}m</b>"
+
+    raw_pnl = abs(pnl_pct / leverage) if leverage else abs(pnl_pct)
+    move_line = f"\n📐 Price move  <b>{pnl_sign}{raw_pnl:.2f}%</b> × {leverage}× = <b>{pnl_sign}{pnl_pct:.1f}%</b>"
 
     cond_lines = ""
     if conditions:
@@ -940,17 +981,20 @@ def _fmt_close_card(
         if passed:
             cond_lines = "\n<b>Triggered by:</b>\n" + "\n".join(f"  {c}" for c in passed[:3]) + "\n"
 
+    paper_tag = "📄 Paper trade" if is_paper else "✅ Live trade"
+
     return (
         f"{icon} <b>STRATEGY {result}: {strategy_name}</b>\n{bar}\n"
-        f"{dir_icon} <b>{symbol}</b>  ·  {direction}\n"
+        f"{dir_icon} <b>${coin}</b>  ·  {direction}  ·  {leverage}×\n"
         f"{bar}\n"
         f"Entry    <code>{entry:.6g}</code>\n"
         f"Exit     <code>{exit_price:.6g}</code>  ({hit_label})\n"
-        f"P&L      <b>{pnl_sign}{pnl_pct}%</b>  ({leverage}× leverage)"
+        f"P&L      <b>{pnl_sign}{pnl_pct:.1f}%</b>"
+        f"{move_line}"
         f"{duration_line}\n"
         f"{bar}\n"
         f"{cond_lines}"
-        f"<i>📄 Paper trade result</i>"
+        f"<i>{paper_tag} result</i>"
     )
 
 
@@ -997,6 +1041,20 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     # Always scan for a TP/SL hit before considering expiry.  This prevents
     # incorrectly CANCELLING a trade whose TP was already hit but whose
     # fired_at is older than PAPER_MAX_HOLD_HOURS.
+    be_pct = None
+    try:
+        from app.strategy_models import UserStrategy
+        strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
+        if strat and strat.config:
+            ex_cfg = (strat.config or {}).get("exit", {})
+            be_pct = ex_cfg.get("breakeven_pct") or ex_cfg.get("breakeven_at_pct")
+            if be_pct is not None:
+                be_pct = float(be_pct)
+    except Exception:
+        pass
+
+    be_activated = False
+
     if candles:
         entry_ms = int(fired_at.timestamp() * 1000)
         relevant = [c for c in candles if c[0] >= entry_ms - 60_000]
@@ -1006,31 +1064,41 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                     tp_hit = high >= ex.tp_price
                     sl_hit = low  <= ex.sl_price
                     if tp_hit and sl_hit:
-                        # Same-candle: use direction to infer order
-                        if close >= open_:   # bullish → rose first → TP first
+                        if close >= open_:
                             _close_paper_execution(ex, "WIN", ex.tp_price, db)
-                        else:                # bearish → fell first → SL first
-                            _close_paper_execution(ex, "LOSS", ex.sl_price, db)
+                        else:
+                            outcome = "BREAKEVEN" if be_activated and ex.sl_price == ex.entry_price else "LOSS"
+                            _close_paper_execution(ex, outcome, ex.sl_price, db)
                         return True
-                else:  # SHORT
+                else:
                     tp_hit = low  <= ex.tp_price
                     sl_hit = high >= ex.sl_price
                     if tp_hit and sl_hit:
-                        # Same-candle: use direction to infer order
-                        if close <= open_:   # bearish → fell first → TP first
+                        if close <= open_:
                             _close_paper_execution(ex, "WIN", ex.tp_price, db)
-                        else:                # bullish → rose first → SL first
-                            _close_paper_execution(ex, "LOSS", ex.sl_price, db)
+                        else:
+                            outcome = "BREAKEVEN" if be_activated and ex.sl_price == ex.entry_price else "LOSS"
+                            _close_paper_execution(ex, outcome, ex.sl_price, db)
                         return True
 
                 if tp_hit:
                     _close_paper_execution(ex, "WIN", ex.tp_price, db)
                     return True
                 if sl_hit:
-                    _close_paper_execution(ex, "LOSS", ex.sl_price, db)
+                    outcome = "BREAKEVEN" if be_activated and ex.sl_price == ex.entry_price else "LOSS"
+                    _close_paper_execution(ex, outcome, ex.sl_price, db)
                     return True
 
-            # No TP/SL hit — update unrealised notes, preserving any fallback error prefix
+                if be_pct is not None and not be_activated and ex.sl_price != ex.entry_price:
+                    if ex.direction == "LONG":
+                        candle_roi = ((high - ex.entry_price) / ex.entry_price) * 100 * ex.leverage
+                    else:
+                        candle_roi = ((ex.entry_price - low) / ex.entry_price) * 100 * ex.leverage
+                    if candle_roi >= be_pct:
+                        ex.sl_price = ex.entry_price
+                        be_activated = True
+                        logger.info(f"[PaperMonitor] AUTO-BREAKEVEN: exec #{ex.id} {ex.symbol} ROI {candle_roi:.1f}% >= {be_pct}% → SL @ entry")
+
             last_close = relevant[-1][4]
             if ex.direction == "LONG":
                 unreal = (last_close - ex.entry_price) / ex.entry_price * 100
@@ -1039,7 +1107,6 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
             pnl_note = f"open · unrealised {'+' if unreal >= 0 else ''}{unreal:.2f}% · last {last_close:.6g}"
             orig = ex.notes or ""
             if any(kw in orig for kw in ["Live→Paper", "fallback", "Bitunix error", "error"]):
-                # Preserve the original error reason before the P&L suffix
                 base = orig.split(" | open")[0].split(" | unrealised")[0].strip(" |")
                 ex.notes = base + " | " + pnl_note
             else:
@@ -1300,24 +1367,47 @@ async def run_live_position_monitor():
         try:
             user  = db.query(User).filter(User.id == ex.user_id).first()
             strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
+            strat_name = strat.name if strat else "Unknown"
             if user and user.telegram_id:
-                emoji   = "✅" if outcome == "WIN" else "🛑"
-                label   = "TP HIT" if outcome == "WIN" else "SL HIT"
-                ticker  = ex.symbol.replace("USDT", "")
-                elapsed = ""
-                if ex.fired_at:
-                    mins = int((datetime.utcnow() - ex.fired_at).total_seconds() / 60)
-                    elapsed = f"\nDuration: {mins}m"
-                msg = (
-                    f"{emoji} <b>{label} — ${ticker} {ex.direction}</b>\n"
-                    f"Strategy: {strat.name if strat else 'Unknown'}\n"
-                    f"Entry: <code>{ex.entry_price}</code> → Exit: <code>{exit_price}</code>\n"
-                    f"Result: <b>{pnl_pct:+.1f}%</b> (leverage {leverage}×)"
-                    f"{elapsed}"
-                )
                 tg_id = _telegram_int_id(user)
                 if tg_id:
-                    await _send_paper_close_dm(tg_id, msg)
+                    await _send_paper_close_dm(
+                        tg_id,
+                        _fmt_close_card(
+                            strategy_name=strat_name,
+                            symbol=ex.symbol,
+                            direction=ex.direction,
+                            entry=ex.entry_price,
+                            exit_price=exit_price,
+                            outcome=outcome,
+                            pnl_pct=pnl_pct,
+                            leverage=leverage,
+                            fired_at=ex.fired_at,
+                            closed_at=closed_at,
+                            conditions=ex.conditions_met,
+                            is_paper=False,
+                        ),
+                    )
+            # Mobile push — trade close (live)
+            from app.services.expo_push import notify_trade_close_bg
+            dur_mins = int((closed_at - ex.fired_at).total_seconds() / 60) if ex.fired_at else 0
+            notify_trade_close_bg(
+                user_id=ex.user_id,
+                strategy_name=strat_name,
+                symbol=ex.symbol,
+                direction=ex.direction,
+                outcome=outcome,
+                pnl_pct=pnl_pct,
+                leverage=leverage,
+                entry_price=ex.entry_price,
+                exit_price=exit_price,
+                strategy_id=ex.strategy_id,
+                execution_id=ex.id,
+                is_paper=False,
+                duration_mins=dur_mins,
+                kind="live",
+                position_usd=float(ex.position_size) if ex.position_size else None,
+            )
         except Exception as ne:
             logger.warning(f"[live-monitor] Notification error: {ne}")
         return True

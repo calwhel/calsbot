@@ -20,6 +20,39 @@ _price_cache_ttl = 20   # seconds — slightly longer so the background loop hit
 
 ADMIN_CHAT_ID = 5603353066
 
+_be_threshold_cache: dict = {}
+_be_threshold_cache_ts: float = 0
+_BE_CACHE_TTL = 120
+
+
+def _get_breakeven_threshold(db, trade_type: str, user_id: int = 0) -> float:
+    import time
+    global _be_threshold_cache, _be_threshold_cache_ts
+    now = time.monotonic()
+    if now - _be_threshold_cache_ts > _BE_CACHE_TTL:
+        _be_threshold_cache.clear()
+        _be_threshold_cache_ts = now
+    cache_key = (user_id, trade_type)
+    if cache_key in _be_threshold_cache:
+        return _be_threshold_cache[cache_key]
+    try:
+        from app.strategy_models import UserStrategy
+        q = db.query(UserStrategy).filter(UserStrategy.name == trade_type)
+        if user_id:
+            q = q.filter(UserStrategy.user_id == user_id)
+        strat = q.first()
+        if strat and strat.config:
+            exit_cfg = (strat.config or {}).get("exit", {})
+            val = exit_cfg.get("breakeven_pct") or exit_cfg.get("breakeven_at_pct")
+            if val is not None:
+                threshold = float(val)
+                _be_threshold_cache[cache_key] = threshold
+                return threshold
+    except Exception:
+        pass
+    _be_threshold_cache[cache_key] = 70.0
+    return 70.0
+
 
 def _canonical_symbol(raw: str) -> str:
     """Normalise any symbol variant to plain XYZUSDT for cache lookups."""
@@ -228,11 +261,31 @@ async def get_trades(
                         else:
                             t.lowest_price = min(live_price, t.lowest_price or float('inf'))
                         db_changed = True
-                    if pnl_pct >= 70 and not t.breakeven_moved:
+                    _be_thr = _get_breakeven_threshold(db, t.trade_type or "", t.user_id or 0)
+                    if pnl_pct >= _be_thr and not t.breakeven_moved:
                         t.breakeven_moved = True
                         t.stop_loss = t.entry_price
                         db_changed = True
-                        logger.info(f"AUTO-BREAKEVEN: {t.symbol} hit {pnl_pct:.1f}% ROI - SL moved to entry {t.entry_price}")
+                        logger.info(f"AUTO-BREAKEVEN: {t.symbol} hit {pnl_pct:.1f}% ROI (threshold {_be_thr}%) - SL moved to entry {t.entry_price}")
+                        asyncio.create_task(_send_tg_alert(
+                            f"🛡️ <b>BREAKEVEN — {t.symbol} {t.direction}</b>\n"
+                            f"ROI hit <b>{pnl_pct:.1f}%</b> (threshold: {_be_thr}%) → SL moved to entry <code>{t.entry_price}</code>\n"
+                            f"This trade is now risk-free. Leverage: {leverage}×\n"
+                            f"Trade ID: {t.id}"
+                        ))
+                        try:
+                            from app.services.expo_push import notify_breakeven_bg
+                            notify_breakeven_bg(
+                                user_id=t.user_id,
+                                strategy_name=t.trade_type or "Signal Trade",
+                                symbol=t.symbol,
+                                direction=t.direction,
+                                leverage=leverage,
+                                current_roi=pnl_pct,
+                                kind="live",
+                            )
+                        except Exception:
+                            pass
                     tp_just_hit = None
                     check_high = max(live_price, t.highest_price or 0) if t.direction == 'LONG' else live_price
                     check_low = min(live_price, t.lowest_price or float('inf')) if t.direction == 'SHORT' else live_price
@@ -258,6 +311,34 @@ async def get_trades(
                         tp_price = t.take_profit_1 if tp_just_hit == 'TP1' else (t.take_profit_2 if tp_just_hit == 'TP2' else t.take_profit_3)
                         tp_roi = ((tp_price - t.entry_price) / t.entry_price * 100 * leverage) if t.direction == 'LONG' else ((t.entry_price - tp_price) / t.entry_price * 100 * leverage)
                         logger.info(f"AUTO-TP: {t.symbol} hit {tp_just_hit} at {tp_price} ({tp_roi:.1f}% ROI)")
+                        remaining = []
+                        if tp_just_hit == 'TP1' and t.take_profit_2:
+                            remaining.append('TP2')
+                        if tp_just_hit in ('TP1', 'TP2') and t.take_profit_3:
+                            remaining.append('TP3')
+                        remaining_txt = f"  Next: {', '.join(remaining)}" if remaining else ""
+                        asyncio.create_task(_send_tg_alert(
+                            f"🎯 <b>{tp_just_hit} HIT — {t.symbol} {t.direction}</b>\n"
+                            f"Entry: <code>{t.entry_price}</code>\n"
+                            f"{tp_just_hit}: <code>{tp_price}</code>  ({tp_roi:+.1f}% ROI)\n"
+                            f"Leverage: {leverage}×{remaining_txt}\n"
+                            f"Trade ID: {t.id}"
+                        ))
+                        try:
+                            from app.services.expo_push import notify_tp_hit_bg
+                            notify_tp_hit_bg(
+                                user_id=t.user_id,
+                                strategy_name=t.trade_type or "Signal Trade",
+                                symbol=t.symbol,
+                                direction=t.direction,
+                                tp_level=tp_just_hit,
+                                tp_price=tp_price,
+                                tp_roi=tp_roi,
+                                leverage=leverage,
+                                kind="live",
+                            )
+                        except Exception:
+                            pass
 
                     # ── SL BREACH CHECK ─────────────────────────────────
                     if t.stop_loss and t.stop_loss > 0:
@@ -843,11 +924,34 @@ async def _monitor_open_trades() -> None:
                 db_changed = True
 
             # ── auto-breakeven ──────────────────────────────────
-            if pnl_pct >= 70 and not t.breakeven_moved:
+            _be_thr = _get_breakeven_threshold(db, t.trade_type or "", t.user_id or 0)
+            if pnl_pct >= _be_thr and not t.breakeven_moved:
                 t.breakeven_moved = True
                 t.stop_loss = t.entry_price
                 db_changed = True
-                logger.info(f"[monitor] AUTO-BREAKEVEN: {t.symbol} {pnl_pct:.1f}% ROI → SL @ entry")
+                logger.info(f"[monitor] AUTO-BREAKEVEN: {t.symbol} {pnl_pct:.1f}% ROI (threshold {_be_thr}%) → SL @ entry")
+                be_key = f"be-{t.id}"
+                if be_key not in _notified_ids:
+                    _notified_ids.add(be_key)
+                    await _send_tg_alert(
+                        f"🛡️ <b>BREAKEVEN — {t.symbol} {t.direction}</b>\n"
+                        f"ROI hit <b>{pnl_pct:.1f}%</b> (threshold: {_be_thr}%) → SL moved to entry <code>{t.entry_price}</code>\n"
+                        f"This trade is now risk-free. Leverage: {leverage}×\n"
+                        f"Trade ID: {t.id}"
+                    )
+                    try:
+                        from app.services.expo_push import notify_breakeven_bg
+                        notify_breakeven_bg(
+                            user_id=t.user_id,
+                            strategy_name=t.trade_type or "Signal Trade",
+                            symbol=t.symbol,
+                            direction=t.direction,
+                            leverage=leverage,
+                            current_roi=pnl_pct,
+                            kind="live",
+                        )
+                    except Exception:
+                        pass
 
             # ── TP checks ───────────────────────────────────────
             check_high = max(live_price, t.highest_price or 0) if t.direction == "LONG" else live_price
@@ -891,12 +995,34 @@ async def _monitor_open_trades() -> None:
                 if alert_key not in _notified_ids:
                     _notified_ids.add(alert_key)
                     ticker = t.symbol.replace("USDT", "")
+                    remaining = []
+                    if tp_just_hit == "TP1" and t.take_profit_2:
+                        remaining.append("TP2")
+                    if tp_just_hit in ("TP1", "TP2") and t.take_profit_3:
+                        remaining.append("TP3")
+                    remaining_txt = f"\nNext: {', '.join(remaining)}" if remaining else ""
                     await _send_tg_alert(
-                        f"✅ <b>{tp_just_hit} HIT — ${ticker} {t.direction}</b>\n"
+                        f"🎯 <b>{tp_just_hit} HIT — ${ticker} {t.direction}</b>\n"
                         f"Entry: <code>{t.entry_price}</code>  →  {tp_just_hit}: <code>{tp_price}</code>\n"
-                        f"ROI: <b>+{tp_roi:.1f}%</b> (leverage {leverage}×)\n"
-                        f"Trade ID: {t.id}"
+                        f"ROI: <b>+{tp_roi:.1f}%</b> (leverage {leverage}×)"
+                        f"{remaining_txt}\n"
+                        f"Peak ROI: {t.peak_roi or 0:+.1f}%  |  Trade ID: {t.id}"
                     )
+                    try:
+                        from app.services.expo_push import notify_tp_hit_bg
+                        notify_tp_hit_bg(
+                            user_id=t.user_id,
+                            strategy_name=t.trade_type or "Signal Trade",
+                            symbol=t.symbol,
+                            direction=t.direction,
+                            tp_level=tp_just_hit,
+                            tp_price=tp_price,
+                            tp_roi=tp_roi,
+                            leverage=leverage,
+                            kind="live",
+                        )
+                    except Exception:
+                        pass
                 logger.info(f"[monitor] {tp_just_hit} HIT: {t.symbol} @ {tp_price} (+{tp_roi:.1f}%)")
 
             # ── SL BREACH ───────────────────────────────────────

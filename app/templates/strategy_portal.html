@@ -4078,7 +4078,7 @@ function condHtml(c){
 const WZ={
   step:1,style:null,direction:'LONG',mode:'live',
   primaryType:null,primaryCfg:{},confirms:[],
-  tp1:3,tp2:null,sl:1.5,trailing:null,
+  tp1:3,tp2:null,sl:1.5,trailing:null,breakeven:null,
   leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,noDuplicateSymbol:false,
   sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',
   timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,
@@ -4308,13 +4308,22 @@ function wzSl(inputId,displayId,unit,wzKey){
 }
 
 function updateRR(){
-  const slB=document.getElementById('rr-sl-bar'),tpB=document.getElementById('rr-tp-bar'),rr=document.getElementById('rr-ratio');
+  const slB=document.getElementById('rr-sl-bar'),tpB=document.getElementById('rr-tp-bar'),rr=document.getElementById('rr-ratio'),tp2B=document.getElementById('rr-tp2-bar');
   if(!slB||!tpB||!rr)return;
-  const tp=WZ.tp1,sl=WZ.sl,tot=tp+sl;
+  const tp=WZ.tp1,sl=WZ.sl,tp2=WZ.tp2||0;
+  const tot=tp+sl+tp2;
   slB.style.flex=sl/tot*100;tpB.style.flex=tp/tot*100;
+  if(tp2B){tp2B.style.flex=(tp2>tp?(tp2-tp):0)/tot*100;}
   const ratio=(tp/sl).toFixed(1);
   rr.textContent=`${ratio}:1 R:R`;
   rr.style.color=parseFloat(ratio)>=2?'var(--green)':parseFloat(ratio)>=1?'var(--yellow)':'var(--red)';
+  const gradeEl=document.querySelector('.rr-vis [style*="border-radius:4px"]');
+  if(gradeEl){
+    const r=parseFloat(ratio);
+    const grade=r>=2.5?'A+':r>=2?'A':r>=1.5?'B':r>=1?'C':'D';
+    const gc=r>=2?'#16a34a':r>=1.5?'var(--accent)':r>=1?'#d97706':'#dc2626';
+    gradeEl.textContent=grade;gradeEl.style.color=gc;gradeEl.style.background=gc+'18';gradeEl.style.borderColor=gc+'44';
+  }
 }
 
 function getDefaultCfg(type){
@@ -4947,44 +4956,68 @@ function wzRemoveConfirm(idx){WZ.confirms.splice(idx,1);renderCurrentStep();}
 
 function renderStep5(){
   const rr=(WZ.tp1/WZ.sl).toFixed(1);
-  const tot=WZ.tp1+WZ.sl;
+  const tot=WZ.tp1+WZ.sl+(WZ.tp2||0);
+  const rrColor=rr>=2?'#16a34a':rr>=1.5?'var(--accent)':rr>=1?'#d97706':'#dc2626';
+  const rrGrade=rr>=2.5?'A+':rr>=2?'A':rr>=1.5?'B':rr>=1?'C':'D';
   return`<div class="wz-q">Where do you exit?</div>
   <div class="wz-sub">Set your take profit and stop loss. The R:R ratio shows how much you risk versus how much you stand to gain.</div>
-  <div class="form-group">
-    <label style="display:flex;justify-content:space-between">Take Profit 1 <span style="color:var(--green);font-weight:700" id="tp1-v">${WZ.tp1}%</span></label>
-    <input type="range" id="tp1-sl" min="0.5" max="100" value="${WZ.tp1}" step="0.5" oninput="WZ.tp1=Number(this.value);document.getElementById('tp1-v').textContent=this.value+'%';updateRR();updateWzPreview()" style="width:100%;accent-color:var(--green)">
-  </div>
-  <div class="form-group">
-    <label style="display:flex;justify-content:space-between">Stop Loss <span style="color:var(--red);font-weight:700" id="sl-v">${WZ.sl}%</span></label>
-    <input type="range" id="sl-sl" min="0.5" max="30" value="${WZ.sl}" step="0.5" oninput="WZ.sl=Number(this.value);document.getElementById('sl-v').textContent=this.value+'%';updateRR();updateWzPreview()" style="width:100%;accent-color:var(--red)">
-  </div>
-  <div class="rr-vis">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-      <span style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px">Risk:Reward Ratio</span>
-      <span style="font-weight:800;font-size:16px" id="rr-ratio">${rr}:1 R:R</span>
+  <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">🎯</div>Take Profit & Stop Loss</div>
+    <div class="form-group">
+      <label style="display:flex;justify-content:space-between">Take Profit 1 <span style="color:var(--green);font-weight:700" id="tp1-v">${WZ.tp1}%</span></label>
+      <input type="range" id="tp1-sl" min="0.5" max="100" value="${WZ.tp1}" step="0.5" oninput="WZ.tp1=Number(this.value);document.getElementById('tp1-v').textContent=this.value+'%';updateRR();updateWzPreview()" style="width:100%;accent-color:var(--green)">
     </div>
-    <div class="rr-bar-wrap">
-      <div class="rr-sl-bar" id="rr-sl-bar" style="flex:${WZ.sl/tot*100}"></div>
-      <div class="rr-tp-bar" id="rr-tp-bar" style="flex:${WZ.tp1/tot*100}"></div>
+    <div class="form-group">
+      <label style="display:flex;justify-content:space-between">Stop Loss <span style="color:var(--red);font-weight:700" id="sl-v">${WZ.sl}%</span></label>
+      <input type="range" id="sl-sl" min="0.5" max="30" value="${WZ.sl}" step="0.5" oninput="WZ.sl=Number(this.value);document.getElementById('sl-v').textContent=this.value+'%';updateRR();updateWzPreview()" style="width:100%;accent-color:var(--red)">
     </div>
-    <div class="rr-labels"><span style="color:var(--red)">↓ Risk ${WZ.sl}%</span><span style="color:var(--green)">Reward ${WZ.tp1}% ↑</span></div>
+    <div class="rr-vis">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px">Risk:Reward Ratio</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-weight:800;font-size:14px;color:${rrColor};background:${rrColor}18;padding:2px 8px;border-radius:4px;border:1px solid ${rrColor}44">${rrGrade}</span>
+          <span style="font-weight:800;font-size:16px" id="rr-ratio">${rr}:1 R:R</span>
+        </div>
+      </div>
+      <div class="rr-bar-wrap">
+        <div class="rr-sl-bar" id="rr-sl-bar" style="flex:${WZ.sl/tot*100}"></div>
+        <div class="rr-tp-bar" id="rr-tp-bar" style="flex:${WZ.tp1/tot*100}"></div>
+        ${WZ.tp2?`<div style="flex:${(WZ.tp2-WZ.tp1)/tot*100};background:rgba(99,102,241,.35);border-radius:0 6px 6px 0;transition:flex .2s" id="rr-tp2-bar"></div>`:''}
+      </div>
+      <div class="rr-labels">
+        <span style="color:var(--red)">↓ SL ${WZ.sl}%</span>
+        <span style="color:var(--muted);font-size:10px">Entry</span>
+        <span style="color:var(--green)">TP1 ${WZ.tp1}% ↑</span>
+        ${WZ.tp2?`<span style="color:var(--accent)">TP2 ${WZ.tp2}%</span>`:''}
+      </div>
+    </div>
   </div>
-  <div style="margin-top:16px">
+  <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">🛡️</div>Advanced Exits</div>
     <div class="toggle-row" onclick="wzToggleExit('tp2')">
-      <div><div class="toggle-lbl">Take Profit 2 (optional)</div><div class="toggle-sub">Scale out at a second, larger target</div></div>
+      <div><div class="toggle-lbl">Take Profit 2</div><div class="toggle-sub">Scale out a second leg if price keeps running</div></div>
       <div class="switch ${WZ.tp2?'on':''}" id="sw-tp2"></div>
     </div>
     <div id="row-tp2" style="${WZ.tp2?'':'display:none;'}padding:10px 0 4px">
       <label style="display:flex;justify-content:space-between">TP2 <span style="color:var(--green);font-weight:700" id="tp2-v">${WZ.tp2||6}%</span></label>
-      <input type="range" id="tp2-sl" min="1" max="200" value="${WZ.tp2||6}" step="1" oninput="WZ.tp2=Number(this.value);document.getElementById('tp2-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--green)">
+      <input type="range" id="tp2-sl" min="1" max="200" value="${WZ.tp2||6}" step="1" oninput="WZ.tp2=Number(this.value);document.getElementById('tp2-v').textContent=this.value+'%';updateRR()" style="width:100%;accent-color:var(--green)">
     </div>
-    <div class="toggle-row" onclick="wzToggleExit('trail')" style="margin-bottom:0">
-      <div><div class="toggle-lbl">Trailing Stop</div><div class="toggle-sub">Stop follows price to lock in profit</div></div>
+    <div class="toggle-row" onclick="wzToggleExit('trail')">
+      <div><div class="toggle-lbl">Trailing Stop</div><div class="toggle-sub">Stop follows price to lock in profit as it moves</div></div>
       <div class="switch ${WZ.trailing?'on':''}" id="sw-trail"></div>
     </div>
     <div id="row-trail" style="${WZ.trailing?'':'display:none;'}padding:10px 0 0">
       <label style="display:flex;justify-content:space-between">Trail distance <span style="color:var(--accent);font-weight:700" id="trail-v">${WZ.trailing||1}%</span></label>
       <input type="range" id="trail-sl" min="0.5" max="30" value="${WZ.trailing||1}" step="0.5" oninput="WZ.trailing=Number(this.value);document.getElementById('trail-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+    </div>
+    <div class="toggle-row" onclick="wzToggleExit('be')" style="margin-bottom:0">
+      <div><div class="toggle-lbl">Auto-Breakeven</div><div class="toggle-sub">Move stop loss to entry once ROI passes a threshold — makes the trade risk-free</div></div>
+      <div class="switch ${WZ.breakeven?'on':''}" id="sw-be"></div>
+    </div>
+    <div id="row-be" style="${WZ.breakeven?'':'display:none;'}padding:10px 0 0">
+      <label style="display:flex;justify-content:space-between">Breakeven trigger ROI <span style="color:var(--accent);font-weight:700" id="be-v">${WZ.breakeven||70}%</span></label>
+      <input type="range" id="be-sl" min="10" max="200" value="${WZ.breakeven||70}" step="5" oninput="WZ.breakeven=Number(this.value);document.getElementById('be-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">When ROI hits this % (leveraged), SL moves to your entry price automatically.</div>
     </div>
   </div>`;
 }
@@ -4995,8 +5028,9 @@ function wzToggleExit(which){
   if(!sw||!row)return;
   const on=sw.classList.toggle('on');
   row.style.display=on?'block':'none';
-  if(which==='tp2')WZ.tp2=on?Number(document.getElementById('tp2-sl')?.value||6):null;
+  if(which==='tp2'){WZ.tp2=on?Number(document.getElementById('tp2-sl')?.value||6):null;updateRR();}
   if(which==='trail')WZ.trailing=on?Number(document.getElementById('trail-sl')?.value||1):null;
+  if(which==='be')WZ.breakeven=on?Number(document.getElementById('be-sl')?.value||70):null;
 }
 
 function renderStep6(){
@@ -5147,10 +5181,39 @@ function renderStep6(){
   </div>`;
 }
 
+function wzStrengthIndicator(){
+  const rr=(WZ.tp1/WZ.sl);
+  let score=0;const checks=[];
+  if(rr>=2){score++;checks.push({pass:true,label:'R:R ≥ 2:1'});}else{checks.push({pass:false,label:'R:R ≥ 2:1'});}
+  if(WZ.confirms.length>0){score++;checks.push({pass:true,label:'Has confirmations'});}else{checks.push({pass:false,label:'Has confirmations'});}
+  if(WZ.trailing){score++;checks.push({pass:true,label:'Trailing stop enabled'});}else{checks.push({pass:false,label:'Trailing stop enabled'});}
+  if(WZ.breakeven){score++;checks.push({pass:true,label:'Auto-breakeven on'});}else{checks.push({pass:false,label:'Auto-breakeven on'});}
+  if(WZ.leverage<=15){score++;checks.push({pass:true,label:'Conservative leverage'});}else{checks.push({pass:false,label:'Conservative leverage'});}
+  const grade=score>=5?'A':score>=4?'B+':score>=3?'B':score>=2?'C':'D';
+  const gradeColor=score>=4?'#16a34a':score>=3?'var(--accent)':score>=2?'#d97706':'#dc2626';
+  const pct=Math.round(score/5*100);
+  return`<div class="section-card" style="border-color:${gradeColor}44;background:linear-gradient(135deg,${gradeColor}08 0%,var(--surface) 100%)">
+    <div class="sc-title"><div class="sc-icon">📊</div>Strategy Strength</div>
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
+      <div style="width:56px;height:56px;border-radius:50%;border:3px solid ${gradeColor};display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <span style="font-size:22px;font-weight:900;color:${gradeColor}">${grade}</span>
+      </div>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px">${pct}% — ${score>=4?'Excellent setup':score>=3?'Good setup':score>=2?'Fair — room to improve':'Needs work'}</div>
+        <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${gradeColor};border-radius:3px;transition:width .3s"></div>
+        </div>
+      </div>
+    </div>
+    <div style="display:grid;gap:4px">${checks.map(c=>`<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:${c.pass?'#16a34a':'var(--muted)'}"><span style="font-size:14px">${c.pass?'✅':'○'}</span>${c.label}</div>`).join('')}</div>
+  </div>`;
+}
+
 function renderStep7(){
   setTimeout(()=>updateMktPreview(),50);
   return`<div class="wz-q">Name it & launch</div>
   <div class="wz-sub">Give your strategy a name, choose whether to test it first or go live, and optionally list it on the marketplace.</div>
+  ${wzStrengthIndicator()}
   <div class="section-card">
     <div class="sc-title"><div class="sc-icon">✏️</div>Identity</div>
     <div class="form-group">
@@ -5468,7 +5531,14 @@ let _wzLastStep=1;
 
 function renderWzDots(n){
   const el=document.getElementById('wz-dots');if(!el)return;
-  el.innerHTML=WZ_STEPS.map((label,i)=>{
+  const pct=Math.round(((n-1)/(WZ_STEPS.length-1))*100);
+  el.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;padding:0 2px">
+    <span style="font-size:11px;font-weight:700;color:var(--accent)">Step ${n} of ${WZ_STEPS.length}</span>
+    <span style="font-size:11px;font-weight:600;color:var(--muted)">${pct}% complete</span>
+  </div>
+  <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden;margin-bottom:12px">
+    <div style="height:100%;width:${pct}%;background:var(--grad-accent);border-radius:2px;transition:width .35s ease"></div>
+  </div>`+WZ_STEPS.map((label,i)=>{
     const idx=i+1,done=idx<n,active=idx===n;
     const cls=done?'done':active?'active':'';
     const onclick=done?`onclick="goToWzStep(${idx})" title="Go back to ${label}"`:'';
@@ -5586,7 +5656,7 @@ function wzBack(){
 function resetWizard(){
   compiledConfig=null;
   _wzLastStep=1;
-  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium'});
+  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,breakeven:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium'});
   renderCurrentStep();
 }
 
@@ -5713,7 +5783,7 @@ function buildWizardDescription(){
   if(WZ.htfFilter)lines.push('Additional filter: Only enter if 1H trend (EMA-20) aligns with trade direction.');
   if(WZ.btcRegime&&WZ.btcRegime!=='any')lines.push(`BTC market regime requirement: only trade when BTC is in a ${WZ.btcRegime} regime.`);
 
-  lines.push(`\nExit targets: Take Profit 1 = ${WZ.tp1}%.${WZ.tp2?` Take Profit 2 = ${WZ.tp2}%.`:''} Stop Loss = ${WZ.sl}%.${WZ.trailing?` Trailing stop at ${WZ.trailing}%.`:''}`);
+  lines.push(`\nExit targets: Take Profit 1 = ${WZ.tp1}%.${WZ.tp2?` Take Profit 2 = ${WZ.tp2}%.`:''} Stop Loss = ${WZ.sl}%.${WZ.trailing?` Trailing stop at ${WZ.trailing}%.`:''}${WZ.breakeven?` Auto-breakeven at ${WZ.breakeven}% ROI.`:''}`);
   lines.push(`Risk: ${WZ.leverage}× leverage, ${WZ.posSize}% position size per trade. Max ${WZ.maxTrades} trades per day, ${WZ.cooldown} minute cooldown between trades. Max ${WZ.maxPos} simultaneous positions. Daily loss limit: ${WZ.dailyLoss}%.`);
   return lines.join('\n');
 }
@@ -5765,7 +5835,7 @@ async function buildStrategy(){
     Object.assign(risk,{leverage:WZ.leverage,position_size_type:WZ.posSizeType,position_size_pct:WZ.posSize,position_size_usd:WZ.posSizeType==='fixed'?WZ.posSizeUsd:null,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos,no_duplicate_symbol:WZ.noDuplicateSymbol,risk_profile:WZ.riskProfile||'medium'});
     data.config.risk=risk;
     const exit=data.config.exit||{};
-    Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null});
+    Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null,breakeven_pct:WZ.breakeven||null});
     data.config.exit=exit;
     // ── Universe / coin scope ─────────────────────────────────────────
     if(WZ.coins==='single'&&WZ.singleCoin){
