@@ -36,11 +36,13 @@ import {
   type PortfolioTrade,
 } from '@/lib/api';
 
-function fmtPnl(v: number): string {
+function fmtPnl(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—';
   const sign = v > 0 ? '+' : '';
   return `${sign}${v.toFixed(2)}%`;
 }
-function pnlTone(v: number): 'positive' | 'negative' | 'neutral' {
+function pnlTone(v: number | null | undefined): 'positive' | 'negative' | 'neutral' {
+  if (v == null || !Number.isFinite(v)) return 'neutral';
   if (v > 0.01) return 'positive';
   if (v < -0.01) return 'negative';
   return 'neutral';
@@ -476,9 +478,14 @@ function LiveTradingCard({
       : 'Affiliate check unavailable — signals are paper-tracked for now.';
   }
 
-  const livePnl  = data.live_pnl_30d;
-  const paperPnl = data.paper_pnl_30d;
-  const todayTone = data.pnl_today > 0.01 ? colors.positive : data.pnl_today < -0.01 ? colors.negative : colors.text;
+  const livePnl  = data.live_pnl_30d ?? 0;
+  const paperPnl = data.paper_pnl_30d ?? 0;
+  const pnlToday = data.pnl_today ?? 0;
+  const liveOpen = data.live_open ?? 0;
+  const paperOpen = data.paper_open ?? 0;
+  const liveClosed = data.live_closed_30d ?? 0;
+  const paperClosed = data.paper_closed_30d ?? 0;
+  const todayTone = pnlToday > 0.01 ? colors.positive : pnlToday < -0.01 ? colors.negative : colors.text;
 
   return (
     <View style={liveStyles.section}>
@@ -498,7 +505,7 @@ function LiveTradingCard({
         <View style={liveStyles.statsRow}>
           <View style={liveStyles.stat}>
             <Text style={liveStyles.statLabel}>Today's P&L</Text>
-            <Text style={[liveStyles.statValue, { color: todayTone }]}>{fmtPnl(data.pnl_today)}</Text>
+            <Text style={[liveStyles.statValue, { color: todayTone }]}>{fmtPnl(pnlToday)}</Text>
           </View>
           <View style={liveStyles.statDiv} />
           <Pressable
@@ -506,8 +513,8 @@ function LiveTradingCard({
             style={({ pressed }) => [liveStyles.stat, pressed && { opacity: 0.7 }]}
           >
             <Text style={liveStyles.statLabel}>Live open</Text>
-            <Text style={[liveStyles.statValue, { color: data.live_open > 0 ? colors.positive : colors.text }]}>
-              {data.live_open}
+            <Text style={[liveStyles.statValue, { color: liveOpen > 0 ? colors.positive : colors.text }]}>
+              {liveOpen}
             </Text>
           </Pressable>
           <View style={liveStyles.statDiv} />
@@ -516,23 +523,23 @@ function LiveTradingCard({
             style={({ pressed }) => [liveStyles.stat, pressed && { opacity: 0.7 }]}
           >
             <Text style={liveStyles.statLabel}>Paper open</Text>
-            <Text style={[liveStyles.statValue, { color: data.paper_open > 0 ? colors.accent : colors.text }]}>
-              {data.paper_open}
+            <Text style={[liveStyles.statValue, { color: paperOpen > 0 ? colors.accent : colors.text }]}>
+              {paperOpen}
             </Text>
           </Pressable>
         </View>
 
         {/* 30-day breakdown — only show if there's any closed history */}
-        {(data.live_closed_30d + data.paper_closed_30d) > 0 ? (
+        {(liveClosed + paperClosed) > 0 ? (
           <View style={liveStyles.breakdownRow}>
             <Text style={liveStyles.breakdownText}>
               <Text style={{ color: colors.textMute }}>30d · </Text>
               <Text style={{ color: livePnl > 0 ? colors.positive : livePnl < 0 ? colors.negative : colors.textDim }}>
-                Live {fmtPnl(livePnl)} ({data.live_closed_30d})
+                Live {fmtPnl(livePnl)} ({liveClosed})
               </Text>
               <Text style={{ color: colors.textMute }}>  ·  </Text>
               <Text style={{ color: paperPnl > 0 ? colors.positive : paperPnl < 0 ? colors.negative : colors.textDim }}>
-                Paper {fmtPnl(paperPnl)} ({data.paper_closed_30d})
+                Paper {fmtPnl(paperPnl)} ({paperClosed})
               </Text>
             </Text>
           </View>
