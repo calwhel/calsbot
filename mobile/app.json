@@ -10,7 +10,11 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.tradehub.markets"
+      "bundleIdentifier": "com.tradehub.markets",
+      "usesAppleSignIn": true,
+      "infoPlist": {
+        "NSUserNotificationsUsageDescription": "TradeHub sends notifications when your trading strategies fire signals, open positions, or hit take-profit and stop-loss targets."
+      }
     },
     "android": {
       "package": "com.tradehub.markets",
@@ -48,7 +52,8 @@
           "icon": "./assets/images/icon.png",
           "color": "#22d3ee"
         }
-      ]
+      ],
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": false,

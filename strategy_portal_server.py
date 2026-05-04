@@ -605,6 +605,7 @@ def _ensure_tables():
         "email_verified": "ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE",
         "password_hash":  "ALTER TABLE users ADD COLUMN password_hash VARCHAR",
         "google_id":      "ALTER TABLE users ADD COLUMN google_id VARCHAR UNIQUE",
+        "apple_id":       "ALTER TABLE users ADD COLUMN apple_id VARCHAR UNIQUE",
         "auth_provider":  "ALTER TABLE users ADD COLUMN auth_provider VARCHAR DEFAULT 'telegram'",
         "uid":            "ALTER TABLE users ADD COLUMN uid VARCHAR UNIQUE",
     }
@@ -1024,6 +1025,11 @@ async def login_page(request: Request):
 @app.get("/terms", response_class=HTMLResponse)
 async def terms_page():
     return FileResponse("app/templates/terms.html", media_type="text/html")
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_page():
+    return FileResponse("app/templates/privacy.html", media_type="text/html")
 
 
 # ── CallyX brand landing page ─────────────────────────────────────────────────
@@ -1931,6 +1937,8 @@ async def api_mobile_login(request: Request):
         user = _get_user_by_uid(uid, db)
         if not user:
             raise HTTPException(status_code=403, detail="invalid UID")
+        if getattr(user, "banned", False):
+            raise HTTPException(status_code=403, detail="This account has been suspended.")
         return JSONResponse(_build_mobile_login_response(user, db))
     finally:
         db.close()
@@ -2051,6 +2059,201 @@ async def api_mobile_push_unregister(request: Request):
         return JSONResponse({"ok": True})
     finally:
         db.close()
+
+
+_apple_jwks_cache: dict = {"keys": [], "fetched_at": 0}
+
+def _get_apple_public_keys():
+    """Fetch and cache Apple's JWKS (public keys for verifying identity tokens).
+    Cached for 1 hour to avoid hitting Apple on every login.
+    """
+    import time as _time
+    now = _time.time()
+    if _apple_jwks_cache["keys"] and (now - _apple_jwks_cache["fetched_at"]) < 3600:
+        return _apple_jwks_cache["keys"]
+    try:
+        import urllib.request
+        req = urllib.request.Request("https://appleid.apple.com/auth/keys")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        _apple_jwks_cache["keys"] = data.get("keys", [])
+        _apple_jwks_cache["fetched_at"] = now
+        return _apple_jwks_cache["keys"]
+    except Exception as e:
+        logger.warning(f"[apple-auth] Failed to fetch Apple JWKS: {e}")
+        return _apple_jwks_cache["keys"]
+
+
+@app.post("/api/mobile/login/apple")
+async def api_mobile_login_apple(request: Request):
+    """Sign in with Apple for the native mobile app.
+
+    Body: {"identity_token": "<JWT from Apple>", "full_name": "...", "email": "..."}
+    The identity_token is a JWT signed by Apple. We verify its signature against
+    Apple's JWKS, validate iss/exp claims, then find-or-create the user.
+    """
+    import jwt as _jwt
+    from jwt.algorithms import RSAAlgorithm as _RSAAlgorithm
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    id_token = (body.get("identity_token") or "").strip()
+    if not id_token:
+        raise HTTPException(status_code=400, detail="identity_token required")
+
+    # Step 1: Decode the JWT header to find which Apple key was used
+    try:
+        unverified_header = _jwt.get_unverified_header(id_token)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid Apple identity token format")
+
+    kid = unverified_header.get("kid")
+    if not kid:
+        raise HTTPException(status_code=400, detail="Apple token missing kid in header")
+
+    # Step 2: Fetch Apple's public keys and find the matching key
+    apple_keys = await asyncio.to_thread(_get_apple_public_keys)
+    matching_key = None
+    for k in apple_keys:
+        if k.get("kid") == kid:
+            matching_key = k
+            break
+
+    if not matching_key:
+        raise HTTPException(status_code=400, detail="Apple token signed with unknown key")
+
+    # Step 3: Verify the JWT signature and decode claims
+    try:
+        public_key = _RSAAlgorithm.from_jwk(json.dumps(matching_key))
+        claims = _jwt.decode(
+            id_token,
+            key=public_key,
+            algorithms=["RS256"],
+            issuer="https://appleid.apple.com",
+            options={
+                "verify_aud": False,
+                "verify_exp": True,
+                "verify_iss": True,
+            },
+        )
+    except _jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Apple token has expired")
+    except _jwt.InvalidIssuerError:
+        raise HTTPException(status_code=400, detail="Apple token has invalid issuer")
+    except Exception as e:
+        logger.warning(f"[apple-auth] JWT verification failed: {e}")
+        raise HTTPException(status_code=400, detail="Could not verify Apple identity token")
+
+    apple_sub = claims.get("sub", "").strip()
+    if not apple_sub:
+        raise HTTPException(status_code=400, detail="Apple token missing sub claim")
+
+    # Trust the email from the verified token, NOT from the client body
+    apple_email = claims.get("email", "").strip().lower()
+    # Full name is only provided on first sign-in; Apple strips it after that.
+    full_name = (body.get("full_name") or "").strip()
+
+    def _find_or_create():
+        db = SessionLocal()
+        try:
+            # First try to find by apple_sub stored in User.apple_id
+            user = db.query(User).filter(User.apple_id == apple_sub).first()
+            if user:
+                if getattr(user, "banned", False):
+                    return ("banned", None)
+                return ("ok", _build_mobile_login_response(user, db))
+
+            # Try by email match (link Apple ID to existing account)
+            if apple_email:
+                user = db.query(User).filter(User.email == apple_email).first()
+                if user:
+                    if getattr(user, "banned", False):
+                        return ("banned", None)
+                    user.apple_id = apple_sub
+                    if not user.auth_provider or user.auth_provider == "telegram":
+                        user.auth_provider = "apple"
+                    db.commit()
+                    return ("ok", _build_mobile_login_response(user, db))
+
+            # Create a new account
+            import secrets as _secrets
+            new_uid = "TH-" + _secrets.token_hex(4).upper()
+            while db.query(User).filter(User.uid == new_uid).first():
+                new_uid = "TH-" + _secrets.token_hex(4).upper()
+            # telegram_id is NOT NULL in the schema — use a placeholder for
+            # Apple-auth users who have no Telegram account.
+            tg_placeholder = f"apple_{apple_sub[:32]}"
+            user = User(
+                telegram_id=tg_placeholder,
+                uid=new_uid,
+                email=apple_email or None,
+                first_name=full_name or None,
+                apple_id=apple_sub,
+                auth_provider="apple",
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            return ("ok", _build_mobile_login_response(user, db))
+        finally:
+            db.close()
+
+    status, payload = await asyncio.to_thread(_find_or_create)
+    if status == "banned":
+        raise HTTPException(status_code=403, detail="This account has been suspended.")
+    return JSONResponse(payload)
+
+
+@app.delete("/api/mobile/account")
+async def api_mobile_delete_account(request: Request):
+    """Delete the authenticated user's account (Apple/Google requirement).
+
+    Soft-deletes: deactivates all strategies, removes push tokens,
+    clears PII, and marks the account as banned so the UID cannot be reused
+    for login. Trade history is anonymized.
+    """
+    from app.models import MobilePushToken
+    uid = request.query_params.get("uid", "").strip().upper()
+    if not uid:
+        uid_header = request.headers.get("X-TradeHub-UID", "").strip().upper()
+        uid = uid_header or ""
+    if not uid:
+        raise HTTPException(status_code=401, detail="auth required")
+
+    def _do_delete():
+        db = SessionLocal()
+        try:
+            user = _get_user_by_uid(uid, db)
+            if not user:
+                raise HTTPException(status_code=403, detail="invalid UID")
+
+            # Deactivate all strategies
+            db.query(UserStrategy).filter(
+                UserStrategy.user_id == user.id
+            ).update({"status": "deleted"})
+
+            # Remove push tokens
+            db.query(MobilePushToken).filter(
+                MobilePushToken.user_id == user.id
+            ).delete()
+
+            # Clear PII
+            user.email = None
+            user.password_hash = None
+            user.first_name = f"Deleted User"
+            user.username = None
+            user.apple_id = None
+            user.banned = True
+
+            db.commit()
+            return {"ok": True, "message": "Account deleted successfully"}
+        finally:
+            db.close()
+
+    result = await asyncio.to_thread(_do_delete)
+    return JSONResponse(result)
 
 
 @app.get("/api/me")

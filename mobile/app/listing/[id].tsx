@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { Pill } from '@/components/Pill';
 import { StatCard } from '@/components/StatCard';
 import { PrimaryButton } from '@/components/PrimaryButton';
+import { Paywall } from '@/components/Paywall';
 import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, apiPost, ApiError, getApiUrl, type MarketplaceListingDetail, type CloneResponse } from '@/lib/api';
@@ -110,23 +111,10 @@ export default function ListingDetailScreen() {
     },
   });
 
-  const promptUpgrade = useCallback((msg: string) => {
-    Alert.alert(
-      'Pro required',
-      msg,
-      [
-        { text: 'Not now', style: 'cancel' },
-        {
-          text: 'Open billing',
-          onPress: () => {
-            const base = getApiUrl().replace(/\/api\/?$/, '');
-            Linking.openURL(`${base}/billing`).catch(() => {
-              Alert.alert('Could not open browser', 'Visit tradehub.markets in your browser to upgrade.');
-            });
-          },
-        },
-      ],
-    );
+  const [paywallOpen, setPaywallOpen] = useState(false);
+
+  const promptUpgrade = useCallback((_msg: string) => {
+    setPaywallOpen(true);
   }, []);
 
   const promptPayment = useCallback((priceUsdt: number, msg?: string) => {
@@ -374,6 +362,12 @@ export default function ListingDetailScreen() {
           </View>
         ) : null}
       </ScrollView>
+
+      <Paywall
+        visible={paywallOpen}
+        onClose={() => setPaywallOpen(false)}
+        onFallbackWeb={() => { setPaywallOpen(false); Linking.openURL('https://tradehub.markets/pricing').catch(() => {}); }}
+      />
     </>
   );
 }

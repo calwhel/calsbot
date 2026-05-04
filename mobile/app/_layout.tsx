@@ -21,8 +21,15 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { queryClient } from '@/lib/queryClient';
 import { colors } from '@/constants/colors';
 import { OnboardingTour } from '@/components/OnboardingTour';
+import { SubscriptionProvider, initializeRevenueCat } from '@/lib/revenuecat';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
+
+try {
+  initializeRevenueCat();
+} catch (err: any) {
+  console.warn("[RevenueCat] Init failed:", err?.message);
+}
 
 if (Platform.OS === 'android') {
   Notifications.setNotificationChannelAsync('trade-fires', {
@@ -248,8 +255,10 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
-            <StatusBar style="light" />
-            <AuthGate />
+            <SubscriptionProvider>
+              <StatusBar style="light" />
+              <AuthGate />
+            </SubscriptionProvider>
           </AuthProvider>
         </QueryClientProvider>
       </SafeAreaProvider>

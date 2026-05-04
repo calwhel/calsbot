@@ -19,9 +19,11 @@ import { Pill } from '@/components/Pill';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { Logo } from '@/components/Logo';
 import { SectionLabel } from '@/components/SectionLabel';
+import { RiskDisclaimer } from '@/components/RiskDisclaimer';
+import { Paywall } from '@/components/Paywall';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { apiGet, apiPut, type Portfolio, type PushPrefs } from '@/lib/api';
+import { apiGet, apiPut, apiDelete, type Portfolio, type PushPrefs } from '@/lib/api';
 
 export default function SettingsScreen() {
   const { user, uid, signOut, refreshUser } = useAuth();
@@ -29,6 +31,8 @@ export default function SettingsScreen() {
   const [copied, setCopied] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
+  const [paywallVisible, setPaywallVisible] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Re-validate the user payload every time the Account tab regains focus,
   // so a Pro upgrade made on the web shows up immediately when the user
@@ -234,7 +238,7 @@ export default function SettingsScreen() {
       {/* Pro upgrade card — only for free users */}
       {!isPro ? (
         <Pressable
-          onPress={() => Linking.openURL('https://tradehub.markets/pricing').catch(() => {})}
+          onPress={() => setPaywallVisible(true)}
           style={({ pressed }) => [
             styles.proCard,
             glow.accent,
@@ -263,6 +267,12 @@ export default function SettingsScreen() {
           </View>
         </Pressable>
       ) : null}
+
+      <Paywall
+        visible={paywallVisible}
+        onClose={() => { setPaywallVisible(false); refreshUser().catch(() => {}); }}
+        onFallbackWeb={() => { setPaywallVisible(false); Linking.openURL('https://tradehub.markets/pricing').catch(() => {}); }}
+      />
 
       {/* Push notification preferences */}
       <View style={{ marginTop: spacing.xl }}>
@@ -312,8 +322,67 @@ export default function SettingsScreen() {
         />
       </View>
 
+      {/* Legal */}
+      <View style={{ marginTop: spacing.xl }}>
+        <SectionLabel label="Legal" />
+      </View>
+      <View style={styles.section}>
+        <SettingsLink
+          icon="document-text-outline"
+          tone="accent"
+          label="Privacy Policy"
+          onPress={() => Linking.openURL('https://tradehubmarkets.com/privacy').catch(() => {})}
+        />
+        <SettingsLink
+          icon="shield-checkmark-outline"
+          tone="accent"
+          label="Terms & Conditions"
+          onPress={() => Linking.openURL('https://tradehubmarkets.com/terms').catch(() => {})}
+        />
+      </View>
+
+      <RiskDisclaimer />
+
       <View style={[styles.section, { marginTop: spacing.xl }]}>
         <PrimaryButton label="Sign out" variant="destructive" onPress={onSignOut} />
+      </View>
+
+      <View style={[styles.section, { marginTop: spacing.md }]}>
+        <Pressable
+          onPress={() => {
+            Alert.alert(
+              'Delete Account',
+              'This will permanently delete your account, deactivate all strategies, and remove your personal data. This action cannot be undone.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Delete my account',
+                  style: 'destructive',
+                  onPress: async () => {
+                    if (!uid) return;
+                    setDeleting(true);
+                    try {
+                      await apiDelete('/api/mobile/account', uid);
+                      Alert.alert('Account deleted', 'Your account has been deleted.');
+                      signOut();
+                    } catch (e: any) {
+                      Alert.alert('Could not delete', e?.message || 'Please try again or contact support.');
+                    } finally {
+                      setDeleting(false);
+                    }
+                  },
+                },
+              ],
+            );
+          }}
+          disabled={deleting}
+          style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.85 }]}
+        >
+          {deleting
+            ? <ActivityIndicator size="small" color={colors.negative} />
+            : <Ionicons name="trash-outline" size={16} color={colors.negative} />}
+          <Text style={styles.deleteText}>{deleting ? 'Deleting...' : 'Delete account'}</Text>
+        </Pressable>
       </View>
 
       <Text style={styles.version}>TradeHub Mobile · v1.1.2 · early access</Text>
@@ -701,6 +770,22 @@ const styles = StyleSheet.create({
     fontSize: 11,
     textAlign: 'center',
     marginTop: spacing.xxl,
+  },
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(229,72,77,0.24)',
+    backgroundColor: 'rgba(229,72,77,0.06)',
+  },
+  deleteText: {
+    color: colors.negative,
+    fontFamily: font.semibold,
+    fontSize: 14,
   },
 });
 

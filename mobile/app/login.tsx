@@ -5,19 +5,21 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { useAuth } from '@/contexts/AuthContext';
 import { ApiError } from '@/lib/api';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { Logo } from '@/components/Logo';
 import { AmbientBg } from '@/components/AmbientBg';
 import { GradientCard } from '@/components/GradientCard';
+import { RiskDisclaimer } from '@/components/RiskDisclaimer';
 import { colors, font, radius, spacing } from '@/constants/colors';
 
 type Mode = 'uid' | 'email';
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
-  const { signIn, signInEmail } = useAuth();
+  const { signIn, signInEmail, signInApple } = useAuth();
   const [mode, setMode] = useState<Mode>('uid');
   const [uid, setUid] = useState('');
   const [email, setEmail] = useState('');
@@ -148,6 +150,50 @@ export default function LoginScreen() {
               <View style={{ height: spacing.lg }} />
               <PrimaryButton label="Sign in" onPress={onSubmit} loading={loading} />
 
+              {Platform.OS === 'ios' ? (
+                <View style={{ marginTop: spacing.lg }}>
+                  <View style={styles.dividerRow}>
+                    <View style={styles.dividerLine} />
+                    <Text style={styles.dividerText}>or</Text>
+                    <View style={styles.dividerLine} />
+                  </View>
+                  <AppleAuthentication.AppleAuthenticationButton
+                    buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                    buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+                    cornerRadius={radius.md}
+                    style={styles.appleBtn}
+                    onPress={async () => {
+                      try {
+                        setError(null);
+                        setLoading(true);
+                        const credential = await AppleAuthentication.signInAsync({
+                          requestedScopes: [
+                            AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+                            AppleAuthentication.AppleAuthenticationScope.EMAIL,
+                          ],
+                        });
+                        if (!credential.identityToken) {
+                          setError('Apple sign-in failed — no identity token received.');
+                          return;
+                        }
+                        const fullName = [credential.fullName?.givenName, credential.fullName?.familyName]
+                          .filter(Boolean).join(' ') || null;
+                        await signInApple(credential.identityToken, fullName, credential.email);
+                      } catch (e: any) {
+                        if (e?.code === 'ERR_REQUEST_CANCELED') return;
+                        if (e instanceof ApiError) {
+                          setError(e.message || 'Apple sign-in failed.');
+                        } else {
+                          setError('Apple sign-in failed. Please try again.');
+                        }
+                      } finally {
+                        setLoading(false);
+                      }
+                    }}
+                  />
+                </View>
+              ) : null}
+
               <Pressable onPress={openSite} style={styles.helpLink}>
                 <Ionicons name="help-circle-outline" size={14} color={colors.textDim} />
                 <Text style={styles.helpText}>
@@ -159,9 +205,21 @@ export default function LoginScreen() {
             </View>
           </GradientCard>
 
+          <RiskDisclaimer />
+
           <Text style={styles.footer}>
             Your credentials are stored securely on this device.
           </Text>
+
+          <View style={styles.legalRow}>
+            <Pressable onPress={() => Linking.openURL('https://tradehubmarkets.com/privacy').catch(() => {})}>
+              <Text style={styles.legalLink}>Privacy Policy</Text>
+            </Pressable>
+            <Text style={styles.legalSep}>|</Text>
+            <Pressable onPress={() => Linking.openURL('https://tradehubmarkets.com/terms').catch(() => {})}>
+              <Text style={styles.legalLink}>Terms</Text>
+            </Pressable>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -299,5 +357,42 @@ const styles = StyleSheet.create({
     fontSize: 11,
     textAlign: 'center',
     marginTop: spacing.xl,
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: colors.border,
+  },
+  dividerText: {
+    color: colors.textMute,
+    fontFamily: font.medium,
+    fontSize: 12,
+    marginHorizontal: 12,
+  },
+  appleBtn: {
+    width: '100%',
+    height: 48,
+  },
+  legalRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: spacing.md,
+  },
+  legalLink: {
+    color: colors.textMute,
+    fontFamily: font.medium,
+    fontSize: 11,
+    textDecorationLine: 'underline',
+  },
+  legalSep: {
+    color: colors.textMute,
+    fontSize: 11,
   },
 });

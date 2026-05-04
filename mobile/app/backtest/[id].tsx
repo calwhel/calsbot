@@ -21,6 +21,7 @@ import { StatCard } from '@/components/StatCard';
 import { EquityCurve } from '@/components/EquityCurve';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { EmptyState } from '@/components/EmptyState';
+import { Paywall } from '@/components/Paywall';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -137,7 +138,7 @@ function RunningPanel({ days }: { days: 30 | 90 }) {
 
 // ─── Pro paywall ───────────────────────────────────────────────────────────
 
-function ProPaywall({ message }: { message?: string }) {
+function ProPaywall({ message, onUpgrade }: { message?: string; onUpgrade: () => void }) {
   return (
     <View style={[styles.paywall, glow.card]}>
       <Svg style={StyleSheet.absoluteFill}>
@@ -174,10 +175,10 @@ function ProPaywall({ message }: { message?: string }) {
           ))}
         </View>
         <PrimaryButton
-          label="Upgrade to Pro on web"
+          label="Upgrade to Pro"
           variant="primary"
-          icon={<Ionicons name="open-outline" size={15} color={colors.accentText} />}
-          onPress={() => Linking.openURL('https://tradehub.markets/billing').catch(() => {})}
+          icon={<Ionicons name="diamond" size={15} color={colors.accentText} />}
+          onPress={onUpgrade}
         />
       </View>
     </View>
@@ -353,6 +354,7 @@ export default function BacktestScreen() {
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [proRequired, setProRequired] = useState<{ message?: string } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [paywallOpen, setPaywallOpen] = useState(false);
 
   // Strategy lookup — piggyback on the cached list (already loaded by other tabs).
   const listQ = useQuery({
@@ -499,7 +501,7 @@ export default function BacktestScreen() {
         {/* Body — paywall, running, error, or results */}
         <View style={{ marginTop: spacing.lg }}>
           {proRequired ? (
-            <ProPaywall message={proRequired.message} />
+            <ProPaywall message={proRequired.message} onUpgrade={() => setPaywallOpen(true)} />
           ) : running ? (
             <RunningPanel days={days} />
           ) : errorMsg ? (
@@ -520,6 +522,12 @@ export default function BacktestScreen() {
           )}
         </View>
       </ScrollView>
+
+      <Paywall
+        visible={paywallOpen}
+        onClose={() => setPaywallOpen(false)}
+        onFallbackWeb={() => { setPaywallOpen(false); Linking.openURL('https://tradehub.markets/pricing').catch(() => {}); }}
+      />
     </>
   );
 }

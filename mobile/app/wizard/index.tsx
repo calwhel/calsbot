@@ -35,6 +35,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { Pill } from '@/components/Pill';
+import { RiskDisclaimer } from '@/components/RiskDisclaimer';
 import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiPost, apiPostFlex, type SaveStrategyResponse, type BacktestResult } from '@/lib/api';
@@ -1199,6 +1200,8 @@ function Step7({
           <BacktestResultCard r={btResult} />
         ) : null}
       </Card>
+
+      <RiskDisclaimer />
 
       {saveResult ? (
         <Card>

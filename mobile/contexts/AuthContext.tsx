@@ -35,13 +35,8 @@ export type AuthState = {
   ready: boolean;
   signIn: (uid: string) => Promise<LoginResponse>;
   signInEmail: (email: string, password: string) => Promise<LoginResponse>;
+  signInApple: (identityToken: string, fullName?: string | null, email?: string | null) => Promise<LoginResponse>;
   signOut: () => Promise<void>;
-  /**
-   * Re-fetches the LoginResponse from the backend using the persisted UID.
-   * Use this to pick up subscription changes (e.g. user upgraded to Pro on
-   * the web) without requiring a full sign-out / sign-in cycle.
-   * Returns the fresh payload, or null if there is no signed-in user.
-   */
   refreshUser: () => Promise<LoginResponse | null>;
 };
 
@@ -92,6 +87,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const fresh = await apiPost<LoginResponse>('/api/mobile/login/email', {
       email: email.trim().toLowerCase(),
       password,
+    });
+    await storage.set(UID_STORE_KEY, fresh.uid);
+    setUser(fresh);
+    setUid(fresh.uid);
+    return fresh;
+  }, []);
+
+  const signInApple = useCallback(async (
+    identityToken: string,
+    fullName?: string | null,
+    email?: string | null,
+  ): Promise<LoginResponse> => {
+    const fresh = await apiPost<LoginResponse>('/api/mobile/login/apple', {
+      identity_token: identityToken,
+      full_name: fullName || undefined,
+      email: email || undefined,
     });
     await storage.set(UID_STORE_KEY, fresh.uid);
     setUser(fresh);
@@ -177,7 +188,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [uid]);
 
   return (
-    <AuthCtx.Provider value={{ user, uid, ready, signIn, signInEmail, signOut, refreshUser }}>
+    <AuthCtx.Provider value={{ user, uid, ready, signIn, signInEmail, signInApple, signOut, refreshUser }}>
       {children}
     </AuthCtx.Provider>
   );

@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, font, radius, spacing } from '@/constants/colors';
 import { postQuickTrade, type QuickTradeResult } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
+import { RiskDisclaimer } from '@/components/RiskDisclaimer';
 
 type Props = {
   visible: boolean;
@@ -268,6 +269,8 @@ export function QuickTradeSheet({ visible, onClose, symbol, livePrice }: Props) 
               </View>
             ) : null}
           </ScrollView>
+
+          <RiskDisclaimer compact />
 
           {/* Confirm */}
           <Pressable

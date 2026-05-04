@@ -22,7 +22,8 @@ class User(Base):
     email_verified = Column(Boolean, default=False)
     password_hash = Column(String, nullable=True)
     google_id = Column(String, unique=True, index=True, nullable=True)
-    auth_provider = Column(String, default="telegram")  # telegram | google | email
+    apple_id = Column(String, unique=True, index=True, nullable=True)
+    auth_provider = Column(String, default="telegram")  # telegram | google | email | apple
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     subscription_end = Column(DateTime, nullable=True)
