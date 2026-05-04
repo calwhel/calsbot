@@ -551,6 +551,9 @@ function renderKnobs(
       );
     }
 
+    case 'tradingview_webhook':
+      return null;
+
     default:
       return null;
   }

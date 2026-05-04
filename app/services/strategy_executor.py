@@ -30,7 +30,7 @@ _RAW_TICKERS_TTL    = 60  # seconds
 # When multiple strategies scan the same symbol in the same cycle they all
 # hit the cache instead of each making an independent candle + indicator call.
 _PRICE_TA_CACHE: Dict[str, tuple] = {}  # symbol -> (data_dict, fetched_at)
-_PRICE_TA_TTL    = 30  # seconds
+_PRICE_TA_TTL    = 15  # seconds — fresher data for faster signal detection
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -2607,6 +2607,7 @@ async def run_strategy_executor():
                         (s["config"] or {}).get("_locked")
                         and (s["config"] or {}).get("_source_strategy_id") in active_source_ids
                     )
+                    and (s["config"] or {}).get("entry_conditions", {}).get("entry_type") != "tradingview_webhook"
                 ]
                 skipped = len(strategy_snapshots) - len(eval_snapshots)
                 if skipped:

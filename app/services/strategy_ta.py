@@ -189,29 +189,52 @@ def _swing_lows(highs: List[float], lows: List[float], left=2, right=2) -> List[
 
 # ─── Klines cache ──────────────────────────────────────────────────────────────
 
+_KLINE_PERSIST_CACHE: Dict[tuple, tuple] = {}
+_KLINE_PERSIST_TTL = 45
+
 async def _get_klines(
     symbol: str, interval: str, limit: int,
     http_client, cache: Optional[Dict] = None
 ) -> Optional[List]:
+    import time as _time
     key = (symbol, interval, limit)
     if cache is not None and key in cache:
         return cache[key]
-    # MEXC uses 60m instead of 1h, 120m instead of 2h, etc.
+    if cache is not None:
+        for (cs, ci, cl), cv in list(cache.items()):
+            if cs == symbol and ci == interval and cl >= limit and cv:
+                sliced = cv[-limit:]
+                cache[key] = sliced
+                return sliced
+    _now = _time.monotonic()
+    _pkey = (symbol, interval)
+    _pcached = _KLINE_PERSIST_CACHE.get(_pkey)
+    if _pcached:
+        _pdata, _pfetched, _plimit = _pcached
+        if _now - _pfetched < _KLINE_PERSIST_TTL and _plimit >= limit and _pdata:
+            sliced = _pdata[-limit:]
+            if cache is not None:
+                cache[key] = sliced
+            return sliced
     mexc_interval = interval.replace("1h", "60m").replace("2h", "120m").replace("3h", "180m")
+    fetch_limit = max(limit, 200)
     sources = [
-        ("https://api.mexc.com/api/v3/klines",     {"symbol": symbol, "interval": mexc_interval, "limit": limit}),
-        ("https://api.binance.com/api/v3/klines",   {"symbol": symbol, "interval": interval,      "limit": limit}),
-        ("https://fapi.binance.com/fapi/v1/klines", {"symbol": symbol, "interval": interval,      "limit": limit}),
+        ("https://api.mexc.com/api/v3/klines",     {"symbol": symbol, "interval": mexc_interval, "limit": fetch_limit}),
+        ("https://api.binance.com/api/v3/klines",   {"symbol": symbol, "interval": interval,      "limit": fetch_limit}),
+        ("https://fapi.binance.com/fapi/v1/klines", {"symbol": symbol, "interval": interval,      "limit": fetch_limit}),
     ]
     for url, params in sources:
         try:
-            resp = await http_client.get(url, params=params, timeout=3)
+            resp = await http_client.get(url, params=params, timeout=2)
             if resp.status_code == 200:
                 klines = resp.json()
                 if klines and isinstance(klines, list):
+                    _KLINE_PERSIST_CACHE[_pkey] = (klines, _now, len(klines))
+                    sliced = klines[-limit:] if len(klines) > limit else klines
                     if cache is not None:
-                        cache[key] = klines
-                    return klines
+                        cache[key] = sliced
+                        cache[(symbol, interval, len(klines))] = klines
+                    return sliced
         except Exception as e:
             logger.debug(f"Klines fetch failed ({url}) {symbol} {interval}: {e}")
             continue
@@ -385,7 +408,7 @@ async def eval_indicator(
 
     # ── Stochastic RSI ───────────────────────────────────────────────────────
     if name in ("stoch_rsi", "stochrsi"):
-        klines = await _get_klines(symbol, tf, 100, http_client, cache)
+        klines = await _get_klines(symbol, tf, 200, http_client, cache)
         if not klines or len(klines) < 30: return False, "StochRSI insufficient data"
         closes = _closes(klines)
         rsi_vals = _rsi_values(closes, 14)
@@ -417,7 +440,7 @@ async def eval_indicator(
     if name in ("supertrend",):
         period = int(cond.get("period", 10))
         mult   = float(cond.get("multiplier", 3.0))
-        klines = await _get_klines(symbol, tf, period * 4 + 10, http_client, cache)
+        klines = await _get_klines(symbol, tf, period * 6 + 20, http_client, cache)
         if not klines or len(klines) < period + 2: return False, "SuperTrend insufficient data"
         closes = _closes(klines)
         highs  = _highs(klines)
@@ -450,7 +473,7 @@ async def eval_indicator(
 
     # ── ADX ──────────────────────────────────────────────────────────────────
     if name == "adx":
-        klines = await _get_klines(symbol, tf, 60, http_client, cache)
+        klines = await _get_klines(symbol, tf, 120, http_client, cache)
         if not klines or len(klines) < 28: return False, "ADX insufficient data"
         highs = _highs(klines); lows = _lows(klines)
         atrs  = _atr_values(klines, 14)
@@ -603,7 +626,7 @@ async def eval_indicator(
 
     # ── Ichimoku ─────────────────────────────────────────────────────────────
     if name in ("ichimoku", "ichi"):
-        klines = await _get_klines(symbol, tf, 130, http_client, cache)
+        klines = await _get_klines(symbol, tf, 200, http_client, cache)
         if not klines or len(klines) < 52: return False, "Ichimoku insufficient data"
         def midpoint(ks, p): return (max(_highs(ks[-p:])) + min(_lows(ks[-p:]))) / 2
         tenkan  = midpoint(klines, 9)
@@ -632,7 +655,7 @@ async def eval_indicator(
 
     # ── MFI (Money Flow Index) ────────────────────────────────────────────────
     if name == "mfi":
-        klines = await _get_klines(symbol, tf, 50, http_client, cache)
+        klines = await _get_klines(symbol, tf, 100, http_client, cache)
         if not klines or len(klines) < 15: return False, "MFI insufficient data"
         highs = _highs(klines); lows = _lows(klines)
         closes = _closes(klines); vols = _vols(klines)
@@ -1186,7 +1209,7 @@ async def eval_market_structure(
 ) -> Tuple[bool, str]:
     sub    = cond.get("condition", "bos_bullish")
     tf     = cond.get("timeframe", "15m")
-    klines = await _get_klines(symbol, tf, 60, http_client, cache)
+    klines = await _get_klines(symbol, tf, 120, http_client, cache)
     if not klines or len(klines) < 20: return False, "Market structure: not enough data"
     highs = _highs(klines[:-3]); lows = _lows(klines[:-3])
     sh_idx = _swing_highs(highs, lows)
@@ -1224,7 +1247,7 @@ async def eval_order_block(
     ob_type  = cond.get("ob_type", cond.get("direction", "bullish"))
     tf       = cond.get("timeframe", "15m")
     tol      = float(cond.get("tolerance_pct", 1.0)) / 100
-    klines   = await _get_klines(symbol, tf, 50, http_client, cache)
+    klines   = await _get_klines(symbol, tf, 100, http_client, cache)
     if not klines or len(klines) < 10: return False, "OB: insufficient data"
     closes = _closes(klines); opens = _opens(klines)
     highs  = _highs(klines);  lows  = _lows(klines)
@@ -1297,7 +1320,7 @@ async def eval_divergence(
     direction = cond.get("direction", "bullish")
     tf        = cond.get("timeframe", "15m")
     lookback  = int(cond.get("lookback", 20))
-    klines    = await _get_klines(symbol, tf, lookback + 15, http_client, cache)
+    klines    = await _get_klines(symbol, tf, lookback + 50, http_client, cache)
     if not klines or len(klines) < lookback: return False, "Divergence: insufficient data"
     closes = _closes(klines)
     if indicator == "rsi":

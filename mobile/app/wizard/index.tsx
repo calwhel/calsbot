@@ -27,6 +27,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -100,7 +101,7 @@ const BTC_REGIME_OPTIONS: ChipOption<BtcRegime>[] = [
   { value: 'neutral', icon: '⚪', label: 'Neutral only' },
 ];
 type NameSuggestion = { name: string; tagline: string };
-type SaveResult = { id: number; name: string; status: string };
+type SaveResult = { id: number; name: string; status: string; webhook_url?: string };
 
 export default function WizardScreen() {
   const insets = useSafeAreaInsets();
@@ -256,7 +257,7 @@ export default function WizardScreen() {
       return res;
     },
     onSuccess: (data) => {
-      setSaveResult({ id: data.id, name: data.name, status: data.status });
+      setSaveResult({ id: data.id, name: data.name, status: data.status, webhook_url: data.webhook_url });
       qc.invalidateQueries({ queryKey: ['strategies'] });
       qc.invalidateQueries({ queryKey: ['portfolio'] });
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
@@ -575,7 +576,7 @@ function Step3({
         </Pressable>
       </Card>
 
-      {s.primaryType ? (
+      {s.primaryType && s.primaryType !== 'tradingview_webhook' ? (
         <Card>
           <SectionHeader label="Configure signal" />
           <ConditionEditor
@@ -588,6 +589,24 @@ function Step3({
               <Pill label={`🔥 Fires ${fireRate}`} tone="accent" small />
             </View>
           ) : null}
+        </Card>
+      ) : null}
+
+      {s.primaryType === 'tradingview_webhook' ? (
+        <Card>
+          <View style={wizStyles.tvPanel}>
+            <Text style={wizStyles.tvTitle}>How it works</Text>
+            <Text style={wizStyles.tvDesc}>
+              This strategy fires trades when TradingView sends an alert to your unique webhook URL. No indicators are scanned — the entry is entirely driven by your TradingView alert.
+            </Text>
+            <View style={wizStyles.tvSteps}>
+              <Text style={wizStyles.tvStep}>1. Save this strategy — you'll get a unique webhook URL</Text>
+              <Text style={wizStyles.tvStep}>2. In TradingView, create an alert and paste the URL in the "Webhook URL" field</Text>
+              <Text style={wizStyles.tvStep}>3. Set the alert message to JSON:{'\n'}   {'{"symbol":"BTCUSDT"}'}</Text>
+              <Text style={wizStyles.tvStep}>4. When TradingView fires the alert, TradeHub opens a trade using your exit & risk settings</Text>
+            </View>
+            <Text style={wizStyles.tvNote}>Your webhook URL will be shown after you save the strategy.</Text>
+          </View>
         </Card>
       ) : null}
     </View>
@@ -1191,6 +1210,10 @@ function Step7({
             </View>
           </View>
 
+          {saveResult.webhook_url ? (
+            <WebhookUrlCard url={saveResult.webhook_url} />
+          ) : null}
+
           <SectionHeader
             label="Publish to marketplace"
             icon="🌟"
@@ -1229,6 +1252,38 @@ function Step7({
           </Text>
         </Card>
       )}
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Webhook URL card — shown after saving a TradingView webhook strategy
+// ─────────────────────────────────────────────────────────────────────────
+function WebhookUrlCard({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  const doCopy = async () => {
+    await Clipboard.setStringAsync(url);
+    setCopied(true);
+    if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <View style={wizStyles.whCard}>
+      <Text style={wizStyles.whTitle}>Webhook URL</Text>
+      <Text style={wizStyles.whHint}>Paste this into your TradingView alert's "Webhook URL" field.</Text>
+      <View style={wizStyles.whUrlRow}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
+          <Text style={wizStyles.whUrl} selectable>{url}</Text>
+        </ScrollView>
+        <Pressable onPress={doCopy} style={({ pressed }) => [wizStyles.whCopyBtn, pressed && { opacity: 0.85 }]}>
+          <Text style={wizStyles.whCopyTxt}>{copied ? 'Copied!' : 'Copy'}</Text>
+        </Pressable>
+      </View>
+      <Text style={wizStyles.whFormat}>
+        Alert message format:{'\n'}
+        {'{"symbol":"BTCUSDT","direction":"LONG"}'}{'\n'}
+        symbol is required. direction is optional.
+      </Text>
     </View>
   );
 }
@@ -1613,4 +1668,56 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
   },
   backTxt: { fontFamily: font.semibold, fontSize: 13, color: colors.text },
+});
+
+const wizStyles = StyleSheet.create({
+  tvPanel: {
+    backgroundColor: 'rgba(147,51,234,0.06)',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: 'rgba(147,51,234,0.2)',
+    padding: 14,
+  },
+  tvTitle: {
+    fontFamily: font.bold, fontSize: 15, color: colors.text, marginBottom: 4,
+  },
+  tvDesc: {
+    fontFamily: font.regular, fontSize: 12.5, color: colors.textDim, lineHeight: 18, marginBottom: 12,
+  },
+  tvSteps: { gap: 6, marginBottom: 12 },
+  tvStep: {
+    fontFamily: font.regular, fontSize: 12, color: colors.text, lineHeight: 17,
+  },
+  tvNote: {
+    fontFamily: font.semibold, fontSize: 11.5, color: colors.accent,
+  },
+  whCard: {
+    backgroundColor: 'rgba(147,51,234,0.06)',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: 'rgba(147,51,234,0.2)',
+    padding: 14,
+    marginBottom: spacing.md,
+  },
+  whTitle: { fontFamily: font.bold, fontSize: 14, color: colors.text, marginBottom: 4 },
+  whHint: { fontFamily: font.regular, fontSize: 11.5, color: colors.textDim, marginBottom: 10 },
+  whUrlRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: colors.bgElev,
+    borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border,
+    padding: 8, marginBottom: 10,
+  },
+  whUrl: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 10.5, color: colors.text,
+  },
+  whCopyBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: radius.sm,
+    paddingHorizontal: 12, paddingVertical: 6,
+  },
+  whCopyTxt: { fontFamily: font.bold, fontSize: 11, color: '#fff' },
+  whFormat: {
+    fontFamily: font.regular, fontSize: 11, color: colors.textMute, lineHeight: 16,
+  },
 });

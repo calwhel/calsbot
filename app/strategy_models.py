@@ -23,6 +23,7 @@ class UserStrategy(Base):
     status      = Column(String(20), default="draft")   # draft | active | paused | archived
     is_public   = Column(Boolean, default=False)        # marketplace visibility
     clone_count = Column(Integer, default=0)
+    webhook_token = Column(String(64), nullable=True, unique=True, index=True)
     created_at  = Column(DateTime, default=datetime.utcnow)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

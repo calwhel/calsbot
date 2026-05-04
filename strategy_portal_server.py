@@ -674,10 +674,13 @@ def _ensure_tables():
             logger.warning(f"_ensure_tables({table}): {e}")
 
     user_preference_cols = {
-        # Mobile push notification preferences (added with Quick Trade / push prefs feature)
         "push_notify_paper":      "ALTER TABLE user_preferences ADD COLUMN push_notify_paper BOOLEAN DEFAULT TRUE",
         "push_notify_live":       "ALTER TABLE user_preferences ADD COLUMN push_notify_live BOOLEAN DEFAULT TRUE",
         "push_min_position_usd":  "ALTER TABLE user_preferences ADD COLUMN push_min_position_usd DOUBLE PRECISION DEFAULT 0",
+    }
+
+    strategy_cols = {
+        "webhook_token": "ALTER TABLE user_strategies ADD COLUMN webhook_token VARCHAR(64) UNIQUE",
     }
 
     _migrate_columns("users", user_cols)
@@ -685,6 +688,7 @@ def _ensure_tables():
     _migrate_columns("auto_trade_paper_trades", auto_trade_cols)
     _migrate_columns("indicator_alerts", indicator_alerts_cols)
     _migrate_columns("user_preferences", user_preference_cols)
+    _migrate_columns("user_strategies", strategy_cols)
 
 
 @app.on_event("startup")
@@ -5885,12 +5889,24 @@ async def api_save_strategy(request: Request):
         else:
             initial_status = "draft"
 
+        import secrets as _secrets
+        _entry = config.get("entry_conditions", {})
+        _is_webhook = (
+            _entry.get("entry_type") == "tradingview_webhook"
+            or any(
+                c.get("type") == "tradingview_webhook"
+                for c in (_entry.get("conditions") or [])
+            )
+        )
+        _wh_token = _secrets.token_urlsafe(32) if _is_webhook else None
+
         strategy = UserStrategy(
-            user_id     = user.id,
-            name        = config.get("name", "My Strategy"),
-            description = config.get("description", ""),
-            config      = config,
-            status      = initial_status,
+            user_id       = user.id,
+            name          = config.get("name", "My Strategy"),
+            description   = config.get("description", ""),
+            config        = config,
+            status        = initial_status,
+            webhook_token = _wh_token,
         )
         db.add(strategy)
         db.commit()
@@ -5900,7 +5916,297 @@ async def api_save_strategy(request: Request):
         db.add(perf)
         db.commit()
 
-        return JSONResponse({"id": strategy.id, "name": strategy.name, "status": initial_status})
+        _resp: dict = {"id": strategy.id, "name": strategy.name, "status": initial_status}
+        if _wh_token:
+            _resp["webhook_url"] = f"https://{os.environ.get('REPLIT_DEV_DOMAIN', request.headers.get('host', ''))}/api/webhooks/tv/{_wh_token}"
+            _resp["webhook_token"] = _wh_token
+        return JSONResponse(_resp)
+    finally:
+        db.close()
+
+
+@app.post("/api/webhooks/tv/{token}")
+async def api_tradingview_webhook(token: str, request: Request):
+    """Receive a TradingView alert and fire a trade for the linked strategy."""
+    from app.database import SessionLocal
+    from app.strategy_models import (
+        UserStrategy, StrategyExecution, StrategyPerformance,
+        StrategyPortalSettings, PortalSubscription,
+    )
+    from app.models import User
+    import json as _json
+
+    try:
+        raw = await request.body()
+        body = {}
+        if raw:
+            try:
+                body = _json.loads(raw)
+            except Exception:
+                text = raw.decode("utf-8", errors="replace").strip()
+                body = {"symbol": text.upper().replace(" ", "")} if text else {}
+    except Exception:
+        body = {}
+
+    db = SessionLocal()
+    try:
+        strategy = db.query(UserStrategy).filter(
+            UserStrategy.webhook_token == token
+        ).first()
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Unknown webhook token")
+
+        if strategy.status not in ("active", "paper", "draft"):
+            return JSONResponse({"ok": False, "reason": "strategy_paused"})
+
+        user = db.query(User).filter(User.id == strategy.user_id).first()
+        if not user or user.banned:
+            raise HTTPException(status_code=403, detail="User unavailable")
+
+        _now = datetime.utcnow()
+        _has_pro = False
+        try:
+            _psub = db.query(PortalSubscription).filter_by(user_id=user.id).first()
+            _has_pro = (
+                _psub and _psub.tier == "pro"
+                and _psub.subscription_end
+                and _psub.subscription_end > _now
+            )
+        except Exception:
+            pass
+        if not (user.is_admin or getattr(user, "grandfathered", False) or _has_pro):
+            return JSONResponse({"ok": False, "reason": "no_pro_subscription"})
+
+        config = dict(strategy.config or {})
+        risk = config.get("risk", {})
+        ex_config = config.get("exit", {})
+        direction_pref = config.get("direction", "LONG")
+
+        symbol_raw = body.get("symbol") or body.get("ticker") or ""
+        symbol = symbol_raw.strip().upper().replace("/", "").replace("-", "")
+        if ":" in symbol:
+            symbol = symbol.split(":")[-1]
+        import re as _re
+        symbol = _re.sub(r"[^A-Z0-9]", "", symbol)
+        if not symbol:
+            uni = config.get("universe", {})
+            syms = uni.get("symbols", [])
+            if syms:
+                symbol = syms[0]
+            else:
+                raise HTTPException(status_code=400, detail="No symbol in payload or strategy universe")
+
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+
+        alert_dir = (body.get("direction") or body.get("side") or body.get("action") or "").upper()
+        if alert_dir in ("LONG", "BUY"):
+            direction = "LONG"
+        elif alert_dir in ("SHORT", "SELL"):
+            direction = "SHORT"
+        elif direction_pref == "BOTH":
+            direction = "LONG"
+        else:
+            direction = direction_pref
+
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=5) as hc:
+            try:
+                r = await hc.get("https://api.mexc.com/api/v3/ticker/price", params={"symbol": symbol})
+                current_price = float(r.json().get("price", 0))
+            except Exception:
+                try:
+                    r = await hc.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": symbol})
+                    current_price = float(r.json().get("price", 0))
+                except Exception:
+                    raise HTTPException(status_code=502, detail=f"Could not fetch price for {symbol}")
+
+        if not current_price:
+            raise HTTPException(status_code=502, detail=f"Price is 0 for {symbol}")
+
+        tp_pct = float(ex_config.get("take_profit_pct", 3.0))
+        tp2_pct = ex_config.get("take_profit2_pct")
+        sl_pct = float(ex_config.get("stop_loss_pct", 1.5))
+        leverage = int(risk.get("leverage", 10))
+
+        if direction == "LONG":
+            tp_price = current_price * (1 + tp_pct / 100)
+            sl_price = current_price * (1 - sl_pct / 100)
+            tp2_price = current_price * (1 + float(tp2_pct) / 100) if tp2_pct else None
+        else:
+            tp_price = current_price * (1 - tp_pct / 100)
+            sl_price = current_price * (1 + sl_pct / 100)
+            tp2_price = current_price * (1 - float(tp2_pct) / 100) if tp2_pct else None
+
+        from app.services.strategy_executor import (
+            _daily_execution_count, _open_execution_count,
+            _fired_today_for_symbol, _last_any_fired_time,
+        )
+        max_per_day = int(risk.get("max_trades_per_day", 3))
+        max_open = int(risk.get("max_open_positions", 1))
+        cooldown_mins = int(risk.get("cooldown_minutes", 30))
+        no_dup = bool(risk.get("no_duplicate_symbol", False))
+
+        if _daily_execution_count(strategy.id, db) >= max_per_day:
+            return JSONResponse({"ok": False, "reason": "daily_trade_limit"})
+        if _open_execution_count(strategy.id, db) >= max_open:
+            return JSONResponse({"ok": False, "reason": "max_open_positions"})
+        last_global = _last_any_fired_time(strategy.id, db)
+        if last_global:
+            elapsed = (_now - last_global).total_seconds() / 60
+            if elapsed < cooldown_mins:
+                return JSONResponse({"ok": False, "reason": "cooldown", "retry_after_sec": int((cooldown_mins - elapsed) * 60)})
+        if no_dup and _fired_today_for_symbol(strategy.id, symbol, db):
+            return JSONResponse({"ok": False, "reason": "duplicate_symbol_today"})
+
+        is_paper = strategy.status != "active"
+
+        execution = StrategyExecution(
+            strategy_id=strategy.id,
+            user_id=user.id,
+            symbol=symbol,
+            direction=direction,
+            entry_price=current_price,
+            tp_price=tp_price,
+            tp2_price=tp2_price,
+            sl_price=sl_price,
+            leverage=leverage,
+            outcome="OPEN",
+            conditions_met=["📺 TradingView webhook alert"],
+            fired_at=_now,
+            is_paper=is_paper,
+        )
+        db.add(execution)
+        db.commit()
+        db.refresh(execution)
+
+        _perf = db.query(StrategyPerformance).filter(
+            StrategyPerformance.strategy_id == strategy.id
+        ).first()
+        if _perf:
+            _perf.open_trades = (_perf.open_trades or 0) + 1
+        else:
+            _perf = StrategyPerformance(strategy_id=strategy.id, open_trades=1)
+            db.add(_perf)
+        db.commit()
+
+        try:
+            from app.services.strategy_executor import _telegram_int_id, _tg_send, _fmt_open_card
+            tg_id = _telegram_int_id(user)
+            if tg_id:
+                portal_settings = db.query(StrategyPortalSettings).filter(
+                    StrategyPortalSettings.user_id == user.id
+                ).first()
+                if not portal_settings or portal_settings.dm_paper_alerts or not is_paper:
+                    import asyncio as _aio
+                    _aio.create_task(_tg_send(
+                        tg_id,
+                        _fmt_open_card(
+                            strategy_name=strategy.name,
+                            symbol=symbol,
+                            direction=direction,
+                            entry=current_price,
+                            tp_price=tp_price,
+                            tp_pct=tp_pct,
+                            tp2_price=tp2_price,
+                            tp2_pct=float(tp2_pct) if tp2_pct else None,
+                            sl_price=sl_price,
+                            sl_pct=sl_pct,
+                            leverage=leverage,
+                            conditions=["📺 TradingView webhook alert"],
+                            is_paper=is_paper,
+                        ),
+                    ))
+        except Exception as _tg_err:
+            logger.warning(f"Webhook TG notify failed: {_tg_err}")
+
+        try:
+            from app.services.expo_push import notify_user_bg
+            _coin = symbol.replace("USDT", "")
+            notify_user_bg(
+                user.id,
+                title=f"{'📝' if is_paper else '🚀'} {strategy.name}",
+                body=f"{'Paper' if is_paper else 'Live'}: {_coin} {direction} {leverage}x @ ${current_price:,.4f}",
+                data={"type": "trade_open", "strategy_id": strategy.id, "kind": "paper" if is_paper else "live"},
+                kind="paper" if is_paper else "live",
+            )
+        except Exception:
+            pass
+
+        if not is_paper:
+            try:
+                from app.services.strategy_trader import place_bitunix_order_for_user
+                order_result = await place_bitunix_order_for_user(
+                    user=user,
+                    symbol=symbol,
+                    direction=direction,
+                    leverage=leverage,
+                    entry_price=current_price,
+                    tp_pct=tp_pct,
+                    sl_pct=sl_pct,
+                    risk_pct=float(risk.get("position_size_pct", 5)),
+                    risk_usd=float(risk["position_size_usd"]) if risk.get("position_size_type") == "fixed" and risk.get("position_size_usd") else None,
+                )
+                if order_result:
+                    _oid = order_result.get("order_id")
+                    if _oid:
+                        execution.bitunix_order_id = str(_oid)
+                    _fill = order_result.get("actual_fill")
+                    if _fill:
+                        execution.entry_price = float(_fill)
+                    db.commit()
+                else:
+                    execution.is_paper = True
+                    execution.notes = "Live->Paper fallback (webhook): Bitunix returned no result"
+                    db.commit()
+            except Exception as _ord_err:
+                execution.is_paper = True
+                execution.notes = f"Live->Paper fallback (webhook): {str(_ord_err)[:200]}"
+                db.commit()
+                logger.warning(f"Webhook live order failed for strategy {strategy.id}: {_ord_err}")
+
+        mode = "paper" if execution.is_paper else "live"
+        logger.info(
+            f"[Webhook] Strategy {strategy.id} '{strategy.name}' — "
+            f"{symbol} {direction} {leverage}x @ {current_price} ({mode})"
+        )
+
+        return JSONResponse({
+            "ok": True,
+            "execution_id": execution.id,
+            "symbol": symbol,
+            "direction": direction,
+            "entry_price": current_price,
+            "mode": mode,
+        })
+    finally:
+        db.close()
+
+
+@app.get("/api/strategies/{strategy_id}/webhook-url")
+async def api_get_webhook_url(strategy_id: int, request: Request, uid: str = Query(...)):
+    """Return the webhook URL for a strategy (if it has one)."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        strategy = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id,
+            UserStrategy.user_id == user.id,
+        ).first()
+        if not strategy:
+            raise HTTPException(status_code=404)
+        if not strategy.webhook_token:
+            return JSONResponse({"webhook_url": None})
+        host = os.environ.get("REPLIT_DEPLOYMENT_URL") or os.environ.get("REPLIT_DEV_DOMAIN") or request.headers.get("host", "")
+        if not host.startswith("http"):
+            host = f"https://{host}"
+        return JSONResponse({
+            "webhook_url": f"{host}/api/webhooks/tv/{strategy.webhook_token}",
+            "webhook_token": strategy.webhook_token,
+        })
     finally:
         db.close()
 

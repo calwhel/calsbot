@@ -4137,6 +4137,7 @@ const SIGNAL_META={
   donchian:        {icon:'📐',label:'Donchian Channel',  desc:'N-period high/low channel — trend or range filter'},
   aroon:           {icon:'🔔',label:'Aroon',             desc:'Trend strength and direction — Aroon Up/Down'},
   roc:             {icon:'🚀',label:'Rate of Change',    desc:'Momentum: how fast price is moving up or down'},
+  tradingview_webhook:{icon:'📺',label:'TradingView Webhook',desc:'Fire trades from TradingView alerts via webhook URL'},
 };
 
 // ─── Signal fire-rate lookup ───────────────────────────────
@@ -4150,12 +4151,13 @@ const SIGNAL_FREQ={
   order_block:'low', fibonacci:'low', divergence:'low', funding_rate:'low',
   fvg:'low', open_interest:'low', liquidation:'low', session_level:'low',
   trend_reversal:'low', heikin_ashi:'low', ichimoku:'low', aroon:'low',
-  sustained_trend:'low',
+  sustained_trend:'low', tradingview_webhook:'ext',
 };
 const FREQ_STYLE={
   high:{label:'High',color:'#16a34a',bg:'rgba(22,163,74,.12)',title:'Fires often — high trade volume'},
   med: {label:'Med', color:'#d97706',bg:'rgba(217,119,6,.12)',title:'Balanced trade frequency'},
   low: {label:'Low', color:'#3b5bdb',bg:'rgba(59,91,219,.12)',title:'Selective — fewer, higher-quality trades'},
+  ext: {label:'External',color:'#9333ea',bg:'rgba(147,51,234,.12)',title:'Triggered by external webhook — you control the frequency'},
 };
 
 function estimateFireRate(){
@@ -4366,6 +4368,7 @@ function getDefaultCfg(type){
     aroon:            {timeframe:tf,condition:'bullish',period:25},
     roc:              {timeframe:tf,condition:'positive',period:14},
     sma:              {timeframe:'1h',condition:'price_above',period:200,source:'close'},
+    tradingview_webhook:{entry_type:'tradingview_webhook'},
   }[type]||{timeframe:tf};
 }
 
@@ -4803,6 +4806,22 @@ function renderSignalCfg(type,cfg,pfx){
       <div class="opt-label">Lookback Period <span id="${pfx}rocp-d" style="color:var(--accent)">${cfg.period||10}</span></div>
       <input type="range" id="${pfx}rocp" min="2" max="100" value="${cfg.period||10}" step="1" oninput="wzSl('${pfx}rocp','${pfx}rocp-d','','${pfx}period')" style="width:100%;accent-color:var(--accent)">
       <div class="hint">ROC = Rate of Change. Measures how fast price is moving. "Cross above zero" is a clean momentum entry signal. Use with RSI or EMA for confirmation.</div>`;
+    case 'tradingview_webhook':return`
+      <div style="background:linear-gradient(135deg,rgba(147,51,234,.08),rgba(59,91,219,.08));border:1px solid rgba(147,51,234,.25);border-radius:10px;padding:16px;margin-bottom:12px">
+        <div style="font-weight:700;font-size:14px;margin-bottom:6px">📺 TradingView Webhook</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+          This strategy will fire trades when TradingView sends an alert to your unique webhook URL.
+          No technical indicators are scanned — the entry is entirely driven by your TradingView alert.
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600">HOW IT WORKS</div>
+        <ol style="font-size:12px;color:var(--text);margin:0 0 12px 16px;padding:0;line-height:1.7">
+          <li>Save this strategy — you'll get a unique webhook URL</li>
+          <li>In TradingView, create an alert and paste the URL in the "Webhook URL" field</li>
+          <li>Set the alert message to JSON: <code style="background:var(--card2);padding:2px 6px;border-radius:4px;font-size:11px">{"symbol":"BTCUSDT"}</code></li>
+          <li>When TradingView fires the alert, TradeHub opens a trade using your exit/risk settings</li>
+        </ol>
+        <div style="font-size:11px;color:var(--accent);font-weight:600">Your webhook URL will be shown after you save the strategy.</div>
+      </div>`;
     default:return`<div class="hint">Configure this signal above</div>`;
   }
 }
@@ -4892,7 +4911,7 @@ function renderStep3(){
     ${renderSignalCfg(WZ.primaryType,WZ.primaryCfg,'pc.')}
   </div>`:'<div class="hint" style="text-align:center;padding:14px 0">👆 Select a signal above to configure it</div>'}
 
-  <div class="section-card" style="margin-top:14px">
+  ${WZ.primaryType!=='tradingview_webhook'?`<div class="section-card" style="margin-top:14px">
     <div class="sc-title"><div class="sc-icon">⏱</div>Candle Timeframe</div>
     <div class="hint" style="margin-bottom:10px">Which timeframe should your signals be evaluated on? Shorter = more trades, more noise. Longer = fewer trades, higher quality.</div>
     <div class="opt-chips">
@@ -4907,7 +4926,7 @@ function renderStep3(){
       '1h':'Clean trends, strong setups. Ideal for swing strategies.',
       '4h':'High-conviction entries only. Long holds, max signal quality.'
     }[WZ.timeframe]||''}</div>
-  </div>`;
+  </div>`:''}`;
 }
 
 function wzPickSignal(type){
@@ -5816,18 +5835,27 @@ async function buildStrategy(){
   };
 
   try{
-    const ctrl=new AbortController();
-    const timer=setTimeout(()=>ctrl.abort(),55000);
-    let res,data;
-    try{
-      res=await fetch('/api/build-strategy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,name,description:desc}),signal:ctrl.signal});
-    }catch(fe){
-      if(fe.name==='AbortError')toast('Build timed out — server took too long. Try again.','error');
-      else toast('Network error — check your connection and try again.','error');
-      return;
-    }finally{clearTimeout(timer);}
-    try{data=await res.json();}catch{toast('Unexpected server response. Please try again.','error');return;}
-    if(data.error){toast(data.error,'error');return;}
+    let data;
+    if(WZ.primaryType==='tradingview_webhook'){
+      data={config:{
+        version:'1.0',name,description:desc,
+        entry_conditions:{operator:'AND',conditions:[{type:'tradingview_webhook',entry_type:'tradingview_webhook'}],entry_type:'tradingview_webhook'},
+        exit:{},risk:{},filters:{},universe:{type:'all'},
+      },warnings:[],risk_rating:'medium'};
+    } else {
+      const ctrl=new AbortController();
+      const timer=setTimeout(()=>ctrl.abort(),55000);
+      let res;
+      try{
+        res=await fetch('/api/build-strategy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,name,description:desc}),signal:ctrl.signal});
+      }catch(fe){
+        if(fe.name==='AbortError')toast('Build timed out — server took too long. Try again.','error');
+        else toast('Network error — check your connection and try again.','error');
+        return;
+      }finally{clearTimeout(timer);}
+      try{data=await res.json();}catch{toast('Unexpected server response. Please try again.','error');return;}
+      if(data.error){toast(data.error,'error');return;}
+    }
     data.config.direction=WZ.direction;
     data.config._build_mode=WZ.mode;
     data.config._category=WZ.category;
@@ -5865,6 +5893,10 @@ async function buildStrategy(){
     if(WZ.htfFilter)data.config.filters.htf_trend=true;
     if(WZ.btcRegime&&WZ.btcRegime!=='any')data.config.filters.btc_regime=WZ.btcRegime;
     data.config._timeframe=WZ.timeframe||'5m';
+    if(WZ.primaryType==='tradingview_webhook'){
+      if(!data.config.entry_conditions)data.config.entry_conditions={operator:'AND',conditions:[]};
+      data.config.entry_conditions.entry_type='tradingview_webhook';
+    }
     if(WZ.pricing!=='free'){data.config._pricing=WZ.pricing;data.config._price=WZ.price;}
     compiledConfig=data.config;
     const cb=document.getElementById('compiled-box');
@@ -5935,7 +5967,29 @@ async function saveStrategy(){
       return;
     }
     if(d.id){
-      toast(WZ.mode==='paper'?'🧪 Paper strategy saved!':'✅ Strategy saved!',WZ.mode==='paper'?'paper':'success');
+      if(d.webhook_url){
+        toast('📺 Webhook strategy saved! Copy your URL below.','success');
+        const _whModal=document.createElement('div');
+        _whModal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+        _whModal.setAttribute('data-wh-overlay','1');
+        _whModal.innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px;max-width:520px;width:100%">
+          <div style="font-size:20px;font-weight:700;margin-bottom:6px">📺 TradingView Webhook URL</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:16px">Paste this URL into your TradingView alert's Webhook URL field. Send JSON with at least <code>{"symbol":"BTCUSDT"}</code>.</div>
+          <div style="display:flex;gap:8px;margin-bottom:16px">
+            <input id="_wh_url" value="${d.webhook_url}" readonly style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;font-family:monospace;color:var(--text)">
+            <button onclick="navigator.clipboard.writeText(document.getElementById('_wh_url').value);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)" style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:700;cursor:pointer;font-size:12px">Copy</button>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:16px;line-height:1.5">
+            <strong>TradingView alert message format:</strong><br>
+            <code style="background:var(--card2);padding:4px 8px;border-radius:4px;display:inline-block;margin-top:4px">{"symbol":"BTCUSDT","direction":"LONG"}</code><br>
+            <span style="margin-top:4px;display:inline-block"><code>symbol</code> is required. <code>direction</code> is optional (defaults to strategy setting).</span>
+          </div>
+          <button onclick="this.closest('[data-wh-overlay]').remove()" style="width:100%;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px;font-weight:600;cursor:pointer;color:var(--text)">Done</button>
+        </div>`;
+        document.body.appendChild(_whModal);
+      } else {
+        toast(WZ.mode==='paper'?'🧪 Paper strategy saved!':'✅ Strategy saved!',WZ.mode==='paper'?'paper':'success');
+      }
       resetWizard();
       setTimeout(()=>{showPage('my-strats');setTimeout(()=>openConfigure(d.id),600);},300);
     }else{
