@@ -656,6 +656,7 @@ def _ensure_tables():
     def _migrate_columns(table: str, needed: dict):
         try:
             with engine.connect() as conn:
+                conn.execute(sa.text("SET statement_timeout = '15s'"))
                 existing = {
                     row[0] for row in conn.execute(sa.text(
                         "SELECT column_name FROM information_schema.columns "
@@ -680,7 +681,7 @@ def _ensure_tables():
     }
 
     strategy_cols = {
-        "webhook_token": "ALTER TABLE user_strategies ADD COLUMN webhook_token VARCHAR(64) UNIQUE",
+        "webhook_token": "ALTER TABLE user_strategies ADD COLUMN IF NOT EXISTS webhook_token VARCHAR(64)",
     }
 
     _migrate_columns("users", user_cols)
