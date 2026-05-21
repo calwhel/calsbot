@@ -683,6 +683,7 @@ def _ensure_tables():
 
     strategy_cols = {
         "webhook_token": "ALTER TABLE user_strategies ADD COLUMN IF NOT EXISTS webhook_token VARCHAR(64)",
+        "asset_class":   "ALTER TABLE user_strategies ADD COLUMN IF NOT EXISTS asset_class VARCHAR(16) NOT NULL DEFAULT 'crypto'",
     }
 
     _migrate_columns("users", user_cols)
@@ -6026,6 +6027,20 @@ async def api_build_strategy(request: Request):
     })
 
 
+@app.get("/api/markets/catalog")
+async def api_markets_catalog():
+    """
+    Return the per-asset-class symbol catalog used by the wizard symbol picker.
+    Shape: { "stock": [{symbol, name}, ...], "forex": [...], "index": [...] }
+    Crypto is omitted on purpose — its universe is dynamic (top gainers etc.)
+    and the existing /api/coins-by-volume endpoint handles its listing.
+    """
+    from app.services.asset_classes import catalog_for_api, is_market_open, ASSET_CLASSES
+    cat = catalog_for_api()
+    status = {cls: is_market_open(cls) for cls in ASSET_CLASSES}
+    return JSONResponse({"catalog": cat, "market_open": status})
+
+
 @app.post("/api/save-strategy")
 async def api_save_strategy(request: Request):
     """Save a compiled strategy config to the database."""
@@ -6104,6 +6119,40 @@ async def api_save_strategy(request: Request):
         )
         _wh_token = _secrets.token_urlsafe(32) if _is_webhook else None
 
+        # Asset class — crypto (default) / stock / forex / index. Non-crypto
+        # classes are paper-only (no live broker integration yet).
+        from app.services.asset_classes import (
+            normalize_asset_class, PAPER_ONLY_CLASSES, is_supported,
+        )
+        _asset_class = normalize_asset_class(config.get("asset_class"))
+        if _asset_class in PAPER_ONLY_CLASSES:
+            initial_status = "paper"
+            config["_build_mode"] = "paper"
+            # Require an explicit, non-empty, catalog-valid symbol list — non-crypto
+            # strategies have no dynamic universe (no "all gainers" etc.) and would
+            # otherwise silently never fire.
+            _uni2 = config.get("universe") or {}
+            if (_uni2.get("type") or "all") != "specific":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{_asset_class.title()} strategies must pick specific symbols "
+                           f"(no dynamic universe).",
+                )
+            _syms = [s for s in (_uni2.get("symbols") or []) if isinstance(s, str) and s.strip()]
+            if not _syms:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Pick at least one {_asset_class} symbol from the wizard catalog.",
+                )
+            for _s in _syms:
+                if not is_supported(_asset_class, _s):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Symbol '{_s}' is not in our {_asset_class} catalog. "
+                               f"Pick one from the list shown in the wizard.",
+                    )
+        config["asset_class"] = _asset_class
+
         strategy = UserStrategy(
             user_id       = user.id,
             name          = config.get("name", "My Strategy"),
@@ -6111,6 +6160,7 @@ async def api_save_strategy(request: Request):
             config        = config,
             status        = initial_status,
             webhook_token = _wh_token,
+            asset_class   = _asset_class,
         )
         db.add(strategy)
         db.commit()

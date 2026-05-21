@@ -24,6 +24,7 @@ class UserStrategy(Base):
     is_public   = Column(Boolean, default=False)        # marketplace visibility
     clone_count = Column(Integer, default=0)
     webhook_token = Column(String(64), nullable=True, unique=True, index=True)
+    asset_class = Column(String(16), nullable=False, default="crypto", server_default="crypto", index=True)
     created_at  = Column(DateTime, default=datetime.utcnow)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

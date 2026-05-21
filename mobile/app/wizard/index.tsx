@@ -38,7 +38,9 @@ import { Pill } from '@/components/Pill';
 import { RiskDisclaimer } from '@/components/RiskDisclaimer';
 import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { apiPost, apiPostFlex, type SaveStrategyResponse, type BacktestResult } from '@/lib/api';
+import { apiGet, apiPost, apiPostFlex, type SaveStrategyResponse, type BacktestResult } from '@/lib/api';
+import { useQuery } from '@tanstack/react-query';
+import type { AssetClass } from '@/lib/strategyPresets';
 
 import {
   STYLE_LABELS, STYLE_PRESETS, STYLE_SIGNALS, SIGNAL_META,
@@ -83,6 +85,13 @@ const TF_OPTIONS: ChipOption<Tf>[] = [
   { value: '30m', label: '30m'},  { value: '1h',  label: '1h' },
   { value: '4h',  label: '4h' }, { value: '1d',  label: '1d' },
 ];
+const ASSET_CLASS_OPTIONS: ChipOption<AssetClass>[] = [
+  { value: 'crypto', icon: '₿',  label: 'Crypto',  hint: 'Live or paper' },
+  { value: 'stock',  icon: '📈', label: 'Stocks',  hint: 'Paper only' },
+  { value: 'forex',  icon: '💱', label: 'Forex',   hint: 'Paper only' },
+  { value: 'index',  icon: '🏛️', label: 'Indices', hint: 'Paper only' },
+];
+
 const COIN_OPTIONS: ChipOption<CoinUniverse>[] = [
   { value: 'all',      icon: '🌐', label: 'All coins' },
   { value: 'gainers',  icon: '📈', label: 'Top gainers' },
@@ -881,6 +890,117 @@ function Step5({
 // ─────────────────────────────────────────────────────────────────────────
 // Step 6 — Risk + Universe + Filters
 // ─────────────────────────────────────────────────────────────────────────
+type CatalogEntry = { symbol: string; name: string };
+type CatalogResponse = {
+  catalog: Record<string, CatalogEntry[]>;
+  market_open: Record<string, boolean>;
+};
+
+function TradfiSymbolPicker({
+  assetClass, selected, onChange,
+}: { assetClass: AssetClass; selected: string[]; onChange: (syms: string[]) => void }) {
+  const { data, isLoading, error } = useQuery<CatalogResponse>({
+    queryKey: ['markets-catalog'],
+    queryFn: () => apiGet<CatalogResponse>('/api/markets/catalog'),
+    staleTime: 5 * 60_000,
+  });
+  const list = data?.catalog?.[assetClass] ?? [];
+  const open = data?.market_open?.[assetClass];
+  const [filter, setFilter] = useState('');
+  const filtered = useMemo(() => {
+    const q = filter.trim().toUpperCase();
+    if (!q) return list;
+    return list.filter(e => e.symbol.includes(q) || e.name.toUpperCase().includes(q));
+  }, [filter, list]);
+
+  const toggle = useCallback((sym: string) => {
+    Haptics.selectionAsync();
+    if (selected.includes(sym)) onChange(selected.filter(x => x !== sym));
+    else onChange([...selected, sym]);
+  }, [selected, onChange]);
+
+  return (
+    <Card>
+      <SectionHeader
+        label={`Pick ${assetClass === 'stock' ? 'stocks/ETFs' : assetClass === 'forex' ? 'pairs' : 'indices'}`}
+        icon="📋"
+        hint={open === false ? 'Market closed — scanner will pause until it reopens' : 'Tap to add to your watchlist'}
+      />
+      {open === false ? (
+        <View style={{ marginBottom: spacing.sm }}>
+          <Pill label="🕐 Market closed" tone="warning" small />
+        </View>
+      ) : null}
+      <TextInput
+        value={filter}
+        onChangeText={setFilter}
+        placeholder="Filter by ticker or name…"
+        placeholderTextColor={colors.textMute}
+        autoCapitalize="characters"
+        autoCorrect={false}
+        style={styles.input}
+      />
+      {selected.length ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.sm }}>
+          {selected.map(sym => (
+            <Pressable key={sym} onPress={() => toggle(sym)} style={tradfiStyles.chipOn}>
+              <Text style={tradfiStyles.chipOnText}>{sym} ✕</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+      {isLoading ? (
+        <Text style={{ color: colors.textMute, marginTop: spacing.sm }}>Loading catalog…</Text>
+      ) : error ? (
+        <Text style={{ color: colors.negative, marginTop: spacing.sm }}>Couldn't load catalog. Pull to retry.</Text>
+      ) : (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.sm }}>
+          {filtered.slice(0, 200).map(e => {
+            const on = selected.includes(e.symbol);
+            if (on) return null;
+            return (
+              <Pressable key={e.symbol} onPress={() => toggle(e.symbol)} style={tradfiStyles.chip}>
+                <Text style={tradfiStyles.chipText}>{e.symbol}</Text>
+                <Text style={tradfiStyles.chipSub} numberOfLines={1}>{e.name}</Text>
+              </Pressable>
+            );
+          })}
+          {filtered.length > 200 ? (
+            <Text style={{ color: colors.textMute, marginTop: spacing.xs, width: '100%' }}>
+              Showing first 200 — type to filter the rest
+            </Text>
+          ) : null}
+        </View>
+      )}
+    </Card>
+  );
+}
+
+const tradfiStyles = StyleSheet.create({
+  chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radius.md,
+    backgroundColor: colors.cardHi,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginRight: 6,
+    marginBottom: 6,
+    maxWidth: 200,
+  },
+  chipText: { color: colors.text, fontFamily: font.semibold, fontSize: 13 },
+  chipSub:  { color: colors.textDim, fontFamily: font.regular, fontSize: 11, marginTop: 1 },
+  chipOn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radius.md,
+    backgroundColor: colors.positive,
+    marginRight: 6,
+    marginBottom: 6,
+  },
+  chipOnText: { color: '#0E0F11', fontFamily: font.semibold, fontSize: 13 },
+});
+
 function Step6({ s, update }: { s: WizardState; update: (p: Partial<WizardState>) => void }) {
   const toggleSession = (id: Session) => {
     const has = s.sessions.includes(id);
@@ -956,6 +1076,28 @@ function Step6({ s, update }: { s: WizardState; update: (p: Partial<WizardState>
       </Card>
 
       <Card>
+        <SectionHeader label="Market" icon="🌍" hint="Stocks · Forex · Indices run paper-only" />
+        <ChipRow
+          options={ASSET_CLASS_OPTIONS}
+          value={s.assetClass}
+          onChange={(v) => {
+            update({
+              assetClass: v,
+              ...(v !== 'crypto' ? { mode: 'paper' as const } : {}),
+            });
+          }}
+          size="sm"
+        />
+      </Card>
+
+      {s.assetClass !== 'crypto' ? (
+        <TradfiSymbolPicker
+          assetClass={s.assetClass}
+          selected={s.tradfiSymbols}
+          onChange={(syms) => update({ tradfiSymbols: syms })}
+        />
+      ) : (
+      <Card>
         <SectionHeader label="Coin universe" icon="🌐" />
         <ChipRow options={COIN_OPTIONS} value={s.coins} onChange={(v) => update({ coins: v })} size="sm" />
 
@@ -1007,6 +1149,7 @@ function Step6({ s, update }: { s: WizardState; update: (p: Partial<WizardState>
           />
         ) : null}
       </Card>
+      )}
 
       <Card>
         <SectionHeader label="Sessions" icon="🕐" hint="Leave empty to trade 24/7" />
@@ -1146,12 +1289,21 @@ function Step7({
             ['TP1 / SL',  `${s.tp1}% / ${s.sl}%${s.tp2 ? ` · TP2 ${s.tp2}%` : ''}${s.trailing ? ` · trail ${s.trailing}%` : ''}${s.breakeven ? ` · BE @${s.breakeven}%` : ''}`],
             ['Leverage',  `${s.leverage}× · ${risk.label}`],
             ['Position',  s.posSizeType === 'fixed' ? `$${s.posSizeUsd}` : `${s.posSize}% of equity`],
+            ['Market',
+              s.assetClass === 'crypto' ? '₿ Crypto'
+              : s.assetClass === 'stock' ? '📈 Stocks (paper)'
+              : s.assetClass === 'forex' ? '💱 Forex (paper)'
+              : '🏛️ Indices (paper)'],
             ['Universe',
-              s.coins === 'single'   ? `🎯 ${(s.singleCoin || 'BTC').replace(/USDT$/, '')}`
-              : s.coins === 'gainers' ? `📈 Top gainers (${s.coinsThreshold}%+)`
-              : s.coins === 'losers'  ? `📉 Top losers (${s.coinsThreshold}%+)`
-              : s.coins === 'specific' ? `📋 Watchlist (${s.specificCoins.split(',').filter(Boolean).length} coins)`
-              : '🌐 All coins'],
+              s.assetClass !== 'crypto'
+                ? (s.tradfiSymbols.length
+                    ? `📋 ${s.tradfiSymbols.length} symbol${s.tradfiSymbols.length === 1 ? '' : 's'}`
+                    : '— none picked')
+                : s.coins === 'single'   ? `🎯 ${(s.singleCoin || 'BTC').replace(/USDT$/, '')}`
+                : s.coins === 'gainers' ? `📈 Top gainers (${s.coinsThreshold}%+)`
+                : s.coins === 'losers'  ? `📉 Top losers (${s.coinsThreshold}%+)`
+                : s.coins === 'specific' ? `📋 Watchlist (${s.specificCoins.split(',').filter(Boolean).length} coins)`
+                : '🌐 All coins'],
           ]}
         />
         {fireRate ? (

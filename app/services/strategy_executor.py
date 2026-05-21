@@ -459,19 +459,67 @@ async def _get_eligible_symbols(
     return symbols
 
 
-async def _fetch_price_and_ta(symbol: str, http_client: httpx.AsyncClient) -> Optional[Dict]:
+async def _fetch_price_and_ta(
+    symbol: str,
+    http_client: httpx.AsyncClient,
+    asset_class: str = "crypto",
+) -> Optional[Dict]:
     """
     Fetch price + TA indicators for a symbol. Results are cached per symbol for
     _PRICE_TA_TTL seconds so multiple strategies checking the same coin in one
     scan cycle share a single API call instead of making duplicate requests.
+
+    For stocks / forex / indices (asset_class != 'crypto'), price + RSI come
+    from yfinance via tradfi_prices. Other indicators are computed on demand
+    inside the condition evaluator (which reads asset_class from the cache).
     """
     global _PRICE_TA_CACHE
     now = datetime.utcnow()
-    cached = _PRICE_TA_CACHE.get(symbol)
+    cache_key = f"{asset_class}:{symbol}" if asset_class != "crypto" else symbol
+    cached = _PRICE_TA_CACHE.get(cache_key)
     if cached:
         data, fetched_at = cached
         if (now - fetched_at).total_seconds() < _PRICE_TA_TTL:
             return data
+
+    if asset_class != "crypto":
+        try:
+            from app.services.tradfi_prices import get_klines as _tradfi_klines
+            kl = await _tradfi_klines(symbol, asset_class, "15m", 100)
+            if not kl:
+                return None
+            closes = [float(row[4]) for row in kl if row and len(row) >= 5]
+            if len(closes) < 2:
+                return None
+            price = closes[-1]
+            # Inline RSI(14) — same Wilder's smoothing the social_signals impl uses
+            rsi = 50.0
+            if len(closes) >= 15:
+                gains, losses = [], []
+                for i in range(1, len(closes)):
+                    d = closes[i] - closes[i - 1]
+                    gains.append(max(d, 0.0))
+                    losses.append(max(-d, 0.0))
+                ag = sum(gains[-14:]) / 14
+                al = sum(losses[-14:]) / 14
+                rsi = 100.0 if al == 0 else 100.0 - (100.0 / (1.0 + (ag / al)))
+            result = {
+                "price": price,
+                "change_24h": ((price - closes[-min(96, len(closes))]) / closes[-min(96, len(closes))] * 100) if closes[-min(96, len(closes))] else 0.0,
+                "volume_24h": 0.0,
+                "high_24h": max(closes[-min(96, len(closes)):]),
+                "low_24h":  min(closes[-min(96, len(closes)):]),
+                "rsi": rsi,
+                "volume_ratio": 1.0,
+                "btc_correlation": 0.0,
+                "enhanced_ta": {},
+                "_asset_class": asset_class,
+            }
+            _PRICE_TA_CACHE[cache_key] = (result, now)
+            return result
+        except Exception as e:
+            logger.debug(f"Tradfi price/TA fetch failed for {symbol} ({asset_class}): {e}")
+            return None
 
     try:
         from app.services.social_signals import SocialSignalService
@@ -479,7 +527,7 @@ async def _fetch_price_and_ta(symbol: str, http_client: httpx.AsyncClient) -> Op
         svc.http_client = http_client
         result = await svc.fetch_price_data(symbol)
         if result:
-            _PRICE_TA_CACHE[symbol] = (result, now)
+            _PRICE_TA_CACHE[cache_key] = (result, now)
         return result
     except Exception as e:
         logger.debug(f"Price/TA fetch failed for {symbol}: {e}")
@@ -552,6 +600,7 @@ async def _check_htf_trend(
     symbol: str,
     direction: str,
     http_client: httpx.AsyncClient,
+    asset_class: str = "crypto",
 ) -> bool:
     """
     Return True if the 1H trend aligns with `direction`.
@@ -562,29 +611,39 @@ async def _check_htf_trend(
         return True
 
     now = datetime.utcnow()
-    cached = _HTF_CACHE.get(symbol)
+    cache_key = f"{asset_class}:{symbol}" if asset_class != "crypto" else symbol
+    cached = _HTF_CACHE.get(cache_key)
     if cached:
         is_bullish, fetched_at = cached
         if (now - fetched_at).total_seconds() < _HTF_CACHE_TTL:
             return is_bullish if direction == "LONG" else not is_bullish
 
-    # Fetch last 30 × 1H candles
+    # Fetch last 30 × 1H candles — route tradfi through yfinance.
     closes: list = []
-    sources = [
-        ("https://api.mexc.com/api/v3/klines",     {"symbol": symbol, "interval": "1h", "limit": 30}),
-        ("https://fapi.binance.com/fapi/v1/klines", {"symbol": symbol, "interval": "1h", "limit": 30}),
-        ("https://api.binance.com/api/v3/klines",   {"symbol": symbol, "interval": "1h", "limit": 30}),
-    ]
-    for url, params in sources:
+    if asset_class != "crypto":
         try:
-            resp = await http_client.get(url, params=params, timeout=6)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data and len(data) >= 10:
-                    closes = [float(k[4]) for k in data]  # index 4 = close
-                    break
-        except Exception:
-            continue
+            from app.services.tradfi_prices import get_klines as _tradfi_klines
+            kl = await _tradfi_klines(symbol, asset_class, "1h", 60)
+            if kl and len(kl) >= 10:
+                closes = [float(row[4]) for row in kl if row and len(row) >= 5]
+        except Exception as e:
+            logger.debug(f"tradfi HTF fetch failed for {symbol} ({asset_class}): {e}")
+    else:
+        sources = [
+            ("https://api.mexc.com/api/v3/klines",     {"symbol": symbol, "interval": "1h", "limit": 30}),
+            ("https://fapi.binance.com/fapi/v1/klines", {"symbol": symbol, "interval": "1h", "limit": 30}),
+            ("https://api.binance.com/api/v3/klines",   {"symbol": symbol, "interval": "1h", "limit": 30}),
+        ]
+        for url, params in sources:
+            try:
+                resp = await http_client.get(url, params=params, timeout=6)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data and len(data) >= 10:
+                        closes = [float(k[4]) for k in data]
+                        break
+            except Exception:
+                continue
 
     if len(closes) < 10:
         return True   # can't determine — allow through
@@ -597,7 +656,7 @@ async def _check_htf_trend(
         ema = c * k + ema * (1 - k)
 
     is_bullish = closes[-1] > ema
-    _HTF_CACHE[symbol] = (is_bullish, now)
+    _HTF_CACHE[cache_key] = (is_bullish, now)
     return is_bullish if direction == "LONG" else not is_bullish
 
 
@@ -1727,6 +1786,21 @@ async def evaluate_and_fire(
 
     config   = dict(strategy.config or {})
 
+    # ── Asset class (crypto | stock | forex | index) ────────────────────────
+    # Non-crypto strategies are paper-only and gated by market hours.
+    from app.services.asset_classes import (
+        normalize_asset_class, is_market_open, PAPER_ONLY_CLASSES,
+    )
+    asset_class = normalize_asset_class(
+        getattr(strategy, "asset_class", None) or config.get("asset_class")
+    )
+    config["asset_class"] = asset_class
+    if asset_class in PAPER_ONLY_CLASSES:
+        is_paper = True
+        if not is_market_open(asset_class):
+            _bump(f"blk_market_closed_{asset_class}")
+            return
+
     # Locked strategy — fetch live entry_conditions from the original source strategy
     if config.get("_locked") and config.get("_source_strategy_id"):
         try:
@@ -1799,7 +1873,16 @@ async def evaluate_and_fire(
     if _profile_floor is not None:
         strictness_level = max(strictness_level, _profile_floor)
 
-    symbols = await _get_eligible_symbols(universe, http_client, raw_tickers=raw_tickers)
+    if asset_class != "crypto":
+        # Stocks/forex/indices: universe.symbols is a curated list from the
+        # mobile/web wizard (validated against the catalog at save time). No
+        # Bitunix/MEXC filtering applies — just trust the configured symbols.
+        symbols = [
+            s.upper() for s in (universe.get("symbols") or [])
+            if isinstance(s, str) and s.strip()
+        ]
+    else:
+        symbols = await _get_eligible_symbols(universe, http_client, raw_tickers=raw_tickers)
     if not symbols:
         _bump("blk_empty_universe")
         # Diagnostic: dump the offending universe spec at most once per
@@ -1845,7 +1928,7 @@ async def evaluate_and_fire(
     # shared _PRICE_TA_CACHE so subsequent calls inside evaluate_strategy_conditions
     # (which fetches its own klines) benefit from the same warm cache.
     _price_results = await asyncio.gather(
-        *[_fetch_price_and_ta(sym, http_client) for sym in candidate_symbols],
+        *[_fetch_price_and_ta(sym, http_client, asset_class) for sym in candidate_symbols],
         return_exceptions=True,
     )
     price_map: Dict[str, Dict] = {
@@ -1859,7 +1942,7 @@ async def evaluate_and_fire(
     if filters.get("htf_trend") and price_map:
         _htf_syms    = [s for s in candidate_symbols if s in price_map]
         _htf_results = await asyncio.gather(
-            *[_check_htf_trend(s, direction_pref, http_client) for s in _htf_syms],
+            *[_check_htf_trend(s, direction_pref, http_client, asset_class) for s in _htf_syms],
             return_exceptions=True,
         )
         htf_pass = {

@@ -197,11 +197,38 @@ async def _get_klines(
     http_client, cache: Optional[Dict] = None
 ) -> Optional[List]:
     import time as _time
+    # Route stocks/forex/indices through yfinance — cache stashes the strategy's
+    # asset_class under '__asset_class__' (set by evaluate_strategy_conditions).
+    _asset_class = (cache or {}).get("__asset_class__") if isinstance(cache, dict) else None
+    if _asset_class and _asset_class != "crypto":
+        _ckey = (symbol, interval, limit, _asset_class)
+        if cache is not None and _ckey in cache:
+            return cache[_ckey]
+        try:
+            from app.services.tradfi_prices import get_klines as _tradfi_klines
+            kl = await _tradfi_klines(symbol, _asset_class, interval, max(limit, 200))
+        except Exception as _e:
+            logger.debug(f"tradfi klines fetch failed for {symbol} ({_asset_class}): {_e}")
+            kl = []
+        if not kl:
+            return None
+        sliced = kl[-limit:] if len(kl) > limit else kl
+        if cache is not None:
+            cache[_ckey] = sliced
+        return sliced
+
     key = (symbol, interval, limit)
     if cache is not None and key in cache:
         return cache[key]
     if cache is not None:
-        for (cs, ci, cl), cv in list(cache.items()):
+        for _ck, cv in list(cache.items()):
+            # Skip non-tuple keys ('__asset_class__' marker) and any tuple shape
+            # other than the legacy 3-tuple (symbol, interval, limit).
+            if not isinstance(_ck, tuple) or len(_ck) != 3:
+                continue
+            cs, ci, cl = _ck
+            if not isinstance(cl, int):
+                continue
             if cs == symbol and ci == interval and cl >= limit and cv:
                 sliced = cv[-limit:]
                 cache[key] = sliced
@@ -1778,6 +1805,11 @@ async def evaluate_strategy_conditions(
     conds   = entry.get("conditions", [])
     price   = price_data.get("price", 0)
     cache: Dict = {}  # shared klines cache for this evaluation pass
+    # Asset-class hint — read by _get_klines to route non-crypto fetches
+    # through the yfinance-backed tradfi provider instead of MEXC/Binance.
+    _ac = strategy_config.get("asset_class") or price_data.get("_asset_class")
+    if _ac and _ac != "crypto":
+        cache["__asset_class__"] = _ac
 
     # Override operator based on strictness
     if strictness_level >= 1:
