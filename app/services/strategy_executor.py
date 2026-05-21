@@ -753,13 +753,44 @@ async def _fetch_candles_since_entry(
     symbol: str,
     fired_at: datetime,
     http_client: httpx.AsyncClient,
+    asset_class: str = "crypto",
 ) -> list:
     """
     Fetch all 1m candles from `fired_at` to now so no TP/SL hit is ever missed.
     Returns a list of (open_ts, open, high, low, close) tuples sorted oldest-first.
-    Falls back through MEXC → Binance spot → Binance futures.
-    MEXC allows up to 1000 candles; we page if the window exceeds that.
+    For crypto: falls back through MEXC → Binance spot → Binance futures.
+    For stocks/forex/indices: routes through yfinance (1m data capped at 5d
+    upstream — trades older than that return an empty list and the caller's
+    graceful fallback handles it).
     """
+    asset_class = (asset_class or "crypto").lower().strip()
+    if asset_class and asset_class != "crypto":
+        try:
+            from app.services.tradfi_prices import get_klines as _tradfi_klines
+            fired_ms = int(fired_at.timestamp() * 1000)
+            # Dynamically size the fetch window based on minutes elapsed since
+            # fired_at, with a 60-candle prologue + buffer. yfinance 1m data
+            # is upstream-capped at 5d (7200 candles) so we hard-cap at 7200
+            # — older trades will return an empty list and the caller's
+            # graceful fallback handles it.
+            elapsed_min = max(1, int((datetime.utcnow() - fired_at).total_seconds() / 60))
+            tf_limit = min(7200, elapsed_min + 60)
+            raw = await _tradfi_klines(symbol, asset_class, "1m", tf_limit)
+            out = []
+            for k in raw:
+                try:
+                    ts = int(k[0])
+                    if ts < fired_ms:
+                        continue
+                    out.append((ts, float(k[1]), float(k[2]),
+                                float(k[3]), float(k[4])))
+                except (TypeError, ValueError, IndexError):
+                    continue
+            return out
+        except Exception as e:
+            logger.debug(f"tradfi candle fetch failed {symbol} ({asset_class}): {e}")
+            return []
+
     now        = datetime.utcnow()
     minutes    = max(int((now - fired_at).total_seconds() / 60) + 2, 3)
     all_candles: list = []
@@ -1195,7 +1226,8 @@ async def _check_paper_position(ex, db, http_client: httpx.AsyncClient):
     if not ex.entry_price or not ex.tp_price or not ex.sl_price:
         return
     fired_at = ex.fired_at or datetime.utcnow()
-    candles  = await _fetch_candles_since_entry(ex.symbol, fired_at, http_client)
+    _ac = (getattr(ex, "asset_class", None) or "crypto")
+    candles  = await _fetch_candles_since_entry(ex.symbol, fired_at, http_client, _ac)
     _evaluate_paper_position_against_candles(ex, candles, db)
 
 
@@ -1242,23 +1274,27 @@ async def run_paper_position_monitor():
             return
 
         # ── Phase 2: Group + fetch candles (no DB connection held) ────────────
+        # Bucket by (symbol, asset_class) so a ticker that exists in multiple
+        # classes (e.g. someone's crypto BTC vs a "BTC" stock ticker) never
+        # shares candle data between classes.
         from collections import defaultdict
-        by_symbol: dict = defaultdict(list)
+        by_key: dict = defaultdict(list)
         for ex in open_papers:
-            by_symbol[ex.symbol].append(ex)
+            _ac = (getattr(ex, "asset_class", None) or "crypto")
+            by_key[(ex.symbol, _ac)].append(ex)
 
         logger.info(
             f"🧪 Sweeping {len(open_papers)} open paper position(s) "
-            f"across {len(by_symbol)} symbol(s)"
+            f"across {len(by_key)} (symbol, asset_class) bucket(s)"
         )
 
-        async def _fetch_for_symbol(symbol: str, positions: list):
+        async def _fetch_for_bucket(symbol: str, asset_class: str, positions: list):
             earliest = min((ex.fired_at or datetime.utcnow()) for ex in positions)
-            candles  = await _fetch_candles_since_entry(symbol, earliest, http_client)
+            candles  = await _fetch_candles_since_entry(symbol, earliest, http_client, asset_class)
             return symbol, positions, candles
 
         fetch_results = await asyncio.gather(
-            *[_fetch_for_symbol(sym, pos) for sym, pos in by_symbol.items()],
+            *[_fetch_for_bucket(sym, ac, pos) for (sym, ac), pos in by_key.items()],
             return_exceptions=True,
         )
 
@@ -2869,7 +2905,8 @@ async def backfill_cancelled_paper_trades(lookback_days: int = 30) -> int:
                 # Temporarily reset outcome to OPEN so _evaluate can close it properly
                 ex.outcome = "OPEN"
                 ex.closed_at = None
-                candles = await _fetch_candles_since_entry(ex.symbol, ex.fired_at, client)
+                _ac = (getattr(ex, "asset_class", None) or "crypto")
+                candles = await _fetch_candles_since_entry(ex.symbol, ex.fired_at, client, _ac)
                 if not candles:
                     ex.outcome = "CANCELLED"  # restore
                     db.commit()
@@ -2957,7 +2994,8 @@ async def backfill_ghost_cancelled_executions(lookback_days: int = 7) -> int:
                 ex.notes = (ex.notes or "") + " | recovered-as-paper"
                 db.commit()
 
-                candles = await _fetch_candles_since_entry(ex.symbol, ex.fired_at, client)
+                _ac = (getattr(ex, "asset_class", None) or "crypto")
+                candles = await _fetch_candles_since_entry(ex.symbol, ex.fired_at, client, _ac)
                 if not candles:
                     # No candle data — record as BREAKEVEN so it doesn't skew win rate
                     ex.outcome = "BREAKEVEN"

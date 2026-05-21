@@ -9574,6 +9574,13 @@ async def backtest_scan(request: Request):
     days      = int(body.get("days", 30))
     direction = (body.get("direction") or "LONG").upper()
     risk_mode = (body.get("risk_mode") or "optimised").lower()
+    # Asset-class routing for stocks / forex / indices. Defaults to crypto so
+    # legacy callers (mobile pre-multi-asset, web wizard) keep working.
+    try:
+        from app.services.asset_classes import normalize_asset_class as _norm_ac
+        asset_class = _norm_ac(body.get("asset_class"))
+    except Exception:
+        asset_class = (body.get("asset_class") or "crypto").lower().strip() or "crypto"
     if risk_mode not in ("optimised", "fixed"):
         risk_mode = "optimised"
 
@@ -9668,8 +9675,13 @@ async def backtest_scan(request: Request):
                      "message": "Our database is busy right now — please try again in a few seconds."},
         )
 
-    # Normalised symbols (BTCUSDT etc.) for engine; tickers (BTC) for display
-    symbols  = [(c if c.endswith("USDT") else c + "USDT") for c in coin_list]
+    # Normalised symbols (engine input) + display tickers. For crypto we
+    # auto-append USDT; for tradfi (stocks/forex/indices) the symbol IS the
+    # display ticker (AAPL, EURUSD, SPX) so the two lists are identical.
+    if asset_class == "crypto":
+        symbols  = [(c if c.endswith("USDT") else c + "USDT") for c in coin_list]
+    else:
+        symbols  = coin_list[:]
     tickers  = coin_list[:]
     primary_ticker = tickers[0]   # used for AI insight / legacy `coin` field
 
@@ -9853,7 +9865,7 @@ async def backtest_scan(request: Request):
 
     async def _prefetch_one(symbol: str, ticker: str, tf: str, client: httpx.AsyncClient):
         try:
-            candles, label, _ = await _fetch_historical(symbol, days, client, tf)
+            candles, label, _ = await _fetch_historical(symbol, days, client, tf, asset_class=asset_class)
             if len(candles) >= 60:
                 _candle_cache[(symbol, tf)] = (candles, label)
             else:
@@ -9928,6 +9940,7 @@ async def backtest_scan(request: Request):
             "leverage":    r["leverage"],
             "timeframe":   tf,
             "singleCoin":  symbol,
+            "asset_class": asset_class,
         }
         async with _bt_sem:
             try:
@@ -10818,6 +10831,11 @@ async def _run_trade_replay_optimizer(
     if not variants:
         return None
 
+    # Asset-class routing: tradfi (stocks/forex/indices) goes through yfinance
+    # via the shared executor helper. Crypto retains the hand-rolled MEXC →
+    # Binance paging below for max throughput.
+    _replay_ac = ((base_config.get("asset_class") or "crypto") or "crypto").lower().strip()
+
     # Pre-fetch candles ONCE per execution (shared across all variants — this
     # is the whole performance unlock vs the backtest path).
     fetch_concurrency = asyncio.Semaphore(6)
@@ -10847,6 +10865,18 @@ async def _run_trade_replay_optimizer(
 
                 start_ms = int(fired.timestamp()  * 1000)
                 end_ms   = int(end_at.timestamp() * 1000)
+
+                # ── Tradfi path: yfinance 1m candles via the shared helper ─
+                # yfinance 1m data is capped at 5d upstream, so trades older
+                # than that simply return None and we fall back to backtest.
+                _ex_ac = (getattr(ex, "asset_class", None) or _replay_ac or "crypto")
+                if _ex_ac != "crypto":
+                    from app.services.strategy_executor import _fetch_candles_since_entry as _exec_fetch
+                    async with httpx.AsyncClient(timeout=8) as client:
+                        tup_candles = await _exec_fetch(ex.symbol, fired, client, _ex_ac)
+                    # Trim to end_at window
+                    filtered = [c for c in tup_candles if c[0] <= end_ms]
+                    return filtered or None
                 # Page through in 900-candle chunks (MEXC safe)
                 all_candles: list = []
                 cursor = start_ms
@@ -11048,6 +11078,7 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
                 "leverage":    ex.leverage or 5,
                 "fired_at":    ex.fired_at,
                 "closed_at":   ex.closed_at,
+                "asset_class": (getattr(ex, "asset_class", None) or "crypto"),
             })()
             for ex in executions
         ]
