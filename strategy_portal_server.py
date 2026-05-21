@@ -686,12 +686,17 @@ def _ensure_tables():
         "asset_class":   "ALTER TABLE user_strategies ADD COLUMN IF NOT EXISTS asset_class VARCHAR(16) NOT NULL DEFAULT 'crypto'",
     }
 
+    execution_cols = {
+        "asset_class": "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS asset_class VARCHAR(16) NOT NULL DEFAULT 'crypto'",
+    }
+
     _migrate_columns("users", user_cols)
     _migrate_columns("auto_trade_strategies", auto_strategy_cols)
     _migrate_columns("auto_trade_paper_trades", auto_trade_cols)
     _migrate_columns("indicator_alerts", indicator_alerts_cols)
     _migrate_columns("user_preferences", user_preference_cols)
     _migrate_columns("user_strategies", strategy_cols)
+    _migrate_columns("strategy_executions", execution_cols)
 
 
 @app.on_event("startup")
@@ -6336,6 +6341,7 @@ async def api_tradingview_webhook(token: str, request: Request):
             conditions_met=["📺 TradingView webhook alert"],
             fired_at=_now,
             is_paper=is_paper,
+            asset_class=getattr(strategy, "asset_class", None) or "crypto",
         )
         db.add(execution)
         db.commit()
@@ -7669,39 +7675,38 @@ async def api_execution_detail(exec_id: int, uid: str = Query(...)):
 
         candles: list = []
         sym = (ex.symbol or "").upper().strip()
+        # Resolve the trade's asset class — prefer the execution column, fall
+        # back to the parent strategy for legacy rows that pre-date the column.
+        exec_asset_class = (
+            getattr(ex, "asset_class", None)
+            or (getattr(strat, "asset_class", None) if strat else None)
+            or "crypto"
+        )
         if sym:
             try:
-                import httpx
                 tf_secs = {"1m": 60, "5m": 300, "15m": 900, "60m": 3600}.get(interval, 300)
-                # Anchor the window on fired_at — this is a "why did it fire?"
-                # view, so the moment of trigger must always be in frame. We
-                # asymmetric-pad: 30 candles BEFORE fired_at (the setup), and
-                # then enough candles AFTER to cover the trade through closed_at
-                # (capped so a multi-day trade doesn't exceed the 200-row limit).
                 fired_at = ex.fired_at or datetime.utcnow()
                 closed_at = ex.closed_at or datetime.utcnow()
                 start_dt  = fired_at - timedelta(seconds=tf_secs * 30)
                 hold_candles = max(0, int((closed_at - fired_at).total_seconds() / tf_secs))
-                # 30 setup + N hold + 10 follow-through, hard-capped at 160
-                # forward candles so total payload stays ≤ 200 rows.
                 forward = min(hold_candles + 10, 160)
                 end_dt2  = fired_at + timedelta(seconds=tf_secs * forward)
-                async with httpx.AsyncClient(timeout=4.0) as client:
-                    r = await client.get(
-                        "https://api.mexc.com/api/v3/klines",
-                        params={
-                            "symbol":    sym,
-                            "interval":  interval,
-                            "startTime": int(start_dt.timestamp() * 1000),
-                            "endTime":   int(end_dt2.timestamp()   * 1000),
-                            "limit":     200,
-                        },
-                    )
-                    r.raise_for_status()
-                    for k in (r.json() or []):
+
+                if exec_asset_class != "crypto":
+                    # Stocks / forex / indices — pull via yfinance, then clip
+                    # to the same fired_at±window so the chart frames the trigger.
+                    from app.services.tradfi_prices import get_klines as _tradfi_klines
+                    tf_for_tradfi = tf_raw if tf_raw in ("1m","5m","15m","30m","1h","1d") else "15m"
+                    raw = await _tradfi_klines(sym, exec_asset_class, tf_for_tradfi, 600)
+                    start_ms = int(start_dt.timestamp() * 1000)
+                    end_ms   = int(end_dt2.timestamp() * 1000)
+                    for k in raw:
                         try:
+                            ts_ms = int(k[0])
+                            if ts_ms < start_ms or ts_ms > end_ms:
+                                continue
                             candles.append({
-                                "time":   int(k[0]) // 1000,
+                                "time":   ts_ms // 1000,
                                 "open":   float(k[1]),
                                 "high":   float(k[2]),
                                 "low":    float(k[3]),
@@ -7710,6 +7715,33 @@ async def api_execution_detail(exec_id: int, uid: str = Query(...)):
                             })
                         except (TypeError, ValueError, IndexError):
                             continue
+                    candles = candles[-200:]
+                else:
+                    import httpx
+                    async with httpx.AsyncClient(timeout=4.0) as client:
+                        r = await client.get(
+                            "https://api.mexc.com/api/v3/klines",
+                            params={
+                                "symbol":    sym,
+                                "interval":  interval,
+                                "startTime": int(start_dt.timestamp() * 1000),
+                                "endTime":   int(end_dt2.timestamp()   * 1000),
+                                "limit":     200,
+                            },
+                        )
+                        r.raise_for_status()
+                        for k in (r.json() or []):
+                            try:
+                                candles.append({
+                                    "time":   int(k[0]) // 1000,
+                                    "open":   float(k[1]),
+                                    "high":   float(k[2]),
+                                    "low":    float(k[3]),
+                                    "close":  float(k[4]),
+                                    "volume": float(k[5]) if len(k) > 5 else 0.0,
+                                })
+                            except (TypeError, ValueError, IndexError):
+                                continue
             except Exception as e:
                 logger.debug(f"execution_detail({exec_id}) klines failed: {e}")
 

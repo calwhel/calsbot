@@ -2055,6 +2055,7 @@ async def evaluate_and_fire(
             conditions_met = details,
             fired_at       = datetime.utcnow(),
             is_paper       = is_paper,
+            asset_class    = asset_class,
         )
         db.add(execution)
         db.commit()
@@ -2456,6 +2457,7 @@ async def _propagate_to_subscribers(
                 fired_at       = _now,
                 is_paper       = is_paper,
                 notes          = _open_note,
+                asset_class    = getattr(sub_strategy, "asset_class", None) or "crypto",
             )
             _sub_db.add(sub_exec)
             _sub_db.commit()

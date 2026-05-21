@@ -1076,11 +1076,36 @@ async def _fetch_kraken(
     return candles
 
 
+async def _fetch_tradfi_historical(
+    symbol: str,
+    asset_class: str,
+    days: int,
+    timeframe: str,
+) -> tuple:
+    """Fetch OHLC for a stock / forex / index ticker via yfinance and shape it
+    like the crypto path (list of [ts_ms, o, h, l, c, v])."""
+    try:
+        from app.services.tradfi_prices import get_klines as _tradfi_klines
+    except Exception as e:
+        logger.debug(f"tradfi import failed: {e}")
+        return [], symbol, False
+    # Bound limit so a 1m × 90d ask doesn't blow up — yfinance's own period
+    # caps already constrain the upstream, this just keeps the array tidy.
+    _, _, _, interval_min = _tf_meta(timeframe)
+    approx_per_day = max(1, int(round(1440 / max(1, interval_min))))
+    limit = min(approx_per_day * max(1, days) + 20, 5000)
+    candles = await _tradfi_klines(symbol, asset_class, timeframe, limit)
+    if len(candles) >= 60:
+        return candles, f"{symbol.upper()} · yfinance {timeframe}", False
+    return [], symbol, False
+
+
 async def _fetch_historical(
     symbol: str,
     days: int,
     http_client: httpx.AsyncClient,
     timeframe: str = "1h",
+    asset_class: str = "crypto",
 ) -> tuple:
     """
     Fetch OHLCV candles for `symbol` over the past `days` days at `timeframe`.
@@ -1090,6 +1115,10 @@ async def _fetch_historical(
       source_label — human-readable exchange name shown in results
       proxy_used   — always False (we no longer use a BTC proxy)
     """
+    # Stocks / forex / indices route through yfinance — no USDT pair lookup.
+    if asset_class and asset_class != "crypto":
+        return await _fetch_tradfi_historical(symbol, asset_class, days, timeframe)
+
     # 1. Try Gate.io first — covers virtually all USDT perp pairs
     candles = await _fetch_gateio(symbol, days, http_client, timeframe)
     if len(candles) >= 60:
@@ -1334,8 +1363,22 @@ async def run_backtest(
     _, _, _, interval_min = _tf_meta(timeframe)
     bt_interval  = timeframe
 
-    raw_symbol = (config.get("singleCoin") or "BTCUSDT").upper().strip()
-    symbol = raw_symbol if raw_symbol.endswith("USDT") else raw_symbol + "USDT"
+    try:
+        from app.services.asset_classes import normalize_asset_class as _norm_ac
+        asset_class = _norm_ac(config.get("asset_class"))
+    except Exception:
+        asset_class = (config.get("asset_class") or "crypto").lower().strip() or "crypto"
+    raw_symbol = (config.get("singleCoin") or "").upper().strip()
+    if asset_class == "crypto":
+        if not raw_symbol:
+            raw_symbol = "BTCUSDT"
+        symbol = raw_symbol if raw_symbol.endswith("USDT") else raw_symbol + "USDT"
+    else:
+        # tradfi: symbol is the ticker exactly as it appears in the catalog
+        # (e.g. AAPL, EURUSD, SPX) — never append USDT.
+        if not raw_symbol:
+            return {"error": f"No symbol selected for {asset_class} backtest."}
+        symbol = raw_symbol
 
     if precomputed_candles is not None:
         # NOTE: callers (e.g. the scanner) reuse this list across many
@@ -1349,7 +1392,7 @@ async def run_backtest(
         try:
             async with httpx.AsyncClient() as client:
                 candles, source_label, proxy_used = await _fetch_historical(
-                    symbol, days, client, timeframe
+                    symbol, days, client, timeframe, asset_class=asset_class,
                 )
         except Exception as exc:
             return {"error": f"Failed to fetch candle data: {exc}"}
