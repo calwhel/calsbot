@@ -34,8 +34,9 @@ while true; do
         -w 4 \
         -k uvicorn.workers.UvicornWorker \
         --reuse-port \
-        --max-requests 500 \
-        --max-requests-jitter 50 \
+        --max-requests 150 \
+        --max-requests-jitter 30 \
+        --worker-connections 200 \
         --bind 0.0.0.0:5000 \
         --timeout 300 \
         --graceful-timeout 60 \
