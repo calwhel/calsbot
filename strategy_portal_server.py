@@ -531,6 +531,46 @@ def _ensure_tables():
     ])
     _create_with_retry("TradeDrawing", [TradeDrawing.__table__])
 
+    # ── Hot-path indexes ──────────────────────────────────────────────────────
+    # SQLAlchemy `index=True` on a Column only creates the index when the
+    # TABLE is initially created via create_all. If the column was added to
+    # an existing table later (or the table was created before the index
+    # decoration), the index is never backfilled. On Neon Postgres, missing
+    # indexes on these hot paths cause /app and every authed request to time
+    # out with `statement_timeout` because each query degenerates into a full
+    # table scan over users / strategy_executions.
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "CREATE INDEX IF NOT EXISTS idx_users_uid ON users(uid)"
+            ))
+            conn.execute(sa.text(
+                "CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)"
+            ))
+            conn.execute(sa.text(
+                "CREATE INDEX IF NOT EXISTS idx_strategy_executions_strategy_id "
+                "ON strategy_executions(strategy_id)"
+            ))
+            conn.execute(sa.text(
+                "CREATE INDEX IF NOT EXISTS idx_strategy_executions_user_id "
+                "ON strategy_executions(user_id)"
+            ))
+            conn.execute(sa.text(
+                "CREATE INDEX IF NOT EXISTS idx_strategy_executions_outcome_paper "
+                "ON strategy_executions(outcome, is_paper)"
+            ))
+            conn.execute(sa.text(
+                "CREATE INDEX IF NOT EXISTS idx_user_strategies_user_id "
+                "ON user_strategies(user_id)"
+            ))
+        logger.info("_ensure_tables: hot-path indexes ready")
+    except Exception as e:
+        emsg = str(e)
+        if "already exists" in emsg or "duplicate key" in emsg:
+            logger.info("_ensure_tables(indexes): lost startup race (harmless)")
+        else:
+            logger.warning(f"_ensure_tables(indexes): {e}")
+
     # Affiliate program — applications + per-user affiliate state. Raw CREATE
     # to avoid registering yet another SQLAlchemy model just for a simple,
     # mostly-write-once table.
