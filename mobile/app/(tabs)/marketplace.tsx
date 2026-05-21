@@ -23,6 +23,7 @@ import { AmbientBg } from '@/components/AmbientBg';
 import { Sparkline } from '@/components/Sparkline';
 import { MiniDonut } from '@/components/MiniDonut';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
+import { AssetClassChips } from '@/components/AssetClassChips';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, type MarketplaceListing, type LeaderboardResponse, type LeaderboardEntry } from '@/lib/api';
 
@@ -428,6 +429,7 @@ export default function MarketplaceScreen() {
   const { uid } = useAuth();
   const router = useRouter();
   const [sort, setSort] = useState<SortKey>('top');
+  const [assetClass, setAssetClass] = useState<'all' | 'crypto' | 'stock' | 'forex' | 'index'>('all');
 
   const apiSort = sort === 'price' || sort === 'ai' ? 'top' : sort;
   const aiOnly  = sort === 'ai';
@@ -444,11 +446,24 @@ export default function MarketplaceScreen() {
   const onRefresh = useCallback(() => { refetch(); }, [refetch]);
 
   const filtered = useMemo(() => {
-    const list = data || [];
-    if (sort === 'price') return list.filter((m) => m.pricing_model === 'free');
-    if (sort === 'ai')    return list.filter((m) => m.is_ai_generated);
+    let list = data || [];
+    if (sort === 'price') list = list.filter((m) => m.pricing_model === 'free');
+    if (sort === 'ai')    list = list.filter((m) => m.is_ai_generated);
+    if (assetClass !== 'all') {
+      list = list.filter((m) => (m.asset_class || 'crypto') === assetClass);
+    }
     return list;
-  }, [data, sort]);
+  }, [data, sort, assetClass]);
+
+  const assetCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: 0, crypto: 0, stock: 0, forex: 0, index: 0 };
+    for (const m of (data || [])) {
+      counts.all += 1;
+      const ac = m.asset_class || 'crypto';
+      if (ac in counts) counts[ac] += 1;
+    }
+    return counts;
+  }, [data]);
 
   const Header = (
     <View style={styles.header}>
@@ -466,6 +481,7 @@ export default function MarketplaceScreen() {
         </View>
       </View>
       <LeaderboardRail uid={uid} onTap={(lid) => router.push(`/listing/${lid}` as any)} />
+      <AssetClassChips value={assetClass} counts={assetCounts} onChange={setAssetClass} />
       <SortChips value={sort} onChange={setSort} />
     </View>
   );

@@ -1308,6 +1308,25 @@ async def run_paper_position_monitor():
 # so a single API blip can't falsely end a live trade.
 _reconcile_missing: dict = {}  # ex_id → consecutive_missing_count
 
+async def _fetch_live_price_batch_tradfi(symbols: list) -> dict:
+    """Route a batch of stock/forex/index symbols through yfinance."""
+    from app.services.asset_classes import get_symbol as _ac_get
+    from app.services.tradfi_prices import get_price as _tradfi_price
+    out: dict = {}
+    async def _one(sym: str):
+        for cls in ("stock", "forex", "index"):
+            if _ac_get(cls, sym):
+                try:
+                    px = await _tradfi_price(sym, cls)
+                    if px and px > 0:
+                        out[sym] = px
+                except Exception as e:
+                    logger.debug(f"tradfi batch price failed {sym}/{cls}: {e}")
+                return
+    await asyncio.gather(*[_one(s) for s in symbols])
+    return out
+
+
 async def _fetch_live_price_batch(symbols: list, http_client: httpx.AsyncClient) -> dict:
     """
     Fetch live perpetual-futures prices for a batch of symbols.

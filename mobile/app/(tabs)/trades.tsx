@@ -20,6 +20,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { Pill } from '@/components/Pill';
 import { CoinChip } from '@/components/CoinChip';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
+import { AssetClassChips } from '@/components/AssetClassChips';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   apiGet,
@@ -293,8 +294,9 @@ export default function TradesScreen() {
   const { uid } = useAuth();
   const router = useRouter();
   const [filter, setFilter] = useState<TradeFilter>('all');
+  const [assetClass, setAssetClass] = useState<'all' | 'crypto' | 'stock' | 'forex' | 'index'>('all');
 
-  const { data, isLoading, isFetching, refetch, isError } = useQuery({
+  const { data: dataRaw, isLoading, isFetching, refetch, isError } = useQuery({
     queryKey: ['portfolio-trades', uid, filter],
     queryFn: () =>
       apiGet<PortfolioTradesResponse>('/api/portfolio/trades', uid, {
@@ -303,6 +305,23 @@ export default function TradesScreen() {
       }),
     enabled: !!uid,
   });
+
+  const data = useMemo(() => {
+    if (!dataRaw) return dataRaw;
+    if (assetClass === 'all') return dataRaw;
+    const trades = dataRaw.trades.filter((t) => (t.asset_class || 'crypto') === assetClass);
+    return { ...dataRaw, trades, total: trades.length };
+  }, [dataRaw, assetClass]);
+
+  const assetCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: 0, crypto: 0, stock: 0, forex: 0, index: 0 };
+    for (const t of (dataRaw?.trades || [])) {
+      counts.all += 1;
+      const ac = t.asset_class || 'crypto';
+      if (ac in counts) counts[ac] += 1;
+    }
+    return counts;
+  }, [dataRaw]);
 
   const onRefresh = useCallback(() => { refetch(); }, [refetch]);
 
@@ -418,6 +437,7 @@ export default function TradesScreen() {
       </View>
 
       <FilterChips value={filter} onChange={setFilter} />
+      <AssetClassChips value={assetClass} counts={assetCounts} onChange={setAssetClass} />
     </View>
   );
 

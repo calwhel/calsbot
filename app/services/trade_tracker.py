@@ -76,14 +76,46 @@ async def _fetch_live_prices(symbols: list[str]) -> dict:
     Priority: MEXC Futures (contract.mexc.com) → Binance Futures (fapi).
     MEXC Futures is fetched first because many small-caps (MEW, ME, FARTCOIN …)
     only trade there and the *spot* price can differ from the mark price.
+
+    Symbols belonging to a non-crypto asset class (stocks/forex/indices, looked
+    up by catalog) are routed to yfinance via ``tradfi_prices.get_price`` so
+    paper TP/SL evaluation works for tradfi trades too.
     """
     global _price_cache
     now = datetime.utcnow().timestamp()
 
+    # ── Tradfi pass — route stocks/forex/indices through yfinance ────────
+    try:
+        from app.services.asset_classes import get_symbol as _ac_get
+        from app.services.tradfi_prices import get_price as _tradfi_price
+    except Exception:
+        _ac_get = None  # type: ignore
+        _tradfi_price = None  # type: ignore
+    _tradfi_jobs: list[tuple[str, str]] = []  # (symbol, asset_class)
+    if _ac_get is not None:
+        for s in symbols:
+            for _cls in ("stock", "forex", "index"):
+                if _ac_get(_cls, s):
+                    cached = _price_cache.get(s)
+                    if not cached or (now - cached[1]) > _price_cache_ttl:
+                        _tradfi_jobs.append((s, _cls))
+                    break
+    if _tradfi_jobs and _tradfi_price is not None:
+        async def _tf(sym: str, cls: str):
+            try:
+                px = await _tradfi_price(sym, cls)
+                if px and px > 0:
+                    _price_cache[sym] = (px, now)
+            except Exception as e:
+                logger.debug(f"tradfi price fetch failed {sym}/{cls}: {e}")
+        await asyncio.gather(*[_tf(s, c) for s, c in _tradfi_jobs])
+
+    crypto_symbols = [s for s in symbols if s not in {sy for sy, _ in _tradfi_jobs} and not (_ac_get and any(_ac_get(c, s) for c in ("stock", "forex", "index")))]
+
     needs_fetch = any(
         not _price_cache.get(_canonical_symbol(s)) or
         (now - _price_cache[_canonical_symbol(s)][1]) > _price_cache_ttl
-        for s in symbols
+        for s in crypto_symbols
     )
 
     if needs_fetch:
@@ -139,7 +171,14 @@ async def _fetch_live_prices(symbols: list[str]) -> dict:
             )
 
     result = {}
+    _tradfi_set = {sy for sy, _ in _tradfi_jobs} if _tradfi_jobs else set()
     for s in symbols:
+        # Tradfi rows are cached under the raw symbol (no canonicalization)
+        if s in _tradfi_set or (_ac_get and any(_ac_get(c, s) for c in ("stock", "forex", "index"))):
+            cached = _price_cache.get(s)
+            if cached:
+                result[s] = cached[0]
+            continue
         plain = _canonical_symbol(s)
         cached = _price_cache.get(plain)
         if cached:

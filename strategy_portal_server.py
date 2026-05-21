@@ -5219,6 +5219,12 @@ async def api_marketplace(
         }
 
         from app.strategy_models import StrategyExecution
+        # Batched asset_class lookup (avoid N+1)
+        _strat_ids = [m.strategy_id for m in listings]
+        _asset_map: dict = {}
+        if _strat_ids:
+            for sid, ac in db.query(UserStrategy.id, UserStrategy.asset_class).filter(UserStrategy.id.in_(_strat_ids)).all():
+                _asset_map[sid] = ac or "crypto"
         result = []
         for m in listings:
             perf   = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == m.strategy_id).first()
@@ -5256,6 +5262,7 @@ async def api_marketplace(
                 "is_trending":      getattr(m, "is_trending", False),
                 "is_verified":      m.is_verified,
                 "is_ai_generated":  bool(getattr(m, "is_ai_generated", False)),
+                "asset_class":      _asset_map.get(m.strategy_id, "crypto"),
                 "backtest_sharpe":  round(float(getattr(m, "backtest_sharpe", 0) or 0), 2),
                 "backtest_pnl":     round(float(getattr(m, "backtest_pnl_pct", 0) or 0), 2),
                 "backtest_trades":  int(getattr(m, "backtest_trades", 0) or 0),
@@ -7370,7 +7377,7 @@ async def api_portfolio_trades(
 
         # Build a base query: every execution whose strategy belongs to user.
         q = (
-            db.query(StrategyExecution, UserStrategy.name, UserStrategy.id)
+            db.query(StrategyExecution, UserStrategy.name, UserStrategy.id, UserStrategy.asset_class)
             .join(UserStrategy, StrategyExecution.strategy_id == UserStrategy.id)
             .filter(UserStrategy.user_id == user.id)
         )
@@ -7397,18 +7404,27 @@ async def api_portfolio_trades(
 
         # Live prices for any OPEN positions in this page so unrealised P&L
         # is meaningful in the global feed too.
-        open_symbols = list({e.symbol for e, _, _ in rows if e.outcome == "OPEN"})
+        open_symbols = list({e.symbol for e, _, _, _ in rows if e.outcome == "OPEN"})
         live_prices: dict = {}
         if open_symbols:
             try:
+                from app.services.asset_classes import get_symbol as _ac_get
+                tradfi_syms = [s for s in open_symbols
+                               if any(_ac_get(c, s) for c in ("stock", "forex", "index"))]
+                crypto_syms = [s for s in open_symbols if s not in set(tradfi_syms)]
                 async with httpx.AsyncClient() as hc:
-                    from app.services.strategy_executor import _fetch_live_price_batch
-                    live_prices = await _fetch_live_price_batch(open_symbols, hc)
+                    from app.services.strategy_executor import (
+                        _fetch_live_price_batch, _fetch_live_price_batch_tradfi,
+                    )
+                    if crypto_syms:
+                        live_prices.update(await _fetch_live_price_batch(crypto_syms, hc))
+                    if tradfi_syms:
+                        live_prices.update(await _fetch_live_price_batch_tradfi(tradfi_syms))
             except Exception as _lpe:
                 logger.debug(f"live price fetch skipped: {_lpe}")
 
         out = []
-        for e, sname, sid in rows:
+        for e, sname, sid, sasset in rows:
             dur = None
             if e.fired_at and e.closed_at:
                 dur = int((e.closed_at - e.fired_at).total_seconds() / 60)
@@ -7426,6 +7442,7 @@ async def api_portfolio_trades(
                 "id":             e.id,
                 "strategy_id":    sid,
                 "strategy_name":  sname,
+                "asset_class":    sasset or "crypto",
                 "symbol":         e.symbol,
                 "direction":      e.direction,
                 "entry_price":    e.entry_price,

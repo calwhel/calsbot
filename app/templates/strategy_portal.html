@@ -4084,7 +4084,72 @@ const WZ={
   timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,
   name:'',category:'general',pricing:'free',price:null,
   riskProfile:'medium',
+  assetClass:'crypto',tradfiSymbols:[],tradfiQuery:'',
 };
+
+// Asset-class catalog (loaded lazily from /api/markets/catalog)
+let _ASSET_CATALOG=null;
+async function loadAssetCatalog(){
+  if(_ASSET_CATALOG)return _ASSET_CATALOG;
+  try{
+    const r=await fetch('/api/markets/catalog');
+    if(r.ok){_ASSET_CATALOG=await r.json();}
+  }catch(e){console.warn('catalog fetch failed',e);_ASSET_CATALOG={};}
+  return _ASSET_CATALOG||{};
+}
+loadAssetCatalog();
+
+function setAssetClass(cls){
+  if(WZ.assetClass===cls)return;
+  WZ.assetClass=cls;
+  // Always reset class-specific picks — symbols don't carry across asset classes
+  WZ.tradfiSymbols=[];
+  WZ.tradfiQuery='';
+  if(cls==='crypto'){
+    // Restore default crypto universe
+    WZ.coins=WZ.coins||'all';
+  } else {
+    // Stocks/forex/indices are paper-only and use the symbol picker
+    WZ.coins='all';
+    WZ.mode='paper';
+  }
+  // Catalog may not be loaded yet; trigger re-render after it arrives
+  loadAssetCatalog().then(()=>renderCurrentStep());
+  renderCurrentStep();
+}
+
+function _tradfiCatalogFor(cls){
+  const root=_ASSET_CATALOG||{};
+  const cat=root.catalog||root;
+  return cat[cls]||cat[cls+'s']||[];
+}
+
+function renderTradfiOptions(){
+  const list=_tradfiCatalogFor(WZ.assetClass);
+  const q=(WZ.tradfiQuery||'').trim().toLowerCase();
+  if(!list.length){return `<div class="hint" style="padding:12px;color:var(--muted)">${_ASSET_CATALOG===null?'Loading catalog…':'No symbols available for this asset class yet.'}</div>`;}
+  const sel=new Set(WZ.tradfiSymbols||[]);
+  const filtered=q?list.filter(s=>(s.symbol||'').toLowerCase().includes(q)||(s.name||'').toLowerCase().includes(q)):list;
+  if(!filtered.length){return `<div class="hint" style="padding:12px;color:var(--muted)">No matches for "${q}".</div>`;}
+  return filtered.map(s=>{
+    const on=sel.has(s.symbol);
+    const lbl=`${s.symbol}${s.name?' · '+s.name:''}`;
+    return `<div class="opt-chip ${on?'active':''}" style="font-size:11px;padding:5px 10px" onclick="toggleTradfiSymbol('${s.symbol.replace(/'/g,"\\'")}')" title="${(s.name||'').replace(/"/g,'&quot;')}">${lbl}</div>`;
+  }).join('');
+}
+
+function renderTradfiList(){
+  const el=document.getElementById('wz-tf-list');
+  if(el)el.innerHTML=renderTradfiOptions();
+}
+
+function toggleTradfiSymbol(sym){
+  if(!WZ.tradfiSymbols)WZ.tradfiSymbols=[];
+  const i=WZ.tradfiSymbols.indexOf(sym);
+  if(i>=0)WZ.tradfiSymbols.splice(i,1);
+  else WZ.tradfiSymbols.push(sym);
+  renderCurrentStep();
+}
 
 const WZ_STEPS=['Your Style','Trade Direction','Entry Signal','Confirmation','Profit & Protection','Risk & Market','Name & Launch'];
 
@@ -5137,6 +5202,15 @@ function renderStep6(){
     ${WZ.tradingDays.length&&!WZ.tradingDays.includes('saturday')&&!WZ.tradingDays.includes('sunday')?`<div class="hint" style="color:var(--accent);margin-top:6px">⚡ Weekdays only — no weekend trading</div>`:''}
   </div>
   <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">📊</div>Asset Class</div>
+    <div class="hint" style="margin-bottom:8px">Crypto trades 24/7 and supports live mode. Stocks / Forex / Indices are <strong>paper-only</strong> and pause outside market hours.</div>
+    <div class="opt-chips">
+      ${[['crypto','Crypto 🪙'],['stock','Stocks 📈'],['forex','Forex 💱'],['index','Indices 🏛️']].map(([id,lbl])=>`<div class="opt-chip ${WZ.assetClass===id?'active':''}" onclick="setAssetClass('${id}')">${lbl}</div>`).join('')}
+    </div>
+    ${WZ.assetClass!=='crypto'?`<div class="hint" style="margin-top:8px;color:var(--accent)">Paper mode locked — broker integrations for ${WZ.assetClass} coming soon.</div>`:''}
+  </div>
+  ${WZ.assetClass==='crypto'?`
+  <div class="section-card">
     <div class="sc-title"><div class="sc-icon">🌐</div>Which Coins?</div>
     <div class="opt-chips" style="margin-bottom:10px">
       ${wzChip('all',     'All altcoins',    'coins',WZ.coins)}
@@ -5180,6 +5254,15 @@ function renderStep6(){
       </div>
     `:''}
   </div>
+  `:`
+  <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">🎯</div>Pick ${WZ.assetClass==='stock'?'Stocks':WZ.assetClass==='forex'?'Forex Pairs':'Indices'}</div>
+    <div class="hint" style="margin-bottom:8px">Select at least one. The strategy will scan these symbols on every cycle while markets are open.</div>
+    <input type="text" id="wz-tf-q" value="${WZ.tradfiQuery||''}" placeholder="Search…" oninput="WZ.tradfiQuery=this.value;renderTradfiList()" style="margin-bottom:10px">
+    <div id="wz-tf-list" style="display:flex;flex-wrap:wrap;gap:6px;max-height:240px;overflow-y:auto;padding:4px;border:1px solid var(--border);border-radius:8px">${renderTradfiOptions()}</div>
+    <div class="hint" style="margin-top:8px">${WZ.tradfiSymbols.length?WZ.tradfiSymbols.length+' selected':'No symbols selected yet'}</div>
+  </div>
+  `}
 
   <div class="section-card">
     <div class="sc-title"><div class="sc-icon">🔬</div>Extra Filters</div>
@@ -5675,7 +5758,7 @@ function wzBack(){
 function resetWizard(){
   compiledConfig=null;
   _wzLastStep=1;
-  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,breakeven:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium'});
+  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,breakeven:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium',assetClass:'crypto',tradfiSymbols:[],tradfiQuery:''});
   renderCurrentStep();
 }
 
@@ -5865,19 +5948,28 @@ async function buildStrategy(){
     const exit=data.config.exit||{};
     Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null,breakeven_pct:WZ.breakeven||null});
     data.config.exit=exit;
-    // ── Universe / coin scope ─────────────────────────────────────────
-    if(WZ.coins==='single'&&WZ.singleCoin){
+    // ── Asset class & universe ─────────────────────────────────────────
+    data.config.asset_class=WZ.assetClass||'crypto';
+    if(WZ.assetClass&&WZ.assetClass!=='crypto'){
+      // Force paper mode — broker integrations not wired yet
+      data.config._build_mode='paper';
+      WZ.mode='paper';
+      if(!WZ.tradfiSymbols||!WZ.tradfiSymbols.length){
+        throw new Error('Pick at least one '+WZ.assetClass+' symbol on Step 6 before launching.');
+      }
+      data.config.universe={type:'specific',symbols:WZ.tradfiSymbols.slice()};
+    } else if(WZ.coins==='single'&&WZ.singleCoin){
       const sym=WZ.singleCoin.trim().toUpperCase();
       data.config.universe={type:'specific',symbols:[sym.endsWith('USDT')?sym:sym+'USDT'],single_coin:true};
-    } else if(WZ.coins==='specific'&&WZ.specificCoins){
+    } else if(WZ.assetClass==='crypto'&&WZ.coins==='specific'&&WZ.specificCoins){
       data.config.universe={type:'specific',symbols:WZ.specificCoins.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean)};
-    } else if(WZ.coins==='gainers'){
+    } else if(WZ.assetClass==='crypto'&&WZ.coins==='gainers'){
       data.config.universe={type:'top_gainers',top_n:WZ.coinsThreshold||30,exclude_slow_highcap:true,min_volume_usd:500000};
-    } else if(WZ.coins==='losers'){
+    } else if(WZ.assetClass==='crypto'&&WZ.coins==='losers'){
       if(!data.config.universe)data.config.universe={};
       data.config.universe.max_24h_change=-(WZ.coinsThreshold||5);
     }
-    if(WZ.coins==='all'&&WZ.minVol>500){
+    if(WZ.assetClass==='crypto'&&WZ.coins==='all'&&WZ.minVol>500){
       if(!data.config.universe)data.config.universe={};
       data.config.universe.min_volume_usd=WZ.minVol*1000;
     }
@@ -5905,7 +5997,7 @@ async function buildStrategy(){
     toast('✅ Strategy built! Review and save below.');
     cb?.scrollIntoView({behavior:'smooth',block:'start'});
     _wzDone=true;
-  }catch(e){toast('Build failed — try again','error');}
+  }catch(e){toast(e&&e.message?e.message:'Build failed — try again','error');}
   finally{_wzReset();}
 }
 
