@@ -304,24 +304,32 @@ def _get_user_by_uid_safe(uid: str, db: Session):
             pass
         logger.warning(f"[uid lookup] transient DB error, retrying on fresh session: {exc}")
         import time as _t
-        _t.sleep(0.2)
-        fresh = _SL()
-        try:
-            u = fresh.query(User).filter(User.uid == uid).first()
-            if u is not None:
-                return _cache_user(u)
-            return None
-        except _SAOperationalError as exc2:
-            logger.error(f"[uid lookup] DB error persisted after retry: {exc2}")
-            raise HTTPException(
-                status_code=503,
-                detail="Database is busy — please try again in a moment.",
-            )
-        finally:
+        # Neon serverless cold-wake can take 3–10s; back off harder than the
+        # original 0.2s which was useless. Try TWICE on fresh sessions before
+        # giving up — production logs showed the first retry also timing out
+        # because the connection pool was still saturated.
+        last_exc = exc
+        for attempt, delay in ((1, 1.5), (2, 3.0)):
+            _t.sleep(delay)
+            fresh = _SL()
             try:
-                fresh.close()
-            except Exception:
-                pass
+                u = fresh.query(User).filter(User.uid == uid).first()
+                if u is not None:
+                    return _cache_user(u)
+                return None
+            except _SAOperationalError as exc_retry:
+                last_exc = exc_retry
+                logger.warning(f"[uid lookup] retry {attempt} also timed out: {exc_retry}")
+            finally:
+                try:
+                    fresh.close()
+                except Exception:
+                    pass
+        logger.error(f"[uid lookup] DB error persisted after 2 retries: {last_exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Database is busy — please try again in a moment.",
+        )
 
 
 # ── Portal subscription helpers ────────────────────────────

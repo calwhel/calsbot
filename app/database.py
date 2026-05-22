@@ -31,22 +31,24 @@ def _neon_connect_args(statement_timeout_ms: int) -> dict:
 
 
 # ─── HTTP engine ─────────────────────────────────────────────────────────────
-# Serves API + page requests. statement_timeout=20 s — generous enough for
-# Neon's serverless cold-wake (~3–5 s) plus a few seconds of executor lock
-# contention, but still bounded so a single bad query can't hang the worker
-# indefinitely. 8 s (the previous value) was too aggressive: trivial indexed
-# SELECTs against `users.uid` were getting QueryCancelled when Neon was even
-# briefly slow, which produced the "Internal Server Error" 500s on /app
-# right after login.
+# Serves API + page requests. statement_timeout=60 s — production showed even
+# trivial indexed PK lookups on `users.uid` getting QueryCancelled at 20s
+# because Neon's serverless compute was throttled by concurrent executor +
+# AI generator load. 60s is high but it ONLY matters for the worst-case
+# cold-wake — typical queries finish in <50 ms. The user-row cache layer
+# (`_USER_CACHE` in strategy_portal_server.py) means each user only hits this
+# query once per 30 s, so the timeout ceiling is the failsafe, not the norm.
+# Pool sizes also bumped (3→6 base, 4→8 overflow) so a slow query can't
+# starve other requests of a connection.
 engine = create_engine(
     _db_url,
     poolclass=QueuePool,
-    pool_size=3,
-    max_overflow=4,
-    pool_timeout=8,
+    pool_size=6,
+    max_overflow=8,
+    pool_timeout=10,
     pool_recycle=240,
     pool_pre_ping=True,
-    connect_args=_neon_connect_args(20000),
+    connect_args=_neon_connect_args(60000),
 )
 
 
