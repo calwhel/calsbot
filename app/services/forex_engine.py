@@ -350,6 +350,14 @@ FOREX_TEMPLATES: Dict[str, Dict] = {
         "tp_pips": 10, "sl_pips": 6,
         "session": "overlap", "timeframe": "5m",
     },
+    "currency_strength": {
+        "label": "Currency Strength",
+        "tagline": "Buy the strong vs the weak — 28-pair strength matrix",
+        "direction": "BOTH",
+        "tp_pips": 35, "sl_pips": 18,
+        "session": "overlap", "timeframe": "1h",
+        "strength_window": "4h", "strength_min_diff": 0.6,
+    },
 }
 
 

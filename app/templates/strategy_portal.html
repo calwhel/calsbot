@@ -4203,6 +4203,7 @@ const FOREX_TEMPLATES={
   fx_news_avoidance:     {tp_pips:25,sl_pips:15,direction:'BOTH',primary:'forex_news_avoidance',primaryCfg:{minutes_before:30,minutes_after:30,min_impact:'high'}},
   fx_liquidity_grab:     {tp_pips:30,sl_pips:15,direction:'BOTH',primary:'forex_prev_level',   primaryCfg:{condition:'sweep_pdh'}},
   fx_session_scalp:      {tp_pips:10,sl_pips:6, direction:'BOTH',primary:'rsi',                 primaryCfg:{timeframe:'5m', condition:'lt',value:30}},
+  fx_currency_strength:  {tp_pips:35,sl_pips:18,direction:'BOTH',primary:'forex_currency_strength',primaryCfg:{window:'4h',min_diff:0.6,direction:'either'}},
 };
 function isForexStyle(id){return!!id&&typeof id==='string'&&id.startsWith('fx_');}
 
@@ -4249,6 +4250,7 @@ const SIGNAL_META={
   forex_session_break: {icon:'🧨',label:'Session Break',     desc:'Price breaks the high/low of a named session'},
   forex_prev_level:    {icon:'📏',label:'Prev Day H/L',      desc:'Price breaks or sweeps previous day/week H/L'},
   forex_news_avoidance:{icon:'📰',label:'News Avoidance',    desc:'Block trades around high-impact economic events (FMP)'},
+  forex_currency_strength:{icon:'💪',label:'Currency Strength',desc:'Buy the strong vs the weak — 28-pair strength matrix'},
 };
 
 // ─── Signal fire-rate lookup ───────────────────────────────
@@ -4263,7 +4265,7 @@ const SIGNAL_FREQ={
   fvg:'low', open_interest:'low', liquidation:'low', session_level:'low',
   trend_reversal:'low', heikin_ashi:'low', ichimoku:'low', aroon:'low',
   sustained_trend:'low', tradingview_webhook:'ext',
-  forex_session:'med', forex_session_break:'med', forex_prev_level:'med', forex_news_avoidance:'med',
+  forex_session:'med', forex_session_break:'med', forex_prev_level:'med', forex_news_avoidance:'med', forex_currency_strength:'med',
 };
 const FREQ_STYLE={
   high:{label:'High',color:'#16a34a',bg:'rgba(22,163,74,.12)',title:'Fires often — high trade volume'},
@@ -4390,6 +4392,7 @@ const STYLE_SIGNALS={
   fx_trend_continuation: ['ema','sma','supertrend','adx_filter','forex_session','ichimoku'],
   fx_news_avoidance:     ['forex_news_avoidance','ema','forex_session','macd','supertrend'],
   fx_liquidity_grab:     ['forex_prev_level','forex_session','rsi','divergence'],
+  fx_currency_strength:  ['forex_currency_strength','ema','forex_session','adx_filter','macd'],
   fx_session_scalp:      ['rsi','stoch_rsi','forex_session','macd','cci'],
   custom:   [],
 };
@@ -4500,6 +4503,7 @@ function getDefaultCfg(type){
     forex_session_break: {timeframe:tf,condition:'high_break',session:'asian',range_minutes:60},
     forex_prev_level:    {condition:'above_pdh'},
     forex_news_avoidance:{minutes_before:30,minutes_after:30,min_impact:'high'},
+    forex_currency_strength:{window:'4h',min_diff:0.6,direction:'either'},
   }[type]||{timeframe:tf};
 }
 
@@ -5006,6 +5010,22 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('below_pwl','Below prev week low',`${pfx}condition`,cfg.condition,'red')}
       </div>
       <div class="hint">Sweep conditions detect a wick through the level followed by a close back inside — typical liquidity-grab reversal pattern.</div>`;
+    case 'forex_currency_strength':return`
+      <div class="opt-label">Lookback window</div>
+      <div class="opt-chips">
+        ${wzChip('1h','1h',`${pfx}window`,cfg.window||'4h')}
+        ${wzChip('4h','4h',`${pfx}window`,cfg.window||'4h','green')}
+        ${wzChip('1d','1d',`${pfx}window`,cfg.window||'4h')}
+      </div>
+      <div class="opt-label">Required side</div>
+      <div class="opt-chips">
+        ${wzChip('either','Either side (any |diff| ≥ threshold)',`${pfx}direction`,cfg.direction||'either')}
+        ${wzChip('base_strong','Base stronger (favor LONG)',`${pfx}direction`,cfg.direction,'green')}
+        ${wzChip('quote_strong','Quote stronger (favor SHORT)',`${pfx}direction`,cfg.direction,'red')}
+      </div>
+      <div class="opt-label">Min strength difference <span id="${pfx}md-d" style="color:var(--accent)">${cfg.min_diff||0.6}</span></div>
+      <input type="range" id="${pfx}md" min="0.1" max="3" value="${cfg.min_diff||0.6}" step="0.1" oninput="wzSl('${pfx}md','${pfx}md-d','','${pfx}min_diff')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Aggregates % change across all 28 G8 crosses (USD/EUR/GBP/JPY/CHF/AUD/NZD/CAD) into a per-currency strength score, then compares the pair's base vs quote. Higher threshold = rarer but stronger setups. Falls open if the pair isn't a major cross.</div>`;
     default:return`<div class="hint">Configure this signal above</div>`;
   }
 }
@@ -5022,6 +5042,7 @@ function renderStep1(){
     {id:'fx_liquidity_grab',     icon:'🎯', title:'Liquidity Grab',      desc:'Reverse after price sweeps<br>the previous day H/L.'},
     {id:'fx_session_scalp',      icon:'⚡', title:'Session Scalping',    desc:'Quick scalps during the<br>deepest-liquidity overlap.'},
     {id:'fx_news_avoidance',     icon:'📰', title:'News Avoidance',      desc:'Skip 30 min around high-<br>impact economic news.'},
+    {id:'fx_currency_strength',  icon:'💪', title:'Currency Strength',   desc:'Buy the strong vs the weak<br>across the 28-pair matrix.'},
     {id:'custom',                icon:'⚙️', title:'Custom',              desc:'Set everything yourself.<br>Full manual control.'},
   ]:[
     {id:'scalp',    icon:'⚡', title:'Scalper',       desc:'Quick in-and-out trades.<br>Tight targets, high frequency.'},
@@ -5977,6 +5998,7 @@ function buildWizardDescription(){
       case 'forex_session_break':sig=`Price breaks the ${cond(cfg.condition||'high_break')} of the ${cfg.session||'asian'} session (${cfg.range_minutes||60}-min range) on ${tf}`;break;
       case 'forex_prev_level':sig=`Price ${cond(cfg.condition||'above_pdh')} (previous day/week high/low level)`;break;
       case 'forex_news_avoidance':sig=`Block trades within ${cfg.minutes_before||30}min before and ${cfg.minutes_after||30}min after any ${cfg.min_impact||'high'}-impact economic news affecting either currency in the pair (FMP calendar)`;break;
+      case 'forex_currency_strength':{const d=cfg.direction==='base_strong'?'base currency stronger than quote':cfg.direction==='quote_strong'?'quote currency stronger than base':'either side of pair stronger';sig=`Currency-strength differential is at least ${cfg.min_diff||0.6} over ${cfg.window||'4h'} (${d}, measured across the 28-pair G8 matrix)`;break;}
     }
     lines.push(`\nPrimary entry signal: ${sig}.`);
   }

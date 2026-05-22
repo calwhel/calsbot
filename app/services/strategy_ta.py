@@ -1959,6 +1959,49 @@ async def eval_forex_news_avoidance(
     return True, f"{symbol}: clear of {imp}-impact news (±{mb}/{ma} min window)"
 
 
+async def eval_forex_currency_strength(
+    cond: Dict, symbol: str,
+) -> Tuple[bool, str]:
+    """`forex_currency_strength` — fires when the base/quote strength
+    differential breaches the configured threshold in the wanted direction.
+
+    cfg.window      — '1h' | '4h' | '1d' (default '4h')
+    cfg.min_diff    — minimum |base − quote| score required (default 0.5)
+    cfg.direction   — 'base_strong' (favours LONG), 'quote_strong' (favours
+                      SHORT), 'either' (any side with |diff|≥min)
+
+    Falls open if the pair isn't a major cross or yfinance is down.
+    """
+    from app.services.currency_strength import pair_strength_diff
+    win = (cond.get("window") or "4h").lower()
+    try:
+        min_diff = float(cond.get("min_diff") or 0.5)
+    except (TypeError, ValueError):
+        min_diff = 0.5
+    direction = (cond.get("direction") or "either").lower()
+
+    res = await pair_strength_diff(symbol, window=win)
+    if res is None:
+        return True, f"{symbol}: currency-strength filter inactive (not a major cross)"
+    diff, base, quote, _, ok = res
+    if not ok:
+        # Upstream (yfinance) is fully unreachable — fail OPEN so trading
+        # continues; the filter just goes dormant for this cycle.
+        return True, f"{symbol}: currency-strength upstream unavailable — filter passing open"
+    abs_diff = abs(diff)
+    if direction == "base_strong":
+        passed = diff >= min_diff
+    elif direction == "quote_strong":
+        passed = diff <= -min_diff
+    else:  # either
+        passed = abs_diff >= min_diff
+    side = "base" if diff >= 0 else "quote"
+    return passed, (
+        f"{symbol}: {base} {diff:+.2f} vs {quote} (Δ {diff:+.2f}, "
+        f"threshold {min_diff:.2f}, {side} stronger) on {win}"
+    )
+
+
 async def evaluate_strategy_conditions(
     strategy_config: Dict,
     symbol: str,
@@ -2054,6 +2097,8 @@ async def evaluate_strategy_conditions(
                     cond, symbol, price, http_client, cache)
             elif ctype == "forex_news_avoidance":
                 return await eval_forex_news_avoidance(cond, symbol)
+            elif ctype == "forex_currency_strength":
+                return await eval_forex_currency_strength(cond, symbol)
             else:
                 return False, f"Unknown condition type: {ctype}"
         except Exception as e:
