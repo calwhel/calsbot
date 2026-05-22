@@ -554,6 +554,41 @@ function renderKnobs(
     case 'tradingview_webhook':
       return null;
 
+    case 'forex_cot': {
+      const condOpts: ChipOption<string>[] = [
+        { value: 'specs_extreme_long',  label: '🔴 Specs net-long extreme' },
+        { value: 'specs_extreme_short', label: '🟢 Specs net-short extreme' },
+        { value: 'specs_flipped_long',  label: '🟢 Specs flipped long' },
+        { value: 'specs_flipped_short', label: '🔴 Specs flipped short' },
+        { value: 'comm_extreme_long',   label: '🟢 Commercials net-long extreme' },
+        { value: 'comm_extreme_short',  label: '🔴 Commercials net-short extreme' },
+      ];
+      const invOpts: ChipOption<string>[] = [
+        { value: 'auto', label: 'Auto-flip for USD-base pairs' },
+        { value: 'raw',  label: 'Raw (read non-USD leg directly)' },
+      ];
+      return (
+        <View>
+          <Section label="Condition" compact={compact}>
+            <ChipRow options={condOpts}
+              value={(cfg.condition as string) || 'specs_extreme_long'}
+              onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+          <Stepper label="Percentile threshold" value={cfg.extreme_pct ?? 75}
+            min={50} max={95} step={5} unit="th"
+            onChange={(v) => set({ extreme_pct: v })} />
+          <Stepper label="History window (weeks)" value={cfg.lookback_weeks ?? 52}
+            min={8} max={156} step={4} unit="wk"
+            onChange={(v) => set({ lookback_weeks: v })} />
+          <Section label="Pair-direction handling" compact={compact}>
+            <ChipRow options={invOpts}
+              value={cfg.respect_pair_inversion === false ? 'raw' : 'auto'}
+              onChange={(v) => set({ respect_pair_inversion: v === 'auto' })} size="sm" />
+          </Section>
+        </View>
+      );
+    }
+
     case 'forex_liquidity_pa': {
       const patternOpts: ChipOption<string>[] = [
         { value: 'sweep_eqh',    label: '⬆️ Sweep eq-highs' },

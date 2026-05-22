@@ -4205,6 +4205,7 @@ const FOREX_TEMPLATES={
   fx_session_scalp:      {tp_pips:10,sl_pips:6, direction:'BOTH',primary:'rsi',                 primaryCfg:{timeframe:'5m', condition:'lt',value:30}},
   fx_currency_strength:  {tp_pips:35,sl_pips:18,direction:'BOTH',primary:'forex_currency_strength',primaryCfg:{window:'4h',min_diff:0.6,direction:'either'}},
   fx_liquidity_pa:       {tp_pips:28,sl_pips:14,direction:'BOTH',primary:'forex_liquidity_pa',     primaryCfg:{pattern:'sweep_eqh',timeframe:'15m',lookback:20,tolerance_pips:3}},
+  fx_cot_sentiment:      {tp_pips:80,sl_pips:40,direction:'BOTH',primary:'forex_cot',              primaryCfg:{condition:'specs_extreme_long',extreme_pct:75,lookback_weeks:52,respect_pair_inversion:true},timeframe:'4h'},
 };
 function isForexStyle(id){return!!id&&typeof id==='string'&&id.startsWith('fx_');}
 
@@ -4253,6 +4254,7 @@ const SIGNAL_META={
   forex_news_avoidance:{icon:'📰',label:'News Avoidance',    desc:'Block trades around high-impact economic events (FMP)'},
   forex_currency_strength:{icon:'💪',label:'Currency Strength',desc:'Buy the strong vs the weak — 28-pair strength matrix'},
   forex_liquidity_pa:  {icon:'🪤',label:'Liquidity & PA',     desc:'Sweep equal H/L + classic price-action candles'},
+  forex_cot:           {icon:'🏦',label:'COT Sentiment',      desc:'Weekly CFTC positioning extremes — contrarian filter'},
 };
 
 // ─── Signal fire-rate lookup ───────────────────────────────
@@ -4267,7 +4269,7 @@ const SIGNAL_FREQ={
   fvg:'low', open_interest:'low', liquidation:'low', session_level:'low',
   trend_reversal:'low', heikin_ashi:'low', ichimoku:'low', aroon:'low',
   sustained_trend:'low', tradingview_webhook:'ext',
-  forex_session:'med', forex_session_break:'med', forex_prev_level:'med', forex_news_avoidance:'med', forex_currency_strength:'med', forex_liquidity_pa:'med',
+  forex_session:'med', forex_session_break:'med', forex_prev_level:'med', forex_news_avoidance:'med', forex_currency_strength:'med', forex_liquidity_pa:'med', forex_cot:'low',
 };
 const FREQ_STYLE={
   high:{label:'High',color:'#16a34a',bg:'rgba(22,163,74,.12)',title:'Fires often — high trade volume'},
@@ -4396,6 +4398,7 @@ const STYLE_SIGNALS={
   fx_liquidity_grab:     ['forex_prev_level','forex_session','rsi','divergence'],
   fx_currency_strength:  ['forex_currency_strength','ema','forex_session','adx_filter','macd'],
   fx_liquidity_pa:       ['forex_liquidity_pa','forex_session','rsi','forex_prev_level','ema'],
+  fx_cot_sentiment:      ['forex_cot','rsi','ema','forex_prev_level','forex_currency_strength'],
   fx_session_scalp:      ['rsi','stoch_rsi','forex_session','macd','cci'],
   custom:   [],
 };
@@ -4508,6 +4511,7 @@ function getDefaultCfg(type){
     forex_news_avoidance:{minutes_before:30,minutes_after:30,min_impact:'high'},
     forex_currency_strength:{window:'4h',min_diff:0.6,direction:'either'},
     forex_liquidity_pa:  {pattern:'sweep_eqh',timeframe:tf,lookback:20,tolerance_pips:3},
+    forex_cot:           {condition:'specs_extreme_long',extreme_pct:75,lookback_weeks:52,respect_pair_inversion:true},
   }[type]||{timeframe:tf};
 }
 
@@ -5054,6 +5058,26 @@ function renderSignalCfg(type,cfg,pfx){
       <div class="opt-label">Tolerance (pips) <span id="${pfx}tp-d" style="color:var(--accent)">${cfg.tolerance_pips||3}</span></div>
       <input type="range" id="${pfx}tp" min="0.5" max="20" value="${cfg.tolerance_pips||3}" step="0.5" oninput="wzSl('${pfx}tp','${pfx}tp-d','','${pfx}tolerance_pips')" style="width:100%;accent-color:var(--accent)">
       <div class="hint">Sweep modes detect a wick through a cluster of equal highs/lows then a close back inside — classic stop-hunt liquidity grab. Pin bars / engulfings / inside bars are evaluated on the latest closed candle only.</div>`;
+    case 'forex_cot':return`
+      <div class="opt-label">Condition</div>
+      <div class="opt-chips">
+        ${wzChip('specs_extreme_long','Specs net-long extreme (fade → SHORT bias)',`${pfx}condition`,cfg.condition||'specs_extreme_long','red')}
+        ${wzChip('specs_extreme_short','Specs net-short extreme (fade → LONG bias)',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('specs_flipped_long','Specs just flipped net-long',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('specs_flipped_short','Specs just flipped net-short',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('comm_extreme_long','Commercials net-long extreme (smart-money bullish)',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('comm_extreme_short','Commercials net-short extreme (smart-money bearish)',`${pfx}condition`,cfg.condition,'red')}
+      </div>
+      <div class="opt-label">Percentile threshold <span id="${pfx}ep-d" style="color:var(--accent)">${cfg.extreme_pct||75}</span></div>
+      <input type="range" id="${pfx}ep" min="50" max="95" value="${cfg.extreme_pct||75}" step="5" oninput="wzSl('${pfx}ep','${pfx}ep-d','','${pfx}extreme_pct')" style="width:100%;accent-color:var(--accent)">
+      <div class="opt-label">History window (weeks) <span id="${pfx}lw-d" style="color:var(--accent)">${cfg.lookback_weeks||52}</span></div>
+      <input type="range" id="${pfx}lw" min="8" max="156" value="${cfg.lookback_weeks||52}" step="4" oninput="wzSl('${pfx}lw','${pfx}lw-d','','${pfx}lookback_weeks')" style="width:100%;accent-color:var(--accent)">
+      <div class="opt-label">Pair-direction handling</div>
+      <div class="opt-chips">
+        ${wzChip('true','Auto-flip for USD-base pairs (USDJPY etc.)',`${pfx}respect_pair_inversion`,cfg.respect_pair_inversion!==false?'true':'false','green')}
+        ${wzChip('false','Raw — read the non-USD leg directly',`${pfx}respect_pair_inversion`,cfg.respect_pair_inversion!==false?'true':'false')}
+      </div>
+      <div class="hint">Weekly CFTC Commitment-of-Traders positioning on the non-USD leg of a USD pair. Cross pairs (no USD side) are skipped (filter passes open). "Extreme" = percentile rank vs the last N weeks. Updates Friday 15:30 ET; cached 6h. Falls open if CFTC is unreachable.</div>`;
     default:return`<div class="hint">Configure this signal above</div>`;
   }
 }
@@ -5072,6 +5096,7 @@ function renderStep1(){
     {id:'fx_news_avoidance',     icon:'📰', title:'News Avoidance',      desc:'Skip 30 min around high-<br>impact economic news.'},
     {id:'fx_currency_strength',  icon:'💪', title:'Currency Strength',   desc:'Buy the strong vs the weak<br>across the 28-pair matrix.'},
     {id:'fx_liquidity_pa',       icon:'🪤', title:'Liquidity & PA',      desc:'Trade sweeps of equal H/L<br>+ pin bars & engulfings.'},
+    {id:'fx_cot_sentiment',      icon:'🏦', title:'COT Sentiment',       desc:'Fade extreme speculator<br>positioning (weekly CFTC).'},
     {id:'custom',                icon:'⚙️', title:'Custom',              desc:'Set everything yourself.<br>Full manual control.'},
   ]:[
     {id:'scalp',    icon:'⚡', title:'Scalper',       desc:'Quick in-and-out trades.<br>Tight targets, high frequency.'},
@@ -6029,6 +6054,7 @@ function buildWizardDescription(){
       case 'forex_news_avoidance':sig=`Block trades within ${cfg.minutes_before||30}min before and ${cfg.minutes_after||30}min after any ${cfg.min_impact||'high'}-impact economic news affecting either currency in the pair (FMP calendar)`;break;
       case 'forex_currency_strength':{const d=cfg.direction==='base_strong'?'base currency stronger than quote':cfg.direction==='quote_strong'?'quote currency stronger than base':'either side of pair stronger';sig=`Currency-strength differential is at least ${cfg.min_diff||0.6} over ${cfg.window||'4h'} (${d}, measured across the 28-pair G8 matrix)`;break;}
       case 'forex_liquidity_pa':{const p=cfg.pattern||'sweep_eqh';const lbl={sweep_eqh:`Sweep equal highs (last ${cfg.lookback||20} bars, ±${cfg.tolerance_pips||3} pips tolerance)`,sweep_eql:`Sweep equal lows (last ${cfg.lookback||20} bars, ±${cfg.tolerance_pips||3} pips tolerance)`,pin_bar_bull:'Bullish pin bar (small body near top, long lower wick ≥2× body)',pin_bar_bear:'Bearish pin bar (small body near bottom, long upper wick ≥2× body)',engulf_bull:'Bullish engulfing (green candle body engulfs prior red body)',engulf_bear:'Bearish engulfing (red candle body engulfs prior green body)',inside_bar:'Inside bar (current H<prev H, current L>prev L)'}[p]||p;sig=`${lbl} on ${cfg.timeframe||'15m'}`;break;}
+      case 'forex_cot':{const c=cfg.condition||'specs_extreme_long';const ep=cfg.extreme_pct||75;const lw=cfg.lookback_weeks||52;const lbl={specs_extreme_long:`Speculators net-long ≥${ep}th pct (contrarian SHORT bias)`,specs_extreme_short:`Speculators net-short ≥${ep}th pct (contrarian LONG bias)`,specs_flipped_long:'Speculators just flipped net-long this week',specs_flipped_short:'Speculators just flipped net-short this week',comm_extreme_long:`Commercials net-long ≥${ep}th pct (smart-money bullish)`,comm_extreme_short:`Commercials net-short ≥${ep}th pct (smart-money bearish)`}[c]||c;sig=`${lbl} over ${lw}wk window (CFTC weekly)`;break;}
     }
     lines.push(`\nPrimary entry signal: ${sig}.`);
   }

@@ -366,6 +366,14 @@ FOREX_TEMPLATES: Dict[str, Dict] = {
         "session": "london", "timeframe": "15m",
         "pa_pattern": "sweep_eqh", "pa_lookback": 20, "pa_tolerance_pips": 3,
     },
+    "cot_sentiment": {
+        "label": "COT Sentiment Swing",
+        "tagline": "Fade extreme speculator positioning — weekly CFTC contrarian",
+        "direction": "BOTH",
+        "tp_pips": 80, "sl_pips": 40,
+        "session": "any", "timeframe": "4h",
+        "cot_condition": "specs_extreme_long", "cot_extreme_pct": 75, "cot_lookback_weeks": 52,
+    },
 }
 
 

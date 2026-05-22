@@ -2002,6 +2002,105 @@ async def eval_forex_currency_strength(
     )
 
 
+async def eval_forex_cot(
+    cond: Dict, symbol: str,
+) -> Tuple[bool, str]:
+    """`forex_cot` — weekly CFTC Commitment of Traders sentiment filter.
+
+    Uses the Traders-in-Financial-Futures (TFF) report for the non-USD leg
+    of a USD pair. Cross pairs (no USD side) → filter inactive, passes open.
+
+    cfg.condition:
+      'specs_extreme_long'   — leveraged-fund net long in top X percentile
+      'specs_extreme_short'  — leveraged-fund net short in top X percentile
+      'specs_flipped_long'   — leveraged funds flipped to net long this wk
+      'specs_flipped_short'  — leveraged funds flipped to net short
+      'comm_extreme_long'    — dealer/commercial net long extreme
+      'comm_extreme_short'   — dealer/commercial net short extreme
+    cfg.extreme_pct       — percentile threshold (default 70, range 50–95)
+    cfg.lookback_weeks    — history window for the percentile rank (52)
+    cfg.respect_pair_inversion — when True (default), USDJPY-style pairs
+       flip extreme_long↔extreme_short meaning so the filter still maps
+       cleanly to "fire LONG on this pair".
+
+    Always fails OPEN if CFTC Socrata is unreachable or the pair is
+    unsupported, so a CFTC outage cannot block live trading.
+    """
+    from app.services.cot_data import cot_sentiment
+    condition = (cond.get("condition") or "specs_extreme_long").lower()
+    try:
+        extreme_pct = float(cond.get("extreme_pct") or 70)
+    except (TypeError, ValueError):
+        extreme_pct = 70.0
+    extreme_pct = max(50.0, min(95.0, extreme_pct))
+    try:
+        lookback = int(cond.get("lookback_weeks") or 52)
+    except (TypeError, ValueError):
+        lookback = 52
+    lookback = max(8, min(156, lookback))
+    # Tolerant boolean parse — web wizard chips serialize as strings
+    # ('true'/'false'), JSON booleans, ints (0/1) all need to behave.
+    _ri = cond.get("respect_pair_inversion", True)
+    if isinstance(_ri, str):
+        respect_invert = _ri.strip().lower() not in ("false", "0", "no", "off", "")
+    else:
+        respect_invert = bool(_ri)
+
+    res = await cot_sentiment(symbol, lookback_weeks=lookback)
+    if res is None:
+        return True, f"{symbol}: COT filter inactive (no USD leg)"
+    data, ok = res
+    if not ok:
+        return True, f"{symbol}: CFTC upstream unavailable — COT filter passing open"
+    if data.get("weeks_observed", 0) < 2:
+        return True, f"{symbol}: COT history too thin ({data.get('weeks_observed', 0)} wks) — passing open"
+
+    ccy = data["ccy"]
+    invert = bool(data.get("invert_for_pair")) and respect_invert
+    sp = float(data.get("specs_pct", 50))
+    cp = float(data.get("comm_pct", 50))
+    spf = int(data.get("specs_flipped", 0))
+    cmf = int(data.get("comm_flipped", 0))
+
+    # When the non-USD leg is the QUOTE (e.g. USDJPY → JPY), a bullish
+    # reading on JPY = bearish for the pair, so we flip the meaning.
+    eff = condition
+    if invert:
+        flip_map = {
+            "specs_extreme_long":  "specs_extreme_short",
+            "specs_extreme_short": "specs_extreme_long",
+            "specs_flipped_long":  "specs_flipped_short",
+            "specs_flipped_short": "specs_flipped_long",
+            "comm_extreme_long":   "comm_extreme_short",
+            "comm_extreme_short":  "comm_extreme_long",
+        }
+        eff = flip_map.get(condition, condition)
+
+    if eff == "specs_extreme_long":
+        passed = sp >= extreme_pct
+        why = f"leveraged-fund net-long at {sp:.0f}th pct (≥{extreme_pct:.0f})"
+    elif eff == "specs_extreme_short":
+        passed = sp <= (100.0 - extreme_pct)
+        why = f"leveraged-fund net-short at {100-sp:.0f}th pct (≥{extreme_pct:.0f})"
+    elif eff == "specs_flipped_long":
+        passed = spf > 0
+        why = f"leveraged funds flipped net-long this week" if passed else "no spec flip-long this wk"
+    elif eff == "specs_flipped_short":
+        passed = spf < 0
+        why = f"leveraged funds flipped net-short this week" if passed else "no spec flip-short this wk"
+    elif eff == "comm_extreme_long":
+        passed = cp >= extreme_pct
+        why = f"dealer/commercial net-long at {cp:.0f}th pct (≥{extreme_pct:.0f})"
+    elif eff == "comm_extreme_short":
+        passed = cp <= (100.0 - extreme_pct)
+        why = f"dealer/commercial net-short at {100-cp:.0f}th pct (≥{extreme_pct:.0f})"
+    else:
+        return True, f"{symbol}: unknown COT condition '{condition}' — passing open"
+
+    inv_note = " (inverted for USD-base pair)" if invert else ""
+    return passed, f"{symbol}: COT/{ccy} {why}{inv_note}"
+
+
 async def eval_forex_liquidity_pa(
     cond: Dict, symbol: str, http_client, cache: Dict,
 ) -> Tuple[bool, str]:
@@ -2216,6 +2315,8 @@ async def evaluate_strategy_conditions(
             elif ctype == "forex_liquidity_pa":
                 return await eval_forex_liquidity_pa(
                     cond, symbol, http_client, cache)
+            elif ctype == "forex_cot":
+                return await eval_forex_cot(cond, symbol)
             else:
                 return False, f"Unknown condition type: {ctype}"
         except Exception as e:
