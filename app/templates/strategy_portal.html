@@ -4079,6 +4079,9 @@ const WZ={
   step:1,style:null,direction:'LONG',mode:'live',
   primaryType:null,primaryCfg:{},confirms:[],
   tp1:3,tp2:null,sl:1.5,trailing:null,breakeven:null,
+  // Forex-only pip TP/SL — emitted to /api/save-strategy only when assetClass==='forex'.
+  // Executor converts pips→% at fire time using the live price + the pair's pip size.
+  tp1Pips:null,tp2Pips:null,slPips:null,
   leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,noDuplicateSymbol:false,
   sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',
   timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,
@@ -4112,6 +4115,17 @@ function setAssetClass(cls){
     // Stocks/forex/indices are paper-only and use the symbol picker
     WZ.coins='all';
     WZ.mode='paper';
+  }
+  // Pip TP/SL only applies to forex — wipe stale pip state when leaving forex
+  // so a previously-set value doesn't accidentally get re-emitted later.
+  if(cls!=='forex'){WZ.tp1Pips=null;WZ.tp2Pips=null;WZ.slPips=null;}
+  // Style list is asset-class-specific (forex shows 7 session-aware templates,
+  // crypto shows the original 10). Drop any incompatible style so Step 1's
+  // "selected" card doesn't claim a style that isn't even rendered.
+  if(WZ.style){
+    const isFxStyle=WZ.style.startsWith('fx_');
+    if(cls==='forex'&&!isFxStyle){WZ.style=null;WZ.primaryType=null;WZ.primaryCfg={};}
+    else if(cls!=='forex'&&isFxStyle){WZ.style=null;WZ.primaryType=null;WZ.primaryCfg={};}
   }
   // Catalog may not be loaded yet; trigger re-render after it arrives
   loadAssetCatalog().then(()=>renderCurrentStep());
@@ -4163,7 +4177,34 @@ const STYLE_PRESETS={
   pump:     {leverage:20,posSize:2,dailyLoss:5,maxPos:1,maxTrades:10,cooldown:5,   tp1:20, sl:8,   category:'momentum'},
   dip:      {leverage:8, posSize:7,dailyLoss:5,maxPos:2,maxTrades:4, cooldown:45,  tp1:8,  sl:3,   category:'reversal'},
   range:    {leverage:6, posSize:8,dailyLoss:4,maxPos:3,maxTrades:8, cooldown:30,  tp1:3,  sl:1.5, category:'scalp'},
+  // ── Forex (paper-only, 1× leverage). tp1/sl are kept as % back-compat for
+  // the executor's existing exit code paths, but the wizard's Step 5 reads
+  // pips (tp1Pips/slPips) for forex and emits take_profit_pips/stop_loss_pips
+  // to the save endpoint — executor converts pips→% at fire time.
+  fx_london_breakout:    {leverage:1,posSize:5,dailyLoss:3,maxPos:2,maxTrades:4,cooldown:60, tp1:0.30,sl:0.15,category:'fx_london_breakout',    timeframe:'15m'},
+  fx_asian_range:        {leverage:1,posSize:5,dailyLoss:3,maxPos:2,maxTrades:4,cooldown:90, tp1:0.25,sl:0.12,category:'fx_asian_range',        timeframe:'15m'},
+  fx_ny_reversal:        {leverage:1,posSize:5,dailyLoss:3,maxPos:2,maxTrades:3,cooldown:60, tp1:0.20,sl:0.12,category:'fx_ny_reversal',        timeframe:'15m'},
+  fx_trend_continuation: {leverage:1,posSize:5,dailyLoss:3,maxPos:2,maxTrades:3,cooldown:120,tp1:0.40,sl:0.20,category:'fx_trend_continuation', timeframe:'1h' },
+  fx_news_avoidance:     {leverage:1,posSize:4,dailyLoss:3,maxPos:1,maxTrades:3,cooldown:90, tp1:0.25,sl:0.15,category:'fx_news_avoidance',     timeframe:'15m'},
+  fx_liquidity_grab:     {leverage:1,posSize:5,dailyLoss:3,maxPos:1,maxTrades:3,cooldown:120,tp1:0.30,sl:0.15,category:'fx_liquidity_grab',     timeframe:'15m'},
+  fx_session_scalp:      {leverage:1,posSize:4,dailyLoss:2,maxPos:2,maxTrades:6,cooldown:30, tp1:0.10,sl:0.06,category:'fx_session_scalp',      timeframe:'5m' },
 };
+
+// Forex template → pip defaults + primary-signal config. Mirrors the server's
+// FOREX_TEMPLATES in app/services/forex_engine.py and the mobile wizard's
+// FOREX_TEMPLATES in mobile/lib/strategyPresets.ts. Picking a fx_* style
+// auto-fills the primary signal + pip TP/SL so the user lands on a working
+// strategy without having to hand-configure a session-aware condition.
+const FOREX_TEMPLATES={
+  fx_london_breakout:    {tp_pips:30,sl_pips:15,direction:'BOTH',primary:'forex_session_break',primaryCfg:{condition:'high_break',session:'asian', range_minutes:60, timeframe:'15m'}},
+  fx_asian_range:        {tp_pips:25,sl_pips:12,direction:'BOTH',primary:'forex_session_break',primaryCfg:{condition:'high_break',session:'sydney',range_minutes:120,timeframe:'15m'}},
+  fx_ny_reversal:        {tp_pips:20,sl_pips:12,direction:'BOTH',primary:'forex_session',      primaryCfg:{condition:'session_open',session:'ny',within_minutes:30}},
+  fx_trend_continuation: {tp_pips:40,sl_pips:20,direction:'BOTH',primary:'ema',                 primaryCfg:{timeframe:'1h', condition:'golden_cross',periods:'20/50'}},
+  fx_news_avoidance:     {tp_pips:25,sl_pips:15,direction:'BOTH',primary:'ema',                 primaryCfg:{timeframe:'15m',condition:'golden_cross',periods:'9/21'}},
+  fx_liquidity_grab:     {tp_pips:30,sl_pips:15,direction:'BOTH',primary:'forex_prev_level',   primaryCfg:{condition:'sweep_pdh'}},
+  fx_session_scalp:      {tp_pips:10,sl_pips:6, direction:'BOTH',primary:'rsi',                 primaryCfg:{timeframe:'5m', condition:'lt',value:30}},
+};
+function isForexStyle(id){return!!id&&typeof id==='string'&&id.startsWith('fx_');}
 
 const SIGNAL_META={
   rsi:             {icon:'📊',label:'RSI',              desc:'Overbought or oversold level'},
@@ -4203,6 +4244,10 @@ const SIGNAL_META={
   aroon:           {icon:'🔔',label:'Aroon',             desc:'Trend strength and direction — Aroon Up/Down'},
   roc:             {icon:'🚀',label:'Rate of Change',    desc:'Momentum: how fast price is moving up or down'},
   tradingview_webhook:{icon:'📺',label:'TradingView Webhook',desc:'Fire trades from TradingView alerts via webhook URL'},
+  // ── Forex-specific signals ────────────────────────────────
+  forex_session:       {icon:'🕒',label:'Forex Session',     desc:'Gate firing on London / NY / Asian session windows'},
+  forex_session_break: {icon:'🧨',label:'Session Break',     desc:'Price breaks the high/low of a named session'},
+  forex_prev_level:    {icon:'📏',label:'Prev Day H/L',      desc:'Price breaks or sweeps previous day/week H/L'},
 };
 
 // ─── Signal fire-rate lookup ───────────────────────────────
@@ -4217,6 +4262,7 @@ const SIGNAL_FREQ={
   fvg:'low', open_interest:'low', liquidation:'low', session_level:'low',
   trend_reversal:'low', heikin_ashi:'low', ichimoku:'low', aroon:'low',
   sustained_trend:'low', tradingview_webhook:'ext',
+  forex_session:'med', forex_session_break:'med', forex_prev_level:'med',
 };
 const FREQ_STYLE={
   high:{label:'High',color:'#16a34a',bg:'rgba(22,163,74,.12)',title:'Fires often — high trade volume'},
@@ -4241,7 +4287,9 @@ function estimateFireRate(){
 
 function getWzWarnings(){
   const w=[];
-  const rr=WZ.tp1/WZ.sl;
+  // Forex strategies use pip TP/SL — derive R:R from pips for the warning.
+  const isFx=WZ.assetClass==='forex'&&WZ.tp1Pips&&WZ.slPips;
+  const rr=isFx?(WZ.tp1Pips/WZ.slPips):(WZ.tp1/WZ.sl);
   if(rr<1.0)w.push({t:'error',msg:`R:R ${rr.toFixed(1)}:1 — TP below SL risk`});
   else if(rr<1.5)w.push({t:'warn',msg:`R:R ${rr.toFixed(1)}:1 — consider widening TP`});
   else if(rr>=2.5)w.push({t:'tip',msg:`Strong R:R ${rr.toFixed(1)}:1`});
@@ -4334,6 +4382,14 @@ const STYLE_SIGNALS={
   smc:      ['order_block','market_structure','fvg','fibonacci','divergence','session_level'],
   range:    ['support_resistance','bb','adx_filter','rsi','stoch_rsi','vwap_deviation','session_level','keltner'],
   sniper:   ['fvg','order_block','fibonacci','market_structure','divergence','atr_volatility','adx_filter'],
+  // Forex — session-aware primaries listed first (auto-selected per template)
+  fx_london_breakout:    ['forex_session_break','forex_session','ema','adx_filter'],
+  fx_asian_range:        ['forex_session_break','forex_session','bb','rsi'],
+  fx_ny_reversal:        ['forex_session','rsi','stoch_rsi','bb','divergence'],
+  fx_trend_continuation: ['ema','sma','supertrend','adx_filter','forex_session','ichimoku'],
+  fx_news_avoidance:     ['ema','forex_session','macd','supertrend'],
+  fx_liquidity_grab:     ['forex_prev_level','forex_session','rsi','divergence'],
+  fx_session_scalp:      ['rsi','stoch_rsi','forex_session','macd','cci'],
   custom:   [],
 };
 
@@ -4377,7 +4433,11 @@ function wzSl(inputId,displayId,unit,wzKey){
 function updateRR(){
   const slB=document.getElementById('rr-sl-bar'),tpB=document.getElementById('rr-tp-bar'),rr=document.getElementById('rr-ratio'),tp2B=document.getElementById('rr-tp2-bar');
   if(!slB||!tpB||!rr)return;
-  const tp=WZ.tp1,sl=WZ.sl,tp2=WZ.tp2||0;
+  // Forex strategies use pip TP/SL — read from the pip fields when present.
+  const isFx=WZ.assetClass==='forex'&&WZ.tp1Pips&&WZ.slPips;
+  const tp=isFx?WZ.tp1Pips:WZ.tp1;
+  const sl=isFx?WZ.slPips:WZ.sl;
+  const tp2=isFx?(WZ.tp2Pips||0):(WZ.tp2||0);
   const tot=tp+sl+tp2;
   slB.style.flex=sl/tot*100;tpB.style.flex=tp/tot*100;
   if(tp2B){tp2B.style.flex=(tp2>tp?(tp2-tp):0)/tot*100;}
@@ -4434,6 +4494,10 @@ function getDefaultCfg(type){
     roc:              {timeframe:tf,condition:'positive',period:14},
     sma:              {timeframe:'1h',condition:'price_above',period:200,source:'close'},
     tradingview_webhook:{entry_type:'tradingview_webhook'},
+    // Forex-specific
+    forex_session:       {condition:'in_session',session:'london',within_minutes:30},
+    forex_session_break: {timeframe:tf,condition:'high_break',session:'asian',range_minutes:60},
+    forex_prev_level:    {condition:'above_pdh'},
   }[type]||{timeframe:tf};
 }
 
@@ -4887,13 +4951,65 @@ function renderSignalCfg(type,cfg,pfx){
         </ol>
         <div style="font-size:11px;color:var(--accent);font-weight:600">Your webhook URL will be shown after you save the strategy.</div>
       </div>`;
+    case 'forex_session':return`
+      <div class="opt-label">Session</div>
+      <div class="opt-chips">
+        ${['london','ny','asian','sydney','overlap'].map(s=>wzChip(s,s.toUpperCase(),`${pfx}session`,cfg.session||'london')).join('')}
+      </div>
+      <div class="opt-label">When</div>
+      <div class="opt-chips">
+        ${wzChip('in_session','In session',`${pfx}condition`,cfg.condition||'in_session','green')}
+        ${wzChip('session_open','Near session open',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('session_close','Near session close',`${pfx}condition`,cfg.condition,'red')}
+      </div>
+      ${(cfg.condition==='session_open'||cfg.condition==='session_close')?`
+      <div class="opt-label">Within (minutes) <span id="${pfx}wm-d" style="color:var(--accent)">${cfg.within_minutes||30}</span></div>
+      <input type="range" id="${pfx}wm" min="5" max="120" value="${cfg.within_minutes||30}" step="5" oninput="wzSl('${pfx}wm','${pfx}wm-d','','${pfx}within_minutes')" style="width:100%;accent-color:var(--accent)">`:''}
+      <div class="hint">Only fires when price action falls inside the selected forex session window (UTC). Use OVERLAP for the London/NY high-liquidity period.</div>`;
+    case 'forex_session_break':return`${tf}
+      <div class="opt-label">Reference session</div>
+      <div class="opt-chips">
+        ${['asian','sydney','london','ny'].map(s=>wzChip(s,s.toUpperCase(),`${pfx}session`,cfg.session||'asian')).join('')}
+      </div>
+      <div class="opt-label">Break direction</div>
+      <div class="opt-chips">
+        ${wzChip('high_break','Break above session high ↑',`${pfx}condition`,cfg.condition||'high_break','green')}
+        ${wzChip('low_break','Break below session low ↓',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('orb_high','Opening-range high break ↑',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('orb_low','Opening-range low break ↓',`${pfx}condition`,cfg.condition,'red')}
+      </div>
+      <div class="opt-label">Range lookback (minutes) <span id="${pfx}rm-d" style="color:var(--accent)">${cfg.range_minutes||60}</span></div>
+      <input type="range" id="${pfx}rm" min="15" max="480" value="${cfg.range_minutes||60}" step="15" oninput="wzSl('${pfx}rm','${pfx}rm-d','','${pfx}range_minutes')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Builds a high/low range from the last N minutes of the selected session, then waits for price to break that range. Classic London breakout setup uses Asian + 60-120 min range.</div>`;
+    case 'forex_prev_level':return`
+      <div class="opt-label">Level</div>
+      <div class="opt-chips">
+        ${wzChip('above_pdh','Above prev day high',`${pfx}condition`,cfg.condition||'above_pdh','green')}
+        ${wzChip('below_pdl','Below prev day low',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('sweep_pdh','Sweep PDH (liquidity grab)',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('sweep_pdl','Sweep PDL (liquidity grab)',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('above_pwh','Above prev week high',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('below_pwl','Below prev week low',`${pfx}condition`,cfg.condition,'red')}
+      </div>
+      <div class="hint">Sweep conditions detect a wick through the level followed by a close back inside — typical liquidity-grab reversal pattern.</div>`;
     default:return`<div class="hint">Configure this signal above</div>`;
   }
 }
 
 // ─── Step renderers ────────────────────────────────────────
 function renderStep1(){
-  const styles=[
+  // Forex strategies use 7 session-aware templates instead of the crypto
+  // style grid — each pre-fills a session-based primary signal + pip TP/SL.
+  const styles=WZ.assetClass==='forex'?[
+    {id:'fx_london_breakout',    icon:'🇬🇧', title:'London Breakout',     desc:'Buy/sell London open break<br>of the Asian range.'},
+    {id:'fx_asian_range',        icon:'🌏', title:'Asian Range Breakout',desc:'Trade the break of the<br>overnight Sydney/Asian range.'},
+    {id:'fx_ny_reversal',        icon:'🇺🇸', title:'New York Reversal',    desc:'Fade overextended moves<br>at NY open during overlap.'},
+    {id:'fx_trend_continuation', icon:'📈', title:'Trend Continuation',  desc:'Follow the prevailing trend<br>during London/NY overlap.'},
+    {id:'fx_liquidity_grab',     icon:'🎯', title:'Liquidity Grab',      desc:'Reverse after price sweeps<br>the previous day H/L.'},
+    {id:'fx_session_scalp',      icon:'⚡', title:'Session Scalping',    desc:'Quick scalps during the<br>deepest-liquidity overlap.'},
+    {id:'fx_news_avoidance',     icon:'📰', title:'News Avoidance',      desc:'Skip 30 min around high-<br>impact news (FMP — coming).'},
+    {id:'custom',                icon:'⚙️', title:'Custom',              desc:'Set everything yourself.<br>Full manual control.'},
+  ]:[
     {id:'scalp',    icon:'⚡', title:'Scalper',       desc:'Quick in-and-out trades.<br>Tight targets, high frequency.'},
     {id:'swing',    icon:'🌊', title:'Swing Trader',  desc:'Multi-hour positions.<br>Patient for bigger moves.'},
     {id:'momentum', icon:'📈', title:'Momentum',      desc:'Chase strong directional<br>moves. High conviction.'},
@@ -4915,6 +5031,17 @@ function renderStep1(){
 function wzPickStyle(id){
   WZ.style=id;
   if(STYLE_PRESETS[id])Object.assign(WZ,STYLE_PRESETS[id]);
+  // Forex templates also auto-fill the primary signal + pip TP/SL so the
+  // user lands on a working session-aware strategy without further config.
+  if(isForexStyle(id)&&FOREX_TEMPLATES[id]){
+    const tpl=FOREX_TEMPLATES[id];
+    WZ.tp1Pips=tpl.tp_pips;
+    WZ.slPips=tpl.sl_pips;
+    WZ.tp2Pips=null;
+    WZ.direction=tpl.direction;
+    WZ.primaryType=tpl.primary;
+    WZ.primaryCfg=Object.assign({},tpl.primaryCfg);
+  }
   renderCurrentStep();
 }
 
@@ -4932,7 +5059,9 @@ function renderStep2(){
 }
 
 function renderStep3(){
-  const style=WZ.tradingStyle;
+  // Use WZ.style (the actual wizard state key) so recommended-signal mappings
+  // — including the 7 forex template entries in STYLE_SIGNALS — actually fire.
+  const style=WZ.style;
   const recs=STYLE_SIGNALS[style]||[];
   const allTypes=Object.entries(SIGNAL_META);
   const recTypes=recs.filter(id=>SIGNAL_META[id]).map(id=>[id,SIGNAL_META[id]]);
@@ -5039,21 +5168,32 @@ function wzAddConfirm(type){
 function wzRemoveConfirm(idx){WZ.confirms.splice(idx,1);renderCurrentStep();}
 
 function renderStep5(){
-  const rr=(WZ.tp1/WZ.sl).toFixed(1);
-  const tot=WZ.tp1+WZ.sl+(WZ.tp2||0);
+  // Forex uses pip TP/SL; everything else uses %.
+  const isFx=WZ.assetClass==='forex';
+  const tpVal=isFx?(WZ.tp1Pips||20):WZ.tp1;
+  const slVal=isFx?(WZ.slPips||10):WZ.sl;
+  const tp2Val=isFx?(WZ.tp2Pips||0):(WZ.tp2||0);
+  const unit=isFx?' pips':'%';
+  const tpMax=isFx?500:100, tpStep=isFx?1:0.5, tpMin=isFx?1:0.5;
+  const slMax=isFx?300:30,  slStep=isFx?1:0.5, slMin=isFx?1:0.5;
+  const rr=(tpVal/slVal).toFixed(1);
+  const tot=tpVal+slVal+tp2Val;
   const rrColor=rr>=2?'#16a34a':rr>=1.5?'var(--accent)':rr>=1?'#d97706':'#dc2626';
   const rrGrade=rr>=2.5?'A+':rr>=2?'A':rr>=1.5?'B':rr>=1?'C':'D';
+  // Pip inputs write to the pip fields; % inputs write to the % fields.
+  const tpKey=isFx?'tp1Pips':'tp1';
+  const slKey=isFx?'slPips':'sl';
   return`<div class="wz-q">Where do you exit?</div>
-  <div class="wz-sub">Set your take profit and stop loss. The R:R ratio shows how much you risk versus how much you stand to gain.</div>
+  <div class="wz-sub">${isFx?'Forex strategies use pips for TP/SL — the way every broker quotes them. The executor converts to % at fire time using the live price.':'Set your take profit and stop loss. The R:R ratio shows how much you risk versus how much you stand to gain.'}</div>
   <div class="section-card">
-    <div class="sc-title"><div class="sc-icon">🎯</div>Take Profit & Stop Loss</div>
+    <div class="sc-title"><div class="sc-icon">🎯</div>Take Profit & Stop Loss${isFx?' (pips)':''}</div>
     <div class="form-group">
-      <label style="display:flex;justify-content:space-between">Take Profit 1 <span style="color:var(--green);font-weight:700" id="tp1-v">${WZ.tp1}%</span></label>
-      <input type="range" id="tp1-sl" min="0.5" max="100" value="${WZ.tp1}" step="0.5" oninput="WZ.tp1=Number(this.value);document.getElementById('tp1-v').textContent=this.value+'%';updateRR();updateWzPreview()" style="width:100%;accent-color:var(--green)">
+      <label style="display:flex;justify-content:space-between">Take Profit 1 <span style="color:var(--green);font-weight:700" id="tp1-v">${tpVal}${unit}</span></label>
+      <input type="range" id="tp1-sl" min="${tpMin}" max="${tpMax}" value="${tpVal}" step="${tpStep}" oninput="WZ.${tpKey}=Number(this.value);document.getElementById('tp1-v').textContent=this.value+'${unit}';updateRR();updateWzPreview()" style="width:100%;accent-color:var(--green)">
     </div>
     <div class="form-group">
-      <label style="display:flex;justify-content:space-between">Stop Loss <span style="color:var(--red);font-weight:700" id="sl-v">${WZ.sl}%</span></label>
-      <input type="range" id="sl-sl" min="0.5" max="30" value="${WZ.sl}" step="0.5" oninput="WZ.sl=Number(this.value);document.getElementById('sl-v').textContent=this.value+'%';updateRR();updateWzPreview()" style="width:100%;accent-color:var(--red)">
+      <label style="display:flex;justify-content:space-between">Stop Loss <span style="color:var(--red);font-weight:700" id="sl-v">${slVal}${unit}</span></label>
+      <input type="range" id="sl-sl" min="${slMin}" max="${slMax}" value="${slVal}" step="${slStep}" oninput="WZ.${slKey}=Number(this.value);document.getElementById('sl-v').textContent=this.value+'${unit}';updateRR();updateWzPreview()" style="width:100%;accent-color:var(--red)">
     </div>
     <div class="rr-vis">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -5064,15 +5204,15 @@ function renderStep5(){
         </div>
       </div>
       <div class="rr-bar-wrap">
-        <div class="rr-sl-bar" id="rr-sl-bar" style="flex:${WZ.sl/tot*100}"></div>
-        <div class="rr-tp-bar" id="rr-tp-bar" style="flex:${WZ.tp1/tot*100}"></div>
-        ${WZ.tp2?`<div style="flex:${(WZ.tp2-WZ.tp1)/tot*100};background:rgba(99,102,241,.35);border-radius:0 6px 6px 0;transition:flex .2s" id="rr-tp2-bar"></div>`:''}
+        <div class="rr-sl-bar" id="rr-sl-bar" style="flex:${slVal/tot*100}"></div>
+        <div class="rr-tp-bar" id="rr-tp-bar" style="flex:${tpVal/tot*100}"></div>
+        ${tp2Val?`<div style="flex:${(tp2Val-tpVal)/tot*100};background:rgba(99,102,241,.35);border-radius:0 6px 6px 0;transition:flex .2s" id="rr-tp2-bar"></div>`:''}
       </div>
       <div class="rr-labels">
-        <span style="color:var(--red)">↓ SL ${WZ.sl}%</span>
+        <span style="color:var(--red)">↓ SL ${slVal}${unit}</span>
         <span style="color:var(--muted);font-size:10px">Entry</span>
-        <span style="color:var(--green)">TP1 ${WZ.tp1}% ↑</span>
-        ${WZ.tp2?`<span style="color:var(--accent)">TP2 ${WZ.tp2}%</span>`:''}
+        <span style="color:var(--green)">TP1 ${tpVal}${unit} ↑</span>
+        ${tp2Val?`<span style="color:var(--accent)">TP2 ${tp2Val}${unit}</span>`:''}
       </div>
     </div>
   </div>
@@ -5080,11 +5220,11 @@ function renderStep5(){
     <div class="sc-title"><div class="sc-icon">🛡️</div>Advanced Exits</div>
     <div class="toggle-row" onclick="wzToggleExit('tp2')">
       <div><div class="toggle-lbl">Take Profit 2</div><div class="toggle-sub">Scale out a second leg if price keeps running</div></div>
-      <div class="switch ${WZ.tp2?'on':''}" id="sw-tp2"></div>
+      <div class="switch ${(isFx?WZ.tp2Pips:WZ.tp2)?'on':''}" id="sw-tp2"></div>
     </div>
-    <div id="row-tp2" style="${WZ.tp2?'':'display:none;'}padding:10px 0 4px">
-      <label style="display:flex;justify-content:space-between">TP2 <span style="color:var(--green);font-weight:700" id="tp2-v">${WZ.tp2||6}%</span></label>
-      <input type="range" id="tp2-sl" min="1" max="200" value="${WZ.tp2||6}" step="1" oninput="WZ.tp2=Number(this.value);document.getElementById('tp2-v').textContent=this.value+'%';updateRR()" style="width:100%;accent-color:var(--green)">
+    <div id="row-tp2" style="${(isFx?WZ.tp2Pips:WZ.tp2)?'':'display:none;'}padding:10px 0 4px">
+      <label style="display:flex;justify-content:space-between">TP2 <span style="color:var(--green);font-weight:700" id="tp2-v">${(isFx?WZ.tp2Pips:WZ.tp2)||(isFx?40:6)}${unit}</span></label>
+      <input type="range" id="tp2-sl" min="${isFx?2:1}" max="${isFx?800:200}" value="${(isFx?WZ.tp2Pips:WZ.tp2)||(isFx?40:6)}" step="1" oninput="WZ.${isFx?'tp2Pips':'tp2'}=Number(this.value);document.getElementById('tp2-v').textContent=this.value+'${unit}';updateRR()" style="width:100%;accent-color:var(--green)">
     </div>
     <div class="toggle-row" onclick="wzToggleExit('trail')">
       <div><div class="toggle-lbl">Trailing Stop</div><div class="toggle-sub">Stop follows price to lock in profit as it moves</div></div>
@@ -5112,7 +5252,12 @@ function wzToggleExit(which){
   if(!sw||!row)return;
   const on=sw.classList.toggle('on');
   row.style.display=on?'block':'none';
-  if(which==='tp2'){WZ.tp2=on?Number(document.getElementById('tp2-sl')?.value||6):null;updateRR();}
+  if(which==='tp2'){
+    const isFx=WZ.assetClass==='forex';
+    const v=Number(document.getElementById('tp2-sl')?.value||(isFx?40:6));
+    if(isFx){WZ.tp2Pips=on?v:null;WZ.tp2=null;}else{WZ.tp2=on?v:null;WZ.tp2Pips=null;}
+    updateRR();
+  }
   if(which==='trail')WZ.trailing=on?Number(document.getElementById('trail-sl')?.value||1):null;
   if(which==='be')WZ.breakeven=on?Number(document.getElementById('be-sl')?.value||70):null;
 }
@@ -5758,7 +5903,7 @@ function wzBack(){
 function resetWizard(){
   compiledConfig=null;
   _wzLastStep=1;
-  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,breakeven:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium',assetClass:'crypto',tradfiSymbols:[],tradfiQuery:''});
+  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,tp1Pips:null,tp2Pips:null,slPips:null,trailing:null,breakeven:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium',assetClass:'crypto',tradfiSymbols:[],tradfiQuery:''});
   renderCurrentStep();
 }
 
@@ -5947,6 +6092,13 @@ async function buildStrategy(){
     data.config.risk=risk;
     const exit=data.config.exit||{};
     Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null,breakeven_pct:WZ.breakeven||null});
+    // Forex pip TP/SL — executor converts pips→% at fire time using the live
+    // price + the pair's pip size (JPY pairs use 0.01, everything else 0.0001).
+    if(WZ.assetClass==='forex'&&(WZ.tp1Pips||WZ.slPips)){
+      if(WZ.tp1Pips)exit.take_profit_pips=Number(WZ.tp1Pips);
+      if(WZ.slPips) exit.stop_loss_pips =Number(WZ.slPips);
+      if(WZ.tp2Pips)exit.take_profit2_pips=Number(WZ.tp2Pips);
+    }
     data.config.exit=exit;
     // ── Asset class & universe ─────────────────────────────────────────
     data.config.asset_class=WZ.assetClass||'crypto';
