@@ -552,12 +552,31 @@ def _ensure_tables():
         ("idx_strategy_executions_user_id", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_user_id ON strategy_executions(user_id)"),
         ("idx_strategy_executions_outcome_paper", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_outcome_paper ON strategy_executions(outcome, is_paper)"),
         ("idx_user_strategies_user_id", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_strategies_user_id ON user_strategies(user_id)"),
+        # Composite indexes for the executor's per-strategy hot queries
+        # (cooldown / daily-cap / last-fired lookups). Without these, each
+        # WHERE strategy_id=? AND fired_at>=today and ORDER BY fired_at DESC
+        # query degenerates into a sort over every row matching strategy_id,
+        # which on busy strategies pushes the 60s bg statement_timeout.
+        ("idx_strategy_executions_sid_fired", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_sid_fired ON strategy_executions(strategy_id, fired_at DESC)"),
+        ("idx_strategy_executions_sid_symbol_fired", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_sid_symbol_fired ON strategy_executions(strategy_id, symbol, fired_at DESC)"),
+        ("idx_strategy_executions_sid_outcome", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_sid_outcome ON strategy_executions(strategy_id, outcome)"),
     ]
     try:
         # AUTOCOMMIT is required for CREATE INDEX CONCURRENTLY.
         ac_conn = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
         try:
             ac_conn.execute(sa.text("SET statement_timeout = '300s'"))
+            # Postgres advisory lock so concurrent gunicorn workers don't race
+            # each other into ShareUpdateExclusiveLock deadlocks on the same
+            # CREATE INDEX CONCURRENTLY (which we hit in production logs).
+            # Non-blocking try-lock: if another worker holds it, skip — the
+            # winner will create the indexes for everyone.
+            _got_lock = ac_conn.execute(
+                sa.text("SELECT pg_try_advisory_lock(708110001)")
+            ).scalar()
+            if not _got_lock:
+                logger.info("_ensure_tables(indexes): another worker holds the lock — skipping")
+                return
             for label, ddl in _index_ddl:
                 try:
                     ac_conn.execute(sa.text(ddl))
@@ -569,6 +588,10 @@ def _ensure_tables():
                     else:
                         logger.warning(f"_ensure_tables(indexes) {label}: {ie}")
         finally:
+            try:
+                ac_conn.execute(sa.text("SELECT pg_advisory_unlock(708110001)"))
+            except Exception:
+                pass
             ac_conn.close()
     except Exception as e:
         logger.warning(f"_ensure_tables(indexes outer): {e}")
