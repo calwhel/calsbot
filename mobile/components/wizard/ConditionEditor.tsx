@@ -554,6 +554,37 @@ function renderKnobs(
     case 'tradingview_webhook':
       return null;
 
+    case 'forex_liquidity_pa': {
+      const patternOpts: ChipOption<string>[] = [
+        { value: 'sweep_eqh',    label: '⬆️ Sweep eq-highs' },
+        { value: 'sweep_eql',    label: '⬇️ Sweep eq-lows' },
+        { value: 'pin_bar_bull', label: '🟢 Bullish pin' },
+        { value: 'pin_bar_bear', label: '🔴 Bearish pin' },
+        { value: 'engulf_bull',  label: '🟢 Bull engulf' },
+        { value: 'engulf_bear',  label: '🔴 Bear engulf' },
+        { value: 'inside_bar',   label: '📦 Inside bar' },
+      ];
+      const pattern = (cfg.pattern as string) || 'sweep_eqh';
+      const isSweep = pattern === 'sweep_eqh' || pattern === 'sweep_eql';
+      return (
+        <View>
+          <Section label="Pattern" compact={compact}>
+            <ChipRow options={patternOpts} value={pattern} onChange={(v) => set({ pattern: v })} size="sm" />
+          </Section>
+          {isSweep ? (
+            <>
+              <Stepper label="Lookback bars" value={cfg.lookback ?? 20}
+                min={5} max={100} step={1}
+                onChange={(v) => set({ lookback: v })} />
+              <Stepper label="Tolerance (pips)" value={cfg.tolerance_pips ?? 3}
+                min={0.5} max={20} step={0.5} decimals={1} unit="pips"
+                onChange={(v) => set({ tolerance_pips: v })} />
+            </>
+          ) : null}
+        </View>
+      );
+    }
+
     default:
       return null;
   }

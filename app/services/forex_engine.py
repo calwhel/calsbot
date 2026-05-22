@@ -358,6 +358,14 @@ FOREX_TEMPLATES: Dict[str, Dict] = {
         "session": "overlap", "timeframe": "1h",
         "strength_window": "4h", "strength_min_diff": 0.6,
     },
+    "liquidity_pa": {
+        "label": "Liquidity & Price Action",
+        "tagline": "Sweep equal highs/lows + pin bars / engulfings on liquid sessions",
+        "direction": "BOTH",
+        "tp_pips": 28, "sl_pips": 14,
+        "session": "london", "timeframe": "15m",
+        "pa_pattern": "sweep_eqh", "pa_lookback": 20, "pa_tolerance_pips": 3,
+    },
 }
 
 

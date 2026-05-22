@@ -2002,6 +2002,120 @@ async def eval_forex_currency_strength(
     )
 
 
+async def eval_forex_liquidity_pa(
+    cond: Dict, symbol: str, http_client, cache: Dict,
+) -> Tuple[bool, str]:
+    """`forex_liquidity_pa` — intraday liquidity sweeps + classic
+    price-action candle patterns on the strategy's working timeframe.
+
+    cfg.pattern:
+      'sweep_eqh'    — last candle wicked through equal-highs cluster then
+                       closed back below (long-bias liquidity grab)
+      'sweep_eql'    — opposite (short-bias liquidity grab)
+      'pin_bar_bull' — small body near top + lower wick ≥ 2× body
+      'pin_bar_bear' — small body near bottom + upper wick ≥ 2× body
+      'engulf_bull'  — current green candle body engulfs prior red body
+      'engulf_bear'  — current red candle body engulfs prior green body
+      'inside_bar'   — current high<prev_high and current low>prev_low
+    cfg.timeframe   — kline timeframe (default '15m')
+    cfg.lookback    — bars scanned for equal H/L cluster (default 20)
+    cfg.tolerance_pips — max distance between highs/lows to count as
+                         "equal" (default 3 pips; converted to price via
+                         0.01 for JPY pairs, 0.0001 otherwise)
+
+    Returns False (don't fire) when not enough klines; never blocks on
+    upstream error since _get_klines already returns None gracefully.
+    """
+    pattern = (cond.get("pattern") or "sweep_eqh").lower()
+    tf = (cond.get("timeframe") or "15m").lower()
+    try:
+        lookback = max(5, min(int(cond.get("lookback") or 20), 100))
+    except (TypeError, ValueError):
+        lookback = 20
+    try:
+        tol_pips = max(0.5, float(cond.get("tolerance_pips") or 3))
+    except (TypeError, ValueError):
+        tol_pips = 3.0
+    pip = 0.01 if "JPY" in symbol.upper() else 0.0001
+    tol = tol_pips * pip
+
+    need = max(lookback + 5, 30)
+    klines = await _get_klines(symbol, tf, need, http_client, cache)
+    if not klines or len(klines) < 3:
+        return False, f"{symbol}: no klines for liquidity/PA eval"
+
+    try:
+        last_o = float(klines[-1][1]); last_h = float(klines[-1][2])
+        last_l = float(klines[-1][3]); last_c = float(klines[-1][4])
+        prev_o = float(klines[-2][1]); prev_h = float(klines[-2][2])
+        prev_l = float(klines[-2][3]); prev_c = float(klines[-2][4])
+    except (IndexError, ValueError, TypeError):
+        return False, f"{symbol}: malformed kline data"
+
+    body = abs(last_c - last_o)
+    rng  = max(last_h - last_l, 1e-12)
+    upper_wick = last_h - max(last_c, last_o)
+    lower_wick = min(last_c, last_o) - last_l
+
+    if pattern == "pin_bar_bull":
+        ok = (lower_wick >= 2 * body) and (body <= 0.4 * rng) and (last_c > last_o or upper_wick <= body)
+        return ok, (
+            f"{symbol}: bullish pin {'detected' if ok else 'not detected'} "
+            f"(body {body:.5f}, lower_wick {lower_wick:.5f}, range {rng:.5f})"
+        )
+    if pattern == "pin_bar_bear":
+        ok = (upper_wick >= 2 * body) and (body <= 0.4 * rng) and (last_c < last_o or lower_wick <= body)
+        return ok, (
+            f"{symbol}: bearish pin {'detected' if ok else 'not detected'} "
+            f"(body {body:.5f}, upper_wick {upper_wick:.5f}, range {rng:.5f})"
+        )
+    if pattern == "engulf_bull":
+        prev_body_top = max(prev_o, prev_c); prev_body_bot = min(prev_o, prev_c)
+        ok = (prev_c < prev_o) and (last_c > last_o) and (last_c >= prev_body_top) and (last_o <= prev_body_bot)
+        return ok, f"{symbol}: bullish engulfing {'fired' if ok else 'no'} (prev red, last green & engulfs body)"
+    if pattern == "engulf_bear":
+        prev_body_top = max(prev_o, prev_c); prev_body_bot = min(prev_o, prev_c)
+        ok = (prev_c > prev_o) and (last_c < last_o) and (last_o >= prev_body_top) and (last_c <= prev_body_bot)
+        return ok, f"{symbol}: bearish engulfing {'fired' if ok else 'no'} (prev green, last red & engulfs body)"
+    if pattern == "inside_bar":
+        ok = (last_h < prev_h) and (last_l > prev_l)
+        return ok, f"{symbol}: inside bar {'fired' if ok else 'no'} (last H/L inside prev H/L)"
+
+    # Liquidity-sweep modes: scan the lookback window for equal H/L clusters,
+    # then check the latest candle for the wick-through-and-close-back pattern.
+    window = klines[-(lookback + 1):-1]  # exclude the current candle
+    if not window:
+        return False, f"{symbol}: insufficient window for sweep eval"
+    try:
+        highs = [float(k[2]) for k in window]
+        lows  = [float(k[3]) for k in window]
+    except (IndexError, ValueError, TypeError):
+        return False, f"{symbol}: malformed window kline data"
+
+    if pattern == "sweep_eqh":
+        ref = max(highs)
+        cluster = [h for h in highs if abs(h - ref) <= tol]
+        if len(cluster) < 2:
+            return False, f"{symbol}: no equal-highs cluster within ±{tol_pips:.1f} pips"
+        ok = last_h > ref and last_c < ref
+        return ok, (
+            f"{symbol}: {'SWEPT' if ok else 'no sweep of'} equal-highs cluster @ {ref:.5f} "
+            f"({len(cluster)} touches, ±{tol_pips:.1f} pips tol)"
+        )
+    if pattern == "sweep_eql":
+        ref = min(lows)
+        cluster = [l for l in lows if abs(l - ref) <= tol]
+        if len(cluster) < 2:
+            return False, f"{symbol}: no equal-lows cluster within ±{tol_pips:.1f} pips"
+        ok = last_l < ref and last_c > ref
+        return ok, (
+            f"{symbol}: {'SWEPT' if ok else 'no sweep of'} equal-lows cluster @ {ref:.5f} "
+            f"({len(cluster)} touches, ±{tol_pips:.1f} pips tol)"
+        )
+
+    return False, f"{symbol}: unknown liquidity_pa pattern '{pattern}'"
+
+
 async def evaluate_strategy_conditions(
     strategy_config: Dict,
     symbol: str,
@@ -2099,6 +2213,9 @@ async def evaluate_strategy_conditions(
                 return await eval_forex_news_avoidance(cond, symbol)
             elif ctype == "forex_currency_strength":
                 return await eval_forex_currency_strength(cond, symbol)
+            elif ctype == "forex_liquidity_pa":
+                return await eval_forex_liquidity_pa(
+                    cond, symbol, http_client, cache)
             else:
                 return False, f"Unknown condition type: {ctype}"
         except Exception as e:
