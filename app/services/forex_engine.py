@@ -329,12 +329,11 @@ FOREX_TEMPLATES: Dict[str, Dict] = {
     },
     "news_avoidance": {
         "label": "News Avoidance",
-        "tagline": "Skip trading 30 min before/after high-impact news (P2 — needs FMP key)",
+        "tagline": "Skip trading 30 min before/after high-impact news",
         "direction": "BOTH",
         "tp_pips": 25, "sl_pips": 15,
         "session": "london", "timeframe": "15m",
         "news_blackout_min": 30,
-        "_requires_news_engine": True,
     },
     "liquidity_grab": {
         "label": "Liquidity Grab",

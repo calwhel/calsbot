@@ -1931,6 +1931,34 @@ async def eval_forex_prev_level(
     return False, f"{symbol}: unknown prev-level condition {sub}"
 
 
+async def eval_forex_news_avoidance(
+    cond: Dict, symbol: str,
+) -> Tuple[bool, str]:
+    """`forex_news_avoidance` — TRUE when SAFE to trade (i.e. no high-impact
+    event affects either currency within the configured window).
+
+    cfg.minutes_before (default 30) — blackout starts N min before event
+    cfg.minutes_after  (default 30) — blackout ends N min after event
+    cfg.min_impact     (default 'high') — 'low' | 'medium' | 'high'
+
+    Falls open (returns True) when FMP_API_KEY is missing or the upstream
+    is down — strategy keeps trading; it just loses the news filter.
+    """
+    from app.services.fmp_calendar import is_news_blackout
+    mb = int(cond.get("minutes_before") or 30)
+    ma = int(cond.get("minutes_after") or 30)
+    imp = (cond.get("min_impact") or "high").lower()
+    in_blackout, ev = await is_news_blackout(
+        symbol, minutes_before=mb, minutes_after=ma, min_impact=imp,
+    )
+    if in_blackout and ev:
+        return False, (
+            f"{symbol}: BLOCKED by {ev['impact']} {ev['currency']} "
+            f"news '{ev['event']}' ({ev['minutes_from_now']:+.0f} min)"
+        )
+    return True, f"{symbol}: clear of {imp}-impact news (±{mb}/{ma} min window)"
+
+
 async def evaluate_strategy_conditions(
     strategy_config: Dict,
     symbol: str,
@@ -2024,6 +2052,8 @@ async def evaluate_strategy_conditions(
             elif ctype == "forex_prev_level":
                 return await eval_forex_prev_level(
                     cond, symbol, price, http_client, cache)
+            elif ctype == "forex_news_avoidance":
+                return await eval_forex_news_avoidance(cond, symbol)
             else:
                 return False, f"Unknown condition type: {ctype}"
         except Exception as e:

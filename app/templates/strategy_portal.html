@@ -4200,7 +4200,7 @@ const FOREX_TEMPLATES={
   fx_asian_range:        {tp_pips:25,sl_pips:12,direction:'BOTH',primary:'forex_session_break',primaryCfg:{condition:'high_break',session:'sydney',range_minutes:120,timeframe:'15m'}},
   fx_ny_reversal:        {tp_pips:20,sl_pips:12,direction:'BOTH',primary:'forex_session',      primaryCfg:{condition:'session_open',session:'ny',within_minutes:30}},
   fx_trend_continuation: {tp_pips:40,sl_pips:20,direction:'BOTH',primary:'ema',                 primaryCfg:{timeframe:'1h', condition:'golden_cross',periods:'20/50'}},
-  fx_news_avoidance:     {tp_pips:25,sl_pips:15,direction:'BOTH',primary:'ema',                 primaryCfg:{timeframe:'15m',condition:'golden_cross',periods:'9/21'}},
+  fx_news_avoidance:     {tp_pips:25,sl_pips:15,direction:'BOTH',primary:'forex_news_avoidance',primaryCfg:{minutes_before:30,minutes_after:30,min_impact:'high'}},
   fx_liquidity_grab:     {tp_pips:30,sl_pips:15,direction:'BOTH',primary:'forex_prev_level',   primaryCfg:{condition:'sweep_pdh'}},
   fx_session_scalp:      {tp_pips:10,sl_pips:6, direction:'BOTH',primary:'rsi',                 primaryCfg:{timeframe:'5m', condition:'lt',value:30}},
 };
@@ -4248,6 +4248,7 @@ const SIGNAL_META={
   forex_session:       {icon:'🕒',label:'Forex Session',     desc:'Gate firing on London / NY / Asian session windows'},
   forex_session_break: {icon:'🧨',label:'Session Break',     desc:'Price breaks the high/low of a named session'},
   forex_prev_level:    {icon:'📏',label:'Prev Day H/L',      desc:'Price breaks or sweeps previous day/week H/L'},
+  forex_news_avoidance:{icon:'📰',label:'News Avoidance',    desc:'Block trades around high-impact economic events (FMP)'},
 };
 
 // ─── Signal fire-rate lookup ───────────────────────────────
@@ -4262,7 +4263,7 @@ const SIGNAL_FREQ={
   fvg:'low', open_interest:'low', liquidation:'low', session_level:'low',
   trend_reversal:'low', heikin_ashi:'low', ichimoku:'low', aroon:'low',
   sustained_trend:'low', tradingview_webhook:'ext',
-  forex_session:'med', forex_session_break:'med', forex_prev_level:'med',
+  forex_session:'med', forex_session_break:'med', forex_prev_level:'med', forex_news_avoidance:'med',
 };
 const FREQ_STYLE={
   high:{label:'High',color:'#16a34a',bg:'rgba(22,163,74,.12)',title:'Fires often — high trade volume'},
@@ -4387,7 +4388,7 @@ const STYLE_SIGNALS={
   fx_asian_range:        ['forex_session_break','forex_session','bb','rsi'],
   fx_ny_reversal:        ['forex_session','rsi','stoch_rsi','bb','divergence'],
   fx_trend_continuation: ['ema','sma','supertrend','adx_filter','forex_session','ichimoku'],
-  fx_news_avoidance:     ['ema','forex_session','macd','supertrend'],
+  fx_news_avoidance:     ['forex_news_avoidance','ema','forex_session','macd','supertrend'],
   fx_liquidity_grab:     ['forex_prev_level','forex_session','rsi','divergence'],
   fx_session_scalp:      ['rsi','stoch_rsi','forex_session','macd','cci'],
   custom:   [],
@@ -4498,6 +4499,7 @@ function getDefaultCfg(type){
     forex_session:       {condition:'in_session',session:'london',within_minutes:30},
     forex_session_break: {timeframe:tf,condition:'high_break',session:'asian',range_minutes:60},
     forex_prev_level:    {condition:'above_pdh'},
+    forex_news_avoidance:{minutes_before:30,minutes_after:30,min_impact:'high'},
   }[type]||{timeframe:tf};
 }
 
@@ -4981,6 +4983,18 @@ function renderSignalCfg(type,cfg,pfx){
       <div class="opt-label">Range lookback (minutes) <span id="${pfx}rm-d" style="color:var(--accent)">${cfg.range_minutes||60}</span></div>
       <input type="range" id="${pfx}rm" min="15" max="480" value="${cfg.range_minutes||60}" step="15" oninput="wzSl('${pfx}rm','${pfx}rm-d','','${pfx}range_minutes')" style="width:100%;accent-color:var(--accent)">
       <div class="hint">Builds a high/low range from the last N minutes of the selected session, then waits for price to break that range. Classic London breakout setup uses Asian + 60-120 min range.</div>`;
+    case 'forex_news_avoidance':return`
+      <div class="opt-label">Block trades around news with impact ≥</div>
+      <div class="opt-chips">
+        ${wzChip('high','High only',`${pfx}min_impact`,cfg.min_impact||'high','red')}
+        ${wzChip('medium','Medium+',`${pfx}min_impact`,cfg.min_impact,'amber')}
+        ${wzChip('low','All events',`${pfx}min_impact`,cfg.min_impact)}
+      </div>
+      <div class="opt-label">Minutes BEFORE event <span id="${pfx}mb-d" style="color:var(--accent)">${cfg.minutes_before||30}</span></div>
+      <input type="range" id="${pfx}mb" min="5" max="120" value="${cfg.minutes_before||30}" step="5" oninput="wzSl('${pfx}mb','${pfx}mb-d','','${pfx}minutes_before')" style="width:100%;accent-color:var(--accent)">
+      <div class="opt-label">Minutes AFTER event <span id="${pfx}ma-d" style="color:var(--accent)">${cfg.minutes_after||30}</span></div>
+      <input type="range" id="${pfx}ma" min="5" max="120" value="${cfg.minutes_after||30}" step="5" oninput="wzSl('${pfx}ma','${pfx}ma-d','','${pfx}minutes_after')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Uses Financial Modeling Prep's economic calendar (NFP, FOMC, CPI, etc.). Blocks both currencies in the pair — e.g. an EUR event will block EURUSD, EURGBP, EURJPY. Falls open (keeps trading) if FMP is down.</div>`;
     case 'forex_prev_level':return`
       <div class="opt-label">Level</div>
       <div class="opt-chips">
@@ -5007,7 +5021,7 @@ function renderStep1(){
     {id:'fx_trend_continuation', icon:'📈', title:'Trend Continuation',  desc:'Follow the prevailing trend<br>during London/NY overlap.'},
     {id:'fx_liquidity_grab',     icon:'🎯', title:'Liquidity Grab',      desc:'Reverse after price sweeps<br>the previous day H/L.'},
     {id:'fx_session_scalp',      icon:'⚡', title:'Session Scalping',    desc:'Quick scalps during the<br>deepest-liquidity overlap.'},
-    {id:'fx_news_avoidance',     icon:'📰', title:'News Avoidance',      desc:'Skip 30 min around high-<br>impact news (FMP — coming).'},
+    {id:'fx_news_avoidance',     icon:'📰', title:'News Avoidance',      desc:'Skip 30 min around high-<br>impact economic news.'},
     {id:'custom',                icon:'⚙️', title:'Custom',              desc:'Set everything yourself.<br>Full manual control.'},
   ]:[
     {id:'scalp',    icon:'⚡', title:'Scalper',       desc:'Quick in-and-out trades.<br>Tight targets, high frequency.'},
@@ -5959,6 +5973,10 @@ function buildWizardDescription(){
       case 'cci':{const sm=cfg.ma_type&&cfg.ma_type!=='none'?` (${cfg.ma_type}${cfg.ma_period||3} smoothed)`:'';sig=`CCI(${cfg.period||20})${sm} is ${cond(cfg.condition||'bullish')} on ${tf}`;break;}
       case 'trend_reversal':sig=`${cfg.condition||'bullish'} trend reversal (EMA + RSI change of direction) on ${tf}`;break;
       case 'sustained_trend':{const d=cfg.trend_dir==='dump'?'dumping':'pumping';sig=`Coin has been ${d} for ${cfg.periods||3}+ consecutive ${cfg.timeframe||'1d'} periods with at least ${cfg.min_total_pct||10}% total move and ${cfg.min_consistent||65}%+ of candles in that direction`;break;}
+      case 'forex_session':sig=`Inside the ${cfg.session||'london'} forex session${cfg.condition==='session_open'?` (first ${cfg.within_minutes||30} min)`:cfg.condition==='session_close'?` (last ${cfg.within_minutes||30} min)`:cfg.condition==='overlap'?' — London/NY overlap':''}`;break;
+      case 'forex_session_break':sig=`Price breaks the ${cond(cfg.condition||'high_break')} of the ${cfg.session||'asian'} session (${cfg.range_minutes||60}-min range) on ${tf}`;break;
+      case 'forex_prev_level':sig=`Price ${cond(cfg.condition||'above_pdh')} (previous day/week high/low level)`;break;
+      case 'forex_news_avoidance':sig=`Block trades within ${cfg.minutes_before||30}min before and ${cfg.minutes_after||30}min after any ${cfg.min_impact||'high'}-impact economic news affecting either currency in the pair (FMP calendar)`;break;
     }
     lines.push(`\nPrimary entry signal: ${sig}.`);
   }
