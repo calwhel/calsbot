@@ -1784,6 +1784,153 @@ async def eval_sustained_trend(
 
 # ─── Master evaluator ─────────────────────────────────────────────────────────
 
+# ─── Forex evaluators (P1: sessions, ORB, prev day/week levels) ─────────────
+# Pure-Python evaluators — no external HTTP calls beyond the same _get_klines
+# the rest of the TA module uses. Asset_class is set in cache by the dispatch.
+
+def eval_forex_session(cond: Dict) -> Tuple[bool, str]:
+    """`forex_session` — gate firing on session windows.
+
+    cfg.condition:
+      'in_session'     — currently inside the session window
+      'session_open'   — within first N minutes of session open (default 30)
+      'session_close'  — within last N minutes of session close (default 30)
+      'overlap'        — currently in the London/NY overlap
+    cfg.session: 'london' | 'ny' | 'asian' | 'sydney' | 'overlap'
+    cfg.within_minutes (optional, default 30): window for session_open/close.
+    """
+    from app.services.forex_engine import (
+        in_session, session_just_opened, session_about_to_close, SESSIONS,
+    )
+    sub = (cond.get("condition") or "in_session").lower()
+    session = (cond.get("session") or "london").lower()
+    within = int(cond.get("within_minutes") or 30)
+    label = SESSIONS.get(session, SESSIONS["london"]).label
+
+    if sub == "overlap":
+        ok = in_session("overlap")
+        return ok, f"London/NY Overlap session {'active' if ok else 'inactive'}"
+    if sub == "session_open":
+        ok = session_just_opened(session, within_minutes=within)
+        return ok, f"{label} open (first {within} min) {'✓' if ok else '✗'}"
+    if sub == "session_close":
+        ok = session_about_to_close(session, within_minutes=within)
+        return ok, f"{label} close (last {within} min) {'✓' if ok else '✗'}"
+    # default: in_session
+    ok = in_session(session)
+    return ok, f"{label} session {'active' if ok else 'inactive'}"
+
+
+async def eval_forex_session_break(
+    cond: Dict, symbol: str, price: float, http_client, cache: Dict,
+) -> Tuple[bool, str]:
+    """`forex_session_break` — price breaks the H/L of a named session.
+
+    Foundation of "London Breakout" and "Asian Range Breakout" templates.
+
+    cfg.condition:
+      'high_break' — price > session_high
+      'low_break'  — price < session_low
+      'orb_high'   — price > opening-range high (first N min of session)
+      'orb_low'    — price < opening-range low
+    cfg.session: which session's range to use
+    cfg.range_minutes (default 60 for ORB conditions)
+    cfg.timeframe (default '15m')
+    """
+    from app.services.forex_engine import compute_session_range
+    sub = (cond.get("condition") or "high_break").lower()
+    session = (cond.get("session") or "asian").lower()
+    tf = cond.get("timeframe") or "15m"
+    range_min = int(cond.get("range_minutes") or 60)
+
+    klines = await _get_klines(symbol, tf, 200, http_client, cache)
+    if not klines:
+        return False, f"{symbol}: no klines for session-break eval"
+
+    is_orb = sub in ("orb_high", "orb_low")
+    rng = compute_session_range(
+        klines, session,
+        first_n_minutes=range_min if is_orb else None,
+    )
+    if rng is None:
+        return False, f"{symbol}: no candles in {session} session window today"
+
+    if sub in ("high_break", "orb_high"):
+        ok = price > rng.high
+        return ok, (
+            f"{symbol}: price {price:.5f} {'>' if ok else '≤'} "
+            f"{session} {'ORB' if is_orb else ''} high {rng.high:.5f}"
+        )
+    # low_break / orb_low
+    ok = price < rng.low
+    return ok, (
+        f"{symbol}: price {price:.5f} {'<' if ok else '≥'} "
+        f"{session} {'ORB' if is_orb else ''} low {rng.low:.5f}"
+    )
+
+
+async def eval_forex_prev_level(
+    cond: Dict, symbol: str, price: float, http_client, cache: Dict,
+) -> Tuple[bool, str]:
+    """`forex_prev_level` — previous-day or previous-week H/L breaks/sweeps.
+
+    cfg.condition:
+      'above_pdh' | 'below_pdh' | 'above_pdl' | 'below_pdl'
+      'above_wh'  | 'below_wh'  | 'above_wl'  | 'below_wl'
+      'sweep_pdh' — price wicked above PDH then closed back below (liquidity grab)
+      'sweep_pdl' — opposite
+    """
+    from app.services.forex_engine import (
+        previous_day_high_low, previous_week_high_low,
+    )
+    sub = (cond.get("condition") or "above_pdh").lower()
+    # Need ≥2 calendar days of 15m candles for PDH/PDL, more for weekly.
+    tf = "15m" if "pd" in sub else "1h"
+    need = 220 if "pd" in sub else 220
+    klines = await _get_klines(symbol, tf, need, http_client, cache)
+    if not klines:
+        return False, f"{symbol}: no klines for prev-level eval"
+
+    if "w" in sub.split("_")[-1]:
+        levels = previous_week_high_low(klines)
+        period_label = "PWeek"
+    else:
+        levels = previous_day_high_low(klines)
+        period_label = "PDay"
+    if levels is None:
+        return False, f"{symbol}: not enough history for {period_label} levels"
+    high, low = levels
+
+    if sub.endswith("h"):  # ...pdh / ...wh
+        if sub.startswith("above"):
+            return price > high, f"{symbol}: {price:.5f} {'>' if price > high else '≤'} {period_label} high {high:.5f}"
+        if sub.startswith("below"):
+            return price < high, f"{symbol}: {price:.5f} {'<' if price < high else '≥'} {period_label} high {high:.5f}"
+        if sub.startswith("sweep"):
+            # Last candle wicked above `high` but closed back below it.
+            last = klines[-1]
+            try:
+                last_high = float(last[2]); last_close = float(last[4])
+                ok = last_high > high and last_close < high
+                return ok, f"{symbol}: {'swept' if ok else 'did not sweep'} {period_label} high {high:.5f}"
+            except (IndexError, ValueError):
+                return False, f"{symbol}: malformed last kline"
+    # ...pdl / ...wl
+    if sub.startswith("above"):
+        return price > low, f"{symbol}: {price:.5f} {'>' if price > low else '≤'} {period_label} low {low:.5f}"
+    if sub.startswith("below"):
+        return price < low, f"{symbol}: {price:.5f} {'<' if price < low else '≥'} {period_label} low {low:.5f}"
+    if sub.startswith("sweep"):
+        last = klines[-1]
+        try:
+            last_low = float(last[3]); last_close = float(last[4])
+            ok = last_low < low and last_close > low
+            return ok, f"{symbol}: {'swept' if ok else 'did not sweep'} {period_label} low {low:.5f}"
+        except (IndexError, ValueError):
+            return False, f"{symbol}: malformed last kline"
+    return False, f"{symbol}: unknown prev-level condition {sub}"
+
+
 async def evaluate_strategy_conditions(
     strategy_config: Dict,
     symbol: str,
@@ -1866,6 +2013,17 @@ async def evaluate_strategy_conditions(
                 return await eval_trend_reversal(cond, symbol, price, http_client, cache)
             elif ctype == "sustained_trend":
                 return await eval_sustained_trend(cond, symbol, http_client, cache)
+            # ── Forex-specific blocks ───────────────────────────────────────
+            # These only make sense for asset_class=forex but are evaluable on
+            # any OHLC series; the wizard restricts them to forex strategies.
+            elif ctype == "forex_session":
+                return eval_forex_session(cond)
+            elif ctype == "forex_session_break":
+                return await eval_forex_session_break(
+                    cond, symbol, price, http_client, cache)
+            elif ctype == "forex_prev_level":
+                return await eval_forex_prev_level(
+                    cond, symbol, price, http_client, cache)
             else:
                 return False, f"Unknown condition type: {ctype}"
         except Exception as e:

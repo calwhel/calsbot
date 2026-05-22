@@ -543,7 +543,8 @@ async def _fetch_price_and_ta(
 # ─── Guard helpers ───────────────────────────────────────────────────────────
 
 _SESSION_HOURS = {
-    "asian":    (0, 8),   "tokyo":    (0, 8),
+    "asian":    (0, 8),   "tokyo":    (0, 8),   "asia":    (0, 8),
+    "sydney":   (22, 7),  # Sydney wraps midnight UTC — handled specially below
     "london":   (7, 16),  "europe":   (7, 16),
     "new_york": (13, 22), "ny":       (13, 22),
     "overlap":  (13, 16),
@@ -555,9 +556,12 @@ def _check_trading_days(filters: Dict) -> bool:
     allowed = filters.get("trading_days")
     if not allowed:
         return True
+    # Accept both long names ("monday") and short IDs ("mon") — the mobile
+    # wizard sends short, the web wizard sends long, and either should work.
     day_map = {
         "monday": 0, "tuesday": 1, "wednesday": 2,
         "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6,
+        "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
     }
     today = datetime.utcnow().weekday()
     allowed_nums = {day_map[d.lower()] for d in allowed if d.lower() in day_map}
@@ -578,7 +582,15 @@ def _check_time_filter(filters: Dict) -> bool:
     if sf:
         wanted = [s.lower() for s in sf.get("sessions", [])]
         if wanted:
-            active = [name for name, (s, e) in _SESSION_HOURS.items() if s <= hour < e]
+            active = []
+            for name, (s, e) in _SESSION_HOURS.items():
+                # Sessions that wrap midnight UTC (start > end) are active
+                # when hour >= start OR hour < end.
+                if s > e:
+                    if hour >= s or hour < e:
+                        active.append(name)
+                elif s <= hour < e:
+                    active.append(name)
             if not any(s in active for s in wanted):
                 return False
 
@@ -2050,6 +2062,24 @@ async def evaluate_and_fire(
         tp2_pct   = ex_config.get("take_profit2_pct")
         sl_pct    = float(ex_config.get("stop_loss_pct",    1.5))
         leverage  = int(risk.get("leverage", 10))
+
+        # ── Forex pip→% conversion ────────────────────────────────────────
+        # Forex strategies set TP/SL in pips (which is how traders actually
+        # think). We convert to the % move the existing exit engine
+        # understands using the live price + the pair's pip size. This means
+        # a "20 pip SL on EURUSD at 1.0850" produces the same TP/SL price
+        # whether the user typed it as pips or as a %.
+        if asset_class == "forex":
+            from app.services.forex_engine import pips_to_pct as _p2p
+            tp_pips = ex_config.get("take_profit_pips")
+            sl_pips = ex_config.get("stop_loss_pips")
+            tp2_pips = ex_config.get("take_profit2_pips")
+            if tp_pips:
+                tp_pct = _p2p(symbol, current_price, float(tp_pips))
+            if sl_pips:
+                sl_pct = _p2p(symbol, current_price, float(sl_pips))
+            if tp2_pips:
+                tp2_pct = _p2p(symbol, current_price, float(tp2_pips))
 
         direction = direction_pref
         if direction == "BOTH":

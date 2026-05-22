@@ -44,7 +44,7 @@ import type { AssetClass } from '@/lib/strategyPresets';
 
 import {
   STYLE_LABELS, STYLE_PRESETS, STYLE_SIGNALS, SIGNAL_META,
-  STYLES_BY_CLASS, ASSET_CLASS_LABELS,
+  STYLES_BY_CLASS, ASSET_CLASS_LABELS, FOREX_TEMPLATES, isForexStyle,
   SESSIONS, DAYS, getDefaultCfg, estimateFireRate, calcRiskLevel,
   type StyleId, type SignalType, type Tf, type Direction, type CoinUniverse,
   type RiskProfile, type BtcRegime, type Session, type Day,
@@ -182,6 +182,12 @@ export default function WizardScreen() {
         // symbols in Step 7 via the catalog picker instead.
         coins: ac === 'crypto' ? prev.coins : 'specific',
         tradfiSymbols: ac === 'crypto' ? [] : prev.tradfiSymbols,
+        // Pip TP/SL only makes sense for forex — wipe stale values when
+        // leaving forex so a previously-set 20 pips doesn't accidentally
+        // get re-applied if the user comes back later.
+        tp1Pips: ac === 'forex' ? prev.tp1Pips : null,
+        tp2Pips: ac === 'forex' ? prev.tp2Pips : null,
+        slPips:  ac === 'forex' ? prev.slPips  : null,
       };
     });
   };
@@ -190,6 +196,9 @@ export default function WizardScreen() {
   const applyStyle = (style: StyleId) => {
     const p = STYLE_PRESETS[style];
     const recommended = STYLE_SIGNALS[style][0];
+    // Forex templates pre-fill pip TP/SL + a session-aware primary signal
+    // so picking "London Breakout" lands the user on a working strategy.
+    const fxTpl = isForexStyle(style) ? FOREX_TEMPLATES[style] : null;
     setS(prev => {
       const meta = ASSET_CLASS_LABELS[prev.assetClass];
       return {
@@ -197,6 +206,9 @@ export default function WizardScreen() {
         style,
         timeframe: p.timeframe,
         tp1: p.tp1, sl: p.sl,
+        // Forex: also set pip-based TP/SL from the template.
+        tp1Pips: fxTpl ? fxTpl.tp_pips : prev.tp1Pips,
+        slPips:  fxTpl ? fxTpl.sl_pips : prev.slPips,
         // Paper-only classes ignore the preset's leverage and stay at 1×.
         leverage: meta.paperOnly ? 1 : p.leverage,
         posSize: p.posSize,
@@ -204,9 +216,13 @@ export default function WizardScreen() {
         maxTrades: p.maxTrades,
         cooldown: p.cooldown,
         dailyLoss: p.dailyLoss,
-        // Preselect a sensible primary signal if none chosen yet
-        primaryType: prev.primaryType ?? recommended,
-        primaryCfg: prev.primaryType ? prev.primaryCfg : getDefaultCfg(recommended, p.timeframe),
+        // Forex templates override the primary signal — they only work with
+        // the specific session-aware config baked into FOREX_TEMPLATES.
+        // For everything else, only preselect if the user hasn't picked yet.
+        primaryType: fxTpl ? fxTpl.primary : (prev.primaryType ?? recommended),
+        primaryCfg:  fxTpl ? { ...fxTpl.primaryCfg }
+                   : (prev.primaryType ? prev.primaryCfg : getDefaultCfg(recommended, p.timeframe)),
+        direction:   fxTpl ? fxTpl.direction : prev.direction,
       };
     });
   };
@@ -860,31 +876,60 @@ function Step5({
   warnings: ReturnType<typeof getWizardWarnings>;
   risk: ReturnType<typeof calcRiskLevel>;
 }) {
-  const rr = (s.tp1 / s.sl).toFixed(1);
+  const isFx = s.assetClass === 'forex';
+  // Forex: derive R:R from pips. Otherwise from %.
+  const rrNum = isFx && s.tp1Pips && s.slPips
+              ? (s.tp1Pips / s.slPips) : (s.tp1 / s.sl);
+  const rr = rrNum.toFixed(1);
   return (
     <View>
       <StepIntro
         title="When do you exit?"
-        subtitle="Set the price targets that close the position. Optional TP2 lets the trade run further; trailing locks profits as price moves."
+        subtitle={isFx
+          ? "Forex strategies use pips for TP/SL — the way every broker quotes them. The executor converts to % at fire time using the live price."
+          : "Set the price targets that close the position. Optional TP2 lets the trade run further; trailing locks profits as price moves."}
       />
       <Card>
-        <SectionHeader label="Take profit & stop loss" />
-        <Stepper
-          label="Take Profit 1"
-          value={s.tp1}
-          onChange={(v) => update({ tp1: v })}
-          min={0.5} max={50} step={0.5} unit="%" decimals={1}
-          presets={[1, 2, 3, 5, 8, 12]}
-          hint="Where you take profit on most of the position"
-        />
-        <Stepper
-          label="Stop Loss"
-          value={s.sl}
-          onChange={(v) => update({ sl: v })}
-          min={0.3} max={20} step={0.3} unit="%" decimals={1}
-          presets={[0.5, 1, 1.5, 2, 3, 5]}
-          hint="Maximum loss before the trade is closed"
-        />
+        <SectionHeader label={isFx ? 'Take profit & stop loss (pips)' : 'Take profit & stop loss'} />
+        {isFx ? (
+          <>
+            <Stepper
+              label="Take Profit 1"
+              value={s.tp1Pips ?? 20}
+              onChange={(v) => update({ tp1Pips: v })}
+              min={1} max={500} step={1} unit=" pips" decimals={0}
+              presets={[10, 15, 20, 30, 40, 60]}
+              hint="Where you take profit on most of the position (pips)"
+            />
+            <Stepper
+              label="Stop Loss"
+              value={s.slPips ?? 10}
+              onChange={(v) => update({ slPips: v })}
+              min={1} max={300} step={1} unit=" pips" decimals={0}
+              presets={[5, 8, 10, 15, 20, 30]}
+              hint="Maximum loss in pips before the trade is closed"
+            />
+          </>
+        ) : (
+          <>
+            <Stepper
+              label="Take Profit 1"
+              value={s.tp1}
+              onChange={(v) => update({ tp1: v })}
+              min={0.5} max={50} step={0.5} unit="%" decimals={1}
+              presets={[1, 2, 3, 5, 8, 12]}
+              hint="Where you take profit on most of the position"
+            />
+            <Stepper
+              label="Stop Loss"
+              value={s.sl}
+              onChange={(v) => update({ sl: v })}
+              min={0.3} max={20} step={0.3} unit="%" decimals={1}
+              presets={[0.5, 1, 1.5, 2, 3, 5]}
+              hint="Maximum loss before the trade is closed"
+            />
+          </>
+        )}
         <View style={styles.rrRow}>
           <Pill
             label={`R:R ${rr}:1`}
