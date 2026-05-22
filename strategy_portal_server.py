@@ -677,6 +677,21 @@ def _ensure_tables():
     except Exception as e:
         logger.warning(f"_ensure_tables(indexes outer): {e}")
 
+    # OANDA forex live order id (P5e-2). Mirrors bitunix_order_id; nullable
+    # so all existing paper rows stay valid.
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS oanda_order_id VARCHAR(80)"
+            ))
+        logger.info("_ensure_tables: strategy_executions.oanda_order_id ready")
+    except Exception as e:
+        emsg = str(e)
+        if "already exists" in emsg or "duplicate" in emsg:
+            logger.info("_ensure_tables(oanda_order_id): column already present")
+        else:
+            logger.warning(f"_ensure_tables(oanda_order_id): {e}")
+
     # OANDA forex broker credentials (P5e). Three columns on user_preferences:
     # encrypted API key, account ID, and environment (practice|live). Raw
     # ALTER so we don't need a full Alembic migration for additive nullable
@@ -6330,9 +6345,21 @@ async def api_save_strategy(request: Request):
             normalize_asset_class, PAPER_ONLY_CLASSES, is_supported,
         )
         _asset_class = normalize_asset_class(config.get("asset_class"))
-        if _asset_class in PAPER_ONLY_CLASSES:
+        # P5e-2: forex strategies can go live when the user has an OANDA
+        # account connected. Stocks/indices remain paper-only until their
+        # broker integrations land.
+        _forex_live_ok = False
+        if _asset_class == "forex":
+            try:
+                from app.models import UserPreference as _UP_save
+                _ps = db.query(_UP_save).filter(_UP_save.user_id == user.id).first()
+                _forex_live_ok = bool(_ps and _ps.oanda_api_key and _ps.oanda_account_id)
+            except Exception:
+                _forex_live_ok = False
+        if _asset_class in PAPER_ONLY_CLASSES and not _forex_live_ok:
             initial_status = "paper"
             config["_build_mode"] = "paper"
+        if _asset_class in PAPER_ONLY_CLASSES:
             # Require an explicit, non-empty, catalog-valid symbol list — non-crypto
             # strategies have no dynamic universe (no "all gainers" etc.) and would
             # otherwise silently never fire.

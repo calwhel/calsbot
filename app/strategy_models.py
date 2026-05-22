@@ -54,6 +54,7 @@ class StrategyExecution(Base):
     fired_at        = Column(DateTime, default=datetime.utcnow)
     closed_at       = Column(DateTime, nullable=True)
     bitunix_order_id = Column(String(80), nullable=True)
+    oanda_order_id   = Column(String(80), nullable=True)   # P5e-2: OANDA forex live orders
     notes           = Column(Text, nullable=True)
     is_paper        = Column(Boolean, default=False)       # paper trade — no real order placed
     asset_class     = Column(String(16), nullable=False, default="crypto", server_default="crypto", index=True)

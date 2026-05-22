@@ -1846,21 +1846,11 @@ async def evaluate_and_fire(
     # Live strategies automatically downgrade to paper if the user doesn't have
     # Bitunix auto-trading set up — so every signal is always tracked.
     _wants_live = (strategy.status == "active")
-    if _wants_live:
-        _live_ok, _live_reason = await _user_can_live_trade_async(user, db)
-        is_paper = not _live_ok
-        if is_paper:
-            logger.debug(
-                f"[Strategy {strategy.id}] Live strategy downgraded to paper "
-                f"(reason={_live_reason}) — signal will still be tracked."
-            )
-    else:
-        is_paper = True   # paper / draft / paused all track as paper
-
     config   = dict(strategy.config or {})
 
     # ── Asset class (crypto | stock | forex | index) ────────────────────────
-    # Non-crypto strategies are paper-only and gated by market hours.
+    # Determine broker BEFORE gating live so we don't run the Bitunix affiliate
+    # check on a forex strategy (which routes through OANDA).
     from app.services.asset_classes import (
         normalize_asset_class, is_market_open, PAPER_ONLY_CLASSES,
     )
@@ -1868,8 +1858,40 @@ async def evaluate_and_fire(
         getattr(strategy, "asset_class", None) or config.get("asset_class")
     )
     config["asset_class"] = asset_class
-    if asset_class in PAPER_ONLY_CLASSES:
+
+    # P5e-2: per-asset broker gate. Forex → OANDA, crypto → Bitunix,
+    # stocks/indices → paper-only (no broker integration yet).
+    if asset_class == "forex":
+        _oanda_live_ok = False
+        try:
+            from app.models import UserPreference as _UP
+            _prefs = db.query(_UP).filter(_UP.user_id == user.id).first()
+            _oanda_live_ok = bool(_prefs and _prefs.oanda_api_key and _prefs.oanda_account_id)
+        except Exception:
+            _oanda_live_ok = False
+        is_paper = not (_wants_live and _oanda_live_ok)
+        if _wants_live and is_paper:
+            logger.debug(
+                f"[Strategy {strategy.id}] Forex live strategy downgraded to paper "
+                f"(no OANDA credentials) — signal will still be tracked."
+            )
+    elif asset_class in PAPER_ONLY_CLASSES:
+        # Stocks/indices: no broker yet, always paper.
         is_paper = True
+    else:
+        # Crypto: Bitunix gate (auto-trading + keys + affiliate roster).
+        if _wants_live:
+            _live_ok, _live_reason = await _user_can_live_trade_async(user, db)
+            is_paper = not _live_ok
+            if is_paper:
+                logger.debug(
+                    f"[Strategy {strategy.id}] Live strategy downgraded to paper "
+                    f"(reason={_live_reason}) — signal will still be tracked."
+                )
+        else:
+            is_paper = True
+
+    if asset_class in PAPER_ONLY_CLASSES:
         if not is_market_open(asset_class):
             _bump(f"blk_market_closed_{asset_class}")
             return
@@ -2184,23 +2206,40 @@ async def evaluate_and_fire(
             except Exception as e:
                 logger.warning(f"Paper DM failed: {e}")
         else:
-            # Live trade: place on Bitunix
+            # Live trade: route by asset class. Forex → OANDA (P5e-2),
+            # everything else → Bitunix (crypto). Stocks/indices can't reach
+            # this branch yet because the paper-lock above forces is_paper=True.
             order_id    = None
             actual_fill = None
+            _broker     = "oanda" if asset_class == "forex" else "bitunix"
             try:
-                from app.services.strategy_trader import place_bitunix_order_for_user
                 ps_type      = risk.get("position_size_type", "pct")
-                order_result = await place_bitunix_order_for_user(
-                    user        = user,
-                    symbol      = symbol,
-                    direction   = direction,
-                    leverage    = leverage,
-                    entry_price = current_price,
-                    tp_pct      = tp_pct,
-                    sl_pct      = sl_pct,
-                    risk_pct    = float(risk.get("position_size_pct", 5)),
-                    risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None,
-                )
+                _risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None
+                if _broker == "oanda":
+                    from app.services.oanda_trader import place_oanda_order_for_user
+                    order_result = await place_oanda_order_for_user(
+                        user        = user,
+                        symbol      = symbol,
+                        direction   = direction,
+                        entry_price = current_price,
+                        tp_pct      = tp_pct,
+                        sl_pct      = sl_pct,
+                        risk_pct    = float(risk.get("position_size_pct", 5)),
+                        risk_usd    = _risk_usd,
+                    )
+                else:
+                    from app.services.strategy_trader import place_bitunix_order_for_user
+                    order_result = await place_bitunix_order_for_user(
+                        user        = user,
+                        symbol      = symbol,
+                        direction   = direction,
+                        leverage    = leverage,
+                        entry_price = current_price,
+                        tp_pct      = tp_pct,
+                        sl_pct      = sl_pct,
+                        risk_pct    = float(risk.get("position_size_pct", 5)),
+                        risk_usd    = _risk_usd,
+                    )
                 if order_result:
                     order_id    = order_result.get("order_id")
                     actual_fill = order_result.get("actual_fill")
@@ -2248,7 +2287,7 @@ async def evaluate_and_fire(
                     try:
                         await _tg_send(
                             tg_id_ex,
-                            f"⚠️ <b>Bitunix error — paper trade started</b>\n"
+                            f"⚠️ <b>{_broker.title()} error — paper trade started</b>\n"
                             f"Strategy: <b>{strategy.name}</b>\n"
                             f"Signal: {symbol.replace('USDT','')} {direction} {leverage}×\n"
                             f"Entry: <code>${current_price:,.4f}</code>  "
@@ -2285,7 +2324,10 @@ async def evaluate_and_fire(
                 break  # paper execution is now open — stop processing matches
 
             if order_id:
-                execution.bitunix_order_id = str(order_id)
+                if _broker == "oanda":
+                    execution.oanda_order_id = str(order_id)
+                else:
+                    execution.bitunix_order_id = str(order_id)
                 if (
                     actual_fill
                     and actual_fill > 0
@@ -2337,7 +2379,7 @@ async def evaluate_and_fire(
             else:
                 # Fallback: order_id was None (shouldn't normally reach here post-refactor)
                 execution.is_paper = True
-                execution.notes    = "Live→Paper fallback: Bitunix returned no order_id"
+                execution.notes    = f"Live→Paper fallback: {_broker} returned no order_id"
                 db.commit()
                 logger.warning(
                     f"[Strategy {strategy.id}] Live order for {symbol} returned no order_id "
@@ -2348,14 +2390,14 @@ async def evaluate_and_fire(
                     try:
                         await _tg_send(
                             tg_id_live,
-                            f"⚠️ <b>Bitunix order not confirmed — paper trade started</b>\n"
+                            f"⚠️ <b>{_broker.title()} order not confirmed — paper trade started</b>\n"
                             f"Strategy: <b>{strategy.name}</b>\n"
                             f"Signal: {symbol.replace('USDT','')} {direction} {leverage}× lev\n"
                             f"Entry: <code>${current_price:,.4f}</code>\n"
                             f"TP: <code>${tp_price:,.4f}</code> (+{tp_pct}%)  "
                             f"SL: <code>${sl_price:,.4f}</code> (-{sl_pct}%)\n\n"
-                            f"<i>Bitunix did not return an order ID. The signal is being tracked "
-                            f"as a 🧪 paper position. Check your API key has Futures trading permission.</i>"
+                            f"<i>{_broker.title()} did not return an order ID. The signal is being tracked "
+                            f"as a 🧪 paper position. Check your API key has trading permission.</i>"
                         )
                     except Exception:
                         pass
@@ -2499,8 +2541,30 @@ async def _propagate_to_subscribers(
             leverage   = int(sub_risk.get("leverage", 10))
             _wants_live = sub_strategy.status == "active"
             _live_reason = "ok"
+            # P5e-2: broker-aware live gate. Forex copies route through OANDA,
+            # crypto through Bitunix. Stocks/indices stay paper.
+            try:
+                from app.services.asset_classes import normalize_asset_class as _norm_ac
+                _sub_asset_class = _norm_ac(
+                    getattr(sub_strategy, "asset_class", None) or sub_config.get("asset_class")
+                )
+            except Exception:
+                _sub_asset_class = getattr(sub_strategy, "asset_class", None) or sub_config.get("asset_class") or "crypto"
             if _wants_live:
-                _can_live, _live_reason = await _user_can_live_trade_async(sub_user, _sub_db)
+                if _sub_asset_class == "forex":
+                    try:
+                        from app.models import UserPreference as _UP_sub
+                        _sub_prefs = _sub_db.query(_UP_sub).filter(_UP_sub.user_id == sub_user.id).first()
+                        _can_live = bool(_sub_prefs and _sub_prefs.oanda_api_key and _sub_prefs.oanda_account_id)
+                        _live_reason = "ok" if _can_live else "no_oanda_credentials"
+                    except Exception as _e:
+                        _can_live = False
+                        _live_reason = f"oanda_check_error:{_e}"
+                elif _sub_asset_class in ("stock", "index"):
+                    _can_live = False
+                    _live_reason = "paper_only_asset_class"
+                else:
+                    _can_live, _live_reason = await _user_can_live_trade_async(sub_user, _sub_db)
                 is_paper  = not _can_live
                 if is_paper:
                     logger.info(
@@ -2575,23 +2639,38 @@ async def _propagate_to_subscribers(
                     except Exception as _e:
                         logger.warning(f"[Propagate] Paper DM failed for strategy {sub_strategy.id}: {_e}")
             else:
-                # Live — place Bitunix order
+                # Live — route by asset class: forex → OANDA, else → Bitunix.
                 order_id    = None
                 actual_fill = None
+                _sub_broker = "oanda" if _sub_asset_class == "forex" else "bitunix"
                 try:
-                    from app.services.strategy_trader import place_bitunix_order_for_user
                     ps_type      = sub_risk.get("position_size_type", "pct")
-                    order_result = await place_bitunix_order_for_user(
-                        user        = sub_user,
-                        symbol      = symbol,
-                        direction   = direction,
-                        leverage    = leverage,
-                        entry_price = entry,
-                        tp_pct      = tp_pct_raw,
-                        sl_pct      = sl_pct_raw,
-                        risk_pct    = float(sub_risk.get("position_size_pct", 5)),
-                        risk_usd    = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None,
-                    )
+                    _sub_risk_usd = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None
+                    if _sub_broker == "oanda":
+                        from app.services.oanda_trader import place_oanda_order_for_user
+                        order_result = await place_oanda_order_for_user(
+                            user        = sub_user,
+                            symbol      = symbol,
+                            direction   = direction,
+                            entry_price = entry,
+                            tp_pct      = tp_pct_raw,
+                            sl_pct      = sl_pct_raw,
+                            risk_pct    = float(sub_risk.get("position_size_pct", 5)),
+                            risk_usd    = _sub_risk_usd,
+                        )
+                    else:
+                        from app.services.strategy_trader import place_bitunix_order_for_user
+                        order_result = await place_bitunix_order_for_user(
+                            user        = sub_user,
+                            symbol      = symbol,
+                            direction   = direction,
+                            leverage    = leverage,
+                            entry_price = entry,
+                            tp_pct      = tp_pct_raw,
+                            sl_pct      = sl_pct_raw,
+                            risk_pct    = float(sub_risk.get("position_size_pct", 5)),
+                            risk_usd    = _sub_risk_usd,
+                        )
                     if order_result:
                         order_id    = order_result.get("order_id")
                         actual_fill = order_result.get("actual_fill")
@@ -2604,7 +2683,7 @@ async def _propagate_to_subscribers(
                         try:
                             await _tg_send(
                                 tg_id,
-                                f"⚠️ <b>Bitunix error — paper trade started</b>\n"
+                                f"⚠️ <b>{_sub_broker.title()} error — paper trade started</b>\n"
                                 f"Strategy: <b>{sub_strategy.name}</b>\n"
                                 f"Signal: {symbol.replace('USDT','')} {direction} {leverage}×\n"
                                 f"Entry: <code>${entry:,.4f}</code>  "
@@ -2617,7 +2696,10 @@ async def _propagate_to_subscribers(
                     continue
 
                 if order_id:
-                    sub_exec.bitunix_order_id = str(order_id)
+                    if _sub_broker == "oanda":
+                        sub_exec.oanda_order_id = str(order_id)
+                    else:
+                        sub_exec.bitunix_order_id = str(order_id)
                     if (
                         actual_fill
                         and actual_fill > 0
@@ -2656,7 +2738,7 @@ async def _propagate_to_subscribers(
                             logger.warning(f"[Propagate] Live DM failed for strategy {sub_strategy.id}: {_e}")
                 else:
                     sub_exec.is_paper = True
-                    sub_exec.notes = "Live→Paper fallback: Bitunix returned no order_id"
+                    sub_exec.notes = f"Live→Paper fallback: {_sub_broker} returned no order_id"
                     _sub_db.commit()
 
             logger.info(
