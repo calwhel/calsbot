@@ -14,9 +14,15 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-SCAN_INTERVAL_SECONDS  = 3     # how often to evaluate strategies
-PAPER_MONITOR_INTERVAL = 15    # how often to check open paper positions (seconds)
-MAX_CONCURRENT         = 5     # parallel strategy evaluations (stay within DB pool)
+import os as _os_env
+
+# Env-overridable so we can dial pressure on prod without a redeploy.
+# Defaults raised from 3→10s and 5→3 because Neon's compute was getting
+# saturated — every QueryCanceled in the executor cascaded into HTTP 500s
+# on /api/strategies because all pool connections were held by hung scans.
+SCAN_INTERVAL_SECONDS  = int(_os_env.environ.get("EXECUTOR_SCAN_INTERVAL", "10"))
+PAPER_MONITOR_INTERVAL = int(_os_env.environ.get("EXECUTOR_MONITOR_INTERVAL", "20"))
+MAX_CONCURRENT         = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "3"))
 PAPER_MAX_HOLD_HOURS   = 168   # auto-expire paper positions after this many hours (7 days)
 
 # ─── Shared API caches ───────────────────────────────────────────────────────
