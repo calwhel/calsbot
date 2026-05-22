@@ -44,6 +44,7 @@ import type { AssetClass } from '@/lib/strategyPresets';
 
 import {
   STYLE_LABELS, STYLE_PRESETS, STYLE_SIGNALS, SIGNAL_META,
+  STYLES_BY_CLASS, ASSET_CLASS_LABELS,
   SESSIONS, DAYS, getDefaultCfg, estimateFireRate, calcRiskLevel,
   type StyleId, type SignalType, type Tf, type Direction, type CoinUniverse,
   type RiskProfile, type BtcRegime, type Session, type Day,
@@ -61,6 +62,7 @@ import { ConditionPicker } from '@/components/wizard/ConditionPicker';
 import { ConditionEditor } from '@/components/wizard/ConditionEditor';
 
 const WZ_STEPS = [
+  { key: 'market',  label: 'Market',    icon: '🌍' },
   { key: 'style',   label: 'Style',     icon: '🎨' },
   { key: 'dir',     label: 'Direction', icon: '↕️' },
   { key: 'signal',  label: 'Signal',    icon: '⚡' },
@@ -69,6 +71,8 @@ const WZ_STEPS = [
   { key: 'risk',    label: 'Risk',      icon: '⚙️' },
   { key: 'review',  label: 'Launch',    icon: '🚀' },
 ] as const;
+
+const TOTAL_STEPS = WZ_STEPS.length;
 
 const DIR_OPTIONS: ChipOption<Direction>[] = [
   { value: 'LONG',  icon: '📈', label: 'Long only' },
@@ -146,29 +150,65 @@ export default function WizardScreen() {
   const goTo = (n: number) => {
     setStepError(null);
     LayoutAnimation.configureNext(LayoutAnimation.create(280, 'easeInEaseOut', 'opacity'));
-    setS(prev => ({ ...prev, step: Math.max(1, Math.min(7, n)) }));
+    setS(prev => ({ ...prev, step: Math.max(1, Math.min(TOTAL_STEPS, n)) }));
     requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: 0, animated: true }));
+  };
+
+  // ── Asset class selection (Step 1 — Market) ────────────────────────────
+  // Switching market clears the previously-picked style if it doesn't belong
+  // to the new class — keeps Step 2 from showing a "selected" preset that
+  // isn't even in the filtered grid.
+  const applyAssetClass = (ac: AssetClass) => {
+    const meta = ASSET_CLASS_LABELS[ac];
+    setS(prev => {
+      const stylesForClass = STYLES_BY_CLASS[ac];
+      const keepStyle = prev.style && stylesForClass.includes(prev.style);
+      return {
+        ...prev,
+        assetClass: ac,
+        style: keepStyle ? prev.style : null,
+        // Force paper + 1× leverage for tradfi classes (the executor enforces
+        // this server-side too, but locking the UI prevents surprise on Step
+        // 3/7 when the user finds their live-mode pick was silently downgraded).
+        mode: meta.paperOnly ? 'paper' : prev.mode,
+        leverage: meta.paperOnly ? 1 : prev.leverage,
+        // Clear the signal config when the style is invalidated — keeping the
+        // old primary from a crypto preset around makes the Step 4 "selected"
+        // chip look like it was pre-chosen for the new market, which it wasn't.
+        primaryType: keepStyle ? prev.primaryType : null,
+        primaryCfg:  keepStyle ? prev.primaryCfg  : {},
+        confirms:    keepStyle ? prev.confirms    : [],
+        // Crypto-only universe defaults don't apply to tradfi — they'll pick
+        // symbols in Step 7 via the catalog picker instead.
+        coins: ac === 'crypto' ? prev.coins : 'specific',
+        tradfiSymbols: ac === 'crypto' ? [] : prev.tradfiSymbols,
+      };
+    });
   };
 
   // ── Style preset application — mirrors web setWzStyle() ────────────────
   const applyStyle = (style: StyleId) => {
     const p = STYLE_PRESETS[style];
     const recommended = STYLE_SIGNALS[style][0];
-    setS(prev => ({
-      ...prev,
-      style,
-      timeframe: p.timeframe,
-      tp1: p.tp1, sl: p.sl,
-      leverage: p.leverage,
-      posSize: p.posSize,
-      maxPos: p.maxPos,
-      maxTrades: p.maxTrades,
-      cooldown: p.cooldown,
-      dailyLoss: p.dailyLoss,
-      // Preselect a sensible primary signal if none chosen yet
-      primaryType: prev.primaryType ?? recommended,
-      primaryCfg: prev.primaryType ? prev.primaryCfg : getDefaultCfg(recommended, p.timeframe),
-    }));
+    setS(prev => {
+      const meta = ASSET_CLASS_LABELS[prev.assetClass];
+      return {
+        ...prev,
+        style,
+        timeframe: p.timeframe,
+        tp1: p.tp1, sl: p.sl,
+        // Paper-only classes ignore the preset's leverage and stay at 1×.
+        leverage: meta.paperOnly ? 1 : p.leverage,
+        posSize: p.posSize,
+        maxPos: p.maxPos,
+        maxTrades: p.maxTrades,
+        cooldown: p.cooldown,
+        dailyLoss: p.dailyLoss,
+        // Preselect a sensible primary signal if none chosen yet
+        primaryType: prev.primaryType ?? recommended,
+        primaryCfg: prev.primaryType ? prev.primaryCfg : getDefaultCfg(recommended, p.timeframe),
+      };
+    });
   };
 
   // ── Confirmation list helpers ──────────────────────────────────────────
@@ -298,14 +338,20 @@ export default function WizardScreen() {
 
   // ── Live preview line shown under the dots ─────────────────────────────
   const summary = useMemo(() => {
-    if (s.step === 1 || !s.style) return 'Build your perfect strategy';
+    if (s.step <= 2 || !s.style) {
+      const ac = ASSET_CLASS_LABELS[s.assetClass];
+      return s.step === 1 ? 'Pick your market' : `${ac.icon} ${ac.label} · pick a style`;
+    }
     const dir = { LONG: '📈 Long', SHORT: '📉 Short', BOTH: '↕ Both' }[s.direction];
     const sig = s.primaryType ? `${SIGNAL_META[s.primaryType].icon} ${SIGNAL_META[s.primaryType].label}` : '— signal';
-    const coin = s.coins === 'single' && s.singleCoin ? ` · 🎯 ${s.singleCoin.replace(/USDT$/i, '')}`
+    const coin = s.assetClass !== 'crypto' && s.tradfiSymbols.length
+               ? ` · 📋 ${s.tradfiSymbols.length} ${s.assetClass}${s.tradfiSymbols.length > 1 ? 's' : ''}`
+               : s.coins === 'single' && s.singleCoin ? ` · 🎯 ${s.singleCoin.replace(/USDT$/i, '')}`
                : s.coins === 'gainers' ? ' · 📈 gainers'
                : s.coins === 'losers'  ? ' · 📉 losers'
                : '';
-    return `${s.style} · ${dir} · ${sig} · ${s.timeframe} · TP ${s.tp1}% / SL ${s.sl}% · ${s.leverage}×${coin}`;
+    const ac = ASSET_CLASS_LABELS[s.assetClass];
+    return `${ac.icon} ${STYLE_LABELS[s.style].label} · ${dir} · ${sig} · ${s.timeframe} · TP ${s.tp1}% / SL ${s.sl}% · ${s.leverage}×${coin}`;
   }, [s]);
 
   const warnings = useMemo(() => getWizardWarnings(s), [s]);
@@ -329,7 +375,7 @@ export default function WizardScreen() {
 
       <View style={styles.progressWrap}>
         <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${((s.step - 1) / 6) * 100}%` }]} />
+          <View style={[styles.progressFill, { width: `${((s.step - 1) / (TOTAL_STEPS - 1)) * 100}%` }]} />
         </View>
         <View style={styles.dotsRow}>
           {WZ_STEPS.map((step, i) => {
@@ -363,7 +409,7 @@ export default function WizardScreen() {
       </View>
 
       <View style={styles.summaryBar}>
-        <Text style={styles.summaryStep}>Step {s.step} of 7</Text>
+        <Text style={styles.summaryStep}>Step {s.step} of {TOTAL_STEPS}</Text>
         <Text style={styles.summary} numberOfLines={1}>{summary}</Text>
       </View>
 
@@ -379,16 +425,17 @@ export default function WizardScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {s.step === 1 && <Step1 s={s} onPick={applyStyle} />}
-          {s.step === 2 && <Step2 s={s} update={update} />}
-          {s.step === 3 && (
+          {s.step === 1 && <StepMarket s={s} onPick={applyAssetClass} />}
+          {s.step === 2 && <Step1 s={s} onPick={applyStyle} />}
+          {s.step === 3 && <Step2 s={s} update={update} />}
+          {s.step === 4 && (
             <Step3
               s={s}
               update={update}
               onPickPrimary={() => setPickerVisible('primary')}
             />
           )}
-          {s.step === 4 && (
+          {s.step === 5 && (
             <Step4
               s={s}
               onAdd={() => setPickerVisible('confirm')}
@@ -398,9 +445,9 @@ export default function WizardScreen() {
               setEditingIdx={setEditingConfirmIdx}
             />
           )}
-          {s.step === 5 && <Step5 s={s} update={update} warnings={warnings} risk={risk} />}
-          {s.step === 6 && <Step6 s={s} update={update} />}
-          {s.step === 7 && (
+          {s.step === 6 && <Step5 s={s} update={update} warnings={warnings} risk={risk} />}
+          {s.step === 7 && <Step6 s={s} update={update} />}
+          {s.step === 8 && (
             <Step7
               s={s}
               update={update}
@@ -434,7 +481,7 @@ export default function WizardScreen() {
       </KeyboardAvoidingView>
 
       {/* Sticky footer ─ Back / Next buttons */}
-      {!saveResult || s.step !== 7 ? (
+      {!saveResult || s.step !== TOTAL_STEPS ? (
         <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
           {s.step > 1 ? (
             <Pressable onPress={onBack} style={styles.backBtn} accessibilityRole="button">
@@ -442,9 +489,9 @@ export default function WizardScreen() {
               <Text style={styles.backTxt}>Back</Text>
             </Pressable>
           ) : <View style={{ width: 88 }} />}
-          {s.step < 7 ? (
+          {s.step < TOTAL_STEPS ? (
             <PrimaryButton
-              label={s.step === 6 ? 'Review →' : 'Next →'}
+              label={s.step === TOTAL_STEPS - 1 ? 'Review →' : 'Next →'}
               onPress={onNext}
             />
           ) : (
@@ -482,15 +529,62 @@ export default function WizardScreen() {
 // ─────────────────────────────────────────────────────────────────────────
 // Step 1 — Trading Style
 // ─────────────────────────────────────────────────────────────────────────
-function Step1({ s, onPick }: { s: WizardState; onPick: (id: StyleId) => void }) {
+function StepMarket({ s, onPick }: { s: WizardState; onPick: (ac: AssetClass) => void }) {
   return (
     <View>
       <StepIntro
-        title="What kind of trader are you?"
-        subtitle="Each style picks sensible defaults for leverage, TP/SL, and timeframe — you can change anything in the next steps."
+        title="What market do you want to trade?"
+        subtitle="Each market has its own strategy presets — what works on a perpetual altcoin won't work the same way on Apple or EUR/USD."
       />
       <View style={styles.styleGrid}>
-        {(Object.keys(STYLE_LABELS) as StyleId[]).map(id => (
+        {(Object.keys(ASSET_CLASS_LABELS) as AssetClass[]).map(ac => {
+          const meta = ASSET_CLASS_LABELS[ac];
+          return (
+            <StyleCard
+              key={ac}
+              icon={meta.icon}
+              label={meta.label}
+              tagline={meta.tagline}
+              selected={s.assetClass === ac}
+              onPress={() => onPick(ac)}
+            />
+          );
+        })}
+      </View>
+      {s.assetClass ? (
+        <View style={styles.previewCard}>
+          <Text style={styles.previewTitle}>
+            {ASSET_CLASS_LABELS[s.assetClass].icon} {ASSET_CLASS_LABELS[s.assetClass].label}
+            {ASSET_CLASS_LABELS[s.assetClass].paperOnly ? '  ·  Paper only' : ''}
+          </Text>
+          <Text style={styles.previewLine}>
+            {STYLES_BY_CLASS[s.assetClass].length} strategy presets tuned for this market — pick one in the next step.
+          </Text>
+          {ASSET_CLASS_LABELS[s.assetClass].paperOnly ? (
+            <Text style={[styles.previewLine, { marginTop: 6 }]}>
+              Trades simulate fills against real prices — no real money at risk while we build the broker integration.
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Step 2 — Trading Style (filtered by chosen asset class)
+// ─────────────────────────────────────────────────────────────────────────
+function Step1({ s, onPick }: { s: WizardState; onPick: (id: StyleId) => void }) {
+  const styles_for_class = STYLES_BY_CLASS[s.assetClass];
+  const ac_meta = ASSET_CLASS_LABELS[s.assetClass];
+  return (
+    <View>
+      <StepIntro
+        title={`What kind of ${ac_meta.label.toLowerCase()} trader are you?`}
+        subtitle={`These presets are tuned for ${ac_meta.label.toLowerCase()} — sensible defaults for timeframe, TP/SL${ac_meta.paperOnly ? '' : ', and leverage'}. You can change anything in the next steps.`}
+      />
+      <View style={styles.styleGrid}>
+        {styles_for_class.map(id => (
           <StyleCard
             key={id}
             icon={STYLE_LABELS[id].icon}
@@ -520,6 +614,7 @@ function Step1({ s, onPick }: { s: WizardState; onPick: (id: StyleId) => void })
 // Step 2 — Direction & Mode
 // ─────────────────────────────────────────────────────────────────────────
 function Step2({ s, update }: { s: WizardState; update: (p: Partial<WizardState>) => void }) {
+  const paperOnly = ASSET_CLASS_LABELS[s.assetClass].paperOnly;
   return (
     <View>
       <StepIntro
@@ -532,12 +627,25 @@ function Step2({ s, update }: { s: WizardState; update: (p: Partial<WizardState>
       </Card>
       <Card>
         <SectionHeader label="Build mode" icon="🧪" />
-        <ChipRow options={MODE_OPTIONS} value={s.mode} onChange={(v) => update({ mode: v })} />
-        <Text style={styles.hint}>
-          {s.mode === 'paper'
-            ? '🧪 Paper mode tracks signals without sending real orders — perfect for testing.'
-            : '⚡ Live mode places real Bitunix orders. Make sure you trust this strategy.'}
-        </Text>
+        {paperOnly ? (
+          <>
+            <View style={{ marginBottom: spacing.sm }}>
+              <Pill label={`🧪 Paper only — ${ASSET_CLASS_LABELS[s.assetClass].label} live trading not yet supported`} tone="warning" small />
+            </View>
+            <Text style={styles.hint}>
+              Trades will simulate fills against real-time {ASSET_CLASS_LABELS[s.assetClass].label.toLowerCase()} prices. Live brokerage routing is coming in a future release.
+            </Text>
+          </>
+        ) : (
+          <>
+            <ChipRow options={MODE_OPTIONS} value={s.mode} onChange={(v) => update({ mode: v })} />
+            <Text style={styles.hint}>
+              {s.mode === 'paper'
+                ? '🧪 Paper mode tracks signals without sending real orders — perfect for testing.'
+                : '⚡ Live mode places real Bitunix orders. Make sure you trust this strategy.'}
+            </Text>
+          </>
+        )}
       </Card>
       <Card>
         <SectionHeader label="Candle timeframe" icon="🕐" hint="The default candle for all signals — each signal can override below." />
@@ -1019,13 +1127,19 @@ function Step6({ s, update }: { s: WizardState; update: (p: Partial<WizardState>
 
       <Card>
         <SectionHeader label="Risk per trade" icon="⚙️" />
-        <Stepper
-          label="Leverage"
-          value={s.leverage}
-          onChange={(v) => update({ leverage: v })}
-          min={1} max={125} step={1} unit="×"
-          presets={[3, 5, 10, 15, 20, 50]}
-        />
+        {ASSET_CLASS_LABELS[s.assetClass].paperOnly ? (
+          <View style={{ marginBottom: spacing.sm }}>
+            <Pill label={`🔒 Leverage locked to 1× — ${ASSET_CLASS_LABELS[s.assetClass].label} are paper-only`} tone="warning" small />
+          </View>
+        ) : (
+          <Stepper
+            label="Leverage"
+            value={s.leverage}
+            onChange={(v) => update({ leverage: v })}
+            min={1} max={125} step={1} unit="×"
+            presets={[3, 5, 10, 15, 20, 50]}
+          />
+        )}
         <Stepper
           label="Position size"
           value={s.posSize}
@@ -1072,21 +1186,6 @@ function Step6({ s, update }: { s: WizardState; update: (p: Partial<WizardState>
           desc="Skip a coin if you already traded it today"
           enabled={s.noDuplicateSymbol}
           onToggle={(on) => update({ noDuplicateSymbol: on })}
-        />
-      </Card>
-
-      <Card>
-        <SectionHeader label="Market" icon="🌍" hint="Stocks · Forex · Indices run paper-only" />
-        <ChipRow
-          options={ASSET_CLASS_OPTIONS}
-          value={s.assetClass}
-          onChange={(v) => {
-            update({
-              assetClass: v,
-              ...(v !== 'crypto' ? { mode: 'paper' as const } : {}),
-            });
-          }}
-          size="sm"
         />
       </Card>
 
