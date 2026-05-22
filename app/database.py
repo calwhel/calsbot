@@ -31,10 +31,13 @@ def _neon_connect_args(statement_timeout_ms: int) -> dict:
 
 
 # ─── HTTP engine ─────────────────────────────────────────────────────────────
-# Serves API + page requests. Tight per-statement timeout (8 s) so that a
-# slow query fails the single request fast — it can never hang a gunicorn
-# worker long enough to trigger SIGKILL or hold a pool connection while the
-# user gets a 30-second white screen on Safari.
+# Serves API + page requests. statement_timeout=20 s — generous enough for
+# Neon's serverless cold-wake (~3–5 s) plus a few seconds of executor lock
+# contention, but still bounded so a single bad query can't hang the worker
+# indefinitely. 8 s (the previous value) was too aggressive: trivial indexed
+# SELECTs against `users.uid` were getting QueryCancelled when Neon was even
+# briefly slow, which produced the "Internal Server Error" 500s on /app
+# right after login.
 engine = create_engine(
     _db_url,
     poolclass=QueuePool,
@@ -43,7 +46,7 @@ engine = create_engine(
     pool_timeout=8,
     pool_recycle=240,
     pool_pre_ping=True,
-    connect_args=_neon_connect_args(8000),
+    connect_args=_neon_connect_args(20000),
 )
 
 
