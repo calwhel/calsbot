@@ -4255,6 +4255,7 @@ const SIGNAL_META={
   forex_currency_strength:{icon:'💪',label:'Currency Strength',desc:'Buy the strong vs the weak — 28-pair strength matrix'},
   forex_liquidity_pa:  {icon:'🪤',label:'Liquidity & PA',     desc:'Sweep equal H/L + classic price-action candles'},
   forex_cot:           {icon:'🏦',label:'COT Sentiment',      desc:'Weekly CFTC positioning extremes — contrarian filter'},
+  stock_earnings_avoidance:{icon:'📅',label:'Earnings Avoidance',desc:'Block trades around upcoming/just-released earnings (yfinance)'},
 };
 
 // ─── Signal fire-rate lookup ───────────────────────────────
@@ -4270,6 +4271,7 @@ const SIGNAL_FREQ={
   trend_reversal:'low', heikin_ashi:'low', ichimoku:'low', aroon:'low',
   sustained_trend:'low', tradingview_webhook:'ext',
   forex_session:'med', forex_session_break:'med', forex_prev_level:'med', forex_news_avoidance:'med', forex_currency_strength:'med', forex_liquidity_pa:'med', forex_cot:'low',
+  stock_earnings_avoidance:'med',
 };
 const FREQ_STYLE={
   high:{label:'High',color:'#16a34a',bg:'rgba(22,163,74,.12)',title:'Fires often — high trade volume'},
@@ -4512,6 +4514,7 @@ function getDefaultCfg(type){
     forex_currency_strength:{window:'4h',min_diff:0.6,direction:'either'},
     forex_liquidity_pa:  {pattern:'sweep_eqh',timeframe:tf,lookback:20,tolerance_pips:3},
     forex_cot:           {condition:'specs_extreme_long',extreme_pct:75,lookback_weeks:52,respect_pair_inversion:true},
+    stock_earnings_avoidance:{days_before:2,days_after:1,mode:'both'},
   }[type]||{timeframe:tf};
 }
 
@@ -5078,6 +5081,18 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('false','Raw — read the non-USD leg directly',`${pfx}respect_pair_inversion`,cfg.respect_pair_inversion!==false?'true':'false')}
       </div>
       <div class="hint">Weekly CFTC Commitment-of-Traders positioning on the non-USD leg of a USD pair. Cross pairs (no USD side) are skipped (filter passes open). "Extreme" = percentile rank vs the last N weeks. Updates Friday 15:30 ET; cached 6h. Falls open if CFTC is unreachable.</div>`;
+    case 'stock_earnings_avoidance':return`
+      <div class="opt-label">Days before earnings <span id="${pfx}db-d" style="color:var(--accent)">${cfg.days_before||2}</span></div>
+      <input type="range" id="${pfx}db" min="0" max="14" value="${cfg.days_before||2}" step="1" oninput="wzSl('${pfx}db','${pfx}db-d','','${pfx}days_before')" style="width:100%;accent-color:var(--accent)">
+      <div class="opt-label">Days after earnings <span id="${pfx}da-d" style="color:var(--accent)">${cfg.days_after||1}</span></div>
+      <input type="range" id="${pfx}da" min="0" max="14" value="${cfg.days_after||1}" step="1" oninput="wzSl('${pfx}da','${pfx}da-d','','${pfx}days_after')" style="width:100%;accent-color:var(--accent)">
+      <div class="opt-label">Blackout sides</div>
+      <div class="opt-chips">
+        ${wzChip('both','Block both before & after',`${pfx}mode`,cfg.mode||'both','green')}
+        ${wzChip('before','Block only before (catch post-earnings momentum)',`${pfx}mode`,cfg.mode)}
+        ${wzChip('after','Block only after (catch run-up)',`${pfx}mode`,cfg.mode)}
+      </div>
+      <div class="hint">Uses yfinance to look up the ticker's next earnings date and blocks trades within the chosen window. Cached 6h per symbol. Falls open if yfinance is unreachable. Most useful as a confirmation filter on equity strategies — earnings days can move stocks ±10% in minutes and obliterate stop placement.</div>`;
     default:return`<div class="hint">Configure this signal above</div>`;
   }
 }
@@ -6055,6 +6070,7 @@ function buildWizardDescription(){
       case 'forex_currency_strength':{const d=cfg.direction==='base_strong'?'base currency stronger than quote':cfg.direction==='quote_strong'?'quote currency stronger than base':'either side of pair stronger';sig=`Currency-strength differential is at least ${cfg.min_diff||0.6} over ${cfg.window||'4h'} (${d}, measured across the 28-pair G8 matrix)`;break;}
       case 'forex_liquidity_pa':{const p=cfg.pattern||'sweep_eqh';const lbl={sweep_eqh:`Sweep equal highs (last ${cfg.lookback||20} bars, ±${cfg.tolerance_pips||3} pips tolerance)`,sweep_eql:`Sweep equal lows (last ${cfg.lookback||20} bars, ±${cfg.tolerance_pips||3} pips tolerance)`,pin_bar_bull:'Bullish pin bar (small body near top, long lower wick ≥2× body)',pin_bar_bear:'Bearish pin bar (small body near bottom, long upper wick ≥2× body)',engulf_bull:'Bullish engulfing (green candle body engulfs prior red body)',engulf_bear:'Bearish engulfing (red candle body engulfs prior green body)',inside_bar:'Inside bar (current H<prev H, current L>prev L)'}[p]||p;sig=`${lbl} on ${cfg.timeframe||'15m'}`;break;}
       case 'forex_cot':{const c=cfg.condition||'specs_extreme_long';const ep=cfg.extreme_pct||75;const lw=cfg.lookback_weeks||52;const lbl={specs_extreme_long:`Speculators net-long ≥${ep}th pct (contrarian SHORT bias)`,specs_extreme_short:`Speculators net-short ≥${ep}th pct (contrarian LONG bias)`,specs_flipped_long:'Speculators just flipped net-long this week',specs_flipped_short:'Speculators just flipped net-short this week',comm_extreme_long:`Commercials net-long ≥${ep}th pct (smart-money bullish)`,comm_extreme_short:`Commercials net-short ≥${ep}th pct (smart-money bearish)`}[c]||c;sig=`${lbl} over ${lw}wk window (CFTC weekly)`;break;}
+      case 'stock_earnings_avoidance':{const m=cfg.mode||'both';const db=cfg.days_before||2;const da=cfg.days_after||1;const win=m==='before'?`${db}d before earnings`:m==='after'?`${da}d after earnings`:`±${db}d before / ${da}d after earnings`;sig=`Block trades within ${win} (yfinance earnings calendar, per-ticker)`;break;}
     }
     lines.push(`\nPrimary entry signal: ${sig}.`);
   }

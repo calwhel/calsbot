@@ -1959,6 +1959,58 @@ async def eval_forex_news_avoidance(
     return True, f"{symbol}: clear of {imp}-impact news (±{mb}/{ma} min window)"
 
 
+async def eval_stock_earnings_avoidance(
+    cond: Dict, symbol: str,
+) -> Tuple[bool, str]:
+    """`stock_earnings_avoidance` — TRUE when SAFE to trade (no upcoming
+    or just-released earnings for the ticker within the blackout window).
+
+    cfg.days_before (default 2) — blackout starts N days before report
+    cfg.days_after  (default 1) — blackout extends N days after report
+    cfg.mode        (default 'both') — 'before' | 'after' | 'both' to
+                     restrict the blackout to just the pre- or post-
+                     earnings side (some swing strategies want to BUY
+                     post-earnings momentum so they only block pre-).
+
+    Falls open (returns True) when FMP_API_KEY is missing or FMP is down
+    — strategy keeps trading; it just loses the earnings filter.
+    """
+    from app.services.earnings_calendar import is_earnings_blackout
+    try:
+        db_ = int(cond.get("days_before") or 2)
+    except (TypeError, ValueError):
+        db_ = 2
+    try:
+        da_ = int(cond.get("days_after") or 1)
+    except (TypeError, ValueError):
+        da_ = 1
+    db_ = max(0, min(14, db_))
+    da_ = max(0, min(14, da_))
+    mode = (cond.get("mode") or "both").lower()
+    if mode == "before":
+        da_eff = 0; db_eff = db_
+    elif mode == "after":
+        da_eff = da_; db_eff = 0
+    else:
+        da_eff = da_; db_eff = db_
+
+    blocked, ev, ok = await is_earnings_blackout(
+        symbol, days_before=db_eff, days_after=da_eff,
+    )
+    if not ok:
+        return True, f"{symbol}: yfinance upstream unavailable — earnings filter passing open"
+    if blocked and ev:
+        when = ev.get("_dt_utc")
+        delta_d = ((when - __import__("datetime").datetime.now(when.tzinfo)).total_seconds() / 86400.0) if when else 0
+        side = "upcoming" if delta_d >= 0 else "just released"
+        t = (ev.get("time") or "").upper() or "TBA"
+        return False, (
+            f"{symbol}: BLOCKED — {side} earnings on "
+            f"{(ev.get('date') or '?')[:10]} ({t}, {delta_d:+.1f}d)"
+        )
+    return True, f"{symbol}: clear of earnings (±{db_eff}d before / {da_eff}d after, mode={mode})"
+
+
 async def eval_forex_currency_strength(
     cond: Dict, symbol: str,
 ) -> Tuple[bool, str]:
@@ -2317,6 +2369,9 @@ async def evaluate_strategy_conditions(
                     cond, symbol, http_client, cache)
             elif ctype == "forex_cot":
                 return await eval_forex_cot(cond, symbol)
+            # ── Stock-specific blocks ───────────────────────────────────────
+            elif ctype == "stock_earnings_avoidance":
+                return await eval_stock_earnings_avoidance(cond, symbol)
             else:
                 return False, f"Unknown condition type: {ctype}"
         except Exception as e:

@@ -554,6 +554,29 @@ function renderKnobs(
     case 'tradingview_webhook':
       return null;
 
+    case 'stock_earnings_avoidance': {
+      const modeOpts: ChipOption<string>[] = [
+        { value: 'both',   label: '🛑 Block before & after' },
+        { value: 'before', label: '⏪ Block only before (catch post-momentum)' },
+        { value: 'after',  label: '⏩ Block only after (catch run-up)' },
+      ];
+      return (
+        <View>
+          <Stepper label="Days before earnings" value={cfg.days_before ?? 2}
+            min={0} max={14} step={1} unit="d"
+            onChange={(v) => set({ days_before: v })} />
+          <Stepper label="Days after earnings" value={cfg.days_after ?? 1}
+            min={0} max={14} step={1} unit="d"
+            onChange={(v) => set({ days_after: v })} />
+          <Section label="Blackout sides" compact={compact}>
+            <ChipRow options={modeOpts}
+              value={(cfg.mode as string) || 'both'}
+              onChange={(v) => set({ mode: v })} size="sm" />
+          </Section>
+        </View>
+      );
+    }
+
     case 'forex_cot': {
       const condOpts: ChipOption<string>[] = [
         { value: 'specs_extreme_long',  label: '🔴 Specs net-long extreme' },
