@@ -1355,6 +1355,25 @@ async def run_backtest(
     sl_pct       = float(config.get("sl", 1.5)) / 100
     leverage     = int(config.get("leverage", 10))
     timeframe    = (config.get("timeframe") or "1h").lower()
+    # Forex pip-space mode (P5d): when the wizard emits explicit
+    # take_profit_pips / stop_loss_pips (forex assets only), we compute
+    # TP/SL as `entry ± pips*pip_size` instead of `entry × (1 ± pct)`.
+    # This is the right mental model for forex traders and also makes
+    # the backtest math identical to the live executor's pip→pct path.
+    tp_pips_cfg  = config.get("take_profit_pips") or config.get("tp_pips")
+    sl_pips_cfg  = config.get("stop_loss_pips")   or config.get("sl_pips")
+    try:
+        tp_pips_val = float(tp_pips_cfg) if tp_pips_cfg not in (None, "", 0) else None
+        if tp_pips_val is not None and tp_pips_val <= 0:
+            tp_pips_val = None
+    except (TypeError, ValueError):
+        tp_pips_val = None
+    try:
+        sl_pips_val = float(sl_pips_cfg) if sl_pips_cfg not in (None, "", 0) else None
+        if sl_pips_val is not None and sl_pips_val <= 0:
+            sl_pips_val = None
+    except (TypeError, ValueError):
+        sl_pips_val = None
     primary_type = config.get("primaryType", "price_momentum")
     primary_cfg  = config.get("primaryCfg") or {}
     confirms     = config.get("confirms") or []
@@ -1379,6 +1398,20 @@ async def run_backtest(
         if not raw_symbol:
             return {"error": f"No symbol selected for {asset_class} backtest."}
         symbol = raw_symbol
+
+    # Pip-mode is only enabled when assetclass==forex AND the wizard
+    # provided at least one pip value. Otherwise we silently fall through
+    # to the percent-based path so legacy forex strategies (or backtests
+    # invoked without pips) keep working.
+    pip_mode    = (asset_class == "forex") and (tp_pips_val is not None or sl_pips_val is not None)
+    pip_size_v  = 0.0
+    if pip_mode:
+        from app.services.forex_engine import pip_size as _pip_size_fn
+        pip_size_v = _pip_size_fn(symbol)
+        # If only one of TP/SL is in pips, derive the other from the pct
+        # so the user can mix-and-match (rare but supported by the wizard).
+        # Use a "reasonable price" placeholder — overwritten per-entry later
+        # via _derive_other_pips() so this is just a guard for stats display.
 
     if precomputed_candles is not None:
         # NOTE: callers (e.g. the scanner) reuse this list across many
@@ -1611,7 +1644,19 @@ async def run_backtest(
         entry_ts  = int(next_c[0])
         entry_idx = i + 1
 
-        if direction == "LONG":
+        if pip_mode:
+            # entry ± pips × pip_size — the canonical forex formulation.
+            # When only one side was supplied in pips, fall back to the
+            # pct value on the other side so the strategy still has both legs.
+            tp_dist = (tp_pips_val * pip_size_v) if tp_pips_val is not None else (entry * tp_pct)
+            sl_dist = (sl_pips_val * pip_size_v) if sl_pips_val is not None else (entry * sl_pct)
+            if direction == "LONG":
+                tp_price = entry + tp_dist
+                sl_price = entry - sl_dist
+            else:
+                tp_price = entry - tp_dist
+                sl_price = entry + sl_dist
+        elif direction == "LONG":
             tp_price = entry * (1 + tp_pct)
             sl_price = entry * (1 - sl_pct)
         else:
@@ -1649,8 +1694,34 @@ async def run_backtest(
             "exit_reason":  "END_OF_DATA",
         })
 
+    # Tag each trade with its pip move so the UI / stats can display
+    # pips-per-trade alongside %PnL. Direction-aware: LONG profit = up,
+    # SHORT profit = down. Only meaningful in pip_mode (forex).
+    if pip_mode and pip_size_v > 0:
+        for t in trades:
+            try:
+                ep = float(t["entry_price"]); xp = float(t["exit_price"])
+                raw = (xp - ep) if direction == "LONG" else (ep - xp)
+                t["pip_move"] = round(raw / pip_size_v, 1)
+            except Exception:
+                t["pip_move"] = 0.0
+
     stats        = _compute_stats(trades, interval_min)
     equity_curve = _build_equity_curve(trades)
+
+    if pip_mode:
+        closed_p = [t for t in trades if t.get("outcome") in ("WIN", "LOSS")]
+        wins_p   = [t for t in closed_p if t["outcome"] == "WIN"]
+        losses_p = [t for t in closed_p if t["outcome"] == "LOSS"]
+        total_pips_v = sum(float(t.get("pip_move") or 0) for t in closed_p)
+        stats["pip_mode"]            = True
+        stats["pip_size"]            = pip_size_v
+        stats["total_pips"]          = round(total_pips_v, 1)
+        stats["avg_pips_per_trade"]  = round(total_pips_v / len(closed_p), 1) if closed_p else 0.0
+        stats["avg_pips_win"]        = round(sum(float(t.get("pip_move") or 0) for t in wins_p)   / len(wins_p),   1) if wins_p   else 0.0
+        stats["avg_pips_loss"]       = round(sum(float(t.get("pip_move") or 0) for t in losses_p) / len(losses_p), 1) if losses_p else 0.0
+        stats["tp_pips_configured"]  = tp_pips_val
+        stats["sl_pips_configured"]  = sl_pips_val
 
     # Format trade timestamps for display
     display_trades = []
@@ -1686,5 +1757,7 @@ async def run_backtest(
             "tp_sl_fill":              "wick_trigger + slippage (gap_open if gapped)",
             "same_bar_tp_sl":          "bar_color heuristic (green=SL_first for LONG)",
             "liquidation_modeled":     True,
+            "pip_mode":                pip_mode,
+            "pip_size":                pip_size_v if pip_mode else None,
         },
     }
