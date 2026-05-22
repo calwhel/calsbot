@@ -29,7 +29,7 @@ else:
 from app.services.bot import start_bot
 print("✅ Bot module loaded", flush=True)
 from app.config import settings
-from app.database import init_db
+from app.database import init_db_minimal as init_db
 from app.services.subscriptions import api as subscription_api
 
 logging.basicConfig(

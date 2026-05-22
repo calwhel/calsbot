@@ -107,9 +107,33 @@ def get_db():
 
 
 def init_db():
+    """Full init — schema migrations + UID backfill. Slow; should only be
+    called by the strategy_portal process. Bot + tracker should use
+    init_db_minimal() so they don't repeatedly hammer Neon with full table
+    scans on every boot (which can take 60 s+ and saturate the DB)."""
+    import os as _os
+    if _os.environ.get("SKIP_HEAVY_MIGRATIONS", "").lower() in ("1", "true", "yes"):
+        logger.info("init_db: SKIP_HEAVY_MIGRATIONS=1 — skipping ensure_columns + backfill_user_uids")
+        try:
+            Base.metadata.create_all(bind=engine)
+        except Exception as e:
+            logger.warning(f"init_db (create_all only): {e}")
+        return
     ensure_columns()
     Base.metadata.create_all(bind=engine)
     backfill_user_uids()
+
+
+def init_db_minimal():
+    """Minimal init for sidecar processes (bot, tracker) — just verifies the
+    DB connection is alive. The portal owns all schema migrations."""
+    from sqlalchemy import text as _text
+    try:
+        with engine.connect() as c:
+            c.execute(_text("SELECT 1"))
+        logger.info("init_db_minimal: DB reachable")
+    except Exception as e:
+        logger.warning(f"init_db_minimal: DB unreachable: {e}")
 
 
 def ensure_columns():

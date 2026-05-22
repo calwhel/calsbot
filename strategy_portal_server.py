@@ -539,37 +539,39 @@ def _ensure_tables():
     # indexes on these hot paths cause /app and every authed request to time
     # out with `statement_timeout` because each query degenerates into a full
     # table scan over users / strategy_executions.
+    # CREATE INDEX CONCURRENTLY: does not lock the table, can survive on a
+    # saturated Neon instance, and MUST run outside any transaction. We use
+    # an autocommit connection and bump statement_timeout to 5 minutes for
+    # this one connection so the initial backfill of a large index never
+    # gets killed by the default 8 s timeout. Each statement is run in its
+    # own try/except so one slow index doesn't block the others.
+    _index_ddl = [
+        ("idx_users_uid", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_uid ON users(uid)"),
+        ("idx_users_telegram_id", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)"),
+        ("idx_strategy_executions_strategy_id", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_strategy_id ON strategy_executions(strategy_id)"),
+        ("idx_strategy_executions_user_id", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_user_id ON strategy_executions(user_id)"),
+        ("idx_strategy_executions_outcome_paper", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_outcome_paper ON strategy_executions(outcome, is_paper)"),
+        ("idx_user_strategies_user_id", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_strategies_user_id ON user_strategies(user_id)"),
+    ]
     try:
-        with engine.begin() as conn:
-            conn.execute(sa.text(
-                "CREATE INDEX IF NOT EXISTS idx_users_uid ON users(uid)"
-            ))
-            conn.execute(sa.text(
-                "CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)"
-            ))
-            conn.execute(sa.text(
-                "CREATE INDEX IF NOT EXISTS idx_strategy_executions_strategy_id "
-                "ON strategy_executions(strategy_id)"
-            ))
-            conn.execute(sa.text(
-                "CREATE INDEX IF NOT EXISTS idx_strategy_executions_user_id "
-                "ON strategy_executions(user_id)"
-            ))
-            conn.execute(sa.text(
-                "CREATE INDEX IF NOT EXISTS idx_strategy_executions_outcome_paper "
-                "ON strategy_executions(outcome, is_paper)"
-            ))
-            conn.execute(sa.text(
-                "CREATE INDEX IF NOT EXISTS idx_user_strategies_user_id "
-                "ON user_strategies(user_id)"
-            ))
-        logger.info("_ensure_tables: hot-path indexes ready")
+        # AUTOCOMMIT is required for CREATE INDEX CONCURRENTLY.
+        ac_conn = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+        try:
+            ac_conn.execute(sa.text("SET statement_timeout = '300s'"))
+            for label, ddl in _index_ddl:
+                try:
+                    ac_conn.execute(sa.text(ddl))
+                    logger.info(f"_ensure_tables(indexes): {label} ready")
+                except Exception as ie:
+                    iemsg = str(ie)
+                    if "already exists" in iemsg or "duplicate key" in iemsg:
+                        logger.info(f"_ensure_tables(indexes): {label} already exists")
+                    else:
+                        logger.warning(f"_ensure_tables(indexes) {label}: {ie}")
+        finally:
+            ac_conn.close()
     except Exception as e:
-        emsg = str(e)
-        if "already exists" in emsg or "duplicate key" in emsg:
-            logger.info("_ensure_tables(indexes): lost startup race (harmless)")
-        else:
-            logger.warning(f"_ensure_tables(indexes): {e}")
+        logger.warning(f"_ensure_tables(indexes outer): {e}")
 
     # Affiliate program — applications + per-user affiliate state. Raw CREATE
     # to avoid registering yet another SQLAlchemy model just for a simple,

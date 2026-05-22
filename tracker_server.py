@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import init_db
+from app.database import init_db_minimal as init_db
 from app.services.trade_tracker import router as tracker_router
 
 app = FastAPI(title="Trade Tracker")
