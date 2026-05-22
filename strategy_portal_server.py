@@ -560,6 +560,11 @@ def _ensure_tables():
         ("idx_strategy_executions_sid_fired", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_sid_fired ON strategy_executions(strategy_id, fired_at DESC)"),
         ("idx_strategy_executions_sid_symbol_fired", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_sid_symbol_fired ON strategy_executions(strategy_id, symbol, fired_at DESC)"),
         ("idx_strategy_executions_sid_outcome", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_sid_outcome ON strategy_executions(strategy_id, outcome)"),
+        # /api/trade/auto/list batched DISTINCT ON (strategy_id) ORDER BY
+        # strategy_id, opened_at DESC — without this the lookup degrades to a
+        # full table scan + sort and hits Neon's statement_timeout once the
+        # paper-trade history grows.
+        ("idx_auto_trade_paper_sid_opened", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_auto_trade_paper_sid_opened ON auto_trade_paper_trades(strategy_id, opened_at DESC)"),
     ]
     try:
         # AUTOCOMMIT is required for CREATE INDEX CONCURRENTLY.
@@ -3581,12 +3586,36 @@ async def trade_auto_list(request: Request, db: Session = Depends(get_db)):
                       AutoTradeStrategy.status != "archived")
               .order_by(AutoTradeStrategy.created_at.desc())
               .all())
+
+    # Batch the "last trade per strategy" lookup into a single round-trip —
+    # previously this was N+1 (one SELECT per strategy), which on Neon was
+    # blowing past the statement_timeout once a user had many strategies and
+    # many historical paper trades. DISTINCT ON keeps just the newest row per
+    # strategy_id in one indexed scan.
+    last_by_sid: dict[int, "AutoTradePaperTrade"] = {}
+    sids = [s.id for s in rows]
+    if sids:
+        from sqlalchemy import text as _sql_text
+        latest_ids = [
+            r[0] for r in db.execute(
+                _sql_text(
+                    "SELECT DISTINCT ON (strategy_id) id "
+                    "FROM auto_trade_paper_trades "
+                    "WHERE strategy_id = ANY(:sids) "
+                    "ORDER BY strategy_id, opened_at DESC NULLS LAST"
+                ),
+                {"sids": sids},
+            ).fetchall()
+        ]
+        if latest_ids:
+            for t in (db.query(AutoTradePaperTrade)
+                        .filter(AutoTradePaperTrade.id.in_(latest_ids))
+                        .all()):
+                last_by_sid[t.strategy_id] = t
+
     out = []
     for s in rows:
-        last = (db.query(AutoTradePaperTrade)
-                  .filter(AutoTradePaperTrade.strategy_id == s.id)
-                  .order_by(AutoTradePaperTrade.opened_at.desc())
-                  .first())
+        last = last_by_sid.get(s.id)
         out.append(_auto_strategy_to_dict(s, last_trade=_auto_trade_to_dict(last) if last else None))
     return {"ok": True, "strategies": out}
 
