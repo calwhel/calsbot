@@ -206,6 +206,64 @@ def get_db():
         db.close()
 
 
+# ── User-by-UID cache ────────────────────────────────────────────────────
+# In-memory cache of (user.id, telegram_id, banned, is_admin, …) keyed on uid
+# with a 30 s TTL. This lookup fires on EVERY authenticated request — under
+# Neon load it was the #1 source of "Internal Server Error" 500s because the
+# 20s statement_timeout was being hit on cold-wake. Caching the row in-memory
+# means subsequent page loads bypass the DB entirely for 30s, so the user
+# never sees a 500 from a transient DB blip while their session is hot.
+# The cached row is a thin `_CachedUser` namespace, NOT the SQLAlchemy
+# instance (instances can't safely cross sessions). Callers that need to
+# mutate the user must do a fresh fetch.
+import threading as _thr
+import time as _time
+
+_USER_CACHE: dict[str, tuple[float, "object"]] = {}
+_USER_CACHE_LOCK = _thr.Lock()
+_USER_CACHE_TTL = 30.0  # seconds
+
+class _CachedUser:
+    """Detached snapshot of a User row safe to share across requests."""
+    __slots__ = ("id", "uid", "telegram_id", "email", "username", "first_name",
+                 "is_admin", "banned", "approved", "grandfathered",
+                 "subscription_end", "subscription_type", "trial_started_at",
+                 "trial_ends_at", "trial_used", "referral_code", "referred_by",
+                 "auth_provider", "email_verified", "google_id", "apple_id",
+                 "created_at", "admin_notes", "nowpayments_subscription_id",
+                 "password_hash")
+    def __init__(self, u):
+        for f in self.__slots__:
+            setattr(self, f, getattr(u, f, None))
+
+
+def _cache_user(u) -> "_CachedUser":
+    cu = _CachedUser(u)
+    with _USER_CACHE_LOCK:
+        _USER_CACHE[u.uid] = (_time.time(), cu)
+    return cu
+
+
+def _user_from_cache(uid: str):
+    with _USER_CACHE_LOCK:
+        entry = _USER_CACHE.get(uid)
+        if not entry:
+            return None
+        ts, cu = entry
+        if _time.time() - ts > _USER_CACHE_TTL:
+            _USER_CACHE.pop(uid, None)
+            return None
+        return cu
+
+
+def _invalidate_user_cache(uid: str | None = None):
+    with _USER_CACHE_LOCK:
+        if uid:
+            _USER_CACHE.pop(uid, None)
+        else:
+            _USER_CACHE.clear()
+
+
 def _get_user_by_uid(uid: str, db: Session):
     from app.models import User
     return db.query(User).filter(User.uid == uid).first()
@@ -227,8 +285,15 @@ def _get_user_by_uid_safe(uid: str, db: Session):
     from app.models import User
     from app.database import SessionLocal as _SL
     from sqlalchemy.exc import OperationalError as _SAOperationalError
+    # Hot-path cache hit — bypasses DB entirely for ~30s after first login.
+    cached = _user_from_cache(uid)
+    if cached is not None:
+        return cached
     try:
-        return db.query(User).filter(User.uid == uid).first()
+        u = db.query(User).filter(User.uid == uid).first()
+        if u is not None:
+            return _cache_user(u)
+        return None
     except _SAOperationalError as exc:
         # Most common cause: psycopg2.errors.QueryCanceled (statement_timeout).
         # Roll back the dirty transaction on the caller's session, then retry
@@ -242,7 +307,10 @@ def _get_user_by_uid_safe(uid: str, db: Session):
         _t.sleep(0.2)
         fresh = _SL()
         try:
-            return fresh.query(User).filter(User.uid == uid).first()
+            u = fresh.query(User).filter(User.uid == uid).first()
+            if u is not None:
+                return _cache_user(u)
+            return None
         except _SAOperationalError as exc2:
             logger.error(f"[uid lookup] DB error persisted after retry: {exc2}")
             raise HTTPException(
@@ -1755,7 +1823,10 @@ def _load_portal_data(uid: str):
     from datetime import datetime, timedelta
     db = SessionLocal()
     try:
-        user = _get_user_by_uid(uid, db)
+        # Use the resilient + cached lookup — this is the #1 source of /app
+        # 500s under Neon load, and the cache means a logged-in user's hot
+        # path doesn't even touch the DB for their user row.
+        user = _get_user_by_uid_safe(uid, db)
         if not user:
             return None
         if user.banned:
