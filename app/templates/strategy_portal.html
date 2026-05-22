@@ -4102,6 +4102,19 @@ async function loadAssetCatalog(){
 }
 loadAssetCatalog();
 
+// P5e-2: forex strategies become live-eligible once the user has connected an
+// OANDA account. Loaded once on init; consulted by setAssetClass + buildStrategy
+// to decide whether to force paper mode for forex.
+let _OANDA_CONNECTED=false;
+async function loadOandaStatus(){
+  try{
+    const r=await fetch(`/api/oanda/status?uid=${UID}`);
+    if(r.ok){const d=await r.json();_OANDA_CONNECTED=!!d.connected;}
+  }catch(e){_OANDA_CONNECTED=false;}
+}
+loadOandaStatus();
+function wzForexLiveOk(){return WZ.assetClass==='forex'&&_OANDA_CONNECTED;}
+
 function setAssetClass(cls){
   if(WZ.assetClass===cls)return;
   WZ.assetClass=cls;
@@ -4112,9 +4125,10 @@ function setAssetClass(cls){
     // Restore default crypto universe
     WZ.coins=WZ.coins||'all';
   } else {
-    // Stocks/forex/indices are paper-only and use the symbol picker
+    // Stocks/forex/indices use the symbol picker. Forex can run live when the
+    // user has connected OANDA; stocks/indices stay paper until their brokers land.
     WZ.coins='all';
-    WZ.mode='paper';
+    if(!(cls==='forex'&&_OANDA_CONNECTED))WZ.mode='paper';
   }
   // Pip TP/SL only applies to forex — wipe stale pip state when leaving forex
   // so a previously-set value doesn't accidentally get re-emitted later.
@@ -5591,6 +5605,13 @@ function renderStep7(){
     <div id="wz-paper-note" style="${WZ.mode==='paper'?'':'display:none;'}margin-top:10px" class="paper-callout">
       🧪 <strong>Paper Mode</strong> — signals fire with live 1m OHLC tracking, but no real orders are placed. Perfect for testing before committing capital.
     </div>
+    ${WZ.assetClass==='forex'?(_OANDA_CONNECTED?`
+    <div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(63,182,139,.35);border-radius:8px;background:rgba(63,182,139,.08);font-size:12px;color:var(--text);line-height:1.5">
+      ✓ <strong>OANDA connected</strong> — live forex orders route through your OANDA account.
+    </div>`:`
+    <div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(214,163,92,.35);border-radius:8px;background:rgba(214,163,92,.08);font-size:12px;color:var(--text);line-height:1.5">
+      🔒 <strong>Forex live trading requires OANDA</strong> — connect your OANDA account in Settings to enable live forex orders. Until then, forex strategies run as paper.
+    </div>`):''}
   </div>
   <div class="section-card">
     <div class="sc-title"><div class="sc-icon">🏪</div>Marketplace <span style="font-size:11px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></div>
@@ -6215,9 +6236,11 @@ async function buildStrategy(){
     // ── Asset class & universe ─────────────────────────────────────────
     data.config.asset_class=WZ.assetClass||'crypto';
     if(WZ.assetClass&&WZ.assetClass!=='crypto'){
-      // Force paper mode — broker integrations not wired yet
-      data.config._build_mode='paper';
-      WZ.mode='paper';
+      // Forex routes through OANDA when connected; stocks/indices stay paper.
+      if(!wzForexLiveOk()){
+        data.config._build_mode='paper';
+        WZ.mode='paper';
+      }
       if(!WZ.tradfiSymbols||!WZ.tradfiSymbols.length){
         throw new Error('Pick at least one '+WZ.assetClass+' symbol on Step 6 before launching.');
       }
