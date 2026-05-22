@@ -446,7 +446,7 @@ async def run_alerts_engine() -> None:
         return
     _ENGINE_RUNNING = True
 
-    from app.database import SessionLocal
+    from app.database import BgSessionLocal as SessionLocal
     from app.models import IndicatorAlert, User
 
     logger.info(f"🔔 Alerts engine started (interval={ALERTS_INTERVAL_S}s)")

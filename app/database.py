@@ -11,49 +11,78 @@ logger = logging.getLogger(__name__)
 Base = declarative_base()
 
 _db_url = settings.get_database_url()
-_connect_args: dict = {
-    "connect_timeout": 30,
-    "options": "-c statement_timeout=60000",
-}
-if "neon" in _db_url or "neondb" in _db_url:
-    # Neon closes idle SSL connections after ~5 minutes.
-    # keepalives keep the TCP socket alive; pool_recycle < 300 s ensures
-    # the pool never hands out a connection older than Neon's idle timeout.
-    _connect_args["sslmode"] = "require"
-    _connect_args["keepalives"] = 1
-    _connect_args["keepalives_idle"] = 30
-    _connect_args["keepalives_interval"] = 10
-    _connect_args["keepalives_count"] = 5
 
+
+def _neon_connect_args(statement_timeout_ms: int) -> dict:
+    args: dict = {
+        "connect_timeout": 30,
+        "options": f"-c statement_timeout={statement_timeout_ms}",
+    }
+    if "neon" in _db_url or "neondb" in _db_url:
+        # Neon closes idle SSL connections after ~5 minutes.
+        # keepalives keep the TCP socket alive; pool_recycle < 300 s ensures
+        # the pool never hands out a connection older than Neon's idle timeout.
+        args["sslmode"] = "require"
+        args["keepalives"] = 1
+        args["keepalives_idle"] = 30
+        args["keepalives_interval"] = 10
+        args["keepalives_count"] = 5
+    return args
+
+
+# ─── HTTP engine ─────────────────────────────────────────────────────────────
+# Serves API + page requests. Tight per-statement timeout (8 s) so that a
+# slow query fails the single request fast — it can never hang a gunicorn
+# worker long enough to trigger SIGKILL or hold a pool connection while the
+# user gets a 30-second white screen on Safari.
 engine = create_engine(
     _db_url,
     poolclass=QueuePool,
-    pool_size=5,       # raised from 3 — handles executor + monitors + HTTP concurrently
-    max_overflow=10,   # raised from 5 — short bursts when multiple strategies fire together
-    pool_timeout=10,   # fail fast so a slow DB never blocks the whole server
-    pool_recycle=240,        # recycle every 4 min — well under Neon's 5-min idle limit
+    pool_size=3,
+    max_overflow=4,
+    pool_timeout=8,
+    pool_recycle=240,
     pool_pre_ping=True,
-    connect_args=_connect_args,
+    connect_args=_neon_connect_args(8000),
 )
 
 
-@event.listens_for(engine, "checkin")
-def _on_checkin(dbapi_connection, connection_record):
-    try:
-        dbapi_connection.rollback()
-    except Exception:
-        pass
+# ─── Background engine ───────────────────────────────────────────────────────
+# Used by strategy_executor + ai_strategy_generator. Completely isolated pool
+# so background scans CANNOT starve HTTP requests of connections — which was
+# the root cause of /app, /api/strategies, /api/portfolio all timing out
+# while the executor held every connection waiting on slow queries. Keeps
+# the 60 s statement_timeout the executor needs for heavy analytical work.
+bg_engine = create_engine(
+    _db_url,
+    poolclass=QueuePool,
+    pool_size=3,
+    max_overflow=4,
+    pool_timeout=15,
+    pool_recycle=240,
+    pool_pre_ping=True,
+    connect_args=_neon_connect_args(60000),
+)
 
 
-@event.listens_for(engine, "checkout")
-def _on_checkout(dbapi_connection, connection_record, connection_proxy):
-    try:
-        dbapi_connection.rollback()
-    except Exception:
-        pass
+for _eng in (engine, bg_engine):
+    @event.listens_for(_eng, "checkin")
+    def _on_checkin(dbapi_connection, connection_record):
+        try:
+            dbapi_connection.rollback()
+        except Exception:
+            pass
+
+    @event.listens_for(_eng, "checkout")
+    def _on_checkout(dbapi_connection, connection_record, connection_proxy):
+        try:
+            dbapi_connection.rollback()
+        except Exception:
+            pass
 
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+BgSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=bg_engine)
 
 
 @contextmanager

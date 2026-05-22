@@ -488,7 +488,7 @@ def publish_strategy(db, curator_user_id: int, cfg: Dict, bt: Dict) -> Optional[
 async def run_one_cycle(per_cycle: int = None) -> Dict:
     """Run a single generation cycle. Returns summary dict."""
     n = per_cycle if per_cycle is not None else GEN_PER_CYCLE
-    from app.database import SessionLocal
+    from app.database import BgSessionLocal as SessionLocal
     from app.strategy_models import StrategyMarketplace
     summary = {"generated": 0, "published": 0, "failed": 0, "started_at": datetime.utcnow().isoformat()}
 
@@ -634,7 +634,7 @@ def run_promotion_cycle() -> Dict:
 
     Idempotent — re-running won't double-promote or double-archive.
     """
-    from app.database import SessionLocal
+    from app.database import BgSessionLocal as SessionLocal
     from app.strategy_models import (
         UserStrategy, StrategyPerformance, StrategyMarketplace,
     )

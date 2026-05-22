@@ -94,7 +94,7 @@ def _user_can_live_trade(user, db) -> bool:
         except Exception:
             pass
         try:
-            from app.database import SessionLocal as _SL
+            from app.database import BgSessionLocal as _SL
             _fresh = _SL()
             try:
                 return _check(_fresh)
@@ -1242,7 +1242,7 @@ async def run_paper_position_monitor():
     Background loop — monitors all open paper positions every 30s using
     1-minute Binance Futures OHLC data for maximum accuracy.
     """
-    from app.database import SessionLocal
+    from app.database import BgSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution
 
     logger.info("🧪 Paper position monitor started (30s interval, full-history candle scan)")
@@ -1425,7 +1425,7 @@ async def run_live_position_monitor():
     Background loop — monitors all OPEN live (is_paper=False) strategy executions.
     Checks SL/TP price levels every 30 s and closes + notifies on breach.
     """
-    from app.database import SessionLocal
+    from app.database import BgSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution, UserStrategy
     from app.models import User
 
@@ -2365,7 +2365,7 @@ async def _propagate_to_subscribers(
     where independent condition evaluation fires them minutes earlier/later
     at a worse price and different SL level.
     """
-    from app.database import SessionLocal
+    from app.database import BgSessionLocal as SessionLocal
     from app.models import User
     from app.strategy_models import (
         UserStrategy, StrategyExecution, StrategyPerformance,
@@ -2648,7 +2648,7 @@ async def run_strategy_executor():
     Main background loop. Evaluates all active + paper strategies for all users.
     Also spawns the paper position monitor as a sibling task.
     """
-    from app.database import SessionLocal, engine
+    from app.database import BgSessionLocal as SessionLocal, bg_engine as engine
     from app.models import User
     from app.strategy_models import UserStrategy, init_strategy_tables
 
@@ -2874,7 +2874,7 @@ async def backfill_cancelled_paper_trades(lookback_days: int = 30) -> int:
     MEXC candle fetches were missing the startTime parameter.
     Returns the number of trades corrected.
     """
-    from app.database import SessionLocal
+    from app.database import BgSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution
     cutoff = datetime.utcnow() - timedelta(days=lookback_days)
 
@@ -2958,7 +2958,7 @@ async def backfill_ghost_cancelled_executions(lookback_days: int = 7) -> int:
     If still within hold window (trade might still be open), mark OPEN.
     If candles unavailable, mark BREAKEVEN so it doesn't pollute win-rate.
     """
-    from app.database import SessionLocal
+    from app.database import BgSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution
     cutoff = datetime.utcnow() - timedelta(days=lookback_days)
 
