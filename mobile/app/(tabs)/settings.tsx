@@ -280,6 +280,20 @@ export default function SettingsScreen() {
       </View>
       <PushPrefsCard uid={uid} />
 
+      {/* Broker connections */}
+      <View style={{ marginTop: spacing.xl }}>
+        <SectionLabel label="Brokers" />
+      </View>
+      <View style={styles.section}>
+        <SettingsLink
+          icon="globe-outline"
+          tone="accent"
+          label="OANDA (Forex)"
+          hint="Connect your OANDA practice or live account to trade forex strategies"
+          onPress={() => router.push('/oanda' as any)}
+        />
+      </View>
+
       {/* Earn — affiliate program */}
       <View style={{ marginTop: spacing.xl }}>
         <SectionLabel label="Earn" />

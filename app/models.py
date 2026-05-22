@@ -124,6 +124,13 @@ class UserPreference(Base):
     bitunix_api_key = Column(String, nullable=True)
     bitunix_api_secret = Column(String, nullable=True)
     bitunix_uid = Column(String, nullable=True)  # Bitunix User ID for copy trading
+    # OANDA forex broker (P5e). API key is encrypted via app.utils.encryption.
+    # `oanda_environment` is "practice" (api-fxpractice.oanda.com) or "live"
+    # (api-fxtrade.oanda.com). Forex strategies that opt into live trading
+    # route orders through this account; paper-mode keeps walking candles.
+    oanda_api_key = Column(String, nullable=True)
+    oanda_account_id = Column(String, nullable=True)
+    oanda_environment = Column(String, default="practice", nullable=True)
     preferred_exchange = Column(String, default="Bitunix")  # Bitunix (legacy: MEXC, OKX, KuCoin)
     position_size_percent = Column(Float, default=10.0)
     position_size_dollars = Column(Float, nullable=True)  # Fixed $ amount per trade (if set, overrides %)
