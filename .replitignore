@@ -1,0 +1,12 @@
+mobile/
+attached_assets/
+__pycache__/
+**/__pycache__/
+**/*.pyc
+.expo/
+.local/
+.cache/
+node_modules/
+*.log
+/tmp/
+.git/
