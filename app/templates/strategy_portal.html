@@ -5158,6 +5158,28 @@ function renderSignalCfg(type,cfg,pfx){
 
 // ─── Step renderers ────────────────────────────────────────
 function renderStep1(){
+  // ─── Market picker (FIRST question — gates everything that follows) ─────
+  // Until an asset class is picked the trading-style grid stays hidden so the
+  // user can't accidentally start configuring a crypto strategy when they
+  // wanted forex. Mirrors mobile's StepMarket.
+  const marketChips=[
+    ['crypto','🪙 Crypto',  '24/7 · live or paper · Bitunix'],
+    ['forex', '💱 Forex',   'Mon–Fri · live with OANDA · paper otherwise'],
+    ['stock', '📈 Stocks',  'NYSE/Nasdaq hours · paper (live coming)'],
+    ['index', '🏛️ Indices', 'Index futures hours · paper (live coming)'],
+  ];
+  const marketPicker=`
+    <div class="wz-q">Which market?</div>
+    <div class="wz-sub">This determines the entire strategy — entry signals, symbols, market hours, and broker. Crypto runs 24/7. Forex, stocks and indices follow real market hours.</div>
+    <div class="choice-grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:18px">
+      ${marketChips.map(([id,title,desc])=>`<div class="choice-card ${WZ.assetClass===id?'selected':''}" onclick="setAssetClass('${id}')">
+        <div class="cc-title" style="font-size:15px">${title}</div><div class="cc-desc">${desc}</div>
+      </div>`).join('')}
+    </div>
+  `;
+  if(!WZ.assetClass){
+    return marketPicker+`<div class="hint" style="text-align:center;padding:16px;border:1px dashed var(--border);border-radius:8px;color:var(--muted)">👆 Pick a market above to continue</div>`;
+  }
   // Forex strategies use 7 session-aware templates instead of the crypto
   // style grid — each pre-fills a session-based primary signal + pip TP/SL.
   const styles=WZ.assetClass==='forex'?[
@@ -5184,7 +5206,8 @@ function renderStep1(){
     {id:'sniper',   icon:'🎯', title:'Sniper',        desc:'Rare but high-confidence.<br>2 trades/day max.'},
     {id:'custom',   icon:'⚙️', title:'Custom',        desc:'Set everything yourself.<br>Full manual control.'},
   ];
-  return`<div class="wz-q">What kind of trader are you?</div>
+  const styleLabel=WZ.assetClass==='forex'?'Forex template':WZ.assetClass==='stock'?'Stock strategy style':WZ.assetClass==='index'?'Index strategy style':'Trading style';
+  return marketPicker+`<div class="wz-q">${styleLabel}</div>
   <div class="wz-sub">Your trading style sets smart defaults for risk, leverage, and timing. You can fine-tune everything in later steps.</div>
   <div class="choice-grid">${styles.map(s=>`<div class="choice-card ${WZ.style===s.id?'selected':''}" onclick="wzPickStyle('${s.id}')">
     <div class="cc-icon">${s.icon}</div><div class="cc-title">${s.title}</div><div class="cc-desc">${s.desc}</div>
@@ -5508,14 +5531,6 @@ function renderStep6(){
       ${WZ.tradingDays.length?`<div class="opt-chip" onclick="WZ.tradingDays=[];renderCurrentStep()">✕ Clear</div>`:''}
     </div>
     ${WZ.tradingDays.length&&!WZ.tradingDays.includes('saturday')&&!WZ.tradingDays.includes('sunday')?`<div class="hint" style="color:var(--accent);margin-top:6px">⚡ Weekdays only — no weekend trading</div>`:''}
-  </div>
-  <div class="section-card">
-    <div class="sc-title"><div class="sc-icon">📊</div>Asset Class</div>
-    <div class="hint" style="margin-bottom:8px">Crypto trades 24/7 and supports live mode. Stocks / Forex / Indices are <strong>paper-only</strong> and pause outside market hours.</div>
-    <div class="opt-chips">
-      ${[['crypto','Crypto 🪙'],['stock','Stocks 📈'],['forex','Forex 💱'],['index','Indices 🏛️']].map(([id,lbl])=>`<div class="opt-chip ${WZ.assetClass===id?'active':''}" onclick="setAssetClass('${id}')">${lbl}</div>`).join('')}
-    </div>
-    ${WZ.assetClass!=='crypto'?`<div class="hint" style="margin-top:8px;color:var(--accent)">Paper mode locked — broker integrations for ${WZ.assetClass} coming soon.</div>`:''}
   </div>
   ${WZ.assetClass==='crypto'?`
   <div class="section-card">
@@ -6056,6 +6071,7 @@ function buildSummaryLine(){
 }
 
 function wzNext(){
+  if(WZ.step===1&&!WZ.assetClass){toast('Pick a market to continue','error');return;}
   if(WZ.step===1&&!WZ.style){toast('Pick a trading style to continue','error');return;}
   if(WZ.step===3&&!WZ.primaryType){toast('Pick an entry signal to continue','error');return;}
   if(WZ.step===7){buildStrategy();return;}
@@ -6073,7 +6089,7 @@ function wzBack(){
 function resetWizard(){
   compiledConfig=null;
   _wzLastStep=1;
-  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,tp1Pips:null,tp2Pips:null,slPips:null,trailing:null,breakeven:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium',assetClass:'crypto',tradfiSymbols:[],tradfiQuery:''});
+  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,tp1Pips:null,tp2Pips:null,slPips:null,trailing:null,breakeven:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium',assetClass:null,tradfiSymbols:[],tradfiQuery:''});
   renderCurrentStep();
 }
 
