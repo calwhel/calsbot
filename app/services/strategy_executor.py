@@ -756,7 +756,10 @@ def _update_performance(strategy_id: int, db):
     perf.wins          = len(wins)
     perf.losses        = len(losses)
     perf.breakevens    = sum(1 for e in closed if e.outcome == "BREAKEVEN")
-    perf.win_rate      = round(len(wins) / len(closed) * 100, 1) if closed else 0.0
+    # Win rate excludes BREAKEVEN from the denominator — breakevens are
+    # zero-PnL neutral outcomes and shouldn't pull the win rate down.
+    decisive = len(wins) + len(losses)
+    perf.win_rate      = round(len(wins) / decisive * 100, 1) if decisive else 0.0
     perf.total_pnl_pct = round(total_pnl, 2)
     perf.avg_win_pct   = round(sum(wins)   / len(wins),   2) if wins   else 0.0
     perf.avg_loss_pct  = round(sum(losses) / len(losses), 2) if losses else 0.0

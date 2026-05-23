@@ -1892,6 +1892,7 @@ def _load_portal_data(uid: str):
             SELECT
                 COALESCE(SUM(CASE WHEN e.outcome = 'OPEN' THEN 1 ELSE 0 END), 0)                                              AS open_trades,
                 COALESCE(SUM(CASE WHEN e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.pnl_pct IS NOT NULL THEN 1 ELSE 0 END), 0) AS total_trades,
+                COALESCE(SUM(CASE WHEN e.outcome IN ('WIN','LOSS')             AND e.pnl_pct IS NOT NULL THEN 1 ELSE 0 END), 0) AS decisive_trades,
                 COALESCE(SUM(CASE WHEN e.outcome = 'WIN' THEN 1 ELSE 0 END), 0)                                               AS wins,
                 COALESCE(SUM(CASE WHEN e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.pnl_pct IS NOT NULL
                                   AND COALESCE(e.closed_at, e.fired_at) > :cutoff
@@ -1905,10 +1906,13 @@ def _load_portal_data(uid: str):
 
         open_trades = int(agg.open_trades)
         total       = int(agg.total_trades)
+        decisive    = int(agg.decisive_trades)
         wins        = int(agg.wins)
         pnl_7d      = float(agg.pnl_7d)
         pnl_all     = float(agg.pnl_all)
-        win_rate    = round(wins / total * 100, 1) if total > 0 else 0
+        # Win rate denominator excludes BREAKEVEN — breakevens are neutral
+        # outcomes and shouldn't drag the win rate down (matches executor).
+        win_rate    = round(wins / decisive * 100, 1) if decisive > 0 else 0
 
         total_strats  = int(strat_counts.total)   if strat_counts else 0
         active_count  = int(strat_counts.active_count) if strat_counts else 0
@@ -5538,7 +5542,8 @@ async def api_marketplace_leaderboard(
                    m.is_ai_generated AS is_ai_generated,
                    COALESCE(SUM(e.pnl_pct), 0) AS pnl_sum,
                    COUNT(e.id)              AS trades,
-                   SUM(CASE WHEN e.outcome = 'WIN' THEN 1 ELSE 0 END) AS wins
+                   SUM(CASE WHEN e.outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN e.outcome IN ('WIN','LOSS') THEN 1 ELSE 0 END) AS decisive
             FROM strategy_marketplace m
             JOIN strategy_executions e ON e.strategy_id = m.strategy_id
             WHERE e.outcome IN ('WIN', 'LOSS', 'BREAKEVEN')
@@ -5560,9 +5565,11 @@ async def api_marketplace_leaderboard(
 
         entries = []
         for rank, r in enumerate(rows, 1):
-            trades = int(r.trades or 0)
-            wins   = int(r.wins or 0)
-            wr     = round((wins / trades) * 100, 1) if trades > 0 else 0.0
+            trades   = int(r.trades or 0)
+            wins     = int(r.wins or 0)
+            decisive = int(getattr(r, "decisive", 0) or 0)
+            # Exclude BREAKEVEN from win-rate denominator — neutral outcome.
+            wr       = round((wins / decisive) * 100, 1) if decisive > 0 else 0.0
             entries.append({
                 "rank":          rank,
                 "listing_id":    r.listing_id,
@@ -7473,8 +7480,11 @@ async def api_strategy_analytics(strategy_id: int, uid: str = Query(...)):
         # Win rate by direction
         long_closed  = [e for e in closed if e.direction == "LONG"]
         short_closed = [e for e in closed if e.direction == "SHORT"]
-        long_wr  = round(len([e for e in long_closed  if e.outcome == "WIN"]) / len(long_closed)  * 100, 1) if long_closed  else None
-        short_wr = round(len([e for e in short_closed if e.outcome == "WIN"]) / len(short_closed) * 100, 1) if short_closed else None
+        # Exclude BREAKEVEN from per-direction win-rate denominators too.
+        long_dec  = [e for e in long_closed  if e.outcome in ("WIN", "LOSS")]
+        short_dec = [e for e in short_closed if e.outcome in ("WIN", "LOSS")]
+        long_wr   = round(len([e for e in long_dec  if e.outcome == "WIN"]) / len(long_dec)  * 100, 1) if long_dec  else None
+        short_wr  = round(len([e for e in short_dec if e.outcome == "WIN"]) / len(short_dec) * 100, 1) if short_dec else None
 
         # Health score (0–10)
         wr_pct = perf.win_rate if perf else 0
@@ -7789,6 +7799,8 @@ async def api_portfolio(uid: str = Query(...)):
                   if r.outcome in ("WIN", "LOSS", "BREAKEVEN") and r.pnl_pct is not None]
         total = len(closed)
         wins  = sum(1 for _, _, o, _ in closed if o == "WIN")
+        # Win rate denominator excludes BREAKEVEN — neutral outcome shouldn't drag it down.
+        decisive = sum(1 for _, _, o, _ in closed if o in ("WIN", "LOSS"))
 
         closed_30d = [(p, ts, o, ip) for p, ts, o, ip in closed if ts and ts > cutoff_30d]
 
@@ -7838,7 +7850,7 @@ async def api_portfolio(uid: str = Query(...)):
             "live_open":        live_open,
             "paper_open":       paper_open,
             "total_trades":     total,
-            "win_rate":         round(wins / total * 100, 1) if total > 0 else 0,
+            "win_rate":         round(wins / decisive * 100, 1) if decisive > 0 else 0,
             "pnl_today":        round(pnl_today, 2),
             "pnl_7d":           round(pnl_7d, 2),
             "pnl_30d":          round(pnl_30d, 2),
@@ -11893,10 +11905,12 @@ async def api_competition_current(uid: str = Query(...)):
                 StrategyExecution.fired_at <= comp.ends_at,
                 StrategyExecution.outcome.in_(["WIN", "LOSS", "BREAKEVEN"]),
             ).all()
-            score      = round(sum(t.pnl_pct for t in trades if t.pnl_pct), 2)
+            score       = round(sum(t.pnl_pct for t in trades if t.pnl_pct), 2)
             trade_count = len(trades)
             wins        = sum(1 for t in trades if t.outcome == "WIN")
-            win_rate    = round(wins / trade_count * 100, 1) if trade_count else 0
+            # Exclude BREAKEVEN from win-rate denominator — neutral outcome.
+            decisive    = sum(1 for t in trades if t.outcome in ("WIN", "LOSS"))
+            win_rate    = round(wins / decisive * 100, 1) if decisive else 0
             rankings.append({
                 "user_id":      entry.user_id,
                 "user_name":    (author.first_name or author.username or "Anonymous") if author else "Unknown",
