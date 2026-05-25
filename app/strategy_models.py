@@ -53,8 +53,8 @@ class StrategyExecution(Base):
     conditions_met  = Column(JSON, nullable=True)          # which conditions triggered
     fired_at        = Column(DateTime, default=datetime.utcnow)
     closed_at       = Column(DateTime, nullable=True)
-    bitunix_order_id = Column(String(80), nullable=True)
-    oanda_order_id   = Column(String(80), nullable=True)   # P5e-2: OANDA forex live orders
+    bitunix_order_id  = Column(String(80), nullable=True)
+    ctrader_order_id  = Column(String(80), nullable=True)  # cTrader live forex orders
     notes           = Column(Text, nullable=True)
     is_paper        = Column(Boolean, default=False)       # paper trade — no real order placed
     asset_class     = Column(String(16), nullable=False, default="crypto", server_default="crypto", index=True)

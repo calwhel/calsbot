@@ -677,40 +677,24 @@ def _ensure_tables():
     except Exception as e:
         logger.warning(f"_ensure_tables(indexes outer): {e}")
 
-    # OANDA forex live order id (P5e-2). Mirrors bitunix_order_id; nullable
-    # so all existing paper rows stay valid.
-    try:
-        with engine.begin() as conn:
-            conn.execute(sa.text(
-                "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS oanda_order_id VARCHAR(80)"
-            ))
-        logger.info("_ensure_tables: strategy_executions.oanda_order_id ready")
-    except Exception as e:
-        emsg = str(e)
-        if "already exists" in emsg or "duplicate" in emsg:
-            logger.info("_ensure_tables(oanda_order_id): column already present")
-        else:
-            logger.warning(f"_ensure_tables(oanda_order_id): {e}")
-
-    # OANDA forex broker credentials (P5e). Three columns on user_preferences:
-    # encrypted API key, account ID, and environment (practice|live). Raw
-    # ALTER so we don't need a full Alembic migration for additive nullable
-    # columns. Each ALTER is wrapped to survive multi-worker races.
+    # cTrader forex broker columns (replaces OANDA). OAuth2 tokens from
+    # Spotware Open API. Additive nullable ALTERs — safe for multi-worker race.
     try:
         with engine.begin() as conn:
             for ddl in (
-                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS oanda_api_key VARCHAR",
-                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS oanda_account_id VARCHAR",
-                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS oanda_environment VARCHAR DEFAULT 'practice'",
+                "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS ctrader_order_id VARCHAR(80)",
+                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_access_token VARCHAR",
+                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_refresh_token VARCHAR",
+                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_account_id VARCHAR",
             ):
                 conn.execute(sa.text(ddl))
-        logger.info("_ensure_tables: oanda columns ready")
+        logger.info("_ensure_tables: ctrader columns ready")
     except Exception as e:
         emsg = str(e)
         if "already exists" in emsg or "duplicate" in emsg:
-            logger.info("_ensure_tables(oanda): columns already present")
+            logger.info("_ensure_tables(ctrader): columns already present")
         else:
-            logger.warning(f"_ensure_tables(oanda): {e}")
+            logger.warning(f"_ensure_tables(ctrader): {e}")
 
     # Affiliate program — applications + per-user affiliate state. Raw CREATE
     # to avoid registering yet another SQLAlchemy model just for a simple,
@@ -6360,7 +6344,7 @@ async def api_save_strategy(request: Request):
             try:
                 from app.models import UserPreference as _UP_save
                 _ps = db.query(_UP_save).filter(_UP_save.user_id == user.id).first()
-                _forex_live_ok = bool(_ps and _ps.oanda_api_key and _ps.oanda_account_id)
+                _forex_live_ok = bool(_ps and _ps.ctrader_access_token and _ps.ctrader_account_id)
             except Exception:
                 _forex_live_ok = False
         if _asset_class in PAPER_ONLY_CLASSES and not _forex_live_ok:
@@ -8372,9 +8356,8 @@ async def api_get_settings(uid: str = Query(...)):
             "global_max_positions":     portal.global_max_positions    if portal else 0,
             # Exchange connection — only expose boolean, never the actual keys
             "bitunix_keys_set":         bool(prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret),
-            "oanda_connected":          bool(prefs and prefs.oanda_api_key and prefs.oanda_account_id),
-            "oanda_environment":        (getattr(prefs, "oanda_environment", None) or "practice") if prefs else "practice",
-            "oanda_account_id":         (getattr(prefs, "oanda_account_id", None) or "") if prefs else "",
+            "ctrader_connected":        bool(prefs and prefs.ctrader_access_token and prefs.ctrader_account_id),
+            "ctrader_account_id":       (getattr(prefs, "ctrader_account_id", None) or "") if prefs else "",
             "auto_trading_enabled":     bool(prefs and prefs.auto_trading_enabled),
             # Security
             "has_password":             bool(user.password_hash),
@@ -8384,85 +8367,103 @@ async def api_get_settings(uid: str = Query(...)):
         db.close()
 
 
-# ── OANDA forex broker (P5e-1) ────────────────────────────────────────────────
-# Connect / status / disconnect endpoints. P5e-2 will flip the executor to
-# actually route forex live orders through the saved credentials; this phase
-# only persists + validates them so users can hook up their practice account
-# from the mobile Settings card.
-@app.get("/api/oanda/status")
-async def api_oanda_status(uid: str = Query(...)):
+# ── cTrader / FP Markets forex broker OAuth ───────────────────────────────────
+
+@app.get("/api/ctrader/auth-url")
+async def api_ctrader_auth_url(uid: str = Query(...), request: Request = None):
+    """Return the Spotware OAuth URL the user should be redirected to."""
     from app.database import SessionLocal
-    from app.models import UserPreference
     db = SessionLocal()
     try:
         user = _get_user_by_uid(uid, db)
         if not user:
             raise HTTPException(status_code=403)
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        connected = bool(prefs and prefs.oanda_api_key and prefs.oanda_account_id)
-        return JSONResponse({
-            "connected":   connected,
-            "environment": (getattr(prefs, "oanda_environment", None) or "practice") if prefs else "practice",
-            "account_id":  (getattr(prefs, "oanda_account_id", None) or "") if prefs else "",
-        })
+        from app.services.ctrader_client import get_oauth_url
+        host = os.environ.get("REPLIT_DEV_DOMAIN") or (request.headers.get("host") if request else "tradehubmarkets.com")
+        redirect_uri = f"https://{host}/api/ctrader/callback"
+        url = get_oauth_url(redirect_uri=redirect_uri, state=uid)
+        return JSONResponse({"url": url, "redirect_uri": redirect_uri})
     finally:
         db.close()
 
 
-@app.post("/api/oanda/connect")
-async def api_oanda_connect(request: Request, uid: str = Query(...)):
-    """Validate the OANDA key+account against api-fxpractice/api-fxtrade, then
-    encrypt + persist. Returns the account summary on success so the mobile
-    can show balance/currency in the connected card."""
+@app.get("/api/ctrader/callback")
+async def api_ctrader_callback(
+    code:  str = Query(None),
+    state: str = Query(None),
+    error: str = Query(None),
+    request: Request = None,
+):
+    """
+    Spotware OAuth callback. Exchanges code for tokens, fetches the account
+    list, stores the first live account, then redirects back to the portal.
+    """
+    if error:
+        return RedirectResponse(url=f"/?ctrader_error={error}")
+
     from app.database import SessionLocal
     from app.models import UserPreference
-    from app.utils.encryption import encrypt_api_key
-    from app.services.oanda_client import get_account_summary
+    from app.services.ctrader_client import exchange_code, get_accounts_for_token
 
-    # Fail-closed auth BEFORE any third-party call or body parsing so an
-    # unauth'd caller can't use this endpoint as an OANDA credential-validation
-    # proxy (architect P5e-1 finding #1).
     db = SessionLocal()
     try:
-        user = _get_user_by_uid(uid, db)
+        uid = state or ""
+        user = _get_user_by_uid(uid, db) if uid else None
         if not user:
-            raise HTTPException(status_code=403)
+            return RedirectResponse(url="/?ctrader_error=auth_failed")
 
-        try:
-            body = await request.json()
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid JSON body")
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail="Body must be a JSON object")
+        host = os.environ.get("REPLIT_DEV_DOMAIN") or (request.headers.get("host") if request else "tradehubmarkets.com")
+        redirect_uri = f"https://{host}/api/ctrader/callback"
 
-        api_key     = (body.get("api_key") or "").strip()
-        account_id  = (body.get("account_id") or "").strip()
-        environment = (body.get("environment") or "practice").strip().lower()
-        if environment not in ("practice", "live"):
-            raise HTTPException(status_code=400, detail="environment must be 'practice' or 'live'")
-        if not api_key or not account_id:
-            raise HTTPException(status_code=400, detail="api_key and account_id are required")
+        token_data = await exchange_code(code=code, redirect_uri=redirect_uri)
+        access_token  = token_data.get("accessToken") or token_data.get("access_token", "")
+        refresh_token = token_data.get("refreshToken") or token_data.get("refresh_token", "")
 
-        ok, summary = await get_account_summary(api_key, account_id, environment)
-        if not ok:
-            raise HTTPException(status_code=400, detail=summary.get("message") or "OANDA validation failed")
+        if not access_token:
+            return RedirectResponse(url="/?ctrader_error=no_token")
+
+        accounts = await get_accounts_for_token(access_token)
+        live_accounts = [a for a in accounts if a.get("isLive")]
+        chosen = live_accounts[0] if live_accounts else (accounts[0] if accounts else None)
 
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         if not prefs:
             prefs = UserPreference(user_id=user.id)
             db.add(prefs)
-        prefs.oanda_api_key     = encrypt_api_key(api_key)
-        prefs.oanda_account_id  = account_id
-        prefs.oanda_environment = environment
+        prefs.ctrader_access_token  = access_token
+        prefs.ctrader_refresh_token = refresh_token
+        prefs.ctrader_account_id    = str(chosen["ctidTraderAccountId"]) if chosen else ""
         db.commit()
-        return JSONResponse({"ok": True, "account": summary})
+
+        return RedirectResponse(url="/?ctrader_connected=1")
+    except Exception as e:
+        logger.error(f"[cTrader callback] {e}")
+        return RedirectResponse(url=f"/?ctrader_error=callback_failed")
     finally:
-        try: db.close()
-        except Exception: pass
+        db.close()
 
 
-@app.delete("/api/oanda/disconnect")
-async def api_oanda_disconnect(uid: str = Query(...)):
+@app.get("/api/ctrader/status")
+async def api_ctrader_status(uid: str = Query(...)):
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        connected = bool(prefs and prefs.ctrader_access_token and prefs.ctrader_account_id)
+        return JSONResponse({
+            "connected":  connected,
+            "account_id": (prefs.ctrader_account_id or "") if prefs else "",
+        })
+    finally:
+        db.close()
+
+
+@app.delete("/api/ctrader/disconnect")
+async def api_ctrader_disconnect(uid: str = Query(...)):
     from app.database import SessionLocal
     from app.models import UserPreference
     db = SessionLocal()
@@ -8472,8 +8473,9 @@ async def api_oanda_disconnect(uid: str = Query(...)):
             raise HTTPException(status_code=403)
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         if prefs:
-            prefs.oanda_api_key    = None
-            prefs.oanda_account_id = None
+            prefs.ctrader_access_token  = None
+            prefs.ctrader_refresh_token = None
+            prefs.ctrader_account_id    = None
             db.commit()
         return JSONResponse({"ok": True})
     finally:

@@ -1862,21 +1862,25 @@ async def evaluate_and_fire(
     )
     config["asset_class"] = asset_class
 
-    # P5e-2: per-asset broker gate. Forex → OANDA, crypto → Bitunix,
+    # Per-asset broker gate. Forex → cTrader (FP Markets), crypto → Bitunix,
     # stocks/indices → paper-only (no broker integration yet).
     if asset_class == "forex":
-        _oanda_live_ok = False
+        _ctrader_live_ok = False
         try:
             from app.models import UserPreference as _UP
             _prefs = db.query(_UP).filter(_UP.user_id == user.id).first()
-            _oanda_live_ok = bool(_prefs and _prefs.oanda_api_key and _prefs.oanda_account_id)
+            _ctrader_live_ok = bool(
+                _prefs
+                and _prefs.ctrader_access_token
+                and _prefs.ctrader_account_id
+            )
         except Exception:
-            _oanda_live_ok = False
-        is_paper = not (_wants_live and _oanda_live_ok)
+            _ctrader_live_ok = False
+        is_paper = not (_wants_live and _ctrader_live_ok)
         if _wants_live and is_paper:
             logger.debug(
                 f"[Strategy {strategy.id}] Forex live strategy downgraded to paper "
-                f"(no OANDA credentials) — signal will still be tracked."
+                f"(no cTrader credentials) — signal will still be tracked."
             )
     elif asset_class in PAPER_ONLY_CLASSES:
         # Stocks/indices: no broker yet, always paper.
@@ -2221,18 +2225,18 @@ async def evaluate_and_fire(
             except Exception as e:
                 logger.warning(f"Paper DM failed: {e}")
         else:
-            # Live trade: route by asset class. Forex → OANDA (P5e-2),
+            # Live trade: route by asset class. Forex → cTrader (FP Markets),
             # everything else → Bitunix (crypto). Stocks/indices can't reach
             # this branch yet because the paper-lock above forces is_paper=True.
             order_id    = None
             actual_fill = None
-            _broker     = "oanda" if asset_class == "forex" else "bitunix"
+            _broker     = "ctrader" if asset_class == "forex" else "bitunix"
             try:
                 ps_type      = risk.get("position_size_type", "pct")
                 _risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None
-                if _broker == "oanda":
-                    from app.services.oanda_trader import place_oanda_order_for_user
-                    order_result = await place_oanda_order_for_user(
+                if _broker == "ctrader":
+                    from app.services.ctrader_client import place_ctrader_order_for_user
+                    order_result = await place_ctrader_order_for_user(
                         user        = user,
                         symbol      = symbol,
                         direction   = direction,
@@ -2339,8 +2343,8 @@ async def evaluate_and_fire(
                 break  # paper execution is now open — stop processing matches
 
             if order_id:
-                if _broker == "oanda":
-                    execution.oanda_order_id = str(order_id)
+                if _broker == "ctrader":
+                    execution.ctrader_order_id = str(order_id)
                 else:
                     execution.bitunix_order_id = str(order_id)
                 if (
@@ -2570,11 +2574,11 @@ async def _propagate_to_subscribers(
                     try:
                         from app.models import UserPreference as _UP_sub
                         _sub_prefs = _sub_db.query(_UP_sub).filter(_UP_sub.user_id == sub_user.id).first()
-                        _can_live = bool(_sub_prefs and _sub_prefs.oanda_api_key and _sub_prefs.oanda_account_id)
-                        _live_reason = "ok" if _can_live else "no_oanda_credentials"
+                        _can_live = bool(_sub_prefs and _sub_prefs.ctrader_access_token and _sub_prefs.ctrader_account_id)
+                        _live_reason = "ok" if _can_live else "no_ctrader_credentials"
                     except Exception as _e:
                         _can_live = False
-                        _live_reason = f"oanda_check_error:{_e}"
+                        _live_reason = f"ctrader_check_error:{_e}"
                 elif _sub_asset_class in ("stock", "index"):
                     _can_live = False
                     _live_reason = "paper_only_asset_class"
@@ -2654,16 +2658,16 @@ async def _propagate_to_subscribers(
                     except Exception as _e:
                         logger.warning(f"[Propagate] Paper DM failed for strategy {sub_strategy.id}: {_e}")
             else:
-                # Live — route by asset class: forex → OANDA, else → Bitunix.
+                # Live — route by asset class: forex → cTrader, else → Bitunix.
                 order_id    = None
                 actual_fill = None
-                _sub_broker = "oanda" if _sub_asset_class == "forex" else "bitunix"
+                _sub_broker = "ctrader" if _sub_asset_class == "forex" else "bitunix"
                 try:
                     ps_type      = sub_risk.get("position_size_type", "pct")
                     _sub_risk_usd = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None
-                    if _sub_broker == "oanda":
-                        from app.services.oanda_trader import place_oanda_order_for_user
-                        order_result = await place_oanda_order_for_user(
+                    if _sub_broker == "ctrader":
+                        from app.services.ctrader_client import place_ctrader_order_for_user
+                        order_result = await place_ctrader_order_for_user(
                             user        = sub_user,
                             symbol      = symbol,
                             direction   = direction,
@@ -2711,8 +2715,8 @@ async def _propagate_to_subscribers(
                     continue
 
                 if order_id:
-                    if _sub_broker == "oanda":
-                        sub_exec.oanda_order_id = str(order_id)
+                    if _sub_broker == "ctrader":
+                        sub_exec.ctrader_order_id = str(order_id)
                     else:
                         sub_exec.bitunix_order_id = str(order_id)
                     if (

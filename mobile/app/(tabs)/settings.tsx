@@ -288,9 +288,9 @@ export default function SettingsScreen() {
         <SettingsLink
           icon="globe-outline"
           tone="accent"
-          label="OANDA (Forex)"
-          hint="Connect your OANDA practice or live account to trade forex strategies"
-          onPress={() => router.push('/oanda' as any)}
+          label="cTrader — FP Markets (Forex)"
+          hint="Connect your FP Markets cTrader account to trade forex strategies live"
+          onPress={() => router.push('/ctrader' as any)}
         />
       </View>
 

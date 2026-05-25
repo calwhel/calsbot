@@ -126,16 +126,15 @@ export default function WizardScreen() {
   const [s, setS] = useState<WizardState>(defaultWizardState);
   const scrollRef = useRef<ScrollView | null>(null);
 
-  // P5e-2: forex strategies unlock live execution once OANDA is connected.
-  // Used by Step6 to drop the "🔒 paper-only" lock and re-enable the
-  // leverage stepper. Falls back to false (paper-locked) on any error.
-  const { data: oandaStatus } = useQuery({
-    queryKey: ['oanda-status', uid],
-    queryFn: () => apiGet<{ connected: boolean }>('/api/oanda/status', uid),
+  // Forex strategies unlock live execution once cTrader is connected.
+  // Used by Step2/Step6 to drop the paper-only lock and re-enable leverage.
+  const { data: ctraderStatus } = useQuery({
+    queryKey: ['ctrader-status', uid],
+    queryFn: () => apiGet<{ connected: boolean }>('/api/ctrader/status', uid),
     enabled: !!uid,
     staleTime: 60_000,
   });
-  const oandaConnected = !!oandaStatus?.connected;
+  const ctraderConnected = !!ctraderStatus?.connected;
 
   // ── Transient UI state ─────────────────────────────────────────────────
   const [pickerVisible, setPickerVisible]       = useState<null | 'primary' | 'confirm'>(null);
@@ -329,7 +328,7 @@ export default function WizardScreen() {
   // ── Save strategy ─────────────────────────────────────────────────────
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const cfg = buildWizardConfig(s, { oandaConnected });
+      const cfg = buildWizardConfig(s, { ctraderConnected });
       const res = await apiPost<SaveStrategyResponse>('/api/save-strategy', { uid, config: cfg });
       return res;
     },
@@ -454,7 +453,7 @@ export default function WizardScreen() {
         >
           {s.step === 1 && <StepMarket s={s} onPick={applyAssetClass} />}
           {s.step === 2 && <Step1 s={s} onPick={applyStyle} />}
-          {s.step === 3 && <Step2 s={s} update={update} oandaConnected={oandaConnected} />}
+          {s.step === 3 && <Step2 s={s} update={update} ctraderConnected={ctraderConnected} />}
           {s.step === 4 && (
             <Step3
               s={s}
@@ -473,7 +472,7 @@ export default function WizardScreen() {
             />
           )}
           {s.step === 6 && <Step5 s={s} update={update} warnings={warnings} risk={risk} />}
-          {s.step === 7 && <Step6 s={s} update={update} oandaConnected={oandaConnected} />}
+          {s.step === 7 && <Step6 s={s} update={update} ctraderConnected={ctraderConnected} />}
           {s.step === 8 && (
             <Step7
               s={s}
@@ -640,9 +639,8 @@ function Step1({ s, onPick }: { s: WizardState; onPick: (id: StyleId) => void })
 // ─────────────────────────────────────────────────────────────────────────
 // Step 2 — Direction & Mode
 // ─────────────────────────────────────────────────────────────────────────
-function Step2({ s, update, oandaConnected }: { s: WizardState; update: (p: Partial<WizardState>) => void; oandaConnected?: boolean }) {
-  // P5e-2: forex unlocks live mode once OANDA is connected.
-  const forexLiveOk = s.assetClass === 'forex' && !!oandaConnected;
+function Step2({ s, update, ctraderConnected }: { s: WizardState; update: (p: Partial<WizardState>) => void; ctraderConnected?: boolean }) {
+  const forexLiveOk = s.assetClass === 'forex' && !!ctraderConnected;
   const paperOnly = ASSET_CLASS_LABELS[s.assetClass].paperOnly && !forexLiveOk;
   return (
     <View>
@@ -1169,11 +1167,8 @@ const tradfiStyles = StyleSheet.create({
   chipOnText: { color: '#0E0F11', fontFamily: font.semibold, fontSize: 13 },
 });
 
-function Step6({ s, update, oandaConnected }: { s: WizardState; update: (p: Partial<WizardState>) => void; oandaConnected?: boolean }) {
-  // Forex strategies are normally paper-only until a broker is connected.
-  // P5e-2: when the user has linked OANDA, lift the lock so they can pick
-  // a real leverage and let the executor route the order through OANDA.
-  const forexLiveOk = s.assetClass === 'forex' && !!oandaConnected;
+function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Partial<WizardState>) => void; ctraderConnected?: boolean }) {
+  const forexLiveOk = s.assetClass === 'forex' && !!ctraderConnected;
   const paperLocked = ASSET_CLASS_LABELS[s.assetClass].paperOnly && !forexLiveOk;
   const toggleSession = (id: Session) => {
     const has = s.sessions.includes(id);

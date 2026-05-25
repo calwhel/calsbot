@@ -2714,48 +2714,28 @@ function dismissTgBanner(){
       </div>
     </div>
 
-    <!-- Forex Trading / OANDA Connection (P5e-2) -->
+    <!-- Forex Trading — cTrader / FP Markets -->
     <div class="settings-section">
-      <div class="settings-section-title"><div class="sc-icon" style="background:rgba(63,182,139,.15);color:#3FB68B">💱</div>Forex Trading — OANDA Connection</div>
-      <div class="hint" style="margin-bottom:16px">Connect your OANDA account to run forex strategies live. We validate the credentials with OANDA before saving and store the key encrypted. Practice accounts are free and great for testing.</div>
-      <div id="oanda-connected-card" style="display:none;background:rgba(63,182,139,.08);border:1px solid rgba(63,182,139,.25);border-radius:6px;padding:12px 14px;margin-bottom:12px">
+      <div class="settings-section-title"><div class="sc-icon" style="background:rgba(63,182,139,.15);color:#3FB68B">💱</div>Forex Trading — cTrader (FP Markets)</div>
+      <div class="hint" style="margin-bottom:16px">Connect your FP Markets live account via cTrader OAuth to run forex strategies with real execution. Paper testing works without any connection.</div>
+      <div id="ctrader-connected-card" style="display:none;background:rgba(63,182,139,.08);border:1px solid rgba(63,182,139,.25);border-radius:6px;padding:12px 14px;margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#3FB68B;font-weight:700">
           <span style="width:7px;height:7px;border-radius:50%;background:#3FB68B;display:inline-block"></span>
-          <span style="flex:1">OANDA connected — forex live trading active</span>
-          <button class="btn ghost sm" style="flex-shrink:0;font-size:11px" onclick="disconnectOanda()">Disconnect</button>
+          <span style="flex:1">cTrader connected — FP Markets live forex active</span>
+          <button class="btn ghost sm" style="flex-shrink:0;font-size:11px" onclick="disconnectCtrader()">Disconnect</button>
         </div>
-        <div id="oanda-meta" style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.5"></div>
+        <div id="ctrader-meta" style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.5"></div>
       </div>
-      <div id="oanda-form">
-        <div class="form-group" style="margin-bottom:12px">
-          <label>OANDA API Key</label>
-          <div style="display:flex;gap:8px;align-items:center">
-            <input id="oanda-api-key" type="password" placeholder="Paste your OANDA personal access token"
-              style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;color:var(--text);font-size:13px">
-            <button class="btn ghost sm" style="flex-shrink:0;font-size:11px" onclick="toggleKeyVis('oanda-api-key',this)">Show</button>
-          </div>
-          <div class="hint" style="margin-top:6px">Generate one at <a href="https://www.oanda.com/account/tpa/personal_token" target="_blank" rel="noopener" style="color:var(--accent)">oanda.com → My Account → Manage API Access</a>.</div>
-        </div>
-        <div class="form-group" style="margin-bottom:12px">
-          <label>Account ID</label>
-          <input id="oanda-account-id" type="text" placeholder="e.g. 101-001-12345678-001"
-            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;color:var(--text);font-size:13px">
-        </div>
-        <div class="form-group" style="margin-bottom:12px">
-          <label>Environment</label>
-          <div style="display:flex;gap:8px">
-            <label style="flex:1;cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface2)">
-              <input type="radio" name="oanda-env" value="practice" checked style="margin:0">
-              <span style="font-size:13px"><strong>Practice</strong> — paper money, full API access</span>
-            </label>
-            <label style="flex:1;cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface2)">
-              <input type="radio" name="oanda-env" value="live" style="margin:0">
-              <span style="font-size:13px"><strong>Live</strong> — real funds</span>
-            </label>
+      <div id="ctrader-form">
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px">
+          <div style="font-size:12px;color:var(--text-muted);line-height:1.6">
+            <div style="margin-bottom:6px">① Click <strong style="color:var(--text)">Connect via cTrader OAuth</strong> below</div>
+            <div style="margin-bottom:6px">② Log in with your <strong style="color:var(--text)">FP Markets cTrader ID</strong> and authorise TradeHub</div>
+            <div>③ You'll be redirected back automatically — forex strategies set to <strong style="color:var(--text)">Go Live</strong> will route real orders through your account</div>
           </div>
         </div>
-        <div id="oanda-test-result" style="display:none;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:12px;font-weight:600"></div>
-        <button class="btn primary sm" id="oanda-connect-btn" onclick="connectOanda()">Connect OANDA</button>
+        <button class="btn primary sm" id="ctrader-connect-btn" onclick="connectCtrader()">Connect via cTrader OAuth →</button>
+        <div class="hint" style="margin-top:10px">Don't have an FP Markets account? <a href="https://www.fpmarkets.com" target="_blank" rel="noopener" style="color:var(--accent)">Open one at fpmarkets.com</a> — choose the cTrader platform.</div>
       </div>
     </div>
 
@@ -6852,70 +6832,41 @@ async function testExchangeConnection(){
   }
   btns.forEach(b=>{b.disabled=false;b.textContent='Test Connection';});
 }
-// ─── OANDA Connect/Disconnect (P5e-2) ─────────────────────────────────────
-async function loadOandaCard(){
+// ─── cTrader / FP Markets Connect/Disconnect ──────────────────────────────
+async function loadCtraderCard(){
   try{
-    const r=await fetch(`/api/oanda/status?uid=${UID}`);
+    const r=await fetch(`/api/ctrader/status?uid=${UID}`);
     if(!r.ok)return;
     const d=await r.json();
-    _OANDA_CONNECTED=!!d.connected;
-    const card=$('oanda-connected-card'); const form=$('oanda-form');
+    _OANDA_CONNECTED=!!d.connected;  // reuse existing flag — drives forex wizard live-gate
+    const card=$('ctrader-connected-card'); const form=$('ctrader-form');
     if(d.connected){
       card.style.display='block'; form.style.display='none';
       const acct=escHtml(d.account_id||'—');
-      const envBadge=d.environment==='live'?'<span style="color:#D6A35C">⚡ Live</span>':'🧪 Practice';
-      $('oanda-meta').innerHTML=`Account <code>${acct}</code> · ${envBadge}`;
+      $('ctrader-meta').innerHTML=`Account ID <code>${acct}</code> · FP Markets · Live`;
     } else {
       card.style.display='none'; form.style.display='block';
     }
   }catch(e){/* ignore */}
 }
-async function connectOanda(){
-  const btn=$('oanda-connect-btn'); const result=$('oanda-test-result');
-  const apiKey=$('oanda-api-key').value.trim();
-  const accountId=$('oanda-account-id').value.trim();
-  const env=document.querySelector('input[name="oanda-env"]:checked')?.value||'practice';
-  if(!apiKey||!accountId){toast('API key and account ID are required','error');return;}
-  btn.disabled=true; btn.textContent='Connecting…';
-  result.style.display='block';
-  result.style.background='rgba(100,100,120,.12)';
-  result.style.border='1px solid var(--border)';
-  result.style.color='var(--text-muted)';
-  result.textContent='Validating with OANDA…';
+async function connectCtrader(){
+  const btn=$('ctrader-connect-btn');
+  btn.disabled=true; btn.textContent='Opening…';
   try{
-    const r=await fetch(`/api/oanda/connect?uid=${encodeURIComponent(UID)}`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({api_key:apiKey,account_id:accountId,environment:env})
-    });
-    let d={}; try{d=await r.json();}catch(_){}
-    if(r.ok&&d.ok){
-      result.style.background='rgba(63,182,139,.08)';
-      result.style.border='1px solid rgba(63,182,139,.3)';
-      result.style.color='#3FB68B';
-      const bal=d.account?.balance; const cur=d.account?.currency||'';
-      result.innerHTML=`✅ Connected${bal?` — Balance: <strong>${Number(bal).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})} ${cur}</strong>`:''}`;
-      $('oanda-api-key').value=''; $('oanda-account-id').value='';
-      toast('OANDA connected','success');
-      setTimeout(loadOandaCard,400);
-    } else {
-      result.style.background='rgba(229,72,77,.08)';
-      result.style.border='1px solid rgba(229,72,77,.3)';
-      result.style.color='var(--red,#E5484D)';
-      result.textContent=`❌ ${d.detail||'Validation failed — check your API key, account ID, and environment.'}`;
-    }
+    const r=await fetch(`/api/ctrader/auth-url?uid=${encodeURIComponent(UID)}`);
+    const d=await r.json();
+    if(d.url){window.location.href=d.url;}
+    else{toast('Could not get OAuth URL','error'); btn.disabled=false; btn.textContent='Connect via cTrader OAuth →';}
   }catch(e){
-    result.style.background='rgba(229,72,77,.08)';
-    result.style.border='1px solid rgba(229,72,77,.3)';
-    result.style.color='var(--red,#E5484D)';
-    result.textContent='❌ Network error — could not reach server.';
+    toast('Network error','error');
+    btn.disabled=false; btn.textContent='Connect via cTrader OAuth →';
   }
-  btn.disabled=false; btn.textContent='Connect OANDA';
 }
-async function disconnectOanda(){
-  if(!confirm('Disconnect OANDA? Forex strategies will revert to paper mode until you reconnect.'))return;
+async function disconnectCtrader(){
+  if(!confirm('Disconnect cTrader? Forex strategies will revert to paper mode until you reconnect.'))return;
   try{
-    const r=await fetch(`/api/oanda/disconnect?uid=${encodeURIComponent(UID)}`,{method:'DELETE'});
-    if(r.ok){toast('OANDA disconnected'); _OANDA_CONNECTED=false; loadOandaCard();}
+    const r=await fetch(`/api/ctrader/disconnect?uid=${encodeURIComponent(UID)}`,{method:'DELETE'});
+    if(r.ok){toast('cTrader disconnected'); _OANDA_CONNECTED=false; loadCtraderCard();}
     else{toast('Disconnect failed','error');}
   }catch(e){toast('Network error','error');}
 }
