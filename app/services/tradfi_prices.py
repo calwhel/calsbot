@@ -65,10 +65,24 @@ def _yf_download_blocking(ticker: str, interval: str, period: str):
 
 
 async def get_price(symbol: str, asset_class: str) -> Optional[float]:
-    """Latest trade price (last close on the smallest available bar)."""
+    """
+    Latest trade price.
+    Priority: cTrader live feed → yfinance (15-min delayed fallback).
+    """
     cls = normalize_asset_class(asset_class)
     if cls == ASSET_CLASS_CRYPTO:
         return None
+
+    # ── 1. Try cTrader live feed (real-time, same source as FP Markets) ──────
+    try:
+        from app.services.ctrader_price_feed import get_price as _ct_price
+        ct_px = _ct_price(symbol)
+        if ct_px is not None:
+            return ct_px
+    except Exception:
+        pass
+
+    # ── 2. Fallback: yfinance ─────────────────────────────────────────────────
     ticker = _resolve_ticker(cls, symbol)
     if not ticker:
         return None
@@ -98,11 +112,22 @@ async def get_klines(
 ) -> List[List[float]]:
     """
     Return up to `limit` OHLC bars in MEXC-shape: [[ts_ms, o, h, l, c, v], ...]
-    Empty list on failure (caller handles).
+    Priority: cTrader trendbar feed → yfinance (15-min delayed fallback).
     """
     cls = normalize_asset_class(asset_class)
     if cls == ASSET_CLASS_CRYPTO:
         return []
+
+    # ── 1. Try cTrader trendbar feed (FP Markets exact data) ─────────────────
+    try:
+        from app.services.ctrader_price_feed import get_klines as _ct_klines
+        ct_rows = await _ct_klines(symbol, asset_class, timeframe, limit)
+        if ct_rows:
+            return ct_rows
+    except Exception:
+        pass
+
+    # ── 2. Fallback: yfinance ─────────────────────────────────────────────────
     ticker = _resolve_ticker(cls, symbol)
     if not ticker:
         return []

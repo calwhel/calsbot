@@ -1127,6 +1127,18 @@ async def _startup_background():
     except Exception as e:
         logger.warning(f"Background _ensure_tables error: {e}")
 
+    # ── cTrader live price feed ───────────────────────────────────────────────
+    # Starts a persistent TLS connection to live.ctraderapi.com that streams
+    # real-time bid/ask for all tracked forex/index symbols.  tradfi_prices.py
+    # consults this feed first; falls back to yfinance when dormant.
+    # Runs in every environment (dev + prod) since it's read-only market data.
+    try:
+        from app.services.ctrader_price_feed import start as _ct_feed_start
+        _ct_feed_start()
+        logger.info("cTrader live price feed task scheduled")
+    except Exception as _ct_err:
+        logger.warning(f"cTrader price feed start error (non-fatal): {_ct_err}")
+
     # Only run the strategy executor in production (REPL_DEPLOYMENT=1).
     # In dev, both the dev portal and production share the same Neon DB, so
     # running the executor in dev doubles all API calls and causes confusion.
@@ -8480,6 +8492,36 @@ async def api_ctrader_disconnect(uid: str = Query(...)):
         return JSONResponse({"ok": True})
     finally:
         db.close()
+
+
+@app.get("/api/ctrader/feed-status")
+async def api_ctrader_feed_status():
+    """
+    Returns the current state of the live cTrader price feed.
+    No auth required — read-only diagnostic endpoint used by the
+    cTrader connection screen to show feed health.
+    """
+    try:
+        from app.services.ctrader_price_feed import (
+            is_live as _ct_live,
+            cached_symbols as _ct_syms,
+        )
+        live = _ct_live()
+        symbols = _ct_syms()
+        return JSONResponse({
+            "live":            live,
+            "cached_symbols":  symbols,
+            "symbol_count":    len(symbols),
+            "source":          "ctrader" if live else "yfinance_fallback",
+        })
+    except Exception as e:
+        return JSONResponse({
+            "live":           False,
+            "cached_symbols": [],
+            "symbol_count":   0,
+            "source":         "yfinance_fallback",
+            "error":          str(e),
+        })
 
 
 @app.put("/api/settings")
