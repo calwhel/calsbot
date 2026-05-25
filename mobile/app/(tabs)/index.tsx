@@ -474,7 +474,7 @@ function LiveTradingCard({
     badgeBg = 'rgba(148,163,184,0.10)';
     badgeBorder = 'rgba(148,163,184,0.28)';
     hint = aff.reason === 'uid_not_under_master'
-      ? 'Your UID isn\'t under the master affiliate. Re-register via the affiliate link.'
+      ? 'Your Bitunix account isn\'t registered under TradeHub. Sign up via the link in Settings → Brokers → Bitunix to unlock live trading.'
       : 'Affiliate check unavailable — signals are paper-tracked for now.';
   }
 

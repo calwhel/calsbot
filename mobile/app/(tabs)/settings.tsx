@@ -286,10 +286,17 @@ export default function SettingsScreen() {
       </View>
       <View style={styles.section}>
         <SettingsLink
+          icon="trending-up-outline"
+          tone="accent"
+          label="Bitunix — Crypto"
+          hint="Connect your Bitunix account to trade crypto strategies live"
+          onPress={() => router.push('/bitunix' as any)}
+        />
+        <SettingsLink
           icon="globe-outline"
           tone="accent"
-          label="cTrader — FP Markets (Forex)"
-          hint="Connect your FP Markets cTrader account to trade forex strategies live"
+          label="cTrader — FP Markets (Forex & Indices)"
+          hint="Connect your FP Markets cTrader account to trade forex and index strategies live"
           onPress={() => router.push('/ctrader' as any)}
         />
       </View>

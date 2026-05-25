@@ -109,6 +109,10 @@ run = ["bash", "scripts/start_production.sh"]
 
 [userenv.shared]
 GOOGLE_CLIENT_ID = "378619424193-s9926m8c43onme0t5egidbhkfc7ukuur.apps.googleusercontent.com"
+BITUNIX_REFERRAL_URL = "https://www.bitunix.com/register?vipCode=tradehubsave"
+BITUNIX_REQUIRE_AFFILIATE = "1"
+CTRADER_IB_CODE = ""
+CTRADER_REQUIRE_IB = "0"
 
 [userenv.production]
 FORCE_EXECUTOR = "1"

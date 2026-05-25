@@ -175,11 +175,11 @@ export default function CTraderScreen() {
           Don't have an FP Markets account?{' '}
           <Text
             style={styles.link}
-            onPress={() => Linking.openURL('https://www.fpmarkets.com')}
+            onPress={() => Linking.openURL('https://www.fpmarkets.com/?fpm-affiliate-utm-source=IB&fpm-affiliate-model=revenue-sharing')}
           >
-            Open one at fpmarkets.com
+            Open one via TradeHub's IB link
           </Text>
-          {' '}— choose the cTrader platform when signing up.
+          {' '}— choose the cTrader platform when signing up. Your account must be opened through our introducing broker link to be eligible for live trading on TradeHub.
         </Text>
       </View>
     </Screen>

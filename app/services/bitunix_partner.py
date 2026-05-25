@@ -48,6 +48,7 @@ REQUIRE_AFFILIATE  = os.environ.get("BITUNIX_REQUIRE_AFFILIATE", "1").lower() in
 HTTP_TIMEOUT       = int(os.environ.get("BITUNIX_PARTNER_HTTP_TIMEOUT", "10"))
 PAGE_SIZE          = int(os.environ.get("BITUNIX_PARTNER_PAGE_SIZE", "200"))
 MAX_PAGES          = int(os.environ.get("BITUNIX_PARTNER_MAX_PAGES", "50"))
+REFERRAL_URL       = os.environ.get("BITUNIX_REFERRAL_URL", "https://www.bitunix.com/register?vipCode=tradehubsave")
 
 # In-memory cache: (uid_set, fetched_at_epoch, total_count_or_None).
 _cache: Tuple[Set[str], float, Optional[int]] = (set(), 0.0, None)
@@ -193,13 +194,14 @@ async def is_uid_affiliated(bitunix_uid: Optional[str]) -> Tuple[bool, str]:
 def status() -> Dict[str, Any]:
     age = cache_age_sec()
     return {
-        "configured":      is_configured(),
+        "configured":        is_configured(),
         "require_affiliate": REQUIRE_AFFILIATE,
-        "base_url":        BASE_URL,
-        "list_path":       LIST_PATH,
-        "cache_size":      len(_cache[0]),
-        "cache_age_sec":   round(age, 1) if age is not None else None,
-        "cache_ttl_sec":   CACHE_TTL_SEC,
+        "referral_url":      REFERRAL_URL,
+        "base_url":          BASE_URL,
+        "list_path":         LIST_PATH,
+        "cache_size":        len(_cache[0]),
+        "cache_age_sec":     round(age, 1) if age is not None else None,
+        "cache_ttl_sec":     CACHE_TTL_SEC,
         "guidance": (
             "Set BITUNIX_PARTNER_API_KEY + BITUNIX_PARTNER_API_SECRET (from "
             "partners.bitunix.com → API). Live trading will then require the "

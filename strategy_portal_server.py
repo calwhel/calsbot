@@ -7870,6 +7870,9 @@ async def api_portfolio(uid: str = Query(...)):
                 "reason":      aff_reason,
                 "has_uid":     bool(bitunix_uid),
                 "has_keys":    has_keys,
+                "referral_url": (
+                    os.environ.get("BITUNIX_REFERRAL_URL", "https://www.bitunix.com/register?vipCode=tradehubsave")
+                ),
             },
         })
         _CACHE[cache_key] = (result, time.time() + 30)
