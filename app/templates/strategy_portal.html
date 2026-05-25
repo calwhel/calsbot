@@ -4246,6 +4246,7 @@ const FOREX_TEMPLATES={
   fx_currency_strength:  {tp_pips:35,sl_pips:18,direction:'BOTH',primary:'forex_currency_strength',primaryCfg:{window:'4h',min_diff:0.6,direction:'either'}},
   fx_liquidity_pa:       {tp_pips:28,sl_pips:14,direction:'BOTH',primary:'forex_liquidity_pa',     primaryCfg:{pattern:'sweep_eqh',timeframe:'15m',lookback:20,tolerance_pips:3}},
   fx_cot_sentiment:      {tp_pips:80,sl_pips:40,direction:'BOTH',primary:'forex_cot',              primaryCfg:{condition:'specs_extreme_long',extreme_pct:75,lookback_weeks:52,respect_pair_inversion:true},timeframe:'4h'},
+  fx_smc_hunt:           {tp_pips:35,sl_pips:15,direction:'BOTH',primary:'fvg',                    primaryCfg:{timeframe:'15m',fvg_dir:'bullish',condition:'tap_and_reject',min_gap_pct:0.2}},
 };
 function isForexStyle(id){return!!id&&typeof id==='string'&&id.startsWith('fx_');}
 function isIndexStyle(id){return!!id&&typeof id==='string'&&id.startsWith('idx_');}
@@ -4273,7 +4274,8 @@ const SIGNAL_META={
   volume_spike:    {icon:'🔊',label:'Volume Surge',     desc:'Unusual volume spike'},
   funding_rate:    {icon:'💰',label:'Funding Rate',     desc:'Extreme funding conditions'},
   support_resistance:{icon:'📏',label:'S/R Level',      desc:'Support or resistance touch'},
-  fvg:             {icon:'🕳️',label:'Fair Value Gap',   desc:'Unmitigated order imbalance'},
+  fvg:             {icon:'🕳️',label:'Fair Value Gap',   desc:'Unmitigated price imbalance (FVG)'},
+  ifvg:            {icon:'🔁', label:'Inv. Fair Value Gap',desc:'Price re-enters a mitigated FVG (IFVG)'},
   open_interest:   {icon:'📡',label:'OI Surge',         desc:'Open interest spike detection'},
   liquidation:     {icon:'💣',label:'Liquidation',      desc:'Liquidation cascade event'},
   consecutive_candles:{icon:'🟩',label:'Candle Run',    desc:'Several candles in one direction'},
@@ -6289,6 +6291,21 @@ async function buildStrategy(){
       data={config:{
         version:'1.0',name,description:desc,
         entry_conditions:{operator:'AND',conditions:[{type:'tradingview_webhook',entry_type:'tradingview_webhook'}],entry_type:'tradingview_webhook'},
+        exit:{},risk:{},filters:{},universe:{type:'all'},
+      },warnings:[],risk_rating:'medium'};
+    } else if(WZ.assetClass&&WZ.assetClass!=='crypto'){
+      // Forex, stocks, and indices: compile locally — all params are already in WZ
+      // from the wizard steps so sending to the AI endpoint is unnecessary and slow.
+      const primaryCond=Object.assign({type:WZ.primaryType},WZ.primaryCfg||{});
+      if(!primaryCond.timeframe)primaryCond.timeframe=WZ.timeframe||'15m';
+      const confirmConds=(WZ.confirms||[]).map(c=>{
+        const cond=Object.assign({type:c.type},c.cfg||{});
+        if(!cond.timeframe)cond.timeframe=WZ.timeframe||'15m';
+        return cond;
+      });
+      data={config:{
+        version:'1.0',name,description:desc,
+        entry_conditions:{operator:'AND',conditions:[primaryCond,...confirmConds],entry_type:WZ.primaryType},
         exit:{},risk:{},filters:{},universe:{type:'all'},
       },warnings:[],risk_rating:'medium'};
     } else {
