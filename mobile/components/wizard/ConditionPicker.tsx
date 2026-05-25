@@ -117,7 +117,7 @@ export function ConditionPicker({
   );
 }
 
-const CAT_ORDER: SignalCategory[] = ['oscillator', 'trend', 'price', 'volume', 'structure', 'filter'];
+const CAT_ORDER: SignalCategory[] = ['structure', 'oscillator', 'trend', 'price', 'volume', 'filter'];
 
 function SignalRow({
   type, selected, onPress, recommended = false,
