@@ -96,7 +96,7 @@ _TOP_US_STOCKS: List[Tuple[str, str, str]] = [
     ("ARKK",  "ARKK",  "ARK Innovation ETF"),
 ]
 
-# Forex majors — yfinance uses `EURUSD=X` format.
+# Forex majors + metals — yfinance uses `EURUSD=X` format; metals use GC=F / SI=F.
 _FOREX_MAJORS: List[Tuple[str, str, str]] = [
     ("EURUSD", "EURUSD=X", "Euro / US Dollar"),
     ("GBPUSD", "GBPUSD=X", "British Pound / US Dollar"),
@@ -105,6 +105,11 @@ _FOREX_MAJORS: List[Tuple[str, str, str]] = [
     ("USDCAD", "USDCAD=X", "US / Canadian Dollar"),
     ("USDCHF", "USDCHF=X", "US Dollar / Swiss Franc"),
     ("NZDUSD", "NZDUSD=X", "New Zealand / US Dollar"),
+    ("EURGBP", "EURGBP=X", "Euro / British Pound"),
+    ("EURJPY", "EURJPY=X", "Euro / Japanese Yen"),
+    ("GBPJPY", "GBPJPY=X", "British Pound / Japanese Yen"),
+    ("XAUUSD", "GC=F",     "Gold / US Dollar"),
+    ("XAGUSD", "SI=F",     "Silver / US Dollar"),
 ]
 
 # Major indices — yfinance uses caret-prefixed tickers.

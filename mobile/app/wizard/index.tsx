@@ -1208,7 +1208,7 @@ function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
     <View>
       <StepIntro
         title="Risk & universe"
-        subtitle="Position sizing, leverage, what coins to scan, and when the strategy is allowed to trade."
+        subtitle={`Position sizing, leverage, ${s.assetClass === 'crypto' ? 'which coins to scan' : s.assetClass === 'stock' ? 'which stocks to trade' : s.assetClass === 'forex' ? 'which pairs/metals to trade' : 'which indices to trade'}, and when the strategy is allowed to trade.`}
       />
 
       <Card>
@@ -1219,7 +1219,7 @@ function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
           </View>
         ) : forexLiveOk ? (
           <View style={{ marginBottom: spacing.sm }}>
-            <Pill label="✓ Live via OANDA — leverage unlocked" tone="positive" small />
+            <Pill label="✓ Live via FP Markets (cTrader) — leverage unlocked" tone="positive" small />
           </View>
         ) : null}
         {!paperLocked ? (
@@ -1273,8 +1273,8 @@ function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
         <ChipRow options={RISK_PROFILE_OPTIONS} value={s.riskProfile} onChange={(v) => update({ riskProfile: v })} size="sm" />
 
         <ToggleRow
-          label="No duplicate coin per day"
-          desc="Skip a coin if you already traded it today"
+          label={s.assetClass === 'crypto' ? 'No duplicate coin per day' : 'No duplicate symbol per day'}
+          desc={`Skip a ${s.assetClass === 'crypto' ? 'coin' : 'symbol'} if you already traded it today`}
           enabled={s.noDuplicateSymbol}
           onToggle={(on) => update({ noDuplicateSymbol: on })}
         />
@@ -1368,15 +1368,17 @@ function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
           enabled={s.htfFilter}
           onToggle={(on) => update({ htfFilter: on })}
         />
-        <View style={{ marginTop: spacing.sm }}>
-          <Text style={styles.inputLabel}>BTC market regime</Text>
-          <ChipRow
-            options={BTC_REGIME_OPTIONS}
-            value={s.btcRegime}
-            onChange={(v) => update({ btcRegime: v })}
-            size="sm"
-          />
-        </View>
+        {s.assetClass === 'crypto' ? (
+          <View style={{ marginTop: spacing.sm }}>
+            <Text style={styles.inputLabel}>BTC market regime</Text>
+            <ChipRow
+              options={BTC_REGIME_OPTIONS}
+              value={s.btcRegime}
+              onChange={(v) => update({ btcRegime: v })}
+              size="sm"
+            />
+          </View>
+        ) : null}
       </Card>
     </View>
   );

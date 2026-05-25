@@ -301,12 +301,22 @@ function renderKnobs(
       );
     }
 
-    case 'fvg': {
-      const dirOpts: ChipOption<string>[] = [
-        { value: 'bullish', label: '🟢 Bullish FVG' },
-        { value: 'bearish', label: '🔴 Bearish FVG' },
+    case 'fvg':
+    case 'ifvg': {
+      const isIfvg = type === 'ifvg';
+      const dirOpts: ChipOption<string>[] = isIfvg ? [
+        { value: 'bullish', label: '🟢 Bullish IFVG (price re-enters bearish gap)' },
+        { value: 'bearish', label: '🔴 Bearish IFVG (price re-enters bullish gap)' },
+      ] : [
+        { value: 'bullish', label: '🟢 Bullish FVG (buy-side imbalance)' },
+        { value: 'bearish', label: '🔴 Bearish FVG (sell-side imbalance)' },
       ];
-      const condOpts: ChipOption<string>[] = [
+      const condOpts: ChipOption<string>[] = isIfvg ? [
+        { value: 'price_in_gap',   label: 'Price re-enters gap' },
+        { value: 'tap_and_reject', label: 'Tap & reject (reversal)' },
+        { value: 'approaching',    label: 'Approaching gap' },
+        { value: 'gap_exists',     label: 'Gap still open' },
+      ] : [
         { value: 'gap_exists',     label: 'Gap exists' },
         { value: 'just_formed',    label: 'Just formed' },
         { value: 'price_in_gap',   label: 'Price inside' },
@@ -319,7 +329,7 @@ function renderKnobs(
             <ChipRow options={dirOpts} value={cfg.fvg_dir || 'bullish'} onChange={(v) => set({ fvg_dir: v })} size="sm" />
           </Section>
           <Section label="Trigger" compact={compact}>
-            <ChipRow options={condOpts} value={cfg.condition || 'gap_exists'} onChange={(v) => set({ condition: v })} size="sm" />
+            <ChipRow options={condOpts} value={cfg.condition || (isIfvg ? 'price_in_gap' : 'gap_exists')} onChange={(v) => set({ condition: v })} size="sm" />
           </Section>
           <Stepper
             label="Min gap %"
