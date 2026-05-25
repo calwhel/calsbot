@@ -1,12 +1,17 @@
 """
 Stocks / forex / indices price + kline fetcher.
 
-Priority chain:
-  1. FMP real-time WebSocket feed (by-the-second, no account required)
-  2. yfinance (15-min delayed fallback — used only when FMP feed is cold)
+Price path:
+  yfinance Ticker.fast_info — real-time mid price, no exchange delay for
+  forex/indices. Cached 20 s. (FMP WebSocket attempted first but exits on
+  plan-level 401 so effectively always falls straight to fast_info.)
 
-Returned shapes mirror the existing crypto helpers so the strategy executor
-can consume them without branching every TA call:
+Kline path:
+  yfinance download() — intraday OHLC up to the current minute for forex/
+  metals/indices (no 15-min delay for these asset classes). Cached 60 s.
+
+Returned shapes mirror the crypto helpers so the strategy executor can
+consume them without branching:
 - get_price(symbol, asset_class) -> Optional[float]
 - get_klines(symbol, asset_class, interval, limit) -> List[[ts, o, h, l, c, v]]
 """
@@ -133,16 +138,7 @@ async def get_klines(
     if cls == ASSET_CLASS_CRYPTO:
         return []
 
-    # ── 1. FMP REST historical-chart (up-to-the-minute candles) ──────────────
-    try:
-        from app.services.fmp_price_feed import get_klines as _fmp_klines
-        rows = await _fmp_klines(symbol, asset_class, timeframe, limit)
-        if rows:
-            return rows
-    except Exception:
-        pass
-
-    # ── 2. Fallback: yfinance ─────────────────────────────────────────────────
+    # ── yfinance download() — intraday OHLC, near-real-time for forex/indices ──
     ticker = _resolve_ticker(cls, symbol)
     if not ticker:
         return []
