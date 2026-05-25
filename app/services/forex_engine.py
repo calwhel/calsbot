@@ -128,16 +128,32 @@ def current_sessions(now_utc: Optional[datetime] = None) -> List[str]:
 
 
 # ─── Pip math ────────────────────────────────────────────────────────────────
-# JPY pairs use 0.01 as their pip; everything else uses 0.0001. Indices and
-# metals follow their own conventions but for our covered majors this 2-bucket
-# rule covers every pair.
+# JPY pairs:  0.01  (e.g. USDJPY moves in 0.01 increments)
+# Metals:     own table — gold $1/pip, silver $0.01/pip
+#             At ~$3 300 gold: 1 pip = $1 → 20 pips ≈ 0.60%  (matches
+#             cTrader / MT4 "standard lot" pip convention for XAUUSD).
+#             At ~$33 silver: 1 pip = $0.01 → 20 pips ≈ 0.60%
+# Everything else: 0.0001  (standard 4-decimal forex)
 
 _JPY_PAIRS = ("USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "NZDJPY", "CADJPY", "CHFJPY")
 
+# Metals quoted vs USD — pip size in USD per pip.
+_METAL_PIP_SIZES: dict = {
+    "XAUUSD": 1.0,    # Gold:   1 pip = $1.00
+    "XAGUSD": 0.01,   # Silver: 1 pip = $0.01
+}
+
 
 def pip_size(pair: str) -> float:
-    """Return the pip size for a pair (0.01 for JPY, 0.0001 otherwise)."""
+    """Return the pip size for a pair.
+
+    • Metals  (XAU/XAG): see _METAL_PIP_SIZES — $1 per pip for gold, $0.01 for silver
+    • JPY pairs         : 0.01
+    • All others        : 0.0001 (standard 4-decimal forex)
+    """
     p = (pair or "").upper().replace("/", "").replace("=X", "")
+    if p in _METAL_PIP_SIZES:
+        return _METAL_PIP_SIZES[p]
     return 0.01 if p in _JPY_PAIRS or p.endswith("JPY") else 0.0001
 
 
