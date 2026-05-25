@@ -4248,6 +4248,14 @@ const FOREX_TEMPLATES={
   fx_cot_sentiment:      {tp_pips:80,sl_pips:40,direction:'BOTH',primary:'forex_cot',              primaryCfg:{condition:'specs_extreme_long',extreme_pct:75,lookback_weeks:52,respect_pair_inversion:true},timeframe:'4h'},
 };
 function isForexStyle(id){return!!id&&typeof id==='string'&&id.startsWith('fx_');}
+function isIndexStyle(id){return!!id&&typeof id==='string'&&id.startsWith('idx_');}
+
+// Index template → primary signal + direction auto-fill. Mirrors INDEX_TEMPLATES in strategyPresets.ts.
+const INDEX_TEMPLATES={
+  idx_trend:    {primary:'ema',      primaryCfg:{condition:'golden_cross',periods:'20/50',timeframe:'1h'}, direction:'LONG'},
+  idx_breakout: {primary:'breakout', primaryCfg:{lookback:20,timeframe:'1h'},                              direction:'BOTH'},
+  idx_meanrev:  {primary:'rsi',      primaryCfg:{condition:'lt',value:35,timeframe:'4h'},                  direction:'LONG'},
+};
 
 const SIGNAL_META={
   rsi:             {icon:'📊',label:'RSI',              desc:'Overbought or oversold level'},
@@ -4431,6 +4439,10 @@ const STYLE_SIGNALS={
   smc:      ['order_block','market_structure','fvg','fibonacci','divergence','session_level'],
   range:    ['support_resistance','bb','adx_filter','rsi','stoch_rsi','vwap_deviation','session_level','keltner'],
   sniper:   ['fvg','order_block','fibonacci','market_structure','divergence','atr_volatility','adx_filter'],
+  // Indices — index-specific primaries first (auto-selected per INDEX_TEMPLATES)
+  idx_trend:    ['ema','sma','supertrend','macd','ichimoku','adx_filter'],
+  idx_breakout: ['breakout','donchian','price_momentum','ema','rsi'],
+  idx_meanrev:  ['rsi','stoch_rsi','bb','mfi','support_resistance','divergence'],
   // Forex — session-aware primaries listed first (auto-selected per template)
   fx_london_breakout:    ['forex_session_break','forex_session','ema','adx_filter'],
   fx_asian_range:        ['forex_session_break','forex_session','bb','rsi'],
@@ -5210,6 +5222,11 @@ function wzPickStyle(id){
     WZ.tp1Pips=tpl.tp_pips;
     WZ.slPips=tpl.sl_pips;
     WZ.tp2Pips=null;
+    WZ.direction=tpl.direction;
+    WZ.primaryType=tpl.primary;
+    WZ.primaryCfg=Object.assign({},tpl.primaryCfg);
+  } else if(isIndexStyle(id)&&INDEX_TEMPLATES[id]){
+    const tpl=INDEX_TEMPLATES[id];
     WZ.direction=tpl.direction;
     WZ.primaryType=tpl.primary;
     WZ.primaryCfg=Object.assign({},tpl.primaryCfg);

@@ -45,6 +45,7 @@ import type { AssetClass } from '@/lib/strategyPresets';
 import {
   STYLE_LABELS, STYLE_PRESETS, STYLE_SIGNALS, SIGNAL_META,
   STYLES_BY_CLASS, ASSET_CLASS_LABELS, FOREX_TEMPLATES, isForexStyle,
+  INDEX_TEMPLATES, isIndexStyle,
   SESSIONS, DAYS, getDefaultCfg, estimateFireRate, calcRiskLevel,
   type StyleId, type SignalType, type Tf, type Direction, type CoinUniverse,
   type RiskProfile, type BtcRegime, type Session, type Day,
@@ -206,9 +207,12 @@ export default function WizardScreen() {
   const applyStyle = (style: StyleId) => {
     const p = STYLE_PRESETS[style];
     const recommended = STYLE_SIGNALS[style][0];
-    // Forex templates pre-fill pip TP/SL + a session-aware primary signal
-    // so picking "London Breakout" lands the user on a working strategy.
-    const fxTpl = isForexStyle(style) ? FOREX_TEMPLATES[style] : null;
+    // Forex templates pre-fill pip TP/SL + a session-aware primary signal.
+    // Index templates pre-fill a sensible primary signal + direction.
+    // Both let the user land on a complete working strategy in one tap.
+    const fxTpl  = isForexStyle(style)  ? FOREX_TEMPLATES[style]  : null;
+    const idxTpl = isIndexStyle(style)  ? INDEX_TEMPLATES[style]  : null;
+    const tpl = fxTpl || idxTpl || null;
     setS(prev => {
       const meta = ASSET_CLASS_LABELS[prev.assetClass];
       return {
@@ -226,13 +230,12 @@ export default function WizardScreen() {
         maxTrades: p.maxTrades,
         cooldown: p.cooldown,
         dailyLoss: p.dailyLoss,
-        // Forex templates override the primary signal — they only work with
-        // the specific session-aware config baked into FOREX_TEMPLATES.
-        // For everything else, only preselect if the user hasn't picked yet.
-        primaryType: fxTpl ? fxTpl.primary : (prev.primaryType ?? recommended),
-        primaryCfg:  fxTpl ? { ...fxTpl.primaryCfg }
+        // Templates override the primary signal. For everything else, only
+        // preselect if the user hasn't already picked something.
+        primaryType: tpl ? tpl.primary : (prev.primaryType ?? recommended),
+        primaryCfg:  tpl ? { ...tpl.primaryCfg }
                    : (prev.primaryType ? prev.primaryCfg : getDefaultCfg(recommended, p.timeframe)),
-        direction:   fxTpl ? fxTpl.direction : prev.direction,
+        direction:   tpl ? tpl.direction : prev.direction,
       };
     });
   };
@@ -537,9 +540,14 @@ export default function WizardScreen() {
         current={pickerVisible === 'primary' ? s.primaryType : null}
         style={s.style}
         title={pickerVisible === 'primary' ? 'Pick your entry signal' : 'Add a confirmation'}
-        excludeTypes={pickerVisible === 'confirm'
-          ? [...s.confirms.map(c => c.type), ...(s.primaryType ? [s.primaryType] : [])]
-          : []}
+        excludeTypes={[
+          // Hide forex-specific signals when not building a forex strategy.
+          ...(s.assetClass !== 'forex' ? (['forex_session', 'forex_session_break', 'forex_prev_level', 'forex_news_avoidance', 'forex_currency_strength', 'forex_liquidity_pa', 'forex_cot'] as SignalType[]) : []),
+          // Already-used signal types (confirm mode only).
+          ...(pickerVisible === 'confirm'
+            ? [...s.confirms.map(c => c.type), ...(s.primaryType ? [s.primaryType] : [])]
+            : []),
+        ]}
         onPick={(t) => {
           if (pickerVisible === 'primary') {
             update({ primaryType: t, primaryCfg: getDefaultCfg(t, s.timeframe) });
