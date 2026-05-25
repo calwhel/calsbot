@@ -1053,6 +1053,34 @@ function Step5({
             presets={[0.5, 1, 2, 3]}
           />
         ) : null}
+
+        <ToggleRow
+          label="⏰ Intraday / Day-Trade Mode"
+          desc="Force-close all positions before end of session — no overnight exposure"
+          enabled={s.closeBefore != null}
+          onToggle={(on) => update({ closeBefore: on ? '21:00' : null })}
+        />
+        {s.closeBefore != null ? (
+          <View style={{ gap: 8 }}>
+            {[
+              { value: '16:55', label: 'London close — 16:55 UTC' },
+              { value: '20:55', label: 'NY close — 20:55 UTC (4:55 PM ET)' },
+              { value: '21:00', label: 'NYSE / Forex daily — 21:00 UTC' },
+              { value: '21:55', label: 'Futures settle — 21:55 UTC' },
+              { value: '22:00', label: 'Late forex rollover — 22:00 UTC' },
+            ].map(({ value, label }) => (
+              <Pill
+                key={value}
+                label={label}
+                tone={s.closeBefore === value ? 'accent' : 'neutral'}
+                onPress={() => update({ closeBefore: value })}
+              />
+            ))}
+            <Text style={{ fontSize: 11, color: colors.textDim, marginTop: 4 }}>
+              After this time: no new entries + open trades closed at market.
+            </Text>
+          </View>
+        ) : null}
       </Card>
 
       {warnings.length ? (

@@ -110,6 +110,10 @@ _FOREX_MAJORS: List[Tuple[str, str, str]] = [
     ("GBPJPY", "GBPJPY=X", "British Pound / Japanese Yen"),
     ("XAUUSD", "GC=F",     "Gold / US Dollar"),
     ("XAGUSD", "SI=F",     "Silver / US Dollar"),
+    # Commodity futures (CME) — day-traded via cTrader / MT5 accounts
+    ("CLUSD",  "CL=F",     "Crude Oil WTI / US Dollar"),
+    ("NGUSD",  "NG=F",     "Natural Gas / US Dollar"),
+    ("HGUSD",  "HG=F",     "Copper / US Dollar"),
 ]
 
 # Major indices — yfinance uses caret-prefixed tickers.

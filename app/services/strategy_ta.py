@@ -1959,6 +1959,79 @@ async def eval_forex_news_avoidance(
     return True, f"{symbol}: clear of {imp}-impact news (±{mb}/{ma} min window)"
 
 
+async def eval_pivot_points(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """Daily Pivot Points (PP / R1-R3 / S1-S3) from previous day's OHLC.
+    Works on any asset class — crypto, forex/gold, index, stock.
+
+    Config: level='pp'|'r1'|'r2'|'r3'|'s1'|'s2'|'s3'
+            condition='above'|'below'|'near'
+            tolerance_pct=0.3
+    """
+    level     = cond.get("level", "r1").lower()
+    condition = cond.get("condition", "above")
+    tol       = float(cond.get("tolerance_pct", 0.3))
+    try:
+        klines = await _get_klines(symbol, "1d", 3, http_client, cache)
+        if len(klines) < 2:
+            return False, "Pivot points: not enough daily klines"
+        prev = klines[-2]
+        h, l, c = float(prev[2]), float(prev[3]), float(prev[4])
+        pp = (h + l + c) / 3
+        r1 = 2 * pp - l;  r2 = pp + (h - l);  r3 = h + 2 * (pp - l)
+        s1 = 2 * pp - h;  s2 = pp - (h - l);  s3 = l - 2 * (h - pp)
+        levels = {"pp": pp, "r1": r1, "r2": r2, "r3": r3,
+                  "s1": s1, "s2": s2, "s3": s3}
+        ref = levels.get(level)
+        if ref is None or ref <= 0:
+            return False, f"Pivot: unknown level {level!r}"
+        pct = (current_price - ref) / ref * 100
+        label = f"{level.upper()}={ref:.5g} price={current_price:.5g} ({pct:+.2f}%)"
+        if condition == "above":
+            return current_price > ref, f"Pivot {label}"
+        if condition == "below":
+            return current_price < ref, f"Pivot {label}"
+        if condition == "near":
+            return abs(pct) <= tol, f"Pivot near {label} (tol ±{tol}%)"
+        return False, f"Pivot: unknown condition {condition!r}"
+    except Exception as e:
+        return False, f"Pivot points error: {e}"
+
+
+async def eval_session_level(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """Session Level — price relative to current-session high, low, or open.
+    Wraps eval_price_relative and adds 'session_open' reference.
+
+    Config: reference='session_high'|'session_low'|'session_open'|'daily_open'
+            condition='above'|'below'|'near'
+            threshold_pct=1.5
+    """
+    reference = cond.get("reference", "session_low")
+    condition = cond.get("condition", "near")
+    tol       = float(cond.get("threshold_pct", 1.5))
+    try:
+        if reference == "session_open":
+            klines = await _get_klines(symbol, "1h", 12, http_client, cache)
+            if not klines:
+                return False, "Session level: no 1h klines"
+            ref_price = float(klines[0][1])  # open of first candle in window
+            pct = (current_price - ref_price) / ref_price * 100
+            lbl = f"session_open={ref_price:.5g} ({pct:+.2f}%)"
+            if condition == "above":
+                return current_price > ref_price, f"Price above {lbl}"
+            if condition == "below":
+                return current_price < ref_price, f"Price below {lbl}"
+            return abs(pct) <= tol, f"Price near {lbl} (tol ±{tol}%)"
+        # Delegate standard references (session_high/low, daily_open) to existing fn
+        return await eval_price_relative(
+            {**cond, "threshold_pct": tol}, symbol, current_price, http_client, cache)
+    except Exception as e:
+        return False, f"Session level error: {e}"
+
+
 async def eval_stock_earnings_avoidance(
     cond: Dict, symbol: str,
 ) -> Tuple[bool, str]:
@@ -2372,6 +2445,11 @@ async def evaluate_strategy_conditions(
             # ── Stock-specific blocks ───────────────────────────────────────
             elif ctype == "stock_earnings_avoidance":
                 return await eval_stock_earnings_avoidance(cond, symbol)
+            # ── Day-trading blocks (all asset classes) ──────────────────────
+            elif ctype == "pivot_points":
+                return await eval_pivot_points(cond, symbol, price, http_client, cache)
+            elif ctype == "session_level":
+                return await eval_session_level(cond, symbol, price, http_client, cache)
             else:
                 return False, f"Unknown condition type: {ctype}"
         except Exception as e:

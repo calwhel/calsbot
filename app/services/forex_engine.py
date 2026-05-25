@@ -137,10 +137,13 @@ def current_sessions(now_utc: Optional[datetime] = None) -> List[str]:
 
 _JPY_PAIRS = ("USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "NZDJPY", "CADJPY", "CHFJPY")
 
-# Metals quoted vs USD — pip size in USD per pip.
+# Metals + commodities quoted vs USD — pip size in USD per pip.
 _METAL_PIP_SIZES: dict = {
-    "XAUUSD": 1.0,    # Gold:   1 pip = $1.00
-    "XAGUSD": 0.01,   # Silver: 1 pip = $0.01
+    "XAUUSD": 1.0,    # Gold:        1 pip = $1.00  (~$75 → 1% at $3300)
+    "XAGUSD": 0.01,   # Silver:      1 pip = $0.01  (~$0.33 → 1% at $33)
+    "CLUSD":  0.01,   # Crude Oil:   1 pip = $0.01  (min tick = $0.01/bbl)
+    "NGUSD":  0.001,  # Natural Gas: 1 pip = $0.001 (min tick = $0.001/mmBtu)
+    "HGUSD":  0.0001, # Copper:      1 pip = $0.0001/lb (quoted ~$4.50)
 }
 
 

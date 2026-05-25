@@ -706,6 +706,71 @@ function renderKnobs(
       );
     }
 
+    case 'session_level': {
+      const refOpts: ChipOption<string>[] = [
+        { value: 'session_low',  label: '⬇️ Session low' },
+        { value: 'session_high', label: '⬆️ Session high' },
+        { value: 'session_open', label: '🟡 Session open' },
+        { value: 'daily_open',   label: '🔵 Daily open' },
+      ];
+      const condOpts: ChipOption<string>[] = [
+        { value: 'near',  label: '🎯 Near level' },
+        { value: 'above', label: '⬆️ Price above' },
+        { value: 'below', label: '⬇️ Price below' },
+      ];
+      return (
+        <View>
+          <Section label="Reference level" compact={compact}>
+            <ChipRow options={refOpts} value={(cfg.reference as string) || 'session_low'} onChange={(v) => set({ reference: v })} size="sm" />
+          </Section>
+          <Section label="Condition" compact={compact}>
+            <ChipRow options={condOpts} value={(cfg.condition as string) || 'near'} onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="Nearness threshold"
+            value={cfg.threshold_pct ?? 2}
+            onChange={(v) => set({ threshold_pct: v })}
+            min={0.5} max={10} step={0.5} unit="%" decimals={1}
+            presets={[0.5, 1, 2, 3, 5]}
+          />
+        </View>
+      );
+    }
+
+    case 'pivot_points': {
+      const levelOpts: ChipOption<string>[] = [
+        { value: 'pp', label: '◉ PP' },
+        { value: 'r1', label: '🟢 R1' },
+        { value: 'r2', label: '🟢 R2' },
+        { value: 'r3', label: '🟢 R3' },
+        { value: 's1', label: '🔴 S1' },
+        { value: 's2', label: '🔴 S2' },
+        { value: 's3', label: '🔴 S3' },
+      ];
+      const condOpts: ChipOption<string>[] = [
+        { value: 'near',  label: '🎯 Near' },
+        { value: 'above', label: '⬆️ Above' },
+        { value: 'below', label: '⬇️ Below' },
+      ];
+      return (
+        <View>
+          <Section label="Pivot level" compact={compact}>
+            <ChipRow options={levelOpts} value={(cfg.level as string) || 'r1'} onChange={(v) => set({ level: v })} size="sm" />
+          </Section>
+          <Section label="Condition" compact={compact}>
+            <ChipRow options={condOpts} value={(cfg.condition as string) || 'near'} onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="Tolerance (near only)"
+            value={cfg.tolerance_pct ?? 0.3}
+            onChange={(v) => set({ tolerance_pct: v })}
+            min={0.1} max={2} step={0.1} unit="%" decimals={1}
+            presets={[0.1, 0.2, 0.3, 0.5, 1]}
+          />
+        </View>
+      );
+    }
+
     default:
       return null;
   }

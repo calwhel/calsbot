@@ -1903,6 +1903,23 @@ async def evaluate_and_fire(
             _bump(f"blk_market_closed_{asset_class}")
             return
 
+    # ── EOD / close_before entry guard ─────────────────────────────────────
+    # If the strategy has an intraday close-before time set, stop opening new
+    # positions once that UTC time has passed today (Mon-Fri only).  Open trades
+    # are handled independently by the trade_tracker EOD force-close loop.
+    _close_before_cfg = config.get("exit", {}).get("close_before")
+    if _close_before_cfg:
+        try:
+            from datetime import datetime as _dtnow
+            _now_utc = _dtnow.utcnow()
+            _h_eod, _m_eod = map(int, str(_close_before_cfg).split(":"))
+            _eod_cut = _now_utc.replace(hour=_h_eod, minute=_m_eod, second=0, microsecond=0)
+            if _now_utc >= _eod_cut and _now_utc.weekday() < 5:
+                _bump("blk_eod_cutoff")
+                return
+        except Exception:
+            pass
+
     # Locked strategy — fetch live entry_conditions from the original source strategy
     if config.get("_locked") and config.get("_source_strategy_id"):
         try:

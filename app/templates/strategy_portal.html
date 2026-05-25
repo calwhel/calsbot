@@ -4110,7 +4110,7 @@ function condHtml(c){
 const WZ={
   step:1,style:null,direction:'LONG',mode:'live',
   primaryType:null,primaryCfg:{},confirms:[],
-  tp1:3,tp2:null,sl:1.5,trailing:null,breakeven:null,
+  tp1:3,tp2:null,sl:1.5,trailing:null,breakeven:null,closeBefore:null,
   // Forex-only pip TP/SL — emitted to /api/save-strategy only when assetClass==='forex'.
   // Executor converts pips→% at fire time using the live price + the pair's pip size.
   tp1Pips:null,tp2Pips:null,slPips:null,
@@ -4291,6 +4291,7 @@ const SIGNAL_META={
   adx_filter:      {icon:'📶',label:'ADX Filter',       desc:'Is market trending or ranging?'},
   atr_volatility:  {icon:'🌡️',label:'ATR Volatility',   desc:'Volatility expanding or contracting'},
   session_level:   {icon:'🏁',label:'Session Level',    desc:'Price near session high, low or open'},
+  pivot_points:    {icon:'📌',label:'Pivot Points',     desc:'Classic PP / R1-R3 / S1-S3 daily levels from previous day\'s OHLC'},
   keltner:         {icon:'🔲',label:'Keltner Channel',  desc:'Channel squeeze or expansion breakout'},
   williams_r:      {icon:'🎰',label:'Williams %R',      desc:'Momentum oscillator — oversold / overbought'},
   trend_reversal:  {icon:'🔃',label:'Trend Reversal',   desc:'Change of direction — EMA + RSI confirmation'},
@@ -4324,7 +4325,7 @@ const SIGNAL_FREQ={
   obv:'med', donchian:'med',
   bb:'low', supertrend:'low', candlestick:'low', market_structure:'low',
   order_block:'low', fibonacci:'low', divergence:'low', funding_rate:'low',
-  fvg:'low', open_interest:'low', liquidation:'low', session_level:'low',
+  fvg:'low', open_interest:'low', liquidation:'low', session_level:'low', pivot_points:'low',
   trend_reversal:'low', heikin_ashi:'low', ichimoku:'low', aroon:'low',
   sustained_trend:'low', tradingview_webhook:'ext',
   forex_session:'med', forex_session_break:'med', forex_prev_level:'med', forex_news_avoidance:'med', forex_currency_strength:'med', forex_liquidity_pa:'med', forex_cot:'low',
@@ -4553,6 +4554,7 @@ function getDefaultCfg(type){
     adx_filter:       {timeframe:tf,condition:'ranging'},
     atr_volatility:   {timeframe:tf,condition:'contracting',multiplier:1.2},
     session_level:    {timeframe:tf,reference:'session_low',side:'near',threshold_pct:2},
+    pivot_points:     {timeframe:tf,level:'r1',condition:'near',tolerance_pct:0.3},
     keltner:          {timeframe:tf,condition:'squeeze'},
     williams_r:       {timeframe:tf,condition:'oversold'},
     trend_reversal:   {timeframe:tf,condition:'bullish'},
@@ -4855,6 +4857,26 @@ function renderSignalCfg(type,cfg,pfx){
       <div class="opt-label">How close to the level <span id="${pfx}slpct-d" style="color:var(--accent)">${cfg.threshold_pct||2}%</span></div>
       <input type="range" id="${pfx}slpct" min="0.5" max="10" value="${cfg.threshold_pct||2}" step="0.5" oninput="wzSl('${pfx}slpct','${pfx}slpct-d','%','${pfx}threshold_pct')" style="width:100%;accent-color:var(--accent)">
       <div class="hint">Fires when price is within this % of the selected session reference. Perfect for Range Trader & Dip Buyer styles.</div>`;
+    case 'pivot_points':return`${tf}
+      <div class="opt-label">Pivot Level</div>
+      <div class="opt-chips">
+        ${wzChip('pp', 'PP — Pivot Point (mid)',`${pfx}level`,cfg.level||'r1')}
+        ${wzChip('r1','R1 — First resistance',`${pfx}level`,cfg.level||'r1','green')}
+        ${wzChip('r2','R2 — Second resistance',`${pfx}level`,cfg.level||'r1','green')}
+        ${wzChip('r3','R3 — Third resistance',`${pfx}level`,cfg.level||'r1','green')}
+        ${wzChip('s1','S1 — First support',`${pfx}level`,cfg.level||'r1','red')}
+        ${wzChip('s2','S2 — Second support',`${pfx}level`,cfg.level||'r1','red')}
+        ${wzChip('s3','S3 — Third support',`${pfx}level`,cfg.level||'r1','red')}
+      </div>
+      <div class="opt-label">Condition</div>
+      <div class="opt-chips">
+        ${wzChip('above','Price above level — bullish momentum',`${pfx}condition`,cfg.condition||'near','green')}
+        ${wzChip('below','Price below level — bearish momentum',`${pfx}condition`,cfg.condition||'near','red')}
+        ${wzChip('near', 'Price near level — entry zone',`${pfx}condition`,cfg.condition||'near')}
+      </div>
+      <div class="opt-label">Nearness tolerance <span id="${pfx}ppd" style="color:var(--accent)">${cfg.tolerance_pct||0.3}%</span></div>
+      <input type="range" id="${pfx}pp" min="0.1" max="2" value="${cfg.tolerance_pct||0.3}" step="0.1" oninput="wzSl('${pfx}pp','${pfx}ppd','%','${pfx}tolerance_pct')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Pivot Points are calculated from yesterday's High, Low, and Close. R levels are resistance; S levels are support. Works on any asset class.</div>`;
     case 'keltner':return`${tf}
       <div class="opt-label">Keltner Channel Condition</div>
       <div class="opt-chips">
@@ -5465,6 +5487,17 @@ function renderStep5(){
       <input type="range" id="be-sl" min="10" max="200" value="${WZ.breakeven||70}" step="5" oninput="WZ.breakeven=Number(this.value);document.getElementById('be-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
       <div class="hint">When ROI hits this % (leveraged), SL moves to your entry price automatically.</div>
     </div>
+    <div class="toggle-row" onclick="wzToggleExit('eod')" style="margin-top:8px;margin-bottom:0">
+      <div><div class="toggle-lbl">⏰ Intraday / Day-Trade Mode</div><div class="toggle-sub">Force-close all positions before end of trading session — no overnight exposure</div></div>
+      <div class="switch ${WZ.closeBefore?'on':''}" id="sw-eod"></div>
+    </div>
+    <div id="row-eod" style="${WZ.closeBefore?'':'display:none;'}padding:10px 0 0">
+      <label>Close all positions by (UTC)</label>
+      <select id="eod-select" style="width:100%;padding:8px 12px;margin-top:6px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:8px;font-size:14px" onchange="WZ.closeBefore=this.value;updateWzPreview()">
+        ${['16:55 UTC — London close','20:55 UTC — NY close (4:55 PM ET)','21:00 UTC — NYSE/Forex daily close','21:55 UTC — Futures daily settle','22:00 UTC — Late forex rollover'].map((t,i)=>{const v=['16:55','20:55','21:00','21:55','22:00'][i];return`<option value="${v}" ${WZ.closeBefore===v?'selected':''}>${t}</option>`;}).join('')}
+      </select>
+      <div class="hint">After this cutoff: no new entries, and any open trade is force-closed at the live price. Best for gold, indices, and forex day strategies to avoid overnight gaps and swaps.</div>
+    </div>
   </div>`;
 }
 
@@ -5482,6 +5515,7 @@ function wzToggleExit(which){
   }
   if(which==='trail')WZ.trailing=on?Number(document.getElementById('trail-sl')?.value||1):null;
   if(which==='be')WZ.breakeven=on?Number(document.getElementById('be-sl')?.value||70):null;
+  if(which==='eod'){WZ.closeBefore=on?(document.getElementById('eod-select')?.value||'21:00'):null;}
 }
 
 function renderStep6(){
@@ -6125,7 +6159,7 @@ function wzBack(){
 function resetWizard(){
   compiledConfig=null;
   _wzLastStep=1;
-  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,tp1Pips:null,tp2Pips:null,slPips:null,trailing:null,breakeven:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium',assetClass:null,tradfiSymbols:[],tradfiQuery:''});
+  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,tp1Pips:null,tp2Pips:null,slPips:null,trailing:null,breakeven:null,closeBefore:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium',assetClass:null,tradfiSymbols:[],tradfiQuery:''});
   renderCurrentStep();
 }
 
@@ -6176,6 +6210,7 @@ function buildWizardDescription(){
       case 'adx_filter':sig=`Market is ${cfg.condition||'ranging'} (ADX filter) on ${tf}`;break;
       case 'atr_volatility':sig=`Volatility is ${cfg.condition||'contracting'} (ATR ×${cfg.multiplier||1.2}) on ${tf}`;break;
       case 'session_level':sig=`Price within ${cfg.threshold_pct||2}% of ${(cfg.reference||'session_low').replace('_',' ')} on ${tf}`;break;
+      case 'pivot_points':sig=`Price ${cfg.condition||'near'} daily ${(cfg.level||'r1').toUpperCase()} pivot (±${cfg.tolerance_pct||0.3}%) on ${tf}`;break;
       case 'keltner':sig=`Keltner Channel: ${cfg.condition||'squeeze'} on ${tf}`;break;
       case 'williams_r':sig=`Williams %R ${cfg.condition||'oversold'} on ${tf}`;break;
       case 'cci':{const sm=cfg.ma_type&&cfg.ma_type!=='none'?` (${cfg.ma_type}${cfg.ma_period||3} smoothed)`:'';sig=`CCI(${cfg.period||20})${sm} is ${cond(cfg.condition||'bullish')} on ${tf}`;break;}
@@ -6234,6 +6269,7 @@ function buildWizardDescription(){
         case 'adx_filter':cfm=`ADX: market is ${cfg.condition||'ranging'} on ${tf}`;break;
         case 'atr_volatility':cfm=`ATR volatility ${cfg.condition||'contracting'} on ${tf}`;break;
         case 'session_level':cfm=`Price within ${cfg.threshold_pct||2}% of ${(cfg.reference||'session_low').replace('_',' ')}`;break;
+        case 'pivot_points':cfm=`Price ${cfg.condition||'near'} daily ${(cfg.level||'r1').toUpperCase()} pivot (±${cfg.tolerance_pct||0.3}%)`;break;
         case 'keltner':cfm=`Keltner ${cfg.condition||'squeeze'} on ${tf}`;break;
         case 'williams_r':cfm=`Williams %R ${cfg.condition||'oversold'} on ${tf}`;break;
         case 'trend_reversal':cfm=`${cfg.condition||'bullish'} trend reversal on ${tf}`;break;
@@ -6336,7 +6372,7 @@ async function buildStrategy(){
     Object.assign(risk,{leverage:WZ.leverage,position_size_type:WZ.posSizeType,position_size_pct:WZ.posSize,position_size_usd:WZ.posSizeType==='fixed'?WZ.posSizeUsd:null,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos,no_duplicate_symbol:WZ.noDuplicateSymbol,risk_profile:WZ.riskProfile||'medium'});
     data.config.risk=risk;
     const exit=data.config.exit||{};
-    Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null,breakeven_pct:WZ.breakeven||null});
+    Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null,breakeven_pct:WZ.breakeven||null,close_before:WZ.closeBefore||null});
     // Forex pip TP/SL — executor converts pips→% at fire time using the live
     // price + the pair's pip size (JPY pairs use 0.01, everything else 0.0001).
     if(WZ.assetClass==='forex'&&(WZ.tp1Pips||WZ.slPips)){

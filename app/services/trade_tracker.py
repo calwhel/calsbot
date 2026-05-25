@@ -24,6 +24,9 @@ _be_threshold_cache: dict = {}
 _be_threshold_cache_ts: float = 0
 _BE_CACHE_TTL = 120
 
+_close_before_cache: dict = {}
+_close_before_cache_ts: float = 0
+
 
 def _get_breakeven_threshold(db, trade_type: str, user_id: int = 0) -> float:
     import time
@@ -52,6 +55,33 @@ def _get_breakeven_threshold(db, trade_type: str, user_id: int = 0) -> float:
         pass
     _be_threshold_cache[cache_key] = 70.0
     return 70.0
+
+
+def _get_close_before(db, trade_type: str, user_id: int = 0) -> Optional[str]:
+    """Return exit.close_before HH:MM UTC string for EOD intraday close, or None.
+    Shares the same 120s TTL strategy as _get_breakeven_threshold."""
+    import time
+    global _close_before_cache, _close_before_cache_ts
+    now = time.monotonic()
+    if now - _close_before_cache_ts > _BE_CACHE_TTL:
+        _close_before_cache.clear()
+        _close_before_cache_ts = now
+    cache_key = (user_id, trade_type)
+    if cache_key in _close_before_cache:
+        return _close_before_cache[cache_key]
+    val = None
+    try:
+        from app.strategy_models import UserStrategy
+        q = db.query(UserStrategy).filter(UserStrategy.name == trade_type)
+        if user_id:
+            q = q.filter(UserStrategy.user_id == user_id)
+        strat = q.first()
+        if strat and strat.config:
+            val = (strat.config.get("exit") or {}).get("close_before")
+    except Exception:
+        pass
+    _close_before_cache[cache_key] = val
+    return val
 
 
 def _canonical_symbol(raw: str) -> str:
@@ -1091,6 +1121,35 @@ async def _monitor_open_trades() -> None:
                             f"Result: <b>{pnl_pct:+.1f}%</b> (leverage {leverage}×)\n"
                             f"Peak ROI: {t.peak_roi or 0:+.1f}%  |  Trade ID: {t.id}"
                         )
+
+            # ── EOD / intraday-only force-close ─────────────────────────────
+            if not t.status or t.status == "open":
+                _cb_str = _get_close_before(db, t.trade_type or "", t.user_id or 0)
+                if _cb_str:
+                    try:
+                        _h, _m = map(int, _cb_str.split(":"))
+                        _now   = datetime.utcnow()
+                        _cut   = _now.replace(hour=_h, minute=_m, second=0, microsecond=0)
+                        if _now >= _cut and _now.weekday() < 5:
+                            t.status     = "closed"
+                            t.exit_price = live_price
+                            t.closed_at  = _now
+                            t.pnl_percent = round(pnl_pct, 2)
+                            t.pnl         = round((t.position_size or 0) * pnl_pct / 100, 2)
+                            db_changed    = True
+                            _eod_key = f"eod-{t.id}"
+                            if _eod_key not in _notified_ids:
+                                _notified_ids.add(_eod_key)
+                                _ticker = t.symbol.replace("USDT", "")
+                                await _send_tg_alert(
+                                    f"🌙 <b>DAY CLOSE — ${_ticker} {t.direction}</b>\n"
+                                    f"Intraday strategy closed at market before {_cb_str} UTC\n"
+                                    f"Entry: <code>{t.entry_price}</code>  →  Exit: <code>{live_price}</code>\n"
+                                    f"Result: <b>{pnl_pct:+.1f}%</b> (leverage {leverage}×)\n"
+                                    f"Trade ID: {t.id}"
+                                )
+                    except Exception:
+                        pass
 
             if db_changed:
                 try:
