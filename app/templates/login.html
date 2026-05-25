@@ -3,7 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sign In — TradeHub</title>
+<title>Sign In — TradeHub Markets</title>
+<meta name="description" content="Sign in to TradeHub Markets to build, backtest, and automate your crypto trading strategies. Free to start — no code required.">
+<meta name="robots" content="noindex, nofollow">
+<link rel="canonical" href="https://tradehubmarkets.com/login">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
@@ -228,7 +231,7 @@ input::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
   </div>
 
   <div class="switch-text" id="switch-hint">
-    Already have an account? <a onclick="switchTab('signin')">Sign in →</a>
+    Already have an account? <a href="#signin" onclick="switchTab('signin');return false;">Sign in →</a>
   </div>
 
   <div class="back-link"><a href="/">← Back to homepage</a></div>
@@ -242,13 +245,13 @@ function switchTab(t){
   document.getElementById('panel-'+t).classList.add('active');
   const hint = document.getElementById('switch-hint');
   if(t==='register'){
-    hint.innerHTML = 'Already have an account? <a onclick="switchTab(\'signin\')">Sign in →</a>';
+    hint.innerHTML = 'Already have an account? <a href="#signin" onclick="switchTab(\'signin\');return false;">Sign in →</a>';
     setTimeout(()=>document.getElementById('reg-name').focus(),50);
   } else if(t==='signin'){
-    hint.innerHTML = 'New here? <a onclick="switchTab(\'register\')">Create a free account →</a>';
+    hint.innerHTML = 'New here? <a href="#register" onclick="switchTab(\'register\');return false;">Create a free account →</a>';
     setTimeout(()=>document.getElementById('si-email').focus(),50);
   } else {
-    hint.innerHTML = 'New here? <a onclick="switchTab(\'register\')">Create a free account →</a>';
+    hint.innerHTML = 'New here? <a href="#register" onclick="switchTab(\'register\');return false;">Create a free account →</a>';
     setTimeout(()=>document.getElementById('uid-input').focus(),50);
   }
 }

@@ -5,7 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<title>TradeHub Strategy Builder</title>
+<title>Strategy Builder — TradeHub Markets</title>
+<meta name="description" content="Build, backtest, and automate crypto trading strategies with zero code. Use the wizard, AI chat builder, or import PineScript. Paper test free — go live with one tap.">
+<meta name="robots" content="noindex, nofollow">
+<meta property="og:title" content="TradeHub Markets — Strategy Builder">
+<meta property="og:description" content="Build and automate crypto trading strategies. Zero code. Paper test free.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tradehubmarkets.com/app">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 /* ═══════════════════════════════════════════════════════════════
@@ -1821,30 +1827,14 @@ tr:hover td { background: var(--surface) !important; }
 <!-- Nav -->
 <nav class="nav">
   <a class="nav-tab" href="/trade" style="text-decoration:none">📊 Trade</a>
-  <button class="nav-tab active" onclick="showPage('my-strats',this)">
-    Strategies
-  </button>
-  <button class="nav-tab" onclick="showPage('trades',this)">
-    Trades
-  </button>
-  <button class="nav-tab" onclick="showPage('marketplace',this)">
-    Market
-  </button>
-  <button class="nav-tab" onclick="showPage('leaderboard',this)">
-    Leaderboard
-  </button>
-  <button class="nav-tab" onclick="showPage('build',this)">
-    Build
-  </button>
-  <button class="nav-tab" onclick="showPage('feed',this)">
-    Feed
-  </button>
-  <button class="nav-tab" onclick="showPage('purchases',this)">
-    Purchases
-  </button>
-  <button class="nav-tab" onclick="showPage('settings',this)">
-    Settings
-  </button>
+  <a class="nav-tab active" href="#my-strats" onclick="showPage('my-strats',this);return false;" style="text-decoration:none">Strategies</a>
+  <a class="nav-tab" href="#trades" onclick="showPage('trades',this);return false;" style="text-decoration:none">Trades</a>
+  <a class="nav-tab" href="#marketplace" onclick="showPage('marketplace',this);return false;" style="text-decoration:none">Market</a>
+  <a class="nav-tab" href="#leaderboard" onclick="showPage('leaderboard',this);return false;" style="text-decoration:none">Leaderboard</a>
+  <a class="nav-tab" href="#build" onclick="showPage('build',this);return false;" style="text-decoration:none">Build</a>
+  <a class="nav-tab" href="#feed" onclick="showPage('feed',this);return false;" style="text-decoration:none">Feed</a>
+  <a class="nav-tab" href="#purchases" onclick="showPage('purchases',this);return false;" style="text-decoration:none">Purchases</a>
+  <a class="nav-tab" href="#settings" onclick="showPage('settings',this);return false;" style="text-decoration:none">Settings</a>
 </nav>
 
 {% if is_web_user %}
