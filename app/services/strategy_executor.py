@@ -1864,7 +1864,7 @@ async def evaluate_and_fire(
 
     # Per-asset broker gate. Forex → cTrader (FP Markets), crypto → Bitunix,
     # stocks/indices → paper-only (no broker integration yet).
-    if asset_class == "forex":
+    if asset_class in ("forex", "index"):
         _ctrader_live_ok = False
         try:
             from app.models import UserPreference as _UP
@@ -1879,7 +1879,7 @@ async def evaluate_and_fire(
         is_paper = not (_wants_live and _ctrader_live_ok)
         if _wants_live and is_paper:
             logger.debug(
-                f"[Strategy {strategy.id}] Forex live strategy downgraded to paper "
+                f"[Strategy {strategy.id}] {asset_class.title()} live strategy downgraded to paper "
                 f"(no cTrader credentials) — signal will still be tracked."
             )
     elif asset_class in PAPER_ONLY_CLASSES:
@@ -2225,12 +2225,11 @@ async def evaluate_and_fire(
             except Exception as e:
                 logger.warning(f"Paper DM failed: {e}")
         else:
-            # Live trade: route by asset class. Forex → cTrader (FP Markets),
-            # everything else → Bitunix (crypto). Stocks/indices can't reach
-            # this branch yet because the paper-lock above forces is_paper=True.
+            # Live trade: route by asset class. Forex + indices → cTrader (FP Markets),
+            # crypto → Bitunix. Stocks can't reach this branch (paper-lock above).
             order_id    = None
             actual_fill = None
-            _broker     = "ctrader" if asset_class == "forex" else "bitunix"
+            _broker     = "ctrader" if asset_class in ("forex", "index") else "bitunix"
             try:
                 ps_type      = risk.get("position_size_type", "pct")
                 _risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None
@@ -2570,7 +2569,7 @@ async def _propagate_to_subscribers(
             except Exception:
                 _sub_asset_class = getattr(sub_strategy, "asset_class", None) or sub_config.get("asset_class") or "crypto"
             if _wants_live:
-                if _sub_asset_class == "forex":
+                if _sub_asset_class in ("forex", "index"):
                     try:
                         from app.models import UserPreference as _UP_sub
                         _sub_prefs = _sub_db.query(_UP_sub).filter(_UP_sub.user_id == sub_user.id).first()
@@ -2579,7 +2578,7 @@ async def _propagate_to_subscribers(
                     except Exception as _e:
                         _can_live = False
                         _live_reason = f"ctrader_check_error:{_e}"
-                elif _sub_asset_class in ("stock", "index"):
+                elif _sub_asset_class == "stock":
                     _can_live = False
                     _live_reason = "paper_only_asset_class"
                 else:
@@ -2658,10 +2657,10 @@ async def _propagate_to_subscribers(
                     except Exception as _e:
                         logger.warning(f"[Propagate] Paper DM failed for strategy {sub_strategy.id}: {_e}")
             else:
-                # Live — route by asset class: forex → cTrader, else → Bitunix.
+                # Live — route by asset class: forex/index → cTrader, else → Bitunix.
                 order_id    = None
                 actual_fill = None
-                _sub_broker = "ctrader" if _sub_asset_class == "forex" else "bitunix"
+                _sub_broker = "ctrader" if _sub_asset_class in ("forex", "index") else "bitunix"
                 try:
                     ps_type      = sub_risk.get("position_size_type", "pct")
                     _sub_risk_usd = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None

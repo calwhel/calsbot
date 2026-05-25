@@ -92,8 +92,8 @@ const TF_OPTIONS: ChipOption<Tf>[] = [
 const ASSET_CLASS_OPTIONS: ChipOption<AssetClass>[] = [
   { value: 'crypto', icon: '₿',  label: 'Crypto',  hint: 'Live or paper' },
   { value: 'stock',  icon: '📈', label: 'Stocks',  hint: 'Paper only' },
-  { value: 'forex',  icon: '💱', label: 'Forex',   hint: 'Paper only' },
-  { value: 'index',  icon: '🏛️', label: 'Indices', hint: 'Paper only' },
+  { value: 'forex',  icon: '💱', label: 'Forex',   hint: 'Live via cTrader' },
+  { value: 'index',  icon: '🏛️', label: 'Indices', hint: 'Live via cTrader' },
 ];
 
 const COIN_OPTIONS: ChipOption<CoinUniverse>[] = [
@@ -640,7 +640,7 @@ function Step1({ s, onPick }: { s: WizardState; onPick: (id: StyleId) => void })
 // Step 2 — Direction & Mode
 // ─────────────────────────────────────────────────────────────────────────
 function Step2({ s, update, ctraderConnected }: { s: WizardState; update: (p: Partial<WizardState>) => void; ctraderConnected?: boolean }) {
-  const forexLiveOk = s.assetClass === 'forex' && !!ctraderConnected;
+  const forexLiveOk = (s.assetClass === 'forex' || s.assetClass === 'index') && !!ctraderConnected;
   const paperOnly = ASSET_CLASS_LABELS[s.assetClass].paperOnly && !forexLiveOk;
   return (
     <View>
@@ -660,7 +660,7 @@ function Step2({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
               <Pill label={`🧪 Paper only — ${ASSET_CLASS_LABELS[s.assetClass].label} live trading not yet supported`} tone="warning" small />
             </View>
             <Text style={styles.hint}>
-              Trades will simulate fills against real-time {ASSET_CLASS_LABELS[s.assetClass].label.toLowerCase()} prices. Live brokerage routing is coming in a future release.
+              Trades will simulate fills against real-time {ASSET_CLASS_LABELS[s.assetClass].label.toLowerCase()} prices. Connect your FP Markets cTrader account in Settings to unlock live trading.
             </Text>
           </>
         ) : (
@@ -669,8 +669,8 @@ function Step2({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
             <Text style={styles.hint}>
               {s.mode === 'paper'
                 ? '🧪 Paper mode tracks signals without sending real orders — perfect for testing.'
-                : s.assetClass === 'forex'
-                  ? '⚡ Live mode places real OANDA forex orders. Make sure you trust this strategy.'
+                : (s.assetClass === 'forex' || s.assetClass === 'index')
+                  ? '⚡ Live mode places real FP Markets (cTrader) orders. Make sure you trust this strategy.'
                   : '⚡ Live mode places real Bitunix orders. Make sure you trust this strategy.'}
             </Text>
           </>
@@ -1168,7 +1168,7 @@ const tradfiStyles = StyleSheet.create({
 });
 
 function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Partial<WizardState>) => void; ctraderConnected?: boolean }) {
-  const forexLiveOk = s.assetClass === 'forex' && !!ctraderConnected;
+  const forexLiveOk = (s.assetClass === 'forex' || s.assetClass === 'index') && !!ctraderConnected;
   const paperLocked = ASSET_CLASS_LABELS[s.assetClass].paperOnly && !forexLiveOk;
   const toggleSession = (id: Session) => {
     const has = s.sessions.includes(id);

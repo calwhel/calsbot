@@ -6330,24 +6330,22 @@ async def api_save_strategy(request: Request):
         )
         _wh_token = _secrets.token_urlsafe(32) if _is_webhook else None
 
-        # Asset class — crypto (default) / stock / forex / index. Non-crypto
-        # classes are paper-only (no live broker integration yet).
+        # Asset class — crypto (default) / stock / forex / index.
+        # Forex + indices go live via cTrader (FP Markets); stocks are paper-only.
         from app.services.asset_classes import (
             normalize_asset_class, PAPER_ONLY_CLASSES, is_supported,
         )
         _asset_class = normalize_asset_class(config.get("asset_class"))
-        # P5e-2: forex strategies can go live when the user has an OANDA
-        # account connected. Stocks/indices remain paper-only until their
-        # broker integrations land.
-        _forex_live_ok = False
-        if _asset_class == "forex":
+        # cTrader live gate — covers both forex and index CFDs.
+        _ctrader_live_ok = False
+        if _asset_class in ("forex", "index"):
             try:
                 from app.models import UserPreference as _UP_save
                 _ps = db.query(_UP_save).filter(_UP_save.user_id == user.id).first()
-                _forex_live_ok = bool(_ps and _ps.ctrader_access_token and _ps.ctrader_account_id)
+                _ctrader_live_ok = bool(_ps and _ps.ctrader_access_token and _ps.ctrader_account_id)
             except Exception:
-                _forex_live_ok = False
-        if _asset_class in PAPER_ONLY_CLASSES and not _forex_live_ok:
+                _ctrader_live_ok = False
+        if _asset_class in PAPER_ONLY_CLASSES and not _ctrader_live_ok:
             initial_status = "paper"
             config["_build_mode"] = "paper"
         if _asset_class in PAPER_ONLY_CLASSES:
@@ -6376,10 +6374,9 @@ async def api_save_strategy(request: Request):
                     )
         config["asset_class"] = _asset_class
 
-        # Defense-in-depth: paper-only asset classes are forced to 1× leverage
-        # because the paper engine doesn't model margin/liquidation. Forex with
-        # OANDA connected can use real leverage. Anything else is misleading.
-        if _asset_class in PAPER_ONLY_CLASSES and not _forex_live_ok:
+        # Defense-in-depth: paper-only asset classes are forced to 1× leverage.
+        # Forex/index with cTrader connected can use real leverage.
+        if _asset_class in PAPER_ONLY_CLASSES and not _ctrader_live_ok:
             _risk = config.get("risk") or {}
             if int(_risk.get("leverage", 1) or 1) != 1:
                 _risk["leverage"] = 1

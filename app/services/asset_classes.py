@@ -20,8 +20,11 @@ ASSET_CLASS_INDEX = "index"
 
 ASSET_CLASSES = (ASSET_CLASS_CRYPTO, ASSET_CLASS_STOCK, ASSET_CLASS_FOREX, ASSET_CLASS_INDEX)
 
-# Non-crypto classes are paper-only (no live broker support yet).
+# Stocks have no live broker — always paper.
+# Forex + indices go live via cTrader (FP Markets) when credentials are present.
 PAPER_ONLY_CLASSES = {ASSET_CLASS_STOCK, ASSET_CLASS_FOREX, ASSET_CLASS_INDEX}
+# cTrader-eligible classes (forex AND indices via FP Markets)
+CTRADER_CLASSES = frozenset({ASSET_CLASS_FOREX, ASSET_CLASS_INDEX})
 
 
 # ─── Symbol catalogs ────────────────────────────────────────────────────────

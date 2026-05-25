@@ -87,17 +87,32 @@ _PAYLOAD_TYPES = {
 
 # Forex pip sizes
 _PIP_SIZES = {
+    # Forex majors
     "EURUSD": 0.0001, "GBPUSD": 0.0001, "AUDUSD": 0.0001,
     "NZDUSD": 0.0001, "USDCAD": 0.0001, "USDCHF": 0.0001,
     "USDJPY": 0.01,   "EURJPY": 0.01,   "GBPJPY": 0.01,
+    # Indices — tick size used for pip-equivalent math
+    "SPX": 1.0, "NDX": 1.0, "DJI": 1.0, "DAX": 1.0, "FTSE": 1.0,
 }
 
-# FP Markets symbol name mapping (cTrader uses exact broker symbol names)
+# FP Markets / cTrader symbol name mapping
+# Indices use broker-specific contract names on FP Markets cTrader.
 _SYMBOL_MAP = {
+    # Forex
     "EURUSD": "EURUSD", "GBPUSD": "GBPUSD", "USDJPY": "USDJPY",
     "AUDUSD": "AUDUSD", "USDCAD": "USDCAD", "USDCHF": "USDCHF",
     "NZDUSD": "NZDUSD",
+    # Indices (FP Markets cTrader contract names)
+    "SPX":  "US500",  # S&P 500
+    "NDX":  "US100",  # Nasdaq 100
+    "DJI":  "US30",   # Dow Jones
+    "DAX":  "GER40",  # DAX
+    "FTSE": "UK100",  # FTSE 100
 }
+
+# Index contract sizing: for index CFDs volume is in contracts (1 unit = 1 contract).
+# FP Markets minimum is 1 contract; value ≈ price × contract_size USD.
+_INDEX_SYMBOLS = frozenset({"SPX", "NDX", "DJI", "DAX", "FTSE"})
 
 
 # ── Low-level framing helpers ─────────────────────────────────────────────────
@@ -392,8 +407,8 @@ async def place_ctrader_order_for_user(
     risk_usd: Optional[float] = None,
 ) -> Optional[dict]:
     """
-    Place a live forex order for a user who has connected their cTrader account.
-    Converts TP/SL from % to absolute prices, calculates lot size from risk.
+    Place a live forex or index CFD order for a user via their connected cTrader account.
+    Converts TP/SL from % to absolute prices, calculates lot/contract size from risk.
     Returns {"order_id", "actual_fill"} or None on failure.
     """
     from app.database import SessionLocal
@@ -409,33 +424,59 @@ async def place_ctrader_order_for_user(
     finally:
         db.close()
 
-    mult        = 1.0 if direction == "LONG" else -1.0
-    tp_price    = round(entry_price * (1 + mult * tp_pct / 100), 6)
-    sl_price    = round(entry_price * (1 - mult * sl_pct / 100), 6)
+    mult     = 1.0 if direction == "LONG" else -1.0
+    tp_price = round(entry_price * (1 + mult * tp_pct / 100), 6)
+    sl_price = round(entry_price * (1 - mult * sl_pct / 100), 6)
 
-    # Lot size: risk_usd / (sl_pct% of entry * pip_value)
-    pip         = _PIP_SIZES.get(symbol, 0.0001)
-    sl_pips     = abs(entry_price - sl_price) / pip
-    pip_value   = 10.0 if "JPY" not in symbol else 9.28  # approx USD/pip/lot
-    if risk_usd and risk_usd > 0:
-        lots = round(risk_usd / max(sl_pips * pip_value, 0.01), 2)
+    is_index = symbol.upper() in _INDEX_SYMBOLS
+
+    if is_index:
+        # Index CFDs: volume in contracts (1 contract ≈ 1 unit of index value).
+        # Size by risk_usd if provided, else fall back to 1 contract minimum.
+        if risk_usd and risk_usd > 0:
+            # contracts ≈ risk_usd / (sl_pct% of price)
+            sl_value_per_contract = entry_price * (sl_pct / 100)
+            contracts = max(1, round(risk_usd / max(sl_value_per_contract, 0.01)))
+        else:
+            contracts = 1
+        contracts = max(1, min(contracts, 500))  # clamp 1–500 contracts
+        logger.info(
+            f"[cTrader] placing {direction} {symbol} (index) {contracts} contracts "
+            f"TP={tp_price} SL={sl_price} for user {user.id}"
+        )
+        result = await place_order_units(
+            access_token           = access_token,
+            ctid_trader_account_id = ctid_trader_account_id,
+            symbol_name            = _SYMBOL_MAP.get(symbol, symbol),
+            direction              = direction,
+            volume_units           = contracts,
+            stop_loss_price        = sl_price,
+            take_profit_price      = tp_price,
+        )
     else:
-        lots = 0.01  # minimal lot — caller should send risk_usd for real sizing
-    lots = max(0.01, min(lots, 50.0))  # clamp 0.01–50 lots
+        # Forex: standard lot sizing
+        pip       = _PIP_SIZES.get(symbol, 0.0001)
+        sl_pips   = abs(entry_price - sl_price) / pip
+        pip_value = 10.0 if "JPY" not in symbol else 9.28  # approx USD/pip/lot
+        if risk_usd and risk_usd > 0:
+            lots = round(risk_usd / max(sl_pips * pip_value, 0.01), 2)
+        else:
+            lots = 0.01
+        lots = max(0.01, min(lots, 50.0))
+        logger.info(
+            f"[cTrader] placing {direction} {symbol} {lots}L "
+            f"TP={tp_price} SL={sl_price} for user {user.id}"
+        )
+        result = await place_order(
+            access_token           = access_token,
+            ctid_trader_account_id = ctid_trader_account_id,
+            symbol_name            = symbol,
+            direction              = direction,
+            volume_lots            = lots,
+            stop_loss_price        = sl_price,
+            take_profit_price      = tp_price,
+        )
 
-    logger.info(
-        f"[cTrader] placing {direction} {symbol} {lots}L "
-        f"TP={tp_price} SL={sl_price} for user {user.id}"
-    )
-    result = await place_order(
-        access_token           = access_token,
-        ctid_trader_account_id = ctid_trader_account_id,
-        symbol_name            = symbol,
-        direction              = direction,
-        volume_lots            = lots,
-        stop_loss_price        = sl_price,
-        take_profit_price      = tp_price,
-    )
     if result.get("error"):
         logger.error(f"[cTrader] order failed for user {user.id}: {result['error']}")
         return None

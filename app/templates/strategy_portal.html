@@ -2717,11 +2717,11 @@ function dismissTgBanner(){
     <!-- Forex Trading — cTrader / FP Markets -->
     <div class="settings-section">
       <div class="settings-section-title"><div class="sc-icon" style="background:rgba(63,182,139,.15);color:#3FB68B">💱</div>Forex Trading — cTrader (FP Markets)</div>
-      <div class="hint" style="margin-bottom:16px">Connect your FP Markets live account via cTrader OAuth to run forex strategies with real execution. Paper testing works without any connection.</div>
+      <div class="hint" style="margin-bottom:16px">Connect your FP Markets live account via cTrader OAuth to run forex and index CFD strategies with real execution. Paper testing works without any connection.</div>
       <div id="ctrader-connected-card" style="display:none;background:rgba(63,182,139,.08);border:1px solid rgba(63,182,139,.25);border-radius:6px;padding:12px 14px;margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#3FB68B;font-weight:700">
           <span style="width:7px;height:7px;border-radius:50%;background:#3FB68B;display:inline-block"></span>
-          <span style="flex:1">cTrader connected — FP Markets live forex active</span>
+          <span style="flex:1">cTrader connected — FP Markets live forex &amp; indices active</span>
           <button class="btn ghost sm" style="flex-shrink:0;font-size:11px" onclick="disconnectCtrader()">Disconnect</button>
         </div>
         <div id="ctrader-meta" style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.5"></div>
@@ -4127,18 +4127,17 @@ async function loadAssetCatalog(){
 }
 loadAssetCatalog();
 
-// P5e-2: forex strategies become live-eligible once the user has connected an
-// OANDA account. Loaded once on init; consulted by setAssetClass + buildStrategy
-// to decide whether to force paper mode for forex.
-let _OANDA_CONNECTED=false;
-async function loadOandaStatus(){
+// cTrader connected flag — consulted by setAssetClass + buildStrategy to decide
+// whether to allow live mode for forex and index strategies.
+let _OANDA_CONNECTED=false;  // kept as _OANDA_CONNECTED for backward compat with buildStrategy refs
+async function loadCtraderStatus(){
   try{
-    const r=await fetch(`/api/oanda/status?uid=${UID}`);
+    const r=await fetch(`/api/ctrader/status?uid=${UID}`);
     if(r.ok){const d=await r.json();_OANDA_CONNECTED=!!d.connected;}
   }catch(e){_OANDA_CONNECTED=false;}
 }
-loadOandaStatus();
-function wzForexLiveOk(){return WZ.assetClass==='forex'&&_OANDA_CONNECTED;}
+loadCtraderStatus();
+function wzForexLiveOk(){return (WZ.assetClass==='forex'||WZ.assetClass==='index')&&_OANDA_CONNECTED;}
 
 function setAssetClass(cls){
   if(WZ.assetClass===cls)return;
@@ -4153,7 +4152,7 @@ function setAssetClass(cls){
     // Stocks/forex/indices use the symbol picker. Forex can run live when the
     // user has connected OANDA; stocks/indices stay paper until their brokers land.
     WZ.coins='all';
-    if(!(cls==='forex'&&_OANDA_CONNECTED))WZ.mode='paper';
+    if(!((cls==='forex'||cls==='index')&&_OANDA_CONNECTED))WZ.mode='paper';
   }
   // Pip TP/SL only applies to forex — wipe stale pip state when leaving forex
   // so a previously-set value doesn't accidentally get re-emitted later.
