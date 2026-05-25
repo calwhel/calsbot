@@ -67,6 +67,19 @@ function buildSpark(pnl: number, wr: number, trades: number): number[] {
   return out;
 }
 
+const MARKET_LABEL: Record<string, string> = {
+  crypto: '₿ Crypto',
+  forex:  '💱 Forex',
+  stock:  '📈 Stocks',
+  index:  '📊 Indices',
+};
+const MARKET_COLOR: Record<string, string> = {
+  crypto: '#5B6CF7',
+  forex:  '#22c55e',
+  stock:  '#f59e0b',
+  index:  '#a855f7',
+};
+
 const StrategyCard = React.memo(function StrategyCard({ s, onPress }: { s: Strategy; onPress: () => void }) {
   const perf = s.performance || {};
   const pnl = perf.total_pnl ?? 0;
@@ -76,6 +89,9 @@ const StrategyCard = React.memo(function StrategyCard({ s, onPress }: { s: Strat
   const isActive = s.status === 'active';
   const symbol = (s.config?.symbol as string) || 'BTC';
   const timeframe = (s.config?.timeframe as string) || '';
+  const assetClass = ((s.config as Record<string, any>)?.asset_class as string) || 'crypto';
+  const marketLabel = MARKET_LABEL[assetClass] ?? assetClass.toUpperCase();
+  const marketColor = MARKET_COLOR[assetClass] ?? '#5B6CF7';
 
   const uid = React.useId().replace(/:/g, '');
   const haloId = `card-halo-${uid}`;
@@ -119,6 +135,10 @@ const StrategyCard = React.memo(function StrategyCard({ s, onPress }: { s: Strat
           <View style={{ flex: 1, marginLeft: spacing.md }}>
             <Text style={styles.title} numberOfLines={1}>{s.name}</Text>
             <View style={styles.subRow}>
+              <View style={[styles.mktBadge, { backgroundColor: `${marketColor}22`, borderColor: `${marketColor}55` }]}>
+                <Text style={[styles.mktBadgeText, { color: marketColor }]}>{marketLabel}</Text>
+              </View>
+              <View style={styles.dotSep} />
               <Text style={styles.subText} numberOfLines={1}>
                 {symbol}{timeframe ? ` · ${timeframe}` : ''}
               </Text>
@@ -447,6 +467,16 @@ const styles = StyleSheet.create({
     height: 3,
     borderRadius: 1.5,
     backgroundColor: colors.textMute,
+  },
+  mktBadge: {
+    borderWidth: 1,
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  mktBadgeText: {
+    fontSize: 10,
+    fontFamily: font.semibold,
   },
   desc: {
     color: colors.textDim,

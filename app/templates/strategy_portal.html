@@ -3690,10 +3690,15 @@ async function loadMyStrategies(){
     const recent=(s.recent_trades||[]).slice(0,5);
     const wr=p.win_rate||0;
     const hasTrades=p.total_trades>0;
+    const assetClass=cfg.asset_class||'crypto';
+    const _MKT_LABEL={crypto:'₿ Crypto',forex:'💱 Forex',stock:'📈 Stocks',index:'📊 Indices'};
+    const _MKT_COLOR={crypto:'rgba(91,108,247,.15)',forex:'rgba(34,197,94,.15)',stock:'rgba(251,191,36,.15)',index:'rgba(168,85,247,.15)'};
+    const _MKT_TEXT={crypto:'var(--accent)',forex:'#22c55e',stock:'#f59e0b',index:'#a855f7'};
+    const mktBadgeHtml=`<span style="font-size:10px;background:${_MKT_COLOR[assetClass]||'rgba(91,108,247,.15)'};color:${_MKT_TEXT[assetClass]||'var(--accent)'};border:1px solid ${_MKT_TEXT[assetClass]||'var(--accent)'}44;border-radius:4px;padding:2px 7px;font-weight:600">${_MKT_LABEL[assetClass]||assetClass}</span>`;
 
     const metaParts=[];
     if(cfg.direction)metaParts.push(`<span>${cfg.direction}</span>`);
-    if(risk.leverage)metaParts.push(`<span class="card-meta-sep"></span><span>${risk.leverage}× leverage</span>`);
+    if(risk.leverage&&risk.leverage>1)metaParts.push(`<span class="card-meta-sep"></span><span>${risk.leverage}× leverage</span>`);
     if(exit.take_profit_pct)metaParts.push(`<span class="card-meta-sep"></span><span class="rp tp" style="font-size:11px">TP ${exit.take_profit_pct}%</span>`);
     if(exit.stop_loss_pct)metaParts.push(`<span class="rp sl" style="font-size:11px">SL ${exit.stop_loss_pct}%</span>`);
     if(risk.position_size_type==='fixed'&&risk.position_size_usd)metaParts.push(`<span class="card-meta-sep"></span><span>$${risk.position_size_usd} fixed</span>`);
@@ -3705,6 +3710,7 @@ async function loadMyStrategies(){
         <div class="dot ${s.status}"></div>
         <div class="card-name">${s.name}</div>
         ${healthBadge(s.health_score||0,p.total_trades||0)}
+        ${mktBadgeHtml}
         ${isLocked?'<span style="font-size:10px;background:rgba(91,108,247,.15);color:var(--accent);border:1px solid rgba(91,108,247,.3);border-radius:4px;padding:2px 7px;font-weight:600">🔒 Subscribed</span>':''}
         ${isPaper?'<span class="paper-badge">🧪 Paper</span>':''}
         <span class="pill ${s.status}">${isPaper?'PAPER':s.status.toUpperCase()}</span>
@@ -8589,6 +8595,16 @@ async function cbCompile() {
     // but the UI selection is ground truth.
     if (!config.asset_class || config.asset_class === 'crypto') {
       config.asset_class = cbAssetClass;
+    }
+    // Stamp leverage from the chat description — AI compiler often resets it to 1
+    // for forex/indices regardless of what the chat agreed on.
+    const _levMatch = cbDesc && cbDesc.match(/Leverage:\s*(\d+(?:\.\d+)?)[\s×xX]/i);
+    if (_levMatch) {
+      const _parsedLev = parseFloat(_levMatch[1]);
+      if (_parsedLev > 0) {
+        if (!config.risk) config.risk = {};
+        config.risk.leverage = _parsedLev;
+      }
     }
     // For forex: ensure universe is specific (compiler may have defaulted to "all")
     if (cbAssetClass === 'forex' || cbAssetClass === 'stock' || cbAssetClass === 'index') {
