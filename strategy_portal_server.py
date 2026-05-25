@@ -1127,17 +1127,16 @@ async def _startup_background():
     except Exception as e:
         logger.warning(f"Background _ensure_tables error: {e}")
 
-    # ── cTrader live price feed ───────────────────────────────────────────────
-    # Starts a persistent TLS connection to live.ctraderapi.com that streams
-    # real-time bid/ask for all tracked forex/index symbols.  tradfi_prices.py
-    # consults this feed first; falls back to yfinance when dormant.
-    # Runs in every environment (dev + prod) since it's read-only market data.
+    # ── FMP real-time price feed ──────────────────────────────────────────────
+    # Persistent WebSocket to FMP streaming server — no account linking needed.
+    # Streams live bid/ask for all forex + index symbols. tradfi_prices.py
+    # consults this feed first (TTL=10s); falls back to yfinance when cold.
     try:
-        from app.services.ctrader_price_feed import start as _ct_feed_start
-        _ct_feed_start()
-        logger.info("cTrader live price feed task scheduled")
-    except Exception as _ct_err:
-        logger.warning(f"cTrader price feed start error (non-fatal): {_ct_err}")
+        from app.services.fmp_price_feed import start as _fmp_feed_start
+        _fmp_feed_start()
+        logger.info("FMP real-time price feed task scheduled")
+    except Exception as _fmp_err:
+        logger.warning(f"FMP price feed start error (non-fatal): {_fmp_err}")
 
     # Only run the strategy executor in production (REPL_DEPLOYMENT=1).
     # In dev, both the dev portal and production share the same Neon DB, so
@@ -8497,22 +8496,22 @@ async def api_ctrader_disconnect(uid: str = Query(...)):
 @app.get("/api/ctrader/feed-status")
 async def api_ctrader_feed_status():
     """
-    Returns the current state of the live cTrader price feed.
-    No auth required — read-only diagnostic endpoint used by the
-    cTrader connection screen to show feed health.
+    Returns the current state of the FMP real-time price feed.
+    No auth required — read-only diagnostic endpoint.
     """
     try:
-        from app.services.ctrader_price_feed import (
-            is_live as _ct_live,
-            cached_symbols as _ct_syms,
+        from app.services.fmp_price_feed import (
+            is_live as _fmp_live,
+            cached_symbols as _fmp_syms,
+            symbol_count as _fmp_count,
         )
-        live = _ct_live()
-        symbols = _ct_syms()
+        live = _fmp_live()
+        symbols = _fmp_syms()
         return JSONResponse({
             "live":            live,
             "cached_symbols":  symbols,
-            "symbol_count":    len(symbols),
-            "source":          "ctrader" if live else "yfinance_fallback",
+            "symbol_count":    _fmp_count(),
+            "source":          "fmp_realtime" if live else "yfinance_fallback",
         })
     except Exception as e:
         return JSONResponse({

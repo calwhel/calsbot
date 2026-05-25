@@ -1,13 +1,14 @@
 """
-Stocks / forex / indices price + kline fetcher backed by yfinance.
+Stocks / forex / indices price + kline fetcher.
+
+Priority chain:
+  1. FMP real-time WebSocket feed (by-the-second, no account required)
+  2. yfinance (15-min delayed fallback — used only when FMP feed is cold)
 
 Returned shapes mirror the existing crypto helpers so the strategy executor
 can consume them without branching every TA call:
 - get_price(symbol, asset_class) -> Optional[float]
 - get_klines(symbol, asset_class, interval, limit) -> List[[ts, o, h, l, c, v]]
-
-We cache aggressively (price 20s, klines 60s) — yfinance scrapes Yahoo, so
-rate-limit etiquette matters even though there's no documented quota.
 """
 from __future__ import annotations
 
@@ -39,20 +40,35 @@ _TF_MAP: Dict[str, Tuple[str, str]] = {
     "15m": ("15m", "60d"),
     "30m": ("30m", "60d"),
     "1h":  ("60m", "180d"),
-    "4h":  ("60m", "365d"),   # 4h not supported — re-aggregate from 60m client-side if ever needed
+    "4h":  ("60m", "365d"),   # 4h not supported — re-aggregate from 60m
     "1d":  ("1d",  "5y"),
 }
 
 
 def _resolve_ticker(asset_class: str, symbol: str) -> Optional[str]:
     if normalize_asset_class(asset_class) == ASSET_CLASS_CRYPTO:
-        return None  # caller must use crypto path
+        return None
     return yf_ticker(asset_class, symbol)
+
+
+def _yf_fast_price_blocking(ticker: str) -> Optional[float]:
+    """
+    yfinance Ticker.fast_info gives real-time mid prices for forex and indices
+    (no 15-min exchange delay — that only applies to the download() path for
+    US equities).  Run in a thread so we don't block the event loop.
+    """
+    import yfinance as yf
+    try:
+        fi = yf.Ticker(ticker).fast_info
+        px = fi.get("last_price") or fi.get("lastPrice")
+        return float(px) if px else None
+    except Exception:
+        return None
 
 
 def _yf_download_blocking(ticker: str, interval: str, period: str):
     """yfinance is sync — run inside a thread executor."""
-    import yfinance as yf  # imported here to keep cold-start light
+    import yfinance as yf
     return yf.download(
         tickers=ticker,
         interval=interval,
@@ -67,22 +83,22 @@ def _yf_download_blocking(ticker: str, interval: str, period: str):
 async def get_price(symbol: str, asset_class: str) -> Optional[float]:
     """
     Latest trade price.
-    Priority: cTrader live feed → yfinance (15-min delayed fallback).
+    Priority: FMP real-time feed → yfinance (15-min delayed fallback).
     """
     cls = normalize_asset_class(asset_class)
     if cls == ASSET_CLASS_CRYPTO:
         return None
 
-    # ── 1. Try cTrader live feed (real-time, same source as FP Markets) ──────
+    # ── 1. FMP real-time WebSocket feed (by-the-second, always active) ────────
     try:
-        from app.services.ctrader_price_feed import get_price as _ct_price
-        ct_px = _ct_price(symbol)
-        if ct_px is not None:
-            return ct_px
+        from app.services.fmp_price_feed import get_price as _fmp_price
+        px = _fmp_price(symbol)
+        if px is not None:
+            return px
     except Exception:
         pass
 
-    # ── 2. Fallback: yfinance ─────────────────────────────────────────────────
+    # ── 2. yfinance fast_info — real-time mid price (no exchange delay) ────────
     ticker = _resolve_ticker(cls, symbol)
     if not ticker:
         return None
@@ -93,15 +109,14 @@ async def get_price(symbol: str, asset_class: str) -> Optional[float]:
         return cached[0]
 
     try:
-        df = await asyncio.to_thread(_yf_download_blocking, ticker, "1m", "1d")
-        if df is None or df.empty:
-            return None
-        price = float(df["Close"].iloc[-1])
-        _PRICE_CACHE[ticker] = (price, now)
-        return price
+        price = await asyncio.to_thread(_yf_fast_price_blocking, ticker)
+        if price:
+            _PRICE_CACHE[ticker] = (price, now)
+            return price
     except Exception as e:
-        logger.debug(f"tradfi price fetch failed for {ticker}: {e}")
-        return None
+        logger.debug(f"tradfi fast_info failed for {ticker}: {e}")
+
+    return None
 
 
 async def get_klines(
@@ -112,18 +127,18 @@ async def get_klines(
 ) -> List[List[float]]:
     """
     Return up to `limit` OHLC bars in MEXC-shape: [[ts_ms, o, h, l, c, v], ...]
-    Priority: cTrader trendbar feed → yfinance (15-min delayed fallback).
+    Priority: FMP REST historical-chart → yfinance.
     """
     cls = normalize_asset_class(asset_class)
     if cls == ASSET_CLASS_CRYPTO:
         return []
 
-    # ── 1. Try cTrader trendbar feed (FP Markets exact data) ─────────────────
+    # ── 1. FMP REST historical-chart (up-to-the-minute candles) ──────────────
     try:
-        from app.services.ctrader_price_feed import get_klines as _ct_klines
-        ct_rows = await _ct_klines(symbol, asset_class, timeframe, limit)
-        if ct_rows:
-            return ct_rows
+        from app.services.fmp_price_feed import get_klines as _fmp_klines
+        rows = await _fmp_klines(symbol, asset_class, timeframe, limit)
+        if rows:
+            return rows
     except Exception:
         pass
 
@@ -143,8 +158,6 @@ async def get_klines(
         df = await asyncio.to_thread(_yf_download_blocking, ticker, yf_interval, period)
         if df is None or df.empty:
             return []
-        # yfinance returns MultiIndex columns if multiple tickers — we only ever
-        # pass one, but defensively normalize.
         if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
             df.columns = df.columns.get_level_values(0)
         df = df.tail(limit)
@@ -164,7 +177,7 @@ async def get_klines(
         _KLINE_CACHE[key] = (rows, now)
         return rows
     except Exception as e:
-        logger.debug(f"tradfi klines fetch failed for {ticker} ({yf_interval}): {e}")
+        logger.debug(f"tradfi klines failed for {ticker} ({yf_interval}): {e}")
         return []
 
 

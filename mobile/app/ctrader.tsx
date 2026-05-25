@@ -22,12 +22,6 @@ type AuthUrlResp = {
   redirect_uri: string;
 };
 
-type FeedStatus = {
-  live: boolean;
-  cached_symbols: string[];
-  symbol_count: number;
-  source: string;
-};
 
 export default function CTraderScreen() {
   const { uid } = useAuth();
@@ -39,13 +33,6 @@ export default function CTraderScreen() {
     queryFn: () => apiGet<CTraderStatus>('/api/ctrader/status', uid),
     enabled: !!uid,
     refetchInterval: 5000,
-  });
-
-  const { data: feedStatus } = useQuery({
-    queryKey: ['ctrader-feed-status'],
-    queryFn: () => apiGet<FeedStatus>('/api/ctrader/feed-status', null),
-    refetchInterval: 8000,
-    staleTime: 5000,
   });
 
   const connect = useMutation({
@@ -111,7 +98,6 @@ export default function CTraderScreen() {
         <ActivityIndicator color={colors.positive} style={{ marginTop: spacing.xl }} />
       ) : status?.connected ? (
         /* ── Connected state ── */
-        <>
         <View style={styles.card}>
           <View style={styles.connectedRow}>
             <View style={styles.dot} />
@@ -132,30 +118,6 @@ export default function CTraderScreen() {
             </Text>
           </Pressable>
         </View>
-
-        {/* Live price feed status card */}
-        <View style={[
-          styles.feedCard,
-          feedStatus?.live ? styles.feedCardLive : styles.feedCardOff,
-        ]}>
-          <View style={styles.feedRow}>
-            <View style={[styles.feedDot, { backgroundColor: feedStatus?.live ? colors.positive : colors.textMute }]} />
-            <Text style={[styles.feedTitle, { color: feedStatus?.live ? colors.positive : colors.textDim }]}>
-              {feedStatus?.live ? 'Live price feed active' : 'Price feed connecting…'}
-            </Text>
-          </View>
-          <Text style={styles.feedSub}>
-            {feedStatus?.live
-              ? `Streaming real-time bid/ask from FP Markets for ${feedStatus.symbol_count} symbols — paper trades now use exact FP Markets prices.`
-              : 'Connecting to FP Markets price server. Until connected, paper trades use a delayed fallback price source.'}
-          </Text>
-          {feedStatus?.live && feedStatus.cached_symbols.length > 0 && (
-            <Text style={styles.feedSymbols} numberOfLines={2}>
-              {feedStatus.cached_symbols.join(' · ')}
-            </Text>
-          )}
-        </View>
-        </>
       ) : (
         /* ── Not connected state ── */
         <View>
@@ -380,47 +342,5 @@ const styles = StyleSheet.create({
   link: {
     color: colors.positive,
     fontFamily: font.semibold,
-  },
-  feedCard: {
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    marginBottom: spacing.md,
-    borderWidth: 1,
-  },
-  feedCardLive: {
-    backgroundColor: `${colors.positive}0f`,
-    borderColor: `${colors.positive}35`,
-  },
-  feedCardOff: {
-    backgroundColor: colors.card,
-    borderColor: colors.border,
-  },
-  feedRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: spacing.xs,
-  },
-  feedDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-  },
-  feedTitle: {
-    fontSize: 13,
-    fontFamily: font.semibold,
-  },
-  feedSub: {
-    fontSize: 12,
-    fontFamily: font.regular,
-    color: colors.textDim,
-    lineHeight: 18,
-  },
-  feedSymbols: {
-    marginTop: spacing.xs,
-    fontSize: 11,
-    fontFamily: 'monospace',
-    color: colors.textMute,
-    lineHeight: 16,
   },
 });
