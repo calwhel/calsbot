@@ -1013,6 +1013,9 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 .cb-compile-btn { width: 100%; padding: 12px; background: var(--accent); border: 1px solid var(--accent); border-radius: 7px; font-size: 14px; font-weight: 600; color: #fff; cursor: pointer; transition: all .15s; font-family: inherit; }
 .cb-compile-btn:hover { background: #3d5de0; border-color: #3d5de0; }
 .cb-compile-btn:disabled { opacity: .5; cursor: not-allowed; }
+.cb-mkt-chip { background: var(--card2); border: 1px solid var(--border2); border-radius: 20px; color: var(--muted); font-size: 11px; font-weight: 600; padding: 4px 11px; cursor: pointer; transition: all .12s; }
+.cb-mkt-chip:hover { border-color: var(--accent); color: var(--text); }
+.cb-mkt-chip.selected { background: var(--accent); border-color: var(--accent); color: #fff; }
 .cb-input-area { padding: 14px 18px; border-top: 1px solid var(--border); flex-shrink: 0; display: flex; gap: 10px; align-items: center; }
 .cb-input { flex: 1; background: var(--card2); border: 1px solid var(--border2); border-radius: 8px; padding: 11px 14px; font-size: 14px; color: var(--text); font-family: inherit; outline: none; transition: border-color .12s; }
 .cb-input:focus { border-color: var(--accent); }
@@ -2243,9 +2246,17 @@ function dismissTgBanner(){
         <div class="cb-avatar" style="font-size:12px;font-weight:800;letter-spacing:-.5px">AI</div>
         <div class="cb-header-info">
           <div class="cb-name">TradeHub AI</div>
-          <div class="cb-status">Strategy Builder</div>
+          <div class="cb-status" id="cb-market-label">Strategy Builder</div>
         </div>
         <button class="cb-reset" onclick="cbReset()">↺ Start Over</button>
+      </div>
+      <!-- Market selector — shown before conversation begins -->
+      <div id="cb-market-bar" style="padding:10px 16px 0;display:flex;flex-wrap:wrap;gap:6px;flex-shrink:0">
+        <span style="font-size:11px;color:var(--muted);align-self:center;margin-right:2px">Market:</span>
+        <button class="cb-mkt-chip selected" data-mkt="crypto"  onclick="cbSetMarket('crypto')" >🪙 Crypto</button>
+        <button class="cb-mkt-chip"          data-mkt="forex"   onclick="cbSetMarket('forex')"  >💱 Forex</button>
+        <button class="cb-mkt-chip"          data-mkt="stock"   onclick="cbSetMarket('stock')"  >📈 Stocks</button>
+        <button class="cb-mkt-chip"          data-mkt="index"   onclick="cbSetMarket('index')"  >🏦 Indices</button>
       </div>
       <div class="cb-messages" id="cb-messages"></div>
       <div class="cb-limit-wall" id="cb-limit-wall">
@@ -8403,10 +8414,33 @@ async function pineSave() {
 // ══════════════════════════════════════════════════════════
 // CHAT BUILDER
 // ══════════════════════════════════════════════════════════
-let cbMessages = [];        // {role, content}
-let cbTyping   = false;
-let cbDone     = false;
-let cbDesc     = null;
+let cbMessages   = [];        // {role, content}
+let cbTyping     = false;
+let cbDone       = false;
+let cbDesc       = null;
+let cbAssetClass = 'crypto';  // selected market
+
+const _CB_MARKET_GREETINGS = {
+  crypto: "Hey! 👋 Tell me what you want to trade — describe your idea in plain English. For example: <em>\"RSI scalp long on BTC\"</em>, <em>\"MACD swing trade short\"</em>, or <em>\"buy order blocks when smart money is active\"</em>.",
+  forex:  "Hey! 👋 You're building a Forex strategy — tell me your idea. For example: <em>\"London breakout on EURUSD\"</em>, <em>\"FVG bullish tap on Gold\"</em>, or <em>\"RSI oversold swing on GBPUSD\"</em>.",
+  stock:  "Hey! 👋 Building a stock strategy — what's your idea? For example: <em>\"EMA cross on AAPL\"</em>, <em>\"MACD swing on NVDA\"</em>, or <em>\"RSI reversal on tech stocks\"</em>.",
+  index:  "Hey! 👋 Building an index strategy — what's your idea? For example: <em>\"SuperTrend on S&P 500\"</em>, <em>\"RSI oversold on Nasdaq\"</em>, or <em>\"EMA golden cross on FTSE\"</em>.",
+};
+
+const _CB_MARKET_LABELS = {
+  crypto: 'Strategy Builder · Crypto',
+  forex:  'Strategy Builder · Forex',
+  stock:  'Strategy Builder · Stocks',
+  index:  'Strategy Builder · Indices',
+};
+
+function cbSetMarket(mkt) {
+  if (cbDone || cbMessages.length > 0) return; // lock after conversation starts
+  cbAssetClass = mkt;
+  document.querySelectorAll('.cb-mkt-chip').forEach(el => el.classList.toggle('selected', el.dataset.mkt === mkt));
+  document.getElementById('cb-market-label').textContent = _CB_MARKET_LABELS[mkt] || 'Strategy Builder';
+  cbInit();
+}
 
 function cbInit() {
   cbMessages = [];
@@ -8416,10 +8450,15 @@ function cbInit() {
   document.getElementById('cb-complete').classList.remove('show');
   document.getElementById('cb-input').disabled = false;
   document.getElementById('cb-send').disabled = false;
-  cbAddMsg('ai', "Hey! 👋 Tell me what you want to trade — describe your idea in plain English. For example: <em>\"RSI scalp long on BTC\"</em>, <em>\"MACD swing trade short\"</em>, or even <em>\"I want to buy order blocks when smart money is active\"</em>.");
+  document.getElementById('cb-market-label').textContent = _CB_MARKET_LABELS[cbAssetClass] || 'Strategy Builder';
+  cbAddMsg('ai', _CB_MARKET_GREETINGS[cbAssetClass] || _CB_MARKET_GREETINGS.crypto);
 }
 
-function cbReset() { cbInit(); }
+function cbReset() {
+  cbAssetClass = 'crypto';
+  document.querySelectorAll('.cb-mkt-chip').forEach(el => el.classList.toggle('selected', el.dataset.mkt === 'crypto'));
+  cbInit();
+}
 
 function cbAddMsg(role, html) {
   const wrap = document.getElementById('cb-messages');
@@ -8458,7 +8497,7 @@ async function cbSend() {
     const res = await fetch('/api/chat-builder', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uid: UID, messages: cbMessages })
+      body: JSON.stringify({ uid: UID, messages: cbMessages, asset_class: cbAssetClass })
     });
     const data = await res.json();
     cbHideTyping();
@@ -8556,6 +8595,20 @@ async function cbCompile() {
     setTitle('⏳ Saving…');
     const config = buildData.config || {};
     config._build_mode = 'paper';
+    // Stamp asset class from the chat session — the compiler may also set it,
+    // but the UI selection is ground truth.
+    if (!config.asset_class || config.asset_class === 'crypto') {
+      config.asset_class = cbAssetClass;
+    }
+    // For forex: ensure universe is specific (compiler may have defaulted to "all")
+    if (cbAssetClass === 'forex' || cbAssetClass === 'stock' || cbAssetClass === 'index') {
+      if (!config.universe || config.universe.type === 'all') {
+        // Parse Symbols from the description if the compiler missed it
+        const symMatch = cbDesc && cbDesc.match(/Symbols?:\s*([^|]+)/i);
+        const syms = symMatch ? symMatch[1].split(',').map(s=>s.trim().toUpperCase()).filter(Boolean) : [];
+        if (syms.length) config.universe = {type:'specific', symbols: syms};
+      }
+    }
     let saveData;
     try {
       const saveRes = await fetch('/api/save-strategy', {

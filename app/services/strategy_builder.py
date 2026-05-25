@@ -267,6 +267,44 @@ conditions: above | below | near (within threshold_pct of the reference level)
 {"type":"liquidation","direction":"below","tolerance_pct":2.0}
 direction: below (long liquidations below price) | above (short liquidations above)
 → "near liquidation cluster" | "liquidity pool" | "liquidation magnet"
+
+── INVERTED FAIR VALUE GAP (IFVG) ────────────────────────────────────────────
+{"type":"ifvg","direction":"bullish","timeframe":"15m"}
+direction: bullish | bearish | any
+conditions (same as fvg): gap_exists | just_formed | price_in_gap | tap_and_reject | approaching | gap_filled
+→ "IFVG" | "inverted FVG" | "price re-enters old gap" | "mitigated gap retest"
+
+── FOREX — SESSION BREAK ─────────────────────────────────────────────────────
+{"type":"forex_session_break","condition":"high_break","session":"asian","range_minutes":60,"timeframe":"15m"}
+condition: high_break | low_break | either_break
+session: asian | sydney | london | new_york
+→ "London breakout" | "Asian range break" | "session high/low break"
+
+── FOREX — PREVIOUS LEVEL ────────────────────────────────────────────────────
+{"type":"forex_prev_level","condition":"sweep_pdh","timeframe":"15m"}
+conditions: sweep_pdh | sweep_pdl | break_pdh | break_pdl | at_pdh | at_pdl
+(pdh=previous-day-high, pdl=previous-day-low)
+→ "sweep previous day high" | "break above PDH" | "previous day low liquidity"
+
+── FOREX — CURRENCY STRENGTH ─────────────────────────────────────────────────
+{"type":"forex_currency_strength","window":"4h","min_diff":0.6,"direction":"either"}
+direction: either | base_strong | quote_strong
+→ "currency strength" | "strong USD" | "weak GBP" | "AUD outperforming"
+
+── FOREX — LIQUIDITY / PRICE ACTION ─────────────────────────────────────────
+{"type":"forex_liquidity_pa","pattern":"sweep_eqh","timeframe":"15m","lookback":20,"tolerance_pips":3}
+patterns: sweep_eqh | sweep_eql | stop_hunt_high | stop_hunt_low | equal_highs | equal_lows
+→ "equal highs sweep" | "stop hunt" | "liquidity grab" | "SSL/BSL sweep"
+
+── FOREX — NEWS AVOIDANCE ────────────────────────────────────────────────────
+{"type":"forex_news_avoidance","minutes_before":30,"minutes_after":30,"min_impact":"high"}
+min_impact: low | medium | high
+→ "avoid news" | "no trade during NFP" | "high-impact news filter"
+
+── FOREX — COT SENTIMENT ─────────────────────────────────────────────────────
+{"type":"forex_cot","condition":"specs_extreme_long","extreme_pct":75,"lookback_weeks":52}
+conditions: specs_extreme_long | specs_extreme_short | commercials_extreme_long | commercials_extreme_short
+→ "COT report" | "commitment of traders" | "speculator positioning" | "institutional sentiment"
 """
 
 STRATEGY_SCHEMA = """
@@ -274,9 +312,10 @@ STRATEGY_SCHEMA = """
   "version": "1.0",
   "name": "Strategy Name",
   "description": "Plain English description",
+  "asset_class": "crypto",      // "crypto" | "forex" | "stock" | "index"
   "universe": {
     "type": "all",              // "all" | "specific"
-    "symbols": [],              // ["SOLUSDT","ETHUSDT"] if type=specific
+    "symbols": [],              // ["SOLUSDT","ETHUSDT"] for crypto; ["EURUSD","GBPUSD"] for forex; ["AAPL","TSLA"] for stocks
     "exclude_slow_highcap": true,
     "min_volume_usd": 500000,
     "min_24h_change": null,     // null = no filter, e.g. 5.0 = only coins up 5%+
@@ -288,15 +327,17 @@ STRATEGY_SCHEMA = """
     "conditions": [ /* see condition reference above */ ]
   },
   "exit": {
-    "take_profit_pct": 3.0,
+    "take_profit_pct": 3.0,     // % TP for crypto/stocks; for forex prefer take_profit_pips
+    "take_profit_pips": null,   // pip-based TP for forex (e.g. 30); set instead of take_profit_pct
     "take_profit2_pct": null,   // optional second TP, null to disable
-    "stop_loss_pct": 1.5,
+    "stop_loss_pct": 1.5,       // % SL for crypto/stocks; for forex prefer stop_loss_pips
+    "stop_loss_pips": null,     // pip-based SL for forex (e.g. 15); set instead of stop_loss_pct
     "trailing_stop": false,
     "trailing_stop_pct": null,
     "breakeven_at_pct": null    // move SL to entry when price is up this %
   },
   "risk": {
-    "leverage": 10,
+    "leverage": 10,             // for forex retail: 1–30 (regulatory limit); crypto: up to 100
     "position_size_pct": 5,
     "max_trades_per_day": 3,
     "max_open_positions": 1,
@@ -305,12 +346,12 @@ STRATEGY_SCHEMA = """
   },
   "filters": {
     "time_filter": null,        // null | {"start_hour":8,"end_hour":20}  (UTC)
-    "btc_regime": null          // null | "bullish" | "bearish" | "neutral"
+    "btc_regime": null          // null | "bullish" | "bearish" | "neutral" — crypto only
   }
 }
 """
 
-COMPILER_SYSTEM_PROMPT = f"""You are an expert crypto perpetual futures trading strategy compiler.
+COMPILER_SYSTEM_PROMPT = f"""You are an expert multi-market trading strategy compiler supporting crypto, forex, stocks, and indices.
 Your ONLY job: translate a trader's natural-language description into a precise JSON config.
 
 OUTPUT: Return ONLY valid JSON. No markdown fences, no explanation, no comments in JSON.
@@ -321,19 +362,53 @@ OUTPUT: Return ONLY valid JSON. No markdown fences, no explanation, no comments 
 
 === COMPILATION RULES ===
 
+ASSET CLASS (set "asset_class" field — CRITICAL)
+  • Description mentions crypto / coins / BTC / ETH / altcoins / perpetuals → asset_class = "crypto"
+  • Description mentions forex / FX / EUR / GBP / USD / JPY / pair / pips / London session / Asian session → asset_class = "forex"
+  • Description mentions stocks / equities / shares / AAPL / TSLA / NASDAQ / NYSE → asset_class = "stock"
+  • Description mentions indices / S&P / Dow / FTSE / DAX / Nasdaq index → asset_class = "index"
+  • Default: "crypto" if no clear indicator
+
 DIRECTION
   • User describes entering on pumps / overbought / shorts → direction = SHORT
   • User describes entering on dips / oversold / longs → direction = LONG
   • User says "both" or RSI-adaptive → direction = BOTH
 
 STYLE PRESETS (override with explicit values if given)
-  scalp     → max_trades_per_day 4–8, cooldown 15–30min, tp ≤3%, sl ≤1.5%, leverage 10–20
+  scalp     → max_trades_per_day 4–8, cooldown 15–30min, tp ≤3%, sl ≤1.5%, leverage 10–20 (crypto) / 5–10 (forex)
   swing     → max_trades_per_day 1–2, cooldown 4h+, tp 5–15%, sl 2–5%, leverage 3–8
   momentum  → max_trades_per_day 3–6, cooldown 20–40min, tp 3–6%, sl 1.5–2%, leverage 10–15
   reversal  → max_trades_per_day 2–4, cooldown 45–90min, tp 3–6%, sl 1.5–2.5%, leverage 8–12
   smc       → max_trades_per_day 2–4, cooldown 60–120min, tp 5–10%, sl 2–3%, leverage 5–10
   sniper    → max_trades_per_day 1–2, cooldown 2h, position_size 2–5%
   custom    → use explicit values from user; apply reasonable defaults for anything unspecified
+
+FOREX-SPECIFIC RULES (apply when asset_class = "forex")
+  • Always use take_profit_pips + stop_loss_pips instead of take_profit_pct / stop_loss_pct
+    Default pip sizes: scalp 10–20 TP / 8–12 SL, swing 40–80 TP / 20–40 SL
+  • Leverage: retail forex max is 30:1 — default to 10, never exceed 30
+  • Universe: type="specific", symbols must be valid forex pairs like ["EURUSD","GBPUSD","XAUUSD"]
+    Common pairs: EURUSD GBPUSD USDJPY AUDUSD USDCAD EURGBP EURJPY GBPJPY XAUUSD XAGUSD
+  • btc_regime filter must be null (irrelevant for forex)
+  • Session signals map naturally: London → forex_session_break session=london
+    Asian range → forex_session_break session=asian
+    NY reversal → forex_session_break session=new_york
+  • "Liquidity grab" / "stop hunt" → forex_liquidity_pa
+  • "PDH / PDL sweep" / "previous day" → forex_prev_level
+  • "Currency strength" → forex_currency_strength
+  • "Avoid news" / "NFP filter" → forex_news_avoidance
+  • "COT" / "commitment of traders" → forex_cot
+  • Instrument: "Gold" / "XAU" → XAUUSD, "Silver" / "XAG" → XAGUSD
+  • If no specific pairs mentioned, default to ["EURUSD","GBPUSD"] for major-pair strategies
+
+STOCK/INDEX-SPECIFIC RULES (apply when asset_class = "stock" or "index")
+  • Use take_profit_pct / stop_loss_pct (not pips)
+  • Leverage: stocks 1–5, indices 1–10
+  • btc_regime must be null
+  • Universe type="specific" with standard tickers for stocks (e.g. AAPL, TSLA, NVDA)
+    For indices use: SPX, NDX, DJI, FTSE, DAX, NKY
+  • If no specific symbols mentioned for stocks, default to ["AAPL","MSFT","NVDA","TSLA"]
+  • If no specific symbols mentioned for indices, default to ["SPX","NDX"]
 
 CONDITION SELECTION
   "RSI oversold" → indicator rsi lt 30
@@ -366,6 +441,7 @@ CONDITION SELECTION
   "resistance breakout" → support_resistance breakout_above
   "support breakdown" → support_resistance breakout_below
   "FVG" / "fair value gap" / "imbalance" → fvg
+  "IFVG" / "inverted FVG" / "mitigated gap retest" → ifvg
   "hammer" / "pin bar" / "engulfing" / "doji" / "morning star" → candlestick
   "3 red candles" / "consecutive candles" → consecutive_candles
   "BOS" / "break of structure" → market_structure bos_bullish or bos_bearish
@@ -373,16 +449,23 @@ CONDITION SELECTION
   "order block" / "OB" → order_block
   "fib 61.8%" / "golden ratio" / "fibonacci" → fibonacci
   "RSI divergence" / "MACD divergence" → divergence
-  "funding rate" → funding_rate
-  "open interest" / "OI" → open_interest
-  "London session" / "NY session" / "Asian session" → session
+  "funding rate" → funding_rate (crypto only)
+  "open interest" / "OI" → open_interest (crypto only)
+  "London session" / "NY session" / "Asian session" → forex_session_break (forex) or session (crypto)
   "price above daily open" / "above session high" → price_relative
   "sentiment" / "social score" → sentiment
-  "liquidation cluster" / "liquidity pool" → liquidation
+  "liquidation cluster" / "liquidity pool" → liquidation (crypto) or forex_liquidity_pa (forex)
+  "London breakout" / "Asian range break" → forex_session_break
+  "PDH sweep" / "previous day high" → forex_prev_level condition=sweep_pdh
+  "stop hunt" / "equal highs sweep" → forex_liquidity_pa
+  "currency strength" → forex_currency_strength
+  "COT" / "commitment of traders" → forex_cot
 
 RISK/REWARD
   • Never set stop_loss_pct > take_profit_pct (minimum 1:1 R:R)
-  • Never set leverage > 25 unless user explicitly requests higher
+  • For forex: never set stop_loss_pips > take_profit_pips (minimum 1:1 R:R)
+  • Never set leverage > 25 for crypto unless user explicitly requests higher
+  • Never set leverage > 30 for forex
   • For scalps with ≤3% TP, keep SL ≤ 2%
 
 OPERATOR GROUPS
@@ -390,21 +473,25 @@ OPERATOR GROUPS
   Use OR for breakout/momentum screens (checking multiple coins for any signal)
 
 UNIVERSE
-  If user mentions specific coins → type="specific", symbols=[...]
-  If user mentions "top gainers" / "movers" → min_24h_change=3 (or as specified)
-  If user mentions "mid-caps" / "altcoins" → exclude_slow_highcap=true (default)
-  If user mentions "BTC/ETH only" → type="specific", symbols=["BTCUSDT","ETHUSDT"]
-  Default volume: 500000 USD/24h
+  Crypto — If user mentions specific coins → type="specific", symbols=[...USDT format]
+  Crypto — If user mentions "top gainers" / "movers" → min_24h_change=3 (or as specified)
+  Crypto — If user mentions "mid-caps" / "altcoins" → exclude_slow_highcap=true (default)
+  Crypto — If user mentions "BTC/ETH only" → type="specific", symbols=["BTCUSDT","ETHUSDT"]
+  Forex  — Always type="specific", symbols=[valid forex pairs e.g. "EURUSD"]
+  Stocks — Always type="specific", symbols=[valid tickers e.g. "AAPL"]
+  Index  — Always type="specific", symbols=[index codes e.g. "SPX"]
+  Default volume: 500000 USD/24h (crypto only)
 
 FILTERS
   If user mentions time restriction → time_filter with UTC hours
-  If user says "only in bull market" → btc_regime="bullish"
-  If user says "only in bear market" → btc_regime="bearish"
+  If user says "only in bull market" → btc_regime="bullish" (crypto only, null for forex/stocks)
+  If user says "only in bear market" → btc_regime="bearish" (crypto only)
 
 ALWAYS INCLUDE
   • Reasonable defaults for any missing fields
   • A clear description field summarising the strategy in plain English
   • At least one entry condition
+  • Correct asset_class field
 """
 
 

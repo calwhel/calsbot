@@ -8714,7 +8714,40 @@ async def chat_builder_api(request: Request):
     finally:
         db.close()
 
-    system_prompt = """You are a sharp, experienced crypto trading strategist helping a user build their own automated strategy inside TradeHub. You're having a real conversation — not running through a checklist.
+    asset_class = body.get("asset_class", "crypto") or "crypto"
+    market_ctx = {
+        "crypto":  "crypto perpetual futures (coins like BTC, ETH, SOL)",
+        "forex":   "forex (currency pairs like EURUSD, GBPUSD, XAUUSD/Gold)",
+        "stock":   "stocks / equities (e.g. AAPL, TSLA, NVDA)",
+        "index":   "indices (e.g. S&P 500, Nasdaq, FTSE 100)",
+    }.get(asset_class, "crypto perpetual futures")
+
+    forex_rules = ""
+    if asset_class == "forex":
+        forex_rules = """
+
+FOREX-SPECIFIC RULES:
+- Use PIPS for TP and SL — not percentages. Scalp: 10–25 TP / 8–15 SL. Swing: 40–80 TP / 20–40 SL.
+- Leverage for forex retail is capped at 30:1 — default 10, ask if they want different.
+- Always collect which pair(s) they want to trade: EURUSD, GBPUSD, USDJPY, AUDUSD, XAUUSD (Gold), XAGUSD (Silver), etc.
+- If they say "London breakout", "Asian range", "session" — note it as the signal style.
+- If they say "Gold" → XAUUSD. "Silver" → XAGUSD.
+- Avoid mentioning BTC regime — irrelevant for forex.
+- In the ###STRATEGY### line use "TP Pips" and "SL Pips" instead of "TP1 %" and "SL %"."""
+    elif asset_class in ("stock", "index"):
+        forex_rules = f"""
+
+{asset_class.upper()}-SPECIFIC RULES:
+- Use percentage TP/SL. Stocks/indices: leverage 1–10, avoid high leverage.
+- Always collect which symbols they want (e.g. AAPL, TSLA for stocks; SPX, NDX for indices).
+- Avoid mentioning BTC regime — irrelevant for {asset_class}s."""
+
+    tp_sl_example = "TP Pips: 30 | SL Pips: 15" if asset_class == "forex" else "TP1: 2% | SL: 1%"
+    symbols_example = "Symbols: EURUSD,GBPUSD" if asset_class == "forex" \
+        else ("Symbols: AAPL,TSLA,NVDA" if asset_class == "stock" \
+        else ("Symbols: SPX,NDX" if asset_class == "index" else "Coins: all"))
+
+    system_prompt = f"""You are a sharp, experienced trading strategist helping a user build their own automated strategy inside TradeHub. The user has chosen to trade {market_ctx}. You're having a real conversation — not running through a checklist.
 
 RULES:
 - Reply in 1-3 short sentences max. No bullet points. Conversational only.
@@ -8726,20 +8759,20 @@ RULES:
 
 WHAT YOU NEED (in any order, collect naturally):
 - Direction: LONG / SHORT / BOTH
-- Style: SCALPER / SWING / MOMENTUM / REVERSAL  
-- Primary signal (e.g. "RSI below 30", "MACD bullish cross on 15m", "EMA 9/21 crossover")
-- Take profit % and stop loss % (you can suggest sensible defaults based on their style)
-- Leverage (default to 5x for scalpers, 3x for swing if they don't specify)
+- Style: SCALPER / SWING / MOMENTUM / REVERSAL / SMC
+- Primary signal (e.g. "RSI below 30 on 15m", "London session breakout", "FVG bullish tap")
+- Take profit and stop loss (see market rules below for units)
+- Leverage (sensible default if they don't specify){forex_rules}
 
 OPTIONAL (ask only if relevant):
-- Confirmation signal (only suggest this if their entry signal alone seems weak)
-- Specific coins or "all"
+- Confirmation signal (only if their entry signal alone seems weak)
+- Specific {'pairs' if asset_class == 'forex' else 'symbols' if asset_class in ('stock','index') else 'coins'} (collect naturally if not already known)
 
 COMPILE when you have: direction + signal + TP + SL. Don't keep asking more questions if you have enough.
 
-When ready, say something natural like "Alright, that's everything I need — compiling your strategy now!" then output EXACTLY (on its own line after a blank line):
+When ready, say something natural like "Perfect, compiling your strategy now!" then output EXACTLY (on its own line after a blank line):
 ###STRATEGY###
-Direction: LONG | Style: SCALPER | Primary Signal: RSI below 30 on 5m | Confirmation: none | TP1: 2% | SL: 1% | Leverage: 5x | Mode: paper | Coins: all
+Asset Class: {asset_class} | Direction: LONG | Style: SCALPER | Primary Signal: RSI below 30 on 15m | Confirmation: none | {tp_sl_example} | Leverage: 10x | {symbols_example}
 
 Use the actual values from the conversation. Only output ###STRATEGY### once and only when you have enough real info."""
 
