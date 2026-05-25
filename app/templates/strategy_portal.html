@@ -4215,10 +4215,12 @@ const STYLE_PRESETS={
   pump:     {leverage:20,posSize:2,dailyLoss:5,maxPos:1,maxTrades:10,cooldown:5,   tp1:20, sl:8,   category:'momentum'},
   dip:      {leverage:8, posSize:7,dailyLoss:5,maxPos:2,maxTrades:4, cooldown:45,  tp1:8,  sl:3,   category:'reversal'},
   range:    {leverage:6, posSize:8,dailyLoss:4,maxPos:3,maxTrades:8, cooldown:30,  tp1:3,  sl:1.5, category:'scalp'},
-  // ── Forex (paper-only, 1× leverage). tp1/sl are kept as % back-compat for
-  // the executor's existing exit code paths, but the wizard's Step 5 reads
-  // pips (tp1Pips/slPips) for forex and emits take_profit_pips/stop_loss_pips
-  // to the save endpoint — executor converts pips→% at fire time.
+  // ── Index CFDs — 1× leverage default (cTrader live when connected)
+  idx_trend:    {leverage:1,posSize:10,dailyLoss:3,maxPos:2,maxTrades:2,cooldown:240,tp1:2.0,sl:1.0,category:'idx_trend',    timeframe:'1h'},
+  idx_breakout: {leverage:1,posSize:8, dailyLoss:3,maxPos:2,maxTrades:3,cooldown:120,tp1:3.0,sl:1.5,category:'idx_breakout', timeframe:'1h'},
+  idx_meanrev:  {leverage:1,posSize:8, dailyLoss:3,maxPos:2,maxTrades:3,cooldown:240,tp1:1.5,sl:0.8,category:'idx_meanrev',  timeframe:'4h'},
+  // ── Forex — pip-based TP/SL. tp1/sl are % back-compat; wizard Step 5 reads
+  // tp1Pips/slPips and emits take_profit_pips/stop_loss_pips to the save endpoint.
   fx_london_breakout:    {leverage:1,posSize:5,dailyLoss:3,maxPos:2,maxTrades:4,cooldown:60, tp1:0.30,sl:0.15,category:'fx_london_breakout',    timeframe:'15m'},
   fx_asian_range:        {leverage:1,posSize:5,dailyLoss:3,maxPos:2,maxTrades:4,cooldown:90, tp1:0.25,sl:0.12,category:'fx_asian_range',        timeframe:'15m'},
   fx_ny_reversal:        {leverage:1,posSize:5,dailyLoss:3,maxPos:2,maxTrades:3,cooldown:60, tp1:0.20,sl:0.12,category:'fx_ny_reversal',        timeframe:'15m'},
@@ -5143,9 +5145,9 @@ function renderStep1(){
   // wanted forex. Mirrors mobile's StepMarket.
   const marketChips=[
     ['crypto','🪙 Crypto',  '24/7 · live or paper · Bitunix'],
-    ['forex', '💱 Forex',   'Mon–Fri · live with OANDA · paper otherwise'],
-    ['stock', '📈 Stocks',  'NYSE/Nasdaq hours · paper (live coming)'],
-    ['index', '🏛️ Indices', 'Index futures hours · paper (live coming)'],
+    ['forex', '💱 Forex',   'Mon–Fri · live via cTrader (FP Markets)'],
+    ['stock', '📈 Stocks',  'NYSE/Nasdaq hours · paper only'],
+    ['index', '🏛️ Indices', 'US/EU hours · live via cTrader (FP Markets)'],
   ];
   const marketPicker=`
     <div class="wz-q">Which market?</div>
@@ -5159,8 +5161,8 @@ function renderStep1(){
   if(!WZ.assetClass){
     return marketPicker+`<div class="hint" style="text-align:center;padding:16px;border:1px dashed var(--border);border-radius:8px;color:var(--muted)">👆 Pick a market above to continue</div>`;
   }
-  // Forex strategies use 7 session-aware templates instead of the crypto
-  // style grid — each pre-fills a session-based primary signal + pip TP/SL.
+  // Forex strategies use session-aware templates; indices use index-specific
+  // styles; everything else uses the generic crypto style grid.
   const styles=WZ.assetClass==='forex'?[
     {id:'fx_london_breakout',    icon:'🇬🇧', title:'London Breakout',     desc:'Buy/sell London open break<br>of the Asian range.'},
     {id:'fx_asian_range',        icon:'🌏', title:'Asian Range Breakout',desc:'Trade the break of the<br>overnight Sydney/Asian range.'},
@@ -5173,6 +5175,11 @@ function renderStep1(){
     {id:'fx_liquidity_pa',       icon:'🪤', title:'Liquidity & PA',      desc:'Trade sweeps of equal H/L<br>+ pin bars & engulfings.'},
     {id:'fx_cot_sentiment',      icon:'🏦', title:'COT Sentiment',       desc:'Fade extreme speculator<br>positioning (weekly CFTC).'},
     {id:'custom',                icon:'⚙️', title:'Custom',              desc:'Set everything yourself.<br>Full manual control.'},
+  ]:WZ.assetClass==='index'?[
+    {id:'idx_trend',    icon:'📈', title:'Index Trend',    desc:'Long-bias trend follow on<br>US500 / US100 / GER40.'},
+    {id:'idx_breakout', icon:'🚀', title:'Index Breakout', desc:'Buy daily-range breaks on<br>major index CFDs.'},
+    {id:'idx_meanrev',  icon:'🔄', title:'Index Pullback', desc:'Buy 4h oversold dips in<br>a long-term uptrend.'},
+    {id:'custom',       icon:'⚙️', title:'Custom',         desc:'Set everything yourself.<br>Full manual control.'},
   ]:[
     {id:'scalp',    icon:'⚡', title:'Scalper',       desc:'Quick in-and-out trades.<br>Tight targets, high frequency.'},
     {id:'swing',    icon:'🌊', title:'Swing Trader',  desc:'Multi-hour positions.<br>Patient for bigger moves.'},
