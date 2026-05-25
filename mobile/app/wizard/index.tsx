@@ -16,7 +16,7 @@
  * Indicator Generator) are deferred to a separate v1.2 task.
  */
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, Pressable,
   KeyboardAvoidingView, Platform, ActivityIndicator,
@@ -36,6 +36,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { Pill } from '@/components/Pill';
 import { RiskDisclaimer } from '@/components/RiskDisclaimer';
+import { GoLiveModal, type GoLiveBroker } from '@/components/GoLiveModal';
 import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, apiPost, apiPostFlex, type SaveStrategyResponse, type BacktestResult } from '@/lib/api';
@@ -136,6 +137,10 @@ export default function WizardScreen() {
     staleTime: 60_000,
   });
   const ctraderConnected = !!ctraderStatus?.connected;
+
+  // ── Go Live modal ──────────────────────────────────────────────────────
+  const [goLiveOpen, setGoLiveOpen] = useState(false);
+  const [goLiveBroker, setGoLiveBroker] = useState<GoLiveBroker>('bitunix');
 
   // ── Transient UI state ─────────────────────────────────────────────────
   const [pickerVisible, setPickerVisible]       = useState<null | 'primary' | 'confirm'>(null);
@@ -456,7 +461,7 @@ export default function WizardScreen() {
         >
           {s.step === 1 && <StepMarket s={s} onPick={applyAssetClass} />}
           {s.step === 2 && <Step1 s={s} onPick={applyStyle} />}
-          {s.step === 3 && <Step2 s={s} update={update} ctraderConnected={ctraderConnected} />}
+          {s.step === 3 && <Step2 s={s} update={update} ctraderConnected={ctraderConnected} onShowGoLive={(broker) => { setGoLiveBroker(broker); setGoLiveOpen(true); }} />}
           {s.step === 4 && (
             <Step3
               s={s}
@@ -556,6 +561,12 @@ export default function WizardScreen() {
           }
         }}
       />
+
+      <GoLiveModal
+        visible={goLiveOpen}
+        onClose={() => setGoLiveOpen(false)}
+        defaultBroker={goLiveBroker}
+      />
     </View>
   );
 }
@@ -647,9 +658,16 @@ function Step1({ s, onPick }: { s: WizardState; onPick: (id: StyleId) => void })
 // ─────────────────────────────────────────────────────────────────────────
 // Step 2 — Direction & Mode
 // ─────────────────────────────────────────────────────────────────────────
-function Step2({ s, update, ctraderConnected }: { s: WizardState; update: (p: Partial<WizardState>) => void; ctraderConnected?: boolean }) {
+function Step2({ s, update, ctraderConnected, onShowGoLive }: { s: WizardState; update: (p: Partial<WizardState>) => void; ctraderConnected?: boolean; onShowGoLive?: (broker: GoLiveBroker) => void }) {
   const forexLiveOk = (s.assetClass === 'forex' || s.assetClass === 'index') && !!ctraderConnected;
   const paperOnly = ASSET_CLASS_LABELS[s.assetClass].paperOnly && !forexLiveOk;
+  const handleModeChange = (v: 'paper' | 'live') => {
+    update({ mode: v });
+    if (v === 'live') {
+      const broker: GoLiveBroker = (s.assetClass === 'forex' || s.assetClass === 'index') ? 'ctrader' : 'bitunix';
+      onShowGoLive?.(broker);
+    }
+  };
   return (
     <View>
       <StepIntro
@@ -673,7 +691,7 @@ function Step2({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
           </>
         ) : (
           <>
-            <ChipRow options={MODE_OPTIONS} value={s.mode} onChange={(v) => update({ mode: v })} />
+            <ChipRow options={MODE_OPTIONS} value={s.mode} onChange={handleModeChange} />
             <Text style={styles.hint}>
               {s.mode === 'paper'
                 ? '🧪 Paper mode tracks signals without sending real orders — perfect for testing.'

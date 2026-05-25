@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
   RefreshControl, useWindowDimensions, Alert,
@@ -16,6 +16,7 @@ import { CandleChart, type Candle, type ChartMarker } from '@/components/CandleC
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { StrategyConfigCard } from '@/components/StrategyConfigCard';
 import { AutomationCard } from '@/components/AutomationCard';
+import { GoLiveModal, type GoLiveBroker } from '@/components/GoLiveModal';
 import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, apiPost, type Strategy } from '@/lib/api';
@@ -239,6 +240,12 @@ export default function StrategyDetailScreen() {
   const trades_list = tradesQ.data?.trades || [];
   const isActive = strategy.status === 'active';
 
+  const [goLiveOpen, setGoLiveOpen] = useState(false);
+  const strategyAssetClass = (strategy.config as Record<string, any>)?._asset_class as string | undefined;
+  const goLiveBroker: GoLiveBroker =
+    strategyAssetClass === 'forex' || strategyAssetClass === 'index' ? 'ctrader' : 'bitunix';
+  const isPaper = (strategy.config as Record<string, any>)?._build_mode === 'paper';
+
   return (
     <>
       <Stack.Screen options={{ title: '' }} />
@@ -285,6 +292,26 @@ export default function StrategyDetailScreen() {
             ) : null}
           </View>
         )}
+
+        {/* Go Live CTA — shown on paper strategies */}
+        {isPaper && (
+          <View style={{ marginTop: spacing.md }}>
+            <PrimaryButton
+              label="How to go live with this strategy"
+              variant="secondary"
+              onPress={() => setGoLiveOpen(true)}
+              icon={<Ionicons name="flash-outline" size={16} color={colors.positive} />}
+            />
+            <Text style={styles.activateHint}>
+              Paper mode — connect a broker account to run this with real funds.
+            </Text>
+          </View>
+        )}
+        <GoLiveModal
+          visible={goLiveOpen}
+          onClose={() => setGoLiveOpen(false)}
+          defaultBroker={goLiveBroker}
+        />
 
         {/* How this strategy works — parsed config */}
         <View style={{ marginTop: spacing.lg }}>

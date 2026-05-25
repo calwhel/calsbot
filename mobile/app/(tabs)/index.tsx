@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -26,6 +26,7 @@ import { Logo } from '@/components/Logo';
 import { QuickstartCard } from '@/components/QuickstartCard';
 import { Pill } from '@/components/Pill';
 import { EquityCurve } from '@/components/EquityCurve';
+import { GoLiveModal } from '@/components/GoLiveModal';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -62,6 +63,7 @@ function timeAgo(iso: string | null): string {
 export default function HomeScreen() {
   const { uid, user } = useAuth();
   const router = useRouter();
+  const [goLiveOpen, setGoLiveOpen] = useState(false);
 
   const portfolioQ = useQuery({
     queryKey: ['portfolio', uid],
@@ -247,8 +249,19 @@ export default function HomeScreen() {
             {/* Live Trading status — affiliate badge + paper-vs-live split */}
             <LiveTradingCard
               data={data}
-              onPress={() => router.push('/(tabs)/settings' as any)}
+              onPress={() => {
+                if (data.affiliate?.ok) {
+                  router.push('/(tabs)/settings' as any);
+                } else {
+                  setGoLiveOpen(true);
+                }
+              }}
               onPositionsPress={() => router.push('/(tabs)/trades' as any)}
+            />
+            <GoLiveModal
+              visible={goLiveOpen}
+              onClose={() => setGoLiveOpen(false)}
+              defaultBroker="bitunix"
             />
 
             {/* Top strategies leaderboard */}
