@@ -5249,8 +5249,20 @@ function renderStep3(){
   // — including the 7 forex template entries in STYLE_SIGNALS — actually fire.
   const style=WZ.style;
   const recs=STYLE_SIGNALS[style]||[];
-  const allTypes=Object.entries(SIGNAL_META);
-  const recTypes=recs.filter(id=>SIGNAL_META[id]).map(id=>[id,SIGNAL_META[id]]);
+  // Filter signals by asset class — crypto-only signals (funding, OI, liquidation)
+  // only fire on perps; forex_* signals only make sense for FX; stock_* for equities.
+  const _ac=WZ.assetClass||'crypto';
+  const _CRYPTO_ONLY=new Set(['funding_rate','open_interest','liquidation']);
+  const _FOREX_ONLY=new Set(['forex_session','forex_session_break','forex_prev_level','forex_news_avoidance','forex_currency_strength','forex_liquidity_pa','forex_cot']);
+  const _STOCK_ONLY=new Set(['stock_earnings_avoidance']);
+  const _isCompatible=(id)=>{
+    if(_CRYPTO_ONLY.has(id)) return _ac==='crypto';
+    if(_FOREX_ONLY.has(id))  return _ac==='forex';
+    if(_STOCK_ONLY.has(id))  return _ac==='stock';
+    return true;
+  };
+  const allTypes=Object.entries(SIGNAL_META).filter(([id])=>_isCompatible(id));
+  const recTypes=recs.filter(id=>SIGNAL_META[id]&&_isCompatible(id)).map(id=>[id,SIGNAL_META[id]]);
   const otherTypes=allTypes.filter(([id])=>!recs.includes(id));
   const styleLabel=(STYLE_PRESETS[style]||{label:'Custom'}).label;
 
@@ -5317,7 +5329,19 @@ function wzPickSignal(type){
 
 function renderStep4(){
   const usedTypes=[WZ.primaryType,...WZ.confirms.map(c=>c.type)];
-  const available=Object.entries(SIGNAL_META).filter(([id])=>!usedTypes.includes(id));
+  // Same asset-class compatibility filter as Step 3 — don't let users add
+  // confirmations that the executor will silently ignore.
+  const _ac=WZ.assetClass||'crypto';
+  const _CRYPTO_ONLY=new Set(['funding_rate','open_interest','liquidation']);
+  const _FOREX_ONLY=new Set(['forex_session','forex_session_break','forex_prev_level','forex_news_avoidance','forex_currency_strength','forex_liquidity_pa','forex_cot']);
+  const _STOCK_ONLY=new Set(['stock_earnings_avoidance']);
+  const _isCompat=(id)=>{
+    if(_CRYPTO_ONLY.has(id)) return _ac==='crypto';
+    if(_FOREX_ONLY.has(id))  return _ac==='forex';
+    if(_STOCK_ONLY.has(id))  return _ac==='stock';
+    return true;
+  };
+  const available=Object.entries(SIGNAL_META).filter(([id])=>!usedTypes.includes(id)&&_isCompat(id));
   const canAdd=WZ.confirms.length<5;
   return`<div class="wz-q">Add a confirmation? <span style="color:var(--muted);font-size:14px;font-weight:400">(optional)</span></div>
   <div class="wz-sub">Confirming conditions filter out weak signals. Add up to 5 — or skip this step if your primary signal is enough.</div>

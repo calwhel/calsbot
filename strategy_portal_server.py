@@ -6392,6 +6392,30 @@ async def api_save_strategy(request: Request):
                     )
         config["asset_class"] = _asset_class
 
+        # Defense-in-depth: paper-only asset classes are forced to 1× leverage
+        # because the paper engine doesn't model margin/liquidation. Forex with
+        # OANDA connected can use real leverage. Anything else is misleading.
+        if _asset_class in PAPER_ONLY_CLASSES and not _forex_live_ok:
+            _risk = config.get("risk") or {}
+            if int(_risk.get("leverage", 1) or 1) != 1:
+                _risk["leverage"] = 1
+                config["risk"] = _risk
+
+        # Strip crypto-only signal types from non-crypto strategies — these
+        # signals (funding rate, OI, liquidations) only exist on perp markets
+        # and would silently never fire on stocks/forex/indices.
+        if _asset_class != "crypto":
+            _CRYPTO_ONLY_SIGS = {"funding_rate", "open_interest", "liquidation"}
+            _entry2 = config.get("entry_conditions") or {}
+            _conds  = _entry2.get("conditions") or []
+            _filtered = [
+                c for c in _conds
+                if not (isinstance(c, dict) and c.get("type") in _CRYPTO_ONLY_SIGS)
+            ]
+            if len(_filtered) != len(_conds):
+                _entry2["conditions"] = _filtered
+                config["entry_conditions"] = _entry2
+
         strategy = UserStrategy(
             user_id       = user.id,
             name          = config.get("name", "My Strategy"),
