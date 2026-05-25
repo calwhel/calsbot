@@ -564,6 +564,59 @@ function renderKnobs(
     case 'tradingview_webhook':
       return null;
 
+    case 'forex_news_avoidance': {
+      const impactOpts: ChipOption<string>[] = [
+        { value: 'high',   label: '🔴 High only' },
+        { value: 'medium', label: '🟡 Medium & above' },
+        { value: 'low',    label: '⚪ All events' },
+      ];
+      return (
+        <View>
+          <Section label="Minimum impact" compact={compact}>
+            <ChipRow options={impactOpts}
+              value={(cfg.min_impact as string) || 'high'}
+              onChange={(v) => set({ min_impact: v })} size="sm" />
+          </Section>
+          <Stepper label="Block before event" value={cfg.minutes_before ?? 30}
+            min={5} max={120} step={5} unit="min"
+            onChange={(v) => set({ minutes_before: v })} />
+          <Stepper label="Block after event" value={cfg.minutes_after ?? 30}
+            min={5} max={120} step={5} unit="min"
+            onChange={(v) => set({ minutes_after: v })} />
+        </View>
+      );
+    }
+
+    case 'forex_currency_strength': {
+      const winOpts: ChipOption<string>[] = [
+        { value: '1h', label: '1h' },
+        { value: '4h', label: '4h' },
+        { value: '1d', label: '1d' },
+      ];
+      const dirOpts: ChipOption<string>[] = [
+        { value: 'either',       label: '↕ Either side' },
+        { value: 'base_strong',  label: '⬆ Base stronger (LONG)' },
+        { value: 'quote_strong', label: '⬇ Quote stronger (SHORT)' },
+      ];
+      return (
+        <View>
+          <Section label="Strength window" compact={compact}>
+            <ChipRow options={winOpts}
+              value={(cfg.window as string) || '4h'}
+              onChange={(v) => set({ window: v })} size="sm" />
+          </Section>
+          <Section label="Direction bias" compact={compact}>
+            <ChipRow options={dirOpts}
+              value={(cfg.direction as string) || 'either'}
+              onChange={(v) => set({ direction: v })} size="sm" />
+          </Section>
+          <Stepper label="Min differential score" value={cfg.min_diff ?? 0.6}
+            min={0.1} max={3.0} step={0.1} decimals={1}
+            onChange={(v) => set({ min_diff: v })} />
+        </View>
+      );
+    }
+
     case 'stock_earnings_avoidance': {
       const modeOpts: ChipOption<string>[] = [
         { value: 'both',   label: '🛑 Block before & after' },

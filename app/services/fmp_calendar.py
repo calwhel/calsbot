@@ -1,16 +1,23 @@
 """
-FMP economic calendar — Forex P2 news-avoidance backbone.
+Forex economic calendar — news-avoidance backbone.
 
-Wraps the Financial Modeling Prep `/economic_calendar` endpoint with an in-
-process cache so a single 250-req/day free key can power thousands of strategy
-evaluations. Exposes one public helper, `is_news_blackout()`, used by the
-`forex_news_avoidance` signal evaluator in strategy_ta.py.
+Fetches the Forex Factory weekly calendar from their public JSON feed
+(no API key required) and exposes one public helper, `is_news_blackout()`,
+used by the `forex_news_avoidance` condition evaluator in strategy_ta.py.
 
-Cache TTL is 10 minutes (events don't move that often) and the lookup window
-spans yesterday → tomorrow so a session's pre-news scan can see the event
-before it lands. Falls open (returns "no blackout") whenever FMP is down or
-the key is missing — the strategy keeps trading; it just loses the news
-filter rather than blocking every signal.
+Cache TTL is 10 minutes — events rarely change intra-day. The lookup
+window spans the current week AND next week so the pre-event scanner can
+see events that fall just past midnight on Sunday.
+
+Falls open (returns "no blackout") whenever the upstream is unreachable —
+strategies keep trading; they just lose the news filter rather than
+blocking every signal.
+
+Field mapping — Forex Factory → internal schema:
+  country  → currency
+  title    → event
+  impact   → impact (lowercased: "High" → "high")
+  date     → date (ISO-8601 with tz offset: "2026-05-26T21:30:00-04:00")
 """
 from __future__ import annotations
 
@@ -24,9 +31,20 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_FMP_BASE = "https://financialmodelingprep.com/api/v3/economic_calendar"
+_FF_URLS: List[str] = [
+    "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+    "https://nfs.faireconomy.media/ff_calendar_nextweek.json",
+]
+_FF_HEADERS: Dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.forexfactory.com/",
+}
 _CACHE_TTL_S = 600  # 10 min
-_HTTP_TIMEOUT_S = 6.0
+_HTTP_TIMEOUT_S = 8.0
 
 # (events_list, fetched_at_unix). None until first successful fetch.
 _cache: Tuple[Optional[List[Dict]], float] = (None, 0.0)
@@ -35,28 +53,38 @@ _fetch_lock = asyncio.Lock()
 _IMPACT_RANK = {"low": 1, "medium": 2, "high": 3}
 
 
-def _api_key() -> Optional[str]:
-    k = os.getenv("FMP_API_KEY")
-    return k.strip() if k and k.strip() else None
+def _normalize_ff_event(raw: Dict) -> Dict:
+    """Translate Forex Factory field names → internal schema used by all
+    downstream helpers.  Accepts both FF format (country/title/impact) and
+    legacy FMP format (currency/event/impact) so the cache is format-agnostic.
+    """
+    return {
+        "event":    raw.get("title") or raw.get("event") or "",
+        "currency": (raw.get("country") or raw.get("currency") or "").upper(),
+        "impact":   (raw.get("impact") or "").lower(),   # "High" → "high"
+        "date":     raw.get("date") or "",
+    }
 
 
 def _parse_event_dt(ev: Dict) -> Optional[datetime]:
-    """FMP returns 'date' as 'YYYY-MM-DD HH:MM:SS' in UTC. Always returns a
-    tz-aware UTC datetime (or None) so downstream comparisons can't trip
+    """Parse the 'date' field from a normalized event.  Forex Factory uses
+    ISO-8601 with a UTC-offset timezone ('2026-05-26T21:30:00-04:00'). Always
+    returns a tz-aware UTC datetime so downstream comparisons can't trip
     naive-vs-aware TypeErrors."""
     raw = ev.get("date")
     if not raw:
         return None
+    raw_s = str(raw).strip()
     dt: Optional[datetime] = None
     try:
-        dt = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
-    except (ValueError, TypeError):
+        # ISO-8601 with offset (FF standard) or with 'Z' suffix
+        dt = datetime.fromisoformat(raw_s.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
         try:
-            # Some rows come back ISO-format with 'T' separator (and possibly 'Z').
-            dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            # Legacy FMP "YYYY-MM-DD HH:MM:SS" (assumed UTC, no offset)
+            dt = datetime.strptime(raw_s, "%Y-%m-%d %H:%M:%S")
         except (ValueError, TypeError):
             return None
-    # Coerce to tz-aware UTC if naive.
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     else:
@@ -64,44 +92,48 @@ def _parse_event_dt(ev: Dict) -> Optional[datetime]:
     return dt
 
 
-async def _fetch_calendar() -> List[Dict]:
-    """Pull yesterday → tomorrow of events. Single in-flight call shared via lock."""
-    key = _api_key()
-    if not key:
-        return []
-    now = datetime.now(timezone.utc)
-    frm = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    to = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-    params = {"from": frm, "to": to, "apikey": key}
+async def _fetch_one(client: httpx.AsyncClient, url: str) -> List[Dict]:
     try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
-            r = await client.get(_FMP_BASE, params=params)
-            r.raise_for_status()
-            data = r.json()
-            if not isinstance(data, list):
-                logger.warning("[fmp_calendar] unexpected response shape: %r", type(data))
-                return []
-            return data
+        r = await client.get(url, headers=_FF_HEADERS)
+        if r.status_code == 404:
+            # FF only publishes next-week data near the week boundary — 404
+            # is expected for most of the trading week, not an error.
+            logger.debug("[fmp_calendar] %s → 404 (next-week not published yet)", url)
+            return []
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, list):
+            logger.warning("[fmp_calendar] unexpected response from %s: %r", url, type(data))
+            return []
+        return [_normalize_ff_event(ev) for ev in data]
     except Exception as e:
-        logger.warning("[fmp_calendar] fetch failed: %s", e)
+        logger.warning("[fmp_calendar] fetch failed for %s: %s", url, e)
         return []
+
+
+async def _fetch_calendar() -> List[Dict]:
+    """Fetch this week + next week from Forex Factory and merge."""
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
+        results = await asyncio.gather(*[_fetch_one(client, u) for u in _FF_URLS])
+    combined: List[Dict] = []
+    for chunk in results:
+        combined.extend(chunk)
+    return combined
 
 
 async def get_events() -> List[Dict]:
-    """Cached calendar accessor. Refreshes every _CACHE_TTL_S."""
+    """Cached calendar accessor. Refreshes every _CACHE_TTL_S seconds."""
     global _cache
     events, fetched_at = _cache
     now_ts = datetime.now(timezone.utc).timestamp()
     if events is not None and (now_ts - fetched_at) < _CACHE_TTL_S:
         return events
     async with _fetch_lock:
-        # Re-check inside lock — another coroutine may have refreshed already.
         events, fetched_at = _cache
         if events is not None and (now_ts - fetched_at) < _CACHE_TTL_S:
             return events
         fresh = await _fetch_calendar()
-        # On fetch failure keep serving stale data rather than nuking the
-        # cache and hammering FMP on every signal evaluation.
+        # On fetch failure keep stale data rather than dropping to zero.
         if fresh or events is None:
             _cache = (fresh, now_ts)
             return fresh
@@ -127,23 +159,18 @@ def currencies_from_pair(symbol: str) -> List[str]:
     if not symbol:
         return []
     s = str(symbol).upper()
-    # OANDA:FX:EURUSD → keep the rightmost segment after the last ':'
     if ":" in s:
         s = s.rsplit(":", 1)[1]
-    # EURUSD=X / EURUSD.r → drop trailing suffix
     for sep in ("=", "."):
         if sep in s:
             s = s.split(sep, 1)[0]
     cleaned = "".join(ch for ch in s if ch.isalpha())
     if len(cleaned) < 6:
         return []
-    # Scan windows for the first ISO-validated pair.
     for i in range(len(cleaned) - 5):
         a, b = cleaned[i:i+3], cleaned[i+3:i+6]
         if a in _VALID_CCY and b in _VALID_CCY:
             return [a, b]
-    # No valid ISO pair found → return empty so is_news_blackout falls open
-    # rather than blocking trades against fictitious currency codes.
     return []
 
 
@@ -160,7 +187,6 @@ async def is_news_blackout(
     `min_impact`. Returns (in_blackout, matched_event_or_none).
 
     Falls open (False, None) when:
-      • FMP_API_KEY is missing
       • the API call fails AND no stale cache is available
       • symbol doesn't look like a forex pair
     """
@@ -178,8 +204,6 @@ async def is_news_blackout(
     ccys_set = {c.upper() for c in ccys}
 
     for ev in events:
-        # Per-event guard: any malformed row must not break the loop and
-        # cause us to falsely block trades. Fail-open is the contract.
         try:
             ev_ccy = (ev.get("currency") or "").upper()
             if ev_ccy not in ccys_set:
