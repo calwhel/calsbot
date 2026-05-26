@@ -2139,17 +2139,13 @@ async def evaluate_and_fire(
         sl_pct    = float(ex_config.get("stop_loss_pct")   or 1.5)
         leverage  = int(risk.get("leverage") or 10)
 
-        # Defense-in-depth: paper-only asset classes are clamped to 1× at fire
-        # time when the trade is paper. Live forex on OANDA (status='active')
-        # passed broker-credential checks at activation, so its configured
-        # leverage is honored. Catches legacy strategies saved before the
-        # wizard cap landed and direct-API bypasses.
-        if asset_class != "crypto":
-            from app.services.asset_classes import PAPER_ONLY_CLASSES as _POC
-            _is_paper_only = asset_class in _POC
-            _is_paper_trade = strategy.status != "active"
-            if _is_paper_only and _is_paper_trade and leverage != 1:
-                leverage = 1
+        # Defense-in-depth: stocks have no realistic leverage in paper testing —
+        # clamp to 1× so P&L isn't artificially inflated. Forex and indices
+        # DO use leverage in real trading (100:1 is standard on XAUUSD/EUR pairs),
+        # so their configured leverage is honoured even in paper mode so that
+        # paper performance reflects what a live trade would actually make.
+        if asset_class == "stock":
+            leverage = 1
 
         # ── Forex pip→% conversion ────────────────────────────────────────
         # Forex strategies set TP/SL in pips (which is how traders actually
