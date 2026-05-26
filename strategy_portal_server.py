@@ -993,6 +993,20 @@ async def _keepalive_ping_loop():
         await asyncio.sleep(240)   # 4-minute interval
 
 
+async def _resilient_task(name: str, coro_fn, restart_delay: int = 30):
+    """
+    Wraps a background coroutine with auto-restart on crash or clean exit.
+    Without this, a transient DB SSL error silently kills the executor forever.
+    """
+    while True:
+        try:
+            await coro_fn()
+            logger.warning(f"⚠️ {name} exited cleanly — restarting in {restart_delay}s")
+        except Exception as exc:
+            logger.error(f"🔴 {name} crashed ({exc!r}) — restarting in {restart_delay}s")
+        await asyncio.sleep(restart_delay)
+
+
 async def _start_executor_tasks():
     """Import and launch the executor + monitor tasks in this worker."""
     await _cancel_ghost_executions()
@@ -1003,15 +1017,17 @@ async def _start_executor_tasks():
         backfill_cancelled_paper_trades,
         backfill_ghost_cancelled_executions,
     )
-    asyncio.create_task(run_strategy_executor())
-    asyncio.create_task(run_live_position_monitor())
+    # Wrapped in _resilient_task so a transient crash (e.g. DB SSL drop)
+    # auto-restarts instead of silently killing the executor permanently.
+    asyncio.create_task(_resilient_task("run_strategy_executor", run_strategy_executor, restart_delay=20))
+    asyncio.create_task(_resilient_task("run_live_position_monitor", run_live_position_monitor, restart_delay=15))
     asyncio.create_task(backfill_cancelled_paper_trades(lookback_days=30))
     asyncio.create_task(backfill_ghost_cancelled_executions(lookback_days=7))
     # Indicator alerts loop — same advisory-lock-protected worker so a
     # multi-worker gunicorn deploy never double-fires alert DMs.
     try:
         from app.services.alerts_engine import run_alerts_engine
-        asyncio.create_task(run_alerts_engine())
+        asyncio.create_task(_resilient_task("run_alerts_engine", run_alerts_engine, restart_delay=30))
         logger.info("✅ Alerts engine task launched")
     except Exception as e:
         logger.error(f"Failed to launch alerts engine: {e}")
