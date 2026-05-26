@@ -1006,15 +1006,37 @@ def _fmt_open_card(
     conditions: list, is_paper: bool,
     tp2_price: float = None, tp2_pct: float = None,
     order_id: str = None,
+    asset_class: str = "crypto",
 ) -> str:
     dir_icon = "🟢" if direction == "LONG" else "🔴"
     header   = "🧪 <b>YOUR STRATEGY FIRED (PAPER)</b>" if is_paper else "🚀 <b>YOUR STRATEGY IS LIVE</b>"
     bar      = "━━━━━━━━━━━━━━━━━━━━"
 
+    # For forex: show pips (what traders actually think in) instead of %.
+    # pips = price_distance / pip_size  e.g. XAUUSD: $36 / $1.00 = 36 pips.
+    _is_forex = (asset_class == "forex")
+    if _is_forex and entry and entry > 0:
+        from app.services.forex_engine import pip_size as _pip_size
+        _ps = _pip_size(symbol)
+        _tp_pips = round(abs(tp_price - entry) / _ps) if _ps else None
+        _sl_pips = round(abs(sl_price - entry) / _ps) if _ps else None
+        tp_label  = f"{_tp_pips} pips" if _tp_pips is not None else f"{tp_pct:.1f}%"
+        sl_label  = f"{_sl_pips} pips" if _sl_pips is not None else f"{sl_pct:.1f}%"
+    else:
+        sign_tp  = "+" if direction == "LONG" else "-"
+        sign_sl  = "-" if direction == "LONG" else "+"
+        tp_label = f"{sign_tp}{tp_pct:.1f}%"
+        sl_label = f"{sign_sl}{sl_pct:.1f}%"
+
     tp2_line = ""
     if tp2_price and tp2_pct:
-        sign = "+" if direction == "LONG" else "-"
-        tp2_line = f"\nTP₂      <code>{tp2_price:.6g}</code>  ({sign}{tp2_pct:.1f}%)"
+        if _is_forex and entry and entry > 0:
+            _tp2_pips = round(abs(tp2_price - entry) / _ps) if _ps else None
+            tp2_val = f"{_tp2_pips} pips" if _tp2_pips is not None else f"+{tp2_pct:.1f}%"
+        else:
+            sign = "+" if direction == "LONG" else "-"
+            tp2_val = f"{sign}{tp2_pct:.1f}%"
+        tp2_line = f"\nTP₂      <code>{tp2_price:.6g}</code>  ({tp2_val})"
 
     cond_lines = ""
     if conditions:
@@ -1025,17 +1047,14 @@ def _fmt_open_card(
     order_line = f"\n<i>Order ID: #{order_id}</i>" if order_id else ""
     footer     = "<i>📄 Paper trade · no real funds used</i>" if is_paper else "<i>✅ Live strategy trade executed</i>"
 
-    sign_tp = "+" if direction == "LONG" else "-"
-    sign_sl = "-" if direction == "LONG" else "+"
-
     return (
         f"{header}\n{bar}\n"
         f"📋 <b>{strategy_name}</b>\n"
         f"{dir_icon} <b>{symbol}</b>  ·  {direction}  ·  {leverage}×\n"
         f"{bar}\n"
         f"Entry    <code>{entry:.6g}</code>\n"
-        f"TP₁      <code>{tp_price:.6g}</code>  ({sign_tp}{tp_pct:.1f}%){tp2_line}\n"
-        f"SL       <code>{sl_price:.6g}</code>  ({sign_sl}{sl_pct:.1f}%)"
+        f"TP₁      <code>{tp_price:.6g}</code>  ({tp_label}){tp2_line}\n"
+        f"SL       <code>{sl_price:.6g}</code>  ({sl_label})"
         f"{cond_lines}\n"
         f"{bar}\n"
         f"{footer}{order_line}"
@@ -2237,6 +2256,7 @@ async def evaluate_and_fire(
                             leverage      = leverage,
                             conditions    = details,
                             is_paper      = True,
+                            asset_class   = asset_class,
                         ),
                     )
                 # Mobile push (fire-and-forget; never raises)
@@ -2407,6 +2427,7 @@ async def evaluate_and_fire(
                                 conditions    = details,
                                 is_paper      = False,
                                 order_id      = str(order_id),
+                                asset_class   = asset_class,
                             ),
                         )
                         # Mobile push (fire-and-forget) — fires for live trades.
@@ -2680,6 +2701,7 @@ async def _propagate_to_subscribers(
                                 leverage      = leverage,
                                 conditions    = sub_exec.conditions_met,
                                 is_paper      = True,
+                                asset_class   = asset_class,
                             ),
                         )
                     except Exception as _e:
@@ -2778,6 +2800,7 @@ async def _propagate_to_subscribers(
                                     conditions    = sub_exec.conditions_met,
                                     is_paper      = False,
                                     order_id      = str(order_id),
+                                    asset_class   = asset_class,
                                 ),
                             )
                         except Exception as _e:
