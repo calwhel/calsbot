@@ -128,22 +128,32 @@ def current_sessions(now_utc: Optional[datetime] = None) -> List[str]:
 
 
 # ─── Pip math ────────────────────────────────────────────────────────────────
+# Pip size = the smallest price increment for a symbol (i.e. the price-level
+# distance of 1 pip), NOT the monetary pip value per lot.
+#
+# FP Markets cTrader instrument specs (source: FP Markets spreads page):
+#   XAUUSD  digits=2  →  pip = 0.01  (e.g. 4505.20 → 4505.21 = 1 pip)
+#   XAGUSD  digits=3  →  pip = 0.001
+#   Crude Oil digits=2→  pip = 0.01
+#   Nat Gas  digits=3 →  pip = 0.001
+#   Copper   digits=4 →  pip = 0.0001
+#
+# Common confusion: the *monetary* pip value is pip_size × lot_size
+# (e.g. XAUUSD 100oz lot: 0.01 × 100 = $1.00/pip/lot). That $1 figure is
+# NOT the pip_size — it is used only for P&L, not for price-level TP/SL.
+#
 # JPY pairs:  0.01  (e.g. USDJPY moves in 0.01 increments)
-# Metals:     own table — gold $1/pip, silver $0.01/pip
-#             At ~$3 300 gold: 1 pip = $1 → 20 pips ≈ 0.60%  (matches
-#             cTrader / MT4 "standard lot" pip convention for XAUUSD).
-#             At ~$33 silver: 1 pip = $0.01 → 20 pips ≈ 0.60%
 # Everything else: 0.0001  (standard 4-decimal forex)
 
 _JPY_PAIRS = ("USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "NZDJPY", "CADJPY", "CHFJPY")
 
-# Metals + commodities quoted vs USD — pip size in USD per pip.
+# Metals + commodities — pip size = price increment (digits-based).
 _METAL_PIP_SIZES: dict = {
-    "XAUUSD": 1.0,    # Gold:        1 pip = $1.00  (~$75 → 1% at $3300)
-    "XAGUSD": 0.01,   # Silver:      1 pip = $0.01  (~$0.33 → 1% at $33)
-    "CLUSD":  0.01,   # Crude Oil:   1 pip = $0.01  (min tick = $0.01/bbl)
-    "NGUSD":  0.001,  # Natural Gas: 1 pip = $0.001 (min tick = $0.001/mmBtu)
-    "HGUSD":  0.0001, # Copper:      1 pip = $0.0001/lb (quoted ~$4.50)
+    "XAUUSD": 0.01,    # Gold:        digits=2  →  1 pip = $0.01 price move
+    "XAGUSD": 0.001,   # Silver:      digits=3  →  1 pip = $0.001 price move
+    "CLUSD":  0.01,    # Crude Oil:   digits=2  →  1 pip = $0.01 price move
+    "NGUSD":  0.001,   # Natural Gas: digits=3  →  1 pip = $0.001 price move
+    "HGUSD":  0.0001,  # Copper:      digits=4  →  1 pip = $0.0001 price move
 }
 
 
