@@ -1473,7 +1473,16 @@ function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
       )}
 
       <Card>
-        <SectionHeader label="Sessions" icon="🕐" hint="Leave empty to trade 24/7" />
+        <SectionHeader
+          label={s.assetClass === 'forex' ? 'Day trading sessions' : 'Sessions'}
+          icon="🕐"
+          hint={s.assetClass === 'forex' ? 'Strategy only fires signals during selected windows' : 'Leave empty to trade 24/7'}
+        />
+        {s.assetClass === 'forex' ? (
+          <View style={{ marginBottom: spacing.xs }}>
+            <Pill label="Tip: London/NY Overlap (12–16 UTC) = highest liquidity & tightest spreads" tone="neutral" small />
+          </View>
+        ) : null}
         <ChipRow
           options={SESSIONS.map(x => ({ value: x.id, label: x.label, hint: x.hint }))}
           value={s.sessions}
@@ -1481,6 +1490,26 @@ function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
           multi
           size="sm"
         />
+        {s.assetClass === 'forex' && s.sessions.length > 0 ? (
+          <>
+            <ToggleRow
+              label="Max trades per session"
+              desc="Cap how many new trades open during each active session window (resets each session)"
+              enabled={s.maxTradesPerSession != null}
+              onToggle={(on) => update({ maxTradesPerSession: on ? 2 : null })}
+            />
+            {s.maxTradesPerSession != null ? (
+              <Stepper
+                label="Max trades per session"
+                value={s.maxTradesPerSession}
+                onChange={(v) => update({ maxTradesPerSession: v })}
+                min={1} max={10} step={1}
+                presets={[1, 2, 3, 5]}
+                hint="Counted separately from daily cap — e.g. 2 per London + 2 per NY = 4 total"
+              />
+            ) : null}
+          </>
+        ) : null}
         <SectionHeader label="Trading days" icon="📅" hint="Leave empty for all 7 days" />
         <ChipRow
           options={DAYS.map(x => ({ value: x.id, label: x.label }))}
@@ -1489,6 +1518,58 @@ function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
           multi
           size="sm"
         />
+        {s.assetClass === 'forex' ? (
+          <View style={{ marginTop: spacing.sm }}>
+            <ToggleRow
+              label="Friday close protection"
+              desc="No new trades after Thu 21:00 UTC — closes all open positions before the weekend gap"
+              enabled={s.fridayCloseProtection}
+              onToggle={(on) => update({ fridayCloseProtection: on })}
+            />
+            <ToggleRow
+              label="No overnight positions"
+              desc="Force-close all trades before NY close (22:00 UTC) — never hold through the night"
+              enabled={s.noOvernightPositions}
+              onToggle={(on) => update({ noOvernightPositions: on })}
+            />
+            <ToggleRow
+              label="Daily pip target"
+              desc="Stop opening new trades once you've banked X pips profit today — lock in the day"
+              enabled={s.dailyPipTarget != null}
+              onToggle={(on) => update({ dailyPipTarget: on ? 30 : null })}
+            />
+            {s.dailyPipTarget != null ? (
+              <Stepper
+                label="Daily pip target"
+                value={s.dailyPipTarget}
+                onChange={(v) => update({ dailyPipTarget: v })}
+                min={5} max={500} step={5} unit=" pips" decimals={0}
+                presets={[20, 30, 50, 100]}
+                hint="Strategy pauses for the day once total pip profit reaches this — same as a daily profit lock"
+              />
+            ) : null}
+          </View>
+        ) : null}
+      </Card>
+
+      <Card>
+        <SectionHeader label="Trade management" icon="⏱️" />
+        <ToggleRow
+          label="Breakeven timer"
+          desc={`If price hasn't moved to breakeven within X minutes, close the trade at market`}
+          enabled={s.beTimerMinutes != null}
+          onToggle={(on) => update({ beTimerMinutes: on ? 30 : null })}
+        />
+        {s.beTimerMinutes != null ? (
+          <Stepper
+            label="Breakeven timeout"
+            value={s.beTimerMinutes}
+            onChange={(v) => update({ beTimerMinutes: v })}
+            min={5} max={240} step={5} unit="m" decimals={0}
+            presets={[15, 20, 30, 45, 60]}
+            hint="Trade force-closed if SL hasn't moved to entry within this window — protects against slow-moving setups"
+          />
+        ) : null}
       </Card>
 
       <Card>

@@ -1167,6 +1167,7 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
 
     fired_at = ex.fired_at or datetime.utcnow()
     elapsed_hours = (datetime.utcnow() - fired_at).total_seconds() / 3600
+    elapsed_mins  = elapsed_hours * 60
 
     # ── Candle evaluation FIRST ───────────────────────────────────────────────
     # Always scan for a TP/SL hit before considering expiry.  This prevents
@@ -1174,19 +1175,43 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     # fired_at is older than PAPER_MAX_HOLD_HOURS.
     be_pct = None
     partial_close_pct = None
+    be_timer_minutes = None
     try:
         from app.strategy_models import UserStrategy
         strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
         if strat and strat.config:
-            ex_cfg = (strat.config or {}).get("exit", {})
+            ex_cfg  = (strat.config or {}).get("exit", {})
+            risk_cfg = (strat.config or {}).get("risk", {})
             be_pct = ex_cfg.get("breakeven_pct") or ex_cfg.get("breakeven_at_pct")
             if be_pct is not None:
                 be_pct = float(be_pct)
             _pcp = ex_cfg.get("partial_close_pct")
             if _pcp:
                 partial_close_pct = float(_pcp)
+            _bet = risk_cfg.get("be_timer_minutes")
+            if _bet:
+                be_timer_minutes = float(_bet)
     except Exception:
         pass
+
+    # ── BE timer: force-close if price hasn't reached breakeven within N mins ─
+    # Check BEFORE candle evaluation — if the timer has expired and SL hasn't
+    # moved to entry yet, close at the last known price (market close).
+    if be_timer_minutes is not None and elapsed_mins >= be_timer_minutes:
+        # Only fire if the SL hasn't already been moved to entry (be not activated)
+        be_already_at_entry = (
+            ex.sl_price is not None and
+            ex.entry_price is not None and
+            abs(float(ex.sl_price) - float(ex.entry_price)) < float(ex.entry_price) * 0.0001
+        )
+        if not be_already_at_entry:
+            logger.info(
+                f"[PaperMonitor] BE TIMER expired: exec #{ex.id} {ex.symbol} "
+                f"{elapsed_mins:.0f}m elapsed >= {be_timer_minutes:.0f}m limit — "
+                f"closing at entry (CANCELLED). SL never reached entry."
+            )
+            _close_paper_execution(ex, "CANCELLED", ex.entry_price, db)
+            return True
 
     # Also read partial_close_pct from the execution notes (set at fire time)
     # as a fallback when the strategy config lookup failed.
@@ -1382,6 +1407,11 @@ async def run_paper_position_monitor():
         )
 
         # ── Phase 3: Evaluate + write (brief session per position) ────────────
+        _now_sweep = datetime.utcnow()
+        _sweep_wd  = _now_sweep.weekday()   # Mon=0 … Sun=6
+        _sweep_h   = _now_sweep.hour
+        _sweep_m   = _now_sweep.minute
+
         for result in fetch_results:
             if isinstance(result, Exception):
                 logger.warning(f"Candle fetch error in paper sweep: {result}")
@@ -1393,6 +1423,54 @@ async def run_paper_position_monitor():
                     # Re-attach the detached object into the fresh session so
                     # any attribute mutations are tracked for commit.
                     managed = write_db.merge(ex)
+
+                    # ── Forex day-trading force-close guards ──────────────────
+                    # These run BEFORE TP/SL candle evaluation so the position
+                    # is closed at market price rather than waiting for a
+                    # TP/SL hit that may never come before the weekend gap.
+                    _ex_ac = getattr(managed, "asset_class", None) or "crypto"
+                    if _ex_ac == "forex":
+                        _forced = False
+                        _force_reason = None
+                        try:
+                            from app.strategy_models import UserStrategy as _US2
+                            _strat2 = write_db.query(_US2).filter(
+                                _US2.id == managed.strategy_id
+                            ).first()
+                            if _strat2 and _strat2.config:
+                                _risk2 = (_strat2.config or {}).get("risk", {})
+
+                                # Friday close: force-close Fri from 21:00 UTC
+                                if _risk2.get("friday_close_protection"):
+                                    if (_sweep_wd == 4 and _sweep_h >= 21) or _sweep_wd >= 5:
+                                        _forced = True
+                                        _force_reason = "friday_close_protection"
+
+                                # No overnight: force-close Mon-Thu from 22:00 UTC
+                                if not _forced and _risk2.get("no_overnight_positions"):
+                                    if _sweep_wd < 4 and _sweep_h >= 22:
+                                        _forced = True
+                                        _force_reason = "no_overnight_positions"
+                        except Exception as _fce:
+                            logger.debug(f"[PaperMonitor] Force-close config read error ex#{ex.id}: {_fce}")
+
+                        if _forced:
+                            # Close at the last known candle close price (best
+                            # available market price without a live price call)
+                            _fc_price = managed.entry_price
+                            if candles:
+                                try:
+                                    _fc_price = float(candles[-1][4])  # last close
+                                except Exception:
+                                    pass
+                            logger.info(
+                                f"[PaperMonitor] FORCE-CLOSE ({_force_reason}): "
+                                f"exec #{managed.id} {managed.symbol} {managed.direction} "
+                                f"@ {_fc_price} — day-trading rule triggered"
+                            )
+                            _close_paper_execution(managed, "CANCELLED", _fc_price, write_db)
+                            continue  # skip normal TP/SL evaluation
+
                     _evaluate_paper_position_against_candles(managed, candles, write_db)
                 except Exception as e:
                     logger.warning(f"Position {ex.id} eval error: {e}")
@@ -1991,6 +2069,98 @@ async def evaluate_and_fire(
                 return
         except Exception:
             pass
+
+    # ── Forex day-trading guards (entry only) ────────────────────────────────
+    if asset_class == "forex":
+        _risk_cfg = config.get("risk") or {}
+        _now_dt = datetime.utcnow()
+        _wd = _now_dt.weekday()   # Mon=0 … Sun=6
+        _h  = _now_dt.hour
+        _m  = _now_dt.minute
+
+        # 1. Friday close protection: no new trades Thu 21:00+ or Fri/Sat (weekend gap risk)
+        if _risk_cfg.get("friday_close_protection"):
+            if (_wd == 3 and (_h > 21 or (_h == 21 and _m >= 0))) or _wd >= 4:
+                _bump("blk_friday_close")
+                return
+
+        # 2. No overnight positions: no new entries after 21:45 UTC Mon-Thu
+        #    (positions must be closeable before NY close at 22:00)
+        if _risk_cfg.get("no_overnight_positions"):
+            if _wd < 4 and _h == 21 and _m >= 45:
+                _bump("blk_no_overnight")
+                return
+            if _wd < 4 and _h >= 22:
+                _bump("blk_no_overnight")
+                return
+
+        # 3. Daily pip target: sum today's WIN pip gains; block if hit
+        _pip_target = _risk_cfg.get("daily_pip_target")
+        if _pip_target:
+            try:
+                from app.services.forex_engine import pip_size as _psz
+                _today_start = _now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                _today_wins = db.query(StrategyExecution).filter(
+                    StrategyExecution.strategy_id == strategy.id,
+                    StrategyExecution.outcome == "WIN",
+                    StrategyExecution.fired_at >= _today_start,
+                ).all()
+                _total_pip_gain = 0.0
+                for _wx in _today_wins:
+                    if _wx.entry_price and _wx.close_price and _wx.symbol:
+                        _ps = _psz(_wx.symbol)
+                        if _ps > 0:
+                            _entry = float(_wx.entry_price)
+                            _close = float(_wx.close_price)
+                            if _wx.direction == "LONG" and _close > _entry:
+                                _total_pip_gain += (_close - _entry) / _ps
+                            elif _wx.direction == "SHORT" and _close < _entry:
+                                _total_pip_gain += (_entry - _close) / _ps
+                if _total_pip_gain >= float(_pip_target):
+                    _bump("blk_daily_pip_target")
+                    logger.info(
+                        f"[Strategy {strategy.id}] Daily pip target reached: "
+                        f"{_total_pip_gain:.1f} pips >= target {_pip_target} — pausing for the day"
+                    )
+                    return
+            except Exception as _pte:
+                logger.debug(f"[Strategy {strategy.id}] daily pip target check error: {_pte}")
+
+        # 4. Max trades per session: count fires that happened inside the same session window
+        _max_per_sess = _risk_cfg.get("max_trades_per_session")
+        if _max_per_sess:
+            try:
+                from app.services.forex_engine import current_sessions as _cur_sess
+                _active_sessions = _cur_sess(_now_dt)
+                if _active_sessions:
+                    # Determine window start for the current active session(s)
+                    from app.services.forex_engine import SESSIONS as _FX_SESSIONS
+                    _sess_start = None
+                    for _sid in _active_sessions:
+                        _sw = _FX_SESSIONS.get(_sid)
+                        if _sw:
+                            _candidate = _now_dt.replace(
+                                hour=_sw.open_h, minute=_sw.open_m, second=0, microsecond=0
+                            )
+                            # Handle sessions that started yesterday (e.g. Sydney)
+                            if _candidate > _now_dt:
+                                _candidate -= timedelta(days=1)
+                            if _sess_start is None or _candidate > _sess_start:
+                                _sess_start = _candidate
+                    if _sess_start:
+                        _sess_count = db.query(StrategyExecution).filter(
+                            StrategyExecution.strategy_id == strategy.id,
+                            StrategyExecution.fired_at >= _sess_start,
+                        ).count()
+                        if _sess_count >= int(_max_per_sess):
+                            _bump("blk_session_cap")
+                            logger.debug(
+                                f"[Strategy {strategy.id}] Session cap: "
+                                f"{_sess_count}/{_max_per_sess} trades this session"
+                            )
+                            return
+            except Exception as _mps:
+                logger.debug(f"[Strategy {strategy.id}] max_per_session check error: {_mps}")
 
     # Locked strategy — fetch live entry_conditions from the original source strategy
     if config.get("_locked") and config.get("_source_strategy_id"):
