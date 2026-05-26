@@ -2115,9 +2115,9 @@ async def evaluate_and_fire(
         )
 
         ex_config = config.get("exit", {})
-        tp_pct    = float(ex_config.get("take_profit_pct",  3.0))
-        tp2_pct   = ex_config.get("take_profit2_pct")
-        sl_pct    = float(ex_config.get("stop_loss_pct",    1.5))
+        tp_pct    = float(ex_config.get("take_profit_pct")  or 3.0)
+        tp2_pct   = ex_config.get("take_profit2_pct") or None
+        sl_pct    = float(ex_config.get("stop_loss_pct")   or 1.5)
         leverage  = int(risk.get("leverage", 10))
 
         # Defense-in-depth: paper-only asset classes are clamped to 1× at fire
