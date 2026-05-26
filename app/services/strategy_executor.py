@@ -1173,6 +1173,7 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     # incorrectly CANCELLING a trade whose TP was already hit but whose
     # fired_at is older than PAPER_MAX_HOLD_HOURS.
     be_pct = None
+    partial_close_pct = None
     try:
         from app.strategy_models import UserStrategy
         strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
@@ -1181,10 +1182,24 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
             be_pct = ex_cfg.get("breakeven_pct") or ex_cfg.get("breakeven_at_pct")
             if be_pct is not None:
                 be_pct = float(be_pct)
+            _pcp = ex_cfg.get("partial_close_pct")
+            if _pcp:
+                partial_close_pct = float(_pcp)
     except Exception:
         pass
 
+    # Also read partial_close_pct from the execution notes (set at fire time)
+    # as a fallback when the strategy config lookup failed.
+    if partial_close_pct is None and ex.notes:
+        import re as _re
+        _m = _re.search(r"partial_close_pct=(\d+(?:\.\d+)?)", ex.notes or "")
+        if _m:
+            partial_close_pct = float(_m.group(1))
+
     be_activated = False
+    # Track whether we've already performed a partial close for this execution
+    # (stored in notes to survive across monitor cycles).
+    partial_close_done = bool(ex.notes and "partial_close_done" in ex.notes)
 
     if candles:
         entry_ms = int(fired_at.timestamp() * 1000)
@@ -1211,6 +1226,33 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                             outcome = "BREAKEVEN" if be_activated and ex.sl_price == ex.entry_price else "LOSS"
                             _close_paper_execution(ex, outcome, ex.sl_price, db)
                         return True
+
+                # ── Partial close at TP1 (paper simulation) ───────────────
+                # When partial_close_pct is set and TP1 is hit (but not yet
+                # done), we simulate closing partial_close_pct% of the
+                # position and moving the SL to breakeven for the remainder.
+                # The execution record stays OPEN so TP2 / final SL can still
+                # close it — we just record that partial already happened.
+                if tp_hit and partial_close_pct and not partial_close_done and ex.tp2_price:
+                    partial_close_done = True
+                    # Move SL to entry price (protect the partial profit)
+                    ex.sl_price = ex.entry_price
+                    # Mark partial close in notes (survives across monitor cycles)
+                    _old_notes = ex.notes or ""
+                    # Preserve any existing metadata before the live-pnl suffix
+                    _base_notes = _old_notes.split(" | open")[0].split(" | unrealised")[0].strip(" |")
+                    ex.notes = (_base_notes + " | partial_close_done").strip(" |")
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                    logger.info(
+                        f"[PaperMonitor] PARTIAL CLOSE: exec #{ex.id} {ex.symbol} "
+                        f"— {partial_close_pct:.0f}% closed at TP1 {ex.tp_price}, SL→entry. "
+                        f"Remainder runs to TP2 {ex.tp2_price}."
+                    )
+                    # Remainder continues — skip the full-close below
+                    continue
 
                 if tp_hit:
                     _close_paper_execution(ex, "WIN", ex.tp_price, db)
@@ -1986,6 +2028,47 @@ async def evaluate_and_fire(
         _bump("blk_max_open")
         return
 
+    # ── Forex: daily pip loss cap ─────────────────────────────────────────────
+    # If daily_loss_limit_pips is set, check the sum of pip losses today.
+    # We convert to % using the current price so we can reuse the existing
+    # closed-execution query.  Block the whole strategy if exceeded.
+    if asset_class == "forex":
+        _max_pip_loss = risk.get("daily_loss_limit_pips")
+        if _max_pip_loss:
+            try:
+                from app.services.forex_engine import pip_size as _pip_size
+                # Representative price from any symbol in universe to convert pips→%
+                _rep_sym = (universe.get("symbols") or ["EURUSD"])[0]
+                _rep_price = 1.08  # sensible default; will be overwritten below
+                # Sum today's closed pip-losses from StrategyExecution
+                _today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                _today_losses = db.query(StrategyExecution).filter(
+                    StrategyExecution.strategy_id == strategy.id,
+                    StrategyExecution.outcome.in_(["LOSS", "BREAKEVEN"]),
+                    StrategyExecution.fired_at >= _today_start,
+                ).all()
+                _total_pip_loss = 0.0
+                for _ex in _today_losses:
+                    if _ex.entry_price and _ex.close_price and _ex.symbol:
+                        _ps = _pip_size(_ex.symbol)
+                        if _ps > 0:
+                            _entry = float(_ex.entry_price)
+                            _close = float(_ex.close_price)
+                            _loss_price = abs(_entry - _close)
+                            if _ex.direction == "LONG" and _close < _entry:
+                                _total_pip_loss += _loss_price / _ps
+                            elif _ex.direction == "SHORT" and _close > _entry:
+                                _total_pip_loss += _loss_price / _ps
+                if _total_pip_loss >= float(_max_pip_loss):
+                    _bump("blk_daily_pip_loss")
+                    logger.info(
+                        f"[Strategy {strategy.id}] Daily pip loss cap hit: "
+                        f"{_total_pip_loss:.1f} pips >= limit {_max_pip_loss} pips"
+                    )
+                    return
+            except Exception as _dle:
+                logger.debug(f"[Strategy {strategy.id}] daily pip loss check error: {_dle}")
+
     # Global cooldown: if ANY symbol fired within cooldown window, pause entire strategy
     last_global = _last_any_fired_time(strategy.id, db)
     if last_global:
@@ -2118,6 +2201,30 @@ async def evaluate_and_fire(
         if not current_price:
             continue
 
+        # ── Forex: spread filter ──────────────────────────────────────────
+        # Block this symbol if the live bid/ask spread exceeds max_spread_pips.
+        # We estimate spread from the price data bid/ask if available,
+        # otherwise skip the check (fail-open so we don't false-block on stale data).
+        if asset_class == "forex":
+            _max_sp = risk.get("max_spread_pips")
+            if _max_sp:
+                try:
+                    from app.services.forex_engine import pip_size as _psz
+                    _bid = price_data.get("bid") or price_data.get("bid_price")
+                    _ask = price_data.get("ask") or price_data.get("ask_price")
+                    if _bid and _ask and _ask > _bid:
+                        _spread_price = _ask - _bid
+                        _spread_pips  = _spread_price / _psz(symbol)
+                        if _spread_pips > float(_max_sp):
+                            _bump("blk_spread_filter")
+                            logger.info(
+                                f"[Strategy {strategy.id}] {symbol} spread "
+                                f"{_spread_pips:.1f} pips > max {_max_sp} — skipping"
+                            )
+                            continue
+                except Exception as _sfe:
+                    logger.debug(f"[Strategy {strategy.id}] spread filter error: {_sfe}")
+
         passed, details = await evaluate_strategy_conditions(
             config, symbol, price_data, enhanced_ta, http_client,
             strictness_level=strictness_level
@@ -2164,6 +2271,20 @@ async def evaluate_and_fire(
                 sl_pct = _p2p(symbol, current_price, float(sl_pips))
             if tp2_pips:
                 tp2_pct = _p2p(symbol, current_price, float(tp2_pips))
+            # Pip-based trailing stop → convert to % so paper monitor + cTrader
+            # trailing logic both use the same % field.
+            _trail_pips = ex_config.get("trailing_stop_pips")
+            if _trail_pips and float(_trail_pips) > 0:
+                ex_config = dict(ex_config)  # don't mutate config in-place
+                ex_config["trailing_stop"] = True
+                ex_config["trailing_stop_pct"] = _p2p(symbol, current_price, float(_trail_pips))
+            # Pip-based breakeven trigger → convert to % ROI threshold
+            _be_pips = ex_config.get("breakeven_at_pips")
+            if _be_pips and float(_be_pips) > 0:
+                ex_config = dict(ex_config) if not isinstance(ex_config, dict) or id(ex_config) == id(config.get("exit")) else ex_config
+                _be_pct = _p2p(symbol, current_price, float(_be_pips))
+                # breakeven_at_pct is % leveraged ROI, so multiply by leverage
+                ex_config["breakeven_at_pct"] = _be_pct * max(1, leverage)
 
         direction = direction_pref
         if direction == "BOTH":
@@ -2197,6 +2318,12 @@ async def evaluate_and_fire(
             sl_price  = current_price * (1 + sl_pct  / 100)
             tp2_price = current_price * (1 - float(tp2_pct) / 100) if tp2_pct else None
 
+        # Stash partial_close_pct in notes so the paper monitor can act on it.
+        _partial_close_pct = ex_config.get("partial_close_pct")
+        _exec_notes = None
+        if _partial_close_pct and float(_partial_close_pct) > 0:
+            _exec_notes = f"partial_close_pct={float(_partial_close_pct):.0f}"
+
         execution = StrategyExecution(
             strategy_id    = strategy.id,
             user_id        = user.id,
@@ -2212,6 +2339,7 @@ async def evaluate_and_fire(
             fired_at       = datetime.utcnow(),
             is_paper       = is_paper,
             asset_class    = asset_class,
+            notes          = _exec_notes,
         )
         db.add(execution)
         db.commit()
@@ -2279,15 +2407,23 @@ async def evaluate_and_fire(
                 _risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None
                 if _broker == "ctrader":
                     from app.services.ctrader_client import place_ctrader_order_for_user
+                    # Risk % auto lot sizing: when use_risk_pct=True, the wizard
+                    # stored risk_pct_per_trade (% of account to risk).  We pass
+                    # it to the cTrader helper which fetches the account balance
+                    # and computes lots = risk% × balance / (sl_pips × pip_value).
+                    _use_risk_pct = bool(risk.get("use_risk_pct"))
+                    _risk_pct_per = float(risk.get("risk_pct_per_trade") or risk.get("position_size_pct") or 1.0)
                     order_result = await place_ctrader_order_for_user(
-                        user        = user,
-                        symbol      = symbol,
-                        direction   = direction,
-                        entry_price = current_price,
-                        tp_pct      = tp_pct,
-                        sl_pct      = sl_pct,
-                        risk_pct    = float(risk.get("position_size_pct") or 5),
-                        risk_usd    = _risk_usd,
+                        user           = user,
+                        symbol         = symbol,
+                        direction      = direction,
+                        entry_price    = current_price,
+                        tp_pct         = tp_pct,
+                        sl_pct         = sl_pct,
+                        risk_pct       = _risk_pct_per,
+                        risk_usd       = _risk_usd,
+                        use_risk_pct   = _use_risk_pct,
+                        sl_pips        = float(ex_config.get("stop_loss_pips") or 0) or None,
                     )
                 else:
                     from app.services.strategy_trader import place_bitunix_order_for_user

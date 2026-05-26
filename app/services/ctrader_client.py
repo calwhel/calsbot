@@ -490,6 +490,41 @@ async def close_position(
 
 # ── High-level: place order for a TradeHub user ───────────────────────────────
 
+async def _get_account_balance(
+    access_token: str,
+    ctid_trader_account_id: int,
+) -> Optional[float]:
+    """
+    Fetch the current account balance (equity) from cTrader via ProtoOAReconcileReq.
+    Returns USD balance or None on failure.
+    """
+    if not _PROTO_OK:
+        return None
+    try:
+        async with _get_lock():
+            reader, writer = await _get_persistent_connection()
+            if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                return None
+            req = ProtoOAReconcileReq()
+            req.ctidTraderAccountId = ctid_trader_account_id
+            payload = await _send_recv(
+                reader, writer, req,
+                _PAYLOAD_TYPES["reconcile_req"],
+                _PAYLOAD_TYPES["reconcile_res"],
+                timeout=10.0,
+            )
+            if not payload:
+                return None
+            res = ProtoOAReconcileRes()
+            res.ParseFromString(payload)
+            # balance is in cents (×100)
+            if hasattr(res, "balance") and res.balance:
+                return res.balance / 100.0
+    except Exception as e:
+        logger.debug(f"[cTrader] balance fetch error: {e}")
+    return None
+
+
 async def place_ctrader_order_for_user(
     user,
     symbol: str,
@@ -499,10 +534,18 @@ async def place_ctrader_order_for_user(
     sl_pct: float,
     risk_pct: float = 1.0,
     risk_usd: Optional[float] = None,
+    use_risk_pct: bool = False,
+    sl_pips: Optional[float] = None,
 ) -> Optional[dict]:
     """
     Place a live forex or index CFD order for a user via their connected cTrader account.
     Converts TP/SL from % to absolute prices, calculates lot/contract size from risk.
+
+    When use_risk_pct=True and sl_pips is provided, lot size is computed as:
+        lots = (risk_pct% × account_balance) / (sl_pips × pip_value_per_lot)
+    This is the professional "fixed fractional" position sizing traders expect.
+    Falls back to 0.01 lot minimum if balance fetch fails.
+
     Returns {"order_id", "actual_fill"} or None on failure.
     """
     from app.database import SessionLocal
@@ -550,10 +593,41 @@ async def place_ctrader_order_for_user(
     else:
         # Forex: standard lot sizing
         pip       = _PIP_SIZES.get(symbol, 0.0001)
-        sl_pips   = abs(entry_price - sl_price) / pip
-        pip_value = 10.0 if "JPY" not in symbol else 9.28  # approx USD/pip/lot
-        if risk_usd and risk_usd > 0:
-            lots = round(risk_usd / max(sl_pips * pip_value, 0.01), 2)
+        # Compute effective SL in pips for lot sizing
+        _sl_pips_eff = sl_pips if sl_pips and sl_pips > 0 else abs(entry_price - sl_price) / max(pip, 1e-10)
+        # pip_value_per_lot: USD P&L per pip per standard lot
+        # For USD-quoted pairs (EURUSD, GBPUSD…): 10 USD/pip/lot
+        # For JPY pairs: ~9.28 USD (yen-based, approx at USDJPY≈148)
+        # For XAU: $1/pip/lot (XAUUSD pip=0.01, lot=100oz → 100×0.01=$1)
+        if symbol.upper() in ("XAUUSD",):
+            pip_value = 1.0    # $1/pip/lot (100oz lot, pip=0.01)
+        elif symbol.upper() in ("XAGUSD",):
+            pip_value = 5.0    # $5/pip/lot approx (5000oz lot, pip=0.001)
+        elif "JPY" in symbol.upper():
+            pip_value = 9.28   # approx USD/pip/lot at USDJPY~148
+        else:
+            pip_value = 10.0   # standard USD/pip/lot for majors
+
+        if use_risk_pct and risk_pct and risk_pct > 0:
+            # ── Risk % auto lot sizing ─────────────────────────────────────
+            # Fetch live account balance; compute lots from risk fraction.
+            account_balance = await _get_account_balance(access_token, ctid_trader_account_id)
+            if account_balance and account_balance > 0:
+                risk_amount = account_balance * (risk_pct / 100.0)
+                lots = round(risk_amount / max(_sl_pips_eff * pip_value, 0.01), 2)
+                logger.info(
+                    f"[cTrader] risk% lot sizing: balance={account_balance:.2f} "
+                    f"risk%={risk_pct} risk_usd={risk_amount:.2f} "
+                    f"sl_pips={_sl_pips_eff:.1f} pip_val={pip_value} → {lots}L"
+                )
+            else:
+                logger.warning(
+                    f"[cTrader] balance fetch failed for user {user.id} — "
+                    f"falling back to 0.01 lot minimum"
+                )
+                lots = 0.01
+        elif risk_usd and risk_usd > 0:
+            lots = round(risk_usd / max(_sl_pips_eff * pip_value, 0.01), 2)
         else:
             lots = 0.01
         lots = max(0.01, min(lots, 50.0))

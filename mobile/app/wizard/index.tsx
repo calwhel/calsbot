@@ -1024,11 +1024,21 @@ function Step5({
 
         <ToggleRow
           label="Trailing stop"
-          desc="Move SL with price so profits lock in"
-          enabled={s.trailing != null}
-          onToggle={(on) => update({ trailing: on ? 1 : null })}
+          desc={isFx ? "Lock profits as price moves — trail in pips" : "Move SL with price so profits lock in"}
+          enabled={isFx ? s.trailingPips != null : s.trailing != null}
+          onToggle={(on) => isFx ? update({ trailingPips: on ? 10 : null }) : update({ trailing: on ? 1 : null })}
         />
-        {s.trailing != null ? (
+        {isFx && s.trailingPips != null ? (
+          <Stepper
+            label="Trail distance"
+            value={s.trailingPips}
+            onChange={(v) => update({ trailingPips: v })}
+            min={1} max={100} step={1} unit=" pips" decimals={0}
+            presets={[5, 8, 10, 15, 20]}
+            hint="SL trails price by this many pips once in profit"
+          />
+        ) : null}
+        {!isFx && s.trailing != null ? (
           <Stepper
             label="Trail distance"
             value={s.trailing}
@@ -1040,17 +1050,44 @@ function Step5({
 
         <ToggleRow
           label="Move SL to breakeven"
-          desc="Once price moves favourably by X%, your stop becomes free"
-          enabled={s.breakeven != null}
-          onToggle={(on) => update({ breakeven: on ? 1 : null })}
+          desc={isFx ? "Once price moves X pips in your favour, stop becomes free" : "Once price moves favourably by X%, your stop becomes free"}
+          enabled={isFx ? s.breakEvenPips != null : s.breakeven != null}
+          onToggle={(on) => isFx ? update({ breakEvenPips: on ? 15 : null }) : update({ breakeven: on ? 1 : null })}
         />
-        {s.breakeven != null ? (
+        {isFx && s.breakEvenPips != null ? (
+          <Stepper
+            label="Breakeven trigger"
+            value={s.breakEvenPips}
+            onChange={(v) => update({ breakEvenPips: v })}
+            min={1} max={200} step={1} unit=" pips" decimals={0}
+            presets={[10, 15, 20, 30]}
+            hint="Move SL to entry after price moves this many pips in your favour"
+          />
+        ) : null}
+        {!isFx && s.breakeven != null ? (
           <Stepper
             label="Breakeven trigger"
             value={s.breakeven}
             onChange={(v) => update({ breakeven: v })}
             min={0.3} max={20} step={0.1} unit="%" decimals={1}
             presets={[0.5, 1, 2, 3]}
+          />
+        ) : null}
+
+        <ToggleRow
+          label="Partial close at TP1"
+          desc="Close a portion of the position at TP1, let the rest run to TP2"
+          enabled={s.partialClosePct != null}
+          onToggle={(on) => update({ partialClosePct: on ? 50 : null })}
+        />
+        {s.partialClosePct != null ? (
+          <Stepper
+            label="Close % at TP1"
+            value={s.partialClosePct}
+            onChange={(v) => update({ partialClosePct: v })}
+            min={10} max={90} step={10} unit="%" decimals={0}
+            presets={[25, 50, 75]}
+            hint="Remaining position runs to TP2 or until SL hit"
           />
         ) : null}
 
@@ -1259,14 +1296,44 @@ function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
             presets={[3, 5, 10, 15, 20, 50]}
           />
         ) : null}
-        <Stepper
-          label="Position size"
-          value={s.posSize}
-          onChange={(v) => update({ posSize: v })}
-          min={1} max={50} step={1} unit="%"
-          presets={[2, 5, 8, 12, 20]}
-          hint="% of account equity per trade"
-        />
+        {s.assetClass === 'forex' ? (
+          <>
+            <ToggleRow
+              label="Risk % auto lot sizing"
+              desc="Size lots so you risk exactly X% of your account per trade based on your SL distance"
+              enabled={s.useRiskPct}
+              onToggle={(on) => update({ useRiskPct: on })}
+            />
+            {s.useRiskPct ? (
+              <Stepper
+                label="Risk per trade"
+                value={s.riskPct}
+                onChange={(v) => update({ riskPct: v })}
+                min={0.1} max={5} step={0.1} unit="%" decimals={1}
+                presets={[0.5, 1, 1.5, 2]}
+                hint="Lot size auto-calculated: risk% × account balance ÷ (SL pips × pip value)"
+              />
+            ) : (
+              <Stepper
+                label="Position size"
+                value={s.posSize}
+                onChange={(v) => update({ posSize: v })}
+                min={1} max={50} step={1} unit="%"
+                presets={[2, 5, 8, 12, 20]}
+                hint="% of account equity per trade"
+              />
+            )}
+          </>
+        ) : (
+          <Stepper
+            label="Position size"
+            value={s.posSize}
+            onChange={(v) => update({ posSize: v })}
+            min={1} max={50} step={1} unit="%"
+            presets={[2, 5, 8, 12, 20]}
+            hint="% of account equity per trade"
+          />
+        )}
         <Stepper
           label="Max simultaneous positions"
           value={s.maxPos}
@@ -1296,6 +1363,42 @@ function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
           presets={[3, 5, 8, 10, 15]}
           hint="Strategy auto-pauses if daily P&L hits this loss"
         />
+
+        {s.assetClass === 'forex' ? (
+          <>
+            <ToggleRow
+              label="Daily pip loss cap"
+              desc="Also pause if total daily loss exceeds X pips across all trades"
+              enabled={s.maxDailyLossPips != null}
+              onToggle={(on) => update({ maxDailyLossPips: on ? 50 : null })}
+            />
+            {s.maxDailyLossPips != null ? (
+              <Stepper
+                label="Max daily loss (pips)"
+                value={s.maxDailyLossPips}
+                onChange={(v) => update({ maxDailyLossPips: v })}
+                min={5} max={500} step={5} unit=" pips" decimals={0}
+                presets={[20, 30, 50, 100]}
+              />
+            ) : null}
+            <ToggleRow
+              label="Spread filter"
+              desc="Skip trades when the broker spread is too wide (news spikes, thin markets)"
+              enabled={s.maxSpreadPips != null}
+              onToggle={(on) => update({ maxSpreadPips: on ? 3 : null })}
+            />
+            {s.maxSpreadPips != null ? (
+              <Stepper
+                label="Max spread (pips)"
+                value={s.maxSpreadPips}
+                onChange={(v) => update({ maxSpreadPips: v })}
+                min={0.5} max={20} step={0.5} unit=" pips" decimals={1}
+                presets={[1, 2, 3, 5]}
+                hint="Trade blocked if live spread exceeds this. EURUSD normal ≈ 0.6–1 pip, XAUUSD ≈ 3–5 pips."
+              />
+            ) : null}
+          </>
+        ) : null}
 
         <SectionHeader label="Risk profile" />
         <ChipRow options={RISK_PROFILE_OPTIONS} value={s.riskProfile} onChange={(v) => update({ riskProfile: v })} size="sm" />
