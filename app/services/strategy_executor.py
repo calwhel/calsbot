@@ -20,10 +20,11 @@ import os as _os_env
 # Defaults raised from 3→10s and 5→3 because Neon's compute was getting
 # saturated — every QueryCanceled in the executor cascaded into HTTP 500s
 # on /api/strategies because all pool connections were held by hung scans.
-SCAN_INTERVAL_SECONDS  = int(_os_env.environ.get("EXECUTOR_SCAN_INTERVAL", "10"))
-PAPER_MONITOR_INTERVAL = int(_os_env.environ.get("EXECUTOR_MONITOR_INTERVAL", "20"))
-MAX_CONCURRENT         = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "3"))
-PAPER_MAX_HOLD_HOURS   = 168   # auto-expire paper positions after this many hours (7 days)
+SCAN_INTERVAL_SECONDS       = int(_os_env.environ.get("EXECUTOR_SCAN_INTERVAL", "10"))
+FOREX_SCAN_INTERVAL_SECONDS = int(_os_env.environ.get("EXECUTOR_FOREX_SCAN_INTERVAL", "30"))
+PAPER_MONITOR_INTERVAL      = int(_os_env.environ.get("EXECUTOR_MONITOR_INTERVAL", "20"))
+MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "3"))
+PAPER_MAX_HOLD_HOURS        = 168   # auto-expire paper positions after this many hours (7 days)
 
 # ─── Shared API caches ───────────────────────────────────────────────────────
 # Raw ticker list — fetched once per scan cycle, shared by ALL strategies.
@@ -2798,7 +2799,19 @@ async def _propagate_to_subscribers(
             _sub_db.close()
 
 
-# ─── Main executor loop ──────────────────────────────────────────────────────
+# ─── Asset-class helper (shared by both executor loops) ──────────────────────
+
+def _snap_asset_class(snap: dict) -> str:
+    """Return the normalised asset_class for a strategy snapshot dict."""
+    _obj = snap.get("_obj")
+    return (
+        (getattr(_obj, "asset_class", None) or "").strip()
+        or (snap.get("config") or {}).get("asset_class")
+        or "crypto"
+    )
+
+
+# ─── Main executor loop (crypto only) ────────────────────────────────────────
 
 async def run_strategy_executor():
     """
@@ -2922,6 +2935,8 @@ async def run_strategy_executor():
                         and (s["config"] or {}).get("_source_strategy_id") in active_source_ids
                     )
                     and (s["config"] or {}).get("entry_conditions", {}).get("entry_type") != "tradingview_webhook"
+                    # Forex / index / stock handled by run_forex_executor (dedicated loop)
+                    and _snap_asset_class(s) not in ("forex", "index", "stock")
                 ]
                 skipped = len(strategy_snapshots) - len(eval_snapshots)
                 if skipped:
@@ -3034,6 +3049,179 @@ async def run_strategy_executor():
                 logger.error(f"Strategy executor loop error: {e}", exc_info=True)
 
             await asyncio.sleep(SCAN_INTERVAL_SECONDS)
+
+
+# ─── Dedicated forex / index / stock executor loop ───────────────────────────
+
+async def run_forex_executor():
+    """
+    Dedicated scan loop for forex, index, and stock strategies.
+
+    Runs on a shorter independent cycle (EXECUTOR_FOREX_SCAN_INTERVAL, default
+    30 s) so these strategies are not forced to wait for the full crypto cycle
+    (which can take 30-60 s due to MEXC/Bitunix API calls).  Forex price data
+    comes from yfinance, so no MEXC ticker pre-fetch is needed and no Bitunix
+    symbol pre-warm is required.
+    """
+    from app.database import BgSessionLocal as SessionLocal, bg_engine as engine
+    from app.models import User
+    from app.strategy_models import UserStrategy, init_strategy_tables
+
+    init_strategy_tables(engine)
+    logger.info(
+        f"📈 Forex/index executor started (cycle={FOREX_SCAN_INTERVAL_SECONDS}s)"
+    )
+
+    _TRADFI_CLASSES = {"forex", "index", "stock"}
+
+    sem = asyncio.Semaphore(MAX_CONCURRENT)
+
+    # Lighter pool — yfinance calls are outbound Python HTTP, not MEXC REST;
+    # a handful of concurrent connections is plenty.
+    _timeout = httpx.Timeout(20.0, connect=5.0, pool=8.0)
+    _limits  = httpx.Limits(
+        max_connections=50,
+        max_keepalive_connections=10,
+        keepalive_expiry=30.0,
+    )
+
+    async with httpx.AsyncClient(timeout=_timeout, limits=_limits) as http_client:
+        while True:
+            try:
+                _list_db = SessionLocal()
+                try:
+                    strategies = (
+                        _list_db.query(UserStrategy)
+                        .filter(UserStrategy.status.in_(["active", "paper"]))
+                        .all()
+                    )
+                    strategy_snapshots = [
+                        {
+                            "id":      s.id,
+                            "name":    s.name,
+                            "status":  s.status,
+                            "config":  s.config,
+                            "user_id": s.user_id,
+                            "_obj":    s,
+                        }
+                        for s in strategies
+                        if _snap_asset_class({
+                            "_obj":   s,
+                            "config": s.config,
+                        }) in _TRADFI_CLASSES
+                    ]
+                finally:
+                    _list_db.close()
+
+                if not strategy_snapshots:
+                    await asyncio.sleep(FOREX_SCAN_INTERVAL_SECONDS)
+                    continue
+
+                active_source_ids = {
+                    s["id"] for s in strategy_snapshots
+                    if not (s["config"] or {}).get("_locked")
+                }
+                eval_snapshots = [
+                    s for s in strategy_snapshots
+                    if not (
+                        (s["config"] or {}).get("_locked")
+                        and (s["config"] or {}).get("_source_strategy_id") in active_source_ids
+                    )
+                    and (s["config"] or {}).get("entry_conditions", {}).get("entry_type") != "tradingview_webhook"
+                ]
+
+                logger.info(
+                    f"📈 Forex executor: scanning {len(eval_snapshots)} tradfi strateg"
+                    f"{'y' if len(eval_snapshots) == 1 else 'ies'}"
+                )
+
+                # No MEXC ticker prefetch — forex uses yfinance; pass empty list.
+                cycle_gate_stats: Dict[str, int] = {}
+
+                async def _run_one_fx(snap, _http=http_client):
+                    from sqlalchemy.exc import OperationalError as _SAOperationalError
+                    async with sem:
+                        for _attempt in (1, 2):
+                            db_one = SessionLocal()
+                            try:
+                                strategy = db_one.query(UserStrategy).filter(
+                                    UserStrategy.id == snap["id"]
+                                ).first()
+                                if not strategy:
+                                    return
+                                user = db_one.query(User).filter(
+                                    User.id == snap["user_id"]
+                                ).first()
+                                if not user or user.banned:
+                                    return
+                                _now = datetime.utcnow()
+                                _has_portal_pro = False
+                                try:
+                                    from app.strategy_models import PortalSubscription
+                                    _psub = db_one.query(PortalSubscription).filter_by(
+                                        user_id=user.id
+                                    ).first()
+                                    _has_portal_pro = (
+                                        _psub and _psub.tier == "pro"
+                                        and _psub.subscription_end
+                                        and _psub.subscription_end > _now
+                                    )
+                                except Exception:
+                                    pass
+                                if not (
+                                    user.is_admin
+                                    or user.grandfathered
+                                    or _has_portal_pro
+                                ):
+                                    return
+                                await evaluate_and_fire(
+                                    strategy, user, db_one, _http,
+                                    raw_tickers=[],
+                                    gate_stats=cycle_gate_stats,
+                                )
+                                return
+                            except _SAOperationalError as _db_err:
+                                _err_name = type(_db_err.orig).__name__ if getattr(_db_err, "orig", None) else type(_db_err).__name__
+                                if _attempt == 1:
+                                    logger.warning(
+                                        f"[FX Strategy {snap['id']}] Transient DB error "
+                                        f"({_err_name}) — retrying with fresh session"
+                                    )
+                                    try:
+                                        db_one.rollback()
+                                    except Exception:
+                                        pass
+                                    continue
+                                else:
+                                    logger.warning(
+                                        f"[FX Strategy {snap['id']}] Skipping cycle — "
+                                        f"DB error persisted after retry ({_err_name})"
+                                    )
+                                    return
+                            except Exception as e:
+                                logger.error(
+                                    f"[FX Strategy {snap['id']}] Error: {e}", exc_info=True
+                                )
+                                return
+                            finally:
+                                try:
+                                    db_one.close()
+                                except Exception:
+                                    pass
+
+                await asyncio.gather(*[_run_one_fx(s) for s in eval_snapshots])
+
+                if cycle_gate_stats:
+                    _gate_summary = " ".join(
+                        f"{k.replace('blk_', '')}={v}"
+                        for k, v in sorted(cycle_gate_stats.items(), key=lambda kv: -kv[1])
+                    )
+                    logger.info(f"[FX Executor] cycle gates → {_gate_summary}")
+
+            except Exception as e:
+                logger.error(f"Forex executor loop error: {e}", exc_info=True)
+
+            await asyncio.sleep(FOREX_SCAN_INTERVAL_SECONDS)
 
 
 async def backfill_cancelled_paper_trades(lookback_days: int = 30) -> int:
