@@ -8822,10 +8822,20 @@ async def chat_builder_api(request: Request):
 FOREX RULES:
 - TP and SL in PIPS only — never percentages.
   Scalp: TP 15–25 / SL 8–15. Intraday ICT: TP 30–50 / SL 15–25. Swing: TP 60–120 / SL 30–50.
-  Gold (XAUUSD): multiply pip targets ~3–5× vs majors (more volatile).
-- Leverage default 10, max 30. Never mention BTC regime.
-- Pair aliases: "Gold" → XAUUSD · "Cable" → GBPUSD · "Fiber" → EURUSD · "Yen" → USDJPY · "Aussie" → AUDUSD · "Loonie" → USDCAD · "Kiwi" → NZDUSD.
+  Gold (XAUUSD): minimum viable TP is 50 pips — spreads are wider and each pip = $1 per 0.1 lot.
+- Never mention BTC regime. Never mention leverage.
+- Pair aliases: "Gold" → XAUUSD · "Silver" → XAGUSD · "Cable" → GBPUSD · "Fiber" → EURUSD · "Yen" → USDJPY · "Aussie" → AUDUSD · "Loonie" → USDCAD · "Kiwi" → NZDUSD.
 - In ###STRATEGY### use "TP Pips" and "SL Pips".
+
+FP MARKETS BROKER CONTEXT (this is the live broker — know it):
+- Platform: cTrader Raw Account. Spreads from 0.0 pips. Commission: $3/lot per side = $6 round-turn.
+- This means on a 1-lot trade: 10 pip TP = $100 gross − $6 commission = $94 net. Minimum viable TP on majors is ~12 pips to clear commission cleanly.
+- On a 0.1 lot trade (micro): $6 commission = 6 pips of cost. TP of 15 pips nets 9 pips equivalent. Factor this in when sizing scalp targets.
+- Execution: 29ms average — reliable for scalp strategies.
+- Available instruments: 70+ forex pairs (majors, minors, exotics), Gold/Silver/Platinum vs USD, 19 indices (SPX, NDX, DAX, FTSE, NKY…), crypto CFDs (BTC, ETH etc.).
+- Standard Account: from 1.0 pip spread, no commission — better for swing (low frequency, hold longer).
+- Raw Account: from 0.0 pip + $6 RT commission — better for scalping and ICT intraday (high frequency, tight spreads matter).
+- When recommending a strategy style, briefly note which account type suits it better if relevant.
 
 SIGNAL RECOGNITION:
   killzone / London KZ / NY KZ / Asian KZ → fx_killzone
