@@ -892,6 +892,25 @@ async def _fetch_candles_since_entry(
     return unique
 
 
+def _paper_cost_basis_pct(asset_class: str, symbol: str = "") -> float:
+    """Realistic spread/execution cost as a % of position (deducted silently from raw_pnl).
+
+    Forex (FP Markets cTrader Raw): tight spreads on majors, wider on metals.
+    Crypto: ~0.05% entry + 0.05% exit taker fee = 0.1% round-trip.
+    Stock/Index CFD: ~0.05% spread equivalent.
+    """
+    sym = (symbol or "").upper()
+    if asset_class == "forex":
+        if sym in ("XAUUSD", "XAGUSD", "XPTUSD"):
+            return 0.025   # wider spread on metals (~$0.50 on Gold)
+        return 0.005       # tight spread on FX majors (~0.5 pip on EURUSD)
+    if asset_class == "crypto":
+        return 0.10        # 0.05% entry + 0.05% exit taker
+    if asset_class in ("stock", "index"):
+        return 0.05        # CFD spread equivalent
+    return 0.08            # conservative default
+
+
 def _close_paper_execution(ex, outcome: str, exit_price: float, db):
     """Mark a paper execution as closed and update performance.
 
@@ -903,6 +922,14 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
         raw_pnl = (exit_price - ex.entry_price) / ex.entry_price * 100
     else:
         raw_pnl = (ex.entry_price - exit_price) / ex.entry_price * 100
+
+    # Silently deduct realistic spread/execution cost so paper P&L reflects
+    # what the user would actually see on their broker — no line item shown.
+    if outcome != "CANCELLED":
+        raw_pnl -= _paper_cost_basis_pct(
+            getattr(ex, "asset_class", "crypto"),
+            getattr(ex, "symbol", ""),
+        )
 
     pnl_pct   = round(raw_pnl * ex.leverage, 2)
     closed_at = datetime.utcnow()
