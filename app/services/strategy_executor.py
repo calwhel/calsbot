@@ -551,6 +551,24 @@ _SESSION_HOURS = {
     "overlap":  (13, 16),
 }
 
+# ── Session alert dedup + windows ─────────────────────────────────────────────
+# Keyed as (user_id, session_id, "YYYY-MM-DD") so each alert fires at most once
+# per user per session per calendar day (UTC).  Stale entries pruned each loop.
+_SESSION_ALERT_SENT: set = set()
+
+# (session_id_as_stored_in_config, display_label, open_hour_utc, open_min_utc)
+_SESSION_ALERT_WINDOWS = [
+    ("london_kz",  "London Killzone",  7,  0),
+    ("ny_kz",      "NY Killzone",     12,  0),
+    ("asian_kz",   "Asian Killzone",  20,  0),
+    ("london",     "London Session",   8,  0),
+    ("europe",     "Europe Session",   8,  0),
+    ("new_york",   "NY Session",      13, 30),
+    ("ny",         "NY Session",      13, 30),
+    ("asian",      "Asian Session",    0,  0),
+    ("tokyo",      "Tokyo Session",    0,  0),
+]
+
 
 def _check_trading_days(filters: Dict) -> bool:
     """Return True if today is an allowed trading day (Mon=0 … Sun=6)."""
@@ -3138,6 +3156,92 @@ def _snap_asset_class(snap: dict) -> str:
 
 # ─── Main executor loop (crypto only) ────────────────────────────────────────
 
+async def run_session_alert_loop():
+    """
+    Background loop — every 60 s fires a push notification to users who have
+    an active/paper forex strategy with a session filter matching a session that
+    opens within the next ALERT_MINUTES_BEFORE minutes (UTC).
+
+    Dedup: at most one alert per (user_id, session_id, UTC date).
+    """
+    from app.database import BgSessionLocal
+    from app.strategy_models import UserStrategy
+
+    ALERT_MINUTES_BEFORE = 10
+    logger.info("⏰ Session alert loop started (60s interval, %d-min lead time)", ALERT_MINUTES_BEFORE)
+
+    while True:
+        await asyncio.sleep(60)
+        try:
+            now       = datetime.utcnow()
+            today_str = now.strftime("%Y-%m-%d")
+
+            # Find sessions opening in the next ALERT_MINUTES_BEFORE minutes
+            upcoming: list = []
+            for sess_id, label, h, m in _SESSION_ALERT_WINDOWS:
+                session_start = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                diff_min = (session_start - now).total_seconds() / 60
+                if 0 < diff_min <= ALERT_MINUTES_BEFORE:
+                    upcoming.append((sess_id, label, int(diff_min)))
+
+            # Prune old-date entries so the set doesn't grow unbounded
+            stale = {k for k in _SESSION_ALERT_SENT if k[2] != today_str}
+            _SESSION_ALERT_SENT.difference_update(stale)
+
+            if not upcoming:
+                continue
+
+            db = BgSessionLocal()
+            try:
+                strategies = (
+                    db.query(UserStrategy)
+                    .filter(UserStrategy.status.in_(["active", "paper"]))
+                    .all()
+                )
+
+                for strat in strategies:
+                    cfg = strat.config or {}
+                    if cfg.get("asset_class") not in ("forex",):
+                        continue
+
+                    filters         = cfg.get("filters", {})
+                    sess_filter     = filters.get("session", {})
+                    selected_sids   = [s.lower() for s in sess_filter.get("sessions", [])] if sess_filter else []
+                    if not selected_sids:
+                        continue
+
+                    uni      = cfg.get("universe", {})
+                    syms     = uni.get("symbols", [])
+                    pair_str = ", ".join(syms[:2]) if syms else "your pairs"
+
+                    for sess_id, label, mins_left in upcoming:
+                        if sess_id not in selected_sids:
+                            continue
+                        alert_key = (strat.user_id, sess_id, today_str)
+                        if alert_key in _SESSION_ALERT_SENT:
+                            continue
+                        _SESSION_ALERT_SENT.add(alert_key)
+
+                        from app.services.expo_push import notify_session_alert_bg
+                        notify_session_alert_bg(
+                            strat.user_id,
+                            label,
+                            mins_left,
+                            strat.name,
+                            pair_str,
+                            strategy_id=strat.id,
+                        )
+                        logger.debug(
+                            "Session alert → user=%s strat=%s session=%s",
+                            strat.user_id, strat.id, sess_id,
+                        )
+            finally:
+                db.close()
+
+        except Exception as exc:
+            logger.warning("Session alert loop error: %s", exc)
+
+
 async def run_strategy_executor():
     """
     Main background loop. Evaluates all active + paper strategies for all users.
@@ -3150,8 +3254,9 @@ async def run_strategy_executor():
     init_strategy_tables(engine)
     logger.info("🤖 Strategy executor started (active + paper modes)")
 
-    # Spawn paper monitor as a concurrent task
+    # Spawn paper monitor and session alert loop as concurrent sibling tasks
     asyncio.create_task(run_paper_position_monitor())
+    asyncio.create_task(run_session_alert_loop())
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
 

@@ -2916,6 +2916,223 @@ async def eval_vwap_cross(
     )
 
 
+async def eval_stochastic(
+    cond: Dict, symbol: str, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`stochastic` — Classic Stochastic Oscillator (%K/%D).
+
+    Computes %K = (close - lowest_low) / (highest_high - lowest_low) × 100
+    over k_period bars, then smooths to %D via a d_period SMA.
+
+    cfg.condition : 'oversold' (<20) | 'overbought' (>80) |
+                    'bullish_cross' (%K crosses above %D) |
+                    'bearish_cross' (%K crosses below %D)
+    cfg.k_period  : lookback for %K (default 14)
+    cfg.d_period  : smoothing period for %D (default 3)
+    cfg.timeframe : kline TF (default '15m')
+    """
+    condition = (cond.get("condition") or "bullish_cross").lower()
+    k_period  = int(cond.get("k_period") or 14)
+    d_period  = int(cond.get("d_period") or 3)
+    tf        = cond.get("timeframe", "15m")
+    need      = k_period + d_period + 10
+
+    klines = await _get_klines(symbol, tf, need, http_client, cache)
+    if not klines or len(klines) < k_period + d_period:
+        return False, "Stochastic: insufficient data"
+
+    highs  = [float(k[2]) for k in klines]
+    lows   = [float(k[3]) for k in klines]
+    closes = [float(k[4]) for k in klines]
+
+    k_values: list = []
+    for i in range(k_period - 1, len(closes)):
+        hh = max(highs[i - k_period + 1: i + 1])
+        ll = min(lows[i  - k_period + 1: i + 1])
+        k_values.append(50.0 if hh == ll else (closes[i] - ll) / (hh - ll) * 100.0)
+
+    if len(k_values) < d_period + 1:
+        return False, "Stochastic: insufficient %K series"
+
+    def _sma(arr: list, n: int) -> list:
+        return [sum(arr[i: i + n]) / n for i in range(len(arr) - n + 1)]
+
+    d_values = _sma(k_values, d_period)
+
+    k_now  = k_values[-1]
+    d_now  = d_values[-1]
+    k_prev = k_values[-2]
+    d_prev = d_values[-2] if len(d_values) >= 2 else d_now
+
+    if condition == "oversold":
+        fired = k_now < 20
+        return fired, f"Stoch %K={k_now:.1f} {'< 20 ✓' if fired else '≥ 20 ✗'}"
+    elif condition == "overbought":
+        fired = k_now > 80
+        return fired, f"Stoch %K={k_now:.1f} {'> 80 ✓' if fired else '≤ 80 ✗'}"
+    elif condition == "bullish_cross":
+        fired = (k_prev < d_prev) and (k_now >= d_now)
+        return fired, f"Stoch %K={k_now:.1f} %D={d_now:.1f} {'bullish cross ✓' if fired else 'no cross ✗'}"
+    elif condition == "bearish_cross":
+        fired = (k_prev > d_prev) and (k_now <= d_now)
+        return fired, f"Stoch %K={k_now:.1f} %D={d_now:.1f} {'bearish cross ✓' if fired else 'no cross ✗'}"
+    else:
+        return False, f"Stochastic: unknown condition '{condition}'"
+
+
+async def eval_fx_po3(
+    cond: Dict, symbol: str, price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`fx_po3` — ICT Power of 3 (Accumulation / Manipulation / Distribution).
+
+    Detects the classic 3-phase intraday structure:
+      1. Accumulation  — price ranges during Asian session (00:00–07:00 UTC)
+      2. Manipulation  — London open sweeps above or below the range (stop hunt)
+      3. Distribution  — price reverses and moves in the true direction
+
+    cfg.direction  : 'bullish' (swept lows → distributes up) |
+                     'bearish' (swept highs → distributes down)
+    cfg.sweep_pips : minimum manipulation distance beyond range in pips (default 5)
+    cfg.timeframe  : kline TF (default '15m')
+    """
+    direction  = (cond.get("direction") or "bullish").lower()
+    tf         = cond.get("timeframe", "15m")
+    sweep_pips = float(cond.get("sweep_pips") or 5)
+
+    klines = await _get_klines(symbol, tf, 80, http_client, cache)
+    if not klines or len(klines) < 20:
+        return False, "PO3: insufficient data"
+
+    from app.services.forex_engine import pip_size as _pip_size
+    ps = _pip_size(symbol)
+
+    def _candle_hour(k) -> int:
+        ts = int(k[0])
+        return datetime.utcfromtimestamp(ts / 1000 if ts > 1e10 else ts).hour
+
+    asian_candles  = [k for k in klines if 0  <= _candle_hour(k) < 7]
+    london_candles = [k for k in klines if 7  <= _candle_hour(k) < 11]
+
+    if len(asian_candles) < 4:
+        return False, "PO3: insufficient Asian session bars (need 4+)"
+    if not london_candles:
+        return False, "PO3: no London/manipulation bars yet"
+
+    accum_high = max(float(k[2]) for k in asian_candles)
+    accum_low  = min(float(k[3]) for k in asian_candles)
+    accum_pips = (accum_high - accum_low) / ps
+
+    if accum_pips < 5:
+        return False, f"PO3: accumulation range too narrow ({accum_pips:.1f} pips)"
+
+    manip_high = max(float(k[2]) for k in london_candles)
+    manip_low  = min(float(k[3]) for k in london_candles)
+
+    swept_above = (manip_high - accum_high) / ps >= sweep_pips
+    swept_below = (accum_low  - manip_low)  / ps >= sweep_pips
+    mid         = (accum_high + accum_low) / 2
+
+    if direction == "bullish":
+        manipulation_ok  = swept_below
+        distribution_ok  = price > mid
+        fired = manipulation_ok and distribution_ok
+        return fired, (
+            f"PO3 bullish: Asian {accum_low:.5g}–{accum_high:.5g} ({accum_pips:.0f}pips) "
+            f"manip_low={manip_low:.5g} swept_below={swept_below} price>mid={distribution_ok} "
+            f"→ {'✓' if fired else '✗'}"
+        )
+    else:
+        manipulation_ok  = swept_above
+        distribution_ok  = price < mid
+        fired = manipulation_ok and distribution_ok
+        return fired, (
+            f"PO3 bearish: Asian {accum_low:.5g}–{accum_high:.5g} ({accum_pips:.0f}pips) "
+            f"manip_high={manip_high:.5g} swept_above={swept_above} price<mid={distribution_ok} "
+            f"→ {'✓' if fired else '✗'}"
+        )
+
+
+async def eval_wyckoff(
+    cond: Dict, symbol: str, price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`wyckoff` — Wyckoff accumulation/distribution event detection.
+
+    Identifies classic Wyckoff events within a rolling window:
+      spring    — candle wicks below support, closes back inside range (bullish)
+      upthrust  — candle wicks above resistance, closes back inside range (bearish)
+      test      — low-volume re-test of a spring/upthrust level (neutral confirmation)
+      markup    — strong bullish close above midpoint with expanding volume
+      markdown  — strong bearish close below midpoint with expanding volume
+
+    cfg.phase    : 'spring' | 'upthrust' | 'test' | 'markup' | 'markdown'
+    cfg.lookback : bars to define the trading range (default 30)
+    cfg.timeframe: kline TF (default '1h')
+    """
+    phase    = (cond.get("phase") or "spring").lower()
+    tf       = cond.get("timeframe", "1h")
+    lookback = int(cond.get("lookback") or 30)
+
+    klines = await _get_klines(symbol, tf, lookback + 10, http_client, cache)
+    if not klines or len(klines) < 10:
+        return False, "Wyckoff: insufficient data"
+
+    closes  = [float(k[4]) for k in klines]
+    highs   = [float(k[2]) for k in klines]
+    lows    = [float(k[3]) for k in klines]
+    volumes = [float(k[5]) for k in klines]
+
+    window       = min(lookback, len(closes) - 2)
+    range_high   = max(highs[-window - 1: -1])
+    range_low    = min(lows[-window - 1: -1])
+    avg_vol      = sum(volumes[-window:]) / window if window else 1.0
+    midpoint     = (range_high + range_low) / 2
+
+    last_h   = highs[-1];   last_l  = lows[-1]
+    last_c   = closes[-1];  prev_c  = closes[-2]
+    last_vol = volumes[-1]
+
+    if phase == "spring":
+        fired = last_l < range_low and last_c > range_low
+        return fired, (
+            f"Wyckoff Spring: support={range_low:.6g} low={last_l:.6g} close={last_c:.6g} "
+            f"→ {'spring ✓' if fired else 'no spring ✗'}"
+        )
+
+    elif phase == "upthrust":
+        fired = last_h > range_high and last_c < range_high
+        return fired, (
+            f"Wyckoff Upthrust: resist={range_high:.6g} high={last_h:.6g} close={last_c:.6g} "
+            f"→ {'upthrust ✓' if fired else 'no upthrust ✗'}"
+        )
+
+    elif phase == "test":
+        near_support = abs(last_c - range_low)  / max(range_low,  1e-9) < 0.005
+        near_resist  = abs(last_c - range_high) / max(range_high, 1e-9) < 0.005
+        low_vol      = last_vol < avg_vol * 0.7
+        fired        = (near_support or near_resist) and low_vol
+        return fired, (
+            f"Wyckoff Test: near_s={near_support} near_r={near_resist} "
+            f"vol={last_vol:.0f} avg={avg_vol:.0f} → {'test ✓' if fired else '✗'}"
+        )
+
+    elif phase == "markup":
+        fired = last_c > midpoint and last_c > prev_c and last_vol > avg_vol * 1.2
+        return fired, (
+            f"Wyckoff Markup: mid={midpoint:.6g} close={last_c:.6g} "
+            f"vol_ratio={last_vol / avg_vol:.1f} → {'markup ✓' if fired else '✗'}"
+        )
+
+    elif phase == "markdown":
+        fired = last_c < midpoint and last_c < prev_c and last_vol > avg_vol * 1.2
+        return fired, (
+            f"Wyckoff Markdown: mid={midpoint:.6g} close={last_c:.6g} "
+            f"vol_ratio={last_vol / avg_vol:.1f} → {'markdown ✓' if fired else '✗'}"
+        )
+
+    else:
+        return False, f"Wyckoff: unknown phase '{phase}'"
+
+
 async def evaluate_strategy_conditions(
     strategy_config: Dict,
     symbol: str,
@@ -3039,6 +3256,12 @@ async def evaluate_strategy_conditions(
                 return await eval_opening_range_break(cond, symbol, price, http_client, cache)
             elif ctype == "vwap_cross":
                 return await eval_vwap_cross(cond, symbol, price, http_client, cache)
+            elif ctype == "stochastic":
+                return await eval_stochastic(cond, symbol, http_client, cache)
+            elif ctype == "fx_po3":
+                return await eval_fx_po3(cond, symbol, price, http_client, cache)
+            elif ctype == "wyckoff":
+                return await eval_wyckoff(cond, symbol, price, http_client, cache)
             # ── Stock-specific blocks ───────────────────────────────────────
             elif ctype == "stock_earnings_avoidance":
                 return await eval_stock_earnings_avoidance(cond, symbol)

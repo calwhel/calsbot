@@ -547,7 +547,7 @@ export default function WizardScreen() {
         title={pickerVisible === 'primary' ? 'Pick your entry signal' : 'Add a confirmation'}
         excludeTypes={[
           // Hide forex-specific signals when not building a forex strategy.
-          ...(s.assetClass !== 'forex' ? (['forex_session', 'forex_session_break', 'forex_prev_level', 'forex_news_avoidance', 'forex_currency_strength', 'forex_liquidity_pa', 'forex_cot', 'fx_killzone', 'fx_ote', 'fx_displacement', 'fx_equal_hl', 'fx_breaker', 'fx_pd_array', 'fx_judas_swing', 'fx_silver_bullet'] as SignalType[]) : []),
+          ...(s.assetClass !== 'forex' ? (['forex_session', 'forex_session_break', 'forex_prev_level', 'forex_news_avoidance', 'forex_currency_strength', 'forex_liquidity_pa', 'forex_cot', 'fx_killzone', 'fx_ote', 'fx_displacement', 'fx_equal_hl', 'fx_breaker', 'fx_pd_array', 'fx_judas_swing', 'fx_silver_bullet', 'fx_po3'] as SignalType[]) : []),
           // Already-used signal types (confirm mode only).
           ...(pickerVisible === 'confirm'
             ? [...s.confirms.map(c => c.type), ...(s.primaryType ? [s.primaryType] : [])]
@@ -1003,6 +1003,47 @@ function Step5({
           </View>
         </View>
       </Card>
+
+      {isFx && (() => {
+        const PIP_USD_PER_LOT: Record<string, number> = {
+          EURUSD: 10, GBPUSD: 10, AUDUSD: 10, NZDUSD: 10,
+          USDCAD: 10, USDCHF: 10, EURCAD: 10, EURGBP: 12,
+          EURAUD: 10, GBPAUD: 10, GBPCAD: 10, AUDCAD: 10,
+          USDJPY: 9.2, EURJPY: 9.2, GBPJPY: 9.2, AUDJPY: 9.2, CADJPY: 9.2,
+          XAUUSD: 1,  XAGUSD: 5,
+        };
+        const rawPair  = (s.tradfiSymbols[0] || 'EURUSD').toUpperCase().replace('/', '');
+        const pipPerLot = PIP_USD_PER_LOT[rawPair];
+        if (!pipPerLot) return null;
+        const tp = isFx ? (s.tp1Pips ?? 0) : 0;
+        const sl = isFx ? (s.slPips  ?? 0) : 0;
+        if (!tp && !sl) return null;
+        const LOTS = [0.01, 0.1, 1.0] as const;
+        return (
+          <View style={{ marginTop: 10 }}>
+          <Card>
+            <SectionHeader label="Pip value estimate" hint={`${rawPair} · per trade · approximate`} />
+            <View style={{ flexDirection: 'row', marginBottom: 6 }}>
+              <Text style={[styles.pipHdrTxt, { flex: 1.4 }]}>Lot size</Text>
+              <Text style={[styles.pipHdrTxt, { flex: 1, color: colors.positive }]}>TP +${tp} pips</Text>
+              <Text style={[styles.pipHdrTxt, { flex: 1, color: colors.negative }]}>SL −${sl} pips</Text>
+            </View>
+            {LOTS.map(lot => (
+              <View key={lot} style={styles.pipRow}>
+                <Text style={[styles.pipCell, { flex: 1.4 }]}>{lot} lot</Text>
+                <Text style={[styles.pipCell, { flex: 1, color: colors.positive }]}>
+                  {tp ? `+$${(tp * pipPerLot * lot).toFixed(2)}` : '—'}
+                </Text>
+                <Text style={[styles.pipCell, { flex: 1, color: colors.negative }]}>
+                  {sl ? `−$${(sl * pipPerLot * lot).toFixed(2)}` : '—'}
+                </Text>
+              </View>
+            ))}
+            <Text style={styles.pipFooter}>Based on standard contract size · varies with account currency & rate</Text>
+          </Card>
+          </View>
+        );
+      })()}
 
       <Card>
         <SectionHeader label="Optional exits" hint="Layer in extra targets to let winners run further." />
@@ -2126,6 +2167,20 @@ const styles = StyleSheet.create({
   rrBarSeg: { justifyContent: 'center', overflow: 'hidden' },
   rrBarFill: { height: '100%', opacity: 0.4 },
   rrBarEntry: { width: 2, height: '100%' },
+
+  pipHdrTxt: {
+    fontFamily: font.semibold, fontSize: 11, color: colors.textDim,
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  pipRow: {
+    flexDirection: 'row', paddingVertical: 7,
+    borderTopWidth: 1, borderTopColor: colors.border,
+  },
+  pipCell: { fontFamily: font.regular, fontSize: 13, color: colors.text },
+  pipFooter: {
+    fontFamily: font.regular, fontSize: 10.5, color: colors.textDim,
+    marginTop: 8, lineHeight: 14,
+  },
 
   toggleRow: {
     flexDirection: 'row', alignItems: 'center',

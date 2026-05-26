@@ -274,3 +274,22 @@ def notify_breakeven_bg(
         "screen": f"/strategy/{strategy_id}",
     }
     notify_user_bg(user_id, title, body, data, kind=kind, channel="trade-progress")
+
+
+def notify_session_alert_bg(
+    user_id: int,
+    session_label: str,
+    mins_left: int,
+    strategy_name: str,
+    pairs: str,
+    strategy_id: int | None = None,
+) -> None:
+    """Push notification fired ~10 min before a watched trading session opens."""
+    title = f"⏰ {session_label} opens in {mins_left} min"
+    body  = f"{strategy_name} · {pairs}"
+    data  = {
+        "type":        "session_alert",
+        "strategy_id": strategy_id,
+        "screen":      f"/strategy/{strategy_id}" if strategy_id else "/",
+    }
+    notify_user_bg(user_id, title, body, data, kind="paper", channel="Market Intel")

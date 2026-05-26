@@ -997,6 +997,91 @@ function renderKnobs(
       );
     }
 
+    case 'stochastic': {
+      const condOpts: ChipOption<string>[] = [
+        { value: 'oversold',      label: '📉 Oversold <20' },
+        { value: 'overbought',    label: '📈 Overbought >80' },
+        { value: 'bullish_cross', label: '↑ %K crosses %D (bullish)' },
+        { value: 'bearish_cross', label: '↓ %K crosses %D (bearish)' },
+      ];
+      return (
+        <View>
+          <Section label="Condition" compact={compact}>
+            <ChipRow options={condOpts}
+              value={(cfg.condition as string) || 'bullish_cross'}
+              onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="%K period"
+            value={cfg.k_period ?? 14}
+            onChange={(v) => set({ k_period: v })}
+            min={5} max={30} step={1}
+            presets={[5, 9, 14, 21]}
+            hint="Lookback for highest high / lowest low"
+          />
+          <Stepper
+            label="%D smoothing"
+            value={cfg.d_period ?? 3}
+            onChange={(v) => set({ d_period: v })}
+            min={1} max={9} step={1}
+            presets={[1, 3, 5]}
+            hint="SMA of %K — signal line"
+          />
+        </View>
+      );
+    }
+
+    case 'fx_po3': {
+      const dirOpts: ChipOption<string>[] = [
+        { value: 'bullish', label: '🟢 Bullish (swept lows → up)' },
+        { value: 'bearish', label: '🔴 Bearish (swept highs → down)' },
+      ];
+      return (
+        <View>
+          <Section label="Distribution direction" compact={compact}>
+            <ChipRow options={dirOpts}
+              value={(cfg.direction as string) || 'bullish'}
+              onChange={(v) => set({ direction: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="Min manipulation sweep (pips)"
+            value={cfg.sweep_pips ?? 5}
+            onChange={(v) => set({ sweep_pips: v })}
+            min={2} max={30} step={1} unit=" pips" decimals={0}
+            presets={[3, 5, 8, 12]}
+            hint="How far price must sweep beyond the Asian range to count as manipulation"
+          />
+        </View>
+      );
+    }
+
+    case 'wyckoff': {
+      const phaseOpts: ChipOption<string>[] = [
+        { value: 'spring',    label: '🌱 Spring (bullish)' },
+        { value: 'upthrust',  label: '🏹 Upthrust (bearish)' },
+        { value: 'test',      label: '🔍 Low-vol test' },
+        { value: 'markup',    label: '📈 Markup start' },
+        { value: 'markdown',  label: '📉 Markdown start' },
+      ];
+      return (
+        <View>
+          <Section label="Wyckoff phase" compact={compact}>
+            <ChipRow options={phaseOpts}
+              value={(cfg.phase as string) || 'spring'}
+              onChange={(v) => set({ phase: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="Range lookback (bars)"
+            value={cfg.lookback ?? 30}
+            onChange={(v) => set({ lookback: v })}
+            min={10} max={100} step={5}
+            presets={[20, 30, 50, 80]}
+            hint="Bars used to define the trading range for support/resistance"
+          />
+        </View>
+      );
+    }
+
     default:
       return null;
   }

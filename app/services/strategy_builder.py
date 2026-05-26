@@ -359,6 +359,28 @@ orb_minutes: 5 | 15 | 30 | 60
 {"type":"vwap_cross","direction":"cross_above","timeframe":"5m"}
 direction: cross_above (bullish) | cross_below (bearish)
 → "VWAP cross" | "cross above VWAP" | "cross below VWAP" | "price crosses VWAP" | "VWAP momentum"
+
+── STOCHASTIC OSCILLATOR (all asset classes) ────────────────────────────────
+{"type":"stochastic","condition":"bullish_cross","k_period":14,"d_period":3,"timeframe":"15m"}
+condition: oversold (<20) | overbought (>80) | bullish_cross (%K crosses above %D) | bearish_cross (%K crosses below %D)
+→ "stochastic" | "stoch cross" | "%K %D" | "stoch oversold" | "stochastic oscillator" | "slow stochastic" | "stoch 14 3"
+
+── ICT POWER OF 3 — PO3 (forex/index, session-based) ────────────────────────
+{"type":"fx_po3","direction":"bullish","sweep_pips":5,"timeframe":"15m"}
+direction: bullish (Asian low swept → distribution up) | bearish (Asian high swept → distribution down)
+sweep_pips: minimum pip extension beyond Asian range to confirm manipulation (default 5)
+→ "Power of 3" | "PO3" | "ICT PO3" | "accumulation manipulation distribution" | "AMD cycle"
+→ "Asian range swept then reverses" | "Judas swing into distribution" | "fake break then real move"
+
+── WYCKOFF PHASES (all asset classes) ───────────────────────────────────────
+{"type":"wyckoff","phase":"spring","lookback":30,"timeframe":"1h"}
+phase: spring (bullish — price wicks below support, closes back inside)
+       upthrust (bearish — price wicks above resistance, closes back inside)
+       test (low-volume re-test of spring/upthrust level — confirmation)
+       markup (strong bullish close above midpoint, expanding volume)
+       markdown (strong bearish close below midpoint, expanding volume)
+→ "Wyckoff" | "spring" | "shakeout" | "upthrust" | "test of support" | "Wyckoff accumulation"
+→ "markup phase" | "markdown phase" | "Wyckoff distribution" | "Wyckoff re-accumulation"
 """
 
 STRATEGY_SCHEMA = """
@@ -466,6 +488,9 @@ FOREX-SPECIFIC RULES (apply when asset_class = "forex")
   Cross-asset day-trading signal mappings:
   • "ORB" / "opening range breakout" / "first 30 min high/low" → opening_range_break
   • "VWAP cross" / "cross above VWAP" / "crosses VWAP" → vwap_cross
+  • "stochastic" / "stoch cross" / "%K %D" / "stoch oversold/overbought" → stochastic
+  • "Power of 3" / "PO3" / "ICT PO3" / "AMD cycle" / "accumulation manipulation distribution" → fx_po3
+  • "Wyckoff" / "spring" / "shakeout" / "upthrust" / "markup phase" / "Wyckoff distribution" → wyckoff
   ICT-style forex templates — when the user describes these strategies, compose them:
   • "ICT day trade" / "killzone + OTE" → fx_killzone (primary) + fx_ote + fx_pd_array confirmations
   • "London ICT" → fx_killzone (london_kz) + fx_displacement + fvg confirmations
