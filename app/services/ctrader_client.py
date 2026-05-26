@@ -188,6 +188,83 @@ async def _app_auth(
     return True
 
 
+# ── Persistent connection singleton ──────────────────────────────────────────
+# Keeps a single SSL TCP socket open to live.ctraderapi.com so that each
+# order avoids the ~300-500ms SSL handshake + application-auth round-trip.
+# Account auth is still done per call (required by the protocol), but that
+# is a single round-trip on an already-open socket (~30-80ms vs ~300-500ms
+# for a fresh SSL+app-auth sequence).
+#
+# _conn_lock serialises all use of the shared socket.  Idle timeout is 45s —
+# shorter than Spotware's server-side 60s keep-alive grace period.
+
+_conn_lock:   asyncio.Lock   = None   # created lazily (no running loop at import)
+_conn_reader: Optional[asyncio.StreamReader] = None
+_conn_writer: Optional[asyncio.StreamWriter] = None
+_conn_ts:     float = 0.0    # monotonic timestamp of last successful message
+_CONN_MAX_IDLE = 45.0        # force reconnect if socket unused for this long
+
+
+def _get_lock() -> asyncio.Lock:
+    global _conn_lock
+    if _conn_lock is None:
+        _conn_lock = asyncio.Lock()
+    return _conn_lock
+
+
+async def _get_persistent_connection() -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """
+    Return a (reader, writer) that is connected and application-authenticated.
+    Caller MUST hold _get_lock() before calling this.
+    Reconnects automatically on idle timeout or detected closure.
+    """
+    global _conn_reader, _conn_writer, _conn_ts
+
+    idle = time.monotonic() - _conn_ts
+    is_alive = (
+        _conn_writer is not None
+        and not _conn_writer.is_closing()
+        and idle < _CONN_MAX_IDLE
+    )
+
+    if is_alive:
+        return _conn_reader, _conn_writer
+
+    # Close stale connection cleanly
+    if _conn_writer is not None:
+        try:
+            _conn_writer.close()
+        except Exception:
+            pass
+        _conn_reader = _conn_writer = None
+
+    r, w = await _open_connection()
+    ok = await _app_auth(r, w)
+    if not ok:
+        try:
+            w.close()
+        except Exception:
+            pass
+        raise RuntimeError("cTrader persistent connection: app auth failed")
+
+    _conn_reader, _conn_writer = r, w
+    _conn_ts = time.monotonic()
+    logger.debug("[cTrader] persistent connection (re)established")
+    return r, w
+
+
+def _invalidate_persistent_connection() -> None:
+    """Mark the persistent connection as dead so next call reconnects."""
+    global _conn_reader, _conn_writer, _conn_ts
+    if _conn_writer is not None:
+        try:
+            _conn_writer.close()
+        except Exception:
+            pass
+    _conn_reader = _conn_writer = None
+    _conn_ts = 0.0
+
+
 async def _account_auth(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
@@ -260,34 +337,43 @@ async def get_accounts_for_token(access_token: str) -> list:
     """
     Return a list of cTrader trading accounts linked to this access token.
     Each item: {ctidTraderAccountId, isLive, traderLogin, balance}.
+    Uses the persistent connection so the SSL handshake is amortised.
     """
     if not _PROTO_OK:
         return []
-    reader, writer = await _open_connection()
-    try:
-        if not await _app_auth(reader, writer):
-            return []
-        req = ProtoOAGetAccountListByAccessTokenReq()
-        req.accessToken = access_token
-        payload = await _send_recv(
-            reader, writer, req,
-            _PAYLOAD_TYPES["account_list_req"],
-            _PAYLOAD_TYPES["account_list_res"],
-        )
-        if not payload:
-            return []
-        res = ProtoOAGetAccountListByAccessTokenRes()
-        res.ParseFromString(payload)
-        accounts = []
-        for acc in res.ctidTraderAccount:
-            accounts.append({
-                "ctidTraderAccountId": acc.ctidTraderAccountId,
-                "isLive":              acc.isLive,
-                "traderLogin":         getattr(acc, "traderLogin", 0),
-            })
-        return accounts
-    finally:
-        writer.close()
+    async with _get_lock():
+        for attempt in (1, 2):
+            try:
+                reader, writer = await _get_persistent_connection()
+                req = ProtoOAGetAccountListByAccessTokenReq()
+                req.accessToken = access_token
+                payload = await _send_recv(
+                    reader, writer, req,
+                    _PAYLOAD_TYPES["account_list_req"],
+                    _PAYLOAD_TYPES["account_list_res"],
+                )
+                if not payload:
+                    return []
+                res = ProtoOAGetAccountListByAccessTokenRes()
+                res.ParseFromString(payload)
+                global _conn_ts
+                _conn_ts = time.monotonic()
+                accounts = []
+                for acc in res.ctidTraderAccount:
+                    accounts.append({
+                        "ctidTraderAccountId": acc.ctidTraderAccountId,
+                        "isLive":              acc.isLive,
+                        "traderLogin":         getattr(acc, "traderLogin", 0),
+                    })
+                return accounts
+            except Exception as e:
+                if attempt == 1:
+                    logger.warning(f"[cTrader] get_accounts retry after: {e}")
+                    _invalidate_persistent_connection()
+                    continue
+                logger.error(f"[cTrader] get_accounts failed: {e}")
+                return []
+    return []
 
 
 async def place_order(
@@ -305,57 +391,62 @@ async def place_order(
 
     volume_lots — standard lots (1 lot = 100,000 units for FX majors).
     Returns {"order_id": str, "actual_fill": float|None, "error": str|None}.
+
+    Uses a persistent SSL connection — SSL handshake + app auth happen once,
+    not on every order, saving ~300-500 ms per trade.
     """
     if not _PROTO_OK:
         return {"order_id": None, "actual_fill": None, "error": "ctrader proto not available"}
     if not CTRADER_CLIENT_ID or not CTRADER_CLIENT_SECRET:
         return {"order_id": None, "actual_fill": None, "error": "CTRADER_CLIENT_ID/SECRET not set"}
 
-    reader, writer = await _open_connection()
-    try:
-        if not await _app_auth(reader, writer):
-            return {"order_id": None, "actual_fill": None, "error": "app auth failed"}
-        if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
-            return {"order_id": None, "actual_fill": None, "error": "account auth failed"}
+    async with _get_lock():
+        for attempt in (1, 2):
+            try:
+                reader, writer = await _get_persistent_connection()
+                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                    return {"order_id": None, "actual_fill": None, "error": "account auth failed"}
 
-        req = ProtoOANewOrderReq()
-        req.ctidTraderAccountId = ctid_trader_account_id
-        req.symbolName          = _SYMBOL_MAP.get(symbol_name, symbol_name)
-        req.orderType           = ProtoOAOrderType.MARKET
-        req.tradeSide           = ProtoOATradeSide.BUY if direction == "LONG" else ProtoOATradeSide.SELL
-        req.volume              = int(volume_lots * 100_000)  # units
-        req.label               = label[:20]
-        if stop_loss_price is not None:
-            req.relativeStopLoss = 0  # we set absolute via stopLoss field
-            req.stopLoss = int(stop_loss_price * 100_000)
-        if take_profit_price is not None:
-            req.takeProfit = int(take_profit_price * 100_000)
+                req = ProtoOANewOrderReq()
+                req.ctidTraderAccountId = ctid_trader_account_id
+                req.symbolName          = _SYMBOL_MAP.get(symbol_name, symbol_name)
+                req.orderType           = ProtoOAOrderType.MARKET
+                req.tradeSide           = ProtoOATradeSide.BUY if direction == "LONG" else ProtoOATradeSide.SELL
+                req.volume              = int(volume_lots * 100_000)  # units
+                req.label               = label[:20]
+                if stop_loss_price is not None:
+                    req.relativeStopLoss = 0
+                    req.stopLoss = int(stop_loss_price * 100_000)
+                if take_profit_price is not None:
+                    req.takeProfit = int(take_profit_price * 100_000)
 
-        payload = await _send_recv(
-            reader, writer, req,
-            _PAYLOAD_TYPES["new_order_req"],
-            _PAYLOAD_TYPES["execution_event"],
-            timeout=15.0,
-        )
-        if not payload:
-            return {"order_id": None, "actual_fill": None, "error": "no execution event"}
+                payload = await _send_recv(
+                    reader, writer, req,
+                    _PAYLOAD_TYPES["new_order_req"],
+                    _PAYLOAD_TYPES["execution_event"],
+                    timeout=15.0,
+                )
+                if not payload:
+                    return {"order_id": None, "actual_fill": None, "error": "no execution event"}
 
-        ev = ProtoOAExecutionEvent()
-        ev.ParseFromString(payload)
-        order_id   = str(ev.order.orderId) if ev.HasField("order") else None
-        actual_fill = None
-        if ev.HasField("deal") and ev.deal.executionPrice:
-            actual_fill = ev.deal.executionPrice / 100_000.0
-        return {"order_id": order_id, "actual_fill": actual_fill, "error": None}
+                global _conn_ts
+                _conn_ts = time.monotonic()
+                ev = ProtoOAExecutionEvent()
+                ev.ParseFromString(payload)
+                order_id    = str(ev.order.orderId) if ev.HasField("order") else None
+                actual_fill = None
+                if ev.HasField("deal") and ev.deal.executionPrice:
+                    actual_fill = ev.deal.executionPrice / 100_000.0
+                return {"order_id": order_id, "actual_fill": actual_fill, "error": None}
 
-    except Exception as e:
-        logger.error(f"[cTrader] place_order failed: {e}")
-        return {"order_id": None, "actual_fill": None, "error": str(e)}
-    finally:
-        try:
-            writer.close()
-        except Exception:
-            pass
+            except Exception as e:
+                if attempt == 1:
+                    logger.warning(f"[cTrader] place_order retry after: {e}")
+                    _invalidate_persistent_connection()
+                    continue
+                logger.error(f"[cTrader] place_order failed: {e}")
+                return {"order_id": None, "actual_fill": None, "error": str(e)}
+    return {"order_id": None, "actual_fill": None, "error": "unexpected exit"}
 
 
 async def close_position(
@@ -364,34 +455,37 @@ async def close_position(
     position_id: int,
     volume_units: int,
 ) -> bool:
-    """Close (or partially close) an open position."""
+    """Close (or partially close) an open position. Uses persistent connection."""
     if not _PROTO_OK:
         return False
-    reader, writer = await _open_connection()
-    try:
-        if not await _app_auth(reader, writer):
-            return False
-        if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
-            return False
-        req = ProtoOAClosePositionReq()
-        req.ctidTraderAccountId = ctid_trader_account_id
-        req.positionId          = position_id
-        req.volume              = volume_units
-        payload = await _send_recv(
-            reader, writer, req,
-            _PAYLOAD_TYPES["close_position_req"],
-            _PAYLOAD_TYPES["execution_event"],
-            timeout=15.0,
-        )
-        return payload is not None
-    except Exception as e:
-        logger.error(f"[cTrader] close_position failed: {e}")
-        return False
-    finally:
-        try:
-            writer.close()
-        except Exception:
-            pass
+    async with _get_lock():
+        for attempt in (1, 2):
+            try:
+                reader, writer = await _get_persistent_connection()
+                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                    return False
+                req = ProtoOAClosePositionReq()
+                req.ctidTraderAccountId = ctid_trader_account_id
+                req.positionId          = position_id
+                req.volume              = volume_units
+                payload = await _send_recv(
+                    reader, writer, req,
+                    _PAYLOAD_TYPES["close_position_req"],
+                    _PAYLOAD_TYPES["execution_event"],
+                    timeout=15.0,
+                )
+                if payload is not None:
+                    global _conn_ts
+                    _conn_ts = time.monotonic()
+                return payload is not None
+            except Exception as e:
+                if attempt == 1:
+                    logger.warning(f"[cTrader] close_position retry after: {e}")
+                    _invalidate_persistent_connection()
+                    continue
+                logger.error(f"[cTrader] close_position failed: {e}")
+                return False
+    return False
 
 
 # ── High-level: place order for a TradeHub user ───────────────────────────────

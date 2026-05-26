@@ -21,7 +21,7 @@ import os as _os_env
 # saturated — every QueryCanceled in the executor cascaded into HTTP 500s
 # on /api/strategies because all pool connections were held by hung scans.
 SCAN_INTERVAL_SECONDS       = int(_os_env.environ.get("EXECUTOR_SCAN_INTERVAL", "10"))
-FOREX_SCAN_INTERVAL_SECONDS = int(_os_env.environ.get("EXECUTOR_FOREX_SCAN_INTERVAL", "30"))
+FOREX_SCAN_INTERVAL_SECONDS = int(_os_env.environ.get("EXECUTOR_FOREX_SCAN_INTERVAL", "10"))
 PAPER_MONITOR_INTERVAL      = int(_os_env.environ.get("EXECUTOR_MONITOR_INTERVAL", "20"))
 MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "3"))
 PAPER_MAX_HOLD_HOURS        = 168   # auto-expire paper positions after this many hours (7 days)

@@ -61,7 +61,7 @@ _TF_TO_FMP = {
 }
 
 _KLINE_CACHE: Dict[Tuple[str, str, int], Tuple[List[List[float]], datetime]] = {}
-_KLINE_TTL = timedelta(seconds=60)
+_KLINE_TTL = timedelta(seconds=20)
 
 
 # ── Public API ───────────────────────────────────────────────────────────────

@@ -34,7 +34,7 @@ _PRICE_CACHE: Dict[str, Tuple[float, datetime]] = {}
 _PRICE_TTL = timedelta(seconds=20)
 
 _KLINE_CACHE: Dict[Tuple[str, str, int], Tuple[List[List[float]], datetime]] = {}
-_KLINE_TTL = timedelta(seconds=60)
+_KLINE_TTL = timedelta(seconds=20)
 
 # Map our wizard timeframes to yfinance intervals + a sensible history window.
 # yfinance restricts intraday lookback: 1m → 7d max, 5m/15m → 60d, 1h → 730d.
