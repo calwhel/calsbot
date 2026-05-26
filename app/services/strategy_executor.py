@@ -2893,9 +2893,11 @@ async def run_strategy_executor():
                 # Asset-class breakdown so we can confirm forex/index strategies are loaded
                 _ac_counts: Dict[str, int] = {}
                 for _s in strategy_snapshots:
-                    _ac = normalize_asset_class(
-                        getattr(_s.get("_obj"), "asset_class", None)
+                    _obj = _s.get("_obj")
+                    _ac = (
+                        (getattr(_obj, "asset_class", None) or "").strip()
                         or (_s.get("config") or {}).get("asset_class")
+                        or "crypto"
                     )
                     _ac_counts[_ac] = _ac_counts.get(_ac, 0) + 1
                 _ac_str = " ".join(f"{k}={v}" for k, v in sorted(_ac_counts.items()))
