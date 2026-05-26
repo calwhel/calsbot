@@ -524,7 +524,7 @@ async def _fetch_price_and_ta(
             _PRICE_TA_CACHE[cache_key] = (result, now)
             return result
         except Exception as e:
-            logger.debug(f"Tradfi price/TA fetch failed for {symbol} ({asset_class}): {e}")
+            logger.warning(f"[tradfi] price/TA fetch failed for {symbol} ({asset_class}): {e}")
             return None
 
     try:
@@ -2880,8 +2880,17 @@ async def run_strategy_executor():
 
                 active_count = sum(1 for s in strategy_snapshots if s["status"] == "active")
                 paper_count  = sum(1 for s in strategy_snapshots if s["status"] == "paper")
+                # Asset-class breakdown so we can confirm forex/index strategies are loaded
+                _ac_counts: Dict[str, int] = {}
+                for _s in strategy_snapshots:
+                    _ac = normalize_asset_class(
+                        getattr(_s.get("_obj"), "asset_class", None)
+                        or (_s.get("config") or {}).get("asset_class")
+                    )
+                    _ac_counts[_ac] = _ac_counts.get(_ac, 0) + 1
+                _ac_str = " ".join(f"{k}={v}" for k, v in sorted(_ac_counts.items()))
                 logger.info(
-                    f"🤖 Strategy executor: {active_count} live · {paper_count} paper"
+                    f"🤖 Strategy executor: {active_count} live · {paper_count} paper [{_ac_str}]"
                 )
 
                 # Locked subscriber copies MUST NOT evaluate independently —

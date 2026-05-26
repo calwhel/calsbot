@@ -118,8 +118,9 @@ async def get_price(symbol: str, asset_class: str) -> Optional[float]:
         if price:
             _PRICE_CACHE[ticker] = (price, now)
             return price
+        logger.warning(f"[tradfi] fast_info returned no price for {ticker}")
     except Exception as e:
-        logger.debug(f"tradfi fast_info failed for {ticker}: {e}")
+        logger.warning(f"[tradfi] fast_info failed for {ticker}: {e}")
 
     return None
 
@@ -171,9 +172,10 @@ async def get_klines(
             except Exception:
                 continue
         _KLINE_CACHE[key] = (rows, now)
+        logger.info(f"[tradfi] klines ok: {ticker} {yf_interval} → {len(rows)} bars")
         return rows
     except Exception as e:
-        logger.debug(f"tradfi klines failed for {ticker} ({yf_interval}): {e}")
+        logger.warning(f"[tradfi] klines failed for {ticker} ({yf_interval}): {e}")
         return []
 
 
