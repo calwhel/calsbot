@@ -8838,13 +8838,19 @@ ICT / PRICE ACTION SIGNAL RECOGNITION — map user phrases to signals:
   "COT" / "commitment of traders" / "speculator positioning" → Signal: forex_cot
   "ORB" / "opening range breakout" / "first 30 min range" → Signal: opening_range_break
   "VWAP cross" / "crosses VWAP" / "above VWAP" → Signal: vwap_cross
+  "stochastic" / "stoch cross" / "%K %D" / "stoch oversold" / "stoch overbought" → Signal: stochastic (k_period, d_period, condition: oversold/overbought/bullish_cross/bearish_cross)
+  "Power of 3" / "PO3" / "ICT PO3" / "AMD cycle" / "accumulation manipulation distribution" / "Asian range sweep" → Signal: fx_po3 (direction: bullish/bearish, sweep_pips)
+  "Wyckoff" / "spring" / "shakeout" / "upthrust" / "markup phase" / "markdown" / "test of support" / "Wyckoff accumulation" → Signal: wyckoff (phase: spring/shakeout/upthrust/test/markup/markdown)
 
 ICT STRATEGY TEMPLATES — recognise these and suggest them:
   "ICT day trade" / "killzone + OTE" → killzone primary + OTE + PD array confirmations; 2 trades/session max
   "London ICT" → london_kz killzone + displacement + FVG; TP 30–40 pips, SL 15 pips
   "silver bullet strategy" → fx_silver_bullet + FVG; tight TP 15–20 pips, SL 10–12 pips
   "Judas swing" → fx_judas_swing + PD array; BOTH direction, TP 25–35 pips, SL 15 pips
-  "breaker block trade" → fx_breaker + killzone; TP 30–40 pips, SL 15 pips"""
+  "breaker block trade" → fx_breaker + killzone; TP 30–40 pips, SL 15 pips
+  "Power of 3 / PO3 trade" → fx_po3 + fx_killzone; BOTH direction, TP 25–40 pips, SL 12–20 pips
+  "Wyckoff spring long" → wyckoff phase=spring + volume confirmation; LONG, TP 40–60 pips, SL 20 pips
+  "stochastic scalp" → stochastic bullish_cross/bearish_cross + session filter; TP 15–20 pips, SL 10–12 pips"""
     elif asset_class in ("stock", "index"):
         forex_rules = f"""
 
@@ -8990,6 +8996,19 @@ CONDITION REFERENCE (use EXACT type/name/field names from this list):
 • volume     → { type:"indicator", name:"volume", timeframe, operator:"gt"|"lt", value:NUMBER, label }   (value = ratio vs average, e.g. 1.5 = 50% above average)
 • stoch_rsi  → { type:"indicator", name:"stoch_rsi", timeframe, condition:"oversold"|"overbought"|"bullish_cross"|"bearish_cross", label }
 • supertrend → { type:"indicator", name:"supertrend", timeframe, period:INT, multiplier:FLOAT, condition:"bullish"|"bearish"|"bullish_flip"|"bearish_flip", label }
+
+━━━ TYPE: "stochastic" ━━━  (full Stochastic Oscillator — %K/%D — distinct from stoch_rsi above)
+{ type:"stochastic", timeframe, condition:"oversold"|"overbought"|"bullish_cross"|"bearish_cross", k_period:INT, d_period:INT, label }
+  oversold = %K < 20 · overbought = %K > 80 · bullish_cross = %K crosses above %D · bearish_cross = %K crosses below %D
+
+━━━ TYPE: "fx_po3" ━━━  (ICT Power of 3 — accumulation → manipulation sweep → distribution reversal; forex/index)
+{ type:"fx_po3", direction:"bullish"|"bearish", sweep_pips:FLOAT, timeframe, label }
+  bullish = Asian low swept then price reverses up · bearish = Asian high swept then price reverses down
+
+━━━ TYPE: "wyckoff" ━━━  (Wyckoff phases — all asset classes)
+{ type:"wyckoff", phase:"spring"|"shakeout"|"upthrust"|"test"|"markup"|"markdown", lookback:INT, timeframe, label }
+  spring/shakeout = bullish wick below support · upthrust = bearish wick above resistance
+  test = low-volume re-test after spring/upthrust · markup/markdown = trend phase
 • adx        → { type:"indicator", name:"adx", timeframe, condition:"trending"|"strong_trend"|"weak"|"ranging", label }
               OR { type:"indicator", name:"adx", timeframe, operator:"gt"|"lt", value:NUMBER, label }
 • atr        → { type:"indicator", name:"atr", timeframe, condition:"expanding"|"contracting", multiplier:FLOAT, label }
