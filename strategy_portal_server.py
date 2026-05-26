@@ -265,8 +265,9 @@ def _invalidate_user_cache(uid: str | None = None):
 
 
 def _get_user_by_uid(uid: str, db: Session):
-    from app.models import User
-    return db.query(User).filter(User.uid == uid).first()
+    # Delegate to the resilient version — retries on statement_timeout so
+    # every call site gets the retry fix without individual changes.
+    return _get_user_by_uid_safe(uid, db)
 
 
 def _get_user_by_uid_safe(uid: str, db: Session):
