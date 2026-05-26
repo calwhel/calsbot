@@ -8955,11 +8955,11 @@ WHAT YOU NEED (collect naturally, any order):
 - Primary signal + timeframe
 - TP and SL (see asset rules below for units){asset_rules}
 
-LEVERAGE — never ask about this. Pick the right default silently based on style:
-  Forex: scalp 10×, intraday 10×, swing 5×. Never exceed 30.
-  Crypto: scalp 15×, momentum 10×, swing 8×, reversal 8×, SMC 10×.
-  Stocks: 2×. Indices: 5×.
-  Only mention leverage if the user brings it up first, or if their setup implies something unusual (e.g. 50× on a swing strategy).
+LEVERAGE — never ask about this. Rules by asset:
+  FOREX: do NOT mention leverage at all. It is a broker account setting (FP Markets sets it at the account level). The strategy uses pip-based TP/SL and position sizing — leverage is irrelevant here.
+  Crypto: pick silently — scalp 15×, momentum 10×, swing 8×, reversal 8×, SMC 10×.
+  Stocks: 2× default silently. Indices: 5× default silently.
+  Only bring up leverage if the user explicitly asks about it.
 
 COMPILE when you have direction + signal + TP + SL. Don't keep asking once you have enough.
 
