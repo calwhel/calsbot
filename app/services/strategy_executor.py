@@ -1941,10 +1941,10 @@ async def evaluate_and_fire(
         except Exception as _e:
             logger.warning(f"Locked strategy {strategy.id}: could not fetch source conditions: {_e}")
 
-    risk     = config.get("risk", {})
-    filters  = config.get("filters", {})
-    universe = config.get("universe", {})
-    direction_pref = config.get("direction", "LONG")
+    risk     = config.get("risk") or {}
+    filters  = config.get("filters") or {}
+    universe = config.get("universe") or {}
+    direction_pref = config.get("direction") or "LONG"
 
     if not _check_trading_days(filters):
         _bump("blk_trading_days")
@@ -1956,9 +1956,9 @@ async def evaluate_and_fire(
         _bump("blk_btc_regime")
         return
 
-    max_per_day   = int(risk.get("max_trades_per_day", 3))
-    max_open      = int(risk.get("max_open_positions", 1))
-    cooldown_mins = int(risk.get("cooldown_minutes", 30))
+    max_per_day   = int(risk.get("max_trades_per_day") or 3)
+    max_open      = int(risk.get("max_open_positions") or 1)
+    cooldown_mins = int(risk.get("cooldown_minutes") or 30)
 
     if _daily_execution_count(strategy.id, db) >= max_per_day:
         _bump("blk_daily_cap")
@@ -2114,11 +2114,11 @@ async def evaluate_and_fire(
             f"{symbol} conditions met! {direction_pref}"
         )
 
-        ex_config = config.get("exit", {})
+        ex_config = config.get("exit") or {}
         tp_pct    = float(ex_config.get("take_profit_pct")  or 3.0)
         tp2_pct   = ex_config.get("take_profit2_pct") or None
         sl_pct    = float(ex_config.get("stop_loss_pct")   or 1.5)
-        leverage  = int(risk.get("leverage", 10))
+        leverage  = int(risk.get("leverage") or 10)
 
         # Defense-in-depth: paper-only asset classes are clamped to 1× at fire
         # time when the trade is paper. Live forex on OANDA (status='active')
@@ -2270,7 +2270,7 @@ async def evaluate_and_fire(
                         entry_price = current_price,
                         tp_pct      = tp_pct,
                         sl_pct      = sl_pct,
-                        risk_pct    = float(risk.get("position_size_pct", 5)),
+                        risk_pct    = float(risk.get("position_size_pct") or 5),
                         risk_usd    = _risk_usd,
                     )
                 else:
@@ -2283,7 +2283,7 @@ async def evaluate_and_fire(
                         entry_price = current_price,
                         tp_pct      = tp_pct,
                         sl_pct      = sl_pct,
-                        risk_pct    = float(risk.get("position_size_pct", 5)),
+                        risk_pct    = float(risk.get("position_size_pct") or 5),
                         risk_usd    = _risk_usd,
                     )
                 if order_result:
