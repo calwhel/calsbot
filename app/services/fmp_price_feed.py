@@ -1,8 +1,9 @@
 """
-Real-time forex + index price feed via FMP WebSocket.
+Real-time forex + index price feed via FMP REST polling.
 
-No account linking required — uses the platform FMP_API_KEY environment
-variable.  Streams live bid/ask ticks into a module-level cache.
+Polls FMP's /api/v3/quote endpoint every 5 seconds for all tracked forex
+and index symbols. Results are cached with a 10s TTL.
+
 tradfi_prices.py checks this cache first (TTL=10s), then falls back to
 yfinance.  Kline (OHLC) fetches also route through FMP's REST
 historical-chart endpoint for up-to-the-minute candles.
@@ -10,7 +11,6 @@ historical-chart endpoint for up-to-the-minute candles.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from datetime import datetime, timedelta
@@ -31,22 +31,20 @@ _FOREX_SYMBOLS = [
     "XAUUSD", "XAGUSD",
 ]
 
-# Index display → FMP WebSocket ticker
+# Index display → FMP quote ticker
 _INDEX_FMP: Dict[str, str] = {
-    "SPX":  "^GSPC",
-    "NDX":  "^NDX",
-    "DJI":  "^DJI",
-    "VIX":  "^VIX",
-    "DAX":  "^GDAXI",
-    "FTSE": "^FTSE",
+    "SPX":  "%5EGSPC",
+    "NDX":  "%5ENDX",
+    "DJI":  "%5EDJI",
+    "VIX":  "%5EVIX",
+    "DAX":  "%5EGDAXI",
+    "FTSE": "%5EFTSE",
 }
 
 # Reverse map: FMP ticker → display symbol
 _FMP_TO_DISPLAY: Dict[str, str] = {v: k for k, v in _INDEX_FMP.items()}
 for _s in _FOREX_SYMBOLS:
     _FMP_TO_DISPLAY[_s] = _s
-
-_ALL_SUBSCRIBE = _FOREX_SYMBOLS + list(_INDEX_FMP.values())
 
 # Interval map: our TF → FMP REST interval string
 _TF_TO_FMP = {
@@ -62,6 +60,9 @@ _TF_TO_FMP = {
 
 _KLINE_CACHE: Dict[Tuple[str, str, int], Tuple[List[List[float]], datetime]] = {}
 _KLINE_TTL = timedelta(seconds=20)
+
+# Poll interval for REST price updates
+_POLL_INTERVAL = 5
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -101,7 +102,7 @@ async def get_klines(
         return []
 
     sym = symbol.upper()
-    fmp_sym = _INDEX_FMP.get(sym, sym)
+    fmp_sym = _INDEX_FMP.get(sym, sym).replace("%5E", "^")
     fmp_interval = _TF_TO_FMP.get(timeframe, "15min")
     cache_key = (sym, fmp_interval, limit)
     now = datetime.utcnow()
@@ -151,91 +152,121 @@ async def get_klines(
     return rows
 
 
-# ── WebSocket streaming loop ─────────────────────────────────────────────────
+# ── REST polling loop ─────────────────────────────────────────────────────────
+
+async def _poll_forex():
+    """Poll FMP /api/v3/fx for all forex + metals symbols."""
+    api_key = os.environ.get("FMP_API_KEY", "")
+    if not api_key:
+        return
+
+    symbols_csv = ",".join(_FOREX_SYMBOLS)
+    url = f"https://financialmodelingprep.com/api/v3/fx?apikey={api_key}"
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+                if resp.status != 200:
+                    return
+                data = await resp.json(content_type=None)
+    except Exception as e:
+        logger.debug(f"[FMPFeed] forex poll error: {e}")
+        return
+
+    if not isinstance(data, list):
+        return
+
+    now = datetime.utcnow()
+    for item in data:
+        try:
+            ticker = (item.get("ticker") or "").replace("/", "").upper()
+            if ticker not in _FOREX_SYMBOLS:
+                continue
+            bid = item.get("bid")
+            ask = item.get("ask")
+            price = item.get("price") or item.get("changes")
+            if bid and ask:
+                mid = (float(bid) + float(ask)) / 2.0
+            elif price:
+                mid = float(price)
+            else:
+                continue
+            _PRICE_CACHE[ticker] = (mid, now)
+        except Exception:
+            continue
+
+
+async def _poll_indices():
+    """Poll FMP /api/v3/quote for index symbols."""
+    api_key = os.environ.get("FMP_API_KEY", "")
+    if not api_key:
+        return
+
+    index_tickers = [v.replace("%5E", "^") for v in _INDEX_FMP.values()]
+    symbols_csv = ",".join(t.replace("^", "%5E") for t in index_tickers)
+    url = f"https://financialmodelingprep.com/api/v3/quote/{symbols_csv}?apikey={api_key}"
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+                if resp.status != 200:
+                    return
+                data = await resp.json(content_type=None)
+    except Exception as e:
+        logger.debug(f"[FMPFeed] index poll error: {e}")
+        return
+
+    if not isinstance(data, list):
+        return
+
+    now = datetime.utcnow()
+    for item in data:
+        try:
+            fmp_sym = (item.get("symbol") or "").upper()
+            price = item.get("price")
+            if not price:
+                continue
+            # Map encoded key back to display name
+            encoded = fmp_sym.replace("^", "%5E")
+            display = _FMP_TO_DISPLAY.get(encoded) or _FMP_TO_DISPLAY.get(fmp_sym)
+            if display:
+                _PRICE_CACHE[display] = (float(price), now)
+        except Exception:
+            continue
+
 
 async def _stream():
     global _RUNNING
-    import ssl
-    import websockets
-
     api_key = os.environ.get("FMP_API_KEY", "")
     if not api_key:
         logger.warning("[FMPFeed] FMP_API_KEY not set — real-time feed disabled")
         return
 
-    # Replit sandbox lacks a full CA bundle; disable cert verification for this
-    # read-only market-data connection (no user credentials in transit).
-    _ssl_ctx = ssl.create_default_context()
-    _ssl_ctx.check_hostname = False
-    _ssl_ctx.verify_mode = ssl.CERT_NONE
-
-    url = "wss://websockets.financialmodelingprep.com"
-    retry_delay = 5
+    logger.info(f"[FMPFeed] REST polling started — {len(_FOREX_SYMBOLS)} forex + {len(_INDEX_FMP)} indices every {_POLL_INTERVAL}s")
+    _RUNNING = True
+    errors = 0
 
     while True:
         try:
-            async with websockets.connect(
-                url, ssl=_ssl_ctx, ping_interval=20, ping_timeout=15
-            ) as ws:
-                # Authenticate
-                await ws.send(json.dumps({"event": "login", "data": {"apiKey": api_key}}))
-                try:
-                    resp = await asyncio.wait_for(ws.recv(), timeout=10)
-                    logger.info(f"[FMPFeed] login response: {str(resp)[:120]}")
-                    try:
-                        resp_data = json.loads(resp)
-                        if resp_data.get("status") == 401:
-                            logger.warning(
-                                "[FMPFeed] API key unauthorised for WebSocket "
-                                "(plan upgrade required) — feed disabled"
-                            )
-                            return   # permanent exit; no retry
-                    except Exception:
-                        pass
-                except asyncio.TimeoutError:
-                    logger.warning("[FMPFeed] login timeout — retrying")
-                    continue
-
-                # Subscribe
-                for sym in _ALL_SUBSCRIBE:
-                    await ws.send(
-                        json.dumps({"event": "subscribe", "data": {"ticker": sym}})
-                    )
-
-                logger.info(
-                    f"[FMPFeed] subscribed to {len(_ALL_SUBSCRIBE)} symbols — streaming"
-                )
-                _RUNNING = True
-                retry_delay = 5
-
-                async for raw in ws:
-                    try:
-                        msg = json.loads(raw)
-                        fmp_sym = msg.get("s", "")
-                        if not fmp_sym:
-                            continue
-                        ap = msg.get("ap") or msg.get("askPrice")
-                        bp = msg.get("bp") or msg.get("bidPrice")
-                        lp = msg.get("lp") or msg.get("lastPrice")
-                        if ap and bp:
-                            price = (float(ap) + float(bp)) / 2.0
-                        elif lp:
-                            price = float(lp)
-                        else:
-                            continue
-                        display = _FMP_TO_DISPLAY.get(fmp_sym, fmp_sym)
-                        _PRICE_CACHE[display] = (price, datetime.utcnow())
-                    except Exception:
-                        pass
-
+            await asyncio.gather(
+                _poll_forex(),
+                _poll_indices(),
+                return_exceptions=True,
+            )
+            errors = 0
         except Exception as e:
-            _RUNNING = False
-            logger.warning(f"[FMPFeed] disconnected: {e} — retry in {retry_delay}s")
-            await asyncio.sleep(retry_delay)
-            retry_delay = min(retry_delay * 2, 300)
+            errors += 1
+            logger.debug(f"[FMPFeed] poll cycle error ({errors}): {e}")
+
+        if errors > 10:
+            logger.warning("[FMPFeed] too many consecutive errors — pausing 60s")
+            await asyncio.sleep(60)
+            errors = 0
+        else:
+            await asyncio.sleep(_POLL_INTERVAL)
 
 
 def start():
-    """Schedule the streaming loop as a background asyncio task."""
+    """Schedule the polling loop as a background asyncio task."""
     asyncio.create_task(_stream())
     logger.info("[FMPFeed] background streaming task started")
