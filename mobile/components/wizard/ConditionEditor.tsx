@@ -771,6 +771,115 @@ function renderKnobs(
       );
     }
 
+    case 'fx_killzone': {
+      const kzOpts: ChipOption<string>[] = [
+        { value: 'london_kz', label: '🇬🇧 London (07–09 UTC)' },
+        { value: 'ny_kz',     label: '🇺🇸 NY (12–14 UTC)' },
+        { value: 'asian_kz',  label: '🌏 Asian (20–23 UTC)' },
+        { value: 'any_kz',    label: '🎯 Any killzone' },
+      ];
+      return (
+        <Section label="Killzone window" compact={compact}>
+          <ChipRow options={kzOpts}
+            value={(cfg.killzone as string) || 'london_kz'}
+            onChange={(v) => set({ killzone: v })} size="sm" />
+        </Section>
+      );
+    }
+
+    case 'fx_ote': {
+      const dirOpts: ChipOption<string>[] = [
+        { value: 'bullish', label: '🟢 Bullish OTE (demand zone)' },
+        { value: 'bearish', label: '🔴 Bearish OTE (supply zone)' },
+      ];
+      return (
+        <View>
+          <Section label="Direction" compact={compact}>
+            <ChipRow options={dirOpts}
+              value={(cfg.direction as string) || 'bullish'}
+              onChange={(v) => set({ direction: v })} size="sm" />
+          </Section>
+          <Stepper label="Swing lookback (bars)" value={cfg.swing_lookback ?? 20}
+            min={5} max={100} step={5}
+            onChange={(v) => set({ swing_lookback: v })}
+            hint="Look back N bars to find the swing high/low that defines the retracement" />
+          <Stepper label="Fib low (%)" value={cfg.fib_low ?? 61.8}
+            min={50} max={75} step={0.1} decimals={1}
+            onChange={(v) => set({ fib_low: v })} />
+          <Stepper label="Fib high (%)" value={cfg.fib_high ?? 78.6}
+            min={60} max={90} step={0.1} decimals={1}
+            onChange={(v) => set({ fib_high: v })} />
+        </View>
+      );
+    }
+
+    case 'fx_displacement': {
+      const dirOpts: ChipOption<string>[] = [
+        { value: 'bullish', label: '🟢 Bullish (big green candle)' },
+        { value: 'bearish', label: '🔴 Bearish (big red candle)' },
+        { value: 'any',     label: '⚡ Either direction' },
+      ];
+      return (
+        <View>
+          <Section label="Direction" compact={compact}>
+            <ChipRow options={dirOpts}
+              value={(cfg.direction as string) || 'any'}
+              onChange={(v) => set({ direction: v })} size="sm" />
+          </Section>
+          <Stepper label="Min body size (× avg range)" value={cfg.min_body_ratio ?? 3}
+            min={1.5} max={8} step={0.5} decimals={1}
+            onChange={(v) => set({ min_body_ratio: v })}
+            hint="Candle body must be this many times larger than the 14-period average body" />
+        </View>
+      );
+    }
+
+    case 'fx_equal_hl': {
+      const typeOpts: ChipOption<string>[] = [
+        { value: 'eqh', label: '⬆️ Equal Highs (EQH)' },
+        { value: 'eql', label: '⬇️ Equal Lows (EQL)' },
+      ];
+      return (
+        <View>
+          <Section label="Pattern" compact={compact}>
+            <ChipRow options={typeOpts}
+              value={(cfg.type as string) || 'eqh'}
+              onChange={(v) => set({ type: v })} size="sm" />
+          </Section>
+          <Stepper label="Lookback (bars)" value={cfg.lookback ?? 30}
+            min={10} max={100} step={5}
+            onChange={(v) => set({ lookback: v })} />
+          <Stepper label="Tolerance (pips)" value={cfg.tolerance_pips ?? 3}
+            min={0.5} max={20} step={0.5} decimals={1} unit=" pips"
+            onChange={(v) => set({ tolerance_pips: v })}
+            hint="Two highs/lows within this pip distance count as 'equal' — a liquidity pool" />
+        </View>
+      );
+    }
+
+    case 'fx_breaker': {
+      const dirOpts: ChipOption<string>[] = [
+        { value: 'bullish', label: '🟢 Bullish breaker (old supply → support)' },
+        { value: 'bearish', label: '🔴 Bearish breaker (old demand → resistance)' },
+      ];
+      return (
+        <View>
+          <Section label="Direction" compact={compact}>
+            <ChipRow options={dirOpts}
+              value={(cfg.direction as string) || 'bullish'}
+              onChange={(v) => set({ direction: v })} size="sm" />
+          </Section>
+          <Stepper label="Lookback (bars)" value={cfg.lookback ?? 50}
+            min={20} max={200} step={10}
+            onChange={(v) => set({ lookback: v })} />
+          <Stepper label="Zone tolerance (%)" value={cfg.tolerance_pct ?? 0.5}
+            min={0.1} max={3} step={0.1} decimals={1} unit="%"
+            onChange={(v) => set({ tolerance_pct: v })}
+            hint="Price must return within this % of the breaker zone to trigger" />
+        </View>
+      );
+    }
+
     default:
       return null;
   }

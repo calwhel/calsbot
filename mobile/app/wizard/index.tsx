@@ -547,7 +547,7 @@ export default function WizardScreen() {
         title={pickerVisible === 'primary' ? 'Pick your entry signal' : 'Add a confirmation'}
         excludeTypes={[
           // Hide forex-specific signals when not building a forex strategy.
-          ...(s.assetClass !== 'forex' ? (['forex_session', 'forex_session_break', 'forex_prev_level', 'forex_news_avoidance', 'forex_currency_strength', 'forex_liquidity_pa', 'forex_cot'] as SignalType[]) : []),
+          ...(s.assetClass !== 'forex' ? (['forex_session', 'forex_session_break', 'forex_prev_level', 'forex_news_avoidance', 'forex_currency_strength', 'forex_liquidity_pa', 'forex_cot', 'fx_killzone', 'fx_ote', 'fx_displacement', 'fx_equal_hl', 'fx_breaker'] as SignalType[]) : []),
           // Already-used signal types (confirm mode only).
           ...(pickerVisible === 'confirm'
             ? [...s.confirms.map(c => c.type), ...(s.primaryType ? [s.primaryType] : [])]
