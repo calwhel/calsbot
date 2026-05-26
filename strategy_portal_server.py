@@ -863,6 +863,35 @@ def _ensure_tables():
     _migrate_columns("user_strategies", strategy_cols)
     _migrate_columns("strategy_executions", execution_cols)
 
+    # ── Backfill asset_class column from config JSON ───────────────────────────
+    # Strategies created before this column was properly set (e.g. forex/index
+    # strategies that got the DEFAULT 'crypto' from the migration) will have
+    # asset_class='crypto' in the column but 'forex'/'stock'/'index' inside the
+    # config JSON blob. The executor reads the column first; if it says 'crypto'
+    # (truthy) the config fallback is never reached, so forex strategies scan as
+    # crypto and find no price → silently skip every cycle.
+    try:
+        from sqlalchemy import text as _text
+        with engine.begin() as _conn:
+            _result = _conn.execute(_text("""
+                UPDATE user_strategies
+                   SET asset_class = config->>'asset_class'
+                 WHERE config->>'asset_class' IN ('crypto','stock','forex','index','commodity')
+                   AND config->>'asset_class' IS DISTINCT FROM asset_class
+                RETURNING id, name, config->>'asset_class' AS new_class
+            """))
+            _fixed = _result.fetchall()
+            if _fixed:
+                for _row in _fixed:
+                    logger.info(
+                        f"[migration] Fixed asset_class for strategy {_row[0]} "
+                        f"'{_row[1]}' → {_row[2]}"
+                    )
+            else:
+                logger.info("[migration] asset_class backfill: all rows already consistent")
+    except Exception as _e:
+        logger.warning(f"[migration] asset_class backfill failed (non-fatal): {_e}")
+
 
 @app.on_event("startup")
 async def startup():

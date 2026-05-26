@@ -1857,9 +1857,19 @@ async def evaluate_and_fire(
     from app.services.asset_classes import (
         normalize_asset_class, is_market_open, PAPER_ONLY_CLASSES,
     )
-    asset_class = normalize_asset_class(
-        getattr(strategy, "asset_class", None) or config.get("asset_class")
-    )
+    _col_ac  = getattr(strategy, "asset_class", None) or ""
+    _cfg_ac  = config.get("asset_class") or ""
+    # If the DB column says 'crypto' but the config explicitly says something
+    # else (e.g. 'forex'), trust the config — the column may have been set by
+    # the DEFAULT before the backfill migration ran.
+    if _col_ac == "crypto" and _cfg_ac and _cfg_ac != "crypto":
+        asset_class = normalize_asset_class(_cfg_ac)
+        logger.info(
+            f"[Strategy {strategy.id}] asset_class mismatch: column='crypto' config='{_cfg_ac}' "
+            f"→ using '{asset_class}' (run migration to fix)"
+        )
+    else:
+        asset_class = normalize_asset_class(_col_ac or _cfg_ac)
     config["asset_class"] = asset_class
 
     # Per-asset broker gate. Forex → cTrader (FP Markets), crypto → Bitunix,
