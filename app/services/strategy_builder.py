@@ -305,6 +305,60 @@ min_impact: low | medium | high
 {"type":"forex_cot","condition":"specs_extreme_long","extreme_pct":75,"lookback_weeks":52}
 conditions: specs_extreme_long | specs_extreme_short | commercials_extreme_long | commercials_extreme_short
 → "COT report" | "commitment of traders" | "speculator positioning" | "institutional sentiment"
+
+── ICT KILLZONE ───────────────────────────────────────────────────────────────
+{"type":"fx_killzone","killzone":"london_kz"}
+killzone options: london_kz (07:00–09:00 UTC) | ny_kz (12:00–14:00 UTC) | asian_kz (20:00–23:00 UTC) | any_kz
+→ "killzone" | "London KZ" | "NY killzone" | "Asian open" | "ICT time window" | "high-probability window"
+
+── ICT OTE — OPTIMAL TRADE ENTRY ─────────────────────────────────────────────
+{"type":"fx_ote","direction":"bullish","swing_lookback":20,"fib_low":61.8,"fib_high":78.6,"timeframe":"15m"}
+direction: bullish | bearish
+fib_low/fib_high: Fibonacci retracement zone % (default 61.8–78.6 = golden pocket)
+→ "OTE" | "optimal trade entry" | "golden zone" | "61.8 fib" | "78.6 fib" | "golden pocket" | "retracement entry"
+
+── ICT DISPLACEMENT ──────────────────────────────────────────────────────────
+{"type":"fx_displacement","direction":"bullish","min_body_ratio":3,"timeframe":"15m"}
+direction: bullish | bearish | any
+min_body_ratio: body must be ≥ N × average body size (default 3 = institutional candle)
+→ "displacement" | "impulse candle" | "institutional candle" | "large body candle" | "displacement move"
+
+── ICT EQUAL HIGHS / EQUAL LOWS ──────────────────────────────────────────────
+{"type":"fx_equal_hl","type":"eqh","lookback":30,"tolerance_pips":3,"timeframe":"15m"}
+type: eqh (equal highs) | eql (equal lows)
+→ "equal highs" | "equal lows" | "EQH" | "EQL" | "double top liquidity" | "double bottom liquidity" | "BSL/SSL"
+
+── ICT BREAKER BLOCK ──────────────────────────────────────────────────────────
+{"type":"fx_breaker","direction":"bullish","lookback":50,"tolerance_pct":0.5,"timeframe":"15m"}
+direction: bullish (former supply → support) | bearish (former demand → resistance)
+→ "breaker block" | "breaker" | "failed order block" | "broken OB returning" | "mitigation block"
+
+── ICT PREMIUM / DISCOUNT ARRAY ──────────────────────────────────────────────
+{"type":"fx_pd_array","bias":"discount","lookback":50,"timeframe":"1h"}
+bias: discount (price below 50% of swing = buy zone) | premium (price above 50% = sell zone)
+→ "premium zone" | "discount zone" | "PD array" | "premium/discount" | "below equilibrium" | "50% level" | "equilibrium"
+
+── ICT JUDAS SWING ───────────────────────────────────────────────────────────
+{"type":"fx_judas_swing","session":"london","swing_pips":10,"reversal_pips":5,"timeframe":"15m"}
+session: london (08:00 UTC) | ny (13:30 UTC)
+→ "Judas swing" | "fake move" | "false break" | "manipulation leg" | "stop hunt reversal" | "fake breakout then reversal"
+
+── ICT SILVER BULLET ─────────────────────────────────────────────────────────
+{"type":"fx_silver_bullet","window":"any"}
+window: early_am (03:00–04:00 NY) | am (10:00–11:00 NY) | pm (15:00–16:00 NY) | any
+→ "silver bullet" | "ICT silver bullet" | "3 AM setup" | "10 AM setup" | "3 PM setup" | "ICT precision entry"
+
+── OPENING RANGE BREAKOUT (all asset classes) ────────────────────────────────
+{"type":"opening_range_break","session_start":"london","orb_minutes":30,"direction":"both","timeframe":"5m"}
+session_start: london (08:00 UTC) | ny (13:30 UTC) | asia (00:00 UTC) | midnight (00:00 UTC)
+direction: up | down | both
+orb_minutes: 5 | 15 | 30 | 60
+→ "ORB" | "opening range breakout" | "first 30 minutes high/low" | "range break at open" | "opening range"
+
+── VWAP CROSS (all asset classes) ────────────────────────────────────────────
+{"type":"vwap_cross","direction":"cross_above","timeframe":"5m"}
+direction: cross_above (bullish) | cross_below (bearish)
+→ "VWAP cross" | "cross above VWAP" | "cross below VWAP" | "price crosses VWAP" | "VWAP momentum"
 """
 
 STRATEGY_SCHEMA = """
@@ -400,6 +454,28 @@ FOREX-SPECIFIC RULES (apply when asset_class = "forex")
   • "COT" / "commitment of traders" → forex_cot
   • Instrument: "Gold" / "XAU" → XAUUSD, "Silver" / "XAG" → XAGUSD
   • If no specific pairs mentioned, default to ["EURUSD","GBPUSD"] for major-pair strategies
+  ICT / Day-trading signal mappings (forex):
+  • "killzone" / "London KZ" / "NY KZ" / "Asian open window" → fx_killzone
+  • "OTE" / "optimal trade entry" / "golden zone" / "61.8–78.6 fib" → fx_ote
+  • "displacement" / "impulse candle" / "institutional candle" → fx_displacement
+  • "equal highs" / "EQH" / "equal lows" / "EQL" / "BSL" / "SSL" → fx_equal_hl
+  • "breaker block" / "breaker" / "failed order block" → fx_breaker
+  • "premium zone" / "discount zone" / "PD array" / "equilibrium" → fx_pd_array
+  • "Judas swing" / "fake move at open" / "manipulation leg" → fx_judas_swing
+  • "silver bullet" / "ICT silver bullet" / "3 AM setup" / "10 AM" → fx_silver_bullet
+  Cross-asset day-trading signal mappings:
+  • "ORB" / "opening range breakout" / "first 30 min high/low" → opening_range_break
+  • "VWAP cross" / "cross above VWAP" / "crosses VWAP" → vwap_cross
+  ICT-style forex templates — when the user describes these strategies, compose them:
+  • "ICT day trade" / "killzone + OTE" → fx_killzone (primary) + fx_ote + fx_pd_array confirmations
+  • "London ICT" → fx_killzone (london_kz) + fx_displacement + fvg confirmations
+  • "Silver bullet strategy" → fx_silver_bullet + fvg conditions; tight TP 15–20 pips, SL 10–12 pips
+  • "Judas swing fade" → fx_judas_swing + fx_pd_array; BOTH direction, TP 25–35 pips, SL 15 pips
+  • "Breaker block entry" → fx_breaker + fx_killzone; TP 30–40 pips, SL 15 pips
+  ICT risk profiles for forex:
+  • ICT scalp (silver bullet / killzone): TP 15–25 pips, SL 10–15 pips, max 2 trades/day, cooldown 60 min
+  • ICT intraday (OTE + displacement): TP 30–50 pips, SL 15–20 pips, max 2 trades/session, cooldown 90 min
+  • ICT swing (breaker + PD array): TP 60–100 pips, SL 30–40 pips, max 1–2 trades/day, cooldown 4h
 
 STOCK/INDEX-SPECIFIC RULES (apply when asset_class = "stock" or "index")
   • Use take_profit_pct / stop_loss_pct (not pips)

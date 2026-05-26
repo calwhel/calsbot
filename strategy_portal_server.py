@@ -8815,13 +8815,36 @@ async def chat_builder_api(request: Request):
         forex_rules = """
 
 FOREX-SPECIFIC RULES:
-- Use PIPS for TP and SL — not percentages. Scalp: 10–25 TP / 8–15 SL. Swing: 40–80 TP / 20–40 SL.
-- Leverage for forex retail is capped at 30:1 — default 10, ask if they want different.
-- Always collect which pair(s) they want to trade: EURUSD, GBPUSD, USDJPY, AUDUSD, XAUUSD (Gold), XAGUSD (Silver), etc.
-- If they say "London breakout", "Asian range", "session" — note it as the signal style.
-- If they say "Gold" → XAUUSD. "Silver" → XAGUSD.
-- Avoid mentioning BTC regime — irrelevant for forex.
-- In the ###STRATEGY### line use "TP Pips" and "SL Pips" instead of "TP1 %" and "SL %"."""
+- Use PIPS for TP and SL — not percentages.
+  ICT scalp (silver bullet / killzone): TP 15–25 / SL 10–15. Intraday (OTE / displacement): TP 30–50 / SL 15–25. Swing: TP 50–100 / SL 25–40.
+- Leverage: retail forex max 30:1 — default 10. Never mention BTC regime.
+- Always ask which pair(s): EURUSD, GBPUSD, USDJPY, AUDUSD, NZDUSD, USDCAD, EURGBP, EURJPY, GBPJPY, XAUUSD (Gold), XAGUSD (Silver).
+  "Gold" → XAUUSD. "Silver" → XAGUSD. "Cable" → GBPUSD. "Fiber" → EURUSD. "Yen" → USDJPY.
+- In the ###STRATEGY### line use "TP Pips" and "SL Pips" instead of "TP1 %" and "SL %".
+
+ICT / PRICE ACTION SIGNAL RECOGNITION — map user phrases to signals:
+  "killzone" / "London KZ" / "NY killzone" / "Asian KZ" / "ICT time window" → Signal: fx_killzone (specify: london_kz / ny_kz / asian_kz / any_kz)
+  "OTE" / "optimal trade entry" / "golden zone" / "61.8 fib" / "golden pocket" → Signal: fx_ote (bullish or bearish)
+  "displacement" / "impulse candle" / "institutional move" / "large candle" → Signal: fx_displacement
+  "equal highs" / "EQH" / "equal lows" / "EQL" / "BSL" / "SSL" → Signal: fx_equal_hl
+  "breaker block" / "breaker" / "failed OB" / "mitigation block" → Signal: fx_breaker
+  "premium zone" / "discount zone" / "PD array" / "equilibrium" / "above/below 50%" → Signal: fx_pd_array
+  "Judas swing" / "fake move" / "manipulation leg" / "stop hunt then reverse" → Signal: fx_judas_swing
+  "silver bullet" / "ICT silver bullet" / "3 AM" / "10 AM" / "3 PM setup" → Signal: fx_silver_bullet
+  "London breakout" / "Asian range break" / "session break" → Signal: forex_session_break
+  "previous day high" / "PDH" / "PDL sweep" / "previous week high" → Signal: forex_prev_level
+  "currency strength" / "strong vs weak" / "G8 strength" → Signal: forex_currency_strength
+  "stop hunt" / "liquidity grab" / "equal highs sweep" → Signal: forex_liquidity_pa
+  "COT" / "commitment of traders" / "speculator positioning" → Signal: forex_cot
+  "ORB" / "opening range breakout" / "first 30 min range" → Signal: opening_range_break
+  "VWAP cross" / "crosses VWAP" / "above VWAP" → Signal: vwap_cross
+
+ICT STRATEGY TEMPLATES — recognise these and suggest them:
+  "ICT day trade" / "killzone + OTE" → killzone primary + OTE + PD array confirmations; 2 trades/session max
+  "London ICT" → london_kz killzone + displacement + FVG; TP 30–40 pips, SL 15 pips
+  "silver bullet strategy" → fx_silver_bullet + FVG; tight TP 15–20 pips, SL 10–12 pips
+  "Judas swing" → fx_judas_swing + PD array; BOTH direction, TP 25–35 pips, SL 15 pips
+  "breaker block trade" → fx_breaker + killzone; TP 30–40 pips, SL 15 pips"""
     elif asset_class in ("stock", "index"):
         forex_rules = f"""
 
