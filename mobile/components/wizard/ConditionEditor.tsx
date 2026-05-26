@@ -880,6 +880,123 @@ function renderKnobs(
       );
     }
 
+    case 'fx_pd_array': {
+      const biasOpts: ChipOption<string>[] = [
+        { value: 'discount', label: '🟢 Discount (below 50% — buy zone)' },
+        { value: 'premium',  label: '🔴 Premium (above 50% — sell zone)' },
+      ];
+      return (
+        <View>
+          <Section label="Bias" compact={compact}>
+            <ChipRow options={biasOpts}
+              value={(cfg.bias as string) || 'discount'}
+              onChange={(v) => set({ bias: v })} size="sm" />
+          </Section>
+          <Stepper label="Swing lookback (bars)" value={cfg.lookback ?? 50}
+            min={20} max={200} step={10}
+            onChange={(v) => set({ lookback: v })}
+            hint="Bars to scan for the recent swing H/L" />
+        </View>
+      );
+    }
+
+    case 'fx_judas_swing': {
+      const sessOpts: ChipOption<string>[] = [
+        { value: 'london', label: '🇬🇧 London (08:00 UTC)' },
+        { value: 'ny',     label: '🗽 NY (13:30 UTC)' },
+      ];
+      return (
+        <View>
+          <Section label="Session" compact={compact}>
+            <ChipRow options={sessOpts}
+              value={(cfg.session as string) || 'london'}
+              onChange={(v) => set({ session: v })} size="sm" />
+          </Section>
+          <Stepper label="Min fake sweep (pips)" value={cfg.swing_pips ?? 10}
+            min={3} max={50} step={1}
+            onChange={(v) => set({ swing_pips: v })}
+            hint="Minimum pip distance the fake move must extend beyond prior range" />
+          <Stepper label="Min reversal (pips)" value={cfg.reversal_pips ?? 5}
+            min={2} max={30} step={1}
+            onChange={(v) => set({ reversal_pips: v })}
+            hint="Price must then reverse this many pips for confirmation" />
+        </View>
+      );
+    }
+
+    case 'fx_silver_bullet': {
+      const winOpts: ChipOption<string>[] = [
+        { value: 'any',      label: '🔁 Any window' },
+        { value: 'early_am', label: '🌙 03:00–04:00 NY' },
+        { value: 'am',       label: '🌅 10:00–11:00 NY' },
+        { value: 'pm',       label: '🌇 15:00–16:00 NY' },
+      ];
+      return (
+        <View>
+          <Section label="NY time window" compact={compact}>
+            <ChipRow options={winOpts}
+              value={(cfg.window as string) || 'any'}
+              onChange={(v) => set({ window: v })} size="sm" />
+          </Section>
+        </View>
+      );
+    }
+
+    case 'opening_range_break': {
+      const sessOpts: ChipOption<string>[] = [
+        { value: 'london',   label: '🇬🇧 London 08:00' },
+        { value: 'ny',       label: '🗽 NY 13:30' },
+        { value: 'asia',     label: '🌏 Asia 00:00' },
+        { value: 'midnight', label: '🕛 Midnight UTC' },
+      ];
+      const minsOpts: ChipOption<string>[] = [
+        { value: '5',  label: '5m' },
+        { value: '15', label: '15m' },
+        { value: '30', label: '30m' },
+        { value: '60', label: '1h' },
+      ];
+      const dirOpts: ChipOption<string>[] = [
+        { value: 'both', label: '↕ Either' },
+        { value: 'up',   label: '↑ Up only' },
+        { value: 'down', label: '↓ Down only' },
+      ];
+      return (
+        <View>
+          <Section label="Session start" compact={compact}>
+            <ChipRow options={sessOpts}
+              value={(cfg.session_start as string) || 'london'}
+              onChange={(v) => set({ session_start: v })} size="sm" />
+          </Section>
+          <Section label="ORB window" compact={compact}>
+            <ChipRow options={minsOpts}
+              value={String(cfg.orb_minutes ?? 30)}
+              onChange={(v) => set({ orb_minutes: Number(v) })} size="sm" />
+          </Section>
+          <Section label="Break direction" compact={compact}>
+            <ChipRow options={dirOpts}
+              value={(cfg.direction as string) || 'both'}
+              onChange={(v) => set({ direction: v })} size="sm" />
+          </Section>
+        </View>
+      );
+    }
+
+    case 'vwap_cross': {
+      const dirOpts: ChipOption<string>[] = [
+        { value: 'cross_above', label: '↑ Cross above VWAP (bullish)' },
+        { value: 'cross_below', label: '↓ Cross below VWAP (bearish)' },
+      ];
+      return (
+        <View>
+          <Section label="Direction" compact={compact}>
+            <ChipRow options={dirOpts}
+              value={(cfg.direction as string) || 'cross_above'}
+              onChange={(v) => set({ direction: v })} size="sm" />
+          </Section>
+        </View>
+      );
+    }
+
     default:
       return null;
   }

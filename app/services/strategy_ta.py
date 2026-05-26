@@ -2609,6 +2609,313 @@ async def eval_fx_breaker(
     return False, f"BREAKER ({direction}): no qualifying breaker block found in {lookback} bars"
 
 
+async def eval_fx_pd_array(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`fx_pd_array` — Premium / Discount array (ICT equilibrium filter).
+
+    Divides the recent swing range at its 50% midpoint:
+      discount zone  → price < midpoint  → institutional buy bias
+      premium zone   → price > midpoint  → institutional sell bias
+
+    cfg.bias:    'discount' | 'premium' (default 'discount')
+    cfg.lookback: bars to find swing H/L (default 50)
+    cfg.timeframe: kline TF (default '1h')
+    """
+    bias     = (cond.get("bias") or "discount").lower()
+    tf       = cond.get("timeframe", "1h")
+    lookback = max(10, min(int(cond.get("lookback") or 50), 300))
+
+    klines = await _get_klines(symbol, tf, lookback + 5, http_client, cache)
+    if not klines or len(klines) < 5:
+        return False, "PD Array: insufficient data"
+
+    highs = _highs(klines[:-1])
+    lows  = _lows(klines[:-1])
+    swing_h = max(highs)
+    swing_l = min(lows)
+    mid = (swing_h + swing_l) / 2
+
+    in_discount = current_price < mid
+    in_premium  = current_price > mid
+    hit = (bias == "discount" and in_discount) or (bias == "premium" and in_premium)
+    zone_lbl = "discount" if in_discount else "premium"
+    return hit, (
+        f"PD Array: swing {swing_l:.6g}–{swing_h:.6g}, mid={mid:.6g} "
+        f"price={current_price:.6g} → {zone_lbl} "
+        f"({'✓' if hit else '✗'} for bias={bias})"
+    )
+
+
+async def eval_fx_judas_swing(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`fx_judas_swing` — Fake sweep at session open then reversal.
+
+    Algorithm:
+    1. Find the prior session's range (high and low before the current session open).
+    2. Within the first `window_minutes` of the new session, check if price
+       extended BEYOND the prior range (the fake / manipulation leg).
+    3. Confirm that price has since reversed back INSIDE the prior range by
+       at least `reversal_pips` — the real move beginning.
+
+    cfg.session:        'london' (08:00 UTC) | 'ny' (13:30 UTC, default 'london')
+    cfg.swing_pips:     min pip extension beyond prior range (default 10)
+    cfg.reversal_pips:  min pip reversal from the fake extreme (default 5)
+    cfg.timeframe:      kline TF (default '15m')
+    """
+    session       = (cond.get("session") or "london").lower()
+    swing_pips    = max(1.0, float(cond.get("swing_pips")   or 10))
+    reversal_pips = max(1.0, float(cond.get("reversal_pips") or 5))
+    tf            = cond.get("timeframe", "15m")
+
+    pip = 0.01 if "JPY" in symbol.upper() else 0.0001
+    swing_dist    = swing_pips    * pip
+    reversal_dist = reversal_pips * pip
+
+    SESSION_OPEN_UTC = {"london": (8, 0), "ny": (13, 30)}
+    open_h, open_m = SESSION_OPEN_UTC.get(session, (8, 0))
+
+    klines = await _get_klines(symbol, tf, 60, http_client, cache)
+    if not klines or len(klines) < 10:
+        return False, "Judas Swing: insufficient data"
+
+    # Identify session-open index by candle timestamps
+    def _candle_utc(k) -> datetime:
+        ts = int(k[0])
+        return datetime.utcfromtimestamp(ts / 1000 if ts > 1e10 else ts)
+
+    open_idx = None
+    for i, k in enumerate(klines):
+        ct = _candle_utc(k)
+        if ct.hour == open_h and ct.minute >= open_m:
+            open_idx = i
+            break
+
+    if open_idx is None or open_idx < 5:
+        return False, f"Judas Swing: session open ({session}) candles not in window"
+
+    # Prior-session range (candles before session open)
+    prior_candles = klines[:open_idx]
+    prior_h = max(_highs(prior_candles))
+    prior_l = min(_lows(prior_candles))
+
+    # Session candles (after open)
+    sess_candles = klines[open_idx:]
+    if not sess_candles:
+        return False, "Judas Swing: no session candles yet"
+
+    sess_highs = _highs(sess_candles)
+    sess_lows  = _lows(sess_candles)
+    sess_h = max(sess_highs)
+    sess_l = min(sess_lows)
+
+    # Detect bullish Judas: swept below prior_l then reversed up
+    bearish_sweep = sess_l < prior_l - swing_dist
+    bullish_reversal = current_price > sess_l + reversal_dist and current_price > prior_l
+
+    # Detect bearish Judas: swept above prior_h then reversed down
+    bullish_sweep = sess_h > prior_h + swing_dist
+    bearish_reversal = current_price < sess_h - reversal_dist and current_price < prior_h
+
+    fired = (bearish_sweep and bullish_reversal) or (bullish_sweep and bearish_reversal)
+    if fired:
+        direction = "bullish (swept lows)" if bearish_sweep else "bearish (swept highs)"
+        return True, (
+            f"Judas Swing {direction}: prior range {prior_l:.6g}–{prior_h:.6g} "
+            f"sess extremes {sess_l:.6g}–{sess_h:.6g} price={current_price:.6g}"
+        )
+    return False, (
+        f"Judas Swing: no confirmed sweep+reversal "
+        f"(prior {prior_l:.6g}–{prior_h:.6g}, sess {sess_l:.6g}–{sess_h:.6g})"
+    )
+
+
+def eval_fx_silver_bullet(cond: Dict) -> Tuple[bool, str]:
+    """`fx_silver_bullet` — ICT Silver Bullet time windows.
+
+    Three ultra-precise entry windows in NY local time (EST = UTC-5):
+      early_am:  03:00–04:00 NY
+      am:        10:00–11:00 NY
+      pm:        15:00–16:00 NY
+
+    cfg.window: 'early_am' | 'am' | 'pm' | 'any' (default 'any')
+
+    Note: uses a fixed UTC-5 offset (EST).  Summer EDT (UTC-4) shifts the
+    windows by 1 hour — acceptable tolerance for a mechanical time filter.
+    """
+    window = (cond.get("window") or "any").lower()
+    now_utc = datetime.utcnow()
+    ny_hour = (now_utc.hour - 5) % 24   # approximate NY time (EST)
+    cur_min = now_utc.minute
+
+    WINDOWS = {
+        "early_am": (3, 4),
+        "am":       (10, 11),
+        "pm":       (15, 16),
+    }
+    LABELS = {
+        "early_am": "03:00–04:00 NY",
+        "am":       "10:00–11:00 NY",
+        "pm":       "15:00–16:00 NY",
+        "any":      "any Silver Bullet window",
+    }
+
+    if window == "any":
+        inside = any(s <= ny_hour < e for s, e in WINDOWS.values())
+        active = next((k for k, (s, e) in WINDOWS.items() if s <= ny_hour < e), None)
+        lbl = f"in {LABELS[active]}" if active else f"outside all SB windows (NY={ny_hour:02d}:{cur_min:02d})"
+    else:
+        s, e = WINDOWS.get(window, (3, 4))
+        inside = s <= ny_hour < e
+        lbl = f"{LABELS.get(window, window)}: {'INSIDE' if inside else f'outside (NY={ny_hour:02d}:{cur_min:02d})'}"
+
+    return inside, f"Silver Bullet — {lbl}"
+
+
+async def eval_opening_range_break(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`opening_range_break` — Opening Range Breakout (ORB).
+
+    Calculates the high/low of the first `orb_minutes` of a trading session,
+    then fires when the current price has broken above (up) or below (down)
+    that range.
+
+    cfg.session_start: 'london' (08:00 UTC) | 'ny' (13:30 UTC) |
+                       'asia' (00:00 UTC) | 'midnight' (00:00 UTC, default 'london')
+    cfg.orb_minutes:   size of the opening range in minutes (default 30)
+    cfg.direction:     'up' | 'down' | 'both' (default 'both')
+    cfg.timeframe:     kline TF for ORB bars (default '5m')
+    """
+    session_start = (cond.get("session_start") or "london").lower()
+    orb_minutes   = max(5, int(cond.get("orb_minutes") or 30))
+    direction     = (cond.get("direction") or "both").lower()
+    tf            = cond.get("timeframe", "5m")
+
+    SESSION_UTC = {
+        "london":   (8,  0),
+        "ny":       (13, 30),
+        "asia":     (0,  0),
+        "midnight": (0,  0),
+    }
+    open_h, open_m = SESSION_UTC.get(session_start, (8, 0))
+
+    # TF → minutes
+    TF_MIN = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240}
+    tf_mins = TF_MIN.get(tf, 5)
+    orb_bars = max(1, orb_minutes // tf_mins)
+
+    # Fetch enough history to cover session start + ORB window
+    klines = await _get_klines(symbol, tf, orb_bars + 80, http_client, cache)
+    if not klines or len(klines) < orb_bars + 3:
+        return False, "ORB: insufficient data"
+
+    def _candle_utc(k) -> datetime:
+        ts = int(k[0])
+        return datetime.utcfromtimestamp(ts / 1000 if ts > 1e10 else ts)
+
+    # Find session-open candle
+    open_idx = None
+    for i, k in enumerate(klines):
+        ct = _candle_utc(k)
+        # Match candle at or just after session open
+        if (ct.hour > open_h) or (ct.hour == open_h and ct.minute >= open_m):
+            open_idx = i
+            break
+
+    if open_idx is None:
+        return False, f"ORB: session open ({session_start} {open_h:02d}:{open_m:02d} UTC) not in fetched window"
+
+    # ORB candles = first `orb_bars` after session open
+    orb_end = open_idx + orb_bars
+    if orb_end > len(klines) - 1:
+        return False, f"ORB: opening range still forming ({orb_end - len(klines) + 1} bars remaining)"
+
+    orb_candles = klines[open_idx:orb_end]
+    orb_high = max(_highs(orb_candles))
+    orb_low  = min(_lows(orb_candles))
+
+    broke_up   = current_price > orb_high
+    broke_down = current_price < orb_low
+    fired = (direction == "up"   and broke_up)   or \
+            (direction == "down" and broke_down) or \
+            (direction == "both" and (broke_up or broke_down))
+
+    dir_lbl = ("UP ✓" if broke_up else "DOWN ✓") if (broke_up or broke_down) else "inside range"
+    return fired, (
+        f"ORB ({session_start}, {orb_minutes}min): range {orb_low:.6g}–{orb_high:.6g} "
+        f"price={current_price:.6g} → {dir_lbl}"
+    )
+
+
+async def eval_vwap_cross(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`vwap_cross` — Price crosses the session VWAP.
+
+    Computes VWAP from the start of the current UTC calendar day (midnight)
+    using typical-price × volume.  Fires when the most recent closed candle
+    crossed above (cross_above) or below (cross_below) the VWAP line.
+
+    cfg.direction: 'cross_above' | 'cross_below' (default 'cross_above')
+    cfg.timeframe: kline TF (default '5m')
+    """
+    direction = (cond.get("direction") or "cross_above").lower()
+    tf        = cond.get("timeframe", "5m")
+
+    TF_MIN = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240}
+    tf_mins = TF_MIN.get(tf, 5)
+    # Fetch enough bars to cover one full trading day (1440 min) plus buffer
+    bars_per_day = max(50, 1440 // tf_mins + 20)
+
+    klines = await _get_klines(symbol, tf, bars_per_day, http_client, cache)
+    if not klines or len(klines) < 5:
+        return False, "VWAP Cross: insufficient data"
+
+    # Slice to today's session (UTC midnight onwards)
+    today_utc = datetime.utcnow().date()
+    def _candle_utc(k) -> datetime:
+        ts = int(k[0])
+        return datetime.utcfromtimestamp(ts / 1000 if ts > 1e10 else ts)
+
+    session_klines = [k for k in klines if _candle_utc(k).date() >= today_utc]
+    if len(session_klines) < 3:
+        session_klines = klines[-min(len(klines), 60):]  # fallback: last 60 bars
+
+    # VWAP = Σ(typical_price × volume) / Σ(volume)
+    cum_tpv = 0.0; cum_vol = 0.0
+    for k in session_klines[:-1]:   # exclude forming candle
+        h, l, c, v = float(k[2]), float(k[3]), float(k[4]), float(k[5])
+        tp = (h + l + c) / 3
+        cum_tpv += tp * v
+        cum_vol  += v
+
+    if cum_vol <= 0:
+        return False, "VWAP Cross: zero volume in session"
+
+    vwap = cum_tpv / cum_vol
+
+    # Cross detection: compare last two closed candles to vwap
+    if len(session_klines) < 3:
+        return False, "VWAP Cross: not enough session bars for cross detection"
+
+    prev_close = float(session_klines[-3][4])
+    last_close = float(session_klines[-2][4])
+
+    cross_above = prev_close <= vwap < last_close
+    cross_below = prev_close >= vwap > last_close
+
+    fired = (direction == "cross_above" and cross_above) or \
+            (direction == "cross_below" and cross_below)
+
+    cross_lbl = "crossed ABOVE" if cross_above else ("crossed BELOW" if cross_below else "no cross")
+    return fired, (
+        f"VWAP Cross: VWAP={vwap:.6g} prev={prev_close:.6g} last={last_close:.6g} "
+        f"→ {cross_lbl} ({'✓' if fired else '✗'} for {direction})"
+    )
+
+
 async def evaluate_strategy_conditions(
     strategy_config: Dict,
     symbol: str,
@@ -2722,6 +3029,16 @@ async def evaluate_strategy_conditions(
                 return await eval_fx_equal_hl(cond, symbol, price, http_client, cache)
             elif ctype == "fx_breaker":
                 return await eval_fx_breaker(cond, symbol, price, http_client, cache)
+            elif ctype == "fx_pd_array":
+                return await eval_fx_pd_array(cond, symbol, price, http_client, cache)
+            elif ctype == "fx_judas_swing":
+                return await eval_fx_judas_swing(cond, symbol, price, http_client, cache)
+            elif ctype == "fx_silver_bullet":
+                return eval_fx_silver_bullet(cond)
+            elif ctype == "opening_range_break":
+                return await eval_opening_range_break(cond, symbol, price, http_client, cache)
+            elif ctype == "vwap_cross":
+                return await eval_vwap_cross(cond, symbol, price, http_client, cache)
             # ── Stock-specific blocks ───────────────────────────────────────
             elif ctype == "stock_earnings_avoidance":
                 return await eval_stock_earnings_avoidance(cond, symbol)
