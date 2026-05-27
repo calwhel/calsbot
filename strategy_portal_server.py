@@ -845,6 +845,8 @@ def _ensure_tables():
         "push_notify_paper":      "ALTER TABLE user_preferences ADD COLUMN push_notify_paper BOOLEAN DEFAULT TRUE",
         "push_notify_live":       "ALTER TABLE user_preferences ADD COLUMN push_notify_live BOOLEAN DEFAULT TRUE",
         "push_min_position_usd":  "ALTER TABLE user_preferences ADD COLUMN push_min_position_usd DOUBLE PRECISION DEFAULT 0",
+        "account_balance":        "ALTER TABLE user_preferences ADD COLUMN account_balance DOUBLE PRECISION DEFAULT 10000",
+        "lot_size":               "ALTER TABLE user_preferences ADD COLUMN lot_size DOUBLE PRECISION DEFAULT 0.1",
     }
 
     strategy_cols = {
@@ -8399,6 +8401,9 @@ async def api_get_settings(uid: str = Query(...)):
             "push_notify_paper":        prefs.push_notify_paper        if prefs else True,
             "push_notify_live":         prefs.push_notify_live         if prefs else True,
             "push_min_position_usd":    prefs.push_min_position_usd    if prefs else 0.0,
+            # Trading account settings — pip/dollar P&L display
+            "account_balance":          getattr(prefs, "account_balance", 10000.0) or 10000.0,
+            "lot_size":                 getattr(prefs, "lot_size", 0.1) or 0.1,
             # From StrategyPortalSettings (portal defaults)
             "default_leverage":         portal.default_leverage        if portal else 10,
             "default_position_size":    portal.default_position_size   if portal else 5.0,
@@ -8641,6 +8646,25 @@ async def api_put_settings(request: Request, uid: str = Query(...)):
         # Auto-enable live trading once both keys are present
         if prefs.bitunix_api_key and prefs.bitunix_api_secret:
             prefs.auto_trading_enabled = True
+
+        # Trading account settings — pip/dollar P&L display in mobile app
+        if "account_balance" in body:
+            try:
+                _bal = float(body["account_balance"])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="account_balance must be numeric")
+            if not _math2.isfinite(_bal) or _bal <= 0 or _bal > 100_000_000:
+                raise HTTPException(status_code=400, detail="account_balance must be a positive value up to 100,000,000")
+            prefs.account_balance = _bal
+
+        if "lot_size" in body:
+            try:
+                _ls = float(body["lot_size"])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="lot_size must be numeric")
+            if not _math2.isfinite(_ls) or _ls <= 0 or _ls > 1000:
+                raise HTTPException(status_code=400, detail="lot_size must be between 0 and 1000")
+            prefs.lot_size = _ls
 
         if "accepted_risk_levels" in body:
             val = body["accepted_risk_levels"]

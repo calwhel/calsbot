@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Alert, Linking, Platform, ActivityIndicator, Switch } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Alert, Linking, Platform, ActivityIndicator, Switch, TextInput } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
@@ -273,6 +273,12 @@ export default function SettingsScreen() {
         onClose={() => { setPaywallVisible(false); refreshUser().catch(() => {}); }}
         onFallbackWeb={() => { setPaywallVisible(false); Linking.openURL('https://tradehub.markets/pricing').catch(() => {}); }}
       />
+
+      {/* Trading account — balance + lot size for pip/$ display */}
+      <View style={{ marginTop: spacing.xl }}>
+        <SectionLabel label="Trading account" />
+      </View>
+      <TradingAccountCard uid={uid} />
 
       {/* Push notification preferences */}
       <View style={{ marginTop: spacing.xl }}>
@@ -548,6 +554,200 @@ function PushPrefsCard({ uid }: { uid: string | null | undefined }) {
     </View>
   );
 }
+
+function TradingAccountCard({ uid }: { uid: string | null | undefined }) {
+  const [balance, setBalance] = useState('10000');
+  const [lotSize, setLotSize] = useState(0.1);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const LOT_OPTIONS = [
+    { label: '0.01 micro', value: 0.01 },
+    { label: '0.05',       value: 0.05 },
+    { label: '0.1 mini',   value: 0.1  },
+    { label: '0.5',        value: 0.5  },
+    { label: '1.0 std',    value: 1.0  },
+  ];
+
+  useEffect(() => {
+    if (!uid) return;
+    let cancel = false;
+    (async () => {
+      try {
+        const s = await apiGet<Record<string, any>>('/api/settings', uid);
+        if (cancel) return;
+        const bal = Number(s.account_balance);
+        if (bal > 0) setBalance(bal.toFixed(0));
+        const ls = Number(s.lot_size);
+        if (ls > 0) setLotSize(ls);
+      } catch { }
+      finally { if (!cancel) setLoaded(true); }
+    })();
+    return () => { cancel = true; };
+  }, [uid]);
+
+  const persist = useCallback(async (patch: Record<string, any>) => {
+    if (!uid) return;
+    setSaving(true);
+    try {
+      await apiPut('/api/settings', patch, uid);
+      if (Platform.OS !== 'web') Haptics.selectionAsync().catch(() => {});
+    } catch (e: any) {
+      Alert.alert('Could not save', e?.message || 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  }, [uid]);
+
+  const onBalanceBlur = useCallback(() => {
+    const parsed = parseFloat(balance.replace(/,/g, ''));
+    if (!isNaN(parsed) && parsed > 0) {
+      setBalance(parsed.toFixed(0));
+      persist({ account_balance: parsed });
+    }
+  }, [balance, persist]);
+
+  const onLotPress = useCallback((v: number) => {
+    setLotSize(v);
+    persist({ lot_size: v });
+  }, [persist]);
+
+  if (!loaded) {
+    return (
+      <View style={taStyles.card}>
+        <ActivityIndicator size="small" color={colors.accent} style={{ margin: spacing.lg }} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={taStyles.card}>
+      <View style={taStyles.header}>
+        <View style={[taStyles.iconWrap, { backgroundColor: colors.accentDim, borderColor: 'rgba(255,255,255,0.10)' }]}>
+          <Ionicons name="wallet-outline" size={18} color={colors.accent} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={taStyles.title}>Trading account</Text>
+          <Text style={taStyles.hint}>Sets the $ value shown alongside % P&L on strategy stats.</Text>
+        </View>
+        {saving ? <ActivityIndicator size="small" color={colors.accent} /> : null}
+      </View>
+
+      <View style={taStyles.divider} />
+
+      {/* Account balance */}
+      <View style={taStyles.fieldRow}>
+        <Text style={taStyles.fieldLabel}>Account balance</Text>
+        <View style={taStyles.inputWrap}>
+          <Text style={taStyles.currencySymbol}>$</Text>
+          <TextInput
+            style={taStyles.input}
+            value={balance}
+            onChangeText={setBalance}
+            onBlur={onBalanceBlur}
+            keyboardType="numeric"
+            returnKeyType="done"
+            placeholderTextColor={colors.textMute}
+          />
+        </View>
+      </View>
+
+      <View style={taStyles.divider} />
+
+      {/* Lot size */}
+      <View style={{ paddingHorizontal: spacing.md, paddingBottom: spacing.md }}>
+        <Text style={[taStyles.fieldLabel, { marginBottom: spacing.sm }]}>Default lot size</Text>
+        <View style={taStyles.chipRow}>
+          {LOT_OPTIONS.map((opt) => {
+            const active = Math.abs(opt.value - lotSize) < 0.001;
+            return (
+              <Pressable
+                key={opt.value}
+                onPress={() => onLotPress(opt.value)}
+                style={[taStyles.chip, active && taStyles.chipActive]}
+              >
+                <Text style={[taStyles.chipText, active && taStyles.chipTextActive]}>
+                  {opt.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const taStyles = StyleSheet.create({
+  card: {
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    marginTop: spacing.sm,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    padding: spacing.md,
+  },
+  iconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: { color: colors.text, fontFamily: font.bold, fontSize: 14 },
+  hint:  { color: colors.textDim, fontFamily: font.regular, fontSize: 12, marginTop: 2, lineHeight: 17 },
+  divider: { height: 1, backgroundColor: colors.border },
+  fieldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  fieldLabel: { color: colors.textDim, fontFamily: font.bold, fontSize: 13 },
+  inputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.cardHi,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    minWidth: 110,
+  },
+  currencySymbol: { color: colors.textDim, fontFamily: font.bold, fontSize: 14, marginRight: 4 },
+  input: {
+    color: colors.text,
+    fontFamily: font.bold,
+    fontSize: 14,
+    fontVariant: ['tabular-nums'],
+    flex: 1,
+    minWidth: 80,
+    padding: 0,
+  },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(0,0,0,0.28)',
+  },
+  chipActive: {
+    borderColor: 'rgba(63,182,139,0.50)',
+    backgroundColor: colors.accentDim,
+  },
+  chipText: { color: colors.textDim, fontFamily: font.bold, fontSize: 12, letterSpacing: 0.2 },
+  chipTextActive: { color: colors.accent },
+});
 
 function SettingsLink({
   icon, label, hint, tone = 'accent', onPress,

@@ -168,6 +168,10 @@ class UserPreference(Base):
     push_notify_paper      = Column(Boolean, default=True)
     push_notify_live       = Column(Boolean, default=True)
     push_min_position_usd  = Column(Float,   default=0.0)
+
+    # Trading account settings — used for pip/dollar P&L display in the mobile app.
+    account_balance        = Column(Float, default=10000.0)  # User's paper/live account size in USD
+    lot_size               = Column(Float, default=0.1)      # Default lot size (0.01 micro / 0.1 mini / 1.0 std)
     
     # Partial take profit percentages
     tp1_percent = Column(Integer, default=30)  # % to close at TP1

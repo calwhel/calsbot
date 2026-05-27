@@ -20,6 +20,7 @@ import { GoLiveModal, type GoLiveBroker } from '@/components/GoLiveModal';
 import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, apiPost, type Strategy } from '@/lib/api';
+import { calcPips, calcDollar, fmtPips, fmtDollar, fmtApproxDollar, getPipCfg } from '@/lib/pip';
 
 type TradeRow = {
   id?: number;
@@ -90,6 +91,15 @@ export default function StrategyDetailScreen() {
     queryFn: () => apiGet<TradesResponse>(`/api/strategies/${sid}/trades`, uid, { limit: 30 }),
     enabled: !!uid && !!sid,
   });
+
+  const settingsQ = useQuery({
+    queryKey: ['settings', uid],
+    queryFn: () => apiGet<Record<string, any>>('/api/settings', uid),
+    enabled: !!uid,
+    staleTime: 5 * 60_000,
+  });
+  const accountBalance: number = (settingsQ.data?.account_balance as number) || 10000;
+  const lotSize: number = (settingsQ.data?.lot_size as number) || 0.1;
 
   // Pick the symbol to chart: most-recent traded symbol on this strategy. If
   // the strategy has never fired, fall back to (a) the first symbol in its
@@ -349,6 +359,7 @@ export default function StrategyDetailScreen() {
           <StatCard
             label="Total P&L"
             value={trades > 0 ? fmtPnl(pnl) : '—'}
+            sub={trades > 0 ? fmtApproxDollar(pnl, accountBalance) : undefined}
             tone={pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : 'neutral'}
           />
           <View style={{ width: spacing.md }} />
@@ -358,6 +369,7 @@ export default function StrategyDetailScreen() {
           <StatCard
             label="Best trade"
             value={trades > 0 ? fmtPnl(perf.best_trade ?? 0) : '—'}
+            sub={trades > 0 ? fmtApproxDollar(perf.best_trade ?? 0, accountBalance) : undefined}
             tone="positive"
             compact
           />
@@ -365,6 +377,7 @@ export default function StrategyDetailScreen() {
           <StatCard
             label="Worst trade"
             value={trades > 0 ? fmtPnl(perf.worst_trade ?? 0) : '—'}
+            sub={trades > 0 ? fmtApproxDollar(perf.worst_trade ?? 0, accountBalance) : undefined}
             tone="negative"
             compact
           />
@@ -459,6 +472,28 @@ export default function StrategyDetailScreen() {
                     ]}>
                       {t.outcome === 'OPEN' ? 'OPEN' : fmtPnl(t.pnl_pct)}
                     </Text>
+                    {t.outcome !== 'OPEN' && t.entry_price != null && t.exit_price != null && (
+                      (() => {
+                        const isForexLike = strategyAssetClass === 'forex' || strategyAssetClass === 'index';
+                        if (isForexLike) {
+                          const pips = calcPips(t.symbol, t.entry_price, t.exit_price, t.direction);
+                          const dollars = calcDollar(t.symbol, pips, lotSize);
+                          return (
+                            <Text style={styles.tradeSub}>
+                              {fmtPips(pips)} · {fmtDollar(dollars)}
+                            </Text>
+                          );
+                        }
+                        if (t.pnl_pct != null) {
+                          return (
+                            <Text style={styles.tradeSub}>
+                              {fmtApproxDollar(t.pnl_pct, accountBalance)}
+                            </Text>
+                          );
+                        }
+                        return null;
+                      })()
+                    )}
                     <Text style={styles.tradeOutcome}>{t.outcome}</Text>
                   </View>
                 </View>
@@ -484,6 +519,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
     marginTop: spacing.sm,
+  },
+  tradeSub: {
+    color: colors.textMute,
+    fontFamily: font.regular,
+    fontSize: 10.5,
+    marginTop: 1,
+    textAlign: 'right',
+    fontVariant: ['tabular-nums'],
   },
   statRow: { flexDirection: 'row' },
   sectionHead: {

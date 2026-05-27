@@ -84,6 +84,14 @@ export default function HomeScreen() {
     enabled: !!uid,
   });
 
+  const settingsQ = useQuery({
+    queryKey: ['settings', uid],
+    queryFn: () => apiGet<Record<string, any>>('/api/settings', uid),
+    enabled: !!uid,
+    staleTime: 5 * 60_000,
+  });
+  const accountBalance: number = (settingsQ.data?.account_balance as number) || 10000;
+
   const data = portfolioQ.data;
   const isLoading = portfolioQ.isLoading;
   const isFetching =
@@ -214,7 +222,13 @@ export default function HomeScreen() {
                   label="7-day P&L"
                   value={fmtPnl(data.pnl_7d)}
                   tone={data.pnl_7d > 0 ? 'positive' : data.pnl_7d < 0 ? 'negative' : 'neutral'}
-                  sub={data.pnl_7d > 0 ? 'Up week-on-week' : data.pnl_7d < 0 ? 'Down this week' : 'Flat this week'}
+                  sub={(() => {
+                    const approx = Math.abs((data.pnl_7d / 100) * accountBalance);
+                    const sign = data.pnl_7d > 0 ? '+' : data.pnl_7d < 0 ? '-' : '';
+                    const label = data.pnl_7d > 0 ? 'up' : data.pnl_7d < 0 ? 'down' : 'flat';
+                    if (data.pnl_7d === 0) return 'Flat this week';
+                    return `≈ ${sign}$${approx.toFixed(0)} ${label} this week`;
+                  })()}
                 />
                 <View style={{ width: spacing.md }} />
                 <BentoTile
