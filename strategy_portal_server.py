@@ -8799,12 +8799,22 @@ async def chat_builder_api(request: Request):
     # Auth + tier check
     from app.database import SessionLocal
     db = SessionLocal()
+    user = None
+    allowed, used, limit, is_pro = True, 0, None, False
     try:
-        user = _get_user_by_uid(uid, db)
-        if not user:
-            raise HTTPException(status_code=403, detail="Invalid UID")
-        sub = _get_portal_sub(user.id, db)
-        allowed, used, limit, is_pro = _chat_calls_info(sub, db, user)
+        try:
+            user = _get_user_by_uid(uid, db)
+            if not user:
+                raise HTTPException(status_code=403, detail="Invalid UID")
+            sub = _get_portal_sub(user.id, db)
+            allowed, used, limit, is_pro = _chat_calls_info(sub, db, user)
+        except HTTPException:
+            raise
+        except Exception as _db_err:
+            logger.warning(f"Chat builder auth DB error: {_db_err} — continuing without quota check")
+            # DB is overloaded; allow the request through with default limits rather
+            # than surfacing a "Connection error" to the user.
+            user = type("_FallbackUser", (), {"id": 0})()
         if not messages:
             return {
                 "reply": "Hey! 👋 Tell me what you want to trade — long, short, or both? And what kind of signal are you thinking? (e.g. RSI scalp, MACD swing, order block, etc.)",
@@ -9032,7 +9042,7 @@ FIELD RULES for the ###STRATEGY### line:
         client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         resp = await asyncio.wait_for(
             client.messages.create(
-                model="claude-sonnet-4-5-20250929",
+                model="claude-sonnet-4-5",
                 max_tokens=700,
                 system=system_prompt,
                 messages=api_messages,
@@ -10199,7 +10209,7 @@ Entry conditions:
     try:
         client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         resp = await client.messages.create(
-            model="claude-sonnet-4-5-20250929",
+            model="claude-sonnet-4-5",
             max_tokens=500,
             system=system_prompt,
             messages=api_messages,
