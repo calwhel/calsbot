@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
   RefreshControl, useWindowDimensions, Alert,
+  TextInput, TouchableOpacity,
 } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -20,7 +21,7 @@ import { GoLiveModal, type GoLiveBroker } from '@/components/GoLiveModal';
 import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, apiPost, type Strategy } from '@/lib/api';
-import { calcPips, calcDollar, fmtPips, fmtDollar, fmtApproxDollar, getPipCfg } from '@/lib/pip';
+import { calcPips, calcDollar, calcLotFromRisk, fmtPips, fmtDollar, fmtApproxDollar, getPipCfg } from '@/lib/pip';
 
 type TradeRow = {
   id?: number;
@@ -215,6 +216,27 @@ export default function StrategyDetailScreen() {
     });
   }, [tradesQ.data]);
 
+  const pipEquityValues = useMemo(() => {
+    const cfg = (strategy?.config || {}) as Record<string, any>;
+    const ac = cfg._asset_class || cfg.asset_class || (strategy as any)?.asset_class;
+    if (ac !== 'forex' && ac !== 'index') return [];
+    const trades = tradesQ.data?.trades || [];
+    const closed = [...trades]
+      .filter(
+        (t) =>
+          t.outcome &&
+          t.outcome !== 'OPEN' &&
+          t.entry_price != null &&
+          t.exit_price != null,
+      )
+      .reverse();
+    let cum = 0;
+    return closed.map((t) => {
+      cum += calcPips(t.symbol, t.entry_price!, t.exit_price!, t.direction);
+      return Math.round(cum * 10) / 10;
+    });
+  }, [tradesQ.data, strategy]);
+
   const onRefresh = useCallback(() => {
     listQ.refetch();
     tradesQ.refetch();
@@ -251,12 +273,24 @@ export default function StrategyDetailScreen() {
   const isActive = strategy.status === 'active';
 
   const [goLiveOpen, setGoLiveOpen] = useState(false);
+  const [riskPct, setRiskPct] = useState(1);
+  const [slPipsInput, setSlPipsInput] = useState('20');
+
   // Mobile wizard saves _asset_class; web portal saves asset_class — check both
   const _cfg = strategy.config as Record<string, any> | undefined;
   const strategyAssetClass = (_cfg?._asset_class || _cfg?.asset_class || (strategy as any).asset_class) as string | undefined;
-  const goLiveBroker: GoLiveBroker =
-    strategyAssetClass === 'forex' || strategyAssetClass === 'index' ? 'ctrader' : 'bitunix';
+  const isForexLike = strategyAssetClass === 'forex' || strategyAssetClass === 'index';
+  const goLiveBroker: GoLiveBroker = isForexLike ? 'ctrader' : 'bitunix';
   const isPaper = (strategy.config as Record<string, any>)?._build_mode === 'paper';
+
+  // Pip calculator derived values
+  const slPipsNum = Math.max(1, parseFloat(slPipsInput) || 20);
+  const recommendedLot = isForexLike
+    ? calcLotFromRisk(chartSymbol, accountBalance, riskPct, slPipsNum)
+    : 0;
+  const dollarRisk = accountBalance * (riskPct / 100);
+  const { valuePerLot } = getPipCfg(chartSymbol);
+  const pipValueAtLot = recommendedLot * valuePerLot;
 
   return (
     <>
@@ -392,6 +426,73 @@ export default function StrategyDetailScreen() {
           />
         </View>
 
+        {/* Pip position size calculator — forex/index strategies only */}
+        {isForexLike && (
+          <View style={[styles.calcCard, { marginTop: spacing.lg }]}>
+            <Text style={styles.calcTitle}>Position sizing</Text>
+            <Text style={styles.calcSub}>Based on your ${accountBalance.toLocaleString()} account</Text>
+
+            {/* Risk % chips */}
+            <View style={styles.calcRow}>
+              <Text style={styles.calcLabel}>Risk per trade</Text>
+              <View style={styles.chipRow}>
+                {([0.5, 1, 2, 3] as const).map((pct) => (
+                  <TouchableOpacity
+                    key={pct}
+                    onPress={() => setRiskPct(pct)}
+                    style={[styles.chip, riskPct === pct && styles.chipActive]}
+                  >
+                    <Text style={[styles.chipText, riskPct === pct && styles.chipTextActive]}>
+                      {pct}%
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            {/* SL pips input */}
+            <View style={styles.calcRow}>
+              <Text style={styles.calcLabel}>Stop loss (pips)</Text>
+              <View style={styles.slRow}>
+                <TouchableOpacity
+                  style={styles.slBtn}
+                  onPress={() => setSlPipsInput(String(Math.max(1, slPipsNum - 5)))}
+                >
+                  <Text style={styles.slBtnText}>−</Text>
+                </TouchableOpacity>
+                <TextInput
+                  style={styles.slInput}
+                  value={slPipsInput}
+                  onChangeText={setSlPipsInput}
+                  keyboardType="numeric"
+                  returnKeyType="done"
+                  selectTextOnFocus
+                />
+                <TouchableOpacity
+                  style={styles.slBtn}
+                  onPress={() => setSlPipsInput(String(slPipsNum + 5))}
+                >
+                  <Text style={styles.slBtnText}>+</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Result */}
+            <View style={styles.calcResult}>
+              <View>
+                <Text style={styles.calcLotValue}>{recommendedLot.toFixed(2)} lots</Text>
+                <Text style={styles.calcLotSub}>
+                  ${dollarRisk.toFixed(0)} at risk · ${pipValueAtLot.toFixed(2)}/pip
+                </Text>
+              </View>
+              <View style={styles.calcResultRight}>
+                <Text style={styles.calcPipLabel}>pip value</Text>
+                <Text style={styles.calcPipValue}>${pipValueAtLot.toFixed(2)}</Text>
+              </View>
+            </View>
+          </View>
+        )}
+
         {/* Price action (candles + entry/exit markers if any). Always shown —
             even before the strategy has fired — so users get market context. */}
         <View style={{ marginTop: spacing.lg }}>
@@ -424,9 +525,33 @@ export default function StrategyDetailScreen() {
 
         {/* Equity curve */}
         <View style={{ marginTop: spacing.lg }}>
-          <Text style={styles.sectionLabel}>Equity curve</Text>
+          <Text style={styles.sectionLabel}>Equity curve · %</Text>
           <EquityCurve values={equityValues} width={chartW} height={160} />
         </View>
+
+        {/* Pip equity curve — forex/index strategies only */}
+        {isForexLike && (
+          <View style={{ marginTop: spacing.lg }}>
+            <View style={styles.sectionHead}>
+              <Text style={styles.sectionLabel}>Pip curve</Text>
+              {pipEquityValues.length >= 2 && (
+                <Text style={[
+                  styles.sectionHint,
+                  { color: pipEquityValues[pipEquityValues.length - 1] >= 0 ? colors.positive : colors.negative },
+                ]}>
+                  {pipEquityValues[pipEquityValues.length - 1] >= 0 ? '+' : ''}
+                  {pipEquityValues[pipEquityValues.length - 1].toFixed(1)} pips total
+                </Text>
+              )}
+            </View>
+            <EquityCurve
+              values={pipEquityValues}
+              width={chartW}
+              height={130}
+              title="Not enough closed trades for a pip curve yet."
+            />
+          </View>
+        )}
 
         {/* How automation works — educational explainer */}
         <View style={{ marginTop: spacing.lg }}>
@@ -594,5 +719,135 @@ const styles = StyleSheet.create({
   tradeOutcome: {
     color: colors.textMute, fontFamily: font.bold, fontSize: 10,
     letterSpacing: 0.5, marginTop: 2,
+  },
+
+  // Pip calculator card
+  calcCard: {
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+  },
+  calcTitle: {
+    color: colors.text,
+    fontFamily: font.bold,
+    fontSize: 15,
+    letterSpacing: -0.2,
+  },
+  calcSub: {
+    color: colors.textMute,
+    fontFamily: font.regular,
+    fontSize: 12,
+    marginTop: 2,
+    marginBottom: spacing.md,
+  },
+  calcRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.md,
+  },
+  calcLabel: {
+    color: colors.textDim,
+    fontFamily: font.regular,
+    fontSize: 13,
+    flex: 1,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.cardHi,
+  },
+  chipActive: {
+    backgroundColor: colors.positive,
+    borderColor: colors.positive,
+  },
+  chipText: {
+    color: colors.textDim,
+    fontFamily: font.bold,
+    fontSize: 12,
+  },
+  chipTextActive: {
+    color: '#000',
+  },
+  slRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  slBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: radius.md,
+    backgroundColor: colors.cardHi,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  slBtnText: {
+    color: colors.text,
+    fontFamily: font.bold,
+    fontSize: 16,
+    lineHeight: 20,
+  },
+  slInput: {
+    width: 56,
+    height: 30,
+    backgroundColor: colors.bg,
+    borderWidth: 1,
+    borderColor: colors.borderHi,
+    borderRadius: radius.md,
+    color: colors.text,
+    fontFamily: font.bold,
+    fontSize: 14,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+  },
+  calcResult: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.lg,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
+  calcLotValue: {
+    color: colors.text,
+    fontFamily: font.black,
+    fontSize: 24,
+    letterSpacing: -0.5,
+    fontVariant: ['tabular-nums'],
+  },
+  calcLotSub: {
+    color: colors.textMute,
+    fontFamily: font.regular,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  calcResultRight: {
+    alignItems: 'flex-end',
+  },
+  calcPipLabel: {
+    color: colors.textMute,
+    fontFamily: font.regular,
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  calcPipValue: {
+    color: colors.textDim,
+    fontFamily: font.bold,
+    fontSize: 18,
+    fontVariant: ['tabular-nums'],
   },
 });
