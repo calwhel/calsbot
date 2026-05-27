@@ -6335,7 +6335,13 @@ _SIGNAL_LABELS = {
 async def _run_forex_scanner() -> list:
     """
     Scan all forex pairs for BOS/CHoCH/FVG/OB signals.
-    Results are cached per (pair, tf, signal) for _FOREX_SCANNER_TTL seconds.
+
+    Grouped by (pair, timeframe) so klines are fetched ONCE per pair+TF and
+    shared across all 8 signal evaluators.  Without sharing, each evaluator
+    would independently re-fetch the same kline window from yfinance — 8×
+    more API calls than necessary.
+
+    Results cached per (pair, tf, signal_key) for _FOREX_SCANNER_TTL seconds.
     """
     import httpx as _httpx
     from app.services.strategy_ta import eval_market_structure, eval_fvg, eval_order_block
@@ -6343,74 +6349,119 @@ async def _run_forex_scanner() -> list:
     import asyncio, time
 
     now = time.monotonic()
-    results = []
-    sem = asyncio.Semaphore(4)
+    # Semaphore: limit concurrent (pair, tf) group scans
+    sem = asyncio.Semaphore(3)
 
-    async def _scan_one(pair, tf, sig_type, sub):
-        cache_key = f"{pair}|{tf}|{sig_type}|{sub}"
-        cached = _FOREX_SCANNER_CACHE.get(cache_key)
-        if cached and cached[1] > now:
-            return cached[0]
+    async def _scan_pair_tf(pair, tf):
+        """
+        Scan all signals for one (pair, timeframe) combination.
+        A single shared_cache dict is passed to every evaluator so the kline
+        fetch for that symbol+interval is done only once.
+        """
+        # Check if ALL signals for this pair+tf are still fresh in the cache
+        all_keys = [f"{pair}|{tf}|{st}|{sub}" for st, sub in _SCANNER_SIGNALS]
+        fresh = [_FOREX_SCANNER_CACHE.get(k) for k in all_keys]
+        if all(f and f[1] > now for f in fresh):
+            return [f[0] for f in fresh if f and f[0]]
 
+        entries = []
         try:
             async with sem:
                 price = await asyncio.wait_for(_tradfi_price(pair, "forex"), timeout=8)
                 if not price:
-                    return None
+                    return []
+
+                # ONE shared cache dict — klines fetched once, reused by all evals
                 shared_cache = {"_asset_class": "forex"}
-                async with _httpx.AsyncClient(timeout=10) as _http:
-                    if sig_type == "market_structure":
-                        ok, msg = await asyncio.wait_for(
-                            eval_market_structure({"condition": sub, "timeframe": tf}, pair, price, _http, shared_cache),
-                            timeout=12,
-                        )
-                    elif sig_type == "fvg":
-                        ok, msg = await asyncio.wait_for(
-                            eval_fvg({"direction": sub, "timeframe": tf, "sub": "just_formed"}, pair, price, _http, shared_cache),
-                            timeout=12,
-                        )
-                    elif sig_type == "order_block":
-                        ok, msg = await asyncio.wait_for(
-                            eval_order_block({"ob_type": sub, "timeframe": tf}, pair, price, _http, shared_cache),
-                            timeout=12,
-                        )
-                    else:
-                        return None
+                async with _httpx.AsyncClient(timeout=12) as _http:
+                    for sig_type, sub in _SCANNER_SIGNALS:
+                        cache_key = f"{pair}|{tf}|{sig_type}|{sub}"
+                        cached = _FOREX_SCANNER_CACHE.get(cache_key)
+                        if cached and cached[1] > now:
+                            if cached[0]:
+                                entries.append(cached[0])
+                            continue
 
-                entry = None
-                if ok:
-                    label, direction, desc = _SIGNAL_LABELS.get(sub, ("Signal", "LONG", sub))
-                    if sig_type == "fvg":
-                        label = "FVG"
-                        desc = f"{'Bullish' if sub=='bullish' else 'Bearish'} Fair Value Gap (just formed)"
-                    elif sig_type == "order_block":
-                        label = "OB"
-                        desc = f"{'Bullish' if sub=='bullish' else 'Bearish'} Order Block touch"
-                    entry = {
-                        "pair":      pair,
-                        "timeframe": tf,
-                        "signal":    label,
-                        "direction": direction,
-                        "desc":      desc,
-                        "price":     round(price, 6),
-                        "detail":    msg,
-                        "sig_key":   f"{sig_type}:{sub}",
-                    }
+                        entry = None
+                        try:
+                            if sig_type == "market_structure":
+                                ok, msg = await asyncio.wait_for(
+                                    eval_market_structure(
+                                        {"condition": sub, "timeframe": tf},
+                                        pair, price, _http, shared_cache,
+                                    ),
+                                    timeout=15,
+                                )
+                            elif sig_type == "fvg":
+                                ok, msg = await asyncio.wait_for(
+                                    eval_fvg(
+                                        {"direction": sub, "timeframe": tf, "sub": "just_formed"},
+                                        pair, price, _http, shared_cache,
+                                    ),
+                                    timeout=15,
+                                )
+                            elif sig_type == "order_block":
+                                ok, msg = await asyncio.wait_for(
+                                    eval_order_block(
+                                        {"ob_type": sub, "timeframe": tf},
+                                        pair, price, _http, shared_cache,
+                                    ),
+                                    timeout=15,
+                                )
+                            else:
+                                continue
 
-                _FOREX_SCANNER_CACHE[cache_key] = (entry, now + _FOREX_SCANNER_TTL)
-                return entry
+                            if ok:
+                                label, direction, desc = _SIGNAL_LABELS.get(
+                                    sub, ("Signal", "LONG", sub)
+                                )
+                                if sig_type == "fvg":
+                                    label = "FVG"
+                                    desc = (
+                                        f"{'Bullish' if sub == 'bullish' else 'Bearish'}"
+                                        " Fair Value Gap (just formed)"
+                                    )
+                                elif sig_type == "order_block":
+                                    label = "OB"
+                                    desc = (
+                                        f"{'Bullish' if sub == 'bullish' else 'Bearish'}"
+                                        " Order Block touch"
+                                    )
+                                entry = {
+                                    "pair":      pair,
+                                    "timeframe": tf,
+                                    "signal":    label,
+                                    "direction": direction,
+                                    "desc":      desc,
+                                    "price":     round(price, 6),
+                                    "detail":    msg,
+                                    "sig_key":   f"{sig_type}:{sub}",
+                                }
+                                entries.append(entry)
+
+                        except Exception as _se:
+                            logger.debug(f"Scanner {pair}/{tf}/{sig_type}/{sub}: {_se}")
+
+                        _FOREX_SCANNER_CACHE[cache_key] = (entry, now + _FOREX_SCANNER_TTL)
+
         except Exception as _e:
-            logger.debug(f"Forex scanner {pair}/{tf}/{sig_type}/{sub}: {_e}")
-            return None
+            logger.debug(f"Scanner pair+tf {pair}/{tf}: {_e}")
 
+        return entries
+
+    # One task per (pair, tf) — klines shared within each task
     tasks = [
-        _scan_one(pair, tf, sig_type, sub)
+        _scan_pair_tf(pair, tf)
         for pair in _SCANNER_PAIRS
         for tf in _SCANNER_TIMEFRAMES
-        for sig_type, sub in _SCANNER_SIGNALS
     ]
     raw = await asyncio.gather(*tasks, return_exceptions=True)
-    results = [r for r in raw if r and not isinstance(r, Exception)]
+    results = [
+        entry
+        for batch in raw
+        if isinstance(batch, list)
+        for entry in batch
+    ]
 
     # Sort: CHoCH first (highest alpha), then BOS, then FVG, then OB
     _rank = {"CHoCH": 0, "BOS": 1, "FVG": 2, "OB": 3}

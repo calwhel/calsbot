@@ -30,6 +30,11 @@ from app.services.asset_classes import (
 
 logger = logging.getLogger(__name__)
 
+# yfinance logs at ERROR level for every missing ticker / temporarily-delisted
+# symbol even though we already handle the None return gracefully.  Suppress
+# to CRITICAL so these don't flood production logs.
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
 _PRICE_CACHE: Dict[str, Tuple[float, datetime]] = {}
 _PRICE_TTL = timedelta(seconds=20)
 

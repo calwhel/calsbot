@@ -3623,6 +3623,9 @@ async def run_forex_executor():
                 # No MEXC ticker prefetch — forex uses yfinance; pass empty list.
                 cycle_gate_stats: Dict[str, int] = {}
 
+                # Shared counters for cycle-level DB health reporting.
+                _cycle_db_skipped: list = []   # (strategy_id, err_name) tuples
+
                 async def _run_one_fx(snap, _http=http_client):
                     from sqlalchemy.exc import OperationalError as _SAOperationalError
                     async with sem:
@@ -3668,9 +3671,10 @@ async def run_forex_executor():
                             except _SAOperationalError as _db_err:
                                 _err_name = type(_db_err.orig).__name__ if getattr(_db_err, "orig", None) else type(_db_err).__name__
                                 if _attempt == 1:
-                                    logger.warning(
-                                        f"[FX Strategy {snap['id']}] Transient DB error "
-                                        f"({_err_name}) — retrying with fresh session"
+                                    # Quiet retry — cycle summary logged after gather
+                                    logger.debug(
+                                        f"[FX Strategy {snap['id']}] DB error "
+                                        f"({_err_name}) — retrying"
                                     )
                                     try:
                                         db_one.rollback()
@@ -3678,9 +3682,11 @@ async def run_forex_executor():
                                         pass
                                     continue
                                 else:
-                                    logger.warning(
-                                        f"[FX Strategy {snap['id']}] Skipping cycle — "
-                                        f"DB error persisted after retry ({_err_name})"
+                                    # Both attempts failed — record for cycle summary
+                                    _cycle_db_skipped.append((snap["id"], _err_name))
+                                    logger.debug(
+                                        f"[FX Strategy {snap['id']}] Skipping — "
+                                        f"DB error persisted ({_err_name})"
                                     )
                                     return
                             except Exception as e:
@@ -3695,6 +3701,16 @@ async def run_forex_executor():
                                     pass
 
                 await asyncio.gather(*[_run_one_fx(s) for s in eval_snapshots])
+
+                # Emit one consolidated warning per cycle instead of per-strategy spam
+                if _cycle_db_skipped:
+                    _total = len(eval_snapshots)
+                    _skipped = len(_cycle_db_skipped)
+                    _err_types = ", ".join(sorted({e for _, e in _cycle_db_skipped}))
+                    logger.warning(
+                        f"[FX Executor] DB unreachable — skipped {_skipped}/{_total} "
+                        f"strategies this cycle ({_err_types}). Will retry next cycle."
+                    )
 
                 if cycle_gate_stats:
                     _gate_summary = " ".join(
