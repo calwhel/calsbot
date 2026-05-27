@@ -950,6 +950,9 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 .risk-chip.MEDIUM.active { background: rgba(245,158,11,.1); border-color: rgba(245,158,11,.3); color: var(--yellow); }
 .risk-chip.HIGH.active   { background: rgba(239,68,68,.1);  border-color: rgba(239,68,68,.3);  color: var(--red); }
 .risk-chip:hover:not(.active) { border-color: var(--border2); color: var(--text); }
+.lot-chip { padding: 5px 13px; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--muted); transition: all .12s; font-family: var(--font); }
+.lot-chip.active { background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.4); color: #f59e0b; }
+.lot-chip:hover:not(.active) { border-color: var(--border2); color: var(--text); }
 
 /* ─── Settings ────────────────────────────────────────────────── */
 .settings-wrap { max-width: 760px; }
@@ -2740,6 +2743,35 @@ function dismissTgBanner(){
       </div>
     </div>
 
+    <!-- Paper Trading Account -->
+    <div class="settings-section">
+      <div class="settings-section-title"><div class="sc-icon" style="background:rgba(251,191,36,.15);color:#f59e0b">🧪</div>Paper Trading Account</div>
+      <div class="hint" style="margin-bottom:16px">Set your simulated starting balance and default lot size. These are used to calculate pip values and approximate dollar P&amp;L on forex &amp; index strategies.</div>
+      <div class="form-group" style="margin-bottom:12px">
+        <label>Paper Balance (USD)</label>
+        <div style="display:flex;align-items:center;background:var(--surface2);border:1px solid var(--border);border-radius:6px;overflow:hidden">
+          <span style="padding:0 10px;font-size:13px;color:var(--text-muted);font-weight:600">$</span>
+          <input id="set-paper-balance" type="number" min="100" max="10000000" step="100"
+            placeholder="10000"
+            style="flex:1;background:transparent;border:none;outline:none;padding:10px 0;font-size:14px;font-weight:600;color:var(--text)">
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:4px">
+        <label>Default Lot Size</label>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="lot-chip-row">
+          <button class="chip lot-chip" data-lot="0.01" onclick="setLotChip(0.01)">0.01 micro</button>
+          <button class="chip lot-chip" data-lot="0.05" onclick="setLotChip(0.05)">0.05</button>
+          <button class="chip lot-chip" data-lot="0.1"  onclick="setLotChip(0.1)">0.1 mini</button>
+          <button class="chip lot-chip" data-lot="0.2"  onclick="setLotChip(0.2)">0.2</button>
+          <button class="chip lot-chip" data-lot="0.5"  onclick="setLotChip(0.5)">0.5</button>
+          <button class="chip lot-chip" data-lot="1.0"  onclick="setLotChip(1.0)">1.0 standard</button>
+        </div>
+      </div>
+      <div class="hint" style="margin-bottom:12px">1 standard lot = 100,000 units. XAUUSD pip ≈ $1 per micro lot.</div>
+      <button class="btn ghost sm" onclick="savePaperAccount()">Save</button>
+      <span id="paper-acct-saved" style="font-size:12px;color:var(--green);margin-left:10px;opacity:0;transition:opacity .4s">Saved ✓</span>
+    </div>
+
     <!-- Notifications -->
     <div class="settings-section">
       <div class="settings-section-title"><div class="sc-icon">🔔</div>Notifications</div>
@@ -3746,7 +3778,7 @@ async function loadMyStrategies(){
         ${s.status==='active'
           ?`<button class="btn success sm" onclick="toggleStrat(${s.id})">Pause</button>`
           :s.status==='paper'
-          ?`<button class="btn paper-btn sm" onclick="toggleStrat(${s.id})">Running</button><button class="btn sm" onclick="promoteToLive(${s.id})" style="color:var(--green);border-color:rgba(34,197,94,.3)">Go Live</button>`
+          ?`<button class="btn paper-btn sm" onclick="toggleStrat(${s.id})">Running</button><button class="btn sm" onclick="promoteToLive(${s.id},'${assetClass}')" style="color:var(--green);border-color:rgba(34,197,94,.3)">Go Live</button>`
           :`<button class="btn sm" onclick="toggleStrat(${s.id})" style="color:var(--green);border-color:rgba(34,197,94,.3)">Activate</button>`}
         ${isLocked?'':`<button class="btn sm ghost" onclick="shareToMarket(${s.id},'${encodeURIComponent(s.name)}')">Publish</button>`}
         ${window._portalIsPro?`<button class="btn sm" onclick="openAdvisor(${s.id},'${encodeURIComponent(s.name)}')" style="color:var(--accent);border-color:rgba(59,91,219,.3)">Ask AI</button>`:`<button class="btn sm ghost" onclick="showModal('modal-upgrade')" title="Pro feature" style="opacity:.55">Ask AI ✦</button>`}
@@ -3776,9 +3808,39 @@ function showConfirm(title, msg, okLabel, okClass, onOk){
 
 let _goLiveStratId = null;
 
-async function promoteToLive(id){
+async function promoteToLive(id, assetClass){
   if(!IS_PRO){showModal('modal-upgrade');return;}
   _goLiveStratId = id;
+  const isFxLike = assetClass === 'forex' || assetClass === 'index';
+
+  if(isFxLike){
+    // Forex/index → need cTrader connection, not Bitunix UID
+    let connected = false;
+    try{
+      const r = await fetch(`/api/ctrader/status?uid=${UID}`);
+      if(r.ok){ const d=await r.json(); connected = !!d.connected; }
+    }catch(_){}
+
+    if(connected){
+      // cTrader already connected — promote directly
+      const r = await fetch(`/api/strategies/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,status:'active'})});
+      const d = await r.json();
+      if(r.ok && d.success){ toast('Strategy is now live on cTrader ⚡','success'); loadMyStrategies(); }
+      else toast(d.detail||d.message||'Failed to go live','error');
+    } else {
+      // Not connected — send them to settings to connect cTrader
+      showConfirm(
+        'Connect cTrader First',
+        'Forex &amp; index strategies execute via <strong>FP Markets cTrader</strong>.<br><br>Go to <strong>Settings → Forex Trading</strong> and click <em>Connect via cTrader OAuth</em>, then try Go Live again.',
+        'Open Settings',
+        'background:var(--accent);color:#fff;border:none',
+        ()=>showPage('settings')
+      );
+    }
+    return;
+  }
+
+  // Crypto → Bitunix UID modal
   document.getElementById('golive-bitunix-uid').value = '';
   document.getElementById('golive-uid-err').textContent = '';
   document.getElementById('modal-golive').classList.add('open');
@@ -6691,6 +6753,15 @@ async function loadSettings(){
   acceptedRisks=active;
   document.querySelectorAll('.risk-chip').forEach(c=>c.classList.toggle('active',active.has(c.dataset.risk)));
 
+  // Paper trading account
+  if(s.account_balance) $('set-paper-balance').value = s.account_balance;
+  const savedLot = s.lot_size || 0.1;
+  document.querySelectorAll('.lot-chip').forEach(c=>{
+    const v = parseFloat(c.dataset.lot);
+    c.classList.toggle('active', Math.abs(v - savedLot) < 0.0001);
+  });
+  window._paperLotSize = savedLot;
+
   // Cache keys state globally for use in subscribe modal
   window._bitunixKeysSet = !!s.bitunix_keys_set;
 
@@ -6880,6 +6951,28 @@ async function saveSettings(){
     // Clear key fields then reload to show connection badge
     $('set-api-key').value='';$('set-api-secret').value='';
     loadSettings();
+  } else {
+    toast('Save failed','error');
+  }
+}
+
+function setLotChip(val){
+  window._paperLotSize = val;
+  document.querySelectorAll('.lot-chip').forEach(c=>{
+    c.classList.toggle('active', Math.abs(parseFloat(c.dataset.lot) - val) < 0.0001);
+  });
+}
+
+async function savePaperAccount(){
+  const bal = parseFloat($('set-paper-balance').value) || 10000;
+  const lot = window._paperLotSize || 0.1;
+  const r = await fetch(`/api/settings?uid=${UID}`,{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({account_balance: bal, lot_size: lot})});
+  const d = await r.json();
+  if(d.success){
+    const el = $('paper-acct-saved');
+    el.style.opacity = '1';
+    setTimeout(()=>{ el.style.opacity='0'; }, 2000);
   } else {
     toast('Save failed','error');
   }

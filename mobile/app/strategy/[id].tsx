@@ -251,7 +251,9 @@ export default function StrategyDetailScreen() {
   const isActive = strategy.status === 'active';
 
   const [goLiveOpen, setGoLiveOpen] = useState(false);
-  const strategyAssetClass = (strategy.config as Record<string, any>)?._asset_class as string | undefined;
+  // Mobile wizard saves _asset_class; web portal saves asset_class — check both
+  const _cfg = strategy.config as Record<string, any> | undefined;
+  const strategyAssetClass = (_cfg?._asset_class || _cfg?.asset_class || (strategy as any).asset_class) as string | undefined;
   const goLiveBroker: GoLiveBroker =
     strategyAssetClass === 'forex' || strategyAssetClass === 'index' ? 'ctrader' : 'bitunix';
   const isPaper = (strategy.config as Record<string, any>)?._build_mode === 'paper';
