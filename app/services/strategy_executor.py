@@ -2043,7 +2043,9 @@ async def evaluate_and_fire(
         normalize_asset_class, is_market_open, PAPER_ONLY_CLASSES,
     )
     _col_ac  = getattr(strategy, "asset_class", None) or ""
-    _cfg_ac  = config.get("asset_class") or ""
+    # Mobile wizard saves asset_class as "_asset_class"; web portal uses "asset_class".
+    # Check both so mobile-built forex/index strategies aren't silently treated as crypto.
+    _cfg_ac  = config.get("asset_class") or config.get("_asset_class") or ""
     # If the DB column says 'crypto' but the config explicitly says something
     # else (e.g. 'forex'), trust the config — the column may have been set by
     # the DEFAULT before the backfill migration ran.
@@ -3172,11 +3174,16 @@ async def _propagate_to_subscribers(
 # ─── Asset-class helper (shared by both executor loops) ──────────────────────
 
 def _snap_asset_class(snap: dict) -> str:
-    """Return the normalised asset_class for a strategy snapshot dict."""
+    """Return the normalised asset_class for a strategy snapshot dict.
+    Mobile wizard saves asset_class as '_asset_class' in config; web portal
+    uses 'asset_class'. Both are checked so mobile-built forex/index strategies
+    are routed to the correct executor."""
     _obj = snap.get("_obj")
+    _cfg = snap.get("config") or {}
     return (
         (getattr(_obj, "asset_class", None) or "").strip()
-        or (snap.get("config") or {}).get("asset_class")
+        or _cfg.get("asset_class")
+        or _cfg.get("_asset_class")
         or "crypto"
     )
 
@@ -3228,7 +3235,9 @@ async def run_session_alert_loop():
 
                 for strat in strategies:
                     cfg = strat.config or {}
-                    if cfg.get("asset_class") not in ("forex",):
+                    # Mobile wizard saves "_asset_class"; web portal saves "asset_class" — check both
+                    _strat_ac = cfg.get("asset_class") or cfg.get("_asset_class") or ""
+                    if _strat_ac not in ("forex",):
                         continue
 
                     filters         = cfg.get("filters", {})
@@ -3249,6 +3258,7 @@ async def run_session_alert_loop():
                             continue
                         _SESSION_ALERT_SENT.add(alert_key)
 
+                        # Push notification (mobile)
                         from app.services.expo_push import notify_session_alert_bg
                         notify_session_alert_bg(
                             strat.user_id,
@@ -3258,6 +3268,24 @@ async def run_session_alert_loop():
                             pair_str,
                             strategy_id=strat.id,
                         )
+
+                        # Telegram DM — fetch user and send if they have a telegram_id
+                        try:
+                            from app.models import User as _AlertUser
+                            _alert_user = db.query(_AlertUser).filter(
+                                _AlertUser.id == strat.user_id
+                            ).first()
+                            _tg_alert_id = _telegram_int_id(_alert_user) if _alert_user else None
+                            if _tg_alert_id:
+                                asyncio.create_task(_tg_send(
+                                    _tg_alert_id,
+                                    f"⏰ <b>{label}</b> opens in {mins_left} min\n"
+                                    f"📊 <b>{strat.name}</b> is active on {pair_str}\n"
+                                    f"<i>Your strategy is live and watching for entries.</i>",
+                                ))
+                        except Exception as _tg_err:
+                            logger.debug("Session alert Telegram DM failed: %s", _tg_err)
+
                         logger.debug(
                             "Session alert → user=%s strat=%s session=%s",
                             strat.user_id, strat.id, sess_id,
