@@ -3180,6 +3180,12 @@ async def evaluate_strategy_conditions(
                 return eval_support_resistance(cond, enhanced_ta, price)
             elif ctype == "fvg":
                 return await eval_fvg(cond, symbol, price, http_client, cache)
+            elif ctype == "ifvg":
+                # Inverse FVG — price re-enters a mitigated gap.
+                # Shares the same evaluator as FVG; the config supplies
+                # condition='price_in_gap' and only_unfilled=False by default,
+                # which naturally selects already-filled (mitigated) gaps.
+                return await eval_fvg(cond, symbol, price, http_client, cache)
             elif ctype == "candlestick":
                 return await eval_candlestick(cond, symbol, http_client, cache)
             elif ctype == "consecutive_candles":

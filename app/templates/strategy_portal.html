@@ -4744,19 +4744,21 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('breakout_above','Breakout Above',`${pfx}condition`,cfg.condition,'green')}
         ${wzChip('breakout_below','Breakdown Below',`${pfx}condition`,cfg.condition,'red')}
       </div>`;
+    case 'ifvg':
     case 'fvg':return`${tf}
-      <div class="opt-label">Gap Direction</div>
+      <div class="opt-label">${type==='ifvg'?'IFVG Direction (mitigated gap to re-enter)':'Gap Direction'}</div>
       <div class="opt-chips">
-        ${wzChip('bullish','Bullish FVG (unfilled gap up — long)',`${pfx}fvg_dir`,cfg.fvg_dir||'bullish','green')}
-        ${wzChip('bearish','Bearish FVG (unfilled gap down — short)',`${pfx}fvg_dir`,cfg.fvg_dir||'bullish','red')}
+        ${wzChip('bullish',type==='ifvg'?'Bullish IFVG (re-enters mitigated gap up)':'Bullish FVG (unfilled gap up — long)',`${pfx}fvg_dir`,cfg.fvg_dir||'bullish','green')}
+        ${wzChip('bearish',type==='ifvg'?'Bearish IFVG (re-enters mitigated gap down)':'Bearish FVG (unfilled gap down — short)',`${pfx}fvg_dir`,cfg.fvg_dir||'bullish','red')}
       </div>
       <div class="opt-label">Trigger</div>
       <div class="opt-chips">
-        ${wzChip('gap_exists','Any qualifying FVG exists',`${pfx}condition`,cfg.condition||'gap_exists')}
-        ${wzChip('just_formed','FVG just formed (creation — strong displacement)',`${pfx}condition`,cfg.condition||'gap_exists','blue')}
-        ${wzChip('price_in_gap','Price inside FVG (mitigation / retest)',`${pfx}condition`,cfg.condition||'gap_exists')}
-        ${wzChip('tap_and_reject','Tap & reject (wick in, close out)',`${pfx}condition`,cfg.condition||'gap_exists','green')}
-        ${wzChip('approaching','Price approaching FVG (within 0.5%)',`${pfx}condition`,cfg.condition||'gap_exists')}
+        ${type==='ifvg'?wzChip('price_in_gap','Price inside mitigated FVG (re-entry)',`${pfx}condition`,cfg.condition||'price_in_gap','green'):''}
+        ${wzChip('gap_exists','Any qualifying FVG exists',`${pfx}condition`,cfg.condition||(type==='ifvg'?'price_in_gap':'gap_exists'))}
+        ${wzChip('just_formed','FVG just formed (creation — strong displacement)',`${pfx}condition`,cfg.condition||(type==='ifvg'?'price_in_gap':'gap_exists'),'blue')}
+        ${type!=='ifvg'?wzChip('price_in_gap','Price inside FVG (mitigation / retest)',`${pfx}condition`,cfg.condition||'gap_exists'):''}
+        ${wzChip('tap_and_reject','Tap & reject (wick in, close out)',`${pfx}condition`,cfg.condition||(type==='ifvg'?'price_in_gap':'gap_exists'),'green')}
+        ${wzChip('approaching','Price approaching FVG (within 0.5%)',`${pfx}condition`,cfg.condition||(type==='ifvg'?'price_in_gap':'gap_exists'))}
       </div>
       <div class="opt-label">Min Gap Size (% of price) <span id="${pfx}fgp-d" style="color:var(--accent)">${cfg.min_gap_pct||0.3}%</span></div>
       <input type="range" id="${pfx}fgp" min="0.1" max="5" value="${cfg.min_gap_pct||0.3}" step="0.1" oninput="wzSl('${pfx}fgp','${pfx}fgp-d','%','${pfx}min_gap_pct')" style="width:100%;accent-color:var(--accent)">
@@ -6191,13 +6193,16 @@ function buildWizardDescription(){
       case 'volume_spike':sig=`Volume spike of ${cfg.multiplier||2}× the 20-period average`;break;
       case 'funding_rate':sig=`Funding rate is ${cfg.fr_op==='gt'?'above':'below'} ${cfg.fr_val||0.05}%`;break;
       case 'support_resistance':sig=`Price ${cond(cfg.condition||'at_support')} on ${tf}`;break;
+      case 'ifvg':
       case 'fvg':{
-        const trig=cond(cfg.condition||'gap_exists');
-        const parts=[`${cfg.fvg_dir||'bullish'} Fair Value Gap`,`trigger: ${trig}`,`on ${tf}`];
+        const isIfvg=type==='ifvg';
+        const trig=cond(cfg.condition||(isIfvg?'price_in_gap':'gap_exists'));
+        const label=isIfvg?'Inv. Fair Value Gap (IFVG)':'Fair Value Gap';
+        const parts=[`${cfg.fvg_dir||'bullish'} ${label}`,`trigger: ${trig}`,`on ${tf}`];
         if(+cfg.min_gap_pct>0)      parts.push(`min gap ${cfg.min_gap_pct}%`);
         if(+cfg.min_gap_atr_mult>0) parts.push(`min gap ${cfg.min_gap_atr_mult}× ATR`);
         if(+cfg.disp_atr_mult>0)    parts.push(`displacement ≥ ${cfg.disp_atr_mult}× ATR`);
-        if(cfg.only_unfilled==='yes'||cfg.only_unfilled===true) parts.push('only unfilled');
+        if(!isIfvg&&(cfg.only_unfilled==='yes'||cfg.only_unfilled===true)) parts.push('only unfilled');
         if(+cfg.max_age_bars>0)     parts.push(`max age ${cfg.max_age_bars} bars`);
         sig=parts.join(' — ');
         break;
@@ -6251,12 +6256,14 @@ function buildWizardDescription(){
         case 'price_momentum':{const d=cfg.pm_dir==='down'?'down':cfg.pm_dir==='either'?'either way':'up';cfm=`Price moved ${d} ${cfg.pm_pct||10}%+ in ${cfg.pm_window||15}min`;break;}
         case 'funding_rate':cfm=`Funding rate ${cfg.fr_op==='gt'?'above':'below'} ${cfg.fr_val||0.05}%`;break;
         case 'support_resistance':cfm=`Price ${cond(cfg.condition||'at_support')} on ${tf}`;break;
+        case 'ifvg':
         case 'fvg':{
-          const trig=cond(cfg.condition||'gap_exists');
-          const parts=[`${cfg.fvg_dir||'bullish'} FVG`,trig,`on ${tf}`];
+          const isIfvg=c.type==='ifvg';
+          const trig=cond(cfg.condition||(isIfvg?'price_in_gap':'gap_exists'));
+          const parts=[`${cfg.fvg_dir||'bullish'} ${isIfvg?'IFVG':'FVG'}`,trig,`on ${tf}`];
           if(+cfg.min_gap_atr_mult>0) parts.push(`≥${cfg.min_gap_atr_mult}× ATR`);
           if(+cfg.disp_atr_mult>0)    parts.push(`disp ≥${cfg.disp_atr_mult}× ATR`);
-          if(cfg.only_unfilled==='yes'||cfg.only_unfilled===true) parts.push('unfilled only');
+          if(!isIfvg&&(cfg.only_unfilled==='yes'||cfg.only_unfilled===true)) parts.push('unfilled only');
           if(+cfg.max_age_bars>0)     parts.push(`≤${cfg.max_age_bars}b old`);
           cfm=parts.join(' — ');
           break;

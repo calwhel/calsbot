@@ -892,6 +892,7 @@ function summarizeCfg(c: Confirm): string {
     case 'price_momentum':     return `${cfg.pm_dir || 'up'} ${cfg.pm_pct || 10}% in ${cfg.pm_window || 15}m`;
     case 'breakout':           return `${cfg.bo_dir || 'up'} · ${cfg.bo_lookback || 20}c · ${cfg.bo_pct || 1}%`;
     case 'fvg':                return `${cfg.fvg_dir || 'bullish'} · ${(cfg.condition || 'gap_exists').replace(/_/g,' ')}`;
+    case 'ifvg':               return `${cfg.fvg_dir || 'bullish'} IFVG · ${(cfg.condition || 'price_in_gap').replace(/_/g,' ')}`;
     case 'order_block':        return `${cfg.ob_type || 'bullish'} · ${tf}`;
     case 'vwap_deviation':     return `${cfg.vwap_pct || 3}% ${cfg.vwap_side || 'below'} VWAP`;
     case 'support_resistance': return `${(cfg.condition || 'at_support').replace(/_/g,' ')} · ${tf}`;

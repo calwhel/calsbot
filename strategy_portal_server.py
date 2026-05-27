@@ -8875,6 +8875,8 @@ SIGNAL RECOGNITION:
   stochastic / stoch cross / %K %D / stoch oversold → stochastic
   Power of 3 / PO3 / AMD cycle / Asian range swept → fx_po3
   Wyckoff / spring / shakeout / upthrust / markup / distribution → wyckoff
+  IFVG / inverse FVG / inverse fair value gap / re-entry gap / mitigated gap → ifvg
+  FVG / fair value gap / imbalance / unmitigated gap / price gap → fvg
 
 IDEA BANK — pitch these when user is open to suggestions:
   "London ICT sniper" — london_kz killzone + OTE retracement + FVG bullish tap. LONG, TP 35 / SL 15. Clean 2.3:1 R:R, fires 1–2× per London session. EURUSD or GBPUSD.
@@ -9004,13 +9006,23 @@ Use actual values from the conversation. Output ###STRATEGY### exactly once, onl
 
     try:
         client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        resp = await client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=400,
-            system=system_prompt,
-            messages=api_messages,
+        resp = await asyncio.wait_for(
+            client.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=400,
+                system=system_prompt,
+                messages=api_messages,
+            ),
+            timeout=28.0,   # 28s hard cap — mobile shows spinner; Anthropic p99 is ~20s
         )
         raw = resp.content[0].text
+    except asyncio.TimeoutError:
+        logger.warning("Chat builder timed out after 28s")
+        return {
+            "reply": "That took too long on my end — try sending your message again, I'm ready.",
+            "complete": False,
+            "description": None,
+        }
     except Exception as e:
         logger.error(f"Chat builder AI error: {e}")
         return {
