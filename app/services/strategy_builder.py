@@ -588,11 +588,25 @@ FILTERS
   If user says "only in bull market" → btc_regime="bullish" (crypto only, null for forex/stocks)
   If user says "only in bear market" → btc_regime="bearish" (crypto only)
 
+NEW FIELDS FROM CHAT BUILDER (parse these when present in the description)
+  • "TP2: 4%" or "TP2: none" → exit.take_profit2_pct (float or null)
+  • "TP2 Pips: 60" or "TP2 Pips: none" → exit.take_profit2_pips (int or null) — forex only
+  • "Trailing Stop: true/false" → exit.trailing_stop (boolean)
+  • "Breakeven: 70%" or "Breakeven: none" → exit.breakeven_at_pct (int 0–100 or null)
+    Meaning: when this % of TP1 distance is covered, move SL to entry (e.g. 70 = move SL to entry after 70% of TP1 hit)
+  • "Position Size: 3%" → risk.position_size_pct (float, e.g. 3.0)
+  • "Max Trades/Day: 6" → risk.max_trades_per_day (int)
+  • "Confirmation 1: ..." and "Confirmation 2: ..." → additional conditions in entry_conditions.conditions
+
+  When Trailing Stop is true and TP2 is set: set trailing_stop_pct equal to half the stop_loss_pct (reasonable default).
+
 ALWAYS INCLUDE
   • Reasonable defaults for any missing fields
   • A clear description field summarising the strategy in plain English
   • At least one entry condition
   • Correct asset_class field
+  • If trailing_stop is true and trailing_stop_pct is not specified, default to stop_loss_pct / 2
+  • If breakeven_at_pct is not specified and leverage > 8, default to 70 (move SL to entry after 70% of TP hit — protects leveraged trades)
 """
 
 
