@@ -6660,24 +6660,45 @@ async def api_save_strategy(request: Request):
                 _entry2["conditions"] = _filtered
                 config["entry_conditions"] = _entry2
 
-        strategy = UserStrategy(
-            user_id       = user.id,
-            name          = config.get("name", "My Strategy"),
-            description   = config.get("description", ""),
-            config        = config,
-            status        = initial_status,
-            webhook_token = _wh_token,
-            asset_class   = _asset_class,
-        )
-        db.add(strategy)
-        db.commit()
-        db.refresh(strategy)
+        existing_strategy_id = body.get("existing_strategy_id")
+        if existing_strategy_id:
+            # ── IMPROVE MODE: update existing strategy in place ──────────────
+            strategy = db.query(UserStrategy).filter(
+                UserStrategy.id == existing_strategy_id,
+                UserStrategy.user_id == user.id,
+            ).first()
+            if not strategy:
+                raise HTTPException(status_code=404, detail="Strategy not found or not yours.")
+            if getattr(strategy, "is_locked", False):
+                raise HTTPException(status_code=400, detail="LOCKED — this strategy cannot be edited.")
+            strategy.name        = config.get("name", strategy.name)
+            strategy.description = config.get("description", strategy.description or "")
+            strategy.config      = config
+            strategy.asset_class = _asset_class
+            if _wh_token:
+                strategy.webhook_token = _wh_token
+            db.commit()
+            db.refresh(strategy)
+        else:
+            # ── CREATE MODE: new strategy ─────────────────────────────────────
+            strategy = UserStrategy(
+                user_id       = user.id,
+                name          = config.get("name", "My Strategy"),
+                description   = config.get("description", ""),
+                config        = config,
+                status        = initial_status,
+                webhook_token = _wh_token,
+                asset_class   = _asset_class,
+            )
+            db.add(strategy)
+            db.commit()
+            db.refresh(strategy)
 
-        perf = StrategyPerformance(strategy_id=strategy.id)
-        db.add(perf)
-        db.commit()
+            perf = StrategyPerformance(strategy_id=strategy.id)
+            db.add(perf)
+            db.commit()
 
-        _resp: dict = {"id": strategy.id, "name": strategy.name, "status": initial_status}
+        _resp: dict = {"id": strategy.id, "name": strategy.name, "status": strategy.status}
         if _wh_token:
             _resp["webhook_url"] = f"https://{os.environ.get('REPLIT_DEV_DOMAIN', request.headers.get('host', ''))}/api/webhooks/tv/{_wh_token}"
             _resp["webhook_token"] = _wh_token
@@ -8985,6 +9006,55 @@ async def api_set_password(request: Request, uid: str = Query(...)):
     return JSONResponse({"success": True})
 
 
+def _describe_existing_config(config: dict) -> str:
+    """Render a strategy config dict as a compact human-readable block for Claude."""
+    lines = []
+    lines.append(f'Name: "{config.get("name", "Unnamed")}"')
+    lines.append(f'Direction: {config.get("direction", "BOTH")}')
+
+    entry = config.get("entry_conditions") or {}
+    conds = entry.get("conditions") or []
+    for i, c in enumerate(conds[:4]):
+        ctype = c.get("type", "?")
+        ctf   = c.get("timeframe", "")
+        extra = {k: v for k, v in c.items() if k not in ("type", "timeframe", "condition", "entry_type")}
+        label = f"{ctype} on {ctf}" if ctf else ctype
+        if extra:
+            bits = ", ".join(f"{k}={v}" for k, v in list(extra.items())[:3])
+            label += f" ({bits})"
+        tag = "Primary Signal" if i == 0 else f"Confirmation {i}"
+        lines.append(f"{tag}: {label}")
+
+    ex  = config.get("exit") or {}
+    tp1 = ex.get("take_profit_pct") or ex.get("take_profit_pips")
+    tp2 = ex.get("take_profit2_pct") or ex.get("take_profit2_pips")
+    sl  = ex.get("stop_loss_pct") or ex.get("stop_loss_pips")
+    tp_unit = "pips" if ex.get("stop_loss_pips") else "%"
+    parts = [f"TP1: {tp1}{tp_unit}" if tp1 else None,
+             f"TP2: {tp2}{tp_unit}" if tp2 else None,
+             f"SL: {sl}{tp_unit}"  if sl  else None,
+             "trailing stop" if ex.get("trailing_stop") else None,
+             f"breakeven at {ex['breakeven_at_pct']}%" if ex.get("breakeven_at_pct") else None]
+    lines.append(" | ".join(p for p in parts if p))
+
+    risk = config.get("risk") or {}
+    lines.append(
+        f"Leverage: {risk.get('leverage', 1)}x | "
+        f"Position Size: {risk.get('position_size_pct', 5)}% | "
+        f"Max Trades/Day: {risk.get('max_trades_per_day', 5)}"
+    )
+
+    ac  = config.get("asset_class", "crypto")
+    uni = config.get("universe") or {}
+    if uni.get("type") == "specific":
+        syms = ", ".join((uni.get("symbols") or [])[:6])
+        lines.append(f"Asset Class: {ac} | Symbols: {syms}")
+    else:
+        lines.append(f"Asset Class: {ac} | Universe: {uni.get('type', 'all')}")
+
+    return "\n  ".join(lines)
+
+
 @app.post("/api/chat-builder")
 async def chat_builder_api(request: Request):
     """
@@ -9017,7 +9087,7 @@ async def chat_builder_api(request: Request):
             # DB is overloaded; allow the request through with default limits rather
             # than surfacing a "Connection error" to the user.
             user = type("_FallbackUser", (), {"id": 0})()
-        if not messages:
+        if not messages and not body.get("existing_config"):
             return {
                 "reply": "Hey! 👋 Tell me what you want to trade — long, short, or both? And what kind of signal are you thinking? (e.g. RSI scalp, MACD swing, order block, etc.)",
                 "complete": False,
@@ -9039,7 +9109,9 @@ async def chat_builder_api(request: Request):
     finally:
         db.close()
 
-    asset_class = body.get("asset_class", "crypto") or "crypto"
+    asset_class          = body.get("asset_class", "crypto") or "crypto"
+    existing_strategy_id = body.get("existing_strategy_id")
+    existing_config      = body.get("existing_config") or {}
 
     market_ctx = {
         "crypto":  "crypto perpetual futures (BTC, ETH, SOL, altcoins)",
@@ -9289,7 +9361,21 @@ SIGNAL VARIETY — THIS IS CRITICAL:
 - This session, lean toward: **{_nudge}** — unless the user explicitly asks for something else.
 - When pitching 2–3 ideas unprompted, span different signal families (e.g. one SMC, one oscillator, one trend-follow — never three RSI variants). Each idea should feel meaningfully different from the others.
 - If the conversation already discussed a signal type, suggest something from a different family next time. Rotate across the IDEA BANK, not the same 2–3 strategies every session.
+{f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IMPROVE MODE — REFINING AN EXISTING STRATEGY
+You are NOT building from scratch. The user wants to improve their existing strategy.
 
+Current config:
+  {_describe_existing_config(existing_config)}
+
+Your job:
+1. Open with a brief honest assessment (3 sentences max): what's solid, what's the single biggest weakness, and one specific change you'd try first.
+2. Let the user steer — they might want to change signals, tighten stops, add confirmations, or just tweak R:R.
+3. Make targeted suggestions that ADDRESS the specific weaknesses, not generic advice.
+4. When ready, compile the FULL revised ###STRATEGY### line — this will UPDATE the existing strategy (not create a new one), so output all fields even the unchanged ones.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+""" if existing_config else ""}
 WHAT YOU COLLECT (naturally, any order):
 - Direction: LONG / SHORT / BOTH
 - Primary signal + timeframe

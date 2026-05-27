@@ -390,6 +390,21 @@ export default function StrategyDetailScreen() {
           </Text>
         </View>
 
+        {/* Improve via AI Chat — loads existing config into the chat builder */}
+        <View style={{ marginTop: spacing.md }}>
+          <PrimaryButton
+            label="Improve with AI Chat"
+            variant="secondary"
+            onPress={() => router.push(
+              `/build/chat?strategyId=${sid}&strategyName=${encodeURIComponent(strategy.name)}&assetClass=${strategy.asset_class || strategy.config?.asset_class || 'crypto'}` as any
+            )}
+            icon={<Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.text} />}
+          />
+          <Text style={styles.activateHint}>
+            Chat with AI to refine signals, tighten stops, or rethink the setup — saves back to this strategy.
+          </Text>
+        </View>
+
         {/* Stats */}
         <View style={[styles.statRow, { marginTop: spacing.lg }]}>
           <StatCard
