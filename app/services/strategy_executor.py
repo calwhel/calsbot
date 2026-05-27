@@ -902,13 +902,13 @@ def _paper_cost_basis_pct(asset_class: str, symbol: str = "") -> float:
     sym = (symbol or "").upper()
     if asset_class == "forex":
         if sym in ("XAUUSD", "XAGUSD", "XPTUSD"):
-            return 0.025   # wider spread on metals (~$0.50 on Gold)
-        return 0.005       # tight spread on FX majors (~0.5 pip on EURUSD)
+            return 0.008   # Gold/Silver: ~$0.30 spread on Raw ÷ ~$3500 price
+        return 0.002       # FX majors: ~0.2 pip spread on Raw (EURUSD ~0.00020/1.08)
     if asset_class == "crypto":
         return 0.10        # 0.05% entry + 0.05% exit taker
     if asset_class in ("stock", "index"):
         return 0.05        # CFD spread equivalent
-    return 0.08            # conservative default
+    return 0.05            # conservative default
 
 
 def _close_paper_execution(ex, outcome: str, exit_price: float, db):
