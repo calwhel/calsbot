@@ -230,6 +230,36 @@ async def _send_tg_alert(text: str) -> None:
     except Exception as e:
         logger.warning(f"Telegram alert failed: {e}")
 
+
+async def _tg_dm(telegram_id: int, text: str) -> None:
+    """Fire-and-forget Telegram DM to a specific user by their telegram_id."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not token or not telegram_id:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": telegram_id, "text": text, "parse_mode": "HTML"},
+            )
+    except Exception as e:
+        logger.debug(f"Telegram DM failed for {telegram_id}: {e}")
+
+
+def _get_user_telegram_id(db, user_id: int) -> Optional[int]:
+    """Look up a user's Telegram integer ID. Returns None for web-only users."""
+    try:
+        from app.models import User as _User
+        u = db.query(_User).filter(_User.id == user_id).first()
+        if not u:
+            return None
+        tid = getattr(u, "telegram_id", None)
+        if not tid or str(tid).upper().startswith("WEB"):
+            return None
+        return int(tid)
+    except Exception:
+        return None
+
 TRACKER_START_DATE = datetime(2026, 2, 3)
 
 ALLOWED_SORT_COLS = {"opened_at", "symbol", "direction", "entry_price", "exit_price", "pnl", "pnl_percent"}
@@ -342,6 +372,16 @@ async def get_trades(
                             f"This trade is now risk-free. Leverage: {leverage}×\n"
                             f"Trade ID: {t.id}"
                         ))
+                        # DM the trade owner directly on Telegram
+                        _be_tg_id = _get_user_telegram_id(db, t.user_id or 0)
+                        if _be_tg_id:
+                            asyncio.create_task(_tg_dm(
+                                _be_tg_id,
+                                f"🛡️ <b>Stop Loss moved to Breakeven</b>\n\n"
+                                f"<b>{t.symbol}</b> {t.direction} is now risk-free.\n"
+                                f"ROI: <b>+{pnl_pct:.1f}%</b> → SL locked at entry <code>{t.entry_price}</code>\n"
+                                f"Strategy: {t.trade_type or 'Signal Trade'} · {leverage}× leverage",
+                            ))
                         try:
                             from app.services.expo_push import notify_breakeven_bg
                             notify_breakeven_bg(
@@ -1008,6 +1048,16 @@ async def _monitor_open_trades() -> None:
                         f"This trade is now risk-free. Leverage: {leverage}×\n"
                         f"Trade ID: {t.id}"
                     )
+                    # DM the trade owner directly on Telegram
+                    _be_tg_id = _get_user_telegram_id(db, t.user_id or 0)
+                    if _be_tg_id:
+                        asyncio.create_task(_tg_dm(
+                            _be_tg_id,
+                            f"🛡️ <b>Stop Loss moved to Breakeven</b>\n\n"
+                            f"<b>{t.symbol}</b> {t.direction} is now risk-free.\n"
+                            f"ROI: <b>+{pnl_pct:.1f}%</b> → SL locked at entry <code>{t.entry_price}</code>\n"
+                            f"Strategy: {t.trade_type or 'Signal Trade'} · {leverage}× leverage",
+                        ))
                     try:
                         from app.services.expo_push import notify_breakeven_bg
                         notify_breakeven_bg(
