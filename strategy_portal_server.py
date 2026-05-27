@@ -6637,6 +6637,31 @@ async def api_save_strategy(request: Request):
                     )
         config["asset_class"] = _asset_class
 
+        # ── R:R guardrail — TP must be > SL (minimum 1.5:1) ──────────────────
+        # Catches AI-builder outputs that set equal TP/SL (e.g. 0.5%/0.5%).
+        # Auto-corrects silently so the save still succeeds; the UI shows the
+        # corrected values.  Applies to both new strategies and improve-mode updates.
+        _ex_guard = config.get("exit") or {}
+        _tp_pct = _ex_guard.get("take_profit_pct")
+        _sl_pct = _ex_guard.get("stop_loss_pct")
+        if (
+            isinstance(_tp_pct, (int, float)) and _tp_pct > 0
+            and isinstance(_sl_pct, (int, float)) and _sl_pct > 0
+            and _tp_pct < _sl_pct * 1.5
+        ):
+            _ex_guard = dict(_ex_guard)
+            _ex_guard["take_profit_pct"] = round(_sl_pct * 2.0, 2)  # push to 2:1 minimum
+            config["exit"] = _ex_guard
+        # Also handle top-level tp1/sl keys (older config shape)
+        _tp1_top = config.get("tp1")
+        _sl_top  = config.get("sl")
+        if (
+            isinstance(_tp1_top, (int, float)) and _tp1_top > 0
+            and isinstance(_sl_top,  (int, float)) and _sl_top  > 0
+            and _tp1_top < _sl_top * 1.5
+        ):
+            config["tp1"] = round(_sl_top * 2.0, 2)
+
         # Defense-in-depth: paper-only asset classes are forced to 1× leverage.
         # Forex/index with cTrader connected can use real leverage.
         if _asset_class in PAPER_ONLY_CLASSES and not _ctrader_live_ok:
@@ -9414,6 +9439,7 @@ When ready to compile, say something natural like "Perfect, locking that in — 
 Asset Class: {asset_class} | Direction: LONG | Style: SCALPER | Primary Signal: {_ex_primary} | Confirmation 1: {_ex_conf1} | Confirmation 2: {_ex_conf2} | {tp_sl_example} | TP2: none | Trailing Stop: false | Breakeven: 70% | Position Size: 5% | Max Trades/Day: 6 | Leverage: 10x | {symbols_example}
 
 FIELD RULES for the ###STRATEGY### line:
+- TP1 MUST be at least 1.5× the SL value (minimum 1.5:1 R:R). Aim for 2:1 or better. NEVER set TP equal to SL — that is a losing setup over time. If a user asks for 1:1, explain why it's bad and suggest 2:1 instead before compiling.
 - TP2: "none" or a value using same units as TP1 (e.g. "TP2: 4%" or "TP2 Pips: 60")
 - Trailing Stop: "true" or "false"
 - Breakeven: "none" or a percentage of TP1 at which to move SL to entry (e.g. "Breakeven: 60%" means move SL to entry when 60% of TP1 distance is covered)
