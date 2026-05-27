@@ -507,10 +507,22 @@ async def get_trades(
         else:
             result_label = "BREAKEVEN"
 
+        # Detect asset class from symbol (forex/index/stock/crypto)
+        _ac = "crypto"
+        try:
+            from app.services.asset_classes import get_symbol as _ac_get
+            for _cls in ("forex", "index", "stock"):
+                if _ac_get(_cls, t.symbol):
+                    _ac = _cls
+                    break
+        except Exception:
+            pass
+
         results.append({
             "id": t.id,
             "symbol": f"${ticker}",
             "raw_symbol": t.symbol,
+            "asset_class": _ac,
             "direction": t.direction,
             "entry_price": t.entry_price,
             "exit_price": t.exit_price,

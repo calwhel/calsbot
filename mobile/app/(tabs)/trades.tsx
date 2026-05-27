@@ -28,6 +28,7 @@ import {
   type PortfolioTrade,
   type TradeFilter,
 } from '@/lib/api';
+import { calcPips, fmtPips } from '@/lib/pip';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -199,7 +200,14 @@ const TradeRow = React.memo(function TradeRow({ t, onPress }: { t: PortfolioTrad
               </Text>
             </View>
           </View>
-          <Text style={[styles.pnl, { color: pnlColor }]}>{fmtPnl(pnl)}</Text>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={[styles.pnl, { color: pnlColor }]}>{fmtPnl(pnl)}</Text>
+            {t.asset_class === 'forex' && !isOpen && t.entry_price && t.exit_price && t.raw_symbol ? (
+              <Text style={styles.pipRow}>
+                {fmtPips(calcPips(t.raw_symbol, t.entry_price, t.exit_price, t.direction))}
+              </Text>
+            ) : null}
+          </View>
         </View>
 
         {/* Strategy name */}
@@ -764,6 +772,13 @@ const styles = StyleSheet.create({
     fontSize: 17,
     letterSpacing: -0.3,
     fontVariant: ['tabular-nums'],
+  },
+  pipRow: {
+    fontFamily: font.medium,
+    fontSize: 11,
+    color: colors.textMute,
+    fontVariant: ['tabular-nums'],
+    marginTop: 1,
   },
 
   metaRow: {

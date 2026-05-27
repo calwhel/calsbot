@@ -6299,6 +6299,157 @@ async def api_build_strategy(request: Request):
     })
 
 
+
+# ─── Forex multi-pair market structure scanner ───────────────────────────────
+
+_FOREX_SCANNER_CACHE: dict = {}          # key → (signals, expires_ts)
+_FOREX_SCANNER_TTL = 60                  # seconds between rescans per pair+tf
+
+_SCANNER_PAIRS = [
+    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD",
+    "USDCAD", "USDCHF", "NZDUSD", "EURJPY",
+    "GBPJPY", "XAUUSD", "XAGUSD",
+]
+_SCANNER_TIMEFRAMES = ["15m", "1h"]
+_SCANNER_SIGNALS = [
+    ("market_structure", "bos_bullish"),
+    ("market_structure", "bos_bearish"),
+    ("market_structure", "choch_bullish"),
+    ("market_structure", "choch_bearish"),
+    ("fvg",             "bullish"),
+    ("fvg",             "bearish"),
+    ("order_block",     "bullish"),
+    ("order_block",     "bearish"),
+]
+
+_SIGNAL_LABELS = {
+    "bos_bullish":   ("BOS", "LONG",  "Bullish Break of Structure"),
+    "bos_bearish":   ("BOS", "SHORT", "Bearish Break of Structure"),
+    "choch_bullish": ("CHoCH","LONG", "Bullish Change of Character"),
+    "choch_bearish": ("CHoCH","SHORT","Bearish Change of Character"),
+    "bullish":       ("Signal","LONG","Bullish signal"),
+    "bearish":       ("Signal","SHORT","Bearish signal"),
+}
+
+
+async def _run_forex_scanner() -> list:
+    """
+    Scan all forex pairs for BOS/CHoCH/FVG/OB signals.
+    Results are cached per (pair, tf, signal) for _FOREX_SCANNER_TTL seconds.
+    """
+    import httpx as _httpx
+    from app.services.strategy_ta import eval_market_structure, eval_fvg, eval_order_block
+    from app.services.tradfi_prices import get_price as _tradfi_price
+    import asyncio, time
+
+    now = time.monotonic()
+    results = []
+    sem = asyncio.Semaphore(4)
+
+    async def _scan_one(pair, tf, sig_type, sub):
+        cache_key = f"{pair}|{tf}|{sig_type}|{sub}"
+        cached = _FOREX_SCANNER_CACHE.get(cache_key)
+        if cached and cached[1] > now:
+            return cached[0]
+
+        try:
+            async with sem:
+                price = await asyncio.wait_for(_tradfi_price(pair, "forex"), timeout=8)
+                if not price:
+                    return None
+                shared_cache = {"_asset_class": "forex"}
+                async with _httpx.AsyncClient(timeout=10) as _http:
+                    if sig_type == "market_structure":
+                        ok, msg = await asyncio.wait_for(
+                            eval_market_structure({"condition": sub, "timeframe": tf}, pair, price, _http, shared_cache),
+                            timeout=12,
+                        )
+                    elif sig_type == "fvg":
+                        ok, msg = await asyncio.wait_for(
+                            eval_fvg({"direction": sub, "timeframe": tf, "sub": "just_formed"}, pair, price, _http, shared_cache),
+                            timeout=12,
+                        )
+                    elif sig_type == "order_block":
+                        ok, msg = await asyncio.wait_for(
+                            eval_order_block({"ob_type": sub, "timeframe": tf}, pair, price, _http, shared_cache),
+                            timeout=12,
+                        )
+                    else:
+                        return None
+
+                entry = None
+                if ok:
+                    label, direction, desc = _SIGNAL_LABELS.get(sub, ("Signal", "LONG", sub))
+                    if sig_type == "fvg":
+                        label = "FVG"
+                        desc = f"{'Bullish' if sub=='bullish' else 'Bearish'} Fair Value Gap (just formed)"
+                    elif sig_type == "order_block":
+                        label = "OB"
+                        desc = f"{'Bullish' if sub=='bullish' else 'Bearish'} Order Block touch"
+                    entry = {
+                        "pair":      pair,
+                        "timeframe": tf,
+                        "signal":    label,
+                        "direction": direction,
+                        "desc":      desc,
+                        "price":     round(price, 6),
+                        "detail":    msg,
+                        "sig_key":   f"{sig_type}:{sub}",
+                    }
+
+                _FOREX_SCANNER_CACHE[cache_key] = (entry, now + _FOREX_SCANNER_TTL)
+                return entry
+        except Exception as _e:
+            logger.debug(f"Forex scanner {pair}/{tf}/{sig_type}/{sub}: {_e}")
+            return None
+
+    tasks = [
+        _scan_one(pair, tf, sig_type, sub)
+        for pair in _SCANNER_PAIRS
+        for tf in _SCANNER_TIMEFRAMES
+        for sig_type, sub in _SCANNER_SIGNALS
+    ]
+    raw = await asyncio.gather(*tasks, return_exceptions=True)
+    results = [r for r in raw if r and not isinstance(r, Exception)]
+
+    # Sort: CHoCH first (highest alpha), then BOS, then FVG, then OB
+    _rank = {"CHoCH": 0, "BOS": 1, "FVG": 2, "OB": 3}
+    results.sort(key=lambda x: (_rank.get(x["signal"], 9), x["pair"], x["timeframe"]))
+    return results
+
+
+@app.get("/api/forex/scanner")
+async def api_forex_scanner(request: Request):
+    """Multi-pair market structure scanner — BOS, CHoCH, FVG, OB across forex pairs."""
+    uid = request.query_params.get("uid", "")
+    if not uid:
+        raise HTTPException(status_code=400, detail="uid required")
+
+    import time
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or user.banned:
+            raise HTTPException(status_code=403)
+    finally:
+        db.close()
+
+    import asyncio
+    try:
+        signals = await asyncio.wait_for(_run_forex_scanner(), timeout=90)
+    except asyncio.TimeoutError:
+        signals = []
+    import datetime
+    return JSONResponse({
+        "signals": signals,
+        "count": len(signals),
+        "pairs_scanned": len(_SCANNER_PAIRS),
+        "scanned_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "cache_ttl": _FOREX_SCANNER_TTL,
+    })
+
+
 @app.get("/api/markets/catalog")
 async def api_markets_catalog():
     """

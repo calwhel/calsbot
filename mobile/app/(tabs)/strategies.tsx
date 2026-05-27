@@ -320,6 +320,20 @@ export default function StrategiesScreen() {
       </View>
 
       <FilterChips value={filter} counts={counts} onChange={setFilter} />
+
+      {/* Forex scanner shortcut */}
+      <Pressable
+        onPress={() => {
+          Haptics.selectionAsync();
+          router.push('/forex-scanner' as any);
+        }}
+        style={({ pressed }) => [styles.scannerBanner, pressed && { opacity: 0.8 }]}
+      >
+        <Ionicons name="radio-outline" size={14} color="#639BEB" />
+        <Text style={styles.scannerBannerText}>Forex Scanner</Text>
+        <Text style={styles.scannerBannerSub}>BOS · CHoCH · FVG · OB across 11 pairs</Text>
+        <Ionicons name="chevron-forward" size={13} color={colors.textMute} style={{ marginLeft: 'auto' }} />
+      </Pressable>
     </View>
   );
 
@@ -611,6 +625,28 @@ const styles = StyleSheet.create({
     fontFamily: font.bold,
     fontSize: 13,
     letterSpacing: 0.3,
+  },
+  scannerBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: spacing.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    backgroundColor: colors.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderHi,
+  },
+  scannerBannerText: {
+    fontFamily: font.bold,
+    fontSize: 13,
+    color: '#639BEB',
+  },
+  scannerBannerSub: {
+    fontFamily: font.regular,
+    fontSize: 11,
+    color: colors.textMute,
   },
   emptyCta: {
     flexDirection: 'row',
