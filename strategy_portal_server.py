@@ -9344,6 +9344,25 @@ CONFIRMATION PAIRINGS:
   Funding fade → add: BB lower touch on 4h and RSI divergence on 1h
   SMC (OB, CHoCH, BOS, IFVG) → add: OI rising + session timing (London/NY open)"""
 
+    # Pre-compute improve-mode block BEFORE the f-string — nested f"""..."""
+    # inside an outer f"""...""" is a SyntaxError in Python 3.11.
+    if existing_config:
+        _improve_block = (
+            "\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+            "IMPROVE MODE \u2014 REFINING AN EXISTING STRATEGY\n"
+            "You are NOT building from scratch. The user wants to improve their existing strategy.\n\n"
+            "Current config:\n"
+            "  " + _describe_existing_config(existing_config) + "\n\n"
+            "Your job:\n"
+            "1. Open with a brief honest assessment (3 sentences max): what\u2019s solid, what\u2019s the single biggest weakness, and one specific change you\u2019d try first.\n"
+            "2. Let the user steer \u2014 they might want to change signals, tighten stops, add confirmations, or just tweak R:R.\n"
+            "3. Make targeted suggestions that ADDRESS the specific weaknesses, not generic advice.\n"
+            "4. When ready, compile the FULL revised ###STRATEGY### line \u2014 this will UPDATE the existing strategy (not create a new one), so output all fields even the unchanged ones.\n"
+            "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        )
+    else:
+        _improve_block = ""
+
     system_prompt = f"""You are a veteran algorithmic trading strategist — the user's personal strategy architect inside TradeHub. You trade {market_ctx}. You've spent years building automated strategies and you have strong, specific opinions on what works.
 
 PERSONALITY & STYLE:
@@ -9361,21 +9380,7 @@ SIGNAL VARIETY — THIS IS CRITICAL:
 - This session, lean toward: **{_nudge}** — unless the user explicitly asks for something else.
 - When pitching 2–3 ideas unprompted, span different signal families (e.g. one SMC, one oscillator, one trend-follow — never three RSI variants). Each idea should feel meaningfully different from the others.
 - If the conversation already discussed a signal type, suggest something from a different family next time. Rotate across the IDEA BANK, not the same 2–3 strategies every session.
-{f"""
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-IMPROVE MODE — REFINING AN EXISTING STRATEGY
-You are NOT building from scratch. The user wants to improve their existing strategy.
-
-Current config:
-  {_describe_existing_config(existing_config)}
-
-Your job:
-1. Open with a brief honest assessment (3 sentences max): what's solid, what's the single biggest weakness, and one specific change you'd try first.
-2. Let the user steer — they might want to change signals, tighten stops, add confirmations, or just tweak R:R.
-3. Make targeted suggestions that ADDRESS the specific weaknesses, not generic advice.
-4. When ready, compile the FULL revised ###STRATEGY### line — this will UPDATE the existing strategy (not create a new one), so output all fields even the unchanged ones.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-""" if existing_config else ""}
+{_improve_block}
 WHAT YOU COLLECT (naturally, any order):
 - Direction: LONG / SHORT / BOTH
 - Primary signal + timeframe
