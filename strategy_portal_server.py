@@ -9053,6 +9053,93 @@ async def chat_builder_api(request: Request):
         else ("Symbols: AAPL,TSLA,NVDA" if asset_class == "stock" \
         else ("Symbols: SPX,NDX" if asset_class == "index" else "Coins: all"))
 
+    # Randomise the example primary+confirmation signals so Claude doesn't anchor
+    # on RSI+EMA as the default every single time.
+    import random as _random
+    _EXAMPLE_POOL = {
+        "crypto": [
+            ("FVG bullish tap on 15m", "BOS bullish on 1h", "StochRSI bullish cross on 5m"),
+            ("SuperTrend bullish flip on 1h", "ADX > 25 on 1h", "EMA ribbon bullish on 4h"),
+            ("BB lower touch on 15m", "StochRSI bullish cross on 5m", "EMA 50 bullish on 1h"),
+            ("MACD bullish cross on 1h", "price above 200 SMA on 4h", "volume spike 1.5x on 1h"),
+            ("RSI below 30 on 15m", "EMA 50 bullish on 1h", "StochRSI bullish cross on 15m"),
+            ("order_block bullish touch on 15m", "CHoCH bullish on 1h", "StochRSI oversold on 5m"),
+            ("price momentum +3% on 30m", "volume spike 2x on 30m", "SuperTrend bullish on 4h"),
+            ("Ichimoku TK cross bullish on 4h", "ADX > 25 on 1h", "OI rising"),
+            ("funding rate < -0.08% on 1h", "BB lower touch on 4h", "RSI < 35 on 1h"),
+            ("IFVG bullish on 15m", "CHoCH bullish on 1h", "StochRSI oversold on 15m"),
+        ],
+        "forex": [
+            ("london_kz killzone on 15m", "OTE retracement on 15m", "EMA ribbon bullish on 1h"),
+            ("fx_displacement bullish on 15m", "FVG bullish tap on 15m", "EMA 50 bullish on 1h"),
+            ("fx_po3 Asian low swept on 15m", "ny_kz timing", "stochastic oversold on 15m"),
+            ("wyckoff spring on 1h", "stochastic bullish_cross on 15m", "EMA 50 bullish on 4h"),
+            ("fx_silver_bullet 10 AM on 5m", "FVG bullish tap on 5m", "PD array discount zone"),
+            ("fx_judas_swing on 5m", "fx_breaker bullish on 5m", "EMA 50 bullish on 1h"),
+            ("stochastic bullish_cross on 15m", "PDH/PDL confluence on 15m", "EMA ribbon bullish on 1h"),
+            ("ifvg bullish on 15m", "fx_displacement bullish on 1h", "RSI < 50 on 15m"),
+            ("forex_currency_strength bullish on 4h", "EMA ribbon bullish on 4h", "ADX > 25 on 1h"),
+            ("fx_breaker bullish on 15m", "london_kz timing", "RSI < 45 on 15m"),
+        ],
+        "stock": [
+            ("ORB breakout 30m", "volume spike 1.5x on 30m", "price above VWAP"),
+            ("RSI < 28 on 4h", "BB lower touch on 4h", "stochastic oversold on 1h"),
+            ("SuperTrend bullish flip on 1h", "MACD bullish cross on 1h", "price above VWAP"),
+            ("EMA ribbon bullish on 1h", "ADX > 28 on 1h", "price above 200 SMA on daily"),
+            ("BB/Keltner squeeze fires on 1h", "volume spike 2x on 1h", "SuperTrend bullish on 4h"),
+            ("price_momentum +4% gap up", "RSI > 72 on 15m", "EMA 50 bearish on 1h"),
+        ],
+        "index": [
+            ("RSI < 40 on 15m", "price below VWAP", "BB lower touch on 15m"),
+            ("ORB breakout 30m", "volume spike 1.8x on 30m", "SuperTrend bullish on 1h"),
+            ("EMA ribbon bullish on 1h", "ADX > 25 on 1h", "price above 200 SMA on daily"),
+            ("BB/Keltner squeeze fires on 1h", "volume spike 2x on 1h", "SuperTrend bullish on 4h"),
+            ("Ichimoku TK cross bullish on 4h", "ADX > 25 on 1h", "price above cloud on 4h"),
+        ],
+    }
+    _ex_primary, _ex_conf1, _ex_conf2 = _random.choice(
+        _EXAMPLE_POOL.get(asset_class, _EXAMPLE_POOL["crypto"])
+    )
+
+    # Pick a signal family to nudge Claude toward variety without overriding user intent
+    _VARIETY_NUDGES = {
+        "crypto": [
+            "SMC (FVG / order block / BOS / CHoCH / IFVG)",
+            "volatility compression (BB/Keltner squeeze, ATR expansion)",
+            "funding rate + open interest contrarian setups",
+            "multi-timeframe EMA ribbon + SuperTrend trend-following",
+            "oscillator mean-reversion (RSI, StochRSI, BB lower)",
+            "price momentum / volume spike breakouts",
+            "Ichimoku cloud breakout or TK cross",
+            "MACD divergence or zero-cross setups",
+        ],
+        "forex": [
+            "ICT killzone (London / NY / Asian KZ, Silver Bullet, Power of 3)",
+            "SMC structure (BOS, CHoCH, FVG, IFVG, order block)",
+            "liquidity grabs and displacement moves",
+            "Wyckoff (spring, upthrust, distribution phases)",
+            "currency strength divergence",
+            "stochastic or oscillator setups at key levels",
+            "session break / PDH-PDL / previous level plays",
+            "breaker blocks and mitigation block reversals",
+        ],
+        "stock": [
+            "opening range breakout (ORB) + volume confirmation",
+            "mean reversion from oversold extremes (RSI, BB, StochRSI)",
+            "momentum continuation (EMA ribbon + ADX + SuperTrend)",
+            "gap fade or gap follow strategy",
+            "squeeze / compression breakout (BB inside Keltner)",
+        ],
+        "index": [
+            "VWAP mean reversion intraday",
+            "ORB breakout on session open",
+            "Ichimoku cloud breakout or continuation",
+            "trend-following with EMA ribbon + ADX",
+            "oversold reversal at major support (RSI + BB)",
+        ],
+    }
+    _nudge = _random.choice(_VARIETY_NUDGES.get(asset_class, _VARIETY_NUDGES["crypto"]))
+
     # ── Per-asset-class expertise block ──────────────────────────────────────
     if asset_class == "forex":
         asset_rules = """
@@ -9197,6 +9284,12 @@ PERSONALITY & STYLE:
 - Never ask about paper/live mode — strategies always start paper. Never mention it.
 - After compiling, briefly suggest the user run a 30-day backtest to validate before going live.
 
+SIGNAL VARIETY — THIS IS CRITICAL:
+- You have a rich IDEA BANK below. Use it. Do NOT default to RSI + EMA every time — that is the most generic, overused combination and users notice when they get the same suggestion repeatedly.
+- This session, lean toward: **{_nudge}** — unless the user explicitly asks for something else.
+- When pitching 2–3 ideas unprompted, span different signal families (e.g. one SMC, one oscillator, one trend-follow — never three RSI variants). Each idea should feel meaningfully different from the others.
+- If the conversation already discussed a signal type, suggest something from a different family next time. Rotate across the IDEA BANK, not the same 2–3 strategies every session.
+
 WHAT YOU COLLECT (naturally, any order):
 - Direction: LONG / SHORT / BOTH
 - Primary signal + timeframe
@@ -9210,7 +9303,7 @@ WHAT YOU COLLECT (naturally, any order):
 - Confirmations: 1–3 extra conditions that filter out bad entries. ALWAYS suggest at least 1 confirmation — unconfirmed raw signals have poor win rates. For swing trades, push for 2.
 
 GREAT STRATEGY PRINCIPLES — apply these silently when building:
-- Multi-timeframe confluence is the biggest edge: primary signal on a lower TF, confirmed by trend on a higher TF. E.g. RSI signal on 15m + EMA alignment on 1h.
+- Multi-timeframe confluence is the biggest edge: primary signal on a lower TF, confirmed by trend on a higher TF. Pick the right signal family for the market condition — oscillators for ranging, trend-followers for momentum, SMC for precision.
 - At least one structural confirmation (BOS/CHoCH, EMA alignment, SuperTrend direction) prevents counter-trend entries.
 - R:R ≥ 2:1 is the minimum for consistency. 3:1 is professional grade.
 - Breakeven protection on leveraged trades is not optional — it converts would-be losses into free trades.
@@ -9227,7 +9320,7 @@ COMPILE when you have direction + signal + TP + SL. Don't keep asking once you h
 
 When ready to compile, say something natural like "Perfect, locking that in — compiling now." then output EXACTLY on its own line after a blank line:
 ###STRATEGY###
-Asset Class: {asset_class} | Direction: LONG | Style: SCALPER | Primary Signal: RSI below 30 on 15m | Confirmation 1: EMA 50 bullish on 1h | Confirmation 2: StochRSI bullish cross on 15m | {tp_sl_example} | TP2: none | Trailing Stop: false | Breakeven: 70% | Position Size: 5% | Max Trades/Day: 6 | Leverage: 10x | {symbols_example}
+Asset Class: {asset_class} | Direction: LONG | Style: SCALPER | Primary Signal: {_ex_primary} | Confirmation 1: {_ex_conf1} | Confirmation 2: {_ex_conf2} | {tp_sl_example} | TP2: none | Trailing Stop: false | Breakeven: 70% | Position Size: 5% | Max Trades/Day: 6 | Leverage: 10x | {symbols_example}
 
 FIELD RULES for the ###STRATEGY### line:
 - TP2: "none" or a value using same units as TP1 (e.g. "TP2: 4%" or "TP2 Pips: 60")
