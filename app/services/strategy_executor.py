@@ -491,14 +491,27 @@ async def _fetch_price_and_ta(
 
     if asset_class != "crypto":
         try:
-            from app.services.tradfi_prices import get_klines as _tradfi_klines
+            from app.services.tradfi_prices import (
+                get_klines as _tradfi_klines,
+                get_price as _tradfi_live_price,
+            )
             kl = await _tradfi_klines(symbol, asset_class, "15m", 100)
             if not kl:
                 return None
             closes = [float(row[4]) for row in kl if row and len(row) >= 5]
             if len(closes) < 2:
                 return None
-            price = closes[-1]
+
+            # ── Live spot price (FMP WebSocket → yfinance fast_info) ──────────
+            # Using closes[-1] (last 15m kline close) as the entry price causes
+            # stale entries — that candle could have closed up to 14 minutes ago
+            # and price may have moved significantly since then, especially for
+            # fast-moving assets like XAUUSD.  Fetch the live spot price so the
+            # entry stamped on the StrategyExecution reflects where price actually
+            # is right now, not where it was at the last 15m close.
+            live_px = await _tradfi_live_price(symbol, asset_class)
+            price = live_px if live_px else closes[-1]
+
             # Inline RSI(14) — same Wilder's smoothing the social_signals impl uses
             rsi = 50.0
             if len(closes) >= 15:
