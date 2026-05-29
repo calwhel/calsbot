@@ -3940,3 +3940,58 @@ async def backfill_ghost_cancelled_executions(lookback_days: int = 7) -> int:
     db.close()
     logger.info(f"backfill_ghosts: done — {corrected}/{len(ghosts)} execution(s) recovered")
     return corrected
+
+
+async def close_stale_open_executions(stale_after_hours: int = 48) -> int:
+    """
+    Close any strategy_executions rows that have been stuck OPEN for longer than
+    `stale_after_hours` hours.  These accumulate when a position is opened but
+    the monitor loop never sees it (server restart, DB hiccup, price feed gap).
+    Leaving them as OPEN permanently blocks the max_open_positions gate, so all
+    strategies with a stale ghost trade silently stop firing.
+
+    Action: mark outcome='EXPIRED', set closed_at = fired_at + stale_after_hours,
+    exit_price = entry_price, pnl_pct = 0 (no win/loss attribution).
+    Runs once at startup before the scan loops begin.
+    """
+    from app.database import BgSessionLocal as SessionLocal
+    from app.strategy_models import StrategyExecution
+    cutoff = datetime.utcnow() - timedelta(hours=stale_after_hours)
+    db = SessionLocal()
+    try:
+        stale = (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.outcome == "OPEN",
+                StrategyExecution.closed_at.is_(None),
+                StrategyExecution.fired_at <= cutoff,
+            )
+            .all()
+        )
+        if not stale:
+            logger.info("close_stale_open_executions: no stale positions found")
+            return 0
+        logger.warning(
+            f"close_stale_open_executions: closing {len(stale)} position(s) "
+            f"stuck OPEN >{stale_after_hours}h — these were blocking the max_open gate"
+        )
+        count = 0
+        for ex in stale:
+            try:
+                ex.outcome    = "EXPIRED"
+                ex.closed_at  = ex.fired_at + timedelta(hours=stale_after_hours)
+                ex.exit_price = ex.entry_price
+                ex.pnl_pct    = 0.0
+                ex.notes      = (ex.notes or "") + " | auto-expired: stuck open > 48h"
+                db.commit()
+                count += 1
+            except Exception as e:
+                db.rollback()
+                logger.error(f"close_stale_open_executions: failed for exec {ex.id}: {e}")
+        logger.info(f"close_stale_open_executions: expired {count}/{len(stale)} stale position(s)")
+        return count
+    except Exception as e:
+        logger.error(f"close_stale_open_executions: query failed: {e}")
+        return 0
+    finally:
+        db.close()

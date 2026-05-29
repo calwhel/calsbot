@@ -1049,7 +1049,11 @@ async def _start_executor_tasks():
         run_forex_executor,
         backfill_cancelled_paper_trades,
         backfill_ghost_cancelled_executions,
+        close_stale_open_executions,
     )
+    # Run stale-position cleanup BEFORE starting the scan loops so the
+    # max_open gate isn't blocked by ghost trades from previous sessions.
+    await close_stale_open_executions(stale_after_hours=48)
     # Wrapped in _resilient_task so a transient crash (e.g. DB SSL drop)
     # auto-restarts instead of silently killing the executor permanently.
     asyncio.create_task(_resilient_task("run_strategy_executor", run_strategy_executor, restart_delay=20))
@@ -1176,6 +1180,14 @@ async def _startup_background():
         logger.info("Schema migrations complete")
     except Exception as e:
         logger.warning(f"Background _ensure_tables error: {e}")
+
+    # Expire any positions stuck OPEN > 48h — these silently block the
+    # max_open gate and prevent strategies from ever firing again.
+    try:
+        from app.services.strategy_executor import close_stale_open_executions
+        await close_stale_open_executions(stale_after_hours=48)
+    except Exception as e:
+        logger.warning(f"close_stale_open_executions error (non-fatal): {e}")
 
     # ── FMP real-time price feed ──────────────────────────────────────────────
     # Persistent WebSocket to FMP streaming server — no account linking needed.
