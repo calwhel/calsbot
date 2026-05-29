@@ -1063,7 +1063,7 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
         if settings and not settings.dm_paper_alerts:
             return
         strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
-        strat_name = strat.name if strat else "Your Strategy"
+        strat_name = (strat.name if strat else None) or "Your Strategy"
         tg_id = _telegram_int_id(user)
         if tg_id:
             asyncio.create_task(_send_paper_close_dm(
@@ -1802,7 +1802,7 @@ async def run_live_position_monitor():
         try:
             user  = db.query(User).filter(User.id == ex.user_id).first()
             strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
-            strat_name = strat.name if strat else "Unknown"
+            strat_name = (strat.name if strat else None) or "Unknown Strategy"
             if user and user.telegram_id:
                 tg_id = _telegram_int_id(user)
                 if tg_id:
@@ -2710,7 +2710,7 @@ async def evaluate_and_fire(
                     await _tg_send(
                         tg_id,
                         _fmt_open_card(
-                            strategy_name = strategy.name,
+                            strategy_name = strategy.name or "Your Strategy",
                             symbol        = symbol,
                             direction     = direction,
                             entry         = current_price,
@@ -2888,7 +2888,7 @@ async def evaluate_and_fire(
                         await _tg_send(
                             tg_id_live,
                             _fmt_open_card(
-                                strategy_name = strategy.name,
+                                strategy_name = strategy.name or "Your Strategy",
                                 symbol        = symbol,
                                 direction     = direction,
                                 entry         = display_entry,
