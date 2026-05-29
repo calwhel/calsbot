@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator,
   RefreshControl, useWindowDimensions, Alert,
-  TextInput, TouchableOpacity,
+  TextInput, TouchableOpacity, Pressable,
 } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -391,19 +391,26 @@ export default function StrategyDetailScreen() {
         </View>
 
         {/* Improve via AI Chat — loads existing config into the chat builder */}
-        <View style={{ marginTop: spacing.md }}>
-          <PrimaryButton
-            label="Improve with AI Chat"
-            variant="secondary"
-            onPress={() => router.push(
-              `/build/chat?strategyId=${sid}&strategyName=${encodeURIComponent(strategy.name)}&assetClass=${strategy.asset_class || strategy.config?.asset_class || 'crypto'}` as any
-            )}
-            icon={<Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.text} />}
-          />
-          <Text style={styles.activateHint}>
-            Chat with AI to refine signals, tighten stops, or rethink the setup — saves back to this strategy.
-          </Text>
-        </View>
+        <Pressable
+          onPress={() => router.push(
+            `/build/chat?strategyId=${sid}&strategyName=${encodeURIComponent(strategy.name)}&assetClass=${strategy.asset_class || strategy.config?.asset_class || 'crypto'}` as any
+          )}
+          style={({ pressed }) => [styles.aiChatCard, pressed && { opacity: 0.85 }]}
+        >
+          <View style={styles.aiChatHeader}>
+            <View style={styles.aiChatBadge}>
+              <Ionicons name="sparkles" size={13} color={colors.positive} />
+              <Text style={styles.aiChatBadgeText}>AI</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+          </View>
+          <Text style={styles.aiChatTitle}>Improve with AI Chat</Text>
+          <Text style={styles.aiChatSub}>Chat to refine signals, tighten stops, or change the setup. Changes save back here automatically.</Text>
+          <View style={[styles.aiChatBtn]}>
+            <Ionicons name="chatbubble-ellipses" size={15} color={colors.bg} />
+            <Text style={styles.aiChatBtnText}>Open AI Chat</Text>
+          </View>
+        </Pressable>
 
         {/* Stats */}
         <View style={[styles.statRow, { marginTop: spacing.lg }]}>
@@ -661,6 +668,62 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
     marginTop: spacing.sm,
+  },
+  aiChatCard: {
+    marginTop: spacing.md,
+    backgroundColor: colors.card,
+    borderWidth: 1.5,
+    borderColor: colors.positive,
+    borderRadius: radius.xl,
+    padding: spacing.lg,
+  },
+  aiChatHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
+  aiChatBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(63,182,139,0.15)',
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  aiChatBadgeText: {
+    fontFamily: font.semibold,
+    fontSize: 11,
+    color: colors.positive,
+    letterSpacing: 0.5,
+  },
+  aiChatTitle: {
+    fontFamily: font.bold,
+    fontSize: 18,
+    color: colors.text,
+    marginBottom: 6,
+  },
+  aiChatSub: {
+    fontFamily: font.regular,
+    fontSize: 13,
+    color: colors.textDim,
+    lineHeight: 19,
+    marginBottom: spacing.md,
+  },
+  aiChatBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    backgroundColor: colors.positive,
+    borderRadius: radius.md,
+    height: 44,
+  },
+  aiChatBtnText: {
+    fontFamily: font.semibold,
+    fontSize: 14,
+    color: colors.bg,
   },
   tradeSub: {
     color: colors.textMute,
