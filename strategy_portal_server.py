@@ -2291,7 +2291,27 @@ def _load_portal_data(uid: str):
 
 async def _render_portal(request: Request, uid: str):
     """Shared logic for /app and /strategies."""
-    ctx = await asyncio.to_thread(_load_portal_data, uid)
+    cache_key = f"_portal_ctx_{uid}"
+    cached = _CACHE.get(cache_key)
+
+    ctx = None
+    if cached and time.time() < cached[1]:
+        ctx = cached[0]
+    else:
+        try:
+            ctx = await asyncio.wait_for(
+                asyncio.to_thread(_load_portal_data, uid),
+                timeout=8.0,
+            )
+            if ctx and ctx not in (None, "banned"):
+                _CACHE[cache_key] = (ctx, time.time() + 90)
+        except asyncio.TimeoutError:
+            # DB is overloaded — serve stale cache if available, else 503
+            ctx = cached[0] if cached else None
+            logger.warning(f"[render_portal] DB timeout for uid={uid} — using {'stale cache' if ctx else '503'}")
+            if ctx is None:
+                raise HTTPException(status_code=503, detail="Service temporarily overloaded — please refresh in a moment")
+
     if ctx is None:
         raise HTTPException(status_code=403, detail="Invalid access link")
     if ctx == "banned":
