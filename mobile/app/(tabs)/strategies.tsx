@@ -142,7 +142,7 @@ const StrategyCard = React.memo(function StrategyCard({ s, onPress }: { s: Strat
         <View style={styles.topRow}>
           <CoinChip symbol={symbol} size={42} />
           <View style={{ flex: 1, marginLeft: spacing.md }}>
-            <Text style={styles.title} numberOfLines={1}>{s.name}</Text>
+            <Text style={styles.title} numberOfLines={1}>{s.name || 'Unnamed Strategy'}</Text>
             <View style={styles.subRow}>
               <View style={[styles.mktBadge, { backgroundColor: `${marketColor}22`, borderColor: `${marketColor}55` }]}>
                 <Text style={[styles.mktBadgeText, { color: marketColor }]}>{marketLabel}</Text>
