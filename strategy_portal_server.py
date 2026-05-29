@@ -5516,7 +5516,7 @@ async def api_strategies(uid: str = Query(...)):
                         "outcome":     ex.outcome,
                         "pnl_pct":     round(ex.pnl_pct, 4) if ex.pnl_pct is not None else None,
                         "entry_price": ex.entry_price,
-                        "close_price": ex.close_price,
+                        "close_price": ex.exit_price,
                         "fired_at":    ex.fired_at.isoformat() if ex.fired_at else None,
                     } for ex in recent_execs],
                 })
@@ -5937,7 +5937,7 @@ async def api_marketplace_detail(listing_id: int, uid: str = Query(...)):
             },
             "recent_trades": [{"symbol": ex.symbol, "direction": ex.direction, "outcome": ex.outcome,
                 "pnl_pct": round(ex.pnl_pct, 4) if ex.pnl_pct else None,
-                "entry_price": ex.entry_price, "close_price": ex.close_price} for ex in recent_trades],
+                "entry_price": ex.entry_price, "close_price": ex.exit_price} for ex in recent_trades],
             "ratings": [{"stars": r.stars, "review": r.review, "is_verified": r.is_verified} for r in ratings],
             "my_rating": {"stars": my_rating.stars, "review": my_rating.review} if my_rating else None,
         })
