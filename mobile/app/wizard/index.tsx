@@ -622,14 +622,42 @@ function StepMarket({ s, onPick }: { s: WizardState; onPick: (ac: AssetClass) =>
 function Step1({ s, onPick }: { s: WizardState; onPick: (id: StyleId) => void }) {
   const styles_for_class = STYLES_BY_CLASS[s.assetClass];
   const ac_meta = ASSET_CLASS_LABELS[s.assetClass];
+  const quickIds = styles_for_class.filter(id => id.startsWith('quick_'));
+  const advancedIds = styles_for_class.filter(id => !id.startsWith('quick_'));
   return (
     <View>
       <StepIntro
         title={`What kind of ${ac_meta.label.toLowerCase()} trader are you?`}
         subtitle={`These presets are tuned for ${ac_meta.label.toLowerCase()} — sensible defaults for timeframe, TP/SL${ac_meta.paperOnly ? '' : ', and leverage'}. You can change anything in the next steps.`}
       />
+      {quickIds.length > 0 && (
+        <>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+            <Text style={{ color: colors.positive, fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' }}>
+              ⚡ Quick Start — fires often, no confirmations
+            </Text>
+          </View>
+          <View style={styles.styleGrid}>
+            {quickIds.map(id => (
+              <StyleCard
+                key={id}
+                icon={STYLE_LABELS[id].icon}
+                label={STYLE_LABELS[id].label}
+                tagline={STYLE_LABELS[id].tagline}
+                selected={s.style === id}
+                onPress={() => onPick(id)}
+              />
+            ))}
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16, marginBottom: 8, gap: 8 }}>
+            <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
+            <Text style={{ color: colors.textDim, fontSize: 11, fontWeight: '600', letterSpacing: 0.5 }}>MORE STYLES</Text>
+            <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
+          </View>
+        </>
+      )}
       <View style={styles.styleGrid}>
-        {styles_for_class.map(id => (
+        {advancedIds.map(id => (
           <StyleCard
             key={id}
             icon={STYLE_LABELS[id].icon}
