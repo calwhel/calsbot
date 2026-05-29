@@ -156,6 +156,17 @@ _METAL_PIP_SIZES: dict = {
     "HGUSD":  0.0001,  # Copper:      digits=4  →  1 pip = $0.0001 price move
 }
 
+# ── Typical spreads (pips) per symbol — FP Markets cTrader Raw spreads ───────
+# Used for paper trade spread deduction and position sizing reference.
+# Source: FP Markets spreads page (Raw account, typical market hours).
+# Update dynamically from cTrader bid/ask feed if available.
+TYPICAL_SPREADS_PIPS: Dict[str, float] = {
+    "EURUSD": 1.0, "GBPUSD": 1.5, "USDJPY": 1.0, "AUDUSD": 1.5,
+    "USDCAD": 1.5, "USDCHF": 1.5, "NZDUSD": 2.0, "EURGBP": 1.5,
+    "EURJPY": 1.5, "GBPJPY": 2.5, "XAUUSD": 25.0, "XAGUSD": 3.0,
+    "CLUSD":  4.0, "NGUSD":  5.0, "HGUSD":  3.0,
+}
+
 
 def pip_size(pair: str) -> float:
     """Return the pip size for a pair.
@@ -168,6 +179,36 @@ def pip_size(pair: str) -> float:
     if p in _METAL_PIP_SIZES:
         return _METAL_PIP_SIZES[p]
     return 0.01 if p in _JPY_PAIRS or p.endswith("JPY") else 0.0001
+
+
+def get_spread_pips(symbol: str) -> float:
+    """Return the typical spread in pips for a symbol (FP Markets cTrader Raw)."""
+    return TYPICAL_SPREADS_PIPS.get((symbol or "").upper(), 1.5)
+
+
+def is_weekend_gap_window(now_utc: Optional[datetime] = None) -> bool:
+    """True if we are in the first 90 minutes after the Sunday market reopen.
+
+    Forex closes Friday 22:00 UTC and reopens Sunday 22:00 UTC.  The first
+    candles of the week often gap from Friday's close — breakout and momentum
+    signals firing on that gap are unreliable.  Suppressing signals for the
+    first 90 minutes (22:00–23:30 Sunday UTC) is a safe default buffer.
+    Also suppresses for the first 60 minutes Monday 00:00 UTC in case the
+    gap spills past midnight.
+    """
+    now_utc = now_utc or datetime.utcnow()
+    wd = now_utc.weekday()  # Mon=0 … Sun=6
+    hr = now_utc.hour
+    mn = now_utc.minute
+    # Sunday 22:00–23:30 UTC (first 90 minutes after reopen)
+    if wd == 6 and hr == 22:
+        return True
+    if wd == 6 and hr == 23 and mn < 30:
+        return True
+    # Monday 00:00–00:59 UTC (continued gap buffer)
+    if wd == 0 and hr == 0:
+        return True
+    return False
 
 
 def pips_to_pct(pair: str, price: float, pips: float) -> float:

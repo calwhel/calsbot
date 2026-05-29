@@ -797,7 +797,31 @@ def _update_performance(strategy_id: int, db):
     perf.avg_loss_pct  = round(sum(losses) / len(losses), 2) if losses else 0.0
     perf.best_trade    = round(max(wins),   2) if wins   else 0.0
     perf.worst_trade   = round(min(losses), 2) if losses else 0.0
+
+    # Pip-based aggregation for forex/metals strategies
+    pips_closed = [e for e in closed if getattr(e, "pips_pnl", None) is not None]
+    if pips_closed:
+        _total_pips = sum(e.pips_pnl for e in pips_closed)
+        perf.total_pips_pnl    = round(_total_pips, 1)
+        perf.avg_pips_per_trade = round(_total_pips / len(pips_closed), 1)
+    else:
+        perf.total_pips_pnl    = None
+        perf.avg_pips_per_trade = None
+
     db.commit()
+
+    # Pool health monitor — warn when connections are nearly exhausted.
+    # pool_size=6, max_overflow=8 → hard limit 14; warn at 9+ to give early notice.
+    try:
+        from app.database import engine as _pool_eng
+        _co = _pool_eng.pool.checkedout()
+        if _co > 8:
+            logger.warning(
+                f"[PoolMonitor] {_co}/14 DB connections checked out "
+                f"(pool_size=6, max_overflow=8). Consider reducing concurrent scans."
+            )
+    except Exception:
+        pass
 
 
 # ─── Paper position monitor ──────────────────────────────────────────────────
@@ -947,16 +971,42 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
     pnl_pct   = round(raw_pnl * ex.leverage, 2)
     closed_at = datetime.utcnow()
 
+    # ── Pips P&L and spread audit (forex/metals only) ─────────────────────────
+    pips_pnl:           float | None = None
+    spread_pips_stored: float | None = None
+    _ex_ac = getattr(ex, "asset_class", "crypto") or "crypto"
+    if _ex_ac in ("forex", "metals", "commodity"):
+        try:
+            from app.services.forex_engine import (
+                pip_size as _pip_sz,
+                get_spread_pips as _gsp,
+            )
+            _ps = _pip_sz(getattr(ex, "symbol", ""))
+            if _ps > 0 and ex.entry_price and exit_price:
+                if ex.direction == "LONG":
+                    pips_pnl = round((exit_price - ex.entry_price) / _ps, 1)
+                else:
+                    pips_pnl = round((ex.entry_price - exit_price) / _ps, 1)
+            spread_pips_stored = _gsp(getattr(ex, "symbol", ""))
+        except Exception:
+            pass
+
     # Atomic close — only the first worker to execute this UPDATE wins.
     from sqlalchemy import text as _text
     result = db.execute(
         _text(
             "UPDATE strategy_executions "
-            "SET outcome=:outcome, exit_price=:exit_price, pnl_pct=:pnl, closed_at=:closed_at "
+            "SET outcome=:outcome, exit_price=:exit_price, pnl_pct=:pnl, "
+            "    closed_at=:closed_at, pips_pnl=:pips_pnl, "
+            "    spread_pips_applied=:spread_pips "
             "WHERE id=:id AND outcome='OPEN'"
         ),
-        {"outcome": outcome, "exit_price": exit_price, "pnl": pnl_pct,
-         "closed_at": closed_at, "id": ex.id},
+        {
+            "outcome":    outcome,    "exit_price":  exit_price,
+            "pnl":        pnl_pct,   "closed_at":   closed_at,
+            "pips_pnl":   pips_pnl,  "spread_pips": spread_pips_stored,
+            "id":         ex.id,
+        },
     )
     db.commit()
 
@@ -1512,6 +1562,21 @@ async def run_paper_position_monitor():
                 logger.warning(f"Candle fetch error in paper sweep: {result}")
                 continue
             symbol, positions, candles = result
+            if not candles:
+                # Warn when data is missing for trades that are old enough to evaluate.
+                # An empty candle list is normal for very recent trades (< 2 min old)
+                # but for older forex/stock trades it means FMP and yfinance both failed.
+                for _ex in positions:
+                    _elapsed_h = (
+                        datetime.utcnow() - (_ex.fired_at or datetime.utcnow())
+                    ).total_seconds() / 3600
+                    if _elapsed_h >= 0.5:  # only warn if trade is ≥30 min old
+                        _ac_label = getattr(_ex, "asset_class", "?")
+                        logger.warning(
+                            f"[PaperMonitor] EVALUATION_SKIP: exec #{_ex.id} "
+                            f"{symbol} ({_ac_label}) — no 1m candle data after "
+                            f"{_elapsed_h:.1f}h open. Check FMP/yfinance connectivity."
+                        )
             for ex in positions:
                 write_db = SessionLocal()
                 try:
@@ -2336,17 +2401,28 @@ async def evaluate_and_fire(
             except Exception as _dle:
                 logger.debug(f"[Strategy {strategy.id}] daily pip loss check error: {_dle}")
 
-    # Global cooldown: if ANY symbol fired within cooldown window, pause entire strategy
-    last_global = _last_any_fired_time(strategy.id, db)
-    if last_global:
-        elapsed_global = (datetime.utcnow() - last_global).total_seconds() / 60
-        if elapsed_global < cooldown_mins:
-            _bump("blk_cooldown")
-            logger.debug(
-                f"[Strategy {strategy.id}] Global cooldown active — "
-                f"{elapsed_global:.1f}/{cooldown_mins} min elapsed"
-            )
-            return
+    # ── Forex: weekend gap buffer ─────────────────────────────────────────────
+    # Block signal evaluation in the first 90 minutes after the Sunday-night
+    # market reopen (22:00–23:30 UTC) and the first 60 minutes of Monday
+    # (00:00–00:59 UTC).  Gaps can be large and mislead breakout/momentum
+    # signals, so we simply suppress new entries during this window.
+    if asset_class == "forex":
+        try:
+            from app.services.forex_engine import is_weekend_gap_window as _is_gap
+            if _is_gap():
+                _bump("blk_weekend_gap")
+                logger.info(
+                    f"[Strategy {strategy.id}] Weekend gap buffer active "
+                    f"(Sunday reopen window) — skipping signal evaluation"
+                )
+                return
+        except Exception:
+            pass
+
+    # Cooldown is now per-symbol only (handled in the candidate-symbol loop
+    # below). The old global cooldown blocked ALL symbols whenever ANY symbol
+    # fired — this prevented multi-pair strategies (e.g. EURUSD + GBPUSD)
+    # from firing on a second pair while the first was in cooldown.
 
     # Strictness level based on max trades/day
     # 1-2/day = sniper (all conditions must pass + 80% pass-rate gate)

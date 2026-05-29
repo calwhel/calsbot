@@ -20,8 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
+
+_FMP_API_KEY: str = os.environ.get("FMP_API_KEY", "")
 
 from app.services.asset_classes import (
     ASSET_CLASS_CRYPTO,
@@ -245,6 +248,47 @@ async def get_klines(
                 f"({_bn_interval}): {_be}"
             )
         # fall through to yfinance below
+
+    # ── FMP 1-minute REST — primary source for forex/metals paper evaluation ─────
+    # FMP provides real broker mid-prices for forex with no 7-day cap, making it
+    # better than yfinance for paper trade OHLC evaluation. Used only for 1m
+    # requests (paper position monitor). Falls through to yfinance on failure.
+    if timeframe == "1m" and _FMP_API_KEY:
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=10.0) as _fc:
+                _fr = await _fc.get(
+                    f"https://financialmodelingprep.com/api/v3/historical-chart/1min/{symbol.upper()}",
+                    params={"apikey": _FMP_API_KEY, "limit": limit + 5},
+                )
+            if _fr.status_code == 200:
+                _fmp_data = _fr.json()
+                if _fmp_data and isinstance(_fmp_data, list):
+                    # FMP returns newest-first — reverse to oldest-first
+                    rows: List[List[float]] = []
+                    for bar in reversed(_fmp_data[-(limit + 5):]):
+                        try:
+                            ts_ms = int(
+                                datetime.fromisoformat(bar["date"]).timestamp() * 1000
+                            )
+                            rows.append([
+                                ts_ms,
+                                float(bar["open"]), float(bar["high"]),
+                                float(bar["low"]),  float(bar["close"]),
+                                float(bar.get("volume", 0) or 0),
+                            ])
+                        except Exception:
+                            continue
+                    if rows:
+                        rows = rows[-limit:]
+                        _KLINE_CACHE[(symbol.upper(), "1m_fmp", limit)] = (rows, now)
+                        logger.info(
+                            f"[tradfi] klines ok (FMP 1min): {symbol.upper()} → {len(rows)} bars"
+                        )
+                        return rows
+        except Exception as _fe:
+            logger.debug(f"[tradfi] FMP 1min failed {symbol}: {_fe}")
+        # fall through to yfinance
 
     # ── yfinance download() — forex/indices/stocks ────────────────────────────
     ticker = _resolve_ticker(cls, symbol)

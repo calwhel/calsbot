@@ -1,0 +1,187 @@
+You are upgrading a forex strategy builder platform called TradeHub Markets.
+We use Python (Flask/FastAPI) backend, PostgreSQL (Neon serverless), 
+React/TypeScript frontend, and execute live trades via cTrader through 
+FP Markets. Paper trading uses internal OHLC evaluation.
+
+Please implement ALL of the following upgrades:
+
+═══════════════════════════════════════
+UPGRADE 1 — FIX PAPER TRADE EVALUATION (forex OHLC feed)
+═══════════════════════════════════════
+
+PROBLEM: The paper trade evaluator (_evaluate_paper_position_against_candles 
+in strategy_executor.py) currently fetches 1-minute OHLC from MEXC, which is 
+a crypto exchange and does not list forex pairs. This causes silent failures 
+or skipped evaluations for all forex/metals paper trades.
+
+FIX:
+- In _evaluate_paper_position_against_candles(), detect asset class from the 
+  symbol or strategy config
+- For forex and metals symbols (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, 
+  USDCHF, NZDUSD, EURGBP, EURJPY, GBPJPY, XAUUSD, XAGUSD, CLUSD, NGUSD, 
+  HGUSD), fetch 1-min OHLC from FMP REST endpoint as PRIMARY source:
+  GET https://financialmodelingprep.com/api/v3/historical-chart/1min/{symbol}?apikey={FMP_KEY}
+- Fallback to yfinance if FMP fails. For yfinance, map symbols:
+  EURUSD → EURUSD=X, GBPUSD → GBPUSD=X, USDJPY → USDJPY=X etc.
+  XAUUSD → GC=F, XAGUSD → SI=F, CLUSD → CL=F
+- Only use MEXC path for crypto symbols (BTC, ETH etc.)
+- Log which data source was used for each evaluation so we can monitor 
+  fallback frequency
+- Do NOT silently skip evaluation if data fetch fails — raise a warning 
+  and mark the execution as EVALUATION_ERROR so we can see it in the DB
+
+═══════════════════════════════════════
+UPGRADE 2 — SPREAD MODELLING FOR PAPER TRADES
+═══════════════════════════════════════
+
+PROBLEM: Paper trades have no spread deducted, so results are overly 
+optimistic. A trade that barely hits TP by 1 pip counts as a WIN but 
+would lose to spread in live trading.
+
+FIX:
+- Create a shared constants file (constants.py or add to forex_engine.py) 
+  with typical spreads per symbol in pips:
+
+  TYPICAL_SPREADS_PIPS = {
+    "EURUSD": 1.0, "GBPUSD": 1.5, "USDJPY": 1.0, "AUDUSD": 1.5,
+    "USDCAD": 1.5, "USDCHF": 1.5, "NZDUSD": 2.0, "EURGBP": 1.5,
+    "EURJPY": 1.5, "GBPJPY": 2.5, "XAUUSD": 25.0, "XAGUSD": 3.0,
+    "CLUSD": 4.0, "NGUSD": 5.0, "HGUSD": 3.0
+  }
+
+- We use FP Markets via cTrader for live execution. If the cTrader API 
+  provides real-time bid/ask spread data, use that to update these spread 
+  values dynamically instead of hardcoded estimates. Check if cTrader 
+  OpenAPI provides spot spread per symbol and if so, cache and use those.
+
+- In the paper evaluation function, before checking TP/SL hits, adjust 
+  the effective entry price:
+  - LONG trade: effective_entry = entry_price + (spread_price / 2)
+  - SHORT trade: effective_entry = entry_price - (spread_price / 2)
+  where spread_price = spread_pips * pip_size
+
+- Store a spread_pips_applied column on strategy_executions so we can 
+  audit what spread was used for each paper trade
+
+- Add a note in the UI on paper trade results: "Results include estimated 
+  spread of X pips" so users understand the simulation is realistic
+
+═══════════════════════════════════════
+UPGRADE 3 — FIX P&L DISPLAY AND AGGREGATION FOR FOREX
+═══════════════════════════════════════
+
+PROBLEM: strategy_performance sums pnl_pct which is near-zero for forex 
+at 1x leverage (e.g. 50 pip EURUSD move = ~0.33%), making strategies look 
+flat. Pips are the correct primary metric for forex traders.
+
+FIX PART A — Database:
+- Add column to strategy_executions: pips_pnl NUMERIC(10, 1)
+- Add column to strategy_executions: spread_pips_applied NUMERIC(6, 1)
+- Add column to strategy_performance: total_pips_pnl NUMERIC(10, 1)
+- Add column to strategy_performance: avg_pips_per_trade NUMERIC(8, 1)
+- Write the migration SQL and apply it
+
+FIX PART B — Backend calculation:
+- When closing any forex/metals trade, calculate and store pips_pnl:
+  pip_size = PIP_SIZES[symbol]
+  pips_pnl = (close_price - entry_price) / pip_size
+  if direction == 'short': pips_pnl = -pips_pnl
+- Update strategy_performance aggregation to sum pips_pnl for forex 
+  strategies into total_pips_pnl and avg_pips_per_trade
+
+FIX PART C — Frontend:
+- On strategy cards and performance dashboards, for forex/metals strategies:
+  Show pips as the PRIMARY headline metric (e.g. "+247 pips")
+  Show pnl_pct as secondary (e.g. "0.82%")
+- For crypto/stocks: keep pnl_pct as primary (no change)
+- Update the strategy performance page to show a pips P&L chart for forex
+  instead of / alongside the % chart
+
+═══════════════════════════════════════
+UPGRADE 4 — WEEKEND GAP DETECTION
+═══════════════════════════════════════
+
+PROBLEM: When forex markets reopen Sunday ~22:00 UTC, the first candle 
+often gaps significantly from Friday's close. This gap can falsely trigger 
+breakout or momentum signals, firing bad trades on noise.
+
+FIX:
+- Add a function is_weekend_gap_candle(df, symbol) in forex_engine.py
+- Logic: if current time is Sunday 21:45–22:15 UTC OR Monday 00:00 UTC 
+  and the gap between current open and previous close exceeds 0.5x ATR(14), 
+  return True
+- In the strategy scanner loop, call this check before evaluating any 
+  entry conditions for forex/metals symbols
+- If True, skip signal evaluation and log: 
+  "Weekend gap skip: {symbol} gap={gap_pips}p ATR={atr_pips}p"
+- Also suppress signals for the first 2 completed 1-minute candles after 
+  market open as a secondary safety buffer regardless of gap size
+
+═══════════════════════════════════════
+UPGRADE 5 — DATABASE CONNECTION SAFETY FOR NEON
+═══════════════════════════════════════
+
+PROBLEM: Neon serverless Postgres has low concurrent connection limits. 
+The 15-second strategy scanner loop across many strategies may be opening 
+new connections instead of reusing pooled ones, causing exhaustion under load.
+
+FIX:
+- Audit all database connection points in strategy_executor.py, 
+  forex_engine.py, and any other files that touch the DB
+- Ensure SQLAlchemy engine is created ONCE at app startup with QueuePool:
+  engine = create_engine(
+    DATABASE_URL,
+    poolclass=QueuePool,
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,
+    pool_pre_ping=True,
+    pool_recycle=300
+  )
+- Replace any direct psycopg2 connections or per-request engine creation 
+  with this shared pool
+- Wrap ALL database queries in "with engine.connect() as conn:" context 
+  managers so connections are always returned to pool
+- Add a connection pool monitor: log a WARNING if pool.checkedout() > 8 
+  during scanner runs
+- For Neon specifically: ensure the connection string uses the 
+  ?sslmode=require parameter and the pooled connection endpoint 
+  (not the direct endpoint) if available on our plan
+
+═══════════════════════════════════════
+UPGRADE 6 — PER-SYMBOL COOLDOWN SCOPING
+═══════════════════════════════════════
+
+PROBLEM: If cooldown is keyed only on strategy_id, a EURUSD trade firing 
+cooldown will block a valid GBPUSD signal in the same strategy. Cooldown 
+should be per symbol within a strategy.
+
+FIX:
+- Find everywhere cooldown is checked and set in strategy_executor.py 
+  (search for "cooldown")
+- Change the cooldown key from:
+  cooldown_key = f"cooldown:{strategy_id}"
+  to:
+  cooldown_key = f"cooldown:{strategy_id}:{symbol}"
+- Verify this change applies to both the cooldown CHECK (before entry) 
+  and the cooldown SET (after entry fires)
+- Also check the daily trade cap — if it's capped per strategy, that's 
+  correct and should stay as-is. But add a per-symbol daily cap option 
+  in the wizard (e.g. max 2 trades per symbol per day) as an optional 
+  field alongside the existing strategy-level cap
+
+═══════════════════════════════════════
+GENERAL INSTRUCTIONS
+═══════════════════════════════════════
+
+- Make all DB schema changes backward compatible (use ALTER TABLE ADD 
+  COLUMN with defaults, not destructive changes)
+- All new columns should be nullable so existing rows don't break
+- After each upgrade, add a comment block at the top of modified files:
+  # UPGRADED: [date] — [what changed] so we can track what was modified
+- Do not change any crypto trading logic — only forex/metals/stocks paths
+- Do not change the cTrader live execution integration — that is working
+- Run through each upgrade in order (1 through 6) and confirm each is 
+  complete before moving to the next
+- If any upgrade requires an environment variable (e.g. FMP_KEY), flag 
+  it clearly so we can add it to Replit Secrets

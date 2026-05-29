@@ -1,0 +1,1 @@
+- [Neon startup migrations](neon-startup-migrations.md) — ALTER TABLE on busy tables hangs uvicorn startup; use existence-check-first pattern to skip DDL when columns are present.

@@ -49,6 +49,8 @@ class StrategyExecution(Base):
     position_size   = Column(Float, nullable=True)         # USD notional
     outcome         = Column(String(20), default="OPEN")   # OPEN | WIN | LOSS | BREAKEVEN | CANCELLED
     pnl_pct         = Column(Float, nullable=True)
+    pips_pnl        = Column(Float, nullable=True)          # P&L in pips (forex/metals only)
+    spread_pips_applied = Column(Float, nullable=True)      # spread deducted in paper eval
     pnl_usd         = Column(Float, nullable=True)
     conditions_met  = Column(JSON, nullable=True)          # which conditions triggered
     fired_at        = Column(DateTime, default=datetime.utcnow)
@@ -102,9 +104,11 @@ class StrategyPerformance(Base):
     avg_win_pct   = Column(Float, default=0.0)
     avg_loss_pct  = Column(Float, default=0.0)
     avg_rr        = Column(Float, default=0.0)
-    best_trade    = Column(Float, default=0.0)
-    worst_trade   = Column(Float, default=0.0)
-    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    best_trade        = Column(Float, default=0.0)
+    worst_trade       = Column(Float, default=0.0)
+    total_pips_pnl    = Column(Float, nullable=True)        # cumulative pips (forex/metals)
+    avg_pips_per_trade = Column(Float, nullable=True)       # avg pips per closed trade
+    updated_at        = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     strategy = relationship("UserStrategy", back_populates="performance")
 
@@ -210,23 +214,44 @@ def init_strategy_tables(engine):
     # portal instances (dev + production) share the same Neon database.
     from sqlalchemy import text
     with engine.connect() as conn:
+        # Disable statement timeout for migrations — Neon's default is short and
+        # ALTER TABLE can be cancelled under load without this guard.
+        try:
+            conn.execute(text("SET statement_timeout = 0"))
+            conn.commit()
+        except Exception:
+            pass
+
         existing_cols = {
             (row[0], row[1])
             for row in conn.execute(text(
                 "SELECT table_name, column_name "
                 "FROM information_schema.columns "
                 "WHERE table_schema = 'public' "
-                "AND table_name IN ('strategy_executions', 'strategy_marketplace')"
+                "AND table_name IN ('strategy_executions', 'strategy_marketplace', 'strategy_performance')"
             ))
         }
 
         for col, typ in [
-            ("is_paper", "BOOLEAN DEFAULT FALSE"),
-            ("tp2_price", "FLOAT"),
+            ("is_paper",             "BOOLEAN DEFAULT FALSE"),
+            ("tp2_price",            "FLOAT"),
+            ("pips_pnl",             "FLOAT"),
+            ("spread_pips_applied",  "FLOAT"),
         ]:
             if ("strategy_executions", col) not in existing_cols:
                 try:
-                    conn.execute(text(f"ALTER TABLE strategy_executions ADD COLUMN {col} {typ}"))
+                    conn.execute(text(f"ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS {col} {typ}"))
+                    conn.commit()
+                except Exception:
+                    pass
+
+        for col, typ in [
+            ("total_pips_pnl",     "FLOAT"),
+            ("avg_pips_per_trade", "FLOAT"),
+        ]:
+            if ("strategy_performance", col) not in existing_cols:
+                try:
+                    conn.execute(text(f"ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS {col} {typ}"))
                     conn.commit()
                 except Exception:
                     pass

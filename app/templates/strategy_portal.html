@@ -3763,8 +3763,11 @@ async function loadMyStrategies(){
           <div class="win-bar"><div class="win-fill ${wr<40?'low':''}" style="width:${wr}%"></div></div>
         </div>
         <div class="cm-item">
-          <div class="cm-val ${pC(p.total_pnl)}">${pS(p.total_pnl)}</div>
-          <div class="cm-lbl">Total P&L</div>
+          ${(assetClass==='forex'||assetClass==='metals')&&p.total_pips_pnl!=null
+            ?`<div class="cm-val ${pC(p.total_pips_pnl)}">${p.total_pips_pnl>=0?'+':''}${Math.round(p.total_pips_pnl)}p</div>
+          <div class="cm-lbl">Total Pips</div>`
+            :`<div class="cm-val ${pC(p.total_pnl)}">${pS(p.total_pnl)}</div>
+          <div class="cm-lbl">Total P&L</div>`}
         </div>
         <div class="cm-item">
           <div class="cm-val">${p.open_trades||0}</div>

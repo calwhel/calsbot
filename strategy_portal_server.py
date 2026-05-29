@@ -678,6 +678,25 @@ def _ensure_tables():
     except Exception as e:
         logger.warning(f"_ensure_tables(indexes outer): {e}")
 
+    # Forex pip P&L tracking + spread audit columns (additive, nullable — safe to
+    # run on any worker; IF NOT EXISTS makes it idempotent).
+    try:
+        with engine.begin() as conn:
+            for ddl in (
+                "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS pips_pnl FLOAT",
+                "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS spread_pips_applied FLOAT",
+                "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS total_pips_pnl FLOAT",
+                "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS avg_pips_per_trade FLOAT",
+            ):
+                conn.execute(sa.text(ddl))
+        logger.info("_ensure_tables: forex pip columns ready")
+    except Exception as _pe:
+        _ps = str(_pe)
+        if "already exists" in _ps or "duplicate" in _ps:
+            logger.info("_ensure_tables(pip columns): already present")
+        else:
+            logger.warning(f"_ensure_tables(pip columns): {_pe}")
+
     # cTrader forex broker columns (replaces OANDA). OAuth2 tokens from
     # Spotware Open API. Additive nullable ALTERs — safe for multi-worker race.
     try:
@@ -898,8 +917,91 @@ def _ensure_tables():
 
 @app.on_event("startup")
 async def startup():
-    # Run schema migrations in the background so the server starts accepting
-    # requests immediately instead of blocking on DB round-trips.
+    # ── Critical migrations — run in a thread so the event loop stays free ─────
+    # These add new ORM-mapped columns that SQLAlchemy includes in every SELECT.
+    # If they're deferred to the background task, the first DB query errors with
+    # "column does not exist".  IF NOT EXISTS makes each ALTER idempotent.
+    # asyncio.to_thread() ensures the synchronous engine.connect() never blocks
+    # the uvicorn event loop (which caused the server to hang waiting for a lock).
+    _critical_ddls = [
+        "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS pips_pnl FLOAT",
+        "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS spread_pips_applied FLOAT",
+        "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS total_pips_pnl FLOAT",
+        "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS avg_pips_per_trade FLOAT",
+    ]
+
+    def _run_critical_migs():
+        """Fast path: check which columns are missing, then only ALTER TABLE for
+        those.  information_schema reads are lock-free, so the check is always
+        instant regardless of executor activity.  ALTER TABLE is only issued (with
+        lock-timeout retry) on the rare first-deployment scenario where columns
+        are genuinely absent."""
+        import sqlalchemy as _sa
+        import time as _t
+
+        # --- fast existence check (no table locks required) ---
+        with engine.connect() as _chk:
+            _rows = _chk.execute(_sa.text("""
+                SELECT table_name, column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND (
+                    (table_name = 'strategy_executions'
+                     AND column_name IN ('pips_pnl', 'spread_pips_applied'))
+                    OR
+                    (table_name = 'strategy_performance'
+                     AND column_name IN ('total_pips_pnl', 'avg_pips_per_trade'))
+                  )
+            """)).fetchall()
+        _existing = {(r[0], r[1]) for r in _rows}
+
+        _col_map = {
+            "ALTER TABLE strategy_executions  ADD COLUMN pips_pnl FLOAT":
+                ("strategy_executions",  "pips_pnl"),
+            "ALTER TABLE strategy_executions  ADD COLUMN spread_pips_applied FLOAT":
+                ("strategy_executions",  "spread_pips_applied"),
+            "ALTER TABLE strategy_performance ADD COLUMN total_pips_pnl FLOAT":
+                ("strategy_performance", "total_pips_pnl"),
+            "ALTER TABLE strategy_performance ADD COLUMN avg_pips_per_trade FLOAT":
+                ("strategy_performance", "avg_pips_per_trade"),
+        }
+        _needed = [ddl for ddl, key in _col_map.items() if key not in _existing]
+        if not _needed:
+            return  # all columns present — nothing to do, returns instantly
+
+        # --- first-deployment path: retry with short lock_timeout ---
+        for _ddl in _needed:
+            for _attempt in range(25):
+                _conn = engine.connect()
+                try:
+                    _conn.execute(_sa.text("SET lock_timeout = '3s'"))
+                    _conn.execute(_sa.text("SET statement_timeout = '10s'"))
+                    _conn.execute(_sa.text(_ddl))
+                    _conn.commit()
+                    break
+                except Exception as _e:
+                    _em = str(_e)
+                    try:
+                        _conn.rollback()
+                    except Exception:
+                        pass
+                    if "already exists" in _em or "duplicate column" in _em:
+                        break
+                    _t.sleep(2)
+                finally:
+                    try:
+                        _conn.close()
+                    except Exception:
+                        pass
+
+    try:
+        await asyncio.wait_for(asyncio.to_thread(_run_critical_migs), timeout=120)
+        logger.info("startup: critical pip columns ready")
+    except Exception as _ce:
+        logger.warning(f"startup: critical column migration warning: {_ce}")
+
+    # Run remaining schema migrations in the background so the server starts
+    # accepting requests immediately instead of blocking on DB round-trips.
     asyncio.create_task(_startup_background())
     logger.info("Strategy portal started on port 5000 (migrations running in background)")
 
@@ -5296,16 +5398,18 @@ async def api_strategies(uid: str = Query(...)):
                     "created_at":   s.created_at.isoformat() if s.created_at else None,
                     "health_score": health_score,
                     "performance": {
-                        "total_trades": int(perf.total_trades or 0),
-                        "wins":         int(perf.wins or 0),
-                        "losses":       int(perf.losses or 0),
-                        "win_rate":     round(perf.win_rate or 0, 1),
-                        "total_pnl":    round(perf.total_pnl_pct or 0, 2),
-                        "open_trades":  int(perf.open_trades or 0),
-                        "best_trade":   round(perf.best_trade or 0, 2),
-                        "worst_trade":  round(perf.worst_trade or 0, 2),
-                        "avg_win_pct":  round(perf.avg_win_pct or 0, 2),
-                        "avg_loss_pct": round(perf.avg_loss_pct or 0, 2),
+                        "total_trades":      int(perf.total_trades or 0),
+                        "wins":              int(perf.wins or 0),
+                        "losses":            int(perf.losses or 0),
+                        "win_rate":          round(perf.win_rate or 0, 1),
+                        "total_pnl":         round(perf.total_pnl_pct or 0, 2),
+                        "total_pips_pnl":    round(perf.total_pips_pnl, 1) if perf.total_pips_pnl is not None else None,
+                        "avg_pips_per_trade": round(perf.avg_pips_per_trade, 1) if perf.avg_pips_per_trade is not None else None,
+                        "open_trades":       int(perf.open_trades or 0),
+                        "best_trade":        round(perf.best_trade or 0, 2),
+                        "worst_trade":       round(perf.worst_trade or 0, 2),
+                        "avg_win_pct":       round(perf.avg_win_pct or 0, 2),
+                        "avg_loss_pct":      round(perf.avg_loss_pct or 0, 2),
                     } if perf else {},
                     "recent_trades": [{
                         "symbol":      ex.symbol,
