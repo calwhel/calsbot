@@ -631,7 +631,7 @@ async def _compile_with_anthropic(user_description: str) -> Optional[Dict]:
         import anthropic
         client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
         response = await client.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-opus-4-8",
             max_tokens=3000,
             system=COMPILER_SYSTEM_PROMPT,
             messages=[{
@@ -755,7 +755,7 @@ async def _pine_compile_with_anthropic(pine_code: str) -> Optional[Dict]:
         client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
         response = await _asyncio.wait_for(
             client.messages.create(
-                model="claude-haiku-4-5",   # faster + cheaper for structured extraction
+                model="claude-sonnet-4-5",   # faster + cheaper for structured extraction
                 max_tokens=2500,
                 system=PINESCRIPT_COMPILER_PROMPT,
                 messages=[{
@@ -863,7 +863,7 @@ Reply ONLY with this JSON (no other text):
 }}"""
 
         response = await client.messages.create(
-            model="claude-haiku-4-5",
+            model="claude-sonnet-4-5",
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -901,7 +901,7 @@ async def generate_strategy_summary(config: Dict) -> str:
         import anthropic
         client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
         response = await client.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-opus-4-8",
             max_tokens=200,
             messages=[{"role": "user", "content": summary_prompt}],
         )

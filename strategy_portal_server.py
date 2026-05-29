@@ -9468,7 +9468,7 @@ FIELD RULES for the ###STRATEGY### line:
         client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         resp = await asyncio.wait_for(
             client.messages.create(
-                model="claude-sonnet-4-5",
+                model="claude-opus-4-8",
                 max_tokens=700,
                 system=system_prompt,
                 messages=api_messages,
@@ -9673,7 +9673,7 @@ Return ONLY valid JSON (no markdown, no explanation outside the JSON):
         import anthropic as _anthropic
         _ac = _anthropic.Anthropic()
         resp = _ac.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-opus-4-8",
             max_tokens=2000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_msg}],
@@ -10385,7 +10385,7 @@ Return ONLY this JSON (no markdown, no extra text):
     try:
         client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         msg = await client.messages.create(
-            model="claude-haiku-4-5",
+            model="claude-sonnet-4-5",
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -10635,7 +10635,7 @@ Entry conditions:
     try:
         client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         resp = await client.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-opus-4-8",
             max_tokens=500,
             system=system_prompt,
             messages=api_messages,
@@ -11228,7 +11228,7 @@ async def backtest_scan(request: Request):
             _ac = _ant.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
             _msg = await asyncio.wait_for(
                 _ac.messages.create(
-                    model="claude-haiku-4-5",
+                    model="claude-sonnet-4-5",
                     max_tokens=140,
                     system="You are a crypto quant analyst. Respond with exactly 1 short sentence (max 25 words) explaining why this strategy + coin + timeframe + risk combo wins. No markdown.",
                     messages=[{"role": "user", "content":
@@ -11513,7 +11513,7 @@ Respond with ONLY this JSON:
         _ac = _anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         _msg = await asyncio.wait_for(
             _ac.messages.create(
-                model="claude-haiku-4-5",
+                model="claude-sonnet-4-5",
                 max_tokens=900,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}],
