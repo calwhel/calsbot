@@ -9744,12 +9744,12 @@ FIELD RULES for the ###STRATEGY### line:
         client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         resp = await asyncio.wait_for(
             client.messages.create(
-                model="claude-sonnet-4-5",
+                model="claude-opus-4-8",
                 max_tokens=700,
                 system=system_prompt,
                 messages=api_messages,
             ),
-            timeout=25.0,
+            timeout=30.0,
         )
         raw = resp.content[0].text
     except asyncio.TimeoutError:
