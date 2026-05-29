@@ -393,7 +393,7 @@ export default function StrategyDetailScreen() {
         {/* Improve via AI Chat — loads existing config into the chat builder */}
         <Pressable
           onPress={() => router.push(
-            `/build/chat?strategyId=${sid}&strategyName=${encodeURIComponent(strategy.name)}&assetClass=${strategy.asset_class || strategy.config?.asset_class || 'crypto'}` as any
+            `/build/chat?strategyId=${sid}&strategyName=${encodeURIComponent(strategy.name)}&assetClass=${(strategy as any).asset_class || strategy.config?.asset_class || 'crypto'}` as any
           )}
           style={({ pressed }) => [styles.aiChatCard, pressed && { opacity: 0.85 }]}
         >
@@ -415,10 +415,10 @@ export default function StrategyDetailScreen() {
         {/* Stats */}
         <View style={[styles.statRow, { marginTop: spacing.lg }]}>
           <StatCard
-            label="Total P&L"
-            value={trades > 0 ? fmtPnl(pnl) : '—'}
-            sub={trades > 0 ? fmtApproxDollar(pnl, accountBalance) : undefined}
-            tone={pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : 'neutral'}
+            label={isForexLike ? 'Total Pips' : 'Total P&L'}
+            value={trades > 0 ? (isForexLike ? fmtPips(perf.total_pips_pnl ?? 0) : fmtPnl(pnl)) : '—'}
+            sub={isForexLike ? (perf.avg_pips_per_trade != null ? `${perf.avg_pips_per_trade > 0 ? '+' : ''}${perf.avg_pips_per_trade.toFixed(1)} avg/trade` : undefined) : (trades > 0 ? fmtApproxDollar(pnl, accountBalance) : undefined)}
+            tone={(isForexLike ? (perf.total_pips_pnl ?? 0) : pnl) > 0 ? 'positive' : (isForexLike ? (perf.total_pips_pnl ?? 0) : pnl) < 0 ? 'negative' : 'neutral'}
           />
           <View style={{ width: spacing.md }} />
           <StatCard label="Win rate" value={trades > 0 ? `${wr.toFixed(1)}%` : '—'} sub={`${trades} closed`} />

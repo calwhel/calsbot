@@ -48,6 +48,11 @@ function fmtPnl(v: number): string {
   return `${sign}${v.toFixed(2)}%`;
 }
 
+function fmtPips(v: number): string {
+  const sign = v > 0 ? '+' : '';
+  return `${sign}${v.toFixed(1)} pips`;
+}
+
 /** Synthetic sparkline trajectory (no per-trade equity available). */
 function buildSpark(pnl: number, wr: number, trades: number): number[] {
   if (trades < 2) return [];
@@ -83,6 +88,7 @@ const MARKET_COLOR: Record<string, string> = {
 const StrategyCard = React.memo(function StrategyCard({ s, onPress }: { s: Strategy; onPress: () => void }) {
   const perf = s.performance || {};
   const pnl = perf.total_pnl ?? 0;
+  const pipsPnl = perf.total_pips_pnl ?? null;
   const trades = perf.total_trades ?? 0;
   const wr = perf.win_rate ?? 0;
   const spark = buildSpark(pnl, wr, trades);
@@ -90,13 +96,15 @@ const StrategyCard = React.memo(function StrategyCard({ s, onPress }: { s: Strat
   const symbol = (s.config?.symbol as string) || 'BTC';
   const timeframe = (s.config?.timeframe as string) || '';
   const assetClass = ((s.config as Record<string, any>)?.asset_class as string) || 'crypto';
+  const isForexLike = assetClass === 'forex' || assetClass === 'index';
   const marketLabel = MARKET_LABEL[assetClass] ?? assetClass.toUpperCase();
   const marketColor = MARKET_COLOR[assetClass] ?? '#5B6CF7';
 
   const uid = React.useId().replace(/:/g, '');
   const haloId = `card-halo-${uid}`;
   const sheenId = `card-sheen-${uid}`;
-  const tonePrimary = pnl > 0 ? colors.positive : pnl < 0 ? colors.negative : colors.textDim;
+  const displayPnl = isForexLike ? (pipsPnl ?? 0) : pnl;
+  const tonePrimary = displayPnl > 0 ? colors.positive : displayPnl < 0 ? colors.negative : colors.textDim;
 
   return (
     <Pressable
@@ -162,14 +170,14 @@ const StrategyCard = React.memo(function StrategyCard({ s, onPress }: { s: Strat
         {/* Metrics row */}
         <View style={styles.metricsRow}>
           <View style={styles.metricMain}>
-            <Text style={styles.metricLabel}>P&L</Text>
+            <Text style={styles.metricLabel}>{isForexLike ? 'Pips' : 'P&L'}</Text>
             <Text
               style={[
                 styles.metricMainValue,
-                { color: pnl > 0 ? colors.positive : pnl < 0 ? colors.negative : colors.text },
+                { color: displayPnl > 0 ? colors.positive : displayPnl < 0 ? colors.negative : colors.text },
               ]}
             >
-              {trades > 0 ? fmtPnl(pnl) : '—'}
+              {trades > 0 ? (isForexLike ? fmtPips(pipsPnl ?? 0) : fmtPnl(pnl)) : '—'}
             </Text>
           </View>
 
