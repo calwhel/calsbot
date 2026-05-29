@@ -2,13 +2,14 @@
 Stocks / forex / indices price + kline fetcher.
 
 Price path:
-  yfinance Ticker.fast_info — real-time mid price, no exchange delay for
-  forex/indices. Cached 20 s. (FMP WebSocket attempted first but exits on
-  plan-level 401 so effectively always falls straight to fast_info.)
+  Metals (XAUUSD/XAGUSD): Binance spot API (XAUUSDT/XAGUSDT) — real-time,
+  no futures contango premium, same format as crypto pairs.
+  Others: FMP real-time WebSocket → yfinance fast_info fallback.
 
 Kline path:
-  yfinance download() — intraday OHLC up to the current minute for forex/
-  metals/indices (no 15-min delay for these asset classes). Cached 60 s.
+  Metals (XAUUSD/XAGUSD): Binance spot API — returns closed candles only
+  (we fetch limit+1 bars and drop the still-forming last bar).
+  Others: yfinance download() — intraday OHLC for forex/indices.
 
 Returned shapes mirror the crypto helpers so the strategy executor can
 consume them without branching:
@@ -54,6 +55,25 @@ _TF_MAP: Dict[str, Tuple[str, str]] = {
     "1d":  ("1d",  "5y"),
 }
 
+# ── Binance spot metals ──────────────────────────────────────────────────────
+# XAUUSD and XAGUSD trade on Binance spot as XAUUSDT / XAGUSDT.
+# Benefits over yfinance GC=F (gold futures):
+#   • No contango premium — spot price matches forex broker quotes
+#   • Same kline format as crypto (direct list, no pandas wrangling)
+#   • Fetching limit+1 bars and dropping the last gives only CLOSED candles,
+#     preventing signals from firing on a still-forming bar.
+_METALS_BINANCE_MAP: Dict[str, str] = {
+    "XAUUSD": "XAUUSDT",
+    "XAGUSD": "XAGUSDT",
+}
+_BINANCE_SPOT_BASE = "https://api.binance.com/api/v3"
+
+# Binance interval names match our internal convention directly.
+_BINANCE_INTERVAL_MAP: Dict[str, str] = {
+    "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m",
+    "30m": "30m", "1h": "1h", "4h": "4h", "1d": "1d",
+}
+
 
 def _resolve_ticker(asset_class: str, symbol: str) -> Optional[str]:
     if normalize_asset_class(asset_class) == ASSET_CLASS_CRYPTO:
@@ -93,11 +113,36 @@ def _yf_download_blocking(ticker: str, interval: str, period: str):
 async def get_price(symbol: str, asset_class: str) -> Optional[float]:
     """
     Latest trade price.
-    Priority: FMP real-time feed → yfinance (15-min delayed fallback).
+    Metals: Binance spot (XAUUSDT/XAGUSDT) → FMP → yfinance fallback.
+    Others: FMP real-time feed → yfinance fast_info fallback.
     """
     cls = normalize_asset_class(asset_class)
     if cls == ASSET_CLASS_CRYPTO:
         return None
+
+    # ── 0. Binance spot — metals only (XAUUSDT / XAGUSDT) ────────────────────
+    _bn_sym = _METALS_BINANCE_MAP.get(symbol.upper())
+    if _bn_sym:
+        _cache_key = f"binance:{_bn_sym}"
+        now = datetime.utcnow()
+        cached = _PRICE_CACHE.get(_cache_key)
+        if cached and (now - cached[1]) < _PRICE_TTL:
+            return cached[0]
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=3.0) as _c:
+                r = await _c.get(
+                    f"{_BINANCE_SPOT_BASE}/ticker/price",
+                    params={"symbol": _bn_sym},
+                )
+            if r.status_code == 200:
+                px = float(r.json().get("price", 0))
+                if px:
+                    _PRICE_CACHE[_cache_key] = (px, now)
+                    return px
+        except Exception as _be:
+            logger.debug(f"[tradfi] Binance spot price failed for {_bn_sym}: {_be}")
+        # fall through to FMP / yfinance below
 
     # ── 1. FMP real-time WebSocket feed (by-the-second, always active) ────────
     try:
@@ -138,20 +183,76 @@ async def get_klines(
 ) -> List[List[float]]:
     """
     Return up to `limit` OHLC bars in MEXC-shape: [[ts_ms, o, h, l, c, v], ...]
-    Priority: FMP REST historical-chart → yfinance.
+    Metals: Binance spot API (closed candles only — last forming bar stripped).
+    Others: yfinance download().
     """
     cls = normalize_asset_class(asset_class)
     if cls == ASSET_CLASS_CRYPTO:
         return []
 
-    # ── yfinance download() — intraday OHLC, near-real-time for forex/indices ──
+    now = datetime.utcnow()
+
+    # ── Binance spot metals path (XAUUSDT / XAGUSDT) ─────────────────────────
+    _bn_sym = _METALS_BINANCE_MAP.get(symbol.upper())
+    if _bn_sym:
+        _bn_interval = _BINANCE_INTERVAL_MAP.get(timeframe, timeframe)
+        key = (_bn_sym, _bn_interval, limit)
+        cached = _KLINE_CACHE.get(key)
+        if cached and (now - cached[1]) < _KLINE_TTL:
+            return cached[0]
+        try:
+            import httpx
+            # Fetch limit+1 bars so after dropping the still-forming last bar
+            # we still have `limit` complete, closed candles.
+            async with httpx.AsyncClient(timeout=5.0) as _c:
+                r = await _c.get(
+                    f"{_BINANCE_SPOT_BASE}/klines",
+                    params={
+                        "symbol":   _bn_sym,
+                        "interval": _bn_interval,
+                        "limit":    limit + 1,
+                    },
+                )
+            if r.status_code == 200:
+                raw = r.json()
+                if raw and isinstance(raw, list):
+                    # Drop the last bar — it is the still-forming current candle.
+                    # All preceding bars are fully closed.
+                    complete = raw[:-1] if len(raw) > 1 else raw
+                    rows: List[List[float]] = []
+                    for bar in complete[-limit:]:
+                        try:
+                            rows.append([
+                                int(bar[0]),      # open_time ms
+                                float(bar[1]),    # open
+                                float(bar[2]),    # high
+                                float(bar[3]),    # low
+                                float(bar[4]),    # close
+                                float(bar[5]),    # volume
+                            ])
+                        except Exception:
+                            continue
+                    if rows:
+                        _KLINE_CACHE[key] = (rows, now)
+                        logger.info(
+                            f"[tradfi] klines ok (Binance spot): "
+                            f"{_bn_sym} {_bn_interval} → {len(rows)} bars"
+                        )
+                        return rows
+        except Exception as _be:
+            logger.debug(
+                f"[tradfi] Binance spot klines failed for {_bn_sym} "
+                f"({_bn_interval}): {_be}"
+            )
+        # fall through to yfinance below
+
+    # ── yfinance download() — forex/indices/stocks ────────────────────────────
     ticker = _resolve_ticker(cls, symbol)
     if not ticker:
         return []
 
     yf_interval, period = _TF_MAP.get(timeframe, ("15m", "60d"))
     key = (ticker, yf_interval, limit)
-    now = datetime.utcnow()
     cached = _KLINE_CACHE.get(key)
     if cached and (now - cached[1]) < _KLINE_TTL:
         return cached[0]
