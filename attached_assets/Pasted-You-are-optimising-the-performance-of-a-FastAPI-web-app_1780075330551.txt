@@ -1,0 +1,163 @@
+You are optimising the performance of a FastAPI web application called 
+TradeHub Markets hosted on Replit. The stack is:
+
+- FastAPI 0.119.0 with Gunicorn 26.0.0 + Uvicorn 0.37.0 workers (2 workers)
+- Jinja2 server-side rendered HTML templates
+- Neon serverless PostgreSQL (external, cold starts 3-8 seconds after inactivity)
+- SQLAlchemy connection pool (6 per worker, 14 max overflow, 240s recycle)
+- No caching layer currently — every request hits the DB fresh
+- Hosted on Replit shared container (no dedicated CPU/RAM)
+
+Please implement ALL of the following performance upgrades in order:
+
+═══════════════════════════════════════
+UPGRADE 1 — NEON COLD START KEEPALIVE
+═══════════════════════════════════════
+
+PROBLEM: Neon serverless Postgres goes to sleep after inactivity. The first 
+query after sleep takes 3-8 seconds, making the site feel broken for users 
+who visit after a quiet period.
+
+FIX:
+- Create a new file keepalive.py
+- Add an async function keepalive_ping() that runs an infinite loop:
+  - Executes "SELECT 1" against the DB using the existing SQLAlchemy engine
+  - Sleeps 240 seconds between pings (every 4 minutes)
+  - Catches and silently logs any exceptions so it never crashes
+- In main.py, import and start this as a background asyncio task in the 
+  FastAPI @app.on_event("startup") handler
+- Also add a second keepalive for any other external services 
+  (e.g. if there are any HTTP health endpoints for worker processes)
+- Log "Keepalive ping OK" at DEBUG level each time it succeeds so we 
+  can confirm it's running without log spam
+
+═══════════════════════════════════════
+UPGRADE 2 — IN-MEMORY CACHE LAYER
+═══════════════════════════════════════
+
+PROBLEM: Every page load and API request hits Neon fresh. Heavy endpoints 
+like leaderboard, strategy list, and performance aggregations run full DB 
+queries on every request even though the data changes infrequently.
+
+FIX PART A — Create cache.py:
+- Implement a simple thread-safe in-memory cache with TTL support
+- Functions needed:
+  get_cache(key) → returns value if not expired, else None
+  set_cache(key, value, ttl_seconds) → stores value with expiry timestamp
+  invalidate_cache(key) → removes a specific key
+  invalidate_prefix(prefix) → removes all keys starting with prefix
+- Use a dict with (value, expires_at) tuples
+- Use threading.Lock() for thread safety across Gunicorn workers
+  NOTE: since each Gunicorn worker has its own memory, the cache is 
+  per-worker — this is fine, just document it
+
+FIX PART B — Apply cache to slow endpoints:
+Find and wrap ALL of the following endpoint types with caching:
+
+  Leaderboard endpoint → TTL 120 seconds
+    cache_key = "leaderboard"
+  
+  Strategy list endpoint → TTL 60 seconds
+    cache_key = f"strategies:{user_id}" (per user if personalised)
+  
+  Strategy performance/analytics endpoint → TTL 300 seconds
+    cache_key = f"performance:{strategy_id}"
+  
+  Backtest results endpoint → TTL 600 seconds
+    cache_key = f"backtest:{strategy_id}:{window}"
+    NOTE: backtest results never change once computed — cache aggressively
+  
+  Marketplace listings → TTL 180 seconds
+    cache_key = "marketplace"
+
+FIX PART C — Cache invalidation:
+- When a strategy is updated or a new trade closes, call 
+  invalidate_prefix(f"performance:{strategy_id}") and 
+  invalidate_prefix("leaderboard") so stale data is never shown
+- When a new strategy is created, invalidate "marketplace" and 
+  f"strategies:{user_id}"
+
+═══════════════════════════════════════
+UPGRADE 3 — BACKGROUND AGGREGATION REFRESH
+═══════════════════════════════════════
+
+PROBLEM: Leaderboard and strategy performance endpoints run expensive 
+aggregation queries (SUM, COUNT, AVG across many rows) synchronously 
+while the user waits. This blocks the response for 1-3 seconds.
+
+FIX:
+- Create a background task refresh_heavy_caches() in keepalive.py 
+  (or a new background_tasks.py):
+  - Runs every 300 seconds (5 minutes)
+  - Pre-computes and caches:
+    * Full leaderboard data (all strategies ranked by performance)
+    * Marketplace listings with aggregated stats
+    * Global platform stats (total trades, total strategies, 
+      total users — shown on homepage)
+  - Stores results using set_cache() from Upgrade 2
+  - Logs "Cache refreshed: leaderboard" etc at INFO level
+
+- Start this as a second asyncio background task in startup event 
+  alongside the keepalive ping
+
+- For the leaderboard and marketplace endpoints: check cache first, 
+  return immediately if hit. The background task keeps it fresh so 
+  users always get a fast cached response. Only fall through to a 
+  live DB query if the cache is completely empty (first startup)
+
+═══════════════════════════════════════
+UPGRADE 4 — GUNICORN WORKER CONFIGURATION
+═══════════════════════════════════════
+
+PROBLEM: Worker configuration may not be optimal for Replit shared 
+hosting — memory bloat builds up over time and slow requests may 
+time out incorrectly.
+
+FIX:
+- Update the Gunicorn start command (in .replit, Procfile, or 
+  replit.nix — check which one controls the start command):
+
+  gunicorn main:app \
+    --workers 2 \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --timeout 120 \
+    --keepalive 5 \
+    --max-requests 1000 \
+    --max-requests-jitter 100 \
+    --log-level warning \
+    --access-logfile -
+
+- Explanation of each flag:
+  --timeout 120: gives slow DB queries time to complete
+  --keepalive 5: reuses HTTP connections from browser
+  --max-requests 1000: recycles worker after 1000 requests (prevents 
+    memory bloat on shared hosting)
+  --max-requests-jitter 100: staggers worker recycling so both workers 
+    don't restart simultaneously
+  --log-level warning: reduces log noise on Replit
+
+- Also verify the SQLAlchemy pool settings are correct for 2 workers:
+  pool_size=5 (per worker = 10 total connections to Neon)
+  max_overflow=5 (per worker = 10 burst = 20 total max)
+  pool_timeout=30
+  pool_pre_ping=True
+  pool_recycle=300
+  These numbers should fit within Neon's free tier connection limit
+
+═══════════════════════════════════════
+UPGRADE 5 — LAZY LOAD PORTAL PAGE
+═══════════════════════════════════════
+
+PROBLEM: The Jinja2 strategy portal page likely queries the DB during 
+server-side render to populate strategy lists, trade history, and 
+performance data. This means the user sees a blank screen while the 
+server fetches all this data before sending any HTML.
+
+FIX:
+- Audit strategy_portal.html and its FastAPI route handler
+- If the route handler runs DB queries before rendering the template, 
+  refactor it to:
+  1. Return the HTML shell immediately with no DB data
+  2. Move all data fetching to dedicated JSON API endpoints 
+     (e.g. /api/strategies, /api/trades/recent, /api/performance)
+  3. In the HTML, use fetch

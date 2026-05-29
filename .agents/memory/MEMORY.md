@@ -1,1 +1,3 @@
-- [Neon startup migrations](neon-startup-migrations.md) — ALTER TABLE on busy tables hangs uvicorn startup; use existence-check-first pattern to skip DDL when columns are present.
+- [Gunicorn flag names](gunicorn-flags.md) — flag is `--keep-alive` not `--keepalive`; verify flags with `gunicorn --help` before adding new ones.
+- [Portal cache layer](portal-cache-layer.md) — `app/cache.py` provides get_cache/set_cache/invalidate_cache/invalidate_prefix; all new caching uses this module (NOT the old `_CACHE` dict).
+- [Neon startup migrations](neon-startup-migrations.md) — use existence-check-first + asyncio.to_thread + lock_timeout retry pattern for safe Neon migrations.

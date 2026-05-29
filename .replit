@@ -52,7 +52,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "while true; do echo '[portal] starting...'; gunicorn -w 2 -k uvicorn.workers.UvicornWorker --reload --max-requests 300 --max-requests-jitter 30 --bind 0.0.0.0:5000 --timeout 300 --graceful-timeout 60 --log-level info strategy_portal_server:app; echo '[portal] exited — restarting in 5s...'; sleep 5; done"
+args = "while true; do echo '[portal] starting...'; gunicorn -w 2 -k uvicorn.workers.UvicornWorker --max-requests 1000 --max-requests-jitter 100 --keep-alive 5 --bind 0.0.0.0:5000 --timeout 120 --graceful-timeout 30 --log-level warning strategy_portal_server:app; echo '[portal] exited — restarting in 5s...'; sleep 5; done"
 waitForPort = 5000
 
 [[workflows.workflow]]
@@ -80,10 +80,6 @@ args = "cd mobile && while true; do echo '[mobile] starting expo tunnel...'; CI=
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 5001
-externalPort = 3001
 
 [[ports]]
 localPort = 8000
