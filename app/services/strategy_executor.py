@@ -1148,8 +1148,45 @@ def _fmt_close_card(
         else:
             duration_line = f"\n⏱ Duration  <b>{mins}m</b>"
 
-    raw_pnl = abs(pnl_pct / leverage) if leverage else abs(pnl_pct)
-    move_line = f"\n📐 Price move  <b>{pnl_sign}{raw_pnl:.2f}%</b> × {leverage}× = <b>{pnl_sign}{pnl_pct:.1f}%</b>"
+    def _pip_size(sym: str) -> float | None:
+        """Return pip size for the symbol, or None for crypto (no pip convention)."""
+        s = sym.upper().replace("/", "").replace("=F", "").replace("=X", "")
+        # Metals
+        if s in ("XAUUSD", "GOLD", "GC", "XAUUSDT"):   return 0.10   # gold: $0.10/pip
+        if s in ("XAGUSD", "SILVER", "SI", "XAGUSDT"):  return 0.001  # silver
+        if s in ("XPTUSD", "PLATINUM", "PL"):            return 0.10
+        # JPY pairs (2 decimal places)
+        if "JPY" in s:                                   return 0.01
+        # Standard 4-decimal forex pairs
+        _FX = ("USD","EUR","GBP","AUD","NZD","CAD","CHF","SGD","HKD","NOK","SEK","DKK","PLN","CZK","HUF","MXN","ZAR","TRY","INR")
+        if any(s.startswith(c) or s.endswith(c) for c in _FX) and len(s) == 6:
+            return 0.0001
+        # Indices — 1 point per pip
+        _IDX = ("US30","US500","SPX","NAS","NDX","DAX","DE40","UK100","FTSE","JP225","HK50","ASX","IT40","FR40","ES35")
+        if any(s.startswith(i) for i in _IDX):          return 1.0
+        # Oil / commodities
+        if s in ("USOIL","WTIUSD","BRENTUSD","UKOIL","CL","NG"):
+            return 0.01
+        return None  # crypto — no pip convention
+
+    pip_sz  = _pip_size(symbol)
+    # Signed raw price move (positive = favourable for the trade direction)
+    raw_move = (exit_price - entry) if direction == "LONG" else (entry - exit_price)
+
+    if pip_sz is not None:
+        pips = raw_move / pip_sz
+        sign = "+" if pips >= 0 else ""
+        # Whole pips for large values, 1dp for fractional
+        pip_str = f"{sign}{pips:.0f}" if abs(pips) >= 1 else f"{sign}{pips:.1f}"
+        pnl_display = f"<b>{pip_str} pips</b>"
+        move_line   = ""
+    else:
+        # Crypto: keep % with adaptive precision
+        a = abs(pnl_pct)
+        if a < 0.1:   pnl_display = f"<b>{pnl_pct:+.3f}%</b>"
+        elif a < 10:  pnl_display = f"<b>{pnl_pct:+.2f}%</b>"
+        else:         pnl_display = f"<b>{pnl_pct:+.1f}%</b>"
+        move_line = ""
 
     cond_lines = ""
     if conditions:
@@ -1165,7 +1202,7 @@ def _fmt_close_card(
         f"{bar}\n"
         f"Entry    <code>{entry:.6g}</code>\n"
         f"Exit     <code>{exit_price:.6g}</code>  ({hit_label})\n"
-        f"P&L      <b>{pnl_sign}{pnl_pct:.1f}%</b>"
+        f"P&L      {pnl_display}"
         f"{move_line}"
         f"{duration_line}\n"
         f"{bar}\n"
