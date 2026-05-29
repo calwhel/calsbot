@@ -1225,11 +1225,11 @@ async def _cancel_ghost_executions():
 
 async def _ghost_cleanup_loop():
     """
-    Runs _cancel_ghost_executions every 60 seconds indefinitely.
+    Runs _cancel_ghost_executions every 5 minutes indefinitely.
     Only started in the worker that holds the executor advisory lock.
     """
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(300)
         await _cancel_ghost_executions()
 
 
@@ -5531,17 +5531,26 @@ async def api_strategies(uid: str = Query(...)):
                 ).all()
                 perf_map = {p.strategy_id: p for p in perfs}
 
-                execs = (
-                    db.query(StrategyExecution)
-                    .filter(StrategyExecution.strategy_id.in_(strategy_ids))
-                    .order_by(StrategyExecution.fired_at.desc())
-                    .limit(len(strategy_ids) * 10 + 50)
-                    .all()
-                )
-                for ex in execs:
-                    exec_map.setdefault(ex.strategy_id, [])
-                    if len(exec_map[ex.strategy_id]) < 10:
-                        exec_map[ex.strategy_id].append(ex)
+                # LATERAL join — one index-range-scan per strategy_id using
+                # the (strategy_id, fired_at DESC) composite index, avoids the
+                # slow global IN + ORDER BY that times out under DB load.
+                from sqlalchemy import text as _t2
+                ids_str = ",".join(str(i) for i in strategy_ids)
+                raw_rows = db.execute(_t2(f"""
+                    SELECT e.strategy_id, e.symbol, e.direction, e.outcome,
+                           e.pnl_pct, e.entry_price, e.exit_price, e.fired_at
+                    FROM unnest(ARRAY[{ids_str}]::int[]) AS s(sid)
+                    CROSS JOIN LATERAL (
+                        SELECT strategy_id, symbol, direction, outcome,
+                               pnl_pct, entry_price, exit_price, fired_at
+                        FROM strategy_executions
+                        WHERE strategy_id = s.sid
+                        ORDER BY fired_at DESC
+                        LIMIT 5
+                    ) e
+                """)).fetchall()
+                for row in raw_rows:
+                    exec_map.setdefault(row.strategy_id, []).append(row)
 
             result = []
             for s in strategies:
@@ -5606,7 +5615,7 @@ async def api_strategies(uid: str = Query(...)):
     data = await asyncio.to_thread(_load)
     if data is None:
         raise HTTPException(status_code=403)
-    _CACHE[cache_key] = (data, time.time() + 60)
+    _CACHE[cache_key] = (data, time.time() + 120)
     return JSONResponse(data)
 
 
