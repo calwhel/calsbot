@@ -3433,7 +3433,7 @@ let acceptedRisks=new Set(['LOW','MEDIUM']);
 // ─── Helpers ──────────────────────────────────────────────
 function $(id){return document.getElementById(id)}
 function pC(v){return v>0?'pnl-pos':v<0?'pnl-neg':''}
-function pS(v){if(v===null||v===undefined)return'—';const r=Math.round(Number(v));return(r>0?'+':'')+r+'%'}
+function pS(v){if(v===null||v===undefined)return'—';const n=Number(v);const abs=Math.abs(n);const disp=(abs<1&&abs>0)?n.toFixed(1):Math.round(n).toString();return(n>0?'+':'')+disp+'%'}
 function starsHtml(n,max=5){let s='';for(let i=1;i<=max;i++)s+=i<=Math.round(n)?'★':'☆';return s}
 function priceStr(m){if(m.pricing_model==='one_time')return`$${Number(m.price_usdt).toFixed(2)}`;if(m.pricing_model==='subscription')return`$${Number(m.price_usdt).toFixed(2)}/mo`;return'FREE'}
 function priceBadge(m){if(m.pricing_model==='one_time')return`<span class="badge paid">$${Number(m.price_usdt).toFixed(2)}</span>`;if(m.pricing_model==='subscription')return`<span class="badge sub">$${Number(m.price_usdt).toFixed(2)}/mo</span>`;return`<span class="badge free">FREE</span>`}
@@ -3781,7 +3781,7 @@ async function loadMyStrategies(){
           ?`<button class="btn paper-btn sm" onclick="toggleStrat(${s.id})">Running</button><button class="btn sm" onclick="promoteToLive(${s.id},'${assetClass}')" style="color:var(--green);border-color:rgba(34,197,94,.3)">Go Live</button>`
           :`<button class="btn sm" onclick="toggleStrat(${s.id})" style="color:var(--green);border-color:rgba(34,197,94,.3)">Activate</button>`}
         ${isLocked?'':`<button class="btn sm ghost" onclick="shareToMarket(${s.id},'${encodeURIComponent(s.name)}')">Publish</button>`}
-        ${window._portalIsPro?`<button class="btn sm" onclick="openAdvisor(${s.id},'${encodeURIComponent(s.name)}')" style="color:var(--accent);border-color:rgba(59,91,219,.3)">Ask AI</button>`:`<button class="btn sm ghost" onclick="showModal('modal-upgrade')" title="Pro feature" style="opacity:.55">Ask AI ✦</button>`}
+        ${window._portalIsPro?`<button class="btn sm" onclick="openAdvisor(${s.id},'${encodeURIComponent(s.name)}')" style="color:var(--accent);border-color:rgba(59,91,219,.3)">✦ Improve with AI</button>`:`<button class="btn sm ghost" onclick="showModal('modal-upgrade')" title="Pro feature" style="opacity:.55">✦ Improve with AI</button>`}
         <button class="btn danger sm" onclick="deleteStrat(${s.id},'${encodeURIComponent(s.name)}')">${isLocked?'Unsubscribe':'Delete'}</button>
       </div>
     </div>`;
