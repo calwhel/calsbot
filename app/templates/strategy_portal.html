@@ -1891,7 +1891,15 @@ function dismissTgBanner(){
   </div>
   <div class="sh">
     <div class="sh-title">Your Strategies</div>
-    <div style="display:flex;gap:6px">
+    <div style="display:flex;gap:6px;align-items:center">
+      <select id="strat-sort" onchange="applyStratSort()" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;outline:none">
+        <option value="newest">Newest first</option>
+        <option value="winrate">Highest win rate</option>
+        <option value="wins">Most wins</option>
+        <option value="pnl">Best P&amp;L</option>
+        <option value="trades">Most trades</option>
+        <option value="live">Live first</option>
+      </select>
       <button class="btn sm paper-btn" onclick="showPage('build',null,true)">New Paper</button>
       <button class="btn sm" onclick="showPage('build',null,false)" style="color:var(--accent);border-color:rgba(91,108,247,.3)">Build New</button>
     </div>
@@ -3719,6 +3727,18 @@ async function loadMyStrategies(){
       </div></div>`;
     return;
   }
+  _loadedStrats=strats;
+  renderStratList(strats);
+}
+let _loadedStrats=[];
+function applyStratSort(){if(_loadedStrats.length)renderStratList([..._loadedStrats]);}
+function renderStratList(strats){
+  const _sv=document.getElementById('strat-sort')?.value||'newest';
+  if(_sv==='winrate')     strats=[...strats].sort((a,b)=>(b.performance?.win_rate||0)-(a.performance?.win_rate||0));
+  else if(_sv==='wins')   strats=[...strats].sort((a,b)=>(b.performance?.wins||0)-(a.performance?.wins||0));
+  else if(_sv==='pnl')    strats=[...strats].sort((a,b)=>(b.performance?.total_pnl||0)-(a.performance?.total_pnl||0));
+  else if(_sv==='trades') strats=[...strats].sort((a,b)=>(b.performance?.total_trades||0)-(a.performance?.total_trades||0));
+  else if(_sv==='live')   strats=[...strats].sort((a,b)=>{const r={active:0,paper:1,paused:2};return(r[a.status]??3)-(r[b.status]??3);});
   $('my-list').innerHTML=strats.map(s=>{
     const p=s.performance||{};const cfg=s.config||{};const risk=cfg.risk||{};const exit=cfg.exit||{};
     const isPaper=s.status==='paper';

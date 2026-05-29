@@ -108,6 +108,62 @@ async def _warm_neon_db():
     asyncio.create_task(_loop())
     logger.info("[neon-keepwarm] heartbeat scheduled every 240s")
 
+    async def _backfill_pips():
+        """One-time backfill: compute pips_pnl for closed forex/metals executions
+        that pre-date the pips_pnl column addition and have NULL pips_pnl."""
+        await asyncio.sleep(5)  # let the DB warm up first
+        try:
+            from app.database import SessionLocal as _SL
+            from sqlalchemy import text as _t
+            from app.services.forex_engine import pip_size as _pip_sz
+            def _run():
+                db = _SL()
+                try:
+                    rows = db.execute(_t(
+                        "SELECT id, symbol, direction, entry_price, exit_price, strategy_id "
+                        "FROM strategy_executions "
+                        "WHERE asset_class IN ('forex','metals','commodity','index') "
+                        "  AND outcome <> 'OPEN' "
+                        "  AND pips_pnl IS NULL "
+                        "  AND entry_price IS NOT NULL "
+                        "  AND exit_price IS NOT NULL"
+                    )).fetchall()
+                    if not rows:
+                        return
+                    strategy_ids = set()
+                    updated = 0
+                    for row in rows:
+                        ps = _pip_sz(row.symbol or "")
+                        if ps <= 0:
+                            continue
+                        if row.direction == "LONG":
+                            pips = round((row.exit_price - row.entry_price) / ps, 1)
+                        else:
+                            pips = round((row.entry_price - row.exit_price) / ps, 1)
+                        db.execute(_t(
+                            "UPDATE strategy_executions SET pips_pnl=:p WHERE id=:id"
+                        ), {"p": pips, "id": row.id})
+                        strategy_ids.add(row.strategy_id)
+                        updated += 1
+                    db.commit()
+                    logger.info(f"[pips-backfill] updated {updated} rows across {len(strategy_ids)} strategies")
+                    # Recompute performance for affected strategies
+                    from app.services.strategy_executor import _update_performance
+                    for sid in strategy_ids:
+                        try:
+                            db2 = _SL()
+                            _update_performance(sid, db2)
+                            db2.close()
+                        except Exception as pe:
+                            logger.warning(f"[pips-backfill] perf update failed for strategy {sid}: {pe}")
+                finally:
+                    db.close()
+            await asyncio.to_thread(_run)
+        except Exception as e:
+            logger.warning(f"[pips-backfill] failed: {e}")
+
+    asyncio.create_task(_backfill_pips())
+
 
 templates = Jinja2Templates(directory="app/templates")
 
