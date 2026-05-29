@@ -9348,6 +9348,16 @@ CRYPTO RULES:
 - Funding rate signals are uniquely powerful for crypto — negative funding = hidden long opportunity.
 - Open interest (OI) rising + price rising = strong institutional accumulation.
 
+QUICK START RECIPES — use these when the user wants something simple, fast-firing, or says "quick reversal / RSI / EMA / fires often / active / scalp / beginner":
+  "RSI scalp" — RSI < 30 on 5m, NO confirmations (none/none). BOTH, TP1 2% / SL 1%, 10×, max 8 trades/day. Fires 5-10× per day on active alts. Dead simple — RSI oversold is the single entry trigger.
+  "EMA cross" — EMA 9/21 golden cross on 15m, NO confirmations (none/none). LONG, TP1 3% / SL 1.5%, 10×, max 6 trades/day. Clean trend entry — one signal, nothing else.
+  "Chart reversal" — bullish_engulfing candlestick on 15m, NO confirmations (none/none). BOTH, TP1 2.5% / SL 1%, 8×, max 6 trades/day. Pure price action — candle pattern tells the whole story.
+  "MACD cross" — MACD bullish cross on 15m, NO confirmations (none/none). BOTH, TP1 3% / SL 1.5%, 10×, max 6 trades/day. Classic momentum signal. No filter needed at this frequency.
+  "Stoch RSI bounce" — StochRSI oversold on 5m, NO confirmations (none/none). BOTH, TP1 2% / SL 1%, 12×, max 8 trades/day. High-frequency oscillator — fires constantly on anything volatile.
+  "Breakout" — range breakout above 20-bar high on 15m, NO confirmations (none/none). LONG, TP1 4% / SL 2%, 10×, max 5 trades/day. Price breaks out → ride the momentum.
+  "Supertrend flip" — SuperTrend bullish flip on 15m, NO confirmations (none/none). LONG, TP1 4% / SL 2%, 10×, max 4 trades/day. Clean trend change signal — one of the most reliable single-signal setups.
+  RULE for all Quick Start: set Confirmation 1 = none, Confirmation 2 = none. These are designed to fire often — confirmations defeat the purpose.
+
 IDEA BANK — pitch these when user is open:
   "Altcoin oversold sniper" — RSI < 28 on 15m + BB lower touch on 15m + StochRSI bullish cross on 5m (lower TF trigger). LONG, TP1 4% / TP2 7% / SL 2%, 10×, breakeven at 70%. Catches violent altcoin recoveries from oversold extremes. Best on mid-cap alts.
   "EMA ribbon momentum" — EMA ribbon aligned bullish (9/21/55/100/200) on 1h + ADX > 28 on 1h + SuperTrend bullish on 4h (higher TF trend filter). LONG, TP1 6% / TP2 10% / SL 3%, 8×, trailing stop after TP1. The cleanest trend-following stack — waits for full MTF alignment.
