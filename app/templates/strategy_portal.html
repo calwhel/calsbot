@@ -3433,7 +3433,10 @@ let acceptedRisks=new Set(['LOW','MEDIUM']);
 // ─── Helpers ──────────────────────────────────────────────
 function $(id){return document.getElementById(id)}
 function pC(v){return v>0?'pnl-pos':v<0?'pnl-neg':''}
-function pS(v){if(v===null||v===undefined)return'—';const n=Number(v);const abs=Math.abs(n);const disp=(abs<1&&abs>0)?n.toFixed(1):Math.round(n).toString();return(n>0?'+':'')+disp+'%'}
+function pS(v){if(v===null||v===undefined)return'—';const n=Number(v);const abs=Math.abs(n);const disp=abs<0.1&&abs>0?n.toFixed(2):abs<1&&abs>0?n.toFixed(1):Math.round(n).toString();return(n>0?'+':'')+disp+'%'}
+function _pipSz(sym){if(!sym)return 0.0001;const s=sym.toUpperCase();if(s==='XAUUSD')return 0.01;if(s==='XAGUSD'||s.includes('JPY'))return 0.01;return 0.0001;}
+function pipsLabel(t){const e=t.entry_price,c=t.close_price;if(!e||!c)return null;const ps=_pipSz(t.symbol);const raw=t.direction==='SHORT'?e-c:c-e;const pip=Math.round(raw/ps);return(pip>=0?'+':'')+pip+'p';}
+function fmtTradeChip(t,isForex){if(isForex){const lbl=pipsLabel(t);if(lbl)return lbl;}return t.pnl_pct!==null&&t.pnl_pct!==undefined?pS(t.pnl_pct):t.outcome;}
 function starsHtml(n,max=5){let s='';for(let i=1;i<=max;i++)s+=i<=Math.round(n)?'★':'☆';return s}
 function priceStr(m){if(m.pricing_model==='one_time')return`$${Number(m.price_usdt).toFixed(2)}`;if(m.pricing_model==='subscription')return`$${Number(m.price_usdt).toFixed(2)}/mo`;return'FREE'}
 function priceBadge(m){if(m.pricing_model==='one_time')return`<span class="badge paid">$${Number(m.price_usdt).toFixed(2)}</span>`;if(m.pricing_model==='subscription')return`<span class="badge sub">$${Number(m.price_usdt).toFixed(2)}/mo</span>`;return`<span class="badge free">FREE</span>`}
@@ -3768,7 +3771,7 @@ async function loadMyStrategies(){
           <div class="cm-lbl">Open</div>
         </div>
       </div>
-      ${recent.length?`<div class="mini-trades">${recent.map(t=>`<span class="mini-trade ${t.outcome}${isPaper?' paper':''}">${t.symbol.replace('USDT','')} ${t.pnl_pct!==null?pS(t.pnl_pct):t.outcome}</span>`).join('')}</div>`:''}
+      ${recent.length?`<div class="mini-trades">${recent.map(t=>`<span class="mini-trade ${t.outcome}${isPaper?' paper':''}">${t.symbol.replace('USDT','')} ${fmtTradeChip(t,assetClass==='forex')}</span>`).join('')}</div>`:''}
       `:`<div class="card-scanning"><span class="scan-pulse"></span>Scanning markets for entry conditions — first trade card will appear here when conditions are met.</div>`}
       <div class="card-acts">
         <button class="btn primary sm" onclick="openStrategyDetail(${s.id})">Analytics</button>
