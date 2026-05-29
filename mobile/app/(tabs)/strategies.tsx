@@ -95,7 +95,8 @@ const StrategyCard = React.memo(function StrategyCard({ s, onPress }: { s: Strat
   const isActive = s.status === 'active';
   const symbol = (s.config?.symbol as string) || 'BTC';
   const timeframe = (s.config?.timeframe as string) || '';
-  const assetClass = ((s.config as Record<string, any>)?.asset_class as string) || 'crypto';
+  const _cfg = s.config as Record<string, any> | undefined;
+  const assetClass = (_cfg?._asset_class || _cfg?.asset_class || 'crypto') as string;
   const isForexLike = assetClass === 'forex' || assetClass === 'index';
   const marketLabel = MARKET_LABEL[assetClass] ?? assetClass.toUpperCase();
   const marketColor = MARKET_COLOR[assetClass] ?? '#5B6CF7';

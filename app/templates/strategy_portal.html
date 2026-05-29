@@ -3763,8 +3763,8 @@ async function loadMyStrategies(){
           <div class="win-bar"><div class="win-fill ${wr<40?'low':''}" style="width:${wr}%"></div></div>
         </div>
         <div class="cm-item">
-          ${(assetClass==='forex'||assetClass==='metals')&&p.total_pips_pnl!=null
-            ?`<div class="cm-val ${pC(p.total_pips_pnl)}">${p.total_pips_pnl>=0?'+':''}${Math.round(p.total_pips_pnl)}p</div>
+          ${(assetClass==='forex'||assetClass==='index'||assetClass==='metals')
+            ?`<div class="cm-val ${pC(p.total_pips_pnl||0)}">${(p.total_pips_pnl||0)>=0?'+':''}${Math.round(p.total_pips_pnl||0)} pips</div>
           <div class="cm-lbl">Total Pips</div>`
             :`<div class="cm-val ${pC(p.total_pnl)}">${pS(p.total_pnl)}</div>
           <div class="cm-lbl">Total P&L</div>`}
@@ -9037,7 +9037,8 @@ async function openStrategyDetail(id) {
     const tradesData= await tradesRes.json();
 
     _drHeader(detail);
-    _drMetrics(detail.performance || {}, analytics);
+    const _drAc = (detail.config||{}).asset_class || (detail.config||{})._asset_class || 'crypto';
+    _drMetrics(detail.performance || {}, analytics, _drAc);
     _drChart(analytics);
     _drAdvStats(analytics);
     _drCoins(analytics);
@@ -9072,12 +9073,14 @@ function _drHeader(detail) {
   document.getElementById('dr-params').innerHTML = p.join('');
 }
 
-function _drMetrics(perf, analytics) {
+function _drMetrics(perf, analytics, assetClass) {
   const wr  = perf.win_rate  || 0;
   const pnl = perf.total_pnl || 0;
   const pf  = analytics.profit_factor || 0;
+  const isForexLike = assetClass === 'forex' || assetClass === 'index' || assetClass === 'metals';
+  const pipsVal = perf.total_pips_pnl || 0;
   const wrC  = wr  >= 60 ? 'pnl-pos' : wr  >= 45 ? '' : 'pnl-neg';
-  const pnlC = pnl > 0 ? 'pnl-pos' : pnl < 0 ? 'pnl-neg' : '';
+  const pnlC = (isForexLike ? pipsVal : pnl) > 0 ? 'pnl-pos' : (isForexLike ? pipsVal : pnl) < 0 ? 'pnl-neg' : '';
   const pfC  = pf  >= 1.5 ? 'pnl-pos' : pf >= 1 ? '' : 'pnl-neg';
 
   document.getElementById('dr-metrics').innerHTML = `
@@ -9090,8 +9093,8 @@ function _drMetrics(perf, analytics) {
       <div class="dm-lbl">Win Rate</div>
     </div>
     <div class="dm-card">
-      <div class="dm-val ${pnlC}">${pS(pnl)}</div>
-      <div class="dm-lbl">Total P&L</div>
+      <div class="dm-val ${pnlC}">${isForexLike ? `${pipsVal>=0?'+':''}${Math.round(pipsVal)} pips` : pS(pnl)}</div>
+      <div class="dm-lbl">${isForexLike ? 'Total Pips' : 'Total P&L'}</div>
     </div>
     <div class="dm-card">
       <div class="dm-val pnl-pos">${perf.wins || 0} W</div>
