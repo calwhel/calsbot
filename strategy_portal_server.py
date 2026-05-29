@@ -9744,12 +9744,12 @@ FIELD RULES for the ###STRATEGY### line:
         client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         resp = await asyncio.wait_for(
             client.messages.create(
-                model="claude-opus-4-8",
+                model="claude-haiku-3-5",
                 max_tokens=700,
                 system=system_prompt,
                 messages=api_messages,
             ),
-            timeout=28.0,   # 28s hard cap — mobile shows spinner; Anthropic p99 is ~20s
+            timeout=20.0,   # Haiku is ~5x faster than Opus — 20s is generous
         )
         raw = resp.content[0].text
     except asyncio.TimeoutError:
@@ -12213,7 +12213,7 @@ async def _run_trade_replay_optimizer(
 
     # Pre-fetch candles ONCE per execution (shared across all variants — this
     # is the whole performance unlock vs the backtest path).
-    fetch_concurrency = asyncio.Semaphore(6)
+    fetch_concurrency = asyncio.Semaphore(15)
 
     async def _fetch_for(ex):
         """Bounded 1m OHLC fetch from `fired_at` to `end_at`.
@@ -12317,15 +12317,19 @@ async def _run_trade_replay_optimizer(
                 for ex, candles in paired]
         return _aggregate_replay(outs)
 
-    baseline_stats = _replay_variant({})
+    # Run baseline + all variants concurrently in threads (CPU-bound, no I/O).
+    all_patches = [{}] + [v["patch"] for v in variants]
+    all_stats = await asyncio.gather(*[
+        asyncio.to_thread(_replay_variant, p) for p in all_patches
+    ])
+    baseline_stats = all_stats[0]
     base_score = _optimizer_score(baseline_stats)
     base_pnl   = float(baseline_stats.get("total_pnl") or 0.0)
     base_dd    = float(baseline_stats.get("max_drawdown") or 0.0)
     base_wr    = float(baseline_stats.get("win_rate") or 0.0)
 
     out_variants: list[dict] = []
-    for v in variants:
-        stats = _replay_variant(v["patch"])
+    for v, stats in zip(variants, all_stats[1:]):
         score = _optimizer_score(stats)
         out_variants.append({
             "label":          v["label"],
@@ -12464,7 +12468,7 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
         try:
             replay = await asyncio.wait_for(
                 _run_trade_replay_optimizer(base_config, executions_detached, strategy_id),
-                timeout=90,
+                timeout=55,
             )
             if replay:
                 return replay
@@ -12484,9 +12488,10 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
     from app.services.backtest_engine import run_backtest
 
     # Cap concurrency so we don't blow up worker memory / hit Gate.io rate
-    # limits when 20 backtests all request candles at once. Bumped from 3 → 5
-    # in v2 because the variant set grew from ~9 to ~22.
-    concurrency = 5
+    # limits when many backtests all request candles at once. Bumped from 5 → 8
+    # to reduce wall time; per-job timeout tightened from 50 → 25s (Gate.io
+    # candles typically arrive in <5s — 25s is still very generous headroom).
+    concurrency = 8
     sem = asyncio.Semaphore(concurrency)
 
     async def _run_one(cfg: dict) -> dict | None:
@@ -12494,7 +12499,7 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
             try:
                 # run_backtest returns {symbol, days, trades, stats:{...}, equity_curve, ...}
                 # We only care about the stats sub-dict for ranking + the wire payload.
-                full = await asyncio.wait_for(run_backtest(cfg, days), timeout=50)
+                full = await asyncio.wait_for(run_backtest(cfg, days), timeout=25)
                 if not isinstance(full, dict):
                     return None
                 if full.get("error"):
@@ -12514,12 +12519,9 @@ async def api_strategy_optimize(strategy_id: int, request: Request):
         merged.update(v["patch"])
         jobs.append((v["label"], merged, v))
 
-    # Worst-case wall time = ceil(N / concurrency) * per_job_timeout. Add a
-    # small buffer for queueing overhead. Architect-flagged: 120s was too low
-    # for 10 jobs × 60s per-job at concurrency=3 → could 408 even when each
-    # individual backtest respected its own budget.
+    # Worst-case wall time = ceil(N / concurrency) * per_job_timeout + buffer.
     import math
-    outer_timeout = math.ceil(len(jobs) / concurrency) * 50 + 20
+    outer_timeout = math.ceil(len(jobs) / concurrency) * 25 + 15
 
     try:
         results = await asyncio.wait_for(
