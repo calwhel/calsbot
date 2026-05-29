@@ -110,54 +110,77 @@ async def _warm_neon_db():
 
     async def _backfill_pips():
         """One-time backfill: compute pips_pnl for closed forex/metals executions
-        that pre-date the pips_pnl column addition and have NULL pips_pnl."""
-        await asyncio.sleep(5)  # let the DB warm up first
+        that pre-date the pips_pnl column addition. Uses a single bulk SQL UPDATE
+        (no Python loop) to avoid DB contention at startup."""
+        await asyncio.sleep(60)  # wait until all workers are stable
         try:
             from app.database import SessionLocal as _SL
             from sqlalchemy import text as _t
-            from app.services.forex_engine import pip_size as _pip_sz
             def _run():
                 db = _SL()
                 try:
-                    rows = db.execute(_t(
-                        "SELECT id, symbol, direction, entry_price, exit_price, strategy_id "
-                        "FROM strategy_executions "
+                    # Check if there's anything to backfill first
+                    count = db.execute(_t(
+                        "SELECT COUNT(*) FROM strategy_executions "
                         "WHERE asset_class IN ('forex','metals','commodity','index') "
-                        "  AND outcome <> 'OPEN' "
-                        "  AND pips_pnl IS NULL "
-                        "  AND entry_price IS NOT NULL "
-                        "  AND exit_price IS NOT NULL"
-                    )).fetchall()
-                    if not rows:
+                        "  AND outcome <> 'OPEN' AND pips_pnl IS NULL "
+                        "  AND entry_price IS NOT NULL AND exit_price IS NOT NULL"
+                    )).scalar()
+                    if not count:
+                        logger.info("[pips-backfill] nothing to backfill")
                         return
-                    strategy_ids = set()
-                    updated = 0
-                    for row in rows:
-                        ps = _pip_sz(row.symbol or "")
-                        if ps <= 0:
-                            continue
-                        if row.direction == "LONG":
-                            pips = round((row.exit_price - row.entry_price) / ps, 1)
-                        else:
-                            pips = round((row.entry_price - row.exit_price) / ps, 1)
-                        db.execute(_t(
-                            "UPDATE strategy_executions SET pips_pnl=:p WHERE id=:id"
-                        ), {"p": pips, "id": row.id})
-                        strategy_ids.add(row.strategy_id)
-                        updated += 1
+                    # Single bulk UPDATE using SQL CASE for pip_size logic
+                    result = db.execute(_t("""
+                        UPDATE strategy_executions
+                        SET pips_pnl = ROUND(CAST(
+                            CASE
+                                WHEN UPPER(symbol) IN ('XAUUSD') THEN
+                                    CASE WHEN direction='LONG'
+                                         THEN (exit_price - entry_price) / 0.01
+                                         ELSE (entry_price - exit_price) / 0.01 END
+                                WHEN UPPER(symbol) IN ('XAGUSD','CLUSD','NGUSD') THEN
+                                    CASE WHEN direction='LONG'
+                                         THEN (exit_price - entry_price) / 0.001
+                                         ELSE (entry_price - exit_price) / 0.001 END
+                                WHEN UPPER(symbol) LIKE '%JPY%' THEN
+                                    CASE WHEN direction='LONG'
+                                         THEN (exit_price - entry_price) / 0.01
+                                         ELSE (entry_price - exit_price) / 0.01 END
+                                ELSE
+                                    CASE WHEN direction='LONG'
+                                         THEN (exit_price - entry_price) / 0.0001
+                                         ELSE (entry_price - exit_price) / 0.0001 END
+                            END AS NUMERIC), 1)
+                        WHERE asset_class IN ('forex','metals','commodity','index')
+                          AND outcome <> 'OPEN'
+                          AND pips_pnl IS NULL
+                          AND entry_price IS NOT NULL
+                          AND exit_price IS NOT NULL
+                    """))
                     db.commit()
-                    logger.info(f"[pips-backfill] updated {updated} rows across {len(strategy_ids)} strategies")
-                    # Recompute performance for affected strategies
+                    updated = result.rowcount
+                    logger.info(f"[pips-backfill] bulk updated {updated} rows")
+                    if updated == 0:
+                        return
+                    # Get affected strategy ids and recompute performance
+                    sids = db.execute(_t(
+                        "SELECT DISTINCT strategy_id FROM strategy_executions "
+                        "WHERE asset_class IN ('forex','metals','commodity','index') "
+                        "  AND outcome <> 'OPEN' AND pips_pnl IS NOT NULL"
+                    )).scalars().all()
+                    db.close()
                     from app.services.strategy_executor import _update_performance
-                    for sid in strategy_ids:
+                    for sid in sids:
                         try:
                             db2 = _SL()
                             _update_performance(sid, db2)
                             db2.close()
                         except Exception as pe:
-                            logger.warning(f"[pips-backfill] perf update failed for strategy {sid}: {pe}")
-                finally:
+                            logger.warning(f"[pips-backfill] perf update sid={sid}: {pe}")
+                    logger.info(f"[pips-backfill] recomputed perf for {len(sids)} strategies")
+                except Exception as inner:
                     db.close()
+                    raise inner
             await asyncio.to_thread(_run)
         except Exception as e:
             logger.warning(f"[pips-backfill] failed: {e}")
