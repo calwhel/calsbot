@@ -9378,22 +9378,43 @@ async def api_ctrader_callback(
         logger.error("[cTrader callback] no access_token in response")
         return RedirectResponse(url="/?ctrader_error=no_token")
 
-    # ── Step 3: save token in a FRESH session (guaranteed live connection) ─────
+    # ── Step 3: save token via raw SQL UPSERT (atomic, bypasses ORM state) ───────
+    import traceback as _traceback
+    from sqlalchemy import text as _sql_text
     db2 = SessionLocal()
     try:
-        prefs = db2.query(UserPreference).filter(UserPreference.user_id == user_id_saved).first()
-        if not prefs:
-            prefs = UserPreference(user_id=user_id_saved)
-            db2.add(prefs)
-        prefs.ctrader_access_token  = access_token
-        prefs.ctrader_refresh_token = refresh_token
-        if is_admin_saved:
-            prefs.forex_approved = True
+        db2.execute(
+            _sql_text("""
+                INSERT INTO user_preferences
+                    (user_id, ctrader_access_token, ctrader_refresh_token, forex_approved)
+                VALUES (:uid, :tok, :ref, :fa)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    ctrader_access_token  = EXCLUDED.ctrader_access_token,
+                    ctrader_refresh_token = EXCLUDED.ctrader_refresh_token,
+                    forex_approved        = CASE WHEN :fa THEN TRUE
+                                                ELSE user_preferences.forex_approved END
+            """),
+            {"uid": user_id_saved, "tok": access_token,
+             "ref": refresh_token, "fa": is_admin_saved},
+        )
         db2.commit()
-        logger.info(f"[cTrader callback] token saved for user_id={user_id_saved}")
+        # Read back immediately to verify the commit actually landed
+        row = db2.execute(
+            _sql_text("SELECT ctrader_access_token IS NOT NULL AS has_token FROM user_preferences WHERE user_id = :uid"),
+            {"uid": user_id_saved},
+        ).fetchone()
+        logger.info(
+            f"[cTrader callback] token UPSERT ok user_id={user_id_saved} "
+            f"token_len={len(access_token)} verify_has_token={row and row[0]}"
+        )
     except Exception as e:
-        logger.error(f"[cTrader callback] DB commit failed: {e}")
-        db2.rollback()
+        logger.error(
+            f"[cTrader callback] UPSERT failed: {e}\n{_traceback.format_exc()}"
+        )
+        try:
+            db2.rollback()
+        except Exception:
+            pass
         return RedirectResponse(url="/?ctrader_error=db_error")
     finally:
         db2.close()

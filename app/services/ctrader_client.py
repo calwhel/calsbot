@@ -329,8 +329,10 @@ async def exchange_code(code: str, redirect_uri: str) -> dict:
                 "client_secret": CTRADER_CLIENT_SECRET,
             },
         )
+        data = resp.json()
+        logger.info(f"[ctrader] exchange_code HTTP {resp.status_code} → keys={list(data.keys())} body={data}")
         resp.raise_for_status()
-        return resp.json()
+        return data
 
 
 async def refresh_access_token(refresh_token: str) -> dict:
