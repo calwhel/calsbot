@@ -9360,7 +9360,7 @@ async def api_ctrader_callback(
         is_admin_saved = bool(getattr(user, "is_admin", False))
         tg_id_str = str(user.telegram_id) if getattr(user, "telegram_id", None) else ""
         uname_str = getattr(user, "username", "") or ""
-        name_str  = user.name or user.first_name or "User"
+        name_str  = user.first_name or user.username or "User"
 
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         if not prefs:
