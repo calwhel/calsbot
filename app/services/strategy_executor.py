@@ -2185,6 +2185,7 @@ async def evaluate_and_fire(
                 _prefs
                 and _prefs.ctrader_access_token
                 and _prefs.ctrader_account_id
+                and getattr(_prefs, "forex_approved", False)
             )
         except Exception:
             _ctrader_live_ok = False
@@ -3097,8 +3098,13 @@ async def _propagate_to_subscribers(
                     try:
                         from app.models import UserPreference as _UP_sub
                         _sub_prefs = _sub_db.query(_UP_sub).filter(_UP_sub.user_id == sub_user.id).first()
-                        _can_live = bool(_sub_prefs and _sub_prefs.ctrader_access_token and _sub_prefs.ctrader_account_id)
-                        _live_reason = "ok" if _can_live else "no_ctrader_credentials"
+                        _can_live = bool(
+                            _sub_prefs
+                            and _sub_prefs.ctrader_access_token
+                            and _sub_prefs.ctrader_account_id
+                            and getattr(_sub_prefs, "forex_approved", False)
+                        )
+                        _live_reason = "ok" if _can_live else "no_ctrader_credentials_or_not_approved"
                     except Exception as _e:
                         _can_live = False
                         _live_reason = f"ctrader_check_error:{_e}"
