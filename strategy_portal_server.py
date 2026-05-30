@@ -99,11 +99,11 @@ async def _http_exception_handler(request: _Request, exc: _StarletteHTTPExceptio
         return JSONResponse(status_code=exc.status_code, content={"detail": str(exc.detail)})
     # Page routes get a friendly HTML error
     if exc.status_code == 503:
-        return _HTMLResponse(
-            _html_error_page(503, "Back in a moment",
-                             "The server is under heavy load — please refresh in a few seconds."),
-            status_code=503,
-        )
+        page = _html_error_page(503, "Back in a moment",
+                                "Loading your account — this page will refresh automatically.")
+        # Inject auto-retry script before </body>
+        page = page.replace("</body>", "<script>setTimeout(()=>location.reload(),4000)</script></body>")
+        return _HTMLResponse(page, status_code=503)
     if exc.status_code == 403:
         return _HTMLResponse(
             _html_error_page(403, "Access denied",
@@ -2409,45 +2409,22 @@ def _load_portal_data(uid: str):
 
 
 async def _render_portal(request: Request, uid: str):
-    """Shared logic for /app and /strategies."""
-    cache_key = f"_portal_ctx_{uid}"
-    cached = _CACHE.get(cache_key)
-
-    ctx = None
-    if cached and time.time() < cached[1]:
-        ctx = cached[0]
-    else:
-        try:
-            ctx = await asyncio.wait_for(
-                asyncio.to_thread(_load_portal_data, uid),
-                timeout=8.0,
-            )
-            if ctx and ctx not in (None, "banned"):
-                _CACHE[cache_key] = (ctx, time.time() + 90)
-        except asyncio.TimeoutError:
-            # DB is overloaded — serve stale cache if available, else 503
-            ctx = cached[0] if cached else None
-            logger.warning(f"[render_portal] DB timeout for uid={uid} — using {'stale cache' if ctx else '503'}")
-            if ctx is None:
-                raise HTTPException(status_code=503, detail="Service temporarily overloaded — please refresh in a moment")
-
-    if ctx is None:
-        raise HTTPException(status_code=403, detail="Invalid access link")
-    if ctx == "banned":
-        raise HTTPException(status_code=403, detail="Account banned")
-
-    response = templates.TemplateResponse(
-        request,
-        "strategy_portal.html",
-        {
-            "user":         ctx["user"],
-            "uid":          uid,
-            "strategies":   ctx["strategies"],
-            "portfolio":    ctx["portfolio"],
-            "is_web_user":  ctx["is_web_user"],
-            "is_pro":       ctx["is_pro"],
-        },
-    )
+    """Serves the portal HTML shell INSTANTLY — zero DB calls.
+    All personalised data (name, plan, stats) loads client-side via /api/me + /api/portfolio."""
+    _default_user = {"first_name": "", "username": "", "uid": uid}
+    _default_portfolio = {
+        "total_strategies": 0, "active_count": 0, "paper_count": 0,
+        "open_trades": 0, "pnl_7d_fmt": "—", "pnl_all_fmt": "—",
+        "pnl_7d_pos": True, "pnl_all_pos": True, "win_rate": 0, "total_trades": 0,
+    }
+    response = templates.TemplateResponse(request, "strategy_portal.html", {
+        "user":        _default_user,
+        "uid":         uid,
+        "strategies":  [],
+        "portfolio":   _default_portfolio,
+        "is_web_user": False,
+        "is_pro":      False,
+    })
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
@@ -8557,6 +8534,38 @@ async def api_export_trades(strategy_id: int, uid: str = Query(...)):
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+    finally:
+        db.close()
+
+
+@app.get("/api/me")
+async def api_me(uid: str = Query(...)):
+    """Lightweight user + plan info — called by the portal shell on load.
+    Cached 5 min per UID so it never blocks the page render."""
+    cache_key = f"me_{uid}"
+    cached = _CACHE.get(cache_key)
+    if cached and time.time() < cached[1]:
+        return cached[0]
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid_safe(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        sub     = _get_portal_sub(user.id, db)
+        is_pro  = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
+        is_web  = str(getattr(user, "telegram_id", "") or "").startswith("WEB-")
+        avatar  = (user.first_name or user.username or "T")[0].upper()
+        result  = {
+            "name":        user.first_name or user.username or "Trader",
+            "username":    user.username or "",
+            "uid":         user.uid or uid,
+            "is_pro":      is_pro,
+            "is_web_user": is_web,
+            "avatar":      avatar,
+        }
+        _CACHE[cache_key] = (result, time.time() + 300)
+        return result
     finally:
         db.close()
 
