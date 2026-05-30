@@ -33,7 +33,7 @@ CTRADER_PORT = 5035
 # Auth:  ctrader.com/my/settings/openapi/grantingaccess/ (client_id is query param)
 # Token: openapi.ctrader.com/apps/token
 # NOTE: /playground is developer-only testing; connect.spotware.com/apps/{id}/auth → 404.
-OAUTH_AUTH_URL  = "https://ctrader.com/my/settings/openapi/grantingaccess/"
+OAUTH_AUTH_URL  = "https://id.ctrader.com/my/settings/openapi/grantingaccess/"
 OAUTH_TOKEN_URL = "https://openapi.ctrader.com/apps/token"
 
 # ── App credentials (injected via env) ───────────────────────────────────────
