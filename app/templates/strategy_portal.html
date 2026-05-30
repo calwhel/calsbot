@@ -9304,10 +9304,12 @@ async function loadLiveForex() {
   if (!wrap) return;
   wrap.innerHTML = '<div class="loader">Loading account…</div>';
   try {
-    const d = await apiFetch(`/api/live-forex/account?uid=${UID}`);
+    const r = await fetch(`/api/live-forex/account?uid=${UID}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
     renderLiveForex(d, wrap);
   } catch(e) {
-    wrap.innerHTML = `<div class="empty"><div class="icon">⚠️</div><p>Could not load account data. Try refreshing.</p></div>`;
+    wrap.innerHTML = `<div class="empty"><div class="icon">⚠️</div><p>Could not load account data. ${e.message||''} Try refreshing.</p></div>`;
   }
 }
 
@@ -9550,7 +9552,9 @@ function lfCalc() {
 
 async function lfConnect() {
   try {
-    const d = await apiFetch(`/api/ctrader/auth-url?uid=${UID}`);
+    const r = await fetch(`/api/ctrader/auth-url?uid=${UID}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
     if (d.url) window.location.href = d.url;
   } catch(e) { alert('Could not start connection. Please try again.'); }
 }
@@ -9558,7 +9562,8 @@ async function lfConnect() {
 async function lfDisconnect() {
   if (!confirm('Disconnect FP Markets? Your strategies will revert to paper mode.')) return;
   try {
-    await apiFetch(`/api/ctrader/disconnect?uid=${UID}`, {method:'DELETE'});
+    const r = await fetch(`/api/ctrader/disconnect?uid=${UID}`, {method:'DELETE'});
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     loadLiveForex();
   } catch(e) { alert('Error disconnecting. Please try again.'); }
 }
