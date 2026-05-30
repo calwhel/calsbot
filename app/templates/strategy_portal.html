@@ -3416,6 +3416,13 @@ function dismissTgBanner(){
 <script>
 const UID="{{ uid }}";
 let IS_PRO = false;
+// JS fetch cache — instant tab switching on repeat visits
+const _FC=new Map(); // url → {d, exp}
+function _fcGet(url){const h=_FC.get(url);return(h&&Date.now()<h.exp)?h.d:null;}
+function _fcSet(url,d,ttlMs){_FC.set(url,{d,exp:Date.now()+ttlMs});}
+function _fcDel(url){_FC.delete(url);}
+// Call before mutations that should force a fresh strategies/portfolio reload
+function _clearStratCache(){_fcDel('/api/strategies?uid='+UID);_fcDel('/api/portfolio?uid='+UID);}
 (function bootstrapUser(){
   fetch('/api/me?uid='+UID)
     .then(r=>r.ok?r.json():null)
@@ -3650,18 +3657,22 @@ function tradeRowHTML(t){
   </div>`;
 }
 async function loadTrades(){
+  const _tUrl=`/api/portfolio/trades?uid=${UID}&limit=200&filter=${TRADE_FILTER}`;
   const list=$('trades-list');
   const sumEl=$('trades-summary');
-  list.innerHTML=skelCards(4);
-  sumEl.innerHTML='';
-  let data={trades:[],total:0};
-  try{
-    const r=await fetch(`/api/portfolio/trades?uid=${UID}&limit=200&filter=${TRADE_FILTER}`);
-    if(!r.ok)throw new Error(r.status);
-    data=await r.json();
-  }catch(e){
-    list.innerHTML=`<div class="empty"><div class="icon">⚠️</div><p>Couldn't load trades. Check your connection.</p><button class="btn primary" onclick="loadTrades()">↺ Retry</button></div>`;
-    return;
+  let data=_fcGet(_tUrl);
+  if(!data){
+    list.innerHTML=skelCards(4);
+    sumEl.innerHTML='';
+    try{
+      const r=await fetch(_tUrl);
+      if(!r.ok)throw new Error(r.status);
+      data=await r.json();
+      _fcSet(_tUrl,data,30000);
+    }catch(e){
+      list.innerHTML=`<div class="empty"><div class="icon">⚠️</div><p>Couldn't load trades. Check your connection.</p><button class="btn primary" onclick="loadTrades()">↺ Retry</button></div>`;
+      return;
+    }
   }
   const trades=data.trades||[];
 
@@ -3728,21 +3739,25 @@ async function loadTrades(){
 
 // ─── MY STRATEGIES ─────────────────────────────────────────
 async function loadMyStrategies(){
-  $('my-list').innerHTML=skelCards(3);
-  let strats=[],port={total_strategies:0,active_count:0,open_trades:0,total_trades:0,win_rate:0,pnl_7d:0,pnl_30d:0,pnl_all:0,equity_30d:{labels:[],values:[]}};
-  try{
-    const ctrl=new AbortController();
-    const t=setTimeout(()=>ctrl.abort(),25000);
-    const [stratsRes,portRes]=await Promise.all([
-      fetch(`/api/strategies?uid=${UID}`,{signal:ctrl.signal}),
-      fetch(`/api/portfolio?uid=${UID}`,{signal:ctrl.signal})
-    ]);
-    clearTimeout(t);
-    if(stratsRes.ok) strats=await stratsRes.json();
-    if(portRes.ok)   port=await portRes.json();
-  }catch(e){
-    $('my-list').innerHTML=`<div class="empty"><div class="icon" style="font-size:28px;opacity:.4">⚠️</div><p>Couldn't reach the server. Check your connection.</p><button class="btn primary" onclick="loadMyStrategies()" style="margin-top:8px">↺ Retry</button></div>`;
-    return;
+  const _sUrl=`/api/strategies?uid=${UID}`,_pUrl=`/api/portfolio?uid=${UID}`;
+  let strats=_fcGet(_sUrl), port=_fcGet(_pUrl);
+  if(!strats||!port){
+    $('my-list').innerHTML=skelCards(3);
+    strats=[]; port={total_strategies:0,active_count:0,open_trades:0,total_trades:0,win_rate:0,pnl_7d:0,pnl_30d:0,pnl_all:0,equity_30d:{labels:[],values:[]}};
+    try{
+      const ctrl=new AbortController();
+      const t=setTimeout(()=>ctrl.abort(),25000);
+      const [stratsRes,portRes]=await Promise.all([
+        fetch(_sUrl,{signal:ctrl.signal}),
+        fetch(_pUrl,{signal:ctrl.signal})
+      ]);
+      clearTimeout(t);
+      if(stratsRes.ok){strats=await stratsRes.json();_fcSet(_sUrl,strats,20000);}
+      if(portRes.ok)  {port=await portRes.json();  _fcSet(_pUrl,port,20000);}
+    }catch(e){
+      $('my-list').innerHTML=`<div class="empty"><div class="icon" style="font-size:28px;opacity:.4">⚠️</div><p>Couldn't reach the server. Check your connection.</p><button class="btn primary" onclick="loadMyStrategies()" style="margin-top:8px">↺ Retry</button></div>`;
+      return;
+    }
   }
 
   $('s-total').textContent=port.total_strategies||strats.length;
@@ -3862,7 +3877,7 @@ async function toggleStrat(id){
   const r=await fetch(`/api/strategies/${id}/toggle?uid=${UID}`,{method:'POST'});
   const d=await r.json();
   toast(d.status==='active'?'Strategy is now live':'Strategy paused');
-  loadMyStrategies();
+  _clearStratCache();loadMyStrategies();
 }
 
 function showConfirm(title, msg, okLabel, okClass, onOk){
@@ -3895,7 +3910,7 @@ async function promoteToLive(id, assetClass){
       // cTrader already connected — promote directly
       const r = await fetch(`/api/strategies/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,status:'active'})});
       const d = await r.json();
-      if(r.ok && d.success){ toast('Strategy is now live on cTrader ⚡','success'); loadMyStrategies(); }
+      if(r.ok && d.success){ toast('Strategy is now live on cTrader ⚡','success'); _clearStratCache();loadMyStrategies(); }
       else toast(d.detail||d.message||'Failed to go live','error');
     } else {
       // Not connected — send them to settings to connect cTrader
@@ -3945,7 +3960,7 @@ async function submitGoLive(){
     return;
   }
   closeModal('modal-golive');
-  if(d.success){ toast('Strategy is now live'); loadMyStrategies(); }
+  if(d.success){ toast('Strategy is now live'); _clearStratCache();loadMyStrategies(); }
   else toast(d.detail||d.message||'Failed to go live','error');
 }
 
@@ -4021,7 +4036,7 @@ async function deleteStrat(id,name){
     'background:var(--red);color:#fff;border-color:var(--red)',
     async ()=>{
       await fetch(`/api/strategies/${id}?uid=${UID}`,{method:'DELETE'});
-      toast('Strategy deleted','error');loadMyStrategies();
+      toast('Strategy deleted','error');_clearStratCache();loadMyStrategies();
     }
   );
 }
@@ -4031,7 +4046,7 @@ async function shareToMarket(id,name){
   const r=await fetch(`/api/strategies/${id}/share?uid=${UID}`,{method:'POST'});
   if(r.ok)toast(`✅ "${decodeURIComponent(name)}" is live on the marketplace!`);
   else toast((await r.json()).detail||'Already published or error','error');
-  loadMyStrategies();
+  _clearStratCache();loadMyStrategies();
 }
 
 // ─── CONFIGURE ─────────────────────────────────────────────
@@ -4213,7 +4228,7 @@ async function saveCfg(){
     body:JSON.stringify(payload),
   });
   const d=await r.json();btn.disabled=false;btn.textContent='Save Changes';
-  if(d.success){toast('✅ Saved!');closeModal('modal-cfg');loadMyStrategies();}
+  if(d.success){toast('✅ Saved!');closeModal('modal-cfg');_clearStratCache();loadMyStrategies();}
   else if(d.error==='PRO_REQUIRED'){showModal('modal-upgrade');}
   else toast(d.message||'Save failed','error');
 }
@@ -7161,9 +7176,13 @@ function setPrice(v,el){mktPrice=v;document.querySelectorAll('#price-group .filt
 function debounceMarket(){clearTimeout(searchTimeout);searchTimeout=setTimeout(()=>{mktSearch=$('market-search').value;loadMarketplace();},350);}
 
 async function loadMarketplace(){
-  $('market-grid').innerHTML=skelCards(6);$('market-grid').style.display='block';
   const url=`/api/marketplace?uid=${UID}&sort=${mktSort}&category=${mktCat}&pricing=${mktPrice}&search=${encodeURIComponent(mktSearch)}`;
-  const data=await(await fetch(url)).json();
+  let data=_fcGet(url);
+  if(!data){
+    $('market-grid').innerHTML=skelCards(6);$('market-grid').style.display='block';
+    data=await(await fetch(url)).json();
+    _fcSet(url,data,60000);
+  }
   if(!data.length){$('market-grid').innerHTML=`<div class="empty" style="grid-column:1/-1"><div class="icon">🏪</div><p>No strategies match. Build yours and be first to publish!</p><button class="btn primary" onclick="showPage('build')">Build &amp; Publish</button></div>`;$('market-grid').style.display='flex';return;}
   $('market-grid').style.display='grid';
   $('market-grid').innerHTML=data.map(m=>{
@@ -7539,7 +7558,7 @@ async function submitRating(){
       return;
     }
   } catch(e) {}
-  loadMyStrategies();
+  _clearStratCache();loadMyStrategies();
 })();
 loadPortalSubscription();
 
@@ -8602,7 +8621,7 @@ async function pineSave() {
     if (saveData.id) {
       toast('🎉 Strategy saved! Opening configuration…', 'success');
       pineReset();
-      setTimeout(() => { showPage('my-strats', null); loadMyStrategies(); }, 1200);
+      setTimeout(() => { showPage('my-strats', null); _clearStratCache();loadMyStrategies(); }, 1200);
     } else {
       toast(saveData.detail || 'Save failed — please try again.', 'error');
       saveBtn.disabled = false; saveBtn.textContent = '✅ Save Strategy';
@@ -8837,7 +8856,7 @@ async function cbCompile() {
     if (saveData.id) {
       setTitle('✅ Strategy saved!');
       toast('🎉 Strategy saved! Opening your strategies…', 'success');
-      setTimeout(() => { showPage('my-strats', null); loadMyStrategies(); }, 1200);
+      setTimeout(() => { showPage('my-strats', null); _clearStratCache();loadMyStrategies(); }, 1200);
     } else {
       toast(saveData.detail || 'Save failed — please try again.', 'error');
       showRetry();

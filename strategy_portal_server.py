@@ -829,6 +829,12 @@ def _ensure_tables():
         ("idx_strategy_executions_sid_fired", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_sid_fired ON strategy_executions(strategy_id, fired_at DESC)"),
         ("idx_strategy_executions_sid_symbol_fired", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_sid_symbol_fired ON strategy_executions(strategy_id, symbol, fired_at DESC)"),
         ("idx_strategy_executions_sid_outcome", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_sid_outcome ON strategy_executions(strategy_id, outcome)"),
+        # close_stale_open_executions: WHERE outcome='OPEN' AND fired_at<=?
+        ("idx_strategy_executions_outcome_fired", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_outcome_fired ON strategy_executions(outcome, fired_at)"),
+        # /api/portfolio/trades ORDER BY coalesce(closed_at, fired_at) DESC
+        ("idx_strategy_executions_closed_fired", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_closed_fired ON strategy_executions(closed_at DESC NULLS LAST, fired_at DESC)"),
+        # /api/portfolio JOIN user_strategies WHERE user_id=? (covers the JOIN filter)
+        ("idx_strategy_executions_uid_outcome", "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_strategy_executions_uid_outcome ON strategy_executions(user_id, outcome)"),
         # /api/trade/auto/list batched DISTINCT ON (strategy_id) ORDER BY
         # strategy_id, opened_at DESC — without this the lookup degrades to a
         # full table scan + sort and hits Neon's statement_timeout once the
@@ -5927,25 +5933,34 @@ async def api_marketplace(
             u.id: u for u in db.query(User).filter(User.id.in_(_mkt_author_ids)).all()
         } if _mkt_author_ids else {}
 
+        # Bulk-load equity curves in ONE query (was N+1 — one per listing)
+        _equity_raw: dict[int, list] = {}
+        if _strat_ids:
+            from sqlalchemy import text as _eqt
+            _ids_str = ",".join(str(i) for i in _strat_ids)
+            _eq_rows = db.execute(_eqt(f"""
+                SELECT strategy_id, pnl_pct FROM (
+                    SELECT strategy_id, pnl_pct, fired_at,
+                           ROW_NUMBER() OVER (PARTITION BY strategy_id ORDER BY fired_at ASC) AS rn
+                    FROM strategy_executions
+                    WHERE strategy_id = ANY(ARRAY[{_ids_str}]::int[])
+                      AND outcome IN ('WIN','LOSS','BREAKEVEN')
+                      AND pnl_pct IS NOT NULL
+                ) t WHERE rn <= 30
+                ORDER BY strategy_id, fired_at ASC
+            """)).fetchall()
+            for row in _eq_rows:
+                _equity_raw.setdefault(row.strategy_id, []).append(float(row.pnl_pct))
+
         result = []
         for m in listings:
             perf   = _perf_map2.get(m.strategy_id)
             author = _mkt_author_map.get(m.author_id)
-            # Build equity curve from last 30 closed trades (cumulative P&L %)
-            closed_trades = (
-                db.query(StrategyExecution.pnl_pct)
-                .filter(
-                    StrategyExecution.strategy_id == m.strategy_id,
-                    StrategyExecution.outcome.in_(["WIN", "LOSS", "BREAKEVEN"]),
-                    StrategyExecution.pnl_pct.isnot(None),
-                )
-                .order_by(StrategyExecution.fired_at.asc())
-                .limit(30).all()
-            )
+            # Build cumulative equity curve from pre-loaded data
             equity = []
             cum = 0.0
-            for (pnl,) in closed_trades:
-                cum += float(pnl)
+            for pnl in _equity_raw.get(m.strategy_id, []):
+                cum += pnl
                 equity.append(round(cum, 2))
             result.append({
                 "id":               m.id,
@@ -8390,6 +8405,11 @@ async def api_portfolio_trades(
     parent strategy's id + name so the client can deep-link to the strategy
     detail screen without an extra round-trip.
     """
+    _ptrades_key = f"portfolio_trades:{uid}:{filter}:{offset}:{limit}"
+    _ptrades_cached = _CACHE.get(_ptrades_key)
+    if _ptrades_cached and time.time() < _ptrades_cached[1]:
+        return JSONResponse(_ptrades_cached[0])
+
     from app.database import SessionLocal
     db = SessionLocal()
     try:
@@ -8482,14 +8502,16 @@ async def api_portfolio_trades(
                 "unrealised_pnl": unrealised,
             })
 
-        return JSONResponse({
+        _resp = {
             "trades":  out,
             "total":   total,
             "offset":  offset,
             "limit":   limit,
             "filter":  f,
             "has_more": (offset + len(out)) < total,
-        })
+        }
+        _CACHE[_ptrades_key] = (_resp, time.time() + 60)
+        return JSONResponse(_resp)
     finally:
         db.close()
 
