@@ -28,13 +28,13 @@ logger = logging.getLogger(__name__)
 CTRADER_HOST = "live.ctraderapi.com"
 CTRADER_PORT = 5035
 
-# OAuth endpoints
-# Note: connect.spotware.com/apps/{id}/auth returns 404 for all apps.
-# The working OAuth entry point is openapi.ctrader.com/apps/{id}/playground
-# which redirects to id.ctrader.com/login — works for both live and demo accounts.
-OAUTH_BASE      = "https://openapi.ctrader.com"
-OAUTH_AUTH_URL  = f"{OAUTH_BASE}/apps/{{client_id}}/playground"
-OAUTH_TOKEN_URL = "https://connect.spotware.com/apps/token"
+# OAuth endpoints — from official Spotware docs:
+# https://help.ctrader.com/open-api/account-authentication/
+# Auth:  ctrader.com/my/settings/openapi/grantingaccess/ (client_id is query param)
+# Token: openapi.ctrader.com/apps/token
+# NOTE: /playground is developer-only testing; connect.spotware.com/apps/{id}/auth → 404.
+OAUTH_AUTH_URL  = "https://ctrader.com/my/settings/openapi/grantingaccess/"
+OAUTH_TOKEN_URL = "https://openapi.ctrader.com/apps/token"
 
 # ── App credentials (injected via env) ───────────────────────────────────────
 CTRADER_CLIENT_ID     = os.environ.get("CTRADER_CLIENT_ID", "")
@@ -290,39 +290,41 @@ async def _account_auth(
 def get_oauth_url(redirect_uri: str, state: str = "") -> str:
     """Return the Spotware OAuth authorization URL.
 
-    Spotware Client IDs are in the format ``{appId}_{secret}`` (e.g.
-    ``29040_abc…``).  The auth URL path requires only the numeric App ID;
-    the full client_id string is passed as a query parameter for the token
-    exchange step.
+    Uses the official end-user granting-access endpoint:
+    https://ctrader.com/my/settings/openapi/grantingaccess/
+    client_id = numeric app ID (prefix before first underscore in CTRADER_CLIENT_ID).
     """
     import urllib.parse
-    # Spotware Client IDs are "29040_xyz…" — the URL path needs only the
-    # numeric app ID; client_id belongs in the token exchange, NOT here.
     app_id = CTRADER_CLIENT_ID.split("_")[0] if CTRADER_CLIENT_ID else ""
     params = {
+        "client_id":     app_id,
         "redirect_uri":  redirect_uri,
-        "response_type": "code",
         "scope":         "trading",
+        "product":       "web",
     }
     if state:
         params["state"] = state
-    base = OAUTH_AUTH_URL.format(client_id=app_id)
-    url = f"{base}?{urllib.parse.urlencode(params)}"
+    url = f"{OAUTH_AUTH_URL}?{urllib.parse.urlencode(params)}"
     logger.info(f"[ctrader] OAuth URL → {url}")
     return url
 
 
 async def exchange_code(code: str, redirect_uri: str) -> dict:
-    """Exchange an OAuth authorization code for access + refresh tokens."""
+    """Exchange an OAuth authorization code for access + refresh tokens.
+
+    Spotware token endpoint uses POST with query-string params (not form body).
+    client_id = numeric app ID prefix; client_secret = CTRADER_CLIENT_SECRET.
+    """
     import httpx
+    app_id = CTRADER_CLIENT_ID.split("_")[0] if CTRADER_CLIENT_ID else CTRADER_CLIENT_ID
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             OAUTH_TOKEN_URL,
-            data={
+            params={
                 "grant_type":    "authorization_code",
                 "code":          code,
                 "redirect_uri":  redirect_uri,
-                "client_id":     CTRADER_CLIENT_ID,
+                "client_id":     app_id,
                 "client_secret": CTRADER_CLIENT_SECRET,
             },
         )
@@ -333,13 +335,14 @@ async def exchange_code(code: str, redirect_uri: str) -> dict:
 async def refresh_access_token(refresh_token: str) -> dict:
     """Use a refresh token to get a new access token."""
     import httpx
+    app_id = CTRADER_CLIENT_ID.split("_")[0] if CTRADER_CLIENT_ID else CTRADER_CLIENT_ID
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             OAUTH_TOKEN_URL,
-            data={
+            params={
                 "grant_type":    "refresh_token",
                 "refresh_token": refresh_token,
-                "client_id":     CTRADER_CLIENT_ID,
+                "client_id":     app_id,
                 "client_secret": CTRADER_CLIENT_SECRET,
             },
         )
