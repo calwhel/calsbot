@@ -12,7 +12,6 @@ import { EmptyState } from '@/components/EmptyState';
 import { Pill } from '@/components/Pill';
 import { StatCard } from '@/components/StatCard';
 import { PrimaryButton } from '@/components/PrimaryButton';
-import { Paywall } from '@/components/Paywall';
 import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, apiPost, ApiError, getApiUrl, type MarketplaceListingDetail, type CloneResponse } from '@/lib/api';
@@ -57,10 +56,6 @@ export default function ListingDetailScreen() {
       //   { already_owned: true, cloned_strategy_id } — user already has it
       //   { success: true, strategy_id } — free clone succeeded
       // 403-with-error is handled in onError below.
-      if (resp.error === 'PRO_REQUIRED') {
-        promptUpgrade(resp.message || 'A Pro subscription is required.');
-        return;
-      }
       if (resp.requires_payment) {
         promptPayment(resp.price_usdt ?? 0, resp.message);
         return;
@@ -97,25 +92,10 @@ export default function ListingDetailScreen() {
       );
     },
     onError: (e) => {
-      // 403 PRO_REQUIRED comes through here as ApiError with the JSON-encoded body.
-      if (e instanceof ApiError && e.status === 403 && e.body) {
-        try {
-          const j = JSON.parse(e.body);
-          if (j?.error === 'PRO_REQUIRED') {
-            promptUpgrade(j.message || 'A Pro subscription is required.');
-            return;
-          }
-        } catch {}
-      }
       Alert.alert('Could not add strategy', (e as Error).message || 'Try again later.');
     },
   });
 
-  const [paywallOpen, setPaywallOpen] = useState(false);
-
-  const promptUpgrade = useCallback((_msg: string) => {
-    setPaywallOpen(true);
-  }, []);
 
   const promptPayment = useCallback((priceUsdt: number, msg?: string) => {
     Alert.alert(
@@ -363,11 +343,6 @@ export default function ListingDetailScreen() {
         ) : null}
       </ScrollView>
 
-      <Paywall
-        visible={paywallOpen}
-        onClose={() => setPaywallOpen(false)}
-        onFallbackWeb={() => { setPaywallOpen(false); Linking.openURL('https://tradehub.markets/pricing').catch(() => {}); }}
-      />
     </>
   );
 }

@@ -21,7 +21,6 @@ import { StatCard } from '@/components/StatCard';
 import { EquityCurve } from '@/components/EquityCurve';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { EmptyState } from '@/components/EmptyState';
-import { Paywall } from '@/components/Paywall';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -352,9 +351,7 @@ export default function BacktestScreen() {
   const [days, setDays] = useState<30 | 90>(30);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
-  const [proRequired, setProRequired] = useState<{ message?: string } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [paywallOpen, setPaywallOpen] = useState(false);
 
   // Strategy lookup — piggyback on the cached list (already loaded by other tabs).
   const listQ = useQuery({
@@ -386,7 +383,6 @@ export default function BacktestScreen() {
     }
     setRunning(true);
     setResult(null);
-    setProRequired(null);
     setErrorMsg(null);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
 
@@ -397,12 +393,6 @@ export default function BacktestScreen() {
         uid,
       );
 
-      // 402 — Pro subscription required
-      if (resp.status === 402 || resp.body?.error === 'PRO_REQUIRED') {
-        setProRequired({ message: resp.body?.message });
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
-        return;
-      }
       // 408 — backtest exceeded the engine's 90s budget
       if (resp.status === 408 || resp.body?.error === 'TIMEOUT') {
         setErrorMsg(
@@ -498,11 +488,9 @@ export default function BacktestScreen() {
           />
         </View>
 
-        {/* Body — paywall, running, error, or results */}
+        {/* Body — running, error, or results */}
         <View style={{ marginTop: spacing.lg }}>
-          {proRequired ? (
-            <ProPaywall message={proRequired.message} onUpgrade={() => setPaywallOpen(true)} />
-          ) : running ? (
+          {running ? (
             <RunningPanel days={days} />
           ) : errorMsg ? (
             <View style={styles.errorCard}>
@@ -523,11 +511,6 @@ export default function BacktestScreen() {
         </View>
       </ScrollView>
 
-      <Paywall
-        visible={paywallOpen}
-        onClose={() => setPaywallOpen(false)}
-        onFallbackWeb={() => { setPaywallOpen(false); Linking.openURL('https://tradehub.markets/pricing').catch(() => {}); }}
-      />
     </>
   );
 }

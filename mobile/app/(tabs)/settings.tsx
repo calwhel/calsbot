@@ -20,7 +20,6 @@ import { PrimaryButton } from '@/components/PrimaryButton';
 import { Logo } from '@/components/Logo';
 import { SectionLabel } from '@/components/SectionLabel';
 import { RiskDisclaimer } from '@/components/RiskDisclaimer';
-import { Paywall } from '@/components/Paywall';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, apiPut, apiDelete, type Portfolio, type PushPrefs } from '@/lib/api';
@@ -31,7 +30,6 @@ export default function SettingsScreen() {
   const [copied, setCopied] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
-  const [paywallVisible, setPaywallVisible] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   // Re-validate the user payload every time the Account tab regains focus,
@@ -105,8 +103,7 @@ export default function SettingsScreen() {
     );
   }, [signOut]);
 
-  const isPro = !!user?.is_pro;
-  const planLabel = isPro ? `${user.plan.toUpperCase()} PLAN` : 'FREE PLAN';
+  const planLabel = 'TRADEHUB';
 
   return (
     <Screen
@@ -154,7 +151,7 @@ export default function SettingsScreen() {
               <View style={styles.pillRow}>
                 <Pill
                   label={planLabel}
-                  tone={isPro ? 'accent' : 'neutral'}
+                  tone={'neutral'}
                   small
                 />
                 {user?.is_admin ? <Pill label="Admin" tone="warning" small /> : null}
@@ -235,44 +232,6 @@ export default function SettingsScreen() {
         </View>
       </View>
 
-      {/* Pro upgrade card — only for free users */}
-      {!isPro ? (
-        <Pressable
-          onPress={() => setPaywallVisible(true)}
-          style={({ pressed }) => [
-            styles.proCard,
-            glow.accent,
-            pressed && { opacity: 0.9, transform: [{ scale: 0.99 }] },
-          ]}
-        >
-          <Svg style={StyleSheet.absoluteFill} preserveAspectRatio="none" viewBox="0 0 100 100">
-            <Defs>
-              <SvgLinearGradient id="pro-bg" x1="0" y1="0" x2="1" y2="1">
-                <Stop offset="0" stopColor={colors.cardHi} />
-                <Stop offset="1" stopColor={colors.cardHi} />
-              </SvgLinearGradient>
-            </Defs>
-            <Rect width="100" height="100" fill={colors.cardHi} />
-            <Rect width="100" height="100" fill="url(#pro-bg)" />
-          </Svg>
-          <View style={styles.proInner}>
-            <View style={styles.proIcon}>
-              <Ionicons name="diamond" size={20} color={colors.accentText} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.proTitle}>Upgrade to TradeHub Pro</Text>
-              <Text style={styles.proHint}>Unlimited backtests, live alerts, and the full scanner.</Text>
-            </View>
-            <Ionicons name="arrow-forward-circle" size={26} color={colors.accent} />
-          </View>
-        </Pressable>
-      ) : null}
-
-      <Paywall
-        visible={paywallVisible}
-        onClose={() => { setPaywallVisible(false); refreshUser().catch(() => {}); }}
-        onFallbackWeb={() => { setPaywallVisible(false); Linking.openURL('https://tradehub.markets/pricing').catch(() => {}); }}
-      />
 
       {/* Trading account — balance + lot size for pip/$ display */}
       <View style={{ marginTop: spacing.xl }}>

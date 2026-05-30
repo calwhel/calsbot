@@ -500,9 +500,8 @@ def _get_portal_sub(user_id: int, db: Session):
 
 
 def _is_portal_pro(sub) -> bool:
-    if sub.tier == "pro" and sub.subscription_end and datetime.utcnow() < sub.subscription_end:
-        return True
-    return False
+    # Subscriptions removed — all features are free for everyone.
+    return True
 
 
 def _chat_calls_info(sub, db: Session, user=None):
@@ -7272,19 +7271,7 @@ async def api_tradingview_webhook(token: str, request: Request):
         if not user or user.banned:
             raise HTTPException(status_code=403, detail="User unavailable")
 
-        _now = datetime.utcnow()
-        _has_pro = False
-        try:
-            _psub = db.query(PortalSubscription).filter_by(user_id=user.id).first()
-            _has_pro = (
-                _psub and _psub.tier == "pro"
-                and _psub.subscription_end
-                and _psub.subscription_end > _now
-            )
-        except Exception:
-            pass
-        if not (user.is_admin or getattr(user, "grandfathered", False) or _has_pro):
-            return JSONResponse({"ok": False, "reason": "no_pro_subscription"})
+        # Subscription gates removed — all features are free.
 
         config = dict(strategy.config or {})
         risk = config.get("risk", {})

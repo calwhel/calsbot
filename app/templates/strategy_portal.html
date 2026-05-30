@@ -1796,7 +1796,7 @@ tr:hover td { background: var(--surface) !important; }
   </div>
   <div class="topbar-right">
     <button class="btn sm ghost topbar-earnings-btn" onclick="showEarnings()">💰 Earnings</button>
-    <span id="tier-badge" class="tier-badge free" onclick="showModal('modal-upgrade')" title="Upgrade to Pro">FREE</span>
+    <span id="tier-badge" class="tier-badge pro" title="TradeHub">FREE</span>
     <div class="acct-wrap">
       <button class="acct-avatar-btn" id="acct-avatar-btn" onclick="toggleAcctMenu(event)" aria-label="Account menu">
         <span id="nav-avatar">T</span>
@@ -2009,8 +2009,8 @@ function dismissTgBanner(){
     <button class="build-mode-btn" id="bm-indicator" onclick="switchBuildMode('indicator')">✨ Generate from Indicator</button>
     <button class="build-mode-btn active" id="bm-wizard" onclick="switchBuildMode('wizard')">🧙 Step Wizard</button>
     <button class="build-mode-btn" id="bm-chat" onclick="switchBuildMode('chat')">💬 Chat Builder</button>
-    <button class="build-mode-btn" id="bm-pine" onclick="switchBuildMode('pine')">🌲 PineScript <span id="pine-lock" style="font-size:10px;opacity:.6">🔒</span></button>
-    <button class="build-mode-btn" id="bm-scan" onclick="switchBuildMode('scan')">🔍 Scan Best <span id="scan-lock" style="font-size:10px;opacity:.6">🔒</span></button>
+    <button class="build-mode-btn" id="bm-pine" onclick="switchBuildMode('pine')">🌲 PineScript</button>
+    <button class="build-mode-btn" id="bm-scan" onclick="switchBuildMode('scan')">🔍 Scan Best</button>
   </div>
 
   <!-- ── GENERATE INDICATOR PANEL ── -->
@@ -2460,20 +2460,8 @@ function dismissTgBanner(){
   <div id="build-scan-panel" style="display:none;padding-bottom:20px">
     <div class="pine-wrap">
 
-      <!-- Pro gate for free users -->
-      <div id="scan-pro-wall" {% if is_pro %}style="display:none"{% endif %}>
-        <div class="pine-card">
-          <div class="pine-pro-wall">
-            <div class="lw-icon">🔍</div>
-            <div class="lw-title">Pro feature</div>
-            <div class="lw-sub">Strategy Scanner runs 12 strategies against real historical data for any coin and ranks them — so you know which edge actually works before you risk capital.</div>
-            <button class="btn primary" onclick="showModal('modal-upgrade')" style="font-size:14px;padding:11px 24px">Upgrade to Pro — $50/mo</button>
-          </div>
-        </div>
-      </div>
-
       <!-- Config card -->
-      <div id="scan-config-card" {% if not is_pro %}style="display:none"{% endif %}>
+      <div id="scan-config-card">
         <div class="pine-card">
           <div style="margin-bottom:16px">
             <div style="font-size:16px;font-weight:700;letter-spacing:-.3px">🔍 Strategy Scanner</div>
@@ -3158,10 +3146,10 @@ function dismissTgBanner(){
         <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Subscription</div>
         <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:14px;display:flex;align-items:center;justify-content:space-between">
           <div>
-            <div style="font-size:13px;font-weight:700;color:var(--text)" id="settings-plan-name">Free Plan</div>
-            <div id="acct-sub-expiry" style="font-size:12px;color:var(--muted);margin-top:2px">Paper trading only</div>
+            <div style="font-size:13px;font-weight:700;color:var(--text)" id="settings-plan-name">TradeHub</div>
+            <div id="acct-sub-expiry" style="font-size:12px;color:var(--muted);margin-top:2px">Active</div>
           </div>
-          <span id="settings-plan-action"><button class="btn primary sm" onclick="closeModal('modal-acct-settings');showModal('modal-upgrade')">Upgrade</button></span>
+          <span id="settings-plan-action"><span class="tier-badge pro">FREE</span></span>
         </div>
       </div>
 
@@ -3336,12 +3324,7 @@ function dismissTgBanner(){
 <div class="modal-bg" id="modal-advisor">
   <div class="modal" style="max-width:540px;padding:0;overflow:hidden">
     <div class="modal-hd" style="padding:14px 18px"><h3 id="adv-title">AI Strategy Advisor</h3><span class="modal-close" onclick="closeModal('modal-advisor');advReset()">&times;</span></div>
-    <div class="advisor-pro-wall" id="adv-pro-wall">
-      <div style="font-size:36px">🔒</div>
-      <div style="font-size:16px;font-weight:700">Pro Feature</div>
-      <div style="font-size:13px;color:var(--muted);max-width:240px;line-height:1.65">Upgrade to Pro to get unlimited AI advice on your strategies.</div>
-      <button class="btn primary" onclick="closeModal('modal-advisor');showModal('modal-upgrade')">Upgrade to Pro</button>
-    </div>
+    <div class="advisor-pro-wall" id="adv-pro-wall" style="display:none"></div>
     <div class="advisor-wrap" id="adv-wrap" style="display:none">
       <div class="advisor-messages" id="adv-messages"></div>
       <div class="advisor-quick" id="adv-quick">
@@ -3422,7 +3405,7 @@ function dismissTgBanner(){
 
 <script>
 const UID="{{ uid }}";
-let IS_PRO = false;
+let IS_PRO = true;
 // JS fetch cache — instant tab switching on repeat visits
 const _FC=new Map(); // url → {d, exp}
 function _fcGet(url){const h=_FC.get(url);return(h&&Date.now()<h.exp)?h.d:null;}
@@ -3435,41 +3418,21 @@ function _clearStratCache(){_fcDel('/api/strategies?uid='+UID);_fcDel('/api/port
     .then(r=>r.ok?r.json():null)
     .then(d=>{
       if(!d)return;
-      IS_PRO = !!d.is_pro;
       const av = d.avatar||'T', name = d.name||'Trader', uname = d.username||'';
       // Nav
       const ne=document.getElementById('nav-avatar'); if(ne)ne.textContent=av;
       const da=document.getElementById('dd-avatar');  if(da)da.textContent=av;
       const dn=document.getElementById('dd-name');    if(dn)dn.textContent=name;
       const du=document.getElementById('dd-uid');     if(du)du.textContent=d.uid||UID;
-      // Tier badge
-      const tb=document.getElementById('tier-badge');
-      if(tb){
-        if(IS_PRO){
-          tb.className='tier-badge pro'; tb.textContent='PRO';
-          tb.onclick=null; tb.title='Pro Member';
-        } else {
-          tb.className='tier-badge free'; tb.textContent='FREE';
-          tb.onclick=()=>showModal('modal-upgrade'); tb.title='Upgrade to Pro';
-        }
-      }
-      // Lock icons
-      const pl=document.getElementById('pine-lock'); if(pl)pl.style.display=IS_PRO?'none':'';
-      const sl=document.getElementById('scan-lock'); if(sl)sl.style.display=IS_PRO?'none':'';
-      // Pro walls (build scan panel)
-      const pw=document.getElementById('scan-pro-wall');   if(pw)pw.style.display=IS_PRO?'none':'';
-      const sc=document.getElementById('scan-config-card');if(sc)sc.style.display=IS_PRO?'':'none';
       // Settings panel
       const sa=document.getElementById('settings-avatar');     if(sa)sa.textContent=av;
       const sn=document.getElementById('settings-name');       if(sn)sn.textContent=name;
       const su=document.getElementById('settings-username');    if(su)su.textContent=uname?'@'+uname:'';
       const st=document.getElementById('settings-uid-text');   if(st)st.textContent=d.uid||UID;
-      const spn=document.getElementById('settings-plan-name'); if(spn)spn.textContent=IS_PRO?'⚡ Pro Plan':'Free Plan';
-      const se=document.getElementById('acct-sub-expiry');     if(se)se.textContent=IS_PRO?'Active':'Paper trading only';
+      const spn=document.getElementById('settings-plan-name'); if(spn)spn.textContent='TradeHub';
+      const se=document.getElementById('acct-sub-expiry');     if(se)se.textContent='Active';
       const spa=document.getElementById('settings-plan-action');
-      if(spa)spa.innerHTML=IS_PRO
-        ?'<span class="tier-badge pro">PRO</span>'
-        :'<button class="btn primary sm" onclick="closeModal(\'modal-acct-settings\');showModal(\'modal-upgrade\')">Upgrade</button>';
+      if(spa)spa.innerHTML='<span class="tier-badge pro">FREE</span>';
     })
     .catch(()=>{});
 })();
@@ -3873,7 +3836,7 @@ function renderStratList(strats){
           ?`<button class="btn paper-btn sm" onclick="toggleStrat(${s.id})">Running</button><button class="btn sm" onclick="promoteToLive(${s.id},'${assetClass}')" style="color:var(--green);border-color:rgba(34,197,94,.3)">Go Live</button>`
           :`<button class="btn sm" onclick="toggleStrat(${s.id})" style="color:var(--green);border-color:rgba(34,197,94,.3)">Activate</button>`}
         ${isLocked?'':`<button class="btn sm ghost" onclick="shareToMarket(${s.id},'${encodeURIComponent(s.name)}')">Publish</button>`}
-        ${window._portalIsPro?`<button class="btn sm" onclick="openAdvisor(${s.id},'${encodeURIComponent(s.name)}')" style="color:var(--accent);border-color:rgba(59,91,219,.3)">✦ Improve with AI</button>`:`<button class="btn sm ghost" onclick="showModal('modal-upgrade')" title="Pro feature" style="opacity:.55">✦ Improve with AI</button>`}
+        <button class="btn sm" onclick="openAdvisor(${s.id},'${encodeURIComponent(s.name)}')" style="color:var(--accent);border-color:rgba(59,91,219,.3)">✦ Improve with AI</button>
         <button class="btn danger sm" onclick="deleteStrat(${s.id},'${encodeURIComponent(s.name)}')">${isLocked?'Unsubscribe':'Delete'}</button>
       </div>
     </div>`;
@@ -3901,7 +3864,6 @@ function showConfirm(title, msg, okLabel, okClass, onOk){
 let _goLiveStratId = null;
 
 async function promoteToLive(id, assetClass){
-  if(!IS_PRO){showModal('modal-upgrade');return;}
   _goLiveStratId = id;
   const isFxLike = assetClass === 'forex' || assetClass === 'index';
 
@@ -3957,9 +3919,10 @@ async function submitGoLive(){
   okBtn.disabled=false; okBtn.textContent='Go Live';
   if(r.status===403 && d.error==='PRO_REQUIRED'){
     closeModal('modal-golive');
-    showConfirm(
-      'Pro Subscription Required',
-      'Live strategy automation requires a <strong>Pro subscription ($50/month)</strong>.<br><br>Upgrade to Pro to run live strategies, copy from the marketplace, and access advanced signals.',
+    toast('Could not go live — please try again.','error');
+    if(false){showConfirm(
+      'Go Live Failed',
+      '',
       'Upgrade to Pro',
       'background:linear-gradient(135deg,#5b7fff,#4060f0);color:#fff;border:none',
       ()=>window.location='/login'
@@ -4143,7 +4106,7 @@ function updateStatusHint(){
   $('cfg-status-hint').textContent=hints[cfgStatus]||'';
 }
 
-function setCfgStatus(st,el){if(st==='active'&&!IS_PRO){showModal('modal-upgrade');return;}cfgStatus=st;cfgStatusChanged=true;$('cfg-status-toggle').querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');updateStatusHint();}
+function setCfgStatus(st,el){cfgStatus=st;cfgStatusChanged=true;$('cfg-status-toggle').querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');updateStatusHint();}
 function setCfgDir(d,el){cfgDir=d;$('cfg-dir-toggle').querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');}
 function setCfgDir2(d,el,toggleId){
   if(toggleId==='set-dir-toggle')settingsDir=d;
@@ -4236,7 +4199,7 @@ async function saveCfg(){
   });
   const d=await r.json();btn.disabled=false;btn.textContent='Save Changes';
   if(d.success){toast('✅ Saved!');closeModal('modal-cfg');_clearStratCache();loadMyStrategies();}
-  else if(d.error==='PRO_REQUIRED'){showModal('modal-upgrade');}
+  else if(d.error==='PRO_REQUIRED'){toast('Could not save — please try again.','error');}
   else toast(d.message||'Save failed','error');
 }
 
@@ -5885,7 +5848,7 @@ function renderStep7(){
   <div class="section-card">
     <div class="sc-title"><div class="sc-icon">🚀</div>Launch Mode</div>
     <div class="dir-toggle">
-      <button class="dir-btn live ${WZ.mode==='live'?'active':''}" onclick="if(!IS_PRO){showModal('modal-upgrade');return;}WZ.mode='live';wzSyncMode()">Live Trade${IS_PRO?'':'  🔒'}</button>
+      <button class="dir-btn live ${WZ.mode==='live'?'active':''}" onclick="WZ.mode='live';wzSyncMode()">Live Trade</button>
       <button class="dir-btn paper ${WZ.mode==='paper'?'active':''}" onclick="WZ.mode='paper';wzSyncMode()">🧪 Paper Test</button>
     </div>
     <div id="wz-paper-note" style="${WZ.mode==='paper'?'':'display:none;'}margin-top:10px" class="paper-callout">
@@ -5923,8 +5886,8 @@ function renderStep7(){
   <div class="section-card" id="bt-panel" style="border-color:var(--accent);background:linear-gradient(135deg,rgba(99,102,241,.06) 0%,var(--surface) 100%)">
     <div class="sc-title"><div class="sc-icon">📊</div>Backtest <span style="font-size:11px;color:var(--muted);text-transform:none;font-weight:400;letter-spacing:0">— test against historical price data before going live</span></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
-      <button class="btn ghost sm" id="bt-btn-30" onclick="runBacktest(30)" style="flex:1;min-width:120px;font-weight:600">${IS_PRO?'⚡ Quick Test · 30 days':'🔒 Quick Test · 30 days'}</button>
-      <button class="btn ghost sm" id="bt-btn-90" onclick="runBacktest(90)" style="flex:1;min-width:120px;font-weight:600">${IS_PRO?'🔬 Deep Test · 90 days':'🔒 Deep Test · 90 days'}</button>
+      <button class="btn ghost sm" id="bt-btn-30" onclick="runBacktest(30)" style="flex:1;min-width:120px;font-weight:600">⚡ Quick Test · 30 days</button>
+      <button class="btn ghost sm" id="bt-btn-90" onclick="runBacktest(90)" style="flex:1;min-width:120px;font-weight:600">🔬 Deep Test · 90 days</button>
     </div>
     <div style="font-size:11px;color:var(--muted);margin-top:2px;line-height:1.5">Replays your strategy on real historical candles. Results are simulated — actual performance may vary.</div>
     <div id="bt-result" style="margin-top:12px"></div>
@@ -5945,7 +5908,6 @@ function wzSyncMode(){
 
 // ─── Backtest ────────────────────────────────────────────────────────────────
 async function runBacktest(days){
-  if(!IS_PRO){showModal('modal-upgrade');return;}
   const res=document.getElementById('bt-result');
   if(!res)return;
   const btn30=document.getElementById('bt-btn-30');
@@ -7253,10 +7215,11 @@ async function quickGet(id){
   if(d.already_owned){toast('Already in your strategies!','info');return;}
   if(res.status===403 && d.error==='PRO_REQUIRED'){
     closeModal('modal-detail');
-    showConfirm(
-      'Pro Subscription Required',
-      'Copying marketplace strategies requires a <strong>Pro subscription ($50/month)</strong>.<br><br>Upgrade to unlock the full marketplace, live automation, and advanced signals.',
-      'Upgrade to Pro',
+    toast('Could not copy strategy — please try again.','error');
+    if(false){showConfirm(
+      '',
+      '',
+      '',
       'background:linear-gradient(135deg,#5b7fff,#4060f0);color:#fff;border:none',
       ()=>window.location='/login'
     );
@@ -7526,9 +7489,7 @@ async function openAcctSettings(){
     if(ps) ps.value = String(d.default_position_size || 5);
     // Show subscription expiry if Pro
     const expEl = document.getElementById('acct-sub-expiry');
-    if(expEl && IS_PRO && d.sub_expires){
-      expEl.textContent = 'Renews ' + new Date(d.sub_expires).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
-    }
+    if(expEl){ expEl.textContent = 'Active'; }
   } catch(e){ /* settings load failed silently */ }
 }
 
@@ -7612,9 +7573,7 @@ function switchBuildMode(mode) {
   document.getElementById('build-pine-panel').style.display = mode === 'pine' ? '' : 'none';
   document.getElementById('build-scan-panel').style.display = mode === 'scan' ? '' : 'none';
   if (mode === 'chat') {
-    if (!IS_PRO) {
-      cbSyncUsage(0, 0, false);
-    } else if (cbMessages.length === 0) {
+    if (cbMessages.length === 0) {
       cbInit();
     }
   }
@@ -7721,7 +7680,6 @@ function resetScan() {
 }
 
 async function runScan() {
-  if (!IS_PRO) { showModal('modal-upgrade'); return; }
   const coins = _parseScanCoins();
   if (!coins.length) return;
   if (!_scanTfs.length) _scanTfs = ['1h'];
@@ -7768,7 +7726,7 @@ async function runScan() {
     clearInterval(barTimer);
     bar.style.width = '100%';
 
-    if (data.error === 'PRO_REQUIRED') { showModal('modal-upgrade'); resetScan(); return; }
+    if (data.error === 'PRO_REQUIRED') { resetScan(); return; }
     if (data.error || !data.ok) {
       document.getElementById('scan-error-msg').textContent = data.message || data.error || 'Unknown error';
       document.getElementById('scan-progress').style.display = 'none';
@@ -8403,13 +8361,8 @@ let _pinePineDir = 'LONG';
 function pineInitUI() {
   const proWall = document.getElementById('pine-pro-wall');
   const main    = document.getElementById('pine-main');
-  if (!IS_PRO) {
-    proWall.style.display = '';
-    main.style.display = 'none';
-  } else {
-    proWall.style.display = 'none';
-    main.style.display = '';
-  }
+  if (proWall) proWall.style.display = 'none';
+  if (main)    main.style.display = '';
 }
 
 function setPineDir(dir, btn) {
@@ -8901,24 +8854,14 @@ async function cbCompile() {
 // ══════════════════════════════════════════════════════════
 // SUBSCRIPTION — load tier, update badge + usage bar
 // ══════════════════════════════════════════════════════════
-window._portalIsPro = false;
+window._portalIsPro = true;
 
 async function loadPortalSubscription() {
   try {
     const d = await (await fetch(`/api/portal/subscription?uid=${UID}`)).json();
-    window._portalIsPro = d.is_pro;
-    const badge = document.getElementById('tier-badge');
-    if (d.is_pro) {
-      badge.textContent = '⚡ PRO';
-      badge.className = 'tier-badge pro';
-      badge.title = `Pro · expires ${d.subscription_end ? new Date(d.subscription_end).toLocaleDateString() : ''}`;
-      badge.onclick = null;
-    } else {
-      badge.textContent = 'FREE';
-      badge.className = 'tier-badge free';
-    }
+    window._portalIsPro = true;
     document.getElementById('ug-uid-display').textContent = UID;
-    cbSyncUsage(d.chat_calls_used, d.chat_calls_limit, d.is_pro);
+    cbSyncUsage(d.chat_calls_used, d.chat_calls_limit, true);
   } catch (e) { /* silent */ }
 }
 
@@ -8928,20 +8871,11 @@ function cbSyncUsage(used, limit, isPro) {
   const inputArea = document.getElementById('cb-input-area');
   const msgs      = document.getElementById('cb-messages');
 
-  // Chat Builder is Pro-only — block free users entirely
-  if (!isPro) {
-    if (usageRow)  usageRow.style.display = 'none';
-    limitWall.classList.add('show');
-    if (inputArea) inputArea.style.display = 'none';
-    if (msgs)      msgs.style.display = 'none';
-    return;
-  }
-
-  // Pro user — hide wall, show input
-  if (usageRow)  usageRow.style.display = 'none';
-  limitWall.classList.remove('show');
+  if (limitWall) limitWall.classList.remove('show');
   if (inputArea) inputArea.style.display = '';
   if (msgs)      msgs.style.display = '';
+
+  if (usageRow)  usageRow.style.display = 'none';
 }
 
 
@@ -9086,8 +9020,8 @@ async function advSend() {
     const data = await res.json();
     advHideTyping();
     if (data.pro_required) {
-      closeModal('modal-advisor');
-      showModal('modal-upgrade');
+      advHideTyping();
+      advAddMsg('ai', "I couldn't process that — please try again.");
       return;
     }
     const reply = data.reply || "I couldn't process that — please try again.";
