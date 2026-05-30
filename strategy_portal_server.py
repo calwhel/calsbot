@@ -787,6 +787,7 @@ def _ensure_tables():
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_access_token VARCHAR",
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_refresh_token VARCHAR",
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_account_id VARCHAR",
+                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS forex_approved BOOLEAN DEFAULT FALSE",
             ):
                 conn.execute(sa.text(ddl))
         logger.info("_ensure_tables: ctrader columns ready")
@@ -9213,6 +9214,114 @@ async def api_ctrader_feed_status():
             "source":         "yfinance_fallback",
             "error":          str(e),
         })
+
+
+@app.get("/api/live-forex/account")
+async def api_live_forex_account(uid: str = Query(...)):
+    """
+    Returns live cTrader account data (balance, equity, open positions)
+    plus connection/approval state for the Live Forex tab.
+    """
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        connected = bool(prefs and prefs.ctrader_access_token and prefs.ctrader_account_id)
+        forex_approved = bool(getattr(prefs, "forex_approved", False)) if prefs else False
+
+        if not connected:
+            return JSONResponse({"connected": False, "forex_approved": forex_approved, "balance": None, "equity": None})
+
+        # Fetch live balance from cTrader (async, non-blocking)
+        balance = None
+        try:
+            from app.services.ctrader_client import _get_account_balance
+            balance = await asyncio.wait_for(
+                _get_account_balance(prefs.ctrader_access_token, int(prefs.ctrader_account_id)),
+                timeout=8.0,
+            )
+        except Exception as _be:
+            logger.warning(f"[live-forex] balance fetch failed uid={uid}: {_be}")
+
+        # Fetch open positions from strategy_executions (forex/index live trades)
+        def _get_open_positions():
+            from app.database import SessionLocal as _SL
+            from sqlalchemy import text as _t
+            _db = _SL()
+            try:
+                rows = _db.execute(_t("""
+                    SELECT e.id, e.symbol, e.direction, e.entry_price,
+                           e.tp1_price, e.sl_price, e.pnl_pct,
+                           e.fired_at, s.name AS strategy_name,
+                           e.asset_class
+                    FROM strategy_executions e
+                    JOIN user_strategies s ON s.id = e.strategy_id
+                    WHERE s.user_id = :uid
+                      AND e.outcome = 'OPEN'
+                      AND e.is_paper = false
+                      AND e.asset_class IN ('forex', 'index', 'metals', 'commodity')
+                    ORDER BY e.fired_at DESC
+                    LIMIT 20
+                """), {"uid": user.id}).fetchall()
+                return [dict(r._mapping) for r in rows]
+            finally:
+                _db.close()
+
+        positions = await asyncio.to_thread(_get_open_positions)
+        # Serialise datetime objects
+        for p in positions:
+            if p.get("fired_at"):
+                p["fired_at"] = p["fired_at"].isoformat()
+
+        return JSONResponse({
+            "connected":      True,
+            "forex_approved": forex_approved,
+            "account_id":     prefs.ctrader_account_id or "",
+            "balance":        round(balance, 2) if balance else None,
+            "equity":         round(balance, 2) if balance else None,
+            "open_positions": positions,
+        })
+    finally:
+        db.close()
+
+
+@app.post("/api/live-forex/approve")
+async def api_live_forex_approve(uid: str = Query(...), request: Request = None):
+    """Admin-only endpoint to approve a user for live forex trading."""
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    body = await request.json()
+    admin_uid = (body.get("admin_uid") or "").strip()
+
+    def _do():
+        db = SessionLocal()
+        try:
+            admin = _get_user_by_uid(admin_uid, db)
+            if not admin or not getattr(admin, "is_admin", False):
+                return None
+            target = _get_user_by_uid(uid, db)
+            if not target:
+                return False
+            prefs = db.query(UserPreference).filter(UserPreference.user_id == target.id).first()
+            if not prefs:
+                prefs = UserPreference(user_id=target.id)
+                db.add(prefs)
+            prefs.forex_approved = True
+            db.commit()
+            return True
+        finally:
+            db.close()
+
+    result = await asyncio.to_thread(_do)
+    if result is None:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if result is False:
+        raise HTTPException(status_code=404, detail="User not found")
+    return JSONResponse({"ok": True})
 
 
 @app.put("/api/settings")

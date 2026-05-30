@@ -1836,6 +1836,7 @@ tr:hover td { background: var(--surface) !important; }
   <a class="nav-tab" href="#leaderboard" onclick="showPage('leaderboard',this);return false;" style="text-decoration:none">Leaderboard</a>
   <a class="nav-tab" href="#build" onclick="showPage('build',this);return false;" style="text-decoration:none">Build</a>
   <a class="nav-tab" href="#feed" onclick="showPage('feed',this);return false;" style="text-decoration:none">Feed</a>
+  <a class="nav-tab" href="#live-forex" onclick="showPage('live-forex',this);return false;" style="text-decoration:none">🟢 Live Forex</a>
   <a class="nav-tab" href="#purchases" onclick="showPage('purchases',this);return false;" style="text-decoration:none">Purchases</a>
   <a class="nav-tab" href="#settings" onclick="showPage('settings',this);return false;" style="text-decoration:none">Settings</a>
 </nav>
@@ -2616,6 +2617,15 @@ function dismissTgBanner(){
     </div>
   </div>
 
+</div>
+
+<!-- ════ LIVE FOREX ════════════════════════════════════════ -->
+<div id="live-forex" class="page">
+  <div class="sh" style="margin-bottom:20px">
+    <div class="sh-title">Live Forex</div>
+    <div style="font-size:12px;color:var(--muted)">FP Markets · cTrader</div>
+  </div>
+  <div id="lf-body"><div class="loader">Loading…</div></div>
 </div>
 
 <!-- ════ PURCHASES ════════════════════════════════════════ -->
@@ -3531,6 +3541,7 @@ function showPage(id,el,startPaper){
   if(id==='marketplace')loadMarketplace();
   if(id==='leaderboard')loadLeaderboard();
   if(id==='feed')loadFeed();
+  if(id==='live-forex')loadLiveForex();
   if(id==='purchases')loadPurchases();
   if(id==='settings'){loadSettings();loadReferralInfo();loadOandaCard();}
   if(id==='build'){renderCurrentStep();if(startPaper!==undefined){WZ.mode=startPaper?'paper':'live';}}
@@ -9265,6 +9276,315 @@ function _drTrades(trades) {
     </table>
     ${trades.length > 150 ? `<div style="text-align:center;color:var(--muted);font-size:12px;padding:12px">Showing 150 of ${trades.length} trades</div>` : ''}`;
 }
+
+// ─── LIVE FOREX ────────────────────────────────────────────
+const LF_FP_LINK = 'https://www.fpmarkets.com/?rfrr=IB-Portal&cxd=37182_638734';
+
+const LF_SESSIONS = [
+  { name:'Sydney',  open:22, close:7,  tz:'UTC', color:'#6366f1' },
+  { name:'Tokyo',   open:0,  close:9,  tz:'UTC', color:'#f59e0b' },
+  { name:'London',  open:8,  close:17, tz:'UTC', color:'#3fb68b' },
+  { name:'New York',open:13, close:22, tz:'UTC', color:'#e5484d' },
+];
+
+const LF_PAIRS = [
+  { symbol:'EURUSD', name:'Euro / US Dollar',        pip:0.0001, desc:'Most traded pair worldwide' },
+  { symbol:'GBPUSD', name:'British Pound / US Dollar',pip:0.0001,desc:'Volatile, high liquidity' },
+  { symbol:'USDJPY', name:'US Dollar / Japanese Yen', pip:0.01,  desc:'Safe haven pair' },
+  { symbol:'AUDUSD', name:'Australian Dollar / USD',  pip:0.0001,desc:'Commodity currency' },
+  { symbol:'USDCAD', name:'US Dollar / Canadian Dollar',pip:0.0001,desc:'Correlated to oil' },
+  { symbol:'XAUUSD', name:'Gold / US Dollar',         pip:0.01,  desc:'Inflation hedge' },
+  { symbol:'XAGUSD', name:'Silver / US Dollar',       pip:0.001, desc:'Industrial metal' },
+  { symbol:'NAS100', name:'NASDAQ 100',               pip:0.25,  desc:'Tech index CFD' },
+  { symbol:'SPX500', name:'S&P 500',                  pip:0.25,  desc:'US large-cap index' },
+];
+
+async function loadLiveForex() {
+  const wrap = $('lf-body');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="loader">Loading account…</div>';
+  try {
+    const d = await apiFetch(`/api/live-forex/account?uid=${UID}`);
+    renderLiveForex(d, wrap);
+  } catch(e) {
+    wrap.innerHTML = `<div class="empty"><div class="icon">⚠️</div><p>Could not load account data. Try refreshing.</p></div>`;
+  }
+}
+
+function renderLiveForex(d, wrap) {
+  if (!d.connected) {
+    renderLFOnboarding(wrap);
+    return;
+  }
+  // Connected — show full dashboard
+  const bal = d.balance != null ? `$${d.balance.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}` : '—';
+  const positions = d.open_positions || [];
+  const approvedBanner = d.forex_approved
+    ? `<div class="lf-approved-badge">✅ Approved for live trading</div>`
+    : `<div class="lf-pending-badge">⏳ Awaiting approval from TradeHub — your strategies will run in paper mode until approved. Contact us via Telegram to speed this up.</div>`;
+
+  wrap.innerHTML = `
+    ${approvedBanner}
+
+    <!-- Account card -->
+    <div class="lf-card" style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div>
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">FP Markets · cTrader</div>
+          <div style="font-size:11px;color:var(--muted)">Account #${d.account_id}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:2px">Balance</div>
+          <div style="font-size:26px;font-weight:800;letter-spacing:-.5px">${bal}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost sm" onclick="lfRefreshBalance()">↻ Refresh</button>
+        <button class="btn ghost sm" style="color:var(--negative)" onclick="lfDisconnect()">Disconnect</button>
+      </div>
+    </div>
+
+    <!-- Session clock -->
+    <div class="lf-card" style="margin-bottom:16px">
+      <div class="lf-section-title">Forex Sessions</div>
+      <div id="lf-sessions"></div>
+    </div>
+
+    <!-- Open positions -->
+    <div class="lf-card" style="margin-bottom:16px">
+      <div class="lf-section-title">Open Positions <span style="font-weight:400;color:var(--muted)">(${positions.length})</span></div>
+      <div id="lf-positions">${renderLFPositions(positions)}</div>
+    </div>
+
+    <!-- Lot size calculator -->
+    <div class="lf-card" style="margin-bottom:16px">
+      <div class="lf-section-title">Lot Size Calculator</div>
+      <div class="lf-calc">
+        <div class="lf-row">
+          <label>Pair</label>
+          <select id="lf-pair" onchange="lfCalc()" class="lf-input">
+            ${LF_PAIRS.map(p=>`<option value="${p.pip}">${p.symbol} — ${p.name}</option>`).join('')}
+          </select>
+        </div>
+        <div class="lf-row">
+          <label>Account Balance ($)</label>
+          <input id="lf-bal-inp" type="number" class="lf-input" value="${d.balance||10000}" min="100" step="100" oninput="lfCalc()">
+        </div>
+        <div class="lf-row">
+          <label>Risk % per trade</label>
+          <input id="lf-risk" type="number" class="lf-input" value="1" min="0.1" max="10" step="0.1" oninput="lfCalc()">
+        </div>
+        <div class="lf-row">
+          <label>Stop Loss (pips)</label>
+          <input id="lf-sl" type="number" class="lf-input" value="20" min="1" step="1" oninput="lfCalc()">
+        </div>
+        <div class="lf-result" id="lf-calc-result">—</div>
+      </div>
+    </div>
+  `;
+
+  renderLFSessions();
+  lfCalc();
+  setInterval(renderLFSessions, 30000);
+}
+
+function renderLFOnboarding(wrap) {
+  wrap.innerHTML = `
+    <div class="lf-onboard">
+      <!-- Hero -->
+      <div class="lf-card" style="text-align:center;padding:32px 24px;margin-bottom:16px">
+        <div style="font-size:40px;margin-bottom:12px">📈</div>
+        <div style="font-size:20px;font-weight:800;margin-bottom:8px">Automate Forex & Indices</div>
+        <div style="font-size:13px;color:var(--muted);max-width:360px;margin:0 auto 20px">Connect your FP Markets account to run your strategies live on 70+ forex pairs, Gold, Silver, and major indices — automated, 24/5.</div>
+        <a href="${LF_FP_LINK}" target="_blank" class="btn primary" style="display:inline-block;text-decoration:none;margin-bottom:12px">Open FP Markets Account →</a>
+        <div style="font-size:11px;color:var(--muted)">Use our link — required for live trading integration</div>
+      </div>
+
+      <!-- Steps -->
+      <div class="lf-card" style="margin-bottom:16px">
+        <div class="lf-section-title">How to get started</div>
+        <div class="lf-steps">
+          <div class="lf-step">
+            <div class="lf-step-num">1</div>
+            <div>
+              <div class="lf-step-title">Open a Raw account with FP Markets</div>
+              <div class="lf-step-desc">Use our affiliate link below — this links your account to TradeHub for the integration to work. Choose <strong>Raw</strong> for tight spreads.</div>
+              <a href="${LF_FP_LINK}" target="_blank" class="btn sm" style="margin-top:8px;display:inline-block;text-decoration:none">Open account via our link →</a>
+            </div>
+          </div>
+          <div class="lf-step">
+            <div class="lf-step-num">2</div>
+            <div>
+              <div class="lf-step-title">Fund your FP Markets account</div>
+              <div class="lf-step-desc">Deposit via bank transfer, card, or crypto inside your FP Markets dashboard. Minimum is $100 USD.</div>
+            </div>
+          </div>
+          <div class="lf-step">
+            <div class="lf-step-num">3</div>
+            <div>
+              <div class="lf-step-title">Connect cTrader to TradeHub</div>
+              <div class="lf-step-desc">Click below to securely link your FP Markets cTrader account. You'll be redirected to Spotware's login — takes 30 seconds.</div>
+              <button class="btn sm" style="margin-top:8px;background:var(--accent);color:#fff;border:none" onclick="lfConnect()">Connect FP Markets →</button>
+            </div>
+          </div>
+          <div class="lf-step">
+            <div class="lf-step-num">4</div>
+            <div>
+              <div class="lf-step-title">Get approved by TradeHub</div>
+              <div class="lf-step-desc">Once connected, message us on Telegram — we verify your account is linked through our affiliate and approve you for live trading. Usually within a few hours.</div>
+              <a href="https://t.me/AISIGNALPERPBOT" target="_blank" class="btn sm ghost" style="margin-top:8px;display:inline-block;text-decoration:none">Message us on Telegram →</a>
+            </div>
+          </div>
+          <div class="lf-step">
+            <div class="lf-step-num">5</div>
+            <div>
+              <div class="lf-step-title">Set your forex strategies to Live</div>
+              <div class="lf-step-desc">Go to Strategies → any forex/gold/index strategy → set to Live. The platform will auto-size your lots based on your account balance and risk % setting.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Session clock preview -->
+      <div class="lf-card" style="margin-bottom:16px">
+        <div class="lf-section-title">Forex Sessions (UTC)</div>
+        <div id="lf-sessions"></div>
+      </div>
+
+      <!-- Available instruments -->
+      <div class="lf-card">
+        <div class="lf-section-title">Available instruments</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:10px">
+          ${LF_PAIRS.map(p=>`
+            <div style="background:var(--card-hi,#22252a);border-radius:8px;padding:10px 12px">
+              <div style="font-weight:700;font-size:13px">${p.symbol}</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px">${p.desc}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+  renderLFSessions();
+  setInterval(renderLFSessions, 30000);
+}
+
+function renderLFSessions() {
+  const el = document.getElementById('lf-sessions');
+  if (!el) return;
+  const now = new Date();
+  const utcH = now.getUTCHours() + now.getUTCMinutes() / 60;
+  el.innerHTML = LF_SESSIONS.map(s => {
+    let open = s.open, close = s.close;
+    let active;
+    if (open < close) { active = utcH >= open && utcH < close; }
+    else { active = utcH >= open || utcH < close; } // crosses midnight
+    const pct = active ? Math.min(100, Math.round(
+      (open < close
+        ? ((utcH - open) / (close - open))
+        : (utcH >= open ? (utcH - open) / (24 - open + close) : (utcH + 24 - open) / (24 - open + close))
+      ) * 100
+    )) : 0;
+    return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      <div style="width:10px;height:10px;border-radius:50%;background:${active?s.color:'#444'};flex-shrink:0;${active?`box-shadow:0 0 6px ${s.color}`:''}" ></div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+          <span style="font-weight:${active?700:400}">${s.name}</span>
+          <span style="color:${active?s.color:'var(--muted)'};font-size:11px">${active?'OPEN':'Closed'} · ${String(s.open).padStart(2,'0')}:00–${String(s.close).padStart(2,'0')}:00 UTC</span>
+        </div>
+        <div style="height:4px;background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden">
+          ${active?`<div style="height:100%;width:${pct}%;background:${s.color};border-radius:2px;transition:width .5s"></div>`:''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderLFPositions(positions) {
+  if (!positions.length) return `<div style="color:var(--muted);font-size:13px;padding:8px 0">No open forex positions right now.</div>`;
+  return `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px">
+      <th style="text-align:left;padding:6px 8px 6px 0">Symbol</th>
+      <th style="padding:6px 4px">Dir</th>
+      <th style="padding:6px 4px">Entry</th>
+      <th style="padding:6px 4px">TP</th>
+      <th style="padding:6px 4px">SL</th>
+      <th style="text-align:right;padding:6px 0 6px 4px">P&L</th>
+    </tr></thead>
+    <tbody>
+    ${positions.map(p => {
+      const pnl = p.pnl_pct != null ? p.pnl_pct : null;
+      const pnlStr = pnl != null ? `${pnl>=0?'+':''}${pnl.toFixed(2)}%` : '—';
+      const pnlC = pnl == null ? '' : pnl >= 0 ? 'color:var(--positive,#3fb68b)' : 'color:var(--negative,#e5484d)';
+      const dirC = p.direction === 'LONG' ? 'color:var(--positive,#3fb68b)' : 'color:var(--negative,#e5484d)';
+      return `<tr style="border-top:1px solid var(--border,rgba(255,255,255,.06))">
+        <td style="padding:8px 8px 8px 0;font-weight:700">${p.symbol}</td>
+        <td style="padding:8px 4px;${dirC};font-weight:600">${p.direction}</td>
+        <td style="padding:8px 4px;font-family:monospace">${p.entry_price?.toFixed(5)??'—'}</td>
+        <td style="padding:8px 4px;font-family:monospace;color:var(--positive,#3fb68b)">${p.tp1_price?.toFixed(5)??'—'}</td>
+        <td style="padding:8px 4px;font-family:monospace;color:var(--negative,#e5484d)">${p.sl_price?.toFixed(5)??'—'}</td>
+        <td style="padding:8px 0 8px 4px;text-align:right;font-weight:700;${pnlC}">${pnlStr}</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table></div>`;
+}
+
+function lfCalc() {
+  const pip    = parseFloat(document.getElementById('lf-pair')?.value    || 0.0001);
+  const bal    = parseFloat(document.getElementById('lf-bal-inp')?.value || 10000);
+  const risk   = parseFloat(document.getElementById('lf-risk')?.value    || 1);
+  const sl     = parseFloat(document.getElementById('lf-sl')?.value      || 20);
+  const out    = document.getElementById('lf-calc-result');
+  if (!out || !pip || !bal || !risk || !sl) return;
+  const pipVal  = pip === 0.01 ? (pip === 0.001 ? 5 : 1) : 10; // JPY≈9.28 approximated to 10 for simplicity
+  const riskUsd = bal * (risk / 100);
+  const lots    = riskUsd / (sl * pipVal);
+  const lotsStr = lots.toFixed(2);
+  const riskUsdStr = riskUsd.toFixed(2);
+  out.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+    <div><div style="font-size:11px;color:var(--muted)">Lot size</div><div style="font-size:28px;font-weight:800">${lotsStr}</div></div>
+    <div style="text-align:right"><div style="font-size:11px;color:var(--muted)">Risk amount</div><div style="font-size:18px;font-weight:700;color:var(--negative,#e5484d)">$${riskUsdStr}</div></div>
+  </div>`;
+}
+
+async function lfConnect() {
+  try {
+    const d = await apiFetch(`/api/ctrader/auth-url?uid=${UID}`);
+    if (d.url) window.location.href = d.url;
+  } catch(e) { alert('Could not start connection. Please try again.'); }
+}
+
+async function lfDisconnect() {
+  if (!confirm('Disconnect FP Markets? Your strategies will revert to paper mode.')) return;
+  try {
+    await apiFetch(`/api/ctrader/disconnect?uid=${UID}`, {method:'DELETE'});
+    loadLiveForex();
+  } catch(e) { alert('Error disconnecting. Please try again.'); }
+}
+
+async function lfRefreshBalance() {
+  $('lf-body').querySelector('button')?.setAttribute('disabled','1');
+  await loadLiveForex();
+}
 </script>
+<style>
+.lf-card { background:var(--card,#1a1c20);border:1px solid var(--border,rgba(255,255,255,.06));border-radius:12px;padding:18px; }
+.lf-section-title { font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:14px; }
+.lf-approved-badge { background:rgba(63,182,139,.12);border:1px solid rgba(63,182,139,.3);color:#3fb68b;border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;margin-bottom:14px; }
+.lf-pending-badge { background:rgba(214,163,92,.10);border:1px solid rgba(214,163,92,.3);color:#d6a35c;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:14px; }
+.lf-steps { display:flex;flex-direction:column;gap:0; }
+.lf-step { display:flex;gap:14px;padding:14px 0;border-bottom:1px solid var(--border,rgba(255,255,255,.06)); }
+.lf-step:last-child { border-bottom:none; }
+.lf-step-num { width:28px;height:28px;border-radius:50%;background:var(--accent,#5b6cf7);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px; }
+.lf-step-title { font-size:14px;font-weight:700;margin-bottom:4px; }
+.lf-step-desc { font-size:12px;color:var(--muted);line-height:1.5; }
+.lf-calc { display:flex;flex-direction:column;gap:10px; }
+.lf-row { display:flex;align-items:center;gap:10px; }
+.lf-row label { font-size:12px;color:var(--muted);width:160px;flex-shrink:0; }
+.lf-input { flex:1;background:var(--card-hi,#22252a);border:1px solid var(--border,rgba(255,255,255,.08));border-radius:6px;padding:7px 10px;color:var(--text,#fff);font-size:13px;outline:none; }
+.lf-result { background:var(--card-hi,#22252a);border-radius:8px;padding:14px 16px;margin-top:4px; }
+@media(max-width:540px){ .lf-row{flex-direction:column;align-items:flex-start} .lf-row label{width:auto} }
+</style>
 </body>
 </html>

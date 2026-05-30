@@ -130,6 +130,7 @@ class UserPreference(Base):
     ctrader_access_token  = Column(String, nullable=True)
     ctrader_refresh_token = Column(String, nullable=True)
     ctrader_account_id    = Column(String, nullable=True)  # ctidTraderAccountId
+    forex_approved        = Column(Boolean, default=False, nullable=True)  # admin-approved for live forex
     preferred_exchange = Column(String, default="Bitunix")  # Bitunix (legacy: MEXC, OKX, KuCoin)
     position_size_percent = Column(Float, default=10.0)
     position_size_dollars = Column(Float, nullable=True)  # Fixed $ amount per trade (if set, overrides %)
