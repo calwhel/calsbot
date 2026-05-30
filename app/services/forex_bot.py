@@ -43,7 +43,6 @@ class Onboard(StatesGroup):
     q1_fp_markets    = State()   # Opened FP Markets Standard account?
     q2_ctrader       = State()   # Connected cTrader in portal?
     q3_name          = State()   # Full name
-    q4_deposit       = State()   # Deposit amount / plan
 
 class AdminReply(StatesGroup):
     waiting_for_message = State()  # Admin typing a reply to a specific user
@@ -91,7 +90,6 @@ async def _notify_admin(user_id: int, tg_id: int, answers: dict, name: str, unam
         f"<b>Answers:</b>",
         f"• FP Markets acct: {answers.get('fp_markets','—')}",
         f"• cTrader linked:  {answers.get('ctrader','—')}",
-        f"• Deposit plan:    {answers.get('deposit','—')}",
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Approve", callback_data=f"fxapprove:{user_id}:{tg_id}"),
@@ -195,35 +193,16 @@ async def fx_q2(message: types.Message, state: FSMContext):
     await state.set_state(Onboard.q3_name)
 
 
-# ── Q3: Name ──────────────────────────────────────────────────────────────────
+# ── Q3: Name / submit ─────────────────────────────────────────────────────────
 @forex_dp.message(Onboard.q3_name)
 async def fx_q3(message: types.Message, state: FSMContext):
     name = (message.text or "").strip()
     if len(name) < 2:
         await message.answer("Please enter your full name.")
         return
-    await state.update_data(name=name)
-    await message.answer(
-        "<b>How much are you planning to deposit into your FP Markets account?</b>\n\n"
-        "<i>e.g. $500, $1,000, $5,000 — just a rough idea is fine</i>",
-        parse_mode="HTML",
-    )
-    await state.set_state(Onboard.q4_deposit)
-
-
-# ── Q4: Deposit / submit ──────────────────────────────────────────────────────
-@forex_dp.message(Onboard.q4_deposit)
-async def fx_q4(message: types.Message, state: FSMContext):
-    deposit = (message.text or "").strip()
-    if not deposit:
-        await message.answer("Please enter an amount, e.g. $1,000")
-        return
 
     data = await state.get_data()
-    await state.update_data(deposit=deposit)
-    data["deposit"] = deposit
-
-    name   = data.get("name", "")
+    data["name"] = name
     uname  = message.from_user.username or ""
     tg_id  = message.from_user.id
 
