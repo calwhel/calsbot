@@ -40,11 +40,10 @@ FP_LINK    = "https://www.fpmarkets.com/?rfrr=IB-Portal&cxd=37182_638734"
 
 # ── FSM states ────────────────────────────────────────────────────────────────
 class Onboard(StatesGroup):
-    q1_signed_up     = State()   # Are you a TradeHub member?
-    q2_fp_markets    = State()   # Opened FP Markets Standard account?
-    q3_ctrader       = State()   # Connected cTrader in portal?
-    q4_name          = State()   # Full name
-    q5_deposit       = State()   # Deposit amount / plan
+    q1_fp_markets    = State()   # Opened FP Markets Standard account?
+    q2_ctrader       = State()   # Connected cTrader in portal?
+    q3_name          = State()   # Full name
+    q4_deposit       = State()   # Deposit amount / plan
 
 class AdminReply(StatesGroup):
     waiting_for_message = State()  # Admin typing a reply to a specific user
@@ -89,8 +88,7 @@ async def _notify_admin(user_id: int, tg_id: int, answers: dict, name: str, unam
         f"<b>TG ID:</b> <code>{tg_id}</code>",
         f"<b>DB uid:</b> <code>{user_id or '—'}</code>",
         f"",
-        f"<b>Questionnaire:</b>",
-        f"• TradeHub member: {answers.get('signed_up','—')}",
+        f"<b>Answers:</b>",
         f"• FP Markets acct: {answers.get('fp_markets','—')}",
         f"• cTrader linked:  {answers.get('ctrader','—')}",
         f"• Deposit plan:    {answers.get('deposit','—')}",
@@ -111,59 +109,41 @@ async def _notify_admin(user_id: int, tg_id: int, answers: dict, name: str, unam
         logger.warning(f"[forex_bot] admin notify failed: {e}")
 
 
-# ── /start ────────────────────────────────────────────────────────────────────
+# ── /start — welcome ─────────────────────────────────────────────────────────
 @forex_dp.message(Command("start"))
 async def fx_start(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(
         "👋 <b>Welcome to TradeHub Strategy!</b>\n\n"
-        "I'll ask you a few quick questions to get your live forex trading set up.\n\n"
-        "<b>Are you already a TradeHub member?</b>\n"
-        f"(Sign up free at <a href='{PORTAL_URL}'>{PORTAL_URL}</a>)",
-        parse_mode="HTML",
-        reply_markup=_yn_keyboard(),
-        disable_web_page_preview=True,
-    )
-    await state.set_state(Onboard.q1_signed_up)
-
-
-# ── Q1: Signed up? ────────────────────────────────────────────────────────────
-@forex_dp.message(Onboard.q1_signed_up)
-async def fx_q1(message: types.Message, state: FSMContext):
-    if _is_no(message.text or ""):
-        await state.clear()
-        await message.answer(
-            "No problem! Sign up for free at:\n"
-            f"👉 <a href='{PORTAL_URL}'>{PORTAL_URL}</a>\n\n"
-            "Once you've created your account, come back and tap /start to continue.",
-            parse_mode="HTML",
-            reply_markup=_remove_keyboard(),
-            disable_web_page_preview=True,
-        )
-        return
-    if not _is_yes(message.text or ""):
-        await message.answer("Please tap ✅ Yes or ❌ No.", reply_markup=_yn_keyboard())
-        return
-
-    await state.update_data(signed_up="Yes ✅")
-    await message.answer(
+        "We help traders of all levels build, test, and automate trading strategies — "
+        "no coding required.\n\n"
+        "📊 <b>What you get:</b>\n"
+        "• Build strategies with our AI wizard in minutes\n"
+        "• Copy the best-performing strategies for <b>free</b>\n"
+        "• Paper trade risk-free, then go live with one tap\n"
+        "• Automated execution across crypto &amp; forex\n"
+        "• Full Telegram alerts on every trade\n\n"
+        f"🌐 <a href='{PORTAL_URL}'>tradehubmarkets.com</a>\n\n"
+        "─────────────────────────\n\n"
+        "To get started with <b>live forex &amp; gold trading</b> through FP Markets, "
+        "I'll ask you a few quick questions.\n\n"
         "<b>Have you already opened a Standard account with FP Markets?</b>\n\n"
-        f"If not, you'll need to use our link: <a href='{FP_LINK}'>Open FP Markets account →</a>\n"
+        f"If not, open one here first 👉 <a href='{FP_LINK}'>FP Markets — Standard account</a>\n"
         "<i>(Using our link is required for the integration to work)</i>",
         parse_mode="HTML",
         reply_markup=_yn_keyboard(),
         disable_web_page_preview=True,
     )
-    await state.set_state(Onboard.q2_fp_markets)
+    await state.set_state(Onboard.q1_fp_markets)
 
 
-# ── Q2: FP Markets account? ───────────────────────────────────────────────────
-@forex_dp.message(Onboard.q2_fp_markets)
-async def fx_q2(message: types.Message, state: FSMContext):
+# ── Q1: FP Markets account? ───────────────────────────────────────────────────
+@forex_dp.message(Onboard.q1_fp_markets)
+async def fx_q1(message: types.Message, state: FSMContext):
     if _is_no(message.text or ""):
         await state.clear()
         await message.answer(
-            "No worries — open your free Standard account here:\n"
+            "No problem — open your free Standard account here:\n"
             f"👉 <a href='{FP_LINK}'>FP Markets — Standard account</a>\n\n"
             "Once your account is open, come back and tap /start to continue.",
             parse_mode="HTML",
@@ -183,12 +163,12 @@ async def fx_q2(message: types.Message, state: FSMContext):
         reply_markup=_yn_keyboard(),
         disable_web_page_preview=True,
     )
-    await state.set_state(Onboard.q3_ctrader)
+    await state.set_state(Onboard.q2_ctrader)
 
 
-# ── Q3: cTrader connected? ────────────────────────────────────────────────────
-@forex_dp.message(Onboard.q3_ctrader)
-async def fx_q3(message: types.Message, state: FSMContext):
+# ── Q2: cTrader connected? ────────────────────────────────────────────────────
+@forex_dp.message(Onboard.q2_ctrader)
+async def fx_q2(message: types.Message, state: FSMContext):
     if _is_no(message.text or ""):
         await state.clear()
         await message.answer(
@@ -212,12 +192,12 @@ async def fx_q3(message: types.Message, state: FSMContext):
         parse_mode="HTML",
         reply_markup=_remove_keyboard(),
     )
-    await state.set_state(Onboard.q4_name)
+    await state.set_state(Onboard.q3_name)
 
 
-# ── Q4: Name ──────────────────────────────────────────────────────────────────
-@forex_dp.message(Onboard.q4_name)
-async def fx_q4(message: types.Message, state: FSMContext):
+# ── Q3: Name ──────────────────────────────────────────────────────────────────
+@forex_dp.message(Onboard.q3_name)
+async def fx_q3(message: types.Message, state: FSMContext):
     name = (message.text or "").strip()
     if len(name) < 2:
         await message.answer("Please enter your full name.")
@@ -228,12 +208,12 @@ async def fx_q4(message: types.Message, state: FSMContext):
         "<i>e.g. $500, $1,000, $5,000 — just a rough idea is fine</i>",
         parse_mode="HTML",
     )
-    await state.set_state(Onboard.q5_deposit)
+    await state.set_state(Onboard.q4_deposit)
 
 
-# ── Q5: Deposit / submit ──────────────────────────────────────────────────────
-@forex_dp.message(Onboard.q5_deposit)
-async def fx_q5(message: types.Message, state: FSMContext):
+# ── Q4: Deposit / submit ──────────────────────────────────────────────────────
+@forex_dp.message(Onboard.q4_deposit)
+async def fx_q4(message: types.Message, state: FSMContext):
     deposit = (message.text or "").strip()
     if not deposit:
         await message.answer("Please enter an amount, e.g. $1,000")
