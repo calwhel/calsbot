@@ -29,9 +29,12 @@ CTRADER_HOST = "live.ctraderapi.com"
 CTRADER_PORT = 5035
 
 # OAuth endpoints
-OAUTH_BASE      = "https://connect.spotware.com"
-OAUTH_AUTH_URL  = f"{OAUTH_BASE}/apps/{{client_id}}/auth"
-OAUTH_TOKEN_URL = f"{OAUTH_BASE}/apps/token"
+# Note: connect.spotware.com/apps/{id}/auth returns 404 for all apps.
+# The working OAuth entry point is openapi.ctrader.com/apps/{id}/playground
+# which redirects to id.ctrader.com/login — works for both live and demo accounts.
+OAUTH_BASE      = "https://openapi.ctrader.com"
+OAUTH_AUTH_URL  = f"{OAUTH_BASE}/apps/{{client_id}}/playground"
+OAUTH_TOKEN_URL = "https://connect.spotware.com/apps/token"
 
 # ── App credentials (injected via env) ───────────────────────────────────────
 CTRADER_CLIENT_ID     = os.environ.get("CTRADER_CLIENT_ID", "")
