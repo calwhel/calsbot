@@ -17052,6 +17052,82 @@ async def telegram_conflict_watcher():
         await asyncio.sleep(1)
 
 
+@dp.message(Command("forex"))
+async def cmd_forex(message: types.Message):
+    """User requests live forex trading access — notifies admin with approve/deny buttons."""
+    await update_message_timestamp()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer(
+                "👋 You need a TradeHub account first.\n\n"
+                "Sign up at <b>tradehubmarkets.com</b> and link your Telegram, then try /forex again.",
+                parse_mode="HTML",
+            )
+            return
+
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        already_approved = bool(prefs and getattr(prefs, "forex_approved", False))
+        if already_approved:
+            await message.answer(
+                "✅ <b>You're already approved for live forex trading!</b>\n\n"
+                "Open the <b>Live Forex</b> tab at tradehubmarkets.com/app to get started.",
+                parse_mode="HTML",
+            )
+            return
+
+        connected = bool(prefs and prefs.ctrader_access_token and prefs.ctrader_account_id)
+        if not connected:
+            await message.answer(
+                "🔗 <b>Connect your FP Markets account first.</b>\n\n"
+                "Go to tradehubmarkets.com/app → <b>Live Forex</b> tab → follow the 5 steps to connect cTrader, then send /forex again.",
+                parse_mode="HTML",
+            )
+            return
+
+        # Notify admin with approve/deny buttons
+        from app.config import settings as _s
+        admin_chat = getattr(_s, "OWNER_TELEGRAM_ID", None)
+        uname = message.from_user.username or ""
+        mention = f"@{uname}" if uname else f"ID {message.from_user.id}"
+        full_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or "User"
+        acct_id = prefs.ctrader_account_id or "unknown"
+
+        if admin_chat:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="✅ Approve", callback_data=f"forex_approve:{user.id}"),
+                InlineKeyboardButton(text="❌ Deny",    callback_data=f"forex_deny:{user.id}"),
+            ]])
+            try:
+                await bot.send_message(
+                    chat_id=int(admin_chat),
+                    text=(
+                        f"<b>🔗 Forex Approval Request via /forex</b>\n\n"
+                        f"User:         {full_name} ({mention})\n"
+                        f"cTrader Acct: <code>{acct_id}</code>\n"
+                        f"DB user_id:   <code>{user.id}</code>\n\n"
+                        f"<i>User sent /forex in the bot requesting live trading access.</i>"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
+            except Exception as _e:
+                logger.warning(f"[cmd_forex] admin notify failed: {_e}")
+
+        await message.answer(
+            "✅ <b>Request received!</b>\n\n"
+            "We've notified the TradeHub team. You'll get a message here once you're approved — usually within a few hours.\n\n"
+            "Make sure you opened your FP Markets account through our affiliate link, otherwise we can't verify the connection.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"[cmd_forex] {e}")
+        await message.answer("Something went wrong. Please try again later.")
+    finally:
+        db.close()
+
+
 @dp.callback_query(F.data.startswith("forex_approve:"))
 async def handle_forex_approve(callback: CallbackQuery):
     """Admin approves a user for live forex trading."""
@@ -17241,6 +17317,7 @@ async def start_bot():
         commands = [
             BotCommand(command="start", description="Home — your UID & strategies"),
             BotCommand(command="help", description="Help & support"),
+            BotCommand(command="forex", description="Request live forex trading access"),
         ]
         try:
             await bot.set_my_commands(commands)

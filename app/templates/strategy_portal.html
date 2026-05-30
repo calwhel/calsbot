@@ -9323,7 +9323,7 @@ function renderLiveForex(d, wrap) {
   const positions = d.open_positions || [];
   const approvedBanner = d.forex_approved
     ? `<div class="lf-approved-badge">✅ Approved for live trading</div>`
-    : `<div class="lf-pending-badge">⏳ Awaiting approval — strategies run in paper mode until approved. Message <a href="https://t.me/bu11dogg" target="_blank" style="color:inherit;font-weight:700">@bu11dogg</a> on Telegram to get approved fast.</div>`;
+    : `<div class="lf-pending-badge">⏳ Awaiting approval — strategies run in paper mode until approved. Send <b>/forex</b> to our <a href="https://t.me/AISIGNALPERPBOT?start=forex" target="_blank" style="color:inherit;font-weight:700">TradeHub bot</a> to request access fast.</div>`;
 
   wrap.innerHTML = `
     ${approvedBanner}
