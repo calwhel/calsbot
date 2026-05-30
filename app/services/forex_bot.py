@@ -43,6 +43,7 @@ _REPLY_MAP: dict[int, int] = {}
 class Onboard(StatesGroup):
     q1_fp_markets = State()   # Opened FP Markets Standard account?
     q2_ctrader    = State()   # Connected cTrader in portal?
+    q3_name       = State()   # Full name
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def _yn_keyboard():
@@ -93,12 +94,14 @@ async def _notify_admin_submission(user_id_db, tg_user: types.User, answers: dic
     admin_chat = _admin_id()
     if not admin_chat or not forex_bot:
         return None
-    uname   = f"@{tg_user.username}" if tg_user.username else f"ID {tg_user.id}"
-    name    = " ".join(filter(None, [tg_user.first_name, tg_user.last_name])) or uname
+    uname        = f"@{tg_user.username}" if tg_user.username else f"ID {tg_user.id}"
+    entered_name = answers.get("name") or ""
+    tg_name      = " ".join(filter(None, [tg_user.first_name, tg_user.last_name]))
+    display_name = entered_name or tg_name or uname
     lines = [
         "📋 <b>New Forex Onboarding Request</b>",
         "",
-        f"<b>Name:</b> {name}",
+        f"<b>Name:</b> {display_name}",
         f"<b>Telegram:</b> {uname}",
         f"<b>TG ID:</b> <code>{tg_user.id}</code>",
         f"<b>DB uid:</b> <code>{user_id_db or '—'}</code>",
@@ -191,7 +194,7 @@ async def fx_q1(message: types.Message, state: FSMContext):
     await state.set_state(Onboard.q2_ctrader)
 
 
-# ── Q2: cTrader? → submit ─────────────────────────────────────────────────────
+# ── Q2: cTrader? ──────────────────────────────────────────────────────────────
 @forex_dp.message(Onboard.q2_ctrader)
 async def fx_q2(message: types.Message, state: FSMContext):
     if _is_no(message.text or ""):
@@ -212,8 +215,25 @@ async def fx_q2(message: types.Message, state: FSMContext):
         await message.answer("Please tap ✅ Yes or ❌ No.", reply_markup=_yn_keyboard())
         return
 
+    await state.update_data(ctrader="Yes ✅")
+    await message.answer(
+        "<b>What's your full name?</b>",
+        parse_mode="HTML",
+        reply_markup=_remove_keyboard(),
+    )
+    await state.set_state(Onboard.q3_name)
+
+
+# ── Q3: Name → submit ─────────────────────────────────────────────────────────
+@forex_dp.message(Onboard.q3_name)
+async def fx_q3(message: types.Message, state: FSMContext):
+    name = (message.text or "").strip()
+    if len(name) < 2:
+        await message.answer("Please enter your full name.")
+        return
+
     data = await state.get_data()
-    data["ctrader"] = "Yes ✅"
+    data["name"] = name
     tg_user = message.from_user
     await state.clear()
 
@@ -230,11 +250,11 @@ async def fx_q2(message: types.Message, state: FSMContext):
         pass
 
     await message.answer(
-        "✅ <b>All set — request submitted!</b>\n\n"
-        "The TradeHub team will review your account and send you a message here once you're approved.\n\n"
-        "<i>Usually within a few hours. Feel free to send a message if you have any questions!</i>",
+        f"✅ <b>Thanks, {name}!</b>\n\n"
+        "Your request has been sent to the TradeHub team. "
+        "You'll receive a message here once you're approved — usually within a few hours.\n\n"
+        "<i>Feel free to send a message if you have any questions!</i>",
         parse_mode="HTML",
-        reply_markup=_remove_keyboard(),
     )
 
     msg_id = await _notify_admin_submission(user_id_db, tg_user, data)
