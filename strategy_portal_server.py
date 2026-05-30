@@ -16,7 +16,7 @@ import httpx
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple, List
 
-from fastapi import FastAPI, Request, HTTPException, Query, Depends
+from fastapi import FastAPI, Request, HTTPException, Query, Depends, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.gzip import GZipMiddleware
@@ -9311,80 +9311,105 @@ async def api_ctrader_callback(
     state: str = Query(None),
     error: str = Query(None),
     request: Request = None,
+    background_tasks: BackgroundTasks = None,
 ):
     """
-    Spotware OAuth callback. Exchanges code for tokens, fetches the account
-    list, stores the first live account, then redirects back to the portal.
+    Spotware OAuth callback. Exchanges code for tokens, saves immediately,
+    then fetches account list in background.
+
+    IMPORTANT: We intentionally close the first DB session BEFORE the slow
+    exchange_code() HTTP call.  Neon drops idle connections after a few seconds
+    of inactivity, so a session opened before the ~5s Spotware round-trip will
+    have a dead TCP connection by the time we try to commit.  Opening a fresh
+    session AFTER the HTTP call guarantees a live connection.
     """
     if error:
         return RedirectResponse(url=f"/?ctrader_error={error}")
 
     from app.database import SessionLocal
     from app.models import UserPreference
-    from app.services.ctrader_client import exchange_code, get_accounts_for_token
+    from app.services.ctrader_client import exchange_code
 
-    db = SessionLocal()
+    # ── Step 1: resolve user from a SHORT-LIVED session (close before slow IO) ──
+    user_id_saved  = None
+    is_admin_saved = False
+    tg_id_str      = ""
+    uname_str      = ""
+    name_str       = "User"
+    redirect_uri   = ""
+
+    db1 = SessionLocal()
     try:
-        uid = state or ""
-        user = _get_user_by_uid(uid, db) if uid else None
+        uid  = state or ""
+        user = _get_user_by_uid(uid, db1) if uid else None
         if not user and request:
-            # Fallback: try the live session cookie — handles stale/mismatched state UIDs
             session_uid = _get_session_uid(request)
             if session_uid:
-                user = _get_user_by_uid(session_uid, db)
+                user = _get_user_by_uid(session_uid, db1)
         if not user:
-            logger.warning(f"[cTrader callback] state uid={uid!r} not found in DB, no session cookie fallback")
+            logger.warning(f"[cTrader callback] uid={uid!r} not found")
             return RedirectResponse(url="/login?next=/app%23live-forex&msg=session_expired")
 
-        # Must match exactly what was sent in the auth URL — use CTRADER_REDIRECT_URI
-        # if set (same logic as /api/ctrader/connect) so both sides agree.
+        user_id_saved  = user.id
+        is_admin_saved = bool(getattr(user, "is_admin", False))
+        tg_id_str      = str(user.telegram_id) if getattr(user, "telegram_id", None) else ""
+        uname_str      = getattr(user, "username", "") or ""
+        name_str       = user.first_name or user.username or "User"
+
         explicit = os.environ.get("CTRADER_REDIRECT_URI", "")
         if explicit:
             redirect_uri = explicit
         else:
             host = (request.headers.get("host") if request else None) or "tradehubmarkets.com"
-            host = host.split(":")[0]
-            redirect_uri = f"https://{host}/api/ctrader/callback"
+            redirect_uri = f"https://{host.split(':')[0]}/api/ctrader/callback"
+    finally:
+        db1.close()  # ← close BEFORE the slow HTTP call so Neon doesn't drop it
 
+    # ── Step 2: exchange code (slow ~5s HTTP round-trip) ──────────────────────
+    try:
         token_data = await exchange_code(code=code, redirect_uri=redirect_uri)
-        access_token  = token_data.get("accessToken") or token_data.get("access_token", "")
-        refresh_token = token_data.get("refreshToken") or token_data.get("refresh_token", "")
+    except Exception as e:
+        logger.error(f"[cTrader callback] exchange_code failed: {e}")
+        return RedirectResponse(url="/?ctrader_error=token_exchange_failed")
 
-        if not access_token:
-            return RedirectResponse(url="/?ctrader_error=no_token")
+    access_token  = token_data.get("accessToken")  or token_data.get("access_token",  "")
+    refresh_token = token_data.get("refreshToken") or token_data.get("refresh_token", "")
+    if not access_token:
+        logger.error("[cTrader callback] no access_token in response")
+        return RedirectResponse(url="/?ctrader_error=no_token")
 
-        # ── Save token IMMEDIATELY before any slow API calls (account list fetch
-        #    uses a protobuf TCP connection that can block for 10+ seconds, which
-        #    would cause the DB session to time out before we ever commit). ──────
-        user_id_saved = user.id
-        is_admin_saved = bool(getattr(user, "is_admin", False))
-        tg_id_str = str(user.telegram_id) if getattr(user, "telegram_id", None) else ""
-        uname_str = getattr(user, "username", "") or ""
-        name_str  = user.first_name or user.username or "User"
-
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+    # ── Step 3: save token in a FRESH session (guaranteed live connection) ─────
+    db2 = SessionLocal()
+    try:
+        prefs = db2.query(UserPreference).filter(UserPreference.user_id == user_id_saved).first()
         if not prefs:
-            prefs = UserPreference(user_id=user.id)
-            db.add(prefs)
+            prefs = UserPreference(user_id=user_id_saved)
+            db2.add(prefs)
         prefs.ctrader_access_token  = access_token
         prefs.ctrader_refresh_token = refresh_token
         if is_admin_saved:
-            prefs.forex_approved = True  # admins are auto-approved
-        db.commit()
+            prefs.forex_approved = True
+        db2.commit()
+        logger.info(f"[cTrader callback] token saved for user_id={user_id_saved}")
+    except Exception as e:
+        logger.error(f"[cTrader callback] DB commit failed: {e}")
+        db2.rollback()
+        return RedirectResponse(url="/?ctrader_error=db_error")
+    finally:
+        db2.close()
 
-        # ── Fetch accounts list in background — stores all accounts + auto-selects
-        #    if only one live account exists. UI lets user pick if multiple. ──────
-        asyncio.ensure_future(_fetch_and_store_ctrader_accounts(
+    # ── Step 4: fetch & cache account list in background (uses BackgroundTasks,
+    #    not asyncio.ensure_future — safe with anyio/Starlette task groups) ─────
+    if background_tasks is not None:
+        background_tasks.add_task(
+            _fetch_and_store_ctrader_accounts,
             user_id_saved, access_token, is_admin_saved,
             name_str, uname_str, tg_id_str,
-        ))
+        )
 
-        return RedirectResponse(url="/app#live-forex")
-    except Exception as e:
-        logger.error(f"[cTrader callback] {e}")
-        return RedirectResponse(url=f"/?ctrader_error=callback_failed")
-    finally:
-        db.close()
+    return RedirectResponse(url="/app#live-forex")
+
+
 
 
 @app.get("/api/ctrader/status")
