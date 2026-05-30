@@ -9580,19 +9580,25 @@ async def api_live_forex_account(uid: str = Query(...)):
         if not connected:
             return JSONResponse({"connected": False, "forex_approved": forex_approved, "accounts": accounts, "balance": None, "equity": None})
 
-        # Fetch live balance from cTrader (async, non-blocking)
-        # ctrader_account_id may be NULL if the user hasn't selected an account yet
+        # Fetch live balance from cTrader — cached 20s per user to avoid hammering
+        # the persistent TLS connection on every frontend poll cycle.
         balance = None
         _acct_id = prefs.ctrader_account_id if prefs else None
         if _acct_id:
-            try:
-                from app.services.ctrader_client import _get_account_balance
-                balance = await asyncio.wait_for(
-                    _get_account_balance(prefs.ctrader_access_token, int(_acct_id)),
-                    timeout=8.0,
-                )
-            except Exception as _be:
-                logger.warning(f"[live-forex] balance fetch failed uid={uid}: {_be}")
+            from app.cache import get_cache, set_cache
+            _bal_key = f"ctrader_balance:{user.id}"
+            balance = get_cache(_bal_key)
+            if balance is None:
+                try:
+                    from app.services.ctrader_client import _get_account_balance
+                    balance = await asyncio.wait_for(
+                        _get_account_balance(prefs.ctrader_access_token, int(_acct_id)),
+                        timeout=6.0,
+                    )
+                    if balance is not None:
+                        set_cache(_bal_key, balance, ttl_seconds=20)
+                except Exception as _be:
+                    logger.warning(f"[live-forex] balance fetch failed uid={uid}: {_be}")
 
         # Fetch open positions from strategy_executions (forex/index live trades)
         def _get_open_positions():
