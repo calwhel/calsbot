@@ -1088,100 +1088,123 @@ async def startup():
     logger.info("Strategy portal started on port 5000 (migrations running in background)")
 
 
+def _do_refresh_heavy_caches_sync():
+    """Sync DB work for cache pre-warming — called via asyncio.to_thread so it
+    never blocks the event loop."""
+    from app.database import SessionLocal
+    from sqlalchemy import text as _text
+    from datetime import datetime as _dt, timedelta as _td
+    from app.strategy_models import StrategyMarketplace as _SM, StrategyPerformance as _SP
+    db = SessionLocal()
+    try:
+        _listings = db.query(_SM).all()
+        _mkt_sids = [m.strategy_id for m in _listings]
+        _perf_map = {p.strategy_id: p for p in db.query(_SP).filter(_SP.strategy_id.in_(_mkt_sids)).all()} if _mkt_sids else {}
+        _auth_ids = list({m.author_id for m in _listings if m.author_id})
+        _auth_map = {u.id: u for u in db.query(User).filter(User.id.in_(_auth_ids)).all()} if _auth_ids else {}
+        _ldr_rows = []
+        for m in _listings:
+            perf = _perf_map.get(m.strategy_id)
+            author = _auth_map.get(m.author_id)
+            if not perf or perf.total_trades < 3 or perf.total_pnl_pct <= 0:
+                continue
+            _ldr_rows.append({
+                "strategy_id": m.strategy_id, "listing_id": m.id,
+                "title": m.title, "mode": "live",
+                "author": (author.first_name or author.username) if author else "Anonymous",
+                "author_uid": author.uid if author else None,
+                "is_own": False,
+                "win_rate": round(perf.win_rate, 1),
+                "total_pnl": round(perf.total_pnl_pct, 2),
+                "total_trades": perf.total_trades,
+                "avg_rating": round(m.avg_rating or 0, 1),
+                "pricing_model": m.pricing_model or "free",
+                "price_usdt": m.price_usdt or 0,
+            })
+        _ldr_rows.sort(key=lambda x: x.get("win_rate", 0), reverse=True)
+        set_cache("_warmup:ldr:win_rate", _ldr_rows[:30], 130)
+
+        cutoff = _dt.utcnow() - _td(days=30)
+        rows = db.execute(_text("""
+            SELECT m.id AS listing_id, m.title, m.author_id,
+                   m.pricing_model, m.price_usdt, m.is_verified, m.is_ai_generated,
+                   COALESCE(SUM(e.pnl_pct), 0) AS pnl_sum,
+                   COUNT(e.id) AS trades,
+                   SUM(CASE WHEN e.outcome='WIN' THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN e.outcome IN ('WIN','LOSS') THEN 1 ELSE 0 END) AS decisive
+            FROM strategy_marketplace m
+            JOIN strategy_executions e ON e.strategy_id = m.strategy_id
+            WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN')
+              AND e.pnl_pct IS NOT NULL
+              AND COALESCE(e.closed_at, e.fired_at) > :cutoff
+            GROUP BY m.id, m.title, m.author_id, m.pricing_model,
+                     m.price_usdt, m.is_verified, m.is_ai_generated
+            HAVING COUNT(e.id) >= 1
+            ORDER BY pnl_sum DESC LIMIT 10
+        """), {"cutoff": cutoff}).fetchall()
+        _lb_author_ids = list({r.author_id for r in rows})
+        _lb_names: dict = {}
+        if _lb_author_ids:
+            for u in db.query(User).filter(User.id.in_(_lb_author_ids)).all():
+                _lb_names[u.id] = u.first_name or u.username or "Anonymous"
+        entries = []
+        for rank, r in enumerate(rows, 1):
+            decisive = int(getattr(r, "decisive", 0) or 0)
+            wins = int(r.wins or 0)
+            wr = round((wins / decisive) * 100, 1) if decisive > 0 else 0.0
+            entries.append({
+                "rank": rank, "listing_id": r.listing_id, "title": r.title,
+                "author_name": _lb_names.get(r.author_id, "Anonymous"),
+                "pricing_model": r.pricing_model or "free",
+                "price_usdt": float(r.price_usdt or 0),
+                "is_verified": bool(r.is_verified),
+                "is_ai_generated": bool(r.is_ai_generated),
+                "pnl_pct": round(float(r.pnl_sum or 0), 2),
+                "trades": int(r.trades or 0), "win_rate": wr,
+            })
+        set_cache("_warmup:mkt_lb:30d:10", {"period": "30d", "entries": entries}, 130)
+    finally:
+        db.close()
+
+
 async def _refresh_heavy_caches():
     """Pre-warm leaderboard and marketplace-leaderboard caches every 5 minutes.
 
-    Only warms non-personalized (public) caches — the per-user marketplace and
-    strategy-list caches are populated lazily on first request per user.
-    Running in background keeps p50 latency for those endpoints near zero even
-    after TTL expiry.
+    DB work runs in asyncio.to_thread so it never blocks the event loop.
+    Sleep is at the BOTTOM of the loop so caches are populated soon after
+    the initial 60 s startup delay.
     """
     await asyncio.sleep(60)  # let workers settle after startup
     while True:
         try:
-            from app.database import SessionLocal
-            from sqlalchemy import text as _text
-            from datetime import datetime as _dt, timedelta as _td
-            from app.strategy_models import StrategyMarketplace as _SM, StrategyPerformance as _SP, UserStrategy as _US
-            db = SessionLocal()
-            try:
-                # Pre-warm public leaderboard (metric=win_rate, top 30)
-                _listings = db.query(_SM).all()
-                _mkt_sids = [m.strategy_id for m in _listings]
-                _perf_map = {p.strategy_id: p for p in db.query(_SP).filter(_SP.strategy_id.in_(_mkt_sids)).all()} if _mkt_sids else {}
-                _auth_ids = list({m.author_id for m in _listings if m.author_id})
-                _auth_map = {u.id: u for u in db.query(User).filter(User.id.in_(_auth_ids)).all()} if _auth_ids else {}
-                _ldr_rows = []
-                _seen = set()
-                for m in _listings:
-                    perf = _perf_map.get(m.strategy_id)
-                    author = _auth_map.get(m.author_id)
-                    if not perf or perf.total_trades < 3 or perf.total_pnl_pct <= 0:
-                        continue
-                    _seen.add(m.strategy_id)
-                    _ldr_rows.append({
-                        "strategy_id": m.strategy_id, "listing_id": m.id,
-                        "title": m.title, "mode": "live",
-                        "author": (author.first_name or author.username) if author else "Anonymous",
-                        "author_uid": author.uid if author else None,
-                        "is_own": False,
-                        "win_rate": round(perf.win_rate, 1),
-                        "total_pnl": round(perf.total_pnl_pct, 2),
-                        "total_trades": perf.total_trades,
-                        "avg_rating": round(m.avg_rating or 0, 1),
-                        "pricing_model": m.pricing_model or "free",
-                        "price_usdt": m.price_usdt or 0,
-                    })
-                _ldr_rows.sort(key=lambda x: x.get("win_rate", 0), reverse=True)
-                set_cache("_warmup:ldr:win_rate", _ldr_rows[:30], 130)
-
-                # Pre-warm marketplace leaderboard (30d, limit=10)
-                cutoff = _dt.utcnow() - _td(days=30)
-                rows = db.execute(_text("""
-                    SELECT m.id AS listing_id, m.title, m.author_id,
-                           m.pricing_model, m.price_usdt, m.is_verified, m.is_ai_generated,
-                           COALESCE(SUM(e.pnl_pct), 0) AS pnl_sum,
-                           COUNT(e.id) AS trades,
-                           SUM(CASE WHEN e.outcome='WIN' THEN 1 ELSE 0 END) AS wins,
-                           SUM(CASE WHEN e.outcome IN ('WIN','LOSS') THEN 1 ELSE 0 END) AS decisive
-                    FROM strategy_marketplace m
-                    JOIN strategy_executions e ON e.strategy_id = m.strategy_id
-                    WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN')
-                      AND e.pnl_pct IS NOT NULL
-                      AND COALESCE(e.closed_at, e.fired_at) > :cutoff
-                    GROUP BY m.id, m.title, m.author_id, m.pricing_model,
-                             m.price_usdt, m.is_verified, m.is_ai_generated
-                    HAVING COUNT(e.id) >= 1
-                    ORDER BY pnl_sum DESC LIMIT 10
-                """), {"cutoff": cutoff}).fetchall()
-                _lb_author_ids = list({r.author_id for r in rows})
-                _lb_names: dict = {}
-                if _lb_author_ids:
-                    for u in db.query(User).filter(User.id.in_(_lb_author_ids)).all():
-                        _lb_names[u.id] = u.first_name or u.username or "Anonymous"
-                entries = []
-                for rank, r in enumerate(rows, 1):
-                    decisive = int(getattr(r, "decisive", 0) or 0)
-                    wins = int(r.wins or 0)
-                    wr = round((wins / decisive) * 100, 1) if decisive > 0 else 0.0
-                    entries.append({
-                        "rank": rank, "listing_id": r.listing_id, "title": r.title,
-                        "author_name": _lb_names.get(r.author_id, "Anonymous"),
-                        "pricing_model": r.pricing_model or "free",
-                        "price_usdt": float(r.price_usdt or 0),
-                        "is_verified": bool(r.is_verified),
-                        "is_ai_generated": bool(r.is_ai_generated),
-                        "pnl_pct": round(float(r.pnl_sum or 0), 2),
-                        "trades": int(r.trades or 0), "win_rate": wr,
-                    })
-                _warmup_payload = {"period": "30d", "entries": entries}
-                set_cache("_warmup:mkt_lb:30d:10", _warmup_payload, 130)
-                logger.debug("[cache-refresh] heavy caches pre-warmed")
-            finally:
-                db.close()
+            await asyncio.to_thread(_do_refresh_heavy_caches_sync)
+            logger.debug("[cache-refresh] heavy caches pre-warmed")
         except Exception as _e:
             logger.debug(f"[cache-refresh] error: {_e}")
         await asyncio.sleep(300)
+
+
+def _do_cancel_ghost_executions_sync():
+    """Sync DB work for ghost cleanup — called via asyncio.to_thread."""
+    from app.database import SessionLocal
+    from sqlalchemy import text
+    db = SessionLocal()
+    try:
+        result = db.execute(text("""
+            UPDATE strategy_executions
+            SET outcome = 'CANCELLED',
+                notes   = 'Auto-cancelled: no Bitunix order_id (ghost execution)'
+            WHERE is_paper = false
+              AND outcome  = 'OPEN'
+              AND bitunix_order_id IS NULL
+              AND fired_at < NOW() - INTERVAL '5 minutes'
+            RETURNING id, symbol, direction
+        """))
+        cancelled = result.fetchall()
+        db.commit()
+        return cancelled
+    finally:
+        db.close()
 
 
 async def _cancel_ghost_executions():
@@ -1191,34 +1214,18 @@ async def _cancel_ghost_executions():
     call failed — they were never real positions, but old code left them OPEN
     so the live monitor would fire false SL/TP alerts.
     Run once on startup and then every 5 minutes as a safety net.
+    DB work runs in asyncio.to_thread to avoid blocking the event loop.
     """
-    from app.database import SessionLocal
     try:
-        db = SessionLocal()
-        try:
-            from sqlalchemy import text
-            result = db.execute(text("""
-                UPDATE strategy_executions
-                SET outcome = 'CANCELLED',
-                    notes   = 'Auto-cancelled: no Bitunix order_id (ghost execution)'
-                WHERE is_paper = false
-                  AND outcome  = 'OPEN'
-                  AND bitunix_order_id IS NULL
-                  AND fired_at < NOW() - INTERVAL '5 minutes'
-                RETURNING id, symbol, direction
-            """))
-            cancelled = result.fetchall()
-            db.commit()
-            if cancelled:
-                for row in cancelled:
-                    logger.warning(
-                        f"[ghost-cleanup] Cancelled ghost execution id={row[0]} "
-                        f"{row[1]} {row[2]} — no Bitunix order_id"
-                    )
-            else:
-                logger.debug("[ghost-cleanup] No ghost executions found")
-        finally:
-            db.close()
+        cancelled = await asyncio.to_thread(_do_cancel_ghost_executions_sync)
+        if cancelled:
+            for row in cancelled:
+                logger.warning(
+                    f"[ghost-cleanup] Cancelled ghost execution id={row[0]} "
+                    f"{row[1]} {row[2]} — no Bitunix order_id"
+                )
+        else:
+            logger.debug("[ghost-cleanup] No ghost executions found")
     except Exception as e:
         logger.error(f"[ghost-cleanup] Error: {e}")
 
@@ -12917,11 +12924,6 @@ async def admin_test_bitunix(secret: str = Query(...), user_id: int = Query(...)
         db.close()
 
     return JSONResponse(result)
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "strategy-portal"}
 
 
 # ═══════════════════════════════════════════════════════════

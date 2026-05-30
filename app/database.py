@@ -40,12 +40,14 @@ def _neon_connect_args(statement_timeout_ms: int) -> dict:
 # query once per 30 s, so the timeout ceiling is the failsafe, not the norm.
 # Pool sizes also bumped (3→6 base, 4→8 overflow) so a slow query can't
 # starve other requests of a connection.
+# pool_timeout=30: give requests 30 s to acquire a connection under burst load
+# instead of the previous 10 s which caused spurious pool-exhaustion errors.
 engine = create_engine(
     _db_url,
     poolclass=QueuePool,
     pool_size=6,
     max_overflow=8,
-    pool_timeout=10,
+    pool_timeout=30,
     pool_recycle=240,
     pool_pre_ping=True,
     connect_args=_neon_connect_args(60000),

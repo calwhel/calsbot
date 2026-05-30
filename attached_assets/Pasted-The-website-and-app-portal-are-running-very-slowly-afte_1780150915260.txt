@@ -1,0 +1,263 @@
+The website and app portal are running very slowly after the recent 
+performance upgrades. Users experience slow page loads, the app 
+dashboard takes a long time to render, and the site feels unresponsive.
+
+Please do a full audit and fix of all performance issues:
+
+═══════════════════════════════════════
+ISSUE 1 — BACKGROUND TASKS BLOCKING EVENT LOOP
+═══════════════════════════════════════
+
+PROBLEM: Any background task using time.sleep() instead of 
+await asyncio.sleep() will completely freeze the FastAPI event 
+loop, blocking ALL incoming requests while it sleeps.
+
+CHECK AND FIX:
+- Find every background task and async function in the codebase
+- Replace ANY occurrence of time.sleep() inside async functions 
+  with await asyncio.sleep()
+- Replace ANY occurrence of time.sleep() inside asyncio tasks 
+  with await asyncio.sleep()
+- Check keepalive.py, background_tasks.py, main.py, and any 
+  file touched in the recent performance upgrades
+- Also check for any threading.Event().wait() or blocking I/O 
+  inside async functions — these all block the event loop
+
+The fix is simple but critical:
+  WRONG:  time.sleep(240)
+  RIGHT:  await asyncio.sleep(240)
+
+═══════════════════════════════════════
+ISSUE 2 — SYNCHRONOUS DB CALLS INSIDE ASYNC ROUTES
+═══════════════════════════════════════
+
+PROBLEM: SQLAlchemy by default is synchronous. If async FastAPI 
+route handlers call synchronous SQLAlchemy session.execute() 
+directly, they block the event loop for the entire duration of 
+the DB query — freezing all other requests.
+
+CHECK AND FIX:
+- Audit every FastAPI route handler that is defined as async def
+- For any route that calls synchronous SQLAlchemy operations, 
+  wrap the DB call in run_in_executor to offload it to a thread:
+
+  import asyncio
+  from functools import partial
+
+  # Instead of this (blocks event loop):
+  result = session.execute(query)
+
+  # Do this (runs in thread pool, non-blocking):
+  loop = asyncio.get_event_loop()
+  result = await loop.run_in_executor(
+      None, 
+      lambda: session.execute(query).fetchall()
+  )
+
+- Alternatively, if the route does not need to be async, 
+  change it from "async def" to regular "def" — FastAPI will 
+  automatically run it in a thread pool:
+
+  # If you have no actual awaitable calls in the route,
+  # this is simpler and correct:
+  @app.get("/strategies")
+  def get_strategies():  # NOT async def
+      return fetch_strategies_from_db()
+
+- Go through ALL routes in main.py and apply whichever 
+  pattern is correct for each one
+
+═══════════════════════════════════════
+ISSUE 3 — CACHE REFRESH RUNNING TOO FREQUENTLY
+═══════════════════════════════════════
+
+PROBLEM: If the cache refresh background task has an error in 
+its sleep interval, it may be running in a near-infinite tight 
+loop — hammering the DB constantly and consuming all resources.
+
+CHECK AND FIX:
+- Find the refresh_heavy_caches() or equivalent background task
+- Confirm the sleep interval is await asyncio.sleep(300) — 
+  5 minutes between runs
+- Add error handling so if the DB query fails, it still sleeps 
+  before retrying — not retries in a tight loop:
+
+  async def refresh_heavy_caches():
+      while True:
+          try:
+              await asyncio.sleep(300)  # sleep FIRST
+              data = await fetch_leaderboard()
+              set_cache("leaderboard", data, ttl_seconds=360)
+          except Exception as e:
+              print(f"Cache refresh error: {e}")
+              # still continues loop, next sleep will happen
+
+- Note: sleep should be at the TOP of the loop, before the 
+  DB query — so if startup is slow, it doesn't immediately 
+  hammer the DB on launch
+
+═══════════════════════════════════════
+ISSUE 4 — APP DASHBOARD PAGE SPECIFIC SLOWNESS
+═══════════════════════════════════════
+
+PROBLEM: The app dashboard (strategy portal) is loading slowly. 
+It shows stats cards (Total/Live/Paper strategies, Open Trades, 
+P&L, Win Rate), an equity chart, and a strategy list. These 
+are likely all being fetched in a single synchronous server-side 
+render before any HTML is sent to the browser.
+
+FIX:
+- The portal route handler should return HTML instantly with 
+  NO database calls:
+
+  @app.get("/portal")
+  def portal(request: Request):
+      user = get_current_user(request)
+      return templates.TemplateResponse("strategy_portal.html", {
+          "request": request,
+          "user_id": user.id,
+          "username": user.username
+          # absolutely nothing else — no DB calls
+      })
+
+- Split ALL dashboard data into separate lightweight API endpoints:
+
+  GET /api/dashboard/stats
+  → Returns: total_strategies, live_count, paper_count, 
+    open_trades, win_rate, pnl_7day, pnl_alltime
+  → Cache TTL: 60 seconds per user
+
+  GET /api/dashboard/equity-chart
+  → Returns: 30-day equity curve data points
+  → Cache TTL: 300 seconds per user
+
+  GET /api/dashboard/strategies
+  → Returns: paginated strategy list (first 10 only)
+  → Cache TTL: 60 seconds per user
+
+- In strategy_portal.html, load each section independently 
+  after page paint using fetch():
+
+  document.addEventListener('DOMContentLoaded', async () => {
+
+      // Load stats first (most important, shown at top)
+      fetch('/api/dashboard/stats')
+          .then(r => r.json())
+          .then(data => renderDashboardStats(data))
+
+      // Load chart second
+      fetch('/api/dashboard/equity-chart')
+          .then(r => r.json())
+          .then(data => renderEquityChart(data))
+
+      // Load strategy list last (heaviest)
+      fetch('/api/dashboard/strategies')
+          .then(r => r.json())
+          .then(data => renderStrategyList(data))
+  })
+
+- Add skeleton loading states for each section so the page 
+  looks instant even before data arrives:
+  * Stats cards: show grey placeholder boxes
+  * Equity chart: show a grey rectangle placeholder
+  * Strategy list: show 3 grey card placeholders
+  * Use a simple CSS class "skeleton" with a pulse animation
+
+═══════════════════════════════════════
+ISSUE 5 — NEON CONNECTION POOL UNDER LOAD
+═══════════════════════════════════════
+
+PROBLEM: Multiple simultaneous requests hitting the dashboard 
+after a cold start can exhaust the Neon connection pool, causing 
+requests to queue or time out.
+
+CHECK AND FIX:
+- Print the current pool configuration and confirm it matches:
+  pool_size=5
+  max_overflow=5
+  pool_timeout=30
+  pool_pre_ping=True
+  pool_recycle=300
+
+- Add pool event listeners to log when connections are checked 
+  out and returned — this will show if we are exhausting the pool:
+
+  from sqlalchemy import event
+
+  @event.listens_for(engine, "checkout")
+  def on_checkout(dbapi_conn, conn_record, conn_proxy):
+      pool = engine.pool
+      checked_out = pool.checkedout()
+      if checked_out > 7:
+          print(f"WARNING: DB pool pressure — {checked_out} 
+                connections checked out")
+
+- If pool exhaustion is detected, reduce the number of 
+  simultaneous DB queries on dashboard load by combining 
+  the stats queries into a single SQL query with multiple 
+  aggregations instead of separate queries per stat
+
+═══════════════════════════════════════
+ISSUE 6 — GUNICORN WORKER HEALTH CHECK
+═══════════════════════════════════════
+
+CHECK:
+- Look at the Gunicorn logs for any of these warning signs:
+  * "Worker with pid X was terminated due to signal 9" 
+    → worker killed due to memory, reduce max_requests
+  * "worker timeout" 
+    → a request took too long, check for blocking calls
+  * "worker failed to boot"
+    → startup error, check imports
+
+- Add a simple health endpoint that confirms the app and DB 
+  are both responding:
+
+  @app.get("/health")
+  def health():
+      try:
+          with engine.connect() as conn:
+              conn.execute(text("SELECT 1"))
+          return {"status": "ok", "db": "ok"}
+      except Exception as e:
+          return {"status": "ok", "db": "error", "detail": str(e)}
+
+- Check this endpoint at tradehubmarkets.com/health and 
+  confirm it returns instantly (under 200ms)
+
+═══════════════════════════════════════
+ISSUE 7 — REPLIT SPECIFIC OPTIMISATIONS
+═══════════════════════════════════════
+
+PROBLEM: Replit shared hosting spins down after inactivity, 
+causing cold starts for the web server itself (separate from 
+Neon cold starts). The entire Python process may be restarting.
+
+FIX:
+- Check if there is an "Always On" or "Reserved VM" option 
+  in the Replit project settings — if available and not enabled, 
+  enable it
+- Add a UptimeRobot or similar free monitor that pings 
+  tradehubmarkets.com/health every 5 minutes — this prevents 
+  Replit from spinning down the container
+- Confirm the .replit file has the correct run command and 
+  is not doing any slow setup steps (pip install etc.) on 
+  every start — these should be in replit.nix instead
+
+═══════════════════════════════════════
+GENERAL INSTRUCTIONS
+═══════════════════════════════════════
+
+- Work through issues 1 to 7 in order
+- After fixing issue 1 and 2, restart the server and test 
+  response time on /health before continuing
+- Do not change any trading logic, strategy execution, 
+  cTrader integration, or database schema
+- After all fixes, provide:
+  1. A list of every file changed and what was changed
+  2. The specific cause of slowness that was found
+  3. Confirmation that no time.sleep() calls remain in 
+     any async context
+  4. Current pool_size configuration
+- Add a comment to the top of every modified file:
+  # PERF FIX [date]: [what was fixed]
