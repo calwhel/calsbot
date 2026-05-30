@@ -293,19 +293,19 @@ def get_oauth_url(redirect_uri: str, state: str = "") -> str:
     exchange step.
     """
     import urllib.parse
-    # Extract numeric app ID from "29040_xyz..." → "29040"
+    # Spotware Client IDs are "29040_xyz…" — the URL path needs only the
+    # numeric app ID; client_id belongs in the token exchange, NOT here.
     app_id = CTRADER_CLIENT_ID.split("_")[0] if CTRADER_CLIENT_ID else ""
     params = {
         "redirect_uri":  redirect_uri,
         "response_type": "code",
         "scope":         "trading",
-        "client_id":     CTRADER_CLIENT_ID,  # full client_id for token exchange
     }
     if state:
         params["state"] = state
     base = OAUTH_AUTH_URL.format(client_id=app_id)
     url = f"{base}?{urllib.parse.urlencode(params)}"
-    logger.info(f"[ctrader] OAuth URL → app_id={app_id} redirect_uri={redirect_uri}")
+    logger.info(f"[ctrader] OAuth URL → {url}")
     return url
 
 
