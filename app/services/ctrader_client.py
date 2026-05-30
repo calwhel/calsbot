@@ -292,12 +292,13 @@ def get_oauth_url(redirect_uri: str, state: str = "") -> str:
 
     Uses the official end-user granting-access endpoint:
     https://ctrader.com/my/settings/openapi/grantingaccess/
-    client_id = numeric app ID (prefix before first underscore in CTRADER_CLIENT_ID).
+    client_id = full CTRADER_CLIENT_ID string (numeric-only prefix causes "Malformed clientId").
     """
     import urllib.parse
-    app_id = CTRADER_CLIENT_ID.split("_")[0] if CTRADER_CLIENT_ID else ""
+    # Use the full client ID string (e.g. "29040_abc...") — the numeric-only
+    # prefix causes "Malformed clientId parameter" on id.ctrader.com.
     params = {
-        "client_id":     app_id,
+        "client_id":     CTRADER_CLIENT_ID,
         "redirect_uri":  redirect_uri,
         "scope":         "trading",
         "product":       "web",
