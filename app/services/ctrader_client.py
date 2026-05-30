@@ -314,10 +314,10 @@ async def exchange_code(code: str, redirect_uri: str) -> dict:
     """Exchange an OAuth authorization code for access + refresh tokens.
 
     Spotware token endpoint uses POST with query-string params (not form body).
-    client_id = numeric app ID prefix; client_secret = CTRADER_CLIENT_SECRET.
+    client_id = FULL app ID (e.g. "29040_abc..."); Spotware rejects the numeric-only prefix.
     """
     import httpx
-    app_id = CTRADER_CLIENT_ID.split("_")[0] if CTRADER_CLIENT_ID else CTRADER_CLIENT_ID
+    app_id = CTRADER_CLIENT_ID
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             OAUTH_TOKEN_URL,
@@ -338,7 +338,7 @@ async def exchange_code(code: str, redirect_uri: str) -> dict:
 async def refresh_access_token(refresh_token: str) -> dict:
     """Use a refresh token to get a new access token."""
     import httpx
-    app_id = CTRADER_CLIENT_ID.split("_")[0] if CTRADER_CLIENT_ID else CTRADER_CLIENT_ID
+    app_id = CTRADER_CLIENT_ID
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             OAUTH_TOKEN_URL,
