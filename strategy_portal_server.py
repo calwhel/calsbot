@@ -48,6 +48,78 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Strategy Portal", docs_url=None, redoc_url=None)
 app.add_middleware(GZipMiddleware, minimum_size=500)
+
+
+def _html_error_page(status: int, title: str, message: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title} — TradeHub Markets</title>
+  <style>
+    *{{margin:0;padding:0;box-sizing:border-box}}
+    body{{background:#0E0F11;color:#E8EAF0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+         display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}}
+    .card{{background:#1A1C20;border:1px solid rgba(255,255,255,0.08);border-radius:16px;
+           padding:40px 32px;max-width:440px;width:100%;text-align:center}}
+    .logo{{font-size:28px;font-weight:700;color:#fff;letter-spacing:-0.5px;margin-bottom:4px}}
+    .logo span{{color:#3FB68B}}
+    .code{{font-size:48px;font-weight:800;color:rgba(255,255,255,0.12);margin:24px 0 8px}}
+    h1{{font-size:20px;font-weight:600;margin-bottom:10px;color:#fff}}
+    p{{font-size:14px;color:#8B909A;line-height:1.6;margin-bottom:28px}}
+    a{{display:inline-block;background:#3FB68B;color:#0E0F11;font-weight:600;font-size:14px;
+       padding:12px 28px;border-radius:10px;text-decoration:none}}
+    a:hover{{opacity:.88}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">TradeHub<span>.</span></div>
+    <div class="code">{status}</div>
+    <h1>{title}</h1>
+    <p>{message}</p>
+    <a href="/app">Back to app</a>
+  </div>
+</body>
+</html>"""
+
+
+from fastapi import Request as _Request
+from fastapi.responses import HTMLResponse as _HTMLResponse
+from fastapi.exceptions import HTTPException as _HTTPException
+from starlette.exceptions import HTTPException as _StarletteHTTPException
+
+
+@app.exception_handler(_StarletteHTTPException)
+async def _http_exception_handler(request: _Request, exc: _StarletteHTTPException):
+    # API routes always get JSON
+    if request.url.path.startswith("/api/") or request.url.path.startswith("/webhook"):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=exc.status_code, content={"detail": str(exc.detail)})
+    # Page routes get a friendly HTML error
+    if exc.status_code == 503:
+        return _HTMLResponse(
+            _html_error_page(503, "Back in a moment",
+                             "The server is under heavy load — please refresh in a few seconds."),
+            status_code=503,
+        )
+    if exc.status_code == 403:
+        return _HTMLResponse(
+            _html_error_page(403, "Access denied",
+                             str(exc.detail) or "You don't have permission to view this page."),
+            status_code=403,
+        )
+    if exc.status_code == 404:
+        return _HTMLResponse(
+            _html_error_page(404, "Page not found",
+                             "The page you're looking for doesn't exist or has moved."),
+            status_code=404,
+        )
+    return _HTMLResponse(
+        _html_error_page(exc.status_code, "Something went wrong", str(exc.detail or "An unexpected error occurred.")),
+        status_code=exc.status_code,
+    )
 # Mobile app (Expo Go) makes cross-origin requests; UID is passed as query
 # param, not via cookie, so we don't need credentials. Open CORS for /api/*.
 app.add_middleware(
