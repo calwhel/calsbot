@@ -521,10 +521,12 @@ async def _tg_send_msg(chat_id: str, text: str):
 
 
 async def _notify_admin_forex_connect(user_id: int, name: str, uname: str, tg_id: str, account_id: str):
-    """Send admin (@bu11dogg) a Telegram message with Approve/Deny buttons when a user connects cTrader."""
+    """Send admin (@bu11dogg) a Telegram message with Approve/Deny buttons when a user connects cTrader.
+    Uses FOREX_BOT_TOKEN so the inline-button callbacks route to the dedicated forex bot."""
     from app.config import settings
     admin_chat = getattr(settings, "OWNER_TELEGRAM_ID", None)
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    # Prefer the dedicated forex bot token so callbacks go to @TradehubStrategyBot
+    token = os.getenv("FOREX_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
     if not admin_chat or not token:
         return
     mention = f"@{uname}" if uname else (f"TG {tg_id}" if tg_id else f"uid={user_id}")

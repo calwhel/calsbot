@@ -9323,7 +9323,7 @@ function renderLiveForex(d, wrap) {
   const positions = d.open_positions || [];
   const approvedBanner = d.forex_approved
     ? `<div class="lf-approved-badge">✅ Approved for live trading</div>`
-    : `<div class="lf-pending-badge">⏳ Awaiting approval — strategies run in paper mode until approved. Send <b>/forex</b> to our <a href="https://t.me/AISIGNALPERPBOT?start=forex" target="_blank" style="color:inherit;font-weight:700">TradeHub bot</a> to request access fast.</div>`;
+    : `<div class="lf-pending-badge">⏳ Awaiting approval — strategies run in paper mode until approved. Send <b>/forex</b> to <a href="https://t.me/TradehubStrategyBot" target="_blank" style="color:inherit;font-weight:700">@TradehubStrategyBot</a> on Telegram to request access.</div>`;
 
   wrap.innerHTML = `
     ${approvedBanner}
@@ -9432,9 +9432,9 @@ function renderLFOnboarding(wrap) {
           <div class="lf-step">
             <div class="lf-step-num">4</div>
             <div>
-              <div class="lf-step-title">Message @bu11dogg on Telegram</div>
-              <div class="lf-step-desc">After connecting, send a quick message to <b>@bu11dogg</b> on Telegram — just say you've connected and want forex enabled. You'll get a reply with approval (usually within a few hours). Make sure you used our FP Markets link in Step 1 or it won't verify.</div>
-              <a href="https://t.me/bu11dogg" target="_blank" class="btn sm ghost" style="margin-top:8px;display:inline-block;text-decoration:none">Message @bu11dogg →</a>
+              <div class="lf-step-title">Request approval via Telegram</div>
+              <div class="lf-step-desc">After connecting, open our <b>@TradehubStrategyBot</b> on Telegram and send <b>/forex</b>. The bot will confirm your request and notify the team. You'll get a reply once approved — usually within a few hours. Make sure you used our FP Markets link in Step 1 or it won't verify.</div>
+              <a href="https://t.me/TradehubStrategyBot" target="_blank" class="btn sm ghost" style="margin-top:8px;display:inline-block;text-decoration:none">Open @TradehubStrategyBot →</a>
             </div>
           </div>
           <div class="lf-step">

@@ -72,8 +72,11 @@ async def lifespan(app: FastAPI):
     # This prevents the dev IDE instance from conflicting with the live production bot.
     if _START_BOT_POLLING:
         bot_task = asyncio.create_task(start_bot())
+        from app.services.forex_bot import start_forex_bot
+        forex_bot_task = asyncio.create_task(start_forex_bot())
     else:
         bot_task = None
+        forex_bot_task = None
         logging.info("🛠️  DEV mode — Telegram polling skipped (production bot handles it)")
     
     # Start OxaPay automatic payment verification
@@ -94,6 +97,12 @@ async def lifespan(app: FastAPI):
     # Cleanup
     if bot_task:
         bot_task.cancel()
+    if forex_bot_task:
+        forex_bot_task.cancel()
+        try:
+            await forex_bot_task
+        except asyncio.CancelledError:
+            pass
     poller_task.cancel()
     twitter_task.cancel()
     wall_watch_task.cancel()
