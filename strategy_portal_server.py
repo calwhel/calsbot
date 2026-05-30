@@ -901,6 +901,7 @@ def _ensure_tables():
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_access_token VARCHAR",
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_refresh_token VARCHAR",
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_account_id VARCHAR",
+                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_accounts TEXT",
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS forex_approved BOOLEAN DEFAULT FALSE",
             ):
                 conn.execute(sa.text(ddl))
@@ -9209,7 +9210,7 @@ async def api_get_settings(uid: str = Query(...)):
             "global_max_positions":     portal.global_max_positions    if portal else 0,
             # Exchange connection — only expose boolean, never the actual keys
             "bitunix_keys_set":         bool(prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret),
-            "ctrader_connected":        bool(prefs and prefs.ctrader_access_token and prefs.ctrader_account_id),
+            "ctrader_connected":        bool(prefs and prefs.ctrader_access_token),
             "ctrader_account_id":       (getattr(prefs, "ctrader_account_id", None) or "") if prefs else "",
             "auto_trading_enabled":     bool(prefs and prefs.auto_trading_enabled),
             # Security
@@ -9249,6 +9250,57 @@ async def api_ctrader_auth_url(uid: str = Query(...), request: Request = None):
         logger.info(f"[ctrader] auth-url: redirect_uri={redirect_uri}")
         url = get_oauth_url(redirect_uri=redirect_uri, state=uid)
         return JSONResponse({"url": url, "redirect_uri": redirect_uri})
+    finally:
+        db.close()
+
+
+async def _fetch_and_store_ctrader_accounts(
+    user_id: int,
+    access_token: str,
+    is_admin: bool,
+    name: str,
+    uname: str,
+    tg_id: str,
+) -> None:
+    """
+    Background task: fetch all cTrader accounts for the given token, store them
+    as JSON, and auto-select the first live account if exactly one live account
+    exists.  Also sends the admin Telegram notification for non-admin users.
+    """
+    import json as _json
+    from app.services.ctrader_client import get_accounts_for_token
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    try:
+        accounts = await asyncio.wait_for(get_accounts_for_token(access_token), timeout=20.0)
+    except Exception as _e:
+        logger.warning(f"[cTrader] bg accounts fetch error user_id={user_id}: {_e}")
+        accounts = []
+
+    db = SessionLocal()
+    try:
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
+        if not prefs:
+            db.close()
+            return
+        if accounts:
+            prefs.ctrader_accounts = _json.dumps(accounts)
+            live = [a for a in accounts if a.get("isLive")]
+            # Auto-select if unambiguous (one live account, or only one account total)
+            if not prefs.ctrader_account_id:
+                chosen = live[0] if len(live) == 1 else (accounts[0] if len(accounts) == 1 else None)
+                if chosen:
+                    prefs.ctrader_account_id = str(chosen["ctidTraderAccountId"])
+            db.commit()
+
+        # Notify admin about new connection (skip if this IS the admin)
+        if not is_admin:
+            acct_id = prefs.ctrader_account_id or "unknown"
+            asyncio.ensure_future(
+                _notify_admin_forex_connect(user_id, name, uname, tg_id, acct_id)
+            )
+    except Exception as _e:
+        logger.warning(f"[cTrader] bg accounts store error user_id={user_id}: {_e}")
     finally:
         db.close()
 
@@ -9301,9 +9353,14 @@ async def api_ctrader_callback(
         if not access_token:
             return RedirectResponse(url="/?ctrader_error=no_token")
 
-        accounts = await get_accounts_for_token(access_token)
-        live_accounts = [a for a in accounts if a.get("isLive")]
-        chosen = live_accounts[0] if live_accounts else (accounts[0] if accounts else None)
+        # ── Save token IMMEDIATELY before any slow API calls (account list fetch
+        #    uses a protobuf TCP connection that can block for 10+ seconds, which
+        #    would cause the DB session to time out before we ever commit). ──────
+        user_id_saved = user.id
+        is_admin_saved = bool(getattr(user, "is_admin", False))
+        tg_id_str = str(user.telegram_id) if getattr(user, "telegram_id", None) else ""
+        uname_str = getattr(user, "username", "") or ""
+        name_str  = user.name or user.first_name or "User"
 
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         if not prefs:
@@ -9311,18 +9368,16 @@ async def api_ctrader_callback(
             db.add(prefs)
         prefs.ctrader_access_token  = access_token
         prefs.ctrader_refresh_token = refresh_token
-        prefs.ctrader_account_id    = str(chosen["ctidTraderAccountId"]) if chosen else ""
+        if is_admin_saved:
+            prefs.forex_approved = True  # admins are auto-approved
         db.commit()
 
-        # Notify admin with inline approve/deny buttons — skip for admin users
-        # (they can't approve themselves via Telegram).
-        if not getattr(user, "is_admin", False):
-            acct_id   = str(chosen["ctidTraderAccountId"]) if chosen else "unknown"
-            tg_id_str = str(user.telegram_id) if getattr(user, "telegram_id", None) else ""
-            uname_str = getattr(user, "username", "") or ""
-            asyncio.ensure_future(
-                _notify_admin_forex_connect(user.id, user.name or user.first_name or "User", uname_str, tg_id_str, acct_id)
-            )
+        # ── Fetch accounts list in background — stores all accounts + auto-selects
+        #    if only one live account exists. UI lets user pick if multiple. ──────
+        asyncio.ensure_future(_fetch_and_store_ctrader_accounts(
+            user_id_saved, access_token, is_admin_saved,
+            name_str, uname_str, tg_id_str,
+        ))
 
         return RedirectResponse(url="/app#live-forex")
     except Exception as e:
@@ -9341,12 +9396,61 @@ async def api_ctrader_status(uid: str = Query(...)):
         user = _get_user_by_uid(uid, db)
         if not user:
             raise HTTPException(status_code=403)
+        import json as _json
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        connected = bool(prefs and prefs.ctrader_access_token and prefs.ctrader_account_id)
+        connected = bool(prefs and prefs.ctrader_access_token)
+        accounts = _json.loads(prefs.ctrader_accounts or "[]") if prefs else []
         return JSONResponse({
             "connected":  connected,
             "account_id": (prefs.ctrader_account_id or "") if prefs else "",
+            "accounts":   accounts,
         })
+    finally:
+        db.close()
+
+
+@app.get("/api/ctrader/accounts")
+async def api_ctrader_accounts_list(uid: str = Query(...)):
+    """Return all cTrader accounts stored for the user so the UI can show a picker."""
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    import json as _json
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        accounts = _json.loads(prefs.ctrader_accounts or "[]") if prefs else []
+        return JSONResponse({
+            "accounts":           accounts,
+            "selected_account_id": (prefs.ctrader_account_id or "") if prefs else "",
+        })
+    finally:
+        db.close()
+
+
+@app.post("/api/ctrader/select-account")
+async def api_ctrader_select_account(uid: str = Query(...), request: Request = None):
+    """Save which cTrader account the user wants to trade on."""
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    body = await request.json()
+    account_id = str(body.get("account_id", "")).strip()
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id required")
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.ctrader_access_token:
+            raise HTTPException(status_code=400, detail="Not connected")
+        prefs.ctrader_account_id = account_id
+        db.commit()
+        _invalidate_user_cache(uid)
+        return JSONResponse({"ok": True, "account_id": account_id})
     finally:
         db.close()
 
@@ -9415,11 +9519,20 @@ async def api_live_forex_account(uid: str = Query(...)):
         if not user:
             raise HTTPException(status_code=403, detail="Invalid UID")
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        connected = bool(prefs and prefs.ctrader_access_token and prefs.ctrader_account_id)
+        connected = bool(prefs and prefs.ctrader_access_token)
         forex_approved = bool(getattr(prefs, "forex_approved", False)) if prefs else False
+        # Admins are always approved — auto-persist if not already set
+        if not forex_approved and getattr(user, "is_admin", False):
+            forex_approved = True
+            if prefs:
+                prefs.forex_approved = True
+                db.commit()
+
+        import json as _json
+        accounts = _json.loads(prefs.ctrader_accounts or "[]") if prefs else []
 
         if not connected:
-            return JSONResponse({"connected": False, "forex_approved": forex_approved, "balance": None, "equity": None})
+            return JSONResponse({"connected": False, "forex_approved": forex_approved, "accounts": accounts, "balance": None, "equity": None})
 
         # Fetch live balance from cTrader (async, non-blocking)
         balance = None
@@ -9466,6 +9579,7 @@ async def api_live_forex_account(uid: str = Query(...)):
             "connected":      True,
             "forex_approved": forex_approved,
             "account_id":     prefs.ctrader_account_id or "",
+            "accounts":       accounts,
             "balance":        round(balance, 2) if balance else None,
             "equity":         round(balance, 2) if balance else None,
             "open_positions": positions,

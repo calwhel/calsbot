@@ -2747,6 +2747,13 @@ function dismissTgBanner(){
           <button class="btn ghost sm" style="flex-shrink:0;font-size:11px" onclick="disconnectCtrader()">Disconnect</button>
         </div>
         <div id="ctrader-meta" style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.5"></div>
+        <div id="ctrader-acct-picker" style="display:none;margin-top:10px">
+          <label style="font-size:11px;color:var(--text-muted);font-weight:600;display:block;margin-bottom:4px">Trading Account</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="ctrader-acct-select" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:12px" onchange="ctraderSelectAccount(this.value)"></select>
+          </div>
+          <div class="hint" style="margin-top:4px">Strategies set to Go Live will trade on this account.</div>
+        </div>
       </div>
       <div id="ctrader-form">
         <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px">
@@ -7106,16 +7113,40 @@ async function loadCtraderCard(){
     const r=await fetch(`/api/ctrader/status?uid=${UID}`);
     if(!r.ok)return;
     const d=await r.json();
-    _OANDA_CONNECTED=!!d.connected;  // reuse existing flag — drives forex wizard live-gate
+    _OANDA_CONNECTED=!!d.connected;
     const card=$('ctrader-connected-card'); const form=$('ctrader-form');
     if(d.connected){
       card.style.display='block'; form.style.display='none';
       const acct=escHtml(d.account_id||'—');
       $('ctrader-meta').innerHTML=`Account ID <code>${acct}</code> · FP Markets · Live`;
+      // Show account picker if multiple accounts exist
+      const picker=$('ctrader-acct-picker');
+      const sel=$('ctrader-acct-select');
+      const accounts=d.accounts||[];
+      if(accounts.length>1){
+        sel.innerHTML=accounts.map(a=>{
+          const label=a.isLive?`Live #${a.traderLogin||a.ctidTraderAccountId}`:`Demo #${a.traderLogin||a.ctidTraderAccountId}`;
+          const selected=String(a.ctidTraderAccountId)===String(d.account_id)?'selected':'';
+          return `<option value="${a.ctidTraderAccountId}" ${selected}>${escHtml(label)}</option>`;
+        }).join('');
+        picker.style.display='block';
+      } else {
+        picker.style.display='none';
+      }
     } else {
       card.style.display='none'; form.style.display='block';
     }
   }catch(e){/* ignore */}
+}
+async function ctraderSelectAccount(accountId){
+  try{
+    const r=await fetch(`/api/ctrader/select-account?uid=${encodeURIComponent(UID)}`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({account_id:accountId})
+    });
+    if(r.ok){toast('Trading account updated'); loadCtraderCard(); loadLiveForex();}
+    else{toast('Failed to switch account','error');}
+  }catch(e){toast('Network error','error');}
 }
 async function connectCtrader(){
   const btn=$('ctrader-connect-btn');
@@ -9370,11 +9401,57 @@ function renderLiveForex(d, wrap) {
     renderLFOnboarding(wrap);
     return;
   }
+
+  const accounts = d.accounts || [];
+  const hasAccount = !!d.account_id;
+
+  // Connected but accounts still loading (background fetch in progress)
+  if (!hasAccount && accounts.length === 0) {
+    wrap.innerHTML = `<div class="lf-card" style="text-align:center;padding:24px">
+      <div style="font-size:24px;margin-bottom:10px">✅</div>
+      <div style="font-size:15px;font-weight:700;margin-bottom:8px">cTrader Connected</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:16px">Fetching your accounts… this takes a few seconds.</div>
+      <button class="btn primary sm" onclick="loadLiveForex()">↻ Refresh</button>
+    </div>`;
+    setTimeout(loadLiveForex, 3000);
+    return;
+  }
+
+  // Connected but multiple accounts with none selected yet
+  if (!hasAccount && accounts.length > 1) {
+    const opts = accounts.map(a => {
+      const label = a.isLive ? `Live — Login #${a.traderLogin||a.ctidTraderAccountId}` : `Demo — Login #${a.traderLogin||a.ctidTraderAccountId}`;
+      return `<div onclick="ctraderSelectAccount('${a.ctidTraderAccountId}')" style="cursor:pointer;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:10px">
+        <div style="width:8px;height:8px;border-radius:50%;background:${a.isLive?'#3FB68B':'#f59e0b'};flex-shrink:0"></div>
+        <div style="flex:1;font-size:13px;font-weight:600">${escHtml(label)}</div>
+        <div style="font-size:11px;color:var(--muted)">Select →</div>
+      </div>`;
+    }).join('');
+    wrap.innerHTML = `<div class="lf-card" style="padding:20px">
+      <div style="font-size:15px;font-weight:700;margin-bottom:4px">Select Trading Account</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:16px">Choose which FP Markets account strategies will trade on.</div>
+      ${opts}
+    </div>`;
+    return;
+  }
+
   // Connected — show full dashboard
   const bal = d.balance != null ? `$${d.balance.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}` : '—';
   const positions = d.open_positions || [];
+  // Account switcher row (if multiple accounts)
+  const acctSwitcher = accounts.length > 1 ? `
+    <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">
+      <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Switch account</label>
+      <select onchange="ctraderSelectAccount(this.value)" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-size:12px;width:100%">
+        ${accounts.map(a=>{
+          const lbl = a.isLive ? `Live #${a.traderLogin||a.ctidTraderAccountId}` : `Demo #${a.traderLogin||a.ctidTraderAccountId}`;
+          const sel = String(a.ctidTraderAccountId)===String(d.account_id)?'selected':'';
+          return `<option value="${a.ctidTraderAccountId}" ${sel}>${escHtml(lbl)}</option>`;
+        }).join('')}
+      </select>
+    </div>` : '';
   const approvedBanner = d.forex_approved
-    ? `<div class="lf-approved-badge">✅ Approved for live trading</div>`
+    ? ''
     : `<div class="lf-pending-badge">⏳ Awaiting approval — strategies run in paper mode until approved. Send <b>/forex</b> to <a href="https://t.me/TradehubStrategyBot" target="_blank" style="color:inherit;font-weight:700">@TradehubStrategyBot</a> on Telegram to request access.</div>`;
 
   wrap.innerHTML = `
@@ -9396,6 +9473,7 @@ function renderLiveForex(d, wrap) {
         <button class="btn ghost sm" onclick="lfRefreshBalance()">↻ Refresh</button>
         <button class="btn ghost sm" style="color:var(--negative)" onclick="lfDisconnect()">Disconnect</button>
       </div>
+      ${acctSwitcher}
     </div>
 
     <!-- Session clock -->
