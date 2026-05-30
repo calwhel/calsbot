@@ -9278,8 +9278,15 @@ async def api_ctrader_callback(
         if not user:
             return RedirectResponse(url="/?ctrader_error=auth_failed")
 
-        host = os.environ.get("REPLIT_DEV_DOMAIN") or (request.headers.get("host") if request else "tradehubmarkets.com")
-        redirect_uri = f"https://{host}/api/ctrader/callback"
+        # Must match exactly what was sent in the auth URL — use CTRADER_REDIRECT_URI
+        # if set (same logic as /api/ctrader/connect) so both sides agree.
+        explicit = os.environ.get("CTRADER_REDIRECT_URI", "")
+        if explicit:
+            redirect_uri = explicit
+        else:
+            host = (request.headers.get("host") if request else None) or "tradehubmarkets.com"
+            host = host.split(":")[0]
+            redirect_uri = f"https://{host}/api/ctrader/callback"
 
         token_data = await exchange_code(code=code, redirect_uri=redirect_uri)
         access_token  = token_data.get("accessToken") or token_data.get("access_token", "")
