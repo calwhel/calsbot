@@ -285,19 +285,27 @@ async def _account_auth(
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def get_oauth_url(redirect_uri: str, state: str = "") -> str:
-    """Return the Spotware OAuth authorization URL."""
+    """Return the Spotware OAuth authorization URL.
+
+    Spotware Client IDs are in the format ``{appId}_{secret}`` (e.g.
+    ``29040_abc…``).  The auth URL path requires only the numeric App ID;
+    the full client_id string is passed as a query parameter for the token
+    exchange step.
+    """
     import urllib.parse
+    # Extract numeric app ID from "29040_xyz..." → "29040"
+    app_id = CTRADER_CLIENT_ID.split("_")[0] if CTRADER_CLIENT_ID else ""
     params = {
         "redirect_uri":  redirect_uri,
         "response_type": "code",
         "scope":         "trading",
-        "client_id":     CTRADER_CLIENT_ID,  # required by some Spotware API versions
+        "client_id":     CTRADER_CLIENT_ID,  # full client_id for token exchange
     }
     if state:
         params["state"] = state
-    base = OAUTH_AUTH_URL.format(client_id=CTRADER_CLIENT_ID)
+    base = OAUTH_AUTH_URL.format(client_id=app_id)
     url = f"{base}?{urllib.parse.urlencode(params)}"
-    logger.info(f"[ctrader] OAuth URL → {url}")
+    logger.info(f"[ctrader] OAuth URL → app_id={app_id} redirect_uri={redirect_uri}")
     return url
 
 
