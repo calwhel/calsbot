@@ -9275,8 +9275,14 @@ async def api_ctrader_callback(
     try:
         uid = state or ""
         user = _get_user_by_uid(uid, db) if uid else None
+        if not user and request:
+            # Fallback: try the live session cookie — handles stale/mismatched state UIDs
+            session_uid = _get_session_uid(request)
+            if session_uid:
+                user = _get_user_by_uid(session_uid, db)
         if not user:
-            return RedirectResponse(url="/?ctrader_error=auth_failed")
+            logger.warning(f"[cTrader callback] state uid={uid!r} not found in DB, no session cookie fallback")
+            return RedirectResponse(url="/login?next=/app%23live-forex&msg=session_expired")
 
         # Must match exactly what was sent in the auth URL — use CTRADER_REDIRECT_URI
         # if set (same logic as /api/ctrader/connect) so both sides agree.
