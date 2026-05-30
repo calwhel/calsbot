@@ -9308,13 +9308,15 @@ async def api_ctrader_callback(
         prefs.ctrader_account_id    = str(chosen["ctidTraderAccountId"]) if chosen else ""
         db.commit()
 
-        # Notify admin with inline approve/deny buttons
-        acct_id   = str(chosen["ctidTraderAccountId"]) if chosen else "unknown"
-        tg_id_str = str(user.telegram_id) if getattr(user, "telegram_id", None) else ""
-        uname_str = getattr(user, "username", "") or ""
-        asyncio.ensure_future(
-            _notify_admin_forex_connect(user.id, user.name or user.first_name or "User", uname_str, tg_id_str, acct_id)
-        )
+        # Notify admin with inline approve/deny buttons — skip for admin users
+        # (they can't approve themselves via Telegram).
+        if not getattr(user, "is_admin", False):
+            acct_id   = str(chosen["ctidTraderAccountId"]) if chosen else "unknown"
+            tg_id_str = str(user.telegram_id) if getattr(user, "telegram_id", None) else ""
+            uname_str = getattr(user, "username", "") or ""
+            asyncio.ensure_future(
+                _notify_admin_forex_connect(user.id, user.name or user.first_name or "User", uname_str, tg_id_str, acct_id)
+            )
 
         return RedirectResponse(url="/app#live-forex")
     except Exception as e:
