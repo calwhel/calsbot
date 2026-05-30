@@ -913,6 +913,28 @@ def _ensure_tables():
         else:
             logger.warning(f"_ensure_tables(ctrader): {e}")
 
+    # Auto-promote admin users to lifetime Pro + forex-approved so they always
+    # bypass every Pro gate without needing the in-memory admin-bypass path.
+    # Idempotent — safe to run on every worker boot.
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa.text("""
+                INSERT INTO portal_subscriptions (user_id, tier, subscription_end)
+                SELECT id, 'pro', '2099-12-31 23:59:59'::timestamp
+                FROM users WHERE is_admin = TRUE
+                ON CONFLICT (user_id) DO UPDATE
+                    SET tier = 'pro',
+                        subscription_end = '2099-12-31 23:59:59'::timestamp
+            """))
+            conn.execute(sa.text("""
+                UPDATE user_preferences
+                SET forex_approved = TRUE
+                WHERE user_id IN (SELECT id FROM users WHERE is_admin = TRUE)
+            """))
+        logger.info("_ensure_tables: admin users set to lifetime Pro + forex approved")
+    except Exception as e:
+        logger.warning(f"_ensure_tables(admin-lifetime-pro): {e}")
+
     # Affiliate program — applications + per-user affiliate state. Raw CREATE
     # to avoid registering yet another SQLAlchemy model just for a simple,
     # mostly-write-once table.
