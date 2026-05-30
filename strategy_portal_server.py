@@ -9581,15 +9581,18 @@ async def api_live_forex_account(uid: str = Query(...)):
             return JSONResponse({"connected": False, "forex_approved": forex_approved, "accounts": accounts, "balance": None, "equity": None})
 
         # Fetch live balance from cTrader (async, non-blocking)
+        # ctrader_account_id may be NULL if the user hasn't selected an account yet
         balance = None
-        try:
-            from app.services.ctrader_client import _get_account_balance
-            balance = await asyncio.wait_for(
-                _get_account_balance(prefs.ctrader_access_token, int(prefs.ctrader_account_id)),
-                timeout=8.0,
-            )
-        except Exception as _be:
-            logger.warning(f"[live-forex] balance fetch failed uid={uid}: {_be}")
+        _acct_id = prefs.ctrader_account_id if prefs else None
+        if _acct_id:
+            try:
+                from app.services.ctrader_client import _get_account_balance
+                balance = await asyncio.wait_for(
+                    _get_account_balance(prefs.ctrader_access_token, int(_acct_id)),
+                    timeout=8.0,
+                )
+            except Exception as _be:
+                logger.warning(f"[live-forex] balance fetch failed uid={uid}: {_be}")
 
         # Fetch open positions from strategy_executions (forex/index live trades)
         def _get_open_positions():
@@ -9599,7 +9602,7 @@ async def api_live_forex_account(uid: str = Query(...)):
             try:
                 rows = _db.execute(_t("""
                     SELECT e.id, e.symbol, e.direction, e.entry_price,
-                           e.tp1_price, e.sl_price, e.pnl_pct,
+                           e.tp_price AS tp1_price, e.sl_price, e.pnl_pct,
                            e.fired_at, s.name AS strategy_name,
                            e.asset_class
                     FROM strategy_executions e
