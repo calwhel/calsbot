@@ -9225,8 +9225,21 @@ async def api_ctrader_auth_url(uid: str = Query(...), request: Request = None):
         if not user:
             raise HTTPException(status_code=403)
         from app.services.ctrader_client import get_oauth_url
-        host = os.environ.get("REPLIT_DEV_DOMAIN") or (request.headers.get("host") if request else "tradehubmarkets.com")
-        redirect_uri = f"https://{host}/api/ctrader/callback"
+        # Use explicit CTRADER_REDIRECT_URI env var if set (recommended for production).
+        # Falls back to dev domain, then the request host, then the production domain.
+        explicit = os.environ.get("CTRADER_REDIRECT_URI", "")
+        if explicit:
+            redirect_uri = explicit
+        elif os.environ.get("REPLIT_DEV_DOMAIN"):
+            redirect_uri = f"https://{os.environ['REPLIT_DEV_DOMAIN']}/api/ctrader/callback"
+        elif request:
+            host = request.headers.get("host", "tradehubmarkets.com")
+            # Strip port if present; always use https for production
+            host = host.split(":")[0]
+            redirect_uri = f"https://{host}/api/ctrader/callback"
+        else:
+            redirect_uri = "https://tradehubmarkets.com/api/ctrader/callback"
+        logger.info(f"[ctrader] auth-url: redirect_uri={redirect_uri}")
         url = get_oauth_url(redirect_uri=redirect_uri, state=uid)
         return JSONResponse({"url": url, "redirect_uri": redirect_uri})
     finally:

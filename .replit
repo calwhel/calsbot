@@ -113,6 +113,7 @@ BITUNIX_REFERRAL_URL = "https://www.bitunix.com/register?vipCode=tradehubsave"
 BITUNIX_REQUIRE_AFFILIATE = "1"
 CTRADER_IB_CODE = ""
 CTRADER_REQUIRE_IB = "0"
+CTRADER_REDIRECT_URI = "https://tradehubmarkets.com/api/ctrader/callback"
 
 [userenv.production]
 FORCE_EXECUTOR = "1"

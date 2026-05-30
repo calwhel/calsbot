@@ -291,11 +291,14 @@ def get_oauth_url(redirect_uri: str, state: str = "") -> str:
         "redirect_uri":  redirect_uri,
         "response_type": "code",
         "scope":         "trading",
+        "client_id":     CTRADER_CLIENT_ID,  # required by some Spotware API versions
     }
     if state:
         params["state"] = state
     base = OAUTH_AUTH_URL.format(client_id=CTRADER_CLIENT_ID)
-    return f"{base}?{urllib.parse.urlencode(params)}"
+    url = f"{base}?{urllib.parse.urlencode(params)}"
+    logger.info(f"[ctrader] OAuth URL → {url}")
+    return url
 
 
 async def exchange_code(code: str, redirect_uri: str) -> dict:
