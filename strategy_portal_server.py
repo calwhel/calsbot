@@ -374,7 +374,7 @@ import time as _time
 
 _USER_CACHE: dict[str, tuple[float, "object"]] = {}
 _USER_CACHE_LOCK = _thr.Lock()
-_USER_CACHE_TTL = 30.0  # seconds
+_USER_CACHE_TTL = 120.0  # seconds — keep for 2 min to cut DB pressure
 
 class _CachedUser:
     """Detached snapshot of a User row safe to share across requests."""
@@ -397,13 +397,16 @@ def _cache_user(u) -> "_CachedUser":
     return cu
 
 
-def _user_from_cache(uid: str):
+def _user_from_cache(uid: str, allow_stale: bool = False):
+    """Return cached user. allow_stale=True returns expired entries too (stale-while-revalidate)."""
     with _USER_CACHE_LOCK:
         entry = _USER_CACHE.get(uid)
         if not entry:
             return None
         ts, cu = entry
         if _time.time() - ts > _USER_CACHE_TTL:
+            if allow_stale:
+                return cu  # stale but usable when DB is down
             _USER_CACHE.pop(uid, None)
             return None
         return cu
@@ -439,7 +442,7 @@ def _get_user_by_uid_safe(uid: str, db: Session):
     from app.models import User
     from app.database import SessionLocal as _SL
     from sqlalchemy.exc import OperationalError as _SAOperationalError
-    # Hot-path cache hit — bypasses DB entirely for ~30s after first login.
+    # Hot-path cache hit — bypasses DB entirely for up to 2 min after first load.
     cached = _user_from_cache(uid)
     if cached is not None:
         return cached
@@ -449,41 +452,35 @@ def _get_user_by_uid_safe(uid: str, db: Session):
             return _cache_user(u)
         return None
     except _SAOperationalError as exc:
-        # Most common cause: psycopg2.errors.QueryCanceled (statement_timeout).
-        # Roll back the dirty transaction on the caller's session, then retry
-        # on a SEPARATE fresh session so we never reuse a poisoned connection.
+        # DB timeout — roll back poisoned session, try once on a fresh connection.
         try:
             db.rollback()
         except Exception:
             pass
         logger.warning(f"[uid lookup] transient DB error, retrying on fresh session: {exc}")
-        import time as _t
-        # Neon serverless cold-wake can take 3–10s; back off harder than the
-        # original 0.2s which was useless. Try TWICE on fresh sessions before
-        # giving up — production logs showed the first retry also timing out
-        # because the connection pool was still saturated.
-        last_exc = exc
-        for attempt, delay in ((1, 1.5), (2, 3.0)):
-            _t.sleep(delay)
-            fresh = _SL()
+        fresh = _SL()
+        try:
+            u = fresh.query(User).filter(User.uid == uid).first()
+            if u is not None:
+                return _cache_user(u)
+            return None
+        except _SAOperationalError as exc_retry:
+            logger.warning(f"[uid lookup] retry also timed out: {exc_retry}")
+            # Stale-while-revalidate: return cached user (even if expired) so
+            # the worker doesn't block and the user gets a fast response.
+            stale = _user_from_cache(uid, allow_stale=True)
+            if stale is not None:
+                logger.info(f"[uid lookup] serving stale cache for {uid}")
+                return stale
+            raise HTTPException(
+                status_code=503,
+                detail="Database is busy — please try again in a moment.",
+            )
+        finally:
             try:
-                u = fresh.query(User).filter(User.uid == uid).first()
-                if u is not None:
-                    return _cache_user(u)
-                return None
-            except _SAOperationalError as exc_retry:
-                last_exc = exc_retry
-                logger.warning(f"[uid lookup] retry {attempt} also timed out: {exc_retry}")
-            finally:
-                try:
-                    fresh.close()
-                except Exception:
-                    pass
-        logger.error(f"[uid lookup] DB error persisted after 2 retries: {last_exc}")
-        raise HTTPException(
-            status_code=503,
-            detail="Database is busy — please try again in a moment.",
-        )
+                fresh.close()
+            except Exception:
+                pass
 
 
 # ── Portal subscription helpers ────────────────────────────
@@ -8625,14 +8622,17 @@ async def api_portfolio(uid: str = Query(...)):
 
         cutoff_today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Single query: all executions via JOIN (replaces N+1 loop)
+        # Single query: executions via JOIN — OPEN trades unbounded,
+        # closed trades capped at 90 days to prevent full-table scan.
+        cutoff_90d = datetime.utcnow() - timedelta(days=90)
         exec_rows = db.execute(text("""
             SELECT e.outcome, e.pnl_pct, e.is_paper,
                    COALESCE(e.closed_at, e.fired_at) AS ts
             FROM strategy_executions e
             JOIN user_strategies s ON s.id = e.strategy_id
             WHERE s.user_id = :uid
-        """), {"uid": user.id}).fetchall()
+              AND (e.outcome = 'OPEN' OR COALESCE(e.closed_at, e.fired_at) >= :cutoff)
+        """), {"uid": user.id, "cutoff": cutoff_90d}).fetchall()
 
         open_trades  = sum(1 for r in exec_rows if r.outcome == "OPEN")
         live_open    = sum(1 for r in exec_rows if r.outcome == "OPEN" and not r.is_paper)
@@ -8712,8 +8712,15 @@ async def api_portfolio(uid: str = Query(...)):
                 ),
             },
         })
-        _CACHE[cache_key] = (result, time.time() + 30)
+        _CACHE[cache_key] = (result, time.time() + 90)
         return result
+    except Exception as exc:
+        # On DB timeout serve stale cache rather than killing the worker.
+        stale = _CACHE.get(cache_key)
+        if stale:
+            logger.warning(f"[portfolio] DB error, serving stale cache: {exc}")
+            return stale[0]
+        raise
     finally:
         db.close()
 
