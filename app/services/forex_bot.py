@@ -1,18 +1,15 @@
 """
-TradehubStrategyBot — dedicated forex onboarding chatbot (@TradehubStrategyBot).
+TradehubStrategyBot — forex onboarding + two-way support proxy.
 
-Each user gets a private questionnaire flow. Their answers are forwarded to the
-admin (@bu11dogg) with Approve / Deny / Reply buttons. The admin can reply to any
-user individually through the bot — replies are routed back to that specific user
-only, never broadcast to everyone.
+Onboarding flow (per user, private):
+  /start → welcome + Q1 (FP Markets?) → Q2 (cTrader linked?) → submit → admin notified
 
-Flow:
-  /start → Q1 (signed up?) → Q2 (FP Markets?) → Q3 (cTrader connected?)
-         → Q4 (name?) → Q5 (deposit amount?) → submit → admin notified
+After onboarding (or any time), users can send free-form messages.
+Every user message is forwarded to admin with a header showing who sent it.
+Admin replies to any forwarded message → reply is routed back to that user only.
 
-Admin commands (only works in DM with admin):
-  Inline [✅ Approve] [❌ Deny] [💬 Reply] buttons on each submission card.
-  [💬 Reply] → bot asks admin for message → routes it back to that user only.
+This gives the admin a full conversation thread per user inside the bot chat —
+no commands, no FSM states needed for the two-way chat part.
 """
 
 import asyncio
@@ -38,14 +35,14 @@ forex_dp  = Dispatcher(storage=MemoryStorage())
 PORTAL_URL = "https://tradehubmarkets.com/app"
 FP_LINK    = "https://www.fpmarkets.com/?rfrr=IB-Portal&cxd=37182_638734"
 
-# ── FSM states ────────────────────────────────────────────────────────────────
-class Onboard(StatesGroup):
-    q1_fp_markets    = State()   # Opened FP Markets Standard account?
-    q2_ctrader       = State()   # Connected cTrader in portal?
-    q3_name          = State()   # Full name
+# ── In-memory map: admin_message_id → user_tg_id ─────────────────────────────
+# Lets admin reply to any forwarded message and have it routed back automatically.
+_REPLY_MAP: dict[int, int] = {}
 
-class AdminReply(StatesGroup):
-    waiting_for_message = State()  # Admin typing a reply to a specific user
+# ── FSM states (onboarding only) ──────────────────────────────────────────────
+class Onboard(StatesGroup):
+    q1_fp_markets = State()   # Opened FP Markets Standard account?
+    q2_ctrader    = State()   # Connected cTrader in portal?
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def _yn_keyboard():
@@ -67,49 +64,78 @@ def _admin_id() -> str:
     from app.config import settings as _s
     return str(getattr(_s, "OWNER_TELEGRAM_ID", ""))
 
-async def _safe_answer(cb: CallbackQuery, txt: str = None):
-    try:
-        await cb.answer(text=txt)
-    except Exception:
-        pass
+def _is_admin(user_id: int) -> bool:
+    return str(user_id) == _admin_id()
 
-async def _notify_admin(user_id: int, tg_id: int, answers: dict, name: str, uname: str):
-    """Send admin a summary card with Approve / Deny / Reply buttons."""
+
+async def _forward_to_admin(user: types.User, text: str, label: str = "💬 User message") -> int | None:
+    """Forward a user message to admin. Returns the admin message_id for reply routing."""
     admin_chat = _admin_id()
     if not admin_chat or not forex_bot:
-        return
-    mention = f"@{uname}" if uname else f"ID {tg_id}"
+        return None
+    uname   = f"@{user.username}" if user.username else f"ID {user.id}"
+    name    = " ".join(filter(None, [user.first_name, user.last_name])) or uname
+    header  = f"{label}\n<b>{name}</b> ({uname}) · <code>{user.id}</code>\n\n"
+    try:
+        sent = await forex_bot.send_message(
+            chat_id=int(admin_chat),
+            text=header + text,
+            parse_mode="HTML",
+        )
+        return sent.message_id
+    except Exception as e:
+        logger.warning(f"[forex_bot] forward_to_admin failed: {e}")
+        return None
+
+
+async def _notify_admin_submission(user_id_db, tg_user: types.User, answers: dict) -> int | None:
+    """Send admin the onboarding summary card with Approve / Deny buttons."""
+    admin_chat = _admin_id()
+    if not admin_chat or not forex_bot:
+        return None
+    uname   = f"@{tg_user.username}" if tg_user.username else f"ID {tg_user.id}"
+    name    = " ".join(filter(None, [tg_user.first_name, tg_user.last_name])) or uname
     lines = [
-        f"<b>📋 New Forex Onboarding</b>",
-        f"",
+        "📋 <b>New Forex Onboarding Request</b>",
+        "",
         f"<b>Name:</b> {name}",
-        f"<b>Telegram:</b> {mention}",
-        f"<b>TG ID:</b> <code>{tg_id}</code>",
-        f"<b>DB uid:</b> <code>{user_id or '—'}</code>",
-        f"",
-        f"<b>Answers:</b>",
+        f"<b>Telegram:</b> {uname}",
+        f"<b>TG ID:</b> <code>{tg_user.id}</code>",
+        f"<b>DB uid:</b> <code>{user_id_db or '—'}</code>",
+        "",
+        "<b>Answers:</b>",
         f"• FP Markets acct: {answers.get('fp_markets','—')}",
         f"• cTrader linked:  {answers.get('ctrader','—')}",
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Approve", callback_data=f"fxapprove:{user_id}:{tg_id}"),
-        InlineKeyboardButton(text="❌ Deny",    callback_data=f"fxdeny:{user_id}:{tg_id}"),
-        InlineKeyboardButton(text="💬 Reply",   callback_data=f"fxreply:{tg_id}"),
+        InlineKeyboardButton(text="✅ Approve", callback_data=f"fxapprove:{user_id_db}:{tg_user.id}"),
+        InlineKeyboardButton(text="❌ Deny",    callback_data=f"fxdeny:{user_id_db}:{tg_user.id}"),
     ]])
     try:
-        await forex_bot.send_message(
+        sent = await forex_bot.send_message(
             chat_id=int(admin_chat),
             text="\n".join(lines),
             parse_mode="HTML",
             reply_markup=keyboard,
         )
+        return sent.message_id
     except Exception as e:
-        logger.warning(f"[forex_bot] admin notify failed: {e}")
+        logger.warning(f"[forex_bot] notify_admin_submission failed: {e}")
+        return None
 
 
-# ── /start — welcome ─────────────────────────────────────────────────────────
+# ── /start ────────────────────────────────────────────────────────────────────
 @forex_dp.message(Command("start"))
 async def fx_start(message: types.Message, state: FSMContext):
+    if _is_admin(message.from_user.id):
+        await message.answer(
+            "👋 <b>Admin mode.</b>\n\n"
+            "Reply to any forwarded user message in this chat to send them a private response.\n"
+            "Use the ✅ Approve / ❌ Deny buttons on submission cards to manage access.",
+            parse_mode="HTML",
+        )
+        return
+
     await state.clear()
     await message.answer(
         "👋 <b>Welcome to TradeHub Strategy!</b>\n\n"
@@ -123,8 +149,8 @@ async def fx_start(message: types.Message, state: FSMContext):
         "• Full Telegram alerts on every trade\n\n"
         f"🌐 <a href='{PORTAL_URL}'>tradehubmarkets.com</a>\n\n"
         "─────────────────────────\n\n"
-        "To get started with <b>live forex &amp; gold trading</b> through FP Markets, "
-        "I'll ask you a few quick questions.\n\n"
+        "To enable <b>live forex &amp; gold trading</b> through FP Markets, "
+        "I just need to check a couple of things.\n\n"
         "<b>Have you already opened a Standard account with FP Markets?</b>\n\n"
         f"If not, open one here first 👉 <a href='{FP_LINK}'>FP Markets — Standard account</a>\n"
         "<i>(Using our link is required for the integration to work)</i>",
@@ -135,7 +161,7 @@ async def fx_start(message: types.Message, state: FSMContext):
     await state.set_state(Onboard.q1_fp_markets)
 
 
-# ── Q1: FP Markets account? ───────────────────────────────────────────────────
+# ── Q1: FP Markets? ───────────────────────────────────────────────────────────
 @forex_dp.message(Onboard.q1_fp_markets)
 async def fx_q1(message: types.Message, state: FSMContext):
     if _is_no(message.text or ""):
@@ -143,7 +169,8 @@ async def fx_q1(message: types.Message, state: FSMContext):
         await message.answer(
             "No problem — open your free Standard account here:\n"
             f"👉 <a href='{FP_LINK}'>FP Markets — Standard account</a>\n\n"
-            "Once your account is open, come back and tap /start to continue.",
+            "Once your account is open, come back and tap /start to continue.\n\n"
+            "Feel free to message me any questions in the meantime!",
             parse_mode="HTML",
             reply_markup=_remove_keyboard(),
             disable_web_page_preview=True,
@@ -164,7 +191,7 @@ async def fx_q1(message: types.Message, state: FSMContext):
     await state.set_state(Onboard.q2_ctrader)
 
 
-# ── Q2: cTrader connected? ────────────────────────────────────────────────────
+# ── Q2: cTrader? → submit ─────────────────────────────────────────────────────
 @forex_dp.message(Onboard.q2_ctrader)
 async def fx_q2(message: types.Message, state: FSMContext):
     if _is_no(message.text or ""):
@@ -174,7 +201,8 @@ async def fx_q2(message: types.Message, state: FSMContext):
             f"1. Go to <a href='{PORTAL_URL}'>{PORTAL_URL}</a>\n"
             "2. Click the <b>Live Forex</b> tab\n"
             "3. Follow Step 3 — it takes about 30 seconds\n\n"
-            "Once connected, come back and tap /start to continue.",
+            "Come back and tap /start once it's connected.\n\n"
+            "Feel free to message me any questions in the meantime!",
             parse_mode="HTML",
             reply_markup=_remove_keyboard(),
             disable_web_page_preview=True,
@@ -184,65 +212,51 @@ async def fx_q2(message: types.Message, state: FSMContext):
         await message.answer("Please tap ✅ Yes or ❌ No.", reply_markup=_yn_keyboard())
         return
 
-    await state.update_data(ctrader="Yes ✅")
-    await message.answer(
-        "<b>What's your full name?</b>",
-        parse_mode="HTML",
-        reply_markup=_remove_keyboard(),
-    )
-    await state.set_state(Onboard.q3_name)
-
-
-# ── Q3: Name / submit ─────────────────────────────────────────────────────────
-@forex_dp.message(Onboard.q3_name)
-async def fx_q3(message: types.Message, state: FSMContext):
-    name = (message.text or "").strip()
-    if len(name) < 2:
-        await message.answer("Please enter your full name.")
-        return
-
     data = await state.get_data()
-    data["name"] = name
-    uname  = message.from_user.username or ""
-    tg_id  = message.from_user.id
+    data["ctrader"] = "Yes ✅"
+    tg_user = message.from_user
+    await state.clear()
 
     # Look up DB user
-    user_id = None
+    user_id_db = None
     try:
         from app.database import SessionLocal
         from app.models import User
         db = SessionLocal()
-        u = db.query(User).filter(User.telegram_id == str(tg_id)).first()
-        user_id = u.id if u else None
+        u = db.query(User).filter(User.telegram_id == str(tg_user.id)).first()
+        user_id_db = u.id if u else None
         db.close()
     except Exception:
         pass
 
     await message.answer(
-        f"✅ <b>Thanks, {name}!</b>\n\n"
-        "Your request has been sent to the TradeHub team. "
-        "You'll receive a message here once you're approved — usually within a few hours.\n\n"
-        "<i>Sit tight and we'll be in touch shortly! 🚀</i>",
+        "✅ <b>All set — request submitted!</b>\n\n"
+        "The TradeHub team will review your account and send you a message here once you're approved.\n\n"
+        "<i>Usually within a few hours. Feel free to send a message if you have any questions!</i>",
         parse_mode="HTML",
+        reply_markup=_remove_keyboard(),
     )
-    await state.clear()
 
-    await _notify_admin(user_id, tg_id, data, name, uname)
+    msg_id = await _notify_admin_submission(user_id_db, tg_user, data)
+    if msg_id:
+        _REPLY_MAP[msg_id] = tg_user.id
 
 
 # ── Admin: Approve ────────────────────────────────────────────────────────────
 @forex_dp.callback_query(F.data.startswith("fxapprove:"))
 async def fx_approve(cb: CallbackQuery):
-    await _safe_answer(cb)
-    if str(cb.from_user.id) != _admin_id():
+    try:
+        await cb.answer()
+    except Exception:
+        pass
+    if not _is_admin(cb.from_user.id):
         await cb.answer("⛔ Not authorised.", show_alert=True)
         return
 
-    parts = cb.data.split(":")          # fxapprove:user_id:tg_id
+    parts      = cb.data.split(":")
     db_user_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
     tg_id      = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
 
-    # Flip DB flag
     if db_user_id:
         try:
             from app.database import SessionLocal
@@ -258,29 +272,27 @@ async def fx_approve(cb: CallbackQuery):
         except Exception as e:
             logger.warning(f"[fxapprove] DB error: {e}")
 
-    # Edit admin card
     try:
-        await cb.message.edit_text(
-            cb.message.text + "\n\n✅ <b>Approved</b>",
-            parse_mode="HTML",
-        )
+        await cb.message.edit_reply_markup(reply_markup=None)
+        await cb.message.edit_text(cb.message.text + "\n\n✅ Approved", parse_mode="HTML")
     except Exception:
         pass
 
-    # DM the user
     if tg_id and forex_bot:
         try:
-            await forex_bot.send_message(
+            sent = await forex_bot.send_message(
                 chat_id=tg_id,
                 text=(
                     "✅ <b>You're approved for Live Forex trading!</b>\n\n"
-                    "Your cTrader account is now connected and authorised.\n\n"
-                    f"Head to the <b>Live Forex</b> tab at {PORTAL_URL} and set any forex, "
-                    "gold, or index strategy to <b>Live</b> — your trades will execute "
-                    "automatically on your FP Markets account. 🚀"
+                    "Your cTrader account is now authorised. Head to the <b>Live Forex</b> tab "
+                    f"at <a href='{PORTAL_URL}'>{PORTAL_URL}</a> and set any forex, gold, or index "
+                    "strategy to <b>Live</b> — trades will execute automatically on your FP Markets account. 🚀\n\n"
+                    "Message me here any time if you need help."
                 ),
                 parse_mode="HTML",
+                disable_web_page_preview=True,
             )
+            _REPLY_MAP[sent.message_id] = tg_id
         except Exception as e:
             logger.warning(f"[fxapprove] DM failed tg_id={tg_id}: {e}")
 
@@ -288,12 +300,15 @@ async def fx_approve(cb: CallbackQuery):
 # ── Admin: Deny ───────────────────────────────────────────────────────────────
 @forex_dp.callback_query(F.data.startswith("fxdeny:"))
 async def fx_deny(cb: CallbackQuery):
-    await _safe_answer(cb)
-    if str(cb.from_user.id) != _admin_id():
+    try:
+        await cb.answer()
+    except Exception:
+        pass
+    if not _is_admin(cb.from_user.id):
         await cb.answer("⛔ Not authorised.", show_alert=True)
         return
 
-    parts = cb.data.split(":")
+    parts      = cb.data.split(":")
     db_user_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
     tg_id      = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
 
@@ -311,78 +326,75 @@ async def fx_deny(cb: CallbackQuery):
             logger.warning(f"[fxdeny] DB error: {e}")
 
     try:
-        await cb.message.edit_text(
-            cb.message.text + "\n\n❌ <b>Denied</b>",
-            parse_mode="HTML",
-        )
+        await cb.message.edit_reply_markup(reply_markup=None)
+        await cb.message.edit_text(cb.message.text + "\n\n❌ Denied", parse_mode="HTML")
     except Exception:
         pass
 
     if tg_id and forex_bot:
         try:
-            await forex_bot.send_message(
+            sent = await forex_bot.send_message(
                 chat_id=tg_id,
                 text=(
                     "❌ <b>Not approved yet.</b>\n\n"
                     "Please make sure you opened your FP Markets account through our affiliate link — "
                     "this is required for the integration to work.\n\n"
                     f"👉 <a href='{FP_LINK}'>Open FP Markets via our link</a>\n\n"
-                    "Once done, reconnect cTrader in the Live Forex tab and tap /start to go through the steps again."
+                    "Once done, reconnect cTrader in the Live Forex tab and tap /start to try again.\n"
+                    "Message me here if you have any questions!"
                 ),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )
+            _REPLY_MAP[sent.message_id] = tg_id
         except Exception as e:
             logger.warning(f"[fxdeny] DM failed tg_id={tg_id}: {e}")
 
 
-# ── Admin: Reply (step 1 — click button) ─────────────────────────────────────
-@forex_dp.callback_query(F.data.startswith("fxreply:"))
-async def fx_reply_init(cb: CallbackQuery, state: FSMContext):
-    await _safe_answer(cb)
-    if str(cb.from_user.id) != _admin_id():
-        await cb.answer("⛔ Not authorised.", show_alert=True)
+# ── Admin: reply to forwarded message → route to user ────────────────────────
+@forex_dp.message(F.reply_to_message)
+async def fx_admin_reply(message: types.Message):
+    if not _is_admin(message.from_user.id):
+        return  # only admin replies are routed
+    replied_id = message.reply_to_message.message_id
+    user_tg_id = _REPLY_MAP.get(replied_id)
+    if not user_tg_id or not forex_bot:
+        # Admin replied to something we don't have a mapping for — ignore silently
         return
-
-    tg_id = int(cb.data.split(":")[1])
-    await state.update_data(reply_to_tg_id=tg_id)
-    await state.set_state(AdminReply.waiting_for_message)
-    await cb.message.answer(
-        f"✏️ <b>Type your reply to user <code>{tg_id}</code></b>\n\n"
-        "Send any message and it will be delivered to them privately.\n"
-        "Send /cancel to cancel.",
-        parse_mode="HTML",
-    )
-
-
-# ── Admin: Reply (step 2 — send the message) ─────────────────────────────────
-@forex_dp.message(AdminReply.waiting_for_message)
-async def fx_reply_send(message: types.Message, state: FSMContext):
-    if str(message.from_user.id) != _admin_id():
-        return
-    if message.text and message.text.strip() == "/cancel":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=_remove_keyboard())
-        return
-
-    data = await state.get_data()
-    tg_id = data.get("reply_to_tg_id")
-    if not tg_id or not forex_bot:
-        await state.clear()
-        await message.answer("❌ Could not find the user to reply to.")
-        return
-
     try:
-        await forex_bot.send_message(
-            chat_id=tg_id,
-            text=f"💬 <b>Message from TradeHub Strategy:</b>\n\n{message.text}",
+        sent = await forex_bot.send_message(
+            chat_id=user_tg_id,
+            text=f"💬 <b>TradeHub Strategy:</b>\n\n{message.text or message.caption or ''}",
             parse_mode="HTML",
         )
-        await message.answer(f"✅ Reply sent to user <code>{tg_id}</code>.", parse_mode="HTML")
+        # Map the confirmation message so admin can continue the thread
+        _REPLY_MAP[sent.message_id] = user_tg_id
+        await message.reply("✅ Sent", parse_mode="HTML")
     except Exception as e:
-        await message.answer(f"❌ Failed to send: {e}")
+        await message.reply(f"❌ Failed: {e}")
 
-    await state.clear()
+
+# ── User: any free-form message → forward to admin ───────────────────────────
+@forex_dp.message()
+async def fx_user_message(message: types.Message, state: FSMContext):
+    # Skip if admin (they're managing, not chatting as user)
+    if _is_admin(message.from_user.id):
+        return
+    # Skip if user is mid-questionnaire (FSM handlers take priority above)
+    current = await state.get_state()
+    if current is not None:
+        return
+
+    text = message.text or message.caption or "[non-text message]"
+    msg_id = await _forward_to_admin(message.from_user, text)
+    if msg_id:
+        _REPLY_MAP[msg_id] = message.from_user.id
+
+    # Acknowledge to user so they know it was received
+    await message.answer(
+        "📨 Message received — we'll get back to you shortly!",
+        parse_mode="HTML",
+    )
 
 
 # ── Start function (called from main.py) ──────────────────────────────────────
@@ -395,7 +407,7 @@ async def start_forex_bot():
         await forex_bot.delete_webhook(drop_pending_updates=True)
         from aiogram.types import BotCommand
         await forex_bot.set_my_commands([
-            BotCommand(command="start", description="Start onboarding for live forex trading"),
+            BotCommand(command="start", description="Get started with live forex trading"),
         ])
     except Exception as e:
         logger.warning(f"[forex_bot] setup: {e}")
