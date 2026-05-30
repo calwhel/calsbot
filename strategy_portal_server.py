@@ -520,6 +520,43 @@ async def _tg_send_msg(chat_id: str, text: str):
         )
 
 
+async def _notify_admin_forex_connect(user_id: int, name: str, uname: str, tg_id: str, account_id: str):
+    """Send admin (@bu11dogg) a Telegram message with Approve/Deny buttons when a user connects cTrader."""
+    from app.config import settings
+    admin_chat = getattr(settings, "OWNER_TELEGRAM_ID", None)
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not admin_chat or not token:
+        return
+    mention = f"@{uname}" if uname else (f"TG {tg_id}" if tg_id else f"uid={user_id}")
+    text = (
+        f"<b>🔗 cTrader Connected — Forex Approval Needed</b>\n\n"
+        f"User:        {name} ({mention})\n"
+        f"cTrader Acct: <code>{account_id}</code>\n"
+        f"DB user_id:  <code>{user_id}</code>\n\n"
+        f"<i>Approve to enable live forex trading for this user.</i>"
+    )
+    keyboard = {
+        "inline_keyboard": [[
+            {"text": "✅ Approve", "callback_data": f"forex_approve:{user_id}"},
+            {"text": "❌ Deny",    "callback_data": f"forex_deny:{user_id}"},
+        ]]
+    }
+    try:
+        import json as _json
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": admin_chat,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "reply_markup": keyboard,
+                },
+            )
+    except Exception as e:
+        logger.warning(f"[forex-connect notify] {e}")
+
+
 async def _notify_admin_go_live(tg_id: str, name: str, uname: str, uid: str, cfg: dict):
     """Alert admin via Telegram when a user promotes a strategy to live."""
     from app.config import settings
@@ -9139,7 +9176,15 @@ async def api_ctrader_callback(
         prefs.ctrader_account_id    = str(chosen["ctidTraderAccountId"]) if chosen else ""
         db.commit()
 
-        return RedirectResponse(url="/?ctrader_connected=1")
+        # Notify admin with inline approve/deny buttons
+        acct_id   = str(chosen["ctidTraderAccountId"]) if chosen else "unknown"
+        tg_id_str = str(user.telegram_id) if getattr(user, "telegram_id", None) else ""
+        uname_str = getattr(user, "username", "") or ""
+        asyncio.ensure_future(
+            _notify_admin_forex_connect(user.id, user.name or user.first_name or "User", uname_str, tg_id_str, acct_id)
+        )
+
+        return RedirectResponse(url="/app#live-forex")
     except Exception as e:
         logger.error(f"[cTrader callback] {e}")
         return RedirectResponse(url=f"/?ctrader_error=callback_failed")

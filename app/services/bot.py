@@ -17052,6 +17052,99 @@ async def telegram_conflict_watcher():
         await asyncio.sleep(1)
 
 
+@dp.callback_query(F.data.startswith("forex_approve:"))
+async def handle_forex_approve(callback: CallbackQuery):
+    """Admin approves a user for live forex trading."""
+    await safe_answer_callback(callback)
+    admin_tg_id = str(callback.from_user.id)
+    # Only the owner can approve
+    from app.config import settings as _s
+    if admin_tg_id != str(getattr(_s, "OWNER_TELEGRAM_ID", "")):
+        await callback.message.answer("⛔ Not authorised.")
+        return
+    target_user_id = int(callback.data.split(":", 1)[1])
+    db = SessionLocal()
+    try:
+        from app.models import UserPreference, User
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == target_user_id).first()
+        if not prefs:
+            prefs = UserPreference(user_id=target_user_id)
+            db.add(prefs)
+        prefs.forex_approved = True
+        db.commit()
+        # Update the button message
+        await callback.message.edit_text(
+            callback.message.text + "\n\n✅ <b>Approved</b> by you.",
+            parse_mode="HTML",
+        )
+        # DM the user if they have a telegram_id
+        user = db.query(User).filter(User.id == target_user_id).first()
+        tg_id = getattr(user, "telegram_id", None) if user else None
+        if tg_id:
+            try:
+                await bot.send_message(
+                    chat_id=int(tg_id),
+                    text=(
+                        "✅ <b>You're approved for Live Forex trading!</b>\n\n"
+                        "Your cTrader account is now connected and authorised. "
+                        "Head to the <b>Live Forex</b> tab in your TradeHub portal to get started.\n\n"
+                        "Set any forex/gold/index strategy to <b>Live</b> and it will execute real trades on your FP Markets account."
+                    ),
+                    parse_mode="HTML",
+                )
+            except Exception as _e:
+                logger.warning(f"[forex_approve] DM to user {tg_id} failed: {_e}")
+    except Exception as e:
+        logger.error(f"[forex_approve callback] {e}")
+        await callback.message.answer(f"Error: {e}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("forex_deny:"))
+async def handle_forex_deny(callback: CallbackQuery):
+    """Admin denies a user for live forex trading."""
+    await safe_answer_callback(callback)
+    admin_tg_id = str(callback.from_user.id)
+    from app.config import settings as _s
+    if admin_tg_id != str(getattr(_s, "OWNER_TELEGRAM_ID", "")):
+        await callback.message.answer("⛔ Not authorised.")
+        return
+    target_user_id = int(callback.data.split(":", 1)[1])
+    db = SessionLocal()
+    try:
+        from app.models import UserPreference, User
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == target_user_id).first()
+        if prefs:
+            prefs.forex_approved = False
+            db.commit()
+        await callback.message.edit_text(
+            callback.message.text + "\n\n❌ <b>Denied</b> by you.",
+            parse_mode="HTML",
+        )
+        user = db.query(User).filter(User.id == target_user_id).first()
+        tg_id = getattr(user, "telegram_id", None) if user else None
+        if tg_id:
+            try:
+                await bot.send_message(
+                    chat_id=int(tg_id),
+                    text=(
+                        "❌ <b>Forex trading request not approved yet.</b>\n\n"
+                        "Make sure you opened your FP Markets account through our affiliate link "
+                        "so the integration is properly linked. "
+                        "Message @bu11dogg directly if you have any questions."
+                    ),
+                    parse_mode="HTML",
+                )
+            except Exception as _e:
+                logger.warning(f"[forex_deny] DM to user {tg_id} failed: {_e}")
+    except Exception as e:
+        logger.error(f"[forex_deny callback] {e}")
+        await callback.message.answer(f"Error: {e}")
+    finally:
+        db.close()
+
+
 async def start_bot():
     logger.info("Starting Telegram bot...")
     
