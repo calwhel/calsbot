@@ -10230,6 +10230,7 @@ async def chat_builder_api(request: Request):
             "price momentum / volume spike breakouts",
             "Ichimoku cloud breakout or TK cross",
             "MACD divergence or zero-cross setups",
+            "intraday VWAP bands / VWAP bias + RVOL + ATR volatility filters",
         ],
         "forex": [
             "ICT killzone (London / NY / Asian KZ, Silver Bullet, Power of 3)",
@@ -10247,9 +10248,11 @@ async def chat_builder_api(request: Request):
             "momentum continuation (EMA ribbon + ADX + SuperTrend)",
             "gap fade or gap follow strategy",
             "squeeze / compression breakout (BB inside Keltner)",
+            "VWAP bias + VWAP band fades with RVOL confirmation",
         ],
         "index": [
-            "VWAP mean reversion intraday",
+            "VWAP mean reversion intraday (VWAP bands + RVOL)",
+            "VWAP bias trend-day rider with ATR volatility filter",
             "ORB breakout on session open",
             "Ichimoku cloud breakout or continuation",
             "trend-following with EMA ribbon + ADX",
@@ -10331,12 +10334,15 @@ IDEA BANK — pitch these when user is open:
   "SuperTrend continuation" — SuperTrend bullish flip on 1h + MACD bullish cross on 1h + price above VWAP. LONG, TP1 4% / TP2 7% / SL 2%, trailing stop after TP1 hit. Clean trend entry after pullback. Works well on high-beta names.
   "Squeeze breakout" — BB inside Keltner squeeze on 1h + volume spike 2×, confirmed by SuperTrend direction on 4h. LONG/SHORT, TP1 5% / TP2 9% / SL 2%. Plays the compression → explosion setup. Best after tight consolidation.
   "Gap fade" — price_momentum 4%+ gap up at open + RSI > 72 on 15m + EMA 50 bearish on 1h. SHORT, TP1 3% / SL 1.5%. Fades overextended gap opens — no TP2 since gap fades are fast moves. Works on earnings-adjacent days.
+  "VWAP reclaim" — vwap_bias above (price reclaims session VWAP) on 5m + rvol high (≥1.5×) + market structure BOS bullish on 5m. LONG, TP1 2.5% / SL 1.2%, breakeven at 70%. The opening-drive reclaim — strongest with real relative volume behind it. AAPL/NVDA/SPY.
+  "Band fade to VWAP" — vwap_bands above_upper (price stretched to +2 SD) on 5m + RSI > 72 on 5m. SHORT, TP1 1.8% / SL 1%. Fades intraday overextension back to the VWAP mean. Best on high-beta names mid-session.
 
 CONFIRMATION PAIRINGS:
-  Breakout → add: volume spike 1.5×+ and ATR expanding
+  Breakout → add: volume spike 1.5×+ and ATR expanding (or atr_filter expanding)
   Mean reversion → add: candlestick reversal (hammer/pin bar) and RSI divergence
-  Trend follow → add: price above 200 SMA and ADX trending
-  ORB → add: price above VWAP (long) or below VWAP (short)"""
+  Trend follow → add: price above 200 SMA and ADX trending + vwap_bias above
+  ORB → add: vwap_bias above (long) or below (short) + rvol high
+  Any intraday → add: rvol high (real participation) + atr_filter volatile (enough range)"""
 
     elif asset_class == "index":
         asset_rules = f"""
@@ -10353,12 +10359,14 @@ IDEA BANK — pitch these when user is open:
   "Keltner expansion" — BB/Keltner squeeze fires + volume spike 2× + SuperTrend bullish flip. BOTH, TP 3% / SL 1.5%. Post-compression volatility explosion. Works perfectly on index futures.
   "Ichimoku cloud ride" — price above Ichimoku cloud + TK cross bullish + ADX trending. LONG, TP 5% / SL 2.5%. Ichimoku is unusually reliable on daily/4h index charts. Longer hold, low noise.
   "Oversold index reversal" — RSI < 32 on 4h + price at major support + bullish divergence (MACD). LONG, TP 3.5% / SL 1.5%. Index dips are for buying — institutions accumulate at oversold extremes.
+  "VWAP band scalp" — vwap_bands below_lower (price tags −2 SD VWAP band) on 5m + rvol high (≥1.5×). LONG, TP 1.2% / SL 0.6%. The purest intraday index mean-reversion — SPX/NDX respect VWAP bands tightly. High frequency.
+  "VWAP trend hold" — vwap_bias above (price holding above VWAP) on 5m + atr_filter volatile + EMA ribbon bullish on 15m. LONG, TP 2.5% / SL 1.2%, breakeven at 70%. Rides trend days from the long side only while price respects VWAP.
 
 CONFIRMATION PAIRINGS:
-  Breakout → add: volume spike and ATR expanding
-  Trend → add: price above 200 EMA and ADX > 25
-  Reversal → add: RSI divergence and candlestick reversal
-  VWAP scalp → add: price at key S/R level"""
+  Breakout → add: volume spike and ATR expanding (or atr_filter expanding)
+  Trend → add: price above 200 EMA and ADX > 25 + vwap_bias above
+  Reversal → add: RSI divergence and candlestick reversal + vwap_bands tag
+  VWAP scalp → add: rvol high (real volume) + price at key S/R level"""
 
     else:  # crypto
         asset_rules = """
@@ -10368,6 +10376,12 @@ CRYPTO RULES:
 - BTC regime filter: use "bullish" for long-only strategies, "bearish" for shorts, null for BOTH.
 - Funding rate signals are uniquely powerful for crypto — negative funding = hidden long opportunity.
 - Open interest (OI) rising + price rising = strong institutional accumulation.
+
+SIGNAL RECOGNITION (day-trader filters):
+  relative volume / RVOL / unusual volume / volume vs average → rvol
+  ATR filter / enough volatility / not dead tape / volatility gate / expanding ATR → atr_filter
+  VWAP bands / VWAP standard deviation / ±2 SD VWAP / fade VWAP band → vwap_bands
+  above VWAP / below VWAP / VWAP bias / longs only above VWAP → vwap_bias
 
 QUICK START RECIPES — use these when the user wants something simple, fast-firing, or says "quick reversal / RSI / EMA / fires often / active / scalp / beginner":
   "RSI scalp" — RSI < 30 on 5m, NO confirmations (none/none). BOTH, TP1 2% / SL 1%, 10×, max 8 trades/day. Fires 5-10× per day on active alts. Dead simple — RSI oversold is the single entry trigger.
@@ -10390,6 +10404,8 @@ IDEA BANK — pitch these when user is open:
   "Funding rate reversal" — funding < -0.08% (shorts paying longs) + RSI < 35 on 1h + BB lower touch on 4h. LONG, TP1 6% / TP2 10% / SL 3%, 8×. MTF oversold with contrarian funding — when everyone is short and paying for it, fade them.
   "Ichimoku cloud breakout" — price breaks above Ichimoku cloud on 4h + TK cross bullish on 4h + OI rising + EMA ribbon aligned bullish on 1h. LONG, TP1 8% / TP2 13% / SL 4%, 6×, trailing stop after TP1. Ichimoku on 4h filters 80% of noise — only fires on real institutional breakouts.
   "BTC breakout altcoin chase" — market structure BOS bullish on BTC 1h → scan all alts for EMA ribbon aligning bullish on 1h + volume spike 1.5×. LONG, TP1 7% / TP2 12% / SL 3%, 10×, breakeven at 65%. BTC sets the trend; alts follow with leverage.
+  "VWAP band fade" — vwap_bands below_lower (price tags −2 SD VWAP band) on 5m + rvol high (≥1.5× relative volume) confirming the flush. LONG, TP1 2% / SL 1%, 12×, max 8 trades/day. Classic intraday mean reversion back to VWAP — RVOL filters fake low-liquidity wicks.
+  "Trend-day VWAP rider" — vwap_bias above (price holding above session VWAP) on 5m + atr_filter volatile (enough range) + EMA ribbon bullish on 15m. LONG, TP1 3% / TP2 5% / SL 1.5%, 10×, breakeven at 70%. Only longs above VWAP on volatile days — the #1 intraday discipline rule.
 
 CONFIRMATION PAIRINGS:
   RSI/MACD → add: EMA direction filter (price above 50 EMA for longs) on higher TF + ADX trending
@@ -10398,7 +10414,10 @@ CONFIRMATION PAIRINGS:
   Trend (EMA ribbon, SuperTrend) → add: ADX > 25 on 1h + SuperTrend aligned on 4h + BTC regime = bullish
   Mean reversion (BB lower, RSI<30) → add: StochRSI bullish cross on lower TF + candlestick reversal
   Funding fade → add: BB lower touch on 4h and RSI divergence on 1h
-  SMC (OB, CHoCH, BOS, IFVG) → add: OI rising + session timing (London/NY open)"""
+  SMC (OB, CHoCH, BOS, IFVG) → add: OI rising + session timing (London/NY open)
+  Any intraday entry → add: rvol high (real volume) + vwap_bias (trade with the VWAP side)
+  Breakout/momentum → add: atr_filter volatile or expanding (skip dead, low-range tape)
+  Mean reversion scalp → add: vwap_bands below_lower/above_upper for the precise band tag"""
 
     # Pre-compute improve-mode block BEFORE the f-string — nested f"""..."""
     # inside an outer f"""...""" is a SyntaxError in Python 3.11.
@@ -10645,6 +10664,25 @@ CONDITION REFERENCE (use EXACT type/name/field names from this list):
 
 ━━━ TYPE: "divergence" ━━━
 { type:"divergence", indicator:"rsi"|"macd", timeframe, condition:"bullish"|"bearish", label }
+
+━━━ TYPE: "atr_filter" ━━━  (intraday volatility gate — direction-neutral confirmation)
+{ type:"atr_filter", condition:"volatile"|"expanding", min_atr_pct:FLOAT, period:INT, lookback:INT, timeframe, label }
+  volatile = ATR ≥ min_atr_pct % of price (default 0.3) · expanding = ATR rising vs lookback bars ago (default 5)
+  → Use to avoid dead, low-range tape. Pairs with breakouts/momentum.
+
+━━━ TYPE: "rvol" ━━━  (relative volume — current bar volume vs recent average; direction-neutral)
+{ type:"rvol", condition:"high"|"low", threshold:FLOAT, period:INT, timeframe, label }
+  high = RVOL ≥ threshold (default 1.5) · low = RVOL < threshold · period = bars to average (default 20)
+  → "high" confirms real participation behind a move.
+
+━━━ TYPE: "vwap_bands" ━━━  (session VWAP ± standard-deviation bands)
+{ type:"vwap_bands", condition:"below_lower"|"above_upper"|"inside", num_std:FLOAT, timeframe, label }
+  below_lower = price ≤ VWAP−N·SD (oversold/LONG) · above_upper = price ≥ VWAP+N·SD (overbought/SHORT) · inside = between bands
+  num_std = band width in standard deviations (default 2.0). Classic intraday mean-reversion scalp.
+
+━━━ TYPE: "vwap_bias" ━━━  (directional filter — price above/below session VWAP)
+{ type:"vwap_bias", condition:"above"|"below", timeframe, label }
+  above = price > VWAP (LONG bias) · below = price < VWAP (SHORT bias). The core intraday discipline filter.
 
 ━━━ TYPE: "consecutive_candles" ━━━
 { type:"consecutive_candles", timeframe, count:INT, direction:"green"|"red", label }

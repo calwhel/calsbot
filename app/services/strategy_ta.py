@@ -2916,6 +2916,206 @@ async def eval_vwap_cross(
     )
 
 
+async def _session_vwap_stats(
+    symbol: str, tf: str, http_client, cache: Dict
+) -> Optional[Tuple[float, float, float]]:
+    """Compute session VWAP, its volume-weighted standard deviation, and the
+    last closed price for `symbol` on timeframe `tf`.
+
+    Returns (vwap, sd, last_close) or None when data is insufficient.  Mirrors
+    the session-slicing logic in `eval_vwap_cross` (UTC-midnight anchored,
+    excludes the forming candle).
+    """
+    TF_MIN = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240}
+    tf_mins = TF_MIN.get(tf, 5)
+    bars_per_day = max(50, 1440 // tf_mins + 20)
+
+    klines = await _get_klines(symbol, tf, bars_per_day, http_client, cache)
+    if not klines or len(klines) < 5:
+        return None
+
+    today_utc = datetime.utcnow().date()
+    def _candle_utc(k) -> datetime:
+        ts = int(k[0])
+        return datetime.utcfromtimestamp(ts / 1000 if ts > 1e10 else ts)
+
+    session = [k for k in klines if _candle_utc(k).date() >= today_utc]
+    if len(session) < 3:
+        session = klines[-min(len(klines), 60):]
+
+    closed = session[:-1]  # exclude forming candle
+    if len(closed) < 2:
+        return None
+
+    cum_tpv = 0.0; cum_vol = 0.0
+    tps = []
+    for k in closed:
+        h, l, c, v = float(k[2]), float(k[3]), float(k[4]), float(k[5])
+        tp = (h + l + c) / 3
+        cum_tpv += tp * v
+        cum_vol += v
+        tps.append((tp, v))
+    if cum_vol <= 0:
+        return None
+    vwap = cum_tpv / cum_vol
+
+    # Volume-weighted variance of typical price around VWAP.
+    var = sum(v * (tp - vwap) ** 2 for tp, v in tps) / cum_vol
+    sd = math.sqrt(var) if var > 0 else 0.0
+    last_close = float(closed[-1][4])
+    return vwap, sd, last_close
+
+
+async def eval_atr_filter(
+    cond: Dict, symbol: str, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`atr_filter` — Volatility gate using Average True Range.
+
+    cfg.condition  : 'volatile' (ATR% ≥ min_atr_pct) | 'expanding'
+                     (ATR rising vs `lookback` bars ago).  Default 'volatile'.
+    cfg.min_atr_pct: minimum ATR as a percentage of price (default 0.3).
+    cfg.period     : ATR period (default 14).
+    cfg.lookback   : bars back for the 'expanding' comparison (default 5).
+    cfg.timeframe  : kline TF (default '5m').
+    """
+    condition   = (cond.get("condition") or "volatile").lower()
+    min_atr_pct = float(cond.get("min_atr_pct") or 0.3)
+    period      = int(cond.get("period") or 14)
+    lookback    = int(cond.get("lookback") or 5)
+    tf          = cond.get("timeframe", "5m")
+
+    need = period + lookback + 10
+    klines = await _get_klines(symbol, tf, need, http_client, cache)
+    if not klines or len(klines) < period + 2:
+        return False, "ATR Filter: insufficient data"
+
+    closed = klines[:-1]  # exclude forming candle
+    atrs = _atr_values(closed, period)
+    if not atrs:
+        return False, "ATR Filter: ATR unavailable"
+
+    last_close = float(closed[-1][4])
+    atr_now = atrs[-1]
+    atr_pct = (atr_now / last_close * 100) if last_close else 0.0
+
+    if condition == "expanding":
+        if len(atrs) <= lookback:
+            return False, "ATR Filter: not enough ATR history"
+        atr_prev = atrs[-1 - lookback]
+        fired = atr_now > atr_prev
+        return fired, (
+            f"ATR Filter: ATR {atr_now:.6g} vs {lookback} bars ago {atr_prev:.6g} "
+            f"→ {'expanding' if fired else 'flat/contracting'}"
+        )
+
+    # default: 'volatile'
+    fired = atr_pct >= min_atr_pct
+    return fired, (
+        f"ATR Filter: ATR={atr_pct:.2f}% (need ≥ {min_atr_pct}%) "
+        f"→ {'volatile' if fired else 'too quiet'}"
+    )
+
+
+async def eval_rvol(
+    cond: Dict, symbol: str, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`rvol` — Relative Volume: latest closed bar volume vs its recent average.
+
+    cfg.condition : 'high' (RVOL ≥ threshold) | 'low' (RVOL < threshold).
+                    Default 'high'.
+    cfg.threshold : RVOL multiple (default 1.5).
+    cfg.period    : bars to average for the baseline (default 20).
+    cfg.timeframe : kline TF (default '5m').
+    """
+    condition = (cond.get("condition") or "high").lower()
+    threshold = float(cond.get("threshold") or 1.5)
+    period    = int(cond.get("period") or 20)
+    tf        = cond.get("timeframe", "5m")
+
+    need = period + 5
+    klines = await _get_klines(symbol, tf, need, http_client, cache)
+    if not klines or len(klines) < period + 2:
+        return False, "RVOL: insufficient data"
+
+    closed = klines[:-1]  # exclude forming candle
+    vols = [float(k[5]) for k in closed]
+    last_vol = vols[-1]
+    baseline = vols[-period - 1:-1] if len(vols) > period else vols[:-1]
+    avg = sum(baseline) / len(baseline) if baseline else 0.0
+    if avg <= 0:
+        return False, "RVOL: zero baseline volume"
+
+    rvol = last_vol / avg
+    if condition == "low":
+        fired = rvol < threshold
+    else:
+        fired = rvol >= threshold
+    return fired, (
+        f"RVOL={rvol:.2f}× ({'≥' if condition != 'low' else '<'} {threshold}×) "
+        f"→ {'✓' if fired else '✗'}"
+    )
+
+
+async def eval_vwap_bands(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`vwap_bands` — Session VWAP ± standard-deviation bands.
+
+    cfg.condition : 'below_lower' (price ≤ VWAP − N·SD, oversold/long bias)
+                  | 'above_upper' (price ≥ VWAP + N·SD, overbought/short bias)
+                  | 'inside'      (price between the bands).  Default 'below_lower'.
+    cfg.num_std   : band width in standard deviations (default 2.0).
+    cfg.timeframe : kline TF (default '5m').
+    """
+    condition = (cond.get("condition") or "below_lower").lower()
+    num_std   = float(cond.get("num_std") or 2.0)
+    tf        = cond.get("timeframe", "5m")
+
+    stats = await _session_vwap_stats(symbol, tf, http_client, cache)
+    if stats is None:
+        return False, "VWAP Bands: insufficient data"
+    vwap, sd, last_close = stats
+    price = current_price or last_close
+    upper = vwap + num_std * sd
+    lower = vwap - num_std * sd
+
+    if condition == "above_upper":
+        fired = price >= upper
+    elif condition == "inside":
+        fired = lower < price < upper
+    else:  # below_lower
+        fired = price <= lower
+    return fired, (
+        f"VWAP Bands: price={price:.6g} VWAP={vwap:.6g} "
+        f"[{lower:.6g} … {upper:.6g}] ±{num_std}σ → {'✓' if fired else '✗'} ({condition})"
+    )
+
+
+async def eval_vwap_bias(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`vwap_bias` — Directional filter: price above/below session VWAP.
+
+    cfg.condition : 'above' (price > VWAP, long bias) | 'below' (short bias).
+                    Default 'above'.
+    cfg.timeframe : kline TF (default '5m').
+    """
+    condition = (cond.get("condition") or "above").lower()
+    tf        = cond.get("timeframe", "5m")
+
+    stats = await _session_vwap_stats(symbol, tf, http_client, cache)
+    if stats is None:
+        return False, "VWAP Bias: insufficient data"
+    vwap, _sd, last_close = stats
+    price = current_price or last_close
+
+    fired = price > vwap if condition == "above" else price < vwap
+    return fired, (
+        f"VWAP Bias: price={price:.6g} {'>' if condition == 'above' else '<'} "
+        f"VWAP={vwap:.6g} → {'✓' if fired else '✗'} ({condition} bias)"
+    )
+
+
 async def eval_stochastic(
     cond: Dict, symbol: str, http_client, cache: Dict
 ) -> Tuple[bool, str]:
@@ -3262,6 +3462,14 @@ async def evaluate_strategy_conditions(
                 return await eval_opening_range_break(cond, symbol, price, http_client, cache)
             elif ctype == "vwap_cross":
                 return await eval_vwap_cross(cond, symbol, price, http_client, cache)
+            elif ctype == "atr_filter":
+                return await eval_atr_filter(cond, symbol, http_client, cache)
+            elif ctype == "rvol":
+                return await eval_rvol(cond, symbol, http_client, cache)
+            elif ctype == "vwap_bands":
+                return await eval_vwap_bands(cond, symbol, price, http_client, cache)
+            elif ctype == "vwap_bias":
+                return await eval_vwap_bias(cond, symbol, price, http_client, cache)
             elif ctype == "stochastic":
                 return await eval_stochastic(cond, symbol, http_client, cache)
             elif ctype == "fx_po3":

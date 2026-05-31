@@ -133,6 +133,36 @@ Timeframes: 1m | 3m | 5m | 15m | 30m | 1h | 4h | 1d
     {"type":"indicator","name":"squeeze","condition":"firing","timeframe":"15m"}
     conditions: firing | on | off | bull_mom | bear_mom
 
+── DAY-TRADER FILTERS (intraday volatility / volume / VWAP) ────────────────────
+These are dedicated top-level types (NOT under "indicator"). Prefer them when the
+user talks about intraday volatility gates, relative volume, or VWAP bands/bias.
+
+  ATR Filter (volatility gate — only trade when there's enough range)
+    {"type":"atr_filter","condition":"volatile","min_atr_pct":0.3,"period":14,"timeframe":"5m"}
+    {"type":"atr_filter","condition":"expanding","period":14,"lookback":5,"timeframe":"5m"}
+    conditions: volatile (ATR ≥ min_atr_pct % of price) | expanding (ATR rising vs lookback bars ago)
+    min_atr_pct: minimum ATR as a % of price (default 0.3). Direction-neutral — use as a confirmation.
+    → Kills dead-tape entries. Great confirmation for breakout / momentum day-trade setups.
+
+  Relative Volume (RVOL — current bar volume vs its recent average)
+    {"type":"rvol","condition":"high","threshold":1.5,"period":20,"timeframe":"5m"}
+    conditions: high (RVOL ≥ threshold) | low (RVOL < threshold)
+    threshold: RVOL multiple (default 1.5). period: bars to average (default 20). Direction-neutral.
+    → "high" confirms real participation behind a move. Pairs with breakouts and ORB.
+
+  VWAP Bands (session VWAP ± standard-deviation bands)
+    {"type":"vwap_bands","condition":"below_lower","num_std":2.0,"timeframe":"5m"}
+    conditions: below_lower (price ≤ VWAP − N·SD → oversold/LONG bias) |
+                above_upper (price ≥ VWAP + N·SD → overbought/SHORT bias) |
+                inside (price between the bands)
+    num_std: band width in standard deviations (default 2.0).
+    → Intraday mean-reversion: fade +2SD short, buy −2SD long. The classic VWAP-band scalp.
+
+  VWAP Bias (directional filter — price above/below session VWAP)
+    {"type":"vwap_bias","condition":"above","timeframe":"5m"}
+    conditions: above (price > VWAP → LONG bias) | below (price < VWAP → SHORT bias)
+    → Pure directional filter. "Longs only above VWAP" is the #1 intraday discipline rule.
+
 ── PRICE MOMENTUM ─────────────────────────────────────────────────────────────
 {"type":"price_momentum","window_minutes":10,"operator":"gt","value":8,"direction":"up"}
 direction: up | down | any

@@ -1082,6 +1082,123 @@ function renderKnobs(
       );
     }
 
+    case 'atr_filter': {
+      const condOpts: ChipOption<string>[] = [
+        { value: 'volatile',  label: '⚡ Volatile (ATR% ≥ min)' },
+        { value: 'expanding', label: '📈 Expanding vs N bars ago' },
+      ];
+      const cond = (cfg.condition as string) || 'volatile';
+      return (
+        <View>
+          <Section label="Condition" compact={compact}>
+            <ChipRow options={condOpts}
+              value={cond}
+              onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="ATR period"
+            value={cfg.period ?? 14}
+            onChange={(v) => set({ period: v })}
+            min={5} max={50} step={1}
+            presets={[7, 14, 21]}
+            hint="Lookback for the Average True Range"
+          />
+          {cond === 'volatile' ? (
+            <Stepper
+              label="Min ATR % of price"
+              value={cfg.min_atr_pct ?? 0.3}
+              onChange={(v) => set({ min_atr_pct: v })}
+              min={0.05} max={5} step={0.05} unit="%" decimals={2}
+              presets={[0.2, 0.3, 0.5, 1]}
+              hint="Only trade when ATR is at least this % of price"
+            />
+          ) : (
+            <Stepper
+              label="Compare to N bars ago"
+              value={cfg.lookback ?? 5}
+              onChange={(v) => set({ lookback: v })}
+              min={1} max={30} step={1}
+              presets={[3, 5, 10]}
+              hint="ATR must be higher than it was this many bars ago"
+            />
+          )}
+        </View>
+      );
+    }
+
+    case 'rvol': {
+      const condOpts: ChipOption<string>[] = [
+        { value: 'high', label: '📢 High (≥ threshold)' },
+        { value: 'low',  label: '🔇 Low (< threshold)' },
+      ];
+      return (
+        <View>
+          <Section label="Condition" compact={compact}>
+            <ChipRow options={condOpts}
+              value={(cfg.condition as string) || 'high'}
+              onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="RVOL threshold"
+            value={cfg.threshold ?? 1.5}
+            onChange={(v) => set({ threshold: v })}
+            min={0.5} max={10} step={0.1} unit="×" decimals={1}
+            presets={[1.2, 1.5, 2, 3]}
+            hint="Current volume vs the average (1.5× = 50% above normal)"
+          />
+          <Stepper
+            label="Average period"
+            value={cfg.period ?? 20}
+            onChange={(v) => set({ period: v })}
+            min={5} max={100} step={1}
+            presets={[10, 20, 50]}
+            hint="Bars used for the average-volume baseline"
+          />
+        </View>
+      );
+    }
+
+    case 'vwap_bands': {
+      const condOpts: ChipOption<string>[] = [
+        { value: 'below_lower', label: '📉 At/below lower band (long)' },
+        { value: 'above_upper', label: '📈 At/above upper band (short)' },
+        { value: 'inside',      label: '↔ Inside the bands' },
+      ];
+      return (
+        <View>
+          <Section label="Condition" compact={compact}>
+            <ChipRow options={condOpts}
+              value={(cfg.condition as string) || 'below_lower'}
+              onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="Band width (std dev)"
+            value={cfg.num_std ?? 2.0}
+            onChange={(v) => set({ num_std: v })}
+            min={0.5} max={4} step={0.1} unit="σ" decimals={1}
+            presets={[1, 1.5, 2, 2.5]}
+            hint="VWAP ± this many standard deviations"
+          />
+        </View>
+      );
+    }
+
+    case 'vwap_bias': {
+      const condOpts: ChipOption<string>[] = [
+        { value: 'above', label: '🟢 Above VWAP (long bias)' },
+        { value: 'below', label: '🔴 Below VWAP (short bias)' },
+      ];
+      return (
+        <View>
+          <Section label="Condition" compact={compact}>
+            <ChipRow options={condOpts}
+              value={(cfg.condition as string) || 'above'}
+              onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+        </View>
+      );
+    }
+
     default:
       return null;
   }

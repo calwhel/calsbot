@@ -4221,6 +4221,10 @@ function condHtml(c){
   else if(t==='support_resistance')desc=`S/R: ${(c.condition||'').replace(/_/g,' ')} (±${c.tolerance_pct||1}%)`;
   else if(t==='fvg')desc=`${c.direction||''} FVG — ${(c.condition||'').replace(/_/g,' ')} on ${c.timeframe||'?'}`;
   else if(t==='sustained_trend'){const dir=c.trend_dir==='dump'?'📉 dumping':'📈 pumping';desc=`${dir} for ${c.periods||3}+ ${c.timeframe||'1d'} periods (${c.min_total_pct||10}%+ total, ${c.min_consistent||65}% consistent)`;}
+  else if(t==='atr_filter')desc=(c.condition||'volatile')==='expanding'?`ATR(${c.period||14}) expanding vs ${c.lookback||5} bars on ${c.timeframe||'5m'}`:`ATR(${c.period||14}) ≥ ${c.min_atr_pct||0.3}% of price on ${c.timeframe||'5m'}`;
+  else if(t==='rvol')desc=`RVOL(${c.period||20}) ${c.condition==='low'?'below':'≥'} ${c.threshold||1.5}× on ${c.timeframe||'5m'}`;
+  else if(t==='vwap_bands')desc=`Price ${({below_lower:'below lower',above_upper:'above upper',inside:'inside'}[c.condition||'below_lower'])} VWAP band (${c.num_std||2.0}σ) on ${c.timeframe||'5m'}`;
+  else if(t==='vwap_bias')desc=`Price ${c.condition||'above'} session VWAP on ${c.timeframe||'5m'}`;
   else desc=JSON.stringify(c);
   return`<div class="cond-item"><span class="cond-type">${t.replace(/_/g,' ')}</span><span style="flex:1">${desc}</span></div>`;
 }
@@ -4412,6 +4416,10 @@ const SIGNAL_META={
   vwap_deviation:  {icon:'📉',label:'VWAP Deviation',   desc:'Price far from daily VWAP'},
   adx_filter:      {icon:'📶',label:'ADX Filter',       desc:'Is market trending or ranging?'},
   atr_volatility:  {icon:'🌡️',label:'ATR Volatility',   desc:'Volatility expanding or contracting'},
+  atr_filter:      {icon:'⚡',label:'ATR Filter',        desc:'Volatility gate — only trade live, moving markets'},
+  rvol:            {icon:'📢',label:'Relative Volume',   desc:'Current volume vs recent average (RVOL)'},
+  vwap_bands:      {icon:'🎏',label:'VWAP Bands',        desc:'Price at VWAP ± standard-deviation band'},
+  vwap_bias:       {icon:'🧭',label:'VWAP Bias',         desc:'Price above or below the session VWAP'},
   session_level:   {icon:'🏁',label:'Session Level',    desc:'Price near session high, low or open'},
   pivot_points:    {icon:'📌',label:'Pivot Points',     desc:'Classic PP / R1-R3 / S1-S3 daily levels from previous day\'s OHLC'},
   keltner:         {icon:'🔲',label:'Keltner Channel',  desc:'Channel squeeze or expansion breakout'},
@@ -4444,7 +4452,7 @@ const SIGNAL_FREQ={
   volume_spike:'high', consecutive_candles:'high', mfi:'high', roc:'high',
   macd:'med', ema:'med', vwap_deviation:'med', support_resistance:'med',
   breakout:'med', adx_filter:'med', atr_volatility:'med', keltner:'med', cci:'med',
-  obv:'med', donchian:'med',
+  obv:'med', donchian:'med', rvol:'med', vwap_bands:'med', vwap_bias:'high', atr_filter:'med',
   bb:'low', supertrend:'low', candlestick:'low', market_structure:'low',
   order_block:'low', fibonacci:'low', divergence:'low', funding_rate:'low',
   fvg:'low', open_interest:'low', liquidation:'low', session_level:'low', pivot_points:'low',
@@ -4675,6 +4683,10 @@ function getDefaultCfg(type){
     vwap_deviation:   {vwap_pct:3,vwap_side:'below'},
     adx_filter:       {timeframe:tf,condition:'ranging'},
     atr_volatility:   {timeframe:tf,condition:'contracting',multiplier:1.2},
+    atr_filter:       {timeframe:'5m',condition:'volatile',min_atr_pct:0.3,period:14,lookback:5},
+    rvol:             {timeframe:'5m',condition:'high',threshold:1.5,period:20},
+    vwap_bands:       {timeframe:'5m',condition:'below_lower',num_std:2.0},
+    vwap_bias:        {timeframe:'5m',condition:'above'},
     session_level:    {timeframe:tf,reference:'session_low',side:'near',threshold_pct:2},
     pivot_points:     {timeframe:tf,level:'r1',condition:'near',tolerance_pct:0.3},
     keltner:          {timeframe:tf,condition:'squeeze'},
@@ -4971,6 +4983,48 @@ function renderSignalCfg(type,cfg,pfx){
       <div class="opt-label">Multiplier vs 50-period average <span id="${pfx}atm-d" style="color:var(--accent)">${cfg.multiplier||1.2}×</span></div>
       <input type="range" id="${pfx}atm" min="1.05" max="5" value="${cfg.multiplier||1.2}" step="0.05" oninput="wzSl('${pfx}atm','${pfx}atm-d','×','${pfx}multiplier')" style="width:100%;accent-color:var(--accent)">
       <div class="hint">Contracting = current ATR is below (avg ÷ multiplier). Expanding = current ATR is above (avg × multiplier). Good for Sniper & Swing styles.</div>`;
+    case 'atr_filter':return`${tf}
+      <div class="opt-label">Volatility Gate</div>
+      <div class="opt-chips">
+        ${wzChip('volatile','Volatile enough — ATR ≥ threshold % of price',`${pfx}condition`,cfg.condition||'volatile','green')}
+        ${wzChip('expanding','Expanding — ATR rising vs earlier bars',`${pfx}condition`,cfg.condition||'volatile','green')}
+      </div>
+      ${(cfg.condition||'volatile')==='volatile'?`
+      <div class="opt-label">Min ATR as % of price <span id="${pfx}afp-d" style="color:var(--accent)">${cfg.min_atr_pct||0.3}%</span></div>
+      <input type="range" id="${pfx}afp" min="0.05" max="3" value="${cfg.min_atr_pct||0.3}" step="0.05" oninput="wzSl('${pfx}afp','${pfx}afp-d','%','${pfx}min_atr_pct')" style="width:100%;accent-color:var(--accent)">`:`
+      <div class="opt-label">Lookback (bars to compare against) <span id="${pfx}afl-d" style="color:var(--accent)">${cfg.lookback||5}</span></div>
+      <input type="range" id="${pfx}afl" min="1" max="50" value="${cfg.lookback||5}" step="1" oninput="wzSl('${pfx}afl','${pfx}afl-d','','${pfx}lookback')" style="width:100%;accent-color:var(--accent)">`}
+      <div class="opt-label">ATR Period <span id="${pfx}afpr-d" style="color:var(--accent)">${cfg.period||14}</span></div>
+      <input type="range" id="${pfx}afpr" min="5" max="50" value="${cfg.period||14}" step="1" oninput="wzSl('${pfx}afpr','${pfx}afpr-d','','${pfx}period')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">A volatility gate — only trade when the market is actually moving. "Volatile" = ATR is at least X% of price. "Expanding" = ATR is rising. Pairs well with breakouts & momentum.</div>`;
+    case 'rvol':return`${tf}
+      <div class="opt-label">Relative Volume Condition</div>
+      <div class="opt-chips">
+        ${wzChip('high','High RVOL — real participation (≥ threshold)',`${pfx}condition`,cfg.condition||'high','green')}
+        ${wzChip('low','Low RVOL — quiet tape (&lt; threshold)',`${pfx}condition`,cfg.condition||'high','red')}
+      </div>
+      <div class="opt-label">RVOL Threshold <span id="${pfx}rvt-d" style="color:var(--accent)">${cfg.threshold||1.5}×</span></div>
+      <input type="range" id="${pfx}rvt" min="0.5" max="10" value="${cfg.threshold||1.5}" step="0.1" oninput="wzSl('${pfx}rvt','${pfx}rvt-d','×','${pfx}threshold')" style="width:100%;accent-color:var(--accent)">
+      <div class="opt-label">Average Period (bars) <span id="${pfx}rvp-d" style="color:var(--accent)">${cfg.period||20}</span></div>
+      <input type="range" id="${pfx}rvp" min="5" max="100" value="${cfg.period||20}" step="1" oninput="wzSl('${pfx}rvp','${pfx}rvp-d','','${pfx}period')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">RVOL = current bar volume ÷ average of the prior N bars. "High" confirms there's real volume behind a move — the best filter against fake low-liquidity wicks.</div>`;
+    case 'vwap_bands':return`${tf}
+      <div class="opt-label">Band Condition</div>
+      <div class="opt-chips">
+        ${wzChip('below_lower','Below lower band (oversold — long)',`${pfx}condition`,cfg.condition||'below_lower','green')}
+        ${wzChip('above_upper','Above upper band (overbought — short)',`${pfx}condition`,cfg.condition||'below_lower','red')}
+        ${wzChip('inside','Inside the bands (mean zone)',`${pfx}condition`,cfg.condition||'below_lower')}
+      </div>
+      <div class="opt-label">Band Width <span id="${pfx}vbs-d" style="color:var(--accent)">${cfg.num_std||2.0}σ</span></div>
+      <input type="range" id="${pfx}vbs" min="0.5" max="4" value="${cfg.num_std||2.0}" step="0.1" oninput="wzSl('${pfx}vbs','${pfx}vbs-d','σ','${pfx}num_std')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Session VWAP ± N standard deviations. Classic intraday mean-reversion: fade the −2σ band for longs, the +2σ band for shorts. Resets each trading day.</div>`;
+    case 'vwap_bias':return`${tf}
+      <div class="opt-label">VWAP Bias</div>
+      <div class="opt-chips">
+        ${wzChip('above','Above VWAP (long bias)',`${pfx}condition`,cfg.condition||'above','green')}
+        ${wzChip('below','Below VWAP (short bias)',`${pfx}condition`,cfg.condition||'above','red')}
+      </div>
+      <div class="hint">The core intraday discipline filter — only take longs while price holds above session VWAP, shorts while below. Pair with your entry signal as a directional gate.</div>`;
     case 'session_level':return`${tf}
       <div class="opt-label">Reference Level</div>
       <div class="opt-chips">
@@ -6340,6 +6394,10 @@ function buildWizardDescription(){
       case 'vwap_deviation':sig=`Price is ${cfg.vwap_pct||3}%+ ${cfg.vwap_side||'below'} the daily VWAP`;break;
       case 'adx_filter':sig=`Market is ${cfg.condition||'ranging'} (ADX filter) on ${tf}`;break;
       case 'atr_volatility':sig=`Volatility is ${cfg.condition||'contracting'} (ATR ×${cfg.multiplier||1.2}) on ${tf}`;break;
+      case 'atr_filter':sig=(cfg.condition||'volatile')==='expanding'?`ATR filter: ATR(${cfg.period||14}) is expanding versus ${cfg.lookback||5} bars ago on ${tf} (volatility gate — only trade when the market is moving)`:`ATR filter: ATR(${cfg.period||14}) is at least ${cfg.min_atr_pct||0.3}% of price on ${tf} (volatility gate — market is volatile enough to trade)`;break;
+      case 'rvol':sig=`Relative volume (RVOL over ${cfg.period||20} bars) is ${cfg.condition==='low'?`below ${cfg.threshold||1.5}× (quiet, low participation)`:`at least ${cfg.threshold||1.5}× the average (high participation)`} on ${tf}`;break;
+      case 'vwap_bands':sig=`Price is ${ {below_lower:`at or below the lower VWAP band (VWAP − ${cfg.num_std||2.0} standard deviations) — oversold`,above_upper:`at or above the upper VWAP band (VWAP + ${cfg.num_std||2.0} standard deviations) — overbought`,inside:`inside the VWAP ± ${cfg.num_std||2.0} standard-deviation bands`}[cfg.condition||'below_lower'] } on ${tf} (session VWAP bands)`;break;
+      case 'vwap_bias':sig=`Price is ${cfg.condition||'above'} the session VWAP on ${tf} (VWAP bias — ${cfg.condition==='below'?'short':'long'} side only)`;break;
       case 'session_level':sig=`Price within ${cfg.threshold_pct||2}% of ${(cfg.reference||'session_low').replace('_',' ')} on ${tf}`;break;
       case 'pivot_points':sig=`Price ${cfg.condition||'near'} daily ${(cfg.level||'r1').toUpperCase()} pivot (±${cfg.tolerance_pct||0.3}%) on ${tf}`;break;
       case 'keltner':sig=`Keltner Channel: ${cfg.condition||'squeeze'} on ${tf}`;break;
@@ -6401,6 +6459,10 @@ function buildWizardDescription(){
         case 'vwap_deviation':cfm=`Price ${cfg.vwap_pct||3}%+ ${cfg.vwap_side||'below'} VWAP`;break;
         case 'adx_filter':cfm=`ADX: market is ${cfg.condition||'ranging'} on ${tf}`;break;
         case 'atr_volatility':cfm=`ATR volatility ${cfg.condition||'contracting'} on ${tf}`;break;
+        case 'atr_filter':cfm=(cfg.condition||'volatile')==='expanding'?`ATR(${cfg.period||14}) expanding vs ${cfg.lookback||5} bars ago on ${tf}`:`ATR(${cfg.period||14}) ≥ ${cfg.min_atr_pct||0.3}% of price on ${tf}`;break;
+        case 'rvol':cfm=`RVOL(${cfg.period||20}) ${cfg.condition==='low'?'below':'≥'} ${cfg.threshold||1.5}× on ${tf}`;break;
+        case 'vwap_bands':cfm=`Price ${ {below_lower:'below lower',above_upper:'above upper',inside:'inside'}[cfg.condition||'below_lower'] } VWAP band (${cfg.num_std||2.0}σ) on ${tf}`;break;
+        case 'vwap_bias':cfm=`Price ${cfg.condition||'above'} session VWAP on ${tf}`;break;
         case 'session_level':cfm=`Price within ${cfg.threshold_pct||2}% of ${(cfg.reference||'session_low').replace('_',' ')}`;break;
         case 'pivot_points':cfm=`Price ${cfg.condition||'near'} daily ${(cfg.level||'r1').toUpperCase()} pivot (±${cfg.tolerance_pct||0.3}%)`;break;
         case 'keltner':cfm=`Keltner ${cfg.condition||'squeeze'} on ${tf}`;break;

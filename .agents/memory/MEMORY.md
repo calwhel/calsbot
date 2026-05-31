@@ -1,5 +1,6 @@
 - [Gunicorn flag names](gunicorn-flags.md) — flag is `--keep-alive` not `--keepalive`; verify flags with `gunicorn --help` before adding new ones.
 - [Portal cache layer](portal-cache-layer.md) — `app/cache.py` provides get_cache/set_cache/invalidate_cache/invalidate_prefix; all new caching uses this module (NOT the old `_CACHE` dict).
 - [Neon startup migrations](neon-startup-migrations.md) — use existence-check-first + asyncio.to_thread + lock_timeout retry pattern for safe Neon migrations.
+- [Signal/condition type layers](signal-type-layers.md) — a new strategy signal type must be registered in 4 synced layers (executor=truth, AI schema, web wizard, mobile wizard) with identical config keys.
 - [Response-object caching bug](response-object-caching.md) — never cache a JSONResponse object under BaseHTTPMiddleware; cache the dict/list payload and rebuild JSONResponse each return.
 - [DB lock-queue starvation](db-lock-starvation.md) — startup ALTER/CREATE INDEX without lock_timeout on a hot table freezes ALL reads on it → whole portal "won't load"; cap every DDL with lock_timeout.
