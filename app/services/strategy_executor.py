@@ -30,6 +30,12 @@ SCAN_INTERVAL_SECONDS       = int(_os_env.environ.get("EXECUTOR_SCAN_INTERVAL", 
 FOREX_SCAN_INTERVAL_SECONDS = int(_os_env.environ.get("EXECUTOR_FOREX_SCAN_INTERVAL", "5"))
 PAPER_MONITOR_INTERVAL      = int(_os_env.environ.get("EXECUTOR_MONITOR_INTERVAL", "20"))
 MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "3"))
+# Forex executor runs more strategies in parallel than crypto: after per-cycle
+# batch-loading of users/subs/prefs, each forex strategy holds a DB connection
+# only briefly (one JOINed strategy+user lookup), so higher concurrency scales
+# to ~100 strategies within the 5s cycle without exhausting bg_engine's pool
+# (size 5 + overflow 6 = 11; crypto's 3 + this 6 = 9 peak).
+FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "6"))
 PAPER_MAX_HOLD_HOURS        = 168   # auto-expire paper positions after this many hours (7 days)
 
 # ─── Shared API caches ───────────────────────────────────────────────────────
@@ -2167,6 +2173,7 @@ async def evaluate_and_fire(
     http_client: httpx.AsyncClient,
     raw_tickers: Optional[list] = None,
     gate_stats: Optional[Dict[str, int]] = None,
+    prefetched_ctrader_ok: Optional[bool] = None,
 ):
     """
     Evaluate one strategy. Fires a trade if conditions are met.
@@ -2175,6 +2182,9 @@ async def evaluate_and_fire(
     strategies in one cycle share a single MEXC/Binance fetch instead of each
     making their own request.
     gate_stats — optional shared counter dict for per-cycle diagnostics.
+    prefetched_ctrader_ok — for forex/index, the caller may pass the cTrader
+    live-eligibility boolean it already resolved (batched once per cycle) so we
+    skip a per-strategy UserPreference query. None → resolve it here as before.
     """
     from app.services.strategy_ta import evaluate_strategy_conditions
     from app.strategy_models import StrategyExecution, StrategyPortalSettings
@@ -2215,18 +2225,22 @@ async def evaluate_and_fire(
     # Per-asset broker gate. Forex → cTrader (FP Markets), crypto → Bitunix,
     # stocks/indices → paper-only (no broker integration yet).
     if asset_class in ("forex", "index"):
-        _ctrader_live_ok = False
-        try:
-            from app.models import UserPreference as _UP
-            _prefs = db.query(_UP).filter(_UP.user_id == user.id).first()
-            _ctrader_live_ok = bool(
-                _prefs
-                and _prefs.ctrader_access_token
-                and _prefs.ctrader_account_id
-                and getattr(_prefs, "forex_approved", False)
-            )
-        except Exception:
+        if prefetched_ctrader_ok is not None:
+            # Caller already resolved live-eligibility (batched once per cycle).
+            _ctrader_live_ok = bool(prefetched_ctrader_ok)
+        else:
             _ctrader_live_ok = False
+            try:
+                from app.models import UserPreference as _UP
+                _prefs = db.query(_UP).filter(_UP.user_id == user.id).first()
+                _ctrader_live_ok = bool(
+                    _prefs
+                    and _prefs.ctrader_access_token
+                    and _prefs.ctrader_account_id
+                    and getattr(_prefs, "forex_approved", False)
+                )
+            except Exception:
+                _ctrader_live_ok = False
         is_paper = not (_wants_live and _ctrader_live_ok)
         if _wants_live and is_paper:
             logger.debug(
@@ -3623,6 +3637,27 @@ async def run_strategy_executor():
                 # Pre-fetch tickers ONCE for the entire cycle.
                 shared_tickers = await _get_raw_tickers(http_client)
 
+                # Batch-load Pro status ONCE per cycle (was a per-strategy query)
+                # so each strategy task only does a single JOINed strategy+user
+                # lookup — lets the loop scale to ~100 strategies cheaply.
+                _now_cycle = datetime.utcnow()
+                _crypto_uids = {s["user_id"] for s in eval_snapshots}
+                has_pro_by_user: Dict[int, bool] = {}
+                if _crypto_uids:
+                    from app.strategy_models import PortalSubscription as _PSub
+                    _ref_db = SessionLocal()
+                    try:
+                        for _ps in _ref_db.query(_PSub).filter(_PSub.user_id.in_(_crypto_uids)).all():
+                            has_pro_by_user[_ps.user_id] = bool(
+                                _ps.tier == "pro"
+                                and _ps.subscription_end
+                                and _ps.subscription_end > _now_cycle
+                            )
+                    except Exception as _ref_err:
+                        logger.debug(f"[Executor] ref preload failed: {_ref_err}")
+                    finally:
+                        _ref_db.close()
+
                 # Per-cycle gate diagnostics — counts which gate blocks each strategy.
                 # Logged at end of cycle so we can see WHY strategies aren't firing.
                 cycle_gate_stats: Dict[str, int] = {}
@@ -3640,35 +3675,24 @@ async def run_strategy_executor():
                         for _attempt in (1, 2):
                             db_one = SessionLocal()
                             try:
-                                strategy = db_one.query(UserStrategy).filter(
-                                    UserStrategy.id == snap["id"]
-                                ).first()
-                                if not strategy:
+                                # One round-trip for strategy + user (was two).
+                                row = (
+                                    db_one.query(UserStrategy, User)
+                                    .join(User, User.id == UserStrategy.user_id)
+                                    .filter(UserStrategy.id == snap["id"])
+                                    .first()
+                                )
+                                if not row:
                                     return
-                                user = db_one.query(User).filter(
-                                    User.id == snap["user_id"]
-                                ).first()
+                                strategy, user = row
                                 if not user or user.banned:
                                     return
-                                # Only Pro portal subscribers (or admin/grandfathered) get trades
-                                _now = datetime.utcnow()
-                                _has_portal_pro = False
-                                try:
-                                    from app.strategy_models import PortalSubscription
-                                    _psub = db_one.query(PortalSubscription).filter_by(
-                                        user_id=user.id
-                                    ).first()
-                                    _has_portal_pro = (
-                                        _psub and _psub.tier == "pro"
-                                        and _psub.subscription_end
-                                        and _psub.subscription_end > _now
-                                    )
-                                except Exception:
-                                    pass
+                                # Only Pro portal subscribers (or admin/grandfathered) get
+                                # trades — Pro status was batch-loaded once this cycle.
                                 if not (
                                     user.is_admin
                                     or user.grandfathered
-                                    or _has_portal_pro
+                                    or has_pro_by_user.get(user.id, False)
                                 ):
                                     return
                                 await evaluate_and_fire(
@@ -3933,7 +3957,7 @@ async def run_forex_executor():
 
     _TRADFI_CLASSES = {"forex", "index", "stock"}
 
-    sem = asyncio.Semaphore(MAX_CONCURRENT)
+    sem = asyncio.Semaphore(FOREX_MAX_CONCURRENT)
 
     # Lighter pool — yfinance calls are outbound Python HTTP, not MEXC REST;
     # a handful of concurrent connections is plenty.
@@ -3992,10 +4016,90 @@ async def run_forex_executor():
                     and (s["config"] or {}).get("entry_conditions", {}).get("entry_type") != "tradingview_webhook"
                 ]
 
-                logger.info(
-                    f"📈 Forex executor: scanning {len(eval_snapshots)} tradfi strateg"
-                    f"{'y' if len(eval_snapshots) == 1 else 'ies'}"
-                )
+                # ── Per-cycle market-open gate ──────────────────────────────
+                # Forex/index/stock strategies early-return inside
+                # evaluate_and_fire when their market is closed. Doing that gate
+                # HERE — once per asset class instead of after several
+                # per-strategy DB round-trips — makes closed-market cycles (e.g.
+                # weekends) cost almost nothing instead of ~30s of wasted churn.
+                from app.services.asset_classes import is_market_open as _is_mkt_open
+                _now_cycle = datetime.utcnow()
+                _mkt_open_cache: Dict[str, bool] = {}
+
+                def _ac_open(_ac: str) -> bool:
+                    v = _mkt_open_cache.get(_ac)
+                    if v is None:
+                        v = _is_mkt_open(_ac, _now_cycle)
+                        _mkt_open_cache[_ac] = v
+                    return v
+
+                open_snaps = []
+                _closed_by_class: Dict[str, int] = {}
+                for s in eval_snapshots:
+                    _ac = _snap_asset_class(s)
+                    if _ac_open(_ac):
+                        open_snaps.append(s)
+                    else:
+                        _closed_by_class[_ac] = _closed_by_class.get(_ac, 0) + 1
+
+                _forex_open = _ac_open("forex")
+
+                if _closed_by_class:
+                    _closed_summary = " ".join(
+                        f"{k}={v}" for k, v in sorted(_closed_by_class.items())
+                    )
+                    logger.info(
+                        f"📈 Forex executor: {len(open_snaps)} open-market strateg"
+                        f"{'y' if len(open_snaps) == 1 else 'ies'} to scan "
+                        f"(skipped market-closed: {_closed_summary})"
+                    )
+                else:
+                    logger.info(
+                        f"📈 Forex executor: scanning {len(open_snaps)} tradfi strateg"
+                        f"{'y' if len(open_snaps) == 1 else 'ies'}"
+                    )
+
+                if not open_snaps:
+                    # No tradfi strategies to evaluate this cycle, but live forex
+                    # positions (e.g. from paused/deleted strategies, or ones
+                    # excluded from eval) may still need breakeven/trailing
+                    # amendments while the market is open — so don't skip manage.
+                    if _forex_open:
+                        try:
+                            await _manage_live_forex_positions()
+                        except Exception as _mfe:
+                            logger.warning(f"[FX-manage] cycle failed: {_mfe}")
+                    await asyncio.sleep(FOREX_SCAN_INTERVAL_SECONDS)
+                    continue
+
+                # ── Batch-load reference data ONCE per cycle ────────────────
+                # Collapses the former per-strategy PortalSubscription /
+                # UserPreference round-trips into 2 set-based queries, so each
+                # strategy task only does a single JOINed strategy+user lookup.
+                from app.strategy_models import PortalSubscription as _PSub
+                from app.models import UserPreference as _UPref
+                _uids = {s["user_id"] for s in open_snaps}
+                has_pro_by_user: Dict[int, bool] = {}
+                ctrader_ok_by_user: Dict[int, bool] = {}
+                if _uids:
+                    _ref_db = SessionLocal()
+                    try:
+                        for _ps in _ref_db.query(_PSub).filter(_PSub.user_id.in_(_uids)).all():
+                            has_pro_by_user[_ps.user_id] = bool(
+                                _ps.tier == "pro"
+                                and _ps.subscription_end
+                                and _ps.subscription_end > _now_cycle
+                            )
+                        for _pf in _ref_db.query(_UPref).filter(_UPref.user_id.in_(_uids)).all():
+                            ctrader_ok_by_user[_pf.user_id] = bool(
+                                _pf.ctrader_access_token
+                                and _pf.ctrader_account_id
+                                and getattr(_pf, "forex_approved", False)
+                            )
+                    except Exception as _ref_err:
+                        logger.debug(f"[FX Executor] ref preload failed: {_ref_err}")
+                    finally:
+                        _ref_db.close()
 
                 # No MEXC ticker prefetch — forex uses yfinance; pass empty list.
                 cycle_gate_stats: Dict[str, int] = {}
@@ -4009,40 +4113,29 @@ async def run_forex_executor():
                         for _attempt in (1, 2):
                             db_one = SessionLocal()
                             try:
-                                strategy = db_one.query(UserStrategy).filter(
-                                    UserStrategy.id == snap["id"]
-                                ).first()
-                                if not strategy:
+                                # One round-trip for strategy + user (was two).
+                                row = (
+                                    db_one.query(UserStrategy, User)
+                                    .join(User, User.id == UserStrategy.user_id)
+                                    .filter(UserStrategy.id == snap["id"])
+                                    .first()
+                                )
+                                if not row:
                                     return
-                                user = db_one.query(User).filter(
-                                    User.id == snap["user_id"]
-                                ).first()
+                                strategy, user = row
                                 if not user or user.banned:
                                     return
-                                _now = datetime.utcnow()
-                                _has_portal_pro = False
-                                try:
-                                    from app.strategy_models import PortalSubscription
-                                    _psub = db_one.query(PortalSubscription).filter_by(
-                                        user_id=user.id
-                                    ).first()
-                                    _has_portal_pro = (
-                                        _psub and _psub.tier == "pro"
-                                        and _psub.subscription_end
-                                        and _psub.subscription_end > _now
-                                    )
-                                except Exception:
-                                    pass
                                 if not (
                                     user.is_admin
                                     or user.grandfathered
-                                    or _has_portal_pro
+                                    or has_pro_by_user.get(user.id, False)
                                 ):
                                     return
                                 await evaluate_and_fire(
                                     strategy, user, db_one, _http,
                                     raw_tickers=[],
                                     gate_stats=cycle_gate_stats,
+                                    prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
                                 )
                                 return
                             except _SAOperationalError as _db_err:
@@ -4077,20 +4170,22 @@ async def run_forex_executor():
                                 except Exception:
                                     pass
 
-                await asyncio.gather(*[_run_one_fx(s) for s in eval_snapshots])
+                await asyncio.gather(*[_run_one_fx(s) for s in open_snaps])
 
                 # Push live SL amendments (auto-breakeven + trailing) to cTrader
                 # for any open LIVE forex positions. Failures trip the adaptive
-                # backoff below but never kill the cycle.
-                try:
-                    await _manage_live_forex_positions()
-                except Exception as _mfe:
-                    logger.warning(f"[FX-manage] cycle failed: {_mfe}")
-                    _cycle_db_skipped.append(("__manage__", type(_mfe).__name__))
+                # backoff below but never kill the cycle. Skip when the forex
+                # market is closed — stops cannot move while the broker is shut.
+                if _forex_open:
+                    try:
+                        await _manage_live_forex_positions()
+                    except Exception as _mfe:
+                        logger.warning(f"[FX-manage] cycle failed: {_mfe}")
+                        _cycle_db_skipped.append(("__manage__", type(_mfe).__name__))
 
                 # Emit one consolidated warning per cycle instead of per-strategy spam
                 if _cycle_db_skipped:
-                    _total = len(eval_snapshots)
+                    _total = len(open_snaps)
                     _skipped = len(_cycle_db_skipped)
                     _err_types = ", ".join(sorted({e for _, e in _cycle_db_skipped}))
                     logger.warning(

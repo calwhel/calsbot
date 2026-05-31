@@ -62,9 +62,14 @@ engine = create_engine(
 # the 60 s statement_timeout the executor needs for heavy analytical work.
 bg_engine = create_engine(
     _db_url,
+    # Raised from (3 + 4) to (5 + 6) so the faster forex executor can run more
+    # strategies concurrently (FOREX_MAX_CONCURRENT) without PoolTimeout, while
+    # staying well below the per-cycle batch-loading footprint that previously
+    # saturated Neon. Peak concurrent bg connections ≈ crypto MAX_CONCURRENT
+    # (3) + FOREX_MAX_CONCURRENT (6) = 9, under the 11 ceiling here.
     poolclass=QueuePool,
-    pool_size=3,
-    max_overflow=4,
+    pool_size=5,
+    max_overflow=6,
     pool_timeout=15,
     pool_recycle=240,
     pool_pre_ping=True,
