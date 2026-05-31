@@ -934,6 +934,25 @@ def _ensure_tables():
     except Exception as e:
         logger.warning(f"_ensure_tables(admin-lifetime-pro): {e}")
 
+    # Kubera (TH-UAI2DR1J) — 3-month Pro subscription (ends 2026-08-31).
+    # Idempotent — safe to run on every worker boot.
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa.text("""
+                INSERT INTO portal_subscriptions (user_id, tier, subscription_end)
+                SELECT id, 'pro', '2026-08-31 23:59:59'::timestamp
+                FROM users WHERE uid = 'TH-UAI2DR1J'
+                ON CONFLICT (user_id) DO UPDATE
+                    SET tier = 'pro',
+                        subscription_end = GREATEST(
+                            portal_subscriptions.subscription_end,
+                            '2026-08-31 23:59:59'::timestamp
+                        )
+            """))
+        logger.info("_ensure_tables: Kubera (TH-UAI2DR1J) pro subscription ensured")
+    except Exception as e:
+        logger.warning(f"_ensure_tables(kubera-pro): {e}")
+
     # Affiliate program — applications + per-user affiliate state. Raw CREATE
     # to avoid registering yet another SQLAlchemy model just for a simple,
     # mostly-write-once table.
