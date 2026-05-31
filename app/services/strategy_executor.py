@@ -21,7 +21,13 @@ import os as _os_env
 # saturated — every QueryCanceled in the executor cascaded into HTTP 500s
 # on /api/strategies because all pool connections were held by hung scans.
 SCAN_INTERVAL_SECONDS       = int(_os_env.environ.get("EXECUTOR_SCAN_INTERVAL", "10"))
-FOREX_SCAN_INTERVAL_SECONDS = int(_os_env.environ.get("EXECUTOR_FOREX_SCAN_INTERVAL", "10"))
+# Forex runs at 5s (vs crypto 10s): the forex path fetches fresh OHLC every cycle
+# (it does NOT use the 45s cross-cycle kline cache), so a tighter loop directly
+# lowers signal-to-order latency. Safe because peak DB concurrency stays capped at
+# MAX_CONCURRENT and the post-work fixed sleep self-throttles when scans are slow.
+# Do NOT drop below ~5s or remove the fixed post-work sleep — at 3s the executor
+# previously saturated Neon and cascaded QueryCanceled → HTTP 500s on /api/strategies.
+FOREX_SCAN_INTERVAL_SECONDS = int(_os_env.environ.get("EXECUTOR_FOREX_SCAN_INTERVAL", "5"))
 PAPER_MONITOR_INTERVAL      = int(_os_env.environ.get("EXECUTOR_MONITOR_INTERVAL", "20"))
 MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "3"))
 PAPER_MAX_HOLD_HOURS        = 168   # auto-expire paper positions after this many hours (7 days)
@@ -38,6 +44,11 @@ _RAW_TICKERS_TTL    = 60  # seconds
 # hit the cache instead of each making an independent candle + indicator call.
 _PRICE_TA_CACHE: Dict[str, tuple] = {}  # symbol -> (data_dict, fetched_at)
 _PRICE_TA_TTL    = 15  # seconds — fresher data for faster signal detection
+# Forex/index: the FMP price feed refreshes every 5s, so a 15s cache would make
+# a faster scan loop pointless (it'd re-evaluate stale prices). Match the cache
+# to the feed cadence. Cheap because the slow-moving 15m klines have their own
+# 20s cache in tradfi_prices — only the in-memory FMP spot price is re-read.
+_PRICE_TA_TTL_TRADFI = 5
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -486,7 +497,8 @@ async def _fetch_price_and_ta(
     cached = _PRICE_TA_CACHE.get(cache_key)
     if cached:
         data, fetched_at = cached
-        if (now - fetched_at).total_seconds() < _PRICE_TA_TTL:
+        _ttl = _PRICE_TA_TTL if asset_class == "crypto" else _PRICE_TA_TTL_TRADFI
+        if (now - fetched_at).total_seconds() < _ttl:
             return data
 
     if asset_class != "crypto":
@@ -3711,6 +3723,9 @@ async def run_forex_executor():
 
     async with httpx.AsyncClient(timeout=_timeout, limits=_limits) as http_client:
         while True:
+            _cycle_db_skipped = []  # initialised before try so the adaptive
+                                    # backoff below is safe even if the cycle
+                                    # throws before its own assignment.
             try:
                 _list_db = SessionLocal()
                 try:
@@ -3860,8 +3875,25 @@ async def run_forex_executor():
 
             except Exception as e:
                 logger.error(f"Forex executor loop error: {e}", exc_info=True)
+                # An outer-cycle failure (e.g. the strategy-list query or session
+                # open failing — the hot-table query that preceded the prior
+                # saturation incident) also counts as DB stress, so trip the
+                # backoff below conservatively.
+                _cycle_db_skipped.append(("__cycle__", type(e).__name__))
 
-            await asyncio.sleep(FOREX_SCAN_INTERVAL_SECONDS)
+            # Adaptive backoff: if this cycle hit DB errors (the precursor to the
+            # historical Neon-saturation cascade), space out the next scan to
+            # relieve pressure; recover to the fast cadence as soon as a cycle is
+            # clean. Fixed sleep otherwise preserves baseline backpressure.
+            if _cycle_db_skipped:
+                _sleep_s = max(FOREX_SCAN_INTERVAL_SECONDS * 3, 15)
+                logger.warning(
+                    f"[FX Executor] DB stress detected — backing off to {_sleep_s}s "
+                    f"this cycle (normal cadence {FOREX_SCAN_INTERVAL_SECONDS}s)"
+                )
+            else:
+                _sleep_s = FOREX_SCAN_INTERVAL_SECONDS
+            await asyncio.sleep(_sleep_s)
 
 
 async def backfill_cancelled_paper_trades(lookback_days: int = 30) -> int:
