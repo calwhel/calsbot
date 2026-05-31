@@ -1333,6 +1333,8 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     be_pct = None
     partial_close_pct = None
     be_timer_minutes = None
+    trail_enabled = False
+    trail_pct = None
     try:
         from app.strategy_models import UserStrategy
         strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
@@ -1348,6 +1350,15 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
             _bet = risk_cfg.get("be_timer_minutes")
             if _bet:
                 be_timer_minutes = float(_bet)
+            # Trailing stop — price-% distance behind the best price reached.
+            trail_enabled = bool(ex_cfg.get("trailing_stop"))
+            _tsp = ex_cfg.get("trailing_stop_pct")
+            if trail_enabled and _tsp:
+                trail_pct = float(_tsp)
+            if trail_enabled and (trail_pct is None or trail_pct <= 0):
+                # Sensible default: half the stop distance (mirrors the builder).
+                _slp = ex_cfg.get("stop_loss_pct")
+                trail_pct = (float(_slp) / 2.0) if _slp else None
     except Exception:
         pass
 
@@ -1453,6 +1464,21 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                         ex.sl_price = ex.entry_price
                         be_activated = True
                         logger.info(f"[PaperMonitor] AUTO-BREAKEVEN: exec #{ex.id} {ex.symbol} ROI {candle_roi:.1f}% >= {be_pct}% → SL @ entry")
+
+                # ── Trailing stop ─────────────────────────────────────────────
+                # Ratchet the SL behind the best price reached so far by
+                # trail_pct (price %). Only ever TIGHTENS (never loosens), and
+                # uses this candle's extreme so it applies to SUBSEQUENT candles
+                # only — no same-candle look-ahead, same discipline as breakeven.
+                if trail_enabled and trail_pct and trail_pct > 0:
+                    if ex.direction == "LONG":
+                        cand_sl = high * (1 - trail_pct / 100.0)
+                        if cand_sl > ex.sl_price:
+                            ex.sl_price = cand_sl
+                    else:
+                        cand_sl = low * (1 + trail_pct / 100.0)
+                        if cand_sl < ex.sl_price:
+                            ex.sl_price = cand_sl
 
             last_close = relevant[-1][4]
             if ex.direction == "LONG":
@@ -2757,6 +2783,7 @@ async def evaluate_and_fire(
             # crypto → Bitunix. Stocks can't reach this branch (paper-lock above).
             order_id    = None
             actual_fill = None
+            _position_id = None
             _broker     = "ctrader" if asset_class in ("forex", "index") else "bitunix"
             try:
                 ps_type      = risk.get("position_size_type", "pct")
@@ -2801,6 +2828,7 @@ async def evaluate_and_fire(
                 if order_result:
                     order_id    = order_result.get("order_id")
                     actual_fill = order_result.get("actual_fill")
+                    _position_id = order_result.get("position_id")
             except Exception as e:
                 logger.error(f"[Strategy {strategy.id}] Order error: {e}")
 
@@ -2884,6 +2912,12 @@ async def evaluate_and_fire(
             if order_id:
                 if _broker == "ctrader":
                     execution.ctrader_order_id = str(order_id)
+                    # Persist the broker positionId so the live forex manager can
+                    # later amend SL/TP (auto-breakeven + trailing). No dedicated
+                    # column exists → stash it as a "pos=<id>" token in notes.
+                    if _position_id:
+                        _n = (execution.notes or "").strip()
+                        execution.notes = (f"{_n} | pos={_position_id}".strip(" |"))
                 else:
                     execution.bitunix_order_id = str(order_id)
                 if (
@@ -3207,6 +3241,7 @@ async def _propagate_to_subscribers(
                 # Live — route by asset class: forex/index → cTrader, else → Bitunix.
                 order_id    = None
                 actual_fill = None
+                _position_id = None
                 _sub_broker = "ctrader" if _sub_asset_class in ("forex", "index") else "bitunix"
                 try:
                     ps_type      = sub_risk.get("position_size_type", "pct")
@@ -3242,6 +3277,7 @@ async def _propagate_to_subscribers(
                     if order_result:
                         order_id    = order_result.get("order_id")
                         actual_fill = order_result.get("actual_fill")
+                        _position_id = order_result.get("position_id")
                 except Exception as _e:
                     logger.error(f"[Propagate] Order error for strategy {sub_strategy.id}: {_e}")
                     sub_exec.is_paper = True
@@ -3266,6 +3302,9 @@ async def _propagate_to_subscribers(
                 if order_id:
                     if _sub_broker == "ctrader":
                         sub_exec.ctrader_order_id = str(order_id)
+                        if _position_id:
+                            _sn = (sub_exec.notes or "").strip()
+                            sub_exec.notes = (f"{_sn} | pos={_position_id}".strip(" |"))
                     else:
                         sub_exec.bitunix_order_id = str(order_id)
                     if (
@@ -3687,6 +3726,190 @@ async def run_strategy_executor():
             await asyncio.sleep(SCAN_INTERVAL_SECONDS)
 
 
+async def _manage_live_forex_positions():
+    """
+    Push auto-breakeven and trailing-stop SL amendments to the broker for LIVE
+    forex positions (cTrader). The broker already enforces the initial SL/TP set
+    at entry; this function ratchets the stop as the trade moves into profit so
+    breakeven + trailing actually take effect on real money (without it the
+    broker keeps the original stop forever).
+
+    Forex only — index sizing/scaling is intentionally out of scope here. Runs
+    once per forex scan cycle. All network amends happen after the read session
+    is released. Raises on a top-level DB failure so the caller's adaptive
+    backoff trips (per-position errors are swallowed).
+    """
+    import re as _re
+    from app.database import BgSessionLocal as SessionLocal
+    from app.strategy_models import StrategyExecution, UserStrategy
+    from app.models import User
+    from app.services.tradfi_prices import get_price as _tradfi_get_price
+    from app.services.ctrader_client import modify_position_sltp_for_user
+
+    MIN_TRAIL_STEP_FRAC = 0.001  # 0.1% of price — don't hammer the broker every tick
+
+    db = SessionLocal()
+    try:
+        open_execs = (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.is_paper == False,          # noqa: E712
+                StrategyExecution.outcome == "OPEN",
+                StrategyExecution.asset_class == "forex",
+                StrategyExecution.ctrader_order_id.isnot(None),
+                StrategyExecution.entry_price.isnot(None),
+            )
+            .all()
+        )
+        work = []
+        cfg_cache: Dict[int, dict] = {}
+        user_cache: Dict[int, object] = {}
+        for ex in open_execs:
+            notes = ex.notes or ""
+            m = _re.search(r"pos=(\d+)", notes)
+            if not m:
+                continue  # no broker positionId captured → can't amend
+            position_id = int(m.group(1))
+
+            cfg = cfg_cache.get(ex.strategy_id)
+            if cfg is None:
+                strat = db.query(UserStrategy).filter(
+                    UserStrategy.id == ex.strategy_id
+                ).first()
+                cfg = (strat.config if strat else {}) or {}
+                cfg_cache[ex.strategy_id] = cfg
+            ex_cfg = cfg.get("exit", {}) or {}
+
+            be_pct = ex_cfg.get("breakeven_pct") or ex_cfg.get("breakeven_at_pct")
+            trail_enabled = bool(ex_cfg.get("trailing_stop"))
+            trail_pct = ex_cfg.get("trailing_stop_pct")
+            if trail_enabled and (not trail_pct or float(trail_pct) <= 0):
+                _slp = ex_cfg.get("stop_loss_pct")
+                trail_pct = (float(_slp) / 2.0) if _slp else None
+            if be_pct is None and not (trail_enabled and trail_pct):
+                continue  # neither feature configured → nothing to manage
+
+            user = user_cache.get(ex.user_id)
+            if user is None:
+                user = db.query(User).filter(User.id == ex.user_id).first()
+                user_cache[ex.user_id] = user
+            if not user:
+                continue
+
+            work.append({
+                "exec_id":       ex.id,
+                "position_id":   position_id,
+                "symbol":        ex.symbol,
+                "direction":     ex.direction,
+                "entry_price":   float(ex.entry_price),
+                "sl_price":      float(ex.sl_price) if ex.sl_price is not None else None,
+                "leverage":      float(ex.leverage or 1) or 1.0,
+                "be_pct":        float(be_pct) if be_pct is not None else None,
+                "trail_enabled": bool(trail_enabled and trail_pct),
+                "trail_pct":     float(trail_pct) if trail_pct else None,
+                "be_moved":      ("be_moved" in notes),
+                "user":          user,
+            })
+    finally:
+        db.close()
+
+    if not work:
+        return
+
+    for w in work:
+        try:
+            price = await _tradfi_get_price(w["symbol"], "forex")
+            if not price or price <= 0:
+                continue
+
+            entry     = w["entry_price"]
+            direction = w["direction"]
+            lev       = w["leverage"] or 1.0
+            cur_sl    = w["sl_price"]
+
+            if direction == "LONG":
+                roi = ((price - entry) / entry) * 100 * lev
+            else:
+                roi = ((entry - price) / entry) * 100 * lev
+
+            amend_sl = None   # SL price to send to broker (None = no call)
+            mark_be  = False  # set the be_moved flag in notes this cycle
+
+            # ── Auto-breakeven: move SL to entry once ROI threshold reached ──
+            if w["be_pct"] is not None and not w["be_moved"] and roi >= w["be_pct"]:
+                mark_be = True
+                tightens = (
+                    (direction == "LONG"  and (cur_sl is None or entry > cur_sl)) or
+                    (direction == "SHORT" and (cur_sl is None or entry < cur_sl))
+                )
+                if tightens:
+                    amend_sl = entry
+
+            # ── Trailing stop: ratchet SL behind current price (only tightens) ─
+            if w["trail_enabled"] and w["trail_pct"]:
+                base = amend_sl if amend_sl is not None else cur_sl
+                if direction == "LONG":
+                    cand = price * (1 - w["trail_pct"] / 100.0)
+                    if base is None or cand > base:
+                        amend_sl = cand
+                else:
+                    cand = price * (1 + w["trail_pct"] / 100.0)
+                    if base is None or cand < base:
+                        amend_sl = cand
+
+            # Skip negligible TRAILING-ONLY changes (avoid broker spam every 5s
+            # tick). Never suppress a breakeven cycle: when mark_be is set the
+            # amend must reach the broker, otherwise we could persist be_moved
+            # (below) without the stop actually moving — leaving the original
+            # loss stop in place forever.
+            if (
+                amend_sl is not None and cur_sl is not None
+                and not mark_be
+                and abs(amend_sl - cur_sl) < price * MIN_TRAIL_STEP_FRAC
+            ):
+                amend_sl = None
+
+            if amend_sl is None and not mark_be:
+                continue
+
+            if amend_sl is not None:
+                amend_sl = round(amend_sl, 6)
+                ok = await modify_position_sltp_for_user(
+                    w["user"], w["position_id"], stop_loss_price=amend_sl
+                )
+                if not ok:
+                    logger.warning(
+                        f"[FX-manage] amend SL failed exec#{w['exec_id']} "
+                        f"pos={w['position_id']} {w['symbol']}"
+                    )
+                    continue
+
+            # Persist new SL + breakeven flag (re-check still OPEN).
+            _db2 = SessionLocal()
+            try:
+                ex2 = _db2.query(StrategyExecution).filter(
+                    StrategyExecution.id == w["exec_id"]
+                ).first()
+                if ex2 and ex2.outcome == "OPEN":
+                    if amend_sl is not None:
+                        ex2.sl_price = amend_sl
+                    n = ex2.notes or ""
+                    if mark_be and "be_moved" not in n:
+                        n = (n + " | be_moved").strip(" |")
+                    ex2.notes = n
+                    _db2.commit()
+            finally:
+                _db2.close()
+
+            if amend_sl is not None:
+                logger.info(
+                    f"[FX-manage] exec#{w['exec_id']} {w['symbol']} {direction} "
+                    f"SL→{amend_sl} ({'BE+' if mark_be else ''}roi={roi:.1f}%)"
+                )
+        except Exception as e:
+            logger.warning(f"[FX-manage] error exec#{w['exec_id']}: {e}")
+
+
 # ─── Dedicated forex / index / stock executor loop ───────────────────────────
 
 async def run_forex_executor():
@@ -3855,6 +4078,15 @@ async def run_forex_executor():
                                     pass
 
                 await asyncio.gather(*[_run_one_fx(s) for s in eval_snapshots])
+
+                # Push live SL amendments (auto-breakeven + trailing) to cTrader
+                # for any open LIVE forex positions. Failures trip the adaptive
+                # backoff below but never kill the cycle.
+                try:
+                    await _manage_live_forex_positions()
+                except Exception as _mfe:
+                    logger.warning(f"[FX-manage] cycle failed: {_mfe}")
+                    _cycle_db_skipped.append(("__manage__", type(_mfe).__name__))
 
                 # Emit one consolidated warning per cycle instead of per-strategy spam
                 if _cycle_db_skipped:

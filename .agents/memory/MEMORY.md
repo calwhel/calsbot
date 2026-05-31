@@ -6,4 +6,5 @@
 - [cTrader shared connection](ctrader-shared-connection.md) — never wrap a cTrader call in outer wait_for without CancelledError→invalidate (shared socket desyncs); cold reconnects need ≥10s timeouts.
 - [Response-object caching bug](response-object-caching.md) — never cache a JSONResponse object under BaseHTTPMiddleware; cache the dict/list payload and rebuild JSONResponse each return.
 - [DB lock-queue starvation](db-lock-starvation.md) — startup ALTER/CREATE INDEX without lock_timeout on a hot table freezes ALL reads on it → whole portal "won't load"; cap every DDL with lock_timeout.
+- [cTrader price wire scaling](ctrader-price-scaling.md) — cTrader SL/TP/price fields are sent ×100000 and read /100000 despite proto type double; new amend/order price fields must match; broker positionId lives in execution notes as `pos=<id>`.
 - [Forex executor cadence](forex-executor-cadence.md) — faster forex scan only helps if the tradfi price/TA cache TTL matches the 5s FMP feed; always gate a faster interval with DB-stress backoff (Neon saturation history).

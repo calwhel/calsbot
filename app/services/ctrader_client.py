@@ -57,6 +57,7 @@ try:
         ProtoOARefreshTokenReq,
         ProtoOARefreshTokenRes,
         ProtoOAClosePositionReq,
+        ProtoOAAmendPositionSLTPReq,
         ProtoOAReconcileReq,
         ProtoOAReconcileRes,
     )
@@ -84,6 +85,7 @@ _PAYLOAD_TYPES = {
     "refresh_token_req":     2072,
     "refresh_token_res":     2073,
     "close_position_req":    2140,
+    "amend_position_sltp_req": 2110,
     "reconcile_req":         2124,
     "reconcile_res":         2125,
 }
@@ -455,9 +457,14 @@ async def place_order(
                 ev.ParseFromString(payload)
                 order_id    = str(ev.order.orderId) if ev.HasField("order") else None
                 actual_fill = None
-                if ev.HasField("deal") and ev.deal.executionPrice:
-                    actual_fill = ev.deal.executionPrice / 100_000.0
-                return {"order_id": order_id, "actual_fill": actual_fill, "error": None}
+                position_id = None
+                if ev.HasField("deal"):
+                    if ev.deal.executionPrice:
+                        actual_fill = ev.deal.executionPrice / 100_000.0
+                    if ev.deal.positionId:
+                        position_id = str(ev.deal.positionId)
+                return {"order_id": order_id, "actual_fill": actual_fill,
+                        "position_id": position_id, "error": None}
 
             except Exception as e:
                 if attempt == 1:
@@ -506,6 +513,85 @@ async def close_position(
                 logger.error(f"[cTrader] close_position failed: {e}")
                 return False
     return False
+
+
+async def modify_position_sltp(
+    access_token: str,
+    ctid_trader_account_id: int,
+    position_id: int,
+    stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
+) -> bool:
+    """
+    Amend the stop-loss and/or take-profit of an existing open position on the
+    broker (server-side). Used for auto-breakeven and trailing-stop on live
+    forex trades — without this the broker keeps the original SL forever.
+
+    Prices use the same ×100_000 scaling as place_order (correct for FX majors).
+    Returns True on success.
+    """
+    if not _PROTO_OK:
+        return False
+    if stop_loss_price is None and take_profit_price is None:
+        return False
+    async with _get_lock():
+        for attempt in (1, 2):
+            try:
+                reader, writer = await _get_persistent_connection()
+                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                    return False
+                req = ProtoOAAmendPositionSLTPReq()
+                req.ctidTraderAccountId = ctid_trader_account_id
+                req.positionId          = position_id
+                # Same ×100_000 wire scaling place_order uses (the broker reads
+                # these double fields scaled — confirmed by executionPrice/100_000
+                # round-tripping to correct fills).
+                if stop_loss_price is not None:
+                    req.stopLoss = int(stop_loss_price * 100_000)
+                if take_profit_price is not None:
+                    req.takeProfit = int(take_profit_price * 100_000)
+                payload = await _send_recv(
+                    reader, writer, req,
+                    _PAYLOAD_TYPES["amend_position_sltp_req"],
+                    _PAYLOAD_TYPES["execution_event"],
+                    timeout=15.0,
+                )
+                if payload is not None:
+                    global _conn_ts
+                    _conn_ts = time.monotonic()
+                return payload is not None
+            except Exception as e:
+                if attempt == 1:
+                    logger.warning(f"[cTrader] modify_position_sltp retry after: {e}")
+                    _invalidate_persistent_connection()
+                    continue
+                logger.error(f"[cTrader] modify_position_sltp failed: {e}")
+                return False
+    return False
+
+
+async def modify_position_sltp_for_user(
+    user,
+    position_id: int,
+    stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
+) -> bool:
+    """High-level wrapper: amend a live position's SL/TP for a TradeHub user."""
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    db = SessionLocal()
+    try:
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+            return False
+        access_token           = prefs.ctrader_access_token
+        ctid_trader_account_id = int(prefs.ctrader_account_id)
+    finally:
+        db.close()
+    return await modify_position_sltp(
+        access_token, ctid_trader_account_id, int(position_id),
+        stop_loss_price=stop_loss_price, take_profit_price=take_profit_price,
+    )
 
 
 # ── High-level: place order for a TradeHub user ───────────────────────────────
