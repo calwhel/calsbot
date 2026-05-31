@@ -3927,7 +3927,7 @@ async function submitGoLive(){
       'Upgrade to Pro',
       'background:linear-gradient(135deg,#5b7fff,#4060f0);color:#fff;border:none',
       ()=>window.location='/login'
-    );
+    );}
     return;
   }
   closeModal('modal-golive');
@@ -7231,7 +7231,7 @@ async function quickGet(id){
       '',
       'background:linear-gradient(135deg,#5b7fff,#4060f0);color:#fff;border:none',
       ()=>window.location='/login'
-    );
+    );}
     return;
   }
   if(d.requires_payment){toast(`Pay $${d.price_usdt} via Telegram bot to unlock.`,'info');closeModal('modal-detail');return;}
@@ -7676,6 +7676,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const coinInput = document.getElementById('scan-coin');
   if (coinInput) coinInput.addEventListener('input', _updateScanGridEst);
   _updateScanGridEst();
+
+  // Boot the initial tab's data. The default visible page is #my-strats, but
+  // showPage() (which triggers each tab's loader) only runs on a user tap — so
+  // without this the first paint shows the empty SSR shell and never populates.
+  // Honour a deep-link hash (e.g. /app#marketplace) if present.
+  const _hash = (location.hash || '').replace('#', '');
+  const _valid = ['my-strats','trades','marketplace','leaderboard','build','feed','live-forex','purchases','settings'];
+  if (_hash && _valid.includes(_hash) && _hash !== 'my-strats') {
+    try { showPage(_hash, null); } catch (e) { loadMyStrategies(); }
+  } else {
+    loadMyStrategies();
+  }
 });
 
 function setScanDays(days, el) {

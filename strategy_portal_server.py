@@ -8630,7 +8630,10 @@ async def api_portfolio(uid: str = Query(...)):
     cache_key = f"portfolio_{uid}"
     cached = _CACHE.get(cache_key)
     if cached and time.time() < cached[1]:
-        return cached[0]
+        # Cache the dict, not the Response — a JSONResponse body is consumed by
+        # the auth middleware on first send, so re-returning the same object
+        # yields an empty body (ERR_CONTENT_LENGTH_MISMATCH). Rebuild each time.
+        return JSONResponse(cached[0])
 
     from app.database import SessionLocal
     from sqlalchemy import text
@@ -8753,7 +8756,7 @@ async def api_portfolio(uid: str = Query(...)):
         stale = _CACHE.get(cache_key)
         if stale:
             logger.warning("[portfolio] load timed out — serving stale cache")
-            return stale[0]
+            return JSONResponse(stale[0])
         return JSONResponse(
             {"error": "timeout", "detail": "Portfolio is taking too long to load. Please retry."},
             status_code=503,
@@ -8765,7 +8768,7 @@ async def api_portfolio(uid: str = Query(...)):
         stale = _CACHE.get(cache_key)
         if stale:
             logger.warning(f"[portfolio] DB error, serving stale cache: {exc}")
-            return stale[0]
+            return JSONResponse(stale[0])
         raise
 
     # Affiliate check — async upstream call, runs on the event loop. Fail-soft.
@@ -8777,7 +8780,7 @@ async def api_portfolio(uid: str = Query(...)):
         except Exception as e:
             aff_reason = f"check_error:{type(e).__name__}"
 
-    result = JSONResponse({
+    payload = {
         "total_strategies": d["total_strategies"],
         "active_count":     d["active_count"],
         "open_trades":      d["open_trades"],
@@ -8803,9 +8806,9 @@ async def api_portfolio(uid: str = Query(...)):
                 os.environ.get("BITUNIX_REFERRAL_URL", "https://www.bitunix.com/register?vipCode=tradehubsave")
             ),
         },
-    })
-    _CACHE[cache_key] = (result, time.time() + 90)
-    return result
+    }
+    _CACHE[cache_key] = (payload, time.time() + 90)
+    return JSONResponse(payload)
 
 
 @app.get("/api/executions/{exec_id}")
