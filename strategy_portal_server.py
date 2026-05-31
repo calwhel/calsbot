@@ -5817,6 +5817,80 @@ async def api_toggle_strategy(strategy_id: int, uid: str = Query(...)):
         db.close()
 
 
+@app.post("/api/strategies/{strategy_id}/sizing")
+async def api_update_strategy_sizing(strategy_id: int, request: Request):
+    """Lightweight inline position-size update from the Live Forex page.
+    Body: {uid, size_type: 'lots'|'pct'|'fixed'|'risk_pct', value}.
+    Allowed even for locked (subscribed) strategies — sizing is a user choice,
+    not creator IP. Writes a fresh config dict (SQLAlchemy JSON mutation safety)."""
+    body = await request.json()
+    uid = body.get("uid")
+    if not uid:
+        raise HTTPException(status_code=400)
+    size_type = str(body.get("size_type") or "").lower()
+    if size_type not in ("lots", "pct", "fixed", "risk_pct"):
+        raise HTTPException(status_code=400, detail="Invalid size_type")
+    try:
+        value = float(body.get("value"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid value")
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        from app.strategy_models import UserStrategy
+        s = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id, UserStrategy.user_id == user.id
+        ).first()
+        if not s:
+            raise HTTPException(status_code=404)
+
+        config = dict(s.config or {})
+        risk = dict(config.get("risk", {}))
+        risk["position_size_type"] = size_type if size_type != "risk_pct" else "pct"
+        # Clamp per type, write the canonical value field, and clear stale ones.
+        if size_type == "lots":
+            risk["position_size_lots"] = round(max(0.01, min(50.0, value)), 2)
+            risk["use_risk_pct"] = False
+        elif size_type == "fixed":
+            risk["position_size_usd"] = round(max(1.0, min(1_000_000.0, value)), 2)
+            risk["use_risk_pct"] = False
+        elif size_type == "risk_pct":
+            _rp = round(max(0.1, min(100.0, value)), 2)
+            risk["risk_pct_per_trade"] = _rp
+            # Mirror into position_size_pct: the subscriber-propagation execution
+            # path reads position_size_pct (not risk_pct_per_trade) as its risk%,
+            # so keep both in sync or auto-lot sizing uses a stale value.
+            risk["position_size_pct"] = _rp
+            risk["use_risk_pct"] = True
+        else:  # pct of balance
+            risk["position_size_pct"] = round(max(0.1, min(100.0, value)), 2)
+            risk["use_risk_pct"] = False
+        config["risk"] = risk
+        s.config = config
+        db.commit()
+        invalidate_prefix(f"api_strats_{uid}")
+        invalidate_prefix(f"api_mkt:{uid}")
+        invalidate_cache(f"analytics:{s.id}")
+
+        pst = risk["position_size_type"]
+        if size_type == "lots":
+            size_label = f"{risk['position_size_lots']:g} lots"
+        elif size_type == "fixed":
+            size_label = f"${risk['position_size_usd']:g} fixed"
+        elif size_type == "risk_pct":
+            size_label = f"{risk['risk_pct_per_trade']:g}% risk"
+        else:
+            size_label = f"{risk['position_size_pct']:g}% balance"
+        return JSONResponse({"success": True, "id": s.id,
+                             "size_type": size_type, "size_label": size_label})
+    finally:
+        db.close()
+
+
 @app.delete("/api/strategies/{strategy_id}")
 async def api_delete_strategy(strategy_id: int, uid: str = Query(...)):
     from app.database import SessionLocal
@@ -9740,16 +9814,18 @@ async def api_live_forex_account(uid: str = Query(...)):
                            COUNT(e.id) FILTER (
                                WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN')
                                  AND e.is_paper=false) AS closed_count,
+                           COUNT(e.id) FILTER (
+                               WHERE e.outcome='WIN' AND e.is_paper=false) AS win_count,
                            COALESCE(SUM(e.pnl_pct) FILTER (
                                WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN')
                                  AND e.is_paper=false), 0) AS total_pnl_pct
                     FROM user_strategies s
                     LEFT JOIN strategy_executions e ON e.strategy_id = s.id
                     WHERE s.user_id = :uid
-                      AND s.status = 'active'
+                      AND s.status IN ('active','paused')
                       AND s.asset_class IN ('forex','index','metals','commodity')
                     GROUP BY s.id
-                    ORDER BY s.updated_at DESC
+                    ORDER BY (s.status='active') DESC, s.updated_at DESC
                     LIMIT 30
                 """), {"uid": user.id}).fetchall()
                 return [dict(r._mapping) for r in rows]
@@ -9777,21 +9853,34 @@ async def api_live_forex_account(uid: str = Query(...)):
                     _tf = _conds[0].get("timeframe")
             pst = (risk.get("position_size_type") or "pct").lower()
             if pst == "lots":
-                size_label = f"{risk.get('position_size_lots', 0.1)} lots"
+                size_value = float(risk.get("position_size_lots", 0.1) or 0.1)
+                size_label = f"{size_value:g} lots"
             elif pst == "fixed":
-                size_label = f"${risk.get('position_size_usd', 50)} fixed"
+                size_value = float(risk.get("position_size_usd", 50) or 50)
+                size_label = f"${size_value:g} fixed"
             elif risk.get("use_risk_pct"):
-                size_label = f"{risk.get('risk_pct_per_trade', 1)}% risk"
+                size_value = float(risk.get("risk_pct_per_trade", 1) or 1)
+                size_label = f"{size_value:g}% risk"
+                pst = "risk_pct"
             else:
-                size_label = f"{risk.get('position_size_pct', 5)}% balance"
+                size_value = float(risk.get("position_size_pct", 5) or 5)
+                size_label = f"{size_value:g}% balance"
+                pst = "pct"
+            _closed = int(s["closed_count"] or 0)
+            _wins   = int(s["win_count"] or 0)
             live_strategies.append({
                 "id":            s["id"],
                 "name":          s["name"],
+                "status":        s["status"],
                 "asset_class":   s["asset_class"],
                 "symbols":       [str(x).upper() for x in syms][:8],
                 "open_count":    int(s["open_count"] or 0),
-                "closed_count":  int(s["closed_count"] or 0),
+                "closed_count":  _closed,
+                "win_count":     _wins,
+                "win_rate":      round(_wins / _closed * 100, 1) if _closed else None,
                 "total_pnl_pct": round(float(s["total_pnl_pct"] or 0), 2),
+                "size_type":     pst,
+                "size_value":    round(size_value, 4),
                 "size_label":    size_label,
                 "timeframe":     _tf or "—",
             })

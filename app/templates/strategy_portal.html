@@ -9683,27 +9683,116 @@ function renderLFSessions() {
 function renderLFLiveStrategies(strats) {
   if (!strats || !strats.length) return `<div style="color:var(--muted);font-size:13px;padding:8px 0">No strategies are running live on forex yet. Go to <b>Strategies</b>, open a forex/gold/index strategy, and switch it to <b>Live</b>.</div>`;
   return strats.map(s => {
+    const paused = s.status === 'paused';
     const pnl   = s.total_pnl_pct;
     const pnlC  = pnl == null ? '' : pnl >= 0 ? 'color:var(--positive,#3fb68b)' : 'color:var(--negative,#e5484d)';
     const pnlStr= s.closed_count > 0 ? `${pnl>=0?'+':''}${pnl.toFixed(2)}%` : '—';
     const syms  = (s.symbols||[]).slice(0,6).map(x=>`<span style="background:var(--surface2,rgba(255,255,255,.06));border-radius:5px;padding:2px 7px;font-size:10.5px;font-family:monospace;font-weight:600">${escHtml(x)}</span>`).join(' ');
     const open  = s.open_count || 0;
-    return `<div onclick="openStrategy(${s.id})" style="cursor:pointer;border-top:1px solid var(--border,rgba(255,255,255,.06));padding:11px 0;display:flex;align-items:center;justify-content:space-between;gap:12px">
-      <div style="min-width:0;flex:1">
-        <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px">
-          <span style="width:7px;height:7px;border-radius:50%;background:var(--positive,#3fb68b);box-shadow:0 0 0 3px rgba(63,182,139,.15);flex-shrink:0"></span>
-          <span style="font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(s.name)}</span>
-          <span style="font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--positive,#3fb68b);font-weight:700;border:1px solid var(--positive,#3fb68b);border-radius:4px;padding:1px 5px;flex-shrink:0">LIVE</span>
+    const wr    = s.win_rate;
+    const wrC   = wr == null ? 'color:var(--muted)' : wr >= 50 ? 'color:var(--positive,#3fb68b)' : 'color:var(--negative,#e5484d)';
+    const dotC  = paused ? 'var(--warning,#d6a35c)' : 'var(--positive,#3fb68b)';
+    return `<div style="border-top:1px solid var(--border,rgba(255,255,255,.06));padding:12px 0">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div style="min-width:0;flex:1;cursor:pointer" onclick="openStrategy(${s.id})">
+          <div style="display:flex;align-items:center;gap:7px;margin-bottom:6px">
+            <span style="width:7px;height:7px;border-radius:50%;background:${dotC};box-shadow:0 0 0 3px ${paused?'rgba(214,163,92,.15)':'rgba(63,182,139,.15)'};flex-shrink:0"></span>
+            <span style="font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(s.name)}</span>
+            <span style="font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:${paused?'var(--warning,#d6a35c)':'var(--positive,#3fb68b)'};font-weight:700;border:1px solid ${paused?'var(--warning,#d6a35c)':'var(--positive,#3fb68b)'};border-radius:4px;padding:1px 5px;flex-shrink:0">${paused?'PAUSED':'LIVE'}</span>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px">${syms||'<span style="font-size:10.5px;color:var(--muted)">all pairs</span>'}</div>
         </div>
-        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:5px">${syms||'<span style="font-size:10.5px;color:var(--muted)">all pairs</span>'}</div>
-        <div style="font-size:11px;color:var(--muted)">${s.size_label} · ${s.timeframe} · ${open} open${open===1?'':'s'} · ${s.closed_count} closed</div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:15px;font-weight:800;${pnlC}">${pnlStr}</div>
+          <div style="font-size:10px;color:var(--muted)">realized</div>
+        </div>
       </div>
-      <div style="text-align:right;flex-shrink:0">
-        <div style="font-size:15px;font-weight:800;${pnlC}">${pnlStr}</div>
-        <div style="font-size:10px;color:var(--muted)">realized</div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin:2px 0 9px;font-size:11px">
+        <span style="color:var(--muted)"><b style="color:var(--text,#fff);font-weight:700">${s.size_label}</b> size</span>
+        <span style="color:var(--muted)">${s.timeframe}</span>
+        <span style="color:var(--muted)"><b style="color:var(--text,#fff);font-weight:700">${open}</b> open</span>
+        <span style="color:var(--muted)"><b style="color:var(--text,#fff);font-weight:700">${s.closed_count}</b> closed</span>
+        <span style="color:var(--muted)">win <b style="${wrC};font-weight:700">${wr==null?'—':wr.toFixed(0)+'%'}</b></span>
       </div>
+      <div style="display:flex;gap:7px;flex-wrap:wrap">
+        <button class="btn ghost sm" onclick="lfEditSize(${s.id})">⚖ Edit size</button>
+        <button class="btn ${paused?'primary':'ghost'} sm" onclick="lfToggleStrat(${s.id},'${s.status}')">${paused?'▶ Resume':'⏸ Pause'}</button>
+      </div>
+      <div id="lf-size-edit-${s.id}" style="display:none;margin-top:9px;padding:11px;border:1px solid var(--border,rgba(255,255,255,.1));border-radius:10px;background:var(--surface2,rgba(255,255,255,.03))"
+           data-stype="${s.size_type}" data-sval="${s.size_value}"></div>
     </div>`;
   }).join('');
+}
+
+const LF_SIZE_OPTS = [
+  {v:'lots',     label:'Lots',        unit:'lots', step:'0.01', min:'0.01', max:'50',  hint:'Fixed contract size sent to your broker'},
+  {v:'pct',      label:'% balance',   unit:'%',    step:'0.5',  min:'0.1',  max:'100', hint:'Notional as a % of account balance'},
+  {v:'risk_pct', label:'% risk',      unit:'%',    step:'0.1',  min:'0.1',  max:'100', hint:'Risk this % of balance per trade (auto lot from SL)'},
+  {v:'fixed',    label:'$ fixed',     unit:'$',    step:'1',    min:'1',    max:'1000000', hint:'Fixed dollar notional per trade'},
+];
+
+function lfEditSize(id){
+  const box = document.getElementById('lf-size-edit-'+id);
+  if(!box) return;
+  if(box.style.display==='block'){ box.style.display='none'; return; }
+  const curType = box.getAttribute('data-stype') || 'pct';
+  const curVal  = box.getAttribute('data-sval')  || '';
+  box.setAttribute('data-sel', curType);
+  const chips = LF_SIZE_OPTS.map(o=>`<button type="button" class="btn ${o.v===curType?'primary':'ghost'} sm" style="font-size:11px" onclick="lfPickSizeType(${id},'${o.v}')" data-stype="${o.v}">${o.label}</button>`).join(' ');
+  const opt = LF_SIZE_OPTS.find(o=>o.v===curType) || LF_SIZE_OPTS[1];
+  box.innerHTML = `
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:700;margin-bottom:7px">Position size</div>
+    <div id="lf-size-chips-${id}" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">${chips}</div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
+      <input id="lf-size-val-${id}" type="number" value="${curVal}" step="${opt.step}" min="${opt.min}" max="${opt.max}"
+        style="flex:1;min-width:0;padding:8px 10px;font-size:14px;font-weight:700;border:1px solid var(--border,rgba(255,255,255,.12));border-radius:8px;background:var(--bg,#0e0f11);color:var(--text,#fff)" />
+      <span id="lf-size-unit-${id}" style="font-size:13px;color:var(--muted);font-weight:600;min-width:34px">${opt.unit}</span>
+    </div>
+    <div id="lf-size-hint-${id}" style="font-size:10.5px;color:var(--muted);margin-bottom:10px">${opt.hint}</div>
+    <div style="display:flex;gap:7px">
+      <button class="btn primary sm" onclick="lfSaveSize(${id})">Save size</button>
+      <button class="btn ghost sm" onclick="lfEditSize(${id})">Cancel</button>
+    </div>`;
+  box.style.display='block';
+}
+
+function lfPickSizeType(id, t){
+  const box = document.getElementById('lf-size-edit-'+id);
+  if(box) box.setAttribute('data-sel', t);
+  const opt = LF_SIZE_OPTS.find(o=>o.v===t) || LF_SIZE_OPTS[1];
+  document.querySelectorAll(`#lf-size-chips-${id} button`).forEach(b=>{
+    const on = b.getAttribute('data-stype')===t;
+    b.className = `btn ${on?'primary':'ghost'} sm`; b.style.fontSize='11px';
+  });
+  const inp = document.getElementById('lf-size-val-'+id);
+  if(inp){ inp.step=opt.step; inp.min=opt.min; inp.max=opt.max; }
+  const u = document.getElementById('lf-size-unit-'+id); if(u) u.textContent=opt.unit;
+  const h = document.getElementById('lf-size-hint-'+id); if(h) h.textContent=opt.hint;
+}
+
+async function lfSaveSize(id){
+  const box = document.getElementById('lf-size-edit-'+id);
+  const size_type = box ? (box.getAttribute('data-sel')||'pct') : 'pct';
+  const inp = document.getElementById('lf-size-val-'+id);
+  const value = inp ? parseFloat(inp.value) : NaN;
+  if(isNaN(value) || value<=0){ toast('Enter a valid size','error'); return; }
+  try{
+    const r = await fetch(`/api/strategies/${id}/sizing`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({uid:UID, size_type, value})});
+    const j = await r.json().catch(()=>({}));
+    if(r.ok && j.success){ toast(`Size updated → ${j.size_label}`); loadLiveForex(); }
+    else { toast(j.detail||j.message||'Could not update size','error'); }
+  }catch(e){ toast('Network error','error'); }
+}
+
+async function lfToggleStrat(id, status){
+  const goingLive = status === 'paused';
+  try{
+    const r = await fetch(`/api/strategies/${id}/toggle?uid=${UID}`,{method:'POST'});
+    const j = await r.json().catch(()=>({}));
+    if(r.ok){ toast(goingLive?'Strategy resumed':'Strategy paused'); loadLiveForex(); }
+    else { toast(j.detail||j.message||'Could not change status','error'); }
+  }catch(e){ toast('Network error','error'); }
 }
 
 function renderLFPositions(positions) {
