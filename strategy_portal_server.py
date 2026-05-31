@@ -872,45 +872,43 @@ def _ensure_tables():
     except Exception as e:
         logger.warning(f"_ensure_tables(indexes outer): {e}")
 
-    # Forex pip P&L tracking + spread audit columns (additive, nullable — safe to
-    # run on any worker; IF NOT EXISTS makes it idempotent).
-    try:
-        with engine.begin() as conn:
-            for ddl in (
-                "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS pips_pnl FLOAT",
-                "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS spread_pips_applied FLOAT",
-                "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS total_pips_pnl FLOAT",
-                "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS avg_pips_per_trade FLOAT",
-            ):
-                conn.execute(sa.text(ddl))
-        logger.info("_ensure_tables: forex pip columns ready")
-    except Exception as _pe:
-        _ps = str(_pe)
-        if "already exists" in _ps or "duplicate" in _ps:
-            logger.info("_ensure_tables(pip columns): already present")
-        else:
-            logger.warning(f"_ensure_tables(pip columns): {_pe}")
+    # Forex pip P&L tracking + spread audit columns (additive, nullable).
+    # lock_timeout prevents ACCESS EXCLUSIVE lock starvation under DB load.
+    for _ddl in (
+        "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS pips_pnl FLOAT",
+        "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS spread_pips_applied FLOAT",
+        "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS total_pips_pnl FLOAT",
+        "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS avg_pips_per_trade FLOAT",
+    ):
+        try:
+            with engine.begin() as _conn:
+                _conn.execute(sa.text("SET LOCAL lock_timeout = '2s'"))
+                _conn.execute(sa.text(_ddl))
+        except Exception as _pe:
+            _ps = str(_pe)
+            if "already exists" not in _ps and "duplicate" not in _ps and "LockNotAvailable" not in _ps:
+                logger.warning(f"_ensure_tables(pip column {_ddl[:60]}): {_pe}")
+    logger.info("_ensure_tables: forex pip columns ready")
 
     # cTrader forex broker columns (replaces OANDA). OAuth2 tokens from
     # Spotware Open API. Additive nullable ALTERs — safe for multi-worker race.
-    try:
-        with engine.begin() as conn:
-            for ddl in (
-                "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS ctrader_order_id VARCHAR(80)",
-                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_access_token VARCHAR",
-                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_refresh_token VARCHAR",
-                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_account_id VARCHAR",
-                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_accounts TEXT",
-                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS forex_approved BOOLEAN DEFAULT FALSE",
-            ):
-                conn.execute(sa.text(ddl))
-        logger.info("_ensure_tables: ctrader columns ready")
-    except Exception as e:
-        emsg = str(e)
-        if "already exists" in emsg or "duplicate" in emsg:
-            logger.info("_ensure_tables(ctrader): columns already present")
-        else:
-            logger.warning(f"_ensure_tables(ctrader): {e}")
+    for _ddl in (
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS ctrader_order_id VARCHAR(80)",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_access_token VARCHAR",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_refresh_token VARCHAR",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_account_id VARCHAR",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_accounts TEXT",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS forex_approved BOOLEAN DEFAULT FALSE",
+    ):
+        try:
+            with engine.begin() as _conn:
+                _conn.execute(sa.text("SET LOCAL lock_timeout = '2s'"))
+                _conn.execute(sa.text(_ddl))
+        except Exception as _ce:
+            _cs = str(_ce)
+            if "already exists" not in _cs and "duplicate" not in _cs and "LockNotAvailable" not in _cs:
+                logger.warning(f"_ensure_tables(ctrader {_ddl[:60]}): {_ce}")
+    logger.info("_ensure_tables: ctrader columns ready")
 
     # Auto-promote admin users to lifetime Pro + forex-approved so they always
     # bypass every Pro gate without needing the in-memory admin-bypass path.
@@ -5671,6 +5669,8 @@ async def api_strategies(uid: str = Query(...)):
     def _load():
         db = SessionLocal()
         try:
+            from sqlalchemy import text as _t2
+            db.execute(_t2("SET LOCAL statement_timeout = '8000'"))
             user = _get_user_by_uid(uid, db)
             if not user:
                 return None
@@ -5694,23 +5694,25 @@ async def api_strategies(uid: str = Query(...)):
                 # LATERAL join — one index-range-scan per strategy_id using
                 # the (strategy_id, fired_at DESC) composite index, avoids the
                 # slow global IN + ORDER BY that times out under DB load.
-                from sqlalchemy import text as _t2
                 ids_str = ",".join(str(i) for i in strategy_ids)
-                raw_rows = db.execute(_t2(f"""
-                    SELECT e.strategy_id, e.symbol, e.direction, e.outcome,
-                           e.pnl_pct, e.entry_price, e.exit_price, e.fired_at
-                    FROM unnest(ARRAY[{ids_str}]::int[]) AS s(sid)
-                    CROSS JOIN LATERAL (
-                        SELECT strategy_id, symbol, direction, outcome,
-                               pnl_pct, entry_price, exit_price, fired_at
-                        FROM strategy_executions
-                        WHERE strategy_id = s.sid
-                        ORDER BY fired_at DESC
-                        LIMIT 5
-                    ) e
-                """)).fetchall()
-                for row in raw_rows:
-                    exec_map.setdefault(row.strategy_id, []).append(row)
+                try:
+                    raw_rows = db.execute(_t2(f"""
+                        SELECT e.strategy_id, e.symbol, e.direction, e.outcome,
+                               e.pnl_pct, e.entry_price, e.exit_price, e.fired_at
+                        FROM unnest(ARRAY[{ids_str}]::int[]) AS s(sid)
+                        CROSS JOIN LATERAL (
+                            SELECT strategy_id, symbol, direction, outcome,
+                                   pnl_pct, entry_price, exit_price, fired_at
+                            FROM strategy_executions
+                            WHERE strategy_id = s.sid
+                            ORDER BY fired_at DESC
+                            LIMIT 5
+                        ) e
+                    """)).fetchall()
+                    for row in raw_rows:
+                        exec_map.setdefault(row.strategy_id, []).append(row)
+                except Exception:
+                    pass
 
             result = []
             for s in strategies:
@@ -5772,7 +5774,11 @@ async def api_strategies(uid: str = Query(...)):
         finally:
             db.close()
 
-    data = await asyncio.to_thread(_load)
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(_load), timeout=10.0)
+    except (asyncio.TimeoutError, Exception) as _e:
+        logger.warning(f"api_strategies timeout/error for {uid}: {_e}")
+        raise HTTPException(status_code=503, detail="Database busy — please retry in a moment")
     if data is None:
         raise HTTPException(status_code=403)
     _CACHE[cache_key] = (data, time.time() + 120)
@@ -8632,6 +8638,7 @@ async def api_portfolio(uid: str = Query(...)):
     from collections import defaultdict
     db = SessionLocal()
     try:
+        db.execute(text("SET LOCAL statement_timeout = '8000'"))
         user = _get_user_by_uid(uid, db)
         if not user:
             raise HTTPException(status_code=403)

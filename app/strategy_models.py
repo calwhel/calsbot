@@ -286,7 +286,8 @@ def init_strategy_tables(engine):
                     pass
 
         # Composite and single-column indexes on hot filter columns.
-        # CREATE INDEX IF NOT EXISTS is safe to re-run — no-ops if already present.
+        # Use lock_timeout so a waiting CREATE INDEX never causes lock-queue
+        # starvation that blocks all subsequent SELECTs on the table.
         indexes = [
             "CREATE INDEX IF NOT EXISTS idx_se_outcome    ON strategy_executions(outcome)",
             "CREATE INDEX IF NOT EXISTS idx_se_is_paper   ON strategy_executions(is_paper)",
@@ -301,10 +302,14 @@ def init_strategy_tables(engine):
         ]
         for sql in indexes:
             try:
+                conn.execute(text("SET LOCAL lock_timeout = '2s'"))
                 conn.execute(text(sql))
                 conn.commit()
             except Exception:
-                pass
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
 
         # Weekly AI Trade Coach reports — cached one-per-(user, week) to keep
         # Claude Haiku spend bounded. JSONB so we can add fields without ALTERs.

@@ -48,10 +48,22 @@ def run_migrations():
         
         with engine.connect() as conn:
             # Add referral system columns if they don't exist
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings FLOAT DEFAULT 0.0"))
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS paid_referrals TEXT DEFAULT ''"))
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS crypto_wallet VARCHAR"))
-            conn.commit()
+            # lock_timeout prevents holding ACCESS EXCLUSIVE lock on users table
+            # indefinitely; migration retries on next restart if lock is busy.
+            for _ddl in (
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings FLOAT DEFAULT 0.0",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS paid_referrals TEXT DEFAULT ''",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS crypto_wallet VARCHAR",
+            ):
+                try:
+                    conn.execute(text("SET LOCAL lock_timeout = '2s'"))
+                    conn.execute(text(_ddl))
+                    conn.commit()
+                except Exception:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
             logging.info("✅ Database migrations completed successfully (added referral_earnings, paid_referrals, crypto_wallet)")
         
         engine.dispose()

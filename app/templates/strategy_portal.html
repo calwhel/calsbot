@@ -3717,7 +3717,7 @@ async function loadMyStrategies(){
     strats=[]; port={total_strategies:0,active_count:0,open_trades:0,total_trades:0,win_rate:0,pnl_7d:0,pnl_30d:0,pnl_all:0,equity_30d:{labels:[],values:[]}};
     try{
       const ctrl=new AbortController();
-      const t=setTimeout(()=>ctrl.abort(),25000);
+      const t=setTimeout(()=>ctrl.abort(),8000);
       const [stratsRes,portRes]=await Promise.all([
         fetch(_sUrl,{signal:ctrl.signal}),
         fetch(_pUrl,{signal:ctrl.signal})
