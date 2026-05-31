@@ -3541,7 +3541,7 @@ function makeLineChart(canvasId,labels,values,label='P&L %'){
 
 // ─── Page nav ──────────────────────────────────────────────
 function showPage(id,el,startPaper){
-  window.scrollTo({top:0,behavior:'instant'});
+  try{window.scrollTo(0,0);}catch(e){}
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
   $(id).classList.add('active');
