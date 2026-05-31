@@ -9756,16 +9756,25 @@ async def api_live_forex_account(uid: str = Query(...)):
             else:
                 try:
                     from app.services.ctrader_client import _get_account_balance
+                    # 12s outer cap: on a cold socket (e.g. weekends when the FX
+                    # executor isn't keeping the persistent connection warm) the
+                    # balance flow needs a full reconnect — SSL handshake +
+                    # app-auth + account-auth + reconcile round-trips — which can
+                    # exceed a few seconds. The result is cached 20s so only the
+                    # first poll after a cold start pays this cost.
                     balance = await asyncio.wait_for(
                         _get_account_balance(prefs.ctrader_access_token, int(_acct_id)),
-                        timeout=3.0,
+                        timeout=12.0,
                     )
                     if balance is not None:
                         set_cache(_bal_key, balance, ttl_seconds=20)
                     else:
                         set_cache(_bal_key, "__miss__", ttl_seconds=15)
                 except Exception as _be:
-                    logger.warning(f"[live-forex] balance fetch failed uid={uid}: {_be}")
+                    logger.warning(
+                        f"[live-forex] balance fetch failed uid={uid}: "
+                        f"{type(_be).__name__}: {_be}"
+                    )
                     set_cache(_bal_key, "__miss__", ttl_seconds=15)
 
         # Fetch open positions from strategy_executions (forex/index live trades)

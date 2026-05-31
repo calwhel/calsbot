@@ -522,24 +522,36 @@ async def _get_account_balance(
         return None
     try:
         async with _get_lock():
-            reader, writer = await _get_persistent_connection()
-            if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
-                return None
-            req = ProtoOAReconcileReq()
-            req.ctidTraderAccountId = ctid_trader_account_id
-            payload = await _send_recv(
-                reader, writer, req,
-                _PAYLOAD_TYPES["reconcile_req"],
-                _PAYLOAD_TYPES["reconcile_res"],
-                timeout=10.0,
-            )
-            if not payload:
-                return None
-            res = ProtoOAReconcileRes()
-            res.ParseFromString(payload)
-            # balance is in cents (×100)
-            if hasattr(res, "balance") and res.balance:
-                return res.balance / 100.0
+            try:
+                reader, writer = await _get_persistent_connection()
+                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                    return None
+                req = ProtoOAReconcileReq()
+                req.ctidTraderAccountId = ctid_trader_account_id
+                payload = await _send_recv(
+                    reader, writer, req,
+                    _PAYLOAD_TYPES["reconcile_req"],
+                    _PAYLOAD_TYPES["reconcile_res"],
+                    timeout=10.0,
+                )
+                if not payload:
+                    return None
+                res = ProtoOAReconcileRes()
+                res.ParseFromString(payload)
+                # balance is in cents (×100)
+                if hasattr(res, "balance") and res.balance:
+                    return res.balance / 100.0
+            except asyncio.CancelledError:
+                # An outer asyncio.wait_for() cancelled us mid-flight (e.g. the
+                # live-forex endpoint's balance-fetch timeout). The shared
+                # persistent socket may now hold an unconsumed / partial
+                # reconcile frame, which would desync the NEXT caller (including
+                # live order placement). Drop the socket so the next call
+                # reconnects cleanly, then propagate the cancellation.
+                _invalidate_persistent_connection()
+                raise
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.debug(f"[cTrader] balance fetch error: {e}")
     return None
