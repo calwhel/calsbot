@@ -214,10 +214,14 @@ def init_strategy_tables(engine):
     # portal instances (dev + production) share the same Neon database.
     from sqlalchemy import text
     with engine.connect() as conn:
-        # Disable statement timeout for migrations — Neon's default is short and
-        # ALTER TABLE can be cancelled under load without this guard.
+        # Bound statement time and — critically — cap how long any DDL will WAIT
+        # for a lock. Without lock_timeout a blocked ALTER/CREATE INDEX queues
+        # behind other table access and then blocks every subsequent SELECT on
+        # that table (lock-queue starvation), which hangs all portal API calls.
+        # Session-level SET (not LOCAL) so it applies to every DDL below.
         try:
-            conn.execute(text("SET statement_timeout = 0"))
+            conn.execute(text("SET lock_timeout = '2s'"))
+            conn.execute(text("SET statement_timeout = '30000'"))
             conn.commit()
         except Exception:
             pass

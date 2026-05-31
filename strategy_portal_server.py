@@ -8636,129 +8636,176 @@ async def api_portfolio(uid: str = Query(...)):
     from sqlalchemy import text
     from datetime import datetime, timedelta
     from collections import defaultdict
-    db = SessionLocal()
-    try:
-        db.execute(text("SET LOCAL statement_timeout = '8000'"))
-        user = _get_user_by_uid(uid, db)
-        if not user:
-            raise HTTPException(status_code=403)
 
-        cutoff_30d = datetime.utcnow() - timedelta(days=30)
-        cutoff_7d  = datetime.utcnow() - timedelta(days=7)
-
-        # Single query: strategy counts
-        strat_row = db.execute(text("""
-            SELECT
-                COUNT(*) AS total,
-                COUNT(*) FILTER (WHERE status = 'active') AS active_count
-            FROM user_strategies WHERE user_id = :uid
-        """), {"uid": user.id}).fetchone()
-        total_strategies = strat_row.total if strat_row else 0
-        active_count     = strat_row.active_count if strat_row else 0
-
-        cutoff_today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-
-        # Single query: executions via JOIN — OPEN trades unbounded,
-        # closed trades capped at 90 days to prevent full-table scan.
-        cutoff_90d = datetime.utcnow() - timedelta(days=90)
-        exec_rows = db.execute(text("""
-            SELECT e.outcome, e.pnl_pct, e.is_paper,
-                   COALESCE(e.closed_at, e.fired_at) AS ts
-            FROM strategy_executions e
-            JOIN user_strategies s ON s.id = e.strategy_id
-            WHERE s.user_id = :uid
-              AND (e.outcome = 'OPEN' OR COALESCE(e.closed_at, e.fired_at) >= :cutoff)
-        """), {"uid": user.id, "cutoff": cutoff_90d}).fetchall()
-
-        open_trades  = sum(1 for r in exec_rows if r.outcome == "OPEN")
-        live_open    = sum(1 for r in exec_rows if r.outcome == "OPEN" and not r.is_paper)
-        paper_open   = sum(1 for r in exec_rows if r.outcome == "OPEN" and r.is_paper)
-        closed = [(r.pnl_pct, r.ts, r.outcome, bool(r.is_paper)) for r in exec_rows
-                  if r.outcome in ("WIN", "LOSS", "BREAKEVEN") and r.pnl_pct is not None]
-        total = len(closed)
-        wins  = sum(1 for _, _, o, _ in closed if o == "WIN")
-        # Win rate denominator excludes BREAKEVEN — neutral outcome shouldn't drag it down.
-        decisive = sum(1 for _, _, o, _ in closed if o in ("WIN", "LOSS"))
-
-        closed_30d = [(p, ts, o, ip) for p, ts, o, ip in closed if ts and ts > cutoff_30d]
-
-        pnl_today    = sum(p for p, ts, _, _  in closed if ts and ts > cutoff_today)
-        pnl_7d       = sum(p for p, ts, _, _  in closed if ts and ts > cutoff_7d)
-        pnl_30d      = sum(p for p, _, _, _   in closed_30d)
-        pnl_all      = sum(p for p, _, _, _   in closed)
-        live_pnl_30d  = sum(p for p, _, _, ip in closed_30d if not ip)
-        paper_pnl_30d = sum(p for p, _, _, ip in closed_30d if ip)
-        live_closed_30d  = sum(1 for _, _, _, ip in closed_30d if not ip)
-        paper_closed_30d = sum(1 for _, _, _, ip in closed_30d if ip)
-
-        daily = defaultdict(float)
-        for pnl, ts, _, _ in closed_30d:
-            daily[ts.strftime("%m/%d")] += pnl
-
-        cumulative, port_labels, port_values = 0.0, [], []
-        for day, pnl in sorted(daily.items()):
-            cumulative += pnl
-            port_labels.append(day)
-            port_values.append(round(cumulative, 2))
-
-        # Affiliate + key status — fail-soft, never block portfolio load.
-        # bitunix_uid + bitunix_api_key live on UserPreference, NOT User.
-        aff_ok, aff_reason = False, "no_bitunix_uid"
-        bitunix_uid = None
-        has_keys = False
+    # All DB-heavy work runs in a worker thread bounded by wait_for, so a slow
+    # query under DB pressure can never pin this request's event loop (which
+    # would stall every other portal API call served by the same worker).
+    def _load_portfolio_sync():
+        db = SessionLocal()
         try:
-            from app.models import UserPreference
-            prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-            if prefs:
-                bitunix_uid = getattr(prefs, "bitunix_uid", None)
-                has_keys = bool(
-                    getattr(prefs, "bitunix_api_key", None)
-                    and getattr(prefs, "bitunix_api_secret", None)
-                )
-            if bitunix_uid:
-                from app.services.bitunix_partner import is_uid_affiliated
-                aff_ok, aff_reason = await is_uid_affiliated(bitunix_uid)
-        except Exception as e:
-            aff_reason = f"check_error:{type(e).__name__}"
+            db.execute(text("SET LOCAL statement_timeout = '8000'"))
+            user = _get_user_by_uid(uid, db)
+            if not user:
+                raise HTTPException(status_code=403)
 
-        result = JSONResponse({
-            "total_strategies": total_strategies,
-            "active_count":     active_count,
-            "open_trades":      open_trades,
-            "live_open":        live_open,
-            "paper_open":       paper_open,
-            "total_trades":     total,
-            "win_rate":         round(wins / decisive * 100, 1) if decisive > 0 else 0,
-            "pnl_today":        round(pnl_today, 2),
-            "pnl_7d":           round(pnl_7d, 2),
-            "pnl_30d":          round(pnl_30d, 2),
-            "pnl_all":          round(pnl_all, 2),
-            "live_pnl_30d":     round(live_pnl_30d, 2),
-            "paper_pnl_30d":    round(paper_pnl_30d, 2),
-            "live_closed_30d":  live_closed_30d,
-            "paper_closed_30d": paper_closed_30d,
-            "equity_30d":       {"labels": port_labels, "values": port_values},
-            "affiliate": {
-                "ok":          bool(aff_ok),
-                "reason":      aff_reason,
-                "has_uid":     bool(bitunix_uid),
-                "has_keys":    has_keys,
-                "referral_url": (
-                    os.environ.get("BITUNIX_REFERRAL_URL", "https://www.bitunix.com/register?vipCode=tradehubsave")
-                ),
-            },
-        })
-        _CACHE[cache_key] = (result, time.time() + 90)
-        return result
+            cutoff_30d = datetime.utcnow() - timedelta(days=30)
+            cutoff_7d  = datetime.utcnow() - timedelta(days=7)
+
+            # Single query: strategy counts
+            strat_row = db.execute(text("""
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE status = 'active') AS active_count
+                FROM user_strategies WHERE user_id = :uid
+            """), {"uid": user.id}).fetchone()
+            total_strategies = strat_row.total if strat_row else 0
+            active_count     = strat_row.active_count if strat_row else 0
+
+            cutoff_today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # Single query: executions via JOIN — OPEN trades unbounded,
+            # closed trades capped at 90 days to prevent full-table scan.
+            cutoff_90d = datetime.utcnow() - timedelta(days=90)
+            exec_rows = db.execute(text("""
+                SELECT e.outcome, e.pnl_pct, e.is_paper,
+                       COALESCE(e.closed_at, e.fired_at) AS ts
+                FROM strategy_executions e
+                JOIN user_strategies s ON s.id = e.strategy_id
+                WHERE s.user_id = :uid
+                  AND (e.outcome = 'OPEN' OR COALESCE(e.closed_at, e.fired_at) >= :cutoff)
+            """), {"uid": user.id, "cutoff": cutoff_90d}).fetchall()
+
+            open_trades  = sum(1 for r in exec_rows if r.outcome == "OPEN")
+            live_open    = sum(1 for r in exec_rows if r.outcome == "OPEN" and not r.is_paper)
+            paper_open   = sum(1 for r in exec_rows if r.outcome == "OPEN" and r.is_paper)
+            closed = [(r.pnl_pct, r.ts, r.outcome, bool(r.is_paper)) for r in exec_rows
+                      if r.outcome in ("WIN", "LOSS", "BREAKEVEN") and r.pnl_pct is not None]
+            total = len(closed)
+            wins  = sum(1 for _, _, o, _ in closed if o == "WIN")
+            # Win rate denominator excludes BREAKEVEN — neutral shouldn't drag it down.
+            decisive = sum(1 for _, _, o, _ in closed if o in ("WIN", "LOSS"))
+
+            closed_30d = [(p, ts, o, ip) for p, ts, o, ip in closed if ts and ts > cutoff_30d]
+
+            pnl_today    = sum(p for p, ts, _, _  in closed if ts and ts > cutoff_today)
+            pnl_7d       = sum(p for p, ts, _, _  in closed if ts and ts > cutoff_7d)
+            pnl_30d      = sum(p for p, _, _, _   in closed_30d)
+            pnl_all      = sum(p for p, _, _, _   in closed)
+            live_pnl_30d  = sum(p for p, _, _, ip in closed_30d if not ip)
+            paper_pnl_30d = sum(p for p, _, _, ip in closed_30d if ip)
+            live_closed_30d  = sum(1 for _, _, _, ip in closed_30d if not ip)
+            paper_closed_30d = sum(1 for _, _, _, ip in closed_30d if ip)
+
+            daily = defaultdict(float)
+            for pnl, ts, _, _ in closed_30d:
+                daily[ts.strftime("%m/%d")] += pnl
+
+            cumulative, port_labels, port_values = 0.0, [], []
+            for day, pnl in sorted(daily.items()):
+                cumulative += pnl
+                port_labels.append(day)
+                port_values.append(round(cumulative, 2))
+
+            # Bitunix UID / key presence — read here (sync); the actual affiliate
+            # check is an async upstream call done after the thread returns.
+            bitunix_uid = None
+            has_keys = False
+            try:
+                from app.models import UserPreference
+                prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+                if prefs:
+                    bitunix_uid = getattr(prefs, "bitunix_uid", None)
+                    has_keys = bool(
+                        getattr(prefs, "bitunix_api_key", None)
+                        and getattr(prefs, "bitunix_api_secret", None)
+                    )
+            except Exception:
+                pass
+
+            return {
+                "total_strategies": total_strategies,
+                "active_count":     active_count,
+                "open_trades":      open_trades,
+                "live_open":        live_open,
+                "paper_open":       paper_open,
+                "total":            total,
+                "wins":             wins,
+                "decisive":         decisive,
+                "pnl_today":        pnl_today,
+                "pnl_7d":           pnl_7d,
+                "pnl_30d":          pnl_30d,
+                "pnl_all":          pnl_all,
+                "live_pnl_30d":     live_pnl_30d,
+                "paper_pnl_30d":    paper_pnl_30d,
+                "live_closed_30d":  live_closed_30d,
+                "paper_closed_30d": paper_closed_30d,
+                "port_labels":      port_labels,
+                "port_values":      port_values,
+                "bitunix_uid":      bitunix_uid,
+                "has_keys":         has_keys,
+            }
+        finally:
+            db.close()
+
+    try:
+        d = await asyncio.wait_for(asyncio.to_thread(_load_portfolio_sync), timeout=10.0)
+    except asyncio.TimeoutError:
+        stale = _CACHE.get(cache_key)
+        if stale:
+            logger.warning("[portfolio] load timed out — serving stale cache")
+            return stale[0]
+        return JSONResponse(
+            {"error": "timeout", "detail": "Portfolio is taking too long to load. Please retry."},
+            status_code=503,
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
-        # On DB timeout serve stale cache rather than killing the worker.
+        # On DB error serve stale cache rather than killing the worker.
         stale = _CACHE.get(cache_key)
         if stale:
             logger.warning(f"[portfolio] DB error, serving stale cache: {exc}")
             return stale[0]
         raise
-    finally:
-        db.close()
+
+    # Affiliate check — async upstream call, runs on the event loop. Fail-soft.
+    aff_ok, aff_reason = False, "no_bitunix_uid"
+    if d["bitunix_uid"]:
+        try:
+            from app.services.bitunix_partner import is_uid_affiliated
+            aff_ok, aff_reason = await is_uid_affiliated(d["bitunix_uid"])
+        except Exception as e:
+            aff_reason = f"check_error:{type(e).__name__}"
+
+    result = JSONResponse({
+        "total_strategies": d["total_strategies"],
+        "active_count":     d["active_count"],
+        "open_trades":      d["open_trades"],
+        "live_open":        d["live_open"],
+        "paper_open":       d["paper_open"],
+        "total_trades":     d["total"],
+        "win_rate":         round(d["wins"] / d["decisive"] * 100, 1) if d["decisive"] > 0 else 0,
+        "pnl_today":        round(d["pnl_today"], 2),
+        "pnl_7d":           round(d["pnl_7d"], 2),
+        "pnl_30d":          round(d["pnl_30d"], 2),
+        "pnl_all":          round(d["pnl_all"], 2),
+        "live_pnl_30d":     round(d["live_pnl_30d"], 2),
+        "paper_pnl_30d":    round(d["paper_pnl_30d"], 2),
+        "live_closed_30d":  d["live_closed_30d"],
+        "paper_closed_30d": d["paper_closed_30d"],
+        "equity_30d":       {"labels": d["port_labels"], "values": d["port_values"]},
+        "affiliate": {
+            "ok":          bool(aff_ok),
+            "reason":      aff_reason,
+            "has_uid":     bool(d["bitunix_uid"]),
+            "has_keys":    d["has_keys"],
+            "referral_url": (
+                os.environ.get("BITUNIX_REFERRAL_URL", "https://www.bitunix.com/register?vipCode=tradehubsave")
+            ),
+        },
+    })
+    _CACHE[cache_key] = (result, time.time() + 90)
+    return result
 
 
 @app.get("/api/executions/{exec_id}")
@@ -9622,18 +9669,27 @@ async def api_live_forex_account(uid: str = Query(...)):
         if _acct_id:
             from app.cache import get_cache, set_cache
             _bal_key = f"ctrader_balance:{user.id}"
-            balance = get_cache(_bal_key)
-            if balance is None:
+            _cached = get_cache(_bal_key)
+            # Sentinel string marks a recent failed/timed-out fetch so repeat
+            # polls don't each re-wait the full upstream timeout (negative cache).
+            if _cached == "__miss__":
+                balance = None
+            elif _cached is not None:
+                balance = _cached
+            else:
                 try:
                     from app.services.ctrader_client import _get_account_balance
                     balance = await asyncio.wait_for(
                         _get_account_balance(prefs.ctrader_access_token, int(_acct_id)),
-                        timeout=6.0,
+                        timeout=3.0,
                     )
                     if balance is not None:
                         set_cache(_bal_key, balance, ttl_seconds=20)
+                    else:
+                        set_cache(_bal_key, "__miss__", ttl_seconds=15)
                 except Exception as _be:
                     logger.warning(f"[live-forex] balance fetch failed uid={uid}: {_be}")
+                    set_cache(_bal_key, "__miss__", ttl_seconds=15)
 
         # Fetch open positions from strategy_executions (forex/index live trades)
         def _get_open_positions():
@@ -9670,8 +9726,8 @@ async def api_live_forex_account(uid: str = Query(...)):
             "forex_approved": forex_approved,
             "account_id":     prefs.ctrader_account_id or "",
             "accounts":       accounts,
-            "balance":        round(balance, 2) if balance else None,
-            "equity":         round(balance, 2) if balance else None,
+            "balance":        round(balance, 2) if balance is not None else None,
+            "equity":         round(balance, 2) if balance is not None else None,
             "open_positions": positions,
         })
     finally:
