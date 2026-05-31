@@ -1796,7 +1796,7 @@ tr:hover td { background: var(--surface) !important; }
   </div>
   <div class="topbar-right">
     <button class="btn sm ghost topbar-earnings-btn" onclick="showEarnings()">💰 Earnings</button>
-    <span id="tier-badge" class="tier-badge pro" title="TradeHub">FREE</span>
+    <span id="tier-badge" class="tier-badge pro" title="TradeHub">Active</span>
     <div class="acct-wrap">
       <button class="acct-avatar-btn" id="acct-avatar-btn" onclick="toggleAcctMenu(event)" aria-label="Account menu">
         <span id="nav-avatar">T</span>
@@ -3149,7 +3149,7 @@ function dismissTgBanner(){
             <div style="font-size:13px;font-weight:700;color:var(--text)" id="settings-plan-name">TradeHub</div>
             <div id="acct-sub-expiry" style="font-size:12px;color:var(--muted);margin-top:2px">Active</div>
           </div>
-          <span id="settings-plan-action"><span class="tier-badge pro">FREE</span></span>
+          <span id="settings-plan-action"><span class="tier-badge pro">Active</span></span>
         </div>
       </div>
 
@@ -3432,7 +3432,7 @@ function _clearStratCache(){_fcDel('/api/strategies?uid='+UID);_fcDel('/api/port
       const spn=document.getElementById('settings-plan-name'); if(spn)spn.textContent='TradeHub';
       const se=document.getElementById('acct-sub-expiry');     if(se)se.textContent='Active';
       const spa=document.getElementById('settings-plan-action');
-      if(spa)spa.innerHTML='<span class="tier-badge pro">FREE</span>';
+      if(spa)spa.innerHTML='<span class="tier-badge pro">Active</span>';
     })
     .catch(()=>{});
 })();
@@ -7173,8 +7173,16 @@ async function loadMarketplace(){
   let data=_fcGet(url);
   if(!data){
     $('market-grid').innerHTML=skelCards(6);$('market-grid').style.display='block';
-    data=await(await fetch(url)).json();
-    _fcSet(url,data,60000);
+    try{
+      const r=await fetch(url);
+      if(!r.ok)throw new Error(r.status);
+      data=await r.json();
+      _fcSet(url,data,60000);
+    }catch(e){
+      $('market-grid').innerHTML=`<div class="empty" style="grid-column:1/-1"><div class="icon">⚠️</div><p>Couldn't load marketplace. Check your connection.</p><button class="btn primary" onclick="loadMarketplace()">↺ Retry</button></div>`;
+      $('market-grid').style.display='flex';
+      return;
+    }
   }
   if(!data.length){$('market-grid').innerHTML=`<div class="empty" style="grid-column:1/-1"><div class="icon">🏪</div><p>No strategies match. Build yours and be first to publish!</p><button class="btn primary" onclick="showPage('build')">Build &amp; Publish</button></div>`;$('market-grid').style.display='flex';return;}
   $('market-grid').style.display='grid';
@@ -7265,7 +7273,15 @@ function setLbMetric(m,el){lbMetric=m;document.querySelectorAll('.metric-tabs .f
 async function loadLeaderboard(){
   $('lb-content').innerHTML='<div class="loader">Loading…</div>';
   loadCompetition();
-  const data=await(await fetch(`/api/leaderboard?uid=${UID}&metric=${lbMetric}`)).json();
+  let data;
+  try{
+    const r=await fetch(`/api/leaderboard?uid=${UID}&metric=${lbMetric}`);
+    if(!r.ok)throw new Error(r.status);
+    data=await r.json();
+  }catch(e){
+    $('lb-content').innerHTML='<div class="empty"><p>Couldn\'t load leaderboard. Check your connection.</p><button class="btn primary" onclick="loadLeaderboard()">↺ Retry</button></div>';
+    return;
+  }
   if(!data.length){$('lb-content').innerHTML='<div class="empty"><p>No strategies with enough trade history yet. Be first!</p></div>';return;}
   const rows=data.map((r,i)=>{
     const medal=['🥇','🥈','🥉'][i]||i+1;
@@ -7521,7 +7537,15 @@ async function showEarnings(){
 // ─── PURCHASES ─────────────────────────────────────────────
 async function loadPurchases(){
   const el=$('purchases-list');el.innerHTML='<div class="loader">Loading…</div>';
-  const data=await(await fetch(`/api/my-purchases?uid=${UID}`)).json();
+  let data;
+  try{
+    const r=await fetch(`/api/my-purchases?uid=${UID}`);
+    if(!r.ok)throw new Error(r.status);
+    data=await r.json();
+  }catch(e){
+    el.innerHTML='<div class="empty"><div class="icon">⚠️</div><p>Couldn\'t load purchases. Check your connection.</p><button class="btn primary" onclick="loadPurchases()">↺ Retry</button></div>';
+    return;
+  }
   if(!data.length){el.innerHTML=`<div class="empty"><div class="icon">🛒</div><p>No purchased strategies yet.</p><button class="btn primary" onclick="showPage('marketplace')">Browse Marketplace</button></div>`;return;}
   el.innerHTML=`<div style="display:flex;flex-direction:column;gap:8px">${data.map(p=>`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;display:flex;justify-content:space-between;align-items:center">
     <div><div style="font-weight:600;margin-bottom:3px">${p.title}</div><div style="font-size:12px;color:var(--muted)">${p.pricing_model==='free'?'Free subscription':'$'+p.amount_paid} · ${p.purchased_at?new Date(p.purchased_at).toLocaleDateString():''}</div></div>
