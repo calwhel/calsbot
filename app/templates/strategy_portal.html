@@ -3495,18 +3495,21 @@ function cfgPsToggle(type){
 }
 
 function wzSyncPsUI(){
-  const isPct=WZ.posSizeType!=='fixed';
+  const mode=WZ.posSizeType||'pct';
   const pct=document.getElementById('wz-ps-pct-row');
   const usd=document.getElementById('wz-ps-usd-row');
+  const lots=document.getElementById('wz-ps-lots-row');
   const lbl=document.getElementById('wz-ps-v');
   const allBtns=document.querySelectorAll('[onclick*="wzSyncPsUI"]');
-  if(pct)pct.style.display=isPct?'block':'none';
-  if(usd)usd.style.display=isPct?'none':'block';
-  if(lbl)lbl.textContent=isPct?WZ.posSize+'%':'$'+WZ.posSizeUsd;
+  if(pct)pct.style.display=mode==='pct'?'block':'none';
+  if(usd)usd.style.display=mode==='fixed'?'block':'none';
+  if(lots)lots.style.display=mode==='lots'?'block':'none';
+  if(lbl)lbl.textContent=mode==='lots'?(WZ.posSizeLots+' lots'):mode==='fixed'?('$'+WZ.posSizeUsd):(WZ.posSize+'%');
   allBtns.forEach(b=>{
-    const forPct=b.textContent.trim()==='% Balance';
-    b.style.background=(forPct===isPct)?'var(--accent)':'var(--surface)';
-    b.style.color=(forPct===isPct)?'#fff':'var(--muted)';
+    const t=b.textContent.trim();
+    const on=(t==='% Balance'&&mode==='pct')||(t==='Fixed $'&&mode==='fixed')||(t==='Lots'&&mode==='lots');
+    b.style.background=on?'var(--accent)':'var(--surface)';
+    b.style.color=on?'#fff':'var(--muted)';
   });
 }
 
@@ -3786,7 +3789,8 @@ function renderStratList(strats){
     if(risk.leverage&&risk.leverage>1)metaParts.push(`<span class="card-meta-sep"></span><span>${risk.leverage}× leverage</span>`);
     if(exit.take_profit_pct)metaParts.push(`<span class="card-meta-sep"></span><span class="rp tp" style="font-size:11px">TP ${exit.take_profit_pct}%</span>`);
     if(exit.stop_loss_pct)metaParts.push(`<span class="rp sl" style="font-size:11px">SL ${exit.stop_loss_pct}%</span>`);
-    if(risk.position_size_type==='fixed'&&risk.position_size_usd)metaParts.push(`<span class="card-meta-sep"></span><span>$${risk.position_size_usd} fixed</span>`);
+    if(risk.position_size_type==='lots'&&risk.position_size_lots)metaParts.push(`<span class="card-meta-sep"></span><span>${risk.position_size_lots} lots</span>`);
+    else if(risk.position_size_type==='fixed'&&risk.position_size_usd)metaParts.push(`<span class="card-meta-sep"></span><span>$${risk.position_size_usd} fixed</span>`);
     else if(risk.position_size_pct)metaParts.push(`<span class="card-meta-sep"></span><span>${risk.position_size_pct}% size</span>`);
 
     const isLocked=s.is_locked||false;
@@ -4232,7 +4236,7 @@ const WZ={
   // Forex-only pip TP/SL — emitted to /api/save-strategy only when assetClass==='forex'.
   // Executor converts pips→% at fire time using the live price + the pair's pip size.
   tp1Pips:null,tp2Pips:null,slPips:null,
-  leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,noDuplicateSymbol:false,
+  leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,posSizeLots:0.10,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,noDuplicateSymbol:false,
   sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',
   timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,
   name:'',category:'general',pricing:'free',price:null,
@@ -5663,16 +5667,21 @@ function renderStep6(){
         <input type="range" min="1" max="125" value="${WZ.leverage}" step="1" oninput="WZ.leverage=Number(this.value);document.getElementById('wz-lev-v').textContent=this.value+'×';updateWzPreview()" style="width:100%;accent-color:var(--accent)">
       </div>
       <div class="form-group" style="margin-bottom:0">
-        <label style="display:flex;justify-content:space-between">Position Size <span class="lv" id="wz-ps-v">${WZ.posSizeType==='fixed'?'$'+WZ.posSizeUsd:WZ.posSize+'%'}</span></label>
+        <label style="display:flex;justify-content:space-between">Position Size <span class="lv" id="wz-ps-v">${WZ.posSizeType==='lots'?WZ.posSizeLots+' lots':WZ.posSizeType==='fixed'?'$'+WZ.posSizeUsd:WZ.posSize+'%'}</span></label>
         <div style="display:flex;gap:6px;margin-bottom:8px">
-          <button onclick="WZ.posSizeType='pct';wzSyncPsUI()" style="flex:1;font-size:11px;padding:5px 0;border-radius:6px;border:1px solid var(--border);background:${WZ.posSizeType!=='fixed'?'var(--accent)':'var(--surface)'};color:${WZ.posSizeType!=='fixed'?'#fff':'var(--muted)'};cursor:pointer;font-weight:600;transition:.15s">% Balance</button>
+          <button onclick="WZ.posSizeType='pct';wzSyncPsUI()" style="flex:1;font-size:11px;padding:5px 0;border-radius:6px;border:1px solid var(--border);background:${WZ.posSizeType==='pct'||!WZ.posSizeType?'var(--accent)':'var(--surface)'};color:${WZ.posSizeType==='pct'||!WZ.posSizeType?'#fff':'var(--muted)'};cursor:pointer;font-weight:600;transition:.15s">% Balance</button>
           <button onclick="WZ.posSizeType='fixed';wzSyncPsUI()" style="flex:1;font-size:11px;padding:5px 0;border-radius:6px;border:1px solid var(--border);background:${WZ.posSizeType==='fixed'?'var(--accent)':'var(--surface)'};color:${WZ.posSizeType==='fixed'?'#fff':'var(--muted)'};cursor:pointer;font-weight:600;transition:.15s">Fixed $</button>
+          ${(WZ.assetClass==='forex'||WZ.assetClass==='index')?`<button onclick="WZ.posSizeType='lots';wzSyncPsUI()" style="flex:1;font-size:11px;padding:5px 0;border-radius:6px;border:1px solid var(--border);background:${WZ.posSizeType==='lots'?'var(--accent)':'var(--surface)'};color:${WZ.posSizeType==='lots'?'#fff':'var(--muted)'};cursor:pointer;font-weight:600;transition:.15s">Lots</button>`:''}
         </div>
-        <div id="wz-ps-pct-row" style="display:${WZ.posSizeType!=='fixed'?'block':'none'}">
+        <div id="wz-ps-pct-row" style="display:${WZ.posSizeType==='pct'||!WZ.posSizeType?'block':'none'}">
           <input type="range" min="1" max="50" value="${WZ.posSize}" step="1" oninput="WZ.posSize=Number(this.value);document.getElementById('wz-ps-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
         </div>
         <div id="wz-ps-usd-row" style="display:${WZ.posSizeType==='fixed'?'block':'none'}">
           <input type="number" min="5" step="1" value="${WZ.posSizeUsd}" placeholder="e.g. 50" oninput="WZ.posSizeUsd=Number(this.value);document.getElementById('wz-ps-v').textContent='$'+this.value" style="width:100%;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;box-sizing:border-box">
+        </div>
+        <div id="wz-ps-lots-row" style="display:${WZ.posSizeType==='lots'?'block':'none'}">
+          <input type="number" min="0.01" step="0.01" value="${WZ.posSizeLots}" placeholder="e.g. 0.10" oninput="WZ.posSizeLots=Number(this.value);document.getElementById('wz-ps-v').textContent=this.value+' lots'" style="width:100%;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;box-sizing:border-box">
+          <div class="hint" style="font-size:10.5px;color:var(--muted);margin-top:5px;line-height:1.45">Exact lot size sent to FP Markets per trade. 1.0 lot = 100k units FX (≈$10/pip), or 100oz gold (≈$1/pip). Overrides % / risk-based sizing.</div>
         </div>
       </div>
     </div>
@@ -6493,7 +6502,7 @@ async function buildStrategy(){
     data.config._build_mode=WZ.mode;
     data.config._category=WZ.category;
     const risk=data.config.risk||{};
-    Object.assign(risk,{leverage:WZ.leverage,position_size_type:WZ.posSizeType,position_size_pct:WZ.posSize,position_size_usd:WZ.posSizeType==='fixed'?WZ.posSizeUsd:null,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos,no_duplicate_symbol:WZ.noDuplicateSymbol,risk_profile:WZ.riskProfile||'medium'});
+    Object.assign(risk,{leverage:WZ.leverage,position_size_type:WZ.posSizeType,position_size_pct:WZ.posSize,position_size_usd:WZ.posSizeType==='fixed'?WZ.posSizeUsd:null,position_size_lots:WZ.posSizeType==='lots'?WZ.posSizeLots:null,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos,no_duplicate_symbol:WZ.noDuplicateSymbol,risk_profile:WZ.riskProfile||'medium'});
     data.config.risk=risk;
     const exit=data.config.exit||{};
     Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null,breakeven_pct:WZ.breakeven||null,close_before:WZ.closeBefore||null});
@@ -6580,7 +6589,7 @@ function formatConfig(cfg,warnings,riskRating){
       <div>TP1: <strong>${exit.take_profit_pct}%</strong></div>
       <div>SL: <strong>${exit.stop_loss_pct}%</strong></div>
       <div>Lev: <strong>${risk.leverage}×</strong></div>
-      <div>Size: <strong>${risk.position_size_type==='fixed'?'$'+risk.position_size_usd:(risk.position_size_pct||5)+'%'}</strong></div>
+      <div>Size: <strong>${risk.position_size_type==='lots'?(risk.position_size_lots||0.1)+' lots':risk.position_size_type==='fixed'?'$'+risk.position_size_usd:(risk.position_size_pct||5)+'%'}</strong></div>
       <div>Max/day: <strong>${risk.max_trades_per_day}</strong></div>
       <div>TF: <strong>${cfg._timeframe||'5m'}</strong></div>
       ${exit.take_profit2_pct?`<div>TP2: <strong>${exit.take_profit2_pct}%</strong></div>`:''}
@@ -9453,6 +9462,12 @@ function renderLiveForex(d, wrap) {
       <div id="lf-sessions"></div>
     </div>
 
+    <!-- Live strategies -->
+    <div class="lf-card" style="margin-bottom:16px">
+      <div class="lf-section-title">Your Live Strategies <span style="font-weight:400;color:var(--muted)">(${(d.live_strategies||[]).length})</span></div>
+      <div id="lf-live-strats">${renderLFLiveStrategies(d.live_strategies||[])}</div>
+    </div>
+
     <!-- Open positions -->
     <div class="lf-card" style="margin-bottom:16px">
       <div class="lf-section-title">Open Positions <span style="font-weight:400;color:var(--muted)">(${positions.length})</span></div>
@@ -9598,6 +9613,32 @@ function renderLFSessions() {
         <div style="height:4px;background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden">
           ${active?`<div style="height:100%;width:${pct}%;background:${s.color};border-radius:2px;transition:width .5s"></div>`:''}
         </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderLFLiveStrategies(strats) {
+  if (!strats || !strats.length) return `<div style="color:var(--muted);font-size:13px;padding:8px 0">No strategies are running live on forex yet. Go to <b>Strategies</b>, open a forex/gold/index strategy, and switch it to <b>Live</b>.</div>`;
+  return strats.map(s => {
+    const pnl   = s.total_pnl_pct;
+    const pnlC  = pnl == null ? '' : pnl >= 0 ? 'color:var(--positive,#3fb68b)' : 'color:var(--negative,#e5484d)';
+    const pnlStr= s.closed_count > 0 ? `${pnl>=0?'+':''}${pnl.toFixed(2)}%` : '—';
+    const syms  = (s.symbols||[]).slice(0,6).map(x=>`<span style="background:var(--surface2,rgba(255,255,255,.06));border-radius:5px;padding:2px 7px;font-size:10.5px;font-family:monospace;font-weight:600">${escHtml(x)}</span>`).join(' ');
+    const open  = s.open_count || 0;
+    return `<div onclick="openStrategy(${s.id})" style="cursor:pointer;border-top:1px solid var(--border,rgba(255,255,255,.06));padding:11px 0;display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div style="min-width:0;flex:1">
+        <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px">
+          <span style="width:7px;height:7px;border-radius:50%;background:var(--positive,#3fb68b);box-shadow:0 0 0 3px rgba(63,182,139,.15);flex-shrink:0"></span>
+          <span style="font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(s.name)}</span>
+          <span style="font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--positive,#3fb68b);font-weight:700;border:1px solid var(--positive,#3fb68b);border-radius:4px;padding:1px 5px;flex-shrink:0">LIVE</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:5px">${syms||'<span style="font-size:10.5px;color:var(--muted)">all pairs</span>'}</div>
+        <div style="font-size:11px;color:var(--muted)">${s.size_label} · ${s.timeframe} · ${open} open${open===1?'':'s'} · ${s.closed_count} closed</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-size:15px;font-weight:800;${pnlC}">${pnlStr}</div>
+        <div style="font-size:10px;color:var(--muted)">realized</div>
       </div>
     </div>`;
   }).join('');

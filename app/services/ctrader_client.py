@@ -556,15 +556,18 @@ async def place_ctrader_order_for_user(
     risk_usd: Optional[float] = None,
     use_risk_pct: bool = False,
     sl_pips: Optional[float] = None,
+    fixed_lots: Optional[float] = None,
 ) -> Optional[dict]:
     """
     Place a live forex or index CFD order for a user via their connected cTrader account.
     Converts TP/SL from % to absolute prices, calculates lot/contract size from risk.
 
-    When use_risk_pct=True and sl_pips is provided, lot size is computed as:
-        lots = (risk_pct% × account_balance) / (sl_pips × pip_value_per_lot)
-    This is the professional "fixed fractional" position sizing traders expect.
-    Falls back to 0.01 lot minimum if balance fetch fails.
+    Sizing priority:
+      1. fixed_lots — explicit lot size chosen by the user (forex) or contracts (index).
+      2. use_risk_pct + sl_pips — "fixed fractional":
+           lots = (risk_pct% × account_balance) / (sl_pips × pip_value_per_lot)
+      3. risk_usd — lots = risk_usd / (sl_pips × pip_value_per_lot)
+      4. fallback to 0.01 lot minimum.
 
     Returns {"order_id", "actual_fill"} or None on failure.
     """
@@ -589,8 +592,10 @@ async def place_ctrader_order_for_user(
 
     if is_index:
         # Index CFDs: volume in contracts (1 contract ≈ 1 unit of index value).
-        # Size by risk_usd if provided, else fall back to 1 contract minimum.
-        if risk_usd and risk_usd > 0:
+        # Size by explicit lots/contracts if provided, else risk_usd, else 1 contract.
+        if fixed_lots and fixed_lots > 0:
+            contracts = max(1, round(fixed_lots))
+        elif risk_usd and risk_usd > 0:
             # contracts ≈ risk_usd / (sl_pct% of price)
             sl_value_per_contract = entry_price * (sl_pct / 100)
             contracts = max(1, round(risk_usd / max(sl_value_per_contract, 0.01)))
@@ -628,7 +633,11 @@ async def place_ctrader_order_for_user(
         else:
             pip_value = 10.0   # standard USD/pip/lot for majors
 
-        if use_risk_pct and risk_pct and risk_pct > 0:
+        if fixed_lots and fixed_lots > 0:
+            # ── Explicit lot size chosen by the user ──────────────────────
+            lots = round(fixed_lots, 2)
+            logger.info(f"[cTrader] fixed lot sizing: {lots}L (user-chosen)")
+        elif use_risk_pct and risk_pct and risk_pct > 0:
             # ── Risk % auto lot sizing ─────────────────────────────────────
             # Fetch live account balance; compute lots from risk fraction.
             account_balance = await _get_account_balance(access_token, ctid_trader_account_id)

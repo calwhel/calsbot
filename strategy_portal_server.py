@@ -9724,14 +9724,87 @@ async def api_live_forex_account(uid: str = Query(...)):
             if p.get("fired_at"):
                 p["fired_at"] = p["fired_at"].isoformat()
 
+        # Which of the user's strategies are LIVE on forex/index/metals — i.e.
+        # status='active' with a forex-family asset class.  Since this endpoint
+        # already requires a connected (+approved) cTrader account, an active
+        # forex strategy is genuinely placing live FP Markets orders.
+        def _get_live_strategies():
+            from app.database import SessionLocal as _SL
+            from sqlalchemy import text as _t
+            _db = _SL()
+            try:
+                rows = _db.execute(_t("""
+                    SELECT s.id, s.name, s.status, s.asset_class, s.config,
+                           COUNT(e.id) FILTER (
+                               WHERE e.outcome='OPEN' AND e.is_paper=false) AS open_count,
+                           COUNT(e.id) FILTER (
+                               WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN')
+                                 AND e.is_paper=false) AS closed_count,
+                           COALESCE(SUM(e.pnl_pct) FILTER (
+                               WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN')
+                                 AND e.is_paper=false), 0) AS total_pnl_pct
+                    FROM user_strategies s
+                    LEFT JOIN strategy_executions e ON e.strategy_id = s.id
+                    WHERE s.user_id = :uid
+                      AND s.status = 'active'
+                      AND s.asset_class IN ('forex','index','metals','commodity')
+                    GROUP BY s.id
+                    ORDER BY s.updated_at DESC
+                    LIMIT 30
+                """), {"uid": user.id}).fetchall()
+                return [dict(r._mapping) for r in rows]
+            finally:
+                _db.close()
+
+        live_rows = await asyncio.to_thread(_get_live_strategies)
+        live_strategies = []
+        for s in live_rows:
+            cfg = s.get("config") or {}
+            if isinstance(cfg, str):
+                try: cfg = _json.loads(cfg)
+                except Exception: cfg = {}
+            risk = cfg.get("risk") or {}
+            uni  = cfg.get("universe") or {}
+            syms = (uni.get("symbols") or cfg.get("tradfi_symbols")
+                    or cfg.get("symbols") or [])
+            if isinstance(syms, str):
+                syms = [syms]
+            # Timeframe is stored per entry condition; surface the primary one.
+            _tf = cfg.get("timeframe") or cfg.get("_timeframe")
+            if not _tf:
+                _conds = (cfg.get("entry_conditions") or {}).get("conditions") or []
+                if _conds and isinstance(_conds[0], dict):
+                    _tf = _conds[0].get("timeframe")
+            pst = (risk.get("position_size_type") or "pct").lower()
+            if pst == "lots":
+                size_label = f"{risk.get('position_size_lots', 0.1)} lots"
+            elif pst == "fixed":
+                size_label = f"${risk.get('position_size_usd', 50)} fixed"
+            elif risk.get("use_risk_pct"):
+                size_label = f"{risk.get('risk_pct_per_trade', 1)}% risk"
+            else:
+                size_label = f"{risk.get('position_size_pct', 5)}% balance"
+            live_strategies.append({
+                "id":            s["id"],
+                "name":          s["name"],
+                "asset_class":   s["asset_class"],
+                "symbols":       [str(x).upper() for x in syms][:8],
+                "open_count":    int(s["open_count"] or 0),
+                "closed_count":  int(s["closed_count"] or 0),
+                "total_pnl_pct": round(float(s["total_pnl_pct"] or 0), 2),
+                "size_label":    size_label,
+                "timeframe":     _tf or "—",
+            })
+
         return JSONResponse({
-            "connected":      True,
-            "forex_approved": forex_approved,
-            "account_id":     prefs.ctrader_account_id or "",
-            "accounts":       accounts,
-            "balance":        round(balance, 2) if balance is not None else None,
-            "equity":         round(balance, 2) if balance is not None else None,
-            "open_positions": positions,
+            "connected":       True,
+            "forex_approved":  forex_approved,
+            "account_id":      prefs.ctrader_account_id or "",
+            "accounts":        accounts,
+            "balance":         round(balance, 2) if balance is not None else None,
+            "equity":          round(balance, 2) if balance is not None else None,
+            "open_positions":  positions,
+            "live_strategies": live_strategies,
         })
     finally:
         db.close()

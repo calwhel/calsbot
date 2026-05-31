@@ -2755,8 +2755,11 @@ async def evaluate_and_fire(
                     # stored risk_pct_per_trade (% of account to risk).  We pass
                     # it to the cTrader helper which fetches the account balance
                     # and computes lots = risk% × balance / (sl_pips × pip_value).
+                    # When the user picked an explicit lot size (position_size_type
+                    # == 'lots'), fixed_lots takes priority over every other mode.
                     _use_risk_pct = bool(risk.get("use_risk_pct"))
                     _risk_pct_per = float(risk.get("risk_pct_per_trade") or risk.get("position_size_pct") or 1.0)
+                    _fixed_lots   = float(risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
                     order_result = await place_ctrader_order_for_user(
                         user           = user,
                         symbol         = symbol,
@@ -2768,6 +2771,7 @@ async def evaluate_and_fire(
                         risk_usd       = _risk_usd,
                         use_risk_pct   = _use_risk_pct,
                         sl_pips        = float(ex_config.get("stop_loss_pips") or 0) or None,
+                        fixed_lots     = _fixed_lots or None,
                     )
                 else:
                     from app.services.strategy_trader import place_bitunix_order_for_user
@@ -3195,6 +3199,7 @@ async def _propagate_to_subscribers(
                 try:
                     ps_type      = sub_risk.get("position_size_type", "pct")
                     _sub_risk_usd = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None
+                    _sub_fixed_lots = float(sub_risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
                     if _sub_broker == "ctrader":
                         from app.services.ctrader_client import place_ctrader_order_for_user
                         order_result = await place_ctrader_order_for_user(
@@ -3206,6 +3211,8 @@ async def _propagate_to_subscribers(
                             sl_pct      = sl_pct_raw,
                             risk_pct    = float(sub_risk.get("position_size_pct", 5)),
                             risk_usd    = _sub_risk_usd,
+                            use_risk_pct = bool(sub_risk.get("use_risk_pct")),
+                            fixed_lots  = _sub_fixed_lots or None,
                         )
                     else:
                         from app.services.strategy_trader import place_bitunix_order_for_user

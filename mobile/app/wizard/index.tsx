@@ -1366,15 +1366,17 @@ function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
             presets={[3, 5, 10, 15, 20, 50]}
           />
         ) : null}
-        {s.assetClass === 'forex' ? (
+        {s.assetClass === 'forex' || s.assetClass === 'index' ? (
           <>
-            <ToggleRow
-              label="Risk % auto lot sizing"
-              desc="Size lots so you risk exactly X% of your account per trade based on your SL distance"
-              enabled={s.useRiskPct}
-              onToggle={(on) => update({ useRiskPct: on })}
-            />
-            {s.useRiskPct ? (
+            {s.assetClass === 'forex' ? (
+              <ToggleRow
+                label="Risk % auto lot sizing"
+                desc="Size lots so you risk exactly X% of your account per trade based on your SL distance"
+                enabled={s.useRiskPct}
+                onToggle={(on) => update({ useRiskPct: on })}
+              />
+            ) : null}
+            {s.assetClass === 'forex' && s.useRiskPct ? (
               <Stepper
                 label="Risk per trade"
                 value={s.riskPct}
@@ -1384,14 +1386,41 @@ function Step6({ s, update, ctraderConnected }: { s: WizardState; update: (p: Pa
                 hint="Lot size auto-calculated: risk% × account balance ÷ (SL pips × pip value)"
               />
             ) : (
-              <Stepper
-                label="Position size"
-                value={s.posSize}
-                onChange={(v) => update({ posSize: v })}
-                min={1} max={50} step={1} unit="%"
-                presets={[2, 5, 8, 12, 20]}
-                hint="% of account equity per trade"
-              />
+              <>
+                <View style={styles.sizeModeRow}>
+                  {([['pct', '% balance'], ['lots', 'Fixed lots']] as const).map(([mode, lbl]) => {
+                    const active = s.posSizeType === mode || (mode === 'pct' && s.posSizeType === 'fixed');
+                    return (
+                      <Pressable
+                        key={mode}
+                        onPress={() => update({ posSizeType: mode })}
+                        style={[styles.sizeModeBtn, active && styles.sizeModeBtnActive]}
+                      >
+                        <Text style={[styles.sizeModeTxt, active && styles.sizeModeTxtActive]}>{lbl}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                {s.posSizeType === 'lots' ? (
+                  <Stepper
+                    label="Lots per trade"
+                    value={s.posSizeLots}
+                    onChange={(v) => update({ posSizeLots: v })}
+                    min={0.01} max={50} step={0.01} unit=" lots" decimals={2}
+                    presets={[0.01, 0.05, 0.1, 0.5, 1]}
+                    hint="Exact lot size sent to your broker every trade (1 lot = 100,000 units)"
+                  />
+                ) : (
+                  <Stepper
+                    label="Position size"
+                    value={s.posSize}
+                    onChange={(v) => update({ posSize: v })}
+                    min={1} max={50} step={1} unit="%"
+                    presets={[2, 5, 8, 12, 20]}
+                    hint="% of account equity per trade"
+                  />
+                )}
+              </>
             )}
           </>
         ) : (
@@ -1762,7 +1791,7 @@ function Step7({
             ['Confirmations', s.confirms.length ? `${s.confirms.length} added` : 'None'],
             ['TP1 / SL',  `${s.tp1}% / ${s.sl}%${s.tp2 ? ` · TP2 ${s.tp2}%` : ''}${s.trailing ? ` · trail ${s.trailing}%` : ''}${s.breakeven ? ` · BE @${s.breakeven}%` : ''}`],
             ['Leverage',  `${s.leverage}× · ${risk.label}`],
-            ['Position',  s.posSizeType === 'fixed' ? `$${s.posSizeUsd}` : `${s.posSize}% of equity`],
+            ['Position',  s.useRiskPct ? `${s.riskPct}% risk/trade` : s.posSizeType === 'lots' ? `${s.posSizeLots} lots` : s.posSizeType === 'fixed' ? `$${s.posSizeUsd}` : `${s.posSize}% of equity`],
             ['Market',
               s.assetClass === 'crypto' ? '₿ Crypto'
               : s.assetClass === 'stock' ? '📈 Stocks (paper)'
@@ -2102,6 +2131,16 @@ const styles = StyleSheet.create({
   dotIconActive: { color: colors.text },
   dotLabel:  { fontFamily: font.medium, fontSize: 9.5, color: colors.textMute },
   dotLabelActive: { color: colors.accent, fontFamily: font.semibold },
+
+  sizeModeRow: { flexDirection: 'row', gap: 8, marginBottom: spacing.sm },
+  sizeModeBtn: {
+    flex: 1, paddingVertical: 9, borderRadius: 9,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
+    alignItems: 'center',
+  },
+  sizeModeBtnActive: { borderColor: colors.accent, backgroundColor: colors.accentDim },
+  sizeModeTxt: { fontFamily: font.semibold, fontSize: 12.5, color: colors.textDim },
+  sizeModeTxtActive: { color: colors.text },
 
   summaryBar: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
