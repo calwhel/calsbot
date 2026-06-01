@@ -32,7 +32,12 @@ from typing import Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 # ── Spotware Open API endpoint ────────────────────────────────────────────────
-_HOST = "live.ctraderapi.com"
+# cTrader uses SEPARATE hosts for live vs demo accounts. Authenticating an
+# account against the wrong host fails ("account auth failed"), so the host MUST
+# match the account's isLive flag.
+_HOST_LIVE = "live.ctraderapi.com"
+_HOST_DEMO = "demo.ctraderapi.com"
+_HOST = _HOST_LIVE  # default / back-compat
 _PORT = 5035
 
 # ── Payload type IDs (from protobuf defaults, verified against live API) ──────
@@ -59,6 +64,12 @@ _TF_TO_PERIOD: Dict[str, int] = {
     "1h":  9,
     "4h":  10,
     "1d":  12,
+}
+
+# Minutes per bar for each timeframe — used to size the trendbar fromTimestamp.
+_TF_MINUTES: Dict[str, int] = {
+    "1m": 1, "3m": 3, "5m": 5, "10m": 10, "15m": 15,
+    "30m": 30, "1h": 60, "4h": 240, "1d": 1440,
 }
 
 # ── Symbols we stream (canonical name → FP Markets broker symbol name) ────────
@@ -89,9 +100,13 @@ _KLINE_TTL = 60.0
 
 _feed_live: bool = False
 _feed_task: Optional[asyncio.Task] = None
-# Cached symbol-ID map from the last successful connection
+# Cached symbol-ID map from the last successful connection.
+# Symbol IDs differ per host/account, so the cache is scoped to the
+# (host, ctid) it was resolved from — switching host/account forces a
+# re-resolve to avoid mapping a symbolId to the WRONG instrument.
 _symbol_id_map: Dict[str, int] = {}   # broker_name → symbolId
 _id_to_canonical: Dict[int, str] = {} # symbolId → canonical name
+_symbol_map_ctx: Optional[Tuple[str, int]] = None  # (host, ctid) cache belongs to
 
 # ── Protobuf imports ──────────────────────────────────────────────────────────
 try:
@@ -155,9 +170,9 @@ async def _send(writer: asyncio.StreamWriter, proto_req, payload_type: int) -> N
     await writer.drain()
 
 
-async def _open_conn() -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+async def _open_conn(host: str = _HOST_LIVE) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     ctx = ssl.create_default_context()
-    return await asyncio.open_connection(_HOST, _PORT, ssl=ctx)
+    return await asyncio.open_connection(host, _PORT, ssl=ctx)
 
 
 async def _app_auth(reader, writer) -> bool:
@@ -178,11 +193,16 @@ async def _account_auth(reader, writer, access_token: str, ctid: int) -> bool:
     return msg is not None and msg.payloadType == _PT_ACCT_AUTH_RES
 
 
-async def _resolve_symbols(reader, writer, ctid: int) -> Dict[str, int]:
-    """Fetch the full symbol list and return broker_name → symbolId."""
-    global _symbol_id_map, _id_to_canonical
-    if _symbol_id_map:
-        return _symbol_id_map  # use cached from previous connect
+async def _resolve_symbols(reader, writer, ctid: int, host: str = _HOST_LIVE) -> Dict[str, int]:
+    """Fetch the full symbol list and return broker_name → symbolId.
+
+    The cache is scoped to (host, ctid): if a previous resolve was for a
+    DIFFERENT host/account, we MUST re-resolve — symbolIds are not portable
+    across accounts and reusing them would map to the wrong instrument.
+    """
+    global _symbol_id_map, _id_to_canonical, _symbol_map_ctx
+    if _symbol_id_map and _symbol_map_ctx == (host, ctid):
+        return _symbol_id_map  # cached for THIS host/account
 
     req = ProtoOASymbolsListReq()
     req.ctidTraderAccountId = ctid
@@ -205,6 +225,7 @@ async def _resolve_symbols(reader, writer, ctid: int) -> Dict[str, int]:
                 for canonical, broker in _TRACKED.items()
                 if broker in name_to_id
             }
+            _symbol_map_ctx = (host, ctid)
             logger.info(
                 f"[CTraderFeed] resolved {len(name_to_id)} symbols from broker"
             )
@@ -214,9 +235,15 @@ async def _resolve_symbols(reader, writer, ctid: int) -> Dict[str, int]:
 
 # ── DB helper ─────────────────────────────────────────────────────────────────
 
-async def _get_connected_account() -> Optional[Tuple[str, int]]:
-    """Return (access_token, ctid_trader_account_id) for the first connected user."""
+async def _get_connected_account() -> Optional[Tuple[str, int, int, bool]]:
+    """Return (access_token, ctid, user_id, is_live) for the first connected user.
+
+    is_live is resolved from the stored ctrader_accounts list (matching the
+    chosen ctid) so we connect to the matching host; defaults to True when the
+    metadata is unavailable (loop falls back to the other host on auth failure).
+    """
     try:
+        import json as _json
         from app.database import SessionLocal
         from app.models import UserPreference
         db = SessionLocal()
@@ -230,7 +257,18 @@ async def _get_connected_account() -> Optional[Tuple[str, int]]:
                 .first()
             )
             if prefs:
-                return (prefs.ctrader_access_token, int(prefs.ctrader_account_id))
+                ctid = int(prefs.ctrader_account_id)
+                is_live = True
+                try:
+                    raw = getattr(prefs, "ctrader_accounts", None)
+                    if raw:
+                        for a in _json.loads(raw):
+                            if int(a.get("ctidTraderAccountId", -1)) == ctid:
+                                is_live = bool(a.get("isLive", True))
+                                break
+                except Exception:
+                    pass
+                return (prefs.ctrader_access_token, ctid, int(prefs.user_id), is_live)
         finally:
             db.close()
     except Exception as e:
@@ -255,17 +293,50 @@ async def _feed_loop() -> None:
                 await asyncio.sleep(120)
                 continue
 
-            access_token, ctid = creds
-            logger.info(f"[CTraderFeed] connecting with account {ctid}…")
+            access_token, ctid, _uid, _is_live = creds
+            # Connect to the host matching the account type; if auth fails there,
+            # fall back to the other host (handles stale/missing isLive metadata).
+            _primary_host = _HOST_LIVE if _is_live else _HOST_DEMO
+            _hosts = [_primary_host, _HOST_DEMO if _primary_host == _HOST_LIVE else _HOST_LIVE]
+            logger.info(
+                f"[CTraderFeed] connecting with account {ctid} "
+                f"({'live' if _is_live else 'demo'} → {_primary_host})…"
+            )
 
-            reader, writer = await _open_conn()
+            authed = False
+            for _hi, _host in enumerate(_hosts):
+                if writer:
+                    try:
+                        writer.close()
+                    except Exception:
+                        pass
+                reader, writer = await _open_conn(_host)
+                if not await _app_auth(reader, writer):
+                    raise ConnectionError("app auth failed")
+                if await _account_auth(reader, writer, access_token, ctid):
+                    authed = True
+                    if _hi > 0:
+                        logger.info(f"[CTraderFeed] authed on fallback host {_host}")
+                    break
+                # First host failed — try a token refresh once before the fallback.
+                if _hi == 0:
+                    try:
+                        from app.services.ctrader_client import refresh_user_ctrader_token
+                        new_at = await refresh_user_ctrader_token(_uid)
+                    except Exception as _re:
+                        new_at = None
+                        logger.warning(f"[CTraderFeed] token refresh error: {_re}")
+                    if new_at:
+                        access_token = new_at
+                        logger.info("[CTraderFeed] token refreshed — retrying account auth")
+                        if await _account_auth(reader, writer, access_token, ctid):
+                            authed = True
+                            break
+                logger.warning(f"[CTraderFeed] account auth failed on {_host}")
+            if not authed:
+                raise ConnectionError("account auth failed on all hosts")
 
-            if not await _app_auth(reader, writer):
-                raise ConnectionError("app auth failed")
-            if not await _account_auth(reader, writer, access_token, ctid):
-                raise ConnectionError("account auth failed")
-
-            name_to_id = await _resolve_symbols(reader, writer, ctid)
+            name_to_id = await _resolve_symbols(reader, writer, ctid, _host)
 
             # Collect symbol IDs for our tracked symbols
             sub_ids: List[int] = []
@@ -332,6 +403,7 @@ async def _fetch_trendbars(
     limit: int,
     access_token: str,
     ctid: int,
+    host: str = _HOST_LIVE,
 ) -> List[List[float]]:
     """
     Open a short-lived connection and fetch up to `limit` OHLC bars for
@@ -344,35 +416,43 @@ async def _fetch_trendbars(
         logger.debug(f"[CTraderFeed] unsupported timeframe {timeframe!r}")
         return []
 
-    # Resolve broker symbol name and ID
+    # Resolve broker symbol name
     broker_name = _TRACKED.get(symbol.upper(), symbol.upper())
-    symbol_id = _symbol_id_map.get(broker_name)
+    symbol_id = None
 
     reader = writer = None
     try:
-        reader, writer = await _open_conn()
+        reader, writer = await _open_conn(host)
 
         if not await _app_auth(reader, writer):
             return []
         if not await _account_auth(reader, writer, access_token, ctid):
             return []
 
-        # If we don't have the symbol map yet, fetch it now
-        if not _symbol_id_map:
-            await _resolve_symbols(reader, writer, ctid)
-            symbol_id = _symbol_id_map.get(broker_name)
+        # Resolve symbol IDs scoped to THIS (host, ctid). _resolve_symbols
+        # re-fetches if the cache belongs to a different host/account, so we
+        # never reuse a symbolId that maps to the wrong instrument.
+        name_to_id = await _resolve_symbols(reader, writer, ctid, host)
+        symbol_id = name_to_id.get(broker_name)
 
         if not symbol_id:
             logger.debug(f"[CTraderFeed] symbol_id not found for {broker_name}")
             return []
 
         now_ms = int(time.time() * 1000)
-        # Request enough history. cTrader max is 4096 bars per call.
+        # cTrader REQUIRES fromTimestamp (and toTimestamp). Window it to cover
+        # `count` bars of this timeframe, ×3 to absorb weekends / market-closed
+        # gaps so we still get `count` *trading* bars back. cTrader caps the
+        # returned set at `count` (max 4096) regardless of the window width.
+        _mins = _TF_MINUTES.get(timeframe, 15)
+        _count = min(limit, 4096)
+        _window_ms = _count * _mins * 60_000 * 3
         req = ProtoOAGetTrendbarsReq()
         req.ctidTraderAccountId = ctid
         req.symbolId = symbol_id
         req.period = period
-        req.count = min(limit, 4096)
+        req.count = _count
+        req.fromTimestamp = now_ms - _window_ms
         req.toTimestamp = now_ms
         await _send(writer, req, _PT_TRENDBARS_REQ)
 
@@ -435,8 +515,23 @@ async def get_klines(
     if not creds:
         return []
 
-    access_token, ctid = creds
-    rows = await _fetch_trendbars(sym_up, timeframe, limit, access_token, ctid)
+    access_token, ctid, _uid, _is_live = creds
+    _primary_host = _HOST_LIVE if _is_live else _HOST_DEMO
+    rows = await _fetch_trendbars(sym_up, timeframe, limit, access_token, ctid, _primary_host)
+    if not rows:
+        # Possibly an expired token — refresh once and retry on the primary host.
+        try:
+            from app.services.ctrader_client import refresh_user_ctrader_token
+            new_at = await refresh_user_ctrader_token(_uid)
+        except Exception:
+            new_at = None
+        if new_at:
+            access_token = new_at
+            rows = await _fetch_trendbars(sym_up, timeframe, limit, access_token, ctid, _primary_host)
+    if not rows:
+        # Still nothing — try the other host (wrong/stale isLive metadata).
+        _fallback_host = _HOST_DEMO if _primary_host == _HOST_LIVE else _HOST_LIVE
+        rows = await _fetch_trendbars(sym_up, timeframe, limit, access_token, ctid, _fallback_host)
     if rows:
         _kline_cache[cache_key] = (rows, time.monotonic())
     return rows

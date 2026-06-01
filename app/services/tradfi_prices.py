@@ -123,6 +123,21 @@ async def get_price(symbol: str, asset_class: str) -> Optional[float]:
     if cls == ASSET_CLASS_CRYPTO:
         return None
 
+    # ── 0a. cTrader live spot feed — matches the broker that fills orders ─────
+    # FP Markets / cTrader is where forex/metal/index orders actually execute,
+    # so its spot feed is the ONLY source that matches the user's chart and
+    # fills in real time. (FMP's legacy endpoints are dead and Binance metals
+    # are geo-restricted / a different instrument, so both lag or mismatch.)
+    # Returns None when there's no fresh tick (cold feed / no connected
+    # account) → falls through to the legacy sources below.
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        _cpx = _ctf.get_price(symbol)
+        if _cpx is not None:
+            return _cpx
+    except Exception:
+        pass
+
     # ── 0. Binance spot — metals only (XAUUSDT / XAGUSDT) ────────────────────
     _bn_sym = _METALS_BINANCE_MAP.get(symbol.upper())
     if _bn_sym:
@@ -194,6 +209,24 @@ async def get_klines(
         return []
 
     now = datetime.utcnow()
+
+    # ── cTrader trendbars — same OHLC the broker's chart draws ───────────────
+    # Primary candle source for forex/metals/indices so paper evaluation and
+    # signal candles match the broker that fills orders. Returns [] when the
+    # symbol isn't broker-tracked or no account is connected → falls through.
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        # Bound the cTrader-first attempt (open+app auth+account auth+trendbar
+        # read, ×up to 3 host/refresh tries) so a transient cTrader hiccup
+        # can't stall us before the Binance/yfinance fallbacks below.
+        _crows = await asyncio.wait_for(
+            _ctf.get_klines(symbol, asset_class, timeframe, limit),
+            timeout=6.0,
+        )
+        if _crows:
+            return _crows
+    except Exception:
+        pass
 
     # ── Binance spot metals path (XAUUSDT / XAGUSDT) ─────────────────────────
     _bn_sym = _METALS_BINANCE_MAP.get(symbol.upper())

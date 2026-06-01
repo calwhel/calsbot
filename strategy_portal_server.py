@@ -1641,6 +1641,18 @@ async def _startup_background():
     except Exception as _fmp_err:
         logger.warning(f"FMP price feed start error (non-fatal): {_fmp_err}")
 
+    # ── cTrader live spot feed ────────────────────────────────────────────────
+    # Streams real-time bid/ask straight from FP Markets — the broker that
+    # actually fills forex/metal/index orders. tradfi_prices consults this first
+    # so signal/paper prices match the user's cTrader chart and fills (FMP's
+    # legacy REST is dead; Binance metals are geo-restricted/mismatched).
+    try:
+        from app.services.ctrader_price_feed import start as _ctrader_feed_start
+        _ctrader_feed_start()
+        logger.info("cTrader real-time spot feed task scheduled")
+    except Exception as _ctf_err:
+        logger.warning(f"cTrader price feed start error (non-fatal): {_ctf_err}")
+
     # Only run the strategy executor in production (REPL_DEPLOYMENT=1).
     # In dev, both the dev portal and production share the same Neon DB, so
     # running the executor in dev doubles all API calls and causes confusion.

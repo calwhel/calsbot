@@ -394,6 +394,67 @@ async def refresh_access_token(refresh_token: str) -> dict:
         return resp.json()
 
 
+# Serialise token refreshes within a process so two coroutines (feed + executor)
+# don't both burn the rotating refresh token at once.
+_token_refresh_lock = asyncio.Lock()
+
+
+async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
+    """Refresh and persist a user's cTrader OAuth token.
+
+    cTrader ROTATES the refresh token on every refresh — the new refresh token
+    MUST be persisted or the next refresh fails with ACCESS_DENIED. Re-reads
+    prefs inside the lock so concurrent callers pick up an already-refreshed
+    token instead of replaying a stale (already-rotated) one.
+
+    Returns the new access token, or None if there is no refresh token / the
+    refresh was denied (user must re-link their cTrader account).
+    """
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    async with _token_refresh_lock:
+        db = SessionLocal()
+        try:
+            prefs = (
+                db.query(UserPreference)
+                .filter(UserPreference.user_id == user_id)
+                .first()
+            )
+            if not prefs or not prefs.ctrader_refresh_token:
+                return None
+            refresh_token = prefs.ctrader_refresh_token
+            try:
+                res = await refresh_access_token(refresh_token)
+            except Exception as e:
+                logger.warning(f"[cTrader] token refresh HTTP error for user {user_id}: {e}")
+                return None
+            if res.get("errorCode"):
+                logger.warning(
+                    f"[cTrader] token refresh denied for user {user_id}: "
+                    f"{res.get('errorCode')} — user must re-link cTrader"
+                )
+                return None
+            new_at = res.get("accessToken") or res.get("access_token")
+            new_rt = res.get("refreshToken") or res.get("refresh_token")
+            if not new_at:
+                return None
+            prefs.ctrader_access_token = new_at
+            if new_rt:
+                prefs.ctrader_refresh_token = new_rt  # MUST persist rotated token
+            db.commit()
+            logger.info(f"[cTrader] access token refreshed + persisted for user {user_id}")
+            return new_at
+        except Exception as e:
+            logger.warning(f"[cTrader] token refresh persist error for user {user_id}: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return None
+        finally:
+            db.close()
+
+
 async def get_accounts_for_token(access_token: str) -> list:
     """
     Return a list of cTrader trading accounts linked to this access token.
@@ -845,6 +906,35 @@ async def place_ctrader_order_for_user(
             stop_loss_price        = sl_price,
             take_profit_price      = tp_price,
         )
+
+    # Expired access token → refresh once and retry the placement. cTrader OAuth
+    # tokens expire (~30d); without this the order silently fails as "account
+    # auth failed" (the original live-order bug).
+    if result.get("error") == "account auth failed":
+        new_at = await refresh_user_ctrader_token(user.id)
+        if new_at:
+            access_token = new_at
+            logger.info(f"[cTrader] retrying {symbol} order for user {user.id} after token refresh")
+            if is_index:
+                result = await place_order_units(
+                    access_token           = access_token,
+                    ctid_trader_account_id = ctid_trader_account_id,
+                    symbol_name            = _SYMBOL_MAP.get(symbol, symbol),
+                    direction              = direction,
+                    volume_units           = contracts,
+                    stop_loss_price        = sl_price,
+                    take_profit_price      = tp_price,
+                )
+            else:
+                result = await place_order(
+                    access_token           = access_token,
+                    ctid_trader_account_id = ctid_trader_account_id,
+                    symbol_name            = symbol,
+                    direction              = direction,
+                    volume_lots            = lots,
+                    stop_loss_price        = sl_price,
+                    take_profit_price      = tp_price,
+                )
 
     if result.get("error"):
         logger.error(f"[cTrader] order failed for user {user.id}: {result['error']}")

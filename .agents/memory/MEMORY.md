@@ -6,6 +6,7 @@
 - [cTrader shared connection](ctrader-shared-connection.md) — never wrap a cTrader call in outer wait_for without CancelledError→invalidate (shared socket desyncs); cold reconnects need ≥10s timeouts.
 - [Response-object caching bug](response-object-caching.md) — never cache a JSONResponse object under BaseHTTPMiddleware; cache the dict/list payload and rebuild JSONResponse each return.
 - [DB lock-queue starvation](db-lock-starvation.md) — startup ALTER/CREATE INDEX without lock_timeout on a hot table freezes ALL reads on it → whole portal "won't load"; cap every DDL with lock_timeout.
+- [cTrader feed host/token/symbols](ctrader-feed-host-and-symbols.md) — demo vs live are separate hosts (route by isLive); refresh tokens rotate (persist new one); symbol IDs are per-account (scope cache by host+ctid); trendbars need fromTimestamp.
 - [cTrader order rejection](ctrader-order-rejection.md) — broker rejections arrive as ProtoOAOrderErrorEvent (2132), not exec event; accept both or lose the real reason; return dict-with-error not None.
 - [Metal pip-size source](metal-pip-size-drift.md) — all pip lookups must agree with forex_engine.pip_size; gold/platinum digits=2→0.01, silver→0.001; duplicates cause 10–100× drift.
 - [cTrader index order gap](ctrader-index-order-gap.md) — index live orders call undefined place_order_units → NameError → silent paper fallback; never reach broker (not yet fixed).
