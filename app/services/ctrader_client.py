@@ -24,6 +24,11 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# httpx logs every request URL at INFO — and our OAuth token calls put the
+# refresh_token + client_secret in the query string, so those would be leaked
+# verbatim into the deployment logs. Silence httpx's INFO request logging.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 # ── Spotware Open API endpoints ───────────────────────────────────────────────
 # Demo and live accounts live on SEPARATE hosts. A ctid is reachable ONLY on
 # its matching host — account auth silently fails otherwise (looks like a token
@@ -398,7 +403,7 @@ async def exchange_code(code: str, redirect_uri: str) -> dict:
             },
         )
         data = resp.json()
-        logger.info(f"[ctrader] exchange_code HTTP {resp.status_code} → keys={list(data.keys())} body={data}")
+        logger.info(f"[ctrader] exchange_code HTTP {resp.status_code} → keys={list(data.keys())}")
         resp.raise_for_status()
         return data
 
@@ -425,6 +430,14 @@ async def refresh_access_token(refresh_token: str) -> dict:
 # don't both burn the rotating refresh token at once.
 _token_refresh_lock = asyncio.Lock()
 
+# When a specific refresh token is denied (ACCESS_DENIED → chain dead, user must
+# re-link), back off instead of hammering cTrader's OAuth endpoint every signal
+# tick. Keyed by user_id → (denied_refresh_token, cooldown_until_monotonic). The
+# guard is scoped to the EXACT token value, so a re-link (which rotates the token
+# to a new value) clears it automatically without any cross-module coupling.
+_refresh_denied: dict = {}
+_REFRESH_DENY_COOLDOWN = 300.0  # seconds
+
 
 async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
     """Refresh and persist a user's cTrader OAuth token.
@@ -450,16 +463,40 @@ async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
             if not prefs or not prefs.ctrader_refresh_token:
                 return None
             refresh_token = prefs.ctrader_refresh_token
+            denied = _refresh_denied.get(user_id)
+            if denied and denied[0] == refresh_token and time.monotonic() < denied[1]:
+                # This exact token was already rejected — don't re-hit OAuth until
+                # the user re-links (rotating the token clears this guard).
+                return None
             try:
                 res = await refresh_access_token(refresh_token)
             except Exception as e:
-                logger.warning(f"[cTrader] token refresh HTTP error for user {user_id}: {e}")
+                # NB: do NOT interpolate `e` — for httpx.HTTPStatusError its string
+                # includes the full URL, which carries refresh_token + client_secret
+                # in the query string. Log only the type + status code.
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                logger.warning(
+                    f"[cTrader] token refresh HTTP error for user {user_id}: "
+                    f"{type(e).__name__} status={status}"
+                )
                 return None
             if res.get("errorCode"):
-                logger.warning(
-                    f"[cTrader] token refresh denied for user {user_id}: "
-                    f"{res.get('errorCode')} — user must re-link cTrader"
-                )
+                err = res.get("errorCode")
+                # Only a hard ACCESS_DENIED means the chain is dead and re-link is
+                # required — cooldown that. Other errors may be transient, so don't
+                # suppress retries for them.
+                if err == "ACCESS_DENIED":
+                    _refresh_denied[user_id] = (
+                        refresh_token, time.monotonic() + _REFRESH_DENY_COOLDOWN
+                    )
+                    logger.warning(
+                        f"[cTrader] token refresh denied for user {user_id}: "
+                        f"{err} — user must re-link cTrader"
+                    )
+                else:
+                    logger.warning(
+                        f"[cTrader] token refresh error for user {user_id}: {err}"
+                    )
                 return None
             new_at = res.get("accessToken") or res.get("access_token")
             new_rt = res.get("refreshToken") or res.get("refresh_token")
@@ -468,11 +505,17 @@ async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
             prefs.ctrader_access_token = new_at
             if new_rt:
                 prefs.ctrader_refresh_token = new_rt  # MUST persist rotated token
+            _refresh_denied.pop(user_id, None)
             db.commit()
             logger.info(f"[cTrader] access token refreshed + persisted for user {user_id}")
             return new_at
         except Exception as e:
-            logger.warning(f"[cTrader] token refresh persist error for user {user_id}: {e}")
+            # Sanitized: SQLAlchemy errors can include bound parameter values
+            # (which may be token columns) — log only the exception type.
+            logger.warning(
+                f"[cTrader] token refresh persist error for user {user_id}: "
+                f"{type(e).__name__}"
+            )
             try:
                 db.rollback()
             except Exception:

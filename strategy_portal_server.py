@@ -9556,7 +9556,13 @@ async def api_ctrader_callback(
     try:
         token_data = await exchange_code(code=code, redirect_uri=redirect_uri)
     except Exception as e:
-        logger.error(f"[cTrader callback] exchange_code failed: {e}")
+        # Do NOT interpolate `e` — httpx.HTTPStatusError's string includes the
+        # full URL, which carries `code` + client_secret in the query string.
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        logger.error(
+            f"[cTrader callback] exchange_code failed: "
+            f"{type(e).__name__} status={status}"
+        )
         return RedirectResponse(url="/?ctrader_error=token_exchange_failed")
 
     access_token  = token_data.get("accessToken")  or token_data.get("access_token",  "")
@@ -9595,9 +9601,10 @@ async def api_ctrader_callback(
             f"token_len={len(access_token)} verify_has_token={row and row[0]}"
         )
     except Exception as e:
-        logger.error(
-            f"[cTrader callback] UPSERT failed: {e}\n{_traceback.format_exc()}"
-        )
+        # Do NOT log raw `e`/traceback — this runs right after binding the access
+        # and refresh tokens as SQL params, and SQLAlchemy/driver errors + traces
+        # can echo bound parameter values (the tokens). Log only the type.
+        logger.error(f"[cTrader callback] UPSERT failed: {type(e).__name__}")
         try:
             db2.rollback()
         except Exception:
