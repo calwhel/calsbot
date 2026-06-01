@@ -1485,6 +1485,20 @@ async def _start_executor_tasks():
     await _cancel_ghost_executions()
     asyncio.create_task(_ghost_cleanup_loop())
     asyncio.create_task(_keepalive_ping_loop())   # keep Autoscale awake
+
+    # ── cTrader live spot feed ────────────────────────────────────────────────
+    # Started HERE (not in _startup_background) so it runs in EXACTLY ONE worker —
+    # the same one that runs the executor (its only consumer). Multiple gunicorn
+    # workers each opening a feed connection to the SAME cTrader account caused the
+    # broker to kick duplicate sessions (constant reconnect churn + "app auth
+    # failed"). Co-locating it with the executor also means it never runs in dev
+    # (executor is prod-only), so dev stops competing for the same account.
+    try:
+        from app.services.ctrader_price_feed import start as _ctrader_feed_start
+        _ctrader_feed_start()
+        logger.info("cTrader real-time spot feed task scheduled (executor worker)")
+    except Exception as _ctf_err:
+        logger.warning(f"cTrader price feed start error (non-fatal): {_ctf_err}")
     from app.services.strategy_executor import (
         run_strategy_executor, run_live_position_monitor,
         run_forex_executor,
@@ -1550,6 +1564,14 @@ async def _keepalive_then_reclaim(conn):
     global _executor_running_in_this_worker
     await _maintain_advisory_lock(conn)      # blocks until connection dies
     _executor_running_in_this_worker = False
+    # Stop the cTrader feed so this former lock-holder doesn't keep a second
+    # connection open once another worker wins the lock and starts its own feed
+    # (duplicate sessions are exactly what triggers the broker's reconnect kicks).
+    try:
+        from app.services.ctrader_price_feed import stop as _ctrader_feed_stop
+        _ctrader_feed_stop()
+    except Exception as _fe:
+        logger.warning(f"cTrader feed stop on lock-loss error (non-fatal): {_fe}")
     logger.warning("Advisory lock connection lost — re-entering claim loop")
     asyncio.create_task(_executor_claim_loop(first_attempt_delay=5))
 
@@ -1642,16 +1664,10 @@ async def _startup_background():
         logger.warning(f"FMP price feed start error (non-fatal): {_fmp_err}")
 
     # ── cTrader live spot feed ────────────────────────────────────────────────
-    # Streams real-time bid/ask straight from FP Markets — the broker that
-    # actually fills forex/metal/index orders. tradfi_prices consults this first
-    # so signal/paper prices match the user's cTrader chart and fills (FMP's
-    # legacy REST is dead; Binance metals are geo-restricted/mismatched).
-    try:
-        from app.services.ctrader_price_feed import start as _ctrader_feed_start
-        _ctrader_feed_start()
-        logger.info("cTrader real-time spot feed task scheduled")
-    except Exception as _ctf_err:
-        logger.warning(f"cTrader price feed start error (non-fatal): {_ctf_err}")
+    # NOTE: started in _start_executor_tasks() (the single executor-winning
+    # worker), NOT here — running it per-worker opened duplicate connections to
+    # the same cTrader account and the broker kicked the duplicates (reconnect
+    # churn + "app auth failed"). See _start_executor_tasks for details.
 
     # Only run the strategy executor in production (REPL_DEPLOYMENT=1).
     # In dev, both the dev portal and production share the same Neon DB, so

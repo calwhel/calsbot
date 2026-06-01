@@ -58,6 +58,33 @@ to 3 (primary host, token-refresh retry, fallback host). Wrap the cTrader-first
 call in `tradfi_prices` with a strict `asyncio.wait_for` budget (~6s) so a
 transient cTrader hiccup can't stall before the Binance/FMP/yfinance fallbacks.
 
+## The streaming feed MUST send client heartbeats or the broker drops it
+A subscribed spot stream is NOT self-keepalive. cTrader closes any connection
+that doesn't send a `ProtoHeartbeatEvent` (payloadType 51) within ~30s — EVEN
+while spot events are streaming inbound. Symptom: "stream read timeout /
+disconnect" churn every ~30s.
+
+**Why:** the read loop only reads; nothing was writing to the socket, so the
+server's client-inactivity timer expired.
+**How to apply:** after subscribing, spawn a task that sends a heartbeat every
+~10s on the same writer; cancel it on disconnect. Only the heartbeat task writes
+post-subscription (read loop only reads) so there's no interleaved-write hazard.
+
+## Run the feed in EXACTLY ONE worker — co-locate with the executor
+The portal runs multiple gunicorn workers (`-w 4`) and dev shares the same Neon
+DB/account. If the feed starts per-worker (or in dev too), every worker opens its
+own connection to the SAME cTrader account → the broker kicks the duplicate
+sessions ("app auth failed" + reconnect churn).
+
+**Why:** cTrader limits concurrent sessions per account; the spot cache is
+per-process anyway, and its only critical consumer is the executor (which already
+runs in a single advisory-lock-winning, prod-only worker).
+**How to apply:** start the feed inside the executor-lock-win path (NOT the
+per-worker startup hook) so exactly one connection exists, co-located with its
+consumer, and disabled in dev. CRITICAL: on advisory-lock LOSS/failover, call a
+feed `stop()` in the former holder, else its feed lingers alongside the new
+holder's feed and the duplicate-session churn returns.
+
 ## Price scaling
 Trendbar/spot prices are integer-scaled by 100_000 (divide by 100_000 to get the
 real price). See `ctrader-price-scaling.md` for the order-side wire convention.

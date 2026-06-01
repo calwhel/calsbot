@@ -52,6 +52,8 @@ _PT_SUB_SPOTS_RES = 2128
 _PT_SPOT_EVENT    = 2131
 _PT_TRENDBARS_REQ = 2137
 _PT_TRENDBARS_RES = 2138
+_PT_HEARTBEAT     = 51    # ProtoHeartbeatEvent — client MUST send ~every 10s or
+                         # cTrader drops the socket (the "stream read timeout" churn)
 
 # ── Wizard timeframe → ProtoOATrendbarPeriod enum value ──────────────────────
 _TF_TO_PERIOD: Dict[str, int] = {
@@ -110,7 +112,7 @@ _symbol_map_ctx: Optional[Tuple[str, int]] = None  # (host, ctid) cache belongs 
 
 # ── Protobuf imports ──────────────────────────────────────────────────────────
 try:
-    from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
+    from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage, ProtoHeartbeatEvent
     from ctrader_open_api.messages.OpenApiMessages_pb2 import (
         ProtoOAApplicationAuthReq,
         ProtoOAApplicationAuthRes,
@@ -284,6 +286,7 @@ async def _feed_loop() -> None:
 
     while True:
         reader = writer = None
+        hb_task = None
         try:
             _feed_live = False
 
@@ -361,6 +364,19 @@ async def _feed_loop() -> None:
             _feed_live = True
             backoff = 30.0
 
+            # cTrader drops any connection that doesn't send a client heartbeat
+            # within ~30s (even while spot events stream IN). Send one every 10s.
+            async def _heartbeat(w):
+                try:
+                    while True:
+                        await asyncio.sleep(10)
+                        await _send(w, ProtoHeartbeatEvent(), _PT_HEARTBEAT)
+                except (asyncio.CancelledError, Exception):
+                    # Cancelled on disconnect, or the writer is already closing —
+                    # the read loop will surface the real disconnect; stay quiet.
+                    return
+            hb_task = asyncio.create_task(_heartbeat(writer))
+
             # Stream indefinitely — each SpotEvent updates the cache
             while True:
                 msg = await _read_frame(reader, timeout=60.0)
@@ -385,6 +401,8 @@ async def _feed_loop() -> None:
                 f"[CTraderFeed] disconnected ({exc}) — retry in {backoff:.0f}s"
             )
         finally:
+            if hb_task:
+                hb_task.cancel()
             if writer:
                 try:
                     writer.close()
@@ -600,3 +618,19 @@ def start() -> None:
         logger.info("[CTraderFeed] background streaming task started")
     except Exception as e:
         logger.error(f"[CTraderFeed] failed to start task: {e}")
+
+
+def stop() -> None:
+    """Cancel the background streaming task.
+
+    Called when the executor advisory lock is LOST so a former lock-holder
+    doesn't keep a second cTrader connection open alongside the new holder's
+    feed (which would re-trigger the broker's duplicate-session kicks). Safe to
+    call when the feed isn't running.
+    """
+    global _feed_task, _feed_live
+    if _feed_task and not _feed_task.done():
+        _feed_task.cancel()
+        logger.info("[CTraderFeed] background streaming task cancelled (lock lost)")
+    _feed_task = None
+    _feed_live = False
