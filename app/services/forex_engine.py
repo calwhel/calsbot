@@ -151,6 +151,7 @@ _JPY_PAIRS = ("USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "NZDJPY", "CADJPY", "CHFJP
 _METAL_PIP_SIZES: dict = {
     "XAUUSD": 0.01,    # Gold:        digits=2  →  1 pip = $0.01 price move
     "XAGUSD": 0.001,   # Silver:      digits=3  →  1 pip = $0.001 price move
+    "XPTUSD": 0.01,    # Platinum:    digits=2  →  1 pip = $0.01 price move
     "CLUSD":  0.01,    # Crude Oil:   digits=2  →  1 pip = $0.01 price move
     "NGUSD":  0.001,   # Natural Gas: digits=3  →  1 pip = $0.001 price move
     "HGUSD":  0.0001,  # Copper:      digits=4  →  1 pip = $0.0001 price move

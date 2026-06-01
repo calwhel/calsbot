@@ -1232,10 +1232,14 @@ def _fmt_close_card(
     def _pip_size(sym: str) -> float | None:
         """Return pip size for the symbol, or None for crypto (no pip convention)."""
         s = sym.upper().replace("/", "").replace("=F", "").replace("=X", "")
-        # Metals
-        if s in ("XAUUSD", "GOLD", "GC", "XAUUSDT"):   return 0.10   # gold: $0.10/pip
-        if s in ("XAGUSD", "SILVER", "SI", "XAGUSDT"):  return 0.001  # silver
-        if s in ("XPTUSD", "PLATINUM", "PL"):            return 0.10
+        # Metals — pip size = price increment (digits-based), MUST match
+        # app.services.forex_engine.pip_size (the canonical source used for the
+        # stored pips_pnl and the entry card). Gold/platinum quote to 2 decimals
+        # → 1 pip = 0.01 (NOT 0.10 — that older value made the result card show
+        # 10× too few pips, e.g. "-3 pips" on a 30-pip SL).
+        if s in ("XAUUSD", "GOLD", "GC", "XAUUSDT"):   return 0.01   # gold: digits=2 → 0.01/pip
+        if s in ("XAGUSD", "SILVER", "SI", "XAGUSDT"):  return 0.001  # silver: digits=3
+        if s in ("XPTUSD", "PLATINUM", "PL"):            return 0.01   # platinum: digits=2
         # JPY pairs (2 decimal places)
         if "JPY" in s:                                   return 0.01
         # Standard 4-decimal forex pairs
@@ -2798,6 +2802,7 @@ async def evaluate_and_fire(
             order_id    = None
             actual_fill = None
             _position_id = None
+            _order_err  = None
             _broker     = "ctrader" if asset_class in ("forex", "index") else "bitunix"
             try:
                 ps_type      = risk.get("position_size_type", "pct")
@@ -2843,6 +2848,7 @@ async def evaluate_and_fire(
                     order_id    = order_result.get("order_id")
                     actual_fill = order_result.get("actual_fill")
                     _position_id = order_result.get("position_id")
+                    _order_err  = order_result.get("error")
             except Exception as e:
                 logger.error(f"[Strategy {strategy.id}] Order error: {e}")
 
@@ -2986,14 +2992,23 @@ async def evaluate_and_fire(
             else:
                 # Fallback: order_id was None (shouldn't normally reach here post-refactor)
                 execution.is_paper = True
-                execution.notes    = f"Live→Paper fallback: {_broker} returned no order_id"
+                _reason_note = f" ({_order_err})" if _order_err else ""
+                execution.notes    = f"Live→Paper fallback: {_broker} returned no order_id{_reason_note}"
                 db.commit()
                 logger.warning(
                     f"[Strategy {strategy.id}] Live order for {symbol} returned no order_id "
-                    f"— converting execution #{execution.id} to paper trade for ROI tracking."
+                    f"({_order_err or 'no reason'}) — converting execution #{execution.id} "
+                    f"to paper trade for ROI tracking."
                 )
                 tg_id_live = _telegram_int_id(user)
                 if tg_id_live:
+                    # Surface the broker's actual rejection reason when we have it,
+                    # so the user can fix it (bad symbol, trading disabled, etc.)
+                    # instead of guessing about API permissions.
+                    _reason_line = (
+                        f"<i>Reason: {_order_err}</i>\n\n"
+                        if _order_err else ""
+                    )
                     try:
                         await _tg_send(
                             tg_id_live,
@@ -3003,8 +3018,10 @@ async def evaluate_and_fire(
                             f"Entry: <code>${current_price:,.4f}</code>\n"
                             f"TP: <code>${tp_price:,.4f}</code> (+{tp_pct}%)  "
                             f"SL: <code>${sl_price:,.4f}</code> (-{sl_pct}%)\n\n"
-                            f"<i>{_broker.title()} did not return an order ID. The signal is being tracked "
-                            f"as a 🧪 paper position. Check your API key has trading permission.</i>"
+                            f"{_reason_line}"
+                            f"<i>The signal is being tracked as a 🧪 paper position. "
+                            f"If this keeps happening, check the symbol is tradable on your "
+                            f"account and that API trading is enabled.</i>"
                         )
                     except Exception:
                         pass

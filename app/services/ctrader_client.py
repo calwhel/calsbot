@@ -50,6 +50,7 @@ try:
         ProtoOAAccountAuthRes,
         ProtoOANewOrderReq,
         ProtoOAExecutionEvent,
+        ProtoOAOrderErrorEvent,
         ProtoOAGetAccountListByAccessTokenReq,
         ProtoOAGetAccountListByAccessTokenRes,
         ProtoOAGetCtidProfileByTokenReq,
@@ -64,6 +65,7 @@ try:
     from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
         ProtoOATradeSide,
         ProtoOAOrderType,
+        ProtoOAExecutionType,
     )
     _PROTO_OK = True
 except ImportError as _e:
@@ -78,6 +80,7 @@ _PAYLOAD_TYPES = {
     "account_auth_res":      2103,
     "new_order_req":         2106,
     "execution_event":       2126,
+    "order_error_event":     2132,
     "account_list_req":      2149,
     "account_list_res":      2150,
     "ctid_profile_req":      2114,
@@ -167,6 +170,42 @@ async def _send_recv(
             return msg.payload
         # silently skip heartbeats / other events
     return None
+
+
+async def _send_recv_any(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    proto_req,
+    req_type: int,
+    expected_types: set,
+    timeout: float = 10.0,
+) -> Tuple[Optional[int], Optional[bytes]]:
+    """Like _send_recv but returns (payloadType, payload) for the FIRST message
+    whose payloadType is in `expected_types` — lets a caller distinguish e.g. a
+    successful execution event from an order-error event. (None, None) on timeout.
+    """
+    writer.write(_encode_msg(proto_req, req_type))
+    await writer.drain()
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        try:
+            header = await asyncio.wait_for(reader.readexactly(4), timeout=remaining)
+        except (asyncio.IncompleteReadError, asyncio.TimeoutError):
+            break
+        length = struct.unpack(">I", header)[0]
+        try:
+            body = await asyncio.wait_for(
+                reader.readexactly(length), timeout=min(remaining, 10.0)
+            )
+        except (asyncio.IncompleteReadError, asyncio.TimeoutError):
+            break
+        msg = _decode_msg(body)
+        if msg and msg.payloadType in expected_types:
+            return msg.payloadType, msg.payload
+        # silently skip heartbeats / other events
+    return None, None
 
 
 async def _open_connection() -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
@@ -442,10 +481,11 @@ async def place_order(
                 if take_profit_price is not None:
                     req.takeProfit = int(take_profit_price * 100_000)
 
-                payload = await _send_recv(
+                pt, payload = await _send_recv_any(
                     reader, writer, req,
                     _PAYLOAD_TYPES["new_order_req"],
-                    _PAYLOAD_TYPES["execution_event"],
+                    {_PAYLOAD_TYPES["execution_event"],
+                     _PAYLOAD_TYPES["order_error_event"]},
                     timeout=15.0,
                 )
                 if not payload:
@@ -453,8 +493,42 @@ async def place_order(
 
                 global _conn_ts
                 _conn_ts = time.monotonic()
+
+                # Broker rejected the order outright (unknown symbol, bad volume,
+                # invalid SL/TP, trading disabled, market closed, no margin, …).
+                # Surface the real reason instead of dropping it as "no event".
+                if pt == _PAYLOAD_TYPES["order_error_event"]:
+                    err = ProtoOAOrderErrorEvent()
+                    err.ParseFromString(payload)
+                    _reason = (err.description or "").strip() or (err.errorCode or "").strip() or "order rejected"
+                    _detail = f"{err.errorCode}: {_reason}" if err.errorCode and err.errorCode not in _reason else _reason
+                    logger.error(
+                        f"[cTrader] order REJECTED errorCode={err.errorCode!r} "
+                        f"desc={err.description!r} symbol={req.symbolName} vol={req.volume}"
+                    )
+                    return {"order_id": None, "actual_fill": None, "error": _detail}
+
                 ev = ProtoOAExecutionEvent()
                 ev.ParseFromString(payload)
+
+                # An execution event can ALSO be a rejection/cancellation that
+                # still carries an `order` block — treating that as a fill would
+                # mark a non-existent live position as live. Only real fills pass.
+                _exec_type = ev.executionType
+                if _exec_type in (
+                    ProtoOAExecutionType.ORDER_REJECTED,
+                    ProtoOAExecutionType.ORDER_CANCELLED,
+                    ProtoOAExecutionType.ORDER_EXPIRED,
+                ):
+                    _ec = ev.errorCode if ev.HasField("errorCode") else ""
+                    _tname = ProtoOAExecutionType.Name(_exec_type)
+                    logger.error(
+                        f"[cTrader] order not filled ({_tname}) errorCode={_ec!r} "
+                        f"symbol={req.symbolName} vol={req.volume}"
+                    )
+                    return {"order_id": None, "actual_fill": None,
+                            "error": f"{_tname}: {_ec}" if _ec else _tname}
+
                 order_id    = str(ev.order.orderId) if ev.HasField("order") else None
                 actual_fill = None
                 position_id = None
@@ -774,5 +848,7 @@ async def place_ctrader_order_for_user(
 
     if result.get("error"):
         logger.error(f"[cTrader] order failed for user {user.id}: {result['error']}")
-        return None
+        # Return the dict (order_id is None) so the caller can surface the real
+        # rejection reason instead of a generic "no order id" message.
+        return result
     return result
