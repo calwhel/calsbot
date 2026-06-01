@@ -25,8 +25,33 @@ from typing import Optional, Tuple
 logger = logging.getLogger(__name__)
 
 # ── Spotware Open API endpoints ───────────────────────────────────────────────
-CTRADER_HOST = "live.ctraderapi.com"
+# Demo and live accounts live on SEPARATE hosts. A ctid is reachable ONLY on
+# its matching host — account auth silently fails otherwise (looks like a token
+# problem but isn't). Route by the account's isLive flag.
+CTRADER_HOST_LIVE = "live.ctraderapi.com"
+CTRADER_HOST_DEMO = "demo.ctraderapi.com"
+CTRADER_HOST = CTRADER_HOST_LIVE   # default / backward-compat
 CTRADER_PORT = 5035
+
+
+def _host_for_account(prefs, ctid: int) -> str:
+    """Pick live vs demo host for a ctid by reading isLive from the stored
+    ctrader_accounts JSON on the user's prefs. Defaults to LIVE when metadata
+    is missing (callers fall back to the other host on auth failure)."""
+    try:
+        import json as _json
+        raw = getattr(prefs, "ctrader_accounts", None)
+        if raw:
+            for a in _json.loads(raw):
+                if int(a.get("ctidTraderAccountId", -1)) == int(ctid):
+                    return CTRADER_HOST_LIVE if bool(a.get("isLive", True)) else CTRADER_HOST_DEMO
+    except Exception:
+        pass
+    return CTRADER_HOST_LIVE
+
+
+def _other_host(host: str) -> str:
+    return CTRADER_HOST_DEMO if host == CTRADER_HOST_LIVE else CTRADER_HOST_LIVE
 
 # OAuth endpoints — from official Spotware docs:
 # https://help.ctrader.com/open-api/account-authentication/
@@ -208,9 +233,9 @@ async def _send_recv_any(
     return None, None
 
 
-async def _open_connection() -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+async def _open_connection(host: str = CTRADER_HOST) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     ctx = ssl.create_default_context()
-    return await asyncio.open_connection(CTRADER_HOST, CTRADER_PORT, ssl=ctx)
+    return await asyncio.open_connection(host, CTRADER_PORT, ssl=ctx)
 
 
 async def _app_auth(
@@ -232,20 +257,23 @@ async def _app_auth(
     return True
 
 
-# ── Persistent connection singleton ──────────────────────────────────────────
-# Keeps a single SSL TCP socket open to live.ctraderapi.com so that each
-# order avoids the ~300-500ms SSL handshake + application-auth round-trip.
+# ── Persistent connection pool (per host) ────────────────────────────────────
+# Keeps one SSL TCP socket open PER host (demo.ctraderapi.com AND
+# live.ctraderapi.com) so that each order avoids the ~300-500ms SSL handshake +
+# application-auth round-trip.  Demo and live accounts are reachable ONLY on
+# their matching host, so a demo order must never ride a live-host socket (or
+# vice-versa) — hence the per-host keying.
 # Account auth is still done per call (required by the protocol), but that
 # is a single round-trip on an already-open socket (~30-80ms vs ~300-500ms
 # for a fresh SSL+app-auth sequence).
 #
-# _conn_lock serialises all use of the shared socket.  Idle timeout is 45s —
+# _conn_lock serialises ALL socket use across both hosts.  Idle timeout is 45s —
 # shorter than Spotware's server-side 60s keep-alive grace period.
 
 _conn_lock:   asyncio.Lock   = None   # created lazily (no running loop at import)
-_conn_reader: Optional[asyncio.StreamReader] = None
-_conn_writer: Optional[asyncio.StreamWriter] = None
-_conn_ts:     float = 0.0    # monotonic timestamp of last successful message
+# Connection state is keyed by host — demo and live accounts use separate
+# sockets so a demo order never tries to ride a live-host socket (and v.v.).
+_conns: dict = {}            # host → {"reader", "writer", "ts"}
 _CONN_MAX_IDLE = 45.0        # force reconnect if socket unused for this long
 
 
@@ -256,33 +284,28 @@ def _get_lock() -> asyncio.Lock:
     return _conn_lock
 
 
-async def _get_persistent_connection() -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+async def _get_persistent_connection(
+    host: str = CTRADER_HOST,
+) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """
-    Return a (reader, writer) that is connected and application-authenticated.
-    Caller MUST hold _get_lock() before calling this.
+    Return a (reader, writer) for `host` that is connected and
+    application-authenticated. Caller MUST hold _get_lock() before calling.
     Reconnects automatically on idle timeout or detected closure.
     """
-    global _conn_reader, _conn_writer, _conn_ts
-
-    idle = time.monotonic() - _conn_ts
-    is_alive = (
-        _conn_writer is not None
-        and not _conn_writer.is_closing()
-        and idle < _CONN_MAX_IDLE
-    )
-
-    if is_alive:
-        return _conn_reader, _conn_writer
-
-    # Close stale connection cleanly
-    if _conn_writer is not None:
+    st = _conns.get(host)
+    if st is not None:
+        idle = time.monotonic() - st["ts"]
+        if st["writer"] is not None and not st["writer"].is_closing() and idle < _CONN_MAX_IDLE:
+            return st["reader"], st["writer"]
+        # Close stale connection cleanly
         try:
-            _conn_writer.close()
+            if st["writer"] is not None:
+                st["writer"].close()
         except Exception:
             pass
-        _conn_reader = _conn_writer = None
+        _conns.pop(host, None)
 
-    r, w = await _open_connection()
+    r, w = await _open_connection(host)
     ok = await _app_auth(r, w)
     if not ok:
         try:
@@ -291,22 +314,26 @@ async def _get_persistent_connection() -> Tuple[asyncio.StreamReader, asyncio.St
             pass
         raise RuntimeError("cTrader persistent connection: app auth failed")
 
-    _conn_reader, _conn_writer = r, w
-    _conn_ts = time.monotonic()
-    logger.debug("[cTrader] persistent connection (re)established")
+    _conns[host] = {"reader": r, "writer": w, "ts": time.monotonic()}
+    logger.debug(f"[cTrader] persistent connection (re)established → {host}")
     return r, w
 
 
-def _invalidate_persistent_connection() -> None:
-    """Mark the persistent connection as dead so next call reconnects."""
-    global _conn_reader, _conn_writer, _conn_ts
-    if _conn_writer is not None:
+def _touch_conn(host: str) -> None:
+    """Refresh the last-used timestamp for a host's socket after a good message."""
+    st = _conns.get(host)
+    if st is not None:
+        st["ts"] = time.monotonic()
+
+
+def _invalidate_persistent_connection(host: str = CTRADER_HOST) -> None:
+    """Mark the persistent connection for `host` as dead so next call reconnects."""
+    st = _conns.pop(host, None)
+    if st is not None and st["writer"] is not None:
         try:
-            _conn_writer.close()
+            st["writer"].close()
         except Exception:
             pass
-    _conn_reader = _conn_writer = None
-    _conn_ts = 0.0
 
 
 async def _account_auth(
@@ -455,7 +482,7 @@ async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
             db.close()
 
 
-async def get_accounts_for_token(access_token: str) -> list:
+async def get_accounts_for_token(access_token: str, host: str = CTRADER_HOST) -> list:
     """
     Return a list of cTrader trading accounts linked to this access token.
     Each item: {ctidTraderAccountId, isLive, traderLogin, balance}.
@@ -466,7 +493,7 @@ async def get_accounts_for_token(access_token: str) -> list:
     async with _get_lock():
         for attempt in (1, 2):
             try:
-                reader, writer = await _get_persistent_connection()
+                reader, writer = await _get_persistent_connection(host)
                 req = ProtoOAGetAccountListByAccessTokenReq()
                 req.accessToken = access_token
                 payload = await _send_recv(
@@ -478,8 +505,7 @@ async def get_accounts_for_token(access_token: str) -> list:
                     return []
                 res = ProtoOAGetAccountListByAccessTokenRes()
                 res.ParseFromString(payload)
-                global _conn_ts
-                _conn_ts = time.monotonic()
+                _touch_conn(host)
                 accounts = []
                 for acc in res.ctidTraderAccount:
                     accounts.append({
@@ -491,7 +517,7 @@ async def get_accounts_for_token(access_token: str) -> list:
             except Exception as e:
                 if attempt == 1:
                     logger.warning(f"[cTrader] get_accounts retry after: {e}")
-                    _invalidate_persistent_connection()
+                    _invalidate_persistent_connection(host)
                     continue
                 logger.error(f"[cTrader] get_accounts failed: {e}")
                 return []
@@ -507,6 +533,7 @@ async def place_order(
     stop_loss_price: Optional[float] = None,
     take_profit_price: Optional[float] = None,
     label: str = "TradeHub",
+    host: str = CTRADER_HOST,
 ) -> dict:
     """
     Place a market order on cTrader.
@@ -525,7 +552,7 @@ async def place_order(
     async with _get_lock():
         for attempt in (1, 2):
             try:
-                reader, writer = await _get_persistent_connection()
+                reader, writer = await _get_persistent_connection(host)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
                     return {"order_id": None, "actual_fill": None, "error": "account auth failed"}
 
@@ -552,8 +579,7 @@ async def place_order(
                 if not payload:
                     return {"order_id": None, "actual_fill": None, "error": "no execution event"}
 
-                global _conn_ts
-                _conn_ts = time.monotonic()
+                _touch_conn(host)
 
                 # Broker rejected the order outright (unknown symbol, bad volume,
                 # invalid SL/TP, trading disabled, market closed, no margin, …).
@@ -604,7 +630,7 @@ async def place_order(
             except Exception as e:
                 if attempt == 1:
                     logger.warning(f"[cTrader] place_order retry after: {e}")
-                    _invalidate_persistent_connection()
+                    _invalidate_persistent_connection(host)
                     continue
                 logger.error(f"[cTrader] place_order failed: {e}")
                 return {"order_id": None, "actual_fill": None, "error": str(e)}
@@ -616,6 +642,7 @@ async def close_position(
     ctid_trader_account_id: int,
     position_id: int,
     volume_units: int,
+    host: str = CTRADER_HOST,
 ) -> bool:
     """Close (or partially close) an open position. Uses persistent connection."""
     if not _PROTO_OK:
@@ -623,7 +650,7 @@ async def close_position(
     async with _get_lock():
         for attempt in (1, 2):
             try:
-                reader, writer = await _get_persistent_connection()
+                reader, writer = await _get_persistent_connection(host)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
                     return False
                 req = ProtoOAClosePositionReq()
@@ -637,13 +664,12 @@ async def close_position(
                     timeout=15.0,
                 )
                 if payload is not None:
-                    global _conn_ts
-                    _conn_ts = time.monotonic()
+                    _touch_conn(host)
                 return payload is not None
             except Exception as e:
                 if attempt == 1:
                     logger.warning(f"[cTrader] close_position retry after: {e}")
-                    _invalidate_persistent_connection()
+                    _invalidate_persistent_connection(host)
                     continue
                 logger.error(f"[cTrader] close_position failed: {e}")
                 return False
@@ -656,6 +682,7 @@ async def modify_position_sltp(
     position_id: int,
     stop_loss_price: Optional[float] = None,
     take_profit_price: Optional[float] = None,
+    host: str = CTRADER_HOST,
 ) -> bool:
     """
     Amend the stop-loss and/or take-profit of an existing open position on the
@@ -672,7 +699,7 @@ async def modify_position_sltp(
     async with _get_lock():
         for attempt in (1, 2):
             try:
-                reader, writer = await _get_persistent_connection()
+                reader, writer = await _get_persistent_connection(host)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
                     return False
                 req = ProtoOAAmendPositionSLTPReq()
@@ -692,13 +719,12 @@ async def modify_position_sltp(
                     timeout=15.0,
                 )
                 if payload is not None:
-                    global _conn_ts
-                    _conn_ts = time.monotonic()
+                    _touch_conn(host)
                 return payload is not None
             except Exception as e:
                 if attempt == 1:
                     logger.warning(f"[cTrader] modify_position_sltp retry after: {e}")
-                    _invalidate_persistent_connection()
+                    _invalidate_persistent_connection(host)
                     continue
                 logger.error(f"[cTrader] modify_position_sltp failed: {e}")
                 return False
@@ -721,11 +747,13 @@ async def modify_position_sltp_for_user(
             return False
         access_token           = prefs.ctrader_access_token
         ctid_trader_account_id = int(prefs.ctrader_account_id)
+        _host = _host_for_account(prefs, ctid_trader_account_id)
     finally:
         db.close()
     return await modify_position_sltp(
         access_token, ctid_trader_account_id, int(position_id),
         stop_loss_price=stop_loss_price, take_profit_price=take_profit_price,
+        host=_host,
     )
 
 
@@ -734,6 +762,7 @@ async def modify_position_sltp_for_user(
 async def _get_account_balance(
     access_token: str,
     ctid_trader_account_id: int,
+    host: str = CTRADER_HOST,
 ) -> Optional[float]:
     """
     Fetch the current account balance (equity) from cTrader via ProtoOAReconcileReq.
@@ -744,7 +773,7 @@ async def _get_account_balance(
     try:
         async with _get_lock():
             try:
-                reader, writer = await _get_persistent_connection()
+                reader, writer = await _get_persistent_connection(host)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
                     return None
                 req = ProtoOAReconcileReq()
@@ -769,7 +798,7 @@ async def _get_account_balance(
                 # reconcile frame, which would desync the NEXT caller (including
                 # live order placement). Drop the socket so the next call
                 # reconnects cleanly, then propagate the cancellation.
-                _invalidate_persistent_connection()
+                _invalidate_persistent_connection(host)
                 raise
     except asyncio.CancelledError:
         raise
@@ -814,6 +843,7 @@ async def place_ctrader_order_for_user(
             return None
         access_token           = prefs.ctrader_access_token
         ctid_trader_account_id = int(prefs.ctrader_account_id)
+        primary_host           = _host_for_account(prefs, ctid_trader_account_id)
     finally:
         db.close()
 
@@ -847,6 +877,7 @@ async def place_ctrader_order_for_user(
             volume_units           = contracts,
             stop_loss_price        = sl_price,
             take_profit_price      = tp_price,
+            host                   = primary_host,
         )
     else:
         # Forex: standard lot sizing
@@ -873,7 +904,7 @@ async def place_ctrader_order_for_user(
         elif use_risk_pct and risk_pct and risk_pct > 0:
             # ── Risk % auto lot sizing ─────────────────────────────────────
             # Fetch live account balance; compute lots from risk fraction.
-            account_balance = await _get_account_balance(access_token, ctid_trader_account_id)
+            account_balance = await _get_account_balance(access_token, ctid_trader_account_id, host=primary_host)
             if account_balance and account_balance > 0:
                 risk_amount = account_balance * (risk_pct / 100.0)
                 lots = round(risk_amount / max(_sl_pips_eff * pip_value, 0.01), 2)
@@ -905,6 +936,32 @@ async def place_ctrader_order_for_user(
             volume_lots            = lots,
             stop_loss_price        = sl_price,
             take_profit_price      = tp_price,
+            host                   = primary_host,
+        )
+
+    # Local closure so the token-refresh AND wrong-host retries reuse the exact
+    # same sizing/branch without duplicating the index/forex logic.
+    async def _retry_place(_at: str, _host: str) -> dict:
+        if is_index:
+            return await place_order_units(
+                access_token           = _at,
+                ctid_trader_account_id = ctid_trader_account_id,
+                symbol_name            = _SYMBOL_MAP.get(symbol, symbol),
+                direction              = direction,
+                volume_units           = contracts,
+                stop_loss_price        = sl_price,
+                take_profit_price      = tp_price,
+                host                   = _host,
+            )
+        return await place_order(
+            access_token           = _at,
+            ctid_trader_account_id = ctid_trader_account_id,
+            symbol_name            = symbol,
+            direction              = direction,
+            volume_lots            = lots,
+            stop_loss_price        = sl_price,
+            take_profit_price      = tp_price,
+            host                   = _host,
         )
 
     # Expired access token → refresh once and retry the placement. cTrader OAuth
@@ -915,26 +972,14 @@ async def place_ctrader_order_for_user(
         if new_at:
             access_token = new_at
             logger.info(f"[cTrader] retrying {symbol} order for user {user.id} after token refresh")
-            if is_index:
-                result = await place_order_units(
-                    access_token           = access_token,
-                    ctid_trader_account_id = ctid_trader_account_id,
-                    symbol_name            = _SYMBOL_MAP.get(symbol, symbol),
-                    direction              = direction,
-                    volume_units           = contracts,
-                    stop_loss_price        = sl_price,
-                    take_profit_price      = tp_price,
-                )
-            else:
-                result = await place_order(
-                    access_token           = access_token,
-                    ctid_trader_account_id = ctid_trader_account_id,
-                    symbol_name            = symbol,
-                    direction              = direction,
-                    volume_lots            = lots,
-                    stop_loss_price        = sl_price,
-                    take_profit_price      = tp_price,
-                )
+            result = await _retry_place(access_token, primary_host)
+
+    # Still "account auth failed" → the stored isLive metadata may be wrong/stale
+    # (demo account on the live host or vice-versa). Try the OTHER host once.
+    if result.get("error") == "account auth failed":
+        alt_host = _other_host(primary_host)
+        logger.info(f"[cTrader] retrying {symbol} for user {user.id} on alternate host {alt_host}")
+        result = await _retry_place(access_token, alt_host)
 
     if result.get("error"):
         logger.error(f"[cTrader] order failed for user {user.id}: {result['error']}")
