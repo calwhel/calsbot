@@ -83,6 +83,8 @@ try:
         ProtoOAOrderErrorEvent,
         ProtoOASymbolsListReq,
         ProtoOASymbolsListRes,
+        ProtoOASymbolByIdReq,
+        ProtoOASymbolByIdRes,
         ProtoOAGetAccountListByAccessTokenReq,
         ProtoOAGetAccountListByAccessTokenRes,
         ProtoOAGetCtidProfileByTokenReq,
@@ -113,6 +115,8 @@ _PAYLOAD_TYPES = {
     "new_order_req":         2106,
     "symbols_list_req":      2114,
     "symbols_list_res":      2115,
+    "symbol_by_id_req":      2116,
+    "symbol_by_id_res":      2117,
     "execution_event":       2126,
     "order_error_event":     2132,
     "account_list_req":      2149,
@@ -162,6 +166,14 @@ _INDEX_SYMBOLS = frozenset({"SPX", "NDX", "DJI", "DAX", "FTSE"})
 # accounts/hosts, so the cache is keyed by (host, ctid) and re-resolved when
 # either changes.
 _SYMBOL_ID_CACHE: Dict[Tuple[str, int], Dict[str, int]] = {}
+
+# Per-symbol volume metadata (lotSize / minVolume / maxVolume / stepVolume), all
+# expressed in cTrader's order-volume units. The order `volume` field is NOT in
+# "lots" — it is volume_lots × lotSize, and lotSize is broker/instrument-specific
+# (e.g. FX majors 10_000_000, XAUUSD often 100_000-ish). Hardcoding lots×100_000
+# for every symbol wildly over/under-sizes metals → NOT_ENOUGH_MONEY rejections.
+# Cached per (host, ctid, symbolId) since these are per-account like symbolIds.
+_SYMBOL_DETAILS_CACHE: Dict[Tuple[str, int, int], Dict[str, int]] = {}
 
 
 # ── Low-level framing helpers ─────────────────────────────────────────────────
@@ -668,6 +680,101 @@ async def _resolve_symbol_id(
     return name_to_id.get(broker_symbol) if name_to_id else None
 
 
+async def _resolve_symbol_details(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    ctid_trader_account_id: int,
+    symbol_id: int,
+    host: str = CTRADER_HOST,
+) -> Optional[Dict[str, int]]:
+    """Fetch a symbol's volume metadata → {lotSize, minVolume, maxVolume, stepVolume}.
+
+    The order `volume` field is NOT in lots — it is `volume_lots × lotSize`, where
+    lotSize is per-instrument and per-broker (returned by ProtoOASymbolByIdReq, the
+    full ProtoOASymbol entity; the lightweight ProtoOASymbolsList does NOT carry it).
+    Cached per (host, ctid, symbolId). Returns None if it can't be resolved — the
+    caller then FAILS CLOSED (refuses the live order, falls back to a paper trade)
+    rather than guessing a size.
+    """
+    cache_key = (host, ctid_trader_account_id, symbol_id)
+    cached = _SYMBOL_DETAILS_CACHE.get(cache_key)
+    if cached:
+        return cached
+    try:
+        req = ProtoOASymbolByIdReq()
+        req.ctidTraderAccountId = ctid_trader_account_id
+        req.symbolId.append(symbol_id)
+        payload = await _send_recv(
+            reader, writer, req,
+            _PAYLOAD_TYPES["symbol_by_id_req"],
+            _PAYLOAD_TYPES["symbol_by_id_res"],
+            timeout=20.0,
+        )
+        if not payload:
+            return None
+        res = ProtoOASymbolByIdRes()
+        res.ParseFromString(payload)
+        if not res.symbol:
+            return None
+        s = res.symbol[0]
+        details = {
+            "lotSize":    int(s.lotSize)    if s.HasField("lotSize")    else 0,
+            "minVolume":  int(s.minVolume)  if s.HasField("minVolume")  else 0,
+            "maxVolume":  int(s.maxVolume)  if s.HasField("maxVolume")  else 0,
+            "stepVolume": int(s.stepVolume) if s.HasField("stepVolume") else 0,
+        }
+        if details["lotSize"] > 0:
+            _SYMBOL_DETAILS_CACHE[cache_key] = details
+        return details
+    except Exception as e:
+        logger.warning(f"[cTrader] symbol details fetch failed (symbolId={symbol_id}): {e}")
+        return None
+
+
+def _compute_volume(volume_lots: float, details: Optional[Dict[str, int]]) -> Optional[int]:
+    """Convert lots → cTrader order-volume units using the symbol's lotSize.
+
+    volume = volume_lots × lotSize, aligned to the broker's valid-volume grid
+    (multiples of stepVolume anchored at minVolume) and clamped to [minVolume,
+    maxVolume].
+
+    Returns None when symbol details are unavailable or no valid on-grid volume
+    exists. The caller MUST treat None as a hard failure and NOT place the order —
+    we deliberately do NOT fall back to a flat lots×100_000 guess, because that
+    scaling is wrong for metals (gold lot = 100oz) and re-introduces the exact
+    NOT_ENOUGH_MONEY oversize this fix exists to prevent.
+    """
+    if not details or details.get("lotSize", 0) <= 0:
+        return None
+    lot_size  = details["lotSize"]
+    step      = details.get("stepVolume", 0) or 0
+    min_vol   = details.get("minVolume", 0) or 0
+    max_vol   = details.get("maxVolume", 0) or 0
+
+    vol = int(round(volume_lots * lot_size))
+
+    # cTrader valid volumes form a grid: minVolume + k·stepVolume (k≥0) ≤ maxVolume.
+    # Anchor alignment on minVolume so the result is always on-grid and ≥ min,
+    # rather than snapping to a raw step multiple that the broker may reject.
+    if step > 0:
+        base = min_vol if min_vol > 0 else step
+        if vol <= base:
+            vol = base
+        else:
+            vol = base + round((vol - base) / step) * step
+        if max_vol > 0 and vol > max_vol:
+            vol = base + ((max_vol - base) // step) * step   # largest on-grid ≤ max
+    else:
+        if min_vol > 0 and vol < min_vol:
+            vol = min_vol
+        if max_vol > 0 and vol > max_vol:
+            vol = max_vol
+
+    if min_vol > 0 and vol < min_vol:
+        return None   # cannot satisfy broker minimum on this grid
+    return vol if vol > 0 else None
+
+
 async def place_order(
     access_token: str,
     ctid_trader_account_id: int,
@@ -713,12 +820,36 @@ async def place_order(
                     return {"order_id": None, "actual_fill": None,
                             "error": f"symbol {broker_symbol} not tradable on this account"}
 
+                # Volume is in cTrader's per-symbol units (volume_lots × lotSize),
+                # NOT a flat lots×100_000 — that wildly over-sizes metals (gold lot
+                # = 100oz, not 100k units) → NOT_ENOUGH_MONEY. Resolve the symbol's
+                # lotSize/min/step and size correctly; if it can't be resolved we
+                # FAIL CLOSED below rather than guess a wrong size.
+                details = await _resolve_symbol_details(
+                    reader, writer, ctid_trader_account_id, symbol_id, host
+                )
+                volume_units = _compute_volume(volume_lots, details)
+                if not volume_units or volume_units <= 0:
+                    # Fail CLOSED: never guess the size. A wrong-scale live order
+                    # is worse than no order (it caused the gold over-size). The
+                    # executor will fall back to a paper trade.
+                    logger.error(
+                        f"[cTrader] cannot size order for {broker_symbol} "
+                        f"(lots={volume_lots}, details={details}) — refusing to place"
+                    )
+                    return {"order_id": None, "actual_fill": None,
+                            "error": "could not resolve tradable volume for symbol"}
+                logger.info(
+                    f"[cTrader] {broker_symbol} sizing: {volume_lots}L → vol={volume_units} "
+                    f"(lotSize={details.get('lotSize') if details else None})"
+                )
+
                 req = ProtoOANewOrderReq()
                 req.ctidTraderAccountId = ctid_trader_account_id
                 req.symbolId            = symbol_id
                 req.orderType           = ProtoOAOrderType.MARKET
                 req.tradeSide           = ProtoOATradeSide.BUY if direction == "LONG" else ProtoOATradeSide.SELL
-                req.volume              = int(volume_lots * 100_000)  # units
+                req.volume              = volume_units
                 req.label               = label[:20]
                 # MARKET orders REJECT absolute SL/TP ("SL/TP in absolute values
                 # are allowed only for order types: [LIMIT, STOP, STOP_LIMIT]").

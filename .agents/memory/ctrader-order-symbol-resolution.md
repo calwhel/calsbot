@@ -45,6 +45,25 @@ takes an `entry_price` param threaded from `place_ctrader_order_for_user`.
 position (`ProtoOAAmendPositionSLTPReq`) is different — that one DOES take absolute
 SL/TP prices and works.
 
+# cTrader order volume is lots×lotSize, NOT a flat lots×100_000
+
+`ProtoOANewOrderReq.volume` is in the symbol's order-volume units = `volume_lots ×
+lotSize`, where `lotSize`/`minVolume`/`maxVolume`/`stepVolume` are per-instrument,
+per-broker and live on the FULL `ProtoOASymbol` entity (fetch via
+`ProtoOASymbolByIdReq` 2116 → `ProtoOASymbolByIdRes` 2117; the lightweight
+`ProtoOASymbolsList` 2114/2115 used for symbolId does NOT carry them). Hardcoding
+`lots × 100_000` assumes the FX-major lot (100k units) and massively OVER-sizes
+metals (gold lot = 100 oz) → broker rejects with `NOT_ENOUGH_MONEY`.
+
+Valid volumes form a grid: `minVolume + k·stepVolume ≤ maxVolume`. Compute
+`round(lots×lotSize)`, align to that grid (anchored on minVolume), clamp to max
+on-grid. **FAIL CLOSED if you can't resolve real metadata** — never guess a size;
+a wrong-scale LIVE order is worse than no order. Cache details per (host,ctid,symbolId).
+
+**Why:** the gold order reached the broker (symbolId + relative-SL/TP fixes) but
+was margin-rejected purely from the flat 100_000 scaling; a legacy fallback would
+silently re-introduce the oversize.
+
 # Metals price must never fall back to gold futures
 
 For XAUUSD/XAGUSD, `tradfi_prices.get_price` must NOT fall through to yfinance
