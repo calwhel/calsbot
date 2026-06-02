@@ -229,7 +229,7 @@ async def get_klines(
         # can't stall us before the Binance/yfinance fallbacks below.
         _crows = await asyncio.wait_for(
             _ctf.get_klines(symbol, asset_class, timeframe, limit),
-            timeout=6.0,
+            timeout=10.0,
         )
         if _crows:
             return _crows
@@ -330,6 +330,15 @@ async def get_klines(
         except Exception as _fe:
             logger.debug(f"[tradfi] FMP 1min failed {symbol}: {_fe}")
         # fall through to yfinance
+
+    # ── Metals never fall back to yfinance ───────────────────────────────────
+    # yfinance maps gold/silver to FUTURES (GC=F / SI=F), a different instrument
+    # that trades a few dollars off spot. Feeding those candles to signal/paper
+    # evaluation mismatches the cTrader spot the broker actually fills, so for
+    # metals we stop here (cTrader trendbars + Binance spot already tried above)
+    # and skip the bar rather than serve futures data — mirrors get_price().
+    if symbol.upper() in _METALS_BINANCE_MAP:
+        return []
 
     # ── yfinance download() — forex/indices/stocks ────────────────────────────
     ticker = _resolve_ticker(cls, symbol)

@@ -100,6 +100,19 @@ _spot_cache: Dict[str, Tuple[float, float, float]] = {}
 _kline_cache: Dict[Tuple[str, str, int], Tuple[List[List[float]], float]] = {}
 _KLINE_TTL = 60.0
 
+# ── Persistent trendbar (candle) connection ──────────────────────────────────
+# A SINGLE authed connection reused across all trendbar fetches, serialized by a
+# lock. Opening a fresh short-lived connection per candle request (the old
+# behaviour) meant dozens of concurrent SSL+auth handshakes per scan cycle, which
+# cTrader throttles/rejects → every fetch failed → callers fell back to yfinance
+# (gold *futures* for gold). Reusing one warm connection makes steady-state
+# fetches a single round-trip and matches the broker's own chart.
+_tb_lock: Optional["asyncio.Lock"] = None
+_tb_conn: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
+_tb_conn_ctx: Optional[Tuple[str, int]] = None  # (host, ctid) the conn is authed for
+_tb_last_use: float = 0.0
+_TB_IDLE_MAX = 25.0  # cTrader drops idle conns ~30s → proactively reopen past this
+
 _feed_live: bool = False
 _feed_task: Optional[asyncio.Task] = None
 # Cached symbol-ID map from the last successful connection.
@@ -430,6 +443,78 @@ async def _feed_loop() -> None:
 
 # ── On-demand trendbar (kline) fetch ─────────────────────────────────────────
 
+def _get_tb_lock() -> "asyncio.Lock":
+    global _tb_lock
+    if _tb_lock is None:
+        _tb_lock = asyncio.Lock()
+    return _tb_lock
+
+
+async def _invalidate_tb_conn() -> None:
+    """Close and drop the persistent trendbar connection (forces a reopen)."""
+    global _tb_conn, _tb_conn_ctx
+    conn = _tb_conn
+    _tb_conn = None
+    _tb_conn_ctx = None
+    if conn is not None:
+        try:
+            await _aclose_writer(conn[1])
+        except Exception:
+            pass
+
+
+def _drop_tb_conn_sync() -> None:
+    """Synchronously abandon the persistent trendbar connection — cancellation-safe
+    (no awaits, so it can run while a CancelledError is propagating). Used to make
+    a cancelled/timed-out request connection-fatal: a late response left in the
+    socket buffer must never be read as the answer to the NEXT request."""
+    global _tb_conn, _tb_conn_ctx
+    conn = _tb_conn
+    _tb_conn = None
+    _tb_conn_ctx = None
+    if conn is not None:
+        try:
+            conn[1].close()
+        except Exception:
+            pass
+
+
+async def _get_tb_conn(
+    host: str, access_token: str, ctid: int
+) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Return a live, app+account-authed connection for (host, ctid), reusing the
+    cached one when it is fresh. Reopens when missing, idle too long, or bound to
+    a different host/account. Raises on connect/auth failure."""
+    global _tb_conn, _tb_conn_ctx, _tb_last_use
+    now = time.monotonic()
+    if (
+        _tb_conn is not None
+        and _tb_conn_ctx == (host, ctid)
+        and (now - _tb_last_use) <= _TB_IDLE_MAX
+    ):
+        return _tb_conn
+
+    await _invalidate_tb_conn()
+    reader, writer = await _open_conn(host)
+    try:
+        if not await _app_auth(reader, writer):
+            raise ConnectionError("trendbar app auth failed")
+        if not await _account_auth(reader, writer, access_token, ctid):
+            raise ConnectionError("trendbar account auth failed")
+    except BaseException:
+        # BaseException so a wait_for cancellation during auth still closes the
+        # writer (synchronously — no await while cancelling) instead of leaking it.
+        try:
+            writer.close()
+        except Exception:
+            pass
+        raise
+    _tb_conn = (reader, writer)
+    _tb_conn_ctx = (host, ctid)
+    _tb_last_use = now
+    return _tb_conn
+
+
 async def _fetch_trendbars(
     symbol: str,
     timeframe: str,
@@ -439,84 +524,105 @@ async def _fetch_trendbars(
     host: str = _HOST_LIVE,
 ) -> List[List[float]]:
     """
-    Open a short-lived connection and fetch up to `limit` OHLC bars for
-    `symbol` at `timeframe` from the cTrader server.
+    Fetch up to `limit` OHLC bars for `symbol` at `timeframe` from cTrader over a
+    single persistent, lock-serialized connection (auth happens once on connect,
+    NOT per request). Reuses the warm connection; on a stale/dead socket it
+    reopens and retries once. Returns [] on failure so callers fall through to
+    their next candle source.
+
+    The lock guarantees only one request is in flight at a time, and any
+    timeout/error drops the connection — so a late response can never be misread
+    as the answer to the next request (no clientMsgId correlation needed).
 
     Returns rows in [[ts_ms, open, high, low, close, volume], ...] format.
     """
+    global _tb_last_use
+
     period = _TF_TO_PERIOD.get(timeframe)
     if period is None:
         logger.debug(f"[CTraderFeed] unsupported timeframe {timeframe!r}")
         return []
 
-    # Resolve broker symbol name
     broker_name = _TRACKED.get(symbol.upper(), symbol.upper())
-    symbol_id = None
 
-    reader = writer = None
-    try:
-        reader, writer = await _open_conn(host)
+    async with _get_tb_lock():
+        for attempt in (1, 2):
+            try:
+                reader, writer = await _get_tb_conn(host, access_token, ctid)
 
-        if not await _app_auth(reader, writer):
-            return []
-        if not await _account_auth(reader, writer, access_token, ctid):
-            return []
+                # Symbol IDs are cached per (host, ctid) by _resolve_symbols and
+                # already populated by the streaming connection, so in steady
+                # state this is a no-op lookup (no extra round-trip), and it
+                # never reuses a symbolId that maps to the wrong instrument.
+                name_to_id = await _resolve_symbols(reader, writer, ctid, host)
+                symbol_id = name_to_id.get(broker_name)
+                if not symbol_id:
+                    logger.debug(f"[CTraderFeed] symbol_id not found for {broker_name}")
+                    return []
 
-        # Resolve symbol IDs scoped to THIS (host, ctid). _resolve_symbols
-        # re-fetches if the cache belongs to a different host/account, so we
-        # never reuse a symbolId that maps to the wrong instrument.
-        name_to_id = await _resolve_symbols(reader, writer, ctid, host)
-        symbol_id = name_to_id.get(broker_name)
+                now_ms = int(time.time() * 1000)
+                # cTrader REQUIRES fromTimestamp (and toTimestamp). Window it to
+                # cover `count` bars of this timeframe, ×3 to absorb weekends /
+                # market-closed gaps so we still get `count` *trading* bars back.
+                # cTrader caps the returned set at `count` (max 4096).
+                _mins = _TF_MINUTES.get(timeframe, 15)
+                _count = min(limit, 4096)
+                _window_ms = _count * _mins * 60_000 * 3
+                req = ProtoOAGetTrendbarsReq()
+                req.ctidTraderAccountId = ctid
+                req.symbolId = symbol_id
+                req.period = period
+                req.count = _count
+                req.fromTimestamp = now_ms - _window_ms
+                req.toTimestamp = now_ms
+                await _send(writer, req, _PT_TRENDBARS_REQ)
+                _tb_last_use = time.monotonic()
 
-        if not symbol_id:
-            logger.debug(f"[CTraderFeed] symbol_id not found for {broker_name}")
-            return []
+                # Read frames until we get the trendbars response (skipping any
+                # interleaved heartbeats). Kept under the caller's wait_for budget
+                # so a warm round-trip completes before any forced cancellation.
+                deadline = time.monotonic() + 6.0
+                while time.monotonic() < deadline:
+                    remaining = deadline - time.monotonic()
+                    msg = await _read_frame(reader, timeout=remaining)
+                    if not msg:
+                        break
+                    if msg.payloadType == _PT_TRENDBARS_RES:
+                        res = ProtoOAGetTrendbarsRes()
+                        res.ParseFromString(msg.payload)
+                        rows: List[List[float]] = []
+                        for bar in res.trendbar:
+                            low   = bar.low / 100_000.0
+                            open_ = (bar.low + bar.deltaOpen)  / 100_000.0
+                            high  = (bar.low + bar.deltaHigh)  / 100_000.0
+                            close = (bar.low + bar.deltaClose) / 100_000.0
+                            ts_ms = bar.utcTimestampInMinutes * 60 * 1000
+                            vol   = float(bar.volume)
+                            rows.append([ts_ms, open_, high, low, close, vol])
+                        _tb_last_use = time.monotonic()
+                        return rows[-limit:]
 
-        now_ms = int(time.time() * 1000)
-        # cTrader REQUIRES fromTimestamp (and toTimestamp). Window it to cover
-        # `count` bars of this timeframe, ×3 to absorb weekends / market-closed
-        # gaps so we still get `count` *trading* bars back. cTrader caps the
-        # returned set at `count` (max 4096) regardless of the window width.
-        _mins = _TF_MINUTES.get(timeframe, 15)
-        _count = min(limit, 4096)
-        _window_ms = _count * _mins * 60_000 * 3
-        req = ProtoOAGetTrendbarsReq()
-        req.ctidTraderAccountId = ctid
-        req.symbolId = symbol_id
-        req.period = period
-        req.count = _count
-        req.fromTimestamp = now_ms - _window_ms
-        req.toTimestamp = now_ms
-        await _send(writer, req, _PT_TRENDBARS_REQ)
+                # No matching response — the socket is likely stale. Drop it and,
+                # on the first attempt, reopen + retry once.
+                await _invalidate_tb_conn()
+                if attempt == 1:
+                    continue
+                return []
 
-        # Read frames until we get the trendbars response
-        deadline = time.monotonic() + 20.0
-        while time.monotonic() < deadline:
-            remaining = deadline - time.monotonic()
-            msg = await _read_frame(reader, timeout=remaining)
-            if not msg:
-                break
-            if msg.payloadType == _PT_TRENDBARS_RES:
-                res = ProtoOAGetTrendbarsRes()
-                res.ParseFromString(msg.payload)
-                rows: List[List[float]] = []
-                for bar in res.trendbar:
-                    low   = bar.low / 100_000.0
-                    open_ = (bar.low + bar.deltaOpen)  / 100_000.0
-                    high  = (bar.low + bar.deltaHigh)  / 100_000.0
-                    close = (bar.low + bar.deltaClose) / 100_000.0
-                    ts_ms = bar.utcTimestampInMinutes * 60 * 1000
-                    vol   = float(bar.volume)
-                    rows.append([ts_ms, open_, high, low, close, vol])
-                return rows[-limit:]
-        return []
+            except asyncio.CancelledError:
+                # Caller's wait_for timed out. The socket may have a pending/late
+                # response — abandon it (sync, no await while cancelling) so it is
+                # never misread by the next request, then propagate the cancel.
+                _drop_tb_conn_sync()
+                raise
+            except Exception as e:
+                logger.debug(f"[CTraderFeed] trendbar fetch failed for {symbol}: {e}")
+                await _invalidate_tb_conn()
+                if attempt == 1:
+                    continue
+                return []
 
-    except Exception as e:
-        logger.debug(f"[CTraderFeed] trendbar fetch failed for {symbol}: {e}")
-        return []
-    finally:
-        if writer:
-            await _aclose_writer(writer)
+    return []
 
 
 async def get_klines(

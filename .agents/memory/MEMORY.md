@@ -6,6 +6,7 @@
 - [cTrader shared connection](ctrader-shared-connection.md) — never wrap a cTrader call in outer wait_for without CancelledError→invalidate (shared socket desyncs); cold reconnects need ≥10s timeouts.
 - [Response-object caching bug](response-object-caching.md) — never cache a JSONResponse object under BaseHTTPMiddleware; cache the dict/list payload and rebuild JSONResponse each return.
 - [DB lock-queue starvation](db-lock-starvation.md) — startup ALTER/CREATE INDEX without lock_timeout on a hot table freezes ALL reads on it → whole portal "won't load"; cap every DDL with lock_timeout.
+- [cTrader trendbar connection](ctrader-trendbar-connection.md) — candle fetches MUST reuse one lock-serialized cTrader conn (per-request opens get throttled → silent yfinance/futures fallback); wait_for cancel must drop the socket sync (no clientMsgId correlation).
 - [cTrader order symbol resolution](ctrader-order-symbol-resolution.md) — orders need numeric symbolId (resolve via SymbolsList 2114/2115, NOT symbolName); metals must never fall back to yfinance GC=F futures.
 - [cTrader token refresh cross-process race](ctrader-token-refresh-cross-process.md) — rotating refresh token must be serialised per-user across all 4 gunicorn workers (pg advisory xact lock), not just an asyncio.Lock, or the chain bricks within hours.
 - [asyncio SSL FD leak](asyncio-ssl-fd-leak.md) — bare writer.close() on SSL StreamWriters leaks FDs → "Too many open files"+DNS+DB failures; must await wait_closed() via _aclose_writer.
