@@ -343,6 +343,20 @@ export default function StrategiesScreen() {
         <Text style={styles.scannerBannerSub}>BOS · CHoCH · FVG · OB across 11 pairs</Text>
         <Ionicons name="chevron-forward" size={13} color={colors.textMute} style={{ marginLeft: 'auto' }} />
       </Pressable>
+
+      {/* Portfolio review shortcut */}
+      <Pressable
+        onPress={() => {
+          Haptics.selectionAsync();
+          router.push('/portfolio' as any);
+        }}
+        style={({ pressed }) => [styles.scannerBanner, pressed && { opacity: 0.8 }]}
+      >
+        <Ionicons name="bar-chart-outline" size={14} color="#d4a017" />
+        <Text style={styles.scannerBannerText}>Portfolio Review</Text>
+        <Text style={styles.scannerBannerSub}>AI review of your whole strategy book</Text>
+        <Ionicons name="chevron-forward" size={13} color={colors.textMute} style={{ marginLeft: 'auto' }} />
+      </Pressable>
     </View>
   );
 

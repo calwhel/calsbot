@@ -10338,6 +10338,246 @@ def _describe_existing_config(config: dict) -> str:
     return "\n  ".join(lines)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# AI-builder personalization — feed the user's REAL strategies + performance
+# into the chat builder, improve-mode, and portfolio review.
+# ─────────────────────────────────────────────────────────────────────────────
+_SESSION_ORDER = ["Night (00-06 UTC)", "Morning (06-12 UTC)",
+                  "Afternoon (12-18 UTC)", "Evening (18-24 UTC)"]
+
+
+def _utc_session_name(h: int) -> str:
+    if h < 6:  return "Night (00-06 UTC)"
+    if h < 12: return "Morning (06-12 UTC)"
+    if h < 18: return "Afternoon (12-18 UTC)"
+    return "Evening (18-24 UTC)"
+
+
+def _compute_strategy_trade_stats(db, strategy_id, limit: int = 100) -> dict:
+    """
+    Shared trade-analytics computation over a strategy's closed executions.
+    Returns advisor-style text blocks plus a compact one-line summary and the
+    raw per-bucket dicts. Used by /api/strategy-advisor, chat-builder improve
+    mode, and /api/portfolio-review so the analytics math lives in one place.
+    """
+    from app.strategy_models import StrategyExecution
+
+    out = {
+        "session_block": "  No session data yet",
+        "dow_block":     "  No day-of-week data yet",
+        "best_coins":    "not enough data",
+        "worst_coins":   "none negative yet",
+        "trade_log":     "  No trades yet",
+        "compact":       "no closed trades yet",
+        "n_closed":      0,
+        "best_session":  None,
+        "worst_session": None,
+    }
+    try:
+        execs = (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.strategy_id == strategy_id,
+                StrategyExecution.outcome.in_(["WIN", "LOSS", "BREAKEVEN"]),
+            )
+            .order_by(StrategyExecution.fired_at.desc())
+            .limit(limit)
+            .all()
+        )
+    except Exception as e:
+        logger.warning(f"_compute_strategy_trade_stats query error (non-fatal): {e}")
+        return out
+
+    if not execs:
+        return out
+
+    DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    def _wr(s):
+        tot = s["win"] + s["loss"]
+        return f"{round(s['win']/tot*100)}% ({s['win']}W/{s['loss']}L)" if tot else "no data"
+
+    hour_stats, dow_stats, sess_stats, coin_stats = {}, {}, {}, {}
+    try:
+        for ex in execs:
+            is_win  = ex.outcome == "WIN"
+            is_loss = ex.outcome == "LOSS"
+            coin = (ex.symbol or "").replace("USDT", "")
+            if ex.fired_at:
+                h  = ex.fired_at.hour
+                d  = ex.fired_at.weekday()
+                sn = _utc_session_name(h)
+                hour_stats.setdefault(h, {"win": 0, "loss": 0})
+                dow_stats.setdefault(d, {"win": 0, "loss": 0})
+                sess_stats.setdefault(sn, {"win": 0, "loss": 0})
+                if is_win:
+                    hour_stats[h]["win"] += 1; dow_stats[d]["win"] += 1; sess_stats[sn]["win"] += 1
+                if is_loss:
+                    hour_stats[h]["loss"] += 1; dow_stats[d]["loss"] += 1; sess_stats[sn]["loss"] += 1
+            if coin:
+                coin_stats.setdefault(coin, {"win": 0, "loss": 0, "pnl": 0.0})
+                if is_win:  coin_stats[coin]["win"]  += 1
+                if is_loss: coin_stats[coin]["loss"] += 1
+                if ex.pnl_pct is not None:
+                    coin_stats[coin]["pnl"] += float(ex.pnl_pct)
+
+        sess_lines = [f"  {sn}: {_wr(sess_stats[sn])}" for sn in _SESSION_ORDER if sn in sess_stats]
+        if sess_lines:
+            out["session_block"] = "\n".join(sess_lines)
+
+        dow_lines = [f"  {DOW[d]}: {_wr(dow_stats[d])}" for d in range(7) if d in dow_stats]
+        if dow_lines:
+            out["dow_block"] = "\n".join(dow_lines)
+
+        coin_sorted = sorted(coin_stats.items(), key=lambda x: x[1]["pnl"], reverse=True)
+        if coin_sorted:
+            out["best_coins"] = ", ".join(
+                f"{c} ({v['win']}W/{v['loss']}L, {v['pnl']:+.0f}%)" for c, v in coin_sorted[:5]
+            )
+            negatives = [(c, v) for c, v in coin_sorted[-5:] if v["pnl"] < 0]
+            if negatives:
+                out["worst_coins"] = ", ".join(
+                    f"{c} ({v['win']}W/{v['loss']}L, {v['pnl']:+.0f}%)" for c, v in negatives
+                )
+
+        recent_lines = []
+        for ex in reversed(execs[:25]):
+            try:
+                dt   = ex.fired_at.strftime("%m/%d %H:%M") if ex.fired_at else "?"
+                coin = (ex.symbol or "?").replace("USDT", "")
+                pnl  = f"{ex.pnl_pct:+.1f}%" if ex.pnl_pct is not None else "?"
+                dur  = ""
+                if ex.fired_at and ex.closed_at:
+                    fa = ex.fired_at.replace(tzinfo=None)
+                    ca = ex.closed_at.replace(tzinfo=None)
+                    dur = f" {int((ca - fa).total_seconds() / 60)}m"
+                recent_lines.append(f"  {dt} | {coin} {ex.direction or ''} | {ex.outcome}{dur} | {pnl}")
+            except Exception:
+                continue
+        if recent_lines:
+            out["trade_log"] = "\n".join(recent_lines)
+
+        # Best/worst session by win rate (min 4 decided trades to be meaningful)
+        ranked = []
+        for sn, s in sess_stats.items():
+            tot = s["win"] + s["loss"]
+            if tot >= 4:
+                ranked.append((sn, s["win"] / tot, tot))
+        if ranked:
+            ranked.sort(key=lambda x: x[1], reverse=True)
+            out["best_session"]  = f"{ranked[0][0]} ({round(ranked[0][1]*100)}%)"
+            out["worst_session"] = f"{ranked[-1][0]} ({round(ranked[-1][1]*100)}%)"
+
+        n = len(execs)
+        out["n_closed"] = n
+        bits = [f"{n} closed trades"]
+        if out["best_session"]:
+            bits.append(f"best session {out['best_session']}")
+        if out["worst_session"] and out["worst_session"] != out["best_session"]:
+            bits.append(f"worst session {out['worst_session']}")
+        if out["worst_coins"] != "none negative yet":
+            bits.append(f"losing symbols: {out['worst_coins']}")
+        out["compact"] = "; ".join(bits)
+    except Exception as e:
+        logger.warning(f"_compute_strategy_trade_stats analytics error (non-fatal): {e}")
+
+    return out
+
+
+def _build_user_trading_context(db, user, asset_class: str = None, max_strategies: int = 8) -> str:
+    """
+    Compact summary of the user's saved strategies + real performance, formatted
+    for an LLM system prompt. Lets the AI builder reference what the user already
+    owns, build on winners, avoid duplicates, and warn on past-loser patterns.
+    Cached per (user, asset_class) for 60s. Returns "" when the user has nothing.
+    """
+    try:
+        uid = getattr(user, "id", 0) or 0
+        if not uid:
+            return ""
+        from app.cache import get_cache, set_cache
+        ckey = f"trading_ctx:{uid}:{asset_class or 'all'}"
+        cached = get_cache(ckey)
+        if cached is not None:
+            return cached
+
+        from app.strategy_models import UserStrategy, StrategyPerformance
+
+        q = (
+            db.query(UserStrategy, StrategyPerformance)
+            .outerjoin(StrategyPerformance, StrategyPerformance.strategy_id == UserStrategy.id)
+            .filter(
+                UserStrategy.user_id == uid,
+                UserStrategy.status.in_(["active", "paused", "draft"]),
+            )
+        )
+        rows = q.all()
+        if not rows:
+            set_cache(ckey, "", 60)
+            return ""
+
+        def _signal_types(cfg):
+            try:
+                conds = (cfg.get("entry_conditions") or {}).get("conditions") or []
+                types = [c.get("type", "?") for c in conds if isinstance(c, dict)]
+                return "+".join(types[:3]) if types else "?"
+            except Exception:
+                return "?"
+
+        def _sort_key(row):
+            _s, perf = row
+            return (perf.total_trades if perf and perf.total_trades else 0)
+
+        rows.sort(key=_sort_key, reverse=True)
+
+        lines, winners, bleeders = [], [], []
+        total = len(rows)
+        for strat, perf in rows[:max_strategies]:
+            cfg = strat.config or {}
+            sig = _signal_types(cfg)
+            ac  = strat.asset_class or cfg.get("asset_class", "crypto")
+            tf  = "?"
+            try:
+                conds = (cfg.get("entry_conditions") or {}).get("conditions") or []
+                if conds and isinstance(conds[0], dict):
+                    tf = conds[0].get("timeframe", "?")
+            except Exception:
+                pass
+            if perf and perf.total_trades:
+                wr   = round(perf.win_rate or 0)
+                pnl  = round(perf.total_pnl_pct or 0, 1)
+                perf_s = f"{perf.total_trades} trades, {wr}% WR, {pnl:+}%"
+                if perf.total_trades >= 10 and wr >= 55 and pnl > 0:
+                    winners.append(f"{strat.name} ({wr}% WR, {pnl:+}%)")
+                if perf.total_trades >= 10 and pnl < 0:
+                    bleeders.append(f"{strat.name} ({pnl:+}% over {perf.total_trades})")
+            else:
+                perf_s = "no closed trades yet"
+            lines.append(f'  • "{strat.name}" [{ac}/{sig} on {tf}, {strat.status}] — {perf_s}')
+
+        block = [
+            "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501",
+            f"THE USER ALREADY HAS {total} SAVED STRATEG{'Y' if total == 1 else 'IES'} — USE THIS:",
+            "\n".join(lines),
+        ]
+        if winners:
+            block.append("Their best performers (lean into these styles): " + "; ".join(winners[:4]))
+        if bleeders:
+            block.append("Underperformers (avoid repeating these patterns): " + "; ".join(bleeders[:4]))
+        block.append(
+            "Use this to: reference what they own, AVOID building a near-duplicate of an existing "
+            "strategy (suggest a genuinely different angle if their ask overlaps), build on what's "
+            "winning, and gently flag if their idea resembles one of their underperformers."
+        )
+        block.append("\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501")
+        text = "\n".join(block)
+        set_cache(ckey, text, 60)
+        return text
+    except Exception as e:
+        logger.warning(f"_build_user_trading_context error (non-fatal): {e}")
+        return ""
+
+
 @app.post("/api/chat-builder")
 async def chat_builder_api(request: Request):
     """
@@ -10660,14 +10900,56 @@ CONFIRMATION PAIRINGS:
     # Pre-compute improve-mode block BEFORE the f-string — nested f"""..."""
     # inside an outer f"""...""" is a SyntaxError in Python 3.11.
     if existing_config:
+        # Proactive improvement: pull the strategy's REAL trade performance so the
+        # AI's assessment is data-driven (losing sessions/symbols, actual win rate)
+        # instead of guessing from the config alone. Best-effort + bounded.
+        _perf_block_txt = ""
+        if existing_strategy_id and getattr(user, "id", 0):
+            try:
+                _perf_db = SessionLocal()
+                try:
+                    # Ownership guard: only inject perf for a strategy this user
+                    # owns — _compute_strategy_trade_stats queries by id alone, so
+                    # without this check a caller could pass another user's id (IDOR).
+                    from app.strategy_models import UserStrategy as _UStrat
+                    _owned = (
+                        _perf_db.query(_UStrat.id)
+                        .filter(_UStrat.id == existing_strategy_id,
+                                _UStrat.user_id == user.id)
+                        .first()
+                    )
+                    _st = _compute_strategy_trade_stats(_perf_db, existing_strategy_id) if _owned else {"n_closed": 0}
+                finally:
+                    _perf_db.close()
+                if _st.get("n_closed", 0) > 0:
+                    _perf_block_txt = (
+                        "\nREAL PERFORMANCE OF THIS STRATEGY (use these actual numbers, not guesses):\n"
+                        f"  Summary: {_st['compact']}\n"
+                        "  Win rate by session (UTC):\n" + _st["session_block"] + "\n"
+                        "  Win rate by day of week:\n" + _st["dow_block"] + "\n"
+                        f"  Best symbols: {_st['best_coins']}\n"
+                        f"  Losing symbols: {_st['worst_coins']}\n"
+                        "Ground EVERY suggestion in this data — name the exact losing sessions/days/"
+                        "symbols and propose concrete filters (restrict timing, drop a bleeding symbol, "
+                        "tighten SL where it's leaking). Do NOT give generic advice when you have real numbers.\n"
+                    )
+                else:
+                    _perf_block_txt = (
+                        "\nThis strategy has no closed trades yet — base your assessment on the config "
+                        "structure and best practices; suggest running a backtest to validate.\n"
+                    )
+            except Exception as _perf_err:
+                logger.warning(f"Improve-mode perf fetch failed (non-fatal): {_perf_err}")
+
         _improve_block = (
             "\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
             "IMPROVE MODE \u2014 REFINING AN EXISTING STRATEGY\n"
             "You are NOT building from scratch. The user wants to improve their existing strategy.\n\n"
             "Current config:\n"
-            "  " + _describe_existing_config(existing_config) + "\n\n"
+            "  " + _describe_existing_config(existing_config) + "\n"
+            + _perf_block_txt + "\n"
             "Your job:\n"
-            "1. Open with a brief honest assessment (3 sentences max): what\u2019s solid, what\u2019s the single biggest weakness, and one specific change you\u2019d try first.\n"
+            "1. Open with a brief honest assessment (3 sentences max): what\u2019s solid, what\u2019s the single biggest weakness (cite the real data above if present), and one specific change you\u2019d try first.\n"
             "2. Let the user steer \u2014 they might want to change signals, tighten stops, add confirmations, or just tweak R:R.\n"
             "3. Make targeted suggestions that ADDRESS the specific weaknesses, not generic advice.\n"
             "4. When ready, compile the FULL revised ###STRATEGY### line \u2014 this will UPDATE the existing strategy (not create a new one), so output all fields even the unchanged ones.\n"
@@ -10693,6 +10975,11 @@ SIGNAL VARIETY — THIS IS CRITICAL:
 - This session, lean toward: **{_nudge}** — unless the user explicitly asks for something else.
 - When pitching 2–3 ideas unprompted, span different signal families (e.g. one SMC, one oscillator, one trend-follow — never three RSI variants). Each idea should feel meaningfully different from the others.
 - If the conversation already discussed a signal type, suggest something from a different family next time. Rotate across the IDEA BANK, not the same 2–3 strategies every session.
+
+HANDLING COMPLEX / MULTI-PART REQUESTS:
+- When a user describes a detailed, multi-condition setup (e.g. a full ICT stack: killzone + liquidity sweep + market-structure shift + FVG + CISD), treat every named concept as a REQUIRED ingredient. Acknowledge each part briefly so they know you caught all of it — don't silently drop the hard ones.
+- Build the FULL stack they asked for rather than trimming to 2–3 confirmations; only push back if two requirements genuinely conflict, and if so name the conflict and propose a fix.
+- For sequenced setups ("first a sweep, then structure breaks, then enter on the retrace"), keep the order in how you describe and compile the conditions.
 {_improve_block}
 WHAT YOU COLLECT (naturally, any order):
 - Direction: LONG / SHORT / BOTH
@@ -10739,6 +11026,23 @@ FIELD RULES for the ###STRATEGY### line:
 - Max Trades/Day: integer, typically 3–20 depending on style (scalp: 10–20, swing: 2–5)
 - Confirmation 1 / Confirmation 2: can be "none" if user doesn't want confirmations (discourage this)
 - Use actual values from the conversation. Output ###STRATEGY### exactly once, only when you have enough real info."""
+
+    # ── Personalization: inject the user's REAL saved strategies + performance ──
+    # so the AI references what they own, builds on winners, avoids duplicates,
+    # and warns on past-loser patterns. Skipped in improve mode (that path gets
+    # the focused single-strategy performance block instead). Best-effort: never
+    # let a context-build failure break the chat.
+    if not existing_config and getattr(user, "id", 0):
+        try:
+            _ctx_db = SessionLocal()
+            try:
+                _user_ctx = _build_user_trading_context(_ctx_db, user, asset_class)
+            finally:
+                _ctx_db.close()
+            if _user_ctx:
+                system_prompt += "\n" + _user_ctx
+        except Exception as _ctx_err:
+            logger.warning(f"Chat builder context inject failed (non-fatal): {_ctx_err}")
 
     api_messages = [{"role": m["role"], "content": m["content"]} for m in messages]
 
@@ -11738,127 +12042,14 @@ async def strategy_advisor(request: Request):
             StrategyPerformance.strategy_id == strategy_id
         ).first()
 
-        # ── Fetch last 100 closed executions ─────────────────────────────────
-        execs = (
-            db.query(StrategyExecution)
-            .filter(
-                StrategyExecution.strategy_id == strategy_id,
-                StrategyExecution.outcome.in_(["WIN", "LOSS", "BREAKEVEN"]),
-            )
-            .order_by(StrategyExecution.fired_at.desc())
-            .limit(100)
-            .all()
-        )
-
-        # ── Build trade analytics ─────────────────────────────────────────────
-        DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-
-        def _session(h):
-            if h < 6:   return "Night (00-06 UTC)"
-            if h < 12:  return "Morning (06-12 UTC)"
-            if h < 18:  return "Afternoon (12-18 UTC)"
-            return "Evening (18-24 UTC)"
-
-        def _wr(s):
-            tot = s["win"] + s["loss"]
-            return f"{round(s['win']/tot*100)}% ({s['win']}W/{s['loss']}L)" if tot else "no data"
-
-        hour_stats = {}
-        dow_stats  = {}
-        sess_stats = {}
-        coin_stats = {}
-
-        session_block = "  No session data yet"
-        dow_block     = "  No day-of-week data yet"
-        best_coins    = "not enough data"
-        worst_coins   = "none negative yet"
-        trade_log     = "  No trades yet"
-
-        try:
-            for ex in execs:
-                is_win  = ex.outcome == "WIN"
-                is_loss = ex.outcome == "LOSS"
-                coin = (ex.symbol or "").replace("USDT", "")
-
-                if ex.fired_at:
-                    h  = ex.fired_at.hour
-                    d  = ex.fired_at.weekday()
-                    sn = _session(h)
-
-                    if h  not in hour_stats: hour_stats[h]  = {"win": 0, "loss": 0}
-                    if d  not in dow_stats:  dow_stats[d]   = {"win": 0, "loss": 0}
-                    if sn not in sess_stats: sess_stats[sn] = {"win": 0, "loss": 0}
-
-                    if is_win:
-                        hour_stats[h]["win"]  += 1
-                        dow_stats[d]["win"]   += 1
-                        sess_stats[sn]["win"] += 1
-                    if is_loss:
-                        hour_stats[h]["loss"]  += 1
-                        dow_stats[d]["loss"]   += 1
-                        sess_stats[sn]["loss"] += 1
-
-                if coin:
-                    if coin not in coin_stats: coin_stats[coin] = {"win": 0, "loss": 0, "pnl": 0.0}
-                    if is_win:  coin_stats[coin]["win"]  += 1
-                    if is_loss: coin_stats[coin]["loss"] += 1
-                    if ex.pnl_pct is not None:
-                        coin_stats[coin]["pnl"] += float(ex.pnl_pct)
-
-            # Session breakdown
-            sess_lines = []
-            for sn in ["Night (00-06 UTC)", "Morning (06-12 UTC)", "Afternoon (12-18 UTC)", "Evening (18-24 UTC)"]:
-                if sn in sess_stats:
-                    sess_lines.append(f"  {sn}: {_wr(sess_stats[sn])}")
-            if sess_lines:
-                session_block = "\n".join(sess_lines)
-
-            # Day-of-week breakdown
-            dow_lines = []
-            for d in range(7):
-                if d in dow_stats:
-                    dow_lines.append(f"  {DOW[d]}: {_wr(dow_stats[d])}")
-            if dow_lines:
-                dow_block = "\n".join(dow_lines)
-
-            # Best / worst coins
-            coin_sorted = sorted(coin_stats.items(), key=lambda x: x[1]["pnl"], reverse=True)
-            if coin_sorted:
-                best_coins  = ", ".join(
-                    f"{c} ({v['win']}W/{v['loss']}L, {v['pnl']:+.0f}%)"
-                    for c, v in coin_sorted[:5]
-                )
-                negatives = [(c, v) for c, v in coin_sorted[-5:] if v["pnl"] < 0]
-                if negatives:
-                    worst_coins = ", ".join(
-                        f"{c} ({v['win']}W/{v['loss']}L, {v['pnl']:+.0f}%)"
-                        for c, v in negatives
-                    )
-
-            # Recent trade log (last 25)
-            recent_lines = []
-            for ex in reversed(execs[:25]):
-                try:
-                    dt   = ex.fired_at.strftime("%m/%d %H:%M") if ex.fired_at else "?"
-                    coin = (ex.symbol or "?").replace("USDT", "")
-                    pnl  = f"{ex.pnl_pct:+.1f}%" if ex.pnl_pct is not None else "?"
-                    dur  = ""
-                    if ex.fired_at and ex.closed_at:
-                        # strip tz info to avoid naive/aware mismatch
-                        fa = ex.fired_at.replace(tzinfo=None)
-                        ca = ex.closed_at.replace(tzinfo=None)
-                        mins = int((ca - fa).total_seconds() / 60)
-                        dur  = f" {mins}m"
-                    recent_lines.append(
-                        f"  {dt} | {coin} {ex.direction or ''} | {ex.outcome}{dur} | {pnl}"
-                    )
-                except Exception:
-                    continue
-            if recent_lines:
-                trade_log = "\n".join(recent_lines)
-
-        except Exception as analytics_err:
-            logger.warning(f"Strategy advisor analytics error (non-fatal): {analytics_err}")
+        # ── Trade analytics (shared helper — same math used by improve mode
+        #    and portfolio review) ──────────────────────────────────────────────
+        _adv_stats    = _compute_strategy_trade_stats(db, strategy_id, limit=100)
+        session_block = _adv_stats["session_block"]
+        dow_block     = _adv_stats["dow_block"]
+        best_coins    = _adv_stats["best_coins"]
+        worst_coins   = _adv_stats["worst_coins"]
+        trade_log     = _adv_stats["trade_log"]
 
         # Strategy config summary
         try:
@@ -11947,6 +12138,150 @@ Entry conditions:
     except Exception as e:
         logger.error(f"Strategy advisor AI error: {e}")
         return {"reply": "Sorry, I hit an issue — please try again.", "pro_required": False}
+
+
+@app.post("/api/portfolio-review")
+async def portfolio_review(request: Request):
+    """
+    Pro-only: AI review of the user's ENTIRE strategy portfolio at once —
+    what's working, what's bleeding, where they overlap, and what's missing.
+    Body: { uid }
+    Returns: { review: str|None, pro_required: bool, n_strategies: int }
+    """
+    import anthropic
+    body = await request.json()
+    uid  = (body.get("uid") or "").strip()
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        sub = _get_portal_sub(user.id, db)
+        if not _is_portal_pro(sub) and not getattr(user, "is_admin", False):
+            return {"review": None, "pro_required": True, "n_strategies": 0}
+
+        from app.strategy_models import UserStrategy, StrategyPerformance
+
+        rows = (
+            db.query(UserStrategy, StrategyPerformance)
+            .outerjoin(StrategyPerformance, StrategyPerformance.strategy_id == UserStrategy.id)
+            .filter(
+                UserStrategy.user_id == user.id,
+                UserStrategy.status.in_(["active", "paused", "draft"]),
+            )
+            .all()
+        )
+        if not rows:
+            return {
+                "review": "You don't have any saved strategies yet. Build your first one with the "
+                          "AI builder or the wizard, paper-test it for ~30 days, then come back and "
+                          "I'll review your whole portfolio.",
+                "pro_required": False,
+                "n_strategies": 0,
+            }
+
+        # ── Build a detailed portfolio digest (config + real perf + per-strategy
+        #    session/symbol leaks) for the AI to reason over ───────────────────
+        def _sig_types(cfg):
+            try:
+                conds = (cfg.get("entry_conditions") or {}).get("conditions") or []
+                t = [c.get("type", "?") for c in conds if isinstance(c, dict)]
+                return "+".join(t[:4]) if t else "?"
+            except Exception:
+                return "?"
+
+        digest_lines = []
+        active_n = paused_n = draft_n = 0
+        total_trades = 0
+        for strat, perf in rows:
+            cfg = strat.config or {}
+            st  = (strat.status or "active")
+            if   st == "active": active_n += 1
+            elif st == "paused": paused_n += 1
+            elif st == "draft":  draft_n  += 1
+            ac  = strat.asset_class or cfg.get("asset_class", "crypto")
+            sig = _sig_types(cfg)
+            tf  = "?"
+            try:
+                conds = (cfg.get("entry_conditions") or {}).get("conditions") or []
+                if conds and isinstance(conds[0], dict):
+                    tf = conds[0].get("timeframe", "?")
+            except Exception:
+                pass
+            direction = cfg.get("direction", "BOTH")
+
+            line = f'• "{strat.name}" [{ac}/{direction}/{sig} on {tf}, {st}]'
+            if perf and perf.total_trades:
+                total_trades += perf.total_trades
+                wr  = round(perf.win_rate or 0)
+                pnl = round(perf.total_pnl_pct or 0, 1)
+                line += f" — {perf.total_trades} trades, {wr}% WR, {pnl:+}% total"
+                # add session/symbol leaks for strategies with real history
+                stats = _compute_strategy_trade_stats(db, strat.id, limit=100)
+                extras = []
+                if stats.get("worst_session"):
+                    extras.append(f"weak session {stats['worst_session']}")
+                if stats.get("worst_coins") and stats["worst_coins"] != "none negative yet":
+                    extras.append(f"losing symbols {stats['worst_coins']}")
+                if extras:
+                    line += " | " + "; ".join(extras)
+            else:
+                line += " — no closed trades yet"
+            digest_lines.append(line)
+
+        digest = "\n".join(digest_lines)
+        n_strat = len(rows)
+        overview = (
+            f"{n_strat} strategies total ({active_n} active, {paused_n} paused, {draft_n} draft); "
+            f"{total_trades} closed trades across the portfolio."
+        )
+
+        system_prompt = f"""You are a veteran portfolio strategist inside TradeHub Markets, reviewing a Pro trader's ENTIRE strategy book at once.
+
+PORTFOLIO OVERVIEW:
+{overview}
+
+ALL STRATEGIES (config + real performance + known leaks):
+{digest}
+
+Write a sharp, specific portfolio review in plain prose (NOT JSON, NOT code). Cover, in this order, using short labelled paragraphs:
+1. WORKING — name the 1–3 strategies that are genuinely performing and why (cite their real numbers).
+2. BLEEDING — name the strategies losing money or with weak win rates; for each, give ONE concrete fix grounded in the data (e.g. "cut its worst session", "drop the losing symbol", "tighten SL").
+3. OVERLAP — call out strategies that are too similar (same asset/signal/timeframe) and are effectively competing for the same trades; suggest consolidating or differentiating.
+4. GAPS — what's missing from the book (e.g. no short-side strategy, no forex exposure, everything on one timeframe, no mean-reversion to balance the trend-following) and suggest 1–2 specific additions.
+5. NEXT MOVE — one clear, prioritized recommendation for what to do this week.
+
+Rules:
+- Use the REAL numbers above. Never say you lack data.
+- Be direct and concrete. Reference strategies by their exact names in quotes.
+- No generic platitudes. Every point must be actionable.
+- Keep it tight — aim for ~250–350 words total."""
+
+    finally:
+        db.close()
+
+    try:
+        client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        resp = await asyncio.wait_for(
+            client.messages.create(
+                model="claude-opus-4-8",
+                max_tokens=1100,
+                system=system_prompt,
+                messages=[{"role": "user", "content": "Review my entire strategy portfolio."}],
+            ),
+            timeout=45.0,
+        )
+        return {"review": resp.content[0].text, "pro_required": False, "n_strategies": n_strat}
+    except asyncio.TimeoutError:
+        logger.warning("Portfolio review timed out")
+        return {"review": "The review took too long to generate — please try again.",
+                "pro_required": False, "n_strategies": n_strat}
+    except Exception as e:
+        logger.error(f"Portfolio review AI error: {e}")
+        return {"review": "Sorry, I hit an issue generating your portfolio review — please try again.",
+                "pro_required": False, "n_strategies": n_strat}
 
 
 @app.post("/api/backtest/scan")

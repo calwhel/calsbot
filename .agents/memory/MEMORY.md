@@ -19,3 +19,4 @@
 - [Forex executor cadence](forex-executor-cadence.md) — faster forex scan only helps if the tradfi price/TA cache TTL matches the 5s FMP feed; always gate a faster interval with DB-stress backoff (Neon saturation history).
 - [Forex live SL management](forex-live-sl-management.md) — for sub-second forex/gold reactions read the cTrader spot feed (not 5s FMP); live SL management must run on ONE loop only (no double-amend); BE alerts sync-safe + fire once.
 - [Forex breakeven pip trigger](forex-breakeven-pip-trigger.md) — forex exits must use absolute pip/price triggers, NOT leveraged-ROI (forex is 1x lev → ROI% thresholds unreachable); crypto keeps leveraged ROI.
+- [Strategy-id ownership / IDOR](strategy-id-ownership-idor.md) — id-only perf helpers must be ownership-gated (user_id) before their output reaches an LLM prompt/response, or you leak cross-tenant trade data.

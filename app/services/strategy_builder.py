@@ -639,6 +639,32 @@ NEW FIELDS FROM CHAT BUILDER (parse these when present in the description)
 
   When Trailing Stop is true and TP2 is set: set trailing_stop_pct equal to half the stop_loss_pct (reasonable default).
 
+COMPLEX / MULTI-CONDITION REQUESTS (decompose carefully — do NOT drop parts)
+  • Treat a description as a CHECKLIST. Every distinct concept the user names ("sweep", "FVG",
+    "MSS", "killzone", "RSI < 30", "above 200 EMA", "only London", "avoid news") must map to its
+    own condition OR an explicit filter/field. Never silently merge two requirements into one, and
+    never discard one because it's hard — pick the closest supported type from the lists above.
+  • Sequenced/multi-leg setups ("A, THEN B, THEN entry on C") → emit each leg as a separate
+    condition in entry_conditions.conditions, ordered as described, joined with AND. The platform
+    treats AND-conditions as a confirmation stack, which models the sequence.
+  • Honor the user's requested DEPTH. If they explicitly ask for many confirmations (e.g. a full
+    ICT stack: killzone + liquidity sweep + MSS + FVG + CISD), include ALL of them rather than
+    trimming to 2–3. Only collapse when conditions are genuine duplicates of the same concept.
+  • When the user gives a named multi-part playbook that matches a template above (e.g. "Gold ICT
+    CISD"), start from that template's composition and then layer on any extra specifics they add.
+  • Map qualifiers to the right layer: timing words → time_filter/session, regime words →
+    btc_regime (crypto), volatility/volume gates → atr_filter/rvol/volume_spike, news → news
+    avoidance. Don't cram a filter into a price condition.
+  • Resolve conflicts sensibly: if two requirements contradict (e.g. "scalp" but "swing TPs"),
+    prefer the EXPLICIT numbers the user gave over the style preset, and keep R:R ≥ 1:1.
+
+SELF-CHECK BEFORE EMITTING JSON (do this silently, then output only the JSON)
+  1. Did I represent EVERY concept the user named (re-read their text, tick each off)?
+  2. Is asset_class correct, and are TP/SL in the right unit (pips for forex, % otherwise)?
+  3. Is R:R ≥ 1:1 and leverage within caps?
+  4. Is there ≥1 entry condition and a plain-English description that matches what I built?
+  5. Is the JSON strictly valid (no trailing commas, no comments, no markdown fences)?
+
 ALWAYS INCLUDE
   • Reasonable defaults for any missing fields
   • A clear description field summarising the strategy in plain English

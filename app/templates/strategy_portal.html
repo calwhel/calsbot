@@ -1901,6 +1901,7 @@ function dismissTgBanner(){
         <option value="trades">Most trades</option>
         <option value="live">Live first</option>
       </select>
+      <button class="btn sm" onclick="openPortfolioReview()" style="color:#d4a017;border-color:rgba(212,160,23,.35)">📊 Portfolio Review</button>
       <button class="btn sm paper-btn" onclick="showPage('build',null,true)">New Paper</button>
       <button class="btn sm" onclick="showPage('build',null,false)" style="color:var(--accent);border-color:rgba(91,108,247,.3)">Build New</button>
     </div>
@@ -3338,6 +3339,21 @@ function dismissTgBanner(){
         <input class="advisor-input" id="adv-input" placeholder="Ask anything about this strategy…" onkeydown="if(event.key==='Enter')advSend()">
         <button class="advisor-send" onclick="advSend()">➤</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════ PORTFOLIO REVIEW MODAL ══════════════════════════ -->
+<div class="modal-bg" id="modal-portfolio">
+  <div class="modal" style="max-width:580px;padding:0;overflow:hidden">
+    <div class="modal-hd" style="padding:14px 18px">
+      <h3>📊 Portfolio Review</h3>
+      <span class="modal-close" onclick="closeModal('modal-portfolio')">&times;</span>
+    </div>
+    <div id="pf-body" style="padding:18px;max-height:65vh;overflow-y:auto;font-size:14px;line-height:1.6;color:var(--text)"></div>
+    <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn sm" onclick="closeModal('modal-portfolio')">Close</button>
+      <button class="btn sm" id="pf-refresh" onclick="runPortfolioReview()" style="color:var(--accent);border-color:rgba(91,108,247,.3)">↻ Re-run</button>
     </div>
   </div>
 </div>
@@ -9158,6 +9174,64 @@ async function advSend() {
 function advQuick(el) {
   document.getElementById('adv-input').value = el.textContent;
   advSend();
+}
+
+// ═══════════════════════════════════════════════════════════
+// PORTFOLIO REVIEW (whole-book AI analysis)
+// ═══════════════════════════════════════════════════════════
+let pfLoading = false;
+
+function _pfRenderMarkdown(txt) {
+  // light formatting: escape, bold **x**, headings, line breaks
+  let h = (txt || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  h = h.replace(/^\s*(WORKING|BLEEDING|OVERLAP|GAPS|NEXT MOVE)\b[:\-—]?/gmi,
+                '<div style="color:var(--accent);font-weight:700;margin-top:12px">$1</div>');
+  h = h.replace(/\n/g, '<br>');
+  return h;
+}
+
+function openPortfolioReview() {
+  if (!window._portalIsPro) {
+    showModal('modal-portfolio');
+    document.getElementById('pf-body').innerHTML =
+      '<div style="text-align:center;padding:24px 8px">'
+      + '<div style="font-size:32px;margin-bottom:10px">🔒</div>'
+      + '<div style="font-weight:700;margin-bottom:6px">Portfolio Review is a Pro feature</div>'
+      + '<div style="color:var(--muted);font-size:13px;margin-bottom:14px">Get an AI review of your entire strategy book — what\'s working, what\'s bleeding, overlaps, and gaps.</div>'
+      + '<button class="btn primary" onclick="closeModal(\'modal-portfolio\');showModal(\'modal-upgrade\')">Upgrade to Pro</button>'
+      + '</div>';
+    document.getElementById('pf-refresh').style.display = 'none';
+    return;
+  }
+  document.getElementById('pf-refresh').style.display = '';
+  showModal('modal-portfolio');
+  runPortfolioReview();
+}
+
+async function runPortfolioReview() {
+  if (pfLoading) return;
+  pfLoading = true;
+  const body = document.getElementById('pf-body');
+  body.innerHTML = '<div style="text-align:center;padding:30px 8px;color:var(--muted)">'
+    + '<div class="cb-typing" style="justify-content:center;margin-bottom:10px"><span></span><span></span><span></span></div>'
+    + 'Analyzing your entire portfolio…</div>';
+  try {
+    const res  = await fetch('/api/portfolio-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uid: UID })
+    });
+    const data = await res.json();
+    if (data.pro_required) {
+      body.innerHTML = '<div style="text-align:center;padding:24px 8px;color:var(--muted)">This is a Pro feature.</div>';
+    } else {
+      body.innerHTML = _pfRenderMarkdown(data.review || 'No review available — please try again.');
+    }
+  } catch (e) {
+    body.innerHTML = '<div style="text-align:center;padding:24px 8px;color:var(--muted)">Connection error — please try again.</div>';
+  }
+  pfLoading = false;
 }
 
 // ═══════════════════════════════════════════════════════════
