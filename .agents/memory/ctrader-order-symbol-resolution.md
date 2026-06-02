@@ -74,3 +74,13 @@ fills) → Binance/FMP spot → else return `None`.
 
 **Why:** returning `None` makes the executor skip the tick (callers guard
 `if px and px > 0`); a wrong-instrument price would inject false fills.
+
+## VERIFIED IN PRODUCTION (June 2026)
+Live forex/metals order placement confirmed working end-to-end on cTrader demo
+(account 47468705) via the portal "Test trade" button (0.01 EURUSD round-trip).
+The earlier `NOT_ENOUGH_MONEY` rejections were purely the hardcoded
+`lots × 100_000` volume bug inflating notional far beyond requested — fixed by
+sizing from the broker's real per-symbol `lotSize`/`minVolume`/`stepVolume`
+(`_resolve_symbol_details` / `_compute_volume`), fail-closed when unresolvable.
+**Why:** confirms the broker-driven volume math (not a leverage/margin issue)
+was the root cause; trust this path for both forex and metals sizing.
