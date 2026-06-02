@@ -2476,6 +2476,84 @@ async def eval_fx_displacement(
     )
 
 
+async def eval_fx_cisd(
+    cond: Dict, symbol: str, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`fx_cisd` — Change in State of Delivery (ICT).
+
+    CISD marks the moment institutional delivery flips direction: price closes
+    back through the *open* of the most recent opposing run of candles (the
+    origin of the last delivery leg).
+
+    Bullish CISD: after a run of consecutive bearish (close<open) candles, the
+      latest closed candle is bullish AND closes ABOVE the open of the FIRST
+      candle of that bearish run → selling delivery has ended, buying begins.
+    Bearish CISD: mirror — after a run of consecutive bullish candles, the
+      latest closed candle is bearish AND closes BELOW the open of the FIRST
+      candle of that bullish run.
+
+    cfg.direction: 'bullish' | 'bearish' (default 'bullish')
+    cfg.max_run:   max length of the opposing delivery run to scan (default 10)
+    cfg.timeframe: kline TF (default '5m')
+    """
+    direction = (cond.get("direction") or "bullish").lower()
+    tf        = cond.get("timeframe", "5m")
+    try:
+        max_run = max(1, min(int(cond.get("max_run") or 10), 50))
+    except (TypeError, ValueError):
+        max_run = 10
+
+    klines = await _get_klines(symbol, tf, max_run + 10, http_client, cache)
+    if not klines or len(klines) < 4:
+        return False, "CISD: insufficient data"
+
+    opens  = _opens(klines)
+    closes = _closes(klines)
+
+    # Exclude the still-forming candle (-1); the last CLOSED candle is the
+    # confirmation candle.
+    o = opens[:-1]
+    c = closes[:-1]
+    if len(c) < 3:
+        return False, "CISD: insufficient closed candles"
+
+    ci = len(c) - 1  # confirmation candle index (last closed)
+
+    if direction == "bullish":
+        if not (c[ci] > o[ci]):
+            return False, "CISD bull: confirmation candle not bullish"
+        # walk back over consecutive bearish candles immediately before confirm
+        run_start = None
+        j = ci - 1
+        while j >= 0 and (ci - 1 - j) < max_run and c[j] < o[j]:
+            run_start = j
+            j -= 1
+        if run_start is None:
+            return False, "CISD bull: no preceding bearish delivery run"
+        level = o[run_start]  # open of the first candle in the bearish run
+        fired = c[ci] > level
+        return fired, (
+            f"CISD bull: close={c[ci]:.6g} vs level={level:.6g} "
+            f"({ci - run_start} bear candles) → {'FIRED' if fired else 'miss'}"
+        )
+    else:
+        if not (c[ci] < o[ci]):
+            return False, "CISD bear: confirmation candle not bearish"
+        run_start = None
+        j = ci - 1
+        while j >= 0 and (ci - 1 - j) < max_run and c[j] > o[j]:
+            run_start = j
+            j -= 1
+        if run_start is None:
+            return False, "CISD bear: no preceding bullish delivery run"
+        level = o[run_start]
+        fired = c[ci] < level
+        return fired, (
+            f"CISD bear: close={c[ci]:.6g} vs level={level:.6g} "
+            f"({ci - run_start} bull candles) → {'FIRED' if fired else 'miss'}"
+        )
+
+
 async def eval_fx_equal_hl(
     cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
 ) -> Tuple[bool, str]:
@@ -3450,6 +3528,8 @@ async def evaluate_strategy_conditions(
                 return await eval_fx_displacement(cond, symbol, http_client, cache)
             elif ctype == "fx_equal_hl":
                 return await eval_fx_equal_hl(cond, symbol, price, http_client, cache)
+            elif ctype == "fx_cisd":
+                return await eval_fx_cisd(cond, symbol, http_client, cache)
             elif ctype == "fx_breaker":
                 return await eval_fx_breaker(cond, symbol, price, http_client, cache)
             elif ctype == "fx_pd_array":

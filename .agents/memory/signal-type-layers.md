@@ -38,6 +38,19 @@ Top-level executor types pass straight through `packCondition` in
 to `INDICATOR_NAME_MAP` (that's only for sub-indicators nested under a generic
 `indicator` type).
 
+## Two gotchas when the new type is an ICT/`fx_*` family member
+- **The web wizard does NOT expose the `fx_*` ICT family at all** (no
+  `fx_killzone`/`fx_displacement`/`fx_cisd`/etc. in `strategy_portal.html`). Those
+  types are reachable ONLY via the AI chat builder and the mobile wizard. So for a
+  new `fx_*` type, layer 3 (web wizard) is intentionally SKIPPED — forcing it in
+  would be inconsistent with every sibling type.
+- **`strategy_builder.py` has TWO independent places to register an `fx_*` type**,
+  and the AI is unreliable if you update only one: (1) the `CONDITION_SCHEMA`
+  reference block (the `{"type":...}` JSON schema near the other ICT entries), AND
+  (2) a separate prose "ICT / Day-trading signal mappings (forex)" block
+  (`• "phrase" / "synonyms" → fx_type`). Add the synonym line to BOTH, plus the
+  `SIGNAL RECOGNITION` + `CONDITION REFERENCE` blocks in `strategy_portal_server.py`.
+
 Verify (dev executor is prod-only / disabled): `python -m py_compile` the 3
 backend files, `cd mobile && npx tsc --noEmit`, restart the Strategy Portal
 workflow and confirm HTTP 200 — not live signal firing.

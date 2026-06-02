@@ -880,6 +880,26 @@ function renderKnobs(
       );
     }
 
+    case 'fx_cisd': {
+      const dirOpts: ChipOption<string>[] = [
+        { value: 'bullish', label: '🟢 Bullish (sellers done → buyers in)' },
+        { value: 'bearish', label: '🔴 Bearish (buyers done → sellers in)' },
+      ];
+      return (
+        <View>
+          <Section label="Direction" compact={compact}>
+            <ChipRow options={dirOpts}
+              value={(cfg.direction as string) || 'bullish'}
+              onChange={(v) => set({ direction: v })} size="sm" />
+          </Section>
+          <Stepper label="Max delivery run (candles)" value={cfg.max_run ?? 10}
+            min={1} max={50} step={1}
+            onChange={(v) => set({ max_run: v })}
+            hint="How many opposing candles back to look for the delivery origin to close through" />
+        </View>
+      );
+    }
+
     case 'fx_pd_array': {
       const biasOpts: ChipOption<string>[] = [
         { value: 'discount', label: '🟢 Discount (below 50% — buy zone)' },

@@ -358,6 +358,13 @@ min_body_ratio: body must be ≥ N × average body size (default 3 = institution
 type: eqh (equal highs) | eql (equal lows)
 → "equal highs" | "equal lows" | "EQH" | "EQL" | "double top liquidity" | "double bottom liquidity" | "BSL/SSL"
 
+── ICT CISD — CHANGE IN STATE OF DELIVERY ────────────────────────────────────
+{"type":"fx_cisd","direction":"bullish","max_run":10,"timeframe":"5m"}
+direction: bullish (close back above the open of the last bearish run = sellers done, buyers in)
+           bearish (close back below the open of the last bullish run = buyers done, sellers in)
+max_run: max length of the opposing delivery run to scan (default 10)
+→ "CISD" | "change in state of delivery" | "delivery flip" | "change of delivery" | "state of delivery shift"
+
 ── ICT BREAKER BLOCK ──────────────────────────────────────────────────────────
 {"type":"fx_breaker","direction":"bullish","lookback":50,"tolerance_pct":0.5,"timeframe":"15m"}
 direction: bullish (former supply → support) | bearish (former demand → resistance)
@@ -512,6 +519,7 @@ FOREX-SPECIFIC RULES (apply when asset_class = "forex")
   • "displacement" / "impulse candle" / "institutional candle" → fx_displacement
   • "equal highs" / "EQH" / "equal lows" / "EQL" / "BSL" / "SSL" → fx_equal_hl
   • "breaker block" / "breaker" / "failed order block" → fx_breaker
+  • "CISD" / "change in state of delivery" / "delivery flip" / "change of delivery" / "state of delivery shift" → fx_cisd
   • "premium zone" / "discount zone" / "PD array" / "equilibrium" → fx_pd_array
   • "Judas swing" / "fake move at open" / "manipulation leg" → fx_judas_swing
   • "silver bullet" / "ICT silver bullet" / "3 AM setup" / "10 AM" → fx_silver_bullet
@@ -527,6 +535,7 @@ FOREX-SPECIFIC RULES (apply when asset_class = "forex")
   • "Silver bullet strategy" → fx_silver_bullet + fvg conditions; tight TP 15–20 pips, SL 10–12 pips
   • "Judas swing fade" → fx_judas_swing + fx_pd_array; BOTH direction, TP 25–35 pips, SL 15 pips
   • "Breaker block entry" → fx_breaker + fx_killzone; TP 30–40 pips, SL 15 pips
+  • "Gold ICT CISD" / "XAUUSD liq sweep + iFVG + MSS/CISD" → fx_killzone (london_kz or ny_kz) + forex_liquidity_pa (sweep_eqh/sweep_eql) + market_structure (choch/bos for MSS) + fx_cisd + ifvg (5m) confirmations on XAUUSD; TP 40–80 pips, SL 20–25 pips
   ICT risk profiles for forex:
   • ICT scalp (silver bullet / killzone): TP 15–25 pips, SL 10–15 pips, max 2 trades/day, cooldown 60 min
   • ICT intraday (OTE + displacement): TP 30–50 pips, SL 15–20 pips, max 2 trades/session, cooldown 90 min

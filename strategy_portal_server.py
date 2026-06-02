@@ -10520,6 +10520,7 @@ SIGNAL RECOGNITION:
   OTE / optimal trade entry / golden zone / 61.8 / 78.6 fib → fx_ote
   displacement / impulse candle / institutional move → fx_displacement
   equal highs / EQH / equal lows / EQL / BSL / SSL → fx_equal_hl
+  CISD / change in state of delivery / delivery flip / change of delivery → fx_cisd
   breaker block / failed OB / mitigation block → fx_breaker
   premium zone / discount / PD array / equilibrium → fx_pd_array
   Judas swing / fake move / manipulation leg / stop hunt then reverse → fx_judas_swing
@@ -10883,6 +10884,12 @@ CONDITION REFERENCE (use EXACT type/name/field names from this list):
 
 ━━━ TYPE: "market_structure" ━━━
 { type:"market_structure", timeframe, condition:"bos_bullish"|"bos_bearish"|"choch_bullish"|"choch_bearish", label }
+
+━━━ TYPE: "fx_cisd" ━━━  (ICT Change in State of Delivery — delivery flips direction)
+{ type:"fx_cisd", direction:"bullish"|"bearish", max_run:INT, timeframe, label }
+  bullish = latest candle closes ABOVE the open of the last bearish run (sellers done → buyers in)
+  bearish = latest candle closes BELOW the open of the last bullish run (buyers done → sellers in)
+  max_run = max length of the opposing delivery run to scan (default 10). Pairs with liquidity sweeps + IFVG retests.
 
 ━━━ TYPE: "price_momentum" ━━━
 { type:"price_momentum", window_minutes:INT, operator:"gt"|"lt", value:FLOAT, direction:"up"|"down"|"any", label }
