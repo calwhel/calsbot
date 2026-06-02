@@ -177,6 +177,27 @@ async def _open_conn(host: str = _HOST_LIVE) -> Tuple[asyncio.StreamReader, asyn
     return await asyncio.open_connection(host, _PORT, ssl=ctx)
 
 
+async def _aclose_writer(writer) -> None:
+    """Close an asyncio SSL StreamWriter AND wait for the FD to be released.
+
+    A bare writer.close() does NOT promptly free the underlying SSL socket file
+    descriptor. On hot paths (per-fetch trendbar connections, reconnect churn)
+    that leaks FDs until the process hits 'Too many open files' — which then
+    breaks DNS, DB, and HTTP. wait_closed() (timeout-guarded so a dead peer
+    can't hang us) ensures the FD is actually released.
+    """
+    if writer is None:
+        return
+    try:
+        writer.close()
+    except Exception:
+        pass
+    try:
+        await asyncio.wait_for(writer.wait_closed(), timeout=5.0)
+    except Exception:
+        pass
+
+
 async def _app_auth(reader, writer) -> bool:
     req = ProtoOAApplicationAuthReq()
     req.clientId = os.environ.get("CTRADER_CLIENT_ID", "")
@@ -309,10 +330,7 @@ async def _feed_loop() -> None:
             authed = False
             for _hi, _host in enumerate(_hosts):
                 if writer:
-                    try:
-                        writer.close()
-                    except Exception:
-                        pass
+                    await _aclose_writer(writer)
                 reader, writer = await _open_conn(_host)
                 if not await _app_auth(reader, writer):
                     raise ConnectionError("app auth failed")
@@ -404,10 +422,7 @@ async def _feed_loop() -> None:
             if hb_task:
                 hb_task.cancel()
             if writer:
-                try:
-                    writer.close()
-                except Exception:
-                    pass
+                await _aclose_writer(writer)
 
         await asyncio.sleep(backoff)
         backoff = min(backoff * 1.5, 300.0)
@@ -501,10 +516,7 @@ async def _fetch_trendbars(
         return []
     finally:
         if writer:
-            try:
-                writer.close()
-            except Exception:
-                pass
+            await _aclose_writer(writer)
 
 
 async def get_klines(

@@ -243,6 +243,26 @@ async def _open_connection(host: str = CTRADER_HOST) -> Tuple[asyncio.StreamRead
     return await asyncio.open_connection(host, CTRADER_PORT, ssl=ctx)
 
 
+async def _aclose_writer(writer) -> None:
+    """Close an asyncio SSL StreamWriter AND wait for the FD to be released.
+
+    A bare writer.close() does NOT promptly free the underlying SSL socket file
+    descriptor — under reconnect/invalidation churn that leaks FDs until the
+    process hits 'Too many open files'. wait_closed() (timeout-guarded so a dead
+    peer can't hang us) ensures the FD is actually released.
+    """
+    if writer is None:
+        return
+    try:
+        writer.close()
+    except Exception:
+        pass
+    try:
+        await asyncio.wait_for(writer.wait_closed(), timeout=5.0)
+    except Exception:
+        pass
+
+
 async def _app_auth(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
@@ -302,21 +322,14 @@ async def _get_persistent_connection(
         idle = time.monotonic() - st["ts"]
         if st["writer"] is not None and not st["writer"].is_closing() and idle < _CONN_MAX_IDLE:
             return st["reader"], st["writer"]
-        # Close stale connection cleanly
-        try:
-            if st["writer"] is not None:
-                st["writer"].close()
-        except Exception:
-            pass
+        # Close stale connection cleanly (wait for the FD to actually release)
+        await _aclose_writer(st.get("writer"))
         _conns.pop(host, None)
 
     r, w = await _open_connection(host)
     ok = await _app_auth(r, w)
     if not ok:
-        try:
-            w.close()
-        except Exception:
-            pass
+        await _aclose_writer(w)
         raise RuntimeError("cTrader persistent connection: app auth failed")
 
     _conns[host] = {"reader": r, "writer": w, "ts": time.monotonic()}
@@ -334,11 +347,16 @@ def _touch_conn(host: str) -> None:
 def _invalidate_persistent_connection(host: str = CTRADER_HOST) -> None:
     """Mark the persistent connection for `host` as dead so next call reconnects."""
     st = _conns.pop(host, None)
-    if st is not None and st["writer"] is not None:
+    if st is not None and st.get("writer") is not None:
+        # Schedule a full close (close + wait_closed) so the SSL FD is released,
+        # not just scheduled for close. Falls back to a bare close if no loop.
         try:
-            st["writer"].close()
+            asyncio.ensure_future(_aclose_writer(st["writer"]))
         except Exception:
-            pass
+            try:
+                st["writer"].close()
+            except Exception:
+                pass
 
 
 async def _account_auth(

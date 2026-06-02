@@ -6,6 +6,7 @@
 - [cTrader shared connection](ctrader-shared-connection.md) — never wrap a cTrader call in outer wait_for without CancelledError→invalidate (shared socket desyncs); cold reconnects need ≥10s timeouts.
 - [Response-object caching bug](response-object-caching.md) — never cache a JSONResponse object under BaseHTTPMiddleware; cache the dict/list payload and rebuild JSONResponse each return.
 - [DB lock-queue starvation](db-lock-starvation.md) — startup ALTER/CREATE INDEX without lock_timeout on a hot table freezes ALL reads on it → whole portal "won't load"; cap every DDL with lock_timeout.
+- [asyncio SSL FD leak](asyncio-ssl-fd-leak.md) — bare writer.close() on SSL StreamWriters leaks FDs → "Too many open files"+DNS+DB failures; must await wait_closed() via _aclose_writer.
 - [cTrader OAuth token hygiene](ctrader-oauth-token-hygiene.md) — refresh-token rotation can brick the link (ACCESS_DENIED → user must re-link); never log raw exceptions/URLs in token paths (secrets are in query params).
 - [cTrader feed host/token/symbols](ctrader-feed-host-and-symbols.md) — demo vs live are separate hosts (route by isLive); refresh tokens rotate (persist new one); symbol IDs are per-account (scope cache by host+ctid); trendbars need fromTimestamp.
 - [cTrader order rejection](ctrader-order-rejection.md) — broker rejections arrive as ProtoOAOrderErrorEvent (2132), not exec event; accept both or lose the real reason; return dict-with-error not None.
