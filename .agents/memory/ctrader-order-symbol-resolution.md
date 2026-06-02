@@ -26,6 +26,25 @@ never actually placed.
   is NEVER DEFINED in `ctrader_client.py` → index orders crash with NameError.
   Forex/metals path (`place_order`) is unaffected.
 
+# cTrader MARKET orders need RELATIVE SL/TP, not absolute
+
+`ProtoOANewOrderReq` with `orderType=MARKET` REJECTS absolute `stopLoss`/`takeProfit`
+prices — error: "SL/TP in absolute values are allowed only for order types:
+[LIMIT, STOP, STOP_LIMIT]". For MARKET orders set `relativeStopLoss` /
+`relativeTakeProfit` instead: a POSITIVE distance from entry in 1/100_000 price
+units, i.e. `max(1, int(round(abs(entry_price - target_price) * 100_000)))` (same
+×100_000 wire scaling as absolute prices). The broker applies the sign by side
+(BUY sl=entry-rel, SELL sl=entry+rel) and anchors to the ACTUAL fill, so it also
+fixes slippage drift vs a stale signal price.
+
+**Why:** the order was reaching the broker (symbolId fix) but silently dropping to
+paper on this rejection. Computing relative needs the entry price, so `place_order`
+takes an `entry_price` param threaded from `place_ctrader_order_for_user`.
+
+**How to apply:** never send absolute SL/TP on a MARKET order. Amending an existing
+position (`ProtoOAAmendPositionSLTPReq`) is different — that one DOES take absolute
+SL/TP prices and works.
+
 # Metals price must never fall back to gold futures
 
 For XAUUSD/XAGUSD, `tradfi_prices.get_price` must NOT fall through to yfinance

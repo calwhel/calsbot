@@ -676,6 +676,7 @@ async def place_order(
     volume_lots: float,
     stop_loss_price: Optional[float] = None,
     take_profit_price: Optional[float] = None,
+    entry_price: Optional[float] = None,
     label: str = "TradeHub",
     host: str = CTRADER_HOST,
 ) -> dict:
@@ -719,11 +720,32 @@ async def place_order(
                 req.tradeSide           = ProtoOATradeSide.BUY if direction == "LONG" else ProtoOATradeSide.SELL
                 req.volume              = int(volume_lots * 100_000)  # units
                 req.label               = label[:20]
-                if stop_loss_price is not None:
-                    req.relativeStopLoss = 0
-                    req.stopLoss = int(stop_loss_price * 100_000)
-                if take_profit_price is not None:
-                    req.takeProfit = int(take_profit_price * 100_000)
+                # MARKET orders REJECT absolute SL/TP ("SL/TP in absolute values
+                # are allowed only for order types: [LIMIT, STOP, STOP_LIMIT]").
+                # Use RELATIVE distances instead — a positive offset in 1/100_000
+                # price units (same scaling place_order already uses for prices).
+                # cTrader applies them to the ACTUAL fill price, so the SL/TP track
+                # the real entry rather than a possibly-slipped signal price.
+                if entry_price and entry_price > 0:
+                    if stop_loss_price is not None:
+                        req.relativeStopLoss = max(
+                            1, int(round(abs(entry_price - stop_loss_price) * 100_000))
+                        )
+                    if take_profit_price is not None:
+                        req.relativeTakeProfit = max(
+                            1, int(round(abs(entry_price - take_profit_price) * 100_000))
+                        )
+                elif stop_loss_price is not None or take_profit_price is not None:
+                    # This is always a MARKET order, which REQUIRES relative SL/TP
+                    # (absolute is rejected). Without an entry reference we can't
+                    # compute the offset — fail explicitly rather than send an
+                    # absolute SL/TP that the broker will reject anyway.
+                    logger.error(
+                        "[cTrader] cannot place MARKET order with SL/TP — entry_price "
+                        f"missing (symbol={symbol_name})"
+                    )
+                    return {"order_id": None, "actual_fill": None,
+                            "error": "entry_price required for SL/TP on market order"}
 
                 pt, payload = await _send_recv_any(
                     reader, writer, req,
@@ -1092,6 +1114,7 @@ async def place_ctrader_order_for_user(
             volume_lots            = lots,
             stop_loss_price        = sl_price,
             take_profit_price      = tp_price,
+            entry_price            = entry_price,
             host                   = primary_host,
         )
 
@@ -1117,6 +1140,7 @@ async def place_ctrader_order_for_user(
             volume_lots            = lots,
             stop_loss_price        = sl_price,
             take_profit_price      = tp_price,
+            entry_price            = entry_price,
             host                   = _host,
         )
 
