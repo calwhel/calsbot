@@ -1314,6 +1314,37 @@ async def _send_paper_close_dm(telegram_id: int, text: str):
     await _tg_send(telegram_id, text)
 
 
+def _compute_be_trigger_price(symbol, entry, direction, tp_price, ex_cfg):
+    """Price at which the stop should jump to entry (auto-breakeven) for FOREX.
+
+    Forex strategies run at 1x leverage, so the crypto leveraged-ROI breakeven
+    trigger (price-move% x leverage >= threshold) is mathematically unreachable
+    (a 50-pip gold trade is a fraction of 1%). This returns a reachable,
+    broker-style price level instead:
+
+      * primary  — ``breakeven_at_pips``: move SL to entry once price is N pips
+        in profit (matches the wizard's pip control).
+      * legacy   — ``breakeven_pct``/``breakeven_at_pct``: treated as % of the
+        distance from entry to TP, so older percent-based forex strategies still
+        trigger instead of staying dead.
+
+    Returns the trigger price, or None when breakeven isn't configured.
+    """
+    try:
+        be_pips = ex_cfg.get("breakeven_at_pips")
+        if be_pips and float(be_pips) > 0:
+            from app.services.forex_engine import pip_size as _pipsz
+            dist = float(be_pips) * _pipsz(symbol)
+            return (entry + dist) if direction == "LONG" else (entry - dist)
+        be_pct = ex_cfg.get("breakeven_pct") or ex_cfg.get("breakeven_at_pct")
+        if be_pct and float(be_pct) > 0 and tp_price:
+            frac = float(be_pct) / 100.0
+            return entry + frac * (float(tp_price) - entry)
+    except Exception:
+        return None
+    return None
+
+
 def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     """
     Apply a pre-fetched candle list to one open paper position.
@@ -1341,6 +1372,7 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     # incorrectly CANCELLING a trade whose TP was already hit but whose
     # fired_at is older than PAPER_MAX_HOLD_HOURS.
     be_pct = None
+    be_trigger_price = None  # forex: absolute price at which SL jumps to entry
     partial_close_pct = None
     be_timer_minutes = None
     trail_enabled = False
@@ -1354,6 +1386,13 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
             be_pct = ex_cfg.get("breakeven_pct") or ex_cfg.get("breakeven_at_pct")
             if be_pct is not None:
                 be_pct = float(be_pct)
+            # Forex runs at 1x leverage → the leveraged-ROI trigger below is
+            # unreachable, so use a pip/distance-based price trigger instead.
+            if (getattr(ex, "asset_class", None) == "forex"):
+                be_trigger_price = _compute_be_trigger_price(
+                    ex.symbol, float(ex.entry_price), ex.direction,
+                    ex.tp_price, ex_cfg,
+                )
             _pcp = ex_cfg.get("partial_close_pct")
             if _pcp:
                 partial_close_pct = float(_pcp)
@@ -1465,15 +1504,28 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                     _close_paper_execution(ex, outcome, ex.sl_price, db)
                     return True
 
-                if be_pct is not None and not be_activated and ex.sl_price != ex.entry_price:
-                    if ex.direction == "LONG":
-                        candle_roi = ((high - ex.entry_price) / ex.entry_price) * 100 * ex.leverage
-                    else:
-                        candle_roi = ((ex.entry_price - low) / ex.entry_price) * 100 * ex.leverage
-                    if candle_roi >= be_pct:
+                if not be_activated and ex.sl_price != ex.entry_price:
+                    be_reached = False
+                    be_log = ""
+                    if be_trigger_price is not None:
+                        # Forex: pip/distance price trigger (reachable at 1x lev).
+                        if ex.direction == "LONG":
+                            be_reached = high >= be_trigger_price
+                        else:
+                            be_reached = low <= be_trigger_price
+                        be_log = f"price reached {be_trigger_price:.5f}"
+                    elif be_pct is not None:
+                        # Crypto: leveraged-ROI trigger.
+                        if ex.direction == "LONG":
+                            candle_roi = ((high - ex.entry_price) / ex.entry_price) * 100 * ex.leverage
+                        else:
+                            candle_roi = ((ex.entry_price - low) / ex.entry_price) * 100 * ex.leverage
+                        be_reached = candle_roi >= be_pct
+                        be_log = f"ROI {candle_roi:.1f}% >= {be_pct}%"
+                    if be_reached:
                         ex.sl_price = ex.entry_price
                         be_activated = True
-                        logger.info(f"[PaperMonitor] AUTO-BREAKEVEN: exec #{ex.id} {ex.symbol} ROI {candle_roi:.1f}% >= {be_pct}% → SL @ entry")
+                        logger.info(f"[PaperMonitor] AUTO-BREAKEVEN: exec #{ex.id} {ex.symbol} {be_log} → SL @ entry")
 
                 # ── Trailing stop ─────────────────────────────────────────────
                 # Ratchet the SL behind the best price reached so far by
@@ -3821,13 +3873,17 @@ async def _manage_live_forex_positions():
                 cfg_cache[ex.strategy_id] = cfg
             ex_cfg = cfg.get("exit", {}) or {}
 
-            be_pct = ex_cfg.get("breakeven_pct") or ex_cfg.get("breakeven_at_pct")
+            # Forex is 1x leverage → the leveraged-ROI breakeven trigger is
+            # unreachable. Use a pip/distance-based absolute price level instead.
+            be_trigger = _compute_be_trigger_price(
+                ex.symbol, float(ex.entry_price), ex.direction, ex.tp_price, ex_cfg,
+            )
             trail_enabled = bool(ex_cfg.get("trailing_stop"))
             trail_pct = ex_cfg.get("trailing_stop_pct")
             if trail_enabled and (not trail_pct or float(trail_pct) <= 0):
                 _slp = ex_cfg.get("stop_loss_pct")
                 trail_pct = (float(_slp) / 2.0) if _slp else None
-            if be_pct is None and not (trail_enabled and trail_pct):
+            if be_trigger is None and not (trail_enabled and trail_pct):
                 continue  # neither feature configured → nothing to manage
 
             user = user_cache.get(ex.user_id)
@@ -3845,7 +3901,7 @@ async def _manage_live_forex_positions():
                 "entry_price":   float(ex.entry_price),
                 "sl_price":      float(ex.sl_price) if ex.sl_price is not None else None,
                 "leverage":      float(ex.leverage or 1) or 1.0,
-                "be_pct":        float(be_pct) if be_pct is not None else None,
+                "be_trigger":    be_trigger,
                 "trail_enabled": bool(trail_enabled and trail_pct),
                 "trail_pct":     float(trail_pct) if trail_pct else None,
                 "be_moved":      ("be_moved" in notes),
@@ -3865,19 +3921,19 @@ async def _manage_live_forex_positions():
 
             entry     = w["entry_price"]
             direction = w["direction"]
-            lev       = w["leverage"] or 1.0
             cur_sl    = w["sl_price"]
-
-            if direction == "LONG":
-                roi = ((price - entry) / entry) * 100 * lev
-            else:
-                roi = ((entry - price) / entry) * 100 * lev
 
             amend_sl = None   # SL price to send to broker (None = no call)
             mark_be  = False  # set the be_moved flag in notes this cycle
 
-            # ── Auto-breakeven: move SL to entry once ROI threshold reached ──
-            if w["be_pct"] is not None and not w["be_moved"] and roi >= w["be_pct"]:
+            # ── Auto-breakeven: move SL to entry once price reaches trigger ──
+            be_hit = (
+                w["be_trigger"] is not None and not w["be_moved"] and (
+                    (direction == "LONG"  and price >= w["be_trigger"]) or
+                    (direction == "SHORT" and price <= w["be_trigger"])
+                )
+            )
+            if be_hit:
                 mark_be = True
                 tightens = (
                     (direction == "LONG"  and (cur_sl is None or entry > cur_sl)) or
@@ -3945,7 +4001,7 @@ async def _manage_live_forex_positions():
             if amend_sl is not None:
                 logger.info(
                     f"[FX-manage] exec#{w['exec_id']} {w['symbol']} {direction} "
-                    f"SL→{amend_sl} ({'BE+' if mark_be else ''}roi={roi:.1f}%)"
+                    f"SL→{amend_sl} ({'BE ' if mark_be else 'trail '}@ price {price})"
                 )
         except Exception as e:
             logger.warning(f"[FX-manage] error exec#{w['exec_id']}: {e}")

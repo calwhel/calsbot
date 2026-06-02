@@ -4239,7 +4239,7 @@ const WZ={
   tp1:3,tp2:null,sl:1.5,trailing:null,breakeven:null,closeBefore:null,
   // Forex-only pip TP/SL — emitted to /api/save-strategy only when assetClass==='forex'.
   // Executor converts pips→% at fire time using the live price + the pair's pip size.
-  tp1Pips:null,tp2Pips:null,slPips:null,
+  tp1Pips:null,tp2Pips:null,slPips:null,bePips:null,
   leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,posSizeLots:0.10,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,noDuplicateSymbol:false,
   sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',
   timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,
@@ -4289,7 +4289,7 @@ function setAssetClass(cls){
   }
   // Pip TP/SL only applies to forex — wipe stale pip state when leaving forex
   // so a previously-set value doesn't accidentally get re-emitted later.
-  if(cls!=='forex'){WZ.tp1Pips=null;WZ.tp2Pips=null;WZ.slPips=null;}
+  if(cls!=='forex'){WZ.tp1Pips=null;WZ.tp2Pips=null;WZ.slPips=null;WZ.bePips=null;}
   // Style list is asset-class-specific (forex shows 7 session-aware templates,
   // crypto shows the original 10). Drop any incompatible style so Step 1's
   // "selected" card doesn't claim a style that isn't even rendered.
@@ -5657,14 +5657,20 @@ function renderStep5(){
       <input type="range" id="trail-sl" min="0.5" max="30" value="${WZ.trailing||1}" step="0.5" oninput="WZ.trailing=Number(this.value);document.getElementById('trail-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
     </div>
     <div class="toggle-row" onclick="wzToggleExit('be')" style="margin-bottom:0">
-      <div><div class="toggle-lbl">Auto-Breakeven</div><div class="toggle-sub">Move stop loss to entry once ROI passes a threshold — makes the trade risk-free</div></div>
-      <div class="switch ${WZ.breakeven?'on':''}" id="sw-be"></div>
+      <div><div class="toggle-lbl">Auto-Breakeven</div><div class="toggle-sub">Move stop loss to entry once the trade is in profit — makes the trade risk-free</div></div>
+      <div class="switch ${(isFx?WZ.bePips:WZ.breakeven)?'on':''}" id="sw-be"></div>
     </div>
+    ${isFx?`
+    <div id="row-be" style="${WZ.bePips?'':'display:none;'}padding:10px 0 0">
+      <label style="display:flex;justify-content:space-between">Breakeven trigger <span style="color:var(--accent);font-weight:700" id="be-v">+${WZ.bePips||15} pips</span></label>
+      <input type="range" id="be-sl" min="1" max="200" value="${WZ.bePips||15}" step="1" oninput="WZ.bePips=Number(this.value);document.getElementById('be-v').textContent='+'+this.value+' pips'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Once price is this many pips in profit, SL moves to your entry price automatically.</div>
+    </div>`:`
     <div id="row-be" style="${WZ.breakeven?'':'display:none;'}padding:10px 0 0">
       <label style="display:flex;justify-content:space-between">Breakeven trigger ROI <span style="color:var(--accent);font-weight:700" id="be-v">${WZ.breakeven||70}%</span></label>
       <input type="range" id="be-sl" min="10" max="200" value="${WZ.breakeven||70}" step="5" oninput="WZ.breakeven=Number(this.value);document.getElementById('be-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
       <div class="hint">When ROI hits this % (leveraged), SL moves to your entry price automatically.</div>
-    </div>
+    </div>`}
     <div class="toggle-row" onclick="wzToggleExit('eod')" style="margin-top:8px;margin-bottom:0">
       <div><div class="toggle-lbl">⏰ Intraday / Day-Trade Mode</div><div class="toggle-sub">Force-close all positions before end of trading session — no overnight exposure</div></div>
       <div class="switch ${WZ.closeBefore?'on':''}" id="sw-eod"></div>
@@ -5692,7 +5698,10 @@ function wzToggleExit(which){
     updateRR();
   }
   if(which==='trail')WZ.trailing=on?Number(document.getElementById('trail-sl')?.value||1):null;
-  if(which==='be')WZ.breakeven=on?Number(document.getElementById('be-sl')?.value||70):null;
+  if(which==='be'){
+    if(WZ.assetClass==='forex'){WZ.bePips=on?Number(document.getElementById('be-sl')?.value||15):null;WZ.breakeven=null;}
+    else{WZ.breakeven=on?Number(document.getElementById('be-sl')?.value||70):null;WZ.bePips=null;}
+  }
   if(which==='eod'){WZ.closeBefore=on?(document.getElementById('eod-select')?.value||'21:00'):null;}
 }
 
@@ -5865,7 +5874,7 @@ function wzStrengthIndicator(){
   if(rr>=2){score++;checks.push({pass:true,label:'R:R ≥ 2:1'});}else{checks.push({pass:false,label:'R:R ≥ 2:1'});}
   if(WZ.confirms.length>0){score++;checks.push({pass:true,label:'Has confirmations'});}else{checks.push({pass:false,label:'Has confirmations'});}
   if(WZ.trailing){score++;checks.push({pass:true,label:'Trailing stop enabled'});}else{checks.push({pass:false,label:'Trailing stop enabled'});}
-  if(WZ.breakeven){score++;checks.push({pass:true,label:'Auto-breakeven on'});}else{checks.push({pass:false,label:'Auto-breakeven on'});}
+  if(WZ.assetClass==='forex'?WZ.bePips:WZ.breakeven){score++;checks.push({pass:true,label:'Auto-breakeven on'});}else{checks.push({pass:false,label:'Auto-breakeven on'});}
   if(WZ.leverage<=15){score++;checks.push({pass:true,label:'Conservative leverage'});}else{checks.push({pass:false,label:'Conservative leverage'});}
   const grade=score>=5?'A':score>=4?'B+':score>=3?'B':score>=2?'C':'D';
   const gradeColor=score>=4?'#16a34a':score>=3?'var(--accent)':score>=2?'#d97706':'#dc2626';
@@ -6341,7 +6350,7 @@ function wzBack(){
 function resetWizard(){
   compiledConfig=null;
   _wzLastStep=1;
-  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,tp1Pips:null,tp2Pips:null,slPips:null,trailing:null,breakeven:null,closeBefore:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium',assetClass:null,tradfiSymbols:[],tradfiQuery:''});
+  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,tp1Pips:null,tp2Pips:null,slPips:null,bePips:null,trailing:null,breakeven:null,closeBefore:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null,riskProfile:'medium',assetClass:null,tradfiSymbols:[],tradfiQuery:''});
   renderCurrentStep();
 }
 
@@ -6491,7 +6500,7 @@ function buildWizardDescription(){
   if(WZ.htfFilter)lines.push('Additional filter: Only enter if 1H trend (EMA-20) aligns with trade direction.');
   if(WZ.btcRegime&&WZ.btcRegime!=='any')lines.push(`BTC market regime requirement: only trade when BTC is in a ${WZ.btcRegime} regime.`);
 
-  lines.push(`\nExit targets: Take Profit 1 = ${WZ.tp1}%.${WZ.tp2?` Take Profit 2 = ${WZ.tp2}%.`:''} Stop Loss = ${WZ.sl}%.${WZ.trailing?` Trailing stop at ${WZ.trailing}%.`:''}${WZ.breakeven?` Auto-breakeven at ${WZ.breakeven}% ROI.`:''}`);
+  lines.push(`\nExit targets: Take Profit 1 = ${WZ.tp1}%.${WZ.tp2?` Take Profit 2 = ${WZ.tp2}%.`:''} Stop Loss = ${WZ.sl}%.${WZ.trailing?` Trailing stop at ${WZ.trailing}%.`:''}${WZ.assetClass==='forex'?(WZ.bePips?` Auto-breakeven once +${WZ.bePips} pips in profit.`:''):(WZ.breakeven?` Auto-breakeven at ${WZ.breakeven}% ROI.`:'')}`);
   lines.push(`Risk: ${WZ.leverage}× leverage, ${WZ.posSize}% position size per trade. Max ${WZ.maxTrades} trades per day, ${WZ.cooldown} minute cooldown between trades. Max ${WZ.maxPos} simultaneous positions. Daily loss limit: ${WZ.dailyLoss}%.`);
   return lines.join('\n');
 }
@@ -6568,6 +6577,9 @@ async function buildStrategy(){
     data.config.risk=risk;
     const exit=data.config.exit||{};
     Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null,breakeven_pct:WZ.breakeven||null,close_before:WZ.closeBefore||null});
+    // Forex breakeven is pip-based (executor uses pips at 1x leverage, where a
+    // leveraged-ROI % trigger would be unreachable).
+    if(WZ.assetClass==='forex'){exit.breakeven_at_pips=WZ.bePips||null;exit.breakeven_pct=null;}
     // Forex pip TP/SL — executor converts pips→% at fire time using the live
     // price + the pair's pip size (JPY pairs use 0.01, everything else 0.0001).
     if(WZ.assetClass==='forex'&&(WZ.tp1Pips||WZ.slPips)){

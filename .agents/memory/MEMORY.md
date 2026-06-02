@@ -17,3 +17,4 @@
 - [cTrader index order gap](ctrader-index-order-gap.md) — index live orders call undefined place_order_units → NameError → silent paper fallback; never reach broker (not yet fixed).
 - [cTrader price wire scaling](ctrader-price-scaling.md) — cTrader SL/TP/price fields are sent ×100000 and read /100000 despite proto type double; new amend/order price fields must match; broker positionId lives in execution notes as `pos=<id>`.
 - [Forex executor cadence](forex-executor-cadence.md) — faster forex scan only helps if the tradfi price/TA cache TTL matches the 5s FMP feed; always gate a faster interval with DB-stress backoff (Neon saturation history).
+- [Forex breakeven pip trigger](forex-breakeven-pip-trigger.md) — forex exits must use absolute pip/price triggers, NOT leveraged-ROI (forex is 1x lev → ROI% thresholds unreachable); crypto keeps leveraged ROI.
