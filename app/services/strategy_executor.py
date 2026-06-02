@@ -7,6 +7,7 @@ high/low is used to detect TP/SL hits so scalp results are realistic.
 """
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -28,6 +29,11 @@ SCAN_INTERVAL_SECONDS       = int(_os_env.environ.get("EXECUTOR_SCAN_INTERVAL", 
 # Do NOT drop below ~5s or remove the fixed post-work sleep — at 3s the executor
 # previously saturated Neon and cascaded QueryCanceled → HTTP 500s on /api/strategies.
 FOREX_SCAN_INTERVAL_SECONDS = int(_os_env.environ.get("EXECUTOR_FOREX_SCAN_INTERVAL", "5"))
+# Live forex SL management (breakeven/trailing) runs on its OWN fast loop so fast
+# instruments like gold react in well under a second. It reads prices from the
+# cTrader real-time spot feed (per-tick) — NOT the DB — so a 1s cadence is cheap:
+# the open-position worklist is rebuilt from the DB only every _FX_WORKLIST_TTL.
+FOREX_MANAGE_INTERVAL_SECONDS = float(_os_env.environ.get("EXECUTOR_FOREX_MANAGE_INTERVAL", "1"))
 PAPER_MONITOR_INTERVAL      = int(_os_env.environ.get("EXECUTOR_MONITOR_INTERVAL", "20"))
 MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "3"))
 # Forex executor runs more strategies in parallel than crypto: after per-cycle
@@ -1314,6 +1320,62 @@ async def _send_paper_close_dm(telegram_id: int, text: str):
     await _tg_send(telegram_id, text)
 
 
+def _notify_breakeven_alert(
+    *,
+    user_id: int,
+    telegram_id,
+    strategy_name: str,
+    symbol: str,
+    direction: str,
+    leverage: int,
+    move_pct: float,
+    strategy_id: int = 0,
+    execution_id: int = 0,
+    kind: str = "live",
+) -> None:
+    """Fire push + Telegram alerts when a stop is moved to breakeven.
+
+    Sync-safe so it can be called from BOTH the sync paper monitor and the async
+    live forex manager: push goes via the already-threaded notify_breakeven_bg,
+    and the Telegram DM is scheduled on the running loop when one exists, else
+    dispatched on a throwaway thread.
+    """
+    try:
+        from app.services.expo_push import notify_breakeven_bg
+        notify_breakeven_bg(
+            user_id, strategy_name, symbol, direction, int(leverage or 1),
+            float(move_pct), strategy_id=strategy_id,
+            execution_id=execution_id, kind=kind,
+        )
+    except Exception as _pe:
+        logger.debug(f"[BE-notify] push failed exec#{execution_id}: {_pe}")
+
+    # Skip web-registered users (telegram_id "WEB-…") and any non-numeric id —
+    # mirrors _telegram_int_id so we never make a noisy doomed sendMessage call.
+    if not telegram_id or str(telegram_id).startswith("WEB-"):
+        return
+    try:
+        _tid = int(telegram_id)
+    except (TypeError, ValueError):
+        return
+    _coin = symbol.upper().replace("USDT", "")
+    _text = (
+        f"🛡️ <b>Breakeven — {_coin}</b>\n"
+        f"{strategy_name}: stop moved to entry. This {direction} trade is now risk-free."
+    )
+    try:
+        _loop = asyncio.get_running_loop()
+        _loop.create_task(_tg_send(_tid, _text))
+    except RuntimeError:
+        import threading
+        threading.Thread(
+            target=lambda: asyncio.run(_tg_send(_tid, _text)),
+            daemon=True,
+        ).start()
+    except Exception as _te:
+        logger.debug(f"[BE-notify] telegram schedule failed: {_te}")
+
+
 def _compute_be_trigger_price(symbol, entry, direction, tp_price, ex_cfg):
     """Price at which the stop should jump to entry (auto-breakeven) for FOREX.
 
@@ -1526,6 +1588,28 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                         ex.sl_price = ex.entry_price
                         be_activated = True
                         logger.info(f"[PaperMonitor] AUTO-BREAKEVEN: exec #{ex.id} {ex.symbol} {be_log} → SL @ entry")
+                        # Push + Telegram alert — once, when BE first activates.
+                        try:
+                            from app.models import User as _UserM
+                            from app.strategy_models import UserStrategy as _StratM
+                            _u = db.query(_UserM).filter(_UserM.id == ex.user_id).first()
+                            _s = db.query(_StratM).filter(_StratM.id == ex.strategy_id).first()
+                            if ex.direction == "LONG":
+                                _mv = (high - ex.entry_price) / ex.entry_price * 100
+                            else:
+                                _mv = (ex.entry_price - low) / ex.entry_price * 100
+                            _notify_breakeven_alert(
+                                user_id=ex.user_id,
+                                telegram_id=(_u.telegram_id if _u else None),
+                                strategy_name=(_s.name if _s else "Strategy"),
+                                symbol=ex.symbol, direction=ex.direction,
+                                leverage=(ex.leverage or 1),
+                                move_pct=_mv * max(1, (ex.leverage or 1)),
+                                strategy_id=ex.strategy_id, execution_id=ex.id,
+                                kind=("paper" if ex.is_paper else "live"),
+                            )
+                        except Exception as _ne:
+                            logger.debug(f"[BE-notify] paper exec#{ex.id}: {_ne}")
 
                 # ── Trailing stop ─────────────────────────────────────────────
                 # Ratchet the SL behind the best price reached so far by
@@ -3819,27 +3903,18 @@ async def run_strategy_executor():
             await asyncio.sleep(SCAN_INTERVAL_SECONDS)
 
 
-async def _manage_live_forex_positions():
-    """
-    Push auto-breakeven and trailing-stop SL amendments to the broker for LIVE
-    forex positions (cTrader). The broker already enforces the initial SL/TP set
-    at entry; this function ratchets the stop as the trade moves into profit so
-    breakeven + trailing actually take effect on real money (without it the
-    broker keeps the original stop forever).
+_FX_MIN_TRAIL_STEP_FRAC = 0.001  # 0.1% of price — don't hammer the broker every tick
+_FX_WORKLIST_TTL = 6.0           # rebuild the live-position worklist from DB this often
 
-    Forex only — index sizing/scaling is intentionally out of scope here. Runs
-    once per forex scan cycle. All network amends happen after the read session
-    is released. Raises on a top-level DB failure so the caller's adaptive
-    backoff trips (per-position errors are swallowed).
-    """
+
+def _build_forex_worklist() -> list:
+    """Build the list of open LIVE forex positions needing breakeven/trailing SL
+    management. Pure synchronous DB read so the fast management loop can run it in
+    a thread. Returns a list of work dicts (one per managed position)."""
     import re as _re
     from app.database import BgSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution, UserStrategy
     from app.models import User
-    from app.services.tradfi_prices import get_price as _tradfi_get_price
-    from app.services.ctrader_client import modify_position_sltp_for_user
-
-    MIN_TRAIL_STEP_FRAC = 0.001  # 0.1% of price — don't hammer the broker every tick
 
     db = SessionLocal()
     try:
@@ -3855,7 +3930,7 @@ async def _manage_live_forex_positions():
             .all()
         )
         work = []
-        cfg_cache: Dict[int, dict] = {}
+        strat_cache: Dict[int, tuple] = {}
         user_cache: Dict[int, object] = {}
         for ex in open_execs:
             notes = ex.notes or ""
@@ -3864,13 +3939,16 @@ async def _manage_live_forex_positions():
                 continue  # no broker positionId captured → can't amend
             position_id = int(m.group(1))
 
-            cfg = cfg_cache.get(ex.strategy_id)
-            if cfg is None:
+            cached = strat_cache.get(ex.strategy_id)
+            if cached is None:
                 strat = db.query(UserStrategy).filter(
                     UserStrategy.id == ex.strategy_id
                 ).first()
                 cfg = (strat.config if strat else {}) or {}
-                cfg_cache[ex.strategy_id] = cfg
+                sname = strat.name if strat else "Strategy"
+                strat_cache[ex.strategy_id] = (cfg, sname)
+            else:
+                cfg, sname = cached
             ex_cfg = cfg.get("exit", {}) or {}
 
             # Forex is 1x leverage → the leveraged-ROI breakeven trigger is
@@ -3905,106 +3983,201 @@ async def _manage_live_forex_positions():
                 "trail_enabled": bool(trail_enabled and trail_pct),
                 "trail_pct":     float(trail_pct) if trail_pct else None,
                 "be_moved":      ("be_moved" in notes),
+                "strategy_id":   ex.strategy_id,
+                "strategy_name": sname,
                 "user":          user,
             })
     finally:
         db.close()
+    return work
 
-    if not work:
+
+async def _amend_forex_position(w: dict) -> None:
+    """Check one live forex position against the latest price and amend its broker
+    SL (breakeven / trailing) when triggered.
+
+    Reads the cTrader real-time spot feed FIRST (per-tick, broker-matched) so fast
+    instruments like gold react in well under a second, falling back to the 5s FMP
+    feed only when the stream has no fresh price. Mutates ``w`` in place so a fast
+    loop re-using a cached worklist will not re-fire the same move."""
+    from app.services.tradfi_prices import get_price as _tradfi_get_price
+    from app.services.ctrader_client import modify_position_sltp_for_user
+    from app.database import BgSessionLocal as SessionLocal
+    from app.strategy_models import StrategyExecution
+
+    price = None
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        price = _ctf.get_price(w["symbol"])
+    except Exception:
+        price = None
+    if not price or price <= 0:
+        price = await _tradfi_get_price(w["symbol"], "forex")
+    if not price or price <= 0:
         return
 
+    entry     = w["entry_price"]
+    direction = w["direction"]
+    cur_sl    = w["sl_price"]
+
+    amend_sl = None   # SL price to send to broker (None = no call)
+    mark_be  = False  # set the be_moved flag in notes this cycle
+
+    # ── Auto-breakeven: move SL to entry once price reaches trigger ──
+    be_hit = (
+        w["be_trigger"] is not None and not w["be_moved"] and (
+            (direction == "LONG"  and price >= w["be_trigger"]) or
+            (direction == "SHORT" and price <= w["be_trigger"])
+        )
+    )
+    if be_hit:
+        mark_be = True
+        tightens = (
+            (direction == "LONG"  and (cur_sl is None or entry > cur_sl)) or
+            (direction == "SHORT" and (cur_sl is None or entry < cur_sl))
+        )
+        if tightens:
+            amend_sl = entry
+
+    # ── Trailing stop: ratchet SL behind current price (only tightens) ─
+    if w["trail_enabled"] and w["trail_pct"]:
+        base = amend_sl if amend_sl is not None else cur_sl
+        if direction == "LONG":
+            cand = price * (1 - w["trail_pct"] / 100.0)
+            if base is None or cand > base:
+                amend_sl = cand
+        else:
+            cand = price * (1 + w["trail_pct"] / 100.0)
+            if base is None or cand < base:
+                amend_sl = cand
+
+    # Skip negligible TRAILING-ONLY changes (avoid broker spam every tick).
+    # Never suppress a breakeven cycle: when mark_be is set the amend must reach
+    # the broker, otherwise we could persist be_moved (below) without the stop
+    # actually moving — leaving the original loss stop in place forever.
+    if (
+        amend_sl is not None and cur_sl is not None
+        and not mark_be
+        and abs(amend_sl - cur_sl) < price * _FX_MIN_TRAIL_STEP_FRAC
+    ):
+        amend_sl = None
+
+    if amend_sl is None and not mark_be:
+        return
+
+    if amend_sl is not None:
+        amend_sl = round(amend_sl, 6)
+        ok = await modify_position_sltp_for_user(
+            w["user"], w["position_id"], stop_loss_price=amend_sl
+        )
+        if not ok:
+            logger.warning(
+                f"[FX-manage] amend SL failed exec#{w['exec_id']} "
+                f"pos={w['position_id']} {w['symbol']}"
+            )
+            return
+
+    # Persist new SL + breakeven flag (re-check still OPEN).
+    persisted_be = False
+    _db2 = SessionLocal()
+    try:
+        ex2 = _db2.query(StrategyExecution).filter(
+            StrategyExecution.id == w["exec_id"]
+        ).first()
+        if ex2 and ex2.outcome == "OPEN":
+            if amend_sl is not None:
+                ex2.sl_price = amend_sl
+            n = ex2.notes or ""
+            if mark_be and "be_moved" not in n:
+                n = (n + " | be_moved").strip(" |")
+                persisted_be = True
+            ex2.notes = n
+            _db2.commit()
+    finally:
+        _db2.close()
+
+    # Mutate the cached work item so a re-used worklist (fast loop) won't refire.
+    if amend_sl is not None:
+        w["sl_price"] = amend_sl
+    if mark_be:
+        w["be_moved"] = True
+
+    # Breakeven alert (push + Telegram) — only when newly flagged this pass.
+    if persisted_be:
+        _u = w.get("user")
+        try:
+            _mv = ((price - entry) / entry * 100) if direction == "LONG" \
+                else ((entry - price) / entry * 100)
+        except Exception:
+            _mv = 0.0
+        _notify_breakeven_alert(
+            user_id=getattr(_u, "id", 0) or 0,
+            telegram_id=getattr(_u, "telegram_id", None),
+            strategy_name=w.get("strategy_name", "Strategy"),
+            symbol=w["symbol"], direction=direction,
+            leverage=int(w.get("leverage") or 1), move_pct=_mv,
+            strategy_id=w.get("strategy_id", 0), execution_id=w["exec_id"],
+            kind="live",
+        )
+
+    if amend_sl is not None:
+        logger.info(
+            f"[FX-manage] exec#{w['exec_id']} {w['symbol']} {direction} "
+            f"SL→{amend_sl} ({'BE ' if mark_be else 'trail '}@ price {price})"
+        )
+
+
+async def _manage_live_forex_positions():
+    """One-shot pass over all live forex positions (back-compat / manual use).
+    Normal operation runs through run_forex_live_manager_fast instead."""
+    work = await asyncio.to_thread(_build_forex_worklist)
     for w in work:
         try:
-            price = await _tradfi_get_price(w["symbol"], "forex")
-            if not price or price <= 0:
-                continue
-
-            entry     = w["entry_price"]
-            direction = w["direction"]
-            cur_sl    = w["sl_price"]
-
-            amend_sl = None   # SL price to send to broker (None = no call)
-            mark_be  = False  # set the be_moved flag in notes this cycle
-
-            # ── Auto-breakeven: move SL to entry once price reaches trigger ──
-            be_hit = (
-                w["be_trigger"] is not None and not w["be_moved"] and (
-                    (direction == "LONG"  and price >= w["be_trigger"]) or
-                    (direction == "SHORT" and price <= w["be_trigger"])
-                )
-            )
-            if be_hit:
-                mark_be = True
-                tightens = (
-                    (direction == "LONG"  and (cur_sl is None or entry > cur_sl)) or
-                    (direction == "SHORT" and (cur_sl is None or entry < cur_sl))
-                )
-                if tightens:
-                    amend_sl = entry
-
-            # ── Trailing stop: ratchet SL behind current price (only tightens) ─
-            if w["trail_enabled"] and w["trail_pct"]:
-                base = amend_sl if amend_sl is not None else cur_sl
-                if direction == "LONG":
-                    cand = price * (1 - w["trail_pct"] / 100.0)
-                    if base is None or cand > base:
-                        amend_sl = cand
-                else:
-                    cand = price * (1 + w["trail_pct"] / 100.0)
-                    if base is None or cand < base:
-                        amend_sl = cand
-
-            # Skip negligible TRAILING-ONLY changes (avoid broker spam every 5s
-            # tick). Never suppress a breakeven cycle: when mark_be is set the
-            # amend must reach the broker, otherwise we could persist be_moved
-            # (below) without the stop actually moving — leaving the original
-            # loss stop in place forever.
-            if (
-                amend_sl is not None and cur_sl is not None
-                and not mark_be
-                and abs(amend_sl - cur_sl) < price * MIN_TRAIL_STEP_FRAC
-            ):
-                amend_sl = None
-
-            if amend_sl is None and not mark_be:
-                continue
-
-            if amend_sl is not None:
-                amend_sl = round(amend_sl, 6)
-                ok = await modify_position_sltp_for_user(
-                    w["user"], w["position_id"], stop_loss_price=amend_sl
-                )
-                if not ok:
-                    logger.warning(
-                        f"[FX-manage] amend SL failed exec#{w['exec_id']} "
-                        f"pos={w['position_id']} {w['symbol']}"
-                    )
-                    continue
-
-            # Persist new SL + breakeven flag (re-check still OPEN).
-            _db2 = SessionLocal()
-            try:
-                ex2 = _db2.query(StrategyExecution).filter(
-                    StrategyExecution.id == w["exec_id"]
-                ).first()
-                if ex2 and ex2.outcome == "OPEN":
-                    if amend_sl is not None:
-                        ex2.sl_price = amend_sl
-                    n = ex2.notes or ""
-                    if mark_be and "be_moved" not in n:
-                        n = (n + " | be_moved").strip(" |")
-                    ex2.notes = n
-                    _db2.commit()
-            finally:
-                _db2.close()
-
-            if amend_sl is not None:
-                logger.info(
-                    f"[FX-manage] exec#{w['exec_id']} {w['symbol']} {direction} "
-                    f"SL→{amend_sl} ({'BE ' if mark_be else 'trail '}@ price {price})"
-                )
+            await _amend_forex_position(w)
         except Exception as e:
             logger.warning(f"[FX-manage] error exec#{w['exec_id']}: {e}")
+
+
+async def run_forex_live_manager_fast():
+    """Fast (~1s) loop that amends live forex SL (breakeven + trailing) using the
+    cTrader real-time spot feed, so fast instruments like gold move to breakeven
+    in well under a second instead of waiting for the 5s strategy-scan cycle.
+
+    DB-light: the open-position worklist is rebuilt only every _FX_WORKLIST_TTL;
+    each tick reads prices from the in-memory spot cache and only touches the DB
+    when a stop is actually amended. Shares the executor advisory lock (started in
+    the same worker as run_forex_executor) so amendments never double-fire."""
+    from app.services.asset_classes import is_market_open as _is_mkt_open
+
+    logger.info(
+        f"⚡ Forex live-manager started (cycle={FOREX_MANAGE_INTERVAL_SECONDS}s)"
+    )
+    work: list = []
+    last_build = 0.0
+    while True:
+        try:
+            if not _is_mkt_open("forex", datetime.utcnow()):
+                work = []
+                await asyncio.sleep(5)
+                continue
+            now_m = time.monotonic()
+            if not work or (now_m - last_build) >= _FX_WORKLIST_TTL:
+                try:
+                    work = await asyncio.to_thread(_build_forex_worklist)
+                except Exception as _be:
+                    logger.warning(f"[FX-fast] worklist build failed: {_be}")
+                    work = []
+                last_build = now_m
+            for w in work:
+                try:
+                    await _amend_forex_position(w)
+                except Exception as _ae:
+                    logger.warning(
+                        f"[FX-fast] amend error exec#{w.get('exec_id')}: {_ae}"
+                    )
+        except Exception as _ce:
+            logger.warning(f"[FX-fast] cycle error: {_ce}")
+        await asyncio.sleep(FOREX_MANAGE_INTERVAL_SECONDS)
 
 
 # ─── Dedicated forex / index / stock executor loop ───────────────────────────
@@ -4133,15 +4306,9 @@ async def run_forex_executor():
                     )
 
                 if not open_snaps:
-                    # No tradfi strategies to evaluate this cycle, but live forex
-                    # positions (e.g. from paused/deleted strategies, or ones
-                    # excluded from eval) may still need breakeven/trailing
-                    # amendments while the market is open — so don't skip manage.
-                    if _forex_open:
-                        try:
-                            await _manage_live_forex_positions()
-                        except Exception as _mfe:
-                            logger.warning(f"[FX-manage] cycle failed: {_mfe}")
+                    # No tradfi strategies to evaluate this cycle. Live SL
+                    # amendments (breakeven/trailing) run on the dedicated
+                    # run_forex_live_manager_fast loop, so nothing to do here.
                     await asyncio.sleep(FOREX_SCAN_INTERVAL_SECONDS)
                     continue
 
@@ -4245,16 +4412,10 @@ async def run_forex_executor():
 
                 await asyncio.gather(*[_run_one_fx(s) for s in open_snaps])
 
-                # Push live SL amendments (auto-breakeven + trailing) to cTrader
-                # for any open LIVE forex positions. Failures trip the adaptive
-                # backoff below but never kill the cycle. Skip when the forex
-                # market is closed — stops cannot move while the broker is shut.
-                if _forex_open:
-                    try:
-                        await _manage_live_forex_positions()
-                    except Exception as _mfe:
-                        logger.warning(f"[FX-manage] cycle failed: {_mfe}")
-                        _cycle_db_skipped.append(("__manage__", type(_mfe).__name__))
+                # Live SL amendments (auto-breakeven + trailing) for open LIVE
+                # forex positions run on the dedicated run_forex_live_manager_fast
+                # loop (sub-second cadence via the cTrader spot feed), so the scan
+                # cycle no longer manages them here.
 
                 # Emit one consolidated warning per cycle instead of per-strategy spam
                 if _cycle_db_skipped:

@@ -1501,7 +1501,7 @@ async def _start_executor_tasks():
         logger.warning(f"cTrader price feed start error (non-fatal): {_ctf_err}")
     from app.services.strategy_executor import (
         run_strategy_executor, run_live_position_monitor,
-        run_forex_executor,
+        run_forex_executor, run_forex_live_manager_fast,
         backfill_cancelled_paper_trades,
         backfill_ghost_cancelled_executions,
         close_stale_open_executions,
@@ -1513,6 +1513,10 @@ async def _start_executor_tasks():
     # auto-restarts instead of silently killing the executor permanently.
     asyncio.create_task(_resilient_task("run_strategy_executor", run_strategy_executor, restart_delay=20))
     asyncio.create_task(_resilient_task("run_forex_executor", run_forex_executor, restart_delay=20))
+    # Dedicated fast (~1s) loop that pushes live forex breakeven/trailing SL
+    # amendments to cTrader off the real-time spot feed — so gold reaches
+    # breakeven in well under a second instead of on the 5s scan cadence.
+    asyncio.create_task(_resilient_task("run_forex_live_manager_fast", run_forex_live_manager_fast, restart_delay=15))
     asyncio.create_task(_resilient_task("run_live_position_monitor", run_live_position_monitor, restart_delay=15))
     asyncio.create_task(backfill_cancelled_paper_trades(lookback_days=30))
     asyncio.create_task(backfill_ghost_cancelled_executions(lookback_days=7))
