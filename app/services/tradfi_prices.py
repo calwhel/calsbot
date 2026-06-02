@@ -171,6 +171,14 @@ async def get_price(symbol: str, asset_class: str) -> Optional[float]:
     except Exception:
         pass
 
+    # Metals must NOT fall through to yfinance GC=F — that's gold FUTURES, a
+    # DIFFERENT instrument from XAUUSD spot (carries a contango premium of
+    # several dollars), so it mismatches the cTrader broker quote and can
+    # falsely trigger tight TP/SL. Better to return None (skip the tick) than
+    # feed a wrong-instrument price into live/paper trade evaluation.
+    if symbol.upper() in _METALS_BINANCE_MAP:
+        return None
+
     # ── 2. yfinance fast_info — real-time mid price (no exchange delay) ────────
     ticker = _resolve_ticker(cls, symbol)
     if not ticker:

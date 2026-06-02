@@ -20,7 +20,7 @@ import struct
 import logging
 import os
 import time
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,8 @@ try:
         ProtoOANewOrderReq,
         ProtoOAExecutionEvent,
         ProtoOAOrderErrorEvent,
+        ProtoOASymbolsListReq,
+        ProtoOASymbolsListRes,
         ProtoOAGetAccountListByAccessTokenReq,
         ProtoOAGetAccountListByAccessTokenRes,
         ProtoOAGetCtidProfileByTokenReq,
@@ -109,6 +111,8 @@ _PAYLOAD_TYPES = {
     "account_auth_req":      2102,
     "account_auth_res":      2103,
     "new_order_req":         2106,
+    "symbols_list_req":      2114,
+    "symbols_list_res":      2115,
     "execution_event":       2126,
     "order_error_event":     2132,
     "account_list_req":      2149,
@@ -151,6 +155,13 @@ _SYMBOL_MAP = {
 # Index contract sizing: for index CFDs volume is in contracts (1 unit = 1 contract).
 # FP Markets minimum is 1 contract; value ≈ price × contract_size USD.
 _INDEX_SYMBOLS = frozenset({"SPX", "NDX", "DJI", "DAX", "FTSE"})
+
+# Broker symbol name → numeric symbolId, cached per (host, ctid). cTrader's
+# ProtoOANewOrderReq requires the integer symbolId — there is NO symbolName
+# field (setting it raises AttributeError). symbolIds are not portable across
+# accounts/hosts, so the cache is keyed by (host, ctid) and re-resolved when
+# either changes.
+_SYMBOL_ID_CACHE: Dict[Tuple[str, int], Dict[str, int]] = {}
 
 
 # ── Low-level framing helpers ─────────────────────────────────────────────────
@@ -621,6 +632,42 @@ async def get_accounts_for_token(access_token: str, host: str = CTRADER_HOST) ->
     return []
 
 
+async def _resolve_symbol_id(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    ctid_trader_account_id: int,
+    broker_symbol: str,
+    host: str = CTRADER_HOST,
+) -> Optional[int]:
+    """Resolve a broker symbol NAME → numeric symbolId for this (host, account).
+
+    cTrader's ProtoOANewOrderReq has no symbolName field — it requires the
+    integer symbolId, which differs per account/host. The full name→id map is
+    fetched once over the (already app+account authed) persistent connection and
+    cached per (host, ctid). Returns None if the symbol isn't tradable here.
+    """
+    cache_key = (host, ctid_trader_account_id)
+    name_to_id = _SYMBOL_ID_CACHE.get(cache_key)
+    if not name_to_id:
+        req = ProtoOASymbolsListReq()
+        req.ctidTraderAccountId = ctid_trader_account_id
+        req.includeArchivedSymbols = False
+        payload = await _send_recv(
+            reader, writer, req,
+            _PAYLOAD_TYPES["symbols_list_req"],
+            _PAYLOAD_TYPES["symbols_list_res"],
+            timeout=20.0,
+        )
+        if not payload:
+            return None
+        res = ProtoOASymbolsListRes()
+        res.ParseFromString(payload)
+        name_to_id = {s.symbolName: s.symbolId for s in res.symbol}
+        if name_to_id:
+            _SYMBOL_ID_CACHE[cache_key] = name_to_id
+    return name_to_id.get(broker_symbol) if name_to_id else None
+
+
 async def place_order(
     access_token: str,
     ctid_trader_account_id: int,
@@ -653,9 +700,21 @@ async def place_order(
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
                     return {"order_id": None, "actual_fill": None, "error": "account auth failed"}
 
+                broker_symbol = _SYMBOL_MAP.get(symbol_name, symbol_name)
+                symbol_id = await _resolve_symbol_id(
+                    reader, writer, ctid_trader_account_id, broker_symbol, host
+                )
+                if not symbol_id:
+                    logger.error(
+                        f"[cTrader] symbol {broker_symbol!r} not tradable on account "
+                        f"{ctid_trader_account_id} (no symbolId resolved) — cannot place order"
+                    )
+                    return {"order_id": None, "actual_fill": None,
+                            "error": f"symbol {broker_symbol} not tradable on this account"}
+
                 req = ProtoOANewOrderReq()
                 req.ctidTraderAccountId = ctid_trader_account_id
-                req.symbolName          = _SYMBOL_MAP.get(symbol_name, symbol_name)
+                req.symbolId            = symbol_id
                 req.orderType           = ProtoOAOrderType.MARKET
                 req.tradeSide           = ProtoOATradeSide.BUY if direction == "LONG" else ProtoOATradeSide.SELL
                 req.volume              = int(volume_lots * 100_000)  # units
@@ -688,7 +747,7 @@ async def place_order(
                     _detail = f"{err.errorCode}: {_reason}" if err.errorCode and err.errorCode not in _reason else _reason
                     logger.error(
                         f"[cTrader] order REJECTED errorCode={err.errorCode!r} "
-                        f"desc={err.description!r} symbol={req.symbolName} vol={req.volume}"
+                        f"desc={err.description!r} symbol={broker_symbol} vol={req.volume}"
                     )
                     return {"order_id": None, "actual_fill": None, "error": _detail}
 
@@ -708,7 +767,7 @@ async def place_order(
                     _tname = ProtoOAExecutionType.Name(_exec_type)
                     logger.error(
                         f"[cTrader] order not filled ({_tname}) errorCode={_ec!r} "
-                        f"symbol={req.symbolName} vol={req.volume}"
+                        f"symbol={broker_symbol} vol={req.volume}"
                     )
                     return {"order_id": None, "actual_fill": None,
                             "error": f"{_tname}: {_ec}" if _ec else _tname}
