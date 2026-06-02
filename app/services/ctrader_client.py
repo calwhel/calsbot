@@ -448,6 +448,18 @@ async def refresh_access_token(refresh_token: str) -> dict:
 # don't both burn the rotating refresh token at once.
 _token_refresh_lock = asyncio.Lock()
 
+# Cross-process advisory lock NAMESPACE for token refresh — distinct from the
+# executor (42_424_242) and aigen (42_424_243) lock ids in
+# strategy_portal_server.py. cTrader ROTATES the refresh token on every use;
+# under gunicorn -w 4 the feed/executor worker AND any request worker
+# (charts/backtests hit tradfi_prices → cTrader trendbar fetch → refresh) can
+# refresh concurrently. The per-process asyncio lock above can't coordinate
+# across processes, so two workers racing the same single-use token lose a
+# rotation and permanently brick the chain (ACCESS_DENIED → forced re-link).
+# We use the two-key advisory-lock form (namespace, user_id) so refreshes are
+# serialised PER USER — one user's refresh never blocks another's.
+_TOKEN_REFRESH_PG_LOCK_NS = 42_424_244
+
 # When a specific refresh token is denied (ACCESS_DENIED → chain dead, user must
 # re-link), back off instead of hammering cTrader's OAuth endpoint every signal
 # tick. Keyed by user_id → (denied_refresh_token, cooldown_until_monotonic). The
@@ -470,9 +482,28 @@ async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
     """
     from app.database import SessionLocal
     from app.models import UserPreference
+    from sqlalchemy import text as _sql_text
     async with _token_refresh_lock:
         db = SessionLocal()
         try:
+            # Cross-process serialisation (see _TOKEN_REFRESH_PG_LOCK_ID). The
+            # asyncio lock above only serialises within ONE worker. Take a
+            # Postgres transaction-scoped advisory lock so the other gunicorn
+            # workers can't refresh the same rotating token at the same time.
+            # xact locks auto-release on commit/rollback/close → no leak path.
+            acquired = False
+            for _attempt in range(20):  # wait up to ~10s for a peer's refresh
+                acquired = bool(
+                    db.execute(
+                        _sql_text("SELECT pg_try_advisory_xact_lock(:ns, :uid)"),
+                        {"ns": _TOKEN_REFRESH_PG_LOCK_NS, "uid": int(user_id)},
+                    ).scalar()
+                )
+                if acquired:
+                    break
+                db.rollback()  # drop the empty txn before sleeping + retrying
+                await asyncio.sleep(0.5)
+
             prefs = (
                 db.query(UserPreference)
                 .filter(UserPreference.user_id == user_id)
@@ -480,6 +511,11 @@ async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
             )
             if not prefs or not prefs.ctrader_refresh_token:
                 return None
+            if not acquired:
+                # Another worker is mid-refresh — racing it is exactly what bricks
+                # the rotation chain. Reuse the current access token; by now the
+                # peer has very likely persisted a freshly rotated one.
+                return prefs.ctrader_access_token
             refresh_token = prefs.ctrader_refresh_token
             denied = _refresh_denied.get(user_id)
             if denied and denied[0] == refresh_token and time.monotonic() < denied[1]:
