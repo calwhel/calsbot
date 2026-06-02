@@ -934,7 +934,7 @@ async def place_order(
                     if ev.deal.positionId:
                         position_id = str(ev.deal.positionId)
                 return {"order_id": order_id, "actual_fill": actual_fill,
-                        "position_id": position_id, "error": None}
+                        "position_id": position_id, "volume": req.volume, "error": None}
 
             except Exception as e:
                 if attempt == 1:

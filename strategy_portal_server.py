@@ -9943,6 +9943,106 @@ async def api_live_forex_account(uid: str = Query(...)):
         db.close()
 
 
+@app.post("/api/ctrader/test-trade")
+async def api_ctrader_test_trade(uid: str = Query(...)):
+    """Place a tiny REAL test order on the user's cTrader account and immediately
+    close it — a one-tap end-to-end check that live trading actually works
+    (auth → symbol resolution → volume sizing → fill → close) without waiting for
+    a strategy signal. Uses EURUSD at the broker minimum size, no SL/TP.
+    """
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+            return JSONResponse(
+                {"success": False, "error": "cTrader account not connected"},
+                status_code=400,
+            )
+        access_token = prefs.ctrader_access_token
+        from app.services.ctrader_client import _host_for_account
+        ctid = int(prefs.ctrader_account_id)
+        host = _host_for_account(prefs, ctid)
+    finally:
+        db.close()
+
+    from app.services.ctrader_client import place_order, close_position
+    TEST_SYMBOL = "EURUSD"
+    TEST_LOTS   = 0.01  # broker minimum; ~$1k notional, negligible spread cost on demo
+
+    try:
+        placed = await asyncio.wait_for(
+            place_order(
+                access_token           = access_token,
+                ctid_trader_account_id = ctid,
+                symbol_name            = TEST_SYMBOL,
+                direction              = "LONG",
+                volume_lots            = TEST_LOTS,
+                host                   = host,
+            ),
+            timeout=25.0,
+        )
+    except asyncio.TimeoutError:
+        # AMBIGUOUS: the order may have reached the broker even though we timed out
+        # waiting for the response — tell the user to verify in cTrader.
+        return JSONResponse(
+            {"success": False, "check_open_positions": True,
+             "error": "cTrader did not respond in time — the order MAY have gone through"},
+            status_code=504,
+        )
+    except Exception as e:
+        logger.error(f"[test-trade] place failed uid={uid}: {type(e).__name__}: {e}")
+        return JSONResponse(
+            {"success": False, "check_open_positions": True, "error": "order placement failed"},
+            status_code=500,
+        )
+
+    if not placed or placed.get("error") or not placed.get("order_id"):
+        _perr = (placed or {}).get("error") or "order was not filled"
+        # A clean broker rejection (e.g. NOT_ENOUGH_MONEY) means NO position exists.
+        # But "no execution event"/"unexpected exit" are ambiguous — the order could
+        # have filled while we lost the response; ask the user to check cTrader.
+        _ambiguous = any(t in _perr.lower() for t in ("no execution event", "unexpected exit", "timeout"))
+        return JSONResponse(
+            {"success": False, "stage": "place", "error": _perr,
+             "check_open_positions": _ambiguous},
+            status_code=200,
+        )
+
+    fill        = placed.get("actual_fill")
+    position_id = placed.get("position_id")
+    volume      = placed.get("volume")
+
+    # Round-trip: close the test position so nothing is left open.
+    closed = False
+    close_error = None
+    if position_id and volume:
+        try:
+            closed = await asyncio.wait_for(
+                close_position(access_token, ctid, int(position_id), int(volume), host=host),
+                timeout=20.0,
+            )
+        except Exception as e:
+            close_error = f"{type(e).__name__}"
+            logger.warning(f"[test-trade] close failed uid={uid}: {e}")
+        if not closed and not close_error:
+            close_error = "close request not confirmed"
+
+    return JSONResponse({
+        "success": True,
+        "symbol": TEST_SYMBOL,
+        "lots": TEST_LOTS,
+        "order_id": placed.get("order_id"),
+        "fill": fill,
+        "closed": closed,
+        "close_error": close_error,
+    })
+
+
 @app.post("/api/live-forex/approve")
 async def api_live_forex_approve(uid: str = Query(...), request: Request = None):
     """Admin-only endpoint to approve a user for live forex trading."""

@@ -9511,10 +9511,12 @@ function renderLiveForex(d, wrap) {
           <div style="font-size:26px;font-weight:800;letter-spacing:-.5px">${bal}</div>
         </div>
       </div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn ghost sm" onclick="lfRefreshBalance()">↻ Refresh</button>
+        <button class="btn ghost sm" id="lf-test-btn" onclick="lfTestTrade()">🧪 Test trade</button>
         <button class="btn ghost sm" style="color:var(--negative)" onclick="lfDisconnect()">Disconnect</button>
       </div>
+      <div id="lf-test-result" style="margin-top:8px;font-size:12px;line-height:1.5"></div>
       ${acctSwitcher}
     </div>
 
@@ -9864,6 +9866,38 @@ async function lfDisconnect() {
 async function lfRefreshBalance() {
   $('lf-body').querySelector('button')?.setAttribute('disabled','1');
   await loadLiveForex();
+}
+
+async function lfTestTrade() {
+  const btn = $('lf-test-btn'), out = $('lf-test-result');
+  if (!confirm('Place a tiny real test order (EURUSD, 0.01 lots) on your cTrader account and immediately close it? This confirms live trading works end-to-end.')) return;
+  if (btn) { btn.setAttribute('disabled','1'); btn.textContent = '⏳ Testing…'; }
+  if (out) out.innerHTML = '<span style="color:var(--muted)">Placing test order on cTrader…</span>';
+  try {
+    const r = await fetch(`/api/ctrader/test-trade?uid=${UID}`, {method:'POST'});
+    const j = await r.json().catch(()=>({}));
+    if (j && j.success) {
+      const fill = (j.fill!=null) ? ` @ ${(+j.fill).toFixed(5)}` : '';
+      const closeMsg = j.closed
+        ? '<span style="color:#3fb68b">✓ position closed automatically</span>'
+        : `<span style="color:#d6a35c">⚠ order placed but auto-close not confirmed${j.close_error?` (${j.close_error})`:''} — check &amp; close it in cTrader</span>`;
+      out.innerHTML = `<div style="color:#3fb68b;font-weight:600">✓ Live trading works!</div>`
+        + `<div style="color:var(--muted)">Placed ${j.lots} lot ${j.symbol}${fill} · order #${j.order_id}</div>`
+        + `<div>${closeMsg}</div>`;
+      toast('Test trade succeeded — live trading is working');
+    } else {
+      const err = (j && j.error) ? j.error : `HTTP ${r.status}`;
+      const warn = (j && j.check_open_positions)
+        ? `<div style="color:#d6a35c;margin-top:4px">⚠ Please open cTrader and close any open EURUSD test position manually, just in case.</div>`
+        : '';
+      out.innerHTML = `<div style="color:var(--negative);font-weight:600">✗ Test trade failed</div>`
+        + `<div style="color:var(--muted)">${err}</div>` + warn;
+    }
+  } catch(e) {
+    out.innerHTML = `<div style="color:var(--negative);font-weight:600">✗ Test trade failed</div><div style="color:var(--muted)">Network error — please try again</div>`;
+  } finally {
+    if (btn) { btn.removeAttribute('disabled'); btn.textContent = '🧪 Test trade'; }
+  }
 }
 </script>
 <style>
