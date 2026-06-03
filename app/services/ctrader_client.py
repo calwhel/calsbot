@@ -228,21 +228,16 @@ async def _send_recv(
     return None
 
 
-async def _send_recv_any(
+async def _recv_until(
     reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
-    proto_req,
-    req_type: int,
     expected_types: set,
     timeout: float = 10.0,
 ) -> Tuple[Optional[int], Optional[bytes]]:
-    """Like _send_recv but returns (payloadType, payload) for the FIRST message
-    whose payloadType is in `expected_types` — lets a caller distinguish e.g. a
-    successful execution event from an order-error event. (None, None) on timeout.
+    """Read frames (no send) and return (payloadType, payload) for the FIRST one
+    whose payloadType is in `expected_types`, skipping heartbeats / other events.
+    (None, None) on timeout. Callers must hold the connection lock so the socket
+    is exclusively theirs while draining frames.
     """
-    writer.write(_encode_msg(proto_req, req_type))
-    await writer.drain()
-
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         remaining = deadline - time.monotonic()
@@ -262,6 +257,23 @@ async def _send_recv_any(
             return msg.payloadType, msg.payload
         # silently skip heartbeats / other events
     return None, None
+
+
+async def _send_recv_any(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    proto_req,
+    req_type: int,
+    expected_types: set,
+    timeout: float = 10.0,
+) -> Tuple[Optional[int], Optional[bytes]]:
+    """Like _send_recv but returns (payloadType, payload) for the FIRST message
+    whose payloadType is in `expected_types` — lets a caller distinguish e.g. a
+    successful execution event from an order-error event. (None, None) on timeout.
+    """
+    writer.write(_encode_msg(proto_req, req_type))
+    await writer.drain()
+    return await _recv_until(reader, expected_types, timeout)
 
 
 async def _open_connection(host: str = CTRADER_HOST) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
@@ -907,20 +919,25 @@ async def place_order(
                     )
                     return {"order_id": None, "actual_fill": None, "error": _detail}
 
-                ev = ProtoOAExecutionEvent()
-                ev.ParseFromString(payload)
-
-                # An execution event can ALSO be a rejection/cancellation that
-                # still carries an `order` block — treating that as a fill would
-                # mark a non-existent live position as live. Only real fills pass.
-                _exec_type = ev.executionType
-                if _exec_type in (
+                _terminal = (
                     ProtoOAExecutionType.ORDER_REJECTED,
                     ProtoOAExecutionType.ORDER_CANCELLED,
                     ProtoOAExecutionType.ORDER_EXPIRED,
-                ):
-                    _ec = ev.errorCode if ev.HasField("errorCode") else ""
-                    _tname = ProtoOAExecutionType.Name(_exec_type)
+                )
+
+                def _parse_exec(_payload):
+                    _e = ProtoOAExecutionEvent()
+                    _e.ParseFromString(_payload)
+                    return _e
+
+                def _terminal_err(_e):
+                    # An execution event can ALSO be a rejection/cancellation that
+                    # still carries an `order` block — treating that as a fill would
+                    # mark a non-existent live position as live. Only real fills pass.
+                    if _e.executionType not in _terminal:
+                        return None
+                    _ec = _e.errorCode if _e.HasField("errorCode") else ""
+                    _tname = ProtoOAExecutionType.Name(_e.executionType)
                     logger.error(
                         f"[cTrader] order not filled ({_tname}) errorCode={_ec!r} "
                         f"symbol={broker_symbol} vol={req.volume}"
@@ -928,7 +945,101 @@ async def place_order(
                     return {"order_id": None, "actual_fill": None,
                             "error": f"{_tname}: {_ec}" if _ec else _tname}
 
-                order_id    = str(ev.order.orderId) if ev.HasField("order") else None
+                ev = _parse_exec(payload)
+                _err = _terminal_err(ev)
+                if _err:
+                    return _err
+
+                order_id = str(ev.order.orderId) if ev.HasField("order") else None
+
+                # cTrader sends ORDER_ACCEPTED (carries `order`, NO `deal`) BEFORE
+                # the ORDER_FILLED event that carries the deal (executionPrice +
+                # positionId). _send_recv_any returned the FIRST event, so on the
+                # common ACCEPTED→FILLED sequence we'd otherwise capture NO fill
+                # price (card shows the pre-fill signal price) and NO positionId
+                # (live SL/TP management can't find the position). Keep draining
+                # the same (locked) socket until the deal arrives or it rejects.
+                def _has_fill(_e):
+                    return _e.HasField("deal") and bool(_e.deal.executionPrice)
+
+                def _matches_order(_e):
+                    # Correlate a drained event to OUR order: the account socket can
+                    # carry asynchronous execution events for OTHER trades, and we
+                    # must never misattribute a different order's fill/rejection.
+                    # When we don't yet have an order_id, accept (nothing to match).
+                    # FAIL-CLOSED: once order_id is known, an event we can't correlate
+                    # (no order/deal orderId) is treated as NOT ours and skipped —
+                    # the safe degradation is to fall through to live-without-fill,
+                    # never to attribute a stranger's fill to this order.
+                    if not order_id:
+                        return True
+                    _oid = None
+                    try:
+                        if _e.HasField("order") and _e.order.orderId:
+                            _oid = str(_e.order.orderId)
+                        elif _e.HasField("deal") and getattr(_e.deal, "orderId", 0):
+                            _oid = str(_e.deal.orderId)
+                    except Exception:
+                        return False
+                    if _oid is None:
+                        return False
+                    return _oid == order_id
+
+                if not _has_fill(ev):
+                    # Single ABSOLUTE budget across all iterations (not per-read) so
+                    # a stream of non-fill status events can't extend the wait
+                    # unbounded. Market orders fill (or reject) within seconds.
+                    _fill_deadline = time.monotonic() + 15.0
+                    while True:
+                        _remaining = _fill_deadline - time.monotonic()
+                        if _remaining <= 0:
+                            break  # budget exhausted — fall through with what we have
+                        _pt2, _payload2 = await _recv_until(
+                            reader,
+                            {_PAYLOAD_TYPES["execution_event"],
+                             _PAYLOAD_TYPES["order_error_event"]},
+                            timeout=_remaining,
+                        )
+                        if not _payload2:
+                            break  # no fill event arrived — fall through with what we have
+                        if _pt2 == _PAYLOAD_TYPES["order_error_event"]:
+                            _err2 = ProtoOAOrderErrorEvent()
+                            _err2.ParseFromString(_payload2)
+                            # Only OUR order's rejection aborts the wait.
+                            if order_id and _err2.HasField("orderId") and str(_err2.orderId) != order_id:
+                                continue
+                            _reason2 = (_err2.description or "").strip() or (_err2.errorCode or "").strip() or "order rejected"
+                            _detail2 = f"{_err2.errorCode}: {_reason2}" if _err2.errorCode and _err2.errorCode not in _reason2 else _reason2
+                            logger.error(
+                                f"[cTrader] order REJECTED (post-accept) errorCode={_err2.errorCode!r} "
+                                f"desc={_err2.description!r} symbol={broker_symbol} vol={req.volume}"
+                            )
+                            return {"order_id": None, "actual_fill": None, "error": _detail2}
+                        ev2 = _parse_exec(_payload2)
+                        if not _matches_order(ev2):
+                            continue  # another order's event on the shared socket
+                        _err2 = _terminal_err(ev2)
+                        if _err2:
+                            return _err2
+                        if ev2.HasField("order") and not order_id:
+                            order_id = str(ev2.order.orderId)
+                        if _has_fill(ev2):
+                            ev = ev2
+                            break
+                        # otherwise a non-fill event (e.g. duplicate ACCEPTED) — keep waiting
+                    if not _has_fill(ev):
+                        # Order was ACCEPTED at the broker but we never saw the fill
+                        # within budget. It is a REAL live order — do NOT error
+                        # (that would false-fallback a live position to paper). Return
+                        # order_id with no fill: card shows the signal price and live
+                        # SL management can't manage it, but the broker still enforces
+                        # the SL/TP set at entry.
+                        logger.warning(
+                            f"[cTrader] order {order_id} accepted but no fill event seen "
+                            f"in budget (symbol={broker_symbol}) — tracking live without "
+                            f"fill price / positionId"
+                        )
+
                 actual_fill = None
                 position_id = None
                 if ev.HasField("deal"):

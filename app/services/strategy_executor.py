@@ -3219,13 +3219,30 @@ async def evaluate_and_fire(
                     actual_fill
                     and actual_fill > 0
                     and execution.entry_price
-                    and abs(actual_fill - execution.entry_price) / execution.entry_price > 0.0005
+                    and abs(actual_fill - execution.entry_price) > execution.entry_price * 1e-7
                 ):
+                    # The broker filled at actual_fill (not our pre-fill signal
+                    # price), and it enforces SL/TP as RELATIVE offsets applied to
+                    # that real fill. Shift entry AND SL/TP/TP2 by the same delta
+                    # so the card the user sees + our paper-style monitoring match
+                    # what the broker is actually holding (otherwise the card shows
+                    # the signal price and SL/TP that are ~slippage pips off).
+                    _delta = actual_fill - execution.entry_price
                     logger.info(
-                        f"[Strategy {strategy.id}] entry_price updated: "
-                        f"signal={execution.entry_price:.6g} → fill={actual_fill:.6g}"
+                        f"[Strategy {strategy.id}] entry/SL/TP shifted to fill: "
+                        f"signal={execution.entry_price:.6g} → fill={actual_fill:.6g} "
+                        f"(Δ={_delta:+.6g})"
                     )
                     execution.entry_price = actual_fill
+                    if execution.sl_price:
+                        execution.sl_price += _delta
+                        sl_price = execution.sl_price
+                    if execution.tp_price:
+                        execution.tp_price += _delta
+                        tp_price = execution.tp_price
+                    if execution.tp2_price:
+                        execution.tp2_price += _delta
+                        tp2_price = execution.tp2_price
                 db.commit()
                 display_entry = actual_fill if actual_fill else current_price
                 tg_id_live = _telegram_int_id(user)
@@ -3620,13 +3637,26 @@ async def _propagate_to_subscribers(
                         actual_fill
                         and actual_fill > 0
                         and sub_exec.entry_price
-                        and abs(actual_fill - sub_exec.entry_price) / sub_exec.entry_price > 0.0005
+                        and abs(actual_fill - sub_exec.entry_price) > sub_exec.entry_price * 1e-7
                     ):
+                        # Broker filled at actual_fill and enforces SL/TP as relative
+                        # offsets from it — shift entry AND SL/TP/TP2 by the same
+                        # delta so the subscriber's card + monitoring match the broker.
+                        _delta = actual_fill - sub_exec.entry_price
                         logger.info(
-                            f"[Propagate] Strategy {sub_strategy.id} entry_price updated: "
-                            f"signal={sub_exec.entry_price:.6g} → fill={actual_fill:.6g}"
+                            f"[Propagate] Strategy {sub_strategy.id} entry/SL/TP shifted to fill: "
+                            f"signal={sub_exec.entry_price:.6g} → fill={actual_fill:.6g} (Δ={_delta:+.6g})"
                         )
                         sub_exec.entry_price = actual_fill
+                        if sub_exec.sl_price:
+                            sub_exec.sl_price += _delta
+                            sl_price = sub_exec.sl_price
+                        if sub_exec.tp_price:
+                            sub_exec.tp_price += _delta
+                            tp_price = sub_exec.tp_price
+                        if sub_exec.tp2_price:
+                            sub_exec.tp2_price += _delta
+                            tp2_price = sub_exec.tp2_price
                     _sub_db.commit()
                     display_entry = actual_fill if actual_fill else entry
                     if tg_id:
