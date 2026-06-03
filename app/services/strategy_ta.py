@@ -3463,7 +3463,22 @@ async def evaluate_strategy_conditions(
                 # Shares the same evaluator as FVG; the config supplies
                 # condition='price_in_gap' and only_unfilled=False by default,
                 # which naturally selects already-filled (mitigated) gaps.
-                return await eval_fvg(cond, symbol, price, http_client, cache)
+                _ifvg_ok, _ifvg_det = await eval_fvg(
+                    cond, symbol, price, http_client, cache)
+                # eval_fvg labels the gap "Bullish/Bearish FVG", but an iFVG
+                # INVERTS the bias: a mitigated bearish gap becomes support
+                # (LONG) and a bullish gap becomes resistance (SHORT). Annotate
+                # the detail so the trade card explains why a "Bearish FVG"
+                # produces a LONG. Keep the original "Bullish/Bearish FVG"
+                # substring intact — the BOTH-direction inference in
+                # strategy_executor parses it (case-insensitive).
+                if "Bearish FVG" in _ifvg_det:
+                    _ifvg_det = _ifvg_det.replace(
+                        "Bearish FVG", "Bearish FVG (inverted → LONG)", 1)
+                elif "Bullish FVG" in _ifvg_det:
+                    _ifvg_det = _ifvg_det.replace(
+                        "Bullish FVG", "Bullish FVG (inverted → SHORT)", 1)
+                return _ifvg_ok, _ifvg_det
             elif ctype == "candlestick":
                 return await eval_candlestick(cond, symbol, http_client, cache)
             elif ctype == "consecutive_candles":

@@ -30,12 +30,16 @@ then turned SL/TP into garbage (`-4.95547` / `10.0445`) on the trade card.
 `min([raw, raw/100, raw/1000, raw/100_000], key=lambda v: abs(v-entry_price))`.
 This auto-resolves FX (raw/100000→1.085) and gold (raw→4452.76).
 
-**KNOWN LATENT BUG (not yet fixed):** `modify_position_sltp` (live breakeven/
-trailing) still sends ABSOLUTE `stopLoss/takeProfit` as `int(price*100_000)`. That
-is correct for FX majors but ~1000× wrong for gold (gold absolute prices are
-unscaled on this account). Before relying on live SL amends for metals, migrate it
-to per-symbol digit scaling OR to relative-offset amends. Orders are unaffected
-(they use relative offsets).
+**ABSOLUTE amend prices = REAL price, NO scaling (fixed).** `modify_position_sltp`
+(live breakeven/trailing) sends `req.stopLoss/takeProfit = float(real_price)`. The
+proto fields are `double` and the broker quotes absolute prices unscaled — PROVEN
+live: a gold stop of ~4452 was ACCEPTED, whereas `4452.76*100_000 = 445276000`
+would be rejected. The old `int(price*100_000)` meant gold breakeven NEVER reached
+the broker; worse, on one trade a corrupted entry `0.0445276*100_000 ≈ 4452` was
+accepted by accident and fired a FALSE "risk-free" Telegram alert on a position
+whose stop never actually moved (it then ran to a big loss). Do NOT reintroduce
+×100_000 on these absolute double fields. (Relative order offsets stay ×100_000 —
+different field, different spec.)
 
 # Live forex broker positionId
 

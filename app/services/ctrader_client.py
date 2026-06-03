@@ -1127,7 +1127,11 @@ async def modify_position_sltp(
     broker (server-side). Used for auto-breakeven and trailing-stop on live
     forex trades — without this the broker keeps the original SL forever.
 
-    Prices use the same ×100_000 scaling as place_order (correct for FX majors).
+    Prices are sent as REAL absolute prices (e.g. gold 4452.76, EURUSD 1.0850).
+    The proto stopLoss/takeProfit are `double` fields and the broker quotes
+    absolute prices unscaled (proven live: a gold stop of ~4452 was accepted while
+    4452*100000 would be rejected). place_order's ×100000 is the RELATIVE-offset
+    convention (a different field), NOT applicable to these absolute fields.
     Returns True on success.
     """
     if not _PROTO_OK:
@@ -1143,20 +1147,17 @@ async def modify_position_sltp(
                 req = ProtoOAAmendPositionSLTPReq()
                 req.ctidTraderAccountId = ctid_trader_account_id
                 req.positionId          = position_id
-                # NOTE (symbol-dependent scaling): these ABSOLUTE price fields use
-                # ×100_000, which is correct for 5-digit FX majors but is NOT
-                # universal — live gold fills arrive from the broker UNSCALED
-                # (deal.executionPrice ~4452.76, not 445276000), so a ×100_000
-                # absolute stopLoss/takeProfit for XAUUSD is likely wrong by orders
-                # of magnitude. place_order avoids this by sending RELATIVE offsets
-                # (distance×100_000, symbol-independent per the cTrader spec), which
-                # works for gold. This amend path (live breakeven/trailing) still
-                # uses absolute scaling and should be migrated to per-symbol digit
-                # scaling (or relative amend) before relying on it for metals.
+                # ABSOLUTE price fields (double) → send the REAL price unscaled.
+                # The old ×100_000 was wrong: it set gold breakeven stops to
+                # 4452.76*100000 (rejected by the broker), so live breakeven/
+                # trailing silently never reached the broker for metals — and on
+                # one trade a corrupted entry (0.0445276) ×100000 ≈ 4452 was
+                # accepted by accident, firing a false "risk-free" alert on a
+                # position whose stop was never actually moved.
                 if stop_loss_price is not None:
-                    req.stopLoss = int(stop_loss_price * 100_000)
+                    req.stopLoss = float(stop_loss_price)
                 if take_profit_price is not None:
-                    req.takeProfit = int(take_profit_price * 100_000)
+                    req.takeProfit = float(take_profit_price)
                 payload = await _send_recv(
                     reader, writer, req,
                     _PAYLOAD_TYPES["amend_position_sltp_req"],
