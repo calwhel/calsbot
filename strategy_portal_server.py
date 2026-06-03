@@ -1347,10 +1347,11 @@ def _do_cancel_ghost_executions_sync():
         result = db.execute(text("""
             UPDATE strategy_executions
             SET outcome = 'CANCELLED',
-                notes   = 'Auto-cancelled: no Bitunix order_id (ghost execution)'
+                notes   = 'Auto-cancelled: no broker order_id (ghost execution)'
             WHERE is_paper = false
               AND outcome  = 'OPEN'
               AND bitunix_order_id IS NULL
+              AND ctrader_order_id IS NULL
               AND fired_at < NOW() - INTERVAL '5 minutes'
             RETURNING id, symbol, direction
         """))
@@ -1363,10 +1364,14 @@ def _do_cancel_ghost_executions_sync():
 
 async def _cancel_ghost_executions():
     """
-    Cancel any live (is_paper=False) OPEN strategy executions that have no
-    Bitunix order ID.  These are 'ghost' records created when the Bitunix API
-    call failed — they were never real positions, but old code left them OPEN
-    so the live monitor would fire false SL/TP alerts.
+    Cancel any live (is_paper=False) OPEN strategy executions that have NO
+    broker order ID at all (neither Bitunix for crypto NOR cTrader for
+    forex/index).  These are 'ghost' records created when the broker API call
+    failed — they were never real positions, but old code left them OPEN so the
+    live monitor would fire false SL/TP alerts.
+    CRITICAL: a real cTrader forex/index trade has ctrader_order_id set but
+    bitunix_order_id NULL; it must NOT be treated as a ghost (doing so silently
+    cancelled live forex stop-outs and suppressed their close notifications).
     Run once on startup and then every 5 minutes as a safety net.
     DB work runs in asyncio.to_thread to avoid blocking the event loop.
     """
@@ -1376,7 +1381,7 @@ async def _cancel_ghost_executions():
             for row in cancelled:
                 logger.warning(
                     f"[ghost-cleanup] Cancelled ghost execution id={row[0]} "
-                    f"{row[1]} {row[2]} — no Bitunix order_id"
+                    f"{row[1]} {row[2]} — no broker order_id"
                 )
         else:
             logger.debug("[ghost-cleanup] No ghost executions found")

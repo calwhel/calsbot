@@ -19,4 +19,6 @@
 - [Forex executor cadence](forex-executor-cadence.md) — faster forex scan only helps if the tradfi price/TA cache TTL matches the 5s FMP feed; always gate a faster interval with DB-stress backoff (Neon saturation history).
 - [Forex live SL management](forex-live-sl-management.md) — for sub-second forex/gold reactions read the cTrader spot feed (not 5s FMP); live SL management must run on ONE loop only (no double-amend); BE alerts sync-safe + fire once.
 - [Forex breakeven pip trigger](forex-breakeven-pip-trigger.md) — forex exits must use absolute pip/price triggers, NOT leveraged-ROI (forex is 1x lev → ROI% thresholds unreachable); crypto keeps leveraged ROI.
+- [Ghost-cleanup broker-id trap](ghost-cleanup-broker-id-trap.md) — "no broker id" ghost sweep must require ALL broker-id cols NULL (bitunix AND ctrader); checking only Bitunix false-cancelled live forex trades and suppressed SL notifications.
+- [App DB is Neon, not Replit built-in](app-db-is-neon.md) — app reads NEON_DATABASE_URL (single source of truth, all envs); executeSql replit_database target hits a STALE unused DB; query Neon via app.database.SessionLocal.
 - [Strategy-id ownership / IDOR](strategy-id-ownership-idor.md) — id-only perf helpers must be ownership-gated (user_id) before their output reaches an LLM prompt/response, or you leak cross-tenant trade data.
