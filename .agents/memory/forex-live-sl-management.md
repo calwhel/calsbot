@@ -42,3 +42,25 @@ forever otherwise). This management runs in ONE place.
   web users generate noisy doomed sendMessage calls.
 - Fire ONCE per activation: paper path on first BE activation; live path only
   when `be_moved` is newly persisted to notes.
+
+## Broker close-reconciliation (SL/TP fill detection) — REQUIRED, separate from amending
+- Amending the broker SL is NOT enough: when the broker actually FILLS an SL/TP
+  and removes the position, nothing in the amend path notices. Without a
+  reconcile, a live forex stop-out produced NO push/Telegram alert and the
+  execution sat OPEN until the 48h stale-expiry swept it silently (pnl=0).
+- Crypto already had this (Bitunix `_sweep_live` reconcile → close+notify); forex
+  needed its own. Pattern: poll cTrader open positions per user via
+  `ProtoOAReconcileReq` (`get_open_position_ids_for_user` → set of positionIds,
+  **returns None on any failure** so an outage is never read as "all closed"),
+  compare to each tracked `pos=<id>`; after 2 consecutive misses classify
+  WIN/LOSS/BREAKEVEN by price-vs-TP/SL distance and call the close+notify helper.
+- Run the reconcile THROTTLED (~15s) inside the same single-owner fast loop, not
+  every tick (one broker round-trip per account per interval).
+- **False-close trap:** `pos=<id>` is matched against the user's CURRENT prefs
+  account. If they relink/switch cTrader accounts, an old still-open position is
+  absent from the new account → would false-close. Fix WITHOUT a schema column:
+  stamp `acct=<ctid>` into notes at entry (order placement returns `account_id`)
+  and only reconcile when the stored acct == current `UserPreference.ctrader_account_id`;
+  skip on mismatch/unknown. Legacy execs (no `acct=`) fall back to best-effort.
+- **Why:** see the gold-SL-no-notification incident — the broker enforced the SL
+  but the app never learned the trade closed.

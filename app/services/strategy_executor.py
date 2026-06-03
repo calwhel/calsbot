@@ -2938,6 +2938,7 @@ async def evaluate_and_fire(
             order_id    = None
             actual_fill = None
             _position_id = None
+            _acct_id    = None
             _order_err  = None
             _broker     = "ctrader" if asset_class in ("forex", "index") else "bitunix"
             try:
@@ -2984,6 +2985,7 @@ async def evaluate_and_fire(
                     order_id    = order_result.get("order_id")
                     actual_fill = order_result.get("actual_fill")
                     _position_id = order_result.get("position_id")
+                    _acct_id    = order_result.get("account_id")
                     _order_err  = order_result.get("error")
             except Exception as e:
                 logger.error(f"[Strategy {strategy.id}] Order error: {e}")
@@ -3073,7 +3075,8 @@ async def evaluate_and_fire(
                     # column exists → stash it as a "pos=<id>" token in notes.
                     if _position_id:
                         _n = (execution.notes or "").strip()
-                        execution.notes = (f"{_n} | pos={_position_id}".strip(" |"))
+                        _acct_tok = f" | acct={_acct_id}" if _acct_id else ""
+                        execution.notes = (f"{_n} | pos={_position_id}{_acct_tok}".strip(" |"))
                 else:
                     execution.bitunix_order_id = str(order_id)
                 if (
@@ -3409,6 +3412,7 @@ async def _propagate_to_subscribers(
                 order_id    = None
                 actual_fill = None
                 _position_id = None
+                _acct_id    = None
                 _sub_broker = "ctrader" if _sub_asset_class in ("forex", "index") else "bitunix"
                 try:
                     ps_type      = sub_risk.get("position_size_type", "pct")
@@ -3445,6 +3449,7 @@ async def _propagate_to_subscribers(
                         order_id    = order_result.get("order_id")
                         actual_fill = order_result.get("actual_fill")
                         _position_id = order_result.get("position_id")
+                        _acct_id    = order_result.get("account_id")
                 except Exception as _e:
                     logger.error(f"[Propagate] Order error for strategy {sub_strategy.id}: {_e}")
                     sub_exec.is_paper = True
@@ -3471,7 +3476,8 @@ async def _propagate_to_subscribers(
                         sub_exec.ctrader_order_id = str(order_id)
                         if _position_id:
                             _sn = (sub_exec.notes or "").strip()
-                            sub_exec.notes = (f"{_sn} | pos={_position_id}".strip(" |"))
+                            _acct_tok = f" | acct={_acct_id}" if _acct_id else ""
+                            sub_exec.notes = (f"{_sn} | pos={_position_id}{_acct_tok}".strip(" |"))
                     else:
                         sub_exec.bitunix_order_id = str(order_id)
                     if (
@@ -4127,6 +4133,328 @@ async def _amend_forex_position(w: dict) -> None:
         )
 
 
+_FX_RECONCILE_MISSING: Dict[int, int] = {}   # exec_id → consecutive missing-sweep count
+_FX_RECONCILE_INTERVAL = 15.0                 # seconds between broker position reconciliations
+
+
+async def _close_live_forex_execution_and_notify(
+    ex_id: int, outcome: str, exit_price: float, source: str = "ctrader-reconcile"
+) -> bool:
+    """Atomically close a LIVE forex execution whose broker position was detected
+    closed by reconciliation, then fire the Telegram DM + mobile push.
+
+    Mirrors the crypto `_close_live_execution_and_notify` closure but is module-
+    level so the forex loops can call it, and adds pips_pnl (forex perf tracks it).
+    The atomic UPDATE ... WHERE outcome='OPEN' guarantees exactly one notification
+    even if loops/workers race to close the same execution.
+    """
+    from app.database import BgSessionLocal as SessionLocal
+    from app.strategy_models import StrategyExecution, UserStrategy
+    from app.models import User
+    from sqlalchemy import text as _text
+
+    db = SessionLocal()
+    try:
+        ex = db.query(StrategyExecution).filter(StrategyExecution.id == ex_id).first()
+        if not ex or ex.outcome != "OPEN":
+            return False
+
+        leverage = ex.leverage or 1
+        entry    = float(ex.entry_price or 0)
+        if entry <= 0:
+            return False
+        if ex.direction == "LONG":
+            raw_pnl = (exit_price - entry) / entry * 100
+        else:
+            raw_pnl = (entry - exit_price) / entry * 100
+        pnl_pct   = round(raw_pnl * leverage, 2)
+        closed_at = datetime.utcnow()
+
+        # Pips P&L (forex/metals) — broker fill, no synthetic spread deduction.
+        pips_pnl: Optional[float] = None
+        try:
+            from app.services.forex_engine import pip_size as _pip_sz
+            _ps = _pip_sz(ex.symbol or "")
+            if _ps and _ps > 0:
+                if ex.direction == "LONG":
+                    pips_pnl = round((exit_price - entry) / _ps, 1)
+                else:
+                    pips_pnl = round((entry - exit_price) / _ps, 1)
+        except Exception:
+            pips_pnl = None
+
+        result = db.execute(
+            _text(
+                "UPDATE strategy_executions "
+                "SET outcome=:o, exit_price=:xp, pnl_pct=:p, closed_at=:ca, pips_pnl=:pp "
+                "WHERE id=:id AND outcome='OPEN'"
+            ),
+            {"o": outcome, "xp": exit_price, "p": pnl_pct, "ca": closed_at,
+             "pp": pips_pnl, "id": ex.id},
+        )
+        db.commit()
+        if result.rowcount == 0:
+            return True  # another worker/loop already closed it — no double notify
+
+        ex.outcome = outcome; ex.exit_price = exit_price
+        ex.pnl_pct = pnl_pct; ex.closed_at  = closed_at
+
+        # Append an auditable close note (preserve prior open-time context).
+        pnl_sign = "+" if pnl_pct >= 0 else ""
+        if outcome == "WIN":
+            cn = f"TP hit · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
+        elif outcome == "BREAKEVEN":
+            cn = f"BE stop · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
+        elif outcome == "LOSS":
+            cn = f"SL hit · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
+        else:
+            cn = f"Closed · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
+        existing = (ex.notes or "").strip()
+        if existing and not existing.startswith("open ·"):
+            cn = f"{existing} | {cn}"
+        try:
+            db.execute(
+                _text("UPDATE strategy_executions SET notes=:n WHERE id=:id"),
+                {"n": cn, "id": ex.id},
+            )
+            db.commit()
+            ex.notes = cn
+        except Exception:
+            try: db.rollback()
+            except Exception: pass
+
+        _update_performance(ex.strategy_id, db)
+
+        logger.info(
+            f"[FX-reconcile] {('TP' if outcome=='WIN' else 'BE' if outcome=='BREAKEVEN' else 'SL')} "
+            f"CLOSE ({source}): {ex.symbol} {ex.direction} entry={entry} "
+            f"exit={exit_price} pnl={pnl_pct:+.1f}%"
+        )
+
+        try:
+            user  = db.query(User).filter(User.id == ex.user_id).first()
+            strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
+            strat_name = (strat.name if strat else None) or "Unknown Strategy"
+            if user and user.telegram_id:
+                tg_id = _telegram_int_id(user)
+                if tg_id:
+                    await _send_paper_close_dm(
+                        tg_id,
+                        _fmt_close_card(
+                            strategy_name=strat_name, symbol=ex.symbol,
+                            direction=ex.direction, entry=entry, exit_price=exit_price,
+                            outcome=outcome, pnl_pct=pnl_pct, leverage=leverage,
+                            fired_at=ex.fired_at, closed_at=closed_at,
+                            conditions=ex.conditions_met, is_paper=False,
+                        ),
+                    )
+            from app.services.expo_push import notify_trade_close_bg
+            dur_mins = int((closed_at - ex.fired_at).total_seconds() / 60) if ex.fired_at else 0
+            notify_trade_close_bg(
+                user_id=ex.user_id, strategy_name=strat_name, symbol=ex.symbol,
+                direction=ex.direction, outcome=outcome, pnl_pct=pnl_pct,
+                leverage=leverage, entry_price=entry, exit_price=exit_price,
+                strategy_id=ex.strategy_id, execution_id=ex.id, is_paper=False,
+                duration_mins=dur_mins, kind="live",
+                position_usd=float(ex.position_size) if ex.position_size else None,
+            )
+        except Exception as ne:
+            logger.warning(f"[FX-reconcile] notify error exec#{ex.id}: {ne}")
+        return True
+    except Exception as e:
+        logger.error(f"[FX-reconcile] close error exec#{ex_id}: {e}")
+        try: db.rollback()
+        except Exception: pass
+        return False
+    finally:
+        db.close()
+
+
+def _build_forex_reconcile_worklist() -> list:
+    """Pure-sync DB read of open LIVE forex execs for broker close-reconciliation.
+    Returns one dict per tracked position (carrying tp/sl/entry/be flag and a
+    detached User for the per-user broker reconcile fetch)."""
+    import re as _re
+    from app.database import BgSessionLocal as SessionLocal
+    from app.strategy_models import StrategyExecution
+    from app.models import User, UserPreference
+
+    db = SessionLocal()
+    try:
+        open_execs = (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.is_paper == False,          # noqa: E712
+                StrategyExecution.outcome == "OPEN",
+                StrategyExecution.asset_class == "forex",
+                StrategyExecution.ctrader_order_id.isnot(None),
+                StrategyExecution.entry_price.isnot(None),
+            )
+            .all()
+        )
+        user_cache: Dict[int, object] = {}
+        acct_cache: Dict[int, Optional[int]] = {}   # user_id → current cTrader account id
+        work = []
+        for ex in open_execs:
+            notes = ex.notes or ""
+            m = _re.search(r"pos=(\d+)", notes)
+            if not m:
+                continue  # no broker positionId captured → can't reconcile
+            uid = ex.user_id
+            user = user_cache.get(uid)
+            if user is None:
+                user = db.query(User).filter(User.id == uid).first()
+                if user is not None:
+                    db.expunge(user)
+                user_cache[uid] = user
+            if user is None:
+                continue
+
+            # Account binding: if this execution recorded the broker account it was
+            # opened on (acct=<ctid>), only reconcile when that matches the user's
+            # CURRENT cTrader account. A relink to a different account must NOT
+            # false-close a position still open on the original account. Legacy
+            # executions without an acct token fall back to current-account
+            # reconciliation (best-effort, the prior behaviour).
+            am = _re.search(r"acct=(\d+)", notes)
+            if am:
+                if uid not in acct_cache:
+                    _pf = db.query(UserPreference).filter(
+                        UserPreference.user_id == uid
+                    ).first()
+                    acct_cache[uid] = (
+                        int(_pf.ctrader_account_id)
+                        if _pf and _pf.ctrader_account_id else None
+                    )
+                cur_acct = acct_cache[uid]
+                if cur_acct is None or int(am.group(1)) != cur_acct:
+                    continue  # different/unknown account → skip (never false-close)
+
+            work.append({
+                "exec_id":     ex.id,
+                "user_id":     uid,
+                "user":        user,
+                "position_id": int(m.group(1)),
+                "symbol":      ex.symbol,
+                "direction":   ex.direction,
+                "entry":       float(ex.entry_price),
+                "tp_price":    float(ex.tp_price) if ex.tp_price else None,
+                "sl_price":    float(ex.sl_price) if ex.sl_price else None,
+                "be_moved":    ("be_moved" in notes),
+            })
+    finally:
+        db.close()
+    return work
+
+
+async def _reconcile_forex_closes() -> None:
+    """Detect live forex positions closed broker-side (SL/TP fill) and close+notify.
+
+    The forex live loop only AMENDS broker SL/TP; nothing else notices when the
+    broker actually fills an SL/TP and removes the position. Without this, a live
+    forex SL hit produced NO push/Telegram alert and the execution sat OPEN until
+    the 48h stale-expiry swept it (silently, pnl=0). This polls cTrader open
+    positions per user; when a tracked positionId is gone for 2 consecutive
+    sweeps it classifies WIN/LOSS/BREAKEVEN via price-vs-TP/SL distance and fires
+    `_close_live_forex_execution_and_notify`.
+    """
+    from app.services.ctrader_client import get_open_position_ids_for_user
+
+    try:
+        work = await asyncio.to_thread(_build_forex_reconcile_worklist)
+    except Exception as e:
+        logger.warning(f"[FX-reconcile] worklist build failed: {e}")
+        return
+    if not work:
+        return
+
+    # Group by user so we hit the broker once per account.
+    by_user: Dict[int, list] = {}
+    user_obj: Dict[int, object] = {}
+    for w in work:
+        by_user.setdefault(w["user_id"], []).append(w)
+        user_obj[w["user_id"]] = w["user"]
+
+    for uid, items in by_user.items():
+        try:
+            open_ids = await get_open_position_ids_for_user(user_obj[uid])
+        except Exception as e:
+            logger.warning(f"[FX-reconcile] open-positions fetch failed user {uid}: {e}")
+            continue
+        if open_ids is None:
+            # Broker unreachable / no creds — never false-close.
+            continue
+
+        for w in items:
+            ex_id = w["exec_id"]
+            if w["position_id"] in open_ids:
+                _FX_RECONCILE_MISSING.pop(ex_id, None)
+                continue
+
+            miss = _FX_RECONCILE_MISSING.get(ex_id, 0) + 1
+            _FX_RECONCILE_MISSING[ex_id] = miss
+            if miss < 2:
+                logger.info(
+                    f"[FX-reconcile] {w['symbol']} exec#{ex_id} pos={w['position_id']} "
+                    f"absent from broker (miss {miss}/2) — awaiting confirmation"
+                )
+                continue
+
+            # Confirmed gone — classify the close via current price vs TP/SL.
+            price = None
+            try:
+                from app.services import ctrader_price_feed as _ctf
+                price = _ctf.get_price(w["symbol"])
+            except Exception:
+                price = None
+            if not price or price <= 0:
+                try:
+                    from app.services.tradfi_prices import get_price as _tg
+                    price = await _tg(w["symbol"], "forex")
+                except Exception:
+                    price = None
+
+            tp, sl, entry = w["tp_price"], w["sl_price"], w["entry"]
+            outcome = None
+            exit_price = None
+            if tp is not None and sl is not None and price and price > 0:
+                if abs(price - tp) <= abs(price - sl):
+                    outcome, exit_price = "WIN", tp
+                else:
+                    exit_price = sl
+                    be_stop = w["be_moved"] and entry > 0 and abs(sl - entry) / entry < 0.0005
+                    outcome = "BREAKEVEN" if be_stop else "LOSS"
+            elif tp is not None and price and price > 0 and abs(price - tp) <= (tp * 0.001):
+                outcome, exit_price = "WIN", tp
+            elif sl is not None:
+                exit_price = sl
+                be_stop = w["be_moved"] and entry > 0 and abs(sl - entry) / entry < 0.0005
+                outcome = "BREAKEVEN" if be_stop else "LOSS"
+            elif price and price > 0:
+                # No stored TP/SL — fall back to direction vs last price.
+                if w["direction"] == "LONG":
+                    outcome = "WIN" if price >= entry else "LOSS"
+                else:
+                    outcome = "WIN" if price <= entry else "LOSS"
+                exit_price = price
+
+            if outcome is None or exit_price is None:
+                logger.info(
+                    f"[FX-reconcile] {w['symbol']} exec#{ex_id} gone but no price/levels "
+                    f"to classify — retrying next sweep"
+                )
+                continue
+
+            _FX_RECONCILE_MISSING.pop(ex_id, None)
+            await _close_live_forex_execution_and_notify(
+                ex_id, outcome, float(exit_price), source="ctrader-reconcile"
+            )
+
+    # Bound the missing-counter dict.
+    if len(_FX_RECONCILE_MISSING) > 500:
+        _FX_RECONCILE_MISSING.clear()
+
+
 async def _manage_live_forex_positions():
     """One-shot pass over all live forex positions (back-compat / manual use).
     Normal operation runs through run_forex_live_manager_fast instead."""
@@ -4154,6 +4482,7 @@ async def run_forex_live_manager_fast():
     )
     work: list = []
     last_build = 0.0
+    last_reconcile = 0.0
     while True:
         try:
             if not _is_mkt_open("forex", datetime.utcnow()):
@@ -4175,6 +4504,14 @@ async def run_forex_live_manager_fast():
                     logger.warning(
                         f"[FX-fast] amend error exec#{w.get('exec_id')}: {_ae}"
                     )
+            # Periodically reconcile broker-side closes (SL/TP fills) so a live
+            # forex stop-out actually notifies the user instead of sitting OPEN.
+            if (now_m - last_reconcile) >= _FX_RECONCILE_INTERVAL:
+                last_reconcile = now_m
+                try:
+                    await _reconcile_forex_closes()
+                except Exception as _re:
+                    logger.warning(f"[FX-fast] reconcile error: {_re}")
         except Exception as _ce:
             logger.warning(f"[FX-fast] cycle error: {_ce}")
         await asyncio.sleep(FOREX_MANAGE_INTERVAL_SECONDS)

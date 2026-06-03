@@ -1116,6 +1116,70 @@ async def _get_account_balance(
     return None
 
 
+async def _get_open_position_ids(
+    access_token: str,
+    ctid_trader_account_id: int,
+    host: str = CTRADER_HOST,
+) -> Optional[set]:
+    """Fetch the set of currently-open broker positionIds via ProtoOAReconcileReq.
+
+    Returns a set of ints (possibly empty) on success, or None on ANY failure so
+    the caller can distinguish "broker says zero open positions" from "broker
+    unreachable" and never false-close a tracked execution.
+    """
+    if not _PROTO_OK:
+        return None
+    try:
+        async with _get_lock():
+            try:
+                reader, writer = await _get_persistent_connection(host)
+                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                    return None
+                req = ProtoOAReconcileReq()
+                req.ctidTraderAccountId = ctid_trader_account_id
+                payload = await _send_recv(
+                    reader, writer, req,
+                    _PAYLOAD_TYPES["reconcile_req"],
+                    _PAYLOAD_TYPES["reconcile_res"],
+                    timeout=10.0,
+                )
+                if not payload:
+                    return None
+                res = ProtoOAReconcileRes()
+                res.ParseFromString(payload)
+                return {int(p.positionId) for p in res.position}
+            except asyncio.CancelledError:
+                # An outer wait_for() cancelled us mid-flight — the shared socket
+                # may hold a partial reconcile frame that would desync the next
+                # caller. Drop it so the next call reconnects cleanly.
+                _invalidate_persistent_connection(host)
+                raise
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.debug(f"[cTrader] open-positions fetch error: {e}")
+    return None
+
+
+async def get_open_position_ids_for_user(user) -> Optional[set]:
+    """High-level wrapper: the set of open broker positionIds for a TradeHub user,
+    or None when credentials are missing / the broker is unreachable (so callers
+    never mistake an error for "all positions closed")."""
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    db = SessionLocal()
+    try:
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+            return None
+        access_token           = prefs.ctrader_access_token
+        ctid_trader_account_id = int(prefs.ctrader_account_id)
+        _host = _host_for_account(prefs, ctid_trader_account_id)
+    finally:
+        db.close()
+    return await _get_open_position_ids(access_token, ctid_trader_account_id, host=_host)
+
+
 async def place_ctrader_order_for_user(
     user,
     symbol: str,
@@ -1297,4 +1361,9 @@ async def place_ctrader_order_for_user(
         # Return the dict (order_id is None) so the caller can surface the real
         # rejection reason instead of a generic "no order id" message.
         return result
+    # Stamp the broker account this order was actually placed on, so close
+    # reconciliation can bind the execution to that account (a later account
+    # relink must not false-close a position opened on the previous account).
+    if isinstance(result, dict) and result.get("order_id"):
+        result["account_id"] = ctid_trader_account_id
     return result
