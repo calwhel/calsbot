@@ -23,3 +23,11 @@ dev and prod (no separate prod replica for this app's data).
 **Why:** an investigation of a "missing notification" almost went wrong because the
 Replit built-in DB showed zero live trades + an old schema; the real Neon DB had the
 actual execution row that revealed the bug.
+
+## Strategy status values when querying
+`UserStrategy.status` ∈ draft | active | paper | paused | archived. The executor
+runs the **active + paper (+ paused for live-position management)** set — and FOREX
+strategies live almost entirely under `status='paper'`, NOT 'active'. Filtering
+forex on just `active`/`paused` silently drops ~90% of them (found 5 instead of 40).
+Always include `'paper'`. Strategy symbols are inside `config['universe']['symbols']`
+(JSON), there is no `symbol` column on `user_strategies`.
