@@ -55,6 +55,20 @@ _PT_TRENDBARS_RES = 2138
 _PT_HEARTBEAT     = 51    # ProtoHeartbeatEvent — client MUST send ~every 10s or
                          # cTrader drops the socket (the "stream read timeout" churn)
 
+# ── Reconnect tuning ─────────────────────────────────────────────────────────
+# cTrader periodically recycles long-lived spot sessions (especially when a
+# second authed socket — the on-demand trendbar fetch — shares the same account
+# id). We can't stop the broker recycling, so we make the reconnect SEAMLESS:
+# after a session that streamed fine for a while drops, reconnect almost
+# immediately so the sub-second feed blackout is negligible. A growing backoff
+# is reserved ONLY for genuine connect/auth/subscribe failures so we never
+# hammer the broker while still being effectively always-on.
+_READ_TIMEOUT          = 35.0   # max stream silence before declaring the socket dead
+_HEALTHY_SESSION_SECS  = 20.0   # a session alive ≥ this counts as "healthy"
+_RECONNECT_FAST        = 2.0    # delay after a healthy drop (near-seamless)
+_RECONNECT_BACKOFF_MIN = 3.0    # initial backoff for connect/auth failures
+_RECONNECT_BACKOFF_MAX = 60.0   # cap (was 300s — far too long for an always-on feed)
+
 # ── Wizard timeframe → ProtoOATrendbarPeriod enum value ──────────────────────
 _TF_TO_PERIOD: Dict[str, int] = {
     "1m":  1,
@@ -316,11 +330,13 @@ async def _get_connected_account() -> Optional[Tuple[str, int, int, bool]]:
 
 async def _feed_loop() -> None:
     global _feed_live
-    backoff = 30.0
+    fail_backoff = _RECONNECT_BACKOFF_MIN  # grows ONLY on connect/auth failures
 
     while True:
         reader = writer = None
         hb_task = None
+        healthy = False                # True once spots are flowing
+        session_start = time.monotonic()
         try:
             _feed_live = False
 
@@ -393,7 +409,8 @@ async def _feed_loop() -> None:
                 f"[CTraderFeed] subscribed to {len(sub_ids)} symbols — LIVE"
             )
             _feed_live = True
-            backoff = 30.0
+            session_start = time.monotonic()
+            fail_backoff = _RECONNECT_BACKOFF_MIN  # reset after a clean subscribe
 
             # cTrader drops any connection that doesn't send a client heartbeat
             # within ~30s (even while spot events stream IN). Send one every 10s.
@@ -410,9 +427,14 @@ async def _feed_loop() -> None:
 
             # Stream indefinitely — each SpotEvent updates the cache
             while True:
-                msg = await _read_frame(reader, timeout=60.0)
+                msg = await _read_frame(reader, timeout=_READ_TIMEOUT)
                 if not msg:
                     raise ConnectionError("stream read timeout / disconnect")
+
+                # Any inbound frame (spot event OR server heartbeat) proves the
+                # socket is genuinely alive — only then treat a later drop as a
+                # benign broker recycle (fast reconnect) rather than a failure.
+                healthy = True
 
                 if msg.payloadType == _PT_SPOT_EVENT:
                     ev = ProtoOASpotEvent()
@@ -428,17 +450,33 @@ async def _feed_loop() -> None:
 
         except Exception as exc:
             _feed_live = False
-            logger.warning(
-                f"[CTraderFeed] disconnected ({exc}) — retry in {backoff:.0f}s"
-            )
+            _last_exc = exc
+        else:
+            _last_exc = None
         finally:
             if hb_task:
                 hb_task.cancel()
             if writer:
                 await _aclose_writer(writer)
 
-        await asyncio.sleep(backoff)
-        backoff = min(backoff * 1.5, 300.0)
+        # Decide the reconnect delay. A session that streamed fine for a while
+        # then dropped is just cTrader recycling the socket — reconnect almost
+        # immediately so the sub-second feed is effectively never down. Only a
+        # connection that never became healthy (connect/auth/subscribe failing)
+        # gets the growing backoff, so we don't hammer the broker.
+        alive = time.monotonic() - session_start
+        if healthy and alive >= _HEALTHY_SESSION_SECS:
+            logger.info(
+                f"[CTraderFeed] session dropped after {alive:.0f}s "
+                f"({_last_exc}) — reconnecting in {_RECONNECT_FAST:.0f}s"
+            )
+            await asyncio.sleep(_RECONNECT_FAST)
+        else:
+            logger.warning(
+                f"[CTraderFeed] disconnected ({_last_exc}) — retry in {fail_backoff:.0f}s"
+            )
+            await asyncio.sleep(fail_backoff)
+            fail_backoff = min(fail_backoff * 1.5, _RECONNECT_BACKOFF_MAX)
 
 
 # ── On-demand trendbar (kline) fetch ─────────────────────────────────────────
