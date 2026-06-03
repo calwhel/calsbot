@@ -294,10 +294,28 @@ function renderKnobs(
         { value: 'bullish', label: '🟢 Bullish OB (demand)' },
         { value: 'bearish', label: '🔴 Bearish OB (supply)' },
       ];
+      const strengthOpts: ChipOption<string>[] = [
+        { value: 'any',           label: 'Any block' },
+        { value: 'strong',        label: '💪 Strong' },
+        { value: 'institutional', label: '🏛️ Institutional' },
+      ];
+      const freshOpts: ChipOption<string>[] = [
+        { value: 'false', label: 'Any tap' },
+        { value: 'true',  label: '✨ Fresh / untested' },
+      ];
+      const freshVal = (cfg.unmitigated_only === true || cfg.unmitigated_only === 'true') ? 'true' : 'false';
       return (
-        <Section label="Block type" compact={compact}>
-          <ChipRow options={opts} value={cfg.ob_type || 'bullish'} onChange={(v) => set({ ob_type: v })} size="sm" />
-        </Section>
+        <View>
+          <Section label="Block type" compact={compact}>
+            <ChipRow options={opts} value={cfg.ob_type || 'bullish'} onChange={(v) => set({ ob_type: v })} size="sm" />
+          </Section>
+          <Section label="Strength — how big the block must be" compact={compact}>
+            <ChipRow options={strengthOpts} value={cfg.strength || 'strong'} onChange={(v) => set({ strength: v })} size="sm" />
+          </Section>
+          <Section label="Freshness" compact={compact}>
+            <ChipRow options={freshOpts} value={freshVal} onChange={(v) => set({ unmitigated_only: v === 'true' })} size="sm" />
+          </Section>
+        </View>
       );
     }
 

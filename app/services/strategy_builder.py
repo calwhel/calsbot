@@ -255,9 +255,18 @@ conditions:
 → "BOS" | "break of structure" | "CHoCH" | "change of character" | "structure break"
 
 ── ORDER BLOCKS (SMC) ────────────────────────────────────────────────────────
-{"type":"order_block","ob_type":"bullish","timeframe":"15m","tolerance_pct":1.0}
+{"type":"order_block","ob_type":"bullish","strength":"strong","timeframe":"15m","tolerance_pct":1.0}
 ob_type: bullish | bearish
+strength: any | strong | institutional  ← how BIG/significant the block must be. "strong"/"institutional"
+  require a large OB candle body + a strong displacement move away from it (measured vs recent ATR/volume,
+  so it works on forex too). DEFAULT to "strong" — most users want real, significant blocks, not every weak
+  one. Use "institutional" only for the most major blocks, "any" only if the user explicitly wants every block.
+unmitigated_only: true|false  ← optional; only fire on a FRESH/untested block (price hasn't returned yet).
+advanced overrides (optional, replace the preset): min_body_mult, min_impulse_atr, min_volume_mult
+  (multiples of the recent average; 0 disables that gate).
 → "order block" | "OB" | "institutional level" | "order block mitigation"
+  | "big/strong/significant order block" → strength strong | "institutional/major OB" → strength institutional
+  | "fresh/untested/unmitigated order block" → unmitigated_only true
 
 ── FIBONACCI ──────────────────────────────────────────────────────────────────
 {"type":"fibonacci","level":0.618,"condition":"at_retracement","timeframe":"4h","tolerance_pct":1.0}
@@ -617,7 +626,7 @@ CONDITION SELECTION
   "3 red candles" / "consecutive candles" → consecutive_candles
   "BOS" / "break of structure" → market_structure bos_bullish or bos_bearish
   "CHoCH" / "change of character" → market_structure choch_bullish or choch_bearish
-  "order block" / "OB" → order_block
+  "order block" / "OB" / "institutional zone" → order_block (default strength: strong; "big/strong/significant" → strength strong, "institutional/major" → strength institutional, "fresh/untested/unmitigated" → unmitigated_only:true)
   "fib 61.8%" / "golden ratio" / "fibonacci" → fibonacci
   "RSI divergence" / "MACD divergence" → divergence
   "funding rate" → funding_rate (crypto only)
@@ -1052,7 +1061,10 @@ def format_config_for_display(config: Dict) -> str:
         elif ct == "market_structure":
             lines.append(f"  • {c.get('condition','').replace('_',' ').upper()}")
         elif ct == "order_block":
-            lines.append(f"  • {c.get('ob_type','').title()} Order Block")
+            _obs = str(c.get('strength', '') or '')
+            _obx = f" [{_obs}]" if _obs and _obs != 'any' else ""
+            _obf = " (fresh)" if str(c.get('unmitigated_only', c.get('fresh_only', ''))).lower() in ("true", "1", "yes", "on") else ""
+            lines.append(f"  • {c.get('ob_type','').title()} Order Block{_obx}{_obf}")
         elif ct == "fibonacci":
             lines.append(f"  • Fib {float(c.get('level',0.618))*100:.1f}% {c.get('condition','retracement')}")
         elif ct == "divergence":

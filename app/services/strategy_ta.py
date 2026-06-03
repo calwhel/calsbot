@@ -1274,42 +1274,93 @@ async def eval_order_block(
     ob_type  = cond.get("ob_type", cond.get("direction", "bullish"))
     tf       = cond.get("timeframe", "15m")
     tol      = float(cond.get("tolerance_pct", 1.0)) / 100
-    klines   = await _get_klines(symbol, tf, 100, http_client, cache)
-    if not klines or len(klines) < 10: return False, "OB: insufficient data"
+    # ── Quality filter: how "big"/significant the order block must be ──────────
+    # strength presets map to thresholds measured RELATIVE to recent volatility
+    # (so they work the same on crypto and forex). Default "any" = legacy
+    # behaviour (no quality gate) so existing saved strategies are unchanged.
+    strength = str(cond.get("strength", "any")).lower()
+    _um      = cond.get("unmitigated_only", cond.get("fresh_only", False))
+    unmit    = _um if isinstance(_um, bool) else str(_um).lower() in ("true", "1", "yes", "on")
+    #                       (body_mult, impulse_atr, volume_mult)
+    _PRESETS = {
+        "any":           (0.0, 0.0, 0.0),
+        "strong":        (1.2, 1.0, 1.2),
+        "institutional": (1.8, 1.8, 1.5),
+    }
+    _b = _PRESETS.get(strength, _PRESETS["any"])
+    min_body_mult   = float(cond.get("min_body_mult",   _b[0]))   # OB candle body ÷ avg body
+    min_impulse_atr = float(cond.get("min_impulse_atr", _b[1]))   # displacement ÷ ATR
+    min_volume_mult = float(cond.get("min_volume_mult", _b[2]))   # OB candle vol ÷ avg vol
+    klines   = await _get_klines(symbol, tf, 120, http_client, cache)
+    if not klines or len(klines) < 12: return False, "OB: insufficient data"
     closes = _closes(klines); opens = _opens(klines)
-    highs  = _highs(klines);  lows  = _lows(klines)
+    highs  = _highs(klines);  lows  = _lows(klines); vols = _vols(klines)
+    n = len(klines)
+    # Reference averages over the last ~20 closed bars (exclude the forming bar)
+    _ref     = slice(max(0, n - 21), n - 1)
+    _bodies  = [abs(closes[k] - opens[k]) for k in range(n)]
+    _ranges  = [highs[k] - lows[k] for k in range(n)]
+    avg_body = (sum(_bodies[_ref]) / max(1, len(_bodies[_ref]))) if _bodies[_ref] else 0.0
+    atr      = (sum(_ranges[_ref]) / max(1, len(_ranges[_ref]))) if _ranges[_ref] else 0.0
+    _vref    = [v for v in vols[_ref] if v > 0]
+    avg_vol  = (sum(_vref) / len(_vref)) if _vref else 0.0
+
+    def _quality_ok(i: int, impulse_move: float) -> bool:
+        if min_body_mult > 0 and avg_body > 0 and _bodies[i] < min_body_mult * avg_body:
+            return False
+        if min_impulse_atr > 0 and atr > 0 and impulse_move < min_impulse_atr * atr:
+            return False
+        # volume gate only when the feed actually provides volume (forex may not)
+        if min_volume_mult > 0 and avg_vol > 0 and vols[i] < min_volume_mult * avg_vol:
+            return False
+        return True
+
+    _tag = strength if strength != "any" else "OB"
     # Find order blocks: last significant candle before a strong opposite move
     # Requires 2 consecutive candles (not 3) so OBs are found in real markets
     if ob_type == "bullish":
         # Last bearish candle before 2+ bullish candles (impulse move up)
-        for i in range(len(klines)-3, 5, -1):
+        for i in range(n-3, 5, -1):
             bear_c = opens[i] > closes[i]
-            next_range = range(i+1, min(i+3, len(klines)))
+            next_range = range(i+1, min(i+3, n))
             next_bull = len(next_range) >= 2 and all(closes[j] > opens[j] for j in next_range)
             # Also accept 1 strong bullish candle (body ≥ 1% move)
-            if not next_bull and i+1 < len(klines):
+            if not next_bull and i+1 < n:
                 body_pct = abs(closes[i+1] - opens[i+1]) / (opens[i+1] or 1) * 100
                 next_bull = closes[i+1] > opens[i+1] and body_pct >= 1.0
-            if bear_c and next_bull:
-                ob_high = highs[i]; ob_low = lows[i]
-                in_ob = ob_low * (1 - tol) <= current_price <= ob_high * (1 + tol)
-                return in_ob, f"Bullish OB {ob_low:.6g}–{ob_high:.6g} {'HIT' if in_ob else 'miss'}"
-        return False, "No bullish OB found"
+            if not (bear_c and next_bull):
+                continue
+            peak = max(highs[i+1:min(i+4, n)] or [closes[i]])
+            if not _quality_ok(i, peak - closes[i]):
+                continue
+            ob_high = highs[i]; ob_low = lows[i]
+            # unmitigated = price has NOT already returned into the zone since it formed
+            if unmit and any(lows[j] <= ob_high * (1 + tol) for j in range(i+1, n-1)):
+                continue
+            in_ob = ob_low * (1 - tol) <= current_price <= ob_high * (1 + tol)
+            return in_ob, f"Bullish {_tag} {ob_low:.6g}–{ob_high:.6g} {'HIT' if in_ob else 'miss'}"
+        return False, f"No qualifying bullish OB ({strength})"
     else:
         # Last bullish candle before 2+ bearish candles (impulse move down)
-        for i in range(len(klines)-3, 5, -1):
+        for i in range(n-3, 5, -1):
             bull_c = closes[i] > opens[i]
-            next_range = range(i+1, min(i+3, len(klines)))
+            next_range = range(i+1, min(i+3, n))
             next_bear = len(next_range) >= 2 and all(closes[j] < opens[j] for j in next_range)
             # Also accept 1 strong bearish candle (body ≥ 1% move)
-            if not next_bear and i+1 < len(klines):
+            if not next_bear and i+1 < n:
                 body_pct = abs(closes[i+1] - opens[i+1]) / (opens[i+1] or 1) * 100
                 next_bear = closes[i+1] < opens[i+1] and body_pct >= 1.0
-            if bull_c and next_bear:
-                ob_high = highs[i]; ob_low = lows[i]
-                in_ob = ob_low * (1 - tol) <= current_price <= ob_high * (1 + tol)
-                return in_ob, f"Bearish OB {ob_low:.6g}–{ob_high:.6g} {'HIT' if in_ob else 'miss'}"
-        return False, "No bearish OB found"
+            if not (bull_c and next_bear):
+                continue
+            trough = min(lows[i+1:min(i+4, n)] or [closes[i]])
+            if not _quality_ok(i, closes[i] - trough):
+                continue
+            ob_high = highs[i]; ob_low = lows[i]
+            if unmit and any(highs[j] >= ob_low * (1 - tol) for j in range(i+1, n-1)):
+                continue
+            in_ob = ob_low * (1 - tol) <= current_price <= ob_high * (1 + tol)
+            return in_ob, f"Bearish {_tag} {ob_low:.6g}–{ob_high:.6g} {'HIT' if in_ob else 'miss'}"
+        return False, f"No qualifying bearish OB ({strength})"
 
 
 # ─── 10. FIBONACCI ────────────────────────────────────────────────────────────

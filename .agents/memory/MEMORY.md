@@ -3,6 +3,7 @@
 - [Neon startup migrations](neon-startup-migrations.md) — use existence-check-first + asyncio.to_thread + lock_timeout retry pattern for safe Neon migrations.
 - [Signal/condition type layers](signal-type-layers.md) — a new strategy signal type must be registered in 4 synced layers (executor=truth, AI schema, web wizard, mobile wizard) with identical config keys.
 - [Web wizard local-compile parity](web-wizard-local-compile.md) — non-crypto wizard compiles client-side; must wrap indicator-route types + remap RSI(condition→operator/value)/vwap_deviation like mobile packCondition or it silently never-fires/over-fires.
+- [Signal quality thresholds](signal-quality-thresholds.md) — signal strength/quality gates must be volatility-relative (ATR/avg-body/avg-vol multiples), not absolute %, or they break across crypto↔forex; volume gate must no-op when feed vol=0; default executor key to permissive for legacy compat.
 - [Risk % sizing key duality](risk-pct-sizing-keys.md) — writing a strategy's "% risk" sizing must set BOTH risk_pct_per_trade and position_size_pct (subscriber path reads only the latter).
 - [cTrader shared connection](ctrader-shared-connection.md) — never wrap a cTrader call in outer wait_for without CancelledError→invalidate (shared socket desyncs); cold reconnects need ≥10s timeouts.
 - [Response-object caching bug](response-object-caching.md) — never cache a JSONResponse object under BaseHTTPMiddleware; cache the dict/list payload and rebuild JSONResponse each return.

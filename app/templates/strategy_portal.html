@@ -4702,7 +4702,7 @@ function getDefaultCfg(type){
     stoch_rsi:        {timeframe:tf,condition:'oversold'},
     candlestick:      {timeframe:tf,pattern:'bullish_engulfing'},
     market_structure: {timeframe:tf,condition:'bos_bullish'},
-    order_block:      {timeframe:tf,ob_type:'bullish'},
+    order_block:      {timeframe:tf,ob_type:'bullish',strength:'strong'},
     fibonacci:        {timeframe:tf,level:'0.618',fib_type:'at_retracement'},
     divergence:       {timeframe:tf,indicator:'rsi',direction:'bullish'},
     price_momentum:   {pm_dir:'up',pm_pct:10,pm_window:15},
@@ -4843,12 +4843,25 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('choch_bullish','Change of Character ↑',`${pfx}condition`,cfg.condition,'green')}
         ${wzChip('choch_bearish','Change of Character ↓',`${pfx}condition`,cfg.condition,'red')}
       </div>`;
-    case 'order_block':return`${tf}
+    case 'order_block':{
+      const _ofresh=(cfg.unmitigated_only===true||cfg.unmitigated_only==='true')?'true':'false';
+      return`${tf}
       <div class="opt-label">Type</div>
       <div class="opt-chips">
         ${wzChip('bullish','Bullish Order Block (buy)',`${pfx}ob_type`,cfg.ob_type||'bullish','green')}
         ${wzChip('bearish','Bearish Order Block (sell)',`${pfx}ob_type`,cfg.ob_type||'bullish','red')}
-      </div>`;
+      </div>
+      <div class="opt-label">Strength — how big the block must be</div>
+      <div class="opt-chips">
+        ${wzChip('any','Any block',`${pfx}strength`,cfg.strength||'strong')}
+        ${wzChip('strong','💪 Strong (big body + displacement)',`${pfx}strength`,cfg.strength||'strong','green')}
+        ${wzChip('institutional','🏛️ Institutional (major only)',`${pfx}strength`,cfg.strength||'strong','green')}
+      </div>
+      <div class="opt-label">Freshness</div>
+      <div class="opt-chips">
+        ${wzChip('false','Any tap',`${pfx}unmitigated_only`,_ofresh)}
+        ${wzChip('true','✨ Fresh / untested only',`${pfx}unmitigated_only`,_ofresh,'green')}
+      </div>`;}
     case 'fibonacci':return`${tf}
       <div class="opt-label">Level</div>
       <div class="opt-chips">
@@ -6415,7 +6428,7 @@ function buildWizardDescription(){
       case 'stoch_rsi':sig=`Stochastic RSI ${cond(cfg.condition||'oversold')} on ${tf}`;break;
       case 'candlestick':sig=`${cond(cfg.pattern||'bullish_engulfing')} candlestick pattern on ${tf}`;break;
       case 'market_structure':sig=`Market structure ${cond(cfg.condition||'bos_bullish')} on ${tf}`;break;
-      case 'order_block':sig=`${cfg.ob_type||'bullish'} order block touch on ${tf}`;break;
+      case 'order_block':sig=`${cfg.strength&&cfg.strength!=='any'?cfg.strength+' ':''}${cfg.ob_type||'bullish'} order block touch on ${tf}${(cfg.unmitigated_only===true||cfg.unmitigated_only==='true')?' (fresh)':''}`;break;
       case 'fibonacci':sig=`Price at ${cfg.level||'0.618'} Fibonacci ${cond(cfg.fib_type||'at_retracement')} on ${tf}`;break;
       case 'divergence':sig=`${cfg.indicator||'RSI'} ${cfg.direction||'bullish'} divergence on ${tf}`;break;
       case 'price_momentum':{const dir=cfg.pm_dir==='down'?'dropped':cfg.pm_dir==='either'?'moved (either direction)':'pumped';sig=`Price has ${dir} at least ${cfg.pm_pct||10}% within the last ${cfg.pm_window||15} minutes`;break;}
@@ -6483,7 +6496,7 @@ function buildWizardDescription(){
         case 'stoch_rsi':cfm=`Stoch RSI ${cond(cfg.condition||'oversold')} on ${tf}`;break;
         case 'candlestick':cfm=`${cond(cfg.pattern||'bullish_engulfing')} pattern on ${tf}`;break;
         case 'market_structure':cfm=`Market structure ${cond(cfg.condition||'bos_bullish')} on ${tf}`;break;
-        case 'order_block':cfm=`${cfg.ob_type||'bullish'} order block on ${tf}`;break;
+        case 'order_block':cfm=`${cfg.strength&&cfg.strength!=='any'?cfg.strength+' ':''}${cfg.ob_type||'bullish'} order block on ${tf}${(cfg.unmitigated_only===true||cfg.unmitigated_only==='true')?' (fresh)':''}`;break;
         case 'fibonacci':cfm=`Fibonacci ${cfg.level||'0.618'} ${cond(cfg.fib_type||'at_retracement')} on ${tf}`;break;
         case 'divergence':cfm=`${cfg.indicator||'RSI'} ${cfg.direction||'bullish'} divergence on ${tf}`;break;
         case 'price_momentum':{const d=cfg.pm_dir==='down'?'down':cfg.pm_dir==='either'?'either way':'up';cfm=`Price moved ${d} ${cfg.pm_pct||10}%+ in ${cfg.pm_window||15}min`;break;}
