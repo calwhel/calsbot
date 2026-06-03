@@ -1792,33 +1792,51 @@ def eval_forex_session(cond: Dict) -> Tuple[bool, str]:
     """`forex_session` — gate firing on session windows.
 
     cfg.condition:
-      'in_session'     — currently inside the session window
+      'in_session'     — currently inside the session window (WHOLE session)
       'session_open'   — within first N minutes of session open (default 30)
       'session_close'  — within last N minutes of session close (default 30)
       'overlap'        — currently in the London/NY overlap
-    cfg.session: 'london' | 'ny' | 'asian' | 'sydney' | 'overlap'
+    cfg.session:  single session 'london' | 'ny' | 'asian' | 'sydney' | 'overlap'
+    cfg.sessions: OPTIONAL list of sessions — fires when in ANY of them (OR).
+                  Use this for "trade during London AND New York session" so the
+                  gate stays open across BOTH whole windows, not just one.
     cfg.within_minutes (optional, default 30): window for session_open/close.
     """
     from app.services.forex_engine import (
         in_session, session_just_opened, session_about_to_close, SESSIONS,
     )
+
+    def _norm_sid(s: str) -> str:
+        s = (s or "").strip().lower()
+        # AI/wizard sometimes emit "new_york"/"ny "/"tokyo" — map to canonical ids.
+        return {"new_york": "ny", "newyork": "ny", "tokyo": "asian",
+                "us": "ny", "uk": "london"}.get(s, s)
+
     sub = (cond.get("condition") or "in_session").lower()
-    session = (cond.get("session") or "london").lower()
     within = int(cond.get("within_minutes") or 30)
-    label = SESSIONS.get(session, SESSIONS["london"]).label
+
+    # Collect one-or-many sessions (plural `sessions` wins when present).
+    raw = cond.get("sessions")
+    if raw:
+        sess_list = [_norm_sid(s) for s in raw if str(s).strip()]
+    else:
+        sess_list = [_norm_sid(cond.get("session") or "london")]
+    sess_list = [s for s in sess_list if s in SESSIONS] or ["london"]
+
+    labels = " / ".join(SESSIONS[s].label for s in sess_list)
 
     if sub == "overlap":
         ok = in_session("overlap")
         return ok, f"London/NY Overlap session {'active' if ok else 'inactive'}"
     if sub == "session_open":
-        ok = session_just_opened(session, within_minutes=within)
-        return ok, f"{label} open (first {within} min) {'✓' if ok else '✗'}"
+        ok = any(session_just_opened(s, within_minutes=within) for s in sess_list)
+        return ok, f"{labels} open (first {within} min) {'✓' if ok else '✗'}"
     if sub == "session_close":
-        ok = session_about_to_close(session, within_minutes=within)
-        return ok, f"{label} close (last {within} min) {'✓' if ok else '✗'}"
-    # default: in_session
-    ok = in_session(session)
-    return ok, f"{label} session {'active' if ok else 'inactive'}"
+        ok = any(session_about_to_close(s, within_minutes=within) for s in sess_list)
+        return ok, f"{labels} close (last {within} min) {'✓' if ok else '✗'}"
+    # default: in_session — true for the FULL duration of any listed session
+    ok = any(in_session(s) for s in sess_list)
+    return ok, f"{labels} session {'active' if ok else 'inactive'}"
 
 
 async def eval_forex_session_break(

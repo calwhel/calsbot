@@ -10776,6 +10776,7 @@ SIGNAL RECOGNITION:
   premium zone / discount / PD array / equilibrium → fx_pd_array
   Judas swing / fake move / manipulation leg / stop hunt then reverse → fx_judas_swing
   silver bullet / 3 AM / 10 AM / 3 PM setup → fx_silver_bullet
+  only trade/fire DURING London/NY session / active all of the session / restrict to session hours → forex_session condition=in_session (use sessions:["london","ny"] for multiple; covers the WHOLE window, NOT just the open)
   London breakout / Asian range break / session break → forex_session_break
   PDH sweep / previous day high / PDL → forex_prev_level
   currency strength / strong USD / weak GBP → forex_currency_strength

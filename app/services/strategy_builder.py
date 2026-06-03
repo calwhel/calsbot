@@ -304,11 +304,22 @@ direction: bullish | bearish | any
 conditions (same as fvg): gap_exists | just_formed | price_in_gap | tap_and_reject | approaching | gap_filled
 → "IFVG" | "inverted FVG" | "price re-enters old gap" | "mitigated gap retest"
 
-── FOREX — SESSION BREAK ─────────────────────────────────────────────────────
+── FOREX — SESSION TIME GATE (whole session) ─────────────────────────────────
+{"type":"forex_session","condition":"in_session","sessions":["london","ny"]}
+condition: in_session (WHOLE session window) | session_open (first N min) | session_close (last N min) | overlap
+sessions: list, fires when in ANY listed — london | ny | asian | sydney (use this for "London AND NY")
+session: single alternative to sessions (one of the same ids)
+within_minutes: for session_open/session_close only (default 30)
+USE THIS when the user wants to TRADE THROUGHOUT a session (a timing filter), e.g.
+"only fire during London and New York session" → {"type":"forex_session","condition":"in_session","sessions":["london","ny"]}
+→ "only trade during London/NY session" | "active all of the London session" | "restrict to NY hours" | "London + NY session only"
+NOTE: in_session covers the ENTIRE window. Do NOT use fx_killzone or forex_session_break for "during the whole session" — those only fire at the open/breakout.
+
+── FOREX — SESSION BREAK (range breakout) ────────────────────────────────────
 {"type":"forex_session_break","condition":"high_break","session":"asian","range_minutes":60,"timeframe":"15m"}
 condition: high_break | low_break | either_break
 session: asian | sydney | london | new_york
-→ "London breakout" | "Asian range break" | "session high/low break"
+→ "London breakout" | "Asian range break" | "session high/low break" (a BREAKOUT signal, not a time gate)
 
 ── FOREX — PREVIOUS LEVEL ────────────────────────────────────────────────────
 {"type":"forex_prev_level","condition":"sweep_pdh","timeframe":"15m"}
@@ -503,9 +514,12 @@ FOREX-SPECIFIC RULES (apply when asset_class = "forex")
   • Universe: type="specific", symbols must be valid forex pairs like ["EURUSD","GBPUSD","XAUUSD"]
     Common pairs: EURUSD GBPUSD USDJPY AUDUSD USDCAD EURGBP EURJPY GBPJPY XAUUSD XAGUSD
   • btc_regime filter must be null (irrelevant for forex)
-  • Session signals map naturally: London → forex_session_break session=london
-    Asian range → forex_session_break session=asian
-    NY reversal → forex_session_break session=new_york
+  • Session TIMING (trade DURING/throughout a session, restrict to session hours):
+    "only during London/NY session" → forex_session condition=in_session sessions=["london","ny"]
+    This covers the WHOLE session window. Do NOT use forex_session_break or fx_killzone for "during the session".
+  • Session BREAKOUT signals only when the user explicitly says breakout/range-break:
+    "London breakout" → forex_session_break session=london
+    "Asian range break" → forex_session_break session=asian
   • "Liquidity grab" / "stop hunt" → forex_liquidity_pa
   • "PDH / PDL sweep" / "previous day" → forex_prev_level
   • "Currency strength" → forex_currency_strength
@@ -591,7 +605,8 @@ CONDITION SELECTION
   "RSI divergence" / "MACD divergence" → divergence
   "funding rate" → funding_rate (crypto only)
   "open interest" / "OI" → open_interest (crypto only)
-  "London session" / "NY session" / "Asian session" → forex_session_break (forex) or session (crypto)
+  "only trade/fire DURING London/NY session" / "active all of the session" / "restrict to session hours" → forex_session condition=in_session (whole window; use sessions:[...] for multiple)
+  "London session BREAKOUT" / "NY session" / "Asian session" (as a breakout/range signal) → forex_session_break (forex) or session (crypto)
   "price above daily open" / "above session high" → price_relative
   "sentiment" / "social score" → sentiment
   "liquidation cluster" / "liquidity pool" → liquidation (crypto) or forex_liquidity_pa (forex)
