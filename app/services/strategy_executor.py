@@ -1169,28 +1169,23 @@ def _fmt_open_card(
     except Exception:
         rr = None
 
-    rows = [
-        ("Entry",  f"{entry:.6g}",    ""),
-        ("Target", f"{tp_price:.6g}", f"+{tp_extra}"),
-    ]
+    # Price block as full-size bold lines. The previous design crammed these
+    # into a monospace <pre> table, which Telegram renders in a small, cramped
+    # font — users found it too small. Full-size <b> lines read much larger.
+    lines = [f"💵 Entry    <b>{entry:.6g}</b>"]
+    lines.append(f"🎯 Target   <b>{tp_price:.6g}</b>  <i>(+{tp_extra})</i>")
     if tp2_price and tp2_pct:
-        rows.append(("Target 2", f"{tp2_price:.6g}", f"+{_dist_label(tp2_price, tp2_pct)}"))
-    rows.append(("Stop", f"{sl_price:.6g}", f"−{sl_extra}"))
+        lines.append(f"🎯 Target 2 <b>{tp2_price:.6g}</b>  <i>(+{_dist_label(tp2_price, tp2_pct)})</i>")
+    lines.append(f"🛑 Stop     <b>{sl_price:.6g}</b>  <i>(−{sl_extra})</i>")
     if rr:
-        rows.append(("R : R", f"{rr:.1f} : 1", ""))
-
-    _lw = max(len(r[0]) for r in rows)
-    _vw = max(len(r[1]) for r in rows)
-    table = "\n".join(
-        f"{lbl:<{_lw}}  {val:>{_vw}}" + (f"   {ext}" if ext else "")
-        for lbl, val, ext in rows
-    )
+        lines.append(f"⚖️ R : R    <b>{rr:.1f} : 1</b>")
+    price_block = "\n".join(lines)
 
     why = ""
     if conditions:
         passed = [c for c in conditions if c.startswith("✅")]
         if passed:
-            why = "\n✅ <b>Why it fired</b>\n" + "\n".join(
+            why = "\n\n✅ <b>Why it fired</b>\n" + "\n".join(
                 f"• {_html.escape(c[1:].strip())}" for c in passed[:5]
             )
 
@@ -1201,7 +1196,7 @@ def _fmt_open_card(
         f"{header}\n"
         f"📋 <b>{_html.escape(str(strategy_name))}</b>\n\n"
         f"{dir_icon} <b>{_html.escape(str(symbol))}</b> · {direction} · {leverage}×\n\n"
-        f"<pre>{table}</pre>"
+        f"{price_block}"
         f"{why}\n\n"
         f"{footer}{order_line}"
     )
@@ -1289,26 +1284,22 @@ def _fmt_close_card(
         elif a < 10:  pnl_display = f"{pnl_pct:+.2f}%"
         else:         pnl_display = f"{pnl_pct:+.1f}%"
 
-    rows = [
-        ("Entry", f"{entry:.6g}",     ""),
-        ("Exit",  f"{exit_price:.6g}", hit_label),
-        ("P/L",   pnl_display,         ""),
+    # Full-size bold lines (see _fmt_open_card — replaces the small <pre> table).
+    pl_emoji = "📈" if raw_move >= 0 else "📉"
+    lines = [
+        f"💵 Entry  <b>{entry:.6g}</b>",
+        f"🏁 Exit   <b>{exit_price:.6g}</b>  <i>({hit_label})</i>",
+        f"{pl_emoji} P/L    <b>{pnl_display}</b>",
     ]
     if dur:
-        rows.append(("Time", dur, ""))
-
-    _lw = max(len(r[0]) for r in rows)
-    _vw = max(len(r[1]) for r in rows)
-    table = "\n".join(
-        f"{lbl:<{_lw}}  {val:>{_vw}}" + (f"   {ext}" if ext else "")
-        for lbl, val, ext in rows
-    )
+        lines.append(f"⏱ Time   <b>{dur}</b>")
+    price_block = "\n".join(lines)
 
     why = ""
     if conditions:
         passed = [c for c in conditions if c.startswith("✅")]
         if passed:
-            why = "\n✅ <b>Triggered by</b>\n" + "\n".join(
+            why = "\n\n✅ <b>Triggered by</b>\n" + "\n".join(
                 f"• {_html.escape(c[1:].strip())}" for c in passed[:3]
             )
 
@@ -1317,7 +1308,7 @@ def _fmt_close_card(
     return (
         f"{icon} <b>{result} · {_html.escape(str(strategy_name))}</b>\n\n"
         f"{dir_icon} <b>${_html.escape(str(coin))}</b> · {direction} · {leverage}×\n\n"
-        f"<pre>{table}</pre>"
+        f"{price_block}"
         f"{why}\n\n"
         f"{paper_tag}"
     )
