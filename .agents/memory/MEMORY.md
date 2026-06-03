@@ -13,7 +13,7 @@
 - [cTrader OAuth token hygiene](ctrader-oauth-token-hygiene.md) — refresh-token rotation can brick the link (ACCESS_DENIED → user must re-link); never log raw exceptions/URLs in token paths (secrets are in query params).
 - [cTrader feed host/token/symbols](ctrader-feed-host-and-symbols.md) — demo vs live are separate hosts (route by isLive); refresh tokens rotate (persist new one); symbol IDs are per-account (scope cache by host+ctid); trendbars need fromTimestamp.
 - [cTrader order rejection](ctrader-order-rejection.md) — broker rejections arrive as ProtoOAOrderErrorEvent (2132), not exec event; accept both or lose the real reason; return dict-with-error not None.
-- [Metal pip-size source](metal-pip-size-drift.md) — all pip lookups must agree with forex_engine.pip_size; gold/platinum digits=2→0.01, silver→0.001; duplicates cause 10–100× drift.
+- [Metal pip-size source](metal-pip-size-drift.md) — all pip lookups + ctrader pip_value must agree with forex_engine.pip_size; gold=$0.10/pip (retail/broker convention, NOT 0.01), silver 0.001; duplicates cause 10–100× drift.
 - [cTrader index order gap](ctrader-index-order-gap.md) — index live orders call undefined place_order_units → NameError → silent paper fallback; never reach broker (not yet fixed).
 - [cTrader price wire scaling](ctrader-price-scaling.md) — cTrader SL/TP/price fields are sent ×100000 and read /100000 despite proto type double; new amend/order price fields must match; broker positionId lives in execution notes as `pos=<id>`.
 - [Forex executor cadence](forex-executor-cadence.md) — faster forex scan only helps if the tradfi price/TA cache TTL matches the 5s FMP feed; always gate a faster interval with DB-stress backoff (Neon saturation history).

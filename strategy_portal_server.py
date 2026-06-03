@@ -206,6 +206,12 @@ async def _warm_neon_db():
                         UPDATE strategy_executions
                         SET pips_pnl = ROUND(CAST(
                             CASE
+                                -- Historical backfill ONLY (rows with pips_pnl IS NULL,
+                                -- pre-dating the column). Intentionally kept at 0.01: the
+                                -- era these gold trades closed in used pip=$0.01, so this
+                                -- keeps old gold rows consistent with each other. LIVE
+                                -- closes now use $0.10 (forex_engine.pip_size) — do NOT
+                                -- "align" this to 0.10 or historical stats shift 10x.
                                 WHEN UPPER(symbol) IN ('XAUUSD') THEN
                                     CASE WHEN direction='LONG'
                                          THEN (exit_price - entry_price) / 0.01

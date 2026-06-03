@@ -2781,7 +2781,7 @@ function dismissTgBanner(){
           <button class="chip lot-chip" data-lot="1.0"  onclick="setLotChip(1.0)">1.0 standard</button>
         </div>
       </div>
-      <div class="hint" style="margin-bottom:12px">1 standard lot = 100,000 units. XAUUSD pip ≈ $1 per micro lot.</div>
+      <div class="hint" style="margin-bottom:12px">1 standard lot = 100,000 units. XAUUSD: 1 pip = $0.10 (≈ $10 per standard lot).</div>
       <button class="btn ghost sm" onclick="savePaperAccount()">Save</button>
       <span id="paper-acct-saved" style="font-size:12px;color:var(--green);margin-left:10px;opacity:0;transition:opacity .4s">Saved ✓</span>
     </div>
@@ -3478,7 +3478,7 @@ let acceptedRisks=new Set(['LOW','MEDIUM']);
 function $(id){return document.getElementById(id)}
 function pC(v){return v>0?'pnl-pos':v<0?'pnl-neg':''}
 function pS(v){if(v===null||v===undefined)return'—';const n=Number(v);const abs=Math.abs(n);const disp=abs<0.1&&abs>0?n.toFixed(2):abs<1&&abs>0?n.toFixed(1):Math.round(n).toString();return(n>0?'+':'')+disp+'%'}
-function _pipSz(sym){if(!sym)return 0.0001;const s=sym.toUpperCase();if(s==='XAUUSD')return 0.01;if(s==='XAGUSD'||s.includes('JPY'))return 0.01;return 0.0001;}
+function _pipSz(sym){if(!sym)return 0.0001;const s=sym.toUpperCase();if(s==='XAUUSD')return 0.10;if(s==='XAGUSD'||s.includes('JPY'))return 0.01;return 0.0001;}
 function pipsLabel(t){const e=t.entry_price,c=t.close_price;if(!e||!c)return null;const ps=_pipSz(t.symbol);const raw=t.direction==='SHORT'?e-c:c-e;const pip=Math.round(raw/ps);return(pip>=0?'+':'')+pip+'p';}
 function fmtTradeChip(t,isForex){if(isForex){const lbl=pipsLabel(t);if(lbl)return lbl;}return t.pnl_pct!==null&&t.pnl_pct!==undefined?pS(t.pnl_pct):t.outcome;}
 function starsHtml(n,max=5){let s='';for(let i=1;i<=max;i++)s+=i<=Math.round(n)?'★':'☆';return s}
@@ -5760,7 +5760,7 @@ function renderStep6(){
         </div>
         <div id="wz-ps-lots-row" style="display:${WZ.posSizeType==='lots'?'block':'none'}">
           <input type="number" min="0.01" step="0.01" value="${WZ.posSizeLots}" placeholder="e.g. 0.10" oninput="WZ.posSizeLots=Number(this.value);document.getElementById('wz-ps-v').textContent=this.value+' lots'" style="width:100%;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;box-sizing:border-box">
-          <div class="hint" style="font-size:10.5px;color:var(--muted);margin-top:5px;line-height:1.45">Exact lot size sent to FP Markets per trade. 1.0 lot = 100k units FX (≈$10/pip), or 100oz gold (≈$1/pip). Overrides % / risk-based sizing.</div>
+          <div class="hint" style="font-size:10.5px;color:var(--muted);margin-top:5px;line-height:1.45">Exact lot size sent to FP Markets per trade. 1.0 lot = 100k units FX (≈$10/pip), or 100oz gold (≈$10/pip). Overrides % / risk-based sizing.</div>
         </div>
       </div>
     </div>
@@ -9504,7 +9504,7 @@ const LF_PAIRS = [
   { symbol:'USDJPY', name:'US Dollar / Japanese Yen', pip:0.01,  desc:'Safe haven pair' },
   { symbol:'AUDUSD', name:'Australian Dollar / USD',  pip:0.0001,desc:'Commodity currency' },
   { symbol:'USDCAD', name:'US Dollar / Canadian Dollar',pip:0.0001,desc:'Correlated to oil' },
-  { symbol:'XAUUSD', name:'Gold / US Dollar',         pip:0.01,  desc:'Inflation hedge' },
+  { symbol:'XAUUSD', name:'Gold / US Dollar',         pip:0.10,  desc:'Inflation hedge' },
   { symbol:'XAGUSD', name:'Silver / US Dollar',       pip:0.001, desc:'Industrial metal' },
   { symbol:'NAS100', name:'NASDAQ 100',               pip:0.25,  desc:'Tech index CFD' },
   { symbol:'SPX500', name:'S&P 500',                  pip:0.25,  desc:'US large-cap index' },
@@ -9920,7 +9920,7 @@ function lfCalc() {
   const sl     = parseFloat(document.getElementById('lf-sl')?.value      || 20);
   const out    = document.getElementById('lf-calc-result');
   if (!out || !pip || !bal || !risk || !sl) return;
-  const pipVal  = pip === 0.01 ? (pip === 0.001 ? 5 : 1) : 10; // JPY≈9.28 approximated to 10 for simplicity
+  const pipVal  = pip === 0.001 ? 5 : 10; // silver ≈$5/pip/lot; gold/majors/JPY ≈$10/pip/lot
   const riskUsd = bal * (risk / 100);
   const lots    = riskUsd / (sl * pipVal);
   const lotsStr = lots.toFixed(2);

@@ -132,14 +132,14 @@ def current_sessions(now_utc: Optional[datetime] = None) -> List[str]:
 # distance of 1 pip), NOT the monetary pip value per lot.
 #
 # FP Markets cTrader instrument specs (source: FP Markets spreads page):
-#   XAUUSD  digits=2  →  pip = 0.01  (e.g. 4505.20 → 4505.21 = 1 pip)
+#   XAUUSD  digits=2  →  pip = 0.10  (retail/broker convention: 4505.20 → 4505.30 = 1 pip)
 #   XAGUSD  digits=3  →  pip = 0.001
 #   Crude Oil digits=2→  pip = 0.01
 #   Nat Gas  digits=3 →  pip = 0.001
 #   Copper   digits=4 →  pip = 0.0001
 #
 # Common confusion: the *monetary* pip value is pip_size × lot_size
-# (e.g. XAUUSD 100oz lot: 0.01 × 100 = $1.00/pip/lot). That $1 figure is
+# (e.g. XAUUSD 100oz lot: 0.10 × 100 = $10/pip/lot). That $10 figure is
 # NOT the pip_size — it is used only for P&L, not for price-level TP/SL.
 #
 # JPY pairs:  0.01  (e.g. USDJPY moves in 0.01 increments)
@@ -149,7 +149,7 @@ _JPY_PAIRS = ("USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "NZDJPY", "CADJPY", "CHFJP
 
 # Metals + commodities — pip size = price increment (digits-based).
 _METAL_PIP_SIZES: dict = {
-    "XAUUSD": 0.01,    # Gold:        digits=2  →  1 pip = $0.01 price move
+    "XAUUSD": 0.10,    # Gold:        retail/broker convention → 1 pip = $0.10 price move
     "XAGUSD": 0.001,   # Silver:      digits=3  →  1 pip = $0.001 price move
     "XPTUSD": 0.01,    # Platinum:    digits=2  →  1 pip = $0.01 price move
     "CLUSD":  0.01,    # Crude Oil:   digits=2  →  1 pip = $0.01 price move
@@ -164,7 +164,7 @@ _METAL_PIP_SIZES: dict = {
 TYPICAL_SPREADS_PIPS: Dict[str, float] = {
     "EURUSD": 1.0, "GBPUSD": 1.5, "USDJPY": 1.0, "AUDUSD": 1.5,
     "USDCAD": 1.5, "USDCHF": 1.5, "NZDUSD": 2.0, "EURGBP": 1.5,
-    "EURJPY": 1.5, "GBPJPY": 2.5, "XAUUSD": 25.0, "XAGUSD": 3.0,
+    "EURJPY": 1.5, "GBPJPY": 2.5, "XAUUSD": 2.5, "XAGUSD": 3.0,
     "CLUSD":  4.0, "NGUSD":  5.0, "HGUSD":  3.0,
 }
 
@@ -172,7 +172,7 @@ TYPICAL_SPREADS_PIPS: Dict[str, float] = {
 def pip_size(pair: str) -> float:
     """Return the pip size for a pair.
 
-    • Metals  (XAU/XAG): see _METAL_PIP_SIZES — $1 per pip for gold, $0.01 for silver
+    • Metals  (XAU/XAG): see _METAL_PIP_SIZES — $0.10 per pip for gold, $0.001 for silver
     • JPY pairs         : 0.01
     • All others        : 0.0001 (standard 4-decimal forex)
     """

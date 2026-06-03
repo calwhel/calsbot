@@ -137,6 +137,9 @@ _PIP_SIZES = {
     "EURUSD": 0.0001, "GBPUSD": 0.0001, "AUDUSD": 0.0001,
     "NZDUSD": 0.0001, "USDCAD": 0.0001, "USDCHF": 0.0001,
     "USDJPY": 0.01,   "EURJPY": 0.01,   "GBPJPY": 0.01,
+    # Metals — retail/broker pip convention (gold pip = $0.10), kept in lockstep
+    # with forex_engine._METAL_PIP_SIZES and the pip_value table below.
+    "XAUUSD": 0.10,
     # Indices — tick size used for pip-equivalent math
     "SPX": 1.0, "NDX": 1.0, "DJI": 1.0, "DAX": 1.0, "FTSE": 1.0,
 }
@@ -1260,9 +1263,9 @@ async def place_ctrader_order_for_user(
         # pip_value_per_lot: USD P&L per pip per standard lot
         # For USD-quoted pairs (EURUSD, GBPUSD…): 10 USD/pip/lot
         # For JPY pairs: ~9.28 USD (yen-based, approx at USDJPY≈148)
-        # For XAU: $1/pip/lot (XAUUSD pip=0.01, lot=100oz → 100×0.01=$1)
+        # For XAU: $10/pip/lot (XAUUSD pip=0.10, lot=100oz → 100×0.10=$10)
         if symbol.upper() in ("XAUUSD",):
-            pip_value = 1.0    # $1/pip/lot (100oz lot, pip=0.01)
+            pip_value = 10.0   # $10/pip/lot (100oz lot, pip=0.10)
         elif symbol.upper() in ("XAGUSD",):
             pip_value = 5.0    # $5/pip/lot approx (5000oz lot, pip=0.001)
         elif "JPY" in symbol.upper():

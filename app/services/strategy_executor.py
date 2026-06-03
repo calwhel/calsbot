@@ -1145,7 +1145,7 @@ def _fmt_open_card(
     bar      = "━━━━━━━━━━━━━━━━━━━━"
 
     # For forex: show pips (what traders actually think in) instead of %.
-    # pips = price_distance / pip_size  e.g. XAUUSD: $36 / $1.00 = 36 pips.
+    # pips = price_distance / pip_size  e.g. XAUUSD: $2.50 / $0.10 = 25 pips.
     _is_forex = (asset_class == "forex")
     if _is_forex and entry and entry > 0:
         from app.services.forex_engine import pip_size as _pip_size
@@ -1238,12 +1238,13 @@ def _fmt_close_card(
     def _pip_size(sym: str) -> float | None:
         """Return pip size for the symbol, or None for crypto (no pip convention)."""
         s = sym.upper().replace("/", "").replace("=F", "").replace("=X", "")
-        # Metals — pip size = price increment (digits-based), MUST match
-        # app.services.forex_engine.pip_size (the canonical source used for the
-        # stored pips_pnl and the entry card). Gold/platinum quote to 2 decimals
-        # → 1 pip = 0.01 (NOT 0.10 — that older value made the result card show
-        # 10× too few pips, e.g. "-3 pips" on a 30-pip SL).
-        if s in ("XAUUSD", "GOLD", "GC", "XAUUSDT"):   return 0.01   # gold: digits=2 → 0.01/pip
+        # Metals — pip size MUST match app.services.forex_engine.pip_size (the
+        # canonical source used for the stored pips_pnl and the entry card).
+        # Gold uses the retail/broker pip convention: 1 pip = $0.10 (e.g. a $2.45
+        # price move ≈ 25 pips, matching FP Markets / broker terminals). Kept in
+        # lockstep with forex_engine._METAL_PIP_SIZES (0.10) and ctrader_client
+        # pip_value ($10/pip/lot) — change all three together or sizing drifts.
+        if s in ("XAUUSD", "GOLD", "GC", "XAUUSDT"):   return 0.10   # gold: retail pip = $0.10
         if s in ("XAGUSD", "SILVER", "SI", "XAGUSDT"):  return 0.001  # silver: digits=3
         if s in ("XPTUSD", "PLATINUM", "PL"):            return 0.01   # platinum: digits=2
         # JPY pairs (2 decimal places)
