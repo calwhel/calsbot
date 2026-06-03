@@ -4377,6 +4377,12 @@ const STYLE_PRESETS={
   fx_news_avoidance:     {leverage:1,posSize:4,dailyLoss:3,maxPos:1,maxTrades:3,cooldown:90, tp1:0.25,sl:0.15,category:'fx_news_avoidance',     timeframe:'15m'},
   fx_liquidity_grab:     {leverage:1,posSize:5,dailyLoss:3,maxPos:1,maxTrades:3,cooldown:120,tp1:0.30,sl:0.15,category:'fx_liquidity_grab',     timeframe:'15m'},
   fx_session_scalp:      {leverage:1,posSize:4,dailyLoss:2,maxPos:2,maxTrades:6,cooldown:30, tp1:0.10,sl:0.06,category:'fx_session_scalp',      timeframe:'5m' },
+  fx_vwap_reversion:     {leverage:1,posSize:4,dailyLoss:3,maxPos:2,maxTrades:5,cooldown:30, tp1:0.15,sl:0.10,category:'fx_vwap_reversion',     timeframe:'5m' },
+  fx_volatility_squeeze: {leverage:1,posSize:5,dailyLoss:3,maxPos:2,maxTrades:4,cooldown:90, tp1:0.35,sl:0.15,category:'fx_volatility_squeeze', timeframe:'15m'},
+  fx_macd_momentum:      {leverage:1,posSize:5,dailyLoss:3,maxPos:2,maxTrades:4,cooldown:60, tp1:0.30,sl:0.15,category:'fx_macd_momentum',      timeframe:'15m'},
+  fx_pivot_bounce:       {leverage:1,posSize:5,dailyLoss:3,maxPos:2,maxTrades:4,cooldown:60, tp1:0.25,sl:0.13,category:'fx_pivot_bounce',       timeframe:'15m'},
+  fx_ichimoku_trend:     {leverage:1,posSize:5,dailyLoss:3,maxPos:2,maxTrades:3,cooldown:120,tp1:0.50,sl:0.25,category:'fx_ichimoku_trend',     timeframe:'1h' },
+  fx_mean_reversion:     {leverage:1,posSize:5,dailyLoss:3,maxPos:2,maxTrades:5,cooldown:45, tp1:0.20,sl:0.12,category:'fx_mean_reversion',     timeframe:'15m'},
 };
 
 // Forex template → pip defaults + primary-signal config. Mirrors the server's
@@ -4396,6 +4402,12 @@ const FOREX_TEMPLATES={
   fx_liquidity_pa:       {tp_pips:28,sl_pips:14,direction:'BOTH',primary:'forex_liquidity_pa',     primaryCfg:{pattern:'sweep_eqh',timeframe:'15m',lookback:20,tolerance_pips:3}},
   fx_cot_sentiment:      {tp_pips:80,sl_pips:40,direction:'BOTH',primary:'forex_cot',              primaryCfg:{condition:'specs_extreme_long',extreme_pct:75,lookback_weeks:52,respect_pair_inversion:true},timeframe:'4h'},
   fx_smc_hunt:           {tp_pips:35,sl_pips:15,direction:'BOTH',primary:'fvg',                    primaryCfg:{timeframe:'15m',fvg_dir:'bullish',condition:'tap_and_reject',min_gap_pct:0.2}},
+  fx_vwap_reversion:     {tp_pips:15,sl_pips:10,direction:'BOTH',primary:'vwap_bands',             primaryCfg:{condition:'below_lower',num_std:2.0,timeframe:'5m'}},
+  fx_volatility_squeeze: {tp_pips:35,sl_pips:15,direction:'BOTH',primary:'donchian',               primaryCfg:{timeframe:'15m',condition:'upper_break',period:20}},
+  fx_macd_momentum:      {tp_pips:30,sl_pips:15,direction:'BOTH',primary:'macd',                   primaryCfg:{timeframe:'15m',condition:'bullish_cross'}},
+  fx_pivot_bounce:       {tp_pips:25,sl_pips:13,direction:'BOTH',primary:'pivot_points',           primaryCfg:{timeframe:'15m',level:'s1',condition:'near',tolerance_pct:0.3}},
+  fx_ichimoku_trend:     {tp_pips:50,sl_pips:25,direction:'BOTH',primary:'ichimoku',               primaryCfg:{timeframe:'1h',condition:'above_cloud'}},
+  fx_mean_reversion:     {tp_pips:20,sl_pips:12,direction:'BOTH',primary:'bb',                     primaryCfg:{timeframe:'15m',condition:'lower_touch'}},
 };
 function isForexStyle(id){return!!id&&typeof id==='string'&&id.startsWith('fx_');}
 function isIndexStyle(id){return!!id&&typeof id==='string'&&id.startsWith('idx_');}
@@ -4610,6 +4622,12 @@ const STYLE_SIGNALS={
   fx_liquidity_pa:       ['forex_liquidity_pa','forex_session','rsi','forex_prev_level','ema'],
   fx_cot_sentiment:      ['forex_cot','rsi','ema','forex_prev_level','forex_currency_strength'],
   fx_session_scalp:      ['rsi','stoch_rsi','forex_session','macd','cci'],
+  fx_vwap_reversion:     ['vwap_bands','vwap_bias','rvol','rsi','bb','stoch_rsi'],
+  fx_volatility_squeeze: ['donchian','bb','atr_filter','rvol','ema'],
+  fx_macd_momentum:      ['macd','adx_filter','ema','rsi','roc','supertrend'],
+  fx_pivot_bounce:       ['pivot_points','rsi','forex_prev_level','bb','support_resistance','stoch_rsi'],
+  fx_ichimoku_trend:     ['ichimoku','ema','adx_filter','macd','sma'],
+  fx_mean_reversion:     ['bb','rsi','stoch_rsi','divergence','mfi','cci'],
   custom:   [],
 };
 
@@ -5411,6 +5429,12 @@ function renderStep1(){
     {id:'fx_currency_strength',  icon:'💪', title:'Currency Strength',   desc:'Buy the strong vs the weak<br>across the 28-pair matrix.'},
     {id:'fx_liquidity_pa',       icon:'🪤', title:'Liquidity & PA',      desc:'Trade sweeps of equal H/L<br>+ pin bars & engulfings.'},
     {id:'fx_cot_sentiment',      icon:'🏦', title:'COT Sentiment',       desc:'Fade extreme speculator<br>positioning (weekly CFTC).'},
+    {id:'fx_vwap_reversion',     icon:'〽️', title:'VWAP Reversion',       desc:'Fade stretched moves back to<br>VWAP on high volume.'},
+    {id:'fx_volatility_squeeze', icon:'🎈', title:'Volatility Squeeze',   desc:'Coil in low volatility, then<br>ride the expansion breakout.'},
+    {id:'fx_macd_momentum',      icon:'📊', title:'MACD Momentum',        desc:'Ride MACD crossovers filtered<br>by trend & ADX.'},
+    {id:'fx_pivot_bounce',       icon:'📌', title:'Pivot Point Bounce',   desc:'Bounce off daily pivot S/R<br>with momentum confirmation.'},
+    {id:'fx_ichimoku_trend',     icon:'☁️', title:'Ichimoku Cloud Trend', desc:'Swing the higher-timeframe<br>trend above/below the cloud.'},
+    {id:'fx_mean_reversion',     icon:'📐', title:'Range Reversion',      desc:'Fade Bollinger band extremes<br>with RSI & divergence.'},
     {id:'custom',                icon:'⚙️', title:'Custom',              desc:'Set everything yourself.<br>Full manual control.'},
   ]:WZ.assetClass==='index'?[
     {id:'idx_trend',    icon:'📈', title:'Index Trend',    desc:'Long-bias trend follow on<br>US500 / US100 / GER40.'},
@@ -6559,13 +6583,33 @@ async function buildStrategy(){
     } else if(WZ.assetClass&&WZ.assetClass!=='crypto'){
       // Forex, stocks, and indices: compile locally — all params are already in WZ
       // from the wizard steps so sending to the AI endpoint is unnecessary and slow.
-      const primaryCond=Object.assign({type:WZ.primaryType},WZ.primaryCfg||{});
-      if(!primaryCond.timeframe)primaryCond.timeframe=WZ.timeframe||'15m';
-      const confirmConds=(WZ.confirms||[]).map(c=>{
-        const cond=Object.assign({type:c.type},c.cfg||{});
-        if(!cond.timeframe)cond.timeframe=WZ.timeframe||'15m';
+      // Indicator-route types must be wrapped as {type:'indicator',name:X}: the
+      // executor's condition dispatch only auto-wraps sma*/supertrend; bare
+      // ema/macd/bb/ichimoku/donchian/rsi/adx/… hit "Unknown condition type"
+      // and silently never fire. Mirrors mobile lib/conditionPack.ts INDICATOR_NAME_MAP.
+      const WZ_INDICATOR_NAME_MAP={rsi:'rsi',macd:'macd',macd_hist:'macd_hist',stoch_rsi:'stoch_rsi',williams_r:'williams_r',cci:'cci',mfi:'mfi',roc:'roc',ema:'ema',ema_cross:'ema_cross',ema_ribbon:'ema_ribbon',sma:'sma',sma_cross:'sma_cross',sma_ribbon:'sma_ribbon',bb:'bb',keltner:'keltner',donchian:'donchian',squeeze:'squeeze',atr:'atr',atr_expansion:'atr',obv:'obv',vwap:'vwap',adx:'adx',adx_filter:'adx',aroon:'aroon',heikin_ashi:'heikin_ashi',ichimoku:'ichimoku',supertrend:'supertrend'};
+      const _wrapCond=(t,cfg)=>{
+        const c=cfg||{};
+        const tf=c.timeframe||WZ.timeframe||'15m';
+        const nm=WZ_INDICATOR_NAME_MAP[t];
+        if(nm==='rsi'){
+          // RSI: the wizard cfg uses condition lt/gt/custom, but the executor's
+          // rsi handler reads operator/value only. Mirror mobile packCondition.
+          const rc=c.condition||c.operator||'lt';
+          if(rc==='lt'||rc==='gt')return{type:'indicator',name:'rsi',timeframe:tf,period:c.period||14,operator:rc,value:(c.value!=null?c.value:(rc==='lt'?30:70))};
+          if(rc==='custom')return{type:'indicator',name:'rsi',timeframe:tf,period:c.period||14,operator:'lt',value:(c.value!=null?c.value:50)};
+          return Object.assign({type:'indicator',name:'rsi',timeframe:tf},c,{condition:rc});
+        }
+        if(t==='vwap_deviation'){
+          // Wizard picks vwap_pct/vwap_side; executor's vwap handler expects deviation_pct/side.
+          return Object.assign({type:'indicator',name:'vwap',timeframe:tf,deviation_pct:(c.vwap_pct!=null?c.vwap_pct:(c.deviation_pct!=null?c.deviation_pct:3)),side:c.vwap_side||c.side||'below'},c);
+        }
+        const cond=nm?Object.assign({type:'indicator',name:nm},c):Object.assign({type:t},c);
+        if(!cond.timeframe)cond.timeframe=tf;
         return cond;
-      });
+      };
+      const primaryCond=_wrapCond(WZ.primaryType,WZ.primaryCfg);
+      const confirmConds=(WZ.confirms||[]).map(c=>_wrapCond(c.type,c.cfg));
       data={config:{
         version:'1.0',name,description:desc,
         entry_conditions:{operator:'AND',conditions:[primaryCond,...confirmConds],entry_type:WZ.primaryType},

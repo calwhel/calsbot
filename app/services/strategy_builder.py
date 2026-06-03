@@ -133,6 +133,11 @@ Timeframes: 1m | 3m | 5m | 15m | 30m | 1h | 4h | 1d
     {"type":"indicator","name":"squeeze","condition":"firing","timeframe":"15m"}
     conditions: firing | on | off | bull_mom | bear_mom
 
+  Donchian Channel (N-bar high/low channel — breakout or range filter)
+    {"type":"indicator","name":"donchian","condition":"upper_break","period":20,"timeframe":"15m"}
+    conditions: upper_break (close ≥ N-bar high → bullish breakout) | lower_break (close ≤ N-bar low → bearish breakout) | near_upper | near_lower
+    → The canonical squeeze / volatility-expansion breakout primary. Pairs with bb "squeeze" + atr_filter "expanding".
+
 ── DAY-TRADER FILTERS (intraday volatility / volume / VWAP) ────────────────────
 These are dedicated top-level types (NOT under "indicator"). Prefer them when the
 user talks about intraday volatility gates, relative volume, or VWAP bands/bias.
@@ -162,6 +167,11 @@ user talks about intraday volatility gates, relative volume, or VWAP bands/bias.
     {"type":"vwap_bias","condition":"above","timeframe":"5m"}
     conditions: above (price > VWAP → LONG bias) | below (price < VWAP → SHORT bias)
     → Pure directional filter. "Longs only above VWAP" is the #1 intraday discipline rule.
+
+  Pivot Points (daily PP / R1-R3 / S1-S3 from the prior day's OHLC)
+    {"type":"pivot_points","level":"s1","condition":"near","tolerance_pct":0.3,"timeframe":"15m"}
+    level: pp | r1 | r2 | r3 | s1 | s2 | s3.   condition: above | below | near (within tolerance_pct % of the level)
+    → Intraday S/R bounce or break. "Bounce off S1" = level s1 + near; "break above R1" = level r1 + above.
 
 ── PRICE MOMENTUM ─────────────────────────────────────────────────────────────
 {"type":"price_momentum","window_minutes":10,"operator":"gt","value":8,"direction":"up"}
@@ -550,6 +560,13 @@ FOREX-SPECIFIC RULES (apply when asset_class = "forex")
   • "Judas swing fade" → fx_judas_swing + fx_pd_array; BOTH direction, TP 25–35 pips, SL 15 pips
   • "Breaker block entry" → fx_breaker + fx_killzone; TP 30–40 pips, SL 15 pips
   • "Gold ICT CISD" / "XAUUSD liq sweep + iFVG + MSS/CISD" → fx_killzone (london_kz or ny_kz) + forex_liquidity_pa (sweep_eqh/sweep_eql) + market_structure (choch/bos for MSS) + fx_cisd + ifvg (5m) confirmations on XAUUSD; TP 40–80 pips, SL 20–25 pips
+  Classic non-ICT forex templates — when the user names these, compose them:
+  • "VWAP reversion" / "fade to VWAP" / "mean-revert to VWAP" → vwap_bands (below_lower/above_upper, num_std 2.0, 5m) primary + vwap_bias + rvol + rsi confirmations; BOTH direction, TP 15 pips, SL 10 pips
+  • "Volatility squeeze" / "Bollinger squeeze breakout" / "coil and expand" → donchian (upper_break/lower_break, period 20, 15m) primary + bb (squeeze) + atr_filter (expanding) + rvol confirmations; BOTH direction, TP 35 pips, SL 15 pips
+  • "MACD momentum" / "MACD crossover" → macd (bullish_cross/bearish_cross, 15m) primary + adx (trending) + ema + rsi confirmations; BOTH direction, TP 30 pips, SL 15 pips
+  • "Pivot point bounce" / "daily pivot S/R bounce" → pivot_points (level s1/r1, near, 15m) primary + rsi + forex_prev_level + bb confirmations; BOTH direction, TP 25 pips, SL 13 pips
+  • "Ichimoku cloud trend" / "above/below the cloud" → ichimoku (above_cloud/below_cloud, 1h) primary + ema + adx (trending) + macd confirmations; BOTH direction, TP 50 pips, SL 25 pips
+  • "Range reversion" / "Bollinger band fade" / "mean reversion" → bb (lower_touch/upper_touch, 15m) primary + rsi + stoch_rsi + divergence confirmations; BOTH direction, TP 20 pips, SL 12 pips
   ICT risk profiles for forex:
   • ICT scalp (silver bullet / killzone): TP 15–25 pips, SL 10–15 pips, max 2 trades/day, cooldown 60 min
   • ICT intraday (OTE + displacement): TP 30–50 pips, SL 15–20 pips, max 2 trades/session, cooldown 90 min
