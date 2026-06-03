@@ -473,10 +473,17 @@ def _drop_tb_conn_sync() -> None:
     _tb_conn = None
     _tb_conn_ctx = None
     if conn is not None:
+        # Schedule a full close (close + wait_closed) so the SSL FD is actually
+        # released — a bare .close() leaks the descriptor → "Too many open files".
+        # Cancellation-safe: ensure_future does not await here. Falls back to a
+        # bare close only if there is no running loop to schedule on.
         try:
-            conn[1].close()
+            asyncio.ensure_future(_aclose_writer(conn[1]))
         except Exception:
-            pass
+            try:
+                conn[1].close()
+            except Exception:
+                pass
 
 
 async def _get_tb_conn(
@@ -502,12 +509,19 @@ async def _get_tb_conn(
         if not await _account_auth(reader, writer, access_token, ctid):
             raise ConnectionError("trendbar account auth failed")
     except BaseException:
-        # BaseException so a wait_for cancellation during auth still closes the
-        # writer (synchronously — no await while cancelling) instead of leaking it.
+        # BaseException so a wait_for cancellation during auth still releases the
+        # writer instead of leaking it. Schedule the FULL close (close +
+        # wait_closed) on the loop rather than a bare .close() — a bare close does
+        # not free the SSL FD and, during a dead-token window, this auth-failure
+        # path runs on every reopen → "Too many open files". ensure_future does
+        # not await, so it stays cancellation-safe; bare close only if no loop.
         try:
-            writer.close()
+            asyncio.ensure_future(_aclose_writer(writer))
         except Exception:
-            pass
+            try:
+                writer.close()
+            except Exception:
+                pass
         raise
     _tb_conn = (reader, writer)
     _tb_conn_ctx = (host, ctid)
