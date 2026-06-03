@@ -1550,14 +1550,37 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     # (stored in notes to survive across monitor cycles).
     partial_close_done = bool(ex.notes and "partial_close_done" in ex.notes)
 
+    # ── Moved-stop chronology guard ───────────────────────────────────────────
+    # When the stop is moved tighter (auto-breakeven, partial-close-to-entry or
+    # trailing) it must only apply to price action AT/AFTER the move. The sweep
+    # re-scans every cycle from entry, so without this guard a candle that dipped
+    # to the (later) breakeven/trailing level BEFORE the stop ever moved there is
+    # wrongly read as a stop-out on the next scan — closing winners out flat.
+    # `sl_eff_ms` = timestamp at which the CURRENT stop level became effective
+    # (last move + 1ms). Candles older than it skip the stop-hit test: the trade
+    # was open through them under a looser stop, so no real hit occurred. Stored
+    # in notes so it survives across monitor cycles.
+    sl_eff_ms = None
+    if ex.notes:
+        import re as _re_se
+        _mse = _re_se.search(r"sleff=(\d+)", ex.notes)
+        if _mse:
+            try:
+                sl_eff_ms = int(_mse.group(1))
+            except Exception:
+                sl_eff_ms = None
+
     if candles:
         entry_ms = int(fired_at.timestamp() * 1000)
         relevant = [c for c in candles if c[0] >= entry_ms - 60_000]
         if relevant:
             for _ts, open_, high, low, close in relevant:
+                # Stop only "live" for candles at/after its last move (chronology
+                # guard — a moved stop must never retro-apply to earlier price).
+                _sl_active = not (sl_eff_ms is not None and _ts < sl_eff_ms)
                 if ex.direction == "LONG":
                     tp_hit = high >= ex.tp_price
-                    sl_hit = low  <= ex.sl_price
+                    sl_hit = (low  <= ex.sl_price) and _sl_active
                     if tp_hit and sl_hit:
                         if close >= open_:
                             _close_paper_execution(ex, "WIN", ex.tp_price, db)
@@ -1567,7 +1590,7 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                         return True
                 else:
                     tp_hit = low  <= ex.tp_price
-                    sl_hit = high >= ex.sl_price
+                    sl_hit = (high >= ex.sl_price) and _sl_active
                     if tp_hit and sl_hit:
                         if close <= open_:
                             _close_paper_execution(ex, "WIN", ex.tp_price, db)
@@ -1584,13 +1607,18 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                 # close it — we just record that partial already happened.
                 if tp_hit and partial_close_pct and not partial_close_done and ex.tp2_price:
                     partial_close_done = True
-                    # Move SL to entry price (protect the partial profit)
+                    # Move SL to entry price (protect the partial profit). The
+                    # entry-stop only applies to candles AFTER this one (chronology
+                    # guard) so an earlier dip can't retro-close the remainder.
                     ex.sl_price = ex.entry_price
+                    sl_eff_ms = _ts + 1
                     # Mark partial close in notes (survives across monitor cycles)
                     _old_notes = ex.notes or ""
                     # Preserve any existing metadata before the live-pnl suffix
+                    import re as _re_pc
                     _base_notes = _old_notes.split(" | open")[0].split(" | unrealised")[0].strip(" |")
-                    ex.notes = (_base_notes + " | partial_close_done").strip(" |")
+                    _base_notes = _re_pc.sub(r"\s*\|?\s*sleff=\d+", "", _base_notes).strip(" |")
+                    ex.notes = (_base_notes + f" | partial_close_done | sleff={sl_eff_ms}").strip(" |")
                     try:
                         db.commit()
                     except Exception:
@@ -1632,6 +1660,7 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                     if be_reached:
                         ex.sl_price = ex.entry_price
                         be_activated = True
+                        sl_eff_ms = _ts + 1  # entry-stop effective from NEXT candle only
                         logger.info(f"[PaperMonitor] AUTO-BREAKEVEN: exec #{ex.id} {ex.symbol} {be_log} → SL @ entry")
                         # Push + Telegram alert — once, when BE first activates.
                         try:
@@ -1666,10 +1695,12 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                         cand_sl = high * (1 - trail_pct / 100.0)
                         if cand_sl > ex.sl_price:
                             ex.sl_price = cand_sl
+                            sl_eff_ms = _ts + 1  # trailed stop effective next candle
                     else:
                         cand_sl = low * (1 + trail_pct / 100.0)
                         if cand_sl < ex.sl_price:
                             ex.sl_price = cand_sl
+                            sl_eff_ms = _ts + 1  # trailed stop effective next candle
 
             last_close = relevant[-1][4]
             if ex.direction == "LONG":
@@ -1678,11 +1709,17 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                 unreal = (ex.entry_price - last_close) / ex.entry_price * 100
             pnl_note = f"open · unrealised {'+' if unreal >= 0 else ''}{unreal:.2f}% · last {last_close:.6g}"
             orig = ex.notes or ""
-            if any(kw in orig for kw in ["Live→Paper", "fallback", "Bitunix error", "error"]):
-                base = orig.split(" | open")[0].split(" | unrealised")[0].strip(" |")
-                ex.notes = base + " | " + pnl_note
-            else:
-                ex.notes = pnl_note
+            # Preserve metadata tokens (broker ids, partial/breakeven state and
+            # the moved-stop effective timestamp) — only the live-pnl suffix is
+            # rebuilt each cycle.
+            base = orig.split(" | open")[0].split(" | unrealised")[0].strip(" |")
+            import re as _re_notes
+            base = _re_notes.sub(r"\s*\|?\s*sleff=\d+", "", base).strip(" |")
+            if sl_eff_ms is not None:
+                base = (base + f" | sleff={sl_eff_ms}").strip(" |")
+            if partial_close_done and "partial_close_done" not in base:
+                base = (base + " | partial_close_done").strip(" |")
+            ex.notes = (base + " | " + pnl_note).strip(" |") if base else pnl_note
             try:
                 db.commit()
             except Exception:
@@ -1773,6 +1810,24 @@ async def run_paper_position_monitor():
         async def _fetch_for_bucket(symbol: str, asset_class: str, positions: list):
             earliest = min((ex.fired_at or datetime.utcnow()) for ex in positions)
             candles  = await _fetch_candles_since_entry(symbol, earliest, http_client, asset_class)
+            # ── Live intra-candle hit detection (forex/index) ──────────────────
+            # Paper SL/TP is normally only seen when the 1m candle CLOSES (and the
+            # broker candle feed can fall back to a delayed source), which made
+            # gold alerts minutes late. Append a synthetic "now" candle built from
+            # the real-time broker spot price (same cTrader feed the live path
+            # uses) so a stop/target/breakeven is detected within the sweep cycle
+            # instead of waiting for the candle to close. Crypto already gets
+            # frequent candles, so this targets forex/index where the lag was worst.
+            if asset_class in ("forex", "index"):
+                try:
+                    from app.services.tradfi_prices import get_price as _spot_px
+                    _px = await _spot_px(symbol, asset_class)
+                    if _px and _px > 0:
+                        _now_ms = int(datetime.utcnow().timestamp() * 1000)
+                        if (not candles) or _now_ms > candles[-1][0]:
+                            candles = list(candles) + [[_now_ms, _px, _px, _px, _px]]
+                except Exception as _spe:
+                    logger.debug(f"[PaperMonitor] live spot append failed {symbol}: {_spe}")
             return symbol, positions, candles
 
         fetch_results = await asyncio.gather(
