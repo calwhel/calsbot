@@ -24,3 +24,4 @@
 - [Strategy-id ownership / IDOR](strategy-id-ownership-idor.md) — id-only perf helpers must be ownership-gated (user_id) before their output reaches an LLM prompt/response, or you leak cross-tenant trade data.
 - [Breakeven outcome classification](breakeven-outcome-classification.md) — a stop hit at entry is BREAKEVEN not LOSS; classify off persisted sl≈entry (tick-level eps), never a per-cycle be_activated flag (stays False across cycles once BE persisted).
 - [FVG/iFVG direction inference](fvg-ifvg-direction-inference.md) — BOTH strategies must pick side from the signal: FVG bullish→LONG, iFVG inverts (bullish→SHORT); read gap side from PASSED condition's details[i] (index-aligned, ✅-gated), RSI last resort.
+- [Telegram card HTML escaping](telegram-card-html-escaping.md) — dynamic text in HTML Telegram cards (strategy_name, condition bullets) MUST be html.escape'd or `<>&` (e.g. "RSI < 30") break parse → whole DM silently dropped; use <pre> for column alignment.

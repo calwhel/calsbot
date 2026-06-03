@@ -197,10 +197,10 @@ def notify_trade_close_bg(
         else:
             dur_str = f" · {duration_mins}m"
 
-    paper_tag = " (Paper)" if is_paper else ""
-    title = f"{icon} {result_label}{paper_tag} — {coin}"
+    paper_tag = " · Paper" if is_paper else ""
+    title = f"{icon} {result_label} · {coin}{paper_tag}"
     body = (
-        f"{strategy_name}: {coin} {direction} {leverage}× "
+        f"{strategy_name} · {direction} {leverage}× "
         f"→ {pnl_sign}{pnl_pct:.1f}%{dur_str}"
     )
 
@@ -233,11 +233,11 @@ def notify_tp_hit_bg(
 ) -> None:
     """Push notification when an intermediate TP level (TP1/TP2/TP3) is hit."""
     coin = symbol.replace("USDT", "")
-    paper_tag = " 📝" if is_paper else ""
-    title = f"🎯 {tp_level} HIT{paper_tag} — {coin}"
+    paper_tag = " · Paper" if is_paper else ""
+    title = f"🎯 {tp_level} hit · {coin}{paper_tag}"
     body = (
-        f"{strategy_name}: {coin} {direction} {leverage}× "
-        f"hit {tp_level} @ ${tp_price:,.4f} ({tp_roi:+.1f}%)"
+        f"{strategy_name} · {direction} {leverage}× "
+        f"@ ${tp_price:,.4f} ({tp_roi:+.1f}%)"
     )
     data = {
         "type": "tp_hit",
@@ -262,10 +262,10 @@ def notify_breakeven_bg(
 ) -> None:
     """Push notification when stop loss is moved to breakeven."""
     coin = symbol.replace("USDT", "")
-    title = f"🛡️ Breakeven — {coin}"
+    title = f"🛡️ Breakeven · {coin}"
     body = (
-        f"{strategy_name}: SL moved to entry ({current_roi:+.1f}% ROI). "
-        f"This trade is now risk-free."
+        f"{strategy_name} · {direction} {leverage}× — "
+        f"stop moved to entry, now risk-free ({current_roi:+.1f}%)"
     )
     data = {
         "type": "breakeven_moved",

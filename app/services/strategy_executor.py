@@ -6,6 +6,7 @@ and fires trades. Paper trades are tracked with 1m OHLC accuracy — candle
 high/low is used to detect TP/SL hits so scalp results are realistic.
 """
 import asyncio
+import html as _html
 import logging
 import time
 from datetime import datetime, timedelta
@@ -1141,54 +1142,67 @@ def _fmt_open_card(
     asset_class: str = "crypto",
 ) -> str:
     dir_icon = "🟢" if direction == "LONG" else "🔴"
-    header   = "🧪 <b>YOUR STRATEGY FIRED (PAPER)</b>" if is_paper else "🚀 <b>YOUR STRATEGY IS LIVE</b>"
-    bar      = "━━━━━━━━━━━━━━━━━━━━"
+    header   = "🧪 <b>PAPER TRADE OPENED</b>" if is_paper else "🚀 <b>LIVE TRADE OPENED</b>"
 
     # For forex: show pips (what traders actually think in) instead of %.
     # pips = price_distance / pip_size  e.g. XAUUSD: $2.50 / $0.10 = 25 pips.
     _is_forex = (asset_class == "forex")
+    _ps = 0.0
     if _is_forex and entry and entry > 0:
         from app.services.forex_engine import pip_size as _pip_size
-        _ps = _pip_size(symbol)
-        _tp_pips = round(abs(tp_price - entry) / _ps) if _ps else None
-        _sl_pips = round(abs(sl_price - entry) / _ps) if _ps else None
-        tp_label  = f"{_tp_pips} pips" if _tp_pips is not None else f"{tp_pct:.1f}%"
-        sl_label  = f"{_sl_pips} pips" if _sl_pips is not None else f"{sl_pct:.1f}%"
-    else:
-        sign_tp  = "+" if direction == "LONG" else "-"
-        sign_sl  = "-" if direction == "LONG" else "+"
-        tp_label = f"{sign_tp}{tp_pct:.1f}%"
-        sl_label = f"{sign_sl}{sl_pct:.1f}%"
+        _ps = _pip_size(symbol) or 0.0
 
-    tp2_line = ""
+    def _dist_label(px: float, pct: float) -> str:
+        if _ps:
+            return f"{round(abs(px - entry) / _ps)} pips"
+        return f"{pct:.1f}%"
+
+    tp_extra = _dist_label(tp_price, tp_pct)
+    sl_extra = _dist_label(sl_price, sl_pct)
+
+    # Risk : reward from raw price distances — works for both forex & crypto.
+    rr = None
+    try:
+        _risk = abs(sl_price - entry)
+        if _risk > 0:
+            rr = abs(tp_price - entry) / _risk
+    except Exception:
+        rr = None
+
+    rows = [
+        ("Entry",  f"{entry:.6g}",    ""),
+        ("Target", f"{tp_price:.6g}", f"+{tp_extra}"),
+    ]
     if tp2_price and tp2_pct:
-        if _is_forex and entry and entry > 0:
-            _tp2_pips = round(abs(tp2_price - entry) / _ps) if _ps else None
-            tp2_val = f"{_tp2_pips} pips" if _tp2_pips is not None else f"+{tp2_pct:.1f}%"
-        else:
-            sign = "+" if direction == "LONG" else "-"
-            tp2_val = f"{sign}{tp2_pct:.1f}%"
-        tp2_line = f"\nTP₂      <code>{tp2_price:.6g}</code>  ({tp2_val})"
+        rows.append(("Target 2", f"{tp2_price:.6g}", f"+{_dist_label(tp2_price, tp2_pct)}"))
+    rows.append(("Stop", f"{sl_price:.6g}", f"−{sl_extra}"))
+    if rr:
+        rows.append(("R : R", f"{rr:.1f} : 1", ""))
 
-    cond_lines = ""
+    _lw = max(len(r[0]) for r in rows)
+    _vw = max(len(r[1]) for r in rows)
+    table = "\n".join(
+        f"{lbl:<{_lw}}  {val:>{_vw}}" + (f"   {ext}" if ext else "")
+        for lbl, val, ext in rows
+    )
+
+    why = ""
     if conditions:
         passed = [c for c in conditions if c.startswith("✅")]
         if passed:
-            cond_lines = "\n\n<b>Why it triggered:</b>\n" + "\n".join(f"  {c}" for c in passed[:5])
+            why = "\n✅ <b>Why it fired</b>\n" + "\n".join(
+                f"• {_html.escape(c[1:].strip())}" for c in passed[:5]
+            )
 
-    order_line = f"\n<i>Order ID: #{order_id}</i>" if order_id else ""
-    footer     = "<i>📄 Paper trade · no real funds used</i>" if is_paper else "<i>✅ Live strategy trade executed</i>"
+    order_line = f"\n<i>Order #{_html.escape(str(order_id))}</i>" if order_id else ""
+    footer     = "📄 <i>Paper trade · no real funds used</i>" if is_paper else "✅ <i>Live trade executed</i>"
 
     return (
-        f"{header}\n{bar}\n"
-        f"📋 <b>{strategy_name}</b>\n"
-        f"{dir_icon} <b>{symbol}</b>  ·  {direction}  ·  {leverage}×\n"
-        f"{bar}\n"
-        f"Entry    <code>{entry:.6g}</code>\n"
-        f"TP₁      <code>{tp_price:.6g}</code>  ({tp_label}){tp2_line}\n"
-        f"SL       <code>{sl_price:.6g}</code>  ({sl_label})"
-        f"{cond_lines}\n"
-        f"{bar}\n"
+        f"{header}\n"
+        f"📋 <b>{_html.escape(str(strategy_name))}</b>\n\n"
+        f"{dir_icon} <b>{_html.escape(str(symbol))}</b> · {direction} · {leverage}×\n\n"
+        f"<pre>{table}</pre>"
+        f"{why}\n\n"
         f"{footer}{order_line}"
     )
 
@@ -1201,39 +1215,37 @@ def _fmt_close_card(
     conditions: list = None, is_paper: bool = False,
 ) -> str:
     dir_icon  = "🟢" if direction == "LONG" else "🔴"
-    pnl_sign  = "+" if pnl_pct >= 0 else ""
-    bar       = "━━━━━━━━━━━━━━━━━━━━"
     coin      = symbol.replace("USDT", "")
 
     if outcome == "WIN":
         icon      = "✅"
         result    = "WIN"
-        hit_label = "TP hit 🎯"
+        hit_label = "TP hit"
     elif outcome == "LOSS":
         icon      = "🛑"
         result    = "LOSS"
-        hit_label = "SL hit 🛑"
+        hit_label = "SL hit"
     elif outcome == "BREAKEVEN":
         icon      = "⚖️"
         result    = "BREAKEVEN"
-        hit_label = "Breakeven ⚖️"
+        hit_label = "breakeven"
     else:
         icon      = "📊"
         result    = outcome
         hit_label = f"{outcome}"
 
-    duration_line = ""
+    dur = ""
     if fired_at and closed_at:
         secs  = int((closed_at - fired_at).total_seconds())
         days, rem = divmod(secs, 86400)
         hours, rem = divmod(rem, 3600)
         mins       = rem // 60
         if days:
-            duration_line = f"\n⏱ Duration  <b>{days}d {hours}h {mins}m</b>"
+            dur = f"{days}d {hours}h {mins}m"
         elif hours:
-            duration_line = f"\n⏱ Duration  <b>{hours}h {mins}m</b>"
+            dur = f"{hours}h {mins}m"
         else:
-            duration_line = f"\n⏱ Duration  <b>{mins}m</b>"
+            dur = f"{mins}m"
 
     def _pip_size(sym: str) -> float | None:
         """Return pip size for the symbol, or None for crypto (no pip convention)."""
@@ -1265,41 +1277,49 @@ def _fmt_close_card(
     # Signed raw price move (positive = favourable for the trade direction)
     raw_move = (exit_price - entry) if direction == "LONG" else (entry - exit_price)
 
-    if pip_sz is not None:
+    if pip_sz is not None and pip_sz > 0:
         pips = raw_move / pip_sz
-        sign = "+" if pips >= 0 else ""
+        sign = "+" if pips >= 0 else "−"
         # Whole pips for large values, 1dp for fractional
-        pip_str = f"{sign}{pips:.0f}" if abs(pips) >= 1 else f"{sign}{pips:.1f}"
-        pnl_display = f"<b>{pip_str} pips</b>"
-        move_line   = ""
+        pnl_display = f"{sign}{abs(pips):.0f} pips" if abs(pips) >= 1 else f"{sign}{abs(pips):.1f} pips"
     else:
         # Crypto: keep % with adaptive precision
         a = abs(pnl_pct)
-        if a < 0.1:   pnl_display = f"<b>{pnl_pct:+.3f}%</b>"
-        elif a < 10:  pnl_display = f"<b>{pnl_pct:+.2f}%</b>"
-        else:         pnl_display = f"<b>{pnl_pct:+.1f}%</b>"
-        move_line = ""
+        if a < 0.1:   pnl_display = f"{pnl_pct:+.3f}%"
+        elif a < 10:  pnl_display = f"{pnl_pct:+.2f}%"
+        else:         pnl_display = f"{pnl_pct:+.1f}%"
 
-    cond_lines = ""
+    rows = [
+        ("Entry", f"{entry:.6g}",     ""),
+        ("Exit",  f"{exit_price:.6g}", hit_label),
+        ("P/L",   pnl_display,         ""),
+    ]
+    if dur:
+        rows.append(("Time", dur, ""))
+
+    _lw = max(len(r[0]) for r in rows)
+    _vw = max(len(r[1]) for r in rows)
+    table = "\n".join(
+        f"{lbl:<{_lw}}  {val:>{_vw}}" + (f"   {ext}" if ext else "")
+        for lbl, val, ext in rows
+    )
+
+    why = ""
     if conditions:
         passed = [c for c in conditions if c.startswith("✅")]
         if passed:
-            cond_lines = "\n<b>Triggered by:</b>\n" + "\n".join(f"  {c}" for c in passed[:3]) + "\n"
+            why = "\n✅ <b>Triggered by</b>\n" + "\n".join(
+                f"• {_html.escape(c[1:].strip())}" for c in passed[:3]
+            )
 
-    paper_tag = "📄 Paper trade" if is_paper else "✅ Live trade"
+    paper_tag = "📄 <i>Paper trade result</i>" if is_paper else "✅ <i>Live trade result</i>"
 
     return (
-        f"{icon} <b>STRATEGY {result}: {strategy_name}</b>\n{bar}\n"
-        f"{dir_icon} <b>${coin}</b>  ·  {direction}  ·  {leverage}×\n"
-        f"{bar}\n"
-        f"Entry    <code>{entry:.6g}</code>\n"
-        f"Exit     <code>{exit_price:.6g}</code>  ({hit_label})\n"
-        f"P&L      {pnl_display}"
-        f"{move_line}"
-        f"{duration_line}\n"
-        f"{bar}\n"
-        f"{cond_lines}"
-        f"<i>{paper_tag} result</i>"
+        f"{icon} <b>{result} · {_html.escape(str(strategy_name))}</b>\n\n"
+        f"{dir_icon} <b>${_html.escape(str(coin))}</b> · {direction} · {leverage}×\n\n"
+        f"<pre>{table}</pre>"
+        f"{why}\n\n"
+        f"{paper_tag}"
     )
 
 
@@ -1361,8 +1381,9 @@ def _notify_breakeven_alert(
         return
     _coin = symbol.upper().replace("USDT", "")
     _text = (
-        f"🛡️ <b>Breakeven — {_coin}</b>\n"
-        f"{strategy_name}: stop moved to entry. This {direction} trade is now risk-free."
+        f"🛡️ <b>Breakeven · {_coin}</b>\n"
+        f"📋 <b>{_html.escape(str(strategy_name))}</b>\n\n"
+        f"Stop moved to entry — this {direction} trade is now risk-free. ✅"
     )
     try:
         _loop = asyncio.get_running_loop()
@@ -2993,8 +3014,8 @@ async def evaluate_and_fire(
                 _coin = symbol.replace("USDT", "")
                 notify_user_bg(
                     user.id,
-                    title=f"📝 {strategy.name}",
-                    body=f"Paper trade: {_coin} {direction} {leverage}× @ ${current_price:,.4f}",
+                    title=f"📝 Paper · {_coin} {direction} {leverage}×",
+                    body=f"{strategy.name} @ ${current_price:,.4f}",
                     data={"type": "trade_open", "strategy_id": strategy.id, "kind": "paper"},
                     kind="paper",
                     position_usd=float(risk.get("position_size_usd") or 0) or None,
@@ -3118,8 +3139,8 @@ async def evaluate_and_fire(
                     _coin = symbol.replace("USDT", "")
                     notify_user_bg(
                         user.id,
-                        title=f"⚠️ {strategy.name}",
-                        body=f"Live order failed → paper: {_coin} {direction} {leverage}×",
+                        title=f"⚠️ Live failed → Paper · {_coin} {direction}",
+                        body=f"{strategy.name} · {leverage}×",
                         data={"type": "trade_open", "strategy_id": strategy.id, "kind": "paper_fallback"},
                         kind="paper",
                         position_usd=float(risk.get("position_size_usd") or 0) or None,
@@ -3189,8 +3210,8 @@ async def evaluate_and_fire(
                         _coin = symbol.replace("USDT", "")
                         notify_user_bg(
                             user.id,
-                            title=f"🚀 {strategy.name}",
-                            body=f"Live trade: {_coin} {direction} {leverage}× @ ${display_entry:,.4f}",
+                            title=f"🚀 Live · {_coin} {direction} {leverage}×",
+                            body=f"{strategy.name} @ ${display_entry:,.4f}",
                             data={"type": "trade_open", "strategy_id": strategy.id, "kind": "live"},
                             kind="live",
                             position_usd=float(risk.get("position_size_usd") or 0) or None,
