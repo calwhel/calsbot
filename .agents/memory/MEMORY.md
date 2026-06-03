@@ -22,3 +22,4 @@
 - [Ghost-cleanup broker-id trap](ghost-cleanup-broker-id-trap.md) — "no broker id" ghost sweep must require ALL broker-id cols NULL (bitunix AND ctrader); checking only Bitunix false-cancelled live forex trades and suppressed SL notifications.
 - [App DB is Neon, not Replit built-in](app-db-is-neon.md) — app reads NEON_DATABASE_URL (single source of truth, all envs); executeSql replit_database target hits a STALE unused DB; query Neon via app.database.SessionLocal.
 - [Strategy-id ownership / IDOR](strategy-id-ownership-idor.md) — id-only perf helpers must be ownership-gated (user_id) before their output reaches an LLM prompt/response, or you leak cross-tenant trade data.
+- [Breakeven outcome classification](breakeven-outcome-classification.md) — a stop hit at entry is BREAKEVEN not LOSS; classify off persisted sl≈entry (tick-level eps), never a per-cycle be_activated flag (stays False across cycles once BE persisted).

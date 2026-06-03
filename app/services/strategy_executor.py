@@ -1502,6 +1502,29 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
             partial_close_pct = float(_m.group(1))
 
     be_activated = False
+
+    def _outcome_for_sl() -> str:
+        # A stop sitting AT entry is a scratch/BREAKEVEN, not a LOSS. This must
+        # NOT rely on the per-cycle `be_activated` flag: once breakeven is
+        # persisted (ex.sl_price == ex.entry_price) from a prior monitor cycle,
+        # the in-cycle activation block (which requires sl_price != entry) is
+        # skipped, so be_activated stays False even though the SL is at entry.
+        # Classify off the actual stop price vs entry instead.
+        #
+        # Tolerance is TICK-LEVEL on purpose: breakeven (and partial-close-to-
+        # entry) set ex.sl_price = ex.entry_price EXACTLY (identical float, bit-
+        # stable across the Neon double round-trip), whereas a genuine stop is
+        # always ≥ ~1 pip away (smallest pip move is ~2e-5 relative). A wide band
+        # here would mislabel small genuine losses as BREAKEVEN.
+        try:
+            if (ex.sl_price is not None and ex.entry_price and
+                    abs(float(ex.sl_price) - float(ex.entry_price))
+                    <= float(ex.entry_price) * 1e-7):
+                return "BREAKEVEN"
+        except Exception:
+            pass
+        return "LOSS"
+
     # Track whether we've already performed a partial close for this execution
     # (stored in notes to survive across monitor cycles).
     partial_close_done = bool(ex.notes and "partial_close_done" in ex.notes)
@@ -1518,7 +1541,7 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                         if close >= open_:
                             _close_paper_execution(ex, "WIN", ex.tp_price, db)
                         else:
-                            outcome = "BREAKEVEN" if be_activated and ex.sl_price == ex.entry_price else "LOSS"
+                            outcome = _outcome_for_sl()
                             _close_paper_execution(ex, outcome, ex.sl_price, db)
                         return True
                 else:
@@ -1528,7 +1551,7 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                         if close <= open_:
                             _close_paper_execution(ex, "WIN", ex.tp_price, db)
                         else:
-                            outcome = "BREAKEVEN" if be_activated and ex.sl_price == ex.entry_price else "LOSS"
+                            outcome = _outcome_for_sl()
                             _close_paper_execution(ex, outcome, ex.sl_price, db)
                         return True
 
@@ -1563,7 +1586,7 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                     _close_paper_execution(ex, "WIN", ex.tp_price, db)
                     return True
                 if sl_hit:
-                    outcome = "BREAKEVEN" if be_activated and ex.sl_price == ex.entry_price else "LOSS"
+                    outcome = _outcome_for_sl()
                     _close_paper_execution(ex, outcome, ex.sl_price, db)
                     return True
 
