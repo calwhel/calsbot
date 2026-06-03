@@ -2848,21 +2848,66 @@ async def evaluate_and_fire(
 
         direction = direction_pref
         if direction == "BOTH":
-            # Infer direction from directional conditions (FVG, order block, divergence, COD)
-            # before falling back to RSI — a bullish FVG must never produce a SHORT.
+            # Infer the trade side from the directional signal itself — FVG/iFVG,
+            # order block, divergence/COD — and only fall back to RSI when the
+            # strategy carries no directional signal at all.
+            #
+            #   FVG : bullish gap → LONG,  bearish gap → SHORT.
+            #   iFVG: an inverted gap flips the bias — a violated bullish gap
+            #         becomes resistance → SHORT, a violated bearish gap becomes
+            #         support → LONG.
+            #
+            # When the condition's direction is "any" the gap side isn't pinned in
+            # config, so we read the side actually detected on THIS fire from the
+            # matching evaluation detail (eval_fvg labels them "Bullish/Bearish FVG").
+            #
+            # `details` is index-aligned with entry_conditions.conditions and each
+            # line is prefixed "✅"/"❌". We only ever infer direction from a
+            # condition that PASSED — critical for OR strategies, where a failed
+            # FVG line must never drive the trade side.
+            _entry_conds = config.get("entry_conditions", {}).get("conditions", [])
+
+            def _passed_at(_i):
+                return _i < len(details) and str(details[_i]).lstrip().startswith("✅")
+
+            def _gap_bias_at(_i):
+                if _i >= len(details):
+                    return None
+                _dl = str(details[_i]).lower()
+                if "bullish fvg" in _dl:
+                    return "bullish"
+                if "bearish fvg" in _dl:
+                    return "bearish"
+                return None
+
+            def _norm(_v):
+                return _v.strip().lower() if isinstance(_v, str) else _v
+
             inferred_dir = None
-            for _cond in config.get("entry_conditions", {}).get("conditions", []):
+            for _i, _cond in enumerate(_entry_conds):
+                if not _passed_at(_i):
+                    continue
                 _ct = _cond.get("type", "")
-                _d = None
-                if _ct == "fvg":
-                    _d = _cond.get("direction") or _cond.get("fvg_dir")
+                if _ct in ("fvg", "ifvg"):
+                    _bias = _norm(_cond.get("direction") or _cond.get("fvg_dir"))
+                    if not _bias or _bias in ("any", "both"):
+                        _bias = _gap_bias_at(_i)
+                    if _bias in ("bullish", "bearish"):
+                        if _ct == "ifvg":
+                            inferred_dir = "SHORT" if _bias == "bullish" else "LONG"
+                        else:
+                            inferred_dir = "LONG" if _bias == "bullish" else "SHORT"
+                        break
                 elif _ct in ("order_block", "ob"):
-                    _d = _cond.get("ob_type") or _cond.get("direction")
+                    _d = _norm(_cond.get("ob_type") or _cond.get("direction"))
+                    if _d and _d not in ("any", "both"):
+                        inferred_dir = "LONG" if _d == "bullish" else "SHORT"
+                        break
                 elif _ct in ("divergence", "cod", "change_of_direction"):
-                    _d = _cond.get("direction")
-                if _d and _d not in ("any", "both"):
-                    inferred_dir = "LONG" if _d == "bullish" else "SHORT"
-                    break
+                    _d = _norm(_cond.get("direction"))
+                    if _d and _d not in ("any", "both"):
+                        inferred_dir = "LONG" if _d == "bullish" else "SHORT"
+                        break
             if inferred_dir:
                 direction = inferred_dir
             else:
