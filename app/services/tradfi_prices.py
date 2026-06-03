@@ -45,6 +45,15 @@ _PRICE_TTL = timedelta(seconds=20)
 _KLINE_CACHE: Dict[Tuple[str, str, int], Tuple[List[List[float]], datetime]] = {}
 _KLINE_TTL = timedelta(seconds=20)
 
+# Single-flight registry — collapses concurrent identical candle requests into
+# ONE underlying fetch. The forex executor evaluates up to ~40 strategies per
+# cycle, many on the same symbol+timeframe (e.g. ~28 on XAUUSD); without this,
+# each strategy independently fired its own (slow, ~1-3s) yfinance download when
+# the 20s cache was cold/expired, stretching a forex scan cycle to ~2 minutes.
+# Keyed by the function inputs so any caller asking for the same bars while a
+# fetch is in flight awaits that fetch instead of starting a duplicate one.
+_KLINE_INFLIGHT: Dict[Tuple[str, str, str, int], "asyncio.Future"] = {}
+
 # Map our wizard timeframes to yfinance intervals + a sensible history window.
 # yfinance restricts intraday lookback: 1m → 7d max, 5m/15m → 60d, 1h → 730d.
 _TF_MAP: Dict[str, Tuple[str, str]] = {
@@ -202,6 +211,67 @@ async def get_price(symbol: str, asset_class: str) -> Optional[float]:
 
 
 async def get_klines(
+    symbol: str,
+    asset_class: str,
+    timeframe: str = "15m",
+    limit: int = 200,
+) -> List[List[float]]:
+    """
+    Return up to `limit` OHLC bars in MEXC-shape: [[ts_ms, o, h, l, c, v], ...]
+
+    Single-flight wrapper around `_get_klines_impl`: concurrent callers asking
+    for the same (symbol, asset_class, timeframe, limit) while a fetch is in
+    flight await that one fetch instead of each launching a duplicate (slow)
+    download. The 20s `_KLINE_CACHE` already dedupes *sequential* requests; this
+    dedupes the *simultaneous* ones (the executor's per-cycle thundering herd).
+    """
+    key = (symbol.upper(), normalize_asset_class(asset_class), timeframe, int(limit))
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+
+    if running is not None:
+        inflight = _KLINE_INFLIGHT.get(key)
+        # Only piggy-back on an in-flight fetch that belongs to THIS loop and is
+        # still pending — guards against the (per-process single-loop) invariant
+        # ever being violated.
+        if (
+            inflight is not None
+            and not inflight.done()
+            and inflight.get_loop() is running
+        ):
+            try:
+                return await inflight
+            except Exception:
+                return []
+
+        fut = running.create_future()
+        _KLINE_INFLIGHT[key] = fut
+        try:
+            result = await _get_klines_impl(symbol, asset_class, timeframe, limit)
+            if not fut.done():
+                fut.set_result(result)
+            return result
+        except asyncio.CancelledError:
+            # Producer was cancelled mid-fetch — never leave piggy-backed waiters
+            # hanging on an unresolved future. Cancel it so they wake promptly.
+            if not fut.done():
+                fut.cancel()
+            raise
+        except Exception:
+            if not fut.done():
+                fut.set_result([])
+            return []
+        finally:
+            if _KLINE_INFLIGHT.get(key) is fut:
+                _KLINE_INFLIGHT.pop(key, None)
+
+    # No running loop (shouldn't happen for an async caller) — fetch directly.
+    return await _get_klines_impl(symbol, asset_class, timeframe, limit)
+
+
+async def _get_klines_impl(
     symbol: str,
     asset_class: str,
     timeframe: str = "15m",
