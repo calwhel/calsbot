@@ -1044,7 +1044,22 @@ async def place_order(
                 position_id = None
                 if ev.HasField("deal"):
                     if ev.deal.executionPrice:
-                        actual_fill = ev.deal.executionPrice / 100_000.0
+                        # cTrader's deal.executionPrice scaling is SYMBOL-DEPENDENT:
+                        # FX majors arrive scaled (×10^5 → 1.0850 sent as 108500),
+                        # but metals/indices commonly arrive as the true price
+                        # (gold 4452.76 sent as 4452.76). A fixed /100_000 turned
+                        # a real gold fill into 0.0445276. The fill must be near the
+                        # signal entry, so pick whichever interpretation lands
+                        # closest to entry_price (robust across all symbols).
+                        _raw = float(ev.deal.executionPrice)
+                        if entry_price and entry_price > 0:
+                            _cands = [_raw, _raw / 100.0, _raw / 1000.0,
+                                      _raw / 100_000.0]
+                            actual_fill = min(
+                                _cands, key=lambda v: abs(v - entry_price)
+                            )
+                        else:
+                            actual_fill = _raw
                     if ev.deal.positionId:
                         position_id = str(ev.deal.positionId)
                 return {"order_id": order_id, "actual_fill": actual_fill,
@@ -1128,9 +1143,16 @@ async def modify_position_sltp(
                 req = ProtoOAAmendPositionSLTPReq()
                 req.ctidTraderAccountId = ctid_trader_account_id
                 req.positionId          = position_id
-                # Same ×100_000 wire scaling place_order uses (the broker reads
-                # these double fields scaled — confirmed by executionPrice/100_000
-                # round-tripping to correct fills).
+                # NOTE (symbol-dependent scaling): these ABSOLUTE price fields use
+                # ×100_000, which is correct for 5-digit FX majors but is NOT
+                # universal — live gold fills arrive from the broker UNSCALED
+                # (deal.executionPrice ~4452.76, not 445276000), so a ×100_000
+                # absolute stopLoss/takeProfit for XAUUSD is likely wrong by orders
+                # of magnitude. place_order avoids this by sending RELATIVE offsets
+                # (distance×100_000, symbol-independent per the cTrader spec), which
+                # works for gold. This amend path (live breakeven/trailing) still
+                # uses absolute scaling and should be migrated to per-symbol digit
+                # scaling (or relative amend) before relying on it for metals.
                 if stop_loss_price is not None:
                     req.stopLoss = int(stop_loss_price * 100_000)
                 if take_profit_price is not None:

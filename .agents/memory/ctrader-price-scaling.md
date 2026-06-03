@@ -10,18 +10,32 @@ In `app/services/ctrader_client.py`, all order/position **price** fields
 protobuf type `double`, BUT the working broker convention for this account is the
 **price multiplied by 100000**.
 
-**The rule:** when SENDING a price to cTrader, write `int(price * 100_000)`. When
-READING a price back, divide by `100_000.0`.
+**The ×100000 rule holds ONLY for 5-digit FX majors — price scaling is
+SYMBOL-DEPENDENT.** This was learned the hard way: a live XAUUSD fill came back as
+`deal.executionPrice = 4452.76` (the TRUE price, UNSCALED), so the fixed
+`executionPrice / 100_000.0` produced `0.0445276`, and the executor's delta-shift
+then turned SL/TP into garbage (`-4.95547` / `10.0445`) on the trade card.
 
-**Why:** `place_order` empirically writes `int(stop_loss_price * 100_000)` and reads
-`actual_fill = ev.deal.executionPrice / 100_000.0`, and that round-trips to correct
-live fills in production. A naive read of the proto schema (type=double = absolute
-price) would tell you to send the raw price (e.g. 1.08 for EURUSD) — that is WRONG
-for this broker and would set a stop ~5 orders of magnitude off. Always mirror the
-existing place_order scaling, not the nominal proto type.
+**RELATIVE offsets ARE universal; ABSOLUTE prices are NOT.**
+- `place_order` sends `relativeStopLoss/relativeTakeProfit = abs(entry-level)*100_000`.
+  Relative offsets are spec'd as "1/100000 of a price unit" and are
+  symbol-INDEPENDENT — this is why gold orders place correct stops. Keep using
+  relative offsets for orders.
+- `deal.executionPrice` (and other ABSOLUTE price fields) arrive scaled by the
+  symbol's digits: FX majors ×10^5, metals/indices effectively ×1. Do NOT divide
+  by a fixed constant.
 
-**How to apply:** any new cTrader request that carries a price (e.g.
-`modify_position_sltp` for breakeven/trailing amends) must use `int(price*100_000)`.
+**Reading a fill price (robust):** the fill is always near the known signal
+`entry_price`, so pick whichever interpretation lands closest:
+`min([raw, raw/100, raw/1000, raw/100_000], key=lambda v: abs(v-entry_price))`.
+This auto-resolves FX (raw/100000→1.085) and gold (raw→4452.76).
+
+**KNOWN LATENT BUG (not yet fixed):** `modify_position_sltp` (live breakeven/
+trailing) still sends ABSOLUTE `stopLoss/takeProfit` as `int(price*100_000)`. That
+is correct for FX majors but ~1000× wrong for gold (gold absolute prices are
+unscaled on this account). Before relying on live SL amends for metals, migrate it
+to per-symbol digit scaling OR to relative-offset amends. Orders are unaffected
+(they use relative offsets).
 
 # Live forex broker positionId
 
