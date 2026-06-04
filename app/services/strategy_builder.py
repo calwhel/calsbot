@@ -407,6 +407,20 @@ direction: bullish (close back above the open of the last bearish run = sellers 
 max_run: max length of the opposing delivery run to scan (default 10)
 → "CISD" | "change in state of delivery" | "delivery flip" | "change of delivery" | "state of delivery shift"
 
+── ICT SDP — SWEEP → DISPLACEMENT → PULLBACK ─────────────────────────────────
+{"type":"fx_sdp","direction":"bullish","swing_lookback":20,"sweep_window":5,"min_body_ratio":2.0,"max_age":20,"timeframe":"5m"}
+A single sequenced setup (the order is enforced, NOT three separate conditions):
+  1. sweep of a recent swing extreme (liquidity grab), then
+  2. a displacement candle (body ≥ min_body_ratio× avg) that leaves an FVG, then
+  3. price pulls back into that FVG → fires at the entry.
+direction: bullish (sweep lows → up displacement → pull back into bullish FVG)
+           bearish (sweep highs → down displacement → pull back into bearish FVG)
+swing_lookback: bars defining the swept swing extreme (default 20)
+sweep_window: max bars between the sweep and the displacement (default 5)
+min_body_ratio: displacement body ≥ N× avg body (default 2.0)
+max_age: how many recent bars to scan for the setup (default 20)
+→ "SDP" | "sweep displacement pullback" | "sweep, displacement, pullback" | "liquidity sweep then displacement then retrace" | "sweep + FVG + pullback entry"
+
 ── ICT BREAKER BLOCK ──────────────────────────────────────────────────────────
 {"type":"fx_breaker","direction":"bullish","lookback":50,"tolerance_pct":0.5,"timeframe":"15m"}
 direction: bullish (former supply → support) | bearish (former demand → resistance)
@@ -565,6 +579,7 @@ FOREX-SPECIFIC RULES (apply when asset_class = "forex")
   • "equal highs" / "EQH" / "equal lows" / "EQL" / "BSL" / "SSL" → fx_equal_hl
   • "breaker block" / "breaker" / "failed order block" → fx_breaker
   • "CISD" / "change in state of delivery" / "delivery flip" / "change of delivery" / "state of delivery shift" → fx_cisd
+  • "SDP" / "sweep displacement pullback" / "sweep, displacement, pullback" / "sweep then displacement then retrace" / "sweep + FVG + pullback" → fx_sdp
   • "premium zone" / "discount zone" / "PD array" / "equilibrium" → fx_pd_array
   • "Judas swing" / "fake move at open" / "manipulation leg" → fx_judas_swing
   • "silver bullet" / "ICT silver bullet" / "3 AM setup" / "10 AM" → fx_silver_bullet
@@ -580,6 +595,7 @@ FOREX-SPECIFIC RULES (apply when asset_class = "forex")
   • "Silver bullet strategy" → fx_silver_bullet + fvg conditions; tight TP 15–20 pips, SL 10–12 pips
   • "Judas swing fade" → fx_judas_swing + fx_pd_array; BOTH direction, TP 25–35 pips, SL 15 pips
   • "Breaker block entry" → fx_breaker + fx_killzone; TP 30–40 pips, SL 15 pips
+  • "SDP" / "sweep displacement pullback" → fx_sdp (primary) optionally + fx_killzone (london_kz/ny_kz) timing; TP 25–50 pips, SL 12–18 pips (the sweep low/high is the invalidation)
   • "Gold ICT CISD" / "XAUUSD liq sweep + iFVG + MSS/CISD" → fx_killzone (london_kz or ny_kz) + forex_liquidity_pa (sweep_eqh/sweep_eql) + market_structure (choch/bos for MSS) + fx_cisd + ifvg (5m) confirmations on XAUUSD; TP 40–80 pips, SL 20–25 pips
   Classic non-ICT forex templates — when the user names these, compose them:
   • "VWAP reversion" / "fade to VWAP" / "mean-revert to VWAP" → vwap_bands (below_lower/above_upper, num_std 2.0, 5m) primary + vwap_bias + rvol + rsi confirmations; BOTH direction, TP 15 pips, SL 10 pips

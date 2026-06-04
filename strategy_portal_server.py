@@ -10772,6 +10772,7 @@ SIGNAL RECOGNITION:
   displacement / impulse candle / institutional move → fx_displacement
   equal highs / EQH / equal lows / EQL / BSL / SSL → fx_equal_hl
   CISD / change in state of delivery / delivery flip / change of delivery → fx_cisd
+  SDP / sweep displacement pullback / sweep then displacement then retrace / sweep + FVG + pullback → fx_sdp
   breaker block / failed OB / mitigation block → fx_breaker
   premium zone / discount / PD array / equilibrium → fx_pd_array
   Judas swing / fake move / manipulation leg / stop hunt then reverse → fx_judas_swing
@@ -11207,6 +11208,14 @@ CONDITION REFERENCE (use EXACT type/name/field names from this list):
   bullish = latest candle closes ABOVE the open of the last bearish run (sellers done → buyers in)
   bearish = latest candle closes BELOW the open of the last bullish run (buyers done → sellers in)
   max_run = max length of the opposing delivery run to scan (default 10). Pairs with liquidity sweeps + IFVG retests.
+
+━━━ TYPE: "fx_sdp" ━━━  (ICT Sweep → Displacement → Pullback — sequenced entry model)
+{ type:"fx_sdp", direction:"bullish"|"bearish", swing_lookback:INT, sweep_window:INT, min_body_ratio:FLOAT, max_age:INT, timeframe, label }
+  ONE sequenced setup (order enforced, not 3 separate conditions): liquidity sweep → displacement candle that leaves an FVG → price pulls back into that FVG (fires at entry).
+  bullish = sweep lows → up displacement → pull back into bullish FVG (long)
+  bearish = sweep highs → down displacement → pull back into bearish FVG (short)
+  swing_lookback = bars defining the swept swing extreme (default 20); sweep_window = max bars between sweep & displacement (default 5)
+  min_body_ratio = displacement body ≥ N× avg body (default 2.0); max_age = recent bars scanned (default 20)
 
 ━━━ TYPE: "price_momentum" ━━━
 { type:"price_momentum", window_minutes:INT, operator:"gt"|"lt", value:FLOAT, direction:"up"|"down"|"any", label }

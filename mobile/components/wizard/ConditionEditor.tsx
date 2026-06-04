@@ -918,6 +918,38 @@ function renderKnobs(
       );
     }
 
+    case 'fx_sdp': {
+      const dirOpts: ChipOption<string>[] = [
+        { value: 'bullish', label: '🟢 Bullish (sweep lows → up → pullback)' },
+        { value: 'bearish', label: '🔴 Bearish (sweep highs → down → pullback)' },
+      ];
+      return (
+        <View>
+          <Section label="Direction" compact={compact}>
+            <ChipRow options={dirOpts}
+              value={(cfg.direction as string) || 'bullish'}
+              onChange={(v) => set({ direction: v })} size="sm" />
+          </Section>
+          <Stepper label="Swing lookback (bars)" value={cfg.swing_lookback ?? 20}
+            min={5} max={100} step={5}
+            onChange={(v) => set({ swing_lookback: v })}
+            hint="Bars defining the swing high/low that gets swept (the liquidity grab)" />
+          <Stepper label="Sweep → displacement window (bars)" value={cfg.sweep_window ?? 5}
+            min={1} max={20} step={1}
+            onChange={(v) => set({ sweep_window: v })}
+            hint="Max bars allowed between the sweep and the displacement candle" />
+          <Stepper label="Displacement body (× avg)" value={cfg.min_body_ratio ?? 2.0}
+            min={1} max={8} step={0.5} decimals={1}
+            onChange={(v) => set({ min_body_ratio: v })}
+            hint="Impulse candle body must be this many times the average body" />
+          <Stepper label="Setup recency (bars)" value={cfg.max_age ?? 20}
+            min={3} max={60} step={1}
+            onChange={(v) => set({ max_age: v })}
+            hint="How many recent bars to scan for the sweep→displacement→pullback setup" />
+        </View>
+      );
+    }
+
     case 'fx_pd_array': {
       const biasOpts: ChipOption<string>[] = [
         { value: 'discount', label: '🟢 Discount (below 50% — buy zone)' },

@@ -2623,6 +2623,122 @@ async def eval_fx_cisd(
         )
 
 
+async def eval_fx_sdp(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`fx_sdp` — Sweep → Displacement → Pullback (ICT entry model).
+
+    A complete 3-stage sequence (order matters, not just 3 conditions ANDed):
+      1. SWEEP        — a candle wicks beyond a recent swing extreme (grabs
+                        liquidity) then closes back through it.
+      2. DISPLACEMENT — within a few bars after the sweep, a large-body candle
+                        (>= min_body_ratio × avg body) drives away in the trade
+                        direction and leaves a Fair Value Gap (3-candle imbalance).
+      3. PULLBACK     — price then retraces back into that displacement FVG; the
+                        signal FIRES at this mitigation/entry moment.
+
+    Bullish SDP: sweep of LOWS (sell-side liquidity) → bullish displacement up →
+      price pulls back DOWN into the bullish FVG (long entry).
+    Bearish SDP: mirror — sweep of HIGHS → bearish displacement down → price
+      pulls back UP into the bearish FVG (short entry).
+
+    cfg.direction:      'bullish' | 'bearish' (default 'bullish')
+    cfg.swing_lookback: bars defining the swing extreme that gets swept (default 20)
+    cfg.sweep_window:   max bars between the sweep and the displacement (default 5)
+    cfg.min_body_ratio: displacement body >= N × avg body (default 2.0)
+    cfg.max_age:        how many recent closed bars to scan for the setup (default 20)
+    cfg.timeframe:      kline TF (default '5m')
+    """
+    direction = (cond.get("direction") or "bullish").lower()
+    tf        = cond.get("timeframe", "5m")
+    try:
+        swing_lookback = max(5, min(int(cond.get("swing_lookback") or 20), 100))
+    except (TypeError, ValueError):
+        swing_lookback = 20
+    try:
+        sweep_window = max(1, min(int(cond.get("sweep_window") or 5), 20))
+    except (TypeError, ValueError):
+        sweep_window = 5
+    try:
+        min_body_ratio = max(1.0, float(cond.get("min_body_ratio") or 2.0))
+    except (TypeError, ValueError):
+        min_body_ratio = 2.0
+    try:
+        max_age = max(3, min(int(cond.get("max_age") or 20), 60))
+    except (TypeError, ValueError):
+        max_age = 20
+
+    need = swing_lookback + max_age + 10
+    klines = await _get_klines(symbol, tf, need, http_client, cache)
+    if not klines or len(klines) < swing_lookback + 6:
+        return False, "SDP: insufficient data"
+
+    closed = klines[:-1]  # exclude the still-forming candle
+    n = len(closed)
+    if n < swing_lookback + 4:
+        return False, "SDP: insufficient closed candles"
+    o = _opens(closed); h = _highs(closed); l = _lows(closed); c = _closes(closed)
+
+    bodies = [abs(c[i] - o[i]) for i in range(n)]
+    avg_body = sum(bodies) / len(bodies) if bodies else 0.0
+    if avg_body <= 0:
+        return False, "SDP: zero avg body"
+
+    price = current_price if current_price and current_price > 0 else c[-1]
+
+    # Scan recent displacement candles (most recent first). A displacement
+    # candle d needs d-1 and d+1 to form an FVG, so 1 <= d <= n-2.
+    start = max(swing_lookback, n - max_age)
+    for d in range(n - 2, start - 1, -1):
+        if d - 1 < 0 or d + 1 >= n:
+            continue
+        if bodies[d] < min_body_ratio * avg_body:
+            continue
+        if direction == "bullish" and not (c[d] > o[d]):
+            continue
+        if direction == "bearish" and not (c[d] < o[d]):
+            continue
+
+        # Displacement must leave an FVG across the (d-1, d, d+1) triplet.
+        if direction == "bullish":
+            gap_bottom = h[d - 1]; gap_top = l[d + 1]
+        else:
+            gap_top = l[d - 1]; gap_bottom = h[d + 1]
+        if not (gap_bottom < gap_top):
+            continue
+
+        # Sweep: within sweep_window bars BEFORE the displacement, a candle wicked
+        # beyond the prior swing extreme and closed back through it.
+        sweep_ok = False; sweep_lvl = None
+        for s in range(d - 1, max(d - 1 - sweep_window, 0) - 1, -1):
+            ref_lo = l[max(0, s - swing_lookback):s]
+            ref_hi = h[max(0, s - swing_lookback):s]
+            if direction == "bullish":
+                if ref_lo:
+                    ref_min = min(ref_lo)
+                    if l[s] < ref_min and c[s] > ref_min:
+                        sweep_ok = True; sweep_lvl = ref_min; break
+            else:
+                if ref_hi:
+                    ref_max = max(ref_hi)
+                    if h[s] > ref_max and c[s] < ref_max:
+                        sweep_ok = True; sweep_lvl = ref_max; break
+        if not sweep_ok:
+            continue
+
+        # Pullback: current price has retraced back into the displacement FVG.
+        if gap_bottom <= price <= gap_top:
+            return True, (
+                f"SDP {direction}: sweep@{sweep_lvl:.6g} → displacement "
+                f"{bodies[d]/avg_body:.1f}×avg (bar -{n - 1 - d}) → pullback into FVG "
+                f"[{gap_bottom:.6g}…{gap_top:.6g}] price={price:.6g} → FIRED"
+            )
+
+    return False, (
+        f"SDP {direction}: no sweep→displacement→pullback with price inside the FVG"
+    )
+
+
 async def eval_fx_equal_hl(
     cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
 ) -> Tuple[bool, str]:
@@ -3735,6 +3851,8 @@ async def evaluate_strategy_conditions(
                 return await eval_fx_equal_hl(cond, symbol, price, http_client, cache)
             elif ctype == "fx_cisd":
                 return await eval_fx_cisd(cond, symbol, http_client, cache)
+            elif ctype == "fx_sdp":
+                return await eval_fx_sdp(cond, symbol, price, http_client, cache)
             elif ctype == "fx_breaker":
                 return await eval_fx_breaker(cond, symbol, price, http_client, cache)
             elif ctype == "fx_pd_array":
