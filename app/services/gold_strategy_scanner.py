@@ -80,6 +80,10 @@ MAX_CANDIDATES = 27     # hard cap on total candidates (base + Claude); sized so
                         # candidates × TIMEFRAMES × RISK_VARIANTS stays within the
                         # proven ~320-backtest budget (under the 180s inline timeout)
 LEADERBOARD_SIZE = 15
+CLAUDE_RESERVED_SLOTS = 8  # slots within MAX_CANDIDATES reserved for Claude's
+                          # proposals so AI forex ideas aren't crowded out by the
+                          # deterministic base roster (rest go to a category-diverse
+                          # round-robin of the base)
 _MODEL = "claude-sonnet-4-5"
 
 # Signal vocabulary the BACKTEST ENGINE can actually evaluate (see
@@ -90,6 +94,10 @@ SUPPORTED_PRIMARY = {
     "price_momentum", "volume_spike", "breakout", "support_resistance",
     "candlestick", "divergence", "fibonacci", "fvg", "order_block",
     "market_structure", "williams_r", "adx_filter",
+    # ICT forex day-trade signals — now HONESTLY evaluated by the backtest engine
+    # (eval_condition_bt sync ports). Killzone/session windows let Claude build
+    # genuine forex day-trade setups, not just crypto-style indicators.
+    "fx_killzone", "fx_displacement", "fx_ote", "fx_cisd", "fx_sdp",
 }
 
 
@@ -115,6 +123,11 @@ def _base_roster(direction_mode: str) -> List[Dict]:
         ("Smart Money", "Change of Character", "market_structure", {"condition": "choch_bullish"}),
         ("Divergence", "RSI Divergence",   "divergence",   {"indicator": "rsi", "direction": "bullish"}),
         ("Price Action", "Support Bounce", "support_resistance", {"condition": "at_support"}),
+        # ── ICT forex day-trade signals (honestly backtested) ────────────────────
+        ("ICT", "SDP Sweep+Displace",      "fx_sdp",         {"direction": "bullish", "swing_lookback": 20, "sweep_window": 5, "min_body_ratio": 2.0, "max_age": 20}),
+        ("ICT", "CISD Delivery Flip",      "fx_cisd",        {"direction": "bullish", "max_run": 10}),
+        ("ICT", "OTE Golden Pocket",       "fx_ote",         {"direction": "bullish", "swing_lookback": 20, "fib_low": 61.8, "fib_high": 78.6}),
+        ("ICT", "Displacement Momentum",   "fx_displacement",{"direction": "bullish", "min_body_ratio": 2.5}),
     ]
     combos = [
         ("Combo", "EMA Cross + RSI>50",    "ema",  {"period": 9, "period2": 21, "condition": "bullish_cross"},
@@ -129,6 +142,17 @@ def _base_roster(direction_mode: str) -> List[Dict]:
          [{"type": "rsi", "period": 14, "operator": "gt", "value": 50}]),
         ("Combo", "Breakout + ADX Trend",  "breakout", {"bo_lookback": 20, "bo_pct": 0.5, "bo_dir": "up"},
          [{"type": "adx_filter", "condition": "trending"}]),
+        # ── ICT killzone-gated forex day-trade combos ────────────────────────────
+        # (SDP is already rare; gating it to a 2h killzone yields <MIN_TRADES, so it
+        #  is NOT killzone-gated here — only the higher-frequency ICT signals are.)
+        ("ICT", "Silver Bullet (NY KZ FVG)", "fvg", {"fvg_dir": "bullish", "min_gap_pct": 0.1},
+         [{"type": "fx_killzone", "killzone": "ny_kz"}]),
+        ("ICT", "NY KZ CISD",              "fx_cisd", {"direction": "bullish", "max_run": 10},
+         [{"type": "fx_killzone", "killzone": "ny_kz"}]),
+        ("ICT", "OTE + Displacement",      "fx_ote", {"direction": "bullish", "swing_lookback": 20, "fib_low": 61.8, "fib_high": 78.6},
+         [{"type": "fx_displacement", "direction": "bullish", "min_body_ratio": 2.0}]),
+        ("ICT", "CISD + Order Block",      "fx_cisd", {"direction": "bullish", "max_run": 10},
+         [{"type": "order_block", "ob_type": "bullish"}]),
     ]
 
     out: List[Dict] = []
@@ -174,6 +198,10 @@ def _flip_cfg_for_short(ptype: str, cfg: Dict) -> Dict:
         c["direction"] = "bearish"
     elif ptype == "support_resistance" and c.get("condition") == "at_support":
         c["condition"] = "at_resistance"
+    elif ptype in ("fx_sdp", "fx_cisd", "fx_ote", "fx_displacement"):
+        # ICT signals carry an explicit direction; killzone is a time gate (no flip).
+        if c.get("direction") == "bullish":
+            c["direction"] = "bearish"
     return c
 
 
@@ -259,8 +287,11 @@ async def _claude_propose_candidates(direction_mode: str, n: int = 10) -> List[D
         prompt = (
             "You are a quantitative gold (XAUUSD) trading researcher. Propose "
             f"{n} DIVERSE candidate entry strategies to backtest on gold. Mix "
-            "trend-following, momentum, mean-reversion, breakout and smart-money "
-            "(FVG / order block / market structure) styles.\n\n"
+            "trend-following, momentum, mean-reversion, breakout, smart-money "
+            "(FVG / order block / market structure) AND ICT forex day-trade styles "
+            "(killzone-timed sweeps, displacement, OTE, CISD, SDP). Gold is traded "
+            "as a forex pair, so favour genuine ICT day-trade setups, not only "
+            "crypto-style indicators.\n\n"
             f"You MUST only use these primaryType values: {vocab}.\n"
             "Each confirm must also use one of those as its 'type'.\n"
             f"Direction mode: {direction_mode} (emit LONG and/or SHORT accordingly).\n\n"
@@ -277,7 +308,18 @@ async def _claude_propose_candidates(direction_mode: str, n: int = 10) -> List[D
             "- market_structure: {condition(bos_bullish/bos_bearish/choch_bullish/choch_bearish)}\n"
             "- divergence: {indicator(rsi/macd), direction(bullish/bearish)}\n"
             "- adx_filter: {condition(trending)}\n"
-            "- volume_spike: {multiplier}\n\n"
+            "- volume_spike: {multiplier}\n"
+            "ICT forex day-trade signals (use these for forex/day-trade ideas):\n"
+            "- fx_killzone: {killzone(london_kz/ny_kz/asian_kz/any_kz)} — time gate, "
+            "best as a CONFIRM to restrict an entry to a high-probability window\n"
+            "- fx_displacement: {direction(bullish/bearish/any), min_body_ratio} — "
+            "institutional momentum candle\n"
+            "- fx_ote: {direction(bullish/bearish), swing_lookback, fib_low, fib_high} — "
+            "Optimal Trade Entry fib golden pocket (61.8-78.6%)\n"
+            "- fx_cisd: {direction(bullish/bearish), max_run} — Change in State of "
+            "Delivery (close back through the origin of the prior run)\n"
+            "- fx_sdp: {direction(bullish/bearish), swing_lookback, sweep_window, "
+            "min_body_ratio, max_age} — Sweep→Displacement→Pullback entry\n\n"
             "Return ONLY a JSON array. Each item: "
             '{"label","category","direction","primaryType","primaryCfg","confirms"}. '
             "No prose."
@@ -586,18 +628,54 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
     _progress("Asking Claude to propose strategies…")
     candidates = _base_roster(direction_mode)
     claude_cands = await _claude_propose_candidates(direction_mode, n=12)
-    # Dedupe by (primaryType, direction, sorted primaryCfg) signature.
-    seen = set()
+
+    def _sig(c: Dict) -> tuple:
+        return (c["primaryType"], c["direction"],
+                json.dumps(c.get("primaryCfg", {}), sort_keys=True),
+                json.dumps(c.get("confirms", []), sort_keys=True))
+
+    # The base roster (after LONG/SHORT expansion) is far larger than MAX_CANDIDATES,
+    # so a naive base-order [:N] cut keeps only the first few categories' singles and
+    # silently drops every later category (notably the ICT/forex ideas) AND all of
+    # Claude's proposals. Instead: round-robin the base by category so the cap keeps a
+    # spread across categories (trend, momentum, smart-money, ICT, combo, …), and
+    # RESERVE a block of slots for Claude's proposals so AI forex ideas aren't crowded
+    # out by the deterministic base roster.
+    def _round_robin_by_category(cands: List[Dict]) -> List[Dict]:
+        from collections import OrderedDict
+        buckets: "OrderedDict[str, List[Dict]]" = OrderedDict()
+        for c in cands:
+            buckets.setdefault(c.get("category", "?"), []).append(c)
+        queues = list(buckets.values())
+        out: List[Dict] = []
+        while any(queues):
+            for q in queues:
+                if q:
+                    out.append(q.pop(0))
+        return out
+
+    seen: set = set()
     merged: List[Dict] = []
-    for c in candidates + claude_cands:
-        sig = (c["primaryType"], c["direction"],
-               json.dumps(c.get("primaryCfg", {}), sort_keys=True),
-               json.dumps(c.get("confirms", []), sort_keys=True))
+    claude_keep = claude_cands[:CLAUDE_RESERVED_SLOTS]
+    base_budget = max(0, MAX_CANDIDATES - len(claude_keep))
+
+    for c in _round_robin_by_category(candidates):
+        if len(merged) >= base_budget:
+            break
+        sig = _sig(c)
         if sig in seen:
             continue
         seen.add(sig)
         merged.append(c)
-    merged = merged[:MAX_CANDIDATES]
+
+    for c in claude_keep:
+        if len(merged) >= MAX_CANDIDATES:
+            break
+        sig = _sig(c)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        merged.append(c)
 
     # 3) Backtest every candidate × timeframe × risk, bucket by session.
     _progress(f"Backtesting {len(merged)} strategies across {len(candle_map)} timeframes & {len(SESSIONS)} sessions…")

@@ -523,6 +523,165 @@ def _bt_session_active(ts_ms: int, sessions: List[str]) -> bool:
     return False
 
 
+# ── ICT day-trade signal ports (sync, kline-based) ───────────────────────────────
+# Faithful backtest versions of the live strategy_ta.py ICT evaluators. They are
+# pure price-action over the candle slice (no multi-timeframe / order-flow data),
+# so unlike the no-op fx_* passthrough they are HONEST to backtest. Convention:
+# klines[-1] is the closed decision bar ("current"), matching the other backtest
+# evaluators (RSI/breakout read klines[-1] as the current close).
+
+# ICT killzones (UTC) — mirror strategy_ta.eval_fx_killzone WINDOWS (hour precision).
+_BT_KILLZONE_HOURS = {
+    "london_kz": [(7, 9)],
+    "ny_kz":     [(12, 14)],
+    "asian_kz":  [(20, 23)],
+}
+
+
+def _bt_killzone_active(ts_ms: int, kz: str = "london_kz") -> bool:
+    """True if the candle's UTC hour is inside the requested ICT killzone."""
+    try:
+        hour = datetime.fromtimestamp(int(ts_ms) / 1000, tz=timezone.utc).hour
+    except Exception:
+        return True  # fail-open
+    kz = str(kz or "london_kz").lower().strip()
+    if kz == "any_kz":
+        windows = [w for ws in _BT_KILLZONE_HOURS.values() for w in ws]
+    else:
+        windows = _BT_KILLZONE_HOURS.get(kz, _BT_KILLZONE_HOURS["london_kz"])
+    return any(a <= hour < b for a, b in windows)
+
+
+def _bt_displacement(klines: List, direction: str = "any", min_body_ratio: float = 3.0) -> bool:
+    """Institutional momentum candle: last closed body >= N × recent avg body."""
+    if len(klines) < 5:
+        return False
+    o = _opens(klines); c = _closes(klines)
+    bodies = [abs(c[i] - o[i]) for i in range(len(klines) - 1)]  # exclude current
+    avg_body = sum(bodies) / len(bodies) if bodies else 0.0
+    if avg_body <= 0:
+        return False
+    last_body = abs(c[-1] - o[-1])
+    is_bull = c[-1] > o[-1]; is_bear = c[-1] < o[-1]
+    dir_ok = (
+        direction == "any"
+        or (direction == "bullish" and is_bull)
+        or (direction == "bearish" and is_bear)
+    )
+    return dir_ok and (last_body / avg_body) >= max(1.0, min_body_ratio)
+
+
+def _bt_ote(klines: List, direction: str = "bullish", swing_lookback: int = 20,
+            fib_low: float = 61.8, fib_high: float = 78.6) -> bool:
+    """Optimal Trade Entry — current close inside the fib golden zone of the swing."""
+    lb = max(10, int(swing_lookback))
+    if len(klines) < lb + 2:
+        return False
+    window = klines[-(lb + 1):-1]  # recent swing, exclude current bar
+    if not window:
+        return False
+    swing_h = max(_highs(window)); swing_l = min(_lows(window))
+    rng = swing_h - swing_l
+    if rng <= 0:
+        return False
+    flo = float(fib_low) / 100.0; fhi = float(fib_high) / 100.0
+    price = _closes(klines)[-1]
+    if direction == "bullish":
+        zone_top = swing_h - flo * rng; zone_bot = swing_h - fhi * rng
+    else:
+        zone_bot = swing_l + flo * rng; zone_top = swing_l + fhi * rng
+    return zone_bot <= price <= zone_top
+
+
+def _bt_cisd(klines: List, direction: str = "bullish", max_run: int = 10) -> bool:
+    """Change in State of Delivery — close back through the origin of the prior run."""
+    try:
+        max_run = max(1, min(int(max_run), 50))
+    except (TypeError, ValueError):
+        max_run = 10
+    if len(klines) < 4:
+        return False
+    o = _opens(klines); c = _closes(klines)
+    ci = len(c) - 1  # current closed bar = confirmation candle
+    if ci < 2:
+        return False
+    if direction == "bullish":
+        if not (c[ci] > o[ci]):
+            return False
+        run_start = None; j = ci - 1
+        while j >= 0 and (ci - 1 - j) < max_run and c[j] < o[j]:
+            run_start = j; j -= 1
+        if run_start is None:
+            return False
+        return c[ci] > o[run_start]
+    else:
+        if not (c[ci] < o[ci]):
+            return False
+        run_start = None; j = ci - 1
+        while j >= 0 and (ci - 1 - j) < max_run and c[j] > o[j]:
+            run_start = j; j -= 1
+        if run_start is None:
+            return False
+        return c[ci] < o[run_start]
+
+
+def _bt_sdp(klines: List, direction: str = "bullish", swing_lookback: int = 20,
+            sweep_window: int = 5, min_body_ratio: float = 2.0, max_age: int = 20) -> bool:
+    """Sweep → Displacement → Pullback. Fires when current close is back inside the
+    displacement FVG after a liquidity sweep (mirrors strategy_ta.eval_fx_sdp)."""
+    try:
+        swing_lookback = max(5, min(int(swing_lookback), 100))
+        sweep_window = max(1, min(int(sweep_window), 20))
+        min_body_ratio = max(1.0, float(min_body_ratio))
+        max_age = max(3, min(int(max_age), 60))
+    except (TypeError, ValueError):
+        swing_lookback, sweep_window, min_body_ratio, max_age = 20, 5, 2.0, 20
+    n = len(klines)
+    if n < swing_lookback + 4:
+        return False
+    o = _opens(klines); h = _highs(klines); l = _lows(klines); c = _closes(klines)
+    bodies = [abs(c[i] - o[i]) for i in range(n)]
+    avg_body = sum(bodies) / len(bodies) if bodies else 0.0
+    if avg_body <= 0:
+        return False
+    price = c[-1]
+    start = max(swing_lookback, n - max_age)
+    for d in range(n - 2, start - 1, -1):
+        if d - 1 < 0 or d + 1 >= n:
+            continue
+        if bodies[d] < min_body_ratio * avg_body:
+            continue
+        if direction == "bullish" and not (c[d] > o[d]):
+            continue
+        if direction == "bearish" and not (c[d] < o[d]):
+            continue
+        if direction == "bullish":
+            gap_bottom = h[d - 1]; gap_top = l[d + 1]
+        else:
+            gap_top = l[d - 1]; gap_bottom = h[d + 1]
+        if not (gap_bottom < gap_top):
+            continue
+        sweep_ok = False
+        for s in range(d - 1, max(d - 1 - sweep_window, 0) - 1, -1):
+            ref_lo = l[max(0, s - swing_lookback):s]
+            ref_hi = h[max(0, s - swing_lookback):s]
+            if direction == "bullish":
+                if ref_lo:
+                    rm = min(ref_lo)
+                    if l[s] < rm and c[s] > rm:
+                        sweep_ok = True; break
+            else:
+                if ref_hi:
+                    rm = max(ref_hi)
+                    if h[s] > rm and c[s] < rm:
+                        sweep_ok = True; break
+        if not sweep_ok:
+            continue
+        if gap_bottom <= price <= gap_top:
+            return True
+    return False
+
+
 def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
     """
     Evaluate a single condition against a historical candle slice.
@@ -960,10 +1119,49 @@ def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
 
         return pass_direction and pass_total and pass_consistent and pass_active
 
+    # ── ICT forex day-trade signals (honest sync ports — see helpers above) ──────
+    if ctype == "fx_killzone":
+        return _bt_killzone_active(int(klines[-1][0]), cond.get("killzone", "london_kz"))
+
+    if ctype == "fx_displacement":
+        return _bt_displacement(
+            klines,
+            direction      = (cond.get("direction") or "any").lower(),
+            min_body_ratio = float(cond.get("min_body_ratio") or 3.0),
+        )
+
+    if ctype == "fx_ote":
+        return _bt_ote(
+            klines,
+            direction      = (cond.get("direction") or "bullish").lower(),
+            swing_lookback = int(cond.get("swing_lookback") or 20),
+            fib_low        = float(cond.get("fib_low") or 61.8),
+            fib_high       = float(cond.get("fib_high") or 78.6),
+        )
+
+    if ctype == "fx_cisd":
+        return _bt_cisd(
+            klines,
+            direction = (cond.get("direction") or "bullish").lower(),
+            max_run   = int(cond.get("max_run") or 10),
+        )
+
+    if ctype == "fx_sdp":
+        return _bt_sdp(
+            klines,
+            direction      = (cond.get("direction") or "bullish").lower(),
+            swing_lookback = int(cond.get("swing_lookback") or 20),
+            sweep_window   = int(cond.get("sweep_window") or 5),
+            min_body_ratio = float(cond.get("min_body_ratio") or 2.0),
+            max_age        = int(cond.get("max_age") or 20),
+        )
+
     # Genuinely unsupported types (need real-time external data feeds):
     #   open_interest  — requires historical OI snapshots (Coinglass API)
     #   liquidation    — requires historical liquidation feed
     #   funding_rate   — requires historical funding rate snapshots
+    # Also still no-op (need MTF / order-flow / session-open refs not modelled here):
+    #   fx_judas_swing, fx_silver_bullet, fx_breaker, fx_equal_hl, fx_pd_array, fx_po3
     # Return False so the backtest shows 0 trades rather than fake all-pass signals.
     return False
 
