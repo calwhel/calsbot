@@ -10861,6 +10861,10 @@ SIGNAL RECOGNITION:
   Wyckoff / spring / shakeout / upthrust / markup / distribution → wyckoff
   IFVG / inverse FVG / inverse fair value gap / re-entry gap / mitigated gap → ifvg
   FVG / fair value gap / imbalance / unmitigated gap / price gap → fvg
+  CONFIDENCE/QUALITY tier for fvg & ifvg → add min_confidence:"low"|"medium"|"high" (omit/"any"=off).
+    Graded from ATR-relative quality (displacement strength + gap size + freshness); a tier accepts
+    that grade and above. Use for "high-confidence FVG", "only the strong/quality gaps", "A+ setups only",
+    "skip the weak FVGs" → min_confidence:"high"; "medium-confidence and up" → min_confidence:"medium".
 
 IDEA BANK — pitch these when user is open to suggestions:
   "London ICT sniper" — london_kz killzone + OTE retracement + FVG bullish tap on 15m, confirmed by EMA ribbon bullish on 1h. LONG, TP1 35 / TP2 55 / SL 15, breakeven at 70%. R:R 2.3:1 on TP1, 3.7:1 to TP2. Fires 1–2× per London session. EURUSD or GBPUSD.

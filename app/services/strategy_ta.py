@@ -889,6 +889,7 @@ def _detect_fvg(
     disp_atr_mult:    float = 0.0,
     min_gap_usd:      float = 0.0,
     only_unfilled:    bool  = False,
+    compute_quality:  bool  = False,
     atr_period:       int   = 14,
 ) -> List[Dict]:
     """3-candle FVG detector with ICT-style quality filters.
@@ -911,7 +912,7 @@ def _detect_fvg(
     if n < 3:
         return []
 
-    needs_atr = (min_gap_atr_mult > 0) or (disp_atr_mult > 0)
+    needs_atr = (min_gap_atr_mult > 0) or (disp_atr_mult > 0) or compute_quality
     atr = _atr(klines, atr_period) if needs_atr else None
     if needs_atr and (atr is None or atr <= 0):
         atr = None  # gracefully disable ATR filters when not enough bars
@@ -953,11 +954,9 @@ def _detect_fvg(
             continue
         # ICT displacement filter — formation candle body must be a real
         # expansion bar, not a doji that happened to leave a gap.
-        disp_atr = 0.0
-        if atr and disp_atr_mult > 0:
-            disp_atr = abs(mc - mo) / atr
-            if disp_atr < disp_atr_mult:
-                continue
+        disp_atr = (abs(mc - mo) / atr) if atr else 0.0
+        if atr and disp_atr_mult > 0 and disp_atr < disp_atr_mult:
+            continue
 
         # Walk forward to determine fill status.
         filled = False
@@ -984,6 +983,33 @@ def _detect_fvg(
             "filled":   filled,
         })
     return gaps
+
+
+# Confidence tiers for FVG / iFVG — higher tier = stronger institutional setup.
+# Ordering lets a "min_confidence" gate accept that tier AND everything above it.
+_FVG_CONF_ORDER = {"any": 0, "low": 1, "medium": 2, "high": 3}
+
+
+def _grade_fvg(gap: Dict, is_ifvg: bool = False) -> str:
+    """Confidence tier ('low'|'medium'|'high') for a detected FVG.
+
+    Graded from volatility-relative quality so it travels across crypto↔forex:
+      • disp_atr  — formation-candle body ÷ ATR(14): how impulsive the move that
+                    left the gap was (real displacement vs a lazy doji gap).
+      • size_atr  — gap width ÷ ATR(14): how big the imbalance is.
+      • filled    — for a plain FVG, an untested (unfilled) gap is higher quality;
+                    an iFVG is mitigated BY DEFINITION, so fill is not penalised.
+    Requires ATR-aware detection (compute_quality=True). With no ATR context both
+    metrics are 0 → grades 'low' (cannot confirm a high-confidence setup).
+    """
+    size_atr = gap.get("size_atr") or 0.0
+    disp_atr = gap.get("disp_atr") or 0.0
+    fresh_ok = is_ifvg or (not gap.get("filled", False))
+    if disp_atr >= 1.5 and size_atr >= 0.5 and fresh_ok:
+        return "high"
+    if disp_atr >= 0.8 and size_atr >= 0.25:
+        return "medium"
+    return "low"
 
 
 async def eval_fvg(
@@ -1031,8 +1057,18 @@ async def eval_fvg(
         only_unfilled  = bool(_ouf_raw)
     max_age_bars       = int(cond.get("max_age_bars",       0)   or 0)
 
-    # Ensure enough bars for ATR(14) when ATR-based filters are on.
-    needs_atr = (min_gap_atr_mult > 0) or (disp_atr_mult > 0)
+    # Confidence tier gate — "low"/"medium"/"high" (or "any"=off, legacy default).
+    # Accepts both `min_confidence` and the friendlier alias `confidence`.
+    is_ifvg            = str(cond.get("type", "")).lower() == "ifvg"
+    min_conf           = str(cond.get("min_confidence",
+                                      cond.get("confidence", "any")) or "any").lower().strip()
+    if min_conf not in _FVG_CONF_ORDER:
+        min_conf = "any"
+    min_conf_rank      = _FVG_CONF_ORDER[min_conf]
+    needs_quality      = min_conf_rank > 0
+
+    # Ensure enough bars for ATR(14) when ATR-based filters or grading are on.
+    needs_atr = (min_gap_atr_mult > 0) or (disp_atr_mult > 0) or needs_quality
     lookback = max(lookback_extra, 60) if needs_atr else lookback_extra
 
     klines = await _get_klines(symbol, tf, lookback, http_client, cache)
@@ -1046,6 +1082,7 @@ async def eval_fvg(
         disp_atr_mult    = disp_atr_mult,
         min_gap_usd      = min_gap_usd,
         only_unfilled    = only_unfilled,
+        compute_quality  = needs_quality,
     )
     if not gaps:
         msg = "No FVG"
@@ -1061,13 +1098,21 @@ async def eval_fvg(
         if not gaps:
             return False, f"No FVG within last {max_age_bars} bars"
 
+    # Confidence-tier gate — keep only gaps grading at/above the requested tier.
+    if needs_quality:
+        gaps = [g for g in gaps
+                if _FVG_CONF_ORDER[_grade_fvg(g, is_ifvg)] >= min_conf_rank]
+        if not gaps:
+            return False, f"No {min_conf}-confidence FVG"
+
     # Pick the most recent qualifying gap (highest idx).
     gap = max(gaps, key=lambda g: g["idx"])
     label_size = f"{gap['size_pct']:.2f}%"
     if gap["size_atr"]:
         label_size += f"/{gap['size_atr']:.2f}×ATR"
+    conf_tag = f"{_grade_fvg(gap, is_ifvg)}-conf " if needs_quality else ""
     label = (
-        f"{gap['type'].title()} FVG {gap['bottom']:.6g}–{gap['top']:.6g}"
+        f"{conf_tag}{gap['type'].title()} FVG {gap['bottom']:.6g}–{gap['top']:.6g}"
         f" ({label_size}, {gap['age']}b ago)"
     )
 

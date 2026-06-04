@@ -356,6 +356,19 @@ function renderKnobs(
             min={0} max={5} step={0.1} unit="%" decimals={1}
             presets={[0, 0.2, 0.5, 1]}
           />
+          <Section label="Confidence" compact={compact}>
+            <ChipRow
+              options={[
+                { value: 'any',    label: 'Any' },
+                { value: 'low',    label: 'Low+' },
+                { value: 'medium', label: 'Medium+' },
+                { value: 'high',   label: 'High only' },
+              ]}
+              value={cfg.min_confidence || 'any'}
+              onChange={(v) => set({ min_confidence: v })}
+              size="sm"
+            />
+          </Section>
         </View>
       );
     }

@@ -222,11 +222,24 @@ Optional quality filters (omit or set to 0 = disabled — match legacy behaviour
   min_gap_usd      → absolute USD floor on gap width (e.g. 100)
   only_unfilled    → true → drop FVGs already touched
   max_age_bars     → only consider FVGs formed within the last N bars
+  min_confidence   → CONFIDENCE / QUALITY TIER — the easy one-word quality dial.
+                     "low" | "medium" | "high" (omit or "any" = no filter, legacy).
+                     The executor grades every gap from volatility-relative quality
+                     (displacement-body ÷ ATR + gap-width ÷ ATR + unfilled freshness):
+                       • high   → strong impulsive displacement AND a wide gap, untested
+                                  (≈ disp ≥1.5×ATR, width ≥0.5×ATR) — institutional A+ setup
+                       • medium → decent displacement + size (≈ disp ≥0.8×ATR, width ≥0.25×ATR)
+                       • low    → any qualifying gap
+                     A tier accepts that grade AND everything above it (medium ⇒ medium+high).
+                     PREFER this over hand-tuning min_gap_atr_mult/disp_atr_mult when the
+                     user talks in terms of trade QUALITY/CONFIDENCE ("only the best gaps",
+                     "high-confidence FVG only", "skip the weak ones").
 
 Examples:
 {"type":"fvg","direction":"bullish","condition":"price_in_gap","timeframe":"15m"}
 {"type":"fvg","direction":"bearish","condition":"approaching","timeframe":"5m"}
 {"type":"fvg","direction":"any","condition":"gap_exists","timeframe":"1h"}
+{"type":"fvg","direction":"bullish","condition":"price_in_gap","timeframe":"15m","min_confidence":"high"}
 {"type":"fvg","direction":"bearish","condition":"just_formed","timeframe":"5m",
  "min_gap_atr_mult":2.5,"disp_atr_mult":1.5,"only_unfilled":true}
 {"type":"fvg","direction":"bearish","condition":"tap_and_reject","timeframe":"15m",
@@ -235,6 +248,8 @@ Examples:
 → Triggers: "FVG fill" | "fair value gap" | "imbalance" | "price returning to gap"
             "FVG ≥ 2.5x ATR" | "high-imbalance FVG" | "ICT displacement creating FVG"
             "FVG just formed" | "tap into FVG and reject" | "rejection from FVG" | "FVG mitigation"
+            "high-confidence FVG" | "only strong/quality FVGs" | "best gaps only" → min_confidence
+            "low/medium/high confidence" | "A+ setups only" → min_confidence tier
 
 ── CANDLESTICK PATTERNS ───────────────────────────────────────────────────────
 {"type":"candlestick","pattern":"bullish_engulfing","timeframe":"15m"}
@@ -334,6 +349,10 @@ direction: below (long liquidations below price) | above (short liquidations abo
 {"type":"ifvg","direction":"bullish","timeframe":"15m"}
 direction: bullish | bearish | any
 conditions (same as fvg): gap_exists | just_formed | price_in_gap | tap_and_reject | approaching | gap_filled
+quality: same min_confidence tier as fvg — "low"|"medium"|"high" (omit/"any"=off). Use for
+         "high-confidence iFVG" / "only strong inverted gaps". iFVG is mitigated by definition,
+         so the tier grades the ORIGINAL gap's displacement + size (fill is not penalised).
+{"type":"ifvg","direction":"bullish","timeframe":"15m","min_confidence":"high"}
 → "IFVG" | "inverted FVG" | "price re-enters old gap" | "mitigated gap retest"
 
 ── FOREX — SESSION TIME GATE (whole session) ─────────────────────────────────
@@ -653,8 +672,9 @@ CONDITION SELECTION
   "at support" → support_resistance at_support
   "resistance breakout" → support_resistance breakout_above
   "support breakdown" → support_resistance breakout_below
-  "FVG" / "fair value gap" / "imbalance" → fvg
-  "IFVG" / "inverted FVG" / "mitigated gap retest" → ifvg
+  "FVG" / "fair value gap" / "imbalance" → fvg  (add min_confidence:"low|medium|high" for quality tier)
+  "IFVG" / "inverted FVG" / "mitigated gap retest" → ifvg  (same min_confidence tier as fvg)
+  "high-confidence FVG" / "only the best/strong gaps" / "A+ FVG setups" → fvg/ifvg + min_confidence:"high"
   "hammer" / "pin bar" / "engulfing" / "doji" / "morning star" → candlestick
   "3 red candles" / "consecutive candles" → consecutive_candles
   "BOS" / "break of structure" → market_structure bos_bullish or bos_bearish
