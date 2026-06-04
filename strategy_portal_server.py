@@ -13034,6 +13034,64 @@ async def backtest_scan(request: Request):
     }
 
 
+@app.post("/api/backtest/gold-discovery")
+async def backtest_gold_discovery(request: Request):
+    """
+    Claude-driven GOLD (XAUUSD) strategy discovery scanner.
+
+    Backtests a wide roster of candidate strategies (base roster + Claude-proposed)
+    across multiple timeframes AND the four FX trading sessions (Asian / London /
+    New York / overlap), ranks every combination by a composite profitability
+    score, then asks Claude to pick & explain the single best strategy.
+
+    Body: { uid, days (30|90|180), direction ("BOTH"|"LONG"|"SHORT") }
+    Pro subscribers only.
+    """
+    body = await request.json()
+    uid  = (body.get("uid") or "").strip()
+    days = int(body.get("days", 90))
+    direction_mode = (body.get("direction") or "BOTH").upper()
+
+    # ── Auth + Pro check (mirrors /api/backtest/scan) ─────────────────────────
+    from app.database import SessionLocal
+    import asyncio as _asyncio
+    auth_status = None
+    for _attempt in range(3):
+        try:
+            db = SessionLocal()
+            try:
+                user = _get_user_by_uid_safe(uid, db)
+                if not user:
+                    auth_status = "bad_uid"; break
+                sub = _get_portal_sub(user.id, db)
+                is_pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
+                auth_status = "ok" if is_pro else "not_pro"
+                break
+            finally:
+                db.close()
+        except HTTPException:
+            await _asyncio.sleep(0.3)
+            continue
+        except Exception:
+            await _asyncio.sleep(0.3)
+            continue
+    if auth_status in (None, "bad_uid"):
+        raise HTTPException(status_code=403, detail="Invalid UID")
+    if auth_status == "not_pro":
+        return JSONResponse(status_code=403, content={
+            "ok": False,
+            "message": "A Pro subscription is required to use the Gold Strategy Finder."})
+
+    from app.services.gold_strategy_scanner import run_gold_discovery
+    try:
+        result = await run_gold_discovery(days=days, direction_mode=direction_mode)
+    except Exception as e:
+        logger.exception("gold-discovery scan failed")
+        return JSONResponse(status_code=500, content={
+            "ok": False, "error": f"Scan failed: {type(e).__name__}"})
+    return JSONResponse(content=result)
+
+
 @app.post("/api/backtest/run")
 async def run_backtest_endpoint(request: Request):
     """

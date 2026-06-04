@@ -491,6 +491,38 @@ def _session_reference(klines: List, reference: str = "session_low") -> Optional
     return None
 
 # ── Condition evaluator (no HTTP, uses pre-fetched klines) ─────────────────────
+# ── Trading-session windows (UTC) — mirror strategy_executor._SESSION_HOURS ──────
+# Used for replay-faithful session gating (the live evaluators use wall-clock
+# time, which is wrong for a backtest; here we derive the hour from the candle
+# timestamp instead). Sessions overlap by design (e.g. 14:00 UTC is in london,
+# new_york AND overlap).
+_BT_SESSION_HOURS = {
+    "asian":    (0, 8),  "tokyo": (0, 8),  "asia": (0, 8),
+    "london":   (7, 16), "europe": (7, 16),
+    "new_york": (13, 22), "ny": (13, 22),
+    "overlap":  (13, 16),
+}
+
+def _bt_session_active(ts_ms: int, sessions: List[str]) -> bool:
+    """True if the candle timestamp's UTC hour falls in any requested session."""
+    try:
+        hour = datetime.fromtimestamp(int(ts_ms) / 1000, tz=timezone.utc).hour
+    except Exception:
+        return True  # fail-open: never block a trade on a bad timestamp
+    for sid in sessions:
+        win = _BT_SESSION_HOURS.get(str(sid).lower().strip())
+        if not win:
+            continue
+        a, b = win
+        if a <= b:
+            if a <= hour < b:
+                return True
+        else:  # wraps midnight (e.g. sydney)
+            if hour >= a or hour < b:
+                return True
+    return False
+
+
 def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
     """
     Evaluate a single condition against a historical candle slice.
@@ -498,6 +530,18 @@ def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
     don't falsely block signals during replay.
     """
     ctype = cond.get("type", "")
+
+    # ── Trading session / timezone gate (timestamp-based, replay-faithful) ──────
+    if ctype in ("forex_session", "session", "session_filter"):
+        if not klines:
+            return False
+        sessions = cond.get("sessions")
+        if not sessions:
+            one = cond.get("session") or cond.get("name")
+            sessions = [one] if one else []
+        if not sessions:
+            return True  # no session specified → no restriction
+        return _bt_session_active(int(klines[-1][0]), sessions)
 
     # ── Price Momentum ──────────────────────────────────────────────────────────
     if ctype == "price_momentum":

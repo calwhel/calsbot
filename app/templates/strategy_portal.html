@@ -2469,6 +2469,13 @@ function dismissTgBanner(){
             <div style="font-size:12px;color:var(--muted);margin-top:3px">Test up to <b>12 coins</b> on <b>multiple timeframes</b> with <b>40 strategies</b> each — the engine finds the best (coin, timeframe, strategy, TP/SL) combo across the whole grid.</div>
           </div>
 
+          <!-- Gold Strategy Finder (Claude-driven) -->
+          <div style="margin-bottom:16px;padding:14px;border:1px solid #b8860b55;border-radius:10px;background:linear-gradient(135deg,#3a2e0810,#b8860b14)">
+            <div style="font-size:14px;font-weight:800;letter-spacing:-.2px">🏆 Best GOLD Strategy Finder <span style="font-size:10px;color:var(--muted);font-weight:600">· AI</span></div>
+            <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">Let <b>Claude</b> scan dozens of gold (XAUUSD) strategies across every timeframe &amp; trading session (London, New York, Asian, overlap) and pick the single most profitable setup.</div>
+            <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#caa12c,#b8860b)" onclick="openGoldFinder()">🏆 Find Best Gold Strategy →</button>
+          </div>
+
           <div style="margin-bottom:14px">
             <div class="pine-label">Coins <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 12 · pick a preset or type your own</span></div>
             <input id="scan-coin" type="text" value="BTC" maxlength="200"
@@ -3084,6 +3091,48 @@ function dismissTgBanner(){
     <div class="modal-hd"><h3 id="md-title">Strategy</h3><span class="modal-close" onclick="closeModal('modal-detail')">&times;</span></div>
     <div class="modal-body" id="md-body"></div>
     <div class="modal-footer" id="md-footer"></div>
+  </div>
+</div>
+
+<!-- Gold Strategy Finder -->
+<div class="modal-bg" id="modal-gold">
+  <div class="modal" style="max-width:760px">
+    <div class="modal-hd"><h3>🏆 Best GOLD Strategy Finder</h3><span class="modal-close" onclick="closeModal('modal-gold')">&times;</span></div>
+    <div class="modal-body" id="gold-body" style="padding:18px 20px 8px">
+      <!-- config -->
+      <div id="gold-config">
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">Claude backtests dozens of gold (XAUUSD) strategies across multiple timeframes and every trading session, ranks them by profitability, and picks the single best one. This can take <b>1–2 minutes</b>.</div>
+        <div style="margin-bottom:14px">
+          <div class="pine-label">Direction</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="gold-dir-chips">
+            <button class="opt-chip active" data-dir="BOTH" onclick="setGoldDir('BOTH',this)">Both</button>
+            <button class="opt-chip" data-dir="LONG" onclick="setGoldDir('LONG',this)">Long only</button>
+            <button class="opt-chip" data-dir="SHORT" onclick="setGoldDir('SHORT',this)">Short only</button>
+          </div>
+        </div>
+        <div style="margin-bottom:18px">
+          <div class="pine-label">Test window</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="gold-days-chips">
+            <button class="opt-chip" data-days="30" onclick="setGoldDays(30,this)">30 days</button>
+            <button class="opt-chip active" data-days="90" onclick="setGoldDays(90,this)">90 days</button>
+            <button class="opt-chip" data-days="180" onclick="setGoldDays(180,this)">180 days</button>
+          </div>
+        </div>
+        <button class="pine-analyse-btn" style="background:linear-gradient(135deg,#caa12c,#b8860b)" onclick="runGoldFinder()">🏆 Run Scan →</button>
+      </div>
+      <!-- progress -->
+      <div id="gold-progress" style="display:none;text-align:center;padding:30px 10px">
+        <div class="loader" style="margin:0 auto 14px"></div>
+        <div id="gold-progress-msg" style="font-size:13px;color:var(--text);font-weight:600">Scanning gold strategies…</div>
+        <div style="font-size:11.5px;color:var(--muted);margin-top:6px">Backtesting across timeframes &amp; sessions, then asking Claude to pick the winner. Hang tight — up to ~2 min.</div>
+      </div>
+      <!-- results -->
+      <div id="gold-results" style="display:none"></div>
+    </div>
+    <div class="modal-footer" id="gold-footer" style="display:none">
+      <button class="btn" onclick="goldReset()">↺ New Scan</button>
+      <button class="btn primary" id="gold-build-btn" onclick="goldBuildInAI()">💬 Build this in AI Builder</button>
+    </div>
   </div>
 </div>
 
@@ -7890,6 +7939,121 @@ function resetScan() {
   if (btn) { btn.disabled = false; btn.textContent = '🔍 Scan Strategies →'; }
   const bar = document.getElementById('scan-bar');
   if (bar) bar.style.width = '0%';
+}
+
+// ── Gold Strategy Finder ─────────────────────────────────────────────────────
+let GOLD = { dir:'BOTH', days:90, result:null };
+function openGoldFinder(){ goldReset(); showModal('modal-gold'); }
+function setGoldDir(d,el){ GOLD.dir=d; document.querySelectorAll('#gold-dir-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
+function setGoldDays(d,el){ GOLD.days=d; document.querySelectorAll('#gold-days-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
+function goldReset(){
+  GOLD.result=null;
+  document.getElementById('gold-config').style.display='';
+  document.getElementById('gold-progress').style.display='none';
+  document.getElementById('gold-results').style.display='none';
+  document.getElementById('gold-footer').style.display='none';
+}
+function _gEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+async function runGoldFinder(){
+  document.getElementById('gold-config').style.display='none';
+  document.getElementById('gold-results').style.display='none';
+  document.getElementById('gold-footer').style.display='none';
+  document.getElementById('gold-progress').style.display='';
+  try{
+    const res = await fetch('/api/backtest/gold-discovery', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ uid:UID, days:GOLD.days, direction:GOLD.dir })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.ok){
+      renderGoldError(data && (data.message||data.error) || 'Scan failed. Please try again.');
+      return;
+    }
+    GOLD.result = data;
+    renderGoldResults(data);
+  }catch(e){
+    renderGoldError('Network error — please try again.');
+  }
+}
+function renderGoldError(msg){
+  document.getElementById('gold-progress').style.display='none';
+  const box=document.getElementById('gold-results');
+  box.style.display='';
+  box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">⚠️ '+_gEsc(msg)+'</div>';
+  document.getElementById('gold-footer').style.display='';
+  document.getElementById('gold-build-btn').style.display='none';
+}
+function renderGoldResults(d){
+  document.getElementById('gold-progress').style.display='none';
+  const b=d.best, s=b.stats;
+  const dirBadge = b.direction==='SHORT' ? '<span style="color:#e05858;font-weight:700">SHORT</span>' : '<span style="color:#3fb950;font-weight:700">LONG</span>';
+  let html = '';
+  // Winner card
+  html += '<div style="padding:16px;border:1px solid #b8860b66;border-radius:12px;background:linear-gradient(135deg,#3a2e0814,#b8860b1f);margin-bottom:16px">';
+  html += '<div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#caa12c;font-weight:700;margin-bottom:4px">🏆 Claude\'s Pick</div>';
+  html += '<div style="font-size:18px;font-weight:800;letter-spacing:-.3px">'+_gEsc(b.strategy_name)+'</div>';
+  html += '<div style="font-size:12.5px;color:var(--muted);margin-top:6px;display:flex;gap:14px;flex-wrap:wrap">'
+        + '<span>'+_gEsc(b.label)+' · '+dirBadge+'</span>'
+        + '<span>⏱ '+_gEsc(b.timeframe)+'</span>'
+        + '<span>🕒 '+_gEsc(b.session_label)+'</span>'
+        + '<span>🎯 SL '+b.sl_pips+' / TP '+b.tp_pips+' pips (RR '+b.rr+')</span>'
+        + '</div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px">'
+        + _goldStat('Win rate', s.win_rate+'%')
+        + _goldStat('Profit factor', s.profit_factor)
+        + _goldStat('Net pips', (s.total_pips>0?'+':'')+s.total_pips)
+        + _goldStat('Max drawdown', s.max_drawdown+'%')
+        + _goldStat('Trades', s.closed_trades)
+        + _goldStat('Avg pips/trade', (s.avg_pips>0?'+':'')+s.avg_pips)
+        + _goldStat('Return', (s.total_pnl>0?'+':'')+s.total_pnl+'%')
+        + _goldStat('Wins / Losses', s.wins+' / '+s.losses)
+        + '</div>';
+  if(b.rationale){ html += '<div style="font-size:12.5px;color:var(--text);margin-top:14px;line-height:1.55;padding-top:12px;border-top:1px solid var(--border)">💡 '+_gEsc(b.rationale)+'</div>'; }
+  html += '</div>';
+  // Leaderboard
+  let covTxt='';
+  if(d.coverage_days){ covTxt = ' · '+Object.keys(d.coverage_days).map(tf=>tf+' ~'+d.coverage_days[tf]+'d').join(', '); }
+  html += '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin:6px 0 8px">Top strategies tested ('+d.combos_evaluated+' combos · '+d.candidates_tested+' strategies'+covTxt+')</div>';
+  html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
+  html += '<tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px">#</th><th style="padding:6px 8px">Strategy</th><th style="padding:6px 8px">Dir</th><th style="padding:6px 8px">TF</th><th style="padding:6px 8px">Session</th><th style="padding:6px 8px">SL/TP</th><th style="padding:6px 8px">Win%</th><th style="padding:6px 8px">PF</th><th style="padding:6px 8px">Pips</th><th style="padding:6px 8px">Trades</th></tr>';
+  d.leaderboard.forEach((e,i)=>{
+    const st=e.stats;
+    const hl = i===d.leaderboard.indexOf(b) || (e.label===b.label && e.timeframe===b.timeframe && e.session===b.session);
+    html += '<tr style="border-top:1px solid var(--border)'+(hl?';background:#b8860b14':'')+'">'
+          + '<td style="padding:6px 8px;color:var(--muted)">'+(i+1)+'</td>'
+          + '<td style="padding:6px 8px;font-weight:600">'+_gEsc(e.label)+'</td>'
+          + '<td style="padding:6px 8px">'+(e.direction==='SHORT'?'🔴':'🟢')+'</td>'
+          + '<td style="padding:6px 8px">'+_gEsc(e.timeframe)+'</td>'
+          + '<td style="padding:6px 8px">'+_gEsc(e.session_label)+'</td>'
+          + '<td style="padding:6px 8px">'+e.sl_pips+'/'+e.tp_pips+'</td>'
+          + '<td style="padding:6px 8px">'+st.win_rate+'%</td>'
+          + '<td style="padding:6px 8px">'+st.profit_factor+'</td>'
+          + '<td style="padding:6px 8px;color:'+(st.total_pips>0?'#3fb950':'#e05858')+'">'+(st.total_pips>0?'+':'')+st.total_pips+'</td>'
+          + '<td style="padding:6px 8px;color:var(--muted)">'+st.closed_trades+'</td>'
+          + '</tr>';
+  });
+  html += '</table></div>';
+  html += '<div style="font-size:10.5px;color:var(--muted);margin-top:10px;line-height:1.4">Backtested on historical XAUUSD candles with realistic spread, slippage &amp; fees. Past performance does not guarantee future results.</div>';
+  const box=document.getElementById('gold-results');
+  box.style.display=''; box.innerHTML=html;
+  document.getElementById('gold-footer').style.display='';
+  document.getElementById('gold-build-btn').style.display='';
+}
+function _goldStat(label,val){
+  return '<div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:8px 10px">'
+       + '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">'+_gEsc(label)+'</div>'
+       + '<div style="font-size:15px;font-weight:800;margin-top:2px">'+_gEsc(val)+'</div></div>';
+}
+function goldBuildInAI(){
+  if(!GOLD.result || !GOLD.result.best) return;
+  const prompt = GOLD.result.best.build_prompt || '';
+  closeModal('modal-gold');
+  switchBuildMode('chat');
+  try{ if(typeof cbSetMarket==='function') cbSetMarket('forex'); }catch(e){}
+  setTimeout(()=>{
+    const inp=document.getElementById('cb-input');
+    if(inp){ inp.value=prompt; inp.focus(); }
+  }, 150);
 }
 
 async function runScan() {
