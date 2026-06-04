@@ -3263,6 +3263,127 @@ async def eval_vwap_bias(
     )
 
 
+async def eval_volume_profile(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """`volume_profile` — Volume Profile: POC, Value Area and high/low-volume nodes.
+
+    Builds a horizontal volume distribution over the last `lookback` closed bars by
+    splitting each candle's volume across the price bins its high–low range spans,
+    then locates:
+      • POC  — Point of Control (price bin with the most traded volume; the magnet)
+      • VA   — Value Area (the contiguous band around the POC holding
+               `value_area_pct`% of total volume; VAH/VAL are its edges)
+      • HVN  — High-Volume Nodes (heavily-traded prices → support/resistance/magnets)
+      • LVN  — Low-Volume Nodes (thinly-traded prices → fast move / rejection zones)
+
+    cfg.condition : 'at_poc'       (price within tolerance of the POC)        [default]
+                  | 'in_value'     (price inside the value area)
+                  | 'above_value'  (price above VAH — value-area breakout up)
+                  | 'below_value'  (price below VAL — value-area breakdown)
+                  | 'at_hvn'       (price sitting in a high-volume node)
+                  | 'at_lvn'       (price sitting in a low-volume node)
+    cfg.lookback       : bars used to build the profile (default 120).
+    cfg.bins           : number of price bins (default 24).
+    cfg.value_area_pct : % of volume that defines the value area (default 70).
+    cfg.tolerance_pct  : how close (% of price) counts as "at" a level (default 0.15).
+    cfg.timeframe      : kline TF (default '15m').
+
+    Needs real volume. Forex has no centralised volume; this uses the broker
+    (cTrader) tick volume that backs the kline feed. When the feed reports no
+    volume (e.g. a yfinance fallback returning 0) the profile can't be built and
+    the signal does NOT fire — surfaced explicitly rather than firing on noise.
+    """
+    condition = (cond.get("condition") or "at_poc").lower()
+    lookback  = int(cond.get("lookback") or 120)
+    n_bins    = max(6, int(cond.get("bins") or 24))
+    va_pct    = float(cond.get("value_area_pct") or 70.0) / 100.0
+    tol_pct   = float(cond.get("tolerance_pct") or 0.15)
+    tf        = cond.get("timeframe", "15m")
+
+    lookback = max(20, min(lookback, 500))
+    va_pct = min(max(va_pct, 0.3), 0.95)
+
+    need = lookback + 5
+    klines = await _get_klines(symbol, tf, need, http_client, cache)
+    if not klines or len(klines) < 20:
+        return False, "Volume Profile: insufficient data"
+
+    closed = klines[:-1][-lookback:]  # exclude forming candle, cap to lookback
+    if len(closed) < 20:
+        return False, "Volume Profile: insufficient closed bars"
+
+    p_hi = max(float(k[2]) for k in closed)
+    p_lo = min(float(k[3]) for k in closed)
+    if p_hi <= p_lo:
+        return False, "Volume Profile: flat range"
+
+    total_vol = sum(float(k[5]) for k in closed)
+    if total_vol <= 0:
+        return False, "Volume Profile: no volume in feed (cannot build profile)"
+
+    bin_w = (p_hi - p_lo) / n_bins
+    bins = [0.0] * n_bins
+
+    def _bin_idx(p: float) -> int:
+        i = int((p - p_lo) / bin_w)
+        return 0 if i < 0 else (n_bins - 1 if i >= n_bins else i)
+
+    # Split each candle's volume evenly across the bins its high–low range covers.
+    for k in closed:
+        h, l, v = float(k[2]), float(k[3]), float(k[5])
+        if v <= 0:
+            continue
+        lo_i, hi_i = _bin_idx(l), _bin_idx(h)
+        span = hi_i - lo_i + 1
+        share = v / span
+        for i in range(lo_i, hi_i + 1):
+            bins[i] += share
+
+    poc_idx = max(range(n_bins), key=lambda i: bins[i])
+    poc_price = p_lo + (poc_idx + 0.5) * bin_w
+
+    # Value area: expand contiguously from the POC until va_pct of volume captured.
+    target = total_vol * va_pct
+    lo_i = hi_i = poc_idx
+    acc = bins[poc_idx]
+    while acc < target and (lo_i > 0 or hi_i < n_bins - 1):
+        v_up = bins[hi_i + 1] if hi_i < n_bins - 1 else -1.0
+        v_dn = bins[lo_i - 1] if lo_i > 0 else -1.0
+        if v_up >= v_dn:
+            hi_i += 1; acc += v_up
+        else:
+            lo_i -= 1; acc += v_dn
+    vah = p_lo + (hi_i + 1) * bin_w   # value-area high (upper edge)
+    val = p_lo + lo_i * bin_w         # value-area low  (lower edge)
+
+    # HVN / LVN classification of the bin the current price sits in.
+    avg_bin = total_vol / n_bins
+    price = current_price or float(closed[-1][4])
+    cur_i = _bin_idx(price)
+    cur_bin_vol = bins[cur_i]
+    tol = price * tol_pct / 100.0
+
+    if condition == "in_value":
+        fired = val <= price <= vah
+    elif condition == "above_value":
+        fired = price > vah
+    elif condition == "below_value":
+        fired = price < val
+    elif condition == "at_hvn":
+        fired = cur_bin_vol >= 1.5 * avg_bin
+    elif condition == "at_lvn":
+        fired = cur_bin_vol <= 0.5 * avg_bin
+    else:  # at_poc
+        fired = abs(price - poc_price) <= max(tol, bin_w / 2)
+
+    return fired, (
+        f"Volume Profile: price={price:.6g} POC={poc_price:.6g} "
+        f"VA[{val:.6g}…{vah:.6g}] node={cur_bin_vol / avg_bin:.2f}×avg "
+        f"→ {'✓' if fired else '✗'} ({condition})"
+    )
+
+
 async def eval_stochastic(
     cond: Dict, symbol: str, http_client, cache: Dict
 ) -> Tuple[bool, str]:
@@ -3634,6 +3755,8 @@ async def evaluate_strategy_conditions(
                 return await eval_vwap_bands(cond, symbol, price, http_client, cache)
             elif ctype == "vwap_bias":
                 return await eval_vwap_bias(cond, symbol, price, http_client, cache)
+            elif ctype == "volume_profile":
+                return await eval_volume_profile(cond, symbol, price, http_client, cache)
             elif ctype == "stochastic":
                 return await eval_stochastic(cond, symbol, http_client, cache)
             elif ctype == "fx_po3":

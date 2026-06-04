@@ -4241,6 +4241,7 @@ function condHtml(c){
   else if(t==='rvol')desc=`RVOL(${c.period||20}) ${c.condition==='low'?'below':'≥'} ${c.threshold||1.5}× on ${c.timeframe||'5m'}`;
   else if(t==='vwap_bands')desc=`Price ${({below_lower:'below lower',above_upper:'above upper',inside:'inside'}[c.condition||'below_lower'])} VWAP band (${c.num_std||2.0}σ) on ${c.timeframe||'5m'}`;
   else if(t==='vwap_bias')desc=`Price ${c.condition||'above'} session VWAP on ${c.timeframe||'5m'}`;
+  else if(t==='volume_profile')desc=`Volume Profile ${({at_poc:'at POC',at_hvn:'at high-volume node',at_lvn:'at low-volume node',in_value:'inside value area',above_value:'above value-area high',below_value:'below value-area low'}[c.condition||'at_poc'])} (${c.lookback||120} bars) on ${c.timeframe||'15m'}`;
   else desc=JSON.stringify(c);
   return`<div class="cond-item"><span class="cond-type">${t.replace(/_/g,' ')}</span><span style="flex:1">${desc}</span></div>`;
 }
@@ -4448,6 +4449,7 @@ const SIGNAL_META={
   rvol:            {icon:'📢',label:'Relative Volume',   desc:'Current volume vs recent average (RVOL)'},
   vwap_bands:      {icon:'🎏',label:'VWAP Bands',        desc:'Price at VWAP ± standard-deviation band'},
   vwap_bias:       {icon:'🧭',label:'VWAP Bias',         desc:'Price above or below the session VWAP'},
+  volume_profile:  {icon:'📊',label:'Volume Profile',    desc:'POC, value area & high/low volume nodes (FX & gold via broker volume)'},
   session_level:   {icon:'🏁',label:'Session Level',    desc:'Price near session high, low or open'},
   pivot_points:    {icon:'📌',label:'Pivot Points',     desc:'Classic PP / R1-R3 / S1-S3 daily levels from previous day\'s OHLC'},
   keltner:         {icon:'🔲',label:'Keltner Channel',  desc:'Channel squeeze or expansion breakout'},
@@ -4480,7 +4482,7 @@ const SIGNAL_FREQ={
   volume_spike:'high', consecutive_candles:'high', mfi:'high', roc:'high',
   macd:'med', ema:'med', vwap_deviation:'med', support_resistance:'med',
   breakout:'med', adx_filter:'med', atr_volatility:'med', keltner:'med', cci:'med',
-  obv:'med', donchian:'med', rvol:'med', vwap_bands:'med', vwap_bias:'high', atr_filter:'med',
+  obv:'med', donchian:'med', rvol:'med', vwap_bands:'med', vwap_bias:'high', atr_filter:'med', volume_profile:'low',
   bb:'low', supertrend:'low', candlestick:'low', market_structure:'low',
   order_block:'low', fibonacci:'low', divergence:'low', funding_rate:'low',
   fvg:'low', open_interest:'low', liquidation:'low', session_level:'low', pivot_points:'low',
@@ -4721,6 +4723,7 @@ function getDefaultCfg(type){
     rvol:             {timeframe:'5m',condition:'high',threshold:1.5,period:20},
     vwap_bands:       {timeframe:'5m',condition:'below_lower',num_std:2.0},
     vwap_bias:        {timeframe:'5m',condition:'above'},
+    volume_profile:   {timeframe:'15m',condition:'at_poc',lookback:120,bins:24,value_area_pct:70,tolerance_pct:0.15},
     session_level:    {timeframe:tf,reference:'session_low',side:'near',threshold_pct:2},
     pivot_points:     {timeframe:tf,level:'r1',condition:'near',tolerance_pct:0.3},
     keltner:          {timeframe:tf,condition:'squeeze'},
@@ -5072,6 +5075,21 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('below','Below VWAP (short bias)',`${pfx}condition`,cfg.condition||'above','red')}
       </div>
       <div class="hint">The core intraday discipline filter — only take longs while price holds above session VWAP, shorts while below. Pair with your entry signal as a directional gate.</div>`;
+    case 'volume_profile':return`${tf}
+      <div class="opt-label">Volume Profile Condition</div>
+      <div class="opt-chips">
+        ${wzChip('at_poc','At the POC (point of control — volume magnet)',`${pfx}condition`,cfg.condition||'at_poc')}
+        ${wzChip('at_hvn','At a high-volume node (S/R / reversal)',`${pfx}condition`,cfg.condition||'at_poc')}
+        ${wzChip('at_lvn','At a low-volume node (fast move / rejection)',`${pfx}condition`,cfg.condition||'at_poc')}
+        ${wzChip('in_value','Inside the value area',`${pfx}condition`,cfg.condition||'at_poc')}
+        ${wzChip('above_value','Above value area high (breakout up)',`${pfx}condition`,cfg.condition||'at_poc','green')}
+        ${wzChip('below_value','Below value area low (breakdown)',`${pfx}condition`,cfg.condition||'at_poc','red')}
+      </div>
+      <div class="opt-label">Profile Lookback (bars) <span id="${pfx}vplb-d" style="color:var(--accent)">${cfg.lookback||120}</span></div>
+      <input type="range" id="${pfx}vplb" min="20" max="500" value="${cfg.lookback||120}" step="10" oninput="wzSl('${pfx}vplb','${pfx}vplb-d','','${pfx}lookback')" style="width:100%;accent-color:var(--accent)">
+      <div class="opt-label">Value Area % <span id="${pfx}vpva-d" style="color:var(--accent)">${cfg.value_area_pct||70}%</span></div>
+      <input type="range" id="${pfx}vpva" min="30" max="95" value="${cfg.value_area_pct||70}" step="5" oninput="wzSl('${pfx}vpva','${pfx}vpva-d','%','${pfx}value_area_pct')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Builds a volume-by-price profile from broker volume (works on FX & gold). POC = most-traded price (a magnet); value area = where ${cfg.value_area_pct||70}% of volume traded. Fade back to POC / HVN, or trade breakouts beyond the value area. Won't fire on a feed with no volume.</div>`;
     case 'session_level':return`${tf}
       <div class="opt-label">Reference Level</div>
       <div class="opt-chips">
@@ -6459,6 +6477,7 @@ function buildWizardDescription(){
       case 'atr_filter':sig=(cfg.condition||'volatile')==='expanding'?`ATR filter: ATR(${cfg.period||14}) is expanding versus ${cfg.lookback||5} bars ago on ${tf} (volatility gate — only trade when the market is moving)`:`ATR filter: ATR(${cfg.period||14}) is at least ${cfg.min_atr_pct||0.3}% of price on ${tf} (volatility gate — market is volatile enough to trade)`;break;
       case 'rvol':sig=`Relative volume (RVOL over ${cfg.period||20} bars) is ${cfg.condition==='low'?`below ${cfg.threshold||1.5}× (quiet, low participation)`:`at least ${cfg.threshold||1.5}× the average (high participation)`} on ${tf}`;break;
       case 'vwap_bands':sig=`Price is ${ {below_lower:`at or below the lower VWAP band (VWAP − ${cfg.num_std||2.0} standard deviations) — oversold`,above_upper:`at or above the upper VWAP band (VWAP + ${cfg.num_std||2.0} standard deviations) — overbought`,inside:`inside the VWAP ± ${cfg.num_std||2.0} standard-deviation bands`}[cfg.condition||'below_lower'] } on ${tf} (session VWAP bands)`;break;
+      case 'volume_profile':sig=`Price is ${ {at_poc:'back at the Point of Control (the most-traded price — a volume magnet)',at_hvn:'in a high-volume node (heavily-traded price — support/resistance / reversal zone)',at_lvn:'in a low-volume node (thinly-traded price — fast move / rejection zone)',in_value:'inside the value area',above_value:'above the value-area high (value-area breakout up)',below_value:'below the value-area low (value-area breakdown)'}[cfg.condition||'at_poc'] } on ${tf}, using a volume profile over the last ${cfg.lookback||120} bars (${cfg.value_area_pct||70}% value area, broker volume)`;break;
       case 'vwap_bias':sig=`Price is ${cfg.condition||'above'} the session VWAP on ${tf} (VWAP bias — ${cfg.condition==='below'?'short':'long'} side only)`;break;
       case 'session_level':sig=`Price within ${cfg.threshold_pct||2}% of ${(cfg.reference||'session_low').replace('_',' ')} on ${tf}`;break;
       case 'pivot_points':sig=`Price ${cfg.condition||'near'} daily ${(cfg.level||'r1').toUpperCase()} pivot (±${cfg.tolerance_pct||0.3}%) on ${tf}`;break;
@@ -6524,6 +6543,7 @@ function buildWizardDescription(){
         case 'atr_filter':cfm=(cfg.condition||'volatile')==='expanding'?`ATR(${cfg.period||14}) expanding vs ${cfg.lookback||5} bars ago on ${tf}`:`ATR(${cfg.period||14}) ≥ ${cfg.min_atr_pct||0.3}% of price on ${tf}`;break;
         case 'rvol':cfm=`RVOL(${cfg.period||20}) ${cfg.condition==='low'?'below':'≥'} ${cfg.threshold||1.5}× on ${tf}`;break;
         case 'vwap_bands':cfm=`Price ${ {below_lower:'below lower',above_upper:'above upper',inside:'inside'}[cfg.condition||'below_lower'] } VWAP band (${cfg.num_std||2.0}σ) on ${tf}`;break;
+        case 'volume_profile':cfm=`Volume Profile ${ {at_poc:'at POC',at_hvn:'at high-volume node',at_lvn:'at low-volume node',in_value:'inside value area',above_value:'above value-area high',below_value:'below value-area low'}[cfg.condition||'at_poc'] } (${cfg.lookback||120} bars) on ${tf}`;break;
         case 'vwap_bias':cfm=`Price ${cfg.condition||'above'} session VWAP on ${tf}`;break;
         case 'session_level':cfm=`Price within ${cfg.threshold_pct||2}% of ${(cfg.reference||'session_low').replace('_',' ')}`;break;
         case 'pivot_points':cfm=`Price ${cfg.condition||'near'} daily ${(cfg.level||'r1').toUpperCase()} pivot (±${cfg.tolerance_pct||0.3}%)`;break;

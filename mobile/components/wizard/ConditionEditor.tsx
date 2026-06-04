@@ -1237,6 +1237,45 @@ function renderKnobs(
       );
     }
 
+    case 'volume_profile': {
+      const condOpts: ChipOption<string>[] = [
+        { value: 'at_poc',      label: '🎯 At POC (volume magnet)' },
+        { value: 'at_hvn',      label: '🧲 At high-volume node (S/R)' },
+        { value: 'at_lvn',      label: '💨 At low-volume node (fast move)' },
+        { value: 'in_value',    label: '↔ Inside value area' },
+        { value: 'above_value', label: '📈 Above value area (breakout)' },
+        { value: 'below_value', label: '📉 Below value area (breakdown)' },
+      ];
+      return (
+        <View>
+          <Section label="Condition" compact={compact}>
+            <ChipRow options={condOpts}
+              value={(cfg.condition as string) || 'at_poc'}
+              onChange={(v) => set({ condition: v })} size="sm" />
+          </Section>
+          <Stepper
+            label="Profile lookback (bars)"
+            value={cfg.lookback ?? 120}
+            onChange={(v) => set({ lookback: v })}
+            min={20} max={500} step={10} unit="" decimals={0}
+            presets={[60, 120, 240]}
+            hint="How many bars to build the volume profile from"
+          />
+          <Stepper
+            label="Value area %"
+            value={cfg.value_area_pct ?? 70}
+            onChange={(v) => set({ value_area_pct: v })}
+            min={30} max={95} step={5} unit="%" decimals={0}
+            presets={[68, 70, 80]}
+            hint="Share of volume that defines the value area"
+          />
+          <Text style={[styles.descText, { marginTop: spacing.sm }]}>
+            Uses broker volume (works on FX & gold). POC = most-traded price (a magnet); value area = where most volume traded. Won't fire on a feed with no volume.
+          </Text>
+        </View>
+      );
+    }
+
     default:
       return null;
   }

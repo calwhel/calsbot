@@ -168,6 +168,18 @@ user talks about intraday volatility gates, relative volume, or VWAP bands/bias.
     conditions: above (price > VWAP → LONG bias) | below (price < VWAP → SHORT bias)
     → Pure directional filter. "Longs only above VWAP" is the #1 intraday discipline rule.
 
+  Volume Profile (POC / Value Area / high & low volume nodes — works on FX & gold via broker tick volume)
+    {"type":"volume_profile","condition":"at_poc","lookback":120,"bins":24,"value_area_pct":70,"tolerance_pct":0.15,"timeframe":"15m"}
+    conditions: at_poc (price back at the Point of Control — the biggest-volume magnet) |
+                in_value (price inside the value area) |
+                above_value (price broke above the value-area high — VAH breakout) |
+                below_value (price broke below the value-area low — VAL breakdown) |
+                at_hvn (price in a high-volume node → support/resistance/reversal magnet) |
+                at_lvn (price in a low-volume node → fast move / rejection zone)
+    lookback: bars to build the profile (default 120). bins: price buckets (default 24). value_area_pct: default 70.
+    → Needs real volume (uses broker tick volume). On a low-volume feed it simply won't fire.
+      Classic uses: fade back to POC, reversal at HVN, breakout/acceptance outside the value area.
+
   Pivot Points (daily PP / R1-R3 / S1-S3 from the prior day's OHLC)
     {"type":"pivot_points","level":"s1","condition":"near","tolerance_pct":0.3,"timeframe":"15m"}
     level: pp | r1 | r2 | r3 | s1 | s2 | s3.   condition: above | below | near (within tolerance_pct % of the level)
@@ -576,6 +588,7 @@ FOREX-SPECIFIC RULES (apply when asset_class = "forex")
   • "Pivot point bounce" / "daily pivot S/R bounce" → pivot_points (level s1/r1, near, 15m) primary + rsi + forex_prev_level + bb confirmations; BOTH direction, TP 25 pips, SL 13 pips
   • "Ichimoku cloud trend" / "above/below the cloud" → ichimoku (above_cloud/below_cloud, 1h) primary + ema + adx (trending) + macd confirmations; BOTH direction, TP 50 pips, SL 25 pips
   • "Range reversion" / "Bollinger band fade" / "mean reversion" → bb (lower_touch/upper_touch, 15m) primary + rsi + stoch_rsi + divergence confirmations; BOTH direction, TP 20 pips, SL 12 pips
+  • "Volume Profile" / "POC / point of control" / "value area (VAH/VAL)" / "high/low volume node (HVN/LVN)" → volume_profile (at_poc/at_hvn for reversion, above_value/below_value for breakout; lookback 120, 15m) primary + vwap_bias + rsi confirmations; works on gold/FX via broker tick volume; BOTH direction, TP 25 pips, SL 13 pips
   ICT risk profiles for forex:
   • ICT scalp (silver bullet / killzone): TP 15–25 pips, SL 10–15 pips, max 2 trades/day, cooldown 60 min
   • ICT intraday (OTE + displacement): TP 30–50 pips, SL 15–20 pips, max 2 trades/session, cooldown 90 min

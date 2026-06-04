@@ -10872,6 +10872,7 @@ SIGNAL RECOGNITION (day-trader filters):
   ATR filter / enough volatility / not dead tape / volatility gate / expanding ATR → atr_filter
   VWAP bands / VWAP standard deviation / ±2 SD VWAP / fade VWAP band → vwap_bands
   above VWAP / below VWAP / VWAP bias / longs only above VWAP → vwap_bias
+  volume profile / POC / point of control / value area (VAH/VAL) / high volume node / HVN / LVN / low volume node → volume_profile
 
 QUICK START RECIPES — use these when the user wants something simple, fast-firing, or says "quick reversal / RSI / EMA / fires often / active / scalp / beginner":
   "RSI scalp" — RSI < 30 on 5m, NO confirmations (none/none). BOTH, TP1 2% / SL 1%, 10×, max 8 trades/day. Fires 5-10× per day on active alts. Dead simple — RSI oversold is the single entry trigger.
@@ -11243,6 +11244,13 @@ CONDITION REFERENCE (use EXACT type/name/field names from this list):
 ━━━ TYPE: "vwap_bias" ━━━  (directional filter — price above/below session VWAP)
 { type:"vwap_bias", condition:"above"|"below", timeframe, label }
   above = price > VWAP (LONG bias) · below = price < VWAP (SHORT bias). The core intraday discipline filter.
+
+━━━ TYPE: "volume_profile" ━━━  (POC / Value Area / high & low volume nodes — FX & gold via broker tick volume)
+{ type:"volume_profile", condition:"at_poc"|"in_value"|"above_value"|"below_value"|"at_hvn"|"at_lvn", lookback:INT, bins:INT, value_area_pct:FLOAT, tolerance_pct:FLOAT, timeframe, label }
+  at_poc = price back at the Point of Control (biggest-volume magnet) · in_value = inside value area
+  above_value = broke above value-area high (VAH) · below_value = broke below value-area low (VAL)
+  at_hvn = in a high-volume node (S/R / reversal magnet) · at_lvn = in a low-volume node (fast move / rejection)
+  lookback default 120 · bins default 24 · value_area_pct default 70. Needs real volume — won't fire on a flat-volume feed.
 
 ━━━ TYPE: "consecutive_candles" ━━━
 { type:"consecutive_candles", timeframe, count:INT, direction:"green"|"red", label }
