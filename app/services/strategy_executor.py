@@ -1314,18 +1314,51 @@ def _fmt_close_card(
     )
 
 
-async def _tg_send(telegram_id: int, text: str):
-    """Send a Telegram message via direct Bot API HTTP call — works from any process."""
-    try:
-        from app.config import settings
-        token = settings.TELEGRAM_BOT_TOKEN
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": telegram_id, "text": text, "parse_mode": "HTML"},
-            )
-    except Exception as e:
-        logger.warning(f"Telegram DM failed for {telegram_id}: {e}")
+async def _tg_send(telegram_id: int, text: str) -> bool:
+    """Send a Telegram message via direct Bot API HTTP call — works from any process.
+
+    Hardened against the "live trade fired but no notification" failure mode:
+      • RETRIES transient network failures (timeouts/connection resets during a
+        cTrader feed reconnect or FD pressure window previously dropped the ONLY
+        send attempt — empty exception, no notification).
+      • VERIFIES Telegram accepted the message. client.post does NOT raise on a
+        non-2xx, so a 400 (HTML parse error) or 403 (user blocked the bot / chat
+        not found) was silently treated as success. We now check the response and
+        log the real reason instead of an empty error.
+    Returns True only on confirmed delivery.
+    """
+    from app.config import settings
+    token = settings.TELEGRAM_BOT_TOKEN
+    if not token:
+        logger.warning(f"Telegram DM skipped for {telegram_id}: TELEGRAM_BOT_TOKEN not set")
+        return False
+    last = ""
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": telegram_id, "text": text, "parse_mode": "HTML"},
+                )
+            if r.status_code == 200:
+                try:
+                    if (r.json() or {}).get("ok"):
+                        return True
+                    last = f"HTTP 200 but ok!=true: {(r.text or '')[:200]}"
+                except Exception as je:
+                    # 200 but body unparseable — do NOT assume delivered; retry.
+                    last = f"HTTP 200 unparseable body ({type(je).__name__}): {(r.text or '')[:200]}"
+            else:
+                last = f"HTTP {r.status_code}: {(r.text or '')[:200]}"
+                # 4xx (bad chat / parse error / blocked) will never succeed on retry.
+                if 400 <= r.status_code < 500:
+                    break
+        except Exception as e:
+            last = f"{type(e).__name__}: {e or '(no message)'}"
+        if attempt < 2:
+            await asyncio.sleep(1.5 * (attempt + 1))
+    logger.warning(f"Telegram DM failed for {telegram_id}: {last or '(no detail)'}")
+    return False
 
 
 async def _send_paper_close_dm(telegram_id: int, text: str):
