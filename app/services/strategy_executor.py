@@ -4274,6 +4274,23 @@ def _build_forex_worklist() -> list:
                 cfg, sname = cached
             ex_cfg = cfg.get("exit", {}) or {}
 
+            # ── Partial-runner (TP1 partial profit) state, parsed from notes ──
+            _pc_m = _re.search(r"partial_close_pct=(\d+(?:\.\d+)?)", notes)
+            partial_pct  = float(_pc_m.group(1)) if _pc_m else 0.0
+            partial_done = ("partial_close_done" in notes) or ("partial_skip" in notes)
+            _vol_m   = _re.search(r"vol=(\d+)", notes)
+            pos_vol  = int(_vol_m.group(1)) if _vol_m else 0
+            tp1_price = float(ex.tp_price)  if ex.tp_price  is not None else None
+            tp2_price = float(ex.tp2_price) if ex.tp2_price is not None else None
+            # Active while a partial close is still pending (have a 2nd target, a
+            # captured volume to split, and haven't acted yet).
+            partial_active = bool(
+                partial_pct > 0 and tp2_price and pos_vol > 0 and not partial_done
+            )
+            # The broker holds TP at TP2 for any partial-runner position (set at
+            # placement); re-sending TP1 on an SL amend would clobber it.
+            broker_tp = tp2_price if (partial_pct > 0 and tp2_price) else tp1_price
+
             # Forex is 1x leverage → the leveraged-ROI breakeven trigger is
             # unreachable. Use a pip/distance-based absolute price level instead.
             be_trigger = _compute_be_trigger_price(
@@ -4284,8 +4301,8 @@ def _build_forex_worklist() -> list:
             if trail_enabled and (not trail_pct or float(trail_pct) <= 0):
                 _slp = ex_cfg.get("stop_loss_pct")
                 trail_pct = (float(_slp) / 2.0) if _slp else None
-            if be_trigger is None and not (trail_enabled and trail_pct):
-                continue  # neither feature configured → nothing to manage
+            if be_trigger is None and not (trail_enabled and trail_pct) and not partial_active:
+                continue  # nothing to manage (no breakeven, trailing, or pending partial)
 
             user = user_cache.get(ex.user_id)
             if user is None:
@@ -4310,10 +4327,119 @@ def _build_forex_worklist() -> list:
                 "strategy_id":   ex.strategy_id,
                 "strategy_name": sname,
                 "user":          user,
+                # Partial-runner state (TP1 partial profit → BE → run to TP2).
+                "partial_pct":    partial_pct,
+                "partial_active": partial_active,
+                "partial_done":   partial_done,
+                "pos_vol":        pos_vol,
+                "tp1_price":      tp1_price,
+                "tp2_price":      tp2_price,
+                "broker_tp":      broker_tp,
             })
     finally:
         db.close()
     return work
+
+
+async def _do_forex_partial_close(w: dict, price: float) -> None:
+    """TP1 reached on a partial-runner position: close ``partial_pct``% via the
+    broker, move the stop to breakeven (keeping the broker TP parked at TP2), mark
+    the execution, and notify. Falls back to a stop-to-breakeven-only move when the
+    position is too small to split on the broker volume grid (the full position then
+    rides to TP2 — and we DON'T mark partial_close_done, so the close-out P&L is the
+    full position, not a blend)."""
+    from app.services.ctrader_client import (
+        close_partial_position_for_user, modify_position_sltp_for_user,
+    )
+    from app.database import BgSessionLocal as SessionLocal
+    from app.strategy_models import StrategyExecution
+
+    entry     = w["entry_price"]
+    direction = w["direction"]
+    tp2       = w.get("tp2_price")
+    frac      = float(w.get("partial_pct") or 0) / 100.0
+
+    # close_partial returns: >0 closed units (success), -1 confirmed un-splittable,
+    # 0 transient failure (retry next cycle — DON'T touch SL/notes/state).
+    try:
+        closed = await close_partial_position_for_user(
+            w["user"], w["symbol"], w["position_id"], int(w.get("pos_vol") or 0), frac,
+        )
+    except Exception as e:
+        logger.warning(f"[FX-partial] close failed exec#{w['exec_id']}: {e}")
+        closed = 0  # transient
+
+    if closed == 0:
+        # Transient: leave the position eligible so the next cycle retries. Do not
+        # amend the stop, mark notes, or claim a breakeven move that never happened.
+        logger.info(
+            f"[FX-partial] exec#{w['exec_id']} {w['symbol']} {direction} TP1 partial "
+            f"transient failure — will retry next cycle"
+        )
+        return
+
+    closed_units = closed if closed > 0 else 0  # closed == -1 → confirmed un-splittable
+
+    # Move the (remaining, or full-if-unsplittable) position's stop to breakeven.
+    # Keep the broker TP at TP2 — an SL-only amend would clear it
+    # (ProtoOAAmendPositionSLTPReq replaces both legs).
+    amend_ok = await modify_position_sltp_for_user(
+        w["user"], w["position_id"], stop_loss_price=round(entry, 6),
+        take_profit_price=tp2,
+    )
+
+    # partial_close_done (success → blend P&L) vs partial_skip (confirmed
+    # un-splittable → run the FULL position to TP2, no blend). Either way the
+    # partial is now resolved and must not re-fire.
+    tok = "partial_close_done" if closed_units > 0 else "partial_skip"
+    _db = SessionLocal()
+    try:
+        ex = _db.query(StrategyExecution).filter(
+            StrategyExecution.id == w["exec_id"]
+        ).first()
+        if ex and ex.outcome == "OPEN":
+            n = ex.notes or ""
+            if tok not in n:
+                n = (n + f" | {tok}").strip(" |")
+            # Only record the breakeven move (notes flag + persisted SL) when the
+            # broker actually accepted the amend — otherwise we'd claim a BE that
+            # never reached the broker.
+            if amend_ok:
+                if "be_moved" not in n:
+                    n = (n + " | be_moved").strip(" |")
+                ex.sl_price = round(entry, 6)
+            ex.notes = n
+            _db.commit()
+    finally:
+        _db.close()
+
+    # Update the cached work item so the fast loop won't re-fire the partial.
+    w["partial_active"] = False
+    w["partial_done"]   = True
+    if amend_ok:
+        w["sl_price"] = round(entry, 6)
+        w["be_moved"] = True
+
+    logger.info(
+        f"[FX-partial] exec#{w['exec_id']} {w['symbol']} {direction} TP1 {w.get('tp1_price')} → "
+        f"{'closed ' + str(closed_units) + 'u' if closed_units > 0 else 'too-small-to-split (full runner)'}, "
+        f"SL→entry {entry:.6g} ({'amended' if amend_ok else 'AMEND FAILED'}), runner targets TP2 {tp2}"
+    )
+
+    # Breakeven / partial alert (best-effort).
+    try:
+        _u = w.get("user")
+        _notify_breakeven_alert(
+            user_id=getattr(_u, "id", 0) or 0,
+            telegram_id=getattr(_u, "telegram_id", None),
+            strategy_name=w.get("strategy_name", "Strategy"),
+            symbol=w["symbol"], direction=direction,
+            leverage=int(w.get("leverage") or 1), move_pct=0.0,
+            strategy_id=w.get("strategy_id", 0), execution_id=w["exec_id"],
+            kind="live",
+        )
+    except Exception:
+        pass
 
 
 async def _amend_forex_position(w: dict) -> None:
@@ -4343,6 +4469,20 @@ async def _amend_forex_position(w: dict) -> None:
     entry     = w["entry_price"]
     direction = w["direction"]
     cur_sl    = w["sl_price"]
+
+    # ── Partial profit at TP1: close half, move stop to breakeven, run to TP2 ──
+    # Runs BEFORE the breakeven/trailing logic and returns early, because the
+    # partial close itself moves the stop to entry and the broker TP is already
+    # parked at TP2.
+    if w.get("partial_active") and w.get("tp1_price"):
+        _tp1 = w["tp1_price"]
+        tp1_hit = (
+            (direction == "LONG"  and price >= _tp1) or
+            (direction == "SHORT" and price <= _tp1)
+        )
+        if tp1_hit:
+            await _do_forex_partial_close(w, price)
+            return
 
     amend_sl = None   # SL price to send to broker (None = no call)
     mark_be  = False  # set the be_moved flag in notes this cycle
@@ -4397,7 +4537,9 @@ async def _amend_forex_position(w: dict) -> None:
         # breakeven/trailing path) silently wiped every live forex TP, so positions
         # moved to breakeven could never take profit (price hit the target but the
         # order stayed open). Pass the stored TP every time to preserve it.
-        _tp = w.get("tp_price")
+        # For partial-runner positions the broker TP is parked at TP2 (broker_tp),
+        # so re-sending TP1 here would move the take-profit back to TP1.
+        _tp = w.get("broker_tp") or w.get("tp_price")
         ok = await modify_position_sltp_for_user(
             w["user"], w["position_id"], stop_loss_price=amend_sl,
             take_profit_price=_tp,
@@ -4489,10 +4631,24 @@ async def _close_live_forex_execution_and_notify(
         entry    = float(ex.entry_price or 0)
         if entry <= 0:
             return False
+
+        # Partial-runner blend: when half was banked at TP1 and the stop moved to
+        # breakeven, realised P&L is frac·TP1 + (1-frac)·exit_price (both linear in
+        # exit price). The stored exit_price stays the real final exit for the card.
+        _pnl_exit = exit_price
+        try:
+            if ex.notes and "partial_close_done" in ex.notes and ex.tp_price:
+                import re as _re_b
+                _m = _re_b.search(r"partial_close_pct=(\d+(?:\.\d+)?)", ex.notes)
+                _frac = (min(max(float(_m.group(1)), 0.0), 100.0) / 100.0) if _m else 0.5
+                _pnl_exit = _frac * float(ex.tp_price) + (1.0 - _frac) * float(exit_price)
+        except Exception:
+            _pnl_exit = exit_price
+
         if ex.direction == "LONG":
-            raw_pnl = (exit_price - entry) / entry * 100
+            raw_pnl = (_pnl_exit - entry) / entry * 100
         else:
-            raw_pnl = (entry - exit_price) / entry * 100
+            raw_pnl = (entry - _pnl_exit) / entry * 100
         pnl_pct   = round(raw_pnl * leverage, 2)
         closed_at = datetime.utcnow()
 
@@ -4503,9 +4659,9 @@ async def _close_live_forex_execution_and_notify(
             _ps = _pip_sz(ex.symbol or "")
             if _ps and _ps > 0:
                 if ex.direction == "LONG":
-                    pips_pnl = round((exit_price - entry) / _ps, 1)
+                    pips_pnl = round((_pnl_exit - entry) / _ps, 1)
                 else:
-                    pips_pnl = round((entry - exit_price) / _ps, 1)
+                    pips_pnl = round((entry - _pnl_exit) / _ps, 1)
         except Exception:
             pips_pnl = None
 
@@ -4656,6 +4812,14 @@ def _build_forex_reconcile_worklist() -> list:
                 if cur_acct is None or int(am.group(1)) != cur_acct:
                     continue  # different/unknown account → skip (never false-close)
 
+            # Partial-runner positions park the broker TP at TP2 (the remainder
+            # exits there, not at TP1), so reconcile must classify the close against
+            # TP2 — otherwise a TP2 fill is mis-measured against TP1 and the
+            # close-out P&L blend (which reads ex.tp_price=TP1) underreports.
+            _rec_tp = float(ex.tp_price) if ex.tp_price else None
+            if ("partial_close_pct=" in notes) and ex.tp2_price:
+                _rec_tp = float(ex.tp2_price)
+
             work.append({
                 "exec_id":     ex.id,
                 "user_id":     uid,
@@ -4664,7 +4828,7 @@ def _build_forex_reconcile_worklist() -> list:
                 "symbol":      ex.symbol,
                 "direction":   ex.direction,
                 "entry":       float(ex.entry_price),
-                "tp_price":    float(ex.tp_price) if ex.tp_price else None,
+                "tp_price":    _rec_tp,
                 "sl_price":    float(ex.sl_price) if ex.sl_price else None,
                 "be_moved":    ("be_moved" in notes),
             })

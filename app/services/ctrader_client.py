@@ -1214,9 +1214,17 @@ async def close_partial_position_for_user(
 
     Closes ~``fraction`` of ``total_volume_units`` (the volume the position was
     opened with), aligned DOWN to the symbol's broker volume grid so BOTH the
-    closed slice and the remaining slice stay ≥ minVolume. Returns the actual
-    number of units closed, or 0 when the position is too small to split on the
-    broker grid (the caller should then skip the partial and just manage the stop).
+    closed slice and the remaining slice stay ≥ minVolume.
+
+    Return contract (the caller distinguishes these three outcomes):
+      * ``> 0`` → success, the actual number of units closed.
+      * ``-1`` → CONFIRMED un-splittable on the broker grid (position too small to
+        split into two ≥ minVolume slices). The caller should skip the partial
+        permanently and just run the full position to TP2.
+      * ``0``  → TRANSIENT failure (broker unreachable, creds missing, symbol
+        detail fetch failed, or the close request was rejected). The caller should
+        leave the position eligible and retry on the next cycle — do NOT record a
+        breakeven move or mark the partial skipped.
     """
     if not _PROTO_OK:
         return 0
@@ -1250,23 +1258,27 @@ async def close_partial_position_for_user(
         logger.warning(f"[cTrader] partial-close detail fetch failed for {symbol}: {e}")
         details = None
 
-    step    = (details or {}).get("stepVolume", 0) or 0
-    min_vol = (details or {}).get("minVolume", 0) or 0
+    # Unknown grid (detail fetch failed) → TRANSIENT: never guess the volume grid.
+    if details is None:
+        return 0
+
+    step    = details.get("stepVolume", 0) or 0
+    min_vol = details.get("minVolume", 0) or 0
 
     close_vol = int(total_volume_units * fraction)
     if step > 0:
         # Round DOWN to a step multiple so the closed slice never exceeds the target.
         close_vol = (close_vol // step) * step
     # Both slices must satisfy the broker minimum, else the close (or the residual
-    # position) would be rejected — bail so the caller skips the partial.
+    # position) would be rejected — CONFIRMED un-splittable (skip the partial).
     if min_vol > 0:
         if close_vol < min_vol or (total_volume_units - close_vol) < min_vol:
-            return 0
+            return -1
     if close_vol <= 0 or close_vol >= total_volume_units:
-        return 0
+        return -1
 
     ok = await close_position(access_token, ctid, int(position_id), int(close_vol), host=host)
-    return int(close_vol) if ok else 0
+    return int(close_vol) if ok else 0  # 0 = transient close rejection → retry
 
 
 # ── High-level: place order for a TradeHub user ───────────────────────────────
