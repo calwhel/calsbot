@@ -3826,6 +3826,25 @@ async def run_session_alert_loop():
             logger.warning("Session alert loop error: %s", exc)
 
 
+_EXECUTOR_HEARTBEATS: Dict[str, float] = {}
+
+
+def mark_heartbeat(name: str) -> None:
+    """Record that an executor loop just started a cycle (monotonic-free wall clock).
+
+    Read by the hourly system health monitor to verify the scan loops are alive.
+    """
+    try:
+        _EXECUTOR_HEARTBEATS[name] = time.time()
+    except Exception:
+        pass
+
+
+def get_heartbeats() -> Dict[str, float]:
+    """Return a copy of the last-cycle wall-clock timestamps for each loop."""
+    return dict(_EXECUTOR_HEARTBEATS)
+
+
 async def run_strategy_executor():
     """
     Main background loop. Evaluates all active + paper strategies for all users.
@@ -3887,6 +3906,7 @@ async def run_strategy_executor():
 
         while True:
             try:
+                mark_heartbeat("crypto_executor")
                 # Load strategy list with a short-lived session — close it
                 # immediately so no stale transaction lingers during evaluation.
                 _list_db = SessionLocal()
@@ -4660,6 +4680,7 @@ async def run_forex_live_manager_fast():
     last_reconcile = 0.0
     while True:
         try:
+            mark_heartbeat("forex_live_manager")
             if not _is_mkt_open("forex", datetime.utcnow()):
                 work = []
                 await asyncio.sleep(5)
@@ -4732,6 +4753,7 @@ async def run_forex_executor():
                                     # backoff below is safe even if the cycle
                                     # throws before its own assignment.
             try:
+                mark_heartbeat("forex_executor")
                 _list_db = SessionLocal()
                 try:
                     strategies = (

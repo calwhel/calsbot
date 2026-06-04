@@ -1540,6 +1540,16 @@ async def _start_executor_tasks():
     except Exception as e:
         logger.error(f"Failed to launch alerts engine: {e}")
 
+    # Hourly system health monitor — verifies website + all data/broker
+    # connections + executor loops and DMs the owner a Telegram summary every
+    # hour. Single-fired here (advisory-locked worker) so it never double-sends.
+    try:
+        from app.services.system_health_check import run_system_health_monitor
+        asyncio.create_task(_resilient_task("run_system_health_monitor", run_system_health_monitor, restart_delay=60))
+        logger.info("✅ System health monitor task launched")
+    except Exception as e:
+        logger.error(f"Failed to launch system health monitor: {e}")
+
 
 async def _executor_claim_loop(first_attempt_delay: int = 0):
     """
