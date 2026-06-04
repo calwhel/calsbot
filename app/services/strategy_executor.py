@@ -4150,6 +4150,7 @@ def _build_forex_worklist() -> list:
                 "direction":     ex.direction,
                 "entry_price":   float(ex.entry_price),
                 "sl_price":      float(ex.sl_price) if ex.sl_price is not None else None,
+                "tp_price":      float(ex.tp_price) if ex.tp_price is not None else None,
                 "leverage":      float(ex.leverage or 1) or 1.0,
                 "be_trigger":    be_trigger,
                 "trail_enabled": bool(trail_enabled and trail_pct),
@@ -4239,8 +4240,16 @@ async def _amend_forex_position(w: dict) -> None:
 
     if amend_sl is not None:
         amend_sl = round(amend_sl, 6)
+        # CRITICAL: always re-send the take-profit alongside the stop-loss.
+        # cTrader's ProtoOAAmendPositionSLTPReq REPLACES both legs — omitting
+        # takeProfit CLEARS the broker's existing TP. Sending SL alone (the old
+        # breakeven/trailing path) silently wiped every live forex TP, so positions
+        # moved to breakeven could never take profit (price hit the target but the
+        # order stayed open). Pass the stored TP every time to preserve it.
+        _tp = w.get("tp_price")
         ok = await modify_position_sltp_for_user(
-            w["user"], w["position_id"], stop_loss_price=amend_sl
+            w["user"], w["position_id"], stop_loss_price=amend_sl,
+            take_profit_price=_tp,
         )
         if not ok:
             logger.warning(
