@@ -1203,6 +1203,72 @@ async def modify_position_sltp_for_user(
     )
 
 
+async def close_partial_position_for_user(
+    user,
+    symbol: str,
+    position_id: int,
+    total_volume_units: int,
+    fraction: float,
+) -> int:
+    """Partially close a live position for a TradeHub user (TP1 partial profit).
+
+    Closes ~``fraction`` of ``total_volume_units`` (the volume the position was
+    opened with), aligned DOWN to the symbol's broker volume grid so BOTH the
+    closed slice and the remaining slice stay ≥ minVolume. Returns the actual
+    number of units closed, or 0 when the position is too small to split on the
+    broker grid (the caller should then skip the partial and just manage the stop).
+    """
+    if not _PROTO_OK:
+        return 0
+    if total_volume_units <= 0 or fraction <= 0 or fraction >= 1:
+        return 0
+
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    db = SessionLocal()
+    try:
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+            return 0
+        access_token = prefs.ctrader_access_token
+        ctid = int(prefs.ctrader_account_id)
+        host = _host_for_account(prefs, ctid)
+    finally:
+        db.close()
+
+    # Resolve the symbol's volume grid so the partial close lands on a valid step.
+    details = None
+    try:
+        async with _get_lock():
+            reader, writer = await _get_persistent_connection(host)
+            if await _account_auth(reader, writer, access_token, ctid):
+                broker_symbol = _SYMBOL_MAP.get(symbol, symbol)
+                symbol_id = await _resolve_symbol_id(reader, writer, ctid, broker_symbol, host)
+                if symbol_id:
+                    details = await _resolve_symbol_details(reader, writer, ctid, symbol_id, host)
+    except Exception as e:
+        logger.warning(f"[cTrader] partial-close detail fetch failed for {symbol}: {e}")
+        details = None
+
+    step    = (details or {}).get("stepVolume", 0) or 0
+    min_vol = (details or {}).get("minVolume", 0) or 0
+
+    close_vol = int(total_volume_units * fraction)
+    if step > 0:
+        # Round DOWN to a step multiple so the closed slice never exceeds the target.
+        close_vol = (close_vol // step) * step
+    # Both slices must satisfy the broker minimum, else the close (or the residual
+    # position) would be rejected — bail so the caller skips the partial.
+    if min_vol > 0:
+        if close_vol < min_vol or (total_volume_units - close_vol) < min_vol:
+            return 0
+    if close_vol <= 0 or close_vol >= total_volume_units:
+        return 0
+
+    ok = await close_position(access_token, ctid, int(position_id), int(close_vol), host=host)
+    return int(close_vol) if ok else 0
+
+
 # ── High-level: place order for a TradeHub user ───────────────────────────────
 
 async def _get_account_balance(

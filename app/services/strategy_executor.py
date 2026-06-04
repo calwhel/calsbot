@@ -999,10 +999,25 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
     workers race to close the same position, exactly one wins and sends the
     Telegram notification — preventing duplicate messages.
     """
+    # When TP1 took partial profit and moved the stop to breakeven, realised P&L is
+    # a blend: partial_close_pct% banked at TP1, the remainder closed here at
+    # exit_price. P&L and pips are both LINEAR in exit price, so we feed the existing
+    # formulas an *effective* exit = frac·TP1 + (1-frac)·exit_price. The stored
+    # exit_price (card/record) stays the real final exit.
+    _pnl_exit = exit_price
+    try:
+        if ex.notes and "partial_close_done" in ex.notes and ex.tp_price:
+            import re as _re_blend
+            _m = _re_blend.search(r"partial_close_pct=(\d+(?:\.\d+)?)", ex.notes)
+            _frac = (min(max(float(_m.group(1)), 0.0), 100.0) / 100.0) if _m else 0.5
+            _pnl_exit = _frac * float(ex.tp_price) + (1.0 - _frac) * float(exit_price)
+    except Exception:
+        _pnl_exit = exit_price
+
     if ex.direction == "LONG":
-        raw_pnl = (exit_price - ex.entry_price) / ex.entry_price * 100
+        raw_pnl = (_pnl_exit - ex.entry_price) / ex.entry_price * 100
     else:
-        raw_pnl = (ex.entry_price - exit_price) / ex.entry_price * 100
+        raw_pnl = (ex.entry_price - _pnl_exit) / ex.entry_price * 100
 
     # Silently deduct realistic spread/execution cost so paper P&L reflects
     # what the user would actually see on their broker — no line item shown.
@@ -1026,11 +1041,11 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
                 get_spread_pips as _gsp,
             )
             _ps = _pip_sz(getattr(ex, "symbol", ""))
-            if _ps > 0 and ex.entry_price and exit_price:
+            if _ps > 0 and ex.entry_price and _pnl_exit:
                 if ex.direction == "LONG":
-                    pips_pnl = round((exit_price - ex.entry_price) / _ps, 1)
+                    pips_pnl = round((_pnl_exit - ex.entry_price) / _ps, 1)
                 else:
-                    pips_pnl = round((ex.entry_price - exit_price) / _ps, 1)
+                    pips_pnl = round((ex.entry_price - _pnl_exit) / _ps, 1)
             spread_pips_stored = _gsp(getattr(ex, "symbol", ""))
         except Exception:
             pass
@@ -3069,8 +3084,20 @@ async def evaluate_and_fire(
             sl_price  = current_price * (1 + sl_pct  / 100)
             tp2_price = current_price * (1 - float(tp2_pct) / 100) if tp2_pct else None
 
-        # Stash partial_close_pct in notes so the paper monitor can act on it.
+        # Stash partial_close_pct in notes so the paper monitor + live manager can
+        # act on it. When a FOREX strategy defines a second target (TP2) but the
+        # user never set an explicit partial size, DEFAULT to closing half at TP1
+        # → move the stop to breakeven → run the remainder to TP2 (the standard
+        # "TP1 + runner"). Scoped to forex because the live partial-close + BE flow
+        # is only wired for cTrader forex; crypto keeps full-close-at-TP1 so paper
+        # == live there.
         _partial_close_pct = ex_config.get("partial_close_pct")
+        if (
+            (not _partial_close_pct or float(_partial_close_pct) <= 0)
+            and tp2_price
+            and asset_class == "forex"
+        ):
+            _partial_close_pct = 50.0
         _exec_notes = None
         if _partial_close_pct and float(_partial_close_pct) > 0:
             _exec_notes = f"partial_close_pct={float(_partial_close_pct):.0f}"
@@ -3115,7 +3142,9 @@ async def evaluate_and_fire(
                 portal_settings = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
                 tg_id = _telegram_int_id(user)
                 if tg_id and (not portal_settings or portal_settings.dm_paper_alerts):
-                    await _tg_send(
+                    # Fire-and-forget so a slow/retrying Telegram send never delays
+                    # the firing cycle (a stalled await here was a latency source).
+                    asyncio.create_task(_tg_send(
                         tg_id,
                         _fmt_open_card(
                             strategy_name = strategy.name or "Your Strategy",
@@ -3133,7 +3162,7 @@ async def evaluate_and_fire(
                             is_paper      = True,
                             asset_class   = asset_class,
                         ),
-                    )
+                    ))
                 # Mobile push (fire-and-forget; never raises)
                 from app.services.expo_push import notify_user_bg
                 _coin = symbol.replace("USDT", "")
@@ -3156,6 +3185,15 @@ async def evaluate_and_fire(
             _acct_id    = None
             _order_err  = None
             _broker     = "ctrader" if asset_class in ("forex", "index") else "bitunix"
+            # Partial-runner mode (forex only): the broker holds the position to TP2
+            # (final target) and the live manager closes half at TP1 + moves the
+            # stop to breakeven. Placing the broker TP at TP1 would fully close the
+            # position there and kill the runner, so we send TP2 as the broker TP.
+            _partial_mode = bool(
+                asset_class == "forex"
+                and tp2_price
+                and _partial_close_pct and float(_partial_close_pct) > 0
+            )
             try:
                 ps_type      = risk.get("position_size_type", "pct")
                 _risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None
@@ -3170,12 +3208,15 @@ async def evaluate_and_fire(
                     _use_risk_pct = bool(risk.get("use_risk_pct"))
                     _risk_pct_per = float(risk.get("risk_pct_per_trade") or risk.get("position_size_pct") or 1.0)
                     _fixed_lots   = float(risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
+                    # In partial-runner mode the broker TP must be TP2 (final target);
+                    # otherwise it stays at the strategy's TP1.
+                    _live_tp_pct  = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
                     order_result = await place_ctrader_order_for_user(
                         user           = user,
                         symbol         = symbol,
                         direction      = direction,
                         entry_price    = current_price,
-                        tp_pct         = tp_pct,
+                        tp_pct         = _live_tp_pct,
                         sl_pct         = sl_pct,
                         risk_pct       = _risk_pct_per,
                         risk_usd       = _risk_usd,
@@ -3291,7 +3332,16 @@ async def evaluate_and_fire(
                     if _position_id:
                         _n = (execution.notes or "").strip()
                         _acct_tok = f" | acct={_acct_id}" if _acct_id else ""
-                        execution.notes = (f"{_n} | pos={_position_id}{_acct_tok}".strip(" |"))
+                        # Stash the placed broker volume so the live manager can
+                        # close exactly half at TP1 (partial-runner mode).
+                        _vol_tok = ""
+                        try:
+                            _v = int(order_result.get("volume") or 0)
+                            if _v > 0:
+                                _vol_tok = f" | vol={_v}"
+                        except Exception:
+                            _vol_tok = ""
+                        execution.notes = (f"{_n} | pos={_position_id}{_acct_tok}{_vol_tok}".strip(" |"))
                 else:
                     execution.bitunix_order_id = str(order_id)
                 if (
@@ -3327,7 +3377,9 @@ async def evaluate_and_fire(
                 tg_id_live = _telegram_int_id(user)
                 if tg_id_live:
                     try:
-                        await _tg_send(
+                        # Fire-and-forget so a slow/retrying Telegram send never
+                        # delays the firing cycle (a latency source).
+                        asyncio.create_task(_tg_send(
                             tg_id_live,
                             _fmt_open_card(
                                 strategy_name = strategy.name or "Your Strategy",
@@ -3346,7 +3398,7 @@ async def evaluate_and_fire(
                                 order_id      = str(order_id),
                                 asset_class   = asset_class,
                             ),
-                        )
+                        ))
                         # Mobile push (fire-and-forget) — fires for live trades.
                         from app.services.expo_push import notify_user_bg
                         _coin = symbol.replace("USDT", "")
