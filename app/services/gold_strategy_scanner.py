@@ -56,17 +56,24 @@ SESSION_LABELS = {
 TIMEFRAMES = ["15m", "1h"]
 
 # Gold pip = $0.10 (retail/broker convention). Pip-space risk variants tested per
-# candidate. Each tuple is (stop_loss_pips, take_profit_pips) → RR shown in label.
+# candidate. Each tuple is (stop_loss_pips, take_profit_pips, style) → RR derived.
+# We test BOTH scalp (tight stop, ~100-pip target, in & out fast) and swing (wide
+# stop, big target) profiles so the scanner surfaces fast scalps as well as runners.
 RISK_VARIANTS = [
-    (150, 300),   # 1:2
-    (200, 400),   # 1:2
-    (250, 500),   # 1:2
-    (200, 300),   # 1:1.5
-    (150, 450),   # 1:3
+    # ── Scalps (tight, fast, ~100-pip targets; gold pip=$0.10 → 100 pips=$10) ──
+    (50, 100, "scalp"),    # 1:2
+    (60, 150, "scalp"),    # 1:2.5
+    (40, 120, "scalp"),    # 1:3
+    # ── Swings (wide stop, big target, hold for the move) ─────────────────────
+    (200, 400, "swing"),   # 1:2
+    (250, 500, "swing"),   # 1:2
+    (150, 450, "swing"),   # 1:3
 ]
 
 MIN_TRADES = 8          # a session bucket needs at least this many closed trades
-MAX_CANDIDATES = 32     # hard cap on total candidates (base + Claude)
+MAX_CANDIDATES = 27     # hard cap on total candidates (base + Claude); sized so
+                        # candidates × TIMEFRAMES × RISK_VARIANTS stays within the
+                        # proven ~320-backtest budget (under the 180s inline timeout)
 LEADERBOARD_SIZE = 15
 _MODEL = "claude-sonnet-4-5"
 
@@ -365,7 +372,7 @@ async def _eval_candidate(cand: Dict, candle_map: Dict[str, List], days: int) ->
         candles = candle_map.get(tf)
         if not candles or len(candles) < 120:
             continue
-        for sl_pips, tp_pips in RISK_VARIANTS:
+        for sl_pips, tp_pips, style in RISK_VARIANTS:
             cfg = {
                 "direction": cand["direction"],
                 "primaryType": cand["primaryType"],
@@ -407,6 +414,7 @@ async def _eval_candidate(cand: Dict, candle_map: Dict[str, List], days: int) ->
                     "sl_pips": sl_pips,
                     "tp_pips": tp_pips,
                     "rr": rr,
+                    "style": style,
                     "stats": st,
                     "score": _score(st),
                 })
@@ -426,6 +434,16 @@ def _build_prompt_for(entry: Dict) -> str:
         f"timeframe that enters when {sig}{sess}. Use a stop loss of {entry['sl_pips']} pips "
         f"and take profit of {entry['tp_pips']} pips."
     )
+
+
+def _build_name_for(entry: Dict) -> str:
+    """Short saved-strategy name for an entry (used by 'Build all')."""
+    sess = "" if entry["session"] == "all" else f" {entry['session_label'].split(' ')[0]}"
+    style = (entry.get("style") or "").title()
+    name = f"Gold {entry['label']} {entry['direction']} {entry['timeframe']}{sess}"
+    if style:
+        name = f"{name} ({style})"
+    return name[:60]
 
 
 async def _claude_pick_best(leaderboard: List[Dict], days: int) -> Optional[Dict]:
@@ -552,19 +570,50 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
     # 4) Rank. Keep best variant per (label, direction) so the board isn't
     #    dominated by RR/session permutations of one idea.
     all_results.sort(key=lambda r: r["score"], reverse=True)
+
     # Keep only the single best (timeframe × session × risk) variant per strategy
-    # IDEA so the board surfaces diverse ideas rather than many permutations of
-    # one. Each entry still carries its winning session/timeframe/RR.
-    best_per_idea: Dict = {}
+    # IDEA so the board surfaces diverse ideas rather than permutations of one.
+    def _dedupe_by_idea(rows: List[Dict]) -> List[Dict]:
+        seen, out = set(), []
+        for r in rows:
+            k = (r["label"], r["direction"])
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(r)
+        return out
+
+    # Swings out-score scalps on raw pips, so a single score-ranked board hides
+    # every scalp. Reserve roughly half the board for scalps, then fill the rest
+    # with swings — but each strategy IDEA (label, direction) may appear ONCE on
+    # the whole board (a global `used_ideas` set), so an idea shows EITHER its
+    # best scalp OR its best swing profile, never both.
+    scalp_best = _dedupe_by_idea([r for r in all_results if r.get("style") == "scalp"])
+    swing_best = _dedupe_by_idea([r for r in all_results if r.get("style") == "swing"])
+    half = LEADERBOARD_SIZE // 2
     leaderboard: List[Dict] = []
-    for r in all_results:
-        key = (r["label"], r["direction"])
-        if key in best_per_idea:
-            continue
-        best_per_idea[key] = True
-        leaderboard.append(r)
-        if len(leaderboard) >= LEADERBOARD_SIZE:
-            break
+    used_ideas: set = set()
+
+    def _take(rows: List[Dict], cap: int) -> None:
+        for r in rows:
+            if len(leaderboard) >= cap:
+                break
+            idea = (r["label"], r["direction"])
+            if idea in used_ideas:
+                continue
+            used_ideas.add(idea)
+            leaderboard.append(r)
+
+    _take(scalp_best, half)                 # ~half the board reserved for scalps
+    _take(swing_best, LEADERBOARD_SIZE)     # fill remainder with swing ideas
+    _take(scalp_best, LEADERBOARD_SIZE)     # backfill leftover scalps if swings ran out
+    leaderboard.sort(key=lambda r: r["score"], reverse=True)
+
+    # Attach a build name + NL build prompt to EVERY leaderboard entry so the UI
+    # can build any single one (or all of them at once via "Build all").
+    for e in leaderboard:
+        e["build_prompt"] = _build_prompt_for(e)
+        e["build_name"] = _build_name_for(e)
 
     # 5) Claude picks & explains the winner.
     _progress("Asking Claude to pick the best…")

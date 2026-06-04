@@ -3131,6 +3131,7 @@ function dismissTgBanner(){
     </div>
     <div class="modal-footer" id="gold-footer" style="display:none">
       <button class="btn" onclick="goldReset()">↺ New Scan</button>
+      <button class="btn" id="gold-build-all-btn" onclick="goldBuildAll()">⚡ Build all (paper)</button>
       <button class="btn primary" id="gold-build-btn" onclick="goldBuildInAI()">💬 Build this in AI Builder</button>
     </div>
   </div>
@@ -8015,16 +8016,18 @@ function renderGoldResults(d){
   if(d.coverage_days){ covTxt = ' · '+Object.keys(d.coverage_days).map(tf=>tf+' ~'+d.coverage_days[tf]+'d').join(', '); }
   html += '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin:6px 0 8px">Top strategies tested ('+d.combos_evaluated+' combos · '+d.candidates_tested+' strategies'+covTxt+')</div>';
   html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
-  html += '<tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px">#</th><th style="padding:6px 8px">Strategy</th><th style="padding:6px 8px">Dir</th><th style="padding:6px 8px">TF</th><th style="padding:6px 8px">Session</th><th style="padding:6px 8px">SL/TP</th><th style="padding:6px 8px">Win%</th><th style="padding:6px 8px">PF</th><th style="padding:6px 8px">Pips</th><th style="padding:6px 8px">Trades</th></tr>';
+  html += '<tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px">#</th><th style="padding:6px 8px">Strategy</th><th style="padding:6px 8px">Dir</th><th style="padding:6px 8px">TF</th><th style="padding:6px 8px">Session</th><th style="padding:6px 8px">Style</th><th style="padding:6px 8px">SL/TP</th><th style="padding:6px 8px">Win%</th><th style="padding:6px 8px">PF</th><th style="padding:6px 8px">Pips</th><th style="padding:6px 8px">Trades</th></tr>';
   d.leaderboard.forEach((e,i)=>{
     const st=e.stats;
-    const hl = i===d.leaderboard.indexOf(b) || (e.label===b.label && e.timeframe===b.timeframe && e.session===b.session);
+    const hl = (e.label===b.label && e.direction===b.direction && e.timeframe===b.timeframe && e.session===b.session && e.style===b.style);
+    const styleBadge = e.style==='scalp' ? '<span style="color:#3f9af5">⚡ scalp</span>' : (e.style==='swing' ? '<span style="color:#c08fe0">🌊 swing</span>' : _gEsc(e.style||''));
     html += '<tr style="border-top:1px solid var(--border)'+(hl?';background:#b8860b14':'')+'">'
           + '<td style="padding:6px 8px;color:var(--muted)">'+(i+1)+'</td>'
           + '<td style="padding:6px 8px;font-weight:600">'+_gEsc(e.label)+'</td>'
           + '<td style="padding:6px 8px">'+(e.direction==='SHORT'?'🔴':'🟢')+'</td>'
           + '<td style="padding:6px 8px">'+_gEsc(e.timeframe)+'</td>'
           + '<td style="padding:6px 8px">'+_gEsc(e.session_label)+'</td>'
+          + '<td style="padding:6px 8px">'+styleBadge+'</td>'
           + '<td style="padding:6px 8px">'+e.sl_pips+'/'+e.tp_pips+'</td>'
           + '<td style="padding:6px 8px">'+st.win_rate+'%</td>'
           + '<td style="padding:6px 8px">'+st.profit_factor+'</td>'
@@ -8054,6 +8057,59 @@ function goldBuildInAI(){
     const inp=document.getElementById('cb-input');
     if(inp){ inp.value=prompt; inp.focus(); }
   }, 150);
+}
+
+// Build EVERY strategy on the leaderboard at once — each is compiled from its
+// natural-language build prompt (the same proven AI compiler the single build
+// uses) and saved as a PAPER strategy so nothing goes live unintentionally.
+async function _goldBuildOne(entry){
+  // 1) Compile the NL prompt into a strategy config via the proven compiler.
+  const cRes = await fetch('/api/build-strategy', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ uid:UID, name:(entry.build_name||entry.label||'Gold strategy'), description:(entry.build_prompt||'') })
+  });
+  const cData = await cRes.json();
+  if(!cRes.ok || !cData.config) throw new Error((cData && (cData.error||cData.message)) || 'compile failed');
+  const cfg = cData.config;
+  // 2) Force gold/forex specifics so the save guardrails always pass and it's safe.
+  cfg.name = (entry.build_name||entry.label||'Gold strategy');
+  cfg.asset_class = 'forex';
+  cfg.universe = { type:'specific', symbols:['XAUUSD'] };
+  cfg._build_mode = 'paper';
+  // 3) Save it (paper).
+  const sRes = await fetch('/api/save-strategy', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ uid:UID, config:cfg })
+  });
+  const sData = await sRes.json();
+  if(!sRes.ok || !sData.id) throw new Error((sData && (sData.detail||sData.error)) || 'save failed');
+  return sData.id;
+}
+async function goldBuildAll(){
+  if(!GOLD.result || !Array.isArray(GOLD.result.leaderboard) || !GOLD.result.leaderboard.length) return;
+  const list = GOLD.result.leaderboard;
+  const allBtn = document.getElementById('gold-build-all-btn');
+  const oneBtn = document.getElementById('gold-build-btn');
+  if(!confirm('Build all '+list.length+' strategies as PAPER strategies? You can review them in the Strategies tab and switch the best ones to live.')) return;
+  allBtn.disabled = true; oneBtn.disabled = true;
+  let ok=0, fail=0, done=0;
+  const setLbl = ()=>{ allBtn.textContent = '⚙️ Building '+done+'/'+list.length+' ('+ok+' ✓'+(fail?' · '+fail+' ✗':'')+')'; };
+  setLbl();
+  // Limited concurrency (3 at a time) — each entry is an independent compile+save.
+  let cursor=0;
+  async function worker(){
+    while(cursor < list.length){
+      const idx = cursor++;
+      try{ await _goldBuildOne(list[idx]); ok++; }
+      catch(e){ fail++; console.warn('gold build-all entry failed', e); }
+      done++; setLbl();
+    }
+  }
+  await Promise.all([worker(),worker(),worker()]);
+  allBtn.disabled = false; oneBtn.disabled = false;
+  allBtn.textContent = '✅ Built '+ok+(fail?' · '+fail+' failed':'');
+  alert('Built '+ok+' paper strateg'+(ok===1?'y':'ies')+(fail?(' ('+fail+' failed)'):'')+'. Open the Strategies tab to review them — they\'re running in paper mode so you can watch them before going live.');
+  if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
 }
 
 async function runScan() {

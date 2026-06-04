@@ -35,10 +35,37 @@ trading sessions. Endpoint: `POST /api/backtest/gold-discovery` (pro/admin gated
   (`tradfi_prices.get_klines`) caps depth (~15m: 1–2 months, 1h: 4–5 months), so
   a 90/180-day request is NOT fully covered on 15m. Report real coverage rather
   than implying the full window. Forex backtests run leverage=1 (app FX convention).
-- **Leaderboard dedupes by `(label, direction)`** → diverse ideas, each carrying
-  its own best session/TF/RR, not 10 permutations of one idea.
+- **Leaderboard dedupes by `(label, direction)` GLOBALLY** → diverse ideas, each
+  carrying its own best session/TF/RR, not 10 permutations of one idea. An idea
+  appears ONCE on the whole board even though it's tested in both scalp and swing
+  risk profiles (see scalp quota below) — never list the same idea twice.
+
+## Scalp vs swing risk variants (don't regress)
+- `RISK_VARIANTS` is labelled `(sl_pips, tp_pips, style)` 3-tuples — 3 `scalp`
+  (~100-pip TP: 50/100, 60/150, 40/120) + 3 `swing` (200/400, 250/500, 150/450).
+  Each result row carries its `style`. **Why:** users want fast scalps on the
+  board, not only swing runners.
+- **Swings out-score scalps on raw pips**, so a single score-ranked board hides
+  every scalp. The board therefore RESERVES ~half its slots for scalps: take best
+  scalp-per-idea up to `LEADERBOARD_SIZE//2`, then fill remainder with best
+  swing-per-idea, then backfill leftover scalps — all sharing ONE `used_ideas`
+  set so no idea appears as both scalp and swing. **Why:** without the quota the
+  scan looks like it ignored the scalp request.
+- **Backtest budget is bounded by the 180s inline gunicorn timeout.** Keep
+  `MAX_CANDIDATES × len(TIMEFRAMES) × len(RISK_VARIANTS)` ≈ 320 (proven safe; dev
+  full run ~82–91s, but Claude propose+pick latency adds variance). Adding a risk
+  variant or timeframe means lowering `MAX_CANDIDATES` in lockstep — a run that
+  exceeds 180s is killed mid-request.
 
 ## UI
-Gold-finder button + `modal-gold` in `strategy_portal.html`. "Build this in AI
-Builder" prefills the chat builder (forex market) with the winner's NL
-`build_prompt` — reuse the proven compiler, don't auto-save a hand-built config.
+Gold-finder button + `modal-gold` in `strategy_portal.html`. Leaderboard has a
+Style column (⚡ scalp / 🌊 swing). Two build paths:
+- "Build this in AI Builder" prefills the chat builder (forex market) with the
+  winner's NL `build_prompt` — reuse the proven compiler, don't auto-save.
+- "⚡ Build all (paper)" (`goldBuildAll`): per leaderboard entry POST
+  `/api/build-strategy` (compile NL `build_prompt`) → force
+  `asset_class='forex'`, `universe={specific, [XAUUSD]}`, `_build_mode='paper'`,
+  `name=build_name` → POST `/api/save-strategy`. 3 concurrent workers, confirm
+  first, saves as PAPER only (nothing auto-goes-live). Every leaderboard entry
+  therefore carries `build_prompt` + `build_name` (`_build_name_for`), not just
+  the winner. Reuses the compiler — never hand-builds config (same rule as above).
