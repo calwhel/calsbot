@@ -1298,14 +1298,22 @@ def _compute_stats(trades: List[Dict], interval_min: int) -> Dict:
     because losses asymmetrically reduce the base used for the next trade
     (a 50 % loss requires a 100 % gain to recover, not another 50 %).
     """
-    closed = [t for t in trades if t["outcome"] in ("WIN", "LOSS")]
-    wins   = [t for t in closed if t["outcome"] == "WIN"]
-    losses = [t for t in closed if t["outcome"] == "LOSS"]
+    # BREAKEVEN is its own outcome (a stop moved to entry that's hit, net ~0). It
+    # counts as a CLOSED trade for equity/pnl/drawdown but is NEITHER a win nor a
+    # loss, so win_rate is over decided (win+loss) trades only — matching the
+    # live/paper executor's three-way label. For strategies WITHOUT stop
+    # management (the default) no breakevens are produced, so every metric below
+    # is bit-identical to before.
+    closed     = [t for t in trades if t["outcome"] in ("WIN", "LOSS", "BREAKEVEN")]
+    wins       = [t for t in closed if t["outcome"] == "WIN"]
+    losses     = [t for t in closed if t["outcome"] == "LOSS"]
+    breakevens = [t for t in closed if t["outcome"] == "BREAKEVEN"]
+    decided    = len(wins) + len(losses)
 
     if not closed:
         return {
             "total_signals": len(trades), "closed_trades": 0,
-            "wins": 0, "losses": 0, "win_rate": 0,
+            "wins": 0, "losses": 0, "breakevens": 0, "win_rate": 0,
             "total_pnl": 0, "total_pnl_simple": 0, "avg_win": 0, "avg_loss": 0,
             "max_drawdown": 0, "avg_hold_minutes": 0, "profit_factor": 0,
             "liquidations": 0,
@@ -1340,7 +1348,8 @@ def _compute_stats(trades: List[Dict], interval_min: int) -> Dict:
         "closed_trades":     len(closed),
         "wins":              len(wins),
         "losses":            len(losses),
-        "win_rate":          round(len(wins) / len(closed) * 100, 1),
+        "breakevens":        len(breakevens),
+        "win_rate":          round(len(wins) / decided * 100, 1) if decided else 0,
         "total_pnl":         round(total_pnl_compounded, 2),
         "total_pnl_simple":  round(total_pnl_simple, 2),
         "avg_win":           round(avg_win, 2),
@@ -1418,6 +1427,28 @@ async def run_backtest(
             sl_pips_val = None
     except (TypeError, ValueError):
         sl_pips_val = None
+    # ── Trade management: breakeven + trailing stop ─────────────────────────────
+    # Modelled to MIRROR the live executor (strategy_executor) so a scanned or
+    # built strategy replays in backtest exactly as it trades:
+    #   • breakeven_at_pct  — once price covers this % of the entry→TP distance,
+    #                         the stop jumps to entry (matches _compute_be_trigger_price
+    #                         legacy forex path).
+    #   • trailing_stop +    — ratchet the stop behind the best price reached by
+    #     trailing_stop_pct    trailing_stop_pct % of price (matches the paper monitor).
+    # Both default OFF, so existing callers see zero behaviour change.
+    try:
+        be_at_pct = float(config.get("breakeven_at_pct") or config.get("breakeven_pct") or 0)
+    except (TypeError, ValueError):
+        be_at_pct = 0.0
+    if be_at_pct < 0:
+        be_at_pct = 0.0
+    if be_at_pct > 100:
+        be_at_pct = 100.0
+    trail_on = bool(config.get("trailing_stop"))
+    try:
+        trail_pct_cfg = float(config.get("trailing_stop_pct") or 0)
+    except (TypeError, ValueError):
+        trail_pct_cfg = 0.0
     primary_type = config.get("primaryType", "price_momentum")
     primary_cfg  = config.get("primaryCfg") or {}
     confirms     = config.get("confirms") or []
@@ -1587,6 +1618,15 @@ async def run_backtest(
                 outcome, exit_price, exit_reason = gap_exit
                 pnl = _compute_pnl(direction, entry_px, exit_price, leverage,
                                    held_minutes, gap_slippage=True)
+                # A moved (breakeven/trailing) stop can be gapped through while
+                # still in profit, so classify a SL-side gap exit by the realised
+                # price move vs entry (fee-agnostic label; pnl keeps fee drag).
+                if exit_reason == "SL_GAP":
+                    _mv  = (exit_price - entry_px) if direction == "LONG" else (entry_px - exit_price)
+                    _eps = abs(entry_px) * 1e-7
+                    outcome = "BREAKEVEN" if abs(_mv) <= _eps else ("WIN" if _mv > 0 else "LOSS")
+                    if open_trade.get("sl_moved"):
+                        exit_reason = "TRAIL_BE_GAP"
                 trades.append({
                     "entry_ts":     open_trade["entry_ts"],
                     "exit_ts":      curr_ts,
@@ -1646,6 +1686,21 @@ async def run_backtest(
 
             if outcome:
                 pnl = _compute_pnl(direction, entry_px, exit_price, leverage, held_minutes)
+                is_tp = (exit_price == tp_price)
+                if is_tp:
+                    exit_reason = "TP"
+                else:
+                    # SL-side exit. A breakeven/trailing-moved stop can be hit in
+                    # profit, so classify by the realised price move vs entry
+                    # (fee-agnostic label; pnl_pct still carries the fee drag).
+                    # Three-way to mirror the live/paper executor exactly: a stop
+                    # ratcheted BEYOND entry = WIN, sitting AT entry (true scratch)
+                    # = BREAKEVEN, below = LOSS. Tolerance is tick-level (1e-7
+                    # relative) matching _classify_sl_outcome in the executor.
+                    _mv  = (exit_price - entry_px) if direction == "LONG" else (entry_px - exit_price)
+                    _eps = abs(entry_px) * 1e-7
+                    outcome = "BREAKEVEN" if abs(_mv) <= _eps else ("WIN" if _mv > 0 else "LOSS")
+                    exit_reason = "TRAIL_BE" if open_trade.get("sl_moved") else "SL"
                 trades.append({
                     "entry_ts":     open_trade["entry_ts"],
                     "exit_ts":      curr_ts,
@@ -1654,9 +1709,33 @@ async def run_backtest(
                     "outcome":      outcome,
                     "pnl_pct":      round(pnl, 2),
                     "hold_candles": held,
-                    "exit_reason":  "TP" if outcome == "WIN" else "SL",
+                    "exit_reason":  exit_reason,
                 })
                 open_trade = None
+
+            # ── 5) Move the stop for breakeven / trailing — applies to the NEXT
+            #       bar only (no same-bar look-ahead), mirroring the live monitor.
+            if open_trade is not None:
+                if open_trade["be_trigger"] is not None and not open_trade["be_done"]:
+                    fav = curr_high if direction == "LONG" else curr_low
+                    reached = (fav >= open_trade["be_trigger"]) if direction == "LONG" \
+                        else (fav <= open_trade["be_trigger"])
+                    if reached:
+                        open_trade["sl_price"] = entry_px
+                        open_trade["be_done"]  = True
+                        open_trade["sl_moved"] = True
+                _tp = open_trade["trail_pct"]
+                if _tp:
+                    if direction == "LONG":
+                        cand_sl = curr_high * (1 - _tp / 100.0)
+                        if cand_sl > open_trade["sl_price"]:
+                            open_trade["sl_price"] = cand_sl
+                            open_trade["sl_moved"] = True
+                    else:
+                        cand_sl = curr_low * (1 + _tp / 100.0)
+                        if cand_sl < open_trade["sl_price"]:
+                            open_trade["sl_price"] = cand_sl
+                            open_trade["sl_moved"] = True
 
             prev_cond_met = curr_cond_met
             continue  # still managing trade or just closed — don't open another this candle
@@ -1711,6 +1790,19 @@ async def run_backtest(
         # it cheaply on every bar (matters for high-leverage configs).
         liq_price = _liq_price(direction, entry, leverage)
 
+        # Breakeven trigger price (profit-side): entry covered be_at_pct% of the
+        # entry→TP distance. tp_price is on the profit side for both directions
+        # so (tp_price - entry) is +ve for LONG and -ve for SHORT — correct sign.
+        be_trigger = (entry + (be_at_pct / 100.0) * (tp_price - entry)) if be_at_pct > 0 else None
+        # Trailing distance (% of price). Honour an explicit pct; else mirror the
+        # executor default of half the stop distance when trailing is enabled.
+        eff_trail_pct = None
+        if trail_on:
+            if trail_pct_cfg > 0:
+                eff_trail_pct = trail_pct_cfg
+            elif sl_pct > 0:
+                eff_trail_pct = (sl_pct * 100.0) / 2.0
+
         open_trade = {
             "entry_ts":    entry_ts,
             "entry_idx":   entry_idx,
@@ -1718,6 +1810,10 @@ async def run_backtest(
             "tp_price":    tp_price,
             "sl_price":    sl_price,
             "liq_price":   liq_price,
+            "be_trigger":  be_trigger,
+            "be_done":     False,
+            "trail_pct":   eff_trail_pct,
+            "sl_moved":    False,
         }
 
     # Close any still-open trade at end of data
@@ -1754,7 +1850,7 @@ async def run_backtest(
     equity_curve = _build_equity_curve(trades)
 
     if pip_mode:
-        closed_p = [t for t in trades if t.get("outcome") in ("WIN", "LOSS")]
+        closed_p = [t for t in trades if t.get("outcome") in ("WIN", "LOSS", "BREAKEVEN")]
         wins_p   = [t for t in closed_p if t["outcome"] == "WIN"]
         losses_p = [t for t in closed_p if t["outcome"] == "LOSS"]
         total_pips_v = sum(float(t.get("pip_move") or 0) for t in closed_p)

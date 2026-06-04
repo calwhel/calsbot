@@ -1472,6 +1472,34 @@ def _compute_be_trigger_price(symbol, entry, direction, tp_price, ex_cfg):
     return None
 
 
+def _classify_sl_outcome(sl: float, entry: float, direction: str) -> str:
+    """Single source of truth for SL-side outcome labelling — used by the paper
+    monitor (_outcome_for_sl) AND the live forex reconcile (_reconcile_forex_closes)
+    so test == paper == live.
+
+    A stop sitting AT entry is a scratch/BREAKEVEN; a stop ratcheted (breakeven
+    or trailing) BEYOND entry in the profit direction that's hit locks a gain
+    (WIN); anything else is a LOSS. Tolerance is TICK-LEVEL (1e-7 relative) on
+    purpose: breakeven/partial-close set sl == entry (bit-stable, or round(entry,6)
+    on the live amend — still well within 1e-7 at FX/gold prices), whereas a
+    genuine stop is ≥ ~1 pip away (~2e-5 relative). A wide band would mislabel
+    small genuine losses near entry as BREAKEVEN.
+    """
+    try:
+        if not entry:
+            return "LOSS"
+        tol = abs(entry) * 1e-7
+        if abs(sl - entry) <= tol:
+            return "BREAKEVEN"
+        if direction == "LONG" and sl > entry + tol:
+            return "WIN"
+        if direction == "SHORT" and sl < entry - tol:
+            return "WIN"
+    except Exception:
+        pass
+    return "LOSS"
+
+
 def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     """
     Apply a pre-fetched candle list to one open paper position.
@@ -1581,10 +1609,9 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
         # always ≥ ~1 pip away (smallest pip move is ~2e-5 relative). A wide band
         # here would mislabel small genuine losses as BREAKEVEN.
         try:
-            if (ex.sl_price is not None and ex.entry_price and
-                    abs(float(ex.sl_price) - float(ex.entry_price))
-                    <= float(ex.entry_price) * 1e-7):
-                return "BREAKEVEN"
+            if ex.sl_price is not None and ex.entry_price:
+                return _classify_sl_outcome(
+                    float(ex.sl_price), float(ex.entry_price), ex.direction)
         except Exception:
             pass
         return "LOSS"
@@ -4662,6 +4689,11 @@ async def _reconcile_forex_closes() -> None:
                     price = None
 
             tp, sl, entry = w["tp_price"], w["sl_price"], w["entry"]
+
+            def _classify_sl(_sl) -> str:
+                # Shared helper → live == paper == backtest classification.
+                return _classify_sl_outcome(_sl, entry, w["direction"])
+
             outcome = None
             exit_price = None
             if tp is not None and sl is not None and price and price > 0:
@@ -4669,14 +4701,12 @@ async def _reconcile_forex_closes() -> None:
                     outcome, exit_price = "WIN", tp
                 else:
                     exit_price = sl
-                    be_stop = w["be_moved"] and entry > 0 and abs(sl - entry) / entry < 0.0005
-                    outcome = "BREAKEVEN" if be_stop else "LOSS"
+                    outcome = _classify_sl(sl)
             elif tp is not None and price and price > 0 and abs(price - tp) <= (tp * 0.001):
                 outcome, exit_price = "WIN", tp
             elif sl is not None:
                 exit_price = sl
-                be_stop = w["be_moved"] and entry > 0 and abs(sl - entry) / entry < 0.0005
-                outcome = "BREAKEVEN" if be_stop else "LOSS"
+                outcome = _classify_sl(sl)
             elif price and price > 0:
                 # No stored TP/SL — fall back to direction vs last price.
                 if w["direction"] == "LONG":

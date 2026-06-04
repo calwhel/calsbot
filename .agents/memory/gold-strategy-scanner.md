@@ -57,6 +57,32 @@ trading sessions. Endpoint: `POST /api/backtest/gold-discovery` (pro/admin gated
   variant or timeframe means lowering `MAX_CANDIDATES` in lockstep — a run that
   exceeds 180s is killed mid-request.
 
+## Stop management (breakeven / trailing) — backtest↔live fidelity (don't regress)
+- `RISK_VARIANTS` are `(sl, tp, style, mgmt)` 4-tuples; `mgmt` is one of
+  `fixed` / `breakeven` / `trail`. `_eval_candidate` emits the engine keys
+  `breakeven_at_pct`, `trailing_stop`, `trailing_stop_pct` (the last derived from
+  `sl_pips × pip_sz / ref_close`); result rows + `_build_prompt_for` /
+  `_build_name_for` carry the management so the built strategy replays as scanned.
+- **TP targets are realistic** (40–200 pip swings, ~100-pip scalps) — no 500-pip
+  "blue moon" targets. **Why:** unsustainable targets backtest as rare giant wins
+  but never fill live.
+- **`run_backtest` models management itself** (default OFF): top-level
+  `breakeven_at_pct` (% of entry→TP distance → SL ratchets to entry),
+  `trailing_stop` + `trailing_stop_pct` (% of price). The stop is moved AFTER each
+  bar's exit checks (next-bar only — **no lookahead**). Mirrors executor semantics
+  (`_compute_be_trigger_price`).
+- **SL-side exits are three-way** by realised price move vs entry with tick-level
+  eps (`entry × 1e-7`): WIN if stop ratcheted beyond entry, **BREAKEVEN** at
+  entry, LOSS below. Applied in BOTH the normal-SL and SL-gap blocks. Mirrors the
+  shared `strategy_executor._classify_sl_outcome` so test == live.
+- **BREAKEVEN is its own outcome everywhere** (`_compute_stats`, scanner
+  `_bucket_stats`, the pip-mode aggregate in `run_backtest`): it COUNTS as a
+  closed trade for equity / pnl / drawdown / total_pips but is **neither win nor
+  loss** → `win_rate = wins / (wins + losses)`. **Why:** folding a scratch into
+  WIN inflated the displayed win-rate. For strategies WITHOUT management (the
+  default) zero breakevens are produced, so every metric is bit-identical to the
+  pre-management behavior (parity-tested). Don't fold BREAKEVEN back into WIN/LOSS.
+
 ## UI
 Gold-finder button + `modal-gold` in `strategy_portal.html`. Leaderboard has a
 Style column (⚡ scalp / 🌊 swing). Two build paths:

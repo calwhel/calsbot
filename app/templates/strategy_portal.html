@@ -8016,11 +8016,13 @@ function renderGoldResults(d){
   if(d.coverage_days){ covTxt = ' · '+Object.keys(d.coverage_days).map(tf=>tf+' ~'+d.coverage_days[tf]+'d').join(', '); }
   html += '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin:6px 0 8px">Top strategies tested ('+d.combos_evaluated+' combos · '+d.candidates_tested+' strategies'+covTxt+')</div>';
   html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
-  html += '<tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px">#</th><th style="padding:6px 8px">Strategy</th><th style="padding:6px 8px">Dir</th><th style="padding:6px 8px">TF</th><th style="padding:6px 8px">Session</th><th style="padding:6px 8px">Style</th><th style="padding:6px 8px">SL/TP</th><th style="padding:6px 8px">Win%</th><th style="padding:6px 8px">PF</th><th style="padding:6px 8px">Pips</th><th style="padding:6px 8px">Trades</th></tr>';
+  html += '<tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px">#</th><th style="padding:6px 8px">Strategy</th><th style="padding:6px 8px">Dir</th><th style="padding:6px 8px">TF</th><th style="padding:6px 8px">Session</th><th style="padding:6px 8px">Style</th><th style="padding:6px 8px">SL/TP</th><th style="padding:6px 8px">Stop mgmt</th><th style="padding:6px 8px">Win%</th><th style="padding:6px 8px">PF</th><th style="padding:6px 8px">Pips</th><th style="padding:6px 8px">Trades</th></tr>';
   d.leaderboard.forEach((e,i)=>{
     const st=e.stats;
     const hl = (e.label===b.label && e.direction===b.direction && e.timeframe===b.timeframe && e.session===b.session && e.style===b.style);
     const styleBadge = e.style==='scalp' ? '<span style="color:#3f9af5">⚡ scalp</span>' : (e.style==='swing' ? '<span style="color:#c08fe0">🌊 swing</span>' : _gEsc(e.style||''));
+    const mgmt = e.management||'fixed';
+    const mgmtBadge = mgmt==='breakeven' ? '<span style="color:#3fb950">🛡️ breakeven</span>' : (mgmt==='trail' ? '<span style="color:#d9a441">📈 trailing</span>' : '<span style="color:var(--muted)">fixed</span>');
     html += '<tr style="border-top:1px solid var(--border)'+(hl?';background:#b8860b14':'')+'">'
           + '<td style="padding:6px 8px;color:var(--muted)">'+(i+1)+'</td>'
           + '<td style="padding:6px 8px;font-weight:600">'+_gEsc(e.label)+'</td>'
@@ -8029,6 +8031,7 @@ function renderGoldResults(d){
           + '<td style="padding:6px 8px">'+_gEsc(e.session_label)+'</td>'
           + '<td style="padding:6px 8px">'+styleBadge+'</td>'
           + '<td style="padding:6px 8px">'+e.sl_pips+'/'+e.tp_pips+'</td>'
+          + '<td style="padding:6px 8px">'+mgmtBadge+'</td>'
           + '<td style="padding:6px 8px">'+st.win_rate+'%</td>'
           + '<td style="padding:6px 8px">'+st.profit_factor+'</td>'
           + '<td style="padding:6px 8px;color:'+(st.total_pips>0?'#3fb950':'#e05858')+'">'+(st.total_pips>0?'+':'')+st.total_pips+'</td>'
@@ -8076,6 +8079,23 @@ async function _goldBuildOne(entry){
   cfg.asset_class = 'forex';
   cfg.universe = { type:'specific', symbols:['XAUUSD'] };
   cfg._build_mode = 'paper';
+  // 2b) FORCE the stop-management exactly as it was backtested so the saved
+  //     strategy trades the same way it tested (test==live). The management is
+  //     deterministic (not an LLM-inferred signal), so overriding the compiler
+  //     output here is safe — we never rebuild SIGNALS, only the exit knobs.
+  cfg.exit = cfg.exit || {};
+  const _mgmt = entry.management || 'fixed';
+  if(_mgmt==='breakeven'){
+    cfg.exit.breakeven_at_pct = entry.breakeven_at_pct || 50;
+    cfg.exit.trailing_stop = false;
+  } else if(_mgmt==='trail'){
+    cfg.exit.trailing_stop = true;
+    cfg.exit.trailing_stop_pct = entry.trailing_stop_pct || 0;
+    cfg.exit.breakeven_at_pct = 0;
+  } else {
+    cfg.exit.breakeven_at_pct = 0;
+    cfg.exit.trailing_stop = false;
+  }
   // 3) Save it (paper).
   const sRes = await fetch('/api/save-strategy', {
     method:'POST', headers:{'Content-Type':'application/json'},

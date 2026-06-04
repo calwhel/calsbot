@@ -56,18 +56,23 @@ SESSION_LABELS = {
 TIMEFRAMES = ["15m", "1h"]
 
 # Gold pip = $0.10 (retail/broker convention). Pip-space risk variants tested per
-# candidate. Each tuple is (stop_loss_pips, take_profit_pips, style) → RR derived.
-# We test BOTH scalp (tight stop, ~100-pip target, in & out fast) and swing (wide
-# stop, big target) profiles so the scanner surfaces fast scalps as well as runners.
+# candidate. Each tuple is (stop_loss_pips, take_profit_pips, style, management):
+#   • Targets are REALISTIC/sustainable for gold — a typical XAUUSD day ranges
+#     ~$15-40 (150-400 pips), so a single-trade 500-pip ($50) target is a "blue
+#     moon" event. Scalps aim 40-60 pips ($4-6); swings 120-200 pips ($12-20).
+#   • management ∈ {fixed | breakeven | trail} — the scan now models stop
+#     management exactly as the live executor runs it, so what's tested trades
+#     the same way live (breakeven = SL→entry at halfway; trail = ratchet behind
+#     price). _eval_candidate maps these to engine/exit config keys.
 RISK_VARIANTS = [
-    # ── Scalps (tight, fast, ~100-pip targets; gold pip=$0.10 → 100 pips=$10) ──
-    (50, 100, "scalp"),    # 1:2
-    (60, 150, "scalp"),    # 1:2.5
-    (40, 120, "scalp"),    # 1:3
-    # ── Swings (wide stop, big target, hold for the move) ─────────────────────
-    (200, 400, "swing"),   # 1:2
-    (250, 500, "swing"),   # 1:2
-    (150, 450, "swing"),   # 1:3
+    # ── Scalps (tight stop, fast, realistic 1:2 targets) ──────────────────────
+    (20, 40,  "scalp", "breakeven"),   # 1:2, SL→entry at +20 pips
+    (25, 50,  "scalp", "trail"),       # 1:2, trailing stop
+    (30, 60,  "scalp", "fixed"),       # 1:2, plain
+    # ── Swings (wider stop, sustainable target, hold the move) ────────────────
+    (60, 120, "swing", "breakeven"),   # 1:2
+    (80, 160, "swing", "trail"),       # 1:2
+    (100, 200, "swing", "fixed"),      # 1:2
 ]
 
 MIN_TRADES = 8          # a session bucket needs at least this many closed trades
@@ -312,7 +317,10 @@ def _entry_session(ts_ms: int) -> List[str]:
 
 def _bucket_stats(trades: List[Dict], session: str, pip_size: float) -> Optional[Dict]:
     """Filter closed trades to a session and compute profitability stats."""
-    closed = [t for t in trades if t.get("outcome") in ("WIN", "LOSS")]
+    # BREAKEVEN counts as a closed trade (for pips/pnl/drawdown) but is neither a
+    # win nor a loss — win_rate is over decided (win+loss) trades only, mirroring
+    # the executor's three-way label so the scanner's win% matches live.
+    closed = [t for t in trades if t.get("outcome") in ("WIN", "LOSS", "BREAKEVEN")]
     if session != "all":
         closed = [t for t in closed if session in _entry_session(t.get("entry_ts", 0))]
     n = len(closed)
@@ -320,6 +328,8 @@ def _bucket_stats(trades: List[Dict], session: str, pip_size: float) -> Optional
         return None
     wins = [t for t in closed if t["outcome"] == "WIN"]
     losses = [t for t in closed if t["outcome"] == "LOSS"]
+    breakevens = [t for t in closed if t["outcome"] == "BREAKEVEN"]
+    decided = len(wins) + len(losses)
     gross_w = sum(t["pnl_pct"] for t in wins)
     gross_l = abs(sum(t["pnl_pct"] for t in losses))
     pf = round(gross_w / gross_l, 2) if gross_l > 0 else (99.0 if gross_w > 0 else 0.0)
@@ -338,7 +348,8 @@ def _bucket_stats(trades: List[Dict], session: str, pip_size: float) -> Optional
         "closed_trades": n,
         "wins": len(wins),
         "losses": len(losses),
-        "win_rate": round(len(wins) / n * 100, 1),
+        "breakevens": len(breakevens),
+        "win_rate": round(len(wins) / decided * 100, 1) if decided else 0.0,
         "profit_factor": pf,
         "total_pips": total_pips,
         "avg_pips": round(total_pips / n, 1),
@@ -372,7 +383,17 @@ async def _eval_candidate(cand: Dict, candle_map: Dict[str, List], days: int) ->
         candles = candle_map.get(tf)
         if not candles or len(candles) < 120:
             continue
-        for sl_pips, tp_pips, style in RISK_VARIANTS:
+        # Reference close to convert pip distances → % of price for trailing.
+        try:
+            ref_close = float(candles[-1][4]) or 2000.0
+        except Exception:
+            ref_close = 2000.0
+        for sl_pips, tp_pips, style, mgmt in RISK_VARIANTS:
+            # Map management style → engine/exit config keys (same vocab the live
+            # executor + AI compiler use, so test == live).
+            be_at_pct = 50 if mgmt == "breakeven" else 0
+            trail_on = (mgmt == "trail")
+            trail_pct = round((sl_pips * pip_sz / ref_close) * 100.0, 4) if trail_on else 0.0
             cfg = {
                 "direction": cand["direction"],
                 "primaryType": cand["primaryType"],
@@ -385,6 +406,9 @@ async def _eval_candidate(cand: Dict, candle_map: Dict[str, List], days: int) ->
                 "take_profit_pips": tp_pips,
                 "stop_loss_pips": sl_pips,
                 "maxHoldHours": 72,
+                "breakeven_at_pct": be_at_pct,
+                "trailing_stop": trail_on,
+                "trailing_stop_pct": trail_pct,
             }
             try:
                 res = await run_backtest(cfg, days, precomputed_candles=candles,
@@ -415,6 +439,10 @@ async def _eval_candidate(cand: Dict, candle_map: Dict[str, List], days: int) ->
                     "tp_pips": tp_pips,
                     "rr": rr,
                     "style": style,
+                    "management": mgmt,
+                    "breakeven_at_pct": be_at_pct,
+                    "trailing_stop": trail_on,
+                    "trailing_stop_pct": trail_pct,
                     "stats": st,
                     "score": _score(st),
                 })
@@ -429,10 +457,19 @@ def _build_prompt_for(entry: Dict) -> str:
     for cf in entry.get("confirms", []):
         parts.append(f"confirmed by {cf.get('type')} {json.dumps({k: v for k, v in cf.items() if k != 'type'})}")
     sig = " AND ".join(parts)
+    mgmt = entry.get("management", "fixed")
+    if mgmt == "breakeven":
+        mgmt_txt = (f" Move the stop loss to breakeven once the trade is "
+                    f"{entry.get('breakeven_at_pct', 50)}% of the way to target.")
+    elif mgmt == "trail":
+        mgmt_txt = (f" Use a trailing stop of {entry.get('trailing_stop_pct', 0)}% "
+                    f"behind price to lock in profit.")
+    else:
+        mgmt_txt = ""
     return (
         f"Build a {entry['direction']} gold (XAUUSD) strategy on the {entry['timeframe']} "
         f"timeframe that enters when {sig}{sess}. Use a stop loss of {entry['sl_pips']} pips "
-        f"and take profit of {entry['tp_pips']} pips."
+        f"and take profit of {entry['tp_pips']} pips.{mgmt_txt}"
     )
 
 
@@ -440,9 +477,12 @@ def _build_name_for(entry: Dict) -> str:
     """Short saved-strategy name for an entry (used by 'Build all')."""
     sess = "" if entry["session"] == "all" else f" {entry['session_label'].split(' ')[0]}"
     style = (entry.get("style") or "").title()
+    mgmt = entry.get("management", "fixed")
+    mgmt_tag = {"breakeven": "BE", "trail": "Trail"}.get(mgmt, "")
     name = f"Gold {entry['label']} {entry['direction']} {entry['timeframe']}{sess}"
-    if style:
-        name = f"{name} ({style})"
+    suffix = " ".join(p for p in (style, mgmt_tag) if p)
+    if suffix:
+        name = f"{name} ({suffix})"
     return name[:60]
 
 
@@ -459,6 +499,7 @@ async def _claude_pick_best(leaderboard: List[Dict], days: int) -> Optional[Dict
             rows.append(
                 f"[{i}] {e['label']} | {e['direction']} | {e['timeframe']} | "
                 f"{e['session_label']} | SL {e['sl_pips']}/TP {e['tp_pips']} (RR {e['rr']}) | "
+                f"mgmt={e.get('management', 'fixed')} | "
                 f"trades={s['closed_trades']} winrate={s['win_rate']}% PF={s['profit_factor']} "
                 f"pips={s['total_pips']} pnl={s['total_pnl']}% maxDD={s['max_drawdown']}%"
             )
