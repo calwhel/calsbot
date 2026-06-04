@@ -8,6 +8,7 @@ Binance Futures OHLCV data.
 import json
 import logging
 import os
+import re
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -515,6 +516,8 @@ STRATEGY_SCHEMA = """
   },
   "filters": {
     "time_filter": null,        // null | {"start_hour":8,"end_hour":20}  (UTC)
+    "session": null,            // null | {"type":"session","sessions":["new_york"]} — restrict firing to session hours. Valid ids: asian, london, new_york, overlap. Works for ALL asset classes and shows in the wizard's session chips.
+    "trading_days": null,       // null | ["monday","tuesday","wednesday","thursday","friday"] (lowercase day names) — restrict which weekdays may fire
     "btc_regime": null          // null | "bullish" | "bearish" | "neutral" — crypto only
   }
 }
@@ -560,8 +563,9 @@ FOREX-SPECIFIC RULES (apply when asset_class = "forex")
     Common pairs: EURUSD GBPUSD USDJPY AUDUSD USDCAD EURGBP EURJPY GBPJPY XAUUSD XAGUSD
   • btc_regime filter must be null (irrelevant for forex)
   • Session TIMING (trade DURING/throughout a session, restrict to session hours):
-    "only during London/NY session" → forex_session condition=in_session sessions=["london","ny"]
-    This covers the WHOLE session window. Do NOT use forex_session_break or fx_killzone for "during the session".
+    "only during London/NY session" → PREFER top-level filters.session = {{"type":"session","sessions":["london","new_york"]}} (see SESSION & DAY CONFIGURATION — cross-asset, editable in the wizard).
+    Only use a forex_session in_session CONDITION when it is part of an ICT signal combo, or when the user needs session_open / session_close SUB-WINDOWS (not the whole window). Never use both for the same sessions (double-gates).
+    Do NOT use forex_session_break or fx_killzone for "during the session".
   • Session BREAKOUT signals only when the user explicitly says breakout/range-break:
     "London breakout" → forex_session_break session=london
     "Asian range break" → forex_session_break session=asian
@@ -660,7 +664,7 @@ CONDITION SELECTION
   "RSI divergence" / "MACD divergence" → divergence
   "funding rate" → funding_rate (crypto only)
   "open interest" / "OI" → open_interest (crypto only)
-  "only trade/fire DURING London/NY session" / "active all of the session" / "restrict to session hours" → forex_session condition=in_session (whole window; use sessions:[...] for multiple)
+  "only trade/fire DURING London/NY session" / "active all of the session" / "restrict to session hours" → PREFER top-level filters.session (see SESSION & DAY CONFIGURATION); reserve forex_session in_session for ICT combos or session_open/session_close sub-windows
   "London session BREAKOUT" / "NY session" / "Asian session" (as a breakout/range signal) → forex_session_break (forex) or session (crypto)
   "price above daily open" / "above session high" → price_relative
   "sentiment" / "social score" → sentiment
@@ -697,6 +701,21 @@ FILTERS
   If user says "only in bull market" → btc_regime="bullish" (crypto only, null for forex/stocks)
   If user says "only in bear market" → btc_regime="bearish" (crypto only)
 
+SESSION & DAY CONFIGURATION (top-level filters.session / filters.trading_days — applies to ALL asset classes and is editable in the wizard)
+  • "only trade the New York session" / "US session only" / "restrict to NY hours" → filters.session = {{"type":"session","sessions":["new_york"]}}
+  • "London session" → ["london"]; "London and New York" / "London + NY" → ["london","new_york"]; "Asian session" → ["asian"]; "London/NY overlap only" → ["overlap"]
+  • Valid session ids ONLY: asian, london, new_york, overlap (normalize: "ny"→"new_york", "us"→"new_york", "uk"/"europe"→"london", "tokyo"/"asia"→"asian"). Leave session null for 24/7.
+  • PREFER filters.session for a plain "only trade during X session" restriction — it is cross-asset and shows in the wizard. Do NOT ALSO add a forex_session in_session entry condition for the SAME sessions (that double-gates). Keep the forex_session CONDITION only as part of an ICT signal combo or when you need session_open / session_close sub-windows.
+  • "only Monday to Friday" / "weekdays only" → filters.trading_days = ["monday","tuesday","wednesday","thursday","friday"]
+  • "only on Mondays" → ["monday"]; "no weekends" → Mon–Fri list. Use lowercase full day names. Leave trading_days null for every day.
+
+RISK CONFIGURATION (map explicit instructions to risk.* — apply only what the user states, else keep style-preset defaults)
+  • "risk N% per trade" / "use N% of my account" → risk.position_size_pct (float)
+  • "max N trades a day" → risk.max_trades_per_day (int)
+  • "only one position at a time" / "max N open positions" → risk.max_open_positions (int, ≥1)
+  • "stop after N% daily loss" / "daily loss limit N%" → risk.daily_loss_limit_pct (float)
+  • "wait N minutes between trades" / "N hour cooldown" → risk.cooldown_minutes (int; convert hours→minutes)
+
 NEW FIELDS FROM CHAT BUILDER (parse these when present in the description)
   • "TP2: 4%" or "TP2: none" → exit.take_profit2_pct (float or null)
   • "TP2 Pips: 60" or "TP2 Pips: none" → exit.take_profit2_pips (int or null) — forex only
@@ -705,6 +724,11 @@ NEW FIELDS FROM CHAT BUILDER (parse these when present in the description)
     Meaning: when this % of TP1 distance is covered, move SL to entry (e.g. 70 = move SL to entry after 70% of TP1 hit)
   • "Position Size: 3%" → risk.position_size_pct (float, e.g. 3.0)
   • "Max Trades/Day: 6" → risk.max_trades_per_day (int)
+  • "Sessions: New York" or "Sessions: London, New York" or "Sessions: none" → filters.session (see SESSION & DAY CONFIGURATION; null when "none")
+  • "Trading Days: Mon-Fri" or "Trading Days: Monday, Wednesday" or "Trading Days: none" → filters.trading_days (lowercase full day names; null when "none")
+  • "Daily Loss Limit: 5%" or "Daily Loss Limit: none" → risk.daily_loss_limit_pct (float or leave default)
+  • "Max Open Positions: 2" → risk.max_open_positions (int)
+  • "Cooldown: 30min" or "Cooldown: 1h" → risk.cooldown_minutes (int; convert hours→minutes)
   • "Confirmation 1: ..." and "Confirmation 2: ..." → additional conditions in entry_conditions.conditions
 
   When Trailing Stop is true and TP2 is set: set trailing_stop_pct equal to half the stop_loss_pct (reasonable default).
@@ -816,6 +840,125 @@ async def _compile_with_gemini(user_description: str) -> Optional[Dict]:
         return None
 
 
+_VALID_SESSION_IDS = {"asian", "london", "new_york", "overlap", "tokyo", "europe", "ny"}
+_SESSION_ALIASES = {"ny": "new_york", "us": "new_york", "uk": "london",
+                    "europe": "london", "tokyo": "asian", "asia": "asian",
+                    "newyork": "new_york", "new york": "new_york"}
+_VALID_DAY_NAMES = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+_DAY_ALIASES = {"mon": "monday", "tue": "tuesday", "tues": "tuesday", "wed": "wednesday",
+                "weds": "wednesday", "thu": "thursday", "thur": "thursday", "thurs": "thursday",
+                "fri": "friday", "sat": "saturday", "sun": "sunday"}
+_DAY_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+_NULLISH = {"", "none", "null", "na", "n/a", "any", "all", "24/7", "247", "anytime", "-"}
+
+
+def _canon_day(tok: str) -> Optional[str]:
+    d = tok.strip().lower()
+    d = _DAY_ALIASES.get(d, d)
+    return d if d in _VALID_DAY_NAMES else None
+
+
+def _parse_session_ids(value) -> Optional[list]:
+    """Coerce AI session output (dict / list / string) into canonical ids, or None to clear."""
+    if isinstance(value, dict):
+        toks = value.get("sessions") or []
+    elif isinstance(value, (list, tuple)):
+        toks = value
+    elif isinstance(value, str):
+        if value.strip().lower() in _NULLISH:
+            return None
+        toks = re.split(r"[,/&]| and ", value)
+    else:
+        return None
+    if isinstance(toks, str):  # e.g. {"sessions": "new_york"} → single id
+        toks = re.split(r"[,/&]| and ", toks)
+    ids = []
+    for t in toks:
+        sid = str(t).strip().lower()
+        sid = _SESSION_ALIASES.get(sid, sid)
+        if sid in _VALID_SESSION_IDS and sid not in ids:
+            ids.append(sid)
+    return ids or None
+
+
+def _parse_trading_days(value) -> Optional[list]:
+    """Coerce AI day output (list / string, incl. ranges like 'mon-fri') into canonical names, or None."""
+    if isinstance(value, list):
+        toks = value
+    elif isinstance(value, str):
+        if value.strip().lower() in _NULLISH:
+            return None
+        toks = re.split(r"[,/&]| and ", value)
+    else:
+        return None
+    days = []
+    for t in toks:
+        t = str(t).strip().lower()
+        if "-" in t:  # range, e.g. "mon-fri" / "monday-friday"
+            lo, _, hi = t.partition("-")
+            clo, chi = _canon_day(lo), _canon_day(hi)
+            if clo and chi:
+                i, j = _DAY_ORDER.index(clo), _DAY_ORDER.index(chi)
+                span = _DAY_ORDER[i:j + 1] if i <= j else _DAY_ORDER[i:] + _DAY_ORDER[:j + 1]
+                for d in span:
+                    if d not in days:
+                        days.append(d)
+                continue
+        cd = _canon_day(t)
+        if cd and cd not in days:
+            days.append(cd)
+    return days or None
+
+
+def _normalize_compiled_config(config: Optional[Dict]) -> Optional[Dict]:
+    """Sanitize AI-emitted session / trading_days filters and clamp config risk knobs.
+
+    The executor reads filters.session.sessions, filters.trading_days and the risk.*
+    limits directly — invalid ids would silently never-fire, so coerce to the canonical
+    shapes (matching the wizard) and drop anything unrecognised.
+    """
+    if not isinstance(config, dict):
+        return config
+
+    filters = config.get("filters")
+    if isinstance(filters, dict):
+        # --- session: accept dict/list/string, coerce to canonical ids (or clear) ---
+        if "session" in filters:
+            ids = _parse_session_ids(filters.get("session"))
+            if ids:
+                filters["session"] = {"type": "session", "sessions": ids}
+            else:
+                filters.pop("session", None)
+
+        # --- trading_days: accept list/string (incl. ranges), canonical names (or clear) ---
+        if "trading_days" in filters:
+            days = _parse_trading_days(filters.get("trading_days"))
+            if days:
+                filters["trading_days"] = days
+            else:
+                filters.pop("trading_days", None)
+        config["filters"] = filters
+
+    # --- risk: clamp the configurable knobs to sane ranges when present ---
+    risk = config.get("risk")
+    if isinstance(risk, dict):
+        def _clamp_int(key, lo, hi):
+            v = risk.get(key)
+            if isinstance(v, (int, float)):
+                risk[key] = int(max(lo, min(hi, v)))
+        def _clamp_num(key, lo, hi):
+            v = risk.get(key)
+            if isinstance(v, (int, float)):
+                risk[key] = max(lo, min(hi, float(v)))
+        _clamp_int("max_trades_per_day", 1, 100)
+        _clamp_int("max_open_positions", 1, 50)
+        _clamp_int("cooldown_minutes", 0, 1440)
+        _clamp_num("daily_loss_limit_pct", 0.5, 100.0)
+        config["risk"] = risk
+
+    return config
+
+
 async def compile_strategy_from_conversation(
     conversation: List[Dict[str, str]],
     user_description: str,
@@ -825,10 +968,10 @@ async def compile_strategy_from_conversation(
     Tries Claude first, falls back to Gemini if Anthropic credits are exhausted.
     """
     result = await _compile_with_anthropic(user_description)
-    if result is not None:
-        return result
-    logger.info("Anthropic unavailable — trying Gemini fallback compiler")
-    return await _compile_with_gemini(user_description)
+    if result is None:
+        logger.info("Anthropic unavailable — trying Gemini fallback compiler")
+        result = await _compile_with_gemini(user_description)
+    return _normalize_compiled_config(result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

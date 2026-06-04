@@ -10371,11 +10371,45 @@ def _describe_existing_config(config: dict) -> str:
     lines.append(" | ".join(p for p in parts if p))
 
     risk = config.get("risk") or {}
-    lines.append(
+    _risk_line = (
         f"Leverage: {risk.get('leverage', 1)}x | "
         f"Position Size: {risk.get('position_size_pct', 5)}% | "
         f"Max Trades/Day: {risk.get('max_trades_per_day', 5)}"
     )
+    if risk.get("max_open_positions"):
+        _risk_line += f" | Max Open Positions: {risk['max_open_positions']}"
+    if risk.get("cooldown_minutes"):
+        _risk_line += f" | Cooldown: {risk['cooldown_minutes']}min"
+    if risk.get("daily_loss_limit_pct"):
+        _risk_line += f" | Daily Loss Limit: {risk['daily_loss_limit_pct']}%"
+    lines.append(_risk_line)
+
+    # Session / day filters — round-trip so an "improve" edit never silently drops them.
+    # Tolerate legacy non-dict shapes (a bare list or string) so this never raises.
+    _filters = config.get("filters") or {}
+    _sraw = _filters.get("session")
+    if isinstance(_sraw, dict):
+        _sess = _sraw.get("sessions") or []
+    elif isinstance(_sraw, (list, tuple)):
+        _sess = list(_sraw)
+    elif isinstance(_sraw, str) and _sraw.strip():
+        _sess = [_sraw.strip()]
+    else:
+        _sess = []
+    _draw = _filters.get("trading_days")
+    if isinstance(_draw, (list, tuple)):
+        _days = list(_draw)
+    elif isinstance(_draw, str) and _draw.strip():
+        _days = [_draw.strip()]
+    else:
+        _days = []
+    if _sess or _days:
+        _bits = []
+        if _sess:
+            _bits.append("Sessions: " + ", ".join(str(s) for s in _sess))
+        if _days:
+            _bits.append("Trading Days: " + ", ".join(str(d) for d in _days))
+        lines.append(" | ".join(_bits))
 
     ac  = config.get("asset_class", "crypto")
     uni = config.get("universe") or {}
@@ -10816,7 +10850,7 @@ SIGNAL RECOGNITION:
   premium zone / discount / PD array / equilibrium → fx_pd_array
   Judas swing / fake move / manipulation leg / stop hunt then reverse → fx_judas_swing
   silver bullet / 3 AM / 10 AM / 3 PM setup → fx_silver_bullet
-  only trade/fire DURING London/NY session / active all of the session / restrict to session hours → forex_session condition=in_session (use sessions:["london","ny"] for multiple; covers the WHOLE window, NOT just the open)
+  only trade/fire DURING London/NY session / active all of the session / restrict to session hours → set the top-level Sessions field (e.g. "Sessions: London, New York") — this is the preferred cross-asset session restriction; reserve a forex_session in_session CONDITION for ICT signal combos or session_open/session_close sub-windows only (never both for the same sessions)
   London breakout / Asian range break / session break → forex_session_break
   PDH sweep / previous day high / PDL → forex_prev_level
   currency strength / strong USD / weak GBP → forex_currency_strength
@@ -11068,9 +11102,15 @@ COMPILE when you have direction + signal + TP + SL. Don't keep asking once you h
 
 When ready to compile, say something natural like "Perfect, locking that in — compiling now." then output EXACTLY on its own line after a blank line:
 ###STRATEGY###
-Asset Class: {asset_class} | Direction: LONG | Style: SCALPER | Primary Signal: {_ex_primary} | Confirmation 1: {_ex_conf1} | Confirmation 2: {_ex_conf2} | {tp_sl_example} | TP2: none | Trailing Stop: false | Breakeven: 70% | Position Size: 5% | Max Trades/Day: 6 | Leverage: 10x | {symbols_example}
+Asset Class: {asset_class} | Direction: LONG | Style: SCALPER | Primary Signal: {_ex_primary} | Confirmation 1: {_ex_conf1} | Confirmation 2: {_ex_conf2} | {tp_sl_example} | TP2: none | Trailing Stop: false | Breakeven: 70% | Position Size: 5% | Max Trades/Day: 6 | Sessions: none | Trading Days: none | Daily Loss Limit: none | Max Open Positions: 1 | Cooldown: 30min | Leverage: 10x | {symbols_example}
 
 FIELD RULES for the ###STRATEGY### line:
+- Sessions: "none" (trade 24/7) or a comma list of asian / london / new_york / overlap (e.g. "Sessions: New York" or "Sessions: London, New York"). ONLY set when the user asks to restrict trading to a session window — otherwise "none". This applies to every asset class and is editable later in the wizard.
+- Trading Days: "none" (every day) or specific weekdays (e.g. "Trading Days: Mon-Fri" or "Trading Days: Monday, Wednesday"). ONLY set when the user names days.
+- Daily Loss Limit: "none" or a percentage of account that halts trading for the day (e.g. "Daily Loss Limit: 5%").
+- Max Open Positions: integer, how many trades may be open at once (default 1).
+- Cooldown: minutes to wait after a trade before re-entering (e.g. "Cooldown: 30min" or "Cooldown: 1h").
+- When the user gives a configuration instruction (session, days, risk limits, sizing, breakeven, trailing) about an EXISTING strategy, change ONLY what they asked and keep every other field at its current value.
 - TP1 MUST be at least 1.5× the SL value (minimum 1.5:1 R:R). Aim for 2:1 or better. NEVER set TP equal to SL — that is a losing setup over time. If a user asks for 1:1, explain why it's bad and suggest 2:1 instead before compiling.
 - TP2: "none" or a value using same units as TP1 (e.g. "TP2: 4%" or "TP2 Pips: 60")
 - Trailing Stop: "true" or "false"

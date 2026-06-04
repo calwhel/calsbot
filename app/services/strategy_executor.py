@@ -613,6 +613,13 @@ def _check_trading_days(filters: Dict) -> bool:
     allowed = filters.get("trading_days")
     if not allowed:
         return True
+    # Defensive: accept only a list/tuple/set of day tokens.  A malformed value
+    # (e.g. a raw string) would otherwise iterate character-by-character and
+    # silently block every day — fail OPEN (allow trading) on bad shapes.
+    if isinstance(allowed, str):
+        allowed = [allowed]
+    elif not isinstance(allowed, (list, tuple, set)):
+        return True
     # Accept both long names ("monday") and short IDs ("mon") — the mobile
     # wizard sends short, the web wizard sends long, and either should work.
     day_map = {
@@ -621,7 +628,9 @@ def _check_trading_days(filters: Dict) -> bool:
         "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
     }
     today = datetime.utcnow().weekday()
-    allowed_nums = {day_map[d.lower()] for d in allowed if d.lower() in day_map}
+    allowed_nums = {day_map[str(d).lower()] for d in allowed if str(d).lower() in day_map}
+    if not allowed_nums:
+        return True  # nothing parseable → don't block
     return today in allowed_nums
 
 
@@ -635,9 +644,19 @@ def _check_time_filter(filters: Dict) -> bool:
             return False
 
     # 2. Named session filter  {"type":"session","sessions":["new_york"]}
+    # Defensive: tolerate a bare list of ids or a raw string instead of the
+    # canonical dict — a malformed shape would otherwise raise and block firing.
     sf = filters.get("session")
     if sf:
-        wanted = [s.lower() for s in sf.get("sessions", [])]
+        if isinstance(sf, dict):
+            raw_sessions = sf.get("sessions", [])
+        elif isinstance(sf, (list, tuple)):
+            raw_sessions = sf
+        elif isinstance(sf, str):
+            raw_sessions = [sf]
+        else:
+            raw_sessions = []
+        wanted = [str(s).lower() for s in raw_sessions]
         if wanted:
             active = []
             for name, (s, e) in _SESSION_HOURS.items():
