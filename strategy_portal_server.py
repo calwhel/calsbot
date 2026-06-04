@@ -9676,7 +9676,14 @@ async def api_ctrader_status(uid: str = Query(...)):
 
 @app.get("/api/ctrader/accounts")
 async def api_ctrader_accounts_list(uid: str = Query(...)):
-    """Return all cTrader accounts stored for the user so the UI can show a picker."""
+    """Return all cTrader accounts for the user so the UI can show a picker.
+
+    Re-fetches the LIVE account list from cTrader using the stored access token so
+    that accounts created AFTER the original link (e.g. a new demo account) show up
+    — previously this only returned the JSON snapshot captured at link time, so new
+    accounts never appeared. Falls back to the cached snapshot if the broker is
+    unreachable or the token is stale (never returns an empty picker on a transient
+    failure)."""
     from app.database import SessionLocal
     from app.models import UserPreference
     import json as _json
@@ -9686,10 +9693,32 @@ async def api_ctrader_accounts_list(uid: str = Query(...)):
         if not user:
             raise HTTPException(status_code=403)
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        accounts = _json.loads(prefs.ctrader_accounts or "[]") if prefs else []
+        cached = _json.loads(prefs.ctrader_accounts or "[]") if prefs else []
+        selected = (prefs.ctrader_account_id or "") if prefs else ""
+
+        fresh = None
+        if prefs and prefs.ctrader_access_token:
+            try:
+                from app.services.ctrader_client import get_accounts_for_token
+                fetched = await asyncio.wait_for(
+                    get_accounts_for_token(prefs.ctrader_access_token), timeout=12.0
+                )
+                if fetched:
+                    fresh = fetched
+            except Exception as _e:
+                logger.warning(f"[cTrader] live accounts refresh failed uid={uid}: {type(_e).__name__}")
+
+        accounts = fresh if fresh is not None else cached
+        if fresh is not None and _json.dumps(fresh) != (prefs.ctrader_accounts or ""):
+            try:
+                prefs.ctrader_accounts = _json.dumps(fresh)
+                db.commit()
+            except Exception:
+                db.rollback()
+
         return JSONResponse({
-            "accounts":           accounts,
-            "selected_account_id": (prefs.ctrader_account_id or "") if prefs else "",
+            "accounts":            accounts,
+            "selected_account_id": selected,
         })
     finally:
         db.close()
