@@ -1861,7 +1861,7 @@ async def health():
     return {
         "status": "ok",
         "ts": int(__import__("time").time()),
-        "v": "railway-free-v1",
+        "v": "railway-free-v2-ctrader",
         "commit": _commit[:12] if _commit else "unknown",
         "gold_scan": "yahoo-chart-v3",
         "features_free": portal_features_free(),
