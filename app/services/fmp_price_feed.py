@@ -14,12 +14,20 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+# httpx logs every request URL at INFO — floods logs during 429 storms.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ── Price cache ──────────────────────────────────────────────────────────────
 _PRICE_CACHE: Dict[str, Tuple[float, datetime]] = {}
 _PRICE_TTL = timedelta(seconds=10)
+_PRICE_STALE_TTL = timedelta(seconds=120)  # serve last-good during rate limits
 
 _RUNNING = False
+
+# ── Rate-limit circuit breaker (FMP free/starter tiers are tight) ─────────────
+_FMP_BACKOFF_UNTIL: Optional[datetime] = None
+_FMP_RATE_LIMIT_STREAK = 0
+_FMP_LAST_RATE_LIMIT_LOG: Optional[datetime] = None
 
 # ── Symbol maps ──────────────────────────────────────────────────────────────
 _FOREX_SYMBOLS = [
@@ -56,7 +64,8 @@ _TF_TO_FMP = {
 }
 
 _KLINE_CACHE: Dict[Tuple[str, str, int], Tuple[List[List[float]], datetime]] = {}
-_KLINE_TTL = timedelta(seconds=20)
+_KLINE_TTL = timedelta(seconds=60)
+_KLINE_STALE_TTL = timedelta(seconds=300)
 
 _FMP_STABLE_BASE = "https://financialmodelingprep.com/stable"
 _FMP_LEGACY_BASE = "https://financialmodelingprep.com/api/v3"
@@ -72,16 +81,55 @@ _TF_MINUTES: Dict[str, int] = {
     "1hour": 60, "4hour": 240, "1day": 1440,
 }
 
-# Poll interval for REST price updates
-_POLL_INTERVAL = 5
+# Poll interval for REST price updates (env: FMP_POLL_INTERVAL_SECONDS)
+_POLL_INTERVAL = max(5, int(os.environ.get("FMP_POLL_INTERVAL_SECONDS", "15")))
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
+def fmp_in_backoff() -> bool:
+    """True when FMP returned 429 recently — callers should use fallbacks."""
+    return _FMP_BACKOFF_UNTIL is not None and datetime.utcnow() < _FMP_BACKOFF_UNTIL
+
+
+def fmp_backoff_remaining_seconds() -> int:
+    if not fmp_in_backoff() or _FMP_BACKOFF_UNTIL is None:
+        return 0
+    return max(0, int((_FMP_BACKOFF_UNTIL - datetime.utcnow()).total_seconds()))
+
+
+def _fmp_note_rate_limit() -> None:
+    global _FMP_BACKOFF_UNTIL, _FMP_RATE_LIMIT_STREAK, _FMP_LAST_RATE_LIMIT_LOG
+    _FMP_RATE_LIMIT_STREAK = min(_FMP_RATE_LIMIT_STREAK + 1, 5)
+    wait = min(60 * (2 ** (_FMP_RATE_LIMIT_STREAK - 1)), 300)
+    _FMP_BACKOFF_UNTIL = datetime.utcnow() + timedelta(seconds=wait)
+    now = datetime.utcnow()
+    if (
+        _FMP_LAST_RATE_LIMIT_LOG is None
+        or (now - _FMP_LAST_RATE_LIMIT_LOG).total_seconds() > 60
+    ):
+        _FMP_LAST_RATE_LIMIT_LOG = now
+        logger.warning(
+            f"[FMPFeed] rate limited (429) — backing off {wait}s; "
+            "serving stale cache; cTrader/yfinance fallbacks stay active"
+        )
+
+
+def _fmp_note_success() -> None:
+    global _FMP_RATE_LIMIT_STREAK, _FMP_BACKOFF_UNTIL
+    _FMP_RATE_LIMIT_STREAK = 0
+    _FMP_BACKOFF_UNTIL = None
+
+
 def get_price(symbol: str) -> Optional[float]:
-    """Mid price from live cache, or None if stale / not yet received."""
+    """Mid price from live cache; returns stale up to _PRICE_STALE_TTL when cold."""
     entry = _PRICE_CACHE.get(symbol.upper())
-    if entry and (datetime.utcnow() - entry[1]) < _PRICE_TTL:
+    if not entry:
+        return None
+    age = datetime.utcnow() - entry[1]
+    if age < _PRICE_TTL:
+        return entry[0]
+    if age < _PRICE_STALE_TTL:
         return entry[0]
     return None
 
@@ -173,12 +221,47 @@ def _resample_klines(
     return out[-limit:]
 
 
+async def _fmp_http_get(url: str, params: dict, timeout: float = 8.0) -> Tuple[int, Optional[object]]:
+    """Return (status_code, json_or_none)."""
+    if fmp_in_backoff():
+        return 0, None
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code == 429:
+                _fmp_note_rate_limit()
+                return 429, None
+            if resp.status_code != 200:
+                return resp.status_code, None
+            return 200, resp.json()
+    except Exception as e:
+        logger.debug(f"[FMPFeed] httpx GET failed {url}: {e}")
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url, params=params, timeout=aiohttp.ClientTimeout(total=timeout)
+            ) as resp:
+                if resp.status == 429:
+                    _fmp_note_rate_limit()
+                    return 429, None
+                if resp.status != 200:
+                    return resp.status, None
+                return 200, await resp.json(content_type=None)
+    except Exception as e:
+        logger.debug(f"[FMPFeed] aiohttp GET failed {url}: {e}")
+    return 0, None
+
+
 async def _fetch_fmp_chart_once(
     fmp_sym: str,
     fmp_interval: str,
     limit: int,
     api_key: str,
 ) -> List[List[float]]:
+    if fmp_in_backoff():
+        return []
     minutes = _TF_MINUTES.get(fmp_interval, 15)
     days_back = max(7, int(limit * minutes / 1440) + 7)
     from_d = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
@@ -196,32 +279,13 @@ async def _fetch_fmp_chart_once(
         ),
     )
     for url, params in attempts:
-        data = None
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(url, params=params)
-                if resp.status_code != 200:
-                    logger.debug(
-                        f"[FMPFeed] klines {fmp_sym} {fmp_interval} HTTP {resp.status_code} ({url})"
-                    )
-                    continue
-                data = resp.json()
-        except Exception as e:
-            logger.debug(f"[FMPFeed] klines httpx error {fmp_sym} {fmp_interval}: {e}")
-            try:
-                import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        url, params=params, timeout=aiohttp.ClientTimeout(total=15)
-                    ) as resp:
-                        if resp.status != 200:
-                            continue
-                        data = await resp.json(content_type=None)
-            except Exception as e2:
-                logger.debug(f"[FMPFeed] klines fetch error {fmp_sym} {fmp_interval}: {e2}")
-                continue
-        if data is None:
+        status, data = await _fmp_http_get(url, params, timeout=15.0)
+        if status == 429:
+            return []
+        if status != 200 or data is None:
+            logger.debug(
+                f"[FMPFeed] klines {fmp_sym} {fmp_interval} HTTP {status} ({url})"
+            )
             continue
         if isinstance(data, dict) and data.get("Error Message"):
             logger.warning(
@@ -230,6 +294,7 @@ async def _fetch_fmp_chart_once(
             continue
         rows = _bars_from_fmp_json(data, limit)
         if rows:
+            _fmp_note_success()
             return rows
     return []
 
@@ -253,8 +318,15 @@ async def get_klines(
     cache_key = (sym, fmp_interval, limit)
     now = datetime.utcnow()
     cached = _KLINE_CACHE.get(cache_key)
-    if cached and (now - cached[1]) < _KLINE_TTL:
-        return cached[0]
+    if cached:
+        age = now - cached[1]
+        if age < _KLINE_TTL:
+            return cached[0]
+        if fmp_in_backoff() and age < _KLINE_STALE_TTL:
+            return cached[0]
+
+    if fmp_in_backoff():
+        return cached[0] if cached else []
 
     rows: List[List[float]] = []
     for fmp_sym in _fmp_symbol_candidates(sym):
@@ -289,27 +361,10 @@ async def get_klines(
 # ── REST polling loop ─────────────────────────────────────────────────────────
 
 async def _fmp_get_json(url: str, params: dict) -> Optional[object]:
-    """GET JSON from FMP — httpx first, aiohttp fallback."""
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(url, params=params)
-            if resp.status_code != 200:
-                return None
-            return resp.json()
-    except Exception as e:
-        logger.debug(f"[FMPFeed] httpx GET failed {url}: {e}")
-    try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url, params=params, timeout=aiohttp.ClientTimeout(total=8)
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                return await resp.json(content_type=None)
-    except Exception as e:
-        logger.debug(f"[FMPFeed] aiohttp GET failed {url}: {e}")
+    """GET JSON from FMP — respects circuit breaker on 429."""
+    status, data = await _fmp_http_get(url, params)
+    if status == 200 and data is not None:
+        return data
     return None
 
 
@@ -338,24 +393,27 @@ def _store_fmp_price(display_sym: str, mid: float, now: datetime) -> None:
 
 
 async def _poll_forex():
-    """Poll FMP stable batch-forex-quotes (legacy /api/v3/fx as fallback)."""
+    """One batched forex quote request per poll cycle."""
     api_key = _fmp_api_key()
-    if not api_key:
+    if not api_key or fmp_in_backoff():
         return
 
     now = datetime.utcnow()
-    data = await _fmp_get_json(
+    status, data = await _fmp_http_get(
         f"{_FMP_STABLE_BASE}/batch-forex-quotes",
         {"apikey": api_key},
     )
-    if data is None:
+    if status == 429:
+        return
+    if data is None and not fmp_in_backoff():
         data = await _fmp_get_json(
-            "https://financialmodelingprep.com/api/v3/fx",
+            f"{_FMP_LEGACY_BASE}/fx",
             {"apikey": api_key},
         )
     if not isinstance(data, list):
         return
 
+    got = 0
     for item in data:
         if not isinstance(item, dict):
             continue
@@ -370,51 +428,32 @@ async def _poll_forex():
             mid = _mid_from_quote_item(item)
             if mid is not None:
                 _store_fmp_price(ticker, mid, now)
+                got += 1
         except Exception:
             continue
+    if got:
+        _fmp_note_success()
 
 
 async def _poll_indices():
-    """Poll FMP stable /quote per index (legacy /api/v3/quote as fallback)."""
+    """One batched index quote request per poll cycle (not 6× per-symbol)."""
     api_key = _fmp_api_key()
-    if not api_key:
+    if not api_key or fmp_in_backoff():
         return
 
     now = datetime.utcnow()
-    # Stable API: one quote per canonical index symbol (^NDX, ^GSPC, …).
-    _canonical = ("NAS100", "SPX500", "US30", "GER40", "UK100", "VIX")
-    for display in _canonical:
-        fmp_enc = _INDEX_FMP.get(display)
-        if not fmp_enc:
-            continue
-        fmp_sym = fmp_enc.replace("%5E", "^")
-
-        data = await _fmp_get_json(
-            f"{_FMP_STABLE_BASE}/quote",
-            {"symbol": fmp_sym, "apikey": api_key},
-        )
-        rows = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
-        if not rows:
-            continue
-        for item in rows:
-            if not isinstance(item, dict):
-                continue
-            mid = _mid_from_quote_item(item)
-            if mid is not None:
-                _store_fmp_price(display, mid, now)
-
-    if any(sym in _PRICE_CACHE for sym in ("NAS100", "SPX500", "US30")):
-        return
-
-    # Legacy batch fallback for older FMP plans still on /api/v3.
-    index_tickers = list({v.replace("%5E", "^") for v in _INDEX_FMP.values()})
+    index_tickers = sorted({v.replace("%5E", "^") for v in _INDEX_FMP.values()})
     symbols_csv = ",".join(t.replace("^", "%5E") for t in index_tickers)
-    data = await _fmp_get_json(
+    status, data = await _fmp_http_get(
         f"{_FMP_LEGACY_BASE}/quote/{symbols_csv}",
         {"apikey": api_key},
     )
+    if status == 429:
+        return
     if not isinstance(data, list):
         return
+
+    got = 0
     for item in data:
         if not isinstance(item, dict):
             continue
@@ -427,8 +466,11 @@ async def _poll_indices():
             display = _FMP_TO_DISPLAY.get(encoded) or _FMP_TO_DISPLAY.get(fmp_sym)
             if display:
                 _store_fmp_price(display, mid, now)
+                got += 1
         except Exception:
             continue
+    if got:
+        _fmp_note_success()
 
 
 async def _stream():
@@ -443,6 +485,9 @@ async def _stream():
     errors = 0
 
     while True:
+        if fmp_in_backoff():
+            await asyncio.sleep(max(_POLL_INTERVAL, fmp_backoff_remaining_seconds()))
+            continue
         try:
             await asyncio.gather(
                 _poll_forex(),

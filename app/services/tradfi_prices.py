@@ -591,6 +591,12 @@ async def _get_klines_impl(
 
     for src in _sources:
         if src == "fmp":
+            try:
+                from app.services.fmp_price_feed import fmp_in_backoff
+                if fmp_in_backoff():
+                    continue
+            except Exception:
+                pass
             if is_metal:
                 _frows = await _fetch_fmp_metals_klines(symbol, asset_class, timeframe, limit)
             elif is_index:
@@ -667,10 +673,11 @@ async def _get_klines_impl(
     # ── FMP 1-minute REST — primary source for forex paper evaluation ─────────
     if timeframe == "1m" and _env_fmp_api_key():
         try:
-            from app.services.fmp_price_feed import get_klines as _fmp_klines
-            _frows = await _fmp_klines(symbol, asset_class, timeframe, limit)
-            if _frows:
-                return _frows
+            from app.services.fmp_price_feed import fmp_in_backoff, get_klines as _fmp_klines
+            if not fmp_in_backoff():
+                _frows = await _fmp_klines(symbol, asset_class, timeframe, limit)
+                if _frows:
+                    return _frows
         except Exception as _fe:
             logger.debug(f"[tradfi] FMP 1min failed {symbol}: {_fe}")
 

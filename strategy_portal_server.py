@@ -10089,12 +10089,16 @@ async def api_ctrader_feed_status():
             is_live as _fmp_live,
             cached_symbols as _fmp_syms,
             symbol_count as _fmp_count,
+            fmp_in_backoff as _fmp_backoff,
+            fmp_backoff_remaining_seconds as _fmp_backoff_s,
         )
         _f_syms = _fmp_syms()
         out["fmp"] = {
             "live":           bool(_fmp_live()),
             "symbol_count":   _fmp_count(),
             "cached_symbols": _f_syms[:30],
+            "rate_limited":   bool(_fmp_backoff()),
+            "backoff_seconds": _fmp_backoff_s(),
         }
     except Exception as e:
         out["fmp"]["error"] = str(e)
