@@ -78,8 +78,16 @@ async def lifespan(app: FastAPI):
     # This prevents the dev IDE instance from conflicting with the live production bot.
     if _START_BOT_POLLING:
         bot_task = asyncio.create_task(start_bot())
-        from app.services.forex_bot import start_forex_bot
-        forex_bot_task = asyncio.create_task(start_forex_bot())
+        _main_tok = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+        _fx_tok = (os.getenv("FOREX_BOT_TOKEN") or "").strip()
+        if _fx_tok and _fx_tok != _main_tok:
+            from app.services.forex_bot import start_forex_bot
+            forex_bot_task = asyncio.create_task(start_forex_bot())
+        elif _fx_tok and _fx_tok == _main_tok:
+            logging.warning(
+                "[tg] FOREX_BOT_TOKEN == TELEGRAM_BOT_TOKEN — skipping second "
+                "poller (prevents TelegramConflictError)"
+            )
     else:
         bot_task = None
         forex_bot_task = None

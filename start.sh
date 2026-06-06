@@ -5,17 +5,13 @@ set -e
 export PORTAL_FEATURES_FREE="${PORTAL_FEATURES_FREE:-1}"
 export FORCE_EXECUTOR="${FORCE_EXECUTOR:-1}"
 
-# Optional Telegram bot companion (background; does not bind $PORT)
-if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
+# Optional Telegram bot companion (background; does not bind $PORT).
+# ONE process only — no inner restart loop (that spawned overlapping pollers →
+# TelegramConflictError). Railway's restartPolicy restarts the whole container.
+if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ "${DISABLE_TELEGRAM_POLL:-}" != "1" ]; then
   export FORCE_BOT_POLL=1
-  echo "[railway] Starting Telegram bot on port 8080 (background)..."
-  (
-    while true; do
-      python -m uvicorn main:app --host 0.0.0.0 --port 8080 2>&1 | sed 's/^/[tg-bot] /'
-      echo "[tg-bot] exited — restarting in 5s..."
-      sleep 5
-    done
-  ) &
+  echo "[railway] Starting Telegram bot companion (single process, port 8080)..."
+  python -m uvicorn main:app --host 127.0.0.1 --port 8080 2>&1 | sed 's/^/[tg-bot] /' &
 fi
 
 echo "[railway] Starting Strategy Portal on port ${PORT:-5000}..."

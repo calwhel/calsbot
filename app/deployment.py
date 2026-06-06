@@ -30,6 +30,8 @@ def is_production_deploy() -> bool:
 
 
 def should_poll_telegram() -> bool:
+  if os.getenv("DISABLE_TELEGRAM_POLL", "").lower() in ("1", "true", "yes"):
+    return False
   if os.getenv("FORCE_BOT_POLL", "").lower() in ("1", "true", "yes"):
     return True
   if os.getenv("REPLIT_DEPLOYMENT"):

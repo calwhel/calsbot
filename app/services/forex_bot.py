@@ -422,7 +422,14 @@ async def start_forex_bot():
     if not FOREX_BOT_TOKEN:
         logger.warning("[forex_bot] FOREX_BOT_TOKEN not set — skipping")
         return
-    logger.info("[forex_bot] Starting @TradehubStrategyBot polling…")
+    _main = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if _main and FOREX_BOT_TOKEN.strip() == _main:
+        logger.warning(
+            "[forex_bot] FOREX_BOT_TOKEN equals TELEGRAM_BOT_TOKEN — "
+            "not starting a second poller (use main bot only)"
+        )
+        return
+    logger.info("[forex_bot] Starting forex support bot polling…")
     try:
         await forex_bot.delete_webhook(drop_pending_updates=True)
         from aiogram.types import BotCommand
