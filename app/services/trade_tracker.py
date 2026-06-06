@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _price_cache: dict = {}
 _price_cache_ttl = 20   # seconds — slightly longer so the background loop hits fresh data
 
-ADMIN_CHAT_ID = 5603353066
+ADMIN_CHAT_ID = os.getenv("OWNER_TELEGRAM_ID")
 
 _be_threshold_cache: dict = {}
 _be_threshold_cache_ts: float = 0
@@ -219,7 +219,7 @@ async def _fetch_live_prices(symbols: list[str]) -> dict:
 async def _send_tg_alert(text: str) -> None:
     """Fire-and-forget Telegram message to admin."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    if not token:
+    if not token or not ADMIN_CHAT_ID:
         return
     try:
         async with httpx.AsyncClient(timeout=5) as client:

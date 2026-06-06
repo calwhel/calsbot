@@ -120,13 +120,13 @@ async def _http_exception_handler(request: _Request, exc: _StarletteHTTPExceptio
         _html_error_page(exc.status_code, "Something went wrong", str(exc.detail or "An unexpected error occurred.")),
         status_code=exc.status_code,
     )
-# Mobile app (Expo Go) makes cross-origin requests; UID is passed as query
-# param, not via cookie, so we don't need credentials. Open CORS for /api/*.
+# Mobile app (Expo Go) makes cross-origin requests. Open CORS for /api/*, but
+# protected UID endpoints below must still present a signed session token.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -291,7 +291,9 @@ async def redirect_www_and_log_500(request: Request, call_next):
         raise
 
 # ─── Session cookie helpers (HMAC-signed, no extra deps) ──────────────────────
-_COOKIE_SECRET = os.getenv("SECRET_KEY", "tradehub-portal-secret-2025")
+_COOKIE_SECRET = os.getenv("SECRET_KEY")
+if not _COOKIE_SECRET:
+    raise RuntimeError("SECRET_KEY environment variable is required; refusing to use an insecure default")
 _COOKIE_NAME   = "th_session"
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 
@@ -314,6 +316,76 @@ def _verify_token(token: str) -> Optional[str]:
 def _get_session_uid(request: Request) -> Optional[str]:
     token = request.cookies.get(_COOKIE_NAME)
     return _verify_token(token) if token else None
+
+
+def _get_request_token_uid(request: Request) -> Optional[str]:
+    """Return the UID bound to a mobile/API token, if one was supplied."""
+    auth = request.headers.get("Authorization", "")
+    token = ""
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+    token = token or request.headers.get("X-TradeHub-Session", "").strip()
+    return _verify_token(token) if token else None
+
+
+def _requested_uid(request: Request) -> Optional[str]:
+    uid = request.query_params.get("uid") or request.headers.get("X-TradeHub-UID") or request.headers.get("x-tradehub-uid")
+    uid = (uid or "").strip().upper()
+    return uid or None
+
+
+def _uid_auth_is_legacy_allowed() -> bool:
+    return os.getenv("ALLOW_LEGACY_UID_API_AUTH", "").lower() in ("1", "true", "yes")
+
+
+def _required_env_secret(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        logger.error("%s is not configured; protected endpoint is unavailable", name)
+        raise HTTPException(status_code=503, detail=f"{name} is not configured")
+    return value
+
+
+def _require_admin_secret(secret: str):
+    expected = _required_env_secret("ADMIN_SECRET")
+    if not hmac.compare_digest(secret or "", expected):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _require_admin_bearer(request: Request):
+    secret = request.headers.get("Authorization", "").replace("Bearer ", "", 1).strip()
+    _require_admin_secret(secret)
+
+
+@app.middleware("http")
+async def _require_bound_uid_for_api(request: Request, call_next):
+    """Require UID-bearing API calls to prove ownership of that UID.
+
+    Legacy clients can temporarily opt back into UID-only auth with
+    ALLOW_LEGACY_UID_API_AUTH=1 while they roll out Bearer/X-TradeHub-Session.
+    """
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    path = request.url.path
+    uid = _requested_uid(request)
+    public_prefixes = (
+        "/api/public/",
+        "/api/mobile/login",
+        "/api/webhooks/tv/",
+        "/api/ctrader/callback",
+        "/api/markets/catalog",
+    )
+    if path.startswith("/api/") and uid and not path.startswith(public_prefixes):
+        if not _uid_auth_is_legacy_allowed():
+            session_uid = _get_session_uid(request)
+            token_uid = _get_request_token_uid(request)
+            if uid not in {session_uid, token_uid}:
+                return JSONResponse(
+                    {"detail": "A signed session token is required for this UID."},
+                    status_code=401,
+                )
+    return await call_next(request)
 
 
 def _set_session(response, uid: str, request: Request = None):
@@ -506,8 +578,12 @@ def _get_portal_sub(user_id: int, db: Session):
 
 
 def _is_portal_pro(sub) -> bool:
-    # Subscriptions removed — all features are free for everyone.
-    return True
+    if os.getenv("PORTAL_FEATURES_FREE", "").lower() in ("1", "true", "yes"):
+        return True
+    if not sub or (getattr(sub, "tier", "") or "").lower() != "pro":
+        return False
+    end = getattr(sub, "subscription_end", None)
+    return end is None or end > datetime.utcnow()
 
 
 def _chat_calls_info(sub, db: Session, user=None):
@@ -2648,6 +2724,7 @@ def _build_mobile_login_response(user, db) -> dict:
     # An expired pro sub keeps tier="pro" but should report as free here so
     # the UI cannot accidentally unlock paid features off the plan string.
     plan = "pro" if entitled else "free"
+    session_token = _make_token(user.uid)
     return {
         "uid":        user.uid,
         "display":    display,
@@ -2656,6 +2733,8 @@ def _build_mobile_login_response(user, db) -> dict:
         "plan":       plan,
         "is_pro":     entitled,
         "is_admin":   is_admin,
+        "session_token": session_token,
+        "auth_token":    session_token,
     }
 
 
@@ -2667,6 +2746,11 @@ async def api_mobile_login(request: Request):
     Returns the resolved user profile or 403 if the UID doesn't match.
     The mobile client persists the UID in SecureStore and re-validates on launch.
     """
+    if not _uid_auth_is_legacy_allowed():
+        raise HTTPException(
+            status_code=410,
+            detail="UID-only mobile login is disabled. Use email/password or Apple login to receive a signed session token.",
+        )
     try:
         body = await request.json()
     except Exception:
@@ -10195,10 +10279,12 @@ async def api_put_settings(request: Request, uid: str = Query(...)):
         # API keys — only overwrite if non-empty strings are provided
         api_key    = body.get("bitunix_api_key", "").strip()
         api_secret = body.get("bitunix_api_secret", "").strip()
+        if api_key or api_secret:
+            from app.utils.encryption import encrypt_api_key
         if api_key:
-            prefs.bitunix_api_key = api_key
+            prefs.bitunix_api_key = encrypt_api_key(api_key)
         if api_secret:
-            prefs.bitunix_api_secret = api_secret
+            prefs.bitunix_api_secret = encrypt_api_key(api_secret)
         # Auto-enable live trading once both keys are present
         if prefs.bitunix_api_key and prefs.bitunix_api_secret:
             prefs.auto_trading_enabled = True
@@ -10279,9 +10365,13 @@ async def api_test_exchange(uid: str = Query(...)):
         if not prefs or not prefs.bitunix_api_key or not prefs.bitunix_api_secret:
             return JSONResponse({"ok": False, "error": "No API keys saved. Enter and save your Bitunix API keys first."})
         from app.services.bitunix_trader import BitunixTrader
+        from app.utils.encryption import decrypt_api_key
         import httpx, asyncio
         async with httpx.AsyncClient(timeout=10) as client:
-            trader = BitunixTrader(prefs.bitunix_api_key, prefs.bitunix_api_secret)
+            trader = BitunixTrader(
+                decrypt_api_key(prefs.bitunix_api_key),
+                decrypt_api_key(prefs.bitunix_api_secret),
+            )
             trader.client = client
             try:
                 balance = await asyncio.wait_for(trader.get_account_balance(), timeout=9)
@@ -11502,8 +11592,7 @@ async def api_pinescript_import(request: Request):
 @app.get("/admin/seed-strategies")
 async def seed_admin_strategies(secret: str = Query(...), fix: bool = Query(False)):
     """Seed dev strategies into production for admin. Protected by admin telegram_id."""
-    if secret != "5603353066":
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin_secret(secret)
     from app.database import SessionLocal
     from app.strategy_models import UserStrategy, StrategyPerformance
     import json as _json
@@ -11519,7 +11608,10 @@ async def seed_admin_strategies(secret: str = Query(...), fix: bool = Query(Fals
     db = SessionLocal()
     created = []
     try:
-        user = db.query(User).filter(User.telegram_id == "5603353066").first()
+        admin_telegram_id = os.getenv("OWNER_TELEGRAM_ID", "").strip()
+        if not admin_telegram_id:
+            raise HTTPException(status_code=503, detail="OWNER_TELEGRAM_ID is not configured")
+        user = db.query(User).filter(User.telegram_id == admin_telegram_id).first()
         if not user:
             raise HTTPException(status_code=404, detail="Admin user not found in this database")
         existing = {s.name: s for s in db.query(UserStrategy).filter(UserStrategy.user_id == user.id).all()}
@@ -11629,9 +11721,7 @@ async def executor_force_start(request: Request):
     Requires the dev secret in the Authorization header.
     """
     import os as _os
-    secret = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if secret != "tradehub-portal-secret-2025":
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin_bearer(request)
 
     global _executor_running_in_this_worker
     if _executor_running_in_this_worker:
@@ -11689,9 +11779,7 @@ async def twitter_growth_stats(request: Request, days: int = 7):
     Admin endpoint — returns account growth snapshots from X API tracking.
     Query param: days (default 7, max 90)
     """
-    secret = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if secret != "tradehub-portal-secret-2025":
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin_bearer(request)
 
     days = max(1, min(90, days))
     try:
@@ -11714,9 +11802,7 @@ async def twitter_post_metrics_stats(request: Request, days: int = 30):
     Admin endpoint — returns aggregated tweet performance by post type.
     Query param: days (default 30, max 90)
     """
-    secret = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if secret != "tradehub-portal-secret-2025":
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin_bearer(request)
 
     days = max(1, min(90, days))
     try:
@@ -11897,12 +11983,18 @@ async def portal_oxapay_webhook(request: Request):
     body = raw.decode("utf-8")
 
     # Verify OxaPay HMAC-SHA512 signature
-    sig    = request.headers.get("hmac", "")
-    oxapay = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY or "")
-    if settings.OXAPAY_MERCHANT_API_KEY and sig:
-        if not oxapay.verify_webhook_signature(sig, body, settings.OXAPAY_MERCHANT_API_KEY):
-            logger.warning("[oxapay-webhook] Invalid HMAC signature — ignoring")
-            raise HTTPException(status_code=400, detail="Invalid signature")
+    merchant_key = (settings.OXAPAY_MERCHANT_API_KEY or "").strip()
+    if not merchant_key:
+        logger.error("[oxapay-webhook] OXAPAY_MERCHANT_API_KEY is not configured")
+        raise HTTPException(status_code=503, detail="Payment webhook is not configured")
+    sig    = request.headers.get("hmac", "").strip()
+    oxapay = OxaPayService(merchant_key)
+    if not sig:
+        logger.warning("[oxapay-webhook] Missing HMAC signature")
+        raise HTTPException(status_code=400, detail="Missing signature")
+    if not oxapay.verify_webhook_signature(sig, body, merchant_key):
+        logger.warning("[oxapay-webhook] Invalid HMAC signature — ignoring")
+        raise HTTPException(status_code=400, detail="Invalid signature")
 
     try:
         data = _json.loads(body)
@@ -11924,6 +12016,32 @@ async def portal_oxapay_webhook(request: Request):
             return {"ok": True}
         if payment.status == "paid":
             return {"ok": True}   # idempotent
+
+        inquiry = await asyncio.to_thread(oxapay.check_payment_status, track_id)
+        if not inquiry or str(inquiry.get("status", "")).lower() != "paid":
+            logger.warning(f"[oxapay-webhook] Inquiry did not confirm Paid for trackId={track_id}: {inquiry}")
+            raise HTTPException(status_code=502, detail="Payment status could not be verified")
+
+        from decimal import Decimal, InvalidOperation
+        def _decimal_value(*values):
+            for value in values:
+                if value is None or value == "":
+                    continue
+                try:
+                    return Decimal(str(value))
+                except (InvalidOperation, ValueError):
+                    continue
+            return None
+
+        paid_amount = _decimal_value(inquiry.get("amount"), inquiry.get("payAmount"), data.get("amount"))
+        paid_currency = str(inquiry.get("currency") or data.get("currency") or "").upper()
+        expected_amount = Decimal(str(payment.amount))
+        if paid_amount is None or paid_amount < expected_amount or paid_currency != "USD":
+            logger.warning(
+                "[oxapay-webhook] Payment mismatch trackId=%s paid=%s %s expected=%s USD",
+                track_id, paid_amount, paid_currency, expected_amount,
+            )
+            raise HTTPException(status_code=400, detail="Payment amount or currency mismatch")
 
         payment.status  = "paid"
         payment.paid_at = datetime.utcnow()
@@ -14234,8 +14352,7 @@ async def admin_test_bitunix(secret: str = Query(...), user_id: int = Query(...)
     Returns balance, open positions, and any errors so you can see exactly
     why a user's live orders are failing.
     """
-    if secret != "tradehub-portal-secret-2025":
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin_secret(secret)
 
     from app.database import SessionLocal
     from app.models import User, UserPreference
@@ -14595,9 +14712,7 @@ async def admin_archive_fast_auto_strategies(
     Soft-archives (status='archived') — same as the per-strategy delete UI,
     so trades already open are unaffected and the row is preserved for stats.
     """
-    import os
-    if secret != os.environ.get("ADMIN_SECRET", "5603353066"):
-        raise HTTPException(status_code=403)
+    _require_admin_secret(secret)
 
     from app.database import SessionLocal
     from app.models import AutoTradeStrategy, User
@@ -14640,9 +14755,7 @@ async def admin_archive_fast_auto_strategies(
 @app.post("/admin/competition/create")
 async def admin_competition_create(request: Request, secret: str = Query(...)):
     """Admin-only: create a new monthly competition."""
-    import os
-    if secret != os.environ.get("ADMIN_SECRET", "5603353066"):
-        raise HTTPException(status_code=403)
+    _require_admin_secret(secret)
 
     from app.database import SessionLocal, engine
     db = SessionLocal()

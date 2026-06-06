@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     PORTAL_URL: str = "https://17201325-775a-4a28-aab3-d2c9cf413651-00-3up199ufsye84.kirk.replit.dev"
     
     # Owner ID for admin features
-    OWNER_TELEGRAM_ID: str = "5603353066"  # @bu11dogg
+    OWNER_TELEGRAM_ID: Optional[str] = None
     
     PORT: int = 8080
 
