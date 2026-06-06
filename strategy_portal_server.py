@@ -1884,10 +1884,30 @@ async def _startup_background():
 async def health():
     _commit = deploy_commit()
     _tg_lock = {}
+    _tg_status = {"configured": False, "poll_disabled": False, "bot_username": None, "bot_id": None}
     try:
+        from app.services.telegram_tokens import main_bot_token
+        from app.services.telegram_poller_lock import (
+            MAIN_POLLER_LOCK_ID,
+            FOREX_POLLER_LOCK_ID,
+            describe_bot_token,
+        )
+
+        _tok = main_bot_token()
+        _tg_status["configured"] = bool(_tok)
+        _tg_status["poll_disabled"] = os.getenv("DISABLE_TELEGRAM_POLL", "").lower() in (
+            "1", "true", "yes",
+        )
+        if _tok:
+            _me = await describe_bot_token(_tok, "main")
+            if _me.get("username"):
+                _tg_status["bot_username"] = _me["username"]
+                _tg_status["bot_id"] = _me.get("id")
+            elif _me.get("error"):
+                _tg_status["token_error"] = str(_me["error"])[:120]
+
         from app.database import SessionLocal
         from sqlalchemy import text
-        from app.services.telegram_poller_lock import MAIN_POLLER_LOCK_ID, FOREX_POLLER_LOCK_ID
         db = SessionLocal()
         try:
             rows = db.execute(
@@ -1903,8 +1923,9 @@ async def health():
             _tg_lock = {str(r[0]): {"pid": r[1], "state": r[2]} for r in rows}
         finally:
             db.close()
-    except Exception:
-        pass
+        _tg_status["polling_active"] = str(MAIN_POLLER_LOCK_ID) in _tg_lock
+    except Exception as _tg_err:
+        _tg_status["error"] = str(_tg_err)[:120]
     return {
         "status": "ok",
         "ts": int(__import__("time").time()),
@@ -1914,6 +1935,7 @@ async def health():
         "features_free": portal_features_free(),
         "executor": is_production_deploy()
         and os.getenv("DISABLE_EXECUTOR", "").lower() not in ("1", "true", "yes"),
+        "telegram": _tg_status,
         "telegram_poller_locks": _tg_lock,
     }
 
