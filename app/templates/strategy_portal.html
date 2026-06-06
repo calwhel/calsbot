@@ -2476,12 +2476,19 @@ function dismissTgBanner(){
             <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#caa12c,#b8860b)" onclick="openGoldFinder()">🏆 Find Best Gold Strategy →</button>
           </div>
 
+          <!-- Index Strategy Finder (NASDAQ / S&P via cTrader) -->
+          <div style="margin-bottom:16px;padding:14px;border:1px solid #a855f755;border-radius:10px;background:linear-gradient(135deg,#1a0f2a10,#a855f714)">
+            <div style="font-size:14px;font-weight:800;letter-spacing:-.2px">📊 Index Strategy Finder <span style="font-size:10px;color:var(--muted);font-weight:600">· NASDAQ · cTrader</span></div>
+            <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">Backtest dozens of strategies on <b>NASDAQ 100 (NAS100)</b>, S&amp;P 500, or Dow. <b>No cTrader needed to start</b> — use <b>Build all (paper)</b> and watch signals fire in <b>My Strategies</b> + <b>Trades</b> with full point-based P&amp;L tracking.</div>
+            <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#a855f7,#7c3aed)" onclick="openIndexFinder()">📊 Find Best NASDAQ Strategy →</button>
+          </div>
+
           <!-- Live Forex Scanner (web) -->
           <div id="forex-scanner-card" style="margin-bottom:16px;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--card2)">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
               <div>
                 <div style="font-size:14px;font-weight:800;letter-spacing:-.2px">📡 Live Forex Scanner</div>
-                <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">BOS · CHoCH · FVG · Order Block across majors, gold, silver &amp; US indices.</div>
+                <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">BOS · CHoCH · FVG · Order Block — <b>NAS100</b> &amp; <b>SPX500</b> first, then majors &amp; gold.</div>
               </div>
               <button class="btn primary" style="font-size:12px;padding:8px 14px" onclick="loadForexScanner(true)">↻ Scan now</button>
             </div>
@@ -3197,6 +3204,54 @@ function dismissTgBanner(){
   </div>
 </div>
 
+<!-- Index Strategy Finder -->
+<div class="modal-bg" id="modal-index">
+  <div class="modal" style="max-width:760px">
+    <div class="modal-hd"><h3>📊 Index Strategy Finder</h3><span class="modal-close" onclick="closeModal('modal-index')">&times;</span></div>
+    <div class="modal-body" id="index-body" style="padding:18px 20px 8px">
+      <div id="index-config">
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">Claude backtests index CFD strategies across <b>5m–4h</b> timeframes and US/EU trading sessions. Walk-forward validated (70% train / 30% test). Connect <b>cTrader demo</b> in Settings for broker-matched NASDAQ candles. ~1–2 min.</div>
+        <div style="margin-bottom:14px">
+          <div class="pine-label">Instrument</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="index-sym-chips">
+            <button class="opt-chip active" data-sym="NAS100" onclick="setIndexSym('NAS100',this)">NASDAQ 100</button>
+            <button class="opt-chip" data-sym="SPX500" onclick="setIndexSym('SPX500',this)">S&amp;P 500</button>
+            <button class="opt-chip" data-sym="US30" onclick="setIndexSym('US30',this)">Dow 30</button>
+          </div>
+        </div>
+        <div style="margin-bottom:14px">
+          <div class="pine-label">Direction</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="index-dir-chips">
+            <button class="opt-chip active" data-dir="BOTH" onclick="setIndexDir('BOTH',this)">Both (best long + short)</button>
+            <button class="opt-chip" data-dir="LONG" onclick="setIndexDir('LONG',this)">Long only</button>
+            <button class="opt-chip" data-dir="SHORT" onclick="setIndexDir('SHORT',this)">Short only</button>
+          </div>
+        </div>
+        <div style="margin-bottom:18px">
+          <div class="pine-label">Test window</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="index-days-chips">
+            <button class="opt-chip" data-days="30" onclick="setIndexDays(30,this)">30 days</button>
+            <button class="opt-chip active" data-days="90" onclick="setIndexDays(90,this)">90 days</button>
+            <button class="opt-chip" data-days="180" onclick="setIndexDays(180,this)">180 days</button>
+          </div>
+        </div>
+        <button class="pine-analyse-btn" style="background:linear-gradient(135deg,#a855f7,#7c3aed)" onclick="runIndexFinder()">📊 Run NASDAQ Scan →</button>
+      </div>
+      <div id="index-progress" style="display:none;text-align:center;padding:30px 10px">
+        <div class="loader" style="margin:0 auto 14px"></div>
+        <div id="index-progress-msg" style="font-size:13px;color:var(--text);font-weight:600">Scanning index strategies…</div>
+        <div style="font-size:11.5px;color:var(--muted);margin-top:6px">Backtesting across timeframes &amp; sessions, then asking Claude to pick the winner.</div>
+      </div>
+      <div id="index-results" style="display:none"></div>
+    </div>
+    <div class="modal-footer" id="index-footer" style="display:none">
+      <button class="btn" onclick="indexReset()">↺ New Scan</button>
+      <button class="btn" id="index-build-all-btn" onclick="indexBuildAll()">⚡ Build all (paper)</button>
+      <button class="btn primary" id="index-build-btn" onclick="indexBuildInAI()">💬 Build this in AI Builder</button>
+    </div>
+  </div>
+</div>
+
 <!-- Rating -->
 <div class="modal-bg" id="modal-rate">
   <div class="modal">
@@ -3589,8 +3644,10 @@ let acceptedRisks=new Set(['LOW','MEDIUM']);
 function $(id){return document.getElementById(id)}
 function pC(v){return v>0?'pnl-pos':v<0?'pnl-neg':''}
 function pS(v){if(v===null||v===undefined)return'—';const n=Number(v);const abs=Math.abs(n);const disp=abs<0.1&&abs>0?n.toFixed(2):abs<1&&abs>0?n.toFixed(1):Math.round(n).toString();return(n>0?'+':'')+disp+'%'}
-function _pipSz(sym){if(!sym)return 0.0001;const s=sym.toUpperCase();if(s==='XAUUSD')return 0.10;if(s==='XAGUSD'||s.includes('JPY'))return 0.01;return 0.0001;}
-function pipsLabel(t){const e=t.entry_price,c=t.close_price;if(!e||!c)return null;const ps=_pipSz(t.symbol);const raw=t.direction==='SHORT'?e-c:c-e;const pip=Math.round(raw/ps);return(pip>=0?'+':'')+pip+'p';}
+const _INDEX_SYMS=new Set(['NAS100','SPX500','US30','GER40','UK100','NDX','SPX','DJI','DAX','FTSE']);
+function _pipSz(sym){if(!sym)return 0.0001;const s=sym.toUpperCase();if(_INDEX_SYMS.has(s)||s.startsWith('NAS')||s.startsWith('SPX'))return 1.0;if(s==='XAUUSD')return 0.10;if(s==='XAGUSD'||s.includes('JPY'))return 0.01;return 0.0001;}
+function _isIndexSym(sym){return _INDEX_SYMS.has((sym||'').toUpperCase());}
+function pipsLabel(t){const e=t.entry_price,c=t.close_price;if(!e||!c)return null;const ps=_pipSz(t.symbol);const raw=t.direction==='SHORT'?e-c:c-e;const n=Math.round(raw/ps);const suf=_isIndexSym(t.symbol)?'pts':'p';return(n>=0?'+':'')+n+suf;}
 function fmtTradeChip(t,isForex){if(isForex){const lbl=pipsLabel(t);if(lbl)return lbl;}return t.pnl_pct!==null&&t.pnl_pct!==undefined?pS(t.pnl_pct):t.outcome;}
 function starsHtml(n,max=5){let s='';for(let i=1;i<=max;i++)s+=i<=Math.round(n)?'★':'☆';return s}
 function priceStr(m){if(m.pricing_model==='one_time')return`$${Number(m.price_usdt).toFixed(2)}`;if(m.pricing_model==='subscription')return`$${Number(m.price_usdt).toFixed(2)}/mo`;return'FREE'}
@@ -3945,7 +4002,7 @@ function renderStratList(strats){
         </div>
         <div class="cm-item">
           ${(assetClass==='forex'||assetClass==='index'||assetClass==='metals')
-            ?`<div class="cm-val ${pC(p.total_pips_pnl||0)}">${(p.total_pips_pnl||0)>=0?'+':''}${Math.round(p.total_pips_pnl||0)} pips</div>
+            ?`<div class="cm-val ${pC(p.total_pips_pnl||0)}">${(p.total_pips_pnl||0)>=0?'+':''}${Math.round(p.total_pips_pnl||0)} ${assetClass==='index'?'pts':'pips'}</div>
           <div class="cm-lbl">Total Pips</div>`
             :`<div class="cm-val ${pC(p.total_pnl)}">${pS(p.total_pnl)}</div>
           <div class="cm-lbl">Total P&L</div>`}
@@ -4415,9 +4472,8 @@ function setAssetClass(cls){
     WZ.coins='all';
     if(!((cls==='forex'||cls==='index')&&_OANDA_CONNECTED))WZ.mode='paper';
   }
-  // Pip TP/SL only applies to forex — wipe stale pip state when leaving forex
-  // so a previously-set value doesn't accidentally get re-emitted later.
-  if(cls!=='forex'){WZ.tp1Pips=null;WZ.tp2Pips=null;WZ.slPips=null;WZ.bePips=null;}
+  // Point/pip TP/SL applies to forex + indices — wipe when leaving both.
+  if(cls!=='forex'&&cls!=='index'){WZ.tp1Pips=null;WZ.tp2Pips=null;WZ.slPips=null;WZ.bePips=null;}
   // Style list is asset-class-specific (forex shows 7 session-aware templates,
   // crypto shows the original 10). Drop any incompatible style so Step 1's
   // "selected" card doesn't claim a style that isn't even rendered.
@@ -4526,10 +4582,12 @@ function isIndexStyle(id){return!!id&&typeof id==='string'&&id.startsWith('idx_'
 
 // Index template → primary signal + direction auto-fill. Mirrors INDEX_TEMPLATES in strategyPresets.ts.
 const INDEX_TEMPLATES={
-  idx_trend:    {primary:'ema',      primaryCfg:{condition:'golden_cross',periods:'20/50',timeframe:'1h'}, direction:'LONG'},
-  idx_breakout: {primary:'breakout', primaryCfg:{lookback:20,timeframe:'1h'},                              direction:'BOTH'},
-  idx_meanrev:  {primary:'rsi',      primaryCfg:{condition:'lt',value:35,timeframe:'4h'},                  direction:'LONG'},
+  idx_trend:    {primary:'ema',      primaryCfg:{condition:'golden_cross',periods:'20/50',timeframe:'1h'}, direction:'LONG',  tp_pips:80, sl_pips:40},
+  idx_breakout: {primary:'breakout', primaryCfg:{lookback:20,timeframe:'1h'},                              direction:'BOTH', tp_pips:60, sl_pips:30},
+  idx_meanrev:  {primary:'rsi',      primaryCfg:{condition:'lt',value:35,timeframe:'4h'},                  direction:'LONG',  tp_pips:50, sl_pips:25},
 };
+function wzUsesPointSl(){return WZ.assetClass==='forex'||WZ.assetClass==='index';}
+function wzPointUnitLabel(){return WZ.assetClass==='index'?'points':'pips';}
 
 const SIGNAL_META={
   rsi:             {icon:'📊',label:'RSI',              desc:'Overbought or oversold level'},
@@ -4626,7 +4684,7 @@ function estimateFireRate(){
 function getWzWarnings(){
   const w=[];
   // Forex strategies use pip TP/SL — derive R:R from pips for the warning.
-  const isFx=WZ.assetClass==='forex'&&WZ.tp1Pips&&WZ.slPips;
+  const isFx=wzUsesPointSl()&&WZ.tp1Pips&&WZ.slPips;
   const rr=isFx?(WZ.tp1Pips/WZ.slPips):(WZ.tp1/WZ.sl);
   if(rr<1.0)w.push({t:'error',msg:`R:R ${rr.toFixed(1)}:1 — TP below SL risk`});
   else if(rr<1.5)w.push({t:'warn',msg:`R:R ${rr.toFixed(1)}:1 — consider widening TP`});
@@ -5618,6 +5676,9 @@ function wzPickStyle(id){
     WZ.primaryCfg=Object.assign({},tpl.primaryCfg);
   } else if(isIndexStyle(id)&&INDEX_TEMPLATES[id]){
     const tpl=INDEX_TEMPLATES[id];
+    WZ.tp1Pips=tpl.tp_pips||80;
+    WZ.slPips=tpl.sl_pips||40;
+    WZ.tp2Pips=null;
     WZ.direction=tpl.direction;
     WZ.primaryType=tpl.primary;
     WZ.primaryCfg=Object.assign({},tpl.primaryCfg);
@@ -5772,14 +5833,15 @@ function wzAddConfirm(type){
 function wzRemoveConfirm(idx){WZ.confirms.splice(idx,1);renderCurrentStep();}
 
 function renderStep5(){
-  // Forex uses pip TP/SL; everything else uses %.
-  const isFx=WZ.assetClass==='forex';
-  const tpVal=isFx?(WZ.tp1Pips||20):WZ.tp1;
-  const slVal=isFx?(WZ.slPips||10):WZ.sl;
+  // Forex uses pips; indices use points (same fields); crypto uses %.
+  const isFx=wzUsesPointSl();
+  const isIdx=WZ.assetClass==='index';
+  const tpVal=isFx?(WZ.tp1Pips||(isIdx?80:20)):WZ.tp1;
+  const slVal=isFx?(WZ.slPips||(isIdx?40:10)):WZ.sl;
   const tp2Val=isFx?(WZ.tp2Pips||0):(WZ.tp2||0);
-  const unit=isFx?' pips':'%';
-  const tpMax=isFx?500:100, tpStep=isFx?1:0.5, tpMin=isFx?1:0.5;
-  const slMax=isFx?300:30,  slStep=isFx?1:0.5, slMin=isFx?1:0.5;
+  const unit=isFx?(' '+wzPointUnitLabel()):'%';
+  const tpMax=isFx?(isIdx?400:500):100, tpStep=isFx?1:0.5, tpMin=isFx?1:0.5;
+  const slMax=isFx?(isIdx?200:300):30,  slStep=isFx?1:0.5, slMin=isFx?1:0.5;
   const rr=(tpVal/slVal).toFixed(1);
   const tot=tpVal+slVal+tp2Val;
   const rrColor=rr>=2?'#16a34a':rr>=1.5?'var(--accent)':rr>=1?'#d97706':'#dc2626';
@@ -5788,7 +5850,7 @@ function renderStep5(){
   const tpKey=isFx?'tp1Pips':'tp1';
   const slKey=isFx?'slPips':'sl';
   return`<div class="wz-q">Where do you exit?</div>
-  <div class="wz-sub">${isFx?'Forex strategies use pips for TP/SL — the way every broker quotes them. The executor converts to % at fire time using the live price.':'Set your take profit and stop loss. The R:R ratio shows how much you risk versus how much you stand to gain.'}</div>
+  <div class="wz-sub">${isIdx?'Index CFDs use <b>points</b> for TP/SL (1 point = 1 index level on NAS100). Paper mode tracks these with live prices — no cTrader account needed.':isFx?'Forex strategies use pips for TP/SL. The executor converts to % at fire time using the live price.':'Set your take profit and stop loss. The R:R ratio shows how much you risk versus how much you stand to gain.'}</div>
   <div class="section-card">
     <div class="sc-title"><div class="sc-icon">🎯</div>Take Profit & Stop Loss${isFx?' (pips)':''}</div>
     <div class="form-group">
@@ -5844,9 +5906,9 @@ function renderStep5(){
     </div>
     ${isFx?`
     <div id="row-be" style="${WZ.bePips?'':'display:none;'}padding:10px 0 0">
-      <label style="display:flex;justify-content:space-between">Breakeven trigger <span style="color:var(--accent);font-weight:700" id="be-v">+${WZ.bePips||15} pips</span></label>
-      <input type="range" id="be-sl" min="1" max="200" value="${WZ.bePips||15}" step="1" oninput="WZ.bePips=Number(this.value);document.getElementById('be-v').textContent='+'+this.value+' pips'" style="width:100%;accent-color:var(--accent)">
-      <div class="hint">Once price is this many pips in profit, SL moves to your entry price automatically.</div>
+      <label style="display:flex;justify-content:space-between">Breakeven trigger <span style="color:var(--accent);font-weight:700" id="be-v">+${WZ.bePips||15} ${wzPointUnitLabel()}</span></label>
+      <input type="range" id="be-sl" min="1" max="200" value="${WZ.bePips||15}" step="1" oninput="WZ.bePips=Number(this.value);document.getElementById('be-v').textContent='+'+this.value+' ${wzPointUnitLabel()}'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Once price is this many ${wzPointUnitLabel()} in profit, SL moves to your entry price automatically.</div>
     </div>`:`
     <div id="row-be" style="${WZ.breakeven?'':'display:none;'}padding:10px 0 0">
       <label style="display:flex;justify-content:space-between">Breakeven trigger ROI <span style="color:var(--accent);font-weight:700" id="be-v">${WZ.breakeven||70}%</span></label>
@@ -5874,14 +5936,14 @@ function wzToggleExit(which){
   const on=sw.classList.toggle('on');
   row.style.display=on?'block':'none';
   if(which==='tp2'){
-    const isFx=WZ.assetClass==='forex';
+    const isFx=wzUsesPointSl();
     const v=Number(document.getElementById('tp2-sl')?.value||(isFx?40:6));
     if(isFx){WZ.tp2Pips=on?v:null;WZ.tp2=null;}else{WZ.tp2=on?v:null;WZ.tp2Pips=null;}
     updateRR();
   }
   if(which==='trail')WZ.trailing=on?Number(document.getElementById('trail-sl')?.value||1):null;
   if(which==='be'){
-    if(WZ.assetClass==='forex'){WZ.bePips=on?Number(document.getElementById('be-sl')?.value||15):null;WZ.breakeven=null;}
+    if(wzUsesPointSl()){WZ.bePips=on?Number(document.getElementById('be-sl')?.value||15):null;WZ.breakeven=null;}
     else{WZ.breakeven=on?Number(document.getElementById('be-sl')?.value||70):null;WZ.bePips=null;}
   }
   if(which==='eod'){WZ.closeBefore=on?(document.getElementById('eod-select')?.value||'21:00'):null;}
@@ -6107,14 +6169,15 @@ function renderStep7(){
       <button class="dir-btn paper ${WZ.mode==='paper'?'active':''}" onclick="WZ.mode='paper';wzSyncMode()">🧪 Paper Test</button>
     </div>
     <div id="wz-paper-note" style="${WZ.mode==='paper'?'':'display:none;'}margin-top:10px" class="paper-callout">
-      🧪 <strong>Paper Mode</strong> — signals fire with live 1m OHLC tracking, but no real orders are placed. Perfect for testing before committing capital.
+      🧪 <strong>Paper Mode</strong> — the executor scans live prices, opens virtual trades, tracks TP/SL/breakeven, and logs every result in <strong>Trades</strong>. No broker connection required.
+      ${WZ.assetClass==='index'?' Index paper uses Yahoo/FMP candles and shows P&amp;L in <b>points</b> (pts).':''}
     </div>
-    ${WZ.assetClass==='forex'?(_OANDA_CONNECTED?`
+    ${(WZ.assetClass==='forex'||WZ.assetClass==='index')?(_OANDA_CONNECTED?`
     <div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(63,182,139,.35);border-radius:8px;background:rgba(63,182,139,.08);font-size:12px;color:var(--text);line-height:1.5">
-      ✓ <strong>OANDA connected</strong> — live forex orders route through your OANDA account.
+      ✓ <strong>cTrader connected</strong> — you can switch to Live after paper testing. Until then, paper mode is recommended.
     </div>`:`
-    <div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(214,163,92,.35);border-radius:8px;background:rgba(214,163,92,.08);font-size:12px;color:var(--text);line-height:1.5">
-      🔒 <strong>Forex live trading requires OANDA</strong> — connect your OANDA account in Settings to enable live forex orders. Until then, forex strategies run as paper.
+    <div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(8,145,178,.35);border-radius:8px;background:rgba(8,145,178,.06);font-size:12px;color:var(--text);line-height:1.5">
+      🧪 <strong>Paper first (recommended)</strong> — no cTrader needed. Save as Paper Test, watch trades appear in <strong>My Strategies</strong> and the <strong>Trades</strong> tab. Connect cTrader in Settings only when you're ready for demo/live.
     </div>`):''}
   </div>
   <div class="section-card">
@@ -6783,10 +6846,10 @@ async function buildStrategy(){
     Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null,breakeven_pct:WZ.breakeven||null,close_before:WZ.closeBefore||null});
     // Forex breakeven is pip-based (executor uses pips at 1x leverage, where a
     // leveraged-ROI % trigger would be unreachable).
-    if(WZ.assetClass==='forex'){exit.breakeven_at_pips=WZ.bePips||null;exit.breakeven_pct=null;}
+    if(wzUsesPointSl()){exit.breakeven_at_pips=WZ.bePips||null;exit.breakeven_pct=null;}
     // Forex pip TP/SL — executor converts pips→% at fire time using the live
     // price + the pair's pip size (JPY pairs use 0.01, everything else 0.0001).
-    if(WZ.assetClass==='forex'&&(WZ.tp1Pips||WZ.slPips)){
+    if(wzUsesPointSl()&&(WZ.tp1Pips||WZ.slPips)){
       if(WZ.tp1Pips)exit.take_profit_pips=Number(WZ.tp1Pips);
       if(WZ.slPips) exit.stop_loss_pips =Number(WZ.slPips);
       if(WZ.tp2Pips)exit.take_profit2_pips=Number(WZ.tp2Pips);
@@ -8259,6 +8322,179 @@ async function goldBuildAll(){
   if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
 }
 
+// ── Index Strategy Finder ──────────────────────────────────────────────────────
+let INDEX = { sym:'NAS100', dir:'BOTH', days:90, result:null };
+function openIndexFinder(){ indexReset(); showModal('modal-index'); }
+function setIndexSym(s,el){ INDEX.sym=s; document.querySelectorAll('#index-sym-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
+function setIndexDir(d,el){ INDEX.dir=d; document.querySelectorAll('#index-dir-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
+function setIndexDays(d,el){ INDEX.days=d; document.querySelectorAll('#index-days-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
+function indexReset(){
+  INDEX.result=null;
+  document.getElementById('index-config').style.display='';
+  document.getElementById('index-progress').style.display='none';
+  document.getElementById('index-results').style.display='none';
+  document.getElementById('index-footer').style.display='none';
+}
+let _indexProgressTimer = null;
+async function runIndexFinder(){
+  document.getElementById('index-config').style.display='none';
+  document.getElementById('index-results').style.display='none';
+  document.getElementById('index-footer').style.display='none';
+  document.getElementById('index-progress').style.display='';
+  const progEl=document.getElementById('index-progress-msg');
+  if(_indexProgressTimer) clearInterval(_indexProgressTimer);
+  _indexProgressTimer=setInterval(async()=>{
+    try{
+      const pr=await fetch('/api/backtest/index-discovery/progress?uid='+encodeURIComponent(UID));
+      const pd=await pr.json();
+      if(pd.message&&progEl) progEl.textContent=pd.message;
+    }catch(e){}
+  },1200);
+  try{
+    const res = await fetch('/api/backtest/index-discovery', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ uid:UID, symbol:INDEX.sym, days:INDEX.days, direction:INDEX.dir })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.ok){
+      renderIndexError(data && (data.message||data.error) || 'Scan failed. Please try again.');
+      return;
+    }
+    INDEX.result = data;
+    renderIndexResults(data);
+  }catch(e){
+    renderIndexError('Network error — please try again.');
+  }finally{
+    if(_indexProgressTimer){ clearInterval(_indexProgressTimer); _indexProgressTimer=null; }
+  }
+}
+function renderIndexError(msg){
+  document.getElementById('index-progress').style.display='none';
+  const box=document.getElementById('index-results');
+  box.style.display='';
+  box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">⚠️ '+_gEsc(msg)+'</div>';
+  document.getElementById('index-footer').style.display='';
+  document.getElementById('index-build-btn').style.display='none';
+}
+function renderIndexResults(d){
+  document.getElementById('index-progress').style.display='none';
+  const b=d.best, s=b.stats;
+  const symLabel = d.symbol || INDEX.sym || 'NAS100';
+  let html = '<div style="font-size:11px;color:var(--muted);margin-bottom:10px">Instrument: <b>'+_gEsc(symLabel)+'</b> · asset class index · cTrader-ready</div>';
+  if(d.direction_mode==='BOTH' && (d.best_long||d.best_short)){
+    html += _goldWinnerCard('🟢 Best LONG', d.best_long, '#3fb950');
+    html += _goldWinnerCard('🔴 Best SHORT', d.best_short, '#e05858');
+  }
+  html += '<div style="padding:16px;border:1px solid #a855f766;border-radius:12px;background:linear-gradient(135deg,#1a0f2a14,#a855f71f);margin-bottom:16px">';
+  html += '<div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#a855f7;font-weight:700;margin-bottom:4px">🏆 Claude\'s Pick · '+_goldConfBadge(s.confidence)+'</div>';
+  html += '<div style="font-size:18px;font-weight:800;letter-spacing:-.3px">'+_gEsc(b.strategy_name)+'</div>';
+  const dirBadge = b.direction==='SHORT' ? '<span style="color:#e05858;font-weight:700">SHORT</span>' : '<span style="color:#3fb950;font-weight:700">LONG</span>';
+  html += '<div style="font-size:12.5px;color:var(--muted);margin-top:6px;display:flex;gap:14px;flex-wrap:wrap">'
+        + '<span>'+_gEsc(b.label)+' · '+dirBadge+'</span>'
+        + '<span>⏱ '+_gEsc(b.timeframe)+'</span>'
+        + '<span>🕒 '+_gEsc(b.session_label)+'</span>'
+        + '<span>🎯 SL '+b.sl_pips+' / TP '+b.tp_pips+' pts</span>'
+        + '</div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px">'
+        + _goldStat('Win rate', s.win_rate+'%')
+        + _goldStat('Profit factor', s.profit_factor)
+        + _goldStat('Net pts', (s.total_pips>0?'+':'')+s.total_pips)
+        + _goldStat('Max drawdown', s.max_drawdown+'%')
+        + _goldStat('Trades', s.closed_trades)
+        + _goldStat('Return', (s.total_pnl>0?'+':'')+s.total_pnl+'%')
+        + '</div>';
+  if(b.rationale) html += '<div style="font-size:12.5px;color:var(--text);margin-top:14px;line-height:1.55;border-top:1px solid var(--border);padding-top:12px">'+_gEsc(b.rationale)+'</div>';
+  html += '</div>';
+  if(Array.isArray(d.leaderboard) && d.leaderboard.length){
+    html += '<div style="font-size:12px;font-weight:700;margin:12px 0 8px">Leaderboard</div>';
+    html += '<div style="max-height:220px;overflow-y:auto">';
+    d.leaderboard.slice(0,8).forEach((e,i)=>{
+      html += '<div style="font-size:12px;padding:8px 10px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:8px">'
+           + '<span>#'+(i+1)+' '+_gEsc(e.label)+' · '+_gEsc(e.timeframe)+' · '+_gEsc(e.session_label)+'</span>'
+           + '<span style="color:var(--muted);white-space:nowrap">PF '+e.stats.profit_factor+' · '+e.stats.closed_trades+' tr</span></div>';
+    });
+    html += '</div>';
+  }
+  const box=document.getElementById('index-results');
+  box.style.display=''; box.innerHTML=html;
+  document.getElementById('index-footer').style.display='';
+  document.getElementById('index-build-btn').style.display='';
+}
+function indexBuildInAI(){
+  if(!INDEX.result || !INDEX.result.best) return;
+  const prompt = INDEX.result.best.build_prompt || '';
+  closeModal('modal-index');
+  switchBuildMode('chat');
+  try{ if(typeof cbSetMarket==='function') cbSetMarket('index'); }catch(e){}
+  setTimeout(()=>{
+    const inp=document.getElementById('cb-input');
+    if(inp){ inp.value=prompt; inp.focus(); }
+  }, 150);
+}
+async function _indexBuildOne(entry){
+  const sym = (INDEX.result && INDEX.result.symbol) || INDEX.sym || 'NAS100';
+  const cRes = await fetch('/api/build-strategy', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ uid:UID, name:(entry.build_name||entry.label||'Index strategy'), description:(entry.build_prompt||'') })
+  });
+  const cData = await cRes.json();
+  if(!cRes.ok || !cData.config) throw new Error((cData && (cData.error||cData.message)) || 'compile failed');
+  const cfg = cData.config;
+  cfg.name = (entry.build_name||entry.label||'Index strategy');
+  cfg.asset_class = 'index';
+  cfg.universe = { type:'specific', symbols:[sym] };
+  cfg._build_mode = 'paper';
+  if(entry.session_filter && entry.session_filter.sessions && entry.session_filter.sessions.length){
+    cfg.filters = cfg.filters || {};
+    cfg.filters.session = entry.session_filter;
+  }
+  cfg.exit = cfg.exit || {};
+  const _mgmt = entry.management || 'fixed';
+  if(_mgmt==='breakeven'){
+    cfg.exit.breakeven_at_pct = entry.breakeven_at_pct || 50;
+    cfg.exit.trailing_stop = false;
+  } else if(_mgmt==='trail'){
+    cfg.exit.trailing_stop = true;
+    cfg.exit.trailing_stop_pct = entry.trailing_stop_pct || 0;
+    cfg.exit.breakeven_at_pct = 0;
+  } else {
+    cfg.exit.breakeven_at_pct = 0;
+    cfg.exit.trailing_stop = false;
+  }
+  const sRes = await fetch('/api/save-strategy', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ uid:UID, config:cfg })
+  });
+  const sData = await sRes.json();
+  if(!sRes.ok || !sData.id) throw new Error((sData && (sData.detail||sData.error)) || 'save failed');
+  return sData.id;
+}
+async function indexBuildAll(){
+  if(!INDEX.result || !Array.isArray(INDEX.result.leaderboard) || !INDEX.result.leaderboard.length) return;
+  const list = INDEX.result.leaderboard;
+  const allBtn = document.getElementById('index-build-all-btn');
+  const oneBtn = document.getElementById('index-build-btn');
+  if(!confirm('Build all '+list.length+' index strategies as PAPER? Review in Strategies tab before going live on cTrader.')) return;
+  allBtn.disabled = true; oneBtn.disabled = true;
+  let ok=0, fail=0, done=0;
+  const setLbl = ()=>{ allBtn.textContent = '⚙️ Building '+done+'/'+list.length+' ('+ok+' ✓'+(fail?' · '+fail+' ✗':'')+')'; };
+  setLbl();
+  let cursor=0;
+  async function worker(){
+    while(cursor < list.length){
+      const idx = cursor++;
+      try{ await _indexBuildOne(list[idx]); ok++; }
+      catch(e){ fail++; console.warn('index build-all entry failed', e); }
+      done++; setLbl();
+    }
+  }
+  await Promise.all([worker(),worker(),worker()]);
+  allBtn.disabled = false; oneBtn.disabled = false;
+  allBtn.textContent = '✅ Built '+ok+(fail?' · '+fail+' failed':'');
+  alert('Built '+ok+' paper index strateg'+(ok===1?'y':'ies')+'. Open My Strategies — they scan every ~30s during US market hours. Watch entries & exits in the Trades tab. No cTrader needed until you go live.');
+  if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
+}
+
 // ── Live Forex Scanner (web) ─────────────────────────────────────────────────
 let _fxScanAt = 0;
 async function loadForexScanner(force){
@@ -8278,7 +8514,8 @@ async function loadForexScanner(force){
     let h='<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr style="color:var(--muted);text-align:left"><th style="padding:5px 6px">Pair</th><th>TF</th><th>Signal</th><th>Dir</th><th>Detail</th></tr>';
     (d.signals||[]).slice(0,40).forEach(sig=>{
       const dc=sig.direction==='SHORT'?'#e05858':'#3fb950';
-      h+='<tr style="border-top:1px solid var(--border)"><td style="padding:6px;font-weight:700">'+_gEsc(sig.pair)+'</td>'
+      const idxBadge=_isIndexSym(sig.pair)?' <span style="font-size:9px;color:#a855f7;font-weight:700">IDX</span>':'';
+      h+='<tr style="border-top:1px solid var(--border)"><td style="padding:6px;font-weight:700">'+_gEsc(sig.pair)+idxBadge+'</td>'
         +'<td style="padding:6px">'+_gEsc(sig.timeframe)+'</td>'
         +'<td style="padding:6px;font-weight:600">'+_gEsc(sig.signal)+'</td>'
         +'<td style="padding:6px;color:'+dc+'">'+_gEsc(sig.direction)+'</td>'
@@ -10030,8 +10267,8 @@ const LF_PAIRS = [
   { symbol:'USDCAD', name:'US Dollar / Canadian Dollar',pip:0.0001,desc:'Correlated to oil' },
   { symbol:'XAUUSD', name:'Gold / US Dollar',         pip:0.10,  desc:'Inflation hedge' },
   { symbol:'XAGUSD', name:'Silver / US Dollar',       pip:0.001, desc:'Industrial metal' },
-  { symbol:'NAS100', name:'NASDAQ 100',               pip:0.25,  desc:'Tech index CFD' },
-  { symbol:'SPX500', name:'S&P 500',                  pip:0.25,  desc:'US large-cap index' },
+  { symbol:'NAS100', name:'NASDAQ 100',               pip:1.0, unit:'points', desc:'Tech index CFD · 1 pt = 1 index level' },
+  { symbol:'SPX500', name:'S&P 500',                  pip:1.0, unit:'points', desc:'US large-cap index · 1 pt = 1 index level' },
 ];
 
 async function loadLiveForex() {
@@ -10123,7 +10360,9 @@ function renderLiveForex(d, wrap) {
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn ghost sm" onclick="lfRefreshBalance()">↻ Refresh</button>
-        <button class="btn ghost sm" id="lf-test-btn" onclick="lfTestTrade()">🧪 Test trade</button>
+        <button class="btn ghost sm" id="lf-test-btn" onclick="lfTestTrade('EURUSD')">🧪 Test EURUSD</button>
+        <button class="btn ghost sm" onclick="lfTestTrade('NAS100')">📊 Test NAS100</button>
+        <button class="btn ghost sm" onclick="lfTestTrade('SPX500')">📈 Test SPX500</button>
         <button class="btn ghost sm" style="color:var(--negative)" onclick="lfDisconnect()">Disconnect</button>
       </div>
       <div id="lf-test-result" style="margin-top:8px;font-size:12px;line-height:1.5"></div>
@@ -10478,35 +10717,39 @@ async function lfRefreshBalance() {
   await loadLiveForex();
 }
 
-async function lfTestTrade() {
-  const btn = $('lf-test-btn'), out = $('lf-test-result');
-  if (!confirm('Place a tiny real test order (EURUSD, 0.01 lots) on your cTrader account and immediately close it? This confirms live trading works end-to-end.')) return;
-  if (btn) { btn.setAttribute('disabled','1'); btn.textContent = '⏳ Testing…'; }
+async function lfTestTrade(symbol) {
+  symbol = (symbol || 'EURUSD').toUpperCase();
+  const isIdx = _isIndexSym(symbol);
+  const sizeLbl = isIdx ? '1 contract' : '0.01 lots';
+  const out = $('lf-test-result');
+  if (!confirm(`Place a tiny test ${symbol} order (${sizeLbl}) on cTrader and immediately close it? Confirms ${isIdx?'index':'forex'} execution works.`)) return;
+  document.querySelectorAll('#lf-body button').forEach(b=>{ if(b.textContent.includes('Test')) b.setAttribute('disabled','1'); });
   if (out) out.innerHTML = '<span style="color:var(--muted)">Placing test order on cTrader…</span>';
   try {
-    const r = await fetch(`/api/ctrader/test-trade?uid=${UID}`, {method:'POST'});
+    const r = await fetch(`/api/ctrader/test-trade?uid=${UID}&symbol=${encodeURIComponent(symbol)}`, {method:'POST'});
     const j = await r.json().catch(()=>({}));
     if (j && j.success) {
-      const fill = (j.fill!=null) ? ` @ ${(+j.fill).toFixed(5)}` : '';
+      const fill = (j.fill!=null) ? ` @ ${(+j.fill).toFixed(isIdx?2:5)}` : '';
+      const size = isIdx ? `${j.contracts||1} contract` : `${j.lots} lot`;
       const closeMsg = j.closed
         ? '<span style="color:#3fb68b">✓ position closed automatically</span>'
         : `<span style="color:#d6a35c">⚠ order placed but auto-close not confirmed${j.close_error?` (${j.close_error})`:''} — check &amp; close it in cTrader</span>`;
-      out.innerHTML = `<div style="color:#3fb68b;font-weight:600">✓ Live trading works!</div>`
-        + `<div style="color:var(--muted)">Placed ${j.lots} lot ${j.symbol}${fill} · order #${j.order_id}</div>`
+      out.innerHTML = `<div style="color:#3fb68b;font-weight:600">✓ ${symbol} live trading works!</div>`
+        + `<div style="color:var(--muted)">Placed ${size} ${j.symbol}${fill} · order #${j.order_id}</div>`
         + `<div>${closeMsg}</div>`;
-      toast('Test trade succeeded — live trading is working');
+      toast(`Test trade ${symbol} succeeded`);
     } else {
       const err = (j && j.error) ? j.error : `HTTP ${r.status}`;
       const warn = (j && j.check_open_positions)
-        ? `<div style="color:#d6a35c;margin-top:4px">⚠ Please open cTrader and close any open EURUSD test position manually, just in case.</div>`
+        ? `<div style="color:#d6a35c;margin-top:4px">⚠ Check cTrader and close any open ${symbol} test position manually.</div>`
         : '';
-      out.innerHTML = `<div style="color:var(--negative);font-weight:600">✗ Test trade failed</div>`
+      out.innerHTML = `<div style="color:var(--negative);font-weight:600">✗ ${symbol} test failed</div>`
         + `<div style="color:var(--muted)">${err}</div>` + warn;
     }
   } catch(e) {
     out.innerHTML = `<div style="color:var(--negative);font-weight:600">✗ Test trade failed</div><div style="color:var(--muted)">Network error — please try again</div>`;
   } finally {
-    if (btn) { btn.removeAttribute('disabled'); btn.textContent = '🧪 Test trade'; }
+    document.querySelectorAll('#lf-body button').forEach(b=>{ if(b.textContent.includes('Test')) b.removeAttribute('disabled'); });
   }
 }
 </script>

@@ -116,15 +116,19 @@ _FOREX_MAJORS: List[Tuple[str, str, str]] = [
     ("HGUSD",  "HG=F",     "Copper / US Dollar"),
 ]
 
-# Major indices — yfinance uses caret-prefixed tickers.
-_INDICES: List[Tuple[str, str, str]] = [
-    ("SPX",  "^GSPC",  "S&P 500"),
-    ("NDX",  "^NDX",   "Nasdaq 100"),
-    ("DJI",  "^DJI",   "Dow Jones Industrial"),
-    ("VIX",  "^VIX",   "CBOE Volatility Index"),
-    ("DAX",  "^GDAXI", "DAX (Germany)"),
-    ("FTSE", "^FTSE",  "FTSE 100 (UK)"),
-]
+# Major indices — canonical symbols match FP Markets cTrader (NAS100, SPX500, …).
+try:
+    from app.services.index_symbols import catalog_entries as _index_catalog_entries
+    _INDICES: List[Tuple[str, str, str]] = _index_catalog_entries()
+except Exception:
+    _INDICES = [
+        ("NAS100", "^NDX",   "Nasdaq 100"),
+        ("SPX500", "^GSPC",  "S&P 500"),
+        ("US30",   "^DJI",   "Dow Jones Industrial"),
+        ("GER40",  "^GDAXI", "DAX (Germany)"),
+        ("UK100",  "^FTSE",  "FTSE 100 (UK)"),
+        ("VIX",    "^VIX",   "CBOE Volatility Index"),
+    ]
 
 
 def _index(rows: List[Tuple[str, str, str]], cls: str) -> Dict[str, SymbolMeta]:
@@ -145,7 +149,15 @@ def list_symbols(asset_class: str) -> List[SymbolMeta]:
 
 
 def get_symbol(asset_class: str, symbol: str) -> Optional[SymbolMeta]:
-    return _CATALOG.get(asset_class, {}).get(symbol.upper())
+    cls = normalize_asset_class(asset_class)
+    sym = symbol.upper()
+    if cls == ASSET_CLASS_INDEX:
+        try:
+            from app.services.index_symbols import normalize_index_symbol
+            sym = normalize_index_symbol(sym)
+        except Exception:
+            pass
+    return _CATALOG.get(cls, {}).get(sym)
 
 
 def yf_ticker(asset_class: str, symbol: str) -> Optional[str]:

@@ -1326,7 +1326,13 @@ def _fmt_close_card(
         if any(s.startswith(c) or s.endswith(c) for c in _FX) and len(s) == 6:
             return 0.0001
         # Indices — 1 point per pip
-        _IDX = ("US30","US500","SPX","NAS","NDX","DAX","DE40","UK100","FTSE","JP225","HK50","ASX","IT40","FR40","ES35")
+        try:
+            from app.services.index_symbols import is_index_symbol, index_pip_size
+            if is_index_symbol(s):
+                return index_pip_size(s)
+        except Exception:
+            pass
+        _IDX = ("US30","US500","SPX","SPX500","NAS","NAS100","NDX","DAX","DE40","GER40","UK100","FTSE","JP225","HK50","ASX","IT40","FR40","ES35")
         if any(s.startswith(i) for i in _IDX):          return 1.0
         # Oil / commodities
         if s in ("USOIL","WTIUSD","BRENTUSD","UKOIL","CL","NG"):

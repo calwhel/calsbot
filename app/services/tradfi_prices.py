@@ -102,8 +102,15 @@ _METALS_YAHOO_TICKER: Dict[str, str] = {
 
 
 def _resolve_ticker(asset_class: str, symbol: str) -> Optional[str]:
-    if normalize_asset_class(asset_class) == ASSET_CLASS_CRYPTO:
+    cls = normalize_asset_class(asset_class)
+    if cls == ASSET_CLASS_CRYPTO:
         return None
+    if cls == "index":
+        try:
+            from app.services.index_symbols import normalize_index_symbol, yf_ticker_for_index
+            return yf_ticker_for_index(normalize_index_symbol(symbol))
+        except Exception:
+            pass
     return yf_ticker(asset_class, symbol)
 
 
@@ -198,6 +205,68 @@ async def _fetch_yahoo_chart_klines(
     except Exception as e:
         logger.warning(f"[tradfi] Yahoo chart failed {yahoo_ticker} {timeframe}: {e}")
         return []
+
+
+async def fetch_index_scan_candles(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    user_id: Optional[int] = None,
+) -> List[List[float]]:
+    """
+    Multi-source fetch for index backtest scanners (NASDAQ, S&P, etc.).
+    Prefers linked cTrader demo/live candles when available.
+    """
+    try:
+        from app.services.index_symbols import normalize_index_symbol, yf_ticker_for_index
+        sym = normalize_index_symbol(symbol)
+        yahoo_ticker = yf_ticker_for_index(sym)
+    except Exception:
+        sym = symbol.upper()
+        yahoo_ticker = None
+
+    best: List[List[float]] = []
+
+    async def _keep(rows: List[List[float]], label: str) -> None:
+        nonlocal best
+        if rows and len(rows) > len(best):
+            best = rows
+            logger.info(f"[tradfi] index-scan best={label} {sym} {timeframe} → {len(rows)} bars")
+
+    if user_id:
+        await _keep(
+            await _fetch_ctrader_klines(sym, "index", timeframe, min(limit, 500), user_id=user_id),
+            "ctrader-user",
+        )
+        if len(best) >= 120:
+            return best[-limit:]
+
+    if yahoo_ticker:
+        await _keep(await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit), "yahoo")
+        if len(best) >= 120:
+            return best[-limit:]
+
+    if _env_fmp_api_key():
+        try:
+            from app.services.fmp_price_feed import get_klines as _fmp_klines
+            await _keep(await _fmp_klines(sym, "index", timeframe, limit), "fmp")
+        except Exception:
+            pass
+        if len(best) >= 120:
+            return best[-limit:]
+
+    await _keep(
+        await _fetch_ctrader_klines(sym, "index", timeframe, min(limit, 500), user_id=user_id),
+        "ctrader",
+    )
+    if len(best) >= 120:
+        return best[-limit:]
+
+    tradfi_rows = await _get_klines_impl(
+        sym, "index", timeframe, limit, for_backtest=True, ctrader_user_id=user_id,
+    )
+    await _keep(tradfi_rows, "tradfi-chain")
+    return best[-limit:] if best else []
 
 
 async def fetch_metal_scan_candles(
@@ -499,20 +568,39 @@ async def _get_klines_impl(
     if cls == ASSET_CLASS_CRYPTO:
         return []
 
+    if cls == "index":
+        try:
+            from app.services.index_symbols import normalize_index_symbol
+            symbol = normalize_index_symbol(symbol)
+        except Exception:
+            symbol = symbol.upper()
+
     now = datetime.utcnow()
     is_metal = symbol.upper() in _METALS_BINANCE_MAP
 
     # Live/paper paths prefer broker-matched cTrader OHLC. Backtest discovery
     # (Gold Strategy Finder) prefers FMP first — faster, no protobuf socket auth,
     # and avoids cTrader timing out on multi-thousand-bar requests.
+    is_index = cls == "index"
     if is_metal and for_backtest:
         _sources = ("fmp", "ctrader")
+    elif is_index:
+        _sources = ("ctrader", "fmp")
     else:
         _sources = ("ctrader", "fmp") if is_metal else ("ctrader",)
 
     for src in _sources:
         if src == "fmp":
-            _frows = await _fetch_fmp_metals_klines(symbol, asset_class, timeframe, limit)
+            if is_metal:
+                _frows = await _fetch_fmp_metals_klines(symbol, asset_class, timeframe, limit)
+            elif is_index:
+                try:
+                    from app.services.fmp_price_feed import get_klines as _fmp_klines
+                    _frows = await _fmp_klines(symbol, asset_class, timeframe, limit)
+                except Exception:
+                    _frows = []
+            else:
+                _frows = []
             if _frows:
                 return _frows
         elif src == "ctrader":

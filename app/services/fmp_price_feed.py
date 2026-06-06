@@ -28,14 +28,14 @@ _FOREX_SYMBOLS = [
     "XAUUSD", "XAGUSD",
 ]
 
-# Index display → FMP quote ticker
+# Index display → FMP quote ticker (canonical + legacy aliases)
 _INDEX_FMP: Dict[str, str] = {
-    "SPX":  "%5EGSPC",
-    "NDX":  "%5ENDX",
-    "DJI":  "%5EDJI",
-    "VIX":  "%5EVIX",
-    "DAX":  "%5EGDAXI",
-    "FTSE": "%5EFTSE",
+    "NAS100": "%5ENDX",  "NDX": "%5ENDX",  "US100": "%5ENDX",
+    "SPX500": "%5EGSPC", "SPX": "%5EGSPC", "US500": "%5EGSPC",
+    "US30":   "%5EDJI",  "DJI": "%5EDJI",
+    "GER40":  "%5EGDAXI", "DAX": "%5EGDAXI",
+    "UK100":  "%5EFTSE", "FTSE": "%5EFTSE",
+    "VIX":    "%5EVIX",
 }
 
 # Reverse map: FMP ticker → display symbol

@@ -2298,7 +2298,7 @@ async def run_backtest(
     # provided at least one pip value. Otherwise we silently fall through
     # to the percent-based path so legacy forex strategies (or backtests
     # invoked without pips) keep working.
-    pip_mode    = (asset_class == "forex") and (tp_pips_val is not None or sl_pips_val is not None)
+    pip_mode    = (asset_class in ("forex", "index")) and (tp_pips_val is not None or sl_pips_val is not None)
     pip_size_v  = 0.0
     if pip_mode:
         from app.services.forex_engine import pip_size as _pip_size_fn

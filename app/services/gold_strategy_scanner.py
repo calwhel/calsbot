@@ -326,7 +326,12 @@ def _validate_candidate(c: Dict) -> Optional[Dict]:
     }
 
 
-async def _claude_propose_candidates(direction_mode: str, n: int = 10) -> List[Dict]:
+async def _claude_propose_candidates(
+    direction_mode: str,
+    n: int = 10,
+    instrument_label: str = "gold (XAUUSD)",
+    log_prefix: str = "gold-scan",
+) -> List[Dict]:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return []
@@ -335,13 +340,12 @@ async def _claude_propose_candidates(direction_mode: str, n: int = 10) -> List[D
         client = anthropic.AsyncAnthropic(api_key=api_key)
         vocab = ", ".join(sorted(SUPPORTED_PRIMARY))
         prompt = (
-            "You are a quantitative gold (XAUUSD) trading researcher. Propose "
-            f"{n} DIVERSE candidate entry strategies to backtest on gold. Mix "
+            f"You are a quantitative {instrument_label} trading researcher. Propose "
+            f"{n} DIVERSE candidate entry strategies to backtest on {instrument_label}. Mix "
             "trend-following, momentum, mean-reversion, breakout, smart-money "
-            "(FVG / order block / market structure) AND ICT forex day-trade styles "
-            "(killzone-timed sweeps, displacement, OTE, CISD, SDP). Gold is traded "
-            "as a forex pair, so favour genuine ICT day-trade setups, not only "
-            "crypto-style indicators.\n\n"
+            "(FVG / order block / market structure) AND session-timed setups "
+            "(killzone, displacement, OTE, CISD, SDP). Favour setups suited to "
+            "the instrument's liquidity windows, not only crypto-style indicators.\n\n"
             f"You MUST only use these primaryType values: {vocab}.\n"
             "Each confirm must also use one of those as its 'type'.\n"
             f"Direction mode: {direction_mode} (emit LONG and/or SHORT accordingly).\n\n"
@@ -408,10 +412,10 @@ async def _claude_propose_candidates(direction_mode: str, n: int = 10) -> List[D
             v = _validate_candidate(c)
             if v:
                 out.append(v)
-        logger.info(f"[gold-scan] Claude proposed {len(out)} valid candidates")
+        logger.info(f"[{log_prefix}] Claude proposed {len(out)} valid candidates")
         return out
     except Exception as e:
-        logger.warning(f"[gold-scan] Claude candidate proposal failed: {type(e).__name__}: {e}")
+        logger.warning(f"[{log_prefix}] Claude candidate proposal failed: {type(e).__name__}: {e}")
         return []
 
 
@@ -546,12 +550,16 @@ async def _eval_candidate(
     candle_map: Dict[str, List],
     days: int,
     wf_splits: Optional[Dict[str, Optional[int]]] = None,
+    symbol: str = SYMBOL,
+    asset_class: str = ASSET_CLASS,
+    risk_variants: Optional[List] = None,
 ) -> List[Dict]:
     from app.services.backtest_engine import run_backtest
     from app.services.forex_engine import pip_size as _pip_size_fn
 
     results: List[Dict] = []
-    pip_sz = _pip_size_fn(SYMBOL)
+    pip_sz = _pip_size_fn(symbol)
+    _risk = risk_variants if risk_variants is not None else RISK_VARIANTS
     min_tr = _min_trades_for(cand, days)
     for tf in TIMEFRAMES:
         candles = candle_map.get(tf)
@@ -562,7 +570,7 @@ async def _eval_candidate(
             ref_close = float(candles[-1][4]) or 2000.0
         except Exception:
             ref_close = 2000.0
-        for sl_pips, tp_pips, style, mgmt in RISK_VARIANTS:
+        for sl_pips, tp_pips, style, mgmt in _risk:
             # Map management style → engine/exit config keys (same vocab the live
             # executor + AI compiler use, so test == live).
             be_at_pct = 50 if mgmt == "breakeven" else 0
@@ -574,8 +582,8 @@ async def _eval_candidate(
                 "primaryCfg": cand["primaryCfg"],
                 "confirms": cand.get("confirms", []),
                 "timeframe": tf,
-                "singleCoin": SYMBOL,
-                "asset_class": ASSET_CLASS,
+                "singleCoin": symbol,
+                "asset_class": asset_class,
                 "leverage": 1,
                 "take_profit_pips": tp_pips,
                 "stop_loss_pips": sl_pips,
@@ -586,7 +594,7 @@ async def _eval_candidate(
             }
             try:
                 res = await run_backtest(cfg, days, precomputed_candles=candles,
-                                         precomputed_source_label=f"{SYMBOL} {tf}")
+                                         precomputed_source_label=f"{symbol} {tf}")
             except Exception as e:
                 logger.debug(f"[gold-scan] backtest err {cand['label']} {tf}: {e}")
                 continue
@@ -644,7 +652,7 @@ async def _eval_candidate(
 
 
 # ── Claude: synthesize / pick the best from the leaderboard ─────────────────────
-def _build_prompt_for(entry: Dict) -> str:
+def _build_prompt_for(entry: Dict, instrument_label: str = "gold (XAUUSD)") -> str:
     """Natural-language description the user can drop into the AI builder."""
     sess = "" if entry["session"] == "all" else f" only during the {SESSION_LABELS[entry['session']]} session"
     parts = [f"{entry['primaryType']} {json.dumps(entry['primaryCfg'])}"]
@@ -660,27 +668,34 @@ def _build_prompt_for(entry: Dict) -> str:
                     f"behind price to lock in profit.")
     else:
         mgmt_txt = ""
+    _ul = instrument_label.upper()
+    _unit = "points" if any(k in _ul for k in ("NAS100", "SPX500", "NASDAQ", "S&P", "US30", "INDEX")) else "pips"
     return (
-        f"Build a {entry['direction']} gold (XAUUSD) strategy on the {entry['timeframe']} "
-        f"timeframe that enters when {sig}{sess}. Use a stop loss of {entry['sl_pips']} pips "
-        f"and take profit of {entry['tp_pips']} pips.{mgmt_txt}"
+        f"Build a {entry['direction']} {instrument_label} strategy on the {entry['timeframe']} "
+        f"timeframe that enters when {sig}{sess}. Use a stop loss of {entry['sl_pips']} {_unit} "
+        f"and take profit of {entry['tp_pips']} {_unit}.{mgmt_txt}"
     )
 
 
-def _build_name_for(entry: Dict) -> str:
+def _build_name_for(entry: Dict, name_prefix: str = "Gold") -> str:
     """Short saved-strategy name for an entry (used by 'Build all')."""
     sess = "" if entry["session"] == "all" else f" {entry['session_label'].split(' ')[0]}"
     style = (entry.get("style") or "").title()
     mgmt = entry.get("management", "fixed")
     mgmt_tag = {"breakeven": "BE", "trail": "Trail"}.get(mgmt, "")
-    name = f"Gold {entry['label']} {entry['direction']} {entry['timeframe']}{sess}"
+    name = f"{name_prefix} {entry['label']} {entry['direction']} {entry['timeframe']}{sess}"
     suffix = " ".join(p for p in (style, mgmt_tag) if p)
     if suffix:
         name = f"{name} ({suffix})"
     return name[:60]
 
 
-async def _claude_pick_best(leaderboard: List[Dict], days: int) -> Optional[Dict]:
+async def _claude_pick_best(
+    leaderboard: List[Dict],
+    days: int,
+    instrument_label: str = "gold (XAUUSD)",
+    log_prefix: str = "gold-scan",
+) -> Optional[Dict]:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key or not leaderboard:
         return None
@@ -698,7 +713,7 @@ async def _claude_pick_best(leaderboard: List[Dict], days: int) -> Optional[Dict
                 f"pips={s['total_pips']} pnl={s['total_pnl']}% maxDD={s['max_drawdown']}%"
             )
         prompt = (
-            f"These are the top backtested gold (XAUUSD) strategies over the last {days} days, "
+            f"These are the top backtested {instrument_label} strategies over the last {days} days, "
             "ranked by a composite profitability score. Pick the SINGLE best one to trade live, "
             "balancing profit factor, win rate, total pips, drawdown AND sample size "
             "(more trades = more reliable; be wary of high returns from few trades).\n\n"
@@ -724,14 +739,27 @@ async def _claude_pick_best(leaderboard: List[Dict], days: int) -> Optional[Dict
             "rationale": str(obj.get("rationale") or "")[:800],
         }
     except Exception as e:
-        logger.warning(f"[gold-scan] Claude pick failed: {type(e).__name__}: {e}")
+        logger.warning(f"[{log_prefix}] Claude pick failed: {type(e).__name__}: {e}")
         return None
 
 
-# ── Public entry point ──────────────────────────────────────────────────────────
-async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
-                             progress_cb: Optional[Callable[[str], None]] = None,
-                             user_id: Optional[int] = None) -> Dict:
+# ── Public entry points ─────────────────────────────────────────────────────────
+async def run_tradfi_discovery(
+    symbol: str,
+    asset_class: str,
+    days: int = 90,
+    direction_mode: str = "BOTH",
+    progress_cb: Optional[Callable[[str], None]] = None,
+    user_id: Optional[int] = None,
+    *,
+    instrument_label: str,
+    name_prefix: str,
+    risk_variants: Optional[List] = None,
+    fetch_candles_fn=None,
+    log_prefix: str = "tradfi-scan",
+    no_trades_error: str = "No strategy produced enough trades to rank. Try a longer window.",
+    fetch_error: str = "Could not fetch historical data. Please try again in a minute.",
+) -> Dict:
     """
     Run the full Claude-driven gold strategy discovery scan.
 
@@ -743,17 +771,19 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
         if progress_cb:
             try: progress_cb(msg)
             except Exception: pass
-        logger.info(f"[gold-scan] {msg}")
+        logger.info(f"[{log_prefix}] {msg}")
 
     if days not in (30, 90, 180):
         days = 90
     direction_mode = (direction_mode or "BOTH").upper()
     if direction_mode not in ("LONG", "SHORT", "BOTH"):
         direction_mode = "BOTH"
+    if fetch_candles_fn is None:
+        from app.services.tradfi_prices import fetch_metal_scan_candles
+        fetch_candles_fn = fetch_metal_scan_candles
 
     # 1) Fetch candles once per timeframe.
-    _progress("Fetching gold history…")
-    from app.services.tradfi_prices import fetch_metal_scan_candles
+    _progress(f"Fetching {symbol} history…")
 
     async def _fetch_tf(tf: str) -> tuple:
         eff_days = min(days, _TF_MAX_DAYS.get(tf, days))
@@ -762,11 +792,9 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
         ks: List = []
         for cap in (want, min(want, 800), 300):
             try:
-                batch = await fetch_metal_scan_candles(
-                    SYMBOL, tf, cap, user_id=user_id
-                )
+                batch = await fetch_candles_fn(symbol, tf, cap, user_id=user_id)
             except Exception as e:
-                logger.warning(f"[gold-scan] candle fetch {tf}@{cap} failed: {e}")
+                logger.warning(f"[{log_prefix}] candle fetch {tf}@{cap} failed: {e}")
                 batch = []
             if batch and len(batch) > len(ks):
                 ks = batch
@@ -786,20 +814,16 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
             except Exception:
                 coverage[tf] = 0.0
         else:
-            logger.warning(f"[gold-scan] {tf}: got {n} bars (need ≥120)")
+            logger.warning(f"[{log_prefix}] {tf}: got {n} bars (need ≥120)")
     if not candle_map:
-        return {
-            "ok": False,
-            "error": (
-                "Could not fetch gold (XAUUSD) historical data from any source "
-                "(Yahoo, FMP, cTrader). Please try again in a minute."
-            ),
-        }
+        return {"ok": False, "error": fetch_error}
 
     # 2) Build candidate roster (base + Claude proposals).
     _progress("Asking Claude to propose strategies…")
     candidates = _base_roster(direction_mode)
-    claude_cands = await _claude_propose_candidates(direction_mode, n=12)
+    claude_cands = await _claude_propose_candidates(
+        direction_mode, n=12, instrument_label=instrument_label, log_prefix=log_prefix,
+    )
 
     def _sig(c: Dict) -> tuple:
         return (c["primaryType"], c["direction"],
@@ -860,13 +884,16 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
 
     async def _run_one(cand: Dict) -> List[Dict]:
         async with _sem:
-            return await _eval_candidate(cand, candle_map, days, wf_splits)
+            return await _eval_candidate(
+                cand, candle_map, days, wf_splits,
+                symbol=symbol, asset_class=asset_class, risk_variants=risk_variants,
+            )
 
     nested = await asyncio.gather(*[_run_one(c) for c in merged])
     all_results: List[Dict] = [row for batch in nested for row in batch]
 
     if not all_results:
-        return {"ok": False, "error": "No strategy produced enough trades on gold to rank. Try a longer window."}
+        return {"ok": False, "error": no_trades_error}
 
     # 4) Rank. Keep best variant per (label, direction) so the board isn't
     #    dominated by RR/session permutations of one idea.
@@ -934,12 +961,14 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
     # Attach a build name + NL build prompt to EVERY leaderboard entry so the UI
     # can build any single one (or all of them at once via "Build all").
     for e in leaderboard:
-        e["build_prompt"] = _build_prompt_for(e)
-        e["build_name"] = _build_name_for(e)
+        e["build_prompt"] = _build_prompt_for(e, instrument_label=instrument_label)
+        e["build_name"] = _build_name_for(e, name_prefix=name_prefix)
 
     # 5) Claude picks & explains the winner.
     _progress("Asking Claude to pick the best…")
-    pick = await _claude_pick_best(leaderboard, days)
+    pick = await _claude_pick_best(
+        leaderboard, days, instrument_label=instrument_label, log_prefix=log_prefix,
+    )
     best_idx = pick["index"] if pick else 0
     best_entry = dict(leaderboard[best_idx])
     best_entry["strategy_name"] = pick["strategy_name"] if pick else best_entry["label"]
@@ -947,20 +976,21 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
         "Top-ranked by composite profitability score (profit factor, win rate, "
         "total pips and drawdown, weighted by sample size)."
     )
-    best_entry["build_prompt"] = _build_prompt_for(best_entry)
+    best_entry["build_prompt"] = _build_prompt_for(best_entry, instrument_label=instrument_label)
 
     if best_long_row:
         best_long_row = dict(best_long_row)
-        best_long_row["build_prompt"] = _build_prompt_for(best_long_row)
-        best_long_row["build_name"] = _build_name_for(best_long_row)
+        best_long_row["build_prompt"] = _build_prompt_for(best_long_row, instrument_label=instrument_label)
+        best_long_row["build_name"] = _build_name_for(best_long_row, name_prefix=name_prefix)
     if best_short_row:
         best_short_row = dict(best_short_row)
-        best_short_row["build_prompt"] = _build_prompt_for(best_short_row)
-        best_short_row["build_name"] = _build_name_for(best_short_row)
+        best_short_row["build_prompt"] = _build_prompt_for(best_short_row, instrument_label=instrument_label)
+        best_short_row["build_name"] = _build_name_for(best_short_row, name_prefix=name_prefix)
 
     return {
         "ok": True,
-        "symbol": SYMBOL,
+        "symbol": symbol,
+        "asset_class": asset_class,
         "days": days,
         "direction_mode": direction_mode,
         "timeframes": list(candle_map.keys()),
@@ -976,3 +1006,28 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
         "generated_by": "claude" if pick else "ranker",
         "ai_proposed": len(claude_cands),
     }
+
+
+async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
+                             progress_cb: Optional[Callable[[str], None]] = None,
+                             user_id: Optional[int] = None) -> Dict:
+    """Run the full Claude-driven gold strategy discovery scan."""
+    from app.services.tradfi_prices import fetch_metal_scan_candles
+    return await run_tradfi_discovery(
+        symbol=SYMBOL,
+        asset_class=ASSET_CLASS,
+        days=days,
+        direction_mode=direction_mode,
+        progress_cb=progress_cb,
+        user_id=user_id,
+        instrument_label="gold (XAUUSD)",
+        name_prefix="Gold",
+        risk_variants=RISK_VARIANTS,
+        fetch_candles_fn=fetch_metal_scan_candles,
+        log_prefix="gold-scan",
+        no_trades_error="No strategy produced enough trades on gold to rank. Try a longer window.",
+        fetch_error=(
+            "Could not fetch gold (XAUUSD) historical data from any source "
+            "(Yahoo, FMP, cTrader). Please try again in a minute."
+        ),
+    )
