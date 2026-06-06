@@ -2466,7 +2466,7 @@ function dismissTgBanner(){
         <div class="pine-card">
           <div style="margin-bottom:16px">
             <div style="font-size:16px;font-weight:700;letter-spacing:-.3px">🔍 Strategy Scanner</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:3px">Test up to <b>12 coins</b> on <b>multiple timeframes</b> with <b>40 strategies</b> each — the engine finds the best (coin, timeframe, strategy, TP/SL) combo across the whole grid.</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:3px">Test up to <b>12 symbols</b> on <b>multiple timeframes</b> with classic + forex/ICT strategies — the engine finds the best (symbol, timeframe, strategy, TP/SL) combo across the whole grid.</div>
           </div>
 
           <!-- Gold Strategy Finder (Claude-driven) -->
@@ -2477,11 +2477,25 @@ function dismissTgBanner(){
           </div>
 
           <div style="margin-bottom:14px">
-            <div class="pine-label">Coins <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 12 · pick a preset or type your own</span></div>
-            <input id="scan-coin" type="text" value="BTC" maxlength="200"
+            <div class="pine-label">Market</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="scan-market-chips">
+              <button class="opt-chip active" data-market="forex" onclick="setScanMarket('forex',this)">Forex / Gold</button>
+              <button class="opt-chip" data-market="crypto" onclick="setScanMarket('crypto',this)">Crypto</button>
+            </div>
+          </div>
+
+          <div style="margin-bottom:14px">
+            <div class="pine-label">Symbols <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 12 · pick a preset or type your own</span></div>
+            <input id="scan-coin" type="text" value="EURUSD,XAUUSD,GBPUSD" maxlength="200"
               style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)"
-              placeholder="BTC, ETH, SOL, AVAX, LINK, …">
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+              placeholder="EURUSD, XAUUSD, GBPUSD, …">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px" id="scan-preset-row">
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURUSD',this)">EURUSD only</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('XAUUSD',this)">Gold only</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURUSD,GBPUSD,USDJPY',this)">FX majors</button>
+              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,XAUUSD',this)">Top FX + Gold</button>
+            </div>
+            <div style="display:none;gap:6px;flex-wrap:wrap;margin-top:6px" id="scan-crypto-preset-row">
               <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC',this)">BTC only</button>
               <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH',this)">BTC + ETH</button>
               <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL',this)">Top 3</button>
@@ -2489,7 +2503,7 @@ function dismissTgBanner(){
               <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,LINK,DOT,MATIC,ATOM,NEAR,ARB',this)">Top 10</button>
               <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,BNB,XRP,ADA,DOGE,AVAX,DOT,MATIC,LINK,UNI',this)">Top 12 by mcap</button>
             </div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+            <div style="display:none;gap:6px;flex-wrap:wrap;margin-top:6px" id="scan-crypto-sector-row">
               <div style="font-size:10px;color:var(--muted);align-self:center;margin-right:2px;text-transform:uppercase;letter-spacing:.4px;font-weight:600">Sectors:</div>
               <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,BNB,ADA,DOT',this)">L1s</button>
               <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('ARB,OP,MATIC,STRK,MNT',this)">L2s</button>
@@ -2527,6 +2541,14 @@ function dismissTgBanner(){
             </div>
           </div>
 
+          <div style="margin-bottom:16px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">
+              <div class="pine-label" style="margin-bottom:0">Signal types <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— all selected by default</span></div>
+              <button class="btn ghost" type="button" style="font-size:10.5px;padding:4px 8px" onclick="toggleAllScanSignals()">Toggle all</button>
+            </div>
+            <div id="scan-signal-list" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px"></div>
+          </div>
+
           <!-- TP / SL mode toggle -->
           <div style="margin-bottom:18px">
             <div class="pine-label">Take-profit / Stop-loss
@@ -2543,12 +2565,12 @@ function dismissTgBanner(){
             <div id="scan-fixed-row"
                  style="display:none;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
               <div>
-                <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:4px">Take-profit %</div>
+                <div id="scan-fixed-tp-label" style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:4px">Take-profit pips</div>
                 <input id="scan-fixed-tp" type="number" min="0.1" max="50" step="0.1" value="3.0"
                   style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)">
               </div>
               <div>
-                <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:4px">Stop-loss %</div>
+                <div id="scan-fixed-sl-label" style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:4px">Stop-loss pips</div>
                 <input id="scan-fixed-sl" type="number" min="0.1" max="25" step="0.1" value="1.5"
                   style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)">
               </div>
@@ -4488,6 +4510,18 @@ const SIGNAL_META={
   support_resistance:{icon:'📏',label:'S/R Level',      desc:'Support or resistance touch'},
   fvg:             {icon:'🕳️',label:'Fair Value Gap',   desc:'Unmitigated price imbalance (FVG)'},
   ifvg:            {icon:'🔁', label:'Inv. Fair Value Gap',desc:'Price re-enters a mitigated FVG (IFVG)'},
+  breaker_block:   {icon:'🧱',label:'Breaker Block',     desc:'Failed order block retested from the other side'},
+  liquidity_sweep: {icon:'🪤',label:'Liquidity Sweep',   desc:'Wick sweeps a swing high/low then closes back inside'},
+  mitigation_block:{icon:'↩️',label:'Mitigation Block', desc:'Retrace to the origin candle of a major move'},
+  supply_demand_zone:{icon:'🏗️',label:'Supply/Demand',  desc:'Base before strong rally/drop, traded on first retest'},
+  premium_discount:{icon:'⚖️',label:'Premium/Discount', desc:'Longs below range midpoint, shorts above midpoint'},
+  equilibrium_entry:{icon:'➗',label:'Equilibrium Entry',desc:'Entry near 50% retracement of the latest swing'},
+  pin_bar:         {icon:'📍',label:'Pin Bar',           desc:'Long rejection wick with small candle body'},
+  engulfing:       {icon:'🕯️',label:'Engulfing Candle', desc:'Current candle body engulfs previous body'},
+  inside_bar:      {icon:'📦',label:'Inside Bar',        desc:'Breakout after an inside-bar compression candle'},
+  trend_structure: {icon:'🏗️',label:'HH/HL or LH/LL',   desc:'Confirmed swing structure trend'},
+  fib_retracement: {icon:'🧮',label:'Fib Retracement',   desc:'Pullback into the 0.618-0.705 retracement zone'},
+  vwap_bounce:     {icon:'📍',label:'VWAP Bounce',       desc:'Bounce or rejection at session VWAP'},
   open_interest:   {icon:'📡',label:'OI Surge',         desc:'Open interest spike detection'},
   liquidation:     {icon:'💣',label:'Liquidation',      desc:'Liquidation cascade event'},
   consecutive_candles:{icon:'🟩',label:'Candle Run',    desc:'Several candles in one direction'},
@@ -4535,7 +4569,11 @@ const SIGNAL_FREQ={
   obv:'med', donchian:'med', rvol:'med', vwap_bands:'med', vwap_bias:'high', atr_filter:'med', volume_profile:'low',
   bb:'low', supertrend:'low', candlestick:'low', market_structure:'low',
   order_block:'low', fibonacci:'low', divergence:'low', funding_rate:'low',
-  fvg:'low', open_interest:'low', liquidation:'low', session_level:'low', pivot_points:'low',
+  fvg:'low', ifvg:'low', breaker_block:'low', liquidity_sweep:'med', mitigation_block:'low',
+  supply_demand_zone:'low', premium_discount:'med', equilibrium_entry:'med',
+  pin_bar:'med', engulfing:'med', inside_bar:'med', trend_structure:'low',
+  fib_retracement:'low', vwap_bounce:'med',
+  open_interest:'low', liquidation:'low', session_level:'low', pivot_points:'low',
   trend_reversal:'low', heikin_ashi:'low', ichimoku:'low', aroon:'low',
   sustained_trend:'low', tradingview_webhook:'ext',
   forex_session:'med', forex_session_break:'med', forex_prev_level:'med', forex_news_avoidance:'med', forex_currency_strength:'med', forex_liquidity_pa:'med', forex_cot:'low',
@@ -4656,9 +4694,9 @@ const STYLE_SIGNALS={
   reversal: ['trend_reversal','rsi','divergence','candlestick','stoch_rsi','bb','market_structure','williams_r','cci','sustained_trend'],
   pump:     ['price_momentum','volume_spike','open_interest','liquidation','consecutive_candles','atr_volatility','sustained_trend'],
   dip:      ['rsi','stoch_rsi','bb','vwap_deviation','session_level','divergence','williams_r','cci'],
-  smc:      ['order_block','market_structure','fvg','fibonacci','divergence','session_level'],
+  smc:      ['fvg','ifvg','order_block','breaker_block','liquidity_sweep','mitigation_block','market_structure','supply_demand_zone','premium_discount','equilibrium_entry','fibonacci','divergence','session_level'],
   range:    ['support_resistance','bb','adx_filter','rsi','stoch_rsi','vwap_deviation','session_level','keltner'],
-  sniper:   ['fvg','order_block','fibonacci','market_structure','divergence','atr_volatility','adx_filter'],
+  sniper:   ['fvg','ifvg','liquidity_sweep','order_block','breaker_block','fib_retracement','vwap_bounce','pin_bar','engulfing','fibonacci','market_structure','divergence','atr_volatility','adx_filter'],
   // Indices — index-specific primaries first (auto-selected per INDEX_TEMPLATES)
   idx_trend:    ['ema','sma','supertrend','macd','ichimoku','adx_filter'],
   idx_breakout: ['breakout','donchian','price_momentum','ema','rsi'],
@@ -4762,6 +4800,19 @@ function getDefaultCfg(type){
     funding_rate:     {fr_op:'lt',fr_val:0.05},
     support_resistance:{timeframe:tf,condition:'at_support'},
     fvg:              {timeframe:tf,fvg_dir:'bullish',min_gap_pct:0.3},
+    ifvg:             {timeframe:tf,direction:'bullish',fvg_dir:'bullish',lookback:80},
+    breaker_block:    {timeframe:tf,direction:'bullish'},
+    liquidity_sweep:  {timeframe:tf,direction:'bullish',lookback:10},
+    mitigation_block: {timeframe:tf,direction:'bullish',lookback:60,min_body_ratio:3},
+    supply_demand_zone:{timeframe:tf,direction:'bullish',lookback:80},
+    premium_discount: {timeframe:tf,direction:'bullish',lookback:50},
+    equilibrium_entry:{timeframe:tf,direction:'bullish',lookback:20,tolerance_pct:0.15},
+    pin_bar:          {timeframe:tf,direction:'bullish'},
+    engulfing:        {timeframe:tf,direction:'bullish'},
+    inside_bar:       {timeframe:tf,direction:'bullish'},
+    trend_structure:  {timeframe:tf,direction:'bullish',lookback:80},
+    fib_retracement:  {timeframe:tf,direction:'bullish',lookback:50,low_level:0.618,high_level:0.705},
+    vwap_bounce:      {timeframe:tf,direction:'bullish'},
     open_interest:    {oi_change_pct:10,oi_window_min:30,oi_dir:'any'},
     liquidation:      {liq_side:'long',liq_threshold_pct:3},
     consecutive_candles:{cc_dir:'bullish',cc_count:3,timeframe:tf},
@@ -6505,7 +6556,7 @@ function buildWizardDescription(){
       case 'support_resistance':sig=`Price ${cond(cfg.condition||'at_support')} on ${tf}`;break;
       case 'ifvg':
       case 'fvg':{
-        const isIfvg=type==='ifvg';
+        const isIfvg=WZ.primaryType==='ifvg';
         const trig=cond(cfg.condition||(isIfvg?'price_in_gap':'gap_exists'));
         const label=isIfvg?'Inv. Fair Value Gap (IFVG)':'Fair Value Gap';
         const parts=[`${cfg.fvg_dir||'bullish'} ${label}`,`trigger: ${trig}`,`on ${tf}`];
@@ -6517,6 +6568,18 @@ function buildWizardDescription(){
         sig=parts.join(' — ');
         break;
       }
+      case 'breaker_block':sig=`${cfg.direction||'bullish'} breaker block retest on ${tf}`;break;
+      case 'liquidity_sweep':sig=`${cfg.direction||'bullish'} liquidity sweep over the last ${cfg.lookback||10} candles on ${tf}`;break;
+      case 'mitigation_block':sig=`${cfg.direction||'bullish'} mitigation block retrace to the origin candle 50% level on ${tf}`;break;
+      case 'supply_demand_zone':sig=`${cfg.direction==='bearish'?'Supply':'Demand'} zone first retest after a strong ${cfg.direction==='bearish'?'drop':'rally'} on ${tf}`;break;
+      case 'premium_discount':sig=`${cfg.direction==='bearish'?'Premium':'Discount'} zone entry using the last ${cfg.lookback||50}-candle range on ${tf}`;break;
+      case 'equilibrium_entry':sig=`Equilibrium 50% retracement entry over the last ${cfg.lookback||20} candles on ${tf}`;break;
+      case 'pin_bar':sig=`${cfg.direction||'bullish'} pin bar rejection candle on ${tf}`;break;
+      case 'engulfing':sig=`${cfg.direction||'bullish'} engulfing candle on ${tf}`;break;
+      case 'inside_bar':sig=`${cfg.direction||'bullish'} inside-bar breakout on ${tf}`;break;
+      case 'trend_structure':sig=`${cfg.direction==='bearish'?'LH/LL bearish':'HH/HL bullish'} structure confirmation on ${tf}`;break;
+      case 'fib_retracement':sig=`${cfg.direction||'bullish'} Fibonacci retracement entry in the ${cfg.low_level||0.618}-${cfg.high_level||0.705} zone on ${tf}`;break;
+      case 'vwap_bounce':sig=`${cfg.direction==='bearish'?'Bearish rejection':'Bullish bounce'} at session VWAP on ${tf}`;break;
       case 'open_interest':sig=`Open interest ${cfg.oi_dir||'any'} by ${cfg.oi_change_pct||10}%+ in ${cfg.oi_window_min||30} minutes`;break;
       case 'liquidation':sig=`${cfg.liq_side||'long'} liquidation cascade (price move ≥${cfg.liq_threshold_pct||3}%)`;break;
       case 'consecutive_candles':sig=`${cfg.cc_count||3}+ consecutive ${cfg.cc_dir||'bullish'} candles on ${tf}`;break;
@@ -6583,6 +6646,18 @@ function buildWizardDescription(){
           cfm=parts.join(' — ');
           break;
         }
+        case 'breaker_block':cfm=`${cfg.direction||'bullish'} breaker block retest on ${tf}`;break;
+        case 'liquidity_sweep':cfm=`${cfg.direction||'bullish'} liquidity sweep over ${cfg.lookback||10} candles on ${tf}`;break;
+        case 'mitigation_block':cfm=`${cfg.direction||'bullish'} mitigation block on ${tf}`;break;
+        case 'supply_demand_zone':cfm=`${cfg.direction==='bearish'?'Supply':'Demand'} zone retest on ${tf}`;break;
+        case 'premium_discount':cfm=`${cfg.direction==='bearish'?'Premium':'Discount'} zone on ${tf}`;break;
+        case 'equilibrium_entry':cfm=`Equilibrium 50% retracement on ${tf}`;break;
+        case 'pin_bar':cfm=`${cfg.direction||'bullish'} pin bar on ${tf}`;break;
+        case 'engulfing':cfm=`${cfg.direction||'bullish'} engulfing candle on ${tf}`;break;
+        case 'inside_bar':cfm=`${cfg.direction||'bullish'} inside-bar breakout on ${tf}`;break;
+        case 'trend_structure':cfm=`${cfg.direction==='bearish'?'LH/LL bearish':'HH/HL bullish'} structure on ${tf}`;break;
+        case 'fib_retracement':cfm=`Fib ${cfg.low_level||0.618}-${cfg.high_level||0.705} retracement on ${tf}`;break;
+        case 'vwap_bounce':cfm=`${cfg.direction==='bearish'?'VWAP rejection':'VWAP bounce'} on ${tf}`;break;
         case 'open_interest':cfm=`OI ${cfg.oi_dir||'any'} by ${cfg.oi_change_pct||10}%+ in ${cfg.oi_window_min||30}min`;break;
         case 'liquidation':cfm=`${cfg.liq_side||'long'} liquidation event ≥${cfg.liq_threshold_pct||3}%`;break;
         case 'consecutive_candles':cfm=`${cfg.cc_count||3}+ consecutive ${cfg.cc_dir||'bullish'} candles on ${tf}`;break;
@@ -7841,6 +7916,125 @@ let _scanDir  = 'LONG';
 let _scanTfs  = ['1h'];   // selected timeframes (15m / 1h / 4h)
 let _scanRiskMode = 'optimised';  // 'optimised' (engine picks best TP/SL) | 'fixed' (user pins it)
 let _scanResult = null;   // last successful scan response
+let _scanAssetClass = 'forex';
+const _SCAN_CLASSIC_COUNT = 40;
+const SCAN_SIGNAL_GROUPS = [
+  {category:'ICT/Smart Money', items:[
+    ['fvg','FVG — Fair Value Gap','3-candle imbalance; entry when price retraces into the gap.'],
+    ['ifvg','IFVG — Inverted Fair Value Gap','Filled FVG that flips into support or resistance on retest.'],
+    ['order_block','OB — Order Block','Last opposing candle before a 3x average-size displacement.'],
+    ['breaker_block','BB — Breaker Block','Failed order block retested from the other side.'],
+    ['mss','MSS — Market Structure Shift','Break of the latest swing after trend context changes.'],
+    ['choch','CHoCH — Change of Character','Early structure break after lower highs or higher lows.'],
+    ['liquidity_sweep','LQ — Liquidity Sweep','Wick sweeps a recent swing and closes back inside.'],
+    ['mitigation_block','MIT — Mitigation Block','Retrace to the 50% origin candle of a major move.'],
+  ]},
+  {category:'Supply & Demand', items:[
+    ['supply_demand_zone','SDP — Supply/Demand Zone','Base consolidation before a 2x zone-size rally/drop, first retest.'],
+    ['premium_discount','PD — Premium/Discount','Longs below range midpoint, shorts above range midpoint.'],
+    ['equilibrium_entry','EQ — Equilibrium Entry','Entry near the 50% retracement of the latest swing.'],
+  ]},
+  {category:'Price Action', items:[
+    ['pin_bar','PIN — Pin Bar','Small body with a rejection wick at least 2x body size.'],
+    ['engulfing','ENG — Engulfing Candle','Current candle body fully engulfs the previous body.'],
+    ['inside_bar','IB — Inside Bar Breakout','Breakout after a candle forms inside the prior candle range.'],
+  ]},
+  {category:'Structure', items:[
+    ['trend_structure_bullish','HH/HL — Bullish Structure','Series of higher highs and higher lows over recent swings.'],
+    ['trend_structure_bearish','LH/LL — Bearish Structure','Series of lower highs and lower lows over recent swings.'],
+    ['fib_retracement','FIB — Fibonacci Retracement','Pullback into the 0.618-0.705 retracement zone.'],
+    ['vwap_bounce','VWAP — Volume Weighted Average','Session VWAP bounce for longs or rejection for shorts.'],
+  ]},
+  {category:'Classic Indicators', items:[
+    ['rsi','RSI','Classic overbought/oversold momentum.'],
+    ['macd','MACD','Momentum cross and histogram direction.'],
+    ['ema','EMA','Fast/slow EMA cross or price-vs-EMA trend.'],
+    ['sma','SMA','Simple moving-average trend filter.'],
+    ['supertrend','SuperTrend','ATR-based trend flip.'],
+    ['bb','BB — Bollinger Bands','Lower/upper band bounces and squeeze breakouts.'],
+    ['stochrsi','StochRSI','Fast oscillator extremes.'],
+    ['volume_spike','Volume Spike','Volume above recent average.'],
+    ['williams_r','Williams %R','Fast overbought/oversold oscillator.'],
+    ['adx_filter','ADX','Trend-strength filter.'],
+    ['breakout','Breakout','Close beyond a recent range high/low.'],
+    ['support_resistance','Support/Resistance','Touch or break of recent pivots.'],
+    ['candlestick','Candlestick','Classic engulfing/hammer-style candle patterns.'],
+    ['divergence','Divergence','Price swing diverges from oscillator swing.'],
+  ]},
+];
+let _scanSelectedSignals = new Set(SCAN_SIGNAL_GROUPS.flatMap(g => g.items.map(i => i[0])));
+
+function renderScanSignalList(){
+  const box = document.getElementById('scan-signal-list');
+  if(!box) return;
+  box.innerHTML = SCAN_SIGNAL_GROUPS.map(g => `
+    <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:10px">
+      <div style="font-size:10px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">${g.category}</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${g.items.map(([id,label,tip]) => `
+          <label class="scan-signal-row" style="display:flex;align-items:center;gap:7px;font-size:11.5px;line-height:1.25;cursor:pointer">
+            <input type="checkbox" data-signal-id="${id}" checked onchange="setScanSignal('${id}',this.checked)" style="accent-color:var(--accent)">
+            <span style="flex:1;font-weight:600">${label}</span>
+            <span title="${tip.replace(/"/g,'&quot;')}" style="width:17px;height:17px;border-radius:50%;border:1px solid var(--border2);display:inline-flex;align-items:center;justify-content:center;color:var(--muted);font-size:10px;flex-shrink:0">i</span>
+          </label>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+function setScanSignal(id, on){
+  if(on) _scanSelectedSignals.add(id); else _scanSelectedSignals.delete(id);
+  if(!_scanSelectedSignals.size){
+    _scanSelectedSignals.add(id);
+    const cb = document.querySelector(`#scan-signal-list input[data-signal-id="${id}"]`);
+    if(cb) cb.checked = true;
+    toast('Keep at least one signal selected', 'error');
+  }
+  _updateScanGridEst();
+}
+
+function toggleAllScanSignals(){
+  const allIds = SCAN_SIGNAL_GROUPS.flatMap(g => g.items.map(i => i[0]));
+  const turnOn = _scanSelectedSignals.size < allIds.length;
+  _scanSelectedSignals = new Set(turnOn ? allIds : allIds.slice(0, 1));
+  document.querySelectorAll('#scan-signal-list input[data-signal-id]').forEach(cb => {
+    cb.checked = _scanSelectedSignals.has(cb.dataset.signalId);
+  });
+  _updateScanGridEst();
+}
+
+function setScanMarket(market, el){
+  _scanAssetClass = market === 'crypto' ? 'crypto' : 'forex';
+  document.querySelectorAll('#scan-market-chips .opt-chip').forEach(b => b.classList.remove('active'));
+  if(el) el.classList.add('active');
+  const input = document.getElementById('scan-coin');
+  const fxRow = document.getElementById('scan-preset-row');
+  const cryptoRow = document.getElementById('scan-crypto-preset-row');
+  const sectorRow = document.getElementById('scan-crypto-sector-row');
+  const tpLbl = document.getElementById('scan-fixed-tp-label');
+  const slLbl = document.getElementById('scan-fixed-sl-label');
+  const tpInp = document.getElementById('scan-fixed-tp');
+  const slInp = document.getElementById('scan-fixed-sl');
+  if(_scanAssetClass === 'forex'){
+    if(input){ input.value = 'EURUSD,XAUUSD,GBPUSD'; input.placeholder = 'EURUSD, XAUUSD, GBPUSD, …'; }
+    if(fxRow) fxRow.style.display = 'flex';
+    if(cryptoRow) cryptoRow.style.display = 'none';
+    if(sectorRow) sectorRow.style.display = 'none';
+    if(tpLbl) tpLbl.textContent = 'Take-profit pips';
+    if(slLbl) slLbl.textContent = 'Stop-loss pips';
+    if(tpInp) { tpInp.value = 30; tpInp.max = 500; tpInp.step = 1; }
+    if(slInp) { slInp.value = 15; slInp.max = 250; slInp.step = 1; }
+  } else {
+    if(input){ input.value = 'BTC'; input.placeholder = 'BTC, ETH, SOL, AVAX, LINK, …'; }
+    if(fxRow) fxRow.style.display = 'none';
+    if(cryptoRow) cryptoRow.style.display = 'flex';
+    if(sectorRow) sectorRow.style.display = 'flex';
+    if(tpLbl) tpLbl.textContent = 'Take-profit %';
+    if(slLbl) slLbl.textContent = 'Stop-loss %';
+    if(tpInp) { tpInp.value = 3.0; tpInp.max = 50; tpInp.step = 0.1; }
+    if(slInp) { slInp.value = 1.5; slInp.max = 25; slInp.step = 0.1; }
+  }
+  _updateScanGridEst();
+}
 
 function setScanRiskMode(mode, el) {
   _scanRiskMode = (mode === 'fixed') ? 'fixed' : 'optimised';
@@ -7880,7 +8074,7 @@ function _setScanCoins(csv, el) {
   if (input) input.value = csv;
   // Briefly flash the active chip so the user knows which preset they picked.
   document.querySelectorAll('#scan-config-card .opt-chip').forEach(b => {
-    if (b.getAttribute('data-tf') || b.dataset.mode) return;  // skip TF + risk chips
+    if (b.getAttribute('data-tf') || b.dataset.mode || b.dataset.market) return;  // skip TF + risk + market chips
     b.classList.remove('active');
   });
   if (el) {
@@ -7894,13 +8088,16 @@ function _updateScanGridEst() {
   const el = document.getElementById('scan-grid-est');
   if (!el) return;
   const coins = _parseScanCoins();
-  const total = coins.length * _scanTfs.length * 40;
+  const selectedCount = Math.max(1, _scanSelectedSignals.size || _SCAN_CLASSIC_COUNT);
+  const total = coins.length * _scanTfs.length * selectedCount;
   const eta = Math.max(8, Math.round(total * 0.08));
-  el.textContent = `${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × 40 strategies = ${total} backtests · ~${eta}s`;
+  el.textContent = `${coins.length} symbol${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × ${selectedCount} signal type${selectedCount>1?'s':''} = ~${total} backtests · ${_scanAssetClass==='forex'?'pip-based score':'% based score'} · ~${eta}s`;
 }
 document.addEventListener('DOMContentLoaded', () => {
   const coinInput = document.getElementById('scan-coin');
   if (coinInput) coinInput.addEventListener('input', _updateScanGridEst);
+  renderScanSignalList();
+  setScanMarket('forex', document.querySelector('#scan-market-chips .opt-chip[data-market="forex"]'));
   _updateScanGridEst();
 
   // Boot the initial tab's data. The default visible page is #my-strats, but
@@ -8001,13 +8198,13 @@ function renderGoldResults(d){
         + '</div>';
   html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px">'
         + _goldStat('Win rate', s.win_rate+'%')
-        + _goldStat('Profit factor', s.profit_factor)
+        + _goldStat('Combined score', (b.score||0).toFixed(1)+'/100')
         + _goldStat('Net pips', (s.total_pips>0?'+':'')+s.total_pips)
         + _goldStat('Max drawdown', s.max_drawdown+'%')
         + _goldStat('Trades', s.closed_trades)
         + _goldStat('Avg pips/trade', (s.avg_pips>0?'+':'')+s.avg_pips)
+        + _goldStat('Avg win pips', (s.avg_pips_win>0?'+':'')+(s.avg_pips_win||0))
         + _goldStat('Return', (s.total_pnl>0?'+':'')+s.total_pnl+'%')
-        + _goldStat('Wins / Losses', s.wins+' / '+s.losses)
         + '</div>';
   if(b.rationale){ html += '<div style="font-size:12.5px;color:var(--text);margin-top:14px;line-height:1.55;padding-top:12px;border-top:1px solid var(--border)">💡 '+_gEsc(b.rationale)+'</div>'; }
   html += '</div>';
@@ -8016,15 +8213,16 @@ function renderGoldResults(d){
   if(d.coverage_days){ covTxt = ' · '+Object.keys(d.coverage_days).map(tf=>tf+' ~'+d.coverage_days[tf]+'d').join(', '); }
   html += '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin:6px 0 8px">Top strategies tested ('+d.combos_evaluated+' combos · '+d.candidates_tested+' strategies'+covTxt+')</div>';
   html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
-  html += '<tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px">#</th><th style="padding:6px 8px">Strategy</th><th style="padding:6px 8px">Dir</th><th style="padding:6px 8px">TF</th><th style="padding:6px 8px">Session</th><th style="padding:6px 8px">Style</th><th style="padding:6px 8px">SL/TP</th><th style="padding:6px 8px">Stop mgmt</th><th style="padding:6px 8px">Win%</th><th style="padding:6px 8px">PF</th><th style="padding:6px 8px">Pips</th><th style="padding:6px 8px">Trades</th></tr>';
+  html += '<tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px">#</th><th style="padding:6px 8px">Strategy</th><th style="padding:6px 8px">Dir</th><th style="padding:6px 8px">TF</th><th style="padding:6px 8px">Session</th><th style="padding:6px 8px">Style</th><th style="padding:6px 8px">SL/TP</th><th style="padding:6px 8px">Stop mgmt</th><th style="padding:6px 8px">Win%</th><th style="padding:6px 8px">Avg win</th><th style="padding:6px 8px">Pips</th><th style="padding:6px 8px">Score</th></tr>';
   d.leaderboard.forEach((e,i)=>{
     const st=e.stats;
     const hl = (e.label===b.label && e.direction===b.direction && e.timeframe===b.timeframe && e.session===b.session && e.style===b.style);
     const styleBadge = e.style==='scalp' ? '<span style="color:#3f9af5">⚡ scalp</span>' : (e.style==='swing' ? '<span style="color:#c08fe0">🌊 swing</span>' : _gEsc(e.style||''));
     const mgmt = e.management||'fixed';
     const mgmtBadge = mgmt==='breakeven' ? '<span style="color:#3fb950">🛡️ breakeven</span>' : (mgmt==='trail' ? '<span style="color:#d9a441">📈 trailing</span>' : '<span style="color:var(--muted)">fixed</span>');
+    const rankBadge = i<3 ? '<span style="display:inline-block;padding:1px 6px;border-radius:99px;font-size:9px;font-weight:800;color:'+(i===0?'#7a4d00':i===1?'#4b5563':'#7c2d12')+';background:'+(i===0?'#facc15':i===1?'#d1d5db':'#fdba74')+'">'+(i===0?'GOLD':i===1?'SILVER':'BRONZE')+'</span>' : (i+1);
     html += '<tr style="border-top:1px solid var(--border)'+(hl?';background:#b8860b14':'')+'">'
-          + '<td style="padding:6px 8px;color:var(--muted)">'+(i+1)+'</td>'
+          + '<td style="padding:6px 8px;color:var(--muted)">'+rankBadge+'</td>'
           + '<td style="padding:6px 8px;font-weight:600">'+_gEsc(e.label)+'</td>'
           + '<td style="padding:6px 8px">'+(e.direction==='SHORT'?'🔴':'🟢')+'</td>'
           + '<td style="padding:6px 8px">'+_gEsc(e.timeframe)+'</td>'
@@ -8033,9 +8231,9 @@ function renderGoldResults(d){
           + '<td style="padding:6px 8px">'+e.sl_pips+'/'+e.tp_pips+'</td>'
           + '<td style="padding:6px 8px">'+mgmtBadge+'</td>'
           + '<td style="padding:6px 8px">'+st.win_rate+'%</td>'
-          + '<td style="padding:6px 8px">'+st.profit_factor+'</td>'
+          + '<td style="padding:6px 8px">'+((st.avg_pips_win||0)>0?'+':'')+(st.avg_pips_win||0)+'</td>'
           + '<td style="padding:6px 8px;color:'+(st.total_pips>0?'#3fb950':'#e05858')+'">'+(st.total_pips>0?'+':'')+st.total_pips+'</td>'
-          + '<td style="padding:6px 8px;color:var(--muted)">'+st.closed_trades+'</td>'
+          + '<td style="padding:6px 8px;color:var(--muted)">'+(e.score||0).toFixed(1)+'</td>'
           + '</tr>';
   });
   html += '</table></div>';
@@ -8146,9 +8344,10 @@ async function runScan() {
   document.getElementById('scan-results').style.display = 'none';
   document.getElementById('scan-error').style.display = 'none';
 
-  const total = coins.length * _scanTfs.length * 40;
+  const selectedSignals = Array.from(_scanSelectedSignals);
+  const total = coins.length * _scanTfs.length * Math.max(1, selectedSignals.length);
   document.getElementById('scan-progress-title').textContent =
-    `Running ${total} backtests · ${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} TF${_scanTfs.length>1?'s':''} × 40 strategies…`;
+    `Running scan · ${coins.length} symbol${coins.length>1?'s':''} × ${_scanTfs.length} TF${_scanTfs.length>1?'s':''} × ${selectedSignals.length} signal type${selectedSignals.length>1?'s':''}…`;
 
   // Animate progress bar during wait — slower for bigger grids
   const bar = document.getElementById('scan-bar');
@@ -8170,6 +8369,8 @@ async function runScan() {
         timeframes: _scanTfs,
         days: _scanDays,
         direction: _scanDir,
+        asset_class: _scanAssetClass,
+        selected_signal_types: selectedSignals,
         risk_mode: _scanRiskMode,
         fixed_tp: parseFloat(document.getElementById('scan-fixed-tp')?.value) || 3.0,
         fixed_sl: parseFloat(document.getElementById('scan-fixed-sl')?.value) || 1.5,
@@ -8214,14 +8415,19 @@ function renderScanResults(data) {
   const ws     = winner.stats || {};
   const coin   = winner.coin || data.coin || '';
   const tf     = winner.timeframe || '1h';
+  const isForexScan = data.asset_class === 'forex' || ws.pip_mode;
   const pnlPos = (ws.total_pnl || 0) >= 0;
+  const pipsPos = (ws.total_pips || 0) >= 0;
 
   // Header now reflects the WINNING coin + timeframe (could differ from first coin)
   document.getElementById('scan-winner-coin').textContent  = `${coin} · ${tf}`;
   // Strategy label + optimal risk profile chip
   const wRisk = winner.risk || {};
   const labelEl = document.getElementById('scan-winner-label');
-  labelEl.innerHTML = `${winner.label} <span style="display:inline-block;background:rgba(91,108,247,.15);color:var(--accent);padding:3px 9px;border-radius:99px;font-size:11px;font-weight:700;margin-left:6px;letter-spacing:.2px;vertical-align:middle">${wRisk.name || 'Balanced'} · TP ${wRisk.tp1 || 3}% / SL ${wRisk.sl || 1.5}% · R:R ${wRisk.rr || '2:1'}</span>`;
+  const riskText = isForexScan
+    ? `${wRisk.name || 'Balanced'} · TP ${wRisk.tp_pips || ws.tp_pips_configured || '-'} / SL ${wRisk.sl_pips || ws.sl_pips_configured || '-'} pips · R:R ${wRisk.rr || '2:1'}`
+    : `${wRisk.name || 'Balanced'} · TP ${wRisk.tp1 || 3}% / SL ${wRisk.sl || 1.5}% · R:R ${wRisk.rr || '2:1'}`;
+  labelEl.innerHTML = `${winner.label} <span style="display:inline-block;background:rgba(91,108,247,.15);color:var(--accent);padding:3px 9px;border-radius:99px;font-size:11px;font-weight:700;margin-left:6px;letter-spacing:.2px;vertical-align:middle">${riskText}</span>`;
   const insight = data.winner_insight || '';
   const insightEl = document.getElementById('scan-winner-insight');
   insightEl.textContent = insight;
@@ -8229,12 +8435,20 @@ function renderScanResults(data) {
 
   // Winner stat grid
   const statsEl = document.getElementById('scan-winner-stats');
-  statsEl.innerHTML = [
+  const winnerStats = isForexScan ? [
+    { label:'Win Rate',      val: (ws.win_rate||0).toFixed(1)+'%', color: (ws.win_rate||0)>=50?'var(--green)':'var(--red)' },
+    { label:'Avg Pips/Trade', val: ((ws.avg_pips_per_trade||0)>=0?'+':'')+(ws.avg_pips_per_trade||0).toFixed(1), color: (ws.avg_pips_per_trade||0)>=0?'var(--green)':'var(--red)' },
+    { label:'Total Pips',    val: (pipsPos?'+':'')+(ws.total_pips||0).toFixed(1), color: pipsPos?'var(--green)':'var(--red)' },
+    { label:'Best Timeframe', val: tf, color: 'var(--text)' },
+    { label:'Combined Score', val: (winner.score||0).toFixed(1)+'/100', color: (winner.score||0)>=60?'var(--green)':'var(--accent)' },
+  ] : [
     { label:'Win Rate',      val: (ws.win_rate||0).toFixed(1)+'%',       color: (ws.win_rate||0)>=50?'var(--green)':'var(--red)' },
     { label:'Total P&L',    val: (pnlPos?'+':'')+(ws.total_pnl||0).toFixed(1)+'%', color: pnlPos?'var(--green)':'var(--red)' },
     { label:'Profit Factor', val: (ws.profit_factor||0).toFixed(2),       color: (ws.profit_factor||0)>=1.2?'var(--green)':'var(--muted)' },
     { label:'Trades',        val: ws.closed_trades||0,                    color: 'var(--text)' },
-  ].map(s => `<div style="background:var(--card2);border-radius:8px;padding:10px 8px;text-align:center">
+  ];
+  statsEl.style.gridTemplateColumns = isForexScan ? 'repeat(5,1fr)' : 'repeat(4,1fr)';
+  statsEl.innerHTML = winnerStats.map(s => `<div style="background:var(--card2);border-radius:8px;padding:10px 8px;text-align:center">
     <div style="font-size:16px;font-weight:800;color:${s.color}">${s.val}</div>
     <div style="font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.4px">${s.label}</div>
   </div>`).join('');
@@ -8252,17 +8466,20 @@ function renderScanResults(data) {
       <div id="scan-variants-block" style="background:var(--card2);border-radius:10px;padding:12px;margin-bottom:14px;border:1px solid var(--border)">
         <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:8px">📊 Risk profile comparison</div>
         <div style="display:grid;grid-template-columns:1.4fr .7fr .8fr .8fr .7fr;gap:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;font-weight:600;padding:4px 8px;border-bottom:1px solid var(--border);margin-bottom:4px">
-          <div>Profile</div><div>TP / SL</div><div>Win%</div><div>P&L</div><div style="text-align:right">Trades</div>
+          <div>Profile</div><div>TP / SL</div><div>Win%</div><div>${isForexScan?'Pips':'P&L'}</div><div style="text-align:right">Score</div>
         </div>
         ${variants.map(v => {
-          const vp = (v.total_pnl||0) >= 0;
+          const vMetric = isForexScan ? (v.total_pips||0) : (v.total_pnl||0);
+          const vp = vMetric >= 0;
           const winRowBg = v.is_best ? ';background:rgba(16,185,129,.08);border-radius:6px' : '';
+          const riskPair = isForexScan ? `${v.tp_pips||'-'}/${v.sl_pips||'-'}p` : `${v.tp1}% / ${v.sl}%`;
+          const metricText = isForexScan ? `${vp?'+':''}${(v.total_pips||0).toFixed(1)}` : `${vp?'+':''}${(v.total_pnl||0).toFixed(1)}%`;
           return `<div style="display:grid;grid-template-columns:1.4fr .7fr .8fr .8fr .7fr;gap:6px;padding:6px 8px;font-size:12px;align-items:center${winRowBg}">
             <div style="font-weight:${v.is_best?'700':'500'}">${v.is_best?'✨ ':''}${v.risk_name}</div>
-            <div style="color:var(--muted);font-variant-numeric:tabular-nums">${v.tp1}% / ${v.sl}%</div>
+            <div style="color:var(--muted);font-variant-numeric:tabular-nums">${riskPair}</div>
             <div style="color:${(v.win_rate||0)>=50?'var(--green)':'var(--red)'}">${(v.win_rate||0).toFixed(1)}%</div>
-            <div style="color:${vp?'var(--green)':'var(--red)'};font-weight:${v.is_best?'700':'500'}">${vp?'+':''}${(v.total_pnl||0).toFixed(1)}%</div>
-            <div style="color:var(--muted);text-align:right">${v.closed_trades||0}</div>
+            <div style="color:${vp?'var(--green)':'var(--red)'};font-weight:${v.is_best?'700':'500'}">${metricText}</div>
+            <div style="color:var(--muted);text-align:right">${(v.score||0).toFixed(1)}</div>
           </div>`;
         }).join('')}
       </div>`;
@@ -8278,6 +8495,9 @@ function renderScanResults(data) {
     'Volume':      '#06b6d4',
     'Breakout':    '#ef4444',
     'Price Action':'#8b5cf6',
+    'ICT/Smart Money':'#b8860b',
+    'Supply & Demand':'#14b8a6',
+    'Structure':   '#3b82f6',
     'Divergence':  '#f97316',
     'Combo':       '#a855f7',
     'Other':       '#6b7280',
@@ -8291,27 +8511,32 @@ function renderScanResults(data) {
 
   // Full ranking table — now includes Coin·TF column
   const tableEl = document.getElementById('scan-table');
-  const cols = '1.4fr .85fr .55fr .9fr .55fr .7fr .8fr';
+  const cols = isForexScan ? '1.35fr .75fr .6fr .85fr .55fr .75fr .65fr' : '1.4fr .85fr .55fr .9fr .55fr .7fr .8fr';
   const headerRow = `<div style="display:grid;grid-template-columns:${cols};padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
-    <div>Strategy</div><div>Coin · TF</div><div>Type</div><div>Best Risk · TP/SL</div><div>Win%</div><div>P&L</div><div style="text-align:right">PF · Trades</div>
+    <div>Strategy</div><div>Symbol · TF</div><div>Type</div><div>Best Risk · TP/SL</div><div>Win%</div><div>${isForexScan?'Pips':'P&L'}</div><div style="text-align:right">${isForexScan?'Score':'PF · Trades'}</div>
   </div>`;
   tableEl.innerHTML = headerRow + ranked.map((r, i) => {
     const st    = r.stats || {};
-    const pos   = (st.total_pnl || 0) >= 0;
+    const metric = isForexScan ? (st.total_pips || 0) : (st.total_pnl || 0);
+    const pos   = metric >= 0;
     const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
+    const rankBadge = i < 3 ? `<span style="display:inline-block;margin-right:5px;padding:2px 6px;border-radius:99px;font-size:9px;font-weight:800;color:${i===0?'#7a4d00':i===1?'#4b5563':'#7c2d12'};background:${i===0?'#facc15':i===1?'#d1d5db':'#fdba74'}">${i===0?'GOLD':i===1?'SILVER':'BRONZE'}</span>` : '';
     const cat   = r.category || 'Other';
     const cc    = catColor[cat] || catColor['Other'];
     const rk    = r.risk || {};
     const rcoin = r.coin || '—';
     const rtf   = r.timeframe || '1h';
+    const rowRisk = isForexScan ? `${rk.name || 'Balanced'} · ${rk.tp_pips||'-'} / ${rk.sl_pips||'-'} pips` : `${rk.name || 'Balanced'} · ${rk.tp1||'-'}% / ${rk.sl||'-'}%`;
+    const metricStr = isForexScan ? `${pos?'+':''}${(st.total_pips||0).toFixed(1)}` : `${pos?'+':''}${(st.total_pnl||0).toFixed(1)}%`;
+    const scoreStr = isForexScan ? `${(r.score||0).toFixed(1)}/100 · ${st.closed_trades||0}t` : `PF ${(st.profit_factor||0).toFixed(2)} · ${st.closed_trades||0}t`;
     return `<div style="display:grid;grid-template-columns:${cols};align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':''}">
-      <div style="font-weight:600">${medal} ${r.label}</div>
+      <div style="font-weight:600">${rankBadge}${medal} ${r.label}</div>
       <div style="font-family:var(--mono);font-weight:700;font-size:11.5px"><span>${rcoin}</span> <span style="color:var(--muted);font-weight:500">· ${rtf}</span></div>
       <div><span style="background:${cc}22;color:${cc};padding:2px 7px;border-radius:99px;font-size:10px;font-weight:700;letter-spacing:.2px">${cat}</span></div>
-      <div style="font-size:11px"><span style="color:var(--accent);font-weight:600">${rk.name || 'Balanced'}</span> <span style="color:var(--muted);font-variant-numeric:tabular-nums">· ${rk.tp1||'-'}% / ${rk.sl||'-'}%</span></div>
+      <div style="font-size:11px"><span style="color:var(--accent);font-weight:600">${rowRisk}</span></div>
       <div style="color:${(st.win_rate||0)>=50?'var(--green)':'var(--red)'};">${(st.win_rate||0).toFixed(1)}%</div>
-      <div style="color:${pos?'var(--green)':'var(--red)'};">${pos?'+':''}${(st.total_pnl||0).toFixed(1)}%</div>
-      <div style="color:var(--muted);text-align:right;font-size:11px">PF ${(st.profit_factor||0).toFixed(2)} · ${st.closed_trades||0}t</div>
+      <div style="color:${pos?'var(--green)':'var(--red)'};">${metricStr}</div>
+      <div style="color:var(--muted);text-align:right;font-size:11px">${scoreStr}</div>
     </div>`;
   }).join('');
 
@@ -8319,7 +8544,7 @@ function renderScanResults(data) {
   if (data.tested) {
     const universe = (data.coins || [data.coin]).length;
     const tfs      = (data.timeframes || ['1h']).length;
-    let footer = `Tested <b style="color:var(--text)">${data.tested}</b> backtests across <b style="color:var(--text)">${universe}</b> coin${universe>1?'s':''} × <b style="color:var(--text)">${tfs}</b> timeframe${tfs>1?'s':''} · <b style="color:var(--text)">${data.optimisation_jobs||0}</b> TP/SL optimisations · <b style="color:var(--text)">${ranked.length}</b> ranked${data.skipped ? ` · ${data.skipped} skipped (too few trades)` : ''}`;
+    let footer = `Tested <b style="color:var(--text)">${data.tested}</b> backtests across <b style="color:var(--text)">${universe}</b> symbol${universe>1?'s':''} × <b style="color:var(--text)">${tfs}</b> timeframe${tfs>1?'s':''} · <b style="color:var(--text)">${data.optimisation_jobs||0}</b> ${isForexScan?'pip TP/SL':'TP/SL'} optimisations · <b style="color:var(--text)">${ranked.length}</b> ranked${data.skipped ? ` · ${data.skipped} skipped (too few trades)` : ''}`;
     if ((data.missing_pairs || []).length) {
       footer += `<br><span style="color:var(--red)">⚠ no data: ${data.missing_pairs.map(p => `${p.coin} ${p.timeframe}`).join(', ')}</span>`;
     }
@@ -8339,6 +8564,8 @@ function _renderScanWinnerDetail(winner) {
 
   const trades = winner.trades || [];
   const eq     = winner.equity_curve || [];
+  const stats  = winner.stats || {};
+  const isForex = stats.pip_mode || stats.total_pips != null;
   if (!trades.length && !eq.length) return;
 
   const card = document.createElement('div');
@@ -8349,7 +8576,7 @@ function _renderScanWinnerDetail(winner) {
   card.innerHTML = `
     <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
       <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">📈 Equity curve · winning combo</div>
-      <div style="font-size:11px;color:var(--muted)">Compounded balance starting at $100 — every trade's % return is applied to the running equity</div>
+      <div style="font-size:11px;color:var(--muted)">${isForex?'Pip performance plus compounded balance from % returns':"Compounded balance starting at $100 — every trade's % return is applied to the running equity"}</div>
     </div>
     <div style="padding:14px 8px 4px 8px"><canvas id="scan-equity-canvas" height="160" style="width:100%;display:block"></canvas></div>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0 16px 14px 16px" id="scan-equity-stats"></div>
@@ -8372,12 +8599,18 @@ function _renderScanWinnerDetail(winner) {
   const totalRet = finalEq - 100;
   const wins     = trades.filter(t => t.outcome === 'WIN').length;
   const losses   = trades.filter(t => t.outcome === 'LOSS').length;
-  document.getElementById('scan-equity-stats').innerHTML = [
+  const detailStats = isForex ? [
+    {label:'Total pips', val:`${(stats.total_pips||0)>=0?'+':''}${(stats.total_pips||0).toFixed(1)}`, color:(stats.total_pips||0)>=0?'var(--green)':'var(--red)'},
+    {label:'Avg pips/trade', val:`${(stats.avg_pips_per_trade||0)>=0?'+':''}${(stats.avg_pips_per_trade||0).toFixed(1)}`, color:(stats.avg_pips_per_trade||0)>=0?'var(--green)':'var(--red)'},
+    {label:'Pip std dev', val:`${(stats.pip_stddev||0).toFixed(1)}`, color:'var(--muted)'},
+    {label:'Wins / Losses', val:`${wins} / ${losses}`, color:'var(--text)'},
+  ] : [
     {label:'Final equity', val:`$${finalEq.toFixed(2)}`, color: finalEq>=100?'var(--green)':'var(--red)'},
     {label:'Total return', val:`${totalRet>=0?'+':''}${totalRet.toFixed(1)}%`, color: totalRet>=0?'var(--green)':'var(--red)'},
     {label:'Peak drawdown', val:`-${ddPct.toFixed(1)}%`, color:'var(--red)'},
     {label:'Wins / Losses', val:`${wins} / ${losses}`, color:'var(--text)'},
-  ].map(s => `<div style="background:var(--card2);border-radius:8px;padding:8px;text-align:center">
+  ];
+  document.getElementById('scan-equity-stats').innerHTML = detailStats.map(s => `<div style="background:var(--card2);border-radius:8px;padding:8px;text-align:center">
     <div style="font-size:14px;font-weight:800;color:${s.color}">${s.val}</div>
     <div style="font-size:9.5px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.4px">${s.label}</div>
   </div>`).join('');
@@ -8404,6 +8637,7 @@ function _renderScanTradesList(trades, limit) {
     container.innerHTML = '<div style="padding:14px 16px;color:var(--muted);font-size:12px;text-align:center">No trades</div>';
     return;
   }
+  const isForex = trades.some(t => t.pip_move != null);
   const cols = '.55fr 1.1fr 1.1fr .65fr .55fr .9fr';
   const header = `<div style="display:grid;grid-template-columns:${cols};padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
     <div>#</div><div>Entry</div><div>Exit</div><div>Hold</div><div>Result</div><div style="text-align:right">P&L · Reason</div>
@@ -8422,7 +8656,7 @@ function _renderScanTradesList(trades, limit) {
       <div style="color:var(--muted);font-family:var(--mono);font-size:10.5px">${t.exit_date  || '—'} <span style="color:var(--text)">$${(t.exit_price||0).toFixed(t.exit_price>=100?2:5)}</span></div>
       <div style="color:var(--muted);font-size:10.5px">${t.hold_candles||0} bars</div>
       <div><span style="background:${colour}22;color:${colour};padding:2px 6px;border-radius:5px;font-size:10px;font-weight:700">${badge}</span></div>
-      <div style="text-align:right;color:${(t.pnl_pct||0)>=0?'var(--green)':'var(--red)'};font-weight:700">${(t.pnl_pct||0)>=0?'+':''}${(t.pnl_pct||0).toFixed(2)}% ${reasonChip}</div>
+      <div style="text-align:right;color:${(isForex?(t.pip_move||0):(t.pnl_pct||0))>=0?'var(--green)':'var(--red)'};font-weight:700">${isForex?`${(t.pip_move||0)>=0?'+':''}${(t.pip_move||0).toFixed(1)}p · `:''}${(t.pnl_pct||0)>=0?'+':''}${(t.pnl_pct||0).toFixed(2)}% ${reasonChip}</div>
     </div>`;
   }).join('');
 }
@@ -8515,9 +8749,12 @@ function createFromScan() {
     WZ.confirms    = cfg.confirms    || [];
     WZ.tp1         = risk.tp1 ?? cfg.tp1 ?? 3;
     WZ.sl          = risk.sl  ?? cfg.sl  ?? 1.5;
+    WZ.tp1Pips     = risk.tp_pips ?? cfg.take_profit_pips ?? cfg.tp_pips ?? WZ.tp1Pips;
+    WZ.slPips      = risk.sl_pips ?? cfg.stop_loss_pips ?? cfg.sl_pips ?? WZ.slPips;
     WZ.leverage    = risk.leverage ?? cfg.leverage ?? 5;
     WZ.timeframe   = wtf;
     WZ.singleCoin  = wcoin;
+    WZ.assetClass = cfg.asset_class || _scanResult.asset_class || WZ.assetClass;
     WZ.name        = `${wcoin} ${wtf} ${winner.label} (${risk.name || 'Balanced'})`;
     wzRenderAll && wzRenderAll();
   } catch(e) { /* wizard may not expose all setters — user can adjust manually */ }

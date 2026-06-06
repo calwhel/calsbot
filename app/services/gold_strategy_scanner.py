@@ -76,11 +76,11 @@ RISK_VARIANTS = [
 ]
 
 MIN_TRADES = 8          # a session bucket needs at least this many closed trades
-MAX_CANDIDATES = 27     # hard cap on total candidates (base + Claude); sized so
+MAX_CANDIDATES = 36     # hard cap on total candidates (base + Claude); sized so
                         # candidates × TIMEFRAMES × RISK_VARIANTS stays within the
                         # proven ~320-backtest budget (under the 180s inline timeout)
 LEADERBOARD_SIZE = 15
-CLAUDE_RESERVED_SLOTS = 8  # slots within MAX_CANDIDATES reserved for Claude's
+CLAUDE_RESERVED_SLOTS = 6  # slots within MAX_CANDIDATES reserved for Claude's
                           # proposals so AI forex ideas aren't crowded out by the
                           # deterministic base roster (rest go to a category-diverse
                           # round-robin of the base)
@@ -98,6 +98,10 @@ SUPPORTED_PRIMARY = {
     # (eval_condition_bt sync ports). Killzone/session windows let Claude build
     # genuine forex day-trade setups, not just crypto-style indicators.
     "fx_killzone", "fx_displacement", "fx_ote", "fx_cisd", "fx_sdp",
+    "ifvg", "breaker_block", "liquidity_sweep", "mitigation_block",
+    "supply_demand_zone", "premium_discount", "equilibrium_entry",
+    "pin_bar", "engulfing", "inside_bar", "trend_structure",
+    "fib_retracement", "vwap_bounce",
 }
 
 
@@ -117,10 +121,25 @@ def _base_roster(direction_mode: str) -> List[Dict]:
         ("Volatility", "BB Squeeze Break", "bb",           {"condition": "squeeze"}),
         ("Breakout", "20-bar Breakout",    "breakout",     {"bo_lookback": 20, "bo_pct": 0.5, "bo_dir": "up"}),
         ("Breakout", "50-bar Breakout",    "breakout",     {"bo_lookback": 50, "bo_pct": 0.3, "bo_dir": "up"}),
-        ("Smart Money", "FVG Retest",      "fvg",          {"fvg_dir": "bullish", "min_gap_pct": 0.1}),
+        ("Smart Money", "FVG Retest",      "fvg",          {"fvg_dir": "bullish", "min_gap_pct": 0.1, "touch_retrace": True}),
+        ("ICT/Smart Money", "IFVG — Inverted Fair Value Gap", "ifvg", {"direction": "bullish", "lookback": 80}),
         ("Smart Money", "Order Block Retest", "order_block", {"ob_type": "bullish"}),
+        ("ICT/Smart Money", "BB — Breaker Block", "breaker_block", {"direction": "bullish"}),
         ("Smart Money", "Break of Structure", "market_structure", {"condition": "bos_bullish"}),
+        ("ICT/Smart Money", "MSS — Market Structure Shift", "market_structure", {"condition": "mss_bullish"}),
         ("Smart Money", "Change of Character", "market_structure", {"condition": "choch_bullish"}),
+        ("ICT/Smart Money", "LQ — Liquidity Sweep", "liquidity_sweep", {"direction": "bullish", "lookback": 10}),
+        ("ICT/Smart Money", "MIT — Mitigation Block", "mitigation_block", {"direction": "bullish", "lookback": 60, "min_body_ratio": 3.0}),
+        ("Supply & Demand", "SDP — Supply/Demand Zone", "supply_demand_zone", {"direction": "bullish", "lookback": 80}),
+        ("Supply & Demand", "PD — Premium/Discount", "premium_discount", {"direction": "bullish", "lookback": 50}),
+        ("Supply & Demand", "EQ — Equilibrium Entry", "equilibrium_entry", {"direction": "bullish", "lookback": 20, "tolerance_pct": 0.15}),
+        ("Price Action", "PIN — Pin Bar", "pin_bar", {"direction": "bullish"}),
+        ("Price Action", "ENG — Engulfing Candle", "engulfing", {"direction": "bullish"}),
+        ("Price Action", "IB — Inside Bar Breakout", "inside_bar", {"direction": "bullish"}),
+        ("Structure", "HH/HL — Bullish Structure", "trend_structure", {"direction": "bullish", "lookback": 80}),
+        ("Structure", "LH/LL — Bearish Structure", "trend_structure", {"direction": "bearish", "lookback": 80}),
+        ("Structure", "FIB — Fibonacci Retracement", "fib_retracement", {"direction": "bullish", "lookback": 50, "low_level": 0.618, "high_level": 0.705}),
+        ("Structure", "VWAP — Volume Weighted Average", "vwap_bounce", {"direction": "bullish"}),
         ("Divergence", "RSI Divergence",   "divergence",   {"indicator": "rsi", "direction": "bullish"}),
         ("Price Action", "Support Bounce", "support_resistance", {"condition": "at_support"}),
         # ── ICT forex day-trade signals (honestly backtested) ────────────────────
@@ -136,7 +155,7 @@ def _base_roster(direction_mode: str) -> List[Dict]:
          [{"type": "macd", "condition": "bullish_cross"}]),
         ("Combo", "SuperTrend + MACD",     "supertrend", {"condition": "bullish"},
          [{"type": "macd", "condition": "bullish_cross"}]),
-        ("Combo", "FVG + SuperTrend",      "fvg",  {"fvg_dir": "bullish", "min_gap_pct": 0.1},
+        ("Combo", "FVG + SuperTrend",      "fvg",  {"fvg_dir": "bullish", "min_gap_pct": 0.1, "touch_retrace": True},
          [{"type": "supertrend", "condition": "bullish"}]),
         ("Combo", "Order Block + RSI>50",  "order_block", {"ob_type": "bullish"},
          [{"type": "rsi", "period": 14, "operator": "gt", "value": 50}]),
@@ -145,7 +164,7 @@ def _base_roster(direction_mode: str) -> List[Dict]:
         # ── ICT killzone-gated forex day-trade combos ────────────────────────────
         # (SDP is already rare; gating it to a 2h killzone yields <MIN_TRADES, so it
         #  is NOT killzone-gated here — only the higher-frequency ICT signals are.)
-        ("ICT", "Silver Bullet (NY KZ FVG)", "fvg", {"fvg_dir": "bullish", "min_gap_pct": 0.1},
+        ("ICT", "Silver Bullet (NY KZ FVG)", "fvg", {"fvg_dir": "bullish", "min_gap_pct": 0.1, "touch_retrace": True},
          [{"type": "fx_killzone", "killzone": "ny_kz"}]),
         ("ICT", "NY KZ CISD",              "fx_cisd", {"direction": "bullish", "max_run": 10},
          [{"type": "fx_killzone", "killzone": "ny_kz"}]),
@@ -190,18 +209,28 @@ def _flip_cfg_for_short(ptype: str, cfg: Dict) -> Dict:
         c["bo_dir"] = "down"
     elif ptype == "fvg" and c.get("fvg_dir") == "bullish":
         c["fvg_dir"] = "bearish"
+    elif ptype == "ifvg":
+        c["direction"] = "bearish" if c.get("direction", c.get("fvg_dir", "bullish")) == "bullish" else "bullish"
+        c["fvg_dir"] = c["direction"]
     elif ptype == "order_block" and c.get("ob_type") == "bullish":
         c["ob_type"] = "bearish"
     elif ptype == "market_structure":
-        c["condition"] = (c.get("condition") or "").replace("bullish", "bearish")
+        cond = c.get("condition") or ""
+        c["condition"] = cond.replace("bullish", "bearish") if "bullish" in cond else cond.replace("bearish", "bullish")
     elif ptype == "divergence" and c.get("direction") == "bullish":
         c["direction"] = "bearish"
     elif ptype == "support_resistance" and c.get("condition") == "at_support":
         c["condition"] = "at_resistance"
-    elif ptype in ("fx_sdp", "fx_cisd", "fx_ote", "fx_displacement"):
+    elif ptype in ("fx_sdp", "fx_cisd", "fx_ote", "fx_displacement",
+                   "breaker_block", "liquidity_sweep", "mitigation_block",
+                   "supply_demand_zone", "premium_discount", "equilibrium_entry",
+                   "pin_bar", "engulfing", "inside_bar", "trend_structure",
+                   "fib_retracement", "vwap_bounce"):
         # ICT signals carry an explicit direction; killzone is a time gate (no flip).
         if c.get("direction") == "bullish":
             c["direction"] = "bearish"
+        elif c.get("direction") == "bearish":
+            c["direction"] = "bullish"
     return c
 
 
@@ -216,9 +245,15 @@ def _expand_directions(roster: List[Dict], direction_mode: str) -> List[Dict]:
     mode = (direction_mode or "BOTH").upper()
     out: List[Dict] = []
     for r in roster:
-        if mode in ("LONG", "BOTH"):
+        label = str(r.get("label", ""))
+        long_only = label.startswith("HH/HL")
+        short_only = label.startswith("LH/LL")
+        if mode in ("LONG", "BOTH") and not short_only:
             out.append({**r, "direction": "LONG"})
-        if mode in ("SHORT", "BOTH"):
+        if mode in ("SHORT", "BOTH") and not long_only:
+            if short_only:
+                out.append({**r, "direction": "SHORT"})
+                continue
             out.append({
                 **r,
                 "direction": "SHORT",
@@ -303,9 +338,20 @@ async def _claude_propose_candidates(direction_mode: str, n: int = 10) -> List[D
             "- bb: {condition(price_below_lower/price_above_upper/squeeze)}\n"
             "- stochrsi: {operator(lt/gt), value}\n"
             "- breakout: {bo_lookback, bo_pct, bo_dir(up/down)}\n"
-            "- fvg: {fvg_dir(bullish/bearish), min_gap_pct}\n"
-            "- order_block: {ob_type(bullish/bearish)}\n"
-            "- market_structure: {condition(bos_bullish/bos_bearish/choch_bullish/choch_bearish)}\n"
+            "- fvg: {fvg_dir(bullish/bearish), min_gap_pct, touch_retrace}\n"
+            "- ifvg: {direction(bullish/bearish), lookback}\n"
+            "- order_block: {ob_type(bullish/bearish), min_impulse_mult, impulse_basis(avg_range)}\n"
+            "- breaker_block: {direction(bullish/bearish)}\n"
+            "- market_structure: {condition(bos_bullish/bos_bearish/mss_bullish/mss_bearish/choch_bullish/choch_bearish)}\n"
+            "- liquidity_sweep: {direction(bullish/bearish), lookback}\n"
+            "- mitigation_block: {direction(bullish/bearish), lookback, min_body_ratio}\n"
+            "- supply_demand_zone: {direction(bullish/bearish), lookback}\n"
+            "- premium_discount: {direction(bullish/bearish), lookback}\n"
+            "- equilibrium_entry: {direction(bullish/bearish), lookback, tolerance_pct}\n"
+            "- pin_bar / engulfing / inside_bar: {direction(bullish/bearish)}\n"
+            "- trend_structure: {direction(bullish/bearish), lookback}\n"
+            "- fib_retracement: {direction(bullish/bearish), lookback, low_level, high_level}\n"
+            "- vwap_bounce: {direction(bullish/bearish)}\n"
             "- divergence: {indicator(rsi/macd), direction(bullish/bearish)}\n"
             "- adx_filter: {condition(trending)}\n"
             "- volume_spike: {multiplier}\n"
@@ -376,6 +422,9 @@ def _bucket_stats(trades: List[Dict], session: str, pip_size: float) -> Optional
     gross_l = abs(sum(t["pnl_pct"] for t in losses))
     pf = round(gross_w / gross_l, 2) if gross_l > 0 else (99.0 if gross_w > 0 else 0.0)
     total_pips = round(sum(float(t.get("pip_move") or 0) for t in closed), 1)
+    pip_moves = [float(t.get("pip_move") or 0) for t in closed]
+    pip_mean = sum(pip_moves) / len(pip_moves) if pip_moves else 0.0
+    pip_stddev = (sum((p - pip_mean) ** 2 for p in pip_moves) / len(pip_moves)) ** 0.5 if len(pip_moves) >= 2 else 0.0
 
     equity, peak, max_dd = 100.0, 100.0, 0.0
     for t in closed:
@@ -395,23 +444,27 @@ def _bucket_stats(trades: List[Dict], session: str, pip_size: float) -> Optional
         "profit_factor": pf,
         "total_pips": total_pips,
         "avg_pips": round(total_pips / n, 1),
+        "avg_pips_win": round(sum(float(t.get("pip_move") or 0) for t in wins) / len(wins), 1) if wins else 0.0,
+        "pip_stddev": round(pip_stddev, 1),
         "total_pnl": total_pnl,
         "max_drawdown": round(max_dd, 2),
     }
 
 
 def _score(stats: Dict) -> float:
-    """Composite profitability score, credibility-weighted by trade count."""
+    """Forex pip-first score out of 100: win rate 30%, winning pips 40%, consistency 30%."""
     n = stats["closed_trades"]
     if n < MIN_TRADES:
         return -1e9
     credibility = min(1.0, n / 25.0)
-    pf = min(stats["profit_factor"], 6.0)
-    pnl = stats["total_pnl"]
-    wr = stats["win_rate"]
-    dd = stats["max_drawdown"]
-    raw = (pnl * 0.6) + (pf * 9.0) + (wr * 0.25) - (dd * 0.45)
-    return round(credibility * raw, 3)
+    win_rate_score = max(0.0, min(100.0, float(stats.get("win_rate", 0) or 0)))
+    avg_win_pips = max(0.0, float(stats.get("avg_pips_win", 0) or 0))
+    avg_win_score = max(0.0, min(100.0, (avg_win_pips / 60.0) * 100.0))
+    std = max(0.0, float(stats.get("pip_stddev", 0) or 0))
+    consistency_score = max(0.0, min(100.0, 100.0 - (std / 90.0 * 100.0)))
+    raw = (win_rate_score * 0.30) + (avg_win_score * 0.40) + (consistency_score * 0.30)
+    total_pips = float(stats.get("total_pips", 0) or 0)
+    return round(max(0.0, min(100.0, credibility * raw + max(-2.0, min(2.0, total_pips / 500.0)))), 2)
 
 
 # ── Backtest a single candidate across timeframes/risk; bucket by session ───────

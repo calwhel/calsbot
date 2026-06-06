@@ -12649,6 +12649,15 @@ async def backtest_scan(request: Request):
     if direction not in ("LONG", "SHORT"):
         direction = "LONG"
 
+    selected_signal_types_raw = body.get("selected_signal_types") or body.get("signals") or []
+    selected_signal_types = set()
+    if isinstance(selected_signal_types_raw, list):
+        selected_signal_types = {
+            str(s).lower().strip()
+            for s in selected_signal_types_raw
+            if str(s).strip()
+        }
+
     # Auth + Pro check — wrapped in a retry-safe block because the User /
     # PortalSubscription queries occasionally hit Postgres `statement_timeout`
     # on busy workers, and the previous `[500] OperationalError` would surface
@@ -12757,8 +12766,20 @@ async def backtest_scan(request: Request):
         elif t == "divergence":   c["direction"] = "bearish" if c.get("direction") == "bullish" else "bullish"
         elif t == "order_block":  c["ob_type"]  = "bearish" if c.get("ob_type")  == "bullish" else "bullish"
         elif t == "fvg":          c["fvg_dir"]  = "bearish" if c.get("fvg_dir")  == "bullish" else "bullish"
+        elif t == "ifvg":
+            c["direction"] = "bearish" if c.get("direction", c.get("fvg_dir", "bullish")) == "bullish" else "bullish"
+            c["fvg_dir"] = c["direction"]
+        elif t in ("breaker_block", "liquidity_sweep", "mitigation_block",
+                   "supply_demand_zone", "premium_discount", "equilibrium_entry",
+                   "pin_bar", "engulfing", "inside_bar", "trend_structure",
+                   "fib_retracement", "vwap_bounce"):
+            c["direction"] = "bearish" if c.get("direction", "bullish") == "bullish" else "bullish"
         elif t == "market_structure":
-            c["condition"] = c.get("condition", "").replace("bullish", "bearish")
+            cond = c.get("condition", "")
+            if "bullish" in cond:
+                c["condition"] = cond.replace("bullish", "bearish")
+            elif "bearish" in cond:
+                c["condition"] = cond.replace("bearish", "bullish")
         elif t == "consecutive_candles":
             d = c.get("cc_dir", c.get("direction", "green"))
             c["cc_dir"] = "red" if d in ("green","bullish","up") else "green"
@@ -12842,19 +12863,71 @@ async def backtest_scan(request: Request):
         {"label": "BB Squeeze + Volume Spike",            "category": "Combo",      "primaryType": "bb",         "primaryCfg": {"condition": "squeeze"},                                   "confirms": [{"type": "volume_spike", "multiplier": 1.5}]},
     ]
 
+    # ── Forex / ICT / price-action additions ────────────────────────────────────
+    # These are additive Scan Best templates. Existing classic RSI/MACD/EMA/etc.
+    # templates above are left untouched.
+    forex_signal_templates = [
+        {"signal_id": "fvg", "label": "FVG — Fair Value Gap", "category": "ICT/Smart Money",
+         "primaryType": "fvg", "primaryCfg": {"fvg_dir": "bullish", "min_gap_pct": 0.0, "touch_retrace": True}, "confirms": []},
+        {"signal_id": "ifvg", "label": "IFVG — Inverted Fair Value Gap", "category": "ICT/Smart Money",
+         "primaryType": "ifvg", "primaryCfg": {"direction": "bullish", "lookback": 80}, "confirms": []},
+        {"signal_id": "order_block", "label": "OB — Order Block", "category": "ICT/Smart Money",
+         "primaryType": "order_block", "primaryCfg": {"ob_type": "bullish", "min_impulse_mult": 3.0, "impulse_basis": "avg_range"}, "confirms": []},
+        {"signal_id": "breaker_block", "label": "BB — Breaker Block", "category": "ICT/Smart Money",
+         "primaryType": "breaker_block", "primaryCfg": {"direction": "bullish"}, "confirms": []},
+        {"signal_id": "mss", "label": "MSS — Market Structure Shift", "category": "ICT/Smart Money",
+         "primaryType": "market_structure", "primaryCfg": {"condition": "mss_bullish"}, "confirms": []},
+        {"signal_id": "choch", "label": "CHoCH — Change of Character", "category": "ICT/Smart Money",
+         "primaryType": "market_structure", "primaryCfg": {"condition": "choch_bullish"}, "confirms": []},
+        {"signal_id": "liquidity_sweep", "label": "LQ — Liquidity Sweep", "category": "ICT/Smart Money",
+         "primaryType": "liquidity_sweep", "primaryCfg": {"direction": "bullish", "lookback": 10}, "confirms": []},
+        {"signal_id": "mitigation_block", "label": "MIT — Mitigation Block", "category": "ICT/Smart Money",
+         "primaryType": "mitigation_block", "primaryCfg": {"direction": "bullish", "lookback": 60, "min_body_ratio": 3.0}, "confirms": []},
+
+        {"signal_id": "supply_demand_zone", "label": "SDP — Supply/Demand Zone", "category": "Supply & Demand",
+         "primaryType": "supply_demand_zone", "primaryCfg": {"direction": "bullish", "lookback": 80}, "confirms": []},
+        {"signal_id": "premium_discount", "label": "PD — Premium/Discount", "category": "Supply & Demand",
+         "primaryType": "premium_discount", "primaryCfg": {"direction": "bullish", "lookback": 50}, "confirms": [{"type": "market_structure", "condition": "mss_bullish"}]},
+        {"signal_id": "equilibrium_entry", "label": "EQ — Equilibrium Entry", "category": "Supply & Demand",
+         "primaryType": "equilibrium_entry", "primaryCfg": {"direction": "bullish", "lookback": 20, "tolerance_pct": 0.15}, "confirms": []},
+
+        {"signal_id": "pin_bar", "label": "PIN — Pin Bar", "category": "Price Action",
+         "primaryType": "pin_bar", "primaryCfg": {"direction": "bullish"}, "confirms": []},
+        {"signal_id": "engulfing", "label": "ENG — Engulfing Candle", "category": "Price Action",
+         "primaryType": "engulfing", "primaryCfg": {"direction": "bullish"}, "confirms": []},
+        {"signal_id": "inside_bar", "label": "IB — Inside Bar Breakout", "category": "Price Action",
+         "primaryType": "inside_bar", "primaryCfg": {"direction": "bullish"}, "confirms": []},
+
+        {"signal_id": "trend_structure_bullish", "label": "HH/HL — Bullish Structure", "category": "Structure",
+         "primaryType": "trend_structure", "primaryCfg": {"direction": "bullish", "lookback": 80}, "confirms": [], "directions": ["LONG"]},
+        {"signal_id": "trend_structure_bearish", "label": "LH/LL — Bearish Structure", "category": "Structure",
+         "primaryType": "trend_structure", "primaryCfg": {"direction": "bearish", "lookback": 80}, "confirms": [], "directions": ["SHORT"]},
+        {"signal_id": "fib_retracement", "label": "FIB — Fibonacci Retracement", "category": "Structure",
+         "primaryType": "fib_retracement", "primaryCfg": {"direction": "bullish", "lookback": 50, "low_level": 0.618, "high_level": 0.705}, "confirms": []},
+        {"signal_id": "vwap_bounce", "label": "VWAP — Volume Weighted Average", "category": "Structure",
+         "primaryType": "vwap_bounce", "primaryCfg": {"direction": "bullish"}, "confirms": []},
+    ]
+
     templates = []
-    for base_list in (singles, combos):
+    for base_list in (singles, combos, forex_signal_templates):
         for t in base_list:
+            allowed_dirs = t.get("directions")
+            if allowed_dirs and direction not in allowed_dirs:
+                continue
+            signal_id = t.get("signal_id") or t["primaryType"]
+            if selected_signal_types and signal_id.lower() not in selected_signal_types and t["primaryType"].lower() not in selected_signal_types:
+                continue
             entry = {
                 "label":       t["label"],
                 "category":    t.get("category", "Other"),
+                "signal_id":   signal_id,
                 "primaryType": t["primaryType"],
                 "primaryCfg":  dict(t["primaryCfg"]),
                 "confirms":    [dict(c) for c in t.get("confirms", [])],
                 "timeframe":   t.get("timeframe", "1h"),
                 "tp1": _tp, "sl": _sl, "leverage": _lev,
             }
-            if direction == "SHORT":
+            if direction == "SHORT" and not (allowed_dirs and direction in allowed_dirs):
                 # Flip primary by wrapping it through _C()
                 primary_as_cond = {"type": entry["primaryType"], **entry["primaryCfg"]}
                 flipped_primary = _C(primary_as_cond)
@@ -12863,17 +12936,21 @@ async def backtest_scan(request: Request):
                 # Flip each confirm
                 entry["confirms"] = [_C(c) for c in entry["confirms"]]
                 # Cosmetic label adjustments
-                entry["label"] = (entry["label"]
-                                  .replace("Oversold", "Overbought")
-                                  .replace("Bullish", "Bearish")
-                                  .replace("Bounce", "Rejection")
-                                  .replace("Above SMA", "Below SMA")
-                                  .replace("Price Above", "Price Below")
-                                  .replace("Golden Cross", "Death Cross")
-                                  .replace("Engulfing", "Engulfing")
-                                  .replace("Breakout", "Breakdown")
-                                  .replace("High", "Low")
-                                  .replace("Support", "Resistance"))
+                flipped_label = (entry["label"]
+                                 .replace("Oversold", "Overbought")
+                                 .replace("Bullish", "Bearish")
+                                 .replace("Bounce", "Rejection")
+                                 .replace("Above SMA", "Below SMA")
+                                 .replace("Price Above", "Price Below")
+                                 .replace("Golden Cross", "Death Cross")
+                                 .replace("Engulfing", "Engulfing")
+                                 .replace("Breakout", "Breakdown")
+                                 .replace("High", "Low")
+                                 .replace("Support", "Resistance")
+                                 .replace("HH/HL", "LH/LL"))
+                if t.get("signal_id") == "trend_structure_bearish":
+                    flipped_label = "HH/HL — Bullish Structure"
+                entry["label"] = flipped_label
             templates.append(entry)
 
     from app.services.backtest_engine import run_backtest, _fetch_historical
@@ -12917,23 +12994,42 @@ async def backtest_scan(request: Request):
         # because the optimisation loop iterates over `risk_profiles` and skips
         # DEFAULT_PROFILE, leaving zero variants to test.
         _rr_ratio = round(fixed_tp / max(fixed_sl, 0.01), 2)
-        risk_profiles = [{
-            "name":     f"Fixed {fixed_tp:g}% / {fixed_sl:g}%",
-            "tp1":      fixed_tp,
-            "sl":       fixed_sl,
-            "leverage": 5,
-            "rr":       f"{_rr_ratio}:1",
-        }]
+        if asset_class == "forex":
+            risk_profiles = [{
+                "name":     f"Fixed {fixed_tp:g} / {fixed_sl:g} pips",
+                "tp1":      0.3,
+                "sl":       0.15,
+                "tp_pips":  fixed_tp,
+                "sl_pips":  fixed_sl,
+                "leverage": 1,
+                "rr":       f"{_rr_ratio}:1",
+            }]
+        else:
+            risk_profiles = [{
+                "name":     f"Fixed {fixed_tp:g}% / {fixed_sl:g}%",
+                "tp1":      fixed_tp,
+                "sl":       fixed_sl,
+                "leverage": 5,
+                "rr":       f"{_rr_ratio}:1",
+            }]
         DEFAULT_PROFILE = risk_profiles[0]
     else:
         # Optimised mode — historical 4-profile search picks the best variant
         # per (strategy, coin, TF) combo (stage 2 below).
-        risk_profiles = [
-            {"name": "Tight Scalp", "tp1": 1.5, "sl": 0.75, "leverage": 5, "rr": "2:1"},
-            {"name": "Balanced",    "tp1": 3.0, "sl": 1.5,  "leverage": 5, "rr": "2:1"},
-            {"name": "Wide Swing",  "tp1": 5.0, "sl": 2.0,  "leverage": 5, "rr": "2.5:1"},
-            {"name": "Runner",      "tp1": 8.0, "sl": 2.0,  "leverage": 5, "rr": "4:1"},
-        ]
+        if asset_class == "forex":
+            risk_profiles = [
+                {"name": "Tight Scalp", "tp1": 0.15, "sl": 0.08, "tp_pips": 15, "sl_pips": 8,  "leverage": 1, "rr": "1.9:1"},
+                {"name": "Balanced",    "tp1": 0.30, "sl": 0.15, "tp_pips": 30, "sl_pips": 15, "leverage": 1, "rr": "2:1"},
+                {"name": "Wide Swing",  "tp1": 0.60, "sl": 0.25, "tp_pips": 60, "sl_pips": 25, "leverage": 1, "rr": "2.4:1"},
+                {"name": "Runner",      "tp1": 1.20, "sl": 0.30, "tp_pips": 120,"sl_pips": 30, "leverage": 1, "rr": "4:1"},
+            ]
+        else:
+            risk_profiles = [
+                {"name": "Tight Scalp", "tp1": 1.5, "sl": 0.75, "leverage": 5, "rr": "2:1"},
+                {"name": "Balanced",    "tp1": 3.0, "sl": 1.5,  "leverage": 5, "rr": "2:1"},
+                {"name": "Wide Swing",  "tp1": 5.0, "sl": 2.0,  "leverage": 5, "rr": "2.5:1"},
+                {"name": "Runner",      "tp1": 8.0, "sl": 2.0,  "leverage": 5, "rr": "4:1"},
+            ]
         DEFAULT_PROFILE = risk_profiles[1]  # Balanced
 
     # Bound concurrency so we don't blow up CPU when running 600+ backtests.
@@ -12965,6 +13061,9 @@ async def backtest_scan(request: Request):
             "singleCoin":  symbol,
             "asset_class": asset_class,
         }
+        if asset_class == "forex" and (r.get("tp_pips") or r.get("sl_pips")):
+            cfg["take_profit_pips"] = r.get("tp_pips")
+            cfg["stop_loss_pips"] = r.get("sl_pips")
         async with _bt_sem:
             try:
                 result = await asyncio.wait_for(
@@ -13037,6 +13136,17 @@ async def backtest_scan(request: Request):
         trades = stats.get("closed_trades", 0)
         if trades < _min_trades_for_tf(tf, days):
             return -1.0   # too few trades to trust the result
+        if asset_class == "forex":
+            win_rate_score = max(0.0, min(100.0, float(stats.get("win_rate", 0) or 0)))
+            avg_win_pips = max(0.0, float(stats.get("avg_pips_win", 0) or 0))
+            tp_ref = max(10.0, float(stats.get("tp_pips_configured", 0) or 30.0))
+            avg_win_score = max(0.0, min(100.0, (avg_win_pips / tp_ref) * 100.0))
+            std = max(0.0, float(stats.get("pip_stddev", 0) or 0))
+            consistency_score = max(0.0, min(100.0, 100.0 - (std / max(tp_ref * 1.5, 1.0) * 100.0)))
+            combined = (win_rate_score * 0.30) + (avg_win_score * 0.40) + (consistency_score * 0.30)
+            # Keep the requested 0-100 score, with a small total-pips tie-breaker.
+            total_pips = float(stats.get("total_pips", 0) or 0)
+            return round(max(0.0, min(100.0, combined + max(-2.0, min(2.0, total_pips / 500.0)))), 2)
         pf = float(stats.get("profit_factor", 0) or 0)
         wr = float(stats.get("win_rate", 0) or 0) / 100
         pnl = float(stats.get("total_pnl", 0) or 0)
@@ -13055,6 +13165,7 @@ async def backtest_scan(request: Request):
             "label":     o["label"],
             "category":  o.get("category", "Other"),
             "tpl":       o["tpl"],
+            "signal_id": o["tpl"].get("signal_id") or o["tpl"].get("primaryType"),
             "risk":      o["risk"],
             "coin":      o["coin"],
             "timeframe": o["timeframe"],
@@ -13126,9 +13237,14 @@ async def backtest_scan(request: Request):
                 "risk_name": v["risk"]["name"],
                 "tp1":       v["risk"]["tp1"],
                 "sl":        v["risk"]["sl"],
+                "tp_pips":   v["risk"].get("tp_pips"),
+                "sl_pips":   v["risk"].get("sl_pips"),
                 "rr":        v["risk"]["rr"],
                 "win_rate":  v["stats"].get("win_rate", 0),
                 "total_pnl": v["stats"].get("total_pnl", 0),
+                "total_pips": v["stats"].get("total_pips", 0),
+                "avg_pips_per_trade": v["stats"].get("avg_pips_per_trade", 0),
+                "avg_pips_win": v["stats"].get("avg_pips_win", 0),
                 "profit_factor": v["stats"].get("profit_factor", 0),
                 "closed_trades": v["stats"].get("closed_trades", 0),
                 "score":     v["score"],
@@ -13154,11 +13270,13 @@ async def backtest_scan(request: Request):
                 _ac.messages.create(
                     model="claude-sonnet-4-5",
                     max_tokens=140,
-                    system="You are a crypto quant analyst. Respond with exactly 1 short sentence (max 25 words) explaining why this strategy + coin + timeframe + risk combo wins. No markdown.",
+                    system=f"You are a {asset_class} quant analyst. Respond with exactly 1 short sentence (max 25 words) explaining why this strategy + symbol + timeframe + risk combo wins. No markdown.",
                     messages=[{"role": "user", "content":
                         f"Scan winner: '{w['label']}' on {w['coin']} {w['timeframe']} with '{wr['name']}' risk "
-                        f"(TP {wr['tp1']}% / SL {wr['sl']}%, R:R {wr['rr']}) over {days} days: "
-                        f"win rate {ws.get('win_rate')}%, P&L {ws.get('total_pnl')}%, "
+                        f"(TP {wr.get('tp_pips', wr['tp1'])}{' pips' if wr.get('tp_pips') else '%'} / "
+                        f"SL {wr.get('sl_pips', wr['sl'])}{' pips' if wr.get('sl_pips') else '%'}, R:R {wr['rr']}) over {days} days: "
+                        f"win rate {ws.get('win_rate')}%, "
+                        f"{'total pips ' + str(ws.get('total_pips')) if asset_class == 'forex' else 'P&L ' + str(ws.get('total_pnl')) + '%'}, "
                         f"profit factor {ws.get('profit_factor')}, {ws.get('closed_trades')} trades. "
                         f"Why does this combo work?"}],
                 ),
@@ -13175,6 +13293,7 @@ async def backtest_scan(request: Request):
         out = {
             "label":            r["label"],
             "category":         r["category"],
+            "signal_id":        r.get("signal_id"),
             "coin":             r["coin"],
             "timeframe":        r["timeframe"],
             "config":           r["config"],
@@ -13196,11 +13315,13 @@ async def backtest_scan(request: Request):
         "timeframes": tf_list,               # all TFs scanned
         "days":    days,
         "direction": direction,
+        "asset_class": asset_class,
         "risk_mode": risk_mode,
         "fixed_tp":  fixed_tp if risk_mode == "fixed" else None,
         "fixed_sl":  fixed_sl if risk_mode == "fixed" else None,
         "ranked":  [_clean_row(r, include_full=(i < 5)) for i, r in enumerate(valid[:12])],
         "tested":  len(stage1_jobs),
+        "strategy_count": len(templates),
         "skipped": len(invalid),
         "optimisation_jobs": len(optimisation_jobs),
         "missing_pairs": [{"coin": c, "timeframe": tf} for c, tf in _missing_pairs],
