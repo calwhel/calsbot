@@ -302,9 +302,41 @@ async def redirect_www_and_log_500(request: Request, call_next):
         raise
 
 # ─── Session cookie helpers (HMAC-signed, no extra deps) ──────────────────────
-_COOKIE_SECRET = os.getenv("SECRET_KEY")
-if not _COOKIE_SECRET:
-    raise RuntimeError("SECRET_KEY environment variable is required; refusing to use an insecure default")
+def _load_cookie_secret() -> str:
+    """Load the HMAC secret without killing Railway workers at import time.
+
+    Railway deployments migrated from Replit commonly have SESSION_SECRET
+    rather than SECRET_KEY. Prefer SECRET_KEY, accept SESSION_SECRET, and keep
+    an emergency boot-only fallback so the app serves traffic while operators
+    add a proper stable secret.
+    """
+    value = (os.getenv("SECRET_KEY") or os.getenv("SESSION_SECRET") or "").strip()
+    if value:
+        if not os.getenv("SECRET_KEY") and os.getenv("SESSION_SECRET"):
+            logger.warning("SECRET_KEY missing; using SESSION_SECRET for portal session signing")
+        return value
+
+    db_seed = (
+        os.getenv("NEON_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+        or os.getenv("RAILWAY_DATABASE_URL")
+        or ""
+    ).strip()
+    if db_seed:
+        logger.critical(
+            "SECRET_KEY/SESSION_SECRET missing; deriving temporary session signer from DB URL. "
+            "Set SECRET_KEY in Railway for stable sessions."
+        )
+        return hashlib.sha256(f"tradehub-session:{db_seed}".encode()).hexdigest()
+
+    logger.critical(
+        "SECRET_KEY/SESSION_SECRET missing and no DB URL fallback is available; "
+        "using per-process session signer. Set SECRET_KEY in Railway immediately."
+    )
+    return secrets.token_urlsafe(32)
+
+
+_COOKIE_SECRET = _load_cookie_secret()
 _COOKIE_NAME   = "th_session"
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 
