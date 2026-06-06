@@ -52,9 +52,9 @@ SESSION_LABELS = {
     "overlap":  "London-NY overlap",
 }
 
-# Timeframes scanned. 5m history is capped (see _TF_MAX_DAYS); 4h for swings.
-TIMEFRAMES = ["5m", "15m", "1h", "4h"]
-_TF_MAX_DAYS = {"5m": 30, "15m": 90, "1h": 180, "4h": 180}
+# Day-trader timeframes — 1m needs a short lookback (upstream cap ~7d); 4h for swings.
+TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h"]
+_TF_MAX_DAYS = {"1m": 7, "5m": 30, "15m": 90, "1h": 180, "4h": 180}
 PARALLEL_CANDIDATES = int(os.getenv("GOLD_SCAN_PARALLEL", "5"))
 MIN_TRADES_KILLZONE = 5
 MIN_TRADES_TEST = 4
@@ -1134,6 +1134,8 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
         name_prefix="Gold",
         risk_variants=RISK_VARIANTS,
         fetch_candles_fn=fetch_metal_scan_candles,
+        timeframes=TIMEFRAMES,
+        tf_max_days=_TF_MAX_DAYS,
         log_prefix="gold-scan",
         no_trades_error="No strategy produced enough trades on gold to rank. Try a longer window.",
         fetch_error=(
