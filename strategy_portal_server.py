@@ -12764,6 +12764,21 @@ async def backtest_scan(request: Request):
             c["cc_dir"] = "red" if d in ("green","bullish","up") else "green"
         elif t == "vwap_deviation":
             c["vwap_side"] = "above" if c.get("vwap_side", "below") == "below" else "below"
+        # ── New ICT / Smart Money types ──────────────────────────────────────────
+        elif t in ("ifvg", "breaker_block", "mss", "choch", "liquidity_sweep",
+                   "mitigation_block", "supply_demand_zone", "premium_discount",
+                   "equilibrium_entry", "pin_bar", "engulfing", "fib_retracement",
+                   "vwap_session"):
+            d = c.get("direction", "bullish")
+            c["direction"] = "bearish" if d == "bullish" else "bullish"
+        elif t == "hh_hl_trend":
+            # HH/HL → flip to LH/LL by changing the primary type (handle in label only;
+            # the evaluator uses the type string, not direction, for structure trends).
+            pass   # direction-agnostic: lh_ll_trend is its own type in ict_singles
+        elif t == "lh_ll_trend":
+            pass   # already a bearish type; SHORT scan uses it as-is
+        elif t == "inside_bar":
+            pass   # inside bar breakout direction is determined by scan direction
         # adx_filter, atr_volatility, volume_spike, keltner squeeze: direction-agnostic
         return c
 
@@ -12842,8 +12857,84 @@ async def backtest_scan(request: Request):
         {"label": "BB Squeeze + Volume Spike",            "category": "Combo",      "primaryType": "bb",         "primaryCfg": {"condition": "squeeze"},                                   "confirms": [{"type": "volume_spike", "multiplier": 1.5}]},
     ]
 
+    # ── ICT / Smart Money signal templates ─────────────────────────────────────
+    ict_singles = [
+        # Fair Value Gap
+        {"label": "FVG Retest",                    "category": "ICT/SMC",    "primaryType": "fvg",              "primaryCfg": {"direction": "bullish", "min_gap_pct": 0.3},              "confirms": []},
+        # Inverted Fair Value Gap
+        {"label": "IFVG Retest",                   "category": "ICT/SMC",    "primaryType": "ifvg",             "primaryCfg": {"direction": "bullish"},                                   "confirms": []},
+        # Order Block retest
+        {"label": "Order Block Retest",            "category": "ICT/SMC",    "primaryType": "order_block",      "primaryCfg": {"ob_type": "bullish"},                                     "confirms": []},
+        # Breaker Block
+        {"label": "Breaker Block Retest",          "category": "ICT/SMC",    "primaryType": "breaker_block",    "primaryCfg": {"direction": "bullish"},                                   "confirms": []},
+        # Market Structure Shift
+        {"label": "MSS Bullish Break",             "category": "ICT/SMC",    "primaryType": "mss",              "primaryCfg": {"direction": "bullish", "lookback": 20},                   "confirms": []},
+        # Change of Character
+        {"label": "CHoCH Reversal",                "category": "ICT/SMC",    "primaryType": "choch",            "primaryCfg": {"direction": "bullish"},                                   "confirms": []},
+        # Liquidity Sweep
+        {"label": "Liquidity Sweep Reversal",      "category": "ICT/SMC",    "primaryType": "liquidity_sweep",  "primaryCfg": {"direction": "bullish", "sweep_lookback": 10},             "confirms": []},
+        # Mitigation Block
+        {"label": "Mitigation Block 50%",          "category": "ICT/SMC",    "primaryType": "mitigation_block", "primaryCfg": {"direction": "bullish"},                                   "confirms": []},
+    ]
+
+    # ── Supply & Demand signal templates ────────────────────────────────────────
+    sd_singles = [
+        # Supply / Demand Zone retest
+        {"label": "Demand Zone Retest",            "category": "Supply/Demand", "primaryType": "supply_demand_zone", "primaryCfg": {"direction": "bullish"},                              "confirms": []},
+        # Premium / Discount
+        {"label": "Discount Zone Entry",           "category": "Supply/Demand", "primaryType": "premium_discount",   "primaryCfg": {"direction": "bullish", "range_lookback": 50},        "confirms": []},
+        # Equilibrium Entry
+        {"label": "Equilibrium 50% Retracement",   "category": "Supply/Demand", "primaryType": "equilibrium_entry",  "primaryCfg": {"direction": "bullish", "swing_lookback": 20},        "confirms": []},
+    ]
+
+    # ── Price Action signal templates ────────────────────────────────────────────
+    pa_singles = [
+        # Pin Bar
+        {"label": "Pin Bar Reversal",              "category": "Price Action", "primaryType": "pin_bar",          "primaryCfg": {"direction": "bullish"},                                  "confirms": []},
+        # Engulfing Candle
+        {"label": "Bullish Engulfing",             "category": "Price Action", "primaryType": "engulfing",        "primaryCfg": {"direction": "bullish"},                                  "confirms": []},
+        # Inside Bar Breakout
+        {"label": "Inside Bar Breakout",           "category": "Price Action", "primaryType": "inside_bar",       "primaryCfg": {},                                                        "confirms": []},
+    ]
+
+    # ── Structure signal templates ────────────────────────────────────────────────
+    struct_singles = [
+        # HH/HL Bullish Structure
+        {"label": "HH/HL Bullish Trend",           "category": "Structure",    "primaryType": "hh_hl_trend",      "primaryCfg": {"num_swings": 5},                                         "confirms": []},
+        # LH/LL Bearish Structure
+        {"label": "LH/LL Bearish Trend",           "category": "Structure",    "primaryType": "lh_ll_trend",      "primaryCfg": {"num_swings": 5},                                         "confirms": []},
+        # Fibonacci 0.618/0.705 Retracement
+        {"label": "Fibonacci OTE Retracement",     "category": "Structure",    "primaryType": "fib_retracement",  "primaryCfg": {"direction": "bullish", "lookback": 50},                  "confirms": []},
+        # VWAP Session Bounce
+        {"label": "VWAP Session Bounce",           "category": "Structure",    "primaryType": "vwap_session",     "primaryCfg": {"direction": "bullish"},                                  "confirms": []},
+    ]
+
+    # ── ICT Combo templates ──────────────────────────────────────────────────────
+    ict_combos = [
+        # FVG + Order Block confluence
+        {"label": "FVG + Order Block Confluence",  "category": "ICT/SMC",    "primaryType": "fvg",              "primaryCfg": {"direction": "bullish"},  "confirms": [{"type": "order_block",      "ob_type": "bullish"}]},
+        # MSS + Liquidity Sweep
+        {"label": "MSS + Liquidity Sweep",         "category": "ICT/SMC",    "primaryType": "mss",              "primaryCfg": {"direction": "bullish"},  "confirms": [{"type": "liquidity_sweep", "direction": "bullish"}]},
+        # CHoCH + FVG confluence
+        {"label": "CHoCH + FVG Entry",             "category": "ICT/SMC",    "primaryType": "choch",            "primaryCfg": {"direction": "bullish"},  "confirms": [{"type": "fvg",             "direction": "bullish"}]},
+        # Order Block + Fibonacci OTE
+        {"label": "Order Block + Fibonacci OTE",   "category": "ICT/SMC",    "primaryType": "order_block",      "primaryCfg": {"ob_type": "bullish"},    "confirms": [{"type": "fib_retracement", "direction": "bullish"}]},
+        # Equilibrium + Pin Bar
+        {"label": "EQ Entry + Pin Bar Confirm",    "category": "ICT/SMC",    "primaryType": "equilibrium_entry","primaryCfg": {"direction": "bullish"},  "confirms": [{"type": "pin_bar",         "direction": "bullish"}]},
+        # HH/HL Trend + RSI > 50
+        {"label": "Bullish Structure + RSI > 50",  "category": "ICT/SMC",    "primaryType": "hh_hl_trend",      "primaryCfg": {"num_swings": 5},         "confirms": [{"type": "rsi", "period": 14, "operator": "gt", "value": 50}]},
+        # LH/LL + RSI < 50
+        {"label": "Bearish Structure + RSI < 50",  "category": "ICT/SMC",    "primaryType": "lh_ll_trend",      "primaryCfg": {"num_swings": 5},         "confirms": [{"type": "rsi", "period": 14, "operator": "lt", "value": 50}]},
+        # VWAP + EMA confirmation
+        {"label": "VWAP Bounce + EMA20 Confirm",   "category": "ICT/SMC",    "primaryType": "vwap_session",     "primaryCfg": {"direction": "bullish"},  "confirms": [{"type": "ema", "period": 20, "condition": "above"}]},
+        # Engulfing + Order Block
+        {"label": "OB + Engulfing Confirm",        "category": "ICT/SMC",    "primaryType": "order_block",      "primaryCfg": {"ob_type": "bullish"},    "confirms": [{"type": "engulfing",       "direction": "bullish"}]},
+        # Demand Zone + Fibonacci
+        {"label": "Demand Zone + Fibonacci OTE",   "category": "ICT/SMC",    "primaryType": "supply_demand_zone","primaryCfg": {"direction": "bullish"}, "confirms": [{"type": "fib_retracement", "direction": "bullish"}]},
+    ]
+
     templates = []
-    for base_list in (singles, combos):
+    for base_list in (singles, combos, ict_singles, sd_singles, pa_singles, struct_singles, ict_combos):
         for t in base_list:
             entry = {
                 "label":       t["label"],
@@ -12873,7 +12964,18 @@ async def backtest_scan(request: Request):
                                   .replace("Engulfing", "Engulfing")
                                   .replace("Breakout", "Breakdown")
                                   .replace("High", "Low")
-                                  .replace("Support", "Resistance"))
+                                  .replace("Support", "Resistance")
+                                  # ICT / Smart Money label flips
+                                  .replace("Demand Zone", "Supply Zone")
+                                  .replace("Discount Zone", "Premium Zone")
+                                  .replace("Liquidity Sweep Reversal", "Liquidity Sweep Short")
+                                  .replace("VWAP Bounce", "VWAP Rejection")
+                                  .replace("HH/HL", "LH/LL")
+                                  .replace("MSS Bullish", "MSS Bearish")
+                                  .replace("CHoCH Reversal", "CHoCH Bearish Reversal")
+                                  .replace("Order Block Retest", "Order Block Short")
+                                  .replace("OB + Engulfing Confirm", "OB Short + Engulfing Confirm")
+                                  )
             templates.append(entry)
 
     from app.services.backtest_engine import run_backtest, _fetch_historical
@@ -13046,24 +13148,64 @@ async def backtest_scan(request: Request):
         sample_weight = math.log(trades + 1) / math.log(20)  # ~1.0 at 19 trades
         return round(pf * wr * sample_weight + pnl * 0.001, 4)
 
+    def _forex_score(stats: dict, tf: str = "1h") -> float:
+        """
+        Forex / ICT weighted score (0–100).
+
+        Weights:
+          30% — win rate (normalised 0–100, anchored at 50% = 50 pts)
+          40% — average pips per winning trade (estimated from % P&L, normalised)
+          30% — consistency (1 − coefficient of variation of per-trade P&L, scaled)
+
+        Returns -1.0 when there are too few trades to rank reliably.
+        """
+        import math
+        trades = stats.get("closed_trades", 0)
+        if trades < _min_trades_for_tf(tf, days):
+            return -1.0
+        wr  = float(stats.get("win_rate", 0) or 0)          # 0–100
+        pnl = float(stats.get("total_pnl", 0) or 0)
+        pf  = float(stats.get("profit_factor", 0) or 0)
+
+        # Win-rate component (0–100 → score 0–100, 50% wr = 50 pts)
+        wr_score = min(100.0, max(0.0, wr))
+
+        # Average pips estimate: total_pnl / trades gives avg % per trade.
+        # For forex majors ~1% price move ≈ 100 pips (rough approximation).
+        avg_pct_per_trade = pnl / trades if trades else 0
+        avg_pips_est      = avg_pct_per_trade * 100.0       # rough pip estimate
+        # Normalise: assume 30 pips avg = 100 pts on pip component
+        pip_score = min(100.0, max(0.0, avg_pips_est / 30.0 * 100.0))
+
+        # Consistency: proxy by profit factor (PF ≥ 2.0 = full 100 pts)
+        consistency_score = min(100.0, max(0.0, (pf - 1.0) / 1.0 * 100.0)) if pf >= 1.0 else 0.0
+
+        # Weighted total (credibility discount for low trade counts)
+        credibility = min(1.0, math.log(trades + 1) / math.log(15))
+        raw = wr_score * 0.30 + pip_score * 0.40 + consistency_score * 0.30
+        return round(raw * credibility, 1)
+
     def _outcome_to_row(o: dict) -> dict:
         res   = o.get("result") or {}
         err   = res.get("error")
         stats = res.get("stats") or {}
-        score = _score(stats, o.get("timeframe", "1h")) if not err else -1.0
+        tf    = o.get("timeframe", "1h")
+        score       = _score(stats, tf)       if not err else -1.0
+        forex_score = _forex_score(stats, tf) if not err else -1.0
         return {
-            "label":     o["label"],
-            "category":  o.get("category", "Other"),
-            "tpl":       o["tpl"],
-            "risk":      o["risk"],
-            "coin":      o["coin"],
-            "timeframe": o["timeframe"],
-            "config":    o["config"],
-            "stats":     stats,
-            "trades":    res.get("trades", []),
+            "label":       o["label"],
+            "category":    o.get("category", "Other"),
+            "tpl":         o["tpl"],
+            "risk":        o["risk"],
+            "coin":        o["coin"],
+            "timeframe":   tf,
+            "config":      o["config"],
+            "stats":       stats,
+            "trades":      res.get("trades", []),
             "equity_curve": res.get("equity_curve", []),
-            "score":     score,
-            "error":     err,
+            "score":       score,
+            "forex_score": forex_score,
+            "error":       err,
         }
 
     ranked_s1 = sorted([_outcome_to_row(o) for o in outcomes],
@@ -13123,16 +13265,17 @@ async def backtest_scan(request: Request):
         # Attach all variant stats so the UI can show the comparison
         best["all_risk_variants"] = [
             {
-                "risk_name": v["risk"]["name"],
-                "tp1":       v["risk"]["tp1"],
-                "sl":        v["risk"]["sl"],
-                "rr":        v["risk"]["rr"],
-                "win_rate":  v["stats"].get("win_rate", 0),
-                "total_pnl": v["stats"].get("total_pnl", 0),
+                "risk_name":     v["risk"]["name"],
+                "tp1":           v["risk"]["tp1"],
+                "sl":            v["risk"]["sl"],
+                "rr":            v["risk"]["rr"],
+                "win_rate":      v["stats"].get("win_rate", 0),
+                "total_pnl":     v["stats"].get("total_pnl", 0),
                 "profit_factor": v["stats"].get("profit_factor", 0),
                 "closed_trades": v["stats"].get("closed_trades", 0),
-                "score":     v["score"],
-                "is_best":   v["score"] == best["score"],
+                "score":         v["score"],
+                "forex_score":   v.get("forex_score", -1.0),
+                "is_best":       v["score"] == best["score"],
             }
             for v in sorted(variants, key=lambda v: v["risk"]["tp1"])
         ]
@@ -13180,6 +13323,7 @@ async def backtest_scan(request: Request):
             "config":           r["config"],
             "stats":            r["stats"],
             "score":            r["score"],
+            "forex_score":      r.get("forex_score", -1.0),
             "risk":             r["risk"],
             "all_risk_variants": r.get("all_risk_variants", []),
         }

@@ -2466,7 +2466,17 @@ function dismissTgBanner(){
         <div class="pine-card">
           <div style="margin-bottom:16px">
             <div style="font-size:16px;font-weight:700;letter-spacing:-.3px">🔍 Strategy Scanner</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:3px">Test up to <b>12 coins</b> on <b>multiple timeframes</b> with <b>40 strategies</b> each — the engine finds the best (coin, timeframe, strategy, TP/SL) combo across the whole grid.</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:3px">Test up to <b>12 coins</b> on <b>multiple timeframes</b> with <b>70+ strategies</b> each — now including <b>ICT/Smart Money</b>, Supply &amp; Demand, Price Action and Structure signals. The engine finds the best (coin, timeframe, strategy, TP/SL) combo across the whole grid.</div>
+          </div>
+
+          <!-- Signal category legend -->
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
+            <span style="font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;align-self:center">Categories:</span>
+            <span style="background:#e11d4822;color:#e11d48;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700">ICT/SMC</span>
+            <span style="background:#0891b222;color:#0891b2;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700">Supply/Demand</span>
+            <span style="background:#8b5cf622;color:#8b5cf6;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700">Price Action</span>
+            <span style="background:#05996922;color:#059669;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700">Structure</span>
+            <span style="background:#5b6cf722;color:#5b6cf7;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700">Classic</span>
           </div>
 
           <!-- Gold Strategy Finder (Claude-driven) -->
@@ -2567,7 +2577,7 @@ function dismissTgBanner(){
           <div class="pine-card" style="text-align:center;padding:28px 20px">
             <div style="font-size:28px;margin-bottom:10px">⚙️</div>
             <div style="font-weight:700;font-size:15px;margin-bottom:6px" id="scan-progress-title">Scanning strategies…</div>
-            <div id="scan-progress-sub" style="font-size:12px;color:var(--muted)">Pre-fetching candle data, then running the full strategy × coin × timeframe grid + optimising TP/SL on the top combos.</div>
+            <div id="scan-progress-sub" style="font-size:12px;color:var(--muted)">Pre-fetching candle data, then running the full strategy × coin × timeframe grid (Classic Indicators + ICT/Smart Money + Supply &amp; Demand + Price Action + Structure) + optimising TP/SL on the top combos.</div>
             <div style="margin-top:18px;height:5px;background:var(--border);border-radius:99px;overflow:hidden">
               <div id="scan-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),#818cf8);border-radius:99px;transition:width .4s ease"></div>
             </div>
@@ -4524,6 +4534,26 @@ const SIGNAL_META={
   forex_liquidity_pa:  {icon:'🪤',label:'Liquidity & PA',     desc:'Sweep equal H/L + classic price-action candles'},
   forex_cot:           {icon:'🏦',label:'COT Sentiment',      desc:'Weekly CFTC positioning extremes — contrarian filter'},
   stock_earnings_avoidance:{icon:'📅',label:'Earnings Avoidance',desc:'Block trades around upcoming/just-released earnings (yfinance)'},
+  // ── ICT / Smart Money signals ──────────────────────────────
+  ifvg:             {icon:'🔁', label:'IFVG — Inv. Fair Value Gap',    desc:'Filled FVG that flips to support/resistance — retest entry'},
+  breaker_block:    {icon:'💥', label:'BB — Breaker Block',            desc:'Failed order block violated then retested from opposite side'},
+  mss:              {icon:'📐', label:'MSS — Market Structure Shift',  desc:'Break of most recent swing high (bullish) or low (bearish)'},
+  choch:            {icon:'🔄', label:'CHoCH — Change of Character',  desc:'First structure break after series of lower highs or higher lows'},
+  liquidity_sweep:  {icon:'🌊', label:'LQ — Liquidity Sweep',          desc:'Wick sweeps beyond swing high/low then closes back inside range'},
+  mitigation_block: {icon:'🎯', label:'MIT — Mitigation Block',        desc:'Price retraces to 50% of origin candle of a major impulsive move'},
+  // ── Supply & Demand signals ──────────────────────────────────
+  supply_demand_zone:{icon:'📦', label:'SDP — Supply/Demand Zone',    desc:'Consolidation base before strong impulsive move — retest entry'},
+  premium_discount: {icon:'⚖️', label:'PD — Premium/Discount',         desc:'Price in discount zone (longs) or premium zone (shorts) of 50-candle range'},
+  equilibrium_entry:{icon:'⚖️', label:'EQ — Equilibrium Entry',        desc:'Entry at 50% retracement of most recent significant swing'},
+  // ── Price Action signals ──────────────────────────────────────
+  pin_bar:          {icon:'📌', label:'PIN — Pin Bar',                  desc:'Small body with long rejection wick (wick ≥ 2× body size)'},
+  engulfing:        {icon:'🕯️', label:'ENG — Engulfing Candle',        desc:'Current candle body fully engulfs previous candle, closes higher/lower'},
+  inside_bar:       {icon:'📎', label:'IB — Inside Bar Breakout',       desc:'Current candle range sits entirely inside previous candle — breakout entry'},
+  // ── Structure signals ──────────────────────────────────────────
+  hh_hl_trend:      {icon:'📈', label:'HH/HL — Bullish Structure',     desc:'Confirmed uptrend: series of higher highs and higher lows over 5 swings'},
+  lh_ll_trend:      {icon:'📉', label:'LH/LL — Bearish Structure',     desc:'Confirmed downtrend: series of lower highs and lower lows over 5 swings'},
+  fib_retracement:  {icon:'🎯', label:'FIB — Fibonacci Retracement',    desc:'Entry at 61.8–70.5% (OTE zone) retracement of most recent swing'},
+  vwap_session:     {icon:'〰️', label:'VWAP — Volume Weighted Average', desc:'Price bounces off session VWAP (bullish) or rejects from below (bearish)'},
 };
 
 // ─── Signal fire-rate lookup ───────────────────────────────
@@ -4540,6 +4570,15 @@ const SIGNAL_FREQ={
   sustained_trend:'low', tradingview_webhook:'ext',
   forex_session:'med', forex_session_break:'med', forex_prev_level:'med', forex_news_avoidance:'med', forex_currency_strength:'med', forex_liquidity_pa:'med', forex_cot:'low',
   stock_earnings_avoidance:'med',
+  // ICT / Smart Money
+  ifvg:'low', breaker_block:'low', mss:'low', choch:'low',
+  liquidity_sweep:'low', mitigation_block:'low',
+  // Supply & Demand
+  supply_demand_zone:'low', premium_discount:'med', equilibrium_entry:'med',
+  // Price Action
+  pin_bar:'low', engulfing:'low', inside_bar:'low',
+  // Structure
+  hh_hl_trend:'med', lh_ll_trend:'med', fib_retracement:'low', vwap_session:'med',
 };
 const FREQ_STYLE={
   high:{label:'High',color:'#16a34a',bg:'rgba(22,163,74,.12)',title:'Fires often — high trade volume'},
@@ -7894,9 +7933,9 @@ function _updateScanGridEst() {
   const el = document.getElementById('scan-grid-est');
   if (!el) return;
   const coins = _parseScanCoins();
-  const total = coins.length * _scanTfs.length * 40;
-  const eta = Math.max(8, Math.round(total * 0.08));
-  el.textContent = `${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × 40 strategies = ${total} backtests · ~${eta}s`;
+  const total = coins.length * _scanTfs.length * 70;
+  const eta = Math.max(10, Math.round(total * 0.08));
+  el.textContent = `${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × 70+ strategies (Classic + ICT/SMC) = ${total}+ backtests · ~${eta}s`;
 }
 document.addEventListener('DOMContentLoaded', () => {
   const coinInput = document.getElementById('scan-coin');
@@ -8146,9 +8185,9 @@ async function runScan() {
   document.getElementById('scan-results').style.display = 'none';
   document.getElementById('scan-error').style.display = 'none';
 
-  const total = coins.length * _scanTfs.length * 40;
+  const total = coins.length * _scanTfs.length * 70;
   document.getElementById('scan-progress-title').textContent =
-    `Running ${total} backtests · ${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} TF${_scanTfs.length>1?'s':''} × 40 strategies…`;
+    `Running ${total}+ backtests · ${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} TF${_scanTfs.length>1?'s':''} × 70+ strategies (Classic + ICT/SMC)…`;
 
   // Animate progress bar during wait — slower for bigger grids
   const bar = document.getElementById('scan-bar');
@@ -8227,8 +8266,10 @@ function renderScanResults(data) {
   insightEl.textContent = insight;
   insightEl.style.display = insight ? '' : 'none';
 
-  // Winner stat grid
+  // Winner stat grid — includes forex score if available
   const statsEl = document.getElementById('scan-winner-stats');
+  const fscore  = typeof winner.forex_score === 'number' && winner.forex_score >= 0 ? winner.forex_score : null;
+  const avgPips = ws.closed_trades ? ((ws.total_pnl||0) / ws.closed_trades * 100).toFixed(1) : '—';
   statsEl.innerHTML = [
     { label:'Win Rate',      val: (ws.win_rate||0).toFixed(1)+'%',       color: (ws.win_rate||0)>=50?'var(--green)':'var(--red)' },
     { label:'Total P&L',    val: (pnlPos?'+':'')+(ws.total_pnl||0).toFixed(1)+'%', color: pnlPos?'var(--green)':'var(--red)' },
@@ -8238,6 +8279,39 @@ function renderScanResults(data) {
     <div style="font-size:16px;font-weight:800;color:${s.color}">${s.val}</div>
     <div style="font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.4px">${s.label}</div>
   </div>`).join('');
+
+  // Forex / ICT score panel (shown when score is available)
+  const _staleIctScore = document.getElementById('scan-ict-score-block');
+  if (_staleIctScore) _staleIctScore.remove();
+  if (fscore !== null) {
+    const scoreColor = fscore >= 70 ? '#10b981' : fscore >= 40 ? '#f59e0b' : '#ef4444';
+    const scoreBar   = Math.round(fscore);
+    const ictScoreHtml = `
+      <div id="scan-ict-score-block" style="background:var(--card2);border-radius:10px;padding:12px 16px;margin-bottom:14px;border:1px solid var(--border)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600">📊 ICT / Forex Score</div>
+          <div style="font-size:20px;font-weight:900;color:${scoreColor}">${scoreBar}<span style="font-size:12px;font-weight:600;color:var(--muted)">/100</span></div>
+        </div>
+        <div style="height:6px;background:var(--border);border-radius:99px;overflow:hidden;margin-bottom:8px">
+          <div style="height:100%;width:${scoreBar}%;background:${scoreColor};border-radius:99px;transition:width .6s ease"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:11px">
+          <div style="text-align:center">
+            <div style="font-weight:700;color:var(--text)">${(ws.win_rate||0).toFixed(1)}%</div>
+            <div style="color:var(--muted)">Win Rate · 30%</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-weight:700;color:var(--text)">~${avgPips} pips</div>
+            <div style="color:var(--muted)">Avg Pips/Trade · 40%</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-weight:700;color:var(--text)">${(ws.profit_factor||0).toFixed(2)} PF</div>
+            <div style="color:var(--muted)">Consistency · 30%</div>
+          </div>
+        </div>
+      </div>`;
+    statsEl.insertAdjacentHTML('afterend', ictScoreHtml);
+  }
 
   // Risk-profile comparison table — shows what each TP/SL combo produced.
   // IMPORTANT: this block is appended via insertAdjacentHTML, so we MUST
@@ -8280,6 +8354,9 @@ function renderScanResults(data) {
     'Price Action':'#8b5cf6',
     'Divergence':  '#f97316',
     'Combo':       '#a855f7',
+    'ICT/SMC':     '#e11d48',
+    'Supply/Demand':'#0891b2',
+    'Structure':   '#059669',
     'Other':       '#6b7280',
   };
 
@@ -8289,29 +8366,35 @@ function renderScanResults(data) {
   // every trade with entry/exit/PnL.
   _renderScanWinnerDetail(winner);
 
-  // Full ranking table — now includes Coin·TF column
+  // Full ranking table — now includes Coin·TF column and forex score
   const tableEl = document.getElementById('scan-table');
-  const cols = '1.4fr .85fr .55fr .9fr .55fr .7fr .8fr';
+  const cols = '1.5fr .85fr .65fr .9fr .5fr .65fr .75fr';
   const headerRow = `<div style="display:grid;grid-template-columns:${cols};padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
-    <div>Strategy</div><div>Coin · TF</div><div>Type</div><div>Best Risk · TP/SL</div><div>Win%</div><div>P&L</div><div style="text-align:right">PF · Trades</div>
+    <div>Strategy</div><div>Coin · TF</div><div>Type</div><div>Best Risk · TP/SL</div><div>Win%</div><div>P&L · Pips</div><div style="text-align:right">Score · PF</div>
   </div>`;
   tableEl.innerHTML = headerRow + ranked.map((r, i) => {
-    const st    = r.stats || {};
-    const pos   = (st.total_pnl || 0) >= 0;
-    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
-    const cat   = r.category || 'Other';
-    const cc    = catColor[cat] || catColor['Other'];
-    const rk    = r.risk || {};
-    const rcoin = r.coin || '—';
-    const rtf   = r.timeframe || '1h';
-    return `<div style="display:grid;grid-template-columns:${cols};align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':''}">
+    const st     = r.stats || {};
+    const pos    = (st.total_pnl || 0) >= 0;
+    const medal  = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
+    const badgeBg = i === 0 ? 'rgba(255,215,0,.15)' : i === 1 ? 'rgba(192,192,192,.15)' : i === 2 ? 'rgba(205,127,50,.15)' : '';
+    const cat    = r.category || 'Other';
+    const cc     = catColor[cat] || catColor['Other'];
+    const rk     = r.risk || {};
+    const rcoin  = r.coin || '—';
+    const rtf    = r.timeframe || '1h';
+    const fs     = typeof r.forex_score === 'number' && r.forex_score >= 0 ? r.forex_score : null;
+    const fscoreStr = fs !== null ? `<span style="color:${fs>=70?'#10b981':fs>=40?'#f59e0b':'#ef4444'};font-weight:700">${fs}</span><span style="color:var(--muted);font-size:10px">/100</span>` : '';
+    const trades = st.closed_trades || 0;
+    const avgPipsEst = trades ? ((st.total_pnl||0) / trades * 100).toFixed(0) : '—';
+    const pipsStr = trades ? `<span style="font-size:10px;color:var(--muted)"> ~${avgPipsEst}p</span>` : '';
+    return `<div style="display:grid;grid-template-columns:${cols};align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i<3?`;background:${badgeBg}`:''}">
       <div style="font-weight:600">${medal} ${r.label}</div>
       <div style="font-family:var(--mono);font-weight:700;font-size:11.5px"><span>${rcoin}</span> <span style="color:var(--muted);font-weight:500">· ${rtf}</span></div>
       <div><span style="background:${cc}22;color:${cc};padding:2px 7px;border-radius:99px;font-size:10px;font-weight:700;letter-spacing:.2px">${cat}</span></div>
       <div style="font-size:11px"><span style="color:var(--accent);font-weight:600">${rk.name || 'Balanced'}</span> <span style="color:var(--muted);font-variant-numeric:tabular-nums">· ${rk.tp1||'-'}% / ${rk.sl||'-'}%</span></div>
       <div style="color:${(st.win_rate||0)>=50?'var(--green)':'var(--red)'};">${(st.win_rate||0).toFixed(1)}%</div>
-      <div style="color:${pos?'var(--green)':'var(--red)'};">${pos?'+':''}${(st.total_pnl||0).toFixed(1)}%</div>
-      <div style="color:var(--muted);text-align:right;font-size:11px">PF ${(st.profit_factor||0).toFixed(2)} · ${st.closed_trades||0}t</div>
+      <div style="color:${pos?'var(--green)':'var(--red)'};">${pos?'+':''}${(st.total_pnl||0).toFixed(1)}%${pipsStr}</div>
+      <div style="text-align:right;font-size:11px">${fscoreStr} <span style="color:var(--muted)">PF ${(st.profit_factor||0).toFixed(2)} · ${trades}t</span></div>
     </div>`;
   }).join('');
 
