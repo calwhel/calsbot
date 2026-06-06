@@ -208,7 +208,8 @@ async def fetch_metal_scan_candles(
 ) -> List[List[float]]:
     """
     Aggressive multi-source fetch for gold/silver backtest scanners.
-    Yahoo chart API is tried first — it works without FMP intraday or cTrader.
+    When a user has cTrader linked, broker trendbars are preferred (demo/live
+    matched). Otherwise Yahoo → FMP → cTrader (app creds) → tradfi chain.
     """
     sym = symbol.upper()
     yahoo_ticker = _METALS_YAHOO_TICKER.get(sym)
@@ -219,6 +220,15 @@ async def fetch_metal_scan_candles(
         if rows and len(rows) > len(best):
             best = rows
             logger.info(f"[tradfi] metal-scan best={label} {sym} {timeframe} → {len(rows)} bars")
+
+    # Linked cTrader account → broker OHLC first (matches demo/live charts).
+    if user_id:
+        await _keep(
+            await _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
+            "ctrader-user",
+        )
+        if len(best) >= 120:
+            return best[-limit:]
 
     if yahoo_ticker:
         await _keep(await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit), "yahoo")

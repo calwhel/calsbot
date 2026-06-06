@@ -52,8 +52,21 @@ SESSION_LABELS = {
     "overlap":  "London-NY overlap",
 }
 
-# Timeframes scanned. 1h has the deepest history (~180d); 15m ~30-45d.
-TIMEFRAMES = ["15m", "1h"]
+# Timeframes scanned. 5m history is capped (see _TF_MAX_DAYS); 4h for swings.
+TIMEFRAMES = ["5m", "15m", "1h", "4h"]
+_TF_MAX_DAYS = {"5m": 30, "15m": 90, "1h": 180, "4h": 180}
+PARALLEL_CANDIDATES = int(os.getenv("GOLD_SCAN_PARALLEL", "5"))
+MIN_TRADES_KILLZONE = 5
+MIN_TRADES_TEST = 4
+WALK_FORWARD_TRAIN = 0.7
+
+# Map scan session buckets → executor filters.session ids
+SESSION_EXECUTOR_MAP = {
+    "asian": "asian",
+    "london": "london",
+    "new_york": "ny",
+    "overlap": "overlap",
+}
 
 # Gold pip = $0.10 (retail/broker convention). Pip-space risk variants tested per
 # candidate. Each tuple is (stop_loss_pips, take_profit_pips, style, management):
@@ -411,6 +424,47 @@ def _entry_session(ts_ms: int) -> List[str]:
     return [sid for sid, (a, b) in _SESSION_HOURS.items() if a <= hour < b]
 
 
+def _has_killzone(cand: Dict) -> bool:
+    if str(cand.get("primaryType", "")) == "fx_killzone":
+        return True
+    for cf in cand.get("confirms") or []:
+        if str(cf.get("type", "")) == "fx_killzone":
+            return True
+    return False
+
+
+def _min_trades_for(cand: Dict, days: int) -> int:
+    if _has_killzone(cand):
+        return MIN_TRADES_KILLZONE if days >= 180 else max(6, MIN_TRADES - 2)
+    return MIN_TRADES
+
+
+def _confidence_level(n: int) -> str:
+    if n >= 25:
+        return "high"
+    if n >= 15:
+        return "medium"
+    return "low"
+
+
+def _walk_forward_split_ts(candles: List) -> Optional[int]:
+    if not candles or len(candles) < 200:
+        return None
+    idx = int(len(candles) * WALK_FORWARD_TRAIN)
+    idx = max(120, min(idx, len(candles) - 40))
+    try:
+        return int(candles[idx][0])
+    except Exception:
+        return None
+
+
+def _session_filter_payload(session: str) -> Optional[Dict]:
+    if not session or session == "all":
+        return None
+    sid = SESSION_EXECUTOR_MAP.get(session, session)
+    return {"sessions": [sid]}
+
+
 def _bucket_stats(trades: List[Dict], session: str, pip_size: float) -> Optional[Dict]:
     """Filter closed trades to a session and compute profitability stats."""
     # BREAKEVEN counts as a closed trade (for pips/pnl/drawdown) but is neither a
@@ -451,13 +505,14 @@ def _bucket_stats(trades: List[Dict], session: str, pip_size: float) -> Optional
         "avg_pips": round(total_pips / n, 1),
         "total_pnl": total_pnl,
         "max_drawdown": round(max_dd, 2),
+        "confidence": _confidence_level(n),
     }
 
 
-def _score(stats: Dict) -> float:
+def _score(stats: Dict, min_trades: int = MIN_TRADES) -> float:
     """Composite profitability score, credibility-weighted by trade count."""
     n = stats["closed_trades"]
-    if n < MIN_TRADES:
+    if n < min_trades:
         return -1e9
     credibility = min(1.0, n / 25.0)
     pf = min(stats["profit_factor"], 6.0)
@@ -468,13 +523,36 @@ def _score(stats: Dict) -> float:
     return round(credibility * raw, 3)
 
 
+def _score_with_walkforward(
+    train_stats: Dict,
+    test_stats: Optional[Dict],
+    min_trades: int,
+) -> float:
+    """Train-period score with out-of-sample validation penalty/bonus."""
+    base = _score(train_stats, min_trades)
+    if base < -1e8:
+        return base
+    if not test_stats or test_stats.get("closed_trades", 0) < MIN_TRADES_TEST:
+        return round(base * 0.85, 3)
+    test_s = _score(test_stats, MIN_TRADES_TEST)
+    if float(test_stats.get("total_pnl", 0) or 0) < 0:
+        return round(base * 0.55, 3)
+    return round(base * 0.65 + test_s * 0.35, 3)
+
+
 # ── Backtest a single candidate across timeframes/risk; bucket by session ───────
-async def _eval_candidate(cand: Dict, candle_map: Dict[str, List], days: int) -> List[Dict]:
+async def _eval_candidate(
+    cand: Dict,
+    candle_map: Dict[str, List],
+    days: int,
+    wf_splits: Optional[Dict[str, Optional[int]]] = None,
+) -> List[Dict]:
     from app.services.backtest_engine import run_backtest
     from app.services.forex_engine import pip_size as _pip_size_fn
 
     results: List[Dict] = []
     pip_sz = _pip_size_fn(SYMBOL)
+    min_tr = _min_trades_for(cand, days)
     for tf in TIMEFRAMES:
         candles = candle_map.get(tf)
         if not candles or len(candles) < 120:
@@ -516,10 +594,28 @@ async def _eval_candidate(cand: Dict, candle_map: Dict[str, List], days: int) ->
                 continue
             trades = res.get("trades", [])
             rr = round(tp_pips / sl_pips, 2) if sl_pips else 0
+            split_ts = (wf_splits or {}).get(tf)
             for session in SESSIONS:
                 st = _bucket_stats(trades, session, pip_sz)
-                if not st or st["closed_trades"] < MIN_TRADES:
+                if not st or st["closed_trades"] < min_tr:
                     continue
+                test_st = None
+                if split_ts:
+                    train_tr = [t for t in trades if int(t.get("entry_ts", 0) or 0) < split_ts]
+                    test_tr = [t for t in trades if int(t.get("entry_ts", 0) or 0) >= split_ts]
+                    train_st = _bucket_stats(train_tr, session, pip_sz)
+                    test_st = _bucket_stats(test_tr, session, pip_sz)
+                    if not train_st or train_st["closed_trades"] < min_tr:
+                        continue
+                    st = train_st
+                    st["test_trades"] = (test_st or {}).get("closed_trades", 0)
+                    st["test_pnl"] = (test_st or {}).get("total_pnl", 0)
+                    st["test_win_rate"] = (test_st or {}).get("win_rate", 0)
+                    score = _score_with_walkforward(train_st, test_st, min_tr)
+                else:
+                    score = _score(st, min_tr)
+                if _has_killzone(cand) and st["closed_trades"] < MIN_TRADES and days < 180:
+                    st["low_sample_warning"] = "ICT killzone — try 180-day window for more trades"
                 results.append({
                     "label": cand["label"],
                     "category": cand["category"],
@@ -531,6 +627,7 @@ async def _eval_candidate(cand: Dict, candle_map: Dict[str, List], days: int) ->
                     "timeframe": tf,
                     "session": session,
                     "session_label": SESSION_LABELS[session],
+                    "session_filter": _session_filter_payload(session),
                     "sl_pips": sl_pips,
                     "tp_pips": tp_pips,
                     "rr": rr,
@@ -540,7 +637,8 @@ async def _eval_candidate(cand: Dict, candle_map: Dict[str, List], days: int) ->
                     "trailing_stop": trail_on,
                     "trailing_stop_pct": trail_pct,
                     "stats": st,
-                    "score": _score(st),
+                    "score": score,
+                    "min_trades_required": min_tr,
                 })
     return results
 
@@ -658,8 +756,9 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
     from app.services.tradfi_prices import fetch_metal_scan_candles
 
     async def _fetch_tf(tf: str) -> tuple:
-        per_day = {"15m": 96, "1h": 24}.get(tf, 24)
-        want = min(per_day * days + 120, 2000)
+        eff_days = min(days, _TF_MAX_DAYS.get(tf, days))
+        per_day = {"5m": 288, "15m": 96, "1h": 24, "4h": 6}.get(tf, 24)
+        want = min(per_day * eff_days + 120, 2000)
         ks: List = []
         for cap in (want, min(want, 800), 300):
             try:
@@ -750,11 +849,21 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
         seen.add(sig)
         merged.append(c)
 
-    # 3) Backtest every candidate × timeframe × risk, bucket by session.
-    _progress(f"Backtesting {len(merged)} strategies across {len(candle_map)} timeframes & {len(SESSIONS)} sessions…")
-    all_results: List[Dict] = []
-    for cand in merged:
-        all_results.extend(await _eval_candidate(cand, candle_map, days))
+    wf_splits = {tf: _walk_forward_split_ts(ks) for tf, ks in candle_map.items()}
+
+    # 3) Backtest every candidate × timeframe × risk, bucket by session (parallel).
+    _progress(
+        f"Backtesting {len(merged)} strategies across {len(candle_map)} timeframes "
+        f"& {len(SESSIONS)} sessions (walk-forward validated)…"
+    )
+    _sem = asyncio.Semaphore(max(1, PARALLEL_CANDIDATES))
+
+    async def _run_one(cand: Dict) -> List[Dict]:
+        async with _sem:
+            return await _eval_candidate(cand, candle_map, days, wf_splits)
+
+    nested = await asyncio.gather(*[_run_one(c) for c in merged])
+    all_results: List[Dict] = [row for batch in nested for row in batch]
 
     if not all_results:
         return {"ok": False, "error": "No strategy produced enough trades on gold to rank. Try a longer window."}
@@ -801,6 +910,27 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
     _take(scalp_best, LEADERBOARD_SIZE)     # backfill leftover scalps if swings ran out
     leaderboard.sort(key=lambda r: r["score"], reverse=True)
 
+    # When scanning BOTH directions, surface the best long and best short explicitly.
+    best_long_row = None
+    best_short_row = None
+    if direction_mode == "BOTH":
+        longs = sorted([r for r in all_results if r.get("direction") == "LONG"], key=lambda x: x["score"], reverse=True)
+        shorts = sorted([r for r in all_results if r.get("direction") == "SHORT"], key=lambda x: x["score"], reverse=True)
+        if longs:
+            best_long_row = longs[0]
+        if shorts:
+            best_short_row = shorts[0]
+        # Ensure at least one long + one short on the board when available.
+        for extra in (best_long_row, best_short_row):
+            if not extra:
+                continue
+            idea = (extra["label"], extra["direction"])
+            if idea not in used_ideas and extra not in leaderboard:
+                leaderboard.append(extra)
+                used_ideas.add(idea)
+        leaderboard.sort(key=lambda r: r["score"], reverse=True)
+        leaderboard = leaderboard[:LEADERBOARD_SIZE]
+
     # Attach a build name + NL build prompt to EVERY leaderboard entry so the UI
     # can build any single one (or all of them at once via "Build all").
     for e in leaderboard:
@@ -819,6 +949,15 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
     )
     best_entry["build_prompt"] = _build_prompt_for(best_entry)
 
+    if best_long_row:
+        best_long_row = dict(best_long_row)
+        best_long_row["build_prompt"] = _build_prompt_for(best_long_row)
+        best_long_row["build_name"] = _build_name_for(best_long_row)
+    if best_short_row:
+        best_short_row = dict(best_short_row)
+        best_short_row["build_prompt"] = _build_prompt_for(best_short_row)
+        best_short_row["build_name"] = _build_name_for(best_short_row)
+
     return {
         "ok": True,
         "symbol": SYMBOL,
@@ -827,10 +966,13 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
         "timeframes": list(candle_map.keys()),
         "coverage_days": coverage,
         "sessions": SESSIONS,
+        "walk_forward": True,
         "candidates_tested": len(merged),
         "combos_evaluated": len(all_results),
         "leaderboard": leaderboard,
         "best": best_entry,
+        "best_long": best_long_row,
+        "best_short": best_short_row,
         "generated_by": "claude" if pick else "ranker",
         "ai_proposed": len(claude_cands),
     }

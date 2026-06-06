@@ -7116,11 +7116,14 @@ async def api_build_strategy(request: Request):
 _FOREX_SCANNER_CACHE: dict = {}          # key → (signals, expires_ts)
 _FOREX_SCANNER_TTL = 60                  # seconds between rescans per pair+tf
 
-_SCANNER_PAIRS = [
-    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD",
-    "USDCAD", "USDCHF", "NZDUSD", "EURJPY",
-    "GBPJPY", "XAUUSD", "XAGUSD",
+# (symbol, asset_class) — indices use index OHLC path in tradfi_prices.
+_SCANNER_INSTRUMENTS = [
+    ("EURUSD", "forex"), ("GBPUSD", "forex"), ("USDJPY", "forex"), ("AUDUSD", "forex"),
+    ("USDCAD", "forex"), ("USDCHF", "forex"), ("NZDUSD", "forex"), ("EURJPY", "forex"),
+    ("GBPJPY", "forex"), ("XAUUSD", "forex"), ("XAGUSD", "forex"),
+    ("US30", "index"), ("NAS100", "index"), ("SPX500", "index"),
 ]
+_SCANNER_PAIRS = [p for p, _ in _SCANNER_INSTRUMENTS]
 _SCANNER_TIMEFRAMES = ["15m", "1h"]
 _SCANNER_SIGNALS = [
     ("market_structure", "bos_bullish"),
@@ -7163,7 +7166,7 @@ async def _run_forex_scanner() -> list:
     # Semaphore: limit concurrent (pair, tf) group scans
     sem = asyncio.Semaphore(3)
 
-    async def _scan_pair_tf(pair, tf):
+    async def _scan_pair_tf(pair, tf, asset_class="forex"):
         """
         Scan all signals for one (pair, timeframe) combination.
         A single shared_cache dict is passed to every evaluator so the kline
@@ -7178,12 +7181,12 @@ async def _run_forex_scanner() -> list:
         entries = []
         try:
             async with sem:
-                price = await asyncio.wait_for(_tradfi_price(pair, "forex"), timeout=8)
+                price = await asyncio.wait_for(_tradfi_price(pair, asset_class), timeout=8)
                 if not price:
                     return []
 
                 # ONE shared cache dict — klines fetched once, reused by all evals
-                shared_cache = {"_asset_class": "forex"}
+                shared_cache = {"_asset_class": asset_class}
                 async with _httpx.AsyncClient(timeout=12) as _http:
                     for sig_type, sub in _SCANNER_SIGNALS:
                         cache_key = f"{pair}|{tf}|{sig_type}|{sub}"
@@ -7262,8 +7265,8 @@ async def _run_forex_scanner() -> list:
 
     # One task per (pair, tf) — klines shared within each task
     tasks = [
-        _scan_pair_tf(pair, tf)
-        for pair in _SCANNER_PAIRS
+        _scan_pair_tf(pair, tf, ac)
+        for pair, ac in _SCANNER_INSTRUMENTS
         for tf in _SCANNER_TIMEFRAMES
     ]
     raw = await asyncio.gather(*tasks, return_exceptions=True)
@@ -13345,6 +13348,15 @@ async def backtest_scan(request: Request):
     }
 
 
+_GOLD_SCAN_PROGRESS: Dict[str, str] = {}
+
+
+@app.get("/api/backtest/gold-discovery/progress")
+async def gold_discovery_progress(uid: str = Query(...)):
+    """Poll scan status while gold discovery runs (uid = TH- code)."""
+    return {"message": _GOLD_SCAN_PROGRESS.get(uid.strip(), "")}
+
+
 @app.post("/api/backtest/gold-discovery")
 async def backtest_gold_discovery(request: Request):
     """
@@ -13405,16 +13417,22 @@ async def backtest_gold_discovery(request: Request):
             _db2.close()
     except Exception:
         pass
+    def _progress(msg: str):
+        _GOLD_SCAN_PROGRESS[uid] = msg
+
     try:
         result = await run_gold_discovery(
             days=days,
             direction_mode=direction_mode,
             user_id=_scan_user_id,
+            progress_cb=_progress,
         )
     except Exception as e:
         logger.exception("gold-discovery scan failed")
         return JSONResponse(status_code=500, content={
             "ok": False, "error": f"Scan failed: {type(e).__name__}"})
+    finally:
+        _GOLD_SCAN_PROGRESS.pop(uid, None)
     return JSONResponse(content=result)
 
 

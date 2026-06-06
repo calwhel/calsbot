@@ -2476,6 +2476,21 @@ function dismissTgBanner(){
             <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#caa12c,#b8860b)" onclick="openGoldFinder()">🏆 Find Best Gold Strategy →</button>
           </div>
 
+          <!-- Live Forex Scanner (web) -->
+          <div id="forex-scanner-card" style="margin-bottom:16px;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--card2)">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+              <div>
+                <div style="font-size:14px;font-weight:800;letter-spacing:-.2px">📡 Live Forex Scanner</div>
+                <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">BOS · CHoCH · FVG · Order Block across majors, gold, silver &amp; US indices.</div>
+              </div>
+              <button class="btn primary" style="font-size:12px;padding:8px 14px" onclick="loadForexScanner(true)">↻ Scan now</button>
+            </div>
+            <div id="forex-scanner-meta" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
+            <div id="forex-scanner-list" style="margin-top:10px;max-height:280px;overflow-y:auto">
+              <div style="font-size:12px;color:var(--muted);padding:12px 4px">Tap <b>Scan now</b> to load live structure signals.</div>
+            </div>
+          </div>
+
           <div style="margin-bottom:14px">
             <div class="pine-label">Coins <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 12 · pick a preset or type your own</span></div>
             <input id="scan-coin" type="text" value="BTC" maxlength="200"
@@ -3146,11 +3161,11 @@ function dismissTgBanner(){
     <div class="modal-body" id="gold-body" style="padding:18px 20px 8px">
       <!-- config -->
       <div id="gold-config">
-        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">Claude backtests dozens of gold (XAUUSD) strategies across multiple timeframes and every trading session, ranks them by profitability, and picks the single best one. This can take <b>1–2 minutes</b>.</div>
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">Claude backtests dozens of gold (XAUUSD) strategies across <b>5m–4h</b> timeframes and every trading session. Results use <b>walk-forward validation</b> (train 70% / test 30%). Uses your <b>cTrader demo candles</b> when connected. ~1–2 min.</div>
         <div style="margin-bottom:14px">
           <div class="pine-label">Direction</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="gold-dir-chips">
-            <button class="opt-chip active" data-dir="BOTH" onclick="setGoldDir('BOTH',this)">Both</button>
+            <button class="opt-chip active" data-dir="BOTH" onclick="setGoldDir('BOTH',this)">Both (best long + short)</button>
             <button class="opt-chip" data-dir="LONG" onclick="setGoldDir('LONG',this)">Long only</button>
             <button class="opt-chip" data-dir="SHORT" onclick="setGoldDir('SHORT',this)">Short only</button>
           </div>
@@ -3160,7 +3175,7 @@ function dismissTgBanner(){
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="gold-days-chips">
             <button class="opt-chip" data-days="30" onclick="setGoldDays(30,this)">30 days</button>
             <button class="opt-chip active" data-days="90" onclick="setGoldDays(90,this)">90 days</button>
-            <button class="opt-chip" data-days="180" onclick="setGoldDays(180,this)">180 days</button>
+            <button class="opt-chip" data-days="180" onclick="setGoldDays(180,this)">180 days <span style="opacity:.7">(ICT)</span></button>
           </div>
         </div>
         <button class="pine-analyse-btn" style="background:linear-gradient(135deg,#caa12c,#b8860b)" onclick="runGoldFinder()">🏆 Run Scan →</button>
@@ -7869,6 +7884,9 @@ function switchBuildMode(mode) {
   document.getElementById('build-chat-panel').style.display = mode === 'chat' ? '' : 'none';
   document.getElementById('build-pine-panel').style.display = mode === 'pine' ? '' : 'none';
   document.getElementById('build-scan-panel').style.display = mode === 'scan' ? '' : 'none';
+  if (mode === 'scan') {
+    try { loadForexScanner(false); } catch (e) {}
+  }
   if (mode === 'chat') {
     if (cbMessages.length === 0) {
       cbInit();
@@ -8023,11 +8041,26 @@ function goldReset(){
   document.getElementById('gold-footer').style.display='none';
 }
 function _gEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+let _goldProgressTimer = null;
+function _goldConfBadge(c){
+  const m={high:'#3fb950',medium:'#d9a441',low:'#e05858'};
+  const col=m[c]||'var(--muted)';
+  return '<span style="font-size:10px;font-weight:700;color:'+col+';text-transform:uppercase">'+_gEsc(c||'low')+' conf.</span>';
+}
 async function runGoldFinder(){
   document.getElementById('gold-config').style.display='none';
   document.getElementById('gold-results').style.display='none';
   document.getElementById('gold-footer').style.display='none';
   document.getElementById('gold-progress').style.display='';
+  const progEl=document.getElementById('gold-progress-msg');
+  if(_goldProgressTimer) clearInterval(_goldProgressTimer);
+  _goldProgressTimer=setInterval(async()=>{
+    try{
+      const pr=await fetch('/api/backtest/gold-discovery/progress?uid='+encodeURIComponent(UID));
+      const pd=await pr.json();
+      if(pd.message&&progEl) progEl.textContent=pd.message;
+    }catch(e){}
+  },1200);
   try{
     const res = await fetch('/api/backtest/gold-discovery', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -8042,6 +8075,8 @@ async function runGoldFinder(){
     renderGoldResults(data);
   }catch(e){
     renderGoldError('Network error — please try again.');
+  }finally{
+    if(_goldProgressTimer){ clearInterval(_goldProgressTimer); _goldProgressTimer=null; }
   }
 }
 function renderGoldError(msg){
@@ -8052,14 +8087,31 @@ function renderGoldError(msg){
   document.getElementById('gold-footer').style.display='';
   document.getElementById('gold-build-btn').style.display='none';
 }
+function _goldWinnerCard(title, b, accent){
+  if(!b) return '';
+  const s=b.stats||{};
+  const dirBadge = b.direction==='SHORT' ? '<span style="color:#e05858;font-weight:700">SHORT</span>' : '<span style="color:#3fb950;font-weight:700">LONG</span>';
+  let h='<div style="padding:14px;border:1px solid '+accent+'66;border-radius:12px;background:linear-gradient(135deg,#3a2e0814,#b8860b14);margin-bottom:12px">';
+  h+='<div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#caa12c;font-weight:700;margin-bottom:4px">'+title+' · '+_goldConfBadge(s.confidence)+'</div>';
+  h+='<div style="font-size:16px;font-weight:800">'+_gEsc(b.strategy_name||b.label)+'</div>';
+  h+='<div style="font-size:12px;color:var(--muted);margin-top:6px;display:flex;gap:12px;flex-wrap:wrap">';
+  h+='<span>'+_gEsc(b.label)+' · '+dirBadge+'</span><span>⏱ '+_gEsc(b.timeframe)+'</span><span>🕒 '+_gEsc(b.session_label)+'</span>';
+  if(s.test_trades){ h+='<span>📊 OOS: '+s.test_trades+' tr · '+s.test_pnl+'%</span>'; }
+  h+='</div></div>';
+  return h;
+}
 function renderGoldResults(d){
   document.getElementById('gold-progress').style.display='none';
   const b=d.best, s=b.stats;
   const dirBadge = b.direction==='SHORT' ? '<span style="color:#e05858;font-weight:700">SHORT</span>' : '<span style="color:#3fb950;font-weight:700">LONG</span>';
   let html = '';
+  if(d.direction_mode==='BOTH' && (d.best_long||d.best_short)){
+    html += _goldWinnerCard('🟢 Best LONG', d.best_long, '#3fb950');
+    html += _goldWinnerCard('🔴 Best SHORT', d.best_short, '#e05858');
+  }
   // Winner card
   html += '<div style="padding:16px;border:1px solid #b8860b66;border-radius:12px;background:linear-gradient(135deg,#3a2e0814,#b8860b1f);margin-bottom:16px">';
-  html += '<div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#caa12c;font-weight:700;margin-bottom:4px">🏆 Claude\'s Pick</div>';
+  html += '<div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#caa12c;font-weight:700;margin-bottom:4px">🏆 Claude\'s Pick · '+_goldConfBadge(s.confidence)+'</div>';
   html += '<div style="font-size:18px;font-weight:800;letter-spacing:-.3px">'+_gEsc(b.strategy_name)+'</div>';
   html += '<div style="font-size:12.5px;color:var(--muted);margin-top:6px;display:flex;gap:14px;flex-wrap:wrap">'
         + '<span>'+_gEsc(b.label)+' · '+dirBadge+'</span>'
@@ -8076,7 +8128,9 @@ function renderGoldResults(d){
         + _goldStat('Avg pips/trade', (s.avg_pips>0?'+':'')+s.avg_pips)
         + _goldStat('Return', (s.total_pnl>0?'+':'')+s.total_pnl+'%')
         + _goldStat('Wins / Losses', s.wins+' / '+s.losses)
+        + (s.test_trades ? _goldStat('Out-of-sample', s.test_trades+' tr · '+s.test_pnl+'%') : '')
         + '</div>';
+  if(d.walk_forward){ html += '<div style="font-size:11px;color:var(--muted);margin-top:10px">Walk-forward: ranked on first 70% of data, validated on last 30%.</div>'; }
   if(b.rationale){ html += '<div style="font-size:12.5px;color:var(--text);margin-top:14px;line-height:1.55;padding-top:12px;border-top:1px solid var(--border)">💡 '+_gEsc(b.rationale)+'</div>'; }
   html += '</div>';
   // Leaderboard
@@ -8084,7 +8138,7 @@ function renderGoldResults(d){
   if(d.coverage_days){ covTxt = ' · '+Object.keys(d.coverage_days).map(tf=>tf+' ~'+d.coverage_days[tf]+'d').join(', '); }
   html += '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin:6px 0 8px">Top strategies tested ('+d.combos_evaluated+' combos · '+d.candidates_tested+' strategies'+covTxt+')</div>';
   html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
-  html += '<tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px">#</th><th style="padding:6px 8px">Strategy</th><th style="padding:6px 8px">Dir</th><th style="padding:6px 8px">TF</th><th style="padding:6px 8px">Session</th><th style="padding:6px 8px">Style</th><th style="padding:6px 8px">SL/TP</th><th style="padding:6px 8px">Stop mgmt</th><th style="padding:6px 8px">Win%</th><th style="padding:6px 8px">PF</th><th style="padding:6px 8px">Pips</th><th style="padding:6px 8px">Trades</th></tr>';
+  html += '<tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px">#</th><th style="padding:6px 8px">Strategy</th><th style="padding:6px 8px">Dir</th><th style="padding:6px 8px">TF</th><th style="padding:6px 8px">Session</th><th style="padding:6px 8px">Conf.</th><th style="padding:6px 8px">Style</th><th style="padding:6px 8px">SL/TP</th><th style="padding:6px 8px">Win%</th><th style="padding:6px 8px">PF</th><th style="padding:6px 8px">Pips</th><th style="padding:6px 8px">OOS</th></tr>';
   d.leaderboard.forEach((e,i)=>{
     const st=e.stats;
     const hl = (e.label===b.label && e.direction===b.direction && e.timeframe===b.timeframe && e.session===b.session && e.style===b.style);
@@ -8097,13 +8151,13 @@ function renderGoldResults(d){
           + '<td style="padding:6px 8px">'+(e.direction==='SHORT'?'🔴':'🟢')+'</td>'
           + '<td style="padding:6px 8px">'+_gEsc(e.timeframe)+'</td>'
           + '<td style="padding:6px 8px">'+_gEsc(e.session_label)+'</td>'
+          + '<td style="padding:6px 8px">'+_goldConfBadge(st.confidence)+'</td>'
           + '<td style="padding:6px 8px">'+styleBadge+'</td>'
           + '<td style="padding:6px 8px">'+e.sl_pips+'/'+e.tp_pips+'</td>'
-          + '<td style="padding:6px 8px">'+mgmtBadge+'</td>'
           + '<td style="padding:6px 8px">'+st.win_rate+'%</td>'
           + '<td style="padding:6px 8px">'+st.profit_factor+'</td>'
           + '<td style="padding:6px 8px;color:'+(st.total_pips>0?'#3fb950':'#e05858')+'">'+(st.total_pips>0?'+':'')+st.total_pips+'</td>'
-          + '<td style="padding:6px 8px;color:var(--muted)">'+st.closed_trades+'</td>'
+          + '<td style="padding:6px 8px;color:var(--muted)">'+(st.test_trades!=null?st.test_trades+' / '+st.test_pnl+'%':'—')+'</td>'
           + '</tr>';
   });
   html += '</table></div>';
@@ -8147,6 +8201,11 @@ async function _goldBuildOne(entry){
   cfg.asset_class = 'forex';
   cfg.universe = { type:'specific', symbols:['XAUUSD'] };
   cfg._build_mode = 'paper';
+  // Session filter from scan (London / NY / overlap / Asian only).
+  if(entry.session_filter && entry.session_filter.sessions && entry.session_filter.sessions.length){
+    cfg.filters = cfg.filters || {};
+    cfg.filters.session = entry.session_filter;
+  }
   // 2b) FORCE the stop-management exactly as it was backtested so the saved
   //     strategy trades the same way it tested (test==live). The management is
   //     deterministic (not an LLM-inferred signal), so overriding the compiler
@@ -8198,6 +8257,38 @@ async function goldBuildAll(){
   allBtn.textContent = '✅ Built '+ok+(fail?' · '+fail+' failed':'');
   alert('Built '+ok+' paper strateg'+(ok===1?'y':'ies')+(fail?(' ('+fail+' failed)'):'')+'. Open the Strategies tab to review them — they\'re running in paper mode so you can watch them before going live.');
   if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
+}
+
+// ── Live Forex Scanner (web) ─────────────────────────────────────────────────
+let _fxScanAt = 0;
+async function loadForexScanner(force){
+  const list=document.getElementById('forex-scanner-list');
+  const meta=document.getElementById('forex-scanner-meta');
+  if(!list) return;
+  if(!force && _fxScanAt && Date.now()-_fxScanAt<55000) return;
+  list.innerHTML='<div style="padding:14px;text-align:center;color:var(--muted)">Scanning pairs…</div>';
+  try{
+    const r=await fetch('/api/forex/scanner?uid='+encodeURIComponent(UID));
+    const d=await r.json();
+    if(!r.ok){ list.innerHTML='<div style="padding:12px;color:#e05858">'+_gEsc(d.detail||'Scan failed')+'</div>'; return; }
+    _fxScanAt=Date.now();
+    const n=d.count||0;
+    if(meta) meta.textContent=(d.pairs_scanned||0)+' instruments · '+(d.scanned_at?new Date(d.scanned_at).toLocaleTimeString():'now')+' · '+n+' signal'+(n===1?'':'s');
+    if(!n){ list.innerHTML='<div style="padding:12px;color:var(--muted)">No structure signals right now — market may be quiet or closed.</div>'; return; }
+    let h='<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr style="color:var(--muted);text-align:left"><th style="padding:5px 6px">Pair</th><th>TF</th><th>Signal</th><th>Dir</th><th>Detail</th></tr>';
+    (d.signals||[]).slice(0,40).forEach(sig=>{
+      const dc=sig.direction==='SHORT'?'#e05858':'#3fb950';
+      h+='<tr style="border-top:1px solid var(--border)"><td style="padding:6px;font-weight:700">'+_gEsc(sig.pair)+'</td>'
+        +'<td style="padding:6px">'+_gEsc(sig.timeframe)+'</td>'
+        +'<td style="padding:6px;font-weight:600">'+_gEsc(sig.signal)+'</td>'
+        +'<td style="padding:6px;color:'+dc+'">'+_gEsc(sig.direction)+'</td>'
+        +'<td style="padding:6px;color:var(--muted)">'+_gEsc(sig.desc||sig.detail||'')+'</td></tr>';
+    });
+    h+='</table>';
+    list.innerHTML=h;
+  }catch(e){
+    list.innerHTML='<div style="padding:12px;color:#e05858">Network error</div>';
+  }
 }
 
 async function runScan() {
