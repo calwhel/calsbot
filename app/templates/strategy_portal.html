@@ -2479,7 +2479,7 @@ function dismissTgBanner(){
           <!-- Index Strategy Finder (NASDAQ / S&P via cTrader) -->
           <div style="margin-bottom:16px;padding:14px;border:1px solid #a855f755;border-radius:10px;background:linear-gradient(135deg,#1a0f2a10,#a855f714)">
             <div style="font-size:14px;font-weight:800;letter-spacing:-.2px">📊 Index Strategy Finder <span style="font-size:10px;color:var(--muted);font-weight:600">· NASDAQ · cTrader</span></div>
-            <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">Backtest dozens of strategies on <b>NASDAQ 100 (NAS100)</b>, S&amp;P 500, or Dow — uses your <b>cTrader demo candles</b> when connected. Paper &amp; live execution via FP Markets.</div>
+            <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">Backtest dozens of strategies on <b>NASDAQ 100 (NAS100)</b>, S&amp;P 500, or Dow. <b>No cTrader needed to start</b> — use <b>Build all (paper)</b> and watch signals fire in <b>My Strategies</b> + <b>Trades</b> with full point-based P&amp;L tracking.</div>
             <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#a855f7,#7c3aed)" onclick="openIndexFinder()">📊 Find Best NASDAQ Strategy →</button>
           </div>
 
@@ -4002,7 +4002,7 @@ function renderStratList(strats){
         </div>
         <div class="cm-item">
           ${(assetClass==='forex'||assetClass==='index'||assetClass==='metals')
-            ?`<div class="cm-val ${pC(p.total_pips_pnl||0)}">${(p.total_pips_pnl||0)>=0?'+':''}${Math.round(p.total_pips_pnl||0)} pips</div>
+            ?`<div class="cm-val ${pC(p.total_pips_pnl||0)}">${(p.total_pips_pnl||0)>=0?'+':''}${Math.round(p.total_pips_pnl||0)} ${assetClass==='index'?'pts':'pips'}</div>
           <div class="cm-lbl">Total Pips</div>`
             :`<div class="cm-val ${pC(p.total_pnl)}">${pS(p.total_pnl)}</div>
           <div class="cm-lbl">Total P&L</div>`}
@@ -4472,9 +4472,8 @@ function setAssetClass(cls){
     WZ.coins='all';
     if(!((cls==='forex'||cls==='index')&&_OANDA_CONNECTED))WZ.mode='paper';
   }
-  // Pip TP/SL only applies to forex — wipe stale pip state when leaving forex
-  // so a previously-set value doesn't accidentally get re-emitted later.
-  if(cls!=='forex'){WZ.tp1Pips=null;WZ.tp2Pips=null;WZ.slPips=null;WZ.bePips=null;}
+  // Point/pip TP/SL applies to forex + indices — wipe when leaving both.
+  if(cls!=='forex'&&cls!=='index'){WZ.tp1Pips=null;WZ.tp2Pips=null;WZ.slPips=null;WZ.bePips=null;}
   // Style list is asset-class-specific (forex shows 7 session-aware templates,
   // crypto shows the original 10). Drop any incompatible style so Step 1's
   // "selected" card doesn't claim a style that isn't even rendered.
@@ -4583,10 +4582,12 @@ function isIndexStyle(id){return!!id&&typeof id==='string'&&id.startsWith('idx_'
 
 // Index template → primary signal + direction auto-fill. Mirrors INDEX_TEMPLATES in strategyPresets.ts.
 const INDEX_TEMPLATES={
-  idx_trend:    {primary:'ema',      primaryCfg:{condition:'golden_cross',periods:'20/50',timeframe:'1h'}, direction:'LONG'},
-  idx_breakout: {primary:'breakout', primaryCfg:{lookback:20,timeframe:'1h'},                              direction:'BOTH'},
-  idx_meanrev:  {primary:'rsi',      primaryCfg:{condition:'lt',value:35,timeframe:'4h'},                  direction:'LONG'},
+  idx_trend:    {primary:'ema',      primaryCfg:{condition:'golden_cross',periods:'20/50',timeframe:'1h'}, direction:'LONG',  tp_pips:80, sl_pips:40},
+  idx_breakout: {primary:'breakout', primaryCfg:{lookback:20,timeframe:'1h'},                              direction:'BOTH', tp_pips:60, sl_pips:30},
+  idx_meanrev:  {primary:'rsi',      primaryCfg:{condition:'lt',value:35,timeframe:'4h'},                  direction:'LONG',  tp_pips:50, sl_pips:25},
 };
+function wzUsesPointSl(){return WZ.assetClass==='forex'||WZ.assetClass==='index';}
+function wzPointUnitLabel(){return WZ.assetClass==='index'?'points':'pips';}
 
 const SIGNAL_META={
   rsi:             {icon:'📊',label:'RSI',              desc:'Overbought or oversold level'},
@@ -4683,7 +4684,7 @@ function estimateFireRate(){
 function getWzWarnings(){
   const w=[];
   // Forex strategies use pip TP/SL — derive R:R from pips for the warning.
-  const isFx=WZ.assetClass==='forex'&&WZ.tp1Pips&&WZ.slPips;
+  const isFx=wzUsesPointSl()&&WZ.tp1Pips&&WZ.slPips;
   const rr=isFx?(WZ.tp1Pips/WZ.slPips):(WZ.tp1/WZ.sl);
   if(rr<1.0)w.push({t:'error',msg:`R:R ${rr.toFixed(1)}:1 — TP below SL risk`});
   else if(rr<1.5)w.push({t:'warn',msg:`R:R ${rr.toFixed(1)}:1 — consider widening TP`});
@@ -5675,6 +5676,9 @@ function wzPickStyle(id){
     WZ.primaryCfg=Object.assign({},tpl.primaryCfg);
   } else if(isIndexStyle(id)&&INDEX_TEMPLATES[id]){
     const tpl=INDEX_TEMPLATES[id];
+    WZ.tp1Pips=tpl.tp_pips||80;
+    WZ.slPips=tpl.sl_pips||40;
+    WZ.tp2Pips=null;
     WZ.direction=tpl.direction;
     WZ.primaryType=tpl.primary;
     WZ.primaryCfg=Object.assign({},tpl.primaryCfg);
@@ -5829,14 +5833,15 @@ function wzAddConfirm(type){
 function wzRemoveConfirm(idx){WZ.confirms.splice(idx,1);renderCurrentStep();}
 
 function renderStep5(){
-  // Forex uses pip TP/SL; everything else uses %.
-  const isFx=WZ.assetClass==='forex';
-  const tpVal=isFx?(WZ.tp1Pips||20):WZ.tp1;
-  const slVal=isFx?(WZ.slPips||10):WZ.sl;
+  // Forex uses pips; indices use points (same fields); crypto uses %.
+  const isFx=wzUsesPointSl();
+  const isIdx=WZ.assetClass==='index';
+  const tpVal=isFx?(WZ.tp1Pips||(isIdx?80:20)):WZ.tp1;
+  const slVal=isFx?(WZ.slPips||(isIdx?40:10)):WZ.sl;
   const tp2Val=isFx?(WZ.tp2Pips||0):(WZ.tp2||0);
-  const unit=isFx?' pips':'%';
-  const tpMax=isFx?500:100, tpStep=isFx?1:0.5, tpMin=isFx?1:0.5;
-  const slMax=isFx?300:30,  slStep=isFx?1:0.5, slMin=isFx?1:0.5;
+  const unit=isFx?(' '+wzPointUnitLabel()):'%';
+  const tpMax=isFx?(isIdx?400:500):100, tpStep=isFx?1:0.5, tpMin=isFx?1:0.5;
+  const slMax=isFx?(isIdx?200:300):30,  slStep=isFx?1:0.5, slMin=isFx?1:0.5;
   const rr=(tpVal/slVal).toFixed(1);
   const tot=tpVal+slVal+tp2Val;
   const rrColor=rr>=2?'#16a34a':rr>=1.5?'var(--accent)':rr>=1?'#d97706':'#dc2626';
@@ -5845,7 +5850,7 @@ function renderStep5(){
   const tpKey=isFx?'tp1Pips':'tp1';
   const slKey=isFx?'slPips':'sl';
   return`<div class="wz-q">Where do you exit?</div>
-  <div class="wz-sub">${isFx?'Forex strategies use pips for TP/SL — the way every broker quotes them. The executor converts to % at fire time using the live price.':'Set your take profit and stop loss. The R:R ratio shows how much you risk versus how much you stand to gain.'}</div>
+  <div class="wz-sub">${isIdx?'Index CFDs use <b>points</b> for TP/SL (1 point = 1 index level on NAS100). Paper mode tracks these with live prices — no cTrader account needed.':isFx?'Forex strategies use pips for TP/SL. The executor converts to % at fire time using the live price.':'Set your take profit and stop loss. The R:R ratio shows how much you risk versus how much you stand to gain.'}</div>
   <div class="section-card">
     <div class="sc-title"><div class="sc-icon">🎯</div>Take Profit & Stop Loss${isFx?' (pips)':''}</div>
     <div class="form-group">
@@ -5931,14 +5936,14 @@ function wzToggleExit(which){
   const on=sw.classList.toggle('on');
   row.style.display=on?'block':'none';
   if(which==='tp2'){
-    const isFx=WZ.assetClass==='forex';
+    const isFx=wzUsesPointSl();
     const v=Number(document.getElementById('tp2-sl')?.value||(isFx?40:6));
     if(isFx){WZ.tp2Pips=on?v:null;WZ.tp2=null;}else{WZ.tp2=on?v:null;WZ.tp2Pips=null;}
     updateRR();
   }
   if(which==='trail')WZ.trailing=on?Number(document.getElementById('trail-sl')?.value||1):null;
   if(which==='be'){
-    if(WZ.assetClass==='forex'){WZ.bePips=on?Number(document.getElementById('be-sl')?.value||15):null;WZ.breakeven=null;}
+    if(wzUsesPointSl()){WZ.bePips=on?Number(document.getElementById('be-sl')?.value||15):null;WZ.breakeven=null;}
     else{WZ.breakeven=on?Number(document.getElementById('be-sl')?.value||70):null;WZ.bePips=null;}
   }
   if(which==='eod'){WZ.closeBefore=on?(document.getElementById('eod-select')?.value||'21:00'):null;}
@@ -6164,14 +6169,15 @@ function renderStep7(){
       <button class="dir-btn paper ${WZ.mode==='paper'?'active':''}" onclick="WZ.mode='paper';wzSyncMode()">🧪 Paper Test</button>
     </div>
     <div id="wz-paper-note" style="${WZ.mode==='paper'?'':'display:none;'}margin-top:10px" class="paper-callout">
-      🧪 <strong>Paper Mode</strong> — signals fire with live 1m OHLC tracking, but no real orders are placed. Perfect for testing before committing capital.
+      🧪 <strong>Paper Mode</strong> — the executor scans live prices, opens virtual trades, tracks TP/SL/breakeven, and logs every result in <strong>Trades</strong>. No broker connection required.
+      ${WZ.assetClass==='index'?' Index paper uses Yahoo/FMP candles and shows P&amp;L in <b>points</b> (pts).':''}
     </div>
-    ${WZ.assetClass==='forex'?(_OANDA_CONNECTED?`
+    ${(WZ.assetClass==='forex'||WZ.assetClass==='index')?(_OANDA_CONNECTED?`
     <div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(63,182,139,.35);border-radius:8px;background:rgba(63,182,139,.08);font-size:12px;color:var(--text);line-height:1.5">
-      ✓ <strong>OANDA connected</strong> — live forex orders route through your OANDA account.
+      ✓ <strong>cTrader connected</strong> — you can switch to Live after paper testing. Until then, paper mode is recommended.
     </div>`:`
-    <div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(214,163,92,.35);border-radius:8px;background:rgba(214,163,92,.08);font-size:12px;color:var(--text);line-height:1.5">
-      🔒 <strong>Forex live trading requires OANDA</strong> — connect your OANDA account in Settings to enable live forex orders. Until then, forex strategies run as paper.
+    <div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(8,145,178,.35);border-radius:8px;background:rgba(8,145,178,.06);font-size:12px;color:var(--text);line-height:1.5">
+      🧪 <strong>Paper first (recommended)</strong> — no cTrader needed. Save as Paper Test, watch trades appear in <strong>My Strategies</strong> and the <strong>Trades</strong> tab. Connect cTrader in Settings only when you're ready for demo/live.
     </div>`):''}
   </div>
   <div class="section-card">
@@ -6843,7 +6849,7 @@ async function buildStrategy(){
     if(WZ.assetClass==='forex'){exit.breakeven_at_pips=WZ.bePips||null;exit.breakeven_pct=null;}
     // Forex pip TP/SL — executor converts pips→% at fire time using the live
     // price + the pair's pip size (JPY pairs use 0.01, everything else 0.0001).
-    if(WZ.assetClass==='forex'&&(WZ.tp1Pips||WZ.slPips)){
+    if(wzUsesPointSl()&&(WZ.tp1Pips||WZ.slPips)){
       if(WZ.tp1Pips)exit.take_profit_pips=Number(WZ.tp1Pips);
       if(WZ.slPips) exit.stop_loss_pips =Number(WZ.slPips);
       if(WZ.tp2Pips)exit.take_profit2_pips=Number(WZ.tp2Pips);
@@ -8485,7 +8491,7 @@ async function indexBuildAll(){
   await Promise.all([worker(),worker(),worker()]);
   allBtn.disabled = false; oneBtn.disabled = false;
   allBtn.textContent = '✅ Built '+ok+(fail?' · '+fail+' failed':'');
-  alert('Built '+ok+' paper index strateg'+(ok===1?'y':'ies')+'. Connect cTrader demo in Settings to test live execution on NAS100.');
+  alert('Built '+ok+' paper index strateg'+(ok===1?'y':'ies')+'. Open My Strategies — they scan every ~30s during US market hours. Watch entries & exits in the Trades tab. No cTrader needed until you go live.');
   if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
 }
 
