@@ -50,6 +50,14 @@ app = FastAPI(title="Strategy Portal", docs_url=None, redoc_url=None)
 app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
+def _cached_json(payload, hit: bool, ttl_seconds: int | None = None, status_code: int = 200) -> JSONResponse:
+    """Build a JSON response with cache diagnostics for Railway latency debugging."""
+    headers = {"X-Cache": "HIT" if hit else "MISS"}
+    if ttl_seconds is not None:
+        headers["X-Cache-TTL"] = str(ttl_seconds)
+    return JSONResponse(payload, status_code=status_code, headers=headers)
+
+
 def _html_error_page(status: int, title: str, message: str) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -120,13 +128,13 @@ async def _http_exception_handler(request: _Request, exc: _StarletteHTTPExceptio
         _html_error_page(exc.status_code, "Something went wrong", str(exc.detail or "An unexpected error occurred.")),
         status_code=exc.status_code,
     )
-# Mobile app (Expo Go) makes cross-origin requests; UID is passed as query
-# param, not via cookie, so we don't need credentials. Open CORS for /api/*.
+# Mobile app (Expo Go) makes cross-origin requests. Open CORS for /api/*, but
+# protected UID endpoints below must still present a signed session token.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -157,6 +165,7 @@ async def _warm_neon_db():
     """
     async def _ping():
         try:
+            start = time.monotonic()
             from sqlalchemy import text
             from app.database import SessionLocal as _SL
             def _exec():
@@ -167,6 +176,8 @@ async def _warm_neon_db():
                 finally:
                     db.close()
             await asyncio.to_thread(_exec)
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            logger.info("[neon-keepwarm] ping ok in %sms; next ping in 240s", elapsed_ms)
         except Exception as exc:
             logger.warning(f"[neon-keepwarm] ping failed: {exc}")
 
@@ -291,7 +302,9 @@ async def redirect_www_and_log_500(request: Request, call_next):
         raise
 
 # ─── Session cookie helpers (HMAC-signed, no extra deps) ──────────────────────
-_COOKIE_SECRET = os.getenv("SECRET_KEY", "tradehub-portal-secret-2025")
+_COOKIE_SECRET = os.getenv("SECRET_KEY")
+if not _COOKIE_SECRET:
+    raise RuntimeError("SECRET_KEY environment variable is required; refusing to use an insecure default")
 _COOKIE_NAME   = "th_session"
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 
@@ -314,6 +327,76 @@ def _verify_token(token: str) -> Optional[str]:
 def _get_session_uid(request: Request) -> Optional[str]:
     token = request.cookies.get(_COOKIE_NAME)
     return _verify_token(token) if token else None
+
+
+def _get_request_token_uid(request: Request) -> Optional[str]:
+    """Return the UID bound to a mobile/API token, if one was supplied."""
+    auth = request.headers.get("Authorization", "")
+    token = ""
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+    token = token or request.headers.get("X-TradeHub-Session", "").strip()
+    return _verify_token(token) if token else None
+
+
+def _requested_uid(request: Request) -> Optional[str]:
+    uid = request.query_params.get("uid") or request.headers.get("X-TradeHub-UID") or request.headers.get("x-tradehub-uid")
+    uid = (uid or "").strip().upper()
+    return uid or None
+
+
+def _uid_auth_is_legacy_allowed() -> bool:
+    return os.getenv("ALLOW_LEGACY_UID_API_AUTH", "").lower() in ("1", "true", "yes")
+
+
+def _required_env_secret(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        logger.error("%s is not configured; protected endpoint is unavailable", name)
+        raise HTTPException(status_code=503, detail=f"{name} is not configured")
+    return value
+
+
+def _require_admin_secret(secret: str):
+    expected = _required_env_secret("ADMIN_SECRET")
+    if not hmac.compare_digest(secret or "", expected):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _require_admin_bearer(request: Request):
+    secret = request.headers.get("Authorization", "").replace("Bearer ", "", 1).strip()
+    _require_admin_secret(secret)
+
+
+@app.middleware("http")
+async def _require_bound_uid_for_api(request: Request, call_next):
+    """Require UID-bearing API calls to prove ownership of that UID.
+
+    Legacy clients can temporarily opt back into UID-only auth with
+    ALLOW_LEGACY_UID_API_AUTH=1 while they roll out Bearer/X-TradeHub-Session.
+    """
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    path = request.url.path
+    uid = _requested_uid(request)
+    public_prefixes = (
+        "/api/public/",
+        "/api/mobile/login",
+        "/api/webhooks/tv/",
+        "/api/ctrader/callback",
+        "/api/markets/catalog",
+    )
+    if path.startswith("/api/") and uid and not path.startswith(public_prefixes):
+        if not _uid_auth_is_legacy_allowed():
+            session_uid = _get_session_uid(request)
+            token_uid = _get_request_token_uid(request)
+            if uid not in {session_uid, token_uid}:
+                return JSONResponse(
+                    {"detail": "A signed session token is required for this UID."},
+                    status_code=401,
+                )
+    return await call_next(request)
 
 
 def _set_session(response, uid: str, request: Request = None):
@@ -506,8 +589,12 @@ def _get_portal_sub(user_id: int, db: Session):
 
 
 def _is_portal_pro(sub) -> bool:
-    # Subscriptions removed — all features are free for everyone.
-    return True
+    if os.getenv("PORTAL_FEATURES_FREE", "").lower() in ("1", "true", "yes"):
+        return True
+    if not sub or (getattr(sub, "tier", "") or "").lower() != "pro":
+        return False
+    end = getattr(sub, "subscription_end", None)
+    return end is None or end > datetime.utcnow()
 
 
 def _chat_calls_info(sub, db: Session, user=None):
@@ -2648,6 +2735,7 @@ def _build_mobile_login_response(user, db) -> dict:
     # An expired pro sub keeps tier="pro" but should report as free here so
     # the UI cannot accidentally unlock paid features off the plan string.
     plan = "pro" if entitled else "free"
+    session_token = _make_token(user.uid)
     return {
         "uid":        user.uid,
         "display":    display,
@@ -2656,6 +2744,8 @@ def _build_mobile_login_response(user, db) -> dict:
         "plan":       plan,
         "is_pro":     entitled,
         "is_admin":   is_admin,
+        "session_token": session_token,
+        "auth_token":    session_token,
     }
 
 
@@ -2667,6 +2757,11 @@ async def api_mobile_login(request: Request):
     Returns the resolved user profile or 403 if the UID doesn't match.
     The mobile client persists the UID in SecureStore and re-validates on launch.
     """
+    if not _uid_auth_is_legacy_allowed():
+        raise HTTPException(
+            status_code=410,
+            detail="UID-only mobile login is disabled. Use email/password or Apple login to receive a signed session token.",
+        )
     try:
         body = await request.json()
     except Exception:
@@ -5662,7 +5757,7 @@ async def public_leaderboard(limit: int = Query(5, ge=1, le=10)):
     cache_key = f"pub_lb_{limit}"
     cached = _CACHE.get(cache_key)
     if cached and time.time() < cached[1]:
-        return cached[0]
+        return _cached_json(cached[0], True, 120)
 
     def _load():
         db = SessionLocal()
@@ -5692,7 +5787,7 @@ async def public_leaderboard(limit: int = Query(5, ge=1, le=10)):
 
     payload = await asyncio.to_thread(_load)
     _CACHE[cache_key] = (payload, time.time() + 120)
-    return payload
+    return _cached_json(payload, False, 120)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -5714,7 +5809,7 @@ async def api_strategies(uid: str = Query(...)):
     cache_key = f"api_strats_{uid}"
     cached = _CACHE.get(cache_key)
     if cached and time.time() < cached[1]:
-        return JSONResponse(cached[0])
+        return _cached_json(cached[0], True, 60)
 
     from app.database import SessionLocal
     from app.strategy_models import UserStrategy, StrategyPerformance, StrategyExecution
@@ -5834,8 +5929,8 @@ async def api_strategies(uid: str = Query(...)):
         raise HTTPException(status_code=503, detail="Database busy — please retry in a moment")
     if data is None:
         raise HTTPException(status_code=403)
-    _CACHE[cache_key] = (data, time.time() + 120)
-    return JSONResponse(data)
+    _CACHE[cache_key] = (data, time.time() + 60)
+    return _cached_json(data, False, 60)
 
 
 @app.post("/api/strategies/{strategy_id}/toggle")
@@ -5927,7 +6022,7 @@ async def api_update_strategy_sizing(strategy_id: int, request: Request):
         db.commit()
         invalidate_prefix(f"api_strats_{uid}")
         invalidate_prefix(f"api_mkt:{uid}")
-        invalidate_cache(f"analytics:{s.id}")
+        invalidate_cache(f"analytics:{uid}:{s.id}")
 
         pst = risk["position_size_type"]
         if size_type == "lots":
@@ -6185,84 +6280,91 @@ async def api_marketplace_leaderboard(
     from app.database import SessionLocal
     from sqlalchemy import text
     from datetime import datetime, timedelta
-    db = SessionLocal()
-    try:
-        user = _get_user_by_uid(uid, db)
-        if not user:
-            raise HTTPException(status_code=403)
-        _lb_ck = f"api_mkt_lb:{uid}:{period}:{limit}"
-        _lb_hit = get_cache(_lb_ck)
-        if _lb_hit is not None:
-            return JSONResponse(_lb_hit)
+    _lb_ck = f"api_mkt_lb:{uid}:{period}:{limit}"
+    _lb_hit = get_cache(_lb_ck)
+    if _lb_hit is not None:
+        return _cached_json(_lb_hit, True, 120)
 
-        if period == "7d":
-            cutoff = datetime.utcnow() - timedelta(days=7)
-        elif period == "all":
-            cutoff = None
-        else:
-            period = "30d"
-            cutoff = datetime.utcnow() - timedelta(days=30)
+    def _load():
+        db = SessionLocal()
+        try:
+            user = _get_user_by_uid(uid, db)
+            if not user:
+                return None
 
-        cutoff_clause = "AND COALESCE(e.closed_at, e.fired_at) > :cutoff" if cutoff else ""
-        params: dict = {"limit": int(limit)}
-        if cutoff is not None:
-            params["cutoff"] = cutoff
+            _period = period
+            if _period == "7d":
+                cutoff = datetime.utcnow() - timedelta(days=7)
+            elif _period == "all":
+                cutoff = None
+            else:
+                _period = "30d"
+                cutoff = datetime.utcnow() - timedelta(days=30)
 
-        rows = db.execute(text(f"""
-            SELECT m.id           AS listing_id,
-                   m.title        AS title,
-                   m.author_id    AS author_id,
-                   m.pricing_model AS pricing_model,
-                   m.price_usdt   AS price_usdt,
-                   m.is_verified  AS is_verified,
-                   m.is_ai_generated AS is_ai_generated,
-                   COALESCE(SUM(e.pnl_pct), 0) AS pnl_sum,
-                   COUNT(e.id)              AS trades,
-                   SUM(CASE WHEN e.outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
-                   SUM(CASE WHEN e.outcome IN ('WIN','LOSS') THEN 1 ELSE 0 END) AS decisive
-            FROM strategy_marketplace m
-            JOIN strategy_executions e ON e.strategy_id = m.strategy_id
-            WHERE e.outcome IN ('WIN', 'LOSS', 'BREAKEVEN')
-              AND e.pnl_pct IS NOT NULL
-              {cutoff_clause}
-            GROUP BY m.id, m.title, m.author_id, m.pricing_model, m.price_usdt,
-                     m.is_verified, m.is_ai_generated
-            HAVING COUNT(e.id) >= 1
-            ORDER BY pnl_sum DESC
-            LIMIT :limit
-        """), params).fetchall()
+            cutoff_clause = "AND COALESCE(e.closed_at, e.fired_at) > :cutoff" if cutoff else ""
+            params: dict = {"limit": int(limit)}
+            if cutoff is not None:
+                params["cutoff"] = cutoff
 
-        # Resolve author display names in one shot
-        author_ids = list({r.author_id for r in rows})
-        names: dict = {}
-        if author_ids:
-            for u in db.query(User).filter(User.id.in_(author_ids)).all():
-                names[u.id] = u.first_name or u.username or "Anonymous"
+            rows = db.execute(text(f"""
+                SELECT m.id           AS listing_id,
+                       m.title        AS title,
+                       m.author_id    AS author_id,
+                       m.pricing_model AS pricing_model,
+                       m.price_usdt   AS price_usdt,
+                       m.is_verified  AS is_verified,
+                       m.is_ai_generated AS is_ai_generated,
+                       COALESCE(SUM(e.pnl_pct), 0) AS pnl_sum,
+                       COUNT(e.id)              AS trades,
+                       SUM(CASE WHEN e.outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
+                       SUM(CASE WHEN e.outcome IN ('WIN','LOSS') THEN 1 ELSE 0 END) AS decisive
+                FROM strategy_marketplace m
+                JOIN strategy_executions e ON e.strategy_id = m.strategy_id
+                WHERE e.outcome IN ('WIN', 'LOSS', 'BREAKEVEN')
+                  AND e.pnl_pct IS NOT NULL
+                  {cutoff_clause}
+                GROUP BY m.id, m.title, m.author_id, m.pricing_model, m.price_usdt,
+                         m.is_verified, m.is_ai_generated
+                HAVING COUNT(e.id) >= 1
+                ORDER BY pnl_sum DESC
+                LIMIT :limit
+            """), params).fetchall()
 
-        entries = []
-        for rank, r in enumerate(rows, 1):
-            trades   = int(r.trades or 0)
-            wins     = int(r.wins or 0)
-            decisive = int(getattr(r, "decisive", 0) or 0)
-            wr       = round((wins / decisive) * 100, 1) if decisive > 0 else 0.0
-            entries.append({
-                "rank":          rank,
-                "listing_id":    r.listing_id,
-                "title":         r.title,
-                "author_name":   names.get(r.author_id, "Anonymous"),
-                "pricing_model": r.pricing_model or "free",
-                "price_usdt":    float(r.price_usdt or 0),
-                "is_verified":   bool(r.is_verified),
-                "is_ai_generated": bool(r.is_ai_generated),
-                "pnl_pct":       round(float(r.pnl_sum or 0), 2),
-                "trades":        trades,
-                "win_rate":      wr,
-            })
-        _lb_payload = {"period": period, "entries": entries}
-        set_cache(f"api_mkt_lb:{uid}:{period}:{limit}", _lb_payload, 120)
-        return JSONResponse(_lb_payload)
-    finally:
-        db.close()
+            # Resolve author display names in one shot
+            author_ids = list({r.author_id for r in rows})
+            names: dict = {}
+            if author_ids:
+                for u in db.query(User).filter(User.id.in_(author_ids)).all():
+                    names[u.id] = u.first_name or u.username or "Anonymous"
+
+            entries = []
+            for rank, r in enumerate(rows, 1):
+                trades   = int(r.trades or 0)
+                wins     = int(r.wins or 0)
+                decisive = int(getattr(r, "decisive", 0) or 0)
+                wr       = round((wins / decisive) * 100, 1) if decisive > 0 else 0.0
+                entries.append({
+                    "rank":          rank,
+                    "listing_id":    r.listing_id,
+                    "title":         r.title,
+                    "author_name":   names.get(r.author_id, "Anonymous"),
+                    "pricing_model": r.pricing_model or "free",
+                    "price_usdt":    float(r.price_usdt or 0),
+                    "is_verified":   bool(r.is_verified),
+                    "is_ai_generated": bool(r.is_ai_generated),
+                    "pnl_pct":       round(float(r.pnl_sum or 0), 2),
+                    "trades":        trades,
+                    "win_rate":      wr,
+                })
+            return {"period": _period, "entries": entries}
+        finally:
+            db.close()
+
+    _lb_payload = await asyncio.to_thread(_load)
+    if _lb_payload is None:
+        raise HTTPException(status_code=403)
+    set_cache(_lb_ck, _lb_payload, 120)
+    return _cached_json(_lb_payload, False, 120)
 
 
 @app.get("/api/marketplace/{listing_id}")
@@ -6544,105 +6646,111 @@ async def api_rate_strategy(listing_id: int, uid: str = Query(...), stars: int =
 @app.get("/api/leaderboard")
 async def api_leaderboard(uid: str = Query(...), metric: str = Query("win_rate")):
     from app.database import SessionLocal
-    db = SessionLocal()
-    try:
-        user = _get_user_by_uid(uid, db)
-        if not user:
-            raise HTTPException(status_code=403)
-        _ldr_key = f"api_ldr:{uid}:{metric}"
-        _ldr_cached = get_cache(_ldr_key)
-        if _ldr_cached is not None:
-            return JSONResponse(_ldr_cached)
+    _ldr_key = f"api_ldr:{uid}:{metric}"
+    _ldr_cached = get_cache(_ldr_key)
+    if _ldr_cached is not None:
+        return _cached_json(_ldr_cached, True, 120)
 
-        from app.strategy_models import StrategyMarketplace, StrategyPerformance, UserStrategy, StrategyOffer
-        results = []
-        seen_strategy_ids = set()
+    def _load():
+        db = SessionLocal()
+        try:
+            user = _get_user_by_uid(uid, db)
+            if not user:
+                return None
 
-        # 1. Marketplace (live-published) strategies
-        listings = db.query(StrategyMarketplace).all()
-
-        # Batch-load perfs and authors for marketplace listings (avoid N+1)
-        _mkt_sids   = [m.strategy_id for m in listings]
-        _mkt_auids  = list({m.author_id for m in listings if m.author_id})
-        _ldr_perf1  = {p.strategy_id: p for p in db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id.in_(_mkt_sids)).all()} if _mkt_sids else {}
-        _ldr_auth1  = {u.id: u for u in db.query(User).filter(User.id.in_(_mkt_auids)).all()} if _mkt_auids else {}
-
-        for m in listings:
-            perf   = _ldr_perf1.get(m.strategy_id)
-            author = _ldr_auth1.get(m.author_id)
-            if not perf or perf.total_trades < 3 or perf.total_pnl_pct <= 0:
-                continue
-            seen_strategy_ids.add(m.strategy_id)
-            results.append({
-                "strategy_id": m.strategy_id,
-                "listing_id": m.id,
-                "title": m.title,
-                "author": (author.first_name or author.username) if author else "Anonymous",
-                "author_uid": author.uid if author else None,
-                "is_own": (author.id == user.id) if author else False,
-                "mode": "live",
-                "win_rate": round(perf.win_rate, 1),
-                "total_pnl": round(perf.total_pnl_pct, 2),
-                "total_trades": perf.total_trades,
-                "avg_rating": round(m.avg_rating or 0, 1),
-                "pricing_model": m.pricing_model or "free",
-                "price_usdt": m.price_usdt or 0,
-            })
-
-        # 2. Non-marketplace strategies (paper or live) with enough trade history
-        all_strategies = db.query(UserStrategy).filter(
-            UserStrategy.status.in_(["active", "paused", "draft", "paper"])
-        ).all()
-
-        # Batch-load perfs and authors for all strategies (avoid N+1)
-        _strat_ids2  = [s.id for s in all_strategies]
-        _strat_uids2 = list({s.user_id for s in all_strategies if s.user_id})
-        _ldr_perf2   = {p.strategy_id: p for p in db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id.in_(_strat_ids2)).all()} if _strat_ids2 else {}
-        _ldr_auth2   = {u.id: u for u in db.query(User).filter(User.id.in_(_strat_uids2)).all()} if _strat_uids2 else {}
-
-        for s in all_strategies:
-            if s.id in seen_strategy_ids:
-                continue
-            perf   = _ldr_perf2.get(s.id)
-            author = _ldr_auth2.get(s.user_id)
-            if not perf or perf.total_trades < 3 or perf.total_pnl_pct <= 0:
-                continue
-            # Determine paper vs live from most recent executions
+            from app.strategy_models import StrategyMarketplace, StrategyPerformance, UserStrategy, StrategyOffer
             from app.strategy_models import StrategyExecution
-            recent = db.query(StrategyExecution).filter(
-                StrategyExecution.strategy_id == s.id
-            ).order_by(StrategyExecution.fired_at.desc()).limit(5).all()
-            paper_count = sum(1 for e in recent if getattr(e, 'is_paper', True))
-            mode = "paper" if paper_count >= len(recent) / 2 else "live"
-            # Check if current user already sent an offer
-            offer_sent = db.query(StrategyOffer).filter(
-                StrategyOffer.strategy_id == s.id,
-                StrategyOffer.requester_id == user.id
-            ).first()
-            results.append({
-                "strategy_id": s.id,
-                "listing_id": None,
-                "title": s.name,
-                "author": (author.first_name or author.username) if author else "Anonymous",
-                "author_uid": author.uid if author else None,
-                "is_own": (author.id == user.id) if author else False,
-                "mode": mode,
-                "win_rate": round(perf.win_rate, 1),
-                "total_pnl": round(perf.total_pnl_pct, 2),
-                "total_trades": perf.total_trades,
-                "avg_rating": 0.0,
-                "pricing_model": None,
-                "price_usdt": 0,
-                "offer_sent": offer_sent is not None,
-                "offer_status": offer_sent.status if offer_sent else None,
-            })
+            results = []
+            seen_strategy_ids = set()
 
-        results.sort(key=lambda x: x.get(metric if metric in x else "win_rate", 0), reverse=True)
-        top = results[:30]
-        set_cache(_ldr_key, top, 120)
-        return JSONResponse(top)
-    finally:
-        db.close()
+            # 1. Marketplace (live-published) strategies
+            listings = db.query(StrategyMarketplace).all()
+
+            # Batch-load perfs and authors for marketplace listings (avoid N+1)
+            _mkt_sids   = [m.strategy_id for m in listings]
+            _mkt_auids  = list({m.author_id for m in listings if m.author_id})
+            _ldr_perf1  = {p.strategy_id: p for p in db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id.in_(_mkt_sids)).all()} if _mkt_sids else {}
+            _ldr_auth1  = {u.id: u for u in db.query(User).filter(User.id.in_(_mkt_auids)).all()} if _mkt_auids else {}
+
+            for m in listings:
+                perf   = _ldr_perf1.get(m.strategy_id)
+                author = _ldr_auth1.get(m.author_id)
+                if not perf or perf.total_trades < 3 or perf.total_pnl_pct <= 0:
+                    continue
+                seen_strategy_ids.add(m.strategy_id)
+                results.append({
+                    "strategy_id": m.strategy_id,
+                    "listing_id": m.id,
+                    "title": m.title,
+                    "author": (author.first_name or author.username) if author else "Anonymous",
+                    "author_uid": author.uid if author else None,
+                    "is_own": (author.id == user.id) if author else False,
+                    "mode": "live",
+                    "win_rate": round(perf.win_rate, 1),
+                    "total_pnl": round(perf.total_pnl_pct, 2),
+                    "total_trades": perf.total_trades,
+                    "avg_rating": round(m.avg_rating or 0, 1),
+                    "pricing_model": m.pricing_model or "free",
+                    "price_usdt": m.price_usdt or 0,
+                })
+
+            # 2. Non-marketplace strategies (paper or live) with enough trade history
+            all_strategies = db.query(UserStrategy).filter(
+                UserStrategy.status.in_(["active", "paused", "draft", "paper"])
+            ).all()
+
+            # Batch-load perfs and authors for all strategies (avoid N+1)
+            _strat_ids2  = [s.id for s in all_strategies]
+            _strat_uids2 = list({s.user_id for s in all_strategies if s.user_id})
+            _ldr_perf2   = {p.strategy_id: p for p in db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id.in_(_strat_ids2)).all()} if _strat_ids2 else {}
+            _ldr_auth2   = {u.id: u for u in db.query(User).filter(User.id.in_(_strat_uids2)).all()} if _strat_uids2 else {}
+
+            for s in all_strategies:
+                if s.id in seen_strategy_ids:
+                    continue
+                perf   = _ldr_perf2.get(s.id)
+                author = _ldr_auth2.get(s.user_id)
+                if not perf or perf.total_trades < 3 or perf.total_pnl_pct <= 0:
+                    continue
+                # Determine paper vs live from most recent executions
+                recent = db.query(StrategyExecution).filter(
+                    StrategyExecution.strategy_id == s.id
+                ).order_by(StrategyExecution.fired_at.desc()).limit(5).all()
+                paper_count = sum(1 for e in recent if getattr(e, 'is_paper', True))
+                mode = "paper" if paper_count >= len(recent) / 2 else "live"
+                # Check if current user already sent an offer
+                offer_sent = db.query(StrategyOffer).filter(
+                    StrategyOffer.strategy_id == s.id,
+                    StrategyOffer.requester_id == user.id
+                ).first()
+                results.append({
+                    "strategy_id": s.id,
+                    "listing_id": None,
+                    "title": s.name,
+                    "author": (author.first_name or author.username) if author else "Anonymous",
+                    "author_uid": author.uid if author else None,
+                    "is_own": (author.id == user.id) if author else False,
+                    "mode": mode,
+                    "win_rate": round(perf.win_rate, 1),
+                    "total_pnl": round(perf.total_pnl_pct, 2),
+                    "total_trades": perf.total_trades,
+                    "avg_rating": 0.0,
+                    "pricing_model": None,
+                    "price_usdt": 0,
+                    "offer_sent": offer_sent is not None,
+                    "offer_status": offer_sent.status if offer_sent else None,
+                })
+
+            results.sort(key=lambda x: x.get(metric if metric in x else "win_rate", 0), reverse=True)
+            return results[:30]
+        finally:
+            db.close()
+
+    top = await asyncio.to_thread(_load)
+    if top is None:
+        raise HTTPException(status_code=403)
+    set_cache(_ldr_key, top, 120)
+    return _cached_json(top, False, 120)
 
 
 @app.post("/api/leaderboard/offer")
@@ -8354,8 +8462,13 @@ async def api_strategy_templates():
 
 
 @app.get("/api/strategies/{strategy_id}/analytics")
-async def api_strategy_analytics(strategy_id: int, uid: str = Query(...)):
+def api_strategy_analytics(strategy_id: int, uid: str = Query(...)):
     """Advanced analytics: Sharpe, drawdown, profit factor, equity curve, health score."""
+    _an_key = f"analytics:{uid}:{strategy_id}"
+    _an_hit = get_cache(_an_key)
+    if _an_hit is not None:
+        return _cached_json(_an_hit, True, 300)
+
     from app.database import SessionLocal
     db = SessionLocal()
     try:
@@ -8369,11 +8482,6 @@ async def api_strategy_analytics(strategy_id: int, uid: str = Query(...)):
         ).first()
         if not s:
             raise HTTPException(status_code=404)
-
-        _an_key = f"analytics:{strategy_id}"
-        _an_hit = get_cache(_an_key)
-        if _an_hit is not None:
-            return JSONResponse(_an_hit)
 
         execs = (
             db.query(StrategyExecution)
@@ -8472,7 +8580,7 @@ async def api_strategy_analytics(strategy_id: int, uid: str = Query(...)):
             "total_closed":  len(closed),
         }
         set_cache(_an_key, _an_payload, 300)
-        return JSONResponse(_an_payload)
+        return _cached_json(_an_payload, False, 300)
     finally:
         db.close()
 
@@ -8760,7 +8868,7 @@ async def api_portfolio(uid: str = Query(...)):
         # Cache the dict, not the Response — a JSONResponse body is consumed by
         # the auth middleware on first send, so re-returning the same object
         # yields an empty body (ERR_CONTENT_LENGTH_MISMATCH). Rebuild each time.
-        return JSONResponse(cached[0])
+        return _cached_json(cached[0], True, 60)
 
     from app.database import SessionLocal
     from sqlalchemy import text
@@ -8883,7 +8991,7 @@ async def api_portfolio(uid: str = Query(...)):
         stale = _CACHE.get(cache_key)
         if stale:
             logger.warning("[portfolio] load timed out — serving stale cache")
-            return JSONResponse(stale[0])
+            return _cached_json(stale[0], True, 60)
         return JSONResponse(
             {"error": "timeout", "detail": "Portfolio is taking too long to load. Please retry."},
             status_code=503,
@@ -8895,7 +9003,7 @@ async def api_portfolio(uid: str = Query(...)):
         stale = _CACHE.get(cache_key)
         if stale:
             logger.warning(f"[portfolio] DB error, serving stale cache: {exc}")
-            return JSONResponse(stale[0])
+            return _cached_json(stale[0], True, 60)
         raise
 
     # Affiliate check — async upstream call, runs on the event loop. Fail-soft.
@@ -8934,8 +9042,8 @@ async def api_portfolio(uid: str = Query(...)):
             ),
         },
     }
-    _CACHE[cache_key] = (payload, time.time() + 90)
-    return JSONResponse(payload)
+    _CACHE[cache_key] = (payload, time.time() + 60)
+    return _cached_json(payload, False, 60)
 
 
 @app.get("/api/executions/{exec_id}")
@@ -9223,7 +9331,7 @@ async def api_update_strategy(strategy_id: int, request: Request):
             db.commit()
             invalidate_prefix(f"api_strats_{uid}")
             invalidate_prefix(f"api_mkt:{uid}")
-            invalidate_cache(f"analytics:{s.id}")
+            invalidate_cache(f"analytics:{uid}:{s.id}")
             if s.status == "active" and prev_status != "active":
                 import asyncio
                 asyncio.create_task(_notify_admin_go_live(
@@ -9307,7 +9415,7 @@ async def api_update_strategy(strategy_id: int, request: Request):
         db.commit()
         invalidate_prefix(f"api_strats_{uid}")
         invalidate_prefix(f"api_mkt:{uid}")
-        invalidate_cache(f"analytics:{s.id}")
+        invalidate_cache(f"analytics:{uid}:{s.id}")
 
         # If this is a source (non-locked) strategy, push certain shared fields to
         # marketplace copies and update the listing title.
@@ -10195,10 +10303,12 @@ async def api_put_settings(request: Request, uid: str = Query(...)):
         # API keys — only overwrite if non-empty strings are provided
         api_key    = body.get("bitunix_api_key", "").strip()
         api_secret = body.get("bitunix_api_secret", "").strip()
+        if api_key or api_secret:
+            from app.utils.encryption import encrypt_api_key
         if api_key:
-            prefs.bitunix_api_key = api_key
+            prefs.bitunix_api_key = encrypt_api_key(api_key)
         if api_secret:
-            prefs.bitunix_api_secret = api_secret
+            prefs.bitunix_api_secret = encrypt_api_key(api_secret)
         # Auto-enable live trading once both keys are present
         if prefs.bitunix_api_key and prefs.bitunix_api_secret:
             prefs.auto_trading_enabled = True
@@ -10279,9 +10389,13 @@ async def api_test_exchange(uid: str = Query(...)):
         if not prefs or not prefs.bitunix_api_key or not prefs.bitunix_api_secret:
             return JSONResponse({"ok": False, "error": "No API keys saved. Enter and save your Bitunix API keys first."})
         from app.services.bitunix_trader import BitunixTrader
+        from app.utils.encryption import decrypt_api_key
         import httpx, asyncio
         async with httpx.AsyncClient(timeout=10) as client:
-            trader = BitunixTrader(prefs.bitunix_api_key, prefs.bitunix_api_secret)
+            trader = BitunixTrader(
+                decrypt_api_key(prefs.bitunix_api_key),
+                decrypt_api_key(prefs.bitunix_api_secret),
+            )
             trader.client = client
             try:
                 balance = await asyncio.wait_for(trader.get_account_balance(), timeout=9)
@@ -11502,8 +11616,7 @@ async def api_pinescript_import(request: Request):
 @app.get("/admin/seed-strategies")
 async def seed_admin_strategies(secret: str = Query(...), fix: bool = Query(False)):
     """Seed dev strategies into production for admin. Protected by admin telegram_id."""
-    if secret != "5603353066":
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin_secret(secret)
     from app.database import SessionLocal
     from app.strategy_models import UserStrategy, StrategyPerformance
     import json as _json
@@ -11519,7 +11632,10 @@ async def seed_admin_strategies(secret: str = Query(...), fix: bool = Query(Fals
     db = SessionLocal()
     created = []
     try:
-        user = db.query(User).filter(User.telegram_id == "5603353066").first()
+        admin_telegram_id = os.getenv("OWNER_TELEGRAM_ID", "").strip()
+        if not admin_telegram_id:
+            raise HTTPException(status_code=503, detail="OWNER_TELEGRAM_ID is not configured")
+        user = db.query(User).filter(User.telegram_id == admin_telegram_id).first()
         if not user:
             raise HTTPException(status_code=404, detail="Admin user not found in this database")
         existing = {s.name: s for s in db.query(UserStrategy).filter(UserStrategy.user_id == user.id).all()}
@@ -11629,9 +11745,7 @@ async def executor_force_start(request: Request):
     Requires the dev secret in the Authorization header.
     """
     import os as _os
-    secret = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if secret != "tradehub-portal-secret-2025":
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin_bearer(request)
 
     global _executor_running_in_this_worker
     if _executor_running_in_this_worker:
@@ -11689,9 +11803,7 @@ async def twitter_growth_stats(request: Request, days: int = 7):
     Admin endpoint — returns account growth snapshots from X API tracking.
     Query param: days (default 7, max 90)
     """
-    secret = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if secret != "tradehub-portal-secret-2025":
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin_bearer(request)
 
     days = max(1, min(90, days))
     try:
@@ -11714,9 +11826,7 @@ async def twitter_post_metrics_stats(request: Request, days: int = 30):
     Admin endpoint — returns aggregated tweet performance by post type.
     Query param: days (default 30, max 90)
     """
-    secret = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if secret != "tradehub-portal-secret-2025":
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin_bearer(request)
 
     days = max(1, min(90, days))
     try:
@@ -11897,12 +12007,18 @@ async def portal_oxapay_webhook(request: Request):
     body = raw.decode("utf-8")
 
     # Verify OxaPay HMAC-SHA512 signature
-    sig    = request.headers.get("hmac", "")
-    oxapay = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY or "")
-    if settings.OXAPAY_MERCHANT_API_KEY and sig:
-        if not oxapay.verify_webhook_signature(sig, body, settings.OXAPAY_MERCHANT_API_KEY):
-            logger.warning("[oxapay-webhook] Invalid HMAC signature — ignoring")
-            raise HTTPException(status_code=400, detail="Invalid signature")
+    merchant_key = (settings.OXAPAY_MERCHANT_API_KEY or "").strip()
+    if not merchant_key:
+        logger.error("[oxapay-webhook] OXAPAY_MERCHANT_API_KEY is not configured")
+        raise HTTPException(status_code=503, detail="Payment webhook is not configured")
+    sig    = request.headers.get("hmac", "").strip()
+    oxapay = OxaPayService(merchant_key)
+    if not sig:
+        logger.warning("[oxapay-webhook] Missing HMAC signature")
+        raise HTTPException(status_code=400, detail="Missing signature")
+    if not oxapay.verify_webhook_signature(sig, body, merchant_key):
+        logger.warning("[oxapay-webhook] Invalid HMAC signature — ignoring")
+        raise HTTPException(status_code=400, detail="Invalid signature")
 
     try:
         data = _json.loads(body)
@@ -11924,6 +12040,32 @@ async def portal_oxapay_webhook(request: Request):
             return {"ok": True}
         if payment.status == "paid":
             return {"ok": True}   # idempotent
+
+        inquiry = await asyncio.to_thread(oxapay.check_payment_status, track_id)
+        if not inquiry or str(inquiry.get("status", "")).lower() != "paid":
+            logger.warning(f"[oxapay-webhook] Inquiry did not confirm Paid for trackId={track_id}: {inquiry}")
+            raise HTTPException(status_code=502, detail="Payment status could not be verified")
+
+        from decimal import Decimal, InvalidOperation
+        def _decimal_value(*values):
+            for value in values:
+                if value is None or value == "":
+                    continue
+                try:
+                    return Decimal(str(value))
+                except (InvalidOperation, ValueError):
+                    continue
+            return None
+
+        paid_amount = _decimal_value(inquiry.get("amount"), inquiry.get("payAmount"), data.get("amount"))
+        paid_currency = str(inquiry.get("currency") or data.get("currency") or "").upper()
+        expected_amount = Decimal(str(payment.amount))
+        if paid_amount is None or paid_amount < expected_amount or paid_currency != "USD":
+            logger.warning(
+                "[oxapay-webhook] Payment mismatch trackId=%s paid=%s %s expected=%s USD",
+                track_id, paid_amount, paid_currency, expected_amount,
+            )
+            raise HTTPException(status_code=400, detail="Payment amount or currency mismatch")
 
         payment.status  = "paid"
         payment.paid_at = datetime.utcnow()
@@ -13103,20 +13245,28 @@ async def run_backtest_endpoint(request: Request):
     uid  = (body.get("uid") or "").strip()
 
     from app.database import SessionLocal
-    db = SessionLocal()
-    try:
-        user = _get_user_by_uid_safe(uid, db)
-        if not user:
-            raise HTTPException(status_code=403, detail="Invalid UID")
-        _sub = _get_portal_sub(user.id, db)
-        if not _is_portal_pro(_sub) and not getattr(user, "is_admin", False):
-            return JSONResponse(
-                status_code=402,
-                content={"error": "PRO_REQUIRED",
-                         "message": "A Pro subscription ($50/month) is required to run backtests."},
-            )
-    finally:
-        db.close()
+    def _auth_backtest_user():
+        db = SessionLocal()
+        try:
+            user = _get_user_by_uid_safe(uid, db)
+            if not user:
+                return "invalid"
+            _sub = _get_portal_sub(user.id, db)
+            if not _is_portal_pro(_sub) and not getattr(user, "is_admin", False):
+                return "pro_required"
+            return "ok"
+        finally:
+            db.close()
+
+    auth_status = await asyncio.to_thread(_auth_backtest_user)
+    if auth_status == "invalid":
+        raise HTTPException(status_code=403, detail="Invalid UID")
+    if auth_status == "pro_required":
+        return JSONResponse(
+            status_code=402,
+            content={"error": "PRO_REQUIRED",
+                     "message": "A Pro subscription ($50/month) is required to run backtests."},
+        )
 
     config = body.get("config") or {}
     days   = int(body.get("days", 30))
@@ -13124,11 +13274,23 @@ async def run_backtest_endpoint(request: Request):
         days = 30
 
     try:
+        config_fingerprint = hashlib.sha256(
+            json.dumps(config, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()[:24]
+    except Exception:
+        config_fingerprint = hashlib.sha256(str(config).encode("utf-8")).hexdigest()[:24]
+    cache_key = f"backtest_run:{uid}:{days}:{config_fingerprint}"
+    cached_result = get_cache(cache_key)
+    if cached_result is not None:
+        return _cached_json(cached_result, True, 600)
+
+    try:
         from app.services.backtest_engine import run_backtest
         # Engine has its own ~60s budget; we wrap in 90s as a hard ceiling so
         # the request can never outlive the worker timeout.
         result = await asyncio.wait_for(run_backtest(config, days), timeout=90)
-        return result
+        set_cache(cache_key, result, 600)
+        return _cached_json(result, False, 600)
     except asyncio.TimeoutError:
         # Use 408 so mobile clients can detect the timeout at the HTTP layer
         # instead of parsing a 200-with-error-key blob.
@@ -14234,8 +14396,7 @@ async def admin_test_bitunix(secret: str = Query(...), user_id: int = Query(...)
     Returns balance, open positions, and any errors so you can see exactly
     why a user's live orders are failing.
     """
-    if secret != "tradehub-portal-secret-2025":
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin_secret(secret)
 
     from app.database import SessionLocal
     from app.models import User, UserPreference
@@ -14595,9 +14756,7 @@ async def admin_archive_fast_auto_strategies(
     Soft-archives (status='archived') — same as the per-strategy delete UI,
     so trades already open are unaffected and the row is preserved for stats.
     """
-    import os
-    if secret != os.environ.get("ADMIN_SECRET", "5603353066"):
-        raise HTTPException(status_code=403)
+    _require_admin_secret(secret)
 
     from app.database import SessionLocal
     from app.models import AutoTradeStrategy, User
@@ -14640,9 +14799,7 @@ async def admin_archive_fast_auto_strategies(
 @app.post("/admin/competition/create")
 async def admin_competition_create(request: Request, secret: str = Query(...)):
     """Admin-only: create a new monthly competition."""
-    import os
-    if secret != os.environ.get("ADMIN_SECRET", "5603353066"):
-        raise HTTPException(status_code=403)
+    _require_admin_secret(secret)
 
     from app.database import SessionLocal, engine
     db = SessionLocal()

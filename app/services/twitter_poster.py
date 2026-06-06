@@ -117,7 +117,7 @@ async def notify_admin_post_result(account_name: str, post_type: str, success: b
             return
 
         import os
-        owner_id = os.environ.get("OWNER_TELEGRAM_ID", "5603353066")
+        owner_id = os.environ.get("OWNER_TELEGRAM_ID", "")
         if not owner_id:
             return
 

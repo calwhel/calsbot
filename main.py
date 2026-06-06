@@ -41,10 +41,10 @@ logging.basicConfig(
 def run_migrations():
     """Run database migrations automatically on startup"""
     try:
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import text
+        from app.database import engine
         
         logging.info("🔧 Running database migrations...")
-        engine = create_engine(settings.get_database_url())
         
         with engine.connect() as conn:
             # Add referral system columns if they don't exist
@@ -65,8 +65,6 @@ def run_migrations():
                     except Exception:
                         pass
             logging.info("✅ Database migrations completed successfully (added referral_earnings, paid_referrals, crypto_wallet)")
-        
-        engine.dispose()
     except Exception as e:
         logging.warning(f"Migration warning (may already exist): {e}")
 
