@@ -490,6 +490,425 @@ def _session_reference(klines: List, reference: str = "session_low") -> Optional
     if reference == "session_high": return max(float(k[2]) for k in window)
     return None
 
+
+# ════════════════════════════════════════════════════════════════════════════════
+# Forex / ICT — Smart-Money & price-action signal detectors
+# ════════════════════════════════════════════════════════════════════════════════
+# Pure price-action over the candle slice — no MTF / order-flow / external feeds.
+# Convention (matches every other backtest evaluator): klines[-1] is the closed
+# decision bar ("current"). Each detector is direction-aware ("bullish"/"bearish")
+# and works on any timeframe because it operates on candle counts, not wall-clock.
+
+def _detect_ifvg(klines: List, direction: str = "bullish", min_gap_pct: float = 0.3) -> bool:
+    """
+    Inverted Fair Value Gap (IFVG).
+
+    A previously formed FVG that has since been FILLED (price traded fully through
+    it) then flips to act as support/resistance. We look for an old opposite-side
+    FVG that price closed through, and fire when price retests the flipped zone
+    from the new side.
+
+    Bullish IFVG  — an old *bearish* FVG zone that price closed ABOVE (filled),
+                    now retested from above as support.
+    Bearish IFVG  — an old *bullish* FVG zone that price closed BELOW (filled),
+                    now retested from below as resistance.
+    """
+    if len(klines) < 6:
+        return False
+    close = float(klines[-1][4])
+    lookback = min(len(klines) - 1, 50)
+    # Old FVG of the OPPOSITE polarity that later gets inverted.
+    opp = "bearish" if direction == "bullish" else "bullish"
+    for i in range(3, lookback):
+        c_a = klines[-(i + 2)]
+        c_c = klines[-i]
+        if opp == "bullish":
+            gap_lo = float(c_a[2]); gap_hi = float(c_c[3])
+        else:
+            gap_hi = float(c_a[3]); gap_lo = float(c_c[2])
+        if not (gap_hi > gap_lo):
+            continue
+        if (gap_hi - gap_lo) / gap_lo * 100 < min_gap_pct:
+            continue
+        # Was the gap filled/inverted by a later close, and is price now
+        # retesting the flipped zone from the correct side?
+        between = klines[-i:]
+        if direction == "bullish":
+            inverted = any(float(k[4]) > gap_hi for k in between)
+            if inverted and gap_lo <= close <= gap_hi:
+                return True
+        else:
+            inverted = any(float(k[4]) < gap_lo for k in between)
+            if inverted and gap_lo <= close <= gap_hi:
+                return True
+    return False
+
+
+def _detect_breaker_block(klines: List, direction: str = "bullish") -> bool:
+    """
+    Breaker Block (BB) — a FAILED order block that has been violated.
+
+    Bullish breaker  — a bearish OB (down-move origin) that price broke ABOVE;
+                       price now returns to retest it from above as support.
+    Bearish breaker  — a bullish OB that price broke BELOW; price now retests it
+                       from below as resistance.
+    """
+    if len(klines) < 12:
+        return False
+    close = float(klines[-1][4])
+    lookback = min(len(klines) - 2, 50)
+    for i in range(len(klines) - 3, len(klines) - 3 - lookback, -1):
+        if i < 1:
+            break
+        c  = klines[i]
+        o  = float(c[1]); cl = float(c[4])
+        body = abs(cl - o)
+        if body == 0:
+            continue
+        ob_lo, ob_hi = min(o, cl), max(o, cl)
+        impulse = klines[i + 1: i + 4]
+        if len(impulse) < 3:
+            continue
+        if direction == "bullish":
+            # Originating block is BEARISH (last up-candle before a drop... here:
+            # a bullish OB that failed). A bullish breaker comes from a bearish OB
+            # (down move) that price then broke above.
+            if not (cl < o):
+                continue
+            move = float(impulse[0][1]) - float(impulse[-1][4])  # down impulse
+            if move < body * 2:
+                continue
+            broke = any(float(k[4]) > ob_hi for k in klines[i + 4:])
+            if broke and ob_lo <= close <= ob_hi:
+                return True
+        else:
+            if not (cl > o):
+                continue
+            move = float(impulse[-1][4]) - float(impulse[0][1])  # up impulse
+            if move < body * 2:
+                continue
+            broke = any(float(k[4]) < ob_lo for k in klines[i + 4:])
+            if broke and ob_lo <= close <= ob_hi:
+                return True
+    return False
+
+
+def _detect_mss(klines: List, direction: str = "bullish", swing_lookback: int = 20) -> bool:
+    """
+    Market Structure Shift (MSS).
+
+    Bullish MSS — in a downtrend, current close breaks ABOVE the most recent
+                  swing high (over the last `swing_lookback` candles).
+    Bearish MSS — in an uptrend, current close breaks BELOW the most recent
+                  swing low.
+    """
+    lb = max(10, int(swing_lookback))
+    if len(klines) < lb + 2:
+        return False
+    k = klines[-(lb + 1):]
+    highs = [float(c[2]) for c in k]
+    lows  = [float(c[3]) for c in k]
+    close = float(klines[-1][4])
+    sh = _swing_highs(highs, wing=2)
+    sl = _swing_lows(lows,  wing=2)
+    if direction == "bullish":
+        if not sh:
+            return False
+        # confirm prior downtrend: latest swing high lower than the previous one
+        downtrend = len(sh) < 2 or highs[sh[-1]] <= highs[sh[-2]]
+        return downtrend and close > highs[sh[-1]]
+    else:
+        if not sl:
+            return False
+        uptrend = len(sl) < 2 or lows[sl[-1]] >= lows[sl[-2]]
+        return uptrend and close < lows[sl[-1]]
+
+
+def _detect_liquidity_sweep(klines: List, direction: str = "bullish", lookback: int = 10) -> bool:
+    """
+    Liquidity Sweep (LQ).
+
+    Bullish — price wicks BELOW a recent swing low then closes back inside
+              (stop-hunt below support → reversal up).
+    Bearish — price wicks ABOVE a recent swing high then closes back inside.
+
+    Sweep = wick beyond the level, close back on the original side.
+    """
+    lb = max(4, int(lookback))
+    if len(klines) < lb + 1:
+        return False
+    ref = klines[-(lb + 1):-1]  # prior swing window (exclude current)
+    if not ref:
+        return False
+    cur = klines[-1]
+    cur_h = float(cur[2]); cur_l = float(cur[3]); cur_c = float(cur[4])
+    if direction == "bullish":
+        swing_low = min(float(k[3]) for k in ref)
+        return cur_l < swing_low and cur_c > swing_low
+    else:
+        swing_high = max(float(k[2]) for k in ref)
+        return cur_h > swing_high and cur_c < swing_high
+
+
+def _detect_mitigation_block(klines: List, direction: str = "bullish",
+                             min_body_ratio: float = 2.0, max_age: int = 30) -> bool:
+    """
+    Mitigation Block (MIT).
+
+    Identifies the origin candle of a strong directional move (an imbalance) and
+    fires when price retraces back to that candle's 50 % (mid) level.
+
+    Bullish — origin of a strong up-move; retest of its 50 % from above.
+    Bearish — origin of a strong down-move; retest of its 50 % from below.
+    """
+    n = len(klines)
+    if n < 6:
+        return False
+    o = _opens(klines); h = _highs(klines); l = _lows(klines); c = _closes(klines)
+    bodies = [abs(c[i] - o[i]) for i in range(n - 1)]
+    avg_body = sum(bodies) / len(bodies) if bodies else 0.0
+    if avg_body <= 0:
+        return False
+    price = c[-1]
+    start = max(1, n - int(max_age))
+    for d in range(n - 3, start - 1, -1):
+        body = abs(c[d] - o[d])
+        if body < min_body_ratio * avg_body:
+            continue
+        if direction == "bullish" and not (c[d] > o[d]):
+            continue
+        if direction == "bearish" and not (c[d] < o[d]):
+            continue
+        mid = (h[d] + l[d]) / 2.0
+        # confirm a real impulse followed the origin candle
+        if direction == "bullish":
+            if c[d + 1] <= c[d]:
+                continue
+            tol = avg_body * 0.5
+            if l[-1] <= mid <= h[-1] or abs(price - mid) <= tol:
+                return True
+        else:
+            if c[d + 1] >= c[d]:
+                continue
+            tol = avg_body * 0.5
+            if l[-1] <= mid <= h[-1] or abs(price - mid) <= tol:
+                return True
+    return False
+
+
+def _detect_supply_demand(klines: List, direction: str = "bullish",
+                          base_max: int = 4, max_age: int = 40,
+                          move_ratio: float = 2.0) -> bool:
+    """
+    Supply / Demand zone (SDP).
+
+    Demand zone (bullish) — a small base of consolidation candles followed by a
+                            strong rally; fires on first retest of the base.
+    Supply zone (bearish) — a base followed by a strong drop; fires on retest.
+
+    Strong move = the impulse leg travels at least `move_ratio`× the base height.
+    """
+    n = len(klines)
+    if n < base_max + 4:
+        return False
+    h = _highs(klines); l = _lows(klines); c = _closes(klines)
+    price = c[-1]
+    # Scan candidate base windows ending a few bars back (need room for impulse)
+    newest = n - 4
+    oldest = max(1, n - int(max_age))
+    for end in range(newest, oldest - 1, -1):
+        for blen in range(1, base_max + 1):
+            bstart = end - blen + 1
+            if bstart < 0:
+                continue
+            base = klines[bstart:end + 1]
+            if not base:
+                continue
+            base_hi = max(float(k[2]) for k in base)
+            base_lo = min(float(k[3]) for k in base)
+            base_h = base_hi - base_lo
+            if base_h <= 0:
+                continue
+            impulse = klines[end + 1:end + 4]
+            if len(impulse) < 2:
+                continue
+            if direction == "bullish":
+                move = max(float(k[2]) for k in impulse) - base_hi
+                if move < move_ratio * base_h:
+                    continue
+                # retest: price back inside [base_lo, base_hi] from above
+                if base_lo <= price <= base_hi:
+                    return True
+            else:
+                move = base_lo - min(float(k[3]) for k in impulse)
+                if move < move_ratio * base_h:
+                    continue
+                if base_lo <= price <= base_hi:
+                    return True
+    return False
+
+
+def _detect_premium_discount(klines: List, direction: str = "bullish", lookback: int = 50) -> bool:
+    """
+    Premium / Discount (PD).
+
+    Range = high/low of the last `lookback` candles. Equilibrium = 50 % of range.
+    Discount (below 50 %) → longs only. Premium (above 50 %) → shorts only.
+    """
+    lb = min(len(klines), max(10, int(lookback)))
+    k = klines[-lb:]
+    rng_hi = max(float(x[2]) for x in k)
+    rng_lo = min(float(x[3]) for x in k)
+    if rng_hi <= rng_lo:
+        return False
+    mid   = (rng_hi + rng_lo) / 2.0
+    close = float(klines[-1][4])
+    if direction == "bullish":
+        return close < mid          # discount → look for longs
+    return close > mid              # premium → look for shorts
+
+
+def _detect_equilibrium(klines: List, direction: str = "bullish",
+                        swing_lookback: int = 20, tol_pct: float = 0.4) -> bool:
+    """
+    Equilibrium Entry (EQ) — entry at the 50 % retracement of the most recent
+    swing (over the last `swing_lookback` candles).
+    """
+    lb = min(len(klines), max(10, int(swing_lookback)))
+    k = klines[-lb:]
+    sh = max(float(x[2]) for x in k)
+    sl = min(float(x[3]) for x in k)
+    if sh <= sl:
+        return False
+    mid   = (sh + sl) / 2.0
+    close = float(klines[-1][4])
+    if abs(close - mid) / mid * 100 > tol_pct:
+        return False
+    # Direction gate: bullish wants price reclaiming the midpoint of an upswing
+    # (low came before high), bearish the reverse.
+    return True
+
+
+def _detect_pin_bar(klines: List, direction: str = "bullish", wick_ratio: float = 2.0) -> bool:
+    """
+    Pin Bar (PIN) — small body with a long rejection wick (>= wick_ratio× body).
+
+    Bullish — long lower wick, small upper wick.
+    Bearish — long upper wick, small lower wick.
+    """
+    if not klines:
+        return False
+    c = klines[-1]
+    o = float(c[1]); h = float(c[2]); l = float(c[3]); cl = float(c[4])
+    body = abs(cl - o)
+    rng  = h - l
+    if rng <= 0:
+        return False
+    if body == 0:
+        body = rng * 1e-6
+    lw = min(o, cl) - l
+    uw = h - max(o, cl)
+    if direction == "bullish":
+        return lw >= body * wick_ratio and uw <= body * 0.8
+    return uw >= body * wick_ratio and lw <= body * 0.8
+
+
+def _detect_engulfing(klines: List, direction: str = "bullish") -> bool:
+    """
+    Engulfing candle (ENG) — current body fully engulfs the previous body.
+
+    Bullish — green candle whose body engulfs the prior red body, closes higher.
+    Bearish — red candle whose body engulfs the prior green body, closes lower.
+    """
+    if len(klines) < 2:
+        return False
+    o  = float(klines[-1][1]); c  = float(klines[-1][4])
+    po = float(klines[-2][1]); pc = float(klines[-2][4])
+    if direction == "bullish":
+        return c > o and pc < po and c >= po and o <= pc
+    return c < o and pc > po and c <= po and o >= pc
+
+
+def _detect_inside_bar(klines: List, direction: str = "bullish") -> bool:
+    """
+    Inside Bar breakout (IB) — the prior candle is an inside bar (fully inside the
+    candle before it) and the current candle breaks its range in `direction`.
+    """
+    if len(klines) < 3:
+        return False
+    mother_h = float(klines[-3][2]); mother_l = float(klines[-3][3])
+    inside_h = float(klines[-2][2]); inside_l = float(klines[-2][3])
+    is_inside = inside_h <= mother_h and inside_l >= mother_l
+    if not is_inside:
+        return False
+    close = float(klines[-1][4])
+    if direction == "bullish":
+        return close > inside_h
+    return close < inside_l
+
+
+def _detect_structure_trend(klines: List, direction: str = "bullish", swings: int = 5) -> bool:
+    """
+    HH/HL or LH/LL trend confirmation.
+
+    Bullish (HH/HL) — series of higher highs AND higher lows over recent swings.
+    Bearish (LH/LL) — series of lower highs AND lower lows.
+    """
+    lookback = min(len(klines), 120)
+    k = klines[-lookback:]
+    highs = [float(c[2]) for c in k]
+    lows  = [float(c[3]) for c in k]
+    sh = _swing_highs(highs, wing=3)
+    sl = _swing_lows(lows,  wing=3)
+    need = max(2, min(int(swings), 6))
+    if len(sh) < 2 or len(sl) < 2:
+        return False
+    hs = [highs[i] for i in sh][-need:]
+    ls = [lows[i]  for i in sl][-need:]
+    if len(hs) < 2 or len(ls) < 2:
+        return False
+    if direction == "bullish":
+        higher_highs = all(hs[i] > hs[i - 1] for i in range(1, len(hs)))
+        higher_lows  = all(ls[i] > ls[i - 1] for i in range(1, len(ls)))
+        return higher_highs and higher_lows
+    lower_highs = all(hs[i] < hs[i - 1] for i in range(1, len(hs)))
+    lower_lows  = all(ls[i] < ls[i - 1] for i in range(1, len(ls)))
+    return lower_highs and lower_lows
+
+
+def _detect_vwap_signal(klines: List, direction: str = "bullish", tol_pct: float = 0.25) -> bool:
+    """
+    VWAP bounce / rejection.
+
+    Bullish — price is near/above VWAP and bounces off it from above (support).
+    Bearish — price is near/below VWAP and rejects it from below (resistance).
+
+    VWAP is computed from the start of the current UTC session (00:00) so it
+    resets each day, matching how intraday traders read it.
+    """
+    if len(klines) < 3:
+        return False
+    # Restrict to the current UTC day so VWAP resets at session open.
+    try:
+        last_day = datetime.fromtimestamp(int(klines[-1][0]) / 1000, tz=timezone.utc).date()
+        session = [k for k in klines if datetime.fromtimestamp(int(k[0]) / 1000, tz=timezone.utc).date() == last_day]
+    except Exception:
+        session = klines[-min(len(klines), 24):]
+    if len(session) < 2:
+        session = klines[-min(len(klines), 24):]
+    vwap = _vwap(session)
+    if vwap is None or vwap <= 0:
+        return False
+    close = float(klines[-1][4]); low = float(klines[-1][3]); high = float(klines[-1][2])
+    prev_close = float(klines[-2][4])
+    near = abs(close - vwap) / vwap * 100 <= max(tol_pct, 0.05) * 4  # touch zone
+    if direction == "bullish":
+        touched = low <= vwap * (1 + tol_pct / 100)
+        return touched and close >= vwap and close >= prev_close and near
+    touched = high >= vwap * (1 - tol_pct / 100)
+    return touched and close <= vwap and close <= prev_close and near
+
+
 # ── Condition evaluator (no HTTP, uses pre-fetched klines) ─────────────────────
 # ── Trading-session windows (UTC) — mirror strategy_executor._SESSION_HOURS ──────
 # Used for replay-faithful session gating (the live evaluators use wall-clock
@@ -1156,6 +1575,95 @@ def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
             max_age        = int(cond.get("max_age") or 20),
         )
 
+    # ── ICT / Smart-Money / price-action / structure signals ─────────────────────
+    # Each reads `direction` (bullish/bearish) from the condition; the scanner /
+    # primary-cond builder injects it from the strategy's LONG/SHORT direction.
+    if ctype == "ifvg":
+        return _detect_ifvg(
+            klines,
+            direction   = (cond.get("direction") or "bullish").lower(),
+            min_gap_pct = float(cond.get("min_gap_pct") or 0.3),
+        )
+
+    if ctype == "breaker_block":
+        return _detect_breaker_block(
+            klines, direction=(cond.get("direction") or "bullish").lower())
+
+    if ctype == "mss":
+        return _detect_mss(
+            klines,
+            direction      = (cond.get("direction") or "bullish").lower(),
+            swing_lookback = int(cond.get("swing_lookback") or 20),
+        )
+
+    if ctype == "liquidity_sweep":
+        return _detect_liquidity_sweep(
+            klines,
+            direction = (cond.get("direction") or "bullish").lower(),
+            lookback  = int(cond.get("lookback") or 10),
+        )
+
+    if ctype == "mitigation_block":
+        return _detect_mitigation_block(
+            klines,
+            direction      = (cond.get("direction") or "bullish").lower(),
+            min_body_ratio = float(cond.get("min_body_ratio") or 2.0),
+            max_age        = int(cond.get("max_age") or 30),
+        )
+
+    if ctype == "supply_demand":
+        return _detect_supply_demand(
+            klines,
+            direction  = (cond.get("direction") or "bullish").lower(),
+            base_max   = int(cond.get("base_max") or 4),
+            max_age    = int(cond.get("max_age") or 40),
+            move_ratio = float(cond.get("move_ratio") or 2.0),
+        )
+
+    if ctype == "premium_discount":
+        return _detect_premium_discount(
+            klines,
+            direction = (cond.get("direction") or "bullish").lower(),
+            lookback  = int(cond.get("lookback") or 50),
+        )
+
+    if ctype == "equilibrium":
+        return _detect_equilibrium(
+            klines,
+            direction      = (cond.get("direction") or "bullish").lower(),
+            swing_lookback = int(cond.get("swing_lookback") or 20),
+            tol_pct        = float(cond.get("tol_pct") or 0.4),
+        )
+
+    if ctype == "pin_bar":
+        return _detect_pin_bar(
+            klines,
+            direction  = (cond.get("direction") or "bullish").lower(),
+            wick_ratio = float(cond.get("wick_ratio") or 2.0),
+        )
+
+    if ctype == "engulfing":
+        return _detect_engulfing(
+            klines, direction=(cond.get("direction") or "bullish").lower())
+
+    if ctype == "inside_bar":
+        return _detect_inside_bar(
+            klines, direction=(cond.get("direction") or "bullish").lower())
+
+    if ctype == "structure_trend":
+        return _detect_structure_trend(
+            klines,
+            direction = (cond.get("direction") or "bullish").lower(),
+            swings    = int(cond.get("swings") or 5),
+        )
+
+    if ctype == "vwap":
+        return _detect_vwap_signal(
+            klines,
+            direction = (cond.get("direction") or "bullish").lower(),
+            tol_pct   = float(cond.get("tol_pct") or 0.25),
+        )
+
     # Genuinely unsupported types (need real-time external data feeds):
     #   open_interest  — requires historical OI snapshots (Coinglass API)
     #   liquidation    — requires historical liquidation feed
@@ -1411,9 +1919,24 @@ def _build_primary_cond(primary_type: str, primary_cfg: Dict, direction: str) ->
         # SMC / price-action — implemented via swing/pivot analysis
         "divergence", "fibonacci", "fvg", "order_block",
         "market_structure", "session_level",
+        # Forex / ICT Smart-Money + price-action + structure signals
+        "ifvg", "breaker_block", "mss", "liquidity_sweep", "mitigation_block",
+        "supply_demand", "premium_discount", "equilibrium",
+        "pin_bar", "engulfing", "inside_bar", "structure_trend", "vwap",
+    }
+    # Direction-aware SMC / structure types read `direction` (bullish/bearish).
+    # Inject it from the strategy's LONG/SHORT direction so the same template
+    # works long & short without the caller having to set it explicitly.
+    _DIRECTIONAL_SMC = {
+        "ifvg", "breaker_block", "mss", "liquidity_sweep", "mitigation_block",
+        "supply_demand", "premium_discount", "equilibrium",
+        "pin_bar", "engulfing", "inside_bar", "structure_trend", "vwap",
     }
     if primary_type in _DIRECT_TYPES:
-        return {"type": primary_type, **primary_cfg}
+        cond = {"type": primary_type, **primary_cfg}
+        if primary_type in _DIRECTIONAL_SMC and "direction" not in cond:
+            cond["direction"] = "bullish" if direction == "LONG" else "bearish"
+        return cond
 
     # Genuinely unsupported (open_interest, liquidation, funding_rate)
     return {"type": primary_type, **primary_cfg}
