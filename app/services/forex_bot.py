@@ -419,15 +419,20 @@ async def fx_user_message(message: types.Message, state: FSMContext):
 
 # ── Start function (called from main.py) ──────────────────────────────────────
 async def start_forex_bot():
-    if not FOREX_BOT_TOKEN:
-        logger.warning("[forex_bot] FOREX_BOT_TOKEN not set — skipping")
-        return
-    _main = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-    if _main and FOREX_BOT_TOKEN.strip() == _main:
-        logger.warning(
-            "[forex_bot] FOREX_BOT_TOKEN equals TELEGRAM_BOT_TOKEN — "
-            "not starting a second poller (use main bot only)"
-        )
+    from app.services.telegram_tokens import (
+        forex_bot_token,
+        main_bot_token,
+        should_run_forex_poller,
+        tokens_are_same,
+    )
+    if not should_run_forex_poller():
+        if forex_bot_token() and tokens_are_same(forex_bot_token(), main_bot_token()):
+            logger.warning(
+                "[forex_bot] FOREX_BOT_TOKEN equals TELEGRAM_BOT_TOKEN — "
+                "not starting a second poller (use main bot only)"
+            )
+        else:
+            logger.warning("[forex_bot] FOREX_BOT_TOKEN not set — skipping")
         return
     logger.info("[forex_bot] Starting forex support bot polling…")
     try:
