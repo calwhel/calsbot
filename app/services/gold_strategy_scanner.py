@@ -98,6 +98,11 @@ SUPPORTED_PRIMARY = {
     # (eval_condition_bt sync ports). Killzone/session windows let Claude build
     # genuine forex day-trade setups, not just crypto-style indicators.
     "fx_killzone", "fx_displacement", "fx_ote", "fx_cisd", "fx_sdp",
+    # New ICT / Smart Money / Forex signal types
+    "ifvg", "breaker_block", "mss", "choch", "liquidity_sweep",
+    "mitigation_block", "supply_demand", "premium_discount", "equilibrium",
+    "pin_bar", "engulfing", "inside_bar", "hh_hl", "lh_ll",
+    "fib_retracement", "vwap_bounce",
 }
 
 
@@ -128,6 +133,26 @@ def _base_roster(direction_mode: str) -> List[Dict]:
         ("ICT", "CISD Delivery Flip",      "fx_cisd",        {"direction": "bullish", "max_run": 10}),
         ("ICT", "OTE Golden Pocket",       "fx_ote",         {"direction": "bullish", "swing_lookback": 20, "fib_low": 61.8, "fib_high": 78.6}),
         ("ICT", "Displacement Momentum",   "fx_displacement",{"direction": "bullish", "min_body_ratio": 2.5}),
+        # ── New ICT / Smart Money signals ──────────────────────────────────────────
+        ("ICT", "IFVG Retest",             "ifvg",           {"direction": "bullish", "min_gap_pct": 0.2}),
+        ("ICT", "Breaker Block Retest",    "breaker_block",  {"direction": "bullish"}),
+        ("ICT", "Market Structure Shift",  "mss",            {"direction": "bullish"}),
+        ("ICT", "Change of Character",     "choch",          {"direction": "bullish"}),
+        ("ICT", "Liquidity Sweep",         "liquidity_sweep",{"direction": "bullish"}),
+        ("ICT", "Mitigation Block",        "mitigation_block",{"direction": "bullish"}),
+        # ── Supply & Demand ────────────────────────────────────────────────────────
+        ("Supply/Demand", "Supply/Demand Zone", "supply_demand",   {"direction": "bullish"}),
+        ("Supply/Demand", "Premium/Discount",   "premium_discount",{"zone": "discount"}),
+        ("Supply/Demand", "Equilibrium Entry",  "equilibrium",     {"direction": "bullish"}),
+        # ── Price Action ───────────────────────────────────────────────────────────
+        ("Price Action", "Pin Bar",           "pin_bar",      {"direction": "bullish"}),
+        ("Price Action", "Engulfing Candle",  "engulfing",    {"direction": "bullish"}),
+        ("Price Action", "Inside Bar Breakout","inside_bar",  {"direction": "bullish"}),
+        # ── Structure ──────────────────────────────────────────────────────────────
+        ("Structure", "HH/HL Bullish",        "hh_hl",        {}),
+        ("Structure", "LH/LL Bearish",        "lh_ll",        {}),
+        ("Structure", "Fibonacci Retracement","fib_retracement",{"direction": "bullish"}),
+        ("Structure", "VWAP Bounce",          "vwap_bounce",  {"direction": "bullish"}),
     ]
     combos = [
         ("Combo", "EMA Cross + RSI>50",    "ema",  {"period": 9, "period2": 21, "condition": "bullish_cross"},
@@ -202,6 +227,18 @@ def _flip_cfg_for_short(ptype: str, cfg: Dict) -> Dict:
         # ICT signals carry an explicit direction; killzone is a time gate (no flip).
         if c.get("direction") == "bullish":
             c["direction"] = "bearish"
+    elif ptype in ("ifvg", "breaker_block", "mss", "choch", "liquidity_sweep",
+                   "mitigation_block", "supply_demand", "pin_bar", "engulfing",
+                   "inside_bar", "equilibrium", "fib_retracement", "vwap_bounce"):
+        if c.get("direction") == "bullish":
+            c["direction"] = "bearish"
+    elif ptype == "premium_discount":
+        if c.get("zone") == "discount":
+            c["zone"] = "premium"
+    elif ptype == "hh_hl":
+        pass  # hh_hl is always bullish; _expand_directions maps to lh_ll for SHORT
+    elif ptype == "lh_ll":
+        pass  # lh_ll is always bearish
     return c
 
 
@@ -319,7 +356,24 @@ async def _claude_propose_candidates(direction_mode: str, n: int = 10) -> List[D
             "- fx_cisd: {direction(bullish/bearish), max_run} — Change in State of "
             "Delivery (close back through the origin of the prior run)\n"
             "- fx_sdp: {direction(bullish/bearish), swing_lookback, sweep_window, "
-            "min_body_ratio, max_age} — Sweep→Displacement→Pullback entry\n\n"
+            "min_body_ratio, max_age} — Sweep→Displacement→Pullback entry\n"
+            "New ICT / Smart Money / Forex signals:\n"
+            "- ifvg: {direction(bullish/bearish), min_gap_pct} — Inverted Fair Value Gap retest\n"
+            "- breaker_block: {direction(bullish/bearish)} — Failed order block retested from other side\n"
+            "- mss: {direction(bullish/bearish)} — Market Structure Shift\n"
+            "- choch: {direction(bullish/bearish)} — Change of Character\n"
+            "- liquidity_sweep: {direction(bullish/bearish)} — Sweep of swing high/low with reversal\n"
+            "- mitigation_block: {direction(bullish/bearish)} — Retrace to origin of major move\n"
+            "- supply_demand: {direction(bullish/bearish)} — Supply/Demand zone retest\n"
+            "- premium_discount: {zone(discount/premium)} — Price in discount (longs) or premium (shorts)\n"
+            "- equilibrium: {direction(bullish/bearish)} — 50% retracement of recent swing\n"
+            "- pin_bar: {direction(bullish/bearish)} — Pin bar reversal candle\n"
+            "- engulfing: {direction(bullish/bearish)} — Engulfing candle pattern\n"
+            "- inside_bar: {direction(bullish/bearish)} — Inside bar breakout\n"
+            "- hh_hl: {} — Higher highs / higher lows bullish structure\n"
+            "- lh_ll: {} — Lower highs / lower lows bearish structure\n"
+            "- fib_retracement: {direction(bullish/bearish)} — Fibonacci 0.618-0.705 entry\n"
+            "- vwap_bounce: {direction(bullish/bearish)} — VWAP bounce/rejection\n\n"
             "Return ONLY a JSON array. Each item: "
             '{"label","category","direction","primaryType","primaryCfg","confirms"}. '
             "No prose."

@@ -12764,7 +12764,13 @@ async def backtest_scan(request: Request):
             c["cc_dir"] = "red" if d in ("green","bullish","up") else "green"
         elif t == "vwap_deviation":
             c["vwap_side"] = "above" if c.get("vwap_side", "below") == "below" else "below"
-        # adx_filter, atr_volatility, volume_spike, keltner squeeze: direction-agnostic
+        elif t in ("ifvg", "breaker_block", "mss", "choch", "liquidity_sweep",
+                   "mitigation_block", "supply_demand", "pin_bar", "engulfing",
+                   "inside_bar", "equilibrium", "fib_retracement", "vwap_bounce"):
+            c["direction"] = "bearish" if c.get("direction") == "bullish" else "bullish"
+        elif t == "premium_discount":
+            c["zone"] = "premium" if c.get("zone") == "discount" else "discount"
+        # adx_filter, atr_volatility, volume_spike, keltner squeeze, hh_hl, lh_ll: direction-agnostic
         return c
 
     # ── Singles — diverse indicator families with parameter variants ───────────
@@ -12805,6 +12811,28 @@ async def backtest_scan(request: Request):
         {"label": "Bullish Engulfing Pattern",   "category": "Price Action","primaryType": "candlestick", "primaryCfg": {"pattern": "bullish_engulfing"},                            "confirms": []},
         # Divergence
         {"label": "RSI Bullish Divergence",      "category": "Divergence", "primaryType": "divergence",   "primaryCfg": {"indicator": "rsi", "direction": "bullish"},                "confirms": []},
+        # ── ICT / Smart Money ──────────────────────────────────────────────────────
+        {"label": "FVG — Fair Value Gap",        "category": "ICT",        "primaryType": "fvg",           "primaryCfg": {"fvg_dir": "bullish", "min_gap_pct": 0.15},                  "confirms": []},
+        {"label": "IFVG — Inverted Fair Value Gap","category": "ICT",      "primaryType": "ifvg",          "primaryCfg": {"direction": "bullish", "min_gap_pct": 0.2},                  "confirms": []},
+        {"label": "OB — Order Block",            "category": "ICT",        "primaryType": "order_block",   "primaryCfg": {"ob_type": "bullish"},                                       "confirms": []},
+        {"label": "BB — Breaker Block",          "category": "ICT",        "primaryType": "breaker_block", "primaryCfg": {"direction": "bullish"},                                      "confirms": []},
+        {"label": "MSS — Market Structure Shift","category": "ICT",        "primaryType": "mss",           "primaryCfg": {"direction": "bullish"},                                      "confirms": []},
+        {"label": "CHoCH — Change of Character", "category": "ICT",        "primaryType": "choch",         "primaryCfg": {"direction": "bullish"},                                      "confirms": []},
+        {"label": "LQ — Liquidity Sweep",        "category": "ICT",        "primaryType": "liquidity_sweep","primaryCfg": {"direction": "bullish"},                                     "confirms": []},
+        {"label": "MIT — Mitigation Block",      "category": "ICT",        "primaryType": "mitigation_block","primaryCfg": {"direction": "bullish"},                                    "confirms": []},
+        # ── Supply & Demand ────────────────────────────────────────────────────────
+        {"label": "SDP — Supply/Demand Zone",    "category": "Supply/Demand","primaryType": "supply_demand","primaryCfg": {"direction": "bullish"},                                     "confirms": []},
+        {"label": "PD — Premium/Discount",       "category": "Supply/Demand","primaryType": "premium_discount","primaryCfg": {"zone": "discount"},                                     "confirms": []},
+        {"label": "EQ — Equilibrium Entry",      "category": "Supply/Demand","primaryType": "equilibrium",  "primaryCfg": {"direction": "bullish"},                                     "confirms": []},
+        # ── Price Action (forex) ───────────────────────────────────────────────────
+        {"label": "PIN — Pin Bar",               "category": "Price Action","primaryType": "pin_bar",       "primaryCfg": {"direction": "bullish"},                                     "confirms": []},
+        {"label": "ENG — Engulfing Candle",      "category": "Price Action","primaryType": "engulfing",     "primaryCfg": {"direction": "bullish"},                                     "confirms": []},
+        {"label": "IB — Inside Bar Breakout",    "category": "Price Action","primaryType": "inside_bar",    "primaryCfg": {"direction": "bullish"},                                     "confirms": []},
+        # ── Structure ──────────────────────────────────────────────────────────────
+        {"label": "HH/HL — Bullish Structure",   "category": "Structure",  "primaryType": "hh_hl",         "primaryCfg": {},                                                           "confirms": []},
+        {"label": "LH/LL — Bearish Structure",   "category": "Structure",  "primaryType": "lh_ll",         "primaryCfg": {},                                                           "confirms": []},
+        {"label": "FIB — Fibonacci Retracement", "category": "Structure",  "primaryType": "fib_retracement","primaryCfg": {"direction": "bullish"},                                    "confirms": []},
+        {"label": "VWAP — Volume Weighted Average","category": "Structure", "primaryType": "vwap_bounce",   "primaryCfg": {"direction": "bullish"},                                     "confirms": []},
     ]
 
     # ── Combos — primary + one or two confirmation layers ──────────────────────
@@ -12840,11 +12868,40 @@ async def backtest_scan(request: Request):
         {"label": "RSI Divergence + MACD Cross",          "category": "Combo",      "primaryType": "divergence", "primaryCfg": {"indicator": "rsi", "direction": "bullish"},                "confirms": [{"type": "macd",         "condition": "bullish_cross"}]},
         # BB squeeze breakout + volume
         {"label": "BB Squeeze + Volume Spike",            "category": "Combo",      "primaryType": "bb",         "primaryCfg": {"condition": "squeeze"},                                   "confirms": [{"type": "volume_spike", "multiplier": 1.5}]},
+        # ── ICT / Forex combos ─────────────────────────────────────────────────────
+        {"label": "MSS + FVG Retest",                     "category": "ICT Combo",  "primaryType": "mss",        "primaryCfg": {"direction": "bullish"},                                   "confirms": [{"type": "fvg", "fvg_dir": "bullish", "min_gap_pct": 0.1}]},
+        {"label": "CHoCH + Order Block Retest",           "category": "ICT Combo",  "primaryType": "choch",      "primaryCfg": {"direction": "bullish"},                                   "confirms": [{"type": "order_block", "ob_type": "bullish"}]},
+        {"label": "Liquidity Sweep + Pin Bar",            "category": "ICT Combo",  "primaryType": "liquidity_sweep","primaryCfg": {"direction": "bullish"},                              "confirms": [{"type": "pin_bar", "direction": "bullish"}]},
+        {"label": "FVG + Premium/Discount Zone",          "category": "ICT Combo",  "primaryType": "fvg",        "primaryCfg": {"fvg_dir": "bullish", "min_gap_pct": 0.1},                 "confirms": [{"type": "premium_discount", "zone": "discount"}]},
+        {"label": "Engulfing + Fibonacci Zone",           "category": "ICT Combo",  "primaryType": "engulfing",  "primaryCfg": {"direction": "bullish"},                                   "confirms": [{"type": "fib_retracement", "direction": "bullish"}]},
+        {"label": "Supply/Demand + RSI Oversold",         "category": "ICT Combo",  "primaryType": "supply_demand","primaryCfg": {"direction": "bullish"},                                "confirms": [{"type": "rsi", "period": 14, "operator": "lt", "value": 35}]},
+        {"label": "Breaker Block + MACD Confirm",         "category": "ICT Combo",  "primaryType": "breaker_block","primaryCfg": {"direction": "bullish"},                                "confirms": [{"type": "macd", "condition": "bullish_cross"}]},
+        {"label": "VWAP Bounce + EMA Trend",              "category": "ICT Combo",  "primaryType": "vwap_bounce","primaryCfg": {"direction": "bullish"},                                   "confirms": [{"type": "ema", "period": 20, "condition": "above"}]},
     ]
+
+    # ── Signal category filtering ─────────────────────────────────────────────
+    # The frontend can optionally pass `signal_categories` to limit which signal
+    # families are scanned. Map frontend category ids to backend category names.
+    _sig_cats_raw = body.get("signal_categories")
+    _CAT_MAP = {
+        "classic": {"Momentum", "Trend", "Mean Rev", "Volatility", "Volume", "Breakout", "Divergence"},
+        "ict":     {"ICT"},
+        "sd":      {"Supply/Demand"},
+        "pa":      {"Price Action"},
+        "structure": {"Structure"},
+    }
+    _allowed_cats = None
+    if isinstance(_sig_cats_raw, list) and _sig_cats_raw:
+        _allowed_cats = set()
+        for sc in _sig_cats_raw:
+            _allowed_cats.update(_CAT_MAP.get(sc, set()))
+        _allowed_cats.update({"Combo", "ICT Combo"})
 
     templates = []
     for base_list in (singles, combos):
         for t in base_list:
+            if _allowed_cats and t.get("category", "Other") not in _allowed_cats:
+                continue
             entry = {
                 "label":       t["label"],
                 "category":    t.get("category", "Other"),
@@ -13046,10 +13103,62 @@ async def backtest_scan(request: Request):
         sample_weight = math.log(trades + 1) / math.log(20)  # ~1.0 at 19 trades
         return round(pf * wr * sample_weight + pnl * 0.001, 4)
 
+    def _forex_score(stats: dict) -> int:
+        """Forex-specific composite score out of 100.
+        Win rate (30%) + Avg pips per winning trade (40%) + Consistency (30%)."""
+        wr = float(stats.get("win_rate", 0) or 0) / 100
+        avg_pips = float(stats.get("avg_pips_per_trade", 0) or 0)
+        consistency = float(stats.get("consistency", 50) or 50) / 100
+        wr_score = min(wr * 100, 100) * 0.30
+        pips_score = min(max(avg_pips, 0) / 50 * 100, 100) * 0.40
+        cons_score = min(consistency * 100, 100) * 0.30
+        return max(0, min(100, int(round(wr_score + pips_score + cons_score))))
+
+    def _compute_forex_pips(stats: dict, trades: list, ac: str) -> dict:
+        """Add forex-specific pips metrics to stats for forex asset class."""
+        if ac != "forex" or not trades:
+            return stats
+        from app.services.forex_engine import pip_size as _pip_size
+        try:
+            psize = _pip_size(symbols[0] if symbols else "XAUUSD")
+        except Exception:
+            psize = 0.01
+        total_pips = 0.0
+        win_pips = []
+        all_pips = []
+        for t in trades:
+            entry_p = float(t.get("entry_price", 0) or 0)
+            exit_p = float(t.get("exit_price", 0) or 0)
+            direction_t = t.get("direction", "LONG")
+            if psize > 0 and entry_p > 0:
+                if direction_t == "LONG":
+                    pips = (exit_p - entry_p) / psize
+                else:
+                    pips = (entry_p - exit_p) / psize
+                total_pips += pips
+                all_pips.append(pips)
+                if pips > 0:
+                    win_pips.append(pips)
+        stats = dict(stats)
+        stats["total_pips"] = round(total_pips, 1)
+        stats["avg_pips_per_trade"] = round(total_pips / len(trades), 1) if trades else 0
+        stats["avg_pips_per_win"] = round(sum(win_pips) / len(win_pips), 1) if win_pips else 0
+        if len(all_pips) > 1:
+            import statistics
+            std = statistics.stdev(all_pips)
+            mean = abs(statistics.mean(all_pips)) if statistics.mean(all_pips) != 0 else 1
+            stats["consistency"] = max(0, min(100, int(round(100 - (std / mean * 50))))) if mean > 0 else 50
+        else:
+            stats["consistency"] = 50
+        stats["forex_score"] = _forex_score(stats)
+        return stats
+
     def _outcome_to_row(o: dict) -> dict:
         res   = o.get("result") or {}
         err   = res.get("error")
         stats = res.get("stats") or {}
+        if not err and asset_class == "forex":
+            stats = _compute_forex_pips(stats, res.get("trades", []), asset_class)
         score = _score(stats, o.get("timeframe", "1h")) if not err else -1.0
         return {
             "label":     o["label"],

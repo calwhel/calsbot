@@ -2558,6 +2558,51 @@ function dismissTgBanner(){
             </div>
           </div>
 
+          <!-- Signal Type Filter (forex/ICT categories) -->
+          <div style="margin-bottom:18px">
+            <div class="pine-label">Signal Categories
+              <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">
+                — select which signal families to scan (all selected by default)
+              </span>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px" id="scan-signal-cats">
+              <button class="opt-chip active" data-cat="classic" onclick="toggleScanCat('classic',this)" title="RSI, MACD, EMA, BB, SuperTrend, StochRSI, etc.">Classic Indicators</button>
+              <button class="opt-chip active" data-cat="ict" onclick="toggleScanCat('ict',this)" title="FVG, IFVG, Order Block, Breaker Block, MSS, CHoCH, Liquidity Sweep, Mitigation Block">ICT/Smart Money</button>
+              <button class="opt-chip active" data-cat="sd" onclick="toggleScanCat('sd',this)" title="Supply/Demand Zone, Premium/Discount, Equilibrium Entry">Supply & Demand</button>
+              <button class="opt-chip active" data-cat="pa" onclick="toggleScanCat('pa',this)" title="Pin Bar, Engulfing Candle, Inside Bar Breakout">Price Action</button>
+              <button class="opt-chip active" data-cat="structure" onclick="toggleScanCat('structure',this)" title="HH/HL, LH/LL, Fibonacci Retracement, VWAP">Structure</button>
+            </div>
+            <div style="margin-top:8px;font-size:11px;color:var(--muted);line-height:1.6" id="scan-signal-detail">
+              <details style="cursor:pointer">
+                <summary style="font-weight:600;color:var(--text)">ℹ️ Signal type reference</summary>
+                <div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:10.5px">
+                  <div><b style="color:var(--accent)">ICT/Smart Money:</b></div><div></div>
+                  <div>FVG — 3-candle gap, entry on retrace into gap</div>
+                  <div>IFVG — Filled FVG flips to S/R, retest entry</div>
+                  <div>OB — Last opposite candle before strong move</div>
+                  <div>BB — Failed order block retested from other side</div>
+                  <div>MSS — Break of recent swing (structure shift)</div>
+                  <div>CHoCH — First break after series of LH/HL</div>
+                  <div>LQ — Wick sweeps level, close reverses back</div>
+                  <div>MIT — Retrace to origin candle of major move</div>
+                  <div><b style="color:var(--accent)">Supply & Demand:</b></div><div></div>
+                  <div>SDP — Zone before strong rally/drop, retest entry</div>
+                  <div>PD — Discount zone (longs) / Premium zone (shorts)</div>
+                  <div>EQ — 50% retracement of most recent swing</div>
+                  <div><b style="color:var(--accent)">Price Action:</b></div><div></div>
+                  <div>PIN — Small body, long wick reversal candle</div>
+                  <div>ENG — Body fully engulfs previous candle</div>
+                  <div>IB — Inside bar with breakout entry</div>
+                  <div><b style="color:var(--accent)">Structure:</b></div><div></div>
+                  <div>HH/HL — Higher highs & lows (uptrend)</div>
+                  <div>LH/LL — Lower highs & lows (downtrend)</div>
+                  <div>FIB — Entry at 0.618-0.705 retracement</div>
+                  <div>VWAP — Bounce/rejection at session VWAP</div>
+                </div>
+              </details>
+            </div>
+          </div>
+
           <button class="pine-analyse-btn" id="scan-run-btn" onclick="runScan()">🔍 Scan Strategies →</button>
           <div id="scan-grid-est" style="font-size:11px;color:var(--muted);text-align:center;margin-top:8px"></div>
         </div>
@@ -7840,6 +7885,7 @@ let _scanDays = 30;
 let _scanDir  = 'LONG';
 let _scanTfs  = ['1h'];   // selected timeframes (15m / 1h / 4h)
 let _scanRiskMode = 'optimised';  // 'optimised' (engine picks best TP/SL) | 'fixed' (user pins it)
+let _scanCats = ['classic', 'ict', 'sd', 'pa', 'structure'];  // active signal categories
 let _scanResult = null;   // last successful scan response
 
 function setScanRiskMode(mode, el) {
@@ -7848,6 +7894,19 @@ function setScanRiskMode(mode, el) {
   if (el) el.classList.add('active');
   const row = document.getElementById('scan-fixed-row');
   if (row) row.style.display = (_scanRiskMode === 'fixed') ? 'grid' : 'none';
+}
+
+function toggleScanCat(cat, el) {
+  const idx = _scanCats.indexOf(cat);
+  if (idx >= 0) {
+    if (_scanCats.length === 1) return;
+    _scanCats.splice(idx, 1);
+    el.classList.remove('active');
+  } else {
+    _scanCats.push(cat);
+    el.classList.add('active');
+  }
+  _updateScanGridEst();
 }
 
 function toggleScanTf(tf, el) {
@@ -7894,9 +7953,17 @@ function _updateScanGridEst() {
   const el = document.getElementById('scan-grid-est');
   if (!el) return;
   const coins = _parseScanCoins();
-  const total = coins.length * _scanTfs.length * 40;
+  const catStratCounts = {classic: 22, ict: 8, sd: 3, pa: 3, structure: 4, combo: 18};
+  let stratCount = 0;
+  if (_scanCats.includes('classic')) stratCount += catStratCounts.classic;
+  if (_scanCats.includes('ict')) stratCount += catStratCounts.ict;
+  if (_scanCats.includes('sd')) stratCount += catStratCounts.sd;
+  if (_scanCats.includes('pa')) stratCount += catStratCounts.pa;
+  if (_scanCats.includes('structure')) stratCount += catStratCounts.structure;
+  stratCount += catStratCounts.combo;
+  const total = coins.length * _scanTfs.length * stratCount;
   const eta = Math.max(8, Math.round(total * 0.08));
-  el.textContent = `${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × 40 strategies = ${total} backtests · ~${eta}s`;
+  el.textContent = `${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × ${stratCount} strategies = ${total} backtests · ~${eta}s`;
 }
 document.addEventListener('DOMContentLoaded', () => {
   const coinInput = document.getElementById('scan-coin');
@@ -8171,6 +8238,7 @@ async function runScan() {
         days: _scanDays,
         direction: _scanDir,
         risk_mode: _scanRiskMode,
+        signal_categories: _scanCats,
         fixed_tp: parseFloat(document.getElementById('scan-fixed-tp')?.value) || 3.0,
         fixed_sl: parseFloat(document.getElementById('scan-fixed-sl')?.value) || 1.5,
       }),
@@ -8227,14 +8295,24 @@ function renderScanResults(data) {
   insightEl.textContent = insight;
   insightEl.style.display = insight ? '' : 'none';
 
-  // Winner stat grid
+  // Winner stat grid — shows forex pips metrics when available
   const statsEl = document.getElementById('scan-winner-stats');
-  statsEl.innerHTML = [
+  const hasPips = ws.total_pips !== undefined && ws.total_pips !== null;
+  const pipsPos = (ws.total_pips || 0) >= 0;
+  const fxScore = ws.forex_score !== undefined ? ws.forex_score : null;
+  let statItems = [
     { label:'Win Rate',      val: (ws.win_rate||0).toFixed(1)+'%',       color: (ws.win_rate||0)>=50?'var(--green)':'var(--red)' },
-    { label:'Total P&L',    val: (pnlPos?'+':'')+(ws.total_pnl||0).toFixed(1)+'%', color: pnlPos?'var(--green)':'var(--red)' },
-    { label:'Profit Factor', val: (ws.profit_factor||0).toFixed(2),       color: (ws.profit_factor||0)>=1.2?'var(--green)':'var(--muted)' },
-    { label:'Trades',        val: ws.closed_trades||0,                    color: 'var(--text)' },
-  ].map(s => `<div style="background:var(--card2);border-radius:8px;padding:10px 8px;text-align:center">
+    { label: hasPips ? 'Total Pips' : 'Total P&L',
+      val: hasPips ? (pipsPos?'+':'')+(ws.total_pips||0).toFixed(1) : (pnlPos?'+':'')+(ws.total_pnl||0).toFixed(1)+'%',
+      color: (hasPips ? pipsPos : pnlPos) ? 'var(--green)':'var(--red)' },
+    { label: hasPips ? 'Avg Pips/Trade' : 'Profit Factor',
+      val: hasPips ? (ws.avg_pips_per_trade||0).toFixed(1) : (ws.profit_factor||0).toFixed(2),
+      color: (hasPips ? (ws.avg_pips_per_trade||0)>0 : (ws.profit_factor||0)>=1.2)?'var(--green)':'var(--muted)' },
+    { label: fxScore !== null ? 'Score' : 'Trades',
+      val: fxScore !== null ? fxScore + '/100' : ws.closed_trades||0,
+      color: fxScore !== null ? (fxScore >= 70 ? 'var(--green)' : fxScore >= 40 ? 'var(--accent)' : 'var(--red)') : 'var(--text)' },
+  ];
+  statsEl.innerHTML = statItems.map(s => `<div style="background:var(--card2);border-radius:8px;padding:10px 8px;text-align:center">
     <div style="font-size:16px;font-weight:800;color:${s.color}">${s.val}</div>
     <div style="font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.4px">${s.label}</div>
   </div>`).join('');
@@ -8271,16 +8349,20 @@ function renderScanResults(data) {
 
   // Category → badge color map
   const catColor = {
-    'Momentum':    '#5b6cf7',
-    'Trend':       '#10b981',
-    'Mean Rev':    '#f59e0b',
-    'Volatility':  '#ec4899',
-    'Volume':      '#06b6d4',
-    'Breakout':    '#ef4444',
-    'Price Action':'#8b5cf6',
-    'Divergence':  '#f97316',
-    'Combo':       '#a855f7',
-    'Other':       '#6b7280',
+    'Momentum':      '#5b6cf7',
+    'Trend':         '#10b981',
+    'Mean Rev':      '#f59e0b',
+    'Volatility':    '#ec4899',
+    'Volume':        '#06b6d4',
+    'Breakout':      '#ef4444',
+    'Price Action':  '#8b5cf6',
+    'Divergence':    '#f97316',
+    'Combo':         '#a855f7',
+    'ICT':           '#f59e0b',
+    'ICT Combo':     '#d97706',
+    'Supply/Demand': '#06b6d4',
+    'Structure':     '#10b981',
+    'Other':         '#6b7280',
   };
 
   // ── Equity curve + trade-by-trade table for the winning combo ────────────
@@ -8289,22 +8371,43 @@ function renderScanResults(data) {
   // every trade with entry/exit/PnL.
   _renderScanWinnerDetail(winner);
 
-  // Full ranking table — now includes Coin·TF column
+  // Full ranking table — now includes Coin·TF column + forex pips + badges
   const tableEl = document.getElementById('scan-table');
-  const cols = '1.4fr .85fr .55fr .9fr .55fr .7fr .8fr';
-  const headerRow = `<div style="display:grid;grid-template-columns:${cols};padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
-    <div>Strategy</div><div>Coin · TF</div><div>Type</div><div>Best Risk · TP/SL</div><div>Win%</div><div>P&L</div><div style="text-align:right">PF · Trades</div>
-  </div>`;
+  const anyPips = ranked.some(r => (r.stats||{}).total_pips !== undefined);
+  const cols = anyPips ? '1.4fr .75fr .5fr .55fr .6fr .6fr .7fr' : '1.4fr .85fr .55fr .9fr .55fr .7fr .8fr';
+  const headerRow = anyPips
+    ? `<div style="display:grid;grid-template-columns:${cols};padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
+        <div>Strategy</div><div>Coin · TF</div><div>Type</div><div>Win%</div><div>Avg Pips</div><div>Total Pips</div><div style="text-align:right">Score · Trades</div>
+      </div>`
+    : `<div style="display:grid;grid-template-columns:${cols};padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
+        <div>Strategy</div><div>Coin · TF</div><div>Type</div><div>Best Risk · TP/SL</div><div>Win%</div><div>P&L</div><div style="text-align:right">PF · Trades</div>
+      </div>`;
   tableEl.innerHTML = headerRow + ranked.map((r, i) => {
     const st    = r.stats || {};
     const pos   = (st.total_pnl || 0) >= 0;
     const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
+    const badgeBg = i === 0 ? 'background:linear-gradient(135deg,#ffd70022,#ffd70011);border:1px solid #ffd70044' :
+                    i === 1 ? 'background:linear-gradient(135deg,#c0c0c022,#c0c0c011);border:1px solid #c0c0c044' :
+                    i === 2 ? 'background:linear-gradient(135deg,#cd7f3222,#cd7f3211);border:1px solid #cd7f3244' : '';
     const cat   = r.category || 'Other';
     const cc    = catColor[cat] || catColor['Other'];
     const rk    = r.risk || {};
     const rcoin = r.coin || '—';
     const rtf   = r.timeframe || '1h';
-    return `<div style="display:grid;grid-template-columns:${cols};align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':''}">
+    if (anyPips) {
+      const pipsPos = (st.total_pips||0) >= 0;
+      const fxSc = st.forex_score !== undefined ? st.forex_score : '—';
+      return `<div style="display:grid;grid-template-columns:${cols};align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px;${badgeBg}${i===0?';border-radius:6px':''}">
+        <div style="font-weight:600">${medal} ${r.label}</div>
+        <div style="font-family:var(--mono);font-weight:700;font-size:11.5px"><span>${rcoin}</span> <span style="color:var(--muted);font-weight:500">· ${rtf}</span></div>
+        <div><span style="background:${cc}22;color:${cc};padding:2px 7px;border-radius:99px;font-size:10px;font-weight:700;letter-spacing:.2px">${cat}</span></div>
+        <div style="color:${(st.win_rate||0)>=50?'var(--green)':'var(--red)'};">${(st.win_rate||0).toFixed(1)}%</div>
+        <div style="color:${(st.avg_pips_per_trade||0)>=0?'var(--green)':'var(--red)'};font-weight:600">${(st.avg_pips_per_trade||0).toFixed(1)}</div>
+        <div style="color:${pipsPos?'var(--green)':'var(--red)'};font-weight:600">${pipsPos?'+':''}${(st.total_pips||0).toFixed(1)}</div>
+        <div style="color:var(--muted);text-align:right;font-size:11px"><span style="color:var(--accent);font-weight:600">${fxSc}</span>/100 · ${st.closed_trades||0}t</div>
+      </div>`;
+    }
+    return `<div style="display:grid;grid-template-columns:${cols};align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px;${badgeBg}${i===0?';border-radius:6px':''}">
       <div style="font-weight:600">${medal} ${r.label}</div>
       <div style="font-family:var(--mono);font-weight:700;font-size:11.5px"><span>${rcoin}</span> <span style="color:var(--muted);font-weight:500">· ${rtf}</span></div>
       <div><span style="background:${cc}22;color:${cc};padding:2px 7px;border-radius:99px;font-size:10px;font-weight:700;letter-spacing:.2px">${cat}</span></div>
