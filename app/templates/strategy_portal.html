@@ -8252,14 +8252,14 @@ function goldBuildInAI(){
 // uses) and saved as a PAPER strategy so nothing goes live unintentionally.
 async function _goldBuildOne(entry){
   // 1) Compile the NL prompt into a strategy config via the proven compiler.
-  const cRes = await fetch('/api/build-strategy', {
+  const cRes = await fetch('/api/build-from-scan', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ uid:UID, name:(entry.build_name||entry.label||'Gold strategy'), description:(entry.build_prompt||'') })
+    body: JSON.stringify({ uid:UID, entry, symbol:'XAUUSD', asset_class:'forex', name:(entry.build_name||entry.label||'Gold strategy') })
   });
   const cData = await cRes.json();
-  if(!cRes.ok || !cData.config) throw new Error((cData && (cData.error||cData.message)) || 'compile failed');
+  if(!cRes.ok || !cData.config) throw new Error((cData && (cData.error||cData.message||cData.detail)) || 'compile failed');
   const cfg = cData.config;
-  // 2) Force gold/forex specifics so the save guardrails always pass and it's safe.
+  // Deterministic compile already sets gold/forex specifics — reinforce for safety.
   cfg.name = (entry.build_name||entry.label||'Gold strategy');
   cfg.asset_class = 'forex';
   cfg.universe = { type:'specific', symbols:['XAUUSD'] };
@@ -8433,12 +8433,12 @@ function indexBuildInAI(){
 }
 async function _indexBuildOne(entry){
   const sym = (INDEX.result && INDEX.result.symbol) || INDEX.sym || 'NAS100';
-  const cRes = await fetch('/api/build-strategy', {
+  const cRes = await fetch('/api/build-from-scan', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ uid:UID, name:(entry.build_name||entry.label||'Index strategy'), description:(entry.build_prompt||'') })
+    body: JSON.stringify({ uid:UID, entry, symbol:sym, asset_class:'index', name:(entry.build_name||entry.label||'Index strategy') })
   });
   const cData = await cRes.json();
-  if(!cRes.ok || !cData.config) throw new Error((cData && (cData.error||cData.message)) || 'compile failed');
+  if(!cRes.ok || !cData.config) throw new Error((cData && (cData.error||cData.message||cData.detail)) || 'compile failed');
   const cfg = cData.config;
   cfg.name = (entry.build_name||entry.label||'Index strategy');
   cfg.asset_class = 'index';
@@ -8491,7 +8491,7 @@ async function indexBuildAll(){
   await Promise.all([worker(),worker(),worker()]);
   allBtn.disabled = false; oneBtn.disabled = false;
   allBtn.textContent = '✅ Built '+ok+(fail?' · '+fail+' failed':'');
-  alert('Built '+ok+' paper index strateg'+(ok===1?'y':'ies')+'. Open My Strategies — they scan every ~30s during US market hours. Watch entries & exits in the Trades tab. No cTrader needed until you go live.');
+  alert('Built '+ok+' paper index strateg'+(ok===1?'y':'ies')+(fail?(' ('+fail+' failed)'):'')+'. Open My Strategies — they scan every ~5s during US market hours. Watch entries & exits in the Trades tab. No cTrader needed until you go live.');
   if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
 }
 

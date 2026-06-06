@@ -2113,6 +2113,37 @@ async def eval_pivot_points(
         return False, f"Pivot points error: {e}"
 
 
+# Condition types implemented in backtest_engine but shared with live eval via klines.
+_BT_KLINE_TYPES = frozenset({
+    "supply_demand", "premium_discount", "equilibrium",
+    "pin_bar", "engulfing", "inside_bar", "hh_hl", "lh_ll",
+    "fib_retracement", "vwap_bounce", "mitigation_block",
+    "ifvg", "breaker_block", "mss", "choch", "liquidity_sweep",
+})
+
+
+async def eval_bt_klines_cond(
+    cond: Dict, symbol: str, http_client, cache: Dict,
+) -> Tuple[bool, str]:
+    """Port backtest_engine signal eval to live OHLC (Index/Gold finder strategies)."""
+    ctype = cond.get("type", "")
+    tf = cond.get("timeframe", "15m")
+    try:
+        klines = await _get_klines(symbol, tf, 80, http_client, cache)
+        if not klines:
+            return False, f"{ctype}: no {tf} klines"
+        rows = [
+            [int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4])]
+            for k in klines
+        ]
+        from app.services.backtest_engine import eval_condition_bt
+        ok = eval_condition_bt(cond, rows)
+        label = ctype.replace("_", " ").title()
+        return ok, f"{label} ({tf})"
+    except Exception as e:
+        return False, f"{ctype} error: {e}"
+
+
 async def eval_session_level(
     cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
 ) -> Tuple[bool, str]:
@@ -3934,6 +3965,8 @@ async def evaluate_strategy_conditions(
                 return await eval_pivot_points(cond, symbol, price, http_client, cache)
             elif ctype == "session_level":
                 return await eval_session_level(cond, symbol, price, http_client, cache)
+            elif ctype in _BT_KLINE_TYPES:
+                return await eval_bt_klines_cond(cond, symbol, http_client, cache)
             else:
                 return False, f"Unknown condition type: {ctype}"
         except Exception as e:
