@@ -7,8 +7,9 @@ Price path:
   Others: FMP real-time WebSocket → yfinance fast_info fallback.
 
 Kline path:
-  Metals (XAUUSD/XAGUSD): Binance spot API — returns closed candles only
-  (we fetch limit+1 bars and drop the still-forming last bar).
+  Metals (XAUUSD/XAGUSD): cTrader trendbars → FMP historical-chart → Binance spot.
+  FMP is preferred over Binance because spot metals pairs are geo-blocked on
+  Binance from our infra; yfinance GC=F futures are intentionally skipped.
   Others: yfinance download() — intraday OHLC for forex/indices.
 
 Returned shapes mirror the crypto helpers so the strategy executor can
@@ -306,6 +307,22 @@ async def _get_klines_impl(
     except Exception:
         pass
 
+    # ── FMP historical-chart — metals (spot XAUUSD/XAGUSD, all timeframes) ───
+    # Primary fallback when cTrader is down. Binance spot metals are geo-blocked
+    # from our servers and yfinance maps to futures (GC=F), so FMP is the only
+    # reliable non-broker source for gold/silver backtests (e.g. Gold Strategy Finder).
+    if symbol.upper() in _METALS_BINANCE_MAP and _FMP_API_KEY:
+        try:
+            from app.services.fmp_price_feed import get_klines as _fmp_klines
+            _frows = await _fmp_klines(symbol, asset_class, timeframe, limit)
+            if _frows:
+                logger.info(
+                    f"[tradfi] klines ok (FMP): {symbol.upper()} {timeframe} → {len(_frows)} bars"
+                )
+                return _frows
+        except Exception as _fe:
+            logger.debug(f"[tradfi] FMP klines failed {symbol} {timeframe}: {_fe}")
+
     # ── Binance spot metals path (XAUUSDT / XAGUSDT) ─────────────────────────
     _bn_sym = _METALS_BINANCE_MAP.get(symbol.upper())
     if _bn_sym:
@@ -405,8 +422,8 @@ async def _get_klines_impl(
     # yfinance maps gold/silver to FUTURES (GC=F / SI=F), a different instrument
     # that trades a few dollars off spot. Feeding those candles to signal/paper
     # evaluation mismatches the cTrader spot the broker actually fills, so for
-    # metals we stop here (cTrader trendbars + Binance spot already tried above)
-    # and skip the bar rather than serve futures data — mirrors get_price().
+    # metals we stop here (cTrader + FMP + Binance already tried above) and skip
+    # the bar rather than serve futures data — mirrors get_price().
     if symbol.upper() in _METALS_BINANCE_MAP:
         return []
 
