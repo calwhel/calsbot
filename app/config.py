@@ -3,8 +3,10 @@ from typing import Optional
 
 
 class Settings(BaseSettings):
-    TELEGRAM_BOT_TOKEN: str
-    BROADCAST_CHAT_ID: str
+    # Optional at import time so Strategy Portal can boot on Railway without the
+    # full Telegram bot stack. Bot/notifications code should check before use.
+    TELEGRAM_BOT_TOKEN: str = ""
+    BROADCAST_CHAT_ID: str = ""
     
     DB_HOST: Optional[str] = None
     DB_PORT: Optional[str] = None
