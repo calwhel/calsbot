@@ -78,7 +78,7 @@ async def place_bitunix_order_for_user(
     trader = BitunixTrader(
         api_key=api_key,
         api_secret=api_secret,
-        bitunix_uid=getattr(user, "bitunix_uid", None),
+        bitunix_uid=getattr(prefs, "bitunix_uid", None),
     )
     try:
         if risk_usd:
