@@ -53,7 +53,9 @@ _CACHE: Dict[str, Tuple] = {}
 # Structured cache module (thread-safe, used for new/fixed endpoints)
 from app.cache import get_cache, set_cache, invalidate_cache, invalidate_prefix  # noqa: E402
 
-logging.basicConfig(level=logging.INFO)
+from app.logging_safe import configure_safe_logging
+
+configure_safe_logging(logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Strategy Portal", docs_url=None, redoc_url=None)

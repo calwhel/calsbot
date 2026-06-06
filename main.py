@@ -28,10 +28,9 @@ from app.config import settings
 from app.database import init_db_minimal as init_db
 from app.services.subscriptions import api as subscription_api
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from app.logging_safe import configure_safe_logging
+
+configure_safe_logging(logging.INFO)
 
 
 def run_migrations():
