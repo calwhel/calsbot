@@ -77,6 +77,16 @@ async def lifespan(app: FastAPI):
     # Only poll Telegram in production (or when FORCE_BOT_POLL=1 override is set).
     # This prevents the dev IDE instance from conflicting with the live production bot.
     if _START_BOT_POLLING:
+        try:
+            from app.services.telegram_poller_lock import describe_bot_token
+            from app.services.telegram_tokens import forex_bot_token, main_bot_token
+
+            _main_info = await describe_bot_token(main_bot_token(), "main")
+            _fx_info = await describe_bot_token(forex_bot_token(), "forex")
+            logging.info(f"[tg] poller identity: main={_main_info} forex={_fx_info}")
+        except Exception as _id_err:
+            logging.warning(f"[tg] bot identity probe failed: {_id_err}")
+
         bot_task = asyncio.create_task(start_bot())
         from app.services.telegram_tokens import should_run_forex_poller, tokens_are_same
         from app.services.telegram_tokens import forex_bot_token, main_bot_token

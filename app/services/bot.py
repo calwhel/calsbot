@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 import ccxt.async_support as ccxt
 from aiogram import Bot, Dispatcher, types, F
@@ -17331,7 +17332,13 @@ async def start_bot():
         
         # (Railway 15s startup delay removed — running on Replit, not Railway)
         
-        logger.info("Bot polling started")
+        try:
+            me = await bot.get_me()
+            logger.info(
+                f"Bot polling started — @{me.username} (id={me.id}) PID {os.getpid()}"
+            )
+        except Exception:
+            logger.info("Bot polling started")
         await dp.start_polling(bot)
     finally:
         # Cleanup on shutdown

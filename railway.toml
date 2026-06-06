@@ -4,3 +4,5 @@
 startCommand = "bash start.sh"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
+# One replica only — multiple containers each run a [tg-bot] poller → ConflictError.
+numReplicas = 1

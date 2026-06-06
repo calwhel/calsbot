@@ -1,0 +1,151 @@
+"""
+PostgreSQL advisory locks — one poller per bot token across all hosts/replicas.
+
+Main crypto bot and forex bot use separate lock IDs so two different bots can
+poll concurrently without fighting each other.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import threading
+import time
+from typing import Dict, Optional
+
+logger = logging.getLogger(__name__)
+
+MAIN_POLLER_LOCK_ID = 5_432_109_876
+FOREX_POLLER_LOCK_ID = 5_432_109_877
+
+KEEPALIVE_INTERVAL = 20
+_instance_id = str(os.getpid())
+
+_lock_conns: Dict[int, object] = {}
+_keepalive_threads: Dict[int, threading.Thread] = {}
+
+
+def _get_db_url() -> str:
+    return os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL", "") or ""
+
+
+def _try_acquire(lock_id: int) -> bool:
+    """Try to acquire lock_id. Fail-closed — never poll without a real lock."""
+    import psycopg2
+
+    db_url = _get_db_url()
+    if not db_url:
+        logger.error(
+            "[tg-lock] NEON_DATABASE_URL missing — refusing to poll (fail-closed)"
+        )
+        return False
+
+    try:
+        old = _lock_conns.pop(lock_id, None)
+        if old:
+            try:
+                old.close()
+            except Exception:
+                pass
+
+        conn = psycopg2.connect(
+            db_url,
+            connect_timeout=10,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+        )
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_id,))
+            acquired = bool(cur.fetchone()[0])
+
+        if acquired:
+            _lock_conns[lock_id] = conn
+            logger.info(
+                f"[tg-lock] acquired lock {lock_id} — PID {_instance_id} may poll"
+            )
+            return True
+
+        conn.close()
+        logger.info(f"[tg-lock] lock {lock_id} held elsewhere — waiting")
+        return False
+    except Exception as e:
+        logger.error(f"[tg-lock] acquire {lock_id} failed: {e} — will retry (fail-closed)")
+        return False
+
+
+def _release(lock_id: int) -> None:
+    conn = _lock_conns.pop(lock_id, None)
+    if conn:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        logger.info(f"[tg-lock] released lock {lock_id} (PID {_instance_id})")
+
+
+def _keepalive_loop(lock_id: int) -> None:
+    while lock_id in _lock_conns:
+        time.sleep(KEEPALIVE_INTERVAL)
+        conn = _lock_conns.get(lock_id)
+        if not conn:
+            break
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+        except Exception as e:
+            logger.warning(f"[tg-lock] keepalive failed for {lock_id}: {e}")
+            break
+
+
+def _start_keepalive(lock_id: int) -> None:
+    t = _keepalive_threads.get(lock_id)
+    if t and t.is_alive():
+        return
+    t = threading.Thread(target=_keepalive_loop, args=(lock_id,), daemon=True)
+    _keepalive_threads[lock_id] = t
+    t.start()
+
+
+async def wait_for_poller_lock(lock_id: int, retry_seconds: int = 30) -> None:
+    """Block until this process holds lock_id."""
+    import asyncio
+
+    while True:
+        if await asyncio.to_thread(_try_acquire, lock_id):
+            _start_keepalive(lock_id)
+            return
+        await asyncio.sleep(retry_seconds)
+
+
+def release_poller_lock(lock_id: int) -> None:
+    _release(lock_id)
+
+
+def holds_lock(lock_id: int) -> bool:
+    return lock_id in _lock_conns
+
+
+async def describe_bot_token(token: str, label: str) -> dict:
+    """getMe probe for admin diagnostics."""
+    import httpx
+
+    if not token:
+        return {"label": label, "configured": False}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+            body = r.json()
+        if r.status_code == 200 and body.get("ok"):
+            me = body["result"]
+            return {
+                "label": label,
+                "configured": True,
+                "id": me.get("id"),
+                "username": me.get("username"),
+            }
+        return {"label": label, "configured": True, "error": body.get("description", r.text[:200])}
+    except Exception as e:
+        return {"label": label, "configured": True, "error": str(e)}

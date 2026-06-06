@@ -10,8 +10,10 @@ export FORCE_EXECUTOR="${FORCE_EXECUTOR:-1}"
 # TelegramConflictError). Railway's restartPolicy restarts the whole container.
 if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ "${DISABLE_TELEGRAM_POLL:-}" != "1" ]; then
   export FORCE_BOT_POLL=1
-  echo "[railway] Starting Telegram bot companion (single process, port 8080)..."
-  python -m uvicorn main:app --host 127.0.0.1 --port 8080 2>&1 | sed 's/^/[tg-bot] /' &
+  # Stagger so a rolling deploy's old container releases getUpdates first.
+  _tg_delay="${TELEGRAM_POLL_START_DELAY:-25}"
+  echo "[railway] Telegram bot companion starts in ${_tg_delay}s (port 8080)..."
+  ( sleep "${_tg_delay}"; python -m uvicorn main:app --host 127.0.0.1 --port 8080 2>&1 | sed 's/^/[tg-bot] /' ) &
 fi
 
 echo "[railway] Starting Strategy Portal on port ${PORT:-5000}..."

@@ -434,7 +434,14 @@ async def start_forex_bot():
         else:
             logger.warning("[forex_bot] FOREX_BOT_TOKEN not set — skipping")
         return
-    logger.info("[forex_bot] Starting forex support bot polling…")
+    from app.services.telegram_poller_lock import FOREX_POLLER_LOCK_ID, wait_for_poller_lock
+
+    me = await forex_bot.get_me()
+    logger.info(
+        f"[forex_bot] Starting forex poller for @{me.username} (id={me.id}) "
+        f"— acquiring lock {FOREX_POLLER_LOCK_ID}…"
+    )
+    await wait_for_poller_lock(FOREX_POLLER_LOCK_ID)
     try:
         await forex_bot.delete_webhook(drop_pending_updates=True)
         from aiogram.types import BotCommand

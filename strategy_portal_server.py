@@ -12020,6 +12020,52 @@ async def executor_status(request: Request):
     }
 
 
+@app.get("/api/admin/telegram/status")
+async def admin_telegram_status(request: Request):
+    """Show which bots each token maps to + DB poller lock holders."""
+    _require_admin_bearer(request)
+    from app.services.telegram_poller_lock import (
+        MAIN_POLLER_LOCK_ID,
+        FOREX_POLLER_LOCK_ID,
+        describe_bot_token,
+    )
+    from app.services.telegram_tokens import forex_bot_token, main_bot_token
+
+    locks = {}
+    from app.database import SessionLocal
+    from sqlalchemy import text
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                "SELECT l.objid, l.pid, COALESCE(a.state, 'gone') AS state "
+                "FROM pg_locks l "
+                "LEFT JOIN pg_stat_activity a ON a.pid = l.pid "
+                "WHERE l.locktype = 'advisory' AND l.granted = true "
+                "AND l.objid IN (:main, :forex)"
+            ),
+            {"main": MAIN_POLLER_LOCK_ID, "forex": FOREX_POLLER_LOCK_ID},
+        ).fetchall()
+        for objid, pid, state in rows:
+            locks[str(objid)] = {"pid": pid, "state": state}
+    except Exception as e:
+        locks = {"error": str(e)}
+    finally:
+        db.close()
+
+    return {
+        "main_bot": await describe_bot_token(main_bot_token(), "TELEGRAM_BOT_TOKEN"),
+        "forex_bot": await describe_bot_token(forex_bot_token(), "FOREX_BOT_TOKEN"),
+        "poller_locks": locks,
+        "lock_ids": {"main": MAIN_POLLER_LOCK_ID, "forex": FOREX_POLLER_LOCK_ID},
+        "hint": (
+            "TelegramConflictError on the main bot means two processes poll "
+            "TELEGRAM_BOT_TOKEN. Check Railway replicas=1 and remove the token "
+            "from Replit. Main and forex bots may both poll if they are different bots."
+        ),
+    }
+
+
 @app.post("/api/admin/telegram/test")
 async def admin_telegram_test(request: Request):
     """Send a test DM to OWNER_TELEGRAM_ID — verifies trade/health notification path."""

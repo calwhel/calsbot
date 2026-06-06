@@ -20,97 +20,19 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-ADVISORY_LOCK_ID = 5_432_109_876          # Arbitrary stable integer — unique to this app
-RETRY_INTERVAL   = 30                     # Seconds loser waits before re-trying
-KEEPALIVE_INTERVAL = 20                   # Seconds between keepalive pings on the lock conn
+from app.services.telegram_poller_lock import (
+    MAIN_POLLER_LOCK_ID as ADVISORY_LOCK_ID,
+    holds_lock,
+    release_poller_lock,
+    _try_acquire as _try_acquire_advisory_lock,
+)
 
-_lock_conn   = None    # The psycopg2 connection holding the lock
-_lock_held   = False
+RETRY_INTERVAL = 30
 _instance_id = str(os.getpid())
 
 
-def _get_db_url() -> str:
-    """Return Neon database URL from environment."""
-    url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL", "")
-    return url
-
-
-def _try_acquire_advisory_lock() -> bool:
-    """
-    Try to acquire a PostgreSQL advisory lock.
-    Returns True if acquired, False if another instance holds it.
-    Keeps the connection open so the lock persists.
-    """
-    global _lock_conn, _lock_held
-    import psycopg2
-
-    db_url = _get_db_url()
-    if not db_url:
-        logger.warning("No DB URL — skipping advisory lock, proceeding anyway")
-        _lock_held = True
-        return True
-
-    try:
-        if _lock_conn:
-            try:
-                _lock_conn.close()
-            except Exception:
-                pass
-            _lock_conn = None
-
-        conn = psycopg2.connect(db_url, connect_timeout=10,
-                                keepalives=1, keepalives_idle=30,
-                                keepalives_interval=10, keepalives_count=5)
-        conn.autocommit = True
-
-        with conn.cursor() as cur:
-            cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_ID,))
-            acquired = cur.fetchone()[0]
-
-        if acquired:
-            _lock_conn = conn
-            _lock_held = True
-            logger.info(f"✅ DB advisory lock acquired — this instance is the Telegram poller (PID {_instance_id})")
-            return True
-        else:
-            conn.close()
-            _lock_held = False
-            logger.info("⏳ Another instance holds the advisory lock — this instance will wait")
-            return False
-
-    except Exception as e:
-        logger.error(f"Advisory lock error: {e}")
-        _lock_held = True      # Fail-open: if DB is unreachable, try to poll anyway
-        return True
-
-
 def _release_advisory_lock():
-    """Release the advisory lock by closing the connection."""
-    global _lock_conn, _lock_held
-    if _lock_conn:
-        try:
-            _lock_conn.close()
-        except Exception:
-            pass
-        _lock_conn = None
-    _lock_held = False
-    logger.info("🔓 Advisory lock released")
-
-
-def _keepalive_loop():
-    """Background thread: ping the lock connection to keep it alive."""
-    import psycopg2
-    while True:
-        time.sleep(KEEPALIVE_INTERVAL)
-        global _lock_conn
-        if _lock_conn is None:
-            break
-        try:
-            with _lock_conn.cursor() as cur:
-                cur.execute("SELECT 1")
-        except Exception as e:
-            logger.warning(f"Advisory lock keepalive failed: {e}")
-            break
+    release_poller_lock(ADVISORY_LOCK_ID)
 
 
 # ─── Public interface ────────────────────────────────────────────────────────
@@ -126,7 +48,7 @@ class BotInstanceManager:
 
     @property
     def is_locked(self) -> bool:
-        return _lock_held
+        return holds_lock(ADVISORY_LOCK_ID)
 
     async def acquire_lock(self) -> bool:
         """
@@ -135,19 +57,11 @@ class BotInstanceManager:
         Returns True once this instance is the winner.
         """
         while True:
-            acquired = await asyncio.to_thread(_try_acquire_advisory_lock)
+            acquired = await asyncio.to_thread(_try_acquire_advisory_lock, ADVISORY_LOCK_ID)
             if acquired:
-                self._start_keepalive()
                 return True
             logger.info(f"🔁 Lock not available — retrying in {RETRY_INTERVAL}s...")
             await asyncio.sleep(RETRY_INTERVAL)
-
-    def _start_keepalive(self):
-        """Start the background keepalive thread."""
-        if self._keepalive_thread is None or not self._keepalive_thread.is_alive():
-            t = threading.Thread(target=_keepalive_loop, daemon=True)
-            t.start()
-            self._keepalive_thread = t
 
     async def release_lock(self):
         await asyncio.to_thread(_release_advisory_lock)
