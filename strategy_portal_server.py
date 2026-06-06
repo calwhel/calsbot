@@ -9942,31 +9942,53 @@ async def api_ctrader_disconnect(uid: str = Query(...)):
 @app.get("/api/ctrader/feed-status")
 async def api_ctrader_feed_status():
     """
-    Returns the current state of the FMP real-time price feed.
-    No auth required — read-only diagnostic endpoint.
+    Price-feed diagnostics: cTrader live ticks (broker-matched) + FMP poll cache.
+    No auth required — read-only.
     """
+    out = {
+        "ctrader": {"live": False, "symbol_count": 0, "cached_symbols": []},
+        "fmp":     {"live": False, "symbol_count": 0, "cached_symbols": []},
+        "primary_source": "yfinance_fallback",
+    }
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        _c_syms = _ctf.cached_symbols()
+        out["ctrader"] = {
+            "live":           bool(_ctf.is_live()),
+            "symbol_count":   len(_c_syms),
+            "cached_symbols": _c_syms[:30],
+        }
+    except Exception as e:
+        out["ctrader"]["error"] = str(e)
+
     try:
         from app.services.fmp_price_feed import (
             is_live as _fmp_live,
             cached_symbols as _fmp_syms,
             symbol_count as _fmp_count,
         )
-        live = _fmp_live()
-        symbols = _fmp_syms()
-        return JSONResponse({
-            "live":            live,
-            "cached_symbols":  symbols,
-            "symbol_count":    _fmp_count(),
-            "source":          "fmp_realtime" if live else "yfinance_fallback",
-        })
+        _f_syms = _fmp_syms()
+        out["fmp"] = {
+            "live":           bool(_fmp_live()),
+            "symbol_count":   _fmp_count(),
+            "cached_symbols": _f_syms[:30],
+        }
     except Exception as e:
-        return JSONResponse({
-            "live":           False,
-            "cached_symbols": [],
-            "symbol_count":   0,
-            "source":         "yfinance_fallback",
-            "error":          str(e),
-        })
+        out["fmp"]["error"] = str(e)
+
+    if out["ctrader"]["symbol_count"] > 0:
+        out["primary_source"] = "ctrader_realtime"
+    elif out["fmp"]["symbol_count"] > 0:
+        out["primary_source"] = "fmp_realtime"
+    else:
+        out["primary_source"] = "yfinance_fallback"
+
+    # Back-compat fields used by older UI checks
+    out["live"] = out["fmp"]["live"] or out["ctrader"]["live"]
+    out["cached_symbols"] = out["ctrader"]["cached_symbols"] or out["fmp"]["cached_symbols"]
+    out["symbol_count"] = out["ctrader"]["symbol_count"] + out["fmp"]["symbol_count"]
+    out["source"] = out["primary_source"]
+    return JSONResponse(out)
 
 
 @app.get("/api/live-forex/account")

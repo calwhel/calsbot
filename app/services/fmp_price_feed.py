@@ -288,83 +288,145 @@ async def get_klines(
 
 # ── REST polling loop ─────────────────────────────────────────────────────────
 
+async def _fmp_get_json(url: str, params: dict) -> Optional[object]:
+    """GET JSON from FMP — httpx first, aiohttp fallback."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code != 200:
+                return None
+            return resp.json()
+    except Exception as e:
+        logger.debug(f"[FMPFeed] httpx GET failed {url}: {e}")
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url, params=params, timeout=aiohttp.ClientTimeout(total=8)
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                return await resp.json(content_type=None)
+    except Exception as e:
+        logger.debug(f"[FMPFeed] aiohttp GET failed {url}: {e}")
+    return None
+
+
+def _mid_from_quote_item(item: dict) -> Optional[float]:
+    """Extract mid price from FMP stable or legacy quote objects."""
+    bid = item.get("bid")
+    ask = item.get("ask")
+    if bid is not None and ask is not None:
+        try:
+            return (float(bid) + float(ask)) / 2.0
+        except (TypeError, ValueError):
+            pass
+    for key in ("price", "previousClose", "open"):
+        val = item.get(key)
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _store_fmp_price(display_sym: str, mid: float, now: datetime) -> None:
+    if mid > 0:
+        _PRICE_CACHE[display_sym.upper()] = (mid, now)
+
+
 async def _poll_forex():
-    """Poll FMP /api/v3/fx for all forex + metals symbols."""
+    """Poll FMP stable batch-forex-quotes (legacy /api/v3/fx as fallback)."""
     api_key = _fmp_api_key()
     if not api_key:
         return
 
-    symbols_csv = ",".join(_FOREX_SYMBOLS)
-    url = f"https://financialmodelingprep.com/api/v3/fx?apikey={api_key}"
-    try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
-                if resp.status != 200:
-                    return
-                data = await resp.json(content_type=None)
-    except Exception as e:
-        logger.debug(f"[FMPFeed] forex poll error: {e}")
-        return
-
+    now = datetime.utcnow()
+    data = await _fmp_get_json(
+        f"{_FMP_STABLE_BASE}/batch-forex-quotes",
+        {"apikey": api_key},
+    )
+    if data is None:
+        data = await _fmp_get_json(
+            "https://financialmodelingprep.com/api/v3/fx",
+            {"apikey": api_key},
+        )
     if not isinstance(data, list):
         return
 
-    now = datetime.utcnow()
     for item in data:
+        if not isinstance(item, dict):
+            continue
         try:
-            ticker = (item.get("ticker") or "").replace("/", "").upper()
+            ticker = (
+                (item.get("symbol") or item.get("ticker") or "")
+                .replace("/", "")
+                .upper()
+            )
             if ticker not in _FOREX_SYMBOLS:
                 continue
-            bid = item.get("bid")
-            ask = item.get("ask")
-            price = item.get("price") or item.get("changes")
-            if bid and ask:
-                mid = (float(bid) + float(ask)) / 2.0
-            elif price:
-                mid = float(price)
-            else:
-                continue
-            _PRICE_CACHE[ticker] = (mid, now)
+            mid = _mid_from_quote_item(item)
+            if mid is not None:
+                _store_fmp_price(ticker, mid, now)
         except Exception:
             continue
 
 
 async def _poll_indices():
-    """Poll FMP /api/v3/quote for index symbols."""
+    """Poll FMP stable /quote per index (legacy /api/v3/quote as fallback)."""
     api_key = _fmp_api_key()
     if not api_key:
         return
 
-    index_tickers = [v.replace("%5E", "^") for v in _INDEX_FMP.values()]
-    symbols_csv = ",".join(t.replace("^", "%5E") for t in index_tickers)
-    url = f"https://financialmodelingprep.com/api/v3/quote/{symbols_csv}?apikey={api_key}"
-    try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
-                if resp.status != 200:
-                    return
-                data = await resp.json(content_type=None)
-    except Exception as e:
-        logger.debug(f"[FMPFeed] index poll error: {e}")
+    now = datetime.utcnow()
+    # Stable API: one quote per canonical index symbol (^NDX, ^GSPC, …).
+    _canonical = ("NAS100", "SPX500", "US30", "GER40", "UK100", "VIX")
+    for display in _canonical:
+        fmp_enc = _INDEX_FMP.get(display)
+        if not fmp_enc:
+            continue
+        fmp_sym = fmp_enc.replace("%5E", "^")
+
+        data = await _fmp_get_json(
+            f"{_FMP_STABLE_BASE}/quote",
+            {"symbol": fmp_sym, "apikey": api_key},
+        )
+        rows = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
+        if not rows:
+            continue
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            mid = _mid_from_quote_item(item)
+            if mid is not None:
+                _store_fmp_price(display, mid, now)
+
+    if any(sym in _PRICE_CACHE for sym in ("NAS100", "SPX500", "US30")):
         return
 
+    # Legacy batch fallback for older FMP plans still on /api/v3.
+    index_tickers = list({v.replace("%5E", "^") for v in _INDEX_FMP.values()})
+    symbols_csv = ",".join(t.replace("^", "%5E") for t in index_tickers)
+    data = await _fmp_get_json(
+        f"{_FMP_LEGACY_BASE}/quote/{symbols_csv}",
+        {"apikey": api_key},
+    )
     if not isinstance(data, list):
         return
-
-    now = datetime.utcnow()
     for item in data:
+        if not isinstance(item, dict):
+            continue
         try:
             fmp_sym = (item.get("symbol") or "").upper()
-            price = item.get("price")
-            if not price:
+            mid = _mid_from_quote_item(item)
+            if mid is None:
                 continue
-            # Map encoded key back to display name
             encoded = fmp_sym.replace("^", "%5E")
             display = _FMP_TO_DISPLAY.get(encoded) or _FMP_TO_DISPLAY.get(fmp_sym)
             if display:
-                _PRICE_CACHE[display] = (float(price), now)
+                _store_fmp_price(display, mid, now)
         except Exception:
             continue
 
