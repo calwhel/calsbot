@@ -7431,11 +7431,30 @@ async function loadCtraderCard(){
     if(d.connected){
       card.style.display='block'; form.style.display='none';
       const acct=escHtml(d.account_id||'—');
-      $('ctrader-meta').innerHTML=`Account ID <code>${acct}</code> · FP Markets · Live`;
+      const accounts=d.accounts||[];
+      const selAcct=accounts.find(a=>String(a.ctidTraderAccountId)===String(d.account_id));
+      const liveLbl=selAcct&&selAcct.isLive===false?'Demo':'Live';
+      let feedLine='Checking live price feed…';
+      try{
+        const fr=await fetch('/api/ctrader/feed-status');
+        if(fr.ok){
+          const fd=await fr.json();
+          const ct=fd.ctrader||{};
+          const n=ct.symbol_count||0;
+          if(ct.live&&n>0){
+            const syms=(ct.cached_symbols||[]).slice(0,6).join(', ');
+            feedLine=`Live ticks: <b>${n}</b> symbols`+(syms?` (${escHtml(syms)}…)`:'')+` · prices from <b>cTrader</b>`;
+          }else if(ct.error){
+            feedLine=`OAuth linked, but server feed not streaming yet (${escHtml(ct.error)}). Paper still works via Yahoo.`;
+          }else{
+            feedLine='OAuth linked — waiting for server tick stream (can take ~30s after deploy). Paper uses Yahoo until ticks arrive.';
+          }
+        }
+      }catch(e){feedLine='OAuth linked — live tick status unavailable.';}
+      $('ctrader-meta').innerHTML=`Account ID <code>${acct}</code> · FP Markets · ${liveLbl}<br><span style="font-size:11px">${feedLine}</span>`;
       // Show account picker if multiple accounts exist
       const picker=$('ctrader-acct-picker');
       const sel=$('ctrader-acct-select');
-      const accounts=d.accounts||[];
       if(accounts.length>1){
         sel.innerHTML=accounts.map(a=>{
           const label=a.isLive?`Live #${a.traderLogin||a.ctidTraderAccountId}`:`Demo #${a.traderLogin||a.ctidTraderAccountId}`;

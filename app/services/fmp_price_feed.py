@@ -473,6 +473,21 @@ async def _poll_indices():
         _fmp_note_success()
 
 
+def _ctrader_feed_active() -> bool:
+    """True when cTrader is streaming fresh ticks — FMP can stay dormant."""
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        if not _ctf.is_live():
+            return False
+        syms = set(_ctf.cached_symbols())
+        if len(syms) >= 8:
+            return True
+        # A few key symbols is enough to prove the broker feed is healthy.
+        return len(syms & {"EURUSD", "NAS100", "XAUUSD", "GBPUSD", "US30"}) >= 2
+    except Exception:
+        return False
+
+
 async def _stream():
     global _RUNNING
     api_key = _fmp_api_key()
@@ -483,8 +498,20 @@ async def _stream():
     logger.info(f"[FMPFeed] REST polling started — {len(_FOREX_SYMBOLS)} forex + {len(_INDEX_FMP)} indices every {_POLL_INTERVAL}s")
     _RUNNING = True
     errors = 0
+    _ctrader_skip_logged = False
 
     while True:
+        if _ctrader_feed_active():
+            if not _ctrader_skip_logged:
+                _ctrader_skip_logged = True
+                logger.info(
+                    "[FMPFeed] cTrader live ticks active — pausing FMP polls "
+                    "(FMP remains fallback if cTrader drops)"
+                )
+            await asyncio.sleep(max(120, _POLL_INTERVAL))
+            continue
+        _ctrader_skip_logged = False
+
         if fmp_in_backoff():
             await asyncio.sleep(max(_POLL_INTERVAL, fmp_backoff_remaining_seconds()))
             continue
