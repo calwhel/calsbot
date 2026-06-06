@@ -17,15 +17,18 @@ DEFAULT_SYMBOL = "NAS100"
 # Index CFDs quote in POINTS (1.0 = one index level on NAS100/SPX500).
 # Scalps: 40–80 pt targets (user-requested min 40). Swings capped ~120 pt —
 # prior 160–240 pt targets were unrealistic intraday moonshots on Nasdaq.
+# Breakeven-heavy roster — at 1× leverage, SL→entry after half the stop distance
+# in profit protects scalps on choppy Nasdaq days and lifts effective win rate.
 INDEX_RISK_VARIANTS = [
     (15, 40,  "scalp", "breakeven"),
-    (20, 50,  "scalp", "trail"),
-    (20, 40,  "scalp", "fixed"),
+    (20, 40,  "scalp", "breakeven"),
+    (20, 50,  "scalp", "breakeven"),
     (25, 60,  "scalp", "breakeven"),
-    (30, 70,  "scalp", "trail"),
-    (30, 80,  "scalp", "fixed"),
+    (15, 40,  "scalp", "trail"),
+    (30, 70,  "scalp", "breakeven"),
+    (30, 80,  "scalp", "breakeven"),
     (40, 100, "swing", "breakeven"),
-    (50, 120, "swing", "trail"),
+    (50, 120, "swing", "breakeven"),
 ]
 
 SUPPORTED_SYMBOLS = ("NAS100", "SPX500", "US30", "GER40", "UK100")
