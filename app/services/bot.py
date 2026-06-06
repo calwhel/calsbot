@@ -17234,6 +17234,13 @@ async def start_bot():
         )
         return
 
+    from app.deployment import is_railway
+    if is_railway():
+        logger.info(
+            "[tg] Railway production — users must message @%s for /start (this token)",
+            me.username,
+        )
+
     # Clean up idle transactions (safe — does NOT release advisory locks)
     try:
         from app.database import SessionLocal
