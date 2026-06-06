@@ -1595,9 +1595,9 @@ def _notify_breakeven_alert(
 
 
 def _compute_be_trigger_price(symbol, entry, direction, tp_price, ex_cfg):
-    """Price at which the stop should jump to entry (auto-breakeven) for FOREX.
+    """Price at which the stop should jump to entry (auto-breakeven) for tradfi.
 
-    Forex strategies run at 1x leverage, so the crypto leveraged-ROI breakeven
+    Forex/index strategies run at 1x leverage, so the crypto leveraged-ROI breakeven
     trigger (price-move% x leverage >= threshold) is mathematically unreachable
     (a 50-pip gold trade is a fraction of 1%). This returns a reachable,
     broker-style price level instead:
@@ -1694,9 +1694,10 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
             be_pct = ex_cfg.get("breakeven_pct") or ex_cfg.get("breakeven_at_pct")
             if be_pct is not None:
                 be_pct = float(be_pct)
-            # Forex runs at 1x leverage → the leveraged-ROI trigger below is
-            # unreachable, so use a pip/distance-based price trigger instead.
-            if (getattr(ex, "asset_class", None) == "forex"):
+            # Forex/index/stock at 1x leverage → leveraged-ROI trigger is unreachable;
+            # use pip/point distance or % of entry→TP instead.
+            _ex_ac = getattr(ex, "asset_class", None) or "crypto"
+            if _ex_ac in ("forex", "index", "stock"):
                 be_trigger_price = _compute_be_trigger_price(
                     ex.symbol, float(ex.entry_price), ex.direction,
                     ex.tp_price, ex_cfg,
@@ -4373,7 +4374,7 @@ def _build_forex_worklist() -> list:
             .filter(
                 StrategyExecution.is_paper == False,          # noqa: E712
                 StrategyExecution.outcome == "OPEN",
-                StrategyExecution.asset_class == "forex",
+                StrategyExecution.asset_class.in_(("forex", "index")),
                 StrategyExecution.ctrader_order_id.isnot(None),
                 StrategyExecution.entry_price.isnot(None),
             )
@@ -4895,7 +4896,7 @@ def _build_forex_reconcile_worklist() -> list:
             .filter(
                 StrategyExecution.is_paper == False,          # noqa: E712
                 StrategyExecution.outcome == "OPEN",
-                StrategyExecution.asset_class == "forex",
+                StrategyExecution.asset_class.in_(("forex", "index")),
                 StrategyExecution.ctrader_order_id.isnot(None),
                 StrategyExecution.entry_price.isnot(None),
             )

@@ -686,15 +686,18 @@ def compile_scan_entry_to_config(
     for cf in entry.get("confirms") or []:
         conditions.append(_with_tf(_build_confirm_cond(cf)))
 
+    sl_pts = float(entry.get("sl_pips") or 20)
+    tp_pts = float(entry.get("tp_pips") or 40)
     exit_cfg: Dict = {
-        "take_profit_pips": float(entry.get("tp_pips") or 40),
-        "stop_loss_pips": float(entry.get("sl_pips") or 20),
+        "take_profit_pips": tp_pts,
+        "stop_loss_pips": sl_pts,
         "take_profit_pct": None,
         "stop_loss_pct": None,
         "take_profit2_pct": None,
         "trailing_stop": bool(entry.get("trailing_stop")),
         "trailing_stop_pct": float(entry.get("trailing_stop_pct") or 0) or None,
-        "breakeven_at_pct": float(entry.get("breakeven_at_pct") or 0) or None,
+        "breakeven_at_pct": None,
+        "breakeven_at_pips": None,
     }
     if mgmt == "breakeven":
         exit_cfg["breakeven_at_pct"] = float(entry.get("breakeven_at_pct") or 50)
@@ -706,6 +709,16 @@ def compile_scan_entry_to_config(
     else:
         exit_cfg["breakeven_at_pct"] = 0
         exit_cfg["trailing_stop"] = False
+
+    # Forex/index at 1×: breakeven must use point/pip distance (not leveraged ROI %).
+    if asset_class in ("forex", "index"):
+        be_pts = max(5.0, round(sl_pts * 0.5))
+        if mgmt == "breakeven" or asset_class == "index":
+            exit_cfg["breakeven_at_pips"] = be_pts
+            if not exit_cfg.get("breakeven_at_pct"):
+                exit_cfg["breakeven_at_pct"] = 50
+        elif mgmt == "trail":
+            exit_cfg["breakeven_at_pips"] = be_pts
 
     is_scalp = style == "scalp"
     risk_cfg = {
