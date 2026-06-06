@@ -9728,32 +9728,47 @@ async def api_get_settings(uid: str = Query(...)):
 
 # ── cTrader / FP Markets forex broker OAuth ───────────────────────────────────
 
+def _ctrader_redirect_uri(request: Optional[Request] = None) -> str:
+    """Canonical OAuth callback URL — must match Spotware app settings exactly."""
+    explicit = (os.environ.get("CTRADER_REDIRECT_URI") or "").strip()
+    if explicit:
+        return explicit
+    if os.environ.get("REPLIT_DEV_DOMAIN"):
+        return f"https://{os.environ['REPLIT_DEV_DOMAIN']}/api/ctrader/callback"
+    return f"{public_base_url(request)}/api/ctrader/callback"
+
+
 @app.get("/api/ctrader/auth-url")
 async def api_ctrader_auth_url(uid: str = Query(...), request: Request = None):
     """Return the Spotware OAuth URL the user should be redirected to."""
+    from app.services.ctrader_client import (
+        CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET, get_oauth_url,
+    )
+    if not (CTRADER_CLIENT_ID and CTRADER_CLIENT_SECRET):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "cTrader app credentials are not configured on the server "
+                "(CTRADER_CLIENT_ID / CTRADER_CLIENT_SECRET on Railway). "
+                "Contact support."
+            ),
+        )
+    if not (uid or "").strip():
+        raise HTTPException(status_code=400, detail="Missing user id — please log in again.")
+
     from app.database import SessionLocal
     db = SessionLocal()
     try:
         user = _get_user_by_uid(uid, db)
         if not user:
-            raise HTTPException(status_code=403)
-        from app.services.ctrader_client import get_oauth_url
-        # Use explicit CTRADER_REDIRECT_URI env var if set (recommended for production).
-        # Falls back to dev domain, then the request host, then the production domain.
-        explicit = os.environ.get("CTRADER_REDIRECT_URI", "")
-        if explicit:
-            redirect_uri = explicit
-        elif os.environ.get("REPLIT_DEV_DOMAIN"):
-            redirect_uri = f"https://{os.environ['REPLIT_DEV_DOMAIN']}/api/ctrader/callback"
-        elif request:
-            host = request.headers.get("host", "tradehubmarkets.com")
-            # Strip port if present; always use https for production
-            host = host.split(":")[0]
-            redirect_uri = f"https://{host}/api/ctrader/callback"
-        else:
-            redirect_uri = "https://tradehubmarkets.com/api/ctrader/callback"
-        logger.info(f"[ctrader] auth-url: redirect_uri={redirect_uri}")
+            raise HTTPException(status_code=403, detail="Session expired — please log in again.")
+        if getattr(user, "banned", False):
+            raise HTTPException(status_code=403, detail="Account suspended.")
+        redirect_uri = _ctrader_redirect_uri(request)
+        logger.info(f"[ctrader] auth-url uid={uid} redirect_uri={redirect_uri}")
         url = get_oauth_url(redirect_uri=redirect_uri, state=uid)
+        if not url or "client_id=" not in url:
+            raise HTTPException(status_code=503, detail="Could not build cTrader OAuth URL.")
         return JSONResponse({"url": url, "redirect_uri": redirect_uri})
     finally:
         db.close()
@@ -9861,12 +9876,7 @@ async def api_ctrader_callback(
         uname_str      = getattr(user, "username", "") or ""
         name_str       = user.first_name or user.username or "User"
 
-        explicit = os.environ.get("CTRADER_REDIRECT_URI", "")
-        if explicit:
-            redirect_uri = explicit
-        else:
-            host = (request.headers.get("host") if request else None) or "tradehubmarkets.com"
-            redirect_uri = f"https://{host.split(':')[0]}/api/ctrader/callback"
+        redirect_uri = _ctrader_redirect_uri(request)
     finally:
         db1.close()  # ← close BEFORE the slow HTTP call so Neon doesn't drop it
 

@@ -7481,13 +7481,20 @@ async function ctraderSelectAccount(accountId){
   }catch(e){toast('Network error','error');}
 }
 async function connectCtrader(){
+  if(!UID){ toast('Please log in first','error'); return; }
   const btn=$('ctrader-connect-btn');
   btn.disabled=true; btn.textContent='Opening…';
   try{
     const r=await fetch(`/api/ctrader/auth-url?uid=${encodeURIComponent(UID)}`);
-    const d=await r.json();
+    let d={};
+    try{ d=await r.json(); }catch(_e){}
+    if(!r.ok){
+      toast(d.detail||`Could not start connection (${r.status})`,'error');
+      btn.disabled=false; btn.textContent='Connect via cTrader OAuth →';
+      return;
+    }
     if(d.url){window.location.href=d.url;}
-    else{toast('Could not get OAuth URL','error'); btn.disabled=false; btn.textContent='Connect via cTrader OAuth →';}
+    else{toast(d.detail||'Could not get OAuth URL','error'); btn.disabled=false; btn.textContent='Connect via cTrader OAuth →';}
   }catch(e){
     toast('Network error','error');
     btn.disabled=false; btn.textContent='Connect via cTrader OAuth →';
@@ -10718,12 +10725,20 @@ function lfCalc() {
 }
 
 async function lfConnect() {
+  if(!UID){ alert('Please log in first, then try Connect again.'); return; }
   try {
-    const r = await fetch(`/api/ctrader/auth-url?uid=${UID}`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const d = await r.json();
-    if (d.url) window.location.href = d.url;
-  } catch(e) { alert('Could not start connection. Please try again.'); }
+    const r = await fetch(`/api/ctrader/auth-url?uid=${encodeURIComponent(UID)}`);
+    let d={};
+    try{ d=await r.json(); }catch(_e){}
+    if(!r.ok){
+      alert(d.detail||`Could not start connection (${r.status}). Try Settings → cTrader, or log in again.`);
+      return;
+    }
+    if(d.url){ window.location.href=d.url; }
+    else{ alert(d.detail||'cTrader is not configured on the server yet.'); }
+  } catch(e) {
+    alert('Network error — could not reach the server. Check your connection and try again.');
+  }
 }
 
 async function lfDisconnect() {
