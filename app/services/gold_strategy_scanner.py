@@ -669,14 +669,23 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
         except Exception as e:
             logger.warning(f"[gold-scan] candle fetch {tf} failed: {e}")
             ks = []
-        if ks and len(ks) >= 120:
+        n = len(ks) if ks else 0
+        if ks and n >= 120:
             candle_map[tf] = ks
             try:
                 coverage[tf] = round((int(ks[-1][0]) - int(ks[0][0])) / 86400000.0, 1)
             except Exception:
                 coverage[tf] = 0.0
+        else:
+            logger.warning(f"[gold-scan] {tf}: got {n} bars (need ≥120)")
     if not candle_map:
-        return {"ok": False, "error": "Could not fetch gold (XAUUSD) historical data. Try again shortly."}
+        return {
+            "ok": False,
+            "error": (
+                "Could not fetch gold (XAUUSD) historical data. "
+                "Ensure FMP_API_KEY is set (stable intraday plan) or connect cTrader."
+            ),
+        }
 
     # 2) Build candidate roster (base + Claude proposals).
     _progress("Asking Claude to propose strategies…")

@@ -1,12 +1,9 @@
 """
 Real-time forex + index price feed via FMP REST polling.
 
-Polls FMP's /api/v3/quote endpoint every 5 seconds for all tracked forex
-and index symbols. Results are cached with a 10s TTL.
-
-tradfi_prices.py checks this cache first (TTL=10s), then falls back to
-yfinance.  Kline (OHLC) fetches also route through FMP's REST
-historical-chart endpoint for up-to-the-minute candles.
+Polls FMP forex/index quotes every 5 seconds. Kline fetches use FMP's
+`/stable/historical-chart` API first (legacy `/api/v3/` is blocked for
+new subscriptions), with symbol aliases for metals (XAUUSD → GCUSD).
 """
 from __future__ import annotations
 
@@ -61,6 +58,20 @@ _TF_TO_FMP = {
 _KLINE_CACHE: Dict[Tuple[str, str, int], Tuple[List[List[float]], datetime]] = {}
 _KLINE_TTL = timedelta(seconds=20)
 
+_FMP_STABLE_BASE = "https://financialmodelingprep.com/stable"
+_FMP_LEGACY_BASE = "https://financialmodelingprep.com/api/v3"
+
+# FMP lists gold/silver under both forex (XAUUSD) and commodities (GCUSD) tickers.
+_METALS_FMP_ALIASES: Dict[str, List[str]] = {
+    "XAUUSD": ["XAUUSD", "GCUSD"],
+    "XAGUSD": ["XAGUSD", "SIUSD"],
+}
+
+_TF_MINUTES: Dict[str, int] = {
+    "1min": 1, "5min": 5, "15min": 15, "30min": 30,
+    "1hour": 60, "4hour": 240, "1day": 1440,
+}
+
 # Poll interval for REST price updates
 _POLL_INTERVAL = 5
 
@@ -87,57 +98,27 @@ def cached_symbols() -> List[str]:
     return sorted(_PRICE_CACHE.keys())
 
 
-async def get_klines(
-    symbol: str,
-    asset_class: str,
-    timeframe: str = "15m",
-    limit: int = 200,
-) -> List[List[float]]:
-    """
-    OHLC bars from FMP REST historical-chart.
-    Returns [[ts_ms, o, h, l, c, v], ...] oldest-first, up to `limit` rows.
-    """
-    api_key = os.environ.get("FMP_API_KEY", "")
-    if not api_key:
-        return []
+def _fmp_api_key() -> str:
+    return os.environ.get("FMP_API_KEY", "") or ""
 
-    sym = symbol.upper()
-    fmp_sym = _INDEX_FMP.get(sym, sym).replace("%5E", "^")
-    fmp_interval = _TF_TO_FMP.get(timeframe, "15min")
-    cache_key = (sym, fmp_interval, limit)
-    now = datetime.utcnow()
-    cached = _KLINE_CACHE.get(cache_key)
-    if cached and (now - cached[1]) < _KLINE_TTL:
-        return cached[0]
 
-    fmp_sym_url = fmp_sym.replace("^", "%5E")
-    url = (
-        f"https://financialmodelingprep.com/api/v3/historical-chart"
-        f"/{fmp_interval}/{fmp_sym_url}?apikey={api_key}&limit={limit}"
-    )
-    try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                if resp.status != 200:
-                    logger.debug(f"[FMPFeed] klines {sym} HTTP {resp.status}")
-                    return []
-                data = await resp.json(content_type=None)
-    except Exception as e:
-        logger.debug(f"[FMPFeed] klines fetch error {sym}: {e}")
-        return []
+def _parse_fmp_bar_date(date_str: str) -> int:
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            return int(datetime.strptime(date_str, fmt).timestamp() * 1000)
+        except ValueError:
+            continue
+    return int(datetime.fromisoformat(date_str.replace("Z", "+00:00")).timestamp() * 1000)
 
+
+def _bars_from_fmp_json(data: object, limit: int) -> List[List[float]]:
     if not isinstance(data, list) or not data:
         return []
-
     rows: List[List[float]] = []
     for bar in reversed(data):
         try:
-            ts = int(
-                datetime.strptime(bar["date"], "%Y-%m-%d %H:%M:%S").timestamp() * 1000
-            )
             rows.append([
-                ts,
+                _parse_fmp_bar_date(bar["date"]),
                 float(bar["open"]),
                 float(bar["high"]),
                 float(bar["low"]),
@@ -146,9 +127,146 @@ async def get_klines(
             ])
         except Exception:
             continue
+    return rows[-limit:]
 
-    rows = rows[-limit:]
-    _KLINE_CACHE[cache_key] = (rows, now)
+
+def _fmp_symbol_candidates(sym: str) -> List[str]:
+    sym_up = sym.upper()
+    if sym_up in _METALS_FMP_ALIASES:
+        return _METALS_FMP_ALIASES[sym_up]
+    fmp_sym = _INDEX_FMP.get(sym_up, sym_up).replace("%5E", "^")
+    return [fmp_sym]
+
+
+def _resample_klines(
+    rows: List[List[float]],
+    src_minutes: int,
+    dst_minutes: int,
+    limit: int,
+) -> List[List[float]]:
+    if not rows or dst_minutes <= src_minutes or dst_minutes % src_minutes != 0:
+        return rows[-limit:] if rows else []
+    bucket_ms = dst_minutes * 60 * 1000
+    buckets: Dict[int, List[List[float]]] = {}
+    for bar in rows:
+        key = int(bar[0]) // bucket_ms
+        buckets.setdefault(key, []).append(bar)
+    out: List[List[float]] = []
+    for key in sorted(buckets):
+        chunk = buckets[key]
+        out.append([
+            key * bucket_ms,
+            float(chunk[0][1]),
+            max(float(b[2]) for b in chunk),
+            min(float(b[3]) for b in chunk),
+            float(chunk[-1][4]),
+            sum(float(b[5]) for b in chunk),
+        ])
+    return out[-limit:]
+
+
+async def _fetch_fmp_chart_once(
+    fmp_sym: str,
+    fmp_interval: str,
+    limit: int,
+    api_key: str,
+) -> List[List[float]]:
+    minutes = _TF_MINUTES.get(fmp_interval, 15)
+    days_back = max(7, int(limit * minutes / 1440) + 7)
+    from_d = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    to_d = datetime.utcnow().strftime("%Y-%m-%d")
+    fmp_sym_url = fmp_sym.replace("^", "%5E")
+
+    attempts = (
+        (
+            f"{_FMP_STABLE_BASE}/historical-chart/{fmp_interval}",
+            {"symbol": fmp_sym, "apikey": api_key, "from": from_d, "to": to_d},
+        ),
+        (
+            f"{_FMP_LEGACY_BASE}/historical-chart/{fmp_interval}/{fmp_sym_url}",
+            {"apikey": api_key, "limit": str(limit)},
+        ),
+    )
+    try:
+        import aiohttp
+    except ImportError:
+        return []
+
+    for url, params in attempts:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, params=params, timeout=aiohttp.ClientTimeout(total=12)
+                ) as resp:
+                    if resp.status != 200:
+                        logger.debug(
+                            f"[FMPFeed] klines {fmp_sym} {fmp_interval} HTTP {resp.status} ({url})"
+                        )
+                        continue
+                    data = await resp.json(content_type=None)
+        except Exception as e:
+            logger.debug(f"[FMPFeed] klines fetch error {fmp_sym} {fmp_interval}: {e}")
+            continue
+        if isinstance(data, dict) and data.get("Error Message"):
+            logger.warning(
+                f"[FMPFeed] klines {fmp_sym} {fmp_interval}: {data.get('Error Message')}"
+            )
+            continue
+        rows = _bars_from_fmp_json(data, limit)
+        if rows:
+            return rows
+    return []
+
+
+async def get_klines(
+    symbol: str,
+    asset_class: str,
+    timeframe: str = "15m",
+    limit: int = 200,
+) -> List[List[float]]:
+    """
+    OHLC bars from FMP REST historical-chart (stable API first, legacy v3 fallback).
+    Returns [[ts_ms, o, h, l, c, v], ...] oldest-first, up to `limit` rows.
+    """
+    api_key = _fmp_api_key()
+    if not api_key:
+        return []
+
+    sym = symbol.upper()
+    fmp_interval = _TF_TO_FMP.get(timeframe, "15min")
+    cache_key = (sym, fmp_interval, limit)
+    now = datetime.utcnow()
+    cached = _KLINE_CACHE.get(cache_key)
+    if cached and (now - cached[1]) < _KLINE_TTL:
+        return cached[0]
+
+    rows: List[List[float]] = []
+    for fmp_sym in _fmp_symbol_candidates(sym):
+        rows = await _fetch_fmp_chart_once(fmp_sym, fmp_interval, limit, api_key)
+        if rows:
+            break
+
+    # If the target interval is unavailable on this plan, build it from 1m bars.
+    if not rows and fmp_interval != "1min":
+        need_1m = min(max(limit * _TF_MINUTES.get(fmp_interval, 15), limit), 5000)
+        one_min: List[List[float]] = []
+        for fmp_sym in _fmp_symbol_candidates(sym):
+            one_min = await _fetch_fmp_chart_once(fmp_sym, "1min", need_1m, api_key)
+            if one_min:
+                break
+        if one_min:
+            rows = _resample_klines(
+                one_min,
+                1,
+                _TF_MINUTES.get(fmp_interval, 15),
+                limit,
+            )
+
+    if rows:
+        _KLINE_CACHE[cache_key] = (rows, now)
+        logger.info(f"[FMPFeed] klines ok: {sym} {timeframe} → {len(rows)} bars")
+    else:
+        logger.warning(f"[FMPFeed] klines empty for {sym} {timeframe} (limit={limit})")
     return rows
 
 
