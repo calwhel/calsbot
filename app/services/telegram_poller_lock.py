@@ -15,8 +15,10 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-MAIN_POLLER_LOCK_ID = 5_432_109_876
-FOREX_POLLER_LOCK_ID = 5_432_109_877
+# Must fit PostgreSQL int32 — pg_locks.objid is 32-bit. Values >2^31-1 break
+# lock queries (OID out of range) and prevented the bot from ever polling.
+MAIN_POLLER_LOCK_ID = 708_110_002
+FOREX_POLLER_LOCK_ID = 708_110_003
 
 KEEPALIVE_INTERVAL = 20
 _instance_id = str(os.getpid())
