@@ -651,6 +651,98 @@ async def _eval_candidate(
     return results
 
 
+# ── Deterministic compile (no AI) — used by Index/Gold "Build all" ─────────────
+def compile_scan_entry_to_config(
+    entry: Dict,
+    symbol: str,
+    asset_class: str = "forex",
+    name: Optional[str] = None,
+) -> Dict:
+    """
+    Convert a scan leaderboard row into a saveable strategy config.
+    Mirrors the backtest config shape so test == live without an LLM compile step
+    (which was failing/rate-limited when building 15 strategies at once).
+    """
+    from app.services.backtest_engine import _build_confirm_cond, _build_primary_cond
+
+    tf = str(entry.get("timeframe") or "15m")
+    direction = str(entry.get("direction") or "LONG").upper()
+    style = str(entry.get("style") or "swing").lower()
+    mgmt = str(entry.get("management") or "fixed").lower()
+
+    def _with_tf(cond: Dict) -> Dict:
+        c = dict(cond or {})
+        if "timeframe" not in c:
+            c["timeframe"] = tf
+        return c
+
+    conditions: List[Dict] = [
+        _with_tf(_build_primary_cond(
+            entry.get("primaryType", "price_momentum"),
+            entry.get("primaryCfg") or {},
+            direction,
+        ))
+    ]
+    for cf in entry.get("confirms") or []:
+        conditions.append(_with_tf(_build_confirm_cond(cf)))
+
+    exit_cfg: Dict = {
+        "take_profit_pips": float(entry.get("tp_pips") or 40),
+        "stop_loss_pips": float(entry.get("sl_pips") or 20),
+        "take_profit_pct": None,
+        "stop_loss_pct": None,
+        "take_profit2_pct": None,
+        "trailing_stop": bool(entry.get("trailing_stop")),
+        "trailing_stop_pct": float(entry.get("trailing_stop_pct") or 0) or None,
+        "breakeven_at_pct": float(entry.get("breakeven_at_pct") or 0) or None,
+    }
+    if mgmt == "breakeven":
+        exit_cfg["breakeven_at_pct"] = float(entry.get("breakeven_at_pct") or 50)
+        exit_cfg["trailing_stop"] = False
+    elif mgmt == "trail":
+        exit_cfg["trailing_stop"] = True
+        exit_cfg["trailing_stop_pct"] = float(entry.get("trailing_stop_pct") or 0) or None
+        exit_cfg["breakeven_at_pct"] = 0
+    else:
+        exit_cfg["breakeven_at_pct"] = 0
+        exit_cfg["trailing_stop"] = False
+
+    is_scalp = style == "scalp"
+    risk_cfg = {
+        "leverage": 1,
+        "position_size_pct": 4 if is_scalp else 5,
+        "max_trades_per_day": 8 if is_scalp else 4,
+        "max_open_positions": 3 if is_scalp else 2,
+        "cooldown_minutes": 10 if is_scalp else 30,
+        "daily_loss_limit_pct": 10,
+        "no_duplicate_symbol": True,
+    }
+
+    filters: Dict = {}
+    sf = entry.get("session_filter") or {}
+    if sf.get("sessions"):
+        filters["session"] = sf
+
+    sym_up = (symbol or "").upper()
+    return {
+        "version": "1.0",
+        "name": (name or entry.get("build_name") or entry.get("label") or "Scan strategy")[:60],
+        "description": _build_prompt_for(
+            entry,
+            instrument_label=f"{sym_up} ({asset_class})",
+        ),
+        "asset_class": asset_class,
+        "universe": {"type": "specific", "symbols": [sym_up]},
+        "direction": direction,
+        "entry_conditions": {"operator": "AND", "conditions": conditions},
+        "exit": exit_cfg,
+        "risk": risk_cfg,
+        "filters": filters,
+        "_build_mode": "paper",
+        "_category": entry.get("category") or style,
+    }
+
+
 # ── Claude: synthesize / pick the best from the leaderboard ─────────────────────
 def _build_prompt_for(entry: Dict, instrument_label: str = "gold (XAUUSD)") -> str:
     """Natural-language description the user can drop into the AI builder."""

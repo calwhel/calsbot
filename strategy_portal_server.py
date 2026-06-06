@@ -7110,6 +7110,46 @@ async def api_build_strategy(request: Request):
     })
 
 
+@app.post("/api/build-from-scan")
+async def api_build_from_scan(request: Request):
+    """
+    Deterministic compile for Index/Gold finder leaderboard rows — no AI call.
+    Used by 'Build all (paper)' so 15 strategies save reliably in one batch.
+    """
+    body = await request.json()
+    uid = body.get("uid")
+    if not uid:
+        raise HTTPException(status_code=400, detail="uid required")
+    entry = body.get("entry")
+    if not isinstance(entry, dict):
+        raise HTTPException(status_code=400, detail="entry object required")
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or user.banned:
+            raise HTTPException(status_code=403)
+    finally:
+        db.close()
+
+    symbol = (body.get("symbol") or entry.get("symbol") or "NAS100").upper()
+    asset_class = (body.get("asset_class") or entry.get("asset_class") or "index").lower()
+
+    from app.services.gold_strategy_scanner import compile_scan_entry_to_config
+    try:
+        config = compile_scan_entry_to_config(
+            entry,
+            symbol=symbol,
+            asset_class=asset_class,
+            name=body.get("name") or entry.get("build_name"),
+        )
+    except Exception as e:
+        logger.warning(f"build-from-scan compile failed: {e}")
+        raise HTTPException(status_code=422, detail=f"Could not compile scan entry: {e}")
+
+    return JSONResponse({"config": config, "compiled": "deterministic"})
+
 
 # ─── Forex multi-pair market structure scanner ───────────────────────────────
 

@@ -14,15 +14,18 @@ from app.services.tradfi_prices import fetch_index_scan_candles
 
 DEFAULT_SYMBOL = "NAS100"
 
-# NAS100 / SPX500 pip = 0.25 pt on FP Markets. Targets sized for typical
-# intraday index ranges (~50–200 pts on Nasdaq).
+# Index CFDs quote in POINTS (1.0 = one index level on NAS100/SPX500).
+# Scalps: 40–80 pt targets (user-requested min 40). Swings capped ~120 pt —
+# prior 160–240 pt targets were unrealistic intraday moonshots on Nasdaq.
 INDEX_RISK_VARIANTS = [
-    (20, 40,  "scalp", "breakeven"),
-    (30, 60,  "scalp", "trail"),
-    (40, 80,  "scalp", "fixed"),
-    (80, 160, "swing", "breakeven"),
-    (100, 200, "swing", "trail"),
-    (120, 240, "swing", "fixed"),
+    (15, 40,  "scalp", "breakeven"),
+    (20, 50,  "scalp", "trail"),
+    (20, 40,  "scalp", "fixed"),
+    (25, 60,  "scalp", "breakeven"),
+    (30, 70,  "scalp", "trail"),
+    (30, 80,  "scalp", "fixed"),
+    (40, 100, "swing", "breakeven"),
+    (50, 120, "swing", "trail"),
 ]
 
 SUPPORTED_SYMBOLS = ("NAS100", "SPX500", "US30", "GER40", "UK100")

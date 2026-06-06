@@ -3121,7 +3121,7 @@ async def evaluate_and_fire(
         # understands using the live price + the pair's pip size. This means
         # a "20 pip SL on EURUSD at 1.0850" produces the same TP/SL price
         # whether the user typed it as pips or as a %.
-        if asset_class == "forex":
+        if asset_class in ("forex", "index"):
             from app.services.forex_engine import pips_to_pct as _p2p
             tp_pips = ex_config.get("take_profit_pips")
             sl_pips = ex_config.get("stop_loss_pips")
