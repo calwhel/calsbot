@@ -13366,8 +13366,23 @@ async def backtest_gold_discovery(request: Request):
             "message": "A Pro subscription is required to use the Gold Strategy Finder."})
 
     from app.services.gold_strategy_scanner import run_gold_discovery
+    _scan_user_id = None
     try:
-        result = await run_gold_discovery(days=days, direction_mode=direction_mode)
+        _db2 = SessionLocal()
+        try:
+            _u2 = _get_user_by_uid_safe(uid, _db2)
+            if _u2:
+                _scan_user_id = int(_u2.id)
+        finally:
+            _db2.close()
+    except Exception:
+        pass
+    try:
+        result = await run_gold_discovery(
+            days=days,
+            direction_mode=direction_mode,
+            user_id=_scan_user_id,
+        )
     except Exception as e:
         logger.exception("gold-discovery scan failed")
         return JSONResponse(status_code=500, content={

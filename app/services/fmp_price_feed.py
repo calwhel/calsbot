@@ -99,7 +99,15 @@ def cached_symbols() -> List[str]:
 
 
 def _fmp_api_key() -> str:
-    return os.environ.get("FMP_API_KEY", "") or ""
+    for name in (
+        "FMP_API_KEY",
+        "FMP_KEY",
+        "FINANCIAL_MODELING_PREP_API_KEY",
+    ):
+        val = (os.environ.get(name) or "").strip()
+        if val:
+            return val
+    return ""
 
 
 def _parse_fmp_bar_date(date_str: str) -> int:
@@ -282,7 +290,7 @@ async def get_klines(
 
 async def _poll_forex():
     """Poll FMP /api/v3/fx for all forex + metals symbols."""
-    api_key = os.environ.get("FMP_API_KEY", "")
+    api_key = _fmp_api_key()
     if not api_key:
         return
 
@@ -324,7 +332,7 @@ async def _poll_forex():
 
 async def _poll_indices():
     """Poll FMP /api/v3/quote for index symbols."""
-    api_key = os.environ.get("FMP_API_KEY", "")
+    api_key = _fmp_api_key()
     if not api_key:
         return
 
@@ -363,9 +371,9 @@ async def _poll_indices():
 
 async def _stream():
     global _RUNNING
-    api_key = os.environ.get("FMP_API_KEY", "")
+    api_key = _fmp_api_key()
     if not api_key:
-        logger.warning("[FMPFeed] FMP_API_KEY not set — real-time feed disabled")
+        logger.warning("[FMPFeed] FMP API key not set — real-time feed disabled")
         return
 
     logger.info(f"[FMPFeed] REST polling started — {len(_FOREX_SYMBOLS)} forex + {len(_INDEX_FMP)} indices every {_POLL_INTERVAL}s")

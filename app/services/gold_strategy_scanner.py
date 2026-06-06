@@ -632,7 +632,8 @@ async def _claude_pick_best(leaderboard: List[Dict], days: int) -> Optional[Dict
 
 # ── Public entry point ──────────────────────────────────────────────────────────
 async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
-                             progress_cb: Optional[Callable[[str], None]] = None) -> Dict:
+                             progress_cb: Optional[Callable[[str], None]] = None,
+                             user_id: Optional[int] = None) -> Dict:
     """
     Run the full Claude-driven gold strategy discovery scan.
 
@@ -654,7 +655,7 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
 
     # 1) Fetch candles once per timeframe.
     _progress("Fetching gold history…")
-    from app.services.tradfi_prices import get_klines
+    from app.services.tradfi_prices import fetch_metal_scan_candles
 
     async def _fetch_tf(tf: str) -> tuple:
         per_day = {"15m": 96, "1h": 24}.get(tf, 24)
@@ -662,8 +663,8 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
         ks: List = []
         for cap in (want, min(want, 800), 300):
             try:
-                batch = await get_klines(
-                    SYMBOL, ASSET_CLASS, tf, cap, for_backtest=True
+                batch = await fetch_metal_scan_candles(
+                    SYMBOL, tf, cap, user_id=user_id
                 )
             except Exception as e:
                 logger.warning(f"[gold-scan] candle fetch {tf}@{cap} failed: {e}")
@@ -691,9 +692,8 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
         return {
             "ok": False,
             "error": (
-                "Could not fetch gold (XAUUSD) historical data. "
-                "Check server logs for [FMPFeed] / [gold-scan] — FMP intraday "
-                "charts may need a paid plan, or redeploy after the latest fix."
+                "Could not fetch gold (XAUUSD) historical data from any source "
+                "(Yahoo, FMP, cTrader). Please try again in a minute."
             ),
         }
 

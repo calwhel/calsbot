@@ -85,6 +85,21 @@ _BINANCE_INTERVAL_MAP: Dict[str, str] = {
     "30m": "30m", "1h": "1h", "4h": "4h", "1d": "1d",
 }
 
+# Yahoo v8 chart API — reliable server-side fallback (no yfinance lib required).
+_YAHOO_CHART_TF: Dict[str, Tuple[str, str]] = {
+    "1m":  ("1m",  "5d"),
+    "5m":  ("5m",  "60d"),
+    "15m": ("15m", "60d"),
+    "30m": ("30m", "60d"),
+    "1h":  ("60m", "730d"),
+    "4h":  ("60m", "730d"),
+    "1d":  ("1d",  "5y"),
+}
+_METALS_YAHOO_TICKER: Dict[str, str] = {
+    "XAUUSD": "GC=F",
+    "XAGUSD": "SI=F",
+}
+
 
 def _resolve_ticker(asset_class: str, symbol: str) -> Optional[str]:
     if normalize_asset_class(asset_class) == ASSET_CLASS_CRYPTO:
@@ -105,6 +120,131 @@ def _yf_fast_price_blocking(ticker: str) -> Optional[float]:
         return float(px) if px else None
     except Exception:
         return None
+
+
+def _env_fmp_api_key() -> str:
+    try:
+        from app.services.fmp_price_feed import _fmp_api_key
+        return _fmp_api_key()
+    except Exception:
+        for name in ("FMP_API_KEY", "FMP_KEY", "FINANCIAL_MODELING_PREP_API_KEY"):
+            val = (os.environ.get(name) or "").strip()
+            if val:
+                return val
+        return ""
+
+
+async def _fetch_yahoo_chart_klines(
+    yahoo_ticker: str,
+    timeframe: str,
+    limit: int,
+) -> List[List[float]]:
+    """OHLC from Yahoo Finance chart API — works on Railway without yfinance."""
+    interval, range_ = _YAHOO_CHART_TF.get(timeframe, ("15m", "60d"))
+    cache_key = ("yahoo", yahoo_ticker, interval, range_, limit)
+    now = datetime.utcnow()
+    cached = _KLINE_CACHE.get(cache_key)
+    if cached and (now - cached[1]) < _KLINE_TTL:
+        return cached[0]
+    try:
+        import httpx
+        async with httpx.AsyncClient(
+            timeout=20.0,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; TradeHub/1.0)"},
+        ) as client:
+            resp = await client.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_ticker}",
+                params={"interval": interval, "range": range_},
+            )
+        if resp.status_code != 200:
+            logger.warning(
+                f"[tradfi] Yahoo chart {yahoo_ticker} {timeframe} HTTP {resp.status_code}"
+            )
+            return []
+        payload = resp.json()
+        result = (payload.get("chart") or {}).get("result") or []
+        if not result:
+            return []
+        block = result[0]
+        timestamps = block.get("timestamp") or []
+        quotes = ((block.get("indicators") or {}).get("quote") or [{}])[0]
+        opens = quotes.get("open") or []
+        highs = quotes.get("high") or []
+        lows = quotes.get("low") or []
+        closes = quotes.get("close") or []
+        vols = quotes.get("volume") or []
+        rows: List[List[float]] = []
+        for i, ts in enumerate(timestamps):
+            try:
+                if ts is None:
+                    continue
+                o, h, l, c = opens[i], highs[i], lows[i], closes[i]
+                if o is None or h is None or l is None or c is None:
+                    continue
+                rows.append([
+                    int(ts) * 1000,
+                    float(o), float(h), float(l), float(c),
+                    float(vols[i] or 0),
+                ])
+            except Exception:
+                continue
+        rows = rows[-limit:]
+        if rows:
+            _KLINE_CACHE[cache_key] = (rows, now)
+            logger.info(
+                f"[tradfi] klines ok (Yahoo chart): {yahoo_ticker} {timeframe} → {len(rows)} bars"
+            )
+        return rows
+    except Exception as e:
+        logger.warning(f"[tradfi] Yahoo chart failed {yahoo_ticker} {timeframe}: {e}")
+        return []
+
+
+async def fetch_metal_scan_candles(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    user_id: Optional[int] = None,
+) -> List[List[float]]:
+    """
+    Aggressive multi-source fetch for gold/silver backtest scanners.
+    Yahoo chart API is tried first — it works without FMP intraday or cTrader.
+    """
+    sym = symbol.upper()
+    yahoo_ticker = _METALS_YAHOO_TICKER.get(sym)
+    best: List[List[float]] = []
+
+    async def _keep(rows: List[List[float]], label: str) -> None:
+        nonlocal best
+        if rows and len(rows) > len(best):
+            best = rows
+            logger.info(f"[tradfi] metal-scan best={label} {sym} {timeframe} → {len(rows)} bars")
+
+    if yahoo_ticker:
+        await _keep(await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit), "yahoo")
+        if len(best) >= 120:
+            return best[-limit:]
+
+    if _env_fmp_api_key():
+        await _keep(
+            await _fetch_fmp_metals_klines(sym, "forex", timeframe, limit),
+            "fmp",
+        )
+        if len(best) >= 120:
+            return best[-limit:]
+
+    await _keep(
+        await _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
+        "ctrader",
+    )
+    if len(best) >= 120:
+        return best[-limit:]
+
+    tradfi_rows = await _get_klines_impl(
+        sym, "forex", timeframe, limit, for_backtest=True, ctrader_user_id=user_id,
+    )
+    await _keep(tradfi_rows, "tradfi-chain")
+    return best[-limit:] if best else []
 
 
 def _yf_download_blocking(ticker: str, interval: str, period: str):
@@ -215,6 +355,7 @@ async def get_klines(
     timeframe: str = "15m",
     limit: int = 200,
     for_backtest: bool = False,
+    ctrader_user_id: Optional[int] = None,
 ) -> List[List[float]]:
     """
     Return up to `limit` OHLC bars in MEXC-shape: [[ts_ms, o, h, l, c, v], ...]
@@ -231,6 +372,7 @@ async def get_klines(
         timeframe,
         int(limit),
         bool(for_backtest),
+        int(ctrader_user_id) if ctrader_user_id is not None else -1,
     )
     try:
         running = asyncio.get_running_loop()
@@ -256,7 +398,12 @@ async def get_klines(
         _KLINE_INFLIGHT[key] = fut
         try:
             result = await _get_klines_impl(
-                symbol, asset_class, timeframe, limit, for_backtest=for_backtest
+                symbol,
+                asset_class,
+                timeframe,
+                limit,
+                for_backtest=for_backtest,
+                ctrader_user_id=ctrader_user_id,
             )
             if not fut.done():
                 fut.set_result(result)
@@ -277,7 +424,12 @@ async def get_klines(
 
     # No running loop (shouldn't happen for an async caller) — fetch directly.
     return await _get_klines_impl(
-        symbol, asset_class, timeframe, limit, for_backtest=for_backtest
+        symbol,
+        asset_class,
+        timeframe,
+        limit,
+        for_backtest=for_backtest,
+        ctrader_user_id=ctrader_user_id,
     )
 
 
@@ -287,7 +439,7 @@ async def _fetch_fmp_metals_klines(
     timeframe: str,
     limit: int,
 ) -> List[List[float]]:
-    if not os.environ.get("FMP_API_KEY"):
+    if not _env_fmp_api_key():
         return []
     try:
         from app.services.fmp_price_feed import get_klines as _fmp_klines
@@ -307,12 +459,13 @@ async def _fetch_ctrader_klines(
     asset_class: str,
     timeframe: str,
     limit: int,
+    user_id: Optional[int] = None,
 ) -> List[List[float]]:
     try:
         from app.services import ctrader_price_feed as _ctf
         timeout = min(45.0, 12.0 + limit / 150.0)
         return await asyncio.wait_for(
-            _ctf.get_klines(symbol, asset_class, timeframe, limit),
+            _ctf.get_klines(symbol, asset_class, timeframe, limit, user_id=user_id),
             timeout=timeout,
         )
     except Exception:
@@ -325,6 +478,7 @@ async def _get_klines_impl(
     timeframe: str = "15m",
     limit: int = 200,
     for_backtest: bool = False,
+    ctrader_user_id: Optional[int] = None,
 ) -> List[List[float]]:
     """
     Return up to `limit` OHLC bars in MEXC-shape: [[ts_ms, o, h, l, c, v], ...]
@@ -352,7 +506,9 @@ async def _get_klines_impl(
             if _frows:
                 return _frows
         elif src == "ctrader":
-            _crows = await _fetch_ctrader_klines(symbol, asset_class, timeframe, limit)
+            _crows = await _fetch_ctrader_klines(
+                symbol, asset_class, timeframe, limit, user_id=ctrader_user_id
+            )
             if _crows:
                 return _crows
 
@@ -411,7 +567,7 @@ async def _get_klines_impl(
         # fall through to yfinance below
 
     # ── FMP 1-minute REST — primary source for forex paper evaluation ─────────
-    if timeframe == "1m" and os.environ.get("FMP_API_KEY"):
+    if timeframe == "1m" and _env_fmp_api_key():
         try:
             from app.services.fmp_price_feed import get_klines as _fmp_klines
             _frows = await _fmp_klines(symbol, asset_class, timeframe, limit)
@@ -420,11 +576,16 @@ async def _get_klines_impl(
         except Exception as _fe:
             logger.debug(f"[tradfi] FMP 1min failed {symbol}: {_fe}")
 
-    # ── yfinance download() — forex/indices/stocks; metals futures last resort ─
-    if symbol.upper() in _METALS_BINANCE_MAP:
+    # ── Yahoo chart API — metals futures (GC=F / SI=F) before yfinance lib ─────
+    if is_metal:
+        _yt = _METALS_YAHOO_TICKER.get(symbol.upper())
+        if _yt:
+            _yrows = await _fetch_yahoo_chart_klines(_yt, timeframe, limit)
+            if _yrows:
+                return _yrows
         logger.warning(
             f"[tradfi] metals spot klines unavailable for {symbol.upper()} {timeframe} "
-            f"— using yfinance futures as last resort for backtests"
+            f"— trying yfinance futures as last resort"
         )
 
     # ── yfinance download() ───────────────────────────────────────────────────

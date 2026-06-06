@@ -285,8 +285,13 @@ async def _resolve_symbols(reader, writer, ctid: int, host: str = _HOST_LIVE) ->
 
 # ── DB helper ─────────────────────────────────────────────────────────────────
 
-async def _get_connected_account() -> Optional[Tuple[str, int, int, bool]]:
-    """Return (access_token, ctid, user_id, is_live) for the first connected user.
+async def _get_connected_account(
+    user_id: Optional[int] = None,
+) -> Optional[Tuple[str, int, int, bool]]:
+    """Return (access_token, ctid, user_id, is_live) for a connected cTrader user.
+
+    When `user_id` is given, use that user's linked account (e.g. gold scan for
+    the logged-in portal user). Otherwise fall back to the first connected row.
 
     is_live is resolved from the stored ctrader_accounts list (matching the
     chosen ctid) so we connect to the matching host; defaults to True when the
@@ -298,14 +303,13 @@ async def _get_connected_account() -> Optional[Tuple[str, int, int, bool]]:
         from app.models import UserPreference
         db = SessionLocal()
         try:
-            prefs = (
-                db.query(UserPreference)
-                .filter(
-                    UserPreference.ctrader_access_token.isnot(None),
-                    UserPreference.ctrader_account_id.isnot(None),
-                )
-                .first()
+            q = db.query(UserPreference).filter(
+                UserPreference.ctrader_access_token.isnot(None),
+                UserPreference.ctrader_account_id.isnot(None),
             )
+            if user_id is not None:
+                q = q.filter(UserPreference.user_id == int(user_id))
+            prefs = q.first()
             if prefs:
                 ctid = int(prefs.ctrader_account_id)
                 is_live = True
@@ -682,6 +686,7 @@ async def get_klines(
     asset_class: str,
     timeframe: str = "15m",
     limit: int = 200,
+    user_id: Optional[int] = None,
 ) -> List[List[float]]:
     """
     Return up to `limit` OHLC bars from cTrader for the given symbol.
@@ -699,7 +704,7 @@ async def get_klines(
     if cached and (time.monotonic() - cached[1]) < _KLINE_TTL:
         return cached[0]
 
-    creds = await _get_connected_account()
+    creds = await _get_connected_account(user_id=user_id)
     if not creds:
         return []
 
