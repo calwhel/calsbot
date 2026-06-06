@@ -561,7 +561,7 @@ async def _eval_candidate(
     pip_sz = _pip_size_fn(symbol)
     _risk = risk_variants if risk_variants is not None else RISK_VARIANTS
     min_tr = _min_trades_for(cand, days)
-    for tf in TIMEFRAMES:
+    for tf in candle_map:
         candles = candle_map.get(tf)
         if not candles or len(candles) < 120:
             continue
@@ -861,6 +861,8 @@ async def run_tradfi_discovery(
     name_prefix: str,
     risk_variants: Optional[List] = None,
     fetch_candles_fn=None,
+    timeframes: Optional[List[str]] = None,
+    tf_max_days: Optional[Dict[str, int]] = None,
     log_prefix: str = "tradfi-scan",
     no_trades_error: str = "No strategy produced enough trades to rank. Try a longer window.",
     fetch_error: str = "Could not fetch historical data. Please try again in a minute.",
@@ -887,12 +889,15 @@ async def run_tradfi_discovery(
         from app.services.tradfi_prices import fetch_metal_scan_candles
         fetch_candles_fn = fetch_metal_scan_candles
 
+    scan_tfs = list(timeframes or TIMEFRAMES)
+    scan_tf_days = dict(tf_max_days or _TF_MAX_DAYS)
+
     # 1) Fetch candles once per timeframe.
     _progress(f"Fetching {symbol} history…")
 
     async def _fetch_tf(tf: str) -> tuple:
-        eff_days = min(days, _TF_MAX_DAYS.get(tf, days))
-        per_day = {"5m": 288, "15m": 96, "1h": 24, "4h": 6}.get(tf, 24)
+        eff_days = min(days, scan_tf_days.get(tf, days))
+        per_day = {"1m": 1440, "5m": 288, "15m": 96, "1h": 24, "4h": 6}.get(tf, 24)
         want = min(per_day * eff_days + 120, 2000)
         ks: List = []
         for cap in (want, min(want, 800), 300):
@@ -909,7 +914,7 @@ async def run_tradfi_discovery(
 
     candle_map: Dict[str, List] = {}
     coverage: Dict[str, float] = {}
-    fetch_results = await asyncio.gather(*[_fetch_tf(tf) for tf in TIMEFRAMES])
+    fetch_results = await asyncio.gather(*[_fetch_tf(tf) for tf in scan_tfs])
     for tf, ks in fetch_results:
         n = len(ks) if ks else 0
         if ks and n >= 120:

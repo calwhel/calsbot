@@ -7165,57 +7165,110 @@ _SCANNER_INSTRUMENTS = [
     ("GBPJPY", "forex"), ("XAUUSD", "forex"), ("XAGUSD", "forex"),
 ]
 _SCANNER_PAIRS = [p for p, _ in _SCANNER_INSTRUMENTS]
-_SCANNER_TIMEFRAMES = ["15m", "1h"]
+# NAS indices: 1m/5m/15m for day trading. Forex/metals: same intraday set.
+_SCANNER_TIMEFRAMES_INDEX = ["1m", "5m", "15m"]
+_SCANNER_TIMEFRAMES_FOREX = ["1m", "5m", "15m"]
+
+# (sig_type, sub, mode) — mode disambiguates FVG fresh vs retest, etc.
 _SCANNER_SIGNALS = [
-    ("market_structure", "bos_bullish"),
-    ("market_structure", "bos_bearish"),
-    ("market_structure", "choch_bullish"),
-    ("market_structure", "choch_bearish"),
-    ("fvg",             "bullish"),
-    ("fvg",             "bearish"),
-    ("order_block",     "bullish"),
-    ("order_block",     "bearish"),
+    ("market_structure", "bos_bullish",   None),
+    ("market_structure", "bos_bearish",   None),
+    ("market_structure", "choch_bullish", None),
+    ("market_structure", "choch_bearish", None),
+    ("fvg",             "bullish",       "just_formed"),
+    ("fvg",             "bearish",       "just_formed"),
+    ("fvg",             "bullish",       "retest"),
+    ("fvg",             "bearish",       "retest"),
+    ("ifvg",            "bullish",       "retest"),
+    ("ifvg",            "bearish",       "retest"),
+    ("order_block",     "bullish",       None),
+    ("order_block",     "bearish",       None),
+    ("liquidity_sweep", "bullish",       None),
+    ("liquidity_sweep", "bearish",       None),
+    ("breaker_block",   "bullish",       None),
+    ("breaker_block",   "bearish",       None),
+    ("fx_displacement", "bullish",       None),
+    ("fx_displacement", "bearish",       None),
+    ("mss",             "bullish",       None),
+    ("mss",             "bearish",       None),
 ]
 
-_SIGNAL_LABELS = {
+_MS_LABELS = {
     "bos_bullish":   ("BOS", "LONG",  "Bullish Break of Structure"),
     "bos_bearish":   ("BOS", "SHORT", "Bearish Break of Structure"),
-    "choch_bullish": ("CHoCH","LONG", "Bullish Change of Character"),
-    "choch_bearish": ("CHoCH","SHORT","Bearish Change of Character"),
-    "bullish":       ("Signal","LONG","Bullish signal"),
-    "bearish":       ("Signal","SHORT","Bearish signal"),
+    "choch_bullish": ("CHoCH", "LONG", "Bullish Change of Character"),
+    "choch_bearish": ("CHoCH", "SHORT", "Bearish Change of Character"),
 }
+_BIAS_DIR = {"bullish": "LONG", "bearish": "SHORT"}
+
+
+def _scanner_timeframes_for(asset_class: str) -> list:
+    if asset_class == "index":
+        return list(_SCANNER_TIMEFRAMES_INDEX)
+    return list(_SCANNER_TIMEFRAMES_FOREX)
+
+
+def _scanner_signal_meta(sig_type: str, sub: str, mode: Optional[str]):
+    """Return (label, direction, description) for a scanner hit."""
+    if sig_type == "market_structure":
+        return _MS_LABELS.get(sub, ("MS", "LONG", sub))
+    d = _BIAS_DIR.get(sub, "LONG")
+    if sig_type == "fvg":
+        fresh = (mode or "just_formed") == "just_formed"
+        return (
+            "FVG",
+            d,
+            f"{'Bullish' if sub == 'bullish' else 'Bearish'} Fair Value Gap "
+            f"({'just formed' if fresh else 'retest / in gap'})",
+        )
+    if sig_type == "ifvg":
+        return (
+            "IFVG",
+            d,
+            f"{'Bullish' if sub == 'bullish' else 'Bearish'} Inverse FVG retest",
+        )
+    if sig_type == "order_block":
+        return ("OB", d, f"{'Bullish' if sub == 'bullish' else 'Bearish'} Order Block touch")
+    if sig_type == "liquidity_sweep":
+        return ("LQS", d, f"{'Bullish' if sub == 'bullish' else 'Bearish'} Liquidity sweep")
+    if sig_type == "breaker_block":
+        return ("BRK", d, f"{'Bullish' if sub == 'bullish' else 'Bearish'} Breaker block retest")
+    if sig_type == "fx_displacement":
+        return ("DISP", d, f"{'Bullish' if sub == 'bullish' else 'Bearish'} Displacement candle")
+    if sig_type == "mss":
+        return ("MSS", d, f"{'Bullish' if sub == 'bullish' else 'Bearish'} Market structure shift")
+    return ("Signal", d, sub)
 
 
 async def _run_forex_scanner() -> list:
     """
-    Scan all forex pairs for BOS/CHoCH/FVG/OB signals.
+    Scan indices + forex for ICT / day-trader structure signals on 1m/5m/15m.
 
-    Grouped by (pair, timeframe) so klines are fetched ONCE per pair+TF and
-    shared across all 8 signal evaluators.  Without sharing, each evaluator
-    would independently re-fetch the same kline window from yfinance — 8×
-    more API calls than necessary.
+    Grouped by (pair, timeframe) so klines are fetched once per pair+TF and
+    shared across all signal evaluators.
 
     Results cached per (pair, tf, signal_key) for _FOREX_SCANNER_TTL seconds.
     """
     import httpx as _httpx
-    from app.services.strategy_ta import eval_market_structure, eval_fvg, eval_order_block
+    from app.services.strategy_ta import (
+        eval_market_structure, eval_fvg, eval_order_block,
+        eval_bt_klines_cond, eval_fx_displacement, eval_fx_breaker,
+    )
     from app.services.tradfi_prices import get_price as _tradfi_price
     import asyncio, time
 
     import os as _os_scan
     now = time.monotonic()
-    # Semaphore: limit concurrent (pair, tf) group scans
-    sem = asyncio.Semaphore(int(_os_scan.environ.get("FOREX_SCANNER_PARALLEL", "6")))
+    sem = asyncio.Semaphore(int(_os_scan.environ.get("FOREX_SCANNER_PARALLEL", "8")))
+
+    def _cache_key(pair, tf, sig_type, sub, sig_mode):
+        return f"{pair}|{tf}|{sig_type}|{sub}|{sig_mode or ''}"
 
     async def _scan_pair_tf(pair, tf, asset_class="forex", _http=None):
-        """
-        Scan all signals for one (pair, timeframe) combination.
-        A single shared_cache dict is passed to every evaluator so the kline
-        fetch for that symbol+interval is done only once.
-        """
-        # Check if ALL signals for this pair+tf are still fresh in the cache
-        all_keys = [f"{pair}|{tf}|{st}|{sub}" for st, sub in _SCANNER_SIGNALS]
+        all_keys = [
+            _cache_key(pair, tf, st, sub, mode)
+            for st, sub, mode in _SCANNER_SIGNALS
+        ]
         fresh = [_FOREX_SCANNER_CACHE.get(k) for k in all_keys]
         if all(f and f[1] > now for f in fresh):
             return [f[0] for f in fresh if f and f[0]]
@@ -7227,12 +7280,10 @@ async def _run_forex_scanner() -> list:
                 if not price:
                     return []
 
-                # ONE shared cache dict — klines fetched once, reused by all evals.
-                # strategy_ta._fetch_klines reads "__asset_class__" (double underscores).
                 shared_cache = {"__asset_class__": asset_class}
                 _client = _http or _httpx.AsyncClient(timeout=12)
-                for sig_type, sub in _SCANNER_SIGNALS:
-                    cache_key = f"{pair}|{tf}|{sig_type}|{sub}"
+                for sig_type, sub, sig_mode in _SCANNER_SIGNALS:
+                    cache_key = _cache_key(pair, tf, sig_type, sub, sig_mode)
                     cached = _FOREX_SCANNER_CACHE.get(cache_key)
                     if cached and cached[1] > now:
                         if cached[0]:
@@ -7250,18 +7301,60 @@ async def _run_forex_scanner() -> list:
                                 timeout=15,
                             )
                         elif sig_type == "fvg":
+                            cond = {
+                                "direction": sub,
+                                "timeframe": tf,
+                                "condition": sig_mode or "just_formed",
+                            }
                             ok, msg = await asyncio.wait_for(
-                                eval_fvg(
-                                    {"direction": sub, "timeframe": tf, "sub": "just_formed"},
-                                    pair, price, _client, shared_cache,
+                                eval_fvg(cond, pair, price, _client, shared_cache),
+                                timeout=15,
+                            )
+                        elif sig_type == "ifvg":
+                            ok, msg = await asyncio.wait_for(
+                                eval_bt_klines_cond(
+                                    {"type": "ifvg", "direction": sub, "timeframe": tf},
+                                    pair, _client, shared_cache,
                                 ),
                                 timeout=15,
                             )
                         elif sig_type == "order_block":
                             ok, msg = await asyncio.wait_for(
                                 eval_order_block(
-                                    {"ob_type": sub, "timeframe": tf},
+                                    {"ob_type": sub, "direction": sub, "timeframe": tf},
                                     pair, price, _client, shared_cache,
+                                ),
+                                timeout=15,
+                            )
+                        elif sig_type == "liquidity_sweep":
+                            ok, msg = await asyncio.wait_for(
+                                eval_bt_klines_cond(
+                                    {"type": "liquidity_sweep", "direction": sub, "timeframe": tf},
+                                    pair, _client, shared_cache,
+                                ),
+                                timeout=15,
+                            )
+                        elif sig_type == "breaker_block":
+                            ok, msg = await asyncio.wait_for(
+                                eval_fx_breaker(
+                                    {"direction": sub, "timeframe": tf},
+                                    pair, price, _client, shared_cache,
+                                ),
+                                timeout=15,
+                            )
+                        elif sig_type == "fx_displacement":
+                            ok, msg = await asyncio.wait_for(
+                                eval_fx_displacement(
+                                    {"direction": sub, "timeframe": tf},
+                                    pair, _client, shared_cache,
+                                ),
+                                timeout=15,
+                            )
+                        elif sig_type == "mss":
+                            ok, msg = await asyncio.wait_for(
+                                eval_bt_klines_cond(
+                                    {"type": "mss", "direction": sub, "timeframe": tf},
+                                    pair, _client, shared_cache,
                                 ),
                                 timeout=15,
                             )
@@ -7269,21 +7362,7 @@ async def _run_forex_scanner() -> list:
                             continue
 
                         if ok:
-                            label, direction, desc = _SIGNAL_LABELS.get(
-                                sub, ("Signal", "LONG", sub)
-                            )
-                            if sig_type == "fvg":
-                                label = "FVG"
-                                desc = (
-                                    f"{'Bullish' if sub == 'bullish' else 'Bearish'}"
-                                    " Fair Value Gap (just formed)"
-                                )
-                            elif sig_type == "order_block":
-                                label = "OB"
-                                desc = (
-                                    f"{'Bullish' if sub == 'bullish' else 'Bearish'}"
-                                    " Order Block touch"
-                                )
+                            label, direction, desc = _scanner_signal_meta(sig_type, sub, sig_mode)
                             entry = {
                                 "pair":      pair,
                                 "timeframe": tf,
@@ -7292,7 +7371,8 @@ async def _run_forex_scanner() -> list:
                                 "desc":      desc,
                                 "price":     round(price, 6),
                                 "detail":    msg,
-                                "sig_key":   f"{sig_type}:{sub}",
+                                "sig_key":   f"{sig_type}:{sub}" + (f":{sig_mode}" if sig_mode else ""),
+                                "asset_class": asset_class,
                             }
                             entries.append(entry)
 
@@ -7306,13 +7386,11 @@ async def _run_forex_scanner() -> list:
 
         return entries
 
-    # One task per (pair, tf) — klines shared within each task; one HTTP client
-    # for the whole scan instead of per (pair, tf).
     async with _httpx.AsyncClient(timeout=12) as _scan_http:
         tasks = [
             _scan_pair_tf(pair, tf, ac, _http=_scan_http)
             for pair, ac in _SCANNER_INSTRUMENTS
-            for tf in _SCANNER_TIMEFRAMES
+            for tf in _scanner_timeframes_for(ac)
         ]
         raw = await asyncio.gather(*tasks, return_exceptions=True)
     results = [
@@ -7322,21 +7400,24 @@ async def _run_forex_scanner() -> list:
         for entry in batch
     ]
 
-    # Sort: US indices first (NASDAQ, S&P, Dow), then signal strength
-    _rank = {"CHoCH": 0, "BOS": 1, "FVG": 2, "OB": 3}
+    _tf_rank = {"1m": 0, "5m": 1, "15m": 2, "1h": 3}
+    _sig_rank = {
+        "CHoCH": 0, "MSS": 1, "BOS": 2, "FVG": 3, "IFVG": 4,
+        "LQS": 5, "BRK": 6, "DISP": 7, "OB": 8,
+    }
     _index_pri = {"NAS100": 0, "SPX500": 1, "US30": 2}
     results.sort(key=lambda x: (
         _index_pri.get(x["pair"], 5),
-        _rank.get(x["signal"], 9),
+        _tf_rank.get(x["timeframe"], 4),
+        _sig_rank.get(x["signal"], 9),
         x["pair"],
-        x["timeframe"],
     ))
     return results
 
 
 @app.get("/api/forex/scanner")
 async def api_forex_scanner(request: Request):
-    """Multi-pair market structure scanner — BOS, CHoCH, FVG, OB across forex pairs."""
+    """Live structure scanner — BOS, CHoCH, FVG, IFVG, OB, LQS, BRK, DISP, MSS on 1m/5m/15m."""
     uid = request.query_params.get("uid", "")
     if not uid:
         raise HTTPException(status_code=400, detail="uid required")
@@ -7353,7 +7434,7 @@ async def api_forex_scanner(request: Request):
 
     import asyncio
     try:
-        signals = await asyncio.wait_for(_run_forex_scanner(), timeout=90)
+        signals = await asyncio.wait_for(_run_forex_scanner(), timeout=120)
     except asyncio.TimeoutError:
         signals = []
     import datetime
@@ -7361,6 +7442,8 @@ async def api_forex_scanner(request: Request):
         "signals": signals,
         "count": len(signals),
         "pairs_scanned": len(_SCANNER_PAIRS),
+        "timeframes_index": _SCANNER_TIMEFRAMES_INDEX,
+        "timeframes_forex": _SCANNER_TIMEFRAMES_FOREX,
         "scanned_at": datetime.datetime.utcnow().isoformat() + "Z",
         "cache_ttl": _FOREX_SCANNER_TTL,
     })

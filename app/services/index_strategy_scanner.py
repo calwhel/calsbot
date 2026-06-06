@@ -14,6 +14,10 @@ from app.services.tradfi_prices import fetch_index_scan_candles
 
 DEFAULT_SYMBOL = "NAS100"
 
+# Day-trader timeframes — 1m needs a short lookback (upstream cap ~7d).
+INDEX_TIMEFRAMES = ["1m", "5m", "15m", "1h"]
+INDEX_TF_MAX_DAYS = {"1m": 7, "5m": 30, "15m": 90, "1h": 180}
+
 # Index CFDs quote in POINTS (1.0 = one index level on NAS100/SPX500).
 # Scalps: 40–80 pt targets (user-requested min 40). Swings capped ~120 pt —
 # prior 160–240 pt targets were unrealistic intraday moonshots on Nasdaq.
@@ -56,6 +60,8 @@ async def run_index_discovery(
         name_prefix=sym,
         risk_variants=INDEX_RISK_VARIANTS,
         fetch_candles_fn=fetch_index_scan_candles,
+        timeframes=INDEX_TIMEFRAMES,
+        tf_max_days=INDEX_TF_MAX_DAYS,
         log_prefix="index-scan",
         no_trades_error=(
             f"No strategy produced enough trades on {sym} to rank. "
