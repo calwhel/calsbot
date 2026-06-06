@@ -65,6 +65,34 @@ _PRICE_TA_TTL_TRADFI = 5
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+def _portal_trade_entitled(
+    user,
+    has_pro_by_user: Optional[Dict[int, bool]] = None,
+    db=None,
+) -> bool:
+    """Whether a user may receive executor-fired trades (crypto or forex)."""
+    from app.deployment import portal_features_free
+
+    if portal_features_free():
+        return True
+    if user.is_admin or getattr(user, "grandfathered", False):
+        return True
+    if has_pro_by_user is not None:
+        return has_pro_by_user.get(user.id, False)
+    if db is not None:
+        from app.strategy_models import PortalSubscription
+
+        _now = datetime.utcnow()
+        _psub = db.query(PortalSubscription).filter_by(user_id=user.id).first()
+        return bool(
+            _psub
+            and _psub.tier == "pro"
+            and _psub.subscription_end
+            and _psub.subscription_end > _now
+        )
+    return False
+
+
 def _telegram_int_id(user) -> Optional[int]:
     """
     Return the integer Telegram chat_id for a user.
@@ -149,8 +177,11 @@ async def _user_can_live_trade_async(user, db) -> Tuple[bool, str]:
     if not _user_can_live_trade(user, db):
         return False, "local_check_failed"
     try:
+        from app.models import UserPreference
         from app.services.bitunix_partner import is_uid_affiliated
-        uid = getattr(user, "bitunix_uid", None)
+
+        prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
+        uid = getattr(prefs, "bitunix_uid", None) if prefs else None
         return await is_uid_affiliated(uid)
     except Exception as _e:
         logger.warning(
@@ -3538,16 +3569,9 @@ async def _propagate_to_subscribers(
             if not sub_user or sub_user.banned:
                 continue
 
-            # Pro / grandfathered check
-            _now = datetime.utcnow()
-            _psub = _sub_db.query(PortalSubscription).filter_by(user_id=sub_user.id).first()
-            _has_pro = (
-                _psub and _psub.tier == "pro"
-                and _psub.subscription_end
-                and _psub.subscription_end > _now
-            )
-            if not (sub_user.is_admin or sub_user.grandfathered or _has_pro):
+            if not _portal_trade_entitled(sub_user, db=_sub_db):
                 continue
+            _now = datetime.utcnow()
 
             sub_config  = dict(sub_strategy.config or {})
             sub_risk    = sub_config.get("risk", {})
@@ -4163,13 +4187,7 @@ async def run_strategy_executor():
                                 strategy, user = row
                                 if not user or user.banned:
                                     return
-                                # Only Pro portal subscribers (or admin/grandfathered) get
-                                # trades — Pro status was batch-loaded once this cycle.
-                                if not (
-                                    user.is_admin
-                                    or user.grandfathered
-                                    or has_pro_by_user.get(user.id, False)
-                                ):
+                                if not _portal_trade_entitled(user, has_pro_by_user):
                                     return
                                 await evaluate_and_fire(
                                     strategy, user, db_one, http_client,
@@ -5197,11 +5215,7 @@ async def run_forex_executor():
                                 strategy, user = row
                                 if not user or user.banned:
                                     return
-                                if not (
-                                    user.is_admin
-                                    or user.grandfathered
-                                    or has_pro_by_user.get(user.id, False)
-                                ):
+                                if not _portal_trade_entitled(user, has_pro_by_user):
                                     return
                                 await evaluate_and_fire(
                                     strategy, user, db_one, _http,
