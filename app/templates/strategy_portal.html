@@ -3516,7 +3516,8 @@ function dismissTgBanner(){
 
 <script>
 const UID="{{ uid }}";
-let IS_PRO = true;
+const PORTAL_FEATURES_FREE = {{ 'true' if features_free else 'false' }};
+let IS_PRO = PORTAL_FEATURES_FREE;
 // JS fetch cache — instant tab switching on repeat visits
 const _FC=new Map(); // url → {d, exp}
 function _fcGet(url){const h=_FC.get(url);return(h&&Date.now()<h.exp)?h.d:null;}
@@ -9410,14 +9411,26 @@ async function cbCompile() {
 // ══════════════════════════════════════════════════════════
 // SUBSCRIPTION — load tier, update badge + usage bar
 // ══════════════════════════════════════════════════════════
-window._portalIsPro = true;
+window._portalIsPro = PORTAL_FEATURES_FREE;
+
+function hideUpgradeUI() {
+  document.getElementById('modal-upgrade')?.remove();
+  document.querySelectorAll('[onclick*="modal-upgrade"]').forEach(el => {
+    el.style.display = 'none';
+  });
+  const usageUp = document.querySelector('.cb-usage-upgrade');
+  if (usageUp) usageUp.style.display = 'none';
+}
+
+if (PORTAL_FEATURES_FREE) hideUpgradeUI();
 
 async function loadPortalSubscription() {
   try {
     const d = await (await fetch(`/api/portal/subscription?uid=${UID}`)).json();
-    window._portalIsPro = true;
+    window._portalIsPro = PORTAL_FEATURES_FREE || !!d.is_pro;
+    IS_PRO = window._portalIsPro;
     document.getElementById('ug-uid-display').textContent = UID;
-    cbSyncUsage(d.chat_calls_used, d.chat_calls_limit, true);
+    cbSyncUsage(d.chat_calls_used, d.chat_calls_limit, window._portalIsPro);
   } catch (e) { /* silent */ }
 }
 

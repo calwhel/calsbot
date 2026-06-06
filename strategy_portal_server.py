@@ -36,6 +36,16 @@ from app.strategy_marketplace_ext import (
     calculate_creator_cut, calculate_platform_cut,
 )
 from app.social_models import init_social_tables
+from app.deployment import (
+    is_production_deploy,
+    is_replit,
+    portal_features_free,
+    payments_enabled,
+    request_is_https,
+    public_base_url,
+    deploy_commit,
+    google_auth_enabled,
+)
 
 # ─── Simple in-process TTL cache for public/read-heavy endpoints ─────────────
 # Format: { key: (payload, expiry_timestamp) }
@@ -432,11 +442,7 @@ async def _require_bound_uid_for_api(request: Request, call_next):
 
 
 def _set_session(response, uid: str, request: Request = None):
-    # Detect HTTPS: check REPL_DEPLOYMENT env var OR X-Forwarded-Proto header from the proxy
-    _secure = bool(os.getenv("REPL_DEPLOYMENT"))
-    if not _secure and request:
-        forwarded_proto = request.headers.get("x-forwarded-proto", "")
-        _secure = forwarded_proto.lower() == "https"
+    _secure = request_is_https(request)
     response.set_cookie(
         key=_COOKIE_NAME,
         value=_make_token(uid),
@@ -621,7 +627,7 @@ def _get_portal_sub(user_id: int, db: Session):
 
 
 def _is_portal_pro(sub) -> bool:
-    if os.getenv("PORTAL_FEATURES_FREE", "").lower() in ("1", "true", "yes"):
+    if portal_features_free():
         return True
     if not sub or (getattr(sub, "tier", "") or "").lower() != "pro":
         return False
@@ -672,7 +678,7 @@ _GOOGLE_SCOPE         = "openid email profile"
 
 
 def _google_enabled() -> bool:
-    return bool(_GOOGLE_CLIENT_ID and _GOOGLE_CLIENT_SECRET)
+    return google_auth_enabled()
 
 
 def _google_redirect_uri(request: Request) -> str:
@@ -1578,8 +1584,10 @@ async def _keepalive_ping_loop():
     """
     Ping the app's own health endpoint every 4 minutes so Replit Autoscale
     never scales to zero while strategies are active.
-    Runs only in production (REPL_DEPLOYMENT=1).
+    Replit only — Railway does not need this.
     """
+    if not is_replit():
+        return
     import aiohttp as _aiohttp
     import os as _os
     # Resolve the public domain — prefer the custom domain, fall back to replit.app
@@ -1813,14 +1821,11 @@ async def _startup_background():
     # the same cTrader account and the broker kicked the duplicates (reconnect
     # churn + "app auth failed"). See _start_executor_tasks for details.
 
-    # Only run the strategy executor in production (REPL_DEPLOYMENT=1).
+    # Only run the strategy executor in production (Railway/Replit) or FORCE_EXECUTOR=1.
     # In dev, both the dev portal and production share the same Neon DB, so
     # running the executor in dev doubles all API calls and causes confusion.
     import os as _os
-    _is_production = (
-        _os.environ.get("REPL_DEPLOYMENT") == "1"
-        or _os.environ.get("FORCE_EXECUTOR", "").lower() in ("1", "true", "yes")
-    )
+    _is_production = is_production_deploy()
     _executor_disabled = _os.environ.get("DISABLE_EXECUTOR", "").lower() in ("1", "true", "yes")
     if _is_production and not _executor_disabled:
         # Each worker enters the claim loop.  The first to win acquires the lock
@@ -1852,18 +1857,16 @@ async def _startup_background():
 
 @app.get("/health")
 async def health():
-    import os as _os
-    _commit = (
-        _os.environ.get("RAILWAY_GIT_COMMIT_SHA")
-        or _os.environ.get("GIT_COMMIT")
-        or "unknown"
-    )
+    _commit = deploy_commit()
     return {
         "status": "ok",
         "ts": int(__import__("time").time()),
-        "v": "callyx-live",
+        "v": "railway-free-v1",
         "commit": _commit[:12] if _commit else "unknown",
         "gold_scan": "yahoo-chart-v3",
+        "features_free": portal_features_free(),
+        "executor": is_production_deploy()
+        and os.getenv("DISABLE_EXECUTOR", "").lower() not in ("1", "true", "yes"),
     }
 
 
@@ -2643,13 +2646,16 @@ async def _render_portal(request: Request, uid: str):
         "open_trades": 0, "pnl_7d_fmt": "—", "pnl_all_fmt": "—",
         "pnl_7d_pos": True, "pnl_all_pos": True, "win_rate": 0, "total_trades": 0,
     }
+    _free = portal_features_free()
     response = templates.TemplateResponse(request, "strategy_portal.html", {
-        "user":        _default_user,
-        "uid":         uid,
-        "strategies":  [],
-        "portfolio":   _default_portfolio,
-        "is_web_user": False,
-        "is_pro":      False,
+        "user":          _default_user,
+        "uid":           uid,
+        "strategies":    [],
+        "portfolio":     _default_portfolio,
+        "is_web_user":   False,
+        "is_pro":        _free,
+        "features_free": _free,
+        "payments_enabled": payments_enabled(),
     })
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
@@ -7801,11 +7807,9 @@ async def api_get_webhook_url(strategy_id: int, request: Request, uid: str = Que
             raise HTTPException(status_code=404)
         if not strategy.webhook_token:
             return JSONResponse({"webhook_url": None})
-        host = os.environ.get("REPLIT_DEPLOYMENT_URL") or os.environ.get("REPLIT_DEV_DOMAIN") or request.headers.get("host", "")
-        if not host.startswith("http"):
-            host = f"https://{host}"
+        base = public_base_url(request)
         return JSONResponse({
-            "webhook_url": f"{host}/api/webhooks/tv/{strategy.webhook_token}",
+            "webhook_url": f"{base}/api/webhooks/tv/{strategy.webhook_token}",
             "webhook_token": strategy.webhook_token,
         })
     finally:
@@ -11726,6 +11730,16 @@ async def seed_admin_strategies(secret: str = Query(...), fix: bool = Query(Fals
         db.close()
 
 
+# ── Portal public config (auth/payments UI) ─────────────────
+@app.get("/api/portal/config")
+async def portal_config():
+    return {
+        "features_free": portal_features_free(),
+        "payments_enabled": payments_enabled(),
+        "google_auth_enabled": _google_enabled(),
+    }
+
+
 # ── Portal subscription status ─────────────────────────────
 @app.get("/api/portal/subscription")
 async def portal_subscription(request: Request):
@@ -11754,7 +11768,7 @@ async def portal_subscription(request: Request):
 async def executor_status(request: Request):
     """Returns whether the strategy executor is running in this worker process."""
     import os as _os
-    is_prod = _os.environ.get("REPL_DEPLOYMENT") == "1" or _os.environ.get("FORCE_EXECUTOR", "").lower() in ("1","true","yes")
+    is_prod = is_production_deploy()
     # Query DB for the advisory lock
     from app.database import SessionLocal
     from sqlalchemy import text
@@ -11981,11 +11995,13 @@ async def portal_checkout(request: Request):
         if not user:
             raise HTTPException(status_code=403, detail="User not found")
 
+        if not payments_enabled():
+            raise HTTPException(status_code=503, detail="Payments disabled — portal is free to use")
+
         if not settings.OXAPAY_MERCHANT_API_KEY:
             raise HTTPException(status_code=503, detail="Payment not configured")
 
-        domain = os.getenv("REPLIT_DOMAINS", "perp-signal-bot.replit.app").split(",")[0].strip()
-        callback_url = f"https://{domain}/api/portal/oxapay-webhook"
+        callback_url = f"{public_base_url(request)}/api/portal/oxapay-webhook"
         order_id     = f"portal-{uid}-{int(time.time())}"
 
         oxapay  = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY)

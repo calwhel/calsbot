@@ -11,18 +11,14 @@ from fastapi import FastAPI
 
 print("✅ Core imports loaded", flush=True)
 
-# In deployed production REPLIT_DEPLOYMENT is set to "1".
-# In the Replit IDE (dev) it is absent.
-# Dev should NOT poll Telegram — it would conflict with the live production bot.
-# Set FORCE_BOT_POLL=1 in the IDE environment to override this for local testing.
-_IS_PRODUCTION = bool(os.environ.get("REPLIT_DEPLOYMENT"))
-_FORCE_BOT_POLL = bool(os.environ.get("FORCE_BOT_POLL"))
-_START_BOT_POLLING = _IS_PRODUCTION or _FORCE_BOT_POLL
+from app.deployment import should_poll_telegram, payments_enabled
 
-if _IS_PRODUCTION:
-    print("🌐 PRODUCTION environment detected — bot polling ENABLED", flush=True)
-elif _FORCE_BOT_POLL:
-    print("⚠️  FORCE_BOT_POLL override — bot polling ENABLED (dev mode)", flush=True)
+# Dev should NOT poll Telegram — it would conflict with the live production bot.
+# Railway/Replit set this automatically; use FORCE_BOT_POLL=1 to override locally.
+_START_BOT_POLLING = should_poll_telegram()
+
+if _START_BOT_POLLING:
+    print("🌐 Production/Railway — Telegram bot polling ENABLED", flush=True)
 else:
     print("🛠️  DEV environment — bot polling DISABLED (set FORCE_BOT_POLL=1 to override)", flush=True)
 
@@ -89,9 +85,13 @@ async def lifespan(app: FastAPI):
         forex_bot_task = None
         logging.info("🛠️  DEV mode — Telegram polling skipped (production bot handles it)")
     
-    # Start OxaPay automatic payment verification
-    from app.services.oxapay_poller import poll_oxapay_payments
-    poller_task = asyncio.create_task(poll_oxapay_payments())
+    # OxaPay poller only when payments are configured
+    poller_task = None
+    if payments_enabled():
+        from app.services.oxapay_poller import poll_oxapay_payments
+        poller_task = asyncio.create_task(poll_oxapay_payments())
+    else:
+        logging.info("OxaPay poller skipped (free portal / no merchant key)")
     
     # Twitter auto-posting — strategy leaderboard + market content
     from app.services.twitter_poster import auto_post_loop
@@ -113,7 +113,8 @@ async def lifespan(app: FastAPI):
             await forex_bot_task
         except asyncio.CancelledError:
             pass
-    poller_task.cancel()
+    if poller_task:
+        poller_task.cancel()
     twitter_task.cancel()
     wall_watch_task.cancel()
     try:
@@ -125,10 +126,11 @@ async def lifespan(app: FastAPI):
             await bot_task
         except asyncio.CancelledError:
             pass
-    try:
-        await poller_task
-    except asyncio.CancelledError:
-        pass
+    if poller_task:
+        try:
+            await poller_task
+        except asyncio.CancelledError:
+            pass
     try:
         await twitter_task
     except asyncio.CancelledError:
