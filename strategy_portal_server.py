@@ -12764,6 +12764,20 @@ async def backtest_scan(request: Request):
             c["cc_dir"] = "red" if d in ("green","bullish","up") else "green"
         elif t == "vwap_deviation":
             c["vwap_side"] = "above" if c.get("vwap_side", "below") == "below" else "below"
+        # ── ICT / SMC / Forex price-action types (NEW) — bullish<->bearish ─────
+        elif t in (
+            "ifvg", "breaker_block", "mss", "choch",
+            "liquidity_sweep", "mitigation_block",
+            "supply_demand", "premium_discount", "equilibrium",
+            "pin_bar", "engulfing", "inside_bar",
+            "fib_retracement", "vwap_bounce",
+        ):
+            c["direction"] = "bearish" if c.get("direction") == "bullish" else "bullish"
+        elif t == "hh_hl_structure":
+            # bullish-only structure filter → flip the type for SHORT bias
+            c["type"] = "lh_ll_structure"
+        elif t == "lh_ll_structure":
+            c["type"] = "hh_hl_structure"
         # adx_filter, atr_volatility, volume_spike, keltner squeeze: direction-agnostic
         return c
 
@@ -12842,8 +12856,71 @@ async def backtest_scan(request: Request):
         {"label": "BB Squeeze + Volume Spike",            "category": "Combo",      "primaryType": "bb",         "primaryCfg": {"condition": "squeeze"},                                   "confirms": [{"type": "volume_spike", "multiplier": 1.5}]},
     ]
 
+    # ── ICT / Smart-Money signal singles ──────────────────────────────────────
+    # All new types accept `direction: bullish|bearish`. The flip helper `_C`
+    # handles SHORT bias and the engine has explicit evaluators for each type.
+    ict_singles = [
+        {"label": "FVG — Fair Value Gap",            "category": "ICT/SMC", "primaryType": "fvg",
+         "primaryCfg": {"fvg_dir": "bullish", "min_gap_pct": 0.05},            "confirms": []},
+        {"label": "IFVG — Inverted Fair Value Gap",  "category": "ICT/SMC", "primaryType": "ifvg",
+         "primaryCfg": {"direction": "bullish", "lookback": 50},               "confirms": []},
+        {"label": "OB — Order Block",                "category": "ICT/SMC", "primaryType": "order_block",
+         "primaryCfg": {"ob_type": "bullish"},                                 "confirms": []},
+        {"label": "BB — Breaker Block",              "category": "ICT/SMC", "primaryType": "breaker_block",
+         "primaryCfg": {"direction": "bullish", "lookback": 50},               "confirms": []},
+        {"label": "MSS — Market Structure Shift",    "category": "ICT/SMC", "primaryType": "mss",
+         "primaryCfg": {"direction": "bullish", "swing_lookback": 20},         "confirms": []},
+        {"label": "CHoCH — Change of Character",     "category": "ICT/SMC", "primaryType": "choch",
+         "primaryCfg": {"direction": "bullish", "swing_lookback": 20},         "confirms": []},
+        {"label": "LQ — Liquidity Sweep",            "category": "ICT/SMC", "primaryType": "liquidity_sweep",
+         "primaryCfg": {"direction": "bullish", "lookback": 10},               "confirms": []},
+        {"label": "MIT — Mitigation Block",          "category": "ICT/SMC", "primaryType": "mitigation_block",
+         "primaryCfg": {"direction": "bullish", "lookback": 50},               "confirms": []},
+    ]
+
+    # ── Supply & Demand / structural pricing levels ───────────────────────────
+    sd_singles = [
+        {"label": "SDP — Supply/Demand Zone",        "category": "Supply & Demand", "primaryType": "supply_demand",
+         "primaryCfg": {"direction": "bullish", "base_max": 5, "impulse_mult": 2.0}, "confirms": []},
+        {"label": "PD — Premium/Discount",           "category": "Supply & Demand", "primaryType": "premium_discount",
+         "primaryCfg": {"direction": "bullish", "lookback": 50},
+         # Combine with RSI so the PD filter actually gates an entry trigger
+         "confirms": [{"type": "rsi", "period": 14, "operator": "lt", "value": 45}]},
+        {"label": "EQ — Equilibrium Entry",          "category": "Supply & Demand", "primaryType": "equilibrium",
+         "primaryCfg": {"direction": "bullish", "lookback": 20},               "confirms": []},
+    ]
+
+    # ── Pure price-action patterns ────────────────────────────────────────────
+    pa_singles = [
+        {"label": "PIN — Pin Bar",                   "category": "Price Action", "primaryType": "pin_bar",
+         "primaryCfg": {"direction": "bullish", "wick_ratio": 2.0},            "confirms": []},
+        {"label": "ENG — Engulfing Candle",          "category": "Price Action", "primaryType": "engulfing",
+         "primaryCfg": {"direction": "bullish"},                               "confirms": []},
+        {"label": "IB — Inside Bar Breakout",        "category": "Price Action", "primaryType": "inside_bar",
+         "primaryCfg": {"direction": "bullish"},                               "confirms": []},
+    ]
+
+    # ── Structure / level filters ─────────────────────────────────────────────
+    struct_singles = [
+        {"label": "HH/HL — Bullish Structure",       "category": "Structure", "primaryType": "hh_hl_structure",
+         "primaryCfg": {"lookback": 60, "min_swings": 5},                      "confirms": []},
+        {"label": "LH/LL — Bearish Structure",       "category": "Structure", "primaryType": "lh_ll_structure",
+         "primaryCfg": {"lookback": 60, "min_swings": 5},                      "confirms": []},
+        {"label": "FIB — Fibonacci Retracement",     "category": "Structure", "primaryType": "fib_retracement",
+         "primaryCfg": {"direction": "bullish", "lookback": 50, "low_level": 0.618, "high_level": 0.705},
+         "confirms": []},
+        {"label": "VWAP — Volume Weighted Average",  "category": "Structure", "primaryType": "vwap_bounce",
+         "primaryCfg": {"direction": "bullish", "tol_pct": 0.15},              "confirms": []},
+    ]
+
+    # The new signal universe is enabled for all asset classes — they're pure
+    # price-action so they work on crypto / forex / indices alike. Forex
+    # users get pip-aware scoring (see below) which is the main behavioural
+    # difference vs the legacy crypto scan path.
+    template_groups = (singles, combos, ict_singles, sd_singles, pa_singles, struct_singles)
+
     templates = []
-    for base_list in (singles, combos):
+    for base_list in template_groups:
         for t in base_list:
             entry = {
                 "label":       t["label"],
@@ -12858,8 +12935,13 @@ async def backtest_scan(request: Request):
                 # Flip primary by wrapping it through _C()
                 primary_as_cond = {"type": entry["primaryType"], **entry["primaryCfg"]}
                 flipped_primary = _C(primary_as_cond)
-                flipped_primary.pop("type", None)
-                entry["primaryCfg"] = flipped_primary
+                # _C may rewrite the type (e.g. HH/HL ↔ LH/LL); honour it so
+                # the SHORT scan actually fires the mirrored evaluator. For
+                # all legacy templates _C never touches type, so this stays
+                # bit-identical to the previous behaviour.
+                new_type = flipped_primary.pop("type", entry["primaryType"])
+                entry["primaryType"] = new_type
+                entry["primaryCfg"]  = flipped_primary
                 # Flip each confirm
                 entry["confirms"] = [_C(c) for c in entry["confirms"]]
                 # Cosmetic label adjustments
@@ -12874,6 +12956,10 @@ async def backtest_scan(request: Request):
                                   .replace("Breakout", "Breakdown")
                                   .replace("High", "Low")
                                   .replace("Support", "Resistance"))
+                # New signal labels — keep them clean & symmetric under SHORT
+                if entry["category"] == "Structure" and entry["label"].startswith("HH/HL"):
+                    entry["label"] = entry["label"].replace("HH/HL — Bearish Structure",
+                                                            "LH/LL — Bearish Structure")
             templates.append(entry)
 
     from app.services.backtest_engine import run_backtest, _fetch_historical
@@ -12912,6 +12998,12 @@ async def backtest_scan(request: Request):
     # Each strategy is first scored at the "Balanced" profile (stage 1), then
     # the top 8 are re-tested with all 4 profiles in stage 2 to find the
     # optimal TP/SL for that specific (strategy, coin, TF) combo.
+    # Forex pip-aware risk profiles. We keep `tp1`/`sl` populated (as a
+    # backstop for legacy code paths and the UI display strings) but it's the
+    # pip-mode fields below that drive the engine when `asset_class == "forex"`
+    # — the engine's pip_mode path activates whenever `take_profit_pips` /
+    # `stop_loss_pips` are present, which is the canonical forex formulation.
+    _is_forex = (asset_class == "forex")
     if risk_mode == "fixed":
         # User pinned an exact TP/SL — single profile, stage 2 becomes a no-op
         # because the optimisation loop iterates over `risk_profiles` and skips
@@ -12925,6 +13017,16 @@ async def backtest_scan(request: Request):
             "rr":       f"{_rr_ratio}:1",
         }]
         DEFAULT_PROFILE = risk_profiles[0]
+    elif _is_forex:
+        # Pip-anchored profiles — these are realistic ranges for FX majors and
+        # XAU. The engine multiplies pips × pip_size for the actual TP/SL price.
+        risk_profiles = [
+            {"name": "Tight Scalp", "tp1": 0.15, "sl": 0.075, "leverage": 5, "rr": "2:1",   "tp_pips": 15,  "sl_pips": 7},
+            {"name": "Balanced",    "tp1": 0.30, "sl": 0.15,  "leverage": 5, "rr": "2:1",   "tp_pips": 30,  "sl_pips": 15},
+            {"name": "Wide Swing",  "tp1": 0.60, "sl": 0.25,  "leverage": 5, "rr": "2.4:1", "tp_pips": 60,  "sl_pips": 25},
+            {"name": "Runner",      "tp1": 1.00, "sl": 0.25,  "leverage": 5, "rr": "4:1",   "tp_pips": 100, "sl_pips": 25},
+        ]
+        DEFAULT_PROFILE = risk_profiles[1]  # Balanced
     else:
         # Optimised mode — historical 4-profile search picks the best variant
         # per (strategy, coin, TF) combo (stage 2 below).
@@ -12965,6 +13067,13 @@ async def backtest_scan(request: Request):
             "singleCoin":  symbol,
             "asset_class": asset_class,
         }
+        # Forex profiles expose pip-anchored TP/SL; the engine activates its
+        # pip-aware path when either field is present and yields pip metrics
+        # in the resulting `stats` block (total_pips, avg_pips_per_trade, ...).
+        if r.get("tp_pips") is not None:
+            cfg["take_profit_pips"] = r["tp_pips"]
+        if r.get("sl_pips") is not None:
+            cfg["stop_loss_pips"]   = r["sl_pips"]
         async with _bt_sem:
             try:
                 result = await asyncio.wait_for(
@@ -13046,11 +13155,49 @@ async def backtest_scan(request: Request):
         sample_weight = math.log(trades + 1) / math.log(20)  # ~1.0 at 19 trades
         return round(pf * wr * sample_weight + pnl * 0.001, 4)
 
+    # ── Forex composite score (0..100) ────────────────────────────────────────
+    # Spec breakdown:  win rate (30%) · avg pips per winning trade (40%) ·
+    #                  consistency, i.e. low std-dev of per-trade pip moves (30%).
+    # All three sub-scores are normalised to 0..100 then weighted. Result is
+    # capped at 100 so the UI can render a clean "X / 100" gauge per signal.
+    def _forex_score(stats: dict, trade_list: list, tf: str = "1h") -> float:
+        trades = stats.get("closed_trades", 0)
+        if trades < _min_trades_for_tf(tf, days):
+            return -1.0
+        wr = float(stats.get("win_rate", 0) or 0)  # already 0..100
+        avg_win_pips = float(stats.get("avg_pips_win", 0) or 0)
+        # Avg-pips component: 40 pips per winning trade → full score on majors
+        ap_norm = max(0.0, min(100.0, (avg_win_pips / 40.0) * 100.0))
+        # Consistency: lower σ relative to |mean| ⇒ higher score
+        pip_moves = []
+        for t in trade_list or []:
+            if t.get("outcome") in ("WIN", "LOSS", "BREAKEVEN") and t.get("pip_move") is not None:
+                try: pip_moves.append(float(t["pip_move"]))
+                except (TypeError, ValueError): pass
+        if len(pip_moves) >= 2:
+            import statistics as _st
+            mean = _st.fmean(pip_moves)
+            std  = _st.pstdev(pip_moves)
+            denom = abs(mean) if abs(mean) > 1e-6 else 1.0
+            cv = std / denom            # coefficient of variation (0 = perfect)
+            cons_norm = max(0.0, min(100.0, 100.0 - cv * 20.0))
+        else:
+            cons_norm = 0.0
+        composite = wr * 0.30 + ap_norm * 0.40 + cons_norm * 0.30
+        return round(max(0.0, min(100.0, composite)), 2)
+
     def _outcome_to_row(o: dict) -> dict:
         res   = o.get("result") or {}
         err   = res.get("error")
         stats = res.get("stats") or {}
-        score = _score(stats, o.get("timeframe", "1h")) if not err else -1.0
+        tf_   = o.get("timeframe", "1h")
+        score = _score(stats, tf_) if not err else -1.0
+        # Compute a forex-specific 0..100 composite alongside the legacy score.
+        # We always send it for forex scans so the UI can show a "score / 100"
+        # gauge — on crypto it stays None and the UI keeps the legacy rendering.
+        fx_score = None
+        if _is_forex and not err:
+            fx_score = _forex_score(stats, res.get("trades") or [], tf_)
         return {
             "label":     o["label"],
             "category":  o.get("category", "Other"),
@@ -13063,13 +13210,22 @@ async def backtest_scan(request: Request):
             "trades":    res.get("trades", []),
             "equity_curve": res.get("equity_curve", []),
             "score":     score,
+            "fx_score":  fx_score,
             "error":     err,
         }
 
+    # Choose the primary sort key per asset class. For forex the composite
+    # 0..100 score (pip-weighted) is the right ranking signal; for crypto we
+    # keep the legacy profit-factor × win-rate metric.
+    def _sort_key(row: dict) -> float:
+        if _is_forex and row.get("fx_score") is not None:
+            return row["fx_score"]
+        return row["score"]
+
     ranked_s1 = sorted([_outcome_to_row(o) for o in outcomes],
-                       key=lambda x: x["score"], reverse=True)
-    valid_s1   = [r for r in ranked_s1 if r["score"] >= 0]
-    invalid    = [r for r in ranked_s1 if r["score"] < 0]
+                       key=_sort_key, reverse=True)
+    valid_s1   = [r for r in ranked_s1 if _sort_key(r) >= 0]
+    invalid    = [r for r in ranked_s1 if _sort_key(r) < 0]
 
     # ── Stage 2: Optimise TP/SL on the top 8 (strategy, coin, TF) combos ─────
     # For each surviving combo, re-test it with the OTHER 3 risk profiles
@@ -13115,31 +13271,38 @@ async def backtest_scan(request: Request):
     for (key, _job), o in zip(optimisation_jobs, opt_results):
         by_combo.setdefault(key, []).append(_outcome_to_row(o))
 
-    # For each combo, pick the variant with the best score
+    # For each combo, pick the variant with the best score (forex: fx_score)
     valid = []
     for row in top_for_optimisation:
         variants = by_combo[_combo_key(row)]
-        best = max(variants, key=lambda v: v["score"])
-        # Attach all variant stats so the UI can show the comparison
+        best = max(variants, key=_sort_key)
+        # Attach all variant stats so the UI can show the comparison. We send
+        # the pip metrics too so the forex UI can show pips-per-trade per
+        # profile alongside %P&L.
         best["all_risk_variants"] = [
             {
                 "risk_name": v["risk"]["name"],
                 "tp1":       v["risk"]["tp1"],
                 "sl":        v["risk"]["sl"],
                 "rr":        v["risk"]["rr"],
+                "tp_pips":   v["risk"].get("tp_pips"),
+                "sl_pips":   v["risk"].get("sl_pips"),
                 "win_rate":  v["stats"].get("win_rate", 0),
                 "total_pnl": v["stats"].get("total_pnl", 0),
+                "total_pips":v["stats"].get("total_pips"),
+                "avg_pips_per_trade": v["stats"].get("avg_pips_per_trade"),
                 "profit_factor": v["stats"].get("profit_factor", 0),
                 "closed_trades": v["stats"].get("closed_trades", 0),
                 "score":     v["score"],
-                "is_best":   v["score"] == best["score"],
+                "fx_score":  v.get("fx_score"),
+                "is_best":   _sort_key(v) == _sort_key(best),
             }
             for v in sorted(variants, key=lambda v: v["risk"]["tp1"])
         ]
         valid.append(best)
 
     # Re-sort by the best-variant score so the leaderboard reflects optimisation
-    valid.sort(key=lambda x: x["score"], reverse=True)
+    valid.sort(key=_sort_key, reverse=True)
 
     # ── AI one-liner for the winner ────────────────────────────────────────────
     winner_insight = ""
@@ -13180,6 +13343,7 @@ async def backtest_scan(request: Request):
             "config":           r["config"],
             "stats":            r["stats"],
             "score":            r["score"],
+            "fx_score":         r.get("fx_score"),
             "risk":             r["risk"],
             "all_risk_variants": r.get("all_risk_variants", []),
         }
@@ -13189,17 +13353,66 @@ async def backtest_scan(request: Request):
             out["equity_curve"] = r.get("equity_curve") or []
         return out
 
+    # ── Per-signal-type leaderboard ────────────────────────────────────────────
+    # For each unique signal label, find the (coin, TF, risk) combo that scored
+    # best and surface a tight summary (win-rate, avg pips, total pips, best
+    # TF). The Scan Best UI uses this to render the "signal type leaderboard"
+    # block — separate from the overall leaderboard which is already per-combo.
+    by_label: dict = {}
+    # Use the stage-1 ranked rows so EVERY signal type appears, even if it
+    # didn't make the top-8 optimisation cut. Within a label we still pick
+    # the highest-scoring combo so the headline numbers are the best-case.
+    for r in ranked_s1:
+        if _sort_key(r) < 0:
+            continue
+        key = r["label"]
+        prev = by_label.get(key)
+        if prev is None or _sort_key(r) > _sort_key(prev):
+            by_label[key] = r
+
+    def _signal_summary(r: dict) -> dict:
+        st = r.get("stats") or {}
+        return {
+            "label":              r["label"],
+            "category":           r.get("category", "Other"),
+            "best_coin":          r.get("coin"),
+            "best_timeframe":     r.get("timeframe"),
+            "win_rate":           st.get("win_rate", 0),
+            "total_pnl":          st.get("total_pnl", 0),
+            "profit_factor":      st.get("profit_factor", 0),
+            "closed_trades":      st.get("closed_trades", 0),
+            "avg_pips_per_trade": st.get("avg_pips_per_trade"),
+            "avg_pips_win":       st.get("avg_pips_win"),
+            "total_pips":         st.get("total_pips"),
+            "pip_mode":           bool(st.get("pip_mode")),
+            "score":              r.get("score"),
+            "fx_score":           r.get("fx_score"),
+            "rr":                 (r.get("risk") or {}).get("rr"),
+            "tp_pips":            (r.get("risk") or {}).get("tp_pips"),
+            "sl_pips":            (r.get("risk") or {}).get("sl_pips"),
+        }
+
+    signal_leaderboard = sorted(
+        [_signal_summary(r) for r in by_label.values()],
+        key=lambda s: (s.get("fx_score") if (_is_forex and s.get("fx_score") is not None)
+                       else s.get("score") or 0.0),
+        reverse=True,
+    )
+
     return {
         "ok":      True,
         "coin":    primary_ticker,           # legacy single-coin field
         "coins":   tickers,                  # full coin universe scanned
+        "asset_class": asset_class,
         "timeframes": tf_list,               # all TFs scanned
         "days":    days,
         "direction": direction,
         "risk_mode": risk_mode,
         "fixed_tp":  fixed_tp if risk_mode == "fixed" else None,
         "fixed_sl":  fixed_sl if risk_mode == "fixed" else None,
+        "scoring":   "forex_pips_v1" if _is_forex else "crypto_pf_v1",
         "ranked":  [_clean_row(r, include_full=(i < 5)) for i, r in enumerate(valid[:12])],
+        "signal_leaderboard": signal_leaderboard,
         "tested":  len(stage1_jobs),
         "skipped": len(invalid),
         "optimisation_jobs": len(optimisation_jobs),

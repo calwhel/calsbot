@@ -2476,28 +2476,62 @@ function dismissTgBanner(){
             <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#caa12c,#b8860b)" onclick="openGoldFinder()">🏆 Find Best Gold Strategy →</button>
           </div>
 
+          <!-- ── Asset-class toggle (Crypto vs Forex) ─────────────────── -->
           <div style="margin-bottom:14px">
-            <div class="pine-label">Coins <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 12 · pick a preset or type your own</span></div>
+            <div class="pine-label">Market</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="scan-asset-chips">
+              <button class="opt-chip active" data-ac="crypto" onclick="setScanAssetClass('crypto',this)">🪙 Crypto</button>
+              <button class="opt-chip"         data-ac="forex"  onclick="setScanAssetClass('forex',this)">💱 Forex</button>
+            </div>
+          </div>
+
+          <!-- Symbols input + presets — content swapped by setScanAssetClass() -->
+          <div style="margin-bottom:14px">
+            <div class="pine-label" id="scan-coin-label">Coins <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 12 · pick a preset or type your own</span></div>
             <input id="scan-coin" type="text" value="BTC" maxlength="200"
               style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)"
               placeholder="BTC, ETH, SOL, AVAX, LINK, …">
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC',this)">BTC only</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH',this)">BTC + ETH</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL',this)">Top 3</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,LINK',this)">Top 5</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,LINK,DOT,MATIC,ATOM,NEAR,ARB',this)">Top 10</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,BNB,XRP,ADA,DOGE,AVAX,DOT,MATIC,LINK,UNI',this)">Top 12 by mcap</button>
+
+            <!-- Crypto presets -->
+            <div id="scan-presets-crypto">
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC',this)">BTC only</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH',this)">BTC + ETH</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL',this)">Top 3</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,LINK',this)">Top 5</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,LINK,DOT,MATIC,ATOM,NEAR,ARB',this)">Top 10</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,BNB,XRP,ADA,DOGE,AVAX,DOT,MATIC,LINK,UNI',this)">Top 12 by mcap</button>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+                <div style="font-size:10px;color:var(--muted);align-self:center;margin-right:2px;text-transform:uppercase;letter-spacing:.4px;font-weight:600">Sectors:</div>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,BNB,ADA,DOT',this)">L1s</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('ARB,OP,MATIC,STRK,MNT',this)">L2s</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('UNI,AAVE,MKR,COMP,CRV,SUSHI,LDO',this)">DeFi</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('FET,RNDR,TAO,WLD,AGIX,OCEAN',this)">AI</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('DOGE,SHIB,PEPE,WIF,FLOKI,BONK',this)">Memes</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('AXS,SAND,MANA,IMX,GALA',this)">Gaming</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('LINK,ATOM,FIL,GRT,ICP',this)">Infra</button>
+              </div>
             </div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-              <div style="font-size:10px;color:var(--muted);align-self:center;margin-right:2px;text-transform:uppercase;letter-spacing:.4px;font-weight:600">Sectors:</div>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,BNB,ADA,DOT',this)">L1s</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('ARB,OP,MATIC,STRK,MNT',this)">L2s</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('UNI,AAVE,MKR,COMP,CRV,SUSHI,LDO',this)">DeFi</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('FET,RNDR,TAO,WLD,AGIX,OCEAN',this)">AI</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('DOGE,SHIB,PEPE,WIF,FLOKI,BONK',this)">Memes</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('AXS,SAND,MANA,IMX,GALA',this)">Gaming</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('LINK,ATOM,FIL,GRT,ICP',this)">Infra</button>
+
+            <!-- Forex presets (hidden by default; revealed when Forex is selected) -->
+            <div id="scan-presets-forex" style="display:none">
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURUSD',this)">EUR/USD</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('GBPUSD',this)">GBP/USD</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('USDJPY',this)">USD/JPY</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('XAUUSD',this)">XAU/USD</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURUSD,GBPUSD,USDJPY',this)">Top 3 majors</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURUSD,GBPUSD,USDJPY,USDCHF,AUDUSD,USDCAD,NZDUSD',this)">All majors</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('XAUUSD,EURUSD,GBPUSD,USDJPY,USDCHF,AUDUSD',this)">Metals + majors</button>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+                <div style="font-size:10px;color:var(--muted);align-self:center;margin-right:2px;text-transform:uppercase;letter-spacing:.4px;font-weight:600">Sets:</div>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURUSD,EURGBP,EURJPY,EURCHF',this)">EUR crosses</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('GBPUSD,GBPJPY,GBPCHF,GBPAUD',this)">GBP crosses</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('USDJPY,EURJPY,GBPJPY,AUDJPY,NZDJPY',this)">JPY crosses</button>
+                <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('XAUUSD,XAGUSD',this)">Metals</button>
+              </div>
             </div>
           </div>
 
@@ -7840,7 +7874,84 @@ let _scanDays = 30;
 let _scanDir  = 'LONG';
 let _scanTfs  = ['1h'];   // selected timeframes (15m / 1h / 4h)
 let _scanRiskMode = 'optimised';  // 'optimised' (engine picks best TP/SL) | 'fixed' (user pins it)
+let _scanAssetClass = 'crypto';   // 'crypto' | 'forex'
 let _scanResult = null;   // last successful scan response
+
+// ── One-line tooltips for every signal type the scanner can return ──────────
+const SCAN_SIGNAL_INFO = {
+  // ICT / Smart Money
+  'FVG':   'Fair Value Gap — 3-candle imbalance, fires on retrace into the gap',
+  'IFVG':  'Inverted FVG — a filled FVG that flips to support / resistance on retest',
+  'OB':    'Order Block — last opposite candle before a strong impulse, retest entry',
+  'BB':    'Breaker Block — failed Order Block, retest from the OTHER side',
+  'MSS':   'Market Structure Shift — close breaks the most recent counter-trend swing',
+  'CHoCH': 'Change of Character — first break of structure after a counter-trend run',
+  'LQ':    'Liquidity Sweep — wick takes recent swing, close back inside (reversal)',
+  'MIT':   'Mitigation Block — retrace to 50% of the origin candle of a strong move',
+  // Supply & Demand
+  'SDP':   'Supply / Demand Zone — consolidation base then strong move, retest of base',
+  'PD':    'Premium / Discount — only long the lower 50%, only short the upper 50%',
+  'EQ':    'Equilibrium Entry — at the 50% of the last swing (combine with a signal)',
+  // Price action
+  'PIN':   'Pin Bar — small body with a long wick (≥ 2× body) — rejection wick',
+  'ENG':   'Engulfing Candle — body fully engulfs the previous candle in your direction',
+  'IB':    'Inside Bar Breakout — break of an inside bar high/low for momentum entry',
+  // Structure
+  'HH/HL': 'Bullish Structure — confirmed series of higher highs and higher lows',
+  'LH/LL': 'Bearish Structure — confirmed series of lower highs and lower lows',
+  'FIB':   'Fibonacci — pullback into the 0.618-0.705 golden pocket of last swing',
+  'VWAP':  'VWAP — bounce off / rejection of session-anchored Volume-Weighted Average',
+  // Classic indicators (existing scanner roster)
+  'RSI':   'Relative Strength Index — momentum oscillator (oversold < 30 / overbought > 70)',
+  'MACD':  'Moving Average Convergence Divergence — trend + momentum crossover signal',
+  'EMA':   'Exponential Moving Average cross — fast EMA crossing slow EMA',
+  'SMA':   'Simple Moving Average filter — price above / below a longer SMA trend',
+  'StochRSI': 'Stochastic RSI — oscillator on top of RSI, faster than raw RSI',
+  'Bollinger': 'Bollinger Bands — volatility envelope; bounce off lower band or squeeze',
+  'SuperTrend': 'SuperTrend — ATR-based trend flip indicator',
+  'Williams': 'Williams %R — fast oscillator (oversold < -80 / overbought > -20)',
+  'ADX':   'ADX filter — only fire when the market is trending (ADX > 25)',
+  'Breakout': 'Range Breakout — close above the recent N-bar high',
+  'Support': 'Support / Resistance — bounce off recent pivot level',
+  'Divergence': 'Divergence — price makes new low/high while oscillator doesn\'t',
+  'Engulfing Pattern': 'Bullish / Bearish engulfing candlestick pattern',
+};
+
+// Look up tooltip text by signal label (matches the label prefix before "—")
+function _scanInfoFor(label) {
+  if (!label) return '';
+  const beforeDash = String(label).split('—')[0].trim();
+  if (SCAN_SIGNAL_INFO[beforeDash]) return SCAN_SIGNAL_INFO[beforeDash];
+  // Heuristic match — look for any known key as a substring
+  for (const k of Object.keys(SCAN_SIGNAL_INFO)) {
+    if (label.toUpperCase().includes(k.toUpperCase())) return SCAN_SIGNAL_INFO[k];
+  }
+  return '';
+}
+
+function setScanAssetClass(ac, el) {
+  _scanAssetClass = (ac === 'forex') ? 'forex' : 'crypto';
+  document.querySelectorAll('#scan-asset-chips .opt-chip').forEach(b => b.classList.remove('active'));
+  if (el) el.classList.add('active');
+  // Swap preset chip rows
+  const crypto = document.getElementById('scan-presets-crypto');
+  const forex  = document.getElementById('scan-presets-forex');
+  if (crypto) crypto.style.display = (_scanAssetClass === 'crypto') ? '' : 'none';
+  if (forex)  forex.style.display  = (_scanAssetClass === 'forex')  ? '' : 'none';
+  // Update label + placeholder + default value
+  const lbl = document.getElementById('scan-coin-label');
+  const inp = document.getElementById('scan-coin');
+  if (_scanAssetClass === 'forex') {
+    if (lbl) lbl.innerHTML = 'Forex symbols <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 12 · majors, JPY crosses, XAUUSD…</span>';
+    if (inp && (inp.value === 'BTC' || !inp.value)) inp.value = 'EURUSD';
+    if (inp) inp.placeholder = 'EURUSD, GBPUSD, USDJPY, XAUUSD, …';
+  } else {
+    if (lbl) lbl.innerHTML = 'Coins <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 12 · pick a preset or type your own</span>';
+    if (inp && (inp.value === 'EURUSD' || !inp.value)) inp.value = 'BTC';
+    if (inp) inp.placeholder = 'BTC, ETH, SOL, AVAX, LINK, …';
+  }
+  _updateScanGridEst();
+}
 
 function setScanRiskMode(mode, el) {
   _scanRiskMode = (mode === 'fixed') ? 'fixed' : 'optimised';
@@ -7894,9 +8005,11 @@ function _updateScanGridEst() {
   const el = document.getElementById('scan-grid-est');
   if (!el) return;
   const coins = _parseScanCoins();
-  const total = coins.length * _scanTfs.length * 40;
+  const tplCount = 58;   // singles + combos + ICT + S&D + price-action + structure
+  const total = coins.length * _scanTfs.length * tplCount;
   const eta = Math.max(8, Math.round(total * 0.08));
-  el.textContent = `${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × 40 strategies = ${total} backtests · ~${eta}s`;
+  const marketLbl = (_scanAssetClass === 'forex') ? 'symbol' : 'coin';
+  el.textContent = `${coins.length} ${marketLbl}${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × ${tplCount} strategies = ${total} backtests · ~${eta}s`;
 }
 document.addEventListener('DOMContentLoaded', () => {
   const coinInput = document.getElementById('scan-coin');
@@ -8146,9 +8259,14 @@ async function runScan() {
   document.getElementById('scan-results').style.display = 'none';
   document.getElementById('scan-error').style.display = 'none';
 
-  const total = coins.length * _scanTfs.length * 40;
+  // Stage-1 fans out coins × TFs × templates. Total template count grows when
+  // the new ICT/SMC roster is included (always-on now), so the progress chip
+  // should reflect that — value matches the server-side `templates` list size.
+  const tplCount = 58;
+  const total = coins.length * _scanTfs.length * tplCount;
+  const marketLbl = (_scanAssetClass === 'forex') ? 'symbol' : 'coin';
   document.getElementById('scan-progress-title').textContent =
-    `Running ${total} backtests · ${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} TF${_scanTfs.length>1?'s':''} × 40 strategies…`;
+    `Running ${total} backtests · ${coins.length} ${marketLbl}${coins.length>1?'s':''} × ${_scanTfs.length} TF${_scanTfs.length>1?'s':''} × ${tplCount} strategies…`;
 
   // Animate progress bar during wait — slower for bigger grids
   const bar = document.getElementById('scan-bar');
@@ -8173,6 +8291,7 @@ async function runScan() {
         risk_mode: _scanRiskMode,
         fixed_tp: parseFloat(document.getElementById('scan-fixed-tp')?.value) || 3.0,
         fixed_sl: parseFloat(document.getElementById('scan-fixed-sl')?.value) || 1.5,
+        asset_class: _scanAssetClass,
       }),
     });
     const data = await res.json();
@@ -8227,14 +8346,40 @@ function renderScanResults(data) {
   insightEl.textContent = insight;
   insightEl.style.display = insight ? '' : 'none';
 
-  // Winner stat grid
+  // Winner stat grid — swap to pip-aware tiles when forex scoring is on
   const statsEl = document.getElementById('scan-winner-stats');
-  statsEl.innerHTML = [
-    { label:'Win Rate',      val: (ws.win_rate||0).toFixed(1)+'%',       color: (ws.win_rate||0)>=50?'var(--green)':'var(--red)' },
-    { label:'Total P&L',    val: (pnlPos?'+':'')+(ws.total_pnl||0).toFixed(1)+'%', color: pnlPos?'var(--green)':'var(--red)' },
-    { label:'Profit Factor', val: (ws.profit_factor||0).toFixed(2),       color: (ws.profit_factor||0)>=1.2?'var(--green)':'var(--muted)' },
-    { label:'Trades',        val: ws.closed_trades||0,                    color: 'var(--text)' },
-  ].map(s => `<div style="background:var(--card2);border-radius:8px;padding:10px 8px;text-align:center">
+  const isForex = (data.asset_class === 'forex') || ws.pip_mode === true;
+  const fxScore = winner.fx_score;
+  let winnerTiles;
+  if (isForex) {
+    winnerTiles = [
+      { label:'Win Rate',     val: (ws.win_rate||0).toFixed(1)+'%',
+        color: (ws.win_rate||0)>=50?'var(--green)':'var(--red)' },
+      { label:'Avg pips / trade',
+        val: ((ws.avg_pips_per_trade||0)>=0?'+':'')+(ws.avg_pips_per_trade||0).toFixed(1),
+        color: (ws.avg_pips_per_trade||0)>=0?'var(--green)':'var(--red)' },
+      { label:'Total pips',
+        val: ((ws.total_pips||0)>=0?'+':'')+(ws.total_pips||0).toFixed(0),
+        color: (ws.total_pips||0)>=0?'var(--green)':'var(--red)' },
+      { label:'Trades', val: ws.closed_trades||0, color: 'var(--text)' },
+    ];
+    if (fxScore !== null && fxScore !== undefined) {
+      winnerTiles.unshift({
+        label: 'Score', val: Math.round(fxScore)+' / 100',
+        color: fxScore>=70?'var(--green)':(fxScore>=50?'var(--accent)':'var(--muted)'),
+      });
+    }
+  } else {
+    winnerTiles = [
+      { label:'Win Rate',      val: (ws.win_rate||0).toFixed(1)+'%',       color: (ws.win_rate||0)>=50?'var(--green)':'var(--red)' },
+      { label:'Total P&L',    val: (pnlPos?'+':'')+(ws.total_pnl||0).toFixed(1)+'%', color: pnlPos?'var(--green)':'var(--red)' },
+      { label:'Profit Factor', val: (ws.profit_factor||0).toFixed(2),       color: (ws.profit_factor||0)>=1.2?'var(--green)':'var(--muted)' },
+      { label:'Trades',        val: ws.closed_trades||0,                    color: 'var(--text)' },
+    ];
+  }
+  // Use auto-fit so the forex variant (5 tiles incl. Score) still wraps cleanly
+  statsEl.style.gridTemplateColumns = `repeat(${winnerTiles.length},1fr)`;
+  statsEl.innerHTML = winnerTiles.map(s => `<div style="background:var(--card2);border-radius:8px;padding:10px 8px;text-align:center">
     <div style="font-size:16px;font-weight:800;color:${s.color}">${s.val}</div>
     <div style="font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.4px">${s.label}</div>
   </div>`).join('');
@@ -8269,7 +8414,7 @@ function renderScanResults(data) {
     statsEl.insertAdjacentHTML('afterend', variantsHtml);
   }
 
-  // Category → badge color map
+  // Category → badge color map (extended for ICT / SMC / Structure)
   const catColor = {
     'Momentum':    '#5b6cf7',
     'Trend':       '#10b981',
@@ -8280,8 +8425,19 @@ function renderScanResults(data) {
     'Price Action':'#8b5cf6',
     'Divergence':  '#f97316',
     'Combo':       '#a855f7',
+    'ICT/SMC':         '#3b82f6',
+    'Supply & Demand': '#14b8a6',
+    'Structure':       '#eab308',
     'Other':       '#6b7280',
   };
+
+  // Render an info-tooltip icon next to a signal label
+  function _scanInfoTip(label) {
+    const txt = _scanInfoFor(label);
+    if (!txt) return '';
+    const esc = txt.replace(/"/g, '&quot;');
+    return `<span class="scan-info-tip" title="${esc}" aria-label="${esc}" style="display:inline-block;margin-left:5px;color:var(--muted);font-size:11px;cursor:help;border:1px solid var(--border);border-radius:99px;width:14px;height:14px;line-height:12px;text-align:center;font-weight:700;vertical-align:middle">i</span>`;
+  }
 
   // ── Equity curve + trade-by-trade table for the winning combo ────────────
   // Insert (or replace) a "Winner detail" card after the winner card so the
@@ -8289,28 +8445,53 @@ function renderScanResults(data) {
   // every trade with entry/exit/PnL.
   _renderScanWinnerDetail(winner);
 
-  // Full ranking table — now includes Coin·TF column
+  // Render the per-signal-type leaderboard above the per-combo ranking. This
+  // is the "which signal type performed best across all coins / TFs" view —
+  // each row is one signal label with its single best (coin, TF) combo.
+  _renderScanSignalLeaderboard(data, catColor, isForex, _scanInfoTip);
+
+  // Full ranking table — Best Risk column shows pips when forex
   const tableEl = document.getElementById('scan-table');
-  const cols = '1.4fr .85fr .55fr .9fr .55fr .7fr .8fr';
+  const isFx    = isForex;
+  const cols    = '1.7fr .85fr .55fr 1.0fr .55fr .8fr .8fr';
+  const pnlHdr  = isFx ? 'Pips' : 'P&L';
+  const tailHdr = isFx ? 'PF · Trades' : 'PF · Trades';
   const headerRow = `<div style="display:grid;grid-template-columns:${cols};padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
-    <div>Strategy</div><div>Coin · TF</div><div>Type</div><div>Best Risk · TP/SL</div><div>Win%</div><div>P&L</div><div style="text-align:right">PF · Trades</div>
+    <div>Strategy</div><div>${isFx?'Symbol':'Coin'} · TF</div><div>Type</div><div>Best Risk · TP/SL</div><div>Win%</div><div>${pnlHdr}</div><div style="text-align:right">${tailHdr}</div>
   </div>`;
   tableEl.innerHTML = headerRow + ranked.map((r, i) => {
     const st    = r.stats || {};
-    const pos   = (st.total_pnl || 0) >= 0;
-    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
+    const pos   = isFx
+                  ? (st.total_pips || 0) >= 0
+                  : (st.total_pnl  || 0) >= 0;
+    // Gold / silver / bronze badges for the top 3 — every other row shows
+    // its 1-based rank for quick reference.
+    const medalBadge = i < 3
+      ? `<span class="scan-medal scan-medal-${i+1}" title="${['Gold','Silver','Bronze'][i]} — top ${i+1}" style="display:inline-block;margin-right:6px;font-size:14px;line-height:1;vertical-align:middle">${['🥇','🥈','🥉'][i]}</span>`
+      : `<span style="display:inline-block;margin-right:6px;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums">${i+1}.</span>`;
     const cat   = r.category || 'Other';
     const cc    = catColor[cat] || catColor['Other'];
     const rk    = r.risk || {};
     const rcoin = r.coin || '—';
     const rtf   = r.timeframe || '1h';
-    return `<div style="display:grid;grid-template-columns:${cols};align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':''}">
-      <div style="font-weight:600">${medal} ${r.label}</div>
+    // Risk display: prefer pip values for forex profiles when present.
+    let riskStr;
+    if (isFx && (rk.tp_pips != null || rk.sl_pips != null)) {
+      riskStr = `${rk.tp_pips != null ? rk.tp_pips+'p' : '-'} / ${rk.sl_pips != null ? rk.sl_pips+'p' : '-'}`;
+    } else {
+      riskStr = `${rk.tp1||'-'}% / ${rk.sl||'-'}%`;
+    }
+    // Main P&L column — pips for forex, % for crypto
+    const pnlVal = isFx
+                   ? ((pos?'+':'')+((st.total_pips||0).toFixed(0))+' pips')
+                   : ((pos?'+':'')+((st.total_pnl ||0).toFixed(1))+'%');
+    return `<div style="display:grid;grid-template-columns:${cols};align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':(i===1?';background:rgba(148,163,184,.05)':(i===2?';background:rgba(202,128,52,.05)':''))}">
+      <div style="font-weight:600">${medalBadge}${r.label}${_scanInfoTip(r.label)}</div>
       <div style="font-family:var(--mono);font-weight:700;font-size:11.5px"><span>${rcoin}</span> <span style="color:var(--muted);font-weight:500">· ${rtf}</span></div>
       <div><span style="background:${cc}22;color:${cc};padding:2px 7px;border-radius:99px;font-size:10px;font-weight:700;letter-spacing:.2px">${cat}</span></div>
-      <div style="font-size:11px"><span style="color:var(--accent);font-weight:600">${rk.name || 'Balanced'}</span> <span style="color:var(--muted);font-variant-numeric:tabular-nums">· ${rk.tp1||'-'}% / ${rk.sl||'-'}%</span></div>
+      <div style="font-size:11px"><span style="color:var(--accent);font-weight:600">${rk.name || 'Balanced'}</span> <span style="color:var(--muted);font-variant-numeric:tabular-nums">· ${riskStr}</span></div>
       <div style="color:${(st.win_rate||0)>=50?'var(--green)':'var(--red)'};">${(st.win_rate||0).toFixed(1)}%</div>
-      <div style="color:${pos?'var(--green)':'var(--red)'};">${pos?'+':''}${(st.total_pnl||0).toFixed(1)}%</div>
+      <div style="color:${pos?'var(--green)':'var(--red)'};">${pnlVal}</div>
       <div style="color:var(--muted);text-align:right;font-size:11px">PF ${(st.profit_factor||0).toFixed(2)} · ${st.closed_trades||0}t</div>
     </div>`;
   }).join('');
@@ -8329,6 +8510,120 @@ function renderScanResults(data) {
   document.getElementById('scan-results').style.display = '';
   const btn = document.getElementById('scan-run-btn');
   btn.disabled = false; btn.textContent = '🔍 Scan Strategies →';
+}
+
+// ── Per-signal-type leaderboard (which signal type wins?) ───────────────────
+// Renders a card under the winner card showing, for every signal type the
+// scanner tested, its single best (coin, timeframe, risk) combo with the
+// numbers the spec calls out: win rate %, avg pips per trade, total pips
+// over the window, and the timeframe that produced those numbers. Gold /
+// silver / bronze badges decorate the top 3 entries (already medalled in
+// the headline ranking, but reinforced here so users see at-a-glance which
+// SIGNAL TYPES — not just combos — were the best performers).
+function _renderScanSignalLeaderboard(data, catColor, isForex, infoTip) {
+  const existing = document.getElementById('scan-signal-leaderboard');
+  if (existing) existing.remove();
+  const list = data.signal_leaderboard || [];
+  if (!list.length) return;
+  // Top 12 keeps the panel compact — anything beyond rank 12 is almost always
+  // noise (we already filter by trade-count floor on the server).
+  const rows = list.slice(0, 12);
+
+  const card = document.createElement('div');
+  card.id = 'scan-signal-leaderboard';
+  card.className = 'pine-card';
+  card.style.padding = '0';
+  card.style.overflow = 'hidden';
+
+  const subtitle = isForex
+    ? 'Each row = one signal type at its best coin · TF · risk · ranked by composite score (win-rate 30% + avg pips 40% + consistency 30%)'
+    : 'Each row = one signal type at its best coin · TF · risk · ranked by profit factor × win rate';
+
+  let html = `
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <div>
+        <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">📊 Signal type leaderboard</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4">${subtitle}</div>
+      </div>
+    </div>
+  `;
+
+  // Group rows by category so the user can see the ICT vs Classic split.
+  const groups = {};
+  rows.forEach(r => {
+    const cat = r.category || 'Other';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(r);
+  });
+
+  // Friendly group ordering — ICT/SMC first since the scan-best UX is now
+  // forex-focused, then Supply & Demand, Structure, Price Action, then the
+  // legacy classic-indicator categories last.
+  const orderedCats = [
+    'ICT/SMC', 'Supply & Demand', 'Structure', 'Price Action',
+    'Momentum', 'Trend', 'Mean Rev', 'Volatility', 'Volume',
+    'Breakout', 'Divergence', 'Combo', 'Other',
+  ];
+  const renderGroups = orderedCats.filter(c => groups[c] && groups[c].length);
+
+  // Header strip — pip-aware for forex
+  const cols = isForex
+    ? '1.6fr .55fr .85fr .55fr .65fr .65fr .6fr .55fr'
+    : '1.6fr .55fr .85fr .55fr .65fr .65fr .6fr .55fr';
+  const winHdr  = 'Win%';
+  const pnlHdr  = isForex ? 'Avg pips' : 'P&L';
+  const totHdr  = isForex ? 'Total pips' : 'Total P&L';
+  const scoreHdr = isForex ? 'Score' : 'PF';
+
+  const header = `<div style="display:grid;grid-template-columns:${cols};padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;background:var(--card2);border-bottom:1px solid var(--border)">
+    <div>Signal</div><div>Cat</div><div>Best on</div><div>${winHdr}</div><div>${pnlHdr}</div><div>${totHdr}</div><div>Trades</div><div style="text-align:right">${scoreHdr}</div>
+  </div>`;
+
+  let body = '';
+  let globalIdx = 0;
+  renderGroups.forEach(cat => {
+    const items = groups[cat];
+    const cc = (catColor && catColor[cat]) || '#6b7280';
+    body += `<div style="padding:8px 16px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${cc}">${cat}</div>`;
+    items.forEach(r => {
+      const medal = (globalIdx === 0) ? '🥇 ' : (globalIdx === 1) ? '🥈 ' : (globalIdx === 2) ? '🥉 ' : '';
+      const rowBg = (globalIdx === 0) ? ';background:rgba(255,215,0,.05)'
+                  : (globalIdx === 1) ? ';background:rgba(192,192,192,.045)'
+                  : (globalIdx === 2) ? ';background:rgba(205,127,50,.045)' : '';
+      const wr   = (r.win_rate || 0);
+      const pnl  = (r.total_pnl || 0);
+      const tpip = (r.total_pips != null ? r.total_pips : 0);
+      const apip = (r.avg_pips_per_trade != null ? r.avg_pips_per_trade : 0);
+      const pos  = isForex ? (tpip >= 0) : (pnl >= 0);
+      const apos = apip >= 0;
+      const pnlMain  = isForex
+                       ? (apos?'+':'')+apip.toFixed(1)+'p'
+                       : (pnl>=0?'+':'')+pnl.toFixed(1)+'%';
+      const pnlTotal = isForex
+                       ? (pos?'+':'')+tpip.toFixed(0)+'p'
+                       : (pos?'+':'')+pnl.toFixed(1)+'%';
+      const scoreVal = isForex
+                       ? (r.fx_score != null ? Math.round(r.fx_score)+' / 100' : '—')
+                       : (r.profit_factor != null ? (+r.profit_factor).toFixed(2) : '—');
+      const scoreColor = isForex
+                         ? (r.fx_score >= 70 ? 'var(--green)' : (r.fx_score >= 50 ? 'var(--accent)' : 'var(--muted)'))
+                         : ((r.profit_factor||0) >= 1.2 ? 'var(--green)' : 'var(--muted)');
+      body += `<div style="display:grid;grid-template-columns:${cols};align-items:center;padding:8px 16px;border-bottom:1px solid var(--border);font-size:12px${rowBg}">
+        <div style="font-weight:600">${medal}${r.label}${(infoTip||(()=>'') )(r.label)}</div>
+        <div><span style="background:${cc}22;color:${cc};padding:1px 6px;border-radius:99px;font-size:9.5px;font-weight:700">${cat}</span></div>
+        <div style="font-family:var(--mono);font-weight:700;font-size:11px">${r.best_coin||'—'} <span style="color:var(--muted);font-weight:500">· ${r.best_timeframe||'—'}</span></div>
+        <div style="color:${wr>=50?'var(--green)':'var(--red)'}">${wr.toFixed(1)}%</div>
+        <div style="color:${apos?'var(--green)':'var(--red)'}">${pnlMain}</div>
+        <div style="color:${pos?'var(--green)':'var(--red)'};font-weight:700">${pnlTotal}</div>
+        <div style="color:var(--muted)">${r.closed_trades||0}</div>
+        <div style="text-align:right;color:${scoreColor};font-weight:700">${scoreVal}</div>
+      </div>`;
+      globalIdx++;
+    });
+  });
+
+  card.innerHTML = html + header + body;
+  document.getElementById('scan-winner-card').insertAdjacentElement('afterend', card);
 }
 
 // ── Equity curve + trade table for the winning combo ────────────────────────
