@@ -2466,7 +2466,7 @@ function dismissTgBanner(){
         <div class="pine-card">
           <div style="margin-bottom:16px">
             <div style="font-size:16px;font-weight:700;letter-spacing:-.3px">🔍 Strategy Scanner</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:3px">Test up to <b>12 coins</b> on <b>multiple timeframes</b> with <b>40 strategies</b> each — the engine finds the best (coin, timeframe, strategy, TP/SL) combo across the whole grid.</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:3px">Test up to <b>12 forex symbols</b> on <b>multiple timeframes</b> with your selected signal set — the engine finds the best (symbol, timeframe, signal, TP/SL) combo across the whole grid.</div>
           </div>
 
           <!-- Gold Strategy Finder (Claude-driven) -->
@@ -2477,27 +2477,22 @@ function dismissTgBanner(){
           </div>
 
           <div style="margin-bottom:14px">
-            <div class="pine-label">Coins <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 12 · pick a preset or type your own</span></div>
-            <input id="scan-coin" type="text" value="BTC" maxlength="200"
+            <div class="pine-label">Forex symbols <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— comma-separated, max 12 · pick a preset or type your own</span></div>
+            <input id="scan-coin" type="text" value="EURUSD,GBPUSD,USDJPY,XAUUSD" maxlength="220"
               style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)"
-              placeholder="BTC, ETH, SOL, AVAX, LINK, …">
+              placeholder="EURUSD, GBPUSD, USDJPY, AUDUSD, XAUUSD, …">
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC',this)">BTC only</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH',this)">BTC + ETH</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL',this)">Top 3</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,LINK',this)">Top 5</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,LINK,DOT,MATIC,ATOM,NEAR,ARB',this)">Top 10</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,BNB,XRP,ADA,DOGE,AVAX,DOT,MATIC,LINK,UNI',this)">Top 12 by mcap</button>
+              <button class="opt-chip" data-scan-coin-preset="1" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURUSD',this)">EURUSD only</button>
+              <button class="opt-chip" data-scan-coin-preset="1" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURUSD,GBPUSD',this)">EURUSD + GBPUSD</button>
+              <button class="opt-chip" data-scan-coin-preset="1" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURUSD,GBPUSD,USDJPY',this)">FX majors</button>
+              <button class="opt-chip" data-scan-coin-preset="1" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURUSD,GBPUSD,USDJPY,AUDUSD,NZDUSD,USDCAD,USDCHF',this)">Majors set</button>
+              <button class="opt-chip" data-scan-coin-preset="1" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('XAUUSD,XAGUSD,EURUSD,GBPUSD,USDJPY',this)">Gold + majors</button>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-              <div style="font-size:10px;color:var(--muted);align-self:center;margin-right:2px;text-transform:uppercase;letter-spacing:.4px;font-weight:600">Sectors:</div>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('BTC,ETH,SOL,AVAX,BNB,ADA,DOT',this)">L1s</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('ARB,OP,MATIC,STRK,MNT',this)">L2s</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('UNI,AAVE,MKR,COMP,CRV,SUSHI,LDO',this)">DeFi</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('FET,RNDR,TAO,WLD,AGIX,OCEAN',this)">AI</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('DOGE,SHIB,PEPE,WIF,FLOKI,BONK',this)">Memes</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('AXS,SAND,MANA,IMX,GALA',this)">Gaming</button>
-              <button class="opt-chip" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('LINK,ATOM,FIL,GRT,ICP',this)">Infra</button>
+              <div style="font-size:10px;color:var(--muted);align-self:center;margin-right:2px;text-transform:uppercase;letter-spacing:.4px;font-weight:600">Crosses:</div>
+              <button class="opt-chip" data-scan-coin-preset="1" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURJPY,GBPJPY,AUDJPY,CADJPY',this)">JPY crosses</button>
+              <button class="opt-chip" data-scan-coin-preset="1" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('EURGBP,EURCHF,GBPCHF',this)">Euro/Pound crosses</button>
+              <button class="opt-chip" data-scan-coin-preset="1" style="font-size:11px;padding:4px 9px" onclick="_setScanCoins('XAUUSD,EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD',this)">London + NY mix</button>
             </div>
           </div>
 
@@ -2517,6 +2512,17 @@ function dismissTgBanner(){
                 <button class="opt-chip" onclick="setScanDays(90,this)">90 days</button>
               </div>
             </div>
+          </div>
+
+          <div style="margin-bottom:14px">
+            <div class="pine-label">Signal types <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— select what the scanner should test</span></div>
+            <div style="display:flex;gap:6px;margin-top:6px;margin-bottom:8px;flex-wrap:wrap">
+              <button class="opt-chip active" onclick="scanSelectAllSignals(this)">Select all</button>
+              <button class="opt-chip" onclick="scanSelectForexSignals(this)">Forex/ICT only</button>
+              <button class="opt-chip" onclick="scanSelectClassicSignals(this)">Classic only</button>
+            </div>
+            <div id="scan-signal-groups" style="display:grid;gap:10px"></div>
+            <div id="scan-signal-summary" class="hint" style="margin-top:8px"></div>
           </div>
 
           <div style="margin-bottom:14px">
@@ -2543,13 +2549,13 @@ function dismissTgBanner(){
             <div id="scan-fixed-row"
                  style="display:none;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
               <div>
-                <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:4px">Take-profit %</div>
-                <input id="scan-fixed-tp" type="number" min="0.1" max="50" step="0.1" value="3.0"
+                <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:4px">Take-profit pips</div>
+                <input id="scan-fixed-tp" type="number" min="1" max="800" step="1" value="30"
                   style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)">
               </div>
               <div>
-                <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:4px">Stop-loss %</div>
-                <input id="scan-fixed-sl" type="number" min="0.1" max="25" step="0.1" value="1.5"
+                <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:4px">Stop-loss pips</div>
+                <input id="scan-fixed-sl" type="number" min="1" max="400" step="1" value="15"
                   style="width:100%;padding:9px 11px;background:var(--card2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-weight:700;font-family:var(--mono)">
               </div>
               <div style="grid-column:1 / -1;font-size:11px;color:var(--muted);margin-top:-2px">
@@ -2581,7 +2587,7 @@ function dismissTgBanner(){
             <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px">
               <div style="font-size:28px;flex-shrink:0">🥇</div>
               <div style="flex:1">
-                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:2px">Best strategy for <span id="scan-winner-coin">—</span></div>
+                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:2px">Best signal type for <span id="scan-winner-coin">—</span></div>
                 <div style="font-size:18px;font-weight:700;letter-spacing:-.3px" id="scan-winner-label">—</div>
                 <div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5" id="scan-winner-insight"></div>
               </div>
@@ -7841,6 +7847,146 @@ let _scanDir  = 'LONG';
 let _scanTfs  = ['1h'];   // selected timeframes (15m / 1h / 4h)
 let _scanRiskMode = 'optimised';  // 'optimised' (engine picks best TP/SL) | 'fixed' (user pins it)
 let _scanResult = null;   // last successful scan response
+const SCAN_SIGNAL_GROUPS = [
+  {
+    key: 'ict',
+    label: 'ICT/Smart Money',
+    signals: [
+      { id:'fvg',      label:'FVG — Fair Value Gap',              info:'3-candle imbalance gap; entry on retrace into the gap.' },
+      { id:'ifvg',     label:'IFVG — Inverted Fair Value Gap',    info:'A filled FVG that flips into support/resistance on retest.' },
+      { id:'ob',       label:'OB — Order Block',                  info:'Last opposing candle before a strong displacement move.' },
+      { id:'bbreaker', label:'BB — Breaker Block',                info:'Failed order block that flips after violation and retest.' },
+      { id:'mss',      label:'MSS — Market Structure Shift',      info:'Break of key swing in the opposite trend direction.' },
+      { id:'choch',    label:'CHoCH — Change of Character',       info:'Early structure break that hints trend transition.' },
+      { id:'lq',       label:'LQ — Liquidity Sweep',              info:'Wick sweep beyond swing highs/lows then close back inside.' },
+      { id:'mit',      label:'MIT — Mitigation Block',            info:'Retrace into the origin candle of a major imbalance.' },
+    ],
+  },
+  {
+    key: 'sd',
+    label: 'Supply & Demand',
+    signals: [
+      { id:'sdp', label:'SDP — Supply/Demand Zone', info:'Base before impulse; entry on first return to that zone.' },
+      { id:'pd',  label:'PD — Premium/Discount',    info:'Range midpoint filter: discount for longs, premium for shorts.' },
+      { id:'eq',  label:'EQ — Equilibrium Entry',   info:'Entry around the 50% retracement of the latest swing.' },
+    ],
+  },
+  {
+    key: 'pa',
+    label: 'Price Action',
+    signals: [
+      { id:'pin', label:'PIN — Pin Bar',            info:'Small body with wick >=2x body, showing rejection.' },
+      { id:'eng', label:'ENG — Engulfing Candle',   info:'Current body fully engulfs the previous candle body.' },
+      { id:'ib',  label:'IB — Inside Bar Breakout', info:'Inside bar setup; trigger on breakout of inside range.' },
+    ],
+  },
+  {
+    key: 'structure',
+    label: 'Structure',
+    signals: [
+      { id:'hhhl', label:'HH/HL — Bullish Structure', info:'Higher highs and higher lows confirm bullish structure.' },
+      { id:'lhll', label:'LH/LL — Bearish Structure', info:'Lower highs and lower lows confirm bearish structure.' },
+      { id:'fib',  label:'FIB — Fibonacci Retracement', info:'Pullback into the 0.618-0.705 retracement zone.' },
+      { id:'vwap', label:'VWAP — Volume Weighted Average', info:'Session VWAP bounce/rejection used as dynamic bias.' },
+    ],
+  },
+  {
+    key: 'classic',
+    label: 'Classic Indicators',
+    signals: [
+      { id:'rsi',                label:'RSI',                info:'Momentum oscillator for overbought/oversold regimes.' },
+      { id:'macd',               label:'MACD',               info:'Momentum and trend crossover from MACD line/signal.' },
+      { id:'ema',                label:'EMA',                info:'Fast/slow moving average trend crossover.' },
+      { id:'sma',                label:'SMA',                info:'Simple moving average trend filter or crossover.' },
+      { id:'bb',                 label:'BB',                 info:'Bollinger Band squeeze and mean-reversion extremes.' },
+      { id:'stochrsi',           label:'Stoch RSI',          info:'Fast oscillator tracking RSI momentum extremes.' },
+      { id:'price_momentum',     label:'Price Momentum',     info:'Absolute directional move over a fixed window.' },
+      { id:'volume_spike',       label:'Volume Spike',       info:'Current volume surge versus recent average volume.' },
+      { id:'supertrend',         label:'SuperTrend',         info:'ATR-based trend direction and flip levels.' },
+      { id:'breakout',           label:'Breakout',           info:'Range high/low break with directional continuation.' },
+      { id:'adx_filter',         label:'ADX',                info:'Trend strength filter to avoid low-quality chop.' },
+      { id:'williams_r',         label:'Williams %R',        info:'Momentum oscillator for oversold/overbought zones.' },
+      { id:'support_resistance', label:'Support/Resistance', info:'Reactions at recent support and resistance levels.' },
+      { id:'candlestick',        label:'Candlestick (classic)', info:'Classic candlestick pattern trigger set.' },
+      { id:'market_structure',   label:'Market Structure (classic)', info:'Break of structure and baseline CHoCH logic.' },
+      { id:'order_block',        label:'Order Block (classic)', info:'Legacy order block detection and retest logic.' },
+      { id:'divergence',         label:'Divergence',         info:'Price and oscillator disagreement preceding reversals.' },
+      { id:'fibonacci',          label:'Fibonacci (classic)',info:'Classic fib retracement touch detection.' },
+    ],
+  },
+];
+let _scanSelectedSignals = new Set(
+  SCAN_SIGNAL_GROUPS.flatMap(g => g.signals.map(s => s.id))
+);
+
+function _scanSignalCount() {
+  return Math.max(1, _scanSelectedSignals.size);
+}
+
+function _isClassicScanSignal(id) {
+  return (SCAN_SIGNAL_GROUPS.find(g => g.key === 'classic')?.signals || []).some(s => s.id === id);
+}
+
+function toggleScanSignal(id) {
+  if (_scanSelectedSignals.has(id)) {
+    if (_scanSelectedSignals.size <= 1) return;
+    _scanSelectedSignals.delete(id);
+  } else {
+    _scanSelectedSignals.add(id);
+  }
+  renderScanSignalGroups();
+  _updateScanGridEst();
+}
+
+function scanSelectAllSignals() {
+  _scanSelectedSignals = new Set(SCAN_SIGNAL_GROUPS.flatMap(g => g.signals.map(s => s.id)));
+  renderScanSignalGroups();
+  _updateScanGridEst();
+}
+
+function scanSelectForexSignals() {
+  _scanSelectedSignals = new Set(
+    SCAN_SIGNAL_GROUPS
+      .filter(g => g.key !== 'classic')
+      .flatMap(g => g.signals.map(s => s.id))
+  );
+  renderScanSignalGroups();
+  _updateScanGridEst();
+}
+
+function scanSelectClassicSignals() {
+  _scanSelectedSignals = new Set(
+    (SCAN_SIGNAL_GROUPS.find(g => g.key === 'classic')?.signals || []).map(s => s.id)
+  );
+  renderScanSignalGroups();
+  _updateScanGridEst();
+}
+
+function renderScanSignalGroups() {
+  const host = document.getElementById('scan-signal-groups');
+  if (!host) return;
+  host.innerHTML = SCAN_SIGNAL_GROUPS.map(group => `
+    <div style="border:1px solid var(--border);border-radius:10px;padding:10px 10px 8px;background:var(--card2)">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">${group.label}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px">
+        ${group.signals.map(sig => `
+          <button class="opt-chip ${_scanSelectedSignals.has(sig.id)?'active':''}"
+                  style="display:flex;justify-content:space-between;align-items:center;gap:8px;text-align:left;font-size:11.5px;padding:6px 9px"
+                  onclick="toggleScanSignal('${sig.id}')">
+            <span>${sig.label}</span>
+            <span title="${sig.info.replace(/"/g,'&quot;')}"
+                  style="display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;background:rgba(148,163,184,.18);font-size:10px;color:var(--muted);flex-shrink:0;cursor:help">i</span>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+  const summary = document.getElementById('scan-signal-summary');
+  if (summary) {
+    const n = _scanSignalCount();
+    summary.textContent = `${n} signal type${n === 1 ? '' : 's'} selected`;
+  }
+}
 
 function setScanRiskMode(mode, el) {
   _scanRiskMode = (mode === 'fixed') ? 'fixed' : 'optimised';
@@ -7865,7 +8011,7 @@ function toggleScanTf(tf, el) {
 }
 
 function _parseScanCoins() {
-  const raw = (document.getElementById('scan-coin').value || 'BTC');
+  const raw = (document.getElementById('scan-coin').value || 'EURUSD');
   const list = raw.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
   const seen = new Set();
   // Cap matches the server-side limit (12). Going higher risks tripping the
@@ -7879,10 +8025,7 @@ function _setScanCoins(csv, el) {
   const input = document.getElementById('scan-coin');
   if (input) input.value = csv;
   // Briefly flash the active chip so the user knows which preset they picked.
-  document.querySelectorAll('#scan-config-card .opt-chip').forEach(b => {
-    if (b.getAttribute('data-tf') || b.dataset.mode) return;  // skip TF + risk chips
-    b.classList.remove('active');
-  });
+  document.querySelectorAll('#scan-config-card [data-scan-coin-preset="1"]').forEach(b => b.classList.remove('active'));
   if (el) {
     el.classList.add('active');
     setTimeout(() => el.classList.remove('active'), 800);
@@ -7894,13 +8037,15 @@ function _updateScanGridEst() {
   const el = document.getElementById('scan-grid-est');
   if (!el) return;
   const coins = _parseScanCoins();
-  const total = coins.length * _scanTfs.length * 40;
+  const signalCount = _scanSignalCount();
+  const total = coins.length * _scanTfs.length * signalCount;
   const eta = Math.max(8, Math.round(total * 0.08));
-  el.textContent = `${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × 40 strategies = ${total} backtests · ~${eta}s`;
+  el.textContent = `${coins.length} symbol${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × ${signalCount} signal${signalCount>1?'s':''} = ${total} backtests · ~${eta}s`;
 }
 document.addEventListener('DOMContentLoaded', () => {
   const coinInput = document.getElementById('scan-coin');
   if (coinInput) coinInput.addEventListener('input', _updateScanGridEst);
+  renderScanSignalGroups();
   _updateScanGridEst();
 
   // Boot the initial tab's data. The default visible page is #my-strats, but
@@ -8136,6 +8281,8 @@ async function runScan() {
   const coins = _parseScanCoins();
   if (!coins.length) return;
   if (!_scanTfs.length) _scanTfs = ['1h'];
+  const signalTypes = Array.from(_scanSelectedSignals);
+  if (!signalTypes.length) { try { toast('Select at least one signal type'); } catch (e) {} return; }
 
   const btn = document.getElementById('scan-run-btn');
   btn.disabled = true;
@@ -8146,9 +8293,9 @@ async function runScan() {
   document.getElementById('scan-results').style.display = 'none';
   document.getElementById('scan-error').style.display = 'none';
 
-  const total = coins.length * _scanTfs.length * 40;
+  const total = coins.length * _scanTfs.length * signalTypes.length;
   document.getElementById('scan-progress-title').textContent =
-    `Running ${total} backtests · ${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} TF${_scanTfs.length>1?'s':''} × 40 strategies…`;
+    `Running ${total} backtests · ${coins.length} symbol${coins.length>1?'s':''} × ${_scanTfs.length} TF${_scanTfs.length>1?'s':''} × ${signalTypes.length} signals…`;
 
   // Animate progress bar during wait — slower for bigger grids
   const bar = document.getElementById('scan-bar');
@@ -8168,11 +8315,13 @@ async function runScan() {
         uid: window._portalUID || '',
         coins,
         timeframes: _scanTfs,
+        signal_types: signalTypes,
+        asset_class: 'forex',
         days: _scanDays,
         direction: _scanDir,
         risk_mode: _scanRiskMode,
-        fixed_tp: parseFloat(document.getElementById('scan-fixed-tp')?.value) || 3.0,
-        fixed_sl: parseFloat(document.getElementById('scan-fixed-sl')?.value) || 1.5,
+        fixed_tp: parseFloat(document.getElementById('scan-fixed-tp')?.value) || 30.0,
+        fixed_sl: parseFloat(document.getElementById('scan-fixed-sl')?.value) || 15.0,
       }),
     });
     const data = await res.json();
@@ -8214,14 +8363,18 @@ function renderScanResults(data) {
   const ws     = winner.stats || {};
   const coin   = winner.coin || data.coin || '';
   const tf     = winner.timeframe || '1h';
-  const pnlPos = (ws.total_pnl || 0) >= 0;
+  const isPipMode = (data.score_mode === 'pips') || (data.asset_class === 'forex');
+  const winnerScore = Number(winner.score_100 ?? winner.score ?? 0);
+  const wAvgPips = Number(ws.avg_pips_per_trade ?? winner.score_metrics?.avg_pips_per_trade ?? 0);
+  const wTotalPips = Number(ws.total_pips ?? winner.score_metrics?.total_pips ?? 0);
 
   // Header now reflects the WINNING coin + timeframe (could differ from first coin)
   document.getElementById('scan-winner-coin').textContent  = `${coin} · ${tf}`;
   // Strategy label + optimal risk profile chip
   const wRisk = winner.risk || {};
   const labelEl = document.getElementById('scan-winner-label');
-  labelEl.innerHTML = `${winner.label} <span style="display:inline-block;background:rgba(91,108,247,.15);color:var(--accent);padding:3px 9px;border-radius:99px;font-size:11px;font-weight:700;margin-left:6px;letter-spacing:.2px;vertical-align:middle">${wRisk.name || 'Balanced'} · TP ${wRisk.tp1 || 3}% / SL ${wRisk.sl || 1.5}% · R:R ${wRisk.rr || '2:1'}</span>`;
+  const riskUnit = (wRisk.unit === 'pips' || isPipMode) ? 'p' : '%';
+  labelEl.innerHTML = `${winner.label} <span style="display:inline-block;background:rgba(91,108,247,.15);color:var(--accent);padding:3px 9px;border-radius:99px;font-size:11px;font-weight:700;margin-left:6px;letter-spacing:.2px;vertical-align:middle">${wRisk.name || 'Balanced'} · TP ${wRisk.tp1 || 3}${riskUnit} / SL ${wRisk.sl || 1.5}${riskUnit} · R:R ${wRisk.rr || '2:1'}</span>`;
   const insight = data.winner_insight || '';
   const insightEl = document.getElementById('scan-winner-insight');
   insightEl.textContent = insight;
@@ -8230,10 +8383,10 @@ function renderScanResults(data) {
   // Winner stat grid
   const statsEl = document.getElementById('scan-winner-stats');
   statsEl.innerHTML = [
-    { label:'Win Rate',      val: (ws.win_rate||0).toFixed(1)+'%',       color: (ws.win_rate||0)>=50?'var(--green)':'var(--red)' },
-    { label:'Total P&L',    val: (pnlPos?'+':'')+(ws.total_pnl||0).toFixed(1)+'%', color: pnlPos?'var(--green)':'var(--red)' },
-    { label:'Profit Factor', val: (ws.profit_factor||0).toFixed(2),       color: (ws.profit_factor||0)>=1.2?'var(--green)':'var(--muted)' },
-    { label:'Trades',        val: ws.closed_trades||0,                    color: 'var(--text)' },
+    { label:'Win Rate',                val: (ws.win_rate||0).toFixed(1)+'%',                          color: (ws.win_rate||0)>=50?'var(--green)':'var(--red)' },
+    { label:'Avg pips / trade',        val: `${wAvgPips>=0?'+':''}${wAvgPips.toFixed(1)} p`,         color: wAvgPips>=0?'var(--green)':'var(--red)' },
+    { label:'Total pips',              val: `${wTotalPips>=0?'+':''}${wTotalPips.toFixed(1)} p`,     color: wTotalPips>=0?'var(--green)':'var(--red)' },
+    { label:'Best timeframe · score',  val: `${tf} · ${winnerScore.toFixed(1)}/100`,                  color: 'var(--text)' },
   ].map(s => `<div style="background:var(--card2);border-radius:8px;padding:10px 8px;text-align:center">
     <div style="font-size:16px;font-weight:800;color:${s.color}">${s.val}</div>
     <div style="font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.4px">${s.label}</div>
@@ -8252,16 +8405,18 @@ function renderScanResults(data) {
       <div id="scan-variants-block" style="background:var(--card2);border-radius:10px;padding:12px;margin-bottom:14px;border:1px solid var(--border)">
         <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:8px">📊 Risk profile comparison</div>
         <div style="display:grid;grid-template-columns:1.4fr .7fr .8fr .8fr .7fr;gap:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;font-weight:600;padding:4px 8px;border-bottom:1px solid var(--border);margin-bottom:4px">
-          <div>Profile</div><div>TP / SL</div><div>Win%</div><div>P&L</div><div style="text-align:right">Trades</div>
+          <div>Profile</div><div>TP / SL</div><div>Win%</div><div>${isPipMode ? 'Pips' : 'P&L'}</div><div style="text-align:right">Trades</div>
         </div>
         ${variants.map(v => {
-          const vp = (v.total_pnl||0) >= 0;
+          const unit = (v.unit === 'pips' || isPipMode) ? 'p' : '%';
+          const vTotal = isPipMode ? Number(v.total_pips || 0) : Number(v.total_pnl || 0);
+          const vp = vTotal >= 0;
           const winRowBg = v.is_best ? ';background:rgba(16,185,129,.08);border-radius:6px' : '';
           return `<div style="display:grid;grid-template-columns:1.4fr .7fr .8fr .8fr .7fr;gap:6px;padding:6px 8px;font-size:12px;align-items:center${winRowBg}">
             <div style="font-weight:${v.is_best?'700':'500'}">${v.is_best?'✨ ':''}${v.risk_name}</div>
-            <div style="color:var(--muted);font-variant-numeric:tabular-nums">${v.tp1}% / ${v.sl}%</div>
+            <div style="color:var(--muted);font-variant-numeric:tabular-nums">${v.tp1}${unit} / ${v.sl}${unit}</div>
             <div style="color:${(v.win_rate||0)>=50?'var(--green)':'var(--red)'}">${(v.win_rate||0).toFixed(1)}%</div>
-            <div style="color:${vp?'var(--green)':'var(--red)'};font-weight:${v.is_best?'700':'500'}">${vp?'+':''}${(v.total_pnl||0).toFixed(1)}%</div>
+            <div style="color:${vp?'var(--green)':'var(--red)'};font-weight:${v.is_best?'700':'500'}">${vp?'+':''}${vTotal.toFixed(1)}${isPipMode?'p':'%'}</div>
             <div style="color:var(--muted);text-align:right">${v.closed_trades||0}</div>
           </div>`;
         }).join('')}
@@ -8280,6 +8435,9 @@ function renderScanResults(data) {
     'Price Action':'#8b5cf6',
     'Divergence':  '#f97316',
     'Combo':       '#a855f7',
+    'ICT/Smart Money': '#14b8a6',
+    'Supply & Demand': '#f59e0b',
+    'Structure': '#6366f1',
     'Other':       '#6b7280',
   };
 
@@ -8291,27 +8449,37 @@ function renderScanResults(data) {
 
   // Full ranking table — now includes Coin·TF column
   const tableEl = document.getElementById('scan-table');
-  const cols = '1.4fr .85fr .55fr .9fr .55fr .7fr .8fr';
+  const cols = '1.25fr .85fr .55fr .9fr .55fr .7fr .8fr .7fr';
   const headerRow = `<div style="display:grid;grid-template-columns:${cols};padding:5px 16px;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
-    <div>Strategy</div><div>Coin · TF</div><div>Type</div><div>Best Risk · TP/SL</div><div>Win%</div><div>P&L</div><div style="text-align:right">PF · Trades</div>
+    <div>Signal</div><div>Pair · TF</div><div>Type</div><div>Best Risk</div><div>Win%</div><div>Avg pips</div><div>Total pips</div><div style="text-align:right">Score</div>
   </div>`;
   tableEl.innerHTML = headerRow + ranked.map((r, i) => {
     const st    = r.stats || {};
-    const pos   = (st.total_pnl || 0) >= 0;
-    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
+    const avgPips = Number(st.avg_pips_per_trade || r.score_metrics?.avg_pips_per_trade || 0);
+    const totalPips = Number(st.total_pips || r.score_metrics?.total_pips || 0);
+    const score100 = Number(r.score_100 ?? r.score ?? 0);
+    const medal = i === 0
+      ? '<span style="background:linear-gradient(135deg,#fbbf24,#d97706);color:#111827;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:800">GOLD</span>'
+      : i === 1
+        ? '<span style="background:linear-gradient(135deg,#e5e7eb,#9ca3af);color:#111827;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:800">SILVER</span>'
+        : i === 2
+          ? '<span style="background:linear-gradient(135deg,#f59e0b,#b45309);color:#111827;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:800">BRONZE</span>'
+          : `<span style="color:var(--muted)">${i+1}.</span>`;
     const cat   = r.category || 'Other';
     const cc    = catColor[cat] || catColor['Other'];
     const rk    = r.risk || {};
     const rcoin = r.coin || '—';
     const rtf   = r.timeframe || '1h';
+    const rUnit = (rk.unit === 'pips' || isPipMode) ? 'p' : '%';
     return `<div style="display:grid;grid-template-columns:${cols};align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px${i===0?';background:rgba(91,108,247,.05)':''}">
-      <div style="font-weight:600">${medal} ${r.label}</div>
+      <div style="font-weight:600;display:flex;align-items:center;gap:7px">${medal}<span>${r.label}</span></div>
       <div style="font-family:var(--mono);font-weight:700;font-size:11.5px"><span>${rcoin}</span> <span style="color:var(--muted);font-weight:500">· ${rtf}</span></div>
       <div><span style="background:${cc}22;color:${cc};padding:2px 7px;border-radius:99px;font-size:10px;font-weight:700;letter-spacing:.2px">${cat}</span></div>
-      <div style="font-size:11px"><span style="color:var(--accent);font-weight:600">${rk.name || 'Balanced'}</span> <span style="color:var(--muted);font-variant-numeric:tabular-nums">· ${rk.tp1||'-'}% / ${rk.sl||'-'}%</span></div>
+      <div style="font-size:11px"><span style="color:var(--accent);font-weight:600">${rk.name || 'Balanced'}</span> <span style="color:var(--muted);font-variant-numeric:tabular-nums">· ${rk.tp1||'-'}${rUnit} / ${rk.sl||'-'}${rUnit}</span></div>
       <div style="color:${(st.win_rate||0)>=50?'var(--green)':'var(--red)'};">${(st.win_rate||0).toFixed(1)}%</div>
-      <div style="color:${pos?'var(--green)':'var(--red)'};">${pos?'+':''}${(st.total_pnl||0).toFixed(1)}%</div>
-      <div style="color:var(--muted);text-align:right;font-size:11px">PF ${(st.profit_factor||0).toFixed(2)} · ${st.closed_trades||0}t</div>
+      <div style="color:${avgPips>=0?'var(--green)':'var(--red)'};">${avgPips>=0?'+':''}${avgPips.toFixed(1)}p</div>
+      <div style="color:${totalPips>=0?'var(--green)':'var(--red)'};">${totalPips>=0?'+':''}${totalPips.toFixed(1)}p <span style="color:var(--muted);font-size:10px">· ${st.closed_trades||0}t</span></div>
+      <div style="text-align:right;font-weight:800;color:${score100>=70?'#fbbf24':score100>=55?'#c0c4cc':'var(--muted)'}">${score100.toFixed(1)}/100</div>
     </div>`;
   }).join('');
 
@@ -8319,7 +8487,8 @@ function renderScanResults(data) {
   if (data.tested) {
     const universe = (data.coins || [data.coin]).length;
     const tfs      = (data.timeframes || ['1h']).length;
-    let footer = `Tested <b style="color:var(--text)">${data.tested}</b> backtests across <b style="color:var(--text)">${universe}</b> coin${universe>1?'s':''} × <b style="color:var(--text)">${tfs}</b> timeframe${tfs>1?'s':''} · <b style="color:var(--text)">${data.optimisation_jobs||0}</b> TP/SL optimisations · <b style="color:var(--text)">${ranked.length}</b> ranked${data.skipped ? ` · ${data.skipped} skipped (too few trades)` : ''}`;
+    const sigCount = Number(data.templates_tested || _scanSignalCount());
+    let footer = `Tested <b style="color:var(--text)">${data.tested}</b> backtests across <b style="color:var(--text)">${universe}</b> symbol${universe>1?'s':''} × <b style="color:var(--text)">${tfs}</b> timeframe${tfs>1?'s':''} × <b style="color:var(--text)">${sigCount}</b> signal${sigCount!==1?'s':''} · <b style="color:var(--text)">${data.optimisation_jobs||0}</b> TP/SL optimisations · <b style="color:var(--text)">${ranked.length}</b> ranked${data.skipped ? ` · ${data.skipped} skipped (too few trades)` : ''}`;
     if ((data.missing_pairs || []).length) {
       footer += `<br><span style="color:var(--red)">⚠ no data: ${data.missing_pairs.map(p => `${p.coin} ${p.timeframe}`).join(', ')}</span>`;
     }

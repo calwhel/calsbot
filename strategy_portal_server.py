@@ -12573,7 +12573,7 @@ Rules:
 @app.post("/api/backtest/scan")
 async def backtest_scan(request: Request):
     """
-    AI Strategy Scanner — run 40 strategy templates against historical data
+    AI Strategy Scanner — run strategy templates against historical data
     across one-or-more coins and one-or-more timeframes in parallel, rank
     every (strategy, coin, TF) combination by composite score, return the
     top winners with full trade history & equity curves for charting.
@@ -12588,8 +12588,10 @@ async def backtest_scan(request: Request):
                             4 profiles and returns the historically best variant per
                             combo. "fixed" pins a single user-supplied TP/SL pair, runs
                             ONLY stage 1, and skips the optimisation pass entirely.
-      fixed_tp, fixed_sl  — only used when risk_mode=="fixed". Both are percentages
-                            (e.g. 3.0 for 3%). Clamped to sane ranges server-side.
+      signal_types        — optional list of signal IDs to scan (frontend grouped picker)
+      fixed_tp, fixed_sl  — only used when risk_mode=="fixed". For crypto they are
+                            percentages (e.g. 3.0 for 3%). For forex they are pips.
+                            Clamped to sane ranges server-side.
     }
     """
     body      = await request.json()
@@ -12616,8 +12618,12 @@ async def backtest_scan(request: Request):
             return max(lo, min(hi, f))
         except (TypeError, ValueError):
             return default
-    fixed_tp = _clamp_pct(body.get("fixed_tp"), 0.1, 50.0, 3.0)
-    fixed_sl = _clamp_pct(body.get("fixed_sl"), 0.1, 25.0, 1.5)
+    if asset_class == "forex":
+        fixed_tp = _clamp_pct(body.get("fixed_tp"), 1.0, 800.0, 30.0)  # pips
+        fixed_sl = _clamp_pct(body.get("fixed_sl"), 1.0, 400.0, 15.0)  # pips
+    else:
+        fixed_tp = _clamp_pct(body.get("fixed_tp"), 0.1, 50.0, 3.0)    # %
+        fixed_sl = _clamp_pct(body.get("fixed_sl"), 0.1, 25.0, 1.5)    # %
 
     # ── Coin universe — accept either single `coin` or list `coins` ────────────
     coins_raw = body.get("coins")
@@ -12643,6 +12649,18 @@ async def backtest_scan(request: Request):
     if not tf_list:
         tf_list = ["1h"]
     tf_list = list(dict.fromkeys(tf_list))[:3]  # dedupe, max 3
+
+    # Optional frontend signal-type filter (Scan Best UI).
+    # Values are lower-case IDs (e.g. rsi, fvg, ifvg, mss, choch...).
+    signal_types_raw = body.get("signal_types")
+    if isinstance(signal_types_raw, list) and signal_types_raw:
+        selected_signal_types = {
+            str(s).strip().lower()
+            for s in signal_types_raw
+            if str(s).strip()
+        }
+    else:
+        selected_signal_types = set()
 
     if days not in (30, 90):
         days = 30
@@ -12756,9 +12774,39 @@ async def backtest_scan(request: Request):
             else:              c["condition"] = new_p
         elif t == "divergence":   c["direction"] = "bearish" if c.get("direction") == "bullish" else "bullish"
         elif t == "order_block":  c["ob_type"]  = "bearish" if c.get("ob_type")  == "bullish" else "bullish"
+        elif t == "breaker_block":
+            c["direction"] = "bearish" if c.get("direction", "bullish") == "bullish" else "bullish"
         elif t == "fvg":          c["fvg_dir"]  = "bearish" if c.get("fvg_dir")  == "bullish" else "bullish"
+        elif t == "ifvg":         c["ifvg_dir"] = "bearish" if c.get("ifvg_dir", c.get("fvg_dir", "bullish")) == "bullish" else "bullish"
         elif t == "market_structure":
             c["condition"] = c.get("condition", "").replace("bullish", "bearish")
+        elif t == "liquidity_sweep":
+            c["direction"] = "bearish" if c.get("direction", "bullish") == "bullish" else "bullish"
+        elif t == "mitigation_block":
+            c["direction"] = "bearish" if c.get("direction", "bullish") == "bullish" else "bullish"
+        elif t == "supply_demand":
+            c["zone_type"] = "supply" if c.get("zone_type", "demand") == "demand" else "demand"
+        elif t == "premium_discount":
+            c["bias"] = "premium" if c.get("bias", "discount") == "discount" else "discount"
+        elif t == "inside_bar_breakout":
+            c["direction"] = "bearish" if c.get("direction", "bullish") == "bullish" else "bullish"
+        elif t == "fib_retracement_zone":
+            c["direction"] = "bearish" if c.get("direction", "bullish") == "bullish" else "bullish"
+        elif t == "session_vwap":
+            c["direction"] = "bearish" if c.get("direction", "bullish") == "bullish" else "bullish"
+        elif t == "candlestick":
+            p = c.get("pattern", c.get("condition", ""))
+            flip = {
+                "bullish_engulfing": "bearish_engulfing",
+                "bearish_engulfing": "bullish_engulfing",
+                "pin_bar_bull": "pin_bar_bear",
+                "pin_bar_bear": "pin_bar_bull",
+            }
+            np = flip.get(p, p)
+            if "pattern" in c:
+                c["pattern"] = np
+            else:
+                c["condition"] = np
         elif t == "consecutive_candles":
             d = c.get("cc_dir", c.get("direction", "green"))
             c["cc_dir"] = "red" if d in ("green","bullish","up") else "green"
@@ -12842,11 +12890,41 @@ async def backtest_scan(request: Request):
         {"label": "BB Squeeze + Volume Spike",            "category": "Combo",      "primaryType": "bb",         "primaryCfg": {"condition": "squeeze"},                                   "confirms": [{"type": "volume_spike", "multiplier": 1.5}]},
     ]
 
+    forex_smc_signals = [
+        # ── ICT / Smart Money ────────────────────────────────────────────────
+        {"label": "FVG — Fair Value Gap",                 "signalTypeId": "fvg",    "category": "ICT/Smart Money", "primaryType": "fvg",               "primaryCfg": {"fvg_dir": "bullish", "min_gap_pct": 0.2},                           "confirms": []},
+        {"label": "IFVG — Inverted Fair Value Gap",       "signalTypeId": "ifvg",   "category": "ICT/Smart Money", "primaryType": "ifvg",              "primaryCfg": {"ifvg_dir": "bullish", "min_gap_pct": 0.2},                          "confirms": []},
+        {"label": "OB — Order Block",                     "signalTypeId": "ob",     "category": "ICT/Smart Money", "primaryType": "order_block",       "primaryCfg": {"ob_type": "bullish", "impulse_mult": 3.0},                          "confirms": []},
+        {"label": "BB — Breaker Block",                   "signalTypeId": "bbreaker","category": "ICT/Smart Money", "primaryType": "breaker_block",     "primaryCfg": {"direction": "bullish", "lookback": 50, "tolerance_pct": 0.5},       "confirms": []},
+        {"label": "MSS — Market Structure Shift",         "signalTypeId": "mss",    "category": "ICT/Smart Money", "primaryType": "market_structure",  "primaryCfg": {"condition": "mss_bullish"},                                         "confirms": []},
+        {"label": "CHoCH — Change of Character",          "signalTypeId": "choch",  "category": "ICT/Smart Money", "primaryType": "market_structure",  "primaryCfg": {"condition": "choch_bullish"},                                       "confirms": []},
+        {"label": "LQ — Liquidity Sweep",                 "signalTypeId": "lq",     "category": "ICT/Smart Money", "primaryType": "liquidity_sweep",   "primaryCfg": {"direction": "bullish", "lookback": 10},                             "confirms": []},
+        {"label": "MIT — Mitigation Block",               "signalTypeId": "mit",    "category": "ICT/Smart Money", "primaryType": "mitigation_block",  "primaryCfg": {"direction": "bullish", "move_mult": 3.0, "lookback": 60},           "confirms": []},
+
+        # ── Supply & Demand ───────────────────────────────────────────────────
+        {"label": "SDP — Supply/Demand Zone",             "signalTypeId": "sdp",    "category": "Supply & Demand", "primaryType": "supply_demand",     "primaryCfg": {"zone_type": "demand", "move_mult": 2.0, "base_bars": 3},            "confirms": []},
+        {"label": "PD — Premium/Discount",                "signalTypeId": "pd",     "category": "Supply & Demand", "primaryType": "premium_discount",  "primaryCfg": {"bias": "discount", "lookback": 50},                                  "confirms": [{"type": "rsi", "period": 14, "operator": "lt", "value": 45}]},
+        {"label": "EQ — Equilibrium Entry",               "signalTypeId": "eq",     "category": "Supply & Demand", "primaryType": "equilibrium_entry", "primaryCfg": {"lookback": 20, "tolerance_pct": 0.15},                              "confirms": []},
+
+        # ── Price Action ───────────────────────────────────────────────────────
+        {"label": "PIN — Pin Bar",                        "signalTypeId": "pin",    "category": "Price Action",    "primaryType": "candlestick",       "primaryCfg": {"pattern": "pin_bar_bull"},                                           "confirms": []},
+        {"label": "ENG — Engulfing Candle",               "signalTypeId": "eng",    "category": "Price Action",    "primaryType": "candlestick",       "primaryCfg": {"pattern": "bullish_engulfing"},                                      "confirms": []},
+        {"label": "IB — Inside Bar Breakout",             "signalTypeId": "ib",     "category": "Price Action",    "primaryType": "inside_bar_breakout","primaryCfg": {"direction": "bullish"},                                               "confirms": []},
+
+        # ── Structure ─────────────────────────────────────────────────────────
+        {"label": "HH/HL — Bullish Structure",            "signalTypeId": "hhhl",   "category": "Structure",       "primaryType": "trend_structure",   "primaryCfg": {"structure": "hh_hl", "swing_count": 5},                             "confirms": []},
+        {"label": "LH/LL — Bearish Structure",            "signalTypeId": "lhll",   "category": "Structure",       "primaryType": "trend_structure",   "primaryCfg": {"structure": "lh_ll", "swing_count": 5},                             "confirms": []},
+        {"label": "FIB — Fibonacci Retracement",          "signalTypeId": "fib",    "category": "Structure",       "primaryType": "fib_retracement_zone","primaryCfg": {"direction": "bullish", "lookback": 50, "fib_lo": 0.618, "fib_hi": 0.705}, "confirms": []},
+        {"label": "VWAP — Volume Weighted Average",       "signalTypeId": "vwap",   "category": "Structure",       "primaryType": "session_vwap",      "primaryCfg": {"direction": "bullish"},                                              "confirms": []},
+    ]
+
+    template_groups = (singles, forex_smc_signals) if selected_signal_types else (singles, combos, forex_smc_signals)
     templates = []
-    for base_list in (singles, combos):
+    for base_list in template_groups:
         for t in base_list:
             entry = {
                 "label":       t["label"],
+                "signalTypeId": t.get("signalTypeId", t["primaryType"]),
                 "category":    t.get("category", "Other"),
                 "primaryType": t["primaryType"],
                 "primaryCfg":  dict(t["primaryCfg"]),
@@ -12875,6 +12953,18 @@ async def backtest_scan(request: Request):
                                   .replace("High", "Low")
                                   .replace("Support", "Resistance"))
             templates.append(entry)
+
+    if selected_signal_types:
+        templates = [
+            t for t in templates
+            if str(t.get("signalTypeId", t.get("primaryType", ""))).lower() in selected_signal_types
+        ]
+        if not templates:
+            return {
+                "ok": False,
+                "error": "NO_SIGNAL_TYPES",
+                "message": "No valid signal types were selected.",
+            }
 
     from app.services.backtest_engine import run_backtest, _fetch_historical
     import httpx
@@ -12917,23 +13007,42 @@ async def backtest_scan(request: Request):
         # because the optimisation loop iterates over `risk_profiles` and skips
         # DEFAULT_PROFILE, leaving zero variants to test.
         _rr_ratio = round(fixed_tp / max(fixed_sl, 0.01), 2)
-        risk_profiles = [{
-            "name":     f"Fixed {fixed_tp:g}% / {fixed_sl:g}%",
-            "tp1":      fixed_tp,
-            "sl":       fixed_sl,
-            "leverage": 5,
-            "rr":       f"{_rr_ratio}:1",
-        }]
+        if asset_class == "forex":
+            risk_profiles = [{
+                "name":     f"Fixed {fixed_tp:g}p / {fixed_sl:g}p",
+                "tp1":      fixed_tp,   # pips in forex mode
+                "sl":       fixed_sl,   # pips in forex mode
+                "leverage": 1,
+                "rr":       f"{_rr_ratio}:1",
+                "unit":     "pips",
+            }]
+        else:
+            risk_profiles = [{
+                "name":     f"Fixed {fixed_tp:g}% / {fixed_sl:g}%",
+                "tp1":      fixed_tp,
+                "sl":       fixed_sl,
+                "leverage": 5,
+                "rr":       f"{_rr_ratio}:1",
+                "unit":     "%",
+            }]
         DEFAULT_PROFILE = risk_profiles[0]
     else:
-        # Optimised mode — historical 4-profile search picks the best variant
+        # Optimised mode — historical profile search picks the best variant
         # per (strategy, coin, TF) combo (stage 2 below).
-        risk_profiles = [
-            {"name": "Tight Scalp", "tp1": 1.5, "sl": 0.75, "leverage": 5, "rr": "2:1"},
-            {"name": "Balanced",    "tp1": 3.0, "sl": 1.5,  "leverage": 5, "rr": "2:1"},
-            {"name": "Wide Swing",  "tp1": 5.0, "sl": 2.0,  "leverage": 5, "rr": "2.5:1"},
-            {"name": "Runner",      "tp1": 8.0, "sl": 2.0,  "leverage": 5, "rr": "4:1"},
-        ]
+        if asset_class == "forex":
+            risk_profiles = [
+                {"name": "Scalp",    "tp1": 15.0, "sl": 8.0,  "leverage": 1, "rr": "1.9:1", "unit": "pips"},
+                {"name": "Balanced", "tp1": 30.0, "sl": 15.0, "leverage": 1, "rr": "2:1",   "unit": "pips"},
+                {"name": "Swing",    "tp1": 50.0, "sl": 20.0, "leverage": 1, "rr": "2.5:1", "unit": "pips"},
+                {"name": "Runner",   "tp1": 80.0, "sl": 25.0, "leverage": 1, "rr": "3.2:1", "unit": "pips"},
+            ]
+        else:
+            risk_profiles = [
+                {"name": "Tight Scalp", "tp1": 1.5, "sl": 0.75, "leverage": 5, "rr": "2:1",   "unit": "%"},
+                {"name": "Balanced",    "tp1": 3.0, "sl": 1.5,  "leverage": 5, "rr": "2:1",   "unit": "%"},
+                {"name": "Wide Swing",  "tp1": 5.0, "sl": 2.0,  "leverage": 5, "rr": "2.5:1", "unit": "%"},
+                {"name": "Runner",      "tp1": 8.0, "sl": 2.0,  "leverage": 5, "rr": "4:1",   "unit": "%"},
+            ]
         DEFAULT_PROFILE = risk_profiles[1]  # Balanced
 
     # Bound concurrency so we don't blow up CPU when running 600+ backtests.
@@ -12965,6 +13074,9 @@ async def backtest_scan(request: Request):
             "singleCoin":  symbol,
             "asset_class": asset_class,
         }
+        if asset_class == "forex":
+            cfg["take_profit_pips"] = r["tp1"]
+            cfg["stop_loss_pips"] = r["sl"]
         async with _bt_sem:
             try:
                 result = await asyncio.wait_for(
@@ -13046,13 +13158,76 @@ async def backtest_scan(request: Request):
         sample_weight = math.log(trades + 1) / math.log(20)  # ~1.0 at 19 trades
         return round(pf * wr * sample_weight + pnl * 0.001, 4)
 
+    def _stddev(vals: list[float]) -> float:
+        if len(vals) < 2:
+            return 0.0
+        m = sum(vals) / len(vals)
+        var = sum((v - m) ** 2 for v in vals) / len(vals)
+        return var ** 0.5
+
+    def _score_forex(stats: dict, trades: list[dict], tf: str, risk: dict) -> tuple[float, dict]:
+        """
+        Forex Scan Best score (0-100):
+          - Win rate: 30%
+          - Avg pips per WINNING trade: 40%
+          - Consistency (inverse stddev of pip outcomes): 30%
+        """
+        closed_trades = int(stats.get("closed_trades", 0) or 0)
+        if closed_trades < _min_trades_for_tf(tf, days):
+            return -1.0, {}
+
+        closed = [t for t in (trades or []) if t.get("outcome") in ("WIN", "LOSS", "BREAKEVEN")]
+        if not closed:
+            return -1.0, {}
+        wins = [t for t in closed if t.get("outcome") == "WIN"]
+        pip_vals = [float(t.get("pip_move") or 0.0) for t in closed]
+        win_pips = [float(t.get("pip_move") or 0.0) for t in wins]
+        avg_win_pips = (sum(win_pips) / len(win_pips)) if win_pips else 0.0
+        pip_std = _stddev(pip_vals)
+
+        # Normalise to bounded 0..100 components.
+        win_rate = max(0.0, min(100.0, float(stats.get("win_rate", 0) or 0)))
+        tp_ref = max(5.0, float((risk or {}).get("tp1") or 20.0))
+        avg_pips_score = max(0.0, min(100.0, (max(0.0, avg_win_pips) / tp_ref) * 100.0))
+        consistency_score = max(0.0, 100.0 - min(100.0, (pip_std / tp_ref) * 100.0))
+
+        score_100 = round(
+            0.30 * win_rate +
+            0.40 * avg_pips_score +
+            0.30 * consistency_score,
+            2,
+        )
+        metrics = {
+            "win_rate_component": round(win_rate, 2),
+            "avg_win_pips": round(avg_win_pips, 2),
+            "avg_pips_component": round(avg_pips_score, 2),
+            "consistency_stddev_pips": round(pip_std, 2),
+            "consistency_component": round(consistency_score, 2),
+            "score_100": score_100,
+            "avg_pips_per_trade": round(float(stats.get("avg_pips_per_trade", 0) or 0), 2),
+            "total_pips": round(float(stats.get("total_pips", 0) or 0), 2),
+        }
+        return score_100, metrics
+
     def _outcome_to_row(o: dict) -> dict:
         res   = o.get("result") or {}
         err   = res.get("error")
         stats = res.get("stats") or {}
-        score = _score(stats, o.get("timeframe", "1h")) if not err else -1.0
+        score = -1.0
+        score_metrics = {}
+        if not err:
+            if asset_class == "forex":
+                score, score_metrics = _score_forex(
+                    stats,
+                    res.get("trades") or [],
+                    o.get("timeframe", "1h"),
+                    o.get("risk") or {},
+                )
+            else:
+                score = _score(stats, o.get("timeframe", "1h"))
         return {
             "label":     o["label"],
+            "signal_type_id": o.get("tpl", {}).get("signalTypeId", o.get("tpl", {}).get("primaryType", "")),
             "category":  o.get("category", "Other"),
             "tpl":       o["tpl"],
             "risk":      o["risk"],
@@ -13060,6 +13235,7 @@ async def backtest_scan(request: Request):
             "timeframe": o["timeframe"],
             "config":    o["config"],
             "stats":     stats,
+            "score_metrics": score_metrics,
             "trades":    res.get("trades", []),
             "equity_curve": res.get("equity_curve", []),
             "score":     score,
@@ -13129,9 +13305,12 @@ async def backtest_scan(request: Request):
                 "rr":        v["risk"]["rr"],
                 "win_rate":  v["stats"].get("win_rate", 0),
                 "total_pnl": v["stats"].get("total_pnl", 0),
+                "total_pips": v["stats"].get("total_pips", 0),
                 "profit_factor": v["stats"].get("profit_factor", 0),
                 "closed_trades": v["stats"].get("closed_trades", 0),
                 "score":     v["score"],
+                "score_100": v.get("score_metrics", {}).get("score_100", v["score"]),
+                "unit":      v["risk"].get("unit"),
                 "is_best":   v["score"] == best["score"],
             }
             for v in sorted(variants, key=lambda v: v["risk"]["tp1"])
@@ -13174,12 +13353,15 @@ async def backtest_scan(request: Request):
     def _clean_row(r: dict, include_full: bool = False) -> dict:
         out = {
             "label":            r["label"],
+            "signal_type_id":   r.get("signal_type_id"),
             "category":         r["category"],
             "coin":             r["coin"],
             "timeframe":        r["timeframe"],
             "config":           r["config"],
             "stats":            r["stats"],
             "score":            r["score"],
+            "score_100":        r.get("score_metrics", {}).get("score_100", r["score"]),
+            "score_metrics":    r.get("score_metrics", {}),
             "risk":             r["risk"],
             "all_risk_variants": r.get("all_risk_variants", []),
         }
@@ -13191,14 +13373,18 @@ async def backtest_scan(request: Request):
 
     return {
         "ok":      True,
+        "asset_class": asset_class,
+        "score_mode": "pips" if asset_class == "forex" else "percent",
         "coin":    primary_ticker,           # legacy single-coin field
         "coins":   tickers,                  # full coin universe scanned
         "timeframes": tf_list,               # all TFs scanned
         "days":    days,
         "direction": direction,
         "risk_mode": risk_mode,
+        "signal_types": sorted(selected_signal_types) if selected_signal_types else [],
         "fixed_tp":  fixed_tp if risk_mode == "fixed" else None,
         "fixed_sl":  fixed_sl if risk_mode == "fixed" else None,
+        "templates_tested": len(templates),
         "ranked":  [_clean_row(r, include_full=(i < 5)) for i, r in enumerate(valid[:12])],
         "tested":  len(stage1_jobs),
         "skipped": len(invalid),
