@@ -2488,7 +2488,7 @@ function dismissTgBanner(){
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
               <div>
                 <div style="font-size:14px;font-weight:800;letter-spacing:-.2px">📡 Live Forex Scanner</div>
-                <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">BOS · CHoCH · FVG · Order Block across majors, gold, silver &amp; US indices.</div>
+                <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">BOS · CHoCH · FVG · Order Block — <b>NAS100</b> &amp; <b>SPX500</b> first, then majors &amp; gold.</div>
               </div>
               <button class="btn primary" style="font-size:12px;padding:8px 14px" onclick="loadForexScanner(true)">↻ Scan now</button>
             </div>
@@ -3644,8 +3644,10 @@ let acceptedRisks=new Set(['LOW','MEDIUM']);
 function $(id){return document.getElementById(id)}
 function pC(v){return v>0?'pnl-pos':v<0?'pnl-neg':''}
 function pS(v){if(v===null||v===undefined)return'—';const n=Number(v);const abs=Math.abs(n);const disp=abs<0.1&&abs>0?n.toFixed(2):abs<1&&abs>0?n.toFixed(1):Math.round(n).toString();return(n>0?'+':'')+disp+'%'}
-function _pipSz(sym){if(!sym)return 0.0001;const s=sym.toUpperCase();if(s==='XAUUSD')return 0.10;if(s==='XAGUSD'||s.includes('JPY'))return 0.01;return 0.0001;}
-function pipsLabel(t){const e=t.entry_price,c=t.close_price;if(!e||!c)return null;const ps=_pipSz(t.symbol);const raw=t.direction==='SHORT'?e-c:c-e;const pip=Math.round(raw/ps);return(pip>=0?'+':'')+pip+'p';}
+const _INDEX_SYMS=new Set(['NAS100','SPX500','US30','GER40','UK100','NDX','SPX','DJI','DAX','FTSE']);
+function _pipSz(sym){if(!sym)return 0.0001;const s=sym.toUpperCase();if(_INDEX_SYMS.has(s)||s.startsWith('NAS')||s.startsWith('SPX'))return 1.0;if(s==='XAUUSD')return 0.10;if(s==='XAGUSD'||s.includes('JPY'))return 0.01;return 0.0001;}
+function _isIndexSym(sym){return _INDEX_SYMS.has((sym||'').toUpperCase());}
+function pipsLabel(t){const e=t.entry_price,c=t.close_price;if(!e||!c)return null;const ps=_pipSz(t.symbol);const raw=t.direction==='SHORT'?e-c:c-e;const n=Math.round(raw/ps);const suf=_isIndexSym(t.symbol)?'pts':'p';return(n>=0?'+':'')+n+suf;}
 function fmtTradeChip(t,isForex){if(isForex){const lbl=pipsLabel(t);if(lbl)return lbl;}return t.pnl_pct!==null&&t.pnl_pct!==undefined?pS(t.pnl_pct):t.outcome;}
 function starsHtml(n,max=5){let s='';for(let i=1;i<=max;i++)s+=i<=Math.round(n)?'★':'☆';return s}
 function priceStr(m){if(m.pricing_model==='one_time')return`$${Number(m.price_usdt).toFixed(2)}`;if(m.pricing_model==='subscription')return`$${Number(m.price_usdt).toFixed(2)}/mo`;return'FREE'}
@@ -8506,7 +8508,8 @@ async function loadForexScanner(force){
     let h='<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr style="color:var(--muted);text-align:left"><th style="padding:5px 6px">Pair</th><th>TF</th><th>Signal</th><th>Dir</th><th>Detail</th></tr>';
     (d.signals||[]).slice(0,40).forEach(sig=>{
       const dc=sig.direction==='SHORT'?'#e05858':'#3fb950';
-      h+='<tr style="border-top:1px solid var(--border)"><td style="padding:6px;font-weight:700">'+_gEsc(sig.pair)+'</td>'
+      const idxBadge=_isIndexSym(sig.pair)?' <span style="font-size:9px;color:#a855f7;font-weight:700">IDX</span>':'';
+      h+='<tr style="border-top:1px solid var(--border)"><td style="padding:6px;font-weight:700">'+_gEsc(sig.pair)+idxBadge+'</td>'
         +'<td style="padding:6px">'+_gEsc(sig.timeframe)+'</td>'
         +'<td style="padding:6px;font-weight:600">'+_gEsc(sig.signal)+'</td>'
         +'<td style="padding:6px;color:'+dc+'">'+_gEsc(sig.direction)+'</td>'
@@ -10258,8 +10261,8 @@ const LF_PAIRS = [
   { symbol:'USDCAD', name:'US Dollar / Canadian Dollar',pip:0.0001,desc:'Correlated to oil' },
   { symbol:'XAUUSD', name:'Gold / US Dollar',         pip:0.10,  desc:'Inflation hedge' },
   { symbol:'XAGUSD', name:'Silver / US Dollar',       pip:0.001, desc:'Industrial metal' },
-  { symbol:'NAS100', name:'NASDAQ 100',               pip:0.25,  desc:'Tech index CFD' },
-  { symbol:'SPX500', name:'S&P 500',                  pip:0.25,  desc:'US large-cap index' },
+  { symbol:'NAS100', name:'NASDAQ 100',               pip:1.0, unit:'points', desc:'Tech index CFD · 1 pt = 1 index level' },
+  { symbol:'SPX500', name:'S&P 500',                  pip:1.0, unit:'points', desc:'US large-cap index · 1 pt = 1 index level' },
 ];
 
 async function loadLiveForex() {
@@ -10351,7 +10354,9 @@ function renderLiveForex(d, wrap) {
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn ghost sm" onclick="lfRefreshBalance()">↻ Refresh</button>
-        <button class="btn ghost sm" id="lf-test-btn" onclick="lfTestTrade()">🧪 Test trade</button>
+        <button class="btn ghost sm" id="lf-test-btn" onclick="lfTestTrade('EURUSD')">🧪 Test EURUSD</button>
+        <button class="btn ghost sm" onclick="lfTestTrade('NAS100')">📊 Test NAS100</button>
+        <button class="btn ghost sm" onclick="lfTestTrade('SPX500')">📈 Test SPX500</button>
         <button class="btn ghost sm" style="color:var(--negative)" onclick="lfDisconnect()">Disconnect</button>
       </div>
       <div id="lf-test-result" style="margin-top:8px;font-size:12px;line-height:1.5"></div>
@@ -10706,35 +10711,39 @@ async function lfRefreshBalance() {
   await loadLiveForex();
 }
 
-async function lfTestTrade() {
-  const btn = $('lf-test-btn'), out = $('lf-test-result');
-  if (!confirm('Place a tiny real test order (EURUSD, 0.01 lots) on your cTrader account and immediately close it? This confirms live trading works end-to-end.')) return;
-  if (btn) { btn.setAttribute('disabled','1'); btn.textContent = '⏳ Testing…'; }
+async function lfTestTrade(symbol) {
+  symbol = (symbol || 'EURUSD').toUpperCase();
+  const isIdx = _isIndexSym(symbol);
+  const sizeLbl = isIdx ? '1 contract' : '0.01 lots';
+  const out = $('lf-test-result');
+  if (!confirm(`Place a tiny test ${symbol} order (${sizeLbl}) on cTrader and immediately close it? Confirms ${isIdx?'index':'forex'} execution works.`)) return;
+  document.querySelectorAll('#lf-body button').forEach(b=>{ if(b.textContent.includes('Test')) b.setAttribute('disabled','1'); });
   if (out) out.innerHTML = '<span style="color:var(--muted)">Placing test order on cTrader…</span>';
   try {
-    const r = await fetch(`/api/ctrader/test-trade?uid=${UID}`, {method:'POST'});
+    const r = await fetch(`/api/ctrader/test-trade?uid=${UID}&symbol=${encodeURIComponent(symbol)}`, {method:'POST'});
     const j = await r.json().catch(()=>({}));
     if (j && j.success) {
-      const fill = (j.fill!=null) ? ` @ ${(+j.fill).toFixed(5)}` : '';
+      const fill = (j.fill!=null) ? ` @ ${(+j.fill).toFixed(isIdx?2:5)}` : '';
+      const size = isIdx ? `${j.contracts||1} contract` : `${j.lots} lot`;
       const closeMsg = j.closed
         ? '<span style="color:#3fb68b">✓ position closed automatically</span>'
         : `<span style="color:#d6a35c">⚠ order placed but auto-close not confirmed${j.close_error?` (${j.close_error})`:''} — check &amp; close it in cTrader</span>`;
-      out.innerHTML = `<div style="color:#3fb68b;font-weight:600">✓ Live trading works!</div>`
-        + `<div style="color:var(--muted)">Placed ${j.lots} lot ${j.symbol}${fill} · order #${j.order_id}</div>`
+      out.innerHTML = `<div style="color:#3fb68b;font-weight:600">✓ ${symbol} live trading works!</div>`
+        + `<div style="color:var(--muted)">Placed ${size} ${j.symbol}${fill} · order #${j.order_id}</div>`
         + `<div>${closeMsg}</div>`;
-      toast('Test trade succeeded — live trading is working');
+      toast(`Test trade ${symbol} succeeded`);
     } else {
       const err = (j && j.error) ? j.error : `HTTP ${r.status}`;
       const warn = (j && j.check_open_positions)
-        ? `<div style="color:#d6a35c;margin-top:4px">⚠ Please open cTrader and close any open EURUSD test position manually, just in case.</div>`
+        ? `<div style="color:#d6a35c;margin-top:4px">⚠ Check cTrader and close any open ${symbol} test position manually.</div>`
         : '';
-      out.innerHTML = `<div style="color:var(--negative);font-weight:600">✗ Test trade failed</div>`
+      out.innerHTML = `<div style="color:var(--negative);font-weight:600">✗ ${symbol} test failed</div>`
         + `<div style="color:var(--muted)">${err}</div>` + warn;
     }
   } catch(e) {
     out.innerHTML = `<div style="color:var(--negative);font-weight:600">✗ Test trade failed</div><div style="color:var(--muted)">Network error — please try again</div>`;
   } finally {
-    if (btn) { btn.removeAttribute('disabled'); btn.textContent = '🧪 Test trade'; }
+    document.querySelectorAll('#lf-body button').forEach(b=>{ if(b.textContent.includes('Test')) b.removeAttribute('disabled'); });
   }
 }
 </script>

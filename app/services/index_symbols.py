@@ -9,14 +9,16 @@ from __future__ import annotations
 
 from typing import Dict, Optional, Tuple
 
-# canonical → (broker_name, yfinance_ticker, display_name, pip_size)
+# canonical → (broker_name, yfinance_ticker, display_name, point_size)
+# FP Markets indices are quoted in index POINTS (1.0 = one full index level),
+# not forex-style pips. NAS100 21000 → 21001 is 1 point.
 _INDEX_META: Dict[str, Tuple[str, str, str, float]] = {
-    "NAS100": ("US100", "^NDX",   "Nasdaq 100",           0.25),
-    "SPX500": ("US500", "^GSPC",  "S&P 500",              0.25),
+    "NAS100": ("US100", "^NDX",   "Nasdaq 100",           1.0),
+    "SPX500": ("US500", "^GSPC",  "S&P 500",              1.0),
     "US30":   ("US30",  "^DJI",   "Dow Jones Industrial", 1.0),
     "GER40":  ("GER40", "^GDAXI", "DAX (Germany)",        1.0),
     "UK100":  ("UK100", "^FTSE",  "FTSE 100 (UK)",        1.0),
-    "VIX":    ("VIX",   "^VIX",   "CBOE Volatility Index", 0.05),
+    "VIX":    ("VIX",   "^VIX",   "CBOE Volatility Index", 0.01),
 }
 
 # Alias → canonical
@@ -68,10 +70,25 @@ def index_display_name(symbol: str) -> str:
     return meta[2] if meta else canon
 
 
-def index_pip_size(symbol: str) -> float:
+def index_point_size(symbol: str) -> float:
+    """Price move per one index point (FP Markets: 1.0 for US indices)."""
     canon = normalize_index_symbol(symbol)
     meta = _INDEX_META.get(canon)
     return meta[3] if meta else 1.0
+
+
+def index_pip_size(symbol: str) -> float:
+    """Alias — internal math uses the same field; UI should say 'points' not 'pips'."""
+    return index_point_size(symbol)
+
+
+def price_unit_label(symbol: str, asset_class: str = "index") -> str:
+    """Human label for TP/SL distance on this instrument."""
+    if asset_class == "index" or is_index_symbol(symbol):
+        return "points"
+    if (symbol or "").upper() in ("XAUUSD", "XAGUSD"):
+        return "pips"
+    return "pips"
 
 
 def catalog_entries() -> list:

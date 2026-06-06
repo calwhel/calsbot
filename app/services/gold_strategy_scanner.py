@@ -668,10 +668,12 @@ def _build_prompt_for(entry: Dict, instrument_label: str = "gold (XAUUSD)") -> s
                     f"behind price to lock in profit.")
     else:
         mgmt_txt = ""
+    _ul = instrument_label.upper()
+    _unit = "points" if any(k in _ul for k in ("NAS100", "SPX500", "NASDAQ", "S&P", "US30", "INDEX")) else "pips"
     return (
         f"Build a {entry['direction']} {instrument_label} strategy on the {entry['timeframe']} "
-        f"timeframe that enters when {sig}{sess}. Use a stop loss of {entry['sl_pips']} pips "
-        f"and take profit of {entry['tp_pips']} pips.{mgmt_txt}"
+        f"timeframe that enters when {sig}{sess}. Use a stop loss of {entry['sl_pips']} {_unit} "
+        f"and take profit of {entry['tp_pips']} {_unit}.{mgmt_txt}"
     )
 
 

@@ -140,9 +140,9 @@ _PIP_SIZES = {
     # Metals — retail/broker pip convention (gold pip = $0.10), kept in lockstep
     # with forex_engine._METAL_PIP_SIZES and the pip_value table below.
     "XAUUSD": 0.10,
-    # Indices — tick / pip size (NAS100/SPX500 = 0.25 pt on FP Markets)
-    "NAS100": 0.25, "SPX500": 0.25, "US30": 1.0, "GER40": 1.0, "UK100": 1.0,
-    "NDX": 0.25, "SPX": 0.25, "DJI": 1.0, "DAX": 1.0, "FTSE": 1.0,
+    # Indices — 1 point = 1.0 index level (FP Markets convention)
+    "NAS100": 1.0, "SPX500": 1.0, "US30": 1.0, "GER40": 1.0, "UK100": 1.0,
+    "NDX": 1.0, "SPX": 1.0, "DJI": 1.0, "DAX": 1.0, "FTSE": 1.0,
 }
 
 # FP Markets / cTrader symbol name mapping
@@ -1075,6 +1075,123 @@ async def place_order(
                     _invalidate_persistent_connection(host)
                     continue
                 logger.error(f"[cTrader] place_order failed: {e}")
+                return {"order_id": None, "actual_fill": None, "error": str(e)}
+    return {"order_id": None, "actual_fill": None, "error": "unexpected exit"}
+
+
+async def place_order_units(
+    access_token: str,
+    ctid_trader_account_id: int,
+    symbol_name: str,
+    direction: str,
+    volume_units: int,
+    stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
+    entry_price: Optional[float] = None,
+    label: str = "TradeHub",
+    host: str = CTRADER_HOST,
+) -> dict:
+    """
+    Place a market order sized in contracts / index units.
+
+    ``volume_units`` is the contract count (e.g. 1 NAS100 contract). Converted
+    to cTrader wire volume via the symbol's lotSize grid — same path as forex
+    lots, but callers pass whole contracts instead of fractional lots.
+    """
+    if not _PROTO_OK:
+        return {"order_id": None, "actual_fill": None, "error": "ctrader proto not available"}
+    if not CTRADER_CLIENT_ID or not CTRADER_CLIENT_SECRET:
+        return {"order_id": None, "actual_fill": None, "error": "CTRADER_CLIENT_ID/SECRET not set"}
+
+    contracts = max(1, int(volume_units or 1))
+    broker_symbol = _SYMBOL_MAP.get(symbol_name, symbol_name)
+
+    async with _get_lock():
+        for attempt in (1, 2):
+            try:
+                reader, writer = await _get_persistent_connection(host)
+                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                    return {"order_id": None, "actual_fill": None, "error": "account auth failed"}
+
+                symbol_id = await _resolve_symbol_id(
+                    reader, writer, ctid_trader_account_id, broker_symbol, host
+                )
+                if not symbol_id:
+                    return {"order_id": None, "actual_fill": None,
+                            "error": f"symbol {broker_symbol} not tradable on this account"}
+
+                details = await _resolve_symbol_details(
+                    reader, writer, ctid_trader_account_id, symbol_id, host
+                )
+                vol = _compute_volume(float(contracts), details)
+                if not vol or vol <= 0:
+                    return {"order_id": None, "actual_fill": None,
+                            "error": "could not resolve tradable volume for symbol"}
+
+                logger.info(
+                    f"[cTrader] {broker_symbol} index sizing: {contracts} contracts → vol={vol}"
+                )
+
+                req = ProtoOANewOrderReq()
+                req.ctidTraderAccountId = ctid_trader_account_id
+                req.symbolId            = symbol_id
+                req.orderType           = ProtoOAOrderType.MARKET
+                req.tradeSide           = ProtoOATradeSide.BUY if direction == "LONG" else ProtoOATradeSide.SELL
+                req.volume              = vol
+                req.label               = label[:20]
+                if entry_price and entry_price > 0:
+                    if stop_loss_price is not None:
+                        req.relativeStopLoss = max(
+                            1, int(round(abs(entry_price - stop_loss_price) * 100_000))
+                        )
+                    if take_profit_price is not None:
+                        req.relativeTakeProfit = max(
+                            1, int(round(abs(entry_price - take_profit_price) * 100_000))
+                        )
+
+                pt, payload = await _send_recv_any(
+                    reader, writer, req,
+                    _PAYLOAD_TYPES["new_order_req"],
+                    {_PAYLOAD_TYPES["execution_event"],
+                     _PAYLOAD_TYPES["order_error_event"]},
+                    timeout=15.0,
+                )
+                if not payload:
+                    return {"order_id": None, "actual_fill": None, "error": "no execution event"}
+
+                _touch_conn(host)
+
+                if pt == _PAYLOAD_TYPES["order_error_event"]:
+                    err = ProtoOAOrderErrorEvent()
+                    err.ParseFromString(payload)
+                    _reason = (err.description or "").strip() or (err.errorCode or "").strip() or "order rejected"
+                    _detail = f"{err.errorCode}: {_reason}" if err.errorCode and err.errorCode not in _reason else _reason
+                    return {"order_id": None, "actual_fill": None, "error": _detail}
+
+                ev = ProtoOAExecutionEvent()
+                ev.ParseFromString(payload)
+                order_id = str(ev.order.orderId) if ev.HasField("order") else None
+                actual_fill = None
+                position_id = None
+                if ev.HasField("deal") and ev.deal.executionPrice:
+                    _raw = float(ev.deal.executionPrice)
+                    if entry_price and entry_price > 0:
+                        _cands = [_raw, _raw / 100.0, _raw / 1000.0, _raw / 100_000.0]
+                        actual_fill = min(_cands, key=lambda v: abs(v - entry_price))
+                    else:
+                        actual_fill = _raw
+                    if ev.deal.positionId:
+                        position_id = str(ev.deal.positionId)
+                return {
+                    "order_id": order_id, "actual_fill": actual_fill,
+                    "position_id": position_id, "volume": vol, "error": None,
+                }
+            except Exception as e:
+                if attempt == 1:
+                    logger.warning(f"[cTrader] place_order_units retry after: {e}")
+                    _invalidate_persistent_connection(host)
+                    continue
+                logger.error(f"[cTrader] place_order_units failed: {e}")
                 return {"order_id": None, "actual_fill": None, "error": str(e)}
     return {"order_id": None, "actual_fill": None, "error": "unexpected exit"}
 

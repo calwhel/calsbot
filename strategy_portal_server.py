@@ -7118,10 +7118,11 @@ _FOREX_SCANNER_TTL = 60                  # seconds between rescans per pair+tf
 
 # (symbol, asset_class) — indices use index OHLC path in tradfi_prices.
 _SCANNER_INSTRUMENTS = [
+    # US indices first — primary focus for cTrader demo testing
+    ("NAS100", "index"), ("SPX500", "index"), ("US30", "index"),
     ("EURUSD", "forex"), ("GBPUSD", "forex"), ("USDJPY", "forex"), ("AUDUSD", "forex"),
     ("USDCAD", "forex"), ("USDCHF", "forex"), ("NZDUSD", "forex"), ("EURJPY", "forex"),
     ("GBPJPY", "forex"), ("XAUUSD", "forex"), ("XAGUSD", "forex"),
-    ("US30", "index"), ("NAS100", "index"), ("SPX500", "index"),
 ]
 _SCANNER_PAIRS = [p for p, _ in _SCANNER_INSTRUMENTS]
 _SCANNER_TIMEFRAMES = ["15m", "1h"]
@@ -7277,9 +7278,15 @@ async def _run_forex_scanner() -> list:
         for entry in batch
     ]
 
-    # Sort: CHoCH first (highest alpha), then BOS, then FVG, then OB
+    # Sort: US indices first (NASDAQ, S&P, Dow), then signal strength
     _rank = {"CHoCH": 0, "BOS": 1, "FVG": 2, "OB": 3}
-    results.sort(key=lambda x: (_rank.get(x["signal"], 9), x["pair"], x["timeframe"]))
+    _index_pri = {"NAS100": 0, "SPX500": 1, "US30": 2}
+    results.sort(key=lambda x: (
+        _index_pri.get(x["pair"], 5),
+        _rank.get(x["signal"], 9),
+        x["pair"],
+        x["timeframe"],
+    ))
     return results
 
 
@@ -10157,11 +10164,17 @@ async def api_live_forex_account(uid: str = Query(...)):
 
 
 @app.post("/api/ctrader/test-trade")
-async def api_ctrader_test_trade(uid: str = Query(...)):
+async def api_ctrader_test_trade(
+    uid: str = Query(...),
+    symbol: str = Query("EURUSD"),
+):
     """Place a tiny REAL test order on the user's cTrader account and immediately
     close it — a one-tap end-to-end check that live trading actually works
     (auth → symbol resolution → volume sizing → fill → close) without waiting for
-    a strategy signal. Uses EURUSD at the broker minimum size, no SL/TP.
+    a strategy signal.
+
+    Query ``symbol``: EURUSD (default), NAS100, SPX500, US30 — forex uses 0.01
+    lots; indices use 1 contract. No SL/TP on the test round-trip.
     """
     from app.database import SessionLocal
     from app.models import UserPreference
@@ -10183,22 +10196,41 @@ async def api_ctrader_test_trade(uid: str = Query(...)):
     finally:
         db.close()
 
-    from app.services.ctrader_client import place_order, close_position
-    TEST_SYMBOL = "EURUSD"
-    TEST_LOTS   = 0.01  # broker minimum; ~$1k notional, negligible spread cost on demo
+    from app.services.ctrader_client import place_order, place_order_units, close_position
+    from app.services.index_symbols import normalize_index_symbol, is_index_symbol
+
+    TEST_SYMBOL = (symbol or "EURUSD").upper().strip()
+    is_index = is_index_symbol(TEST_SYMBOL)
+    if is_index:
+        TEST_SYMBOL = normalize_index_symbol(TEST_SYMBOL)
+    TEST_LOTS = 0.01  # forex minimum
+    TEST_CONTRACTS = 1
 
     try:
-        placed = await asyncio.wait_for(
-            place_order(
-                access_token           = access_token,
-                ctid_trader_account_id = ctid,
-                symbol_name            = TEST_SYMBOL,
-                direction              = "LONG",
-                volume_lots            = TEST_LOTS,
-                host                   = host,
-            ),
-            timeout=25.0,
-        )
+        if is_index:
+            placed = await asyncio.wait_for(
+                place_order_units(
+                    access_token           = access_token,
+                    ctid_trader_account_id = ctid,
+                    symbol_name            = TEST_SYMBOL,
+                    direction              = "LONG",
+                    volume_units           = TEST_CONTRACTS,
+                    host                   = host,
+                ),
+                timeout=25.0,
+            )
+        else:
+            placed = await asyncio.wait_for(
+                place_order(
+                    access_token           = access_token,
+                    ctid_trader_account_id = ctid,
+                    symbol_name            = TEST_SYMBOL,
+                    direction              = "LONG",
+                    volume_lots            = TEST_LOTS,
+                    host                   = host,
+                ),
+                timeout=25.0,
+            )
     except asyncio.TimeoutError:
         # AMBIGUOUS: the order may have reached the broker even though we timed out
         # waiting for the response — tell the user to verify in cTrader.
@@ -10248,7 +10280,9 @@ async def api_ctrader_test_trade(uid: str = Query(...)):
     return JSONResponse({
         "success": True,
         "symbol": TEST_SYMBOL,
-        "lots": TEST_LOTS,
+        "asset_class": "index" if is_index else "forex",
+        "lots": TEST_LOTS if not is_index else None,
+        "contracts": TEST_CONTRACTS if is_index else None,
         "order_id": placed.get("order_id"),
         "fill": fill,
         "closed": closed,
