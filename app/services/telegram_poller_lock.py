@@ -154,6 +154,10 @@ def _terminate_other_lock_holders(lock_id: int) -> int:
     return terminated
 
 
+# Public alias for executor / other advisory-lock reclaim paths.
+terminate_advisory_lock_holders = _terminate_other_lock_holders
+
+
 async def wait_for_poller_lock(lock_id: int, retry_seconds: int = 15) -> None:
     """Block until this process holds lock_id.
 

@@ -1534,7 +1534,9 @@ async def _ghost_cleanup_loop():
 
 # ── PostgreSQL advisory lock — ensures only ONE uvicorn worker runs the
 #    executor, monitors, and ghost-cleanup (not all 4 workers). ─────────────
-_EXECUTOR_LOCK_ID = 42_424_242   # arbitrary unique integer for this process role
+# Must fit PostgreSQL int32 for pg_locks.objid queries. Old id 42424242 was
+# held by a zombie Replit/Railway session (pid ~10481) that blocked the executor.
+_EXECUTOR_LOCK_ID = 708_110_004
 
 def _try_acquire_executor_lock():
     """
@@ -1728,6 +1730,7 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
     if first_attempt_delay:
         await asyncio.sleep(first_attempt_delay)
 
+    _wait_attempts = 0
     while True:
         if _executor_running_in_this_worker:
             return  # Already running in this worker — nothing to do
@@ -1744,7 +1747,48 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
                 logger.error(f"Failed to start executor tasks: {e}")
             return  # This worker is now the executor; stop trying
         else:
-            await asyncio.sleep(30)  # Retry every 30 s until lock is free
+            _wait_attempts += 1
+            if _wait_attempts == 1 or _wait_attempts % 3 == 0:
+                try:
+                    from app.database import SessionLocal
+                    from sqlalchemy import text
+                    db = SessionLocal()
+                    try:
+                        row = db.execute(
+                            text(
+                                "SELECT l.pid, COALESCE(a.state, 'gone') "
+                                "FROM pg_locks l "
+                                "LEFT JOIN pg_stat_activity a ON a.pid = l.pid "
+                                "WHERE l.locktype='advisory' AND l.objid=:lid "
+                                "AND l.granted=true LIMIT 1"
+                            ),
+                            {"lid": _EXECUTOR_LOCK_ID},
+                        ).fetchone()
+                        if row:
+                            logger.warning(
+                                f"[executor] lock {_EXECUTOR_LOCK_ID} held by pid={row[0]} "
+                                f"state={row[1]} — trade scanning waiting (attempt {_wait_attempts})"
+                            )
+                        else:
+                            logger.warning(
+                                f"[executor] lock {_EXECUTOR_LOCK_ID} busy but holder unknown "
+                                f"— retrying (attempt {_wait_attempts})"
+                            )
+                    finally:
+                        db.close()
+                except Exception as _le:
+                    logger.warning(f"[executor] lock status check failed: {_le}")
+            if _wait_attempts >= 3 and _wait_attempts % 3 == 0:
+                from app.services.telegram_poller_lock import terminate_advisory_lock_holders
+                n = await loop.run_in_executor(
+                    None, terminate_advisory_lock_holders, _EXECUTOR_LOCK_ID
+                )
+                if n:
+                    logger.warning(
+                        f"[executor] reclaimed lock {_EXECUTOR_LOCK_ID} — "
+                        f"terminated {n} stale holder(s); retrying acquire"
+                    )
+            await asyncio.sleep(15)  # Retry every 15 s until lock is free
 
 
 async def _keepalive_then_reclaim(conn):
@@ -1937,6 +1981,34 @@ async def health():
         _tg_status["polling_active"] = str(MAIN_POLLER_LOCK_ID) in _tg_lock
     except Exception as _tg_err:
         _tg_status["error"] = str(_tg_err)[:120]
+    _exec_status = {"enabled": False, "lock_id": _EXECUTOR_LOCK_ID, "lock_held": False}
+    try:
+        _exec_status["enabled"] = (
+            is_production_deploy()
+            and os.getenv("DISABLE_EXECUTOR", "").lower() not in ("1", "true", "yes")
+        )
+        from app.database import SessionLocal
+        from sqlalchemy import text
+        db = SessionLocal()
+        try:
+            erow = db.execute(
+                text(
+                    "SELECT l.pid, COALESCE(a.state, 'gone') "
+                    "FROM pg_locks l "
+                    "LEFT JOIN pg_stat_activity a ON a.pid = l.pid "
+                    "WHERE l.locktype='advisory' AND l.objid=:lid AND l.granted=true "
+                    "LIMIT 1"
+                ),
+                {"lid": _EXECUTOR_LOCK_ID},
+            ).fetchone()
+            if erow:
+                _exec_status["lock_held"] = True
+                _exec_status["holder_pid"] = erow[0]
+                _exec_status["holder_state"] = erow[1]
+        finally:
+            db.close()
+    except Exception as _ex_err:
+        _exec_status["error"] = str(_ex_err)[:120]
     return {
         "status": "ok",
         "ts": int(__import__("time").time()),
@@ -1944,8 +2016,8 @@ async def health():
         "commit": _commit[:12] if _commit else "unknown",
         "gold_scan": "yahoo-chart-v3",
         "features_free": portal_features_free(),
-        "executor": is_production_deploy()
-        and os.getenv("DISABLE_EXECUTOR", "").lower() not in ("1", "true", "yes"),
+        "executor": _exec_status["enabled"],
+        "executor_detail": _exec_status,
         "telegram": _tg_status,
         "telegram_poller_locks": _tg_lock,
     }
@@ -12055,13 +12127,16 @@ async def executor_status(request: Request):
     from sqlalchemy import text
     db = SessionLocal()
     try:
-        row = db.execute(text(
-            "SELECT l.pid, COALESCE(a.state,'gone') AS state "
-            "FROM pg_locks l "
-            "LEFT JOIN pg_stat_activity a ON a.pid = l.pid "
-            "WHERE l.locktype='advisory' AND l.objid=42424242 AND l.granted=true "
-            "LIMIT 1"
-        )).fetchone()
+        row = db.execute(
+            text(
+                "SELECT l.pid, COALESCE(a.state,'gone') AS state "
+                "FROM pg_locks l "
+                "LEFT JOIN pg_stat_activity a ON a.pid = l.pid "
+                "WHERE l.locktype='advisory' AND l.objid=:lid AND l.granted=true "
+                "LIMIT 1"
+            ),
+            {"lid": _EXECUTOR_LOCK_ID},
+        ).fetchone()
         lock_info = {"pid": row[0], "state": row[1]} if row else None
     except Exception as e:
         lock_info = {"error": str(e)}
@@ -12072,7 +12147,7 @@ async def executor_status(request: Request):
         "executor_running_in_this_worker": _executor_running_in_this_worker,
         "is_production": is_prod,
         "advisory_lock_holder": lock_info,
-        "lock_id": 42424242,
+        "lock_id": _EXECUTOR_LOCK_ID,
     }
 
 
@@ -12182,7 +12257,7 @@ async def executor_force_start(request: Request):
                 cur.execute("SELECT pg_terminate_backend(%s)", (pid,))
                 logger.info(f"[force-start] Terminated stale lock holder PID={pid}")
             import time; time.sleep(0.5)  # brief pause for PG to release
-            cur.execute("SELECT pg_try_advisory_lock(42424242)")
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (_EXECUTOR_LOCK_ID,))
             acquired = cur.fetchone()[0]
             cur.close()
             if acquired:
