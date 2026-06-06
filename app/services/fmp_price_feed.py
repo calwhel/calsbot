@@ -187,25 +187,33 @@ async def _fetch_fmp_chart_once(
             {"apikey": api_key, "limit": str(limit)},
         ),
     )
-    try:
-        import aiohttp
-    except ImportError:
-        return []
-
     for url, params in attempts:
+        data = None
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, params=params, timeout=aiohttp.ClientTimeout(total=12)
-                ) as resp:
-                    if resp.status != 200:
-                        logger.debug(
-                            f"[FMPFeed] klines {fmp_sym} {fmp_interval} HTTP {resp.status} ({url})"
-                        )
-                        continue
-                    data = await resp.json(content_type=None)
+            import httpx
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(url, params=params)
+                if resp.status_code != 200:
+                    logger.debug(
+                        f"[FMPFeed] klines {fmp_sym} {fmp_interval} HTTP {resp.status_code} ({url})"
+                    )
+                    continue
+                data = resp.json()
         except Exception as e:
-            logger.debug(f"[FMPFeed] klines fetch error {fmp_sym} {fmp_interval}: {e}")
+            logger.debug(f"[FMPFeed] klines httpx error {fmp_sym} {fmp_interval}: {e}")
+            try:
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        url, params=params, timeout=aiohttp.ClientTimeout(total=15)
+                    ) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json(content_type=None)
+            except Exception as e2:
+                logger.debug(f"[FMPFeed] klines fetch error {fmp_sym} {fmp_interval}: {e2}")
+                continue
+        if data is None:
             continue
         if isinstance(data, dict) and data.get("Error Message"):
             logger.warning(

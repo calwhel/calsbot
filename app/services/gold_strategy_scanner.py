@@ -655,20 +655,29 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
     # 1) Fetch candles once per timeframe.
     _progress("Fetching gold history…")
     from app.services.tradfi_prices import get_klines
-    candle_map: Dict[str, List] = {}
-    coverage: Dict[str, float] = {}   # actual days of history fetched per timeframe
-    for tf in TIMEFRAMES:
+
+    async def _fetch_tf(tf: str) -> tuple:
         per_day = {"15m": 96, "1h": 24}.get(tf, 24)
-        # Request more than the window so the provider returns its full depth;
-        # the source itself caps how far back gold data goes (15m ≈ 1 month,
-        # 1h ≈ several months), so we report the ACTUAL coverage rather than
-        # pretending every window is fully covered.
-        limit = min(per_day * days + 120, 6000)
-        try:
-            ks = await get_klines(SYMBOL, ASSET_CLASS, tf, limit)
-        except Exception as e:
-            logger.warning(f"[gold-scan] candle fetch {tf} failed: {e}")
-            ks = []
+        want = min(per_day * days + 120, 2000)
+        ks: List = []
+        for cap in (want, min(want, 800), 300):
+            try:
+                batch = await get_klines(
+                    SYMBOL, ASSET_CLASS, tf, cap, for_backtest=True
+                )
+            except Exception as e:
+                logger.warning(f"[gold-scan] candle fetch {tf}@{cap} failed: {e}")
+                batch = []
+            if batch and len(batch) > len(ks):
+                ks = batch
+            if len(ks) >= 120:
+                break
+        return tf, ks
+
+    candle_map: Dict[str, List] = {}
+    coverage: Dict[str, float] = {}
+    fetch_results = await asyncio.gather(*[_fetch_tf(tf) for tf in TIMEFRAMES])
+    for tf, ks in fetch_results:
         n = len(ks) if ks else 0
         if ks and n >= 120:
             candle_map[tf] = ks
@@ -683,7 +692,8 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
             "ok": False,
             "error": (
                 "Could not fetch gold (XAUUSD) historical data. "
-                "Ensure FMP_API_KEY is set (stable intraday plan) or connect cTrader."
+                "Check server logs for [FMPFeed] / [gold-scan] — FMP intraday "
+                "charts may need a paid plan, or redeploy after the latest fix."
             ),
         }
 

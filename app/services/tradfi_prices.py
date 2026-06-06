@@ -214,6 +214,7 @@ async def get_klines(
     asset_class: str,
     timeframe: str = "15m",
     limit: int = 200,
+    for_backtest: bool = False,
 ) -> List[List[float]]:
     """
     Return up to `limit` OHLC bars in MEXC-shape: [[ts_ms, o, h, l, c, v], ...]
@@ -224,7 +225,13 @@ async def get_klines(
     download. The 20s `_KLINE_CACHE` already dedupes *sequential* requests; this
     dedupes the *simultaneous* ones (the executor's per-cycle thundering herd).
     """
-    key = (symbol.upper(), normalize_asset_class(asset_class), timeframe, int(limit))
+    key = (
+        symbol.upper(),
+        normalize_asset_class(asset_class),
+        timeframe,
+        int(limit),
+        bool(for_backtest),
+    )
     try:
         running = asyncio.get_running_loop()
     except RuntimeError:
@@ -248,7 +255,9 @@ async def get_klines(
         fut = running.create_future()
         _KLINE_INFLIGHT[key] = fut
         try:
-            result = await _get_klines_impl(symbol, asset_class, timeframe, limit)
+            result = await _get_klines_impl(
+                symbol, asset_class, timeframe, limit, for_backtest=for_backtest
+            )
             if not fut.done():
                 fut.set_result(result)
             return result
@@ -267,7 +276,47 @@ async def get_klines(
                 _KLINE_INFLIGHT.pop(key, None)
 
     # No running loop (shouldn't happen for an async caller) — fetch directly.
-    return await _get_klines_impl(symbol, asset_class, timeframe, limit)
+    return await _get_klines_impl(
+        symbol, asset_class, timeframe, limit, for_backtest=for_backtest
+    )
+
+
+async def _fetch_fmp_metals_klines(
+    symbol: str,
+    asset_class: str,
+    timeframe: str,
+    limit: int,
+) -> List[List[float]]:
+    if not os.environ.get("FMP_API_KEY"):
+        return []
+    try:
+        from app.services.fmp_price_feed import get_klines as _fmp_klines
+        rows = await _fmp_klines(symbol, asset_class, timeframe, limit)
+        if rows:
+            logger.info(
+                f"[tradfi] klines ok (FMP): {symbol.upper()} {timeframe} → {len(rows)} bars"
+            )
+        return rows
+    except Exception as fe:
+        logger.warning(f"[tradfi] FMP klines failed {symbol} {timeframe}: {fe}")
+        return []
+
+
+async def _fetch_ctrader_klines(
+    symbol: str,
+    asset_class: str,
+    timeframe: str,
+    limit: int,
+) -> List[List[float]]:
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        timeout = min(45.0, 12.0 + limit / 150.0)
+        return await asyncio.wait_for(
+            _ctf.get_klines(symbol, asset_class, timeframe, limit),
+            timeout=timeout,
+        )
+    except Exception:
+        return []
 
 
 async def _get_klines_impl(
@@ -275,6 +324,7 @@ async def _get_klines_impl(
     asset_class: str,
     timeframe: str = "15m",
     limit: int = 200,
+    for_backtest: bool = False,
 ) -> List[List[float]]:
     """
     Return up to `limit` OHLC bars in MEXC-shape: [[ts_ms, o, h, l, c, v], ...]
@@ -286,40 +336,25 @@ async def _get_klines_impl(
         return []
 
     now = datetime.utcnow()
+    is_metal = symbol.upper() in _METALS_BINANCE_MAP
 
-    # ── cTrader trendbars — same OHLC the broker's chart draws ───────────────
-    # Primary candle source for forex/metals/indices so paper evaluation and
-    # signal candles match the broker that fills orders. Returns [] when the
-    # symbol isn't broker-tracked or no account is connected → falls through.
-    try:
-        from app.services import ctrader_price_feed as _ctf
-        # Bound the cTrader-first attempt (open+app auth+account auth+trendbar
-        # read, ×up to 3 host/refresh tries) so a transient cTrader hiccup
-        # can't stall us before the Binance/yfinance fallbacks below.
-        _crows = await asyncio.wait_for(
-            _ctf.get_klines(symbol, asset_class, timeframe, limit),
-            timeout=10.0,
-        )
-        if _crows:
-            return _crows
-    except Exception:
-        pass
+    # Live/paper paths prefer broker-matched cTrader OHLC. Backtest discovery
+    # (Gold Strategy Finder) prefers FMP first — faster, no protobuf socket auth,
+    # and avoids cTrader timing out on multi-thousand-bar requests.
+    if is_metal and for_backtest:
+        _sources = ("fmp", "ctrader")
+    else:
+        _sources = ("ctrader", "fmp") if is_metal else ("ctrader",)
 
-    # ── FMP historical-chart — metals (spot XAUUSD/XAGUSD, all timeframes) ───
-    # Primary fallback when cTrader is down. Binance spot metals are geo-blocked
-    # from our servers and yfinance maps to futures (GC=F), so FMP is the only
-    # reliable non-broker source for gold/silver backtests (e.g. Gold Strategy Finder).
-    if symbol.upper() in _METALS_BINANCE_MAP and os.environ.get("FMP_API_KEY"):
-        try:
-            from app.services.fmp_price_feed import get_klines as _fmp_klines
-            _frows = await _fmp_klines(symbol, asset_class, timeframe, limit)
+    for src in _sources:
+        if src == "fmp":
+            _frows = await _fetch_fmp_metals_klines(symbol, asset_class, timeframe, limit)
             if _frows:
-                logger.info(
-                    f"[tradfi] klines ok (FMP): {symbol.upper()} {timeframe} → {len(_frows)} bars"
-                )
                 return _frows
-        except Exception as _fe:
-            logger.warning(f"[tradfi] FMP klines failed {symbol} {timeframe}: {_fe}")
+        elif src == "ctrader":
+            _crows = await _fetch_ctrader_klines(symbol, asset_class, timeframe, limit)
+            if _crows:
+                return _crows
 
     # ── Binance spot metals path (XAUUSDT / XAGUSDT) ─────────────────────────
     _bn_sym = _METALS_BINANCE_MAP.get(symbol.upper())
