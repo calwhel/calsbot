@@ -5906,9 +5906,9 @@ function renderStep5(){
     </div>
     ${isFx?`
     <div id="row-be" style="${WZ.bePips?'':'display:none;'}padding:10px 0 0">
-      <label style="display:flex;justify-content:space-between">Breakeven trigger <span style="color:var(--accent);font-weight:700" id="be-v">+${WZ.bePips||15} pips</span></label>
-      <input type="range" id="be-sl" min="1" max="200" value="${WZ.bePips||15}" step="1" oninput="WZ.bePips=Number(this.value);document.getElementById('be-v').textContent='+'+this.value+' pips'" style="width:100%;accent-color:var(--accent)">
-      <div class="hint">Once price is this many pips in profit, SL moves to your entry price automatically.</div>
+      <label style="display:flex;justify-content:space-between">Breakeven trigger <span style="color:var(--accent);font-weight:700" id="be-v">+${WZ.bePips||15} ${wzPointUnitLabel()}</span></label>
+      <input type="range" id="be-sl" min="1" max="200" value="${WZ.bePips||15}" step="1" oninput="WZ.bePips=Number(this.value);document.getElementById('be-v').textContent='+'+this.value+' ${wzPointUnitLabel()}'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Once price is this many ${wzPointUnitLabel()} in profit, SL moves to your entry price automatically.</div>
     </div>`:`
     <div id="row-be" style="${WZ.breakeven?'':'display:none;'}padding:10px 0 0">
       <label style="display:flex;justify-content:space-between">Breakeven trigger ROI <span style="color:var(--accent);font-weight:700" id="be-v">${WZ.breakeven||70}%</span></label>
@@ -6846,7 +6846,7 @@ async function buildStrategy(){
     Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null,breakeven_pct:WZ.breakeven||null,close_before:WZ.closeBefore||null});
     // Forex breakeven is pip-based (executor uses pips at 1x leverage, where a
     // leveraged-ROI % trigger would be unreachable).
-    if(WZ.assetClass==='forex'){exit.breakeven_at_pips=WZ.bePips||null;exit.breakeven_pct=null;}
+    if(wzUsesPointSl()){exit.breakeven_at_pips=WZ.bePips||null;exit.breakeven_pct=null;}
     // Forex pip TP/SL — executor converts pips→% at fire time using the live
     // price + the pair's pip size (JPY pairs use 0.01, everything else 0.0001).
     if(wzUsesPointSl()&&(WZ.tp1Pips||WZ.slPips)){
