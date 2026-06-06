@@ -15,9 +15,15 @@ class SecurityHardeningSourceTests(unittest.TestCase):
         combined = "\n".join([PORTAL, CONFIG, TWITTER_POSTER, TRADE_TRACKER])
 
         self.assertNotIn("tradehub-portal-secret-2025", combined)
+        self.assertNotIn("SECRET_KEY environment variable is required", combined)
         self.assertNotRegex(combined, r'ADMIN_SECRET"\s*,\s*"5603353066"')
         self.assertNotRegex(combined, r'OWNER_TELEGRAM_ID"\s*,\s*"5603353066"')
         self.assertNotRegex(combined, r"ADMIN_CHAT_ID\s*=\s*5603353066")
+
+    def test_session_secret_supports_railway_session_secret_alias(self):
+        self.assertIn("def _load_cookie_secret()", PORTAL)
+        self.assertIn('os.getenv("SESSION_SECRET")', PORTAL)
+        self.assertIn("using SESSION_SECRET for portal session signing", PORTAL)
 
     def test_uid_api_guard_requires_bound_session_token(self):
         self.assertIn("async def _require_bound_uid_for_api", PORTAL)
