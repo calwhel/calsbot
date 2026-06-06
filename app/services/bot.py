@@ -17224,7 +17224,16 @@ async def handle_forex_deny(callback: CallbackQuery):
 
 async def start_bot():
     logger.info("Starting Telegram bot...")
-    
+
+    try:
+        me = await bot.get_me()
+        logger.info(f"✅ TELEGRAM_BOT_TOKEN valid — @{me.username} (id={me.id})")
+    except Exception as e:
+        logger.error(
+            f"❌ TELEGRAM_BOT_TOKEN invalid or revoked — bot will NOT poll: {e}"
+        )
+        return
+
     # Clean up idle transactions (safe — does NOT release advisory locks)
     try:
         from app.database import SessionLocal

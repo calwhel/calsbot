@@ -1883,6 +1883,28 @@ async def _startup_background():
 @app.get("/health")
 async def health():
     _commit = deploy_commit()
+    _tg_lock = {}
+    try:
+        from app.database import SessionLocal
+        from sqlalchemy import text
+        from app.services.telegram_poller_lock import MAIN_POLLER_LOCK_ID, FOREX_POLLER_LOCK_ID
+        db = SessionLocal()
+        try:
+            rows = db.execute(
+                text(
+                    "SELECT l.objid, l.pid, COALESCE(a.state, 'gone') "
+                    "FROM pg_locks l "
+                    "LEFT JOIN pg_stat_activity a ON a.pid = l.pid "
+                    "WHERE l.locktype = 'advisory' AND l.granted = true "
+                    "AND l.objid IN (:m, :f)"
+                ),
+                {"m": MAIN_POLLER_LOCK_ID, "f": FOREX_POLLER_LOCK_ID},
+            ).fetchall()
+            _tg_lock = {str(r[0]): {"pid": r[1], "state": r[2]} for r in rows}
+        finally:
+            db.close()
+    except Exception:
+        pass
     return {
         "status": "ok",
         "ts": int(__import__("time").time()),
@@ -1892,6 +1914,7 @@ async def health():
         "features_free": portal_features_free(),
         "executor": is_production_deploy()
         and os.getenv("DISABLE_EXECUTOR", "").lower() not in ("1", "true", "yes"),
+        "telegram_poller_locks": _tg_lock,
     }
 
 

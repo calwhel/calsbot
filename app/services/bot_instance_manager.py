@@ -27,7 +27,7 @@ from app.services.telegram_poller_lock import (
     _try_acquire as _try_acquire_advisory_lock,
 )
 
-RETRY_INTERVAL = 30
+RETRY_INTERVAL = 15
 _instance_id = str(os.getpid())
 
 

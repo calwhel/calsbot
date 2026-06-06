@@ -109,14 +109,76 @@ def _start_keepalive(lock_id: int) -> None:
     t.start()
 
 
-async def wait_for_poller_lock(lock_id: int, retry_seconds: int = 30) -> None:
-    """Block until this process holds lock_id."""
+def _terminate_other_lock_holders(lock_id: int) -> int:
+    """Drop advisory-lock DB sessions held by other hosts (e.g. stale Replit VM)."""
+    import psycopg2
+
+    db_url = _get_db_url()
+    if not db_url:
+        return 0
+    terminated = 0
+    try:
+        conn = psycopg2.connect(db_url, connect_timeout=10)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT l.pid, COALESCE(a.state, 'gone'), a.application_name
+                FROM pg_locks l
+                LEFT JOIN pg_stat_activity a ON a.pid = l.pid
+                WHERE l.locktype = 'advisory'
+                  AND l.objid = %s
+                  AND l.granted = true
+                  AND l.pid != pg_backend_pid()
+                """,
+                (lock_id,),
+            )
+            rows = cur.fetchall()
+            for pid, state, app in rows:
+                try:
+                    cur.execute("SELECT pg_terminate_backend(%s)", (pid,))
+                    ok = cur.fetchone()[0]
+                    if ok:
+                        terminated += 1
+                        logger.warning(
+                            f"[tg-lock] terminated stale holder pid={pid} "
+                            f"state={state} app={app!r} for lock {lock_id}"
+                        )
+                except Exception as te:
+                    logger.warning(f"[tg-lock] could not terminate pid={pid}: {te}")
+        conn.close()
+    except Exception as e:
+        logger.error(f"[tg-lock] terminate_other_lock_holders failed: {e}")
+    return terminated
+
+
+async def wait_for_poller_lock(lock_id: int, retry_seconds: int = 15) -> None:
+    """Block until this process holds lock_id.
+
+    If another host (e.g. a zombie Replit deploy) holds the lock without polling,
+    we terminate its DB session after a few waits so Railway can take over.
+    """
     import asyncio
+
+    from app.deployment import is_railway
+
+    attempts = 0
+    # Railway is production — reclaim faster when a ghost Replit holds the lock.
+    break_after = 3 if is_railway() else 6
 
     while True:
         if await asyncio.to_thread(_try_acquire, lock_id):
             _start_keepalive(lock_id)
             return
+        attempts += 1
+        if attempts >= break_after:
+            n = await asyncio.to_thread(_terminate_other_lock_holders, lock_id)
+            if n:
+                logger.warning(
+                    f"[tg-lock] reclaimed lock {lock_id} — terminated {n} stale holder(s)"
+                )
+                attempts = 0
+                continue
         await asyncio.sleep(retry_seconds)
 
 
