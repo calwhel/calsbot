@@ -216,34 +216,26 @@ async def _fetch_live_prices(symbols: list[str]) -> dict:
     return result
 
 
-async def _send_tg_alert(text: str) -> None:
-    """Fire-and-forget Telegram message to admin."""
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    if not token or not ADMIN_CHAT_ID:
-        return
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            await client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"},
-            )
-    except Exception as e:
-        logger.warning(f"Telegram alert failed: {e}")
-
-
 async def _tg_dm(telegram_id: int, text: str) -> None:
-    """Fire-and-forget Telegram DM to a specific user by their telegram_id."""
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    if not token or not telegram_id:
+    """Telegram DM to a user — uses shared delivery helper (multi-token + verify)."""
+    if not telegram_id:
         return
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            await client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": telegram_id, "text": text, "parse_mode": "HTML"},
-            )
+        from app.services.telegram_dm import schedule_dm
+        schedule_dm(telegram_id, text)
     except Exception as e:
         logger.debug(f"Telegram DM failed for {telegram_id}: {e}")
+
+
+async def _send_tg_alert(text: str) -> None:
+    """Telegram alert to owner (OWNER_TELEGRAM_ID)."""
+    if not ADMIN_CHAT_ID:
+        return
+    try:
+        from app.services.telegram_dm import schedule_dm
+        schedule_dm(ADMIN_CHAT_ID, text)
+    except Exception as e:
+        logger.warning(f"Telegram alert failed: {e}")
 
 
 def _get_user_telegram_id(db, user_id: int) -> Optional[int]:

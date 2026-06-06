@@ -1704,6 +1704,15 @@ async def _start_executor_tasks():
 
     asyncio.create_task(_executor_startup_ping())
 
+    # Legacy Trade-table monitor (TP/SL/breakeven on `trades` rows from signal bot).
+    # Previously only ran via tracker_server.py on Replit — was missing on Railway.
+    try:
+        from app.services.trade_tracker import run_trade_monitor
+        asyncio.create_task(_resilient_task("run_trade_monitor", run_trade_monitor, restart_delay=30))
+        logger.info("✅ Trade tracker monitor launched (legacy trades table)")
+    except Exception as e:
+        logger.error(f"Failed to launch trade tracker monitor: {e}")
+
 
 async def _executor_claim_loop(first_attempt_delay: int = 0):
     """
