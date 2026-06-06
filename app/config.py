@@ -58,8 +58,8 @@ class Settings(BaseSettings):
     # Webhook URL for Coinbase Commerce callbacks (set this to your Railway URL)
     WEBHOOK_BASE_URL: Optional[str] = None  # e.g., "https://your-app.railway.app"
 
-    # Strategy Portal URL (Replit-hosted portal)
-    PORTAL_URL: str = "https://17201325-775a-4a28-aab3-d2c9cf413651-00-3up199ufsye84.kirk.replit.dev"
+    # Strategy Portal URL (production)
+    PORTAL_URL: str = "https://tradehubmarkets.com"
     
     # Owner ID for admin features
     OWNER_TELEGRAM_ID: Optional[str] = None
