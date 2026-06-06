@@ -838,6 +838,45 @@ def _last_fired_time(strategy_id: int, symbol: str, db) -> Optional[datetime]:
     return last.fired_at if last else None
 
 
+def _prefetch_symbol_cooldowns(
+    strategy_id: int,
+    symbols: List[str],
+    db,
+    *,
+    need_today: bool = False,
+) -> Tuple[set, Dict[str, datetime]]:
+    """
+    One GROUP BY query for last-fired times across all candidate symbols.
+    Replaces up to 2×N per-symbol queries in evaluate_and_fire's pre-filter.
+    """
+    from app.strategy_models import StrategyExecution
+    from sqlalchemy import func
+
+    if not symbols:
+        return set(), {}
+
+    rows = (
+        db.query(
+            StrategyExecution.symbol,
+            func.max(StrategyExecution.fired_at).label("last_at"),
+        )
+        .filter(
+            StrategyExecution.strategy_id == strategy_id,
+            StrategyExecution.symbol.in_(symbols),
+        )
+        .group_by(StrategyExecution.symbol)
+        .all()
+    )
+    last_fired = {r.symbol: r.last_at for r in rows if r.last_at}
+
+    fired_today: set = set()
+    if need_today and last_fired:
+        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        fired_today = {sym for sym, ts in last_fired.items() if ts >= today}
+
+    return fired_today, last_fired
+
+
 # ─── Performance update ──────────────────────────────────────────────────────
 
 def _update_performance(strategy_id: int, db):
@@ -900,6 +939,26 @@ def _update_performance(strategy_id: int, db):
 
 
 # ─── Paper position monitor ──────────────────────────────────────────────────
+
+# Incremental 1m candle tail per (symbol, asset_class) — avoids re-fetching full
+# history every 20s sweep when positions are already open.
+_PAPER_CANDLE_CACHE: Dict[Tuple[str, str], Tuple[list, int, int]] = {}
+
+
+def _merge_candle_series(existing: list, new_rows: list) -> list:
+    """Merge two OHLC tuples sorted by open_ts, deduplicating on timestamp."""
+    if not existing:
+        return list(new_rows)
+    if not new_rows:
+        return list(existing)
+    seen: set = set()
+    merged: list = []
+    for c in sorted(existing + new_rows, key=lambda x: x[0]):
+        if c[0] not in seen:
+            seen.add(c[0])
+            merged.append(c)
+    return merged
+
 
 async def _fetch_candles_since_entry(
     symbol: str,
@@ -1002,6 +1061,48 @@ async def _fetch_candles_since_entry(
             seen.add(c[0])
             unique.append(c)
     return unique
+
+
+async def _fetch_paper_candles_cached(
+    symbol: str,
+    earliest_fired_at: datetime,
+    http_client: httpx.AsyncClient,
+    asset_class: str,
+) -> list:
+    """
+    Paper-monitor candle fetch with incremental tail cache.
+    First sweep loads from earliest_fired_at; later sweeps only append new 1m bars.
+    """
+    key = (symbol.upper(), (asset_class or "crypto").lower())
+    earliest_ms = int(earliest_fired_at.timestamp() * 1000)
+    cached = _PAPER_CANDLE_CACHE.get(key)
+
+    if cached:
+        old_candles, cache_earliest_ms, last_ts = cached
+        if cache_earliest_ms <= earliest_ms and old_candles and last_ts:
+            # Overlap one minute so we never miss a partial bar at the boundary.
+            overlap_from = datetime.utcfromtimestamp(max(0, last_ts - 60_000) / 1000)
+            delta = await _fetch_candles_since_entry(
+                symbol, overlap_from, http_client, asset_class,
+            )
+            candles = _merge_candle_series(old_candles, delta)
+            candles = [c for c in candles if c[0] >= earliest_ms]
+        else:
+            candles = await _fetch_candles_since_entry(
+                symbol, earliest_fired_at, http_client, asset_class,
+            )
+    else:
+        candles = await _fetch_candles_since_entry(
+            symbol, earliest_fired_at, http_client, asset_class,
+        )
+
+    if candles:
+        _PAPER_CANDLE_CACHE[key] = (candles, earliest_ms, candles[-1][0])
+    elif key in _PAPER_CANDLE_CACHE and cached:
+        # Keep prior tail if this sweep's fetch failed transiently.
+        return cached[0]
+
+    return candles
 
 
 def _paper_cost_basis_pct(asset_class: str, symbol: str = "") -> float:
@@ -1931,7 +2032,9 @@ async def run_paper_position_monitor():
 
         async def _fetch_for_bucket(symbol: str, asset_class: str, positions: list):
             earliest = min((ex.fired_at or datetime.utcnow()) for ex in positions)
-            candles  = await _fetch_candles_since_entry(symbol, earliest, http_client, asset_class)
+            candles  = await _fetch_paper_candles_cached(
+                symbol, earliest, http_client, asset_class,
+            )
             # ── Live intra-candle hit detection (forex/index) ──────────────────
             # Paper SL/TP is normally only seen when the 1m candle CLOSES (and the
             # broker candle feed can fall back to a delayed source), which made
@@ -1983,69 +2086,64 @@ async def run_paper_position_monitor():
                             f"{symbol} ({_ac_label}) — no 1m candle data after "
                             f"{_elapsed_h:.1f}h open. Check FMP/yfinance connectivity."
                         )
-            for ex in positions:
-                write_db = SessionLocal()
-                try:
-                    # Re-attach the detached object into the fresh session so
-                    # any attribute mutations are tracked for commit.
-                    managed = write_db.merge(ex)
-
-                    # ── Forex day-trading force-close guards ──────────────────
-                    # These run BEFORE TP/SL candle evaluation so the position
-                    # is closed at market price rather than waiting for a
-                    # TP/SL hit that may never come before the weekend gap.
-                    _ex_ac = getattr(managed, "asset_class", None) or "crypto"
-                    if _ex_ac == "forex":
-                        _forced = False
-                        _force_reason = None
-                        try:
-                            from app.strategy_models import UserStrategy as _US2
-                            _strat2 = write_db.query(_US2).filter(
-                                _US2.id == managed.strategy_id
-                            ).first()
-                            if _strat2 and _strat2.config:
-                                _risk2 = (_strat2.config or {}).get("risk", {})
-
-                                # Friday close: force-close Fri from 21:00 UTC
-                                if _risk2.get("friday_close_protection"):
-                                    if (_sweep_wd == 4 and _sweep_h >= 21) or _sweep_wd >= 5:
-                                        _forced = True
-                                        _force_reason = "friday_close_protection"
-
-                                # No overnight: force-close Mon-Thu from 22:00 UTC
-                                if not _forced and _risk2.get("no_overnight_positions"):
-                                    if _sweep_wd < 4 and _sweep_h >= 22:
-                                        _forced = True
-                                        _force_reason = "no_overnight_positions"
-                        except Exception as _fce:
-                            logger.debug(f"[PaperMonitor] Force-close config read error ex#{ex.id}: {_fce}")
-
-                        if _forced:
-                            # Close at the last known candle close price (best
-                            # available market price without a live price call)
-                            _fc_price = managed.entry_price
-                            if candles:
-                                try:
-                                    _fc_price = float(candles[-1][4])  # last close
-                                except Exception:
-                                    pass
-                            logger.info(
-                                f"[PaperMonitor] FORCE-CLOSE ({_force_reason}): "
-                                f"exec #{managed.id} {managed.symbol} {managed.direction} "
-                                f"@ {_fc_price} — day-trading rule triggered"
-                            )
-                            _close_paper_execution(managed, "CANCELLED", _fc_price, write_db)
-                            continue  # skip normal TP/SL evaluation
-
-                    _evaluate_paper_position_against_candles(managed, candles, write_db)
-                except Exception as e:
-                    logger.warning(f"Position {ex.id} eval error: {e}")
+            # One DB session per (symbol, asset_class) bucket — not per position.
+            write_db = SessionLocal()
+            try:
+                for ex in positions:
                     try:
-                        write_db.rollback()
-                    except Exception:
-                        pass
-                finally:
-                    write_db.close()
+                        managed = write_db.merge(ex)
+
+                        # ── Forex day-trading force-close guards ──────────────
+                        _ex_ac = getattr(managed, "asset_class", None) or "crypto"
+                        if _ex_ac == "forex":
+                            _forced = False
+                            _force_reason = None
+                            try:
+                                from app.strategy_models import UserStrategy as _US2
+                                _strat2 = write_db.query(_US2).filter(
+                                    _US2.id == managed.strategy_id
+                                ).first()
+                                if _strat2 and _strat2.config:
+                                    _risk2 = (_strat2.config or {}).get("risk", {})
+
+                                    if _risk2.get("friday_close_protection"):
+                                        if (_sweep_wd == 4 and _sweep_h >= 21) or _sweep_wd >= 5:
+                                            _forced = True
+                                            _force_reason = "friday_close_protection"
+
+                                    if not _forced and _risk2.get("no_overnight_positions"):
+                                        if _sweep_wd < 4 and _sweep_h >= 22:
+                                            _forced = True
+                                            _force_reason = "no_overnight_positions"
+                            except Exception as _fce:
+                                logger.debug(
+                                    f"[PaperMonitor] Force-close config read ex#{ex.id}: {_fce}"
+                                )
+
+                            if _forced:
+                                _fc_price = managed.entry_price
+                                if candles:
+                                    try:
+                                        _fc_price = float(candles[-1][4])
+                                    except Exception:
+                                        pass
+                                logger.info(
+                                    f"[PaperMonitor] FORCE-CLOSE ({_force_reason}): "
+                                    f"exec #{managed.id} {managed.symbol} {managed.direction} "
+                                    f"@ {_fc_price} — day-trading rule triggered"
+                                )
+                                _close_paper_execution(managed, "CANCELLED", _fc_price, write_db)
+                                continue
+
+                        _evaluate_paper_position_against_candles(managed, candles, write_db)
+                    except Exception as e:
+                        logger.warning(f"Position {ex.id} eval error: {e}")
+                        try:
+                            write_db.rollback()
+                        except Exception:
+                            pass
+            finally:
+                write_db.close()
 
     async with httpx.AsyncClient() as http_client:
         # ── Startup catch-up: immediately resolve any positions missed while down ──
@@ -2898,11 +2996,16 @@ async def evaluate_and_fire(
 
     # ── Step 1: Fast sync pre-filter (no awaits) ─────────────────────────────
     # Exclude symbols already fired today or still in cooldown window.
+    # One GROUP BY query replaces up to 2×N per-symbol round-trips.
+    _sym_slice = symbols[:50]
+    _fired_today_set, _last_fired_map = _prefetch_symbol_cooldowns(
+        strategy.id, _sym_slice, db, need_today=no_duplicate_symbol,
+    )
     candidate_symbols: List[str] = []
-    for symbol in symbols[:50]:
-        if no_duplicate_symbol and _fired_today_for_symbol(strategy.id, symbol, db):
+    for symbol in _sym_slice:
+        if no_duplicate_symbol and symbol in _fired_today_set:
             continue
-        last_fired = _last_fired_time(strategy.id, symbol, db)
+        last_fired = _last_fired_map.get(symbol)
         if last_fired:
             elapsed_mins = (datetime.utcnow() - last_fired).total_seconds() / 60
             if elapsed_mins < cooldown_mins:
@@ -3870,12 +3973,12 @@ def _snap_asset_class(snap: dict) -> str:
     are routed to the correct executor."""
     _obj = snap.get("_obj")
     _cfg = snap.get("config") or {}
-    return (
-        (getattr(_obj, "asset_class", None) or "").strip()
-        or _cfg.get("asset_class")
-        or _cfg.get("_asset_class")
-        or "crypto"
-    )
+    _col_ac = (getattr(_obj, "asset_class", None) or "").strip()
+    _cfg_ac = (_cfg.get("asset_class") or _cfg.get("_asset_class") or "").strip()
+    # DB column may still be the default 'crypto' before backfill — trust config.
+    if _col_ac == "crypto" and _cfg_ac and _cfg_ac != "crypto":
+        return _cfg_ac.lower()
+    return _col_ac or _cfg_ac or "crypto"
 
 
 # ─── Main executor loop (crypto only) ────────────────────────────────────────

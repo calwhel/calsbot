@@ -7163,11 +7163,12 @@ async def _run_forex_scanner() -> list:
     from app.services.tradfi_prices import get_price as _tradfi_price
     import asyncio, time
 
+    import os as _os_scan
     now = time.monotonic()
     # Semaphore: limit concurrent (pair, tf) group scans
-    sem = asyncio.Semaphore(3)
+    sem = asyncio.Semaphore(int(_os_scan.environ.get("FOREX_SCANNER_PARALLEL", "6")))
 
-    async def _scan_pair_tf(pair, tf, asset_class="forex"):
+    async def _scan_pair_tf(pair, tf, asset_class="forex", _http=None):
         """
         Scan all signals for one (pair, timeframe) combination.
         A single shared_cache dict is passed to every evaluator so the kline
@@ -7186,91 +7187,94 @@ async def _run_forex_scanner() -> list:
                 if not price:
                     return []
 
-                # ONE shared cache dict — klines fetched once, reused by all evals
-                shared_cache = {"_asset_class": asset_class}
-                async with _httpx.AsyncClient(timeout=12) as _http:
-                    for sig_type, sub in _SCANNER_SIGNALS:
-                        cache_key = f"{pair}|{tf}|{sig_type}|{sub}"
-                        cached = _FOREX_SCANNER_CACHE.get(cache_key)
-                        if cached and cached[1] > now:
-                            if cached[0]:
-                                entries.append(cached[0])
+                # ONE shared cache dict — klines fetched once, reused by all evals.
+                # strategy_ta._fetch_klines reads "__asset_class__" (double underscores).
+                shared_cache = {"__asset_class__": asset_class}
+                _client = _http or _httpx.AsyncClient(timeout=12)
+                for sig_type, sub in _SCANNER_SIGNALS:
+                    cache_key = f"{pair}|{tf}|{sig_type}|{sub}"
+                    cached = _FOREX_SCANNER_CACHE.get(cache_key)
+                    if cached and cached[1] > now:
+                        if cached[0]:
+                            entries.append(cached[0])
+                        continue
+
+                    entry = None
+                    try:
+                        if sig_type == "market_structure":
+                            ok, msg = await asyncio.wait_for(
+                                eval_market_structure(
+                                    {"condition": sub, "timeframe": tf},
+                                    pair, price, _client, shared_cache,
+                                ),
+                                timeout=15,
+                            )
+                        elif sig_type == "fvg":
+                            ok, msg = await asyncio.wait_for(
+                                eval_fvg(
+                                    {"direction": sub, "timeframe": tf, "sub": "just_formed"},
+                                    pair, price, _client, shared_cache,
+                                ),
+                                timeout=15,
+                            )
+                        elif sig_type == "order_block":
+                            ok, msg = await asyncio.wait_for(
+                                eval_order_block(
+                                    {"ob_type": sub, "timeframe": tf},
+                                    pair, price, _client, shared_cache,
+                                ),
+                                timeout=15,
+                            )
+                        else:
                             continue
 
-                        entry = None
-                        try:
-                            if sig_type == "market_structure":
-                                ok, msg = await asyncio.wait_for(
-                                    eval_market_structure(
-                                        {"condition": sub, "timeframe": tf},
-                                        pair, price, _http, shared_cache,
-                                    ),
-                                    timeout=15,
-                                )
-                            elif sig_type == "fvg":
-                                ok, msg = await asyncio.wait_for(
-                                    eval_fvg(
-                                        {"direction": sub, "timeframe": tf, "sub": "just_formed"},
-                                        pair, price, _http, shared_cache,
-                                    ),
-                                    timeout=15,
+                        if ok:
+                            label, direction, desc = _SIGNAL_LABELS.get(
+                                sub, ("Signal", "LONG", sub)
+                            )
+                            if sig_type == "fvg":
+                                label = "FVG"
+                                desc = (
+                                    f"{'Bullish' if sub == 'bullish' else 'Bearish'}"
+                                    " Fair Value Gap (just formed)"
                                 )
                             elif sig_type == "order_block":
-                                ok, msg = await asyncio.wait_for(
-                                    eval_order_block(
-                                        {"ob_type": sub, "timeframe": tf},
-                                        pair, price, _http, shared_cache,
-                                    ),
-                                    timeout=15,
+                                label = "OB"
+                                desc = (
+                                    f"{'Bullish' if sub == 'bullish' else 'Bearish'}"
+                                    " Order Block touch"
                                 )
-                            else:
-                                continue
+                            entry = {
+                                "pair":      pair,
+                                "timeframe": tf,
+                                "signal":    label,
+                                "direction": direction,
+                                "desc":      desc,
+                                "price":     round(price, 6),
+                                "detail":    msg,
+                                "sig_key":   f"{sig_type}:{sub}",
+                            }
+                            entries.append(entry)
 
-                            if ok:
-                                label, direction, desc = _SIGNAL_LABELS.get(
-                                    sub, ("Signal", "LONG", sub)
-                                )
-                                if sig_type == "fvg":
-                                    label = "FVG"
-                                    desc = (
-                                        f"{'Bullish' if sub == 'bullish' else 'Bearish'}"
-                                        " Fair Value Gap (just formed)"
-                                    )
-                                elif sig_type == "order_block":
-                                    label = "OB"
-                                    desc = (
-                                        f"{'Bullish' if sub == 'bullish' else 'Bearish'}"
-                                        " Order Block touch"
-                                    )
-                                entry = {
-                                    "pair":      pair,
-                                    "timeframe": tf,
-                                    "signal":    label,
-                                    "direction": direction,
-                                    "desc":      desc,
-                                    "price":     round(price, 6),
-                                    "detail":    msg,
-                                    "sig_key":   f"{sig_type}:{sub}",
-                                }
-                                entries.append(entry)
+                    except Exception as _se:
+                        logger.debug(f"Scanner {pair}/{tf}/{sig_type}/{sub}: {_se}")
 
-                        except Exception as _se:
-                            logger.debug(f"Scanner {pair}/{tf}/{sig_type}/{sub}: {_se}")
-
-                        _FOREX_SCANNER_CACHE[cache_key] = (entry, now + _FOREX_SCANNER_TTL)
+                    _FOREX_SCANNER_CACHE[cache_key] = (entry, now + _FOREX_SCANNER_TTL)
 
         except Exception as _e:
             logger.debug(f"Scanner pair+tf {pair}/{tf}: {_e}")
 
         return entries
 
-    # One task per (pair, tf) — klines shared within each task
-    tasks = [
-        _scan_pair_tf(pair, tf, ac)
-        for pair, ac in _SCANNER_INSTRUMENTS
-        for tf in _SCANNER_TIMEFRAMES
-    ]
-    raw = await asyncio.gather(*tasks, return_exceptions=True)
+    # One task per (pair, tf) — klines shared within each task; one HTTP client
+    # for the whole scan instead of per (pair, tf).
+    async with _httpx.AsyncClient(timeout=12) as _scan_http:
+        tasks = [
+            _scan_pair_tf(pair, tf, ac, _http=_scan_http)
+            for pair, ac in _SCANNER_INSTRUMENTS
+            for tf in _SCANNER_TIMEFRAMES
+        ]
+        raw = await asyncio.gather(*tasks, return_exceptions=True)
     results = [
         entry
         for batch in raw
@@ -9938,31 +9942,53 @@ async def api_ctrader_disconnect(uid: str = Query(...)):
 @app.get("/api/ctrader/feed-status")
 async def api_ctrader_feed_status():
     """
-    Returns the current state of the FMP real-time price feed.
-    No auth required — read-only diagnostic endpoint.
+    Price-feed diagnostics: cTrader live ticks (broker-matched) + FMP poll cache.
+    No auth required — read-only.
     """
+    out = {
+        "ctrader": {"live": False, "symbol_count": 0, "cached_symbols": []},
+        "fmp":     {"live": False, "symbol_count": 0, "cached_symbols": []},
+        "primary_source": "yfinance_fallback",
+    }
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        _c_syms = _ctf.cached_symbols()
+        out["ctrader"] = {
+            "live":           bool(_ctf.is_live()),
+            "symbol_count":   len(_c_syms),
+            "cached_symbols": _c_syms[:30],
+        }
+    except Exception as e:
+        out["ctrader"]["error"] = str(e)
+
     try:
         from app.services.fmp_price_feed import (
             is_live as _fmp_live,
             cached_symbols as _fmp_syms,
             symbol_count as _fmp_count,
         )
-        live = _fmp_live()
-        symbols = _fmp_syms()
-        return JSONResponse({
-            "live":            live,
-            "cached_symbols":  symbols,
-            "symbol_count":    _fmp_count(),
-            "source":          "fmp_realtime" if live else "yfinance_fallback",
-        })
+        _f_syms = _fmp_syms()
+        out["fmp"] = {
+            "live":           bool(_fmp_live()),
+            "symbol_count":   _fmp_count(),
+            "cached_symbols": _f_syms[:30],
+        }
     except Exception as e:
-        return JSONResponse({
-            "live":           False,
-            "cached_symbols": [],
-            "symbol_count":   0,
-            "source":         "yfinance_fallback",
-            "error":          str(e),
-        })
+        out["fmp"]["error"] = str(e)
+
+    if out["ctrader"]["symbol_count"] > 0:
+        out["primary_source"] = "ctrader_realtime"
+    elif out["fmp"]["symbol_count"] > 0:
+        out["primary_source"] = "fmp_realtime"
+    else:
+        out["primary_source"] = "yfinance_fallback"
+
+    # Back-compat fields used by older UI checks
+    out["live"] = out["fmp"]["live"] or out["ctrader"]["live"]
+    out["cached_symbols"] = out["ctrader"]["cached_symbols"] or out["fmp"]["cached_symbols"]
+    out["symbol_count"] = out["ctrader"]["symbol_count"] + out["fmp"]["symbol_count"]
+    out["source"] = out["primary_source"]
+    return JSONResponse(out)
 
 
 @app.get("/api/live-forex/account")
