@@ -94,12 +94,12 @@ _TRACKED: Dict[str, str] = {
     "AUDUSD": "AUDUSD", "USDCAD": "USDCAD", "USDCHF": "USDCHF",
     "NZDUSD": "NZDUSD", "EURJPY": "EURJPY", "GBPJPY": "GBPJPY",
     "XAUUSD": "XAUUSD",
-    # Indices (FP Markets contract names)
-    "SPX":  "US500",
-    "NDX":  "US100",
-    "DJI":  "US30",
-    "DAX":  "GER40",
-    "FTSE": "UK100",
+    # Indices — canonical cTrader names (FP Markets contract names)
+    "NAS100": "US100", "NDX": "US100", "US100": "US100",
+    "SPX500": "US500", "SPX": "US500",  "US500": "US500",
+    "US30":   "US30",  "DJI": "US30",
+    "GER40":  "GER40", "DAX": "GER40",
+    "UK100":  "UK100", "FTSE": "UK100",
 }
 
 # Broker symbol → canonical name (reverse map, built at start)
@@ -696,6 +696,11 @@ async def get_klines(
     if not _PROTO_OK:
         return []
     sym_up = symbol.upper()
+    try:
+        from app.services.index_symbols import normalize_index_symbol
+        sym_up = normalize_index_symbol(sym_up)
+    except Exception:
+        pass
     if sym_up not in _TRACKED:
         return []
 

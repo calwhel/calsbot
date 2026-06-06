@@ -173,12 +173,19 @@ def pip_size(pair: str) -> float:
     """Return the pip size for a pair.
 
     • Metals  (XAU/XAG): see _METAL_PIP_SIZES — $0.10 per pip for gold, $0.001 for silver
+    • Index CFDs        : NAS100/SPX500 = 0.25 pt; US30/GER40/UK100 = 1.0 pt
     • JPY pairs         : 0.01
     • All others        : 0.0001 (standard 4-decimal forex)
     """
     p = (pair or "").upper().replace("/", "").replace("=X", "")
     if p in _METAL_PIP_SIZES:
         return _METAL_PIP_SIZES[p]
+    try:
+        from app.services.index_symbols import index_pip_size, is_index_symbol
+        if is_index_symbol(p):
+            return index_pip_size(p)
+    except Exception:
+        pass
     return 0.01 if p in _JPY_PAIRS or p.endswith("JPY") else 0.0001
 
 

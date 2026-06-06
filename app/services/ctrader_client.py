@@ -140,8 +140,9 @@ _PIP_SIZES = {
     # Metals — retail/broker pip convention (gold pip = $0.10), kept in lockstep
     # with forex_engine._METAL_PIP_SIZES and the pip_value table below.
     "XAUUSD": 0.10,
-    # Indices — tick size used for pip-equivalent math
-    "SPX": 1.0, "NDX": 1.0, "DJI": 1.0, "DAX": 1.0, "FTSE": 1.0,
+    # Indices — tick / pip size (NAS100/SPX500 = 0.25 pt on FP Markets)
+    "NAS100": 0.25, "SPX500": 0.25, "US30": 1.0, "GER40": 1.0, "UK100": 1.0,
+    "NDX": 0.25, "SPX": 0.25, "DJI": 1.0, "DAX": 1.0, "FTSE": 1.0,
 }
 
 # FP Markets / cTrader symbol name mapping
@@ -151,17 +152,20 @@ _SYMBOL_MAP = {
     "EURUSD": "EURUSD", "GBPUSD": "GBPUSD", "USDJPY": "USDJPY",
     "AUDUSD": "AUDUSD", "USDCAD": "USDCAD", "USDCHF": "USDCHF",
     "NZDUSD": "NZDUSD",
-    # Indices (FP Markets cTrader contract names)
-    "SPX":  "US500",  # S&P 500
-    "NDX":  "US100",  # Nasdaq 100
-    "DJI":  "US30",   # Dow Jones
-    "DAX":  "GER40",  # DAX
-    "FTSE": "UK100",  # FTSE 100
+    # Indices — canonical cTrader names + legacy aliases
+    "NAS100": "US100", "NDX": "US100", "US100": "US100",
+    "SPX500": "US500", "SPX": "US500",  "US500": "US500",
+    "US30":   "US30",  "DJI": "US30",
+    "GER40":  "GER40", "DAX": "GER40",
+    "UK100":  "UK100", "FTSE": "UK100",
 }
 
 # Index contract sizing: for index CFDs volume is in contracts (1 unit = 1 contract).
 # FP Markets minimum is 1 contract; value ≈ price × contract_size USD.
-_INDEX_SYMBOLS = frozenset({"SPX", "NDX", "DJI", "DAX", "FTSE"})
+try:
+    from app.services.index_symbols import CTRADER_INDEX_SYMBOLS as _INDEX_SYMBOLS
+except Exception:
+    _INDEX_SYMBOLS = frozenset({"NAS100", "SPX500", "US30", "GER40", "UK100", "SPX", "NDX", "DJI", "DAX", "FTSE"})
 
 # Broker symbol name → numeric symbolId, cached per (host, ctid). cTrader's
 # ProtoOANewOrderReq requires the integer symbolId — there is NO symbolName
@@ -1439,7 +1443,12 @@ async def place_ctrader_order_for_user(
     tp_price = round(entry_price * (1 + mult * tp_pct / 100), 6)
     sl_price = round(entry_price * (1 - mult * sl_pct / 100), 6)
 
-    is_index = symbol.upper() in _INDEX_SYMBOLS
+    try:
+        from app.services.index_symbols import normalize_index_symbol, is_index_symbol
+        is_index = is_index_symbol(symbol)
+        symbol = normalize_index_symbol(symbol) if is_index else symbol.upper()
+    except Exception:
+        is_index = symbol.upper() in _INDEX_SYMBOLS
 
     if is_index:
         # Index CFDs: volume in contracts (1 contract ≈ 1 unit of index value).

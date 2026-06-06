@@ -2476,6 +2476,13 @@ function dismissTgBanner(){
             <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#caa12c,#b8860b)" onclick="openGoldFinder()">🏆 Find Best Gold Strategy →</button>
           </div>
 
+          <!-- Index Strategy Finder (NASDAQ / S&P via cTrader) -->
+          <div style="margin-bottom:16px;padding:14px;border:1px solid #a855f755;border-radius:10px;background:linear-gradient(135deg,#1a0f2a10,#a855f714)">
+            <div style="font-size:14px;font-weight:800;letter-spacing:-.2px">📊 Index Strategy Finder <span style="font-size:10px;color:var(--muted);font-weight:600">· NASDAQ · cTrader</span></div>
+            <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">Backtest dozens of strategies on <b>NASDAQ 100 (NAS100)</b>, S&amp;P 500, or Dow — uses your <b>cTrader demo candles</b> when connected. Paper &amp; live execution via FP Markets.</div>
+            <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#a855f7,#7c3aed)" onclick="openIndexFinder()">📊 Find Best NASDAQ Strategy →</button>
+          </div>
+
           <!-- Live Forex Scanner (web) -->
           <div id="forex-scanner-card" style="margin-bottom:16px;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--card2)">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
@@ -3193,6 +3200,54 @@ function dismissTgBanner(){
       <button class="btn" onclick="goldReset()">↺ New Scan</button>
       <button class="btn" id="gold-build-all-btn" onclick="goldBuildAll()">⚡ Build all (paper)</button>
       <button class="btn primary" id="gold-build-btn" onclick="goldBuildInAI()">💬 Build this in AI Builder</button>
+    </div>
+  </div>
+</div>
+
+<!-- Index Strategy Finder -->
+<div class="modal-bg" id="modal-index">
+  <div class="modal" style="max-width:760px">
+    <div class="modal-hd"><h3>📊 Index Strategy Finder</h3><span class="modal-close" onclick="closeModal('modal-index')">&times;</span></div>
+    <div class="modal-body" id="index-body" style="padding:18px 20px 8px">
+      <div id="index-config">
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">Claude backtests index CFD strategies across <b>5m–4h</b> timeframes and US/EU trading sessions. Walk-forward validated (70% train / 30% test). Connect <b>cTrader demo</b> in Settings for broker-matched NASDAQ candles. ~1–2 min.</div>
+        <div style="margin-bottom:14px">
+          <div class="pine-label">Instrument</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="index-sym-chips">
+            <button class="opt-chip active" data-sym="NAS100" onclick="setIndexSym('NAS100',this)">NASDAQ 100</button>
+            <button class="opt-chip" data-sym="SPX500" onclick="setIndexSym('SPX500',this)">S&amp;P 500</button>
+            <button class="opt-chip" data-sym="US30" onclick="setIndexSym('US30',this)">Dow 30</button>
+          </div>
+        </div>
+        <div style="margin-bottom:14px">
+          <div class="pine-label">Direction</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="index-dir-chips">
+            <button class="opt-chip active" data-dir="BOTH" onclick="setIndexDir('BOTH',this)">Both (best long + short)</button>
+            <button class="opt-chip" data-dir="LONG" onclick="setIndexDir('LONG',this)">Long only</button>
+            <button class="opt-chip" data-dir="SHORT" onclick="setIndexDir('SHORT',this)">Short only</button>
+          </div>
+        </div>
+        <div style="margin-bottom:18px">
+          <div class="pine-label">Test window</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="index-days-chips">
+            <button class="opt-chip" data-days="30" onclick="setIndexDays(30,this)">30 days</button>
+            <button class="opt-chip active" data-days="90" onclick="setIndexDays(90,this)">90 days</button>
+            <button class="opt-chip" data-days="180" onclick="setIndexDays(180,this)">180 days</button>
+          </div>
+        </div>
+        <button class="pine-analyse-btn" style="background:linear-gradient(135deg,#a855f7,#7c3aed)" onclick="runIndexFinder()">📊 Run NASDAQ Scan →</button>
+      </div>
+      <div id="index-progress" style="display:none;text-align:center;padding:30px 10px">
+        <div class="loader" style="margin:0 auto 14px"></div>
+        <div id="index-progress-msg" style="font-size:13px;color:var(--text);font-weight:600">Scanning index strategies…</div>
+        <div style="font-size:11.5px;color:var(--muted);margin-top:6px">Backtesting across timeframes &amp; sessions, then asking Claude to pick the winner.</div>
+      </div>
+      <div id="index-results" style="display:none"></div>
+    </div>
+    <div class="modal-footer" id="index-footer" style="display:none">
+      <button class="btn" onclick="indexReset()">↺ New Scan</button>
+      <button class="btn" id="index-build-all-btn" onclick="indexBuildAll()">⚡ Build all (paper)</button>
+      <button class="btn primary" id="index-build-btn" onclick="indexBuildInAI()">💬 Build this in AI Builder</button>
     </div>
   </div>
 </div>
@@ -8256,6 +8311,179 @@ async function goldBuildAll(){
   allBtn.disabled = false; oneBtn.disabled = false;
   allBtn.textContent = '✅ Built '+ok+(fail?' · '+fail+' failed':'');
   alert('Built '+ok+' paper strateg'+(ok===1?'y':'ies')+(fail?(' ('+fail+' failed)'):'')+'. Open the Strategies tab to review them — they\'re running in paper mode so you can watch them before going live.');
+  if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
+}
+
+// ── Index Strategy Finder ──────────────────────────────────────────────────────
+let INDEX = { sym:'NAS100', dir:'BOTH', days:90, result:null };
+function openIndexFinder(){ indexReset(); showModal('modal-index'); }
+function setIndexSym(s,el){ INDEX.sym=s; document.querySelectorAll('#index-sym-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
+function setIndexDir(d,el){ INDEX.dir=d; document.querySelectorAll('#index-dir-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
+function setIndexDays(d,el){ INDEX.days=d; document.querySelectorAll('#index-days-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
+function indexReset(){
+  INDEX.result=null;
+  document.getElementById('index-config').style.display='';
+  document.getElementById('index-progress').style.display='none';
+  document.getElementById('index-results').style.display='none';
+  document.getElementById('index-footer').style.display='none';
+}
+let _indexProgressTimer = null;
+async function runIndexFinder(){
+  document.getElementById('index-config').style.display='none';
+  document.getElementById('index-results').style.display='none';
+  document.getElementById('index-footer').style.display='none';
+  document.getElementById('index-progress').style.display='';
+  const progEl=document.getElementById('index-progress-msg');
+  if(_indexProgressTimer) clearInterval(_indexProgressTimer);
+  _indexProgressTimer=setInterval(async()=>{
+    try{
+      const pr=await fetch('/api/backtest/index-discovery/progress?uid='+encodeURIComponent(UID));
+      const pd=await pr.json();
+      if(pd.message&&progEl) progEl.textContent=pd.message;
+    }catch(e){}
+  },1200);
+  try{
+    const res = await fetch('/api/backtest/index-discovery', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ uid:UID, symbol:INDEX.sym, days:INDEX.days, direction:INDEX.dir })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.ok){
+      renderIndexError(data && (data.message||data.error) || 'Scan failed. Please try again.');
+      return;
+    }
+    INDEX.result = data;
+    renderIndexResults(data);
+  }catch(e){
+    renderIndexError('Network error — please try again.');
+  }finally{
+    if(_indexProgressTimer){ clearInterval(_indexProgressTimer); _indexProgressTimer=null; }
+  }
+}
+function renderIndexError(msg){
+  document.getElementById('index-progress').style.display='none';
+  const box=document.getElementById('index-results');
+  box.style.display='';
+  box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">⚠️ '+_gEsc(msg)+'</div>';
+  document.getElementById('index-footer').style.display='';
+  document.getElementById('index-build-btn').style.display='none';
+}
+function renderIndexResults(d){
+  document.getElementById('index-progress').style.display='none';
+  const b=d.best, s=b.stats;
+  const symLabel = d.symbol || INDEX.sym || 'NAS100';
+  let html = '<div style="font-size:11px;color:var(--muted);margin-bottom:10px">Instrument: <b>'+_gEsc(symLabel)+'</b> · asset class index · cTrader-ready</div>';
+  if(d.direction_mode==='BOTH' && (d.best_long||d.best_short)){
+    html += _goldWinnerCard('🟢 Best LONG', d.best_long, '#3fb950');
+    html += _goldWinnerCard('🔴 Best SHORT', d.best_short, '#e05858');
+  }
+  html += '<div style="padding:16px;border:1px solid #a855f766;border-radius:12px;background:linear-gradient(135deg,#1a0f2a14,#a855f71f);margin-bottom:16px">';
+  html += '<div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#a855f7;font-weight:700;margin-bottom:4px">🏆 Claude\'s Pick · '+_goldConfBadge(s.confidence)+'</div>';
+  html += '<div style="font-size:18px;font-weight:800;letter-spacing:-.3px">'+_gEsc(b.strategy_name)+'</div>';
+  const dirBadge = b.direction==='SHORT' ? '<span style="color:#e05858;font-weight:700">SHORT</span>' : '<span style="color:#3fb950;font-weight:700">LONG</span>';
+  html += '<div style="font-size:12.5px;color:var(--muted);margin-top:6px;display:flex;gap:14px;flex-wrap:wrap">'
+        + '<span>'+_gEsc(b.label)+' · '+dirBadge+'</span>'
+        + '<span>⏱ '+_gEsc(b.timeframe)+'</span>'
+        + '<span>🕒 '+_gEsc(b.session_label)+'</span>'
+        + '<span>🎯 SL '+b.sl_pips+' / TP '+b.tp_pips+' pts</span>'
+        + '</div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px">'
+        + _goldStat('Win rate', s.win_rate+'%')
+        + _goldStat('Profit factor', s.profit_factor)
+        + _goldStat('Net pts', (s.total_pips>0?'+':'')+s.total_pips)
+        + _goldStat('Max drawdown', s.max_drawdown+'%')
+        + _goldStat('Trades', s.closed_trades)
+        + _goldStat('Return', (s.total_pnl>0?'+':'')+s.total_pnl+'%')
+        + '</div>';
+  if(b.rationale) html += '<div style="font-size:12.5px;color:var(--text);margin-top:14px;line-height:1.55;border-top:1px solid var(--border);padding-top:12px">'+_gEsc(b.rationale)+'</div>';
+  html += '</div>';
+  if(Array.isArray(d.leaderboard) && d.leaderboard.length){
+    html += '<div style="font-size:12px;font-weight:700;margin:12px 0 8px">Leaderboard</div>';
+    html += '<div style="max-height:220px;overflow-y:auto">';
+    d.leaderboard.slice(0,8).forEach((e,i)=>{
+      html += '<div style="font-size:12px;padding:8px 10px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:8px">'
+           + '<span>#'+(i+1)+' '+_gEsc(e.label)+' · '+_gEsc(e.timeframe)+' · '+_gEsc(e.session_label)+'</span>'
+           + '<span style="color:var(--muted);white-space:nowrap">PF '+e.stats.profit_factor+' · '+e.stats.closed_trades+' tr</span></div>';
+    });
+    html += '</div>';
+  }
+  const box=document.getElementById('index-results');
+  box.style.display=''; box.innerHTML=html;
+  document.getElementById('index-footer').style.display='';
+  document.getElementById('index-build-btn').style.display='';
+}
+function indexBuildInAI(){
+  if(!INDEX.result || !INDEX.result.best) return;
+  const prompt = INDEX.result.best.build_prompt || '';
+  closeModal('modal-index');
+  switchBuildMode('chat');
+  try{ if(typeof cbSetMarket==='function') cbSetMarket('index'); }catch(e){}
+  setTimeout(()=>{
+    const inp=document.getElementById('cb-input');
+    if(inp){ inp.value=prompt; inp.focus(); }
+  }, 150);
+}
+async function _indexBuildOne(entry){
+  const sym = (INDEX.result && INDEX.result.symbol) || INDEX.sym || 'NAS100';
+  const cRes = await fetch('/api/build-strategy', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ uid:UID, name:(entry.build_name||entry.label||'Index strategy'), description:(entry.build_prompt||'') })
+  });
+  const cData = await cRes.json();
+  if(!cRes.ok || !cData.config) throw new Error((cData && (cData.error||cData.message)) || 'compile failed');
+  const cfg = cData.config;
+  cfg.name = (entry.build_name||entry.label||'Index strategy');
+  cfg.asset_class = 'index';
+  cfg.universe = { type:'specific', symbols:[sym] };
+  cfg._build_mode = 'paper';
+  if(entry.session_filter && entry.session_filter.sessions && entry.session_filter.sessions.length){
+    cfg.filters = cfg.filters || {};
+    cfg.filters.session = entry.session_filter;
+  }
+  cfg.exit = cfg.exit || {};
+  const _mgmt = entry.management || 'fixed';
+  if(_mgmt==='breakeven'){
+    cfg.exit.breakeven_at_pct = entry.breakeven_at_pct || 50;
+    cfg.exit.trailing_stop = false;
+  } else if(_mgmt==='trail'){
+    cfg.exit.trailing_stop = true;
+    cfg.exit.trailing_stop_pct = entry.trailing_stop_pct || 0;
+    cfg.exit.breakeven_at_pct = 0;
+  } else {
+    cfg.exit.breakeven_at_pct = 0;
+    cfg.exit.trailing_stop = false;
+  }
+  const sRes = await fetch('/api/save-strategy', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ uid:UID, config:cfg })
+  });
+  const sData = await sRes.json();
+  if(!sRes.ok || !sData.id) throw new Error((sData && (sData.detail||sData.error)) || 'save failed');
+  return sData.id;
+}
+async function indexBuildAll(){
+  if(!INDEX.result || !Array.isArray(INDEX.result.leaderboard) || !INDEX.result.leaderboard.length) return;
+  const list = INDEX.result.leaderboard;
+  const allBtn = document.getElementById('index-build-all-btn');
+  const oneBtn = document.getElementById('index-build-btn');
+  if(!confirm('Build all '+list.length+' index strategies as PAPER? Review in Strategies tab before going live on cTrader.')) return;
+  allBtn.disabled = true; oneBtn.disabled = true;
+  let ok=0, fail=0, done=0;
+  const setLbl = ()=>{ allBtn.textContent = '⚙️ Building '+done+'/'+list.length+' ('+ok+' ✓'+(fail?' · '+fail+' ✗':'')+')'; };
+  setLbl();
+  let cursor=0;
+  async function worker(){
+    while(cursor < list.length){
+      const idx = cursor++;
+      try{ await _indexBuildOne(list[idx]); ok++; }
+      catch(e){ fail++; console.warn('index build-all entry failed', e); }
+      done++; setLbl();
+    }
+  }
+  await Promise.all([worker(),worker(),worker()]);
+  allBtn.disabled = false; oneBtn.disabled = false;
+  allBtn.textContent = '✅ Built '+ok+(fail?' · '+fail+' failed':'');
+  alert('Built '+ok+' paper index strateg'+(ok===1?'y':'ies')+'. Connect cTrader demo in Settings to test live execution on NAS100.');
   if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
 }
 
