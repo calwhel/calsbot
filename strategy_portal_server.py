@@ -1852,7 +1852,19 @@ async def _startup_background():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "ts": int(__import__("time").time()), "v": "callyx-live"}
+    import os as _os
+    _commit = (
+        _os.environ.get("RAILWAY_GIT_COMMIT_SHA")
+        or _os.environ.get("GIT_COMMIT")
+        or "unknown"
+    )
+    return {
+        "status": "ok",
+        "ts": int(__import__("time").time()),
+        "v": "callyx-live",
+        "commit": _commit[:12] if _commit else "unknown",
+        "gold_scan": "yahoo-chart-v3",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
