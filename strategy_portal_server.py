@@ -1677,6 +1677,31 @@ async def _start_executor_tasks():
     except Exception as e:
         logger.error(f"Failed to launch system health monitor: {e}")
 
+    # One-shot owner ping so a deploy/restart is immediately visible on Telegram.
+    async def _executor_startup_ping():
+        try:
+            from app.services.telegram_dm import owner_chat_id, send_dm
+            from app.deployment import deploy_commit
+
+            owner = owner_chat_id()
+            if not owner:
+                logger.warning("[executor] OWNER_TELEGRAM_ID not set — startup ping skipped")
+                return
+            commit = (deploy_commit() or "unknown")[:12]
+            msg = (
+                "🟢 <b>TradeHub executor online</b>\n\n"
+                f"Commit: <code>{commit}</code>\n"
+                "Trade alerts + hourly health reports are active on this worker."
+            )
+            if await send_dm(owner, msg):
+                logger.info("[executor] startup Telegram ping delivered to owner")
+            else:
+                logger.warning("[executor] startup Telegram ping NOT delivered — check OWNER_TELEGRAM_ID + bot token")
+        except Exception as e:
+            logger.warning(f"[executor] startup ping error: {e}")
+
+    asyncio.create_task(_executor_startup_ping())
+
 
 async def _executor_claim_loop(first_attempt_delay: int = 0):
     """
@@ -11993,6 +12018,31 @@ async def executor_status(request: Request):
         "advisory_lock_holder": lock_info,
         "lock_id": 42424242,
     }
+
+
+@app.post("/api/admin/telegram/test")
+async def admin_telegram_test(request: Request):
+    """Send a test DM to OWNER_TELEGRAM_ID — verifies trade/health notification path."""
+    _require_admin_bearer(request)
+    from app.services.telegram_dm import owner_chat_id, send_dm, bot_tokens
+
+    owner = owner_chat_id()
+    if not owner:
+        raise HTTPException(status_code=503, detail="OWNER_TELEGRAM_ID is not configured")
+    if not bot_tokens():
+        raise HTTPException(status_code=503, detail="No TELEGRAM_BOT_TOKEN configured")
+
+    ok = await send_dm(
+        owner,
+        "🧪 <b>TradeHub notification test</b>\n\n"
+        "If you see this, trade TP/SL alerts and hourly health reports can reach you.",
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=502,
+            detail="Telegram rejected the message — open a chat with the bot (/start) and retry",
+        )
+    return {"status": "delivered", "owner_telegram_id": owner}
 
 
 @app.post("/api/admin/executor/force-start")

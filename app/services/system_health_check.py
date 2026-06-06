@@ -307,45 +307,17 @@ def format_report(results: List[Dict[str, Any]]) -> str:
 
 
 async def _send_report(text: str) -> bool:
-    """DM the owner the report. Tries each configured bot token until one
-    Telegram API call returns ok==True. Returns True only on confirmed delivery."""
-    from app.config import settings
-    owner = getattr(settings, "OWNER_TELEGRAM_ID", None)
+    """DM the owner the report. Returns True only on confirmed delivery."""
+    from app.services.telegram_dm import owner_chat_id, send_dm
+
+    owner = owner_chat_id()
     if not owner:
         logger.warning("[health] OWNER_TELEGRAM_ID missing — cannot send report")
         return False
-
-    # Try the main bot first, then the forex bot (the owner may only have a
-    # chat open with one of them). De-dupe identical tokens.
-    tokens: List[str] = []
-    for env in ("TELEGRAM_BOT_TOKEN", "FOREX_BOT_TOKEN"):
-        tok = os.getenv(env)
-        if tok and tok not in tokens:
-            tokens.append(tok)
-    if not tokens:
-        logger.warning("[health] no bot token configured — cannot send report")
-        return False
-
-    last_err = ""
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        for tok in tokens:
-            try:
-                r = await client.post(
-                    f"https://api.telegram.org/bot{tok}/sendMessage",
-                    json={"chat_id": str(owner), "text": text, "parse_mode": "HTML"},
-                )
-                body = {}
-                try:
-                    body = r.json()
-                except Exception:
-                    pass
-                if r.status_code == 200 and body.get("ok"):
-                    return True
-                last_err = f"HTTP {r.status_code} {body.get('description', '')!r}"
-            except Exception as e:
-                last_err = f"{type(e).__name__}: {e}"
-    logger.warning(f"[health] failed to deliver report to owner: {last_err}")
-    return False
+    sent = await send_dm(owner, text)
+    if not sent:
+        logger.warning("[health] failed to deliver report to owner %s", owner)
+    return sent
 
 
 async def run_system_health_monitor() -> None:
@@ -360,9 +332,9 @@ async def run_system_health_monitor() -> None:
         return
     _MONITOR_ACTIVE = True
     try:
-        # Small startup delay so the executor + feeds have a moment to warm up
+        # Brief startup delay so executor loops can record their first heartbeat
         # before the first sweep (avoids a spurious "stale loops" first report).
-        await asyncio.sleep(120)
+        await asyncio.sleep(60)
         while True:
             try:
                 results = await run_system_health_check()

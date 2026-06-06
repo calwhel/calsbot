@@ -1257,7 +1257,8 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
         strat_name = (strat.name if strat else None) or "Your Strategy"
         tg_id = _telegram_int_id(user)
         if tg_id:
-            asyncio.create_task(_send_paper_close_dm(
+            from app.services.telegram_dm import schedule_dm
+            schedule_dm(
                 tg_id,
                 _fmt_close_card(
                     strategy_name = strat_name,
@@ -1273,7 +1274,7 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
                     conditions    = ex.conditions_met,
                     is_paper      = True,
                 ),
-            ))
+            )
         # Mobile push — trade close (paper)
         from app.services.expo_push import notify_trade_close_bg
         dur_mins = int((closed_at - ex.fired_at).total_seconds() / 60) if ex.fired_at else 0
@@ -1487,50 +1488,9 @@ def _fmt_close_card(
 
 
 async def _tg_send(telegram_id: int, text: str) -> bool:
-    """Send a Telegram message via direct Bot API HTTP call — works from any process.
-
-    Hardened against the "live trade fired but no notification" failure mode:
-      • RETRIES transient network failures (timeouts/connection resets during a
-        cTrader feed reconnect or FD pressure window previously dropped the ONLY
-        send attempt — empty exception, no notification).
-      • VERIFIES Telegram accepted the message. client.post does NOT raise on a
-        non-2xx, so a 400 (HTML parse error) or 403 (user blocked the bot / chat
-        not found) was silently treated as success. We now check the response and
-        log the real reason instead of an empty error.
-    Returns True only on confirmed delivery.
-    """
-    from app.config import settings
-    token = settings.TELEGRAM_BOT_TOKEN
-    if not token:
-        logger.warning(f"Telegram DM skipped for {telegram_id}: TELEGRAM_BOT_TOKEN not set")
-        return False
-    last = ""
-    for attempt in range(3):
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                r = await client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={"chat_id": telegram_id, "text": text, "parse_mode": "HTML"},
-                )
-            if r.status_code == 200:
-                try:
-                    if (r.json() or {}).get("ok"):
-                        return True
-                    last = f"HTTP 200 but ok!=true: {(r.text or '')[:200]}"
-                except Exception as je:
-                    # 200 but body unparseable — do NOT assume delivered; retry.
-                    last = f"HTTP 200 unparseable body ({type(je).__name__}): {(r.text or '')[:200]}"
-            else:
-                last = f"HTTP {r.status_code}: {(r.text or '')[:200]}"
-                # 4xx (bad chat / parse error / blocked) will never succeed on retry.
-                if 400 <= r.status_code < 500:
-                    break
-        except Exception as e:
-            last = f"{type(e).__name__}: {e or '(no message)'}"
-        if attempt < 2:
-            await asyncio.sleep(1.5 * (attempt + 1))
-    logger.warning(f"Telegram DM failed for {telegram_id}: {last or '(no detail)'}")
-    return False
+    """Send a trade-notification Telegram DM (multi-token fallback + delivery verify)."""
+    from app.services.telegram_dm import send_dm
+    return await send_dm(telegram_id, text)
 
 
 async def _send_paper_close_dm(telegram_id: int, text: str):
@@ -1582,14 +1542,8 @@ def _notify_breakeven_alert(
         f"Stop moved to entry — this {direction} trade is now risk-free. ✅"
     )
     try:
-        _loop = asyncio.get_running_loop()
-        _loop.create_task(_tg_send(_tid, _text))
-    except RuntimeError:
-        import threading
-        threading.Thread(
-            target=lambda: asyncio.run(_tg_send(_tid, _text)),
-            daemon=True,
-        ).start()
+        from app.services.telegram_dm import schedule_dm
+        schedule_dm(_tid, _text)
     except Exception as _te:
         logger.debug(f"[BE-notify] telegram schedule failed: {_te}")
 
