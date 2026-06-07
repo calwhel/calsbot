@@ -1101,6 +1101,13 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 
 /* ─── Analytics grid ──────────────────────────────────────────── */
 .analytics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.pl-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.pl-card { background: var(--card2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+.pl-card h4 { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 10px; }
+.pl-stat { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; }
+.pl-stat span:last-child { font-weight: 700; }
+.chart-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media(max-width:700px){ .chart-pair,.pl-compare { grid-template-columns: 1fr; } }
 .a-card { background: var(--card2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; text-align: center; }
 .a-card .av { font-size: 20px; font-weight: 700; letter-spacing: -.3px; margin-bottom: 3px; font-variant-numeric: tabular-nums; }
 .a-card .al { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
@@ -1888,7 +1895,14 @@ function dismissTgBanner(){
       <span>30-Day Portfolio Equity</span>
       <span id="port-pnl-label" style="font-weight:700;font-size:14px"></span>
     </div>
-    <div class="chart-mini"><canvas id="portChart"></canvas></div>
+    <div class="chart-pair">
+      <div class="chart-mini"><canvas id="portChart"></canvas></div>
+      <div class="chart-mini"><canvas id="portDdChart"></canvas></div>
+    </div>
+    <div class="pl-compare" id="port-pl-compare" style="display:none;margin-top:12px"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn ghost sm" id="port-tax-export-btn" onclick="window.open(`/api/portfolio/export/tax?uid=${UID}&year=${new Date().getFullYear()}`,'_blank')">📄 Tax export</button>
+    </div>
   </div>
   <div class="sh">
     <div class="sh-title">Your Strategies</div>
@@ -3108,8 +3122,12 @@ function dismissTgBanner(){
         <div id="analytics-loading" class="loader">Loading analytics…</div>
         <div id="analytics-content" style="display:none">
           <div class="analytics-grid" id="analytics-kpis"></div>
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Equity Curve</div>
-          <div class="chart-wrap"><canvas id="equityChart"></canvas></div>
+          <div id="cfg-pl-compare" class="pl-compare" style="display:none"></div>
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Equity &amp; Drawdown</div>
+          <div class="chart-pair">
+            <div class="chart-wrap"><canvas id="equityChart"></canvas></div>
+            <div class="chart-wrap"><canvas id="drawdownChart"></canvas></div>
+          </div>
           <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 10px">Performance by Coin</div>
           <div id="coin-breakdown"></div>
         </div>
@@ -3544,10 +3562,19 @@ function dismissTgBanner(){
       <div style="grid-column:1/-1;color:var(--muted);text-align:center;padding:16px;font-size:13px">Loading analytics…</div>
     </div>
 
-    <!-- Equity curve -->
+    <!-- Paper vs live -->
+    <div class="drawer-section" id="dr-pl-section" style="display:none">
+      <div class="drawer-section-title">⚖️ Paper vs Live</div>
+      <div class="pl-compare" id="dr-pl-compare"></div>
+    </div>
+
+    <!-- Equity + drawdown -->
     <div class="drawer-section" id="dr-chart-section" style="display:none">
-      <div class="drawer-section-title">📈 Equity Curve</div>
-      <div class="chart-tall"><canvas id="dr-chart"></canvas></div>
+      <div class="drawer-section-title">📈 Equity &amp; Drawdown</div>
+      <div class="chart-pair">
+        <div class="chart-tall"><canvas id="dr-chart"></canvas></div>
+        <div class="chart-tall"><canvas id="dr-dd-chart"></canvas></div>
+      </div>
     </div>
 
     <!-- Advanced stats -->
@@ -3577,6 +3604,7 @@ function dismissTgBanner(){
     <div class="drawer-footer">
       <button onclick="openConfigure(drawerStratId)" class="btn">Configure</button>
       <button onclick="window.open(`/api/strategies/${drawerStratId}/export?uid=${UID}`,'_blank')" class="btn ghost">Export CSV</button>
+      <button onclick="window.open(`/api/strategies/${drawerStratId}/export/tax?uid=${UID}&year=${new Date().getFullYear()}`,'_blank')" class="btn ghost">Tax CSV</button>
       <button onclick="closeDrawerPanel()" class="btn ghost" style="margin-left:auto">✕ Close</button>
     </div>
   </div>
@@ -3724,6 +3752,61 @@ function makeLineChart(canvasId,labels,values,label='P&L %'){
     options:{responsive:true,maintainAspectRatio:false,animation:{duration:400},
       plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`${c.parsed.y>0?'+':''}${c.parsed.y.toFixed(2)}%`}}},
       scales:{x:{grid:{display:false},ticks:{maxTicksLimit:6,font:{size:10}}},y:{grid:{color:'#252535'},ticks:{callback:v=>`${v>0?'+':''}${v.toFixed(1)}%`,font:{size:10}}}}}});
+}
+
+function makeDrawdownChart(canvasId, labels, values) {
+  const ctx = $(canvasId);
+  if (!ctx || !values || values.length < 2) return null;
+  const existing = Chart.getChart(canvasId);
+  if (existing) existing.destroy();
+  return new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets: [{
+      label: 'Drawdown', data: values, borderColor: '#ff4d6d',
+      backgroundColor: 'rgba(255,77,109,.12)', borderWidth: 2,
+      pointRadius: 0, pointHoverRadius: 4, fill: true, tension: 0.35,
+    }]},
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 400 },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.parsed.y.toFixed(2)}%` }}}},
+      scales: {
+        x: { grid: { display: false }, ticks: { maxTicksLimit: 6, font: { size: 10 }}},
+        y: { grid: { color: '#252535' }, ticks: { callback: v => `${v.toFixed(1)}%`, font: { size: 10 }}},
+      },
+    },
+  });
+}
+
+function _fmtHoldMins(mins) {
+  if (mins == null) return '—';
+  if (mins >= 60) return `${Math.floor(mins / 60)}h ${Math.round(mins % 60)}m`;
+  return `${Math.round(mins)}m`;
+}
+
+function _renderPlCompare(containerId, pl) {
+  const el = $(containerId);
+  if (!el || !pl) return;
+  const paper = pl.paper || {};
+  const live  = pl.live  || {};
+  if (!(paper.trades || live.trades)) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const card = (title, d) => `
+    <div class="pl-card"><h4>${title}</h4>
+      <div class="pl-stat"><span>Closed trades</span><span>${d.trades || 0}</span></div>
+      <div class="pl-stat"><span>Win rate</span><span class="${d.win_rate >= 50 ? 'pnl-pos' : 'pnl-neg'}">${d.win_rate != null ? d.win_rate + '%' : '—'}</span></div>
+      <div class="pl-stat"><span>Total P&amp;L</span><span class="${pC(d.total_pnl_pct)}">${pS(d.total_pnl_pct)}</span></div>
+      ${d.total_pnl_usd ? `<div class="pl-stat"><span>P&amp;L USD</span><span>$${Number(d.total_pnl_usd).toFixed(2)}</span></div>` : ''}
+    </div>`;
+  el.innerHTML = card('🧪 Paper', paper) + card('🚀 Live', live);
+}
+
+function _ddFromEquity(values) {
+  if (!values || !values.length) return [];
+  let peak = values[0];
+  return values.map(v => {
+    peak = Math.max(peak, v);
+    return Math.round((v - peak) * 100) / 100;
+  });
 }
 
 // ─── Page nav ──────────────────────────────────────────────
@@ -3931,10 +4014,20 @@ async function loadMyStrategies(){
     $('port-chart-wrap').style.display='block';
     $('port-pnl-label').textContent=pS(port.pnl_30d);
     $('port-pnl-label').className=(port.pnl_30d>=0?'pnl-pos':'pnl-neg');
-    // Defer chart render by one animation frame so the browser can layout
-    // the newly-visible canvas before Chart.js reads its dimensions.
-    requestAnimationFrame(()=>makeLineChart('portChart',eq.labels,eq.values,'Portfolio P&L'));
+    requestAnimationFrame(()=>{
+      makeLineChart('portChart',eq.labels,eq.values,'Portfolio P&L');
+      makeDrawdownChart('portDdChart',eq.labels,_ddFromEquity(eq.values));
+    });
   }
+  if ((port.live_closed_30d || port.paper_closed_30d)) {
+    $('port-pl-compare').style.display = '';
+    _renderPlCompare('port-pl-compare', {
+      paper: { trades: port.paper_closed_30d || 0, win_rate: null, total_pnl_pct: port.paper_pnl_30d || 0, total_pnl_usd: 0 },
+      live:  { trades: port.live_closed_30d || 0,  win_rate: null, total_pnl_pct: port.live_pnl_30d || 0,  total_pnl_usd: 0 },
+    });
+  }
+  const taxBtn = $('port-tax-export-btn');
+  if (taxBtn) taxBtn.textContent = `📄 Tax export (${new Date().getFullYear()})`;
 
   if(!strats.length){
     $('my-list').innerHTML=`<div class="empty"><div class="icon" style="font-size:28px;opacity:.4">◎</div><p>No strategies yet. Build your first one — the AI does the heavy lifting.</p>
@@ -4312,14 +4405,22 @@ async function loadAnalytics(){
   $('analytics-kpis').innerHTML=`
     <div class="a-card"><div class="av ${a.sharpe_ratio>=1?'pnl-pos':a.sharpe_ratio<0?'pnl-neg':''}">${a.sharpe_ratio}</div><div class="al">Sharpe</div></div>
     <div class="a-card"><div class="av ${a.profit_factor>=1.5?'pnl-pos':a.profit_factor<1?'pnl-neg':''}">${a.profit_factor}</div><div class="al">Profit Factor</div></div>
-    <div class="a-card"><div class="av pnl-neg">${a.max_drawdown}%</div><div class="al">Max Drawdown</div></div>
+    <div class="a-card"><div class="av pnl-neg">-${a.max_drawdown}%</div><div class="al">Max Drawdown</div></div>
     <div class="a-card"><div class="av pnl-pos">${a.best_streak}</div><div class="al">Best Streak</div></div>
     <div class="a-card"><div class="av pnl-neg">${a.worst_streak}</div><div class="al">Worst Streak</div></div>
+    <div class="a-card"><div class="av">${_fmtHoldMins(a.avg_hold_minutes)}</div><div class="al">Avg Hold</div></div>
     <div class="a-card"><div class="av pnl-pos">${a.avg_win_pct>0?'+':''}${a.avg_win_pct}%</div><div class="al">Avg Win</div></div>
     <div class="a-card"><div class="av pnl-neg">${a.avg_loss_pct}%</div><div class="al">Avg Loss</div></div>`;
 
-  if(a.equity_curve?.values?.length>1)makeLineChart('equityChart',a.equity_curve.labels,a.equity_curve.values,'Cumulative P&L');
-  else $('equityChart').parentElement.innerHTML='<div class="chart-no-data">Not enough trades for equity curve</div>';
+  _renderPlCompare('cfg-pl-compare', a.paper_vs_live);
+  if(a.equity_curve?.values?.length>1){
+    makeLineChart('equityChart',a.equity_curve.labels,a.equity_curve.values,'Cumulative P&L');
+    const dd=a.drawdown_curve;
+    if(dd?.values?.length>1) makeDrawdownChart('drawdownChart',dd.labels,dd.values);
+    else makeDrawdownChart('drawdownChart',a.equity_curve.labels,_ddFromEquity(a.equity_curve.values));
+  } else {
+    $('equityChart').parentElement.innerHTML='<div class="chart-no-data">Not enough trades for equity curve</div>';
+  }
 
   $('coin-breakdown').innerHTML=a.coin_breakdown.length?a.coin_breakdown.map(c=>{
     const maxAbs=Math.max(...a.coin_breakdown.map(x=>Math.abs(x.pnl)));
@@ -10030,6 +10131,7 @@ async function runPortfolioReview() {
 // ═══════════════════════════════════════════════════════════
 let drawerStratId = null;
 let drawerChart   = null;
+let drawerDdChart = null;
 
 function closeDrawerPanel() {
   document.getElementById('strat-drawer').classList.remove('open');
@@ -10056,8 +10158,9 @@ async function openStrategyDetail(id) {
     '<div style="grid-column:1/-1;color:var(--muted);text-align:center;padding:16px;font-size:13px">Loading analytics…</div>';
   document.getElementById('dr-trades-wrap').innerHTML =
     '<div style="color:var(--muted);font-size:13px;text-align:center;padding:30px">Loading trades…</div>';
-  ['dr-chart-section','dr-adv-section','dr-coins-section'].forEach(id=>$(id).style.display='none');
+  ['dr-pl-section','dr-chart-section','dr-adv-section','dr-coins-section'].forEach(id=>$(id).style.display='none');
   if (drawerChart) { drawerChart.destroy(); drawerChart = null; }
+  if (drawerDdChart) { drawerDdChart.destroy(); drawerDdChart = null; }
 
   try {
     const [detailRes, analyticsRes, tradesRes] = await Promise.all([
@@ -10072,6 +10175,7 @@ async function openStrategyDetail(id) {
     _drHeader(detail);
     const _drAc = (detail.config||{}).asset_class || (detail.config||{})._asset_class || 'crypto';
     _drMetrics(detail.performance || {}, analytics, _drAc);
+    _drPlCompare(analytics);
     _drChart(analytics);
     _drAdvStats(analytics);
     _drCoins(analytics);
@@ -10143,6 +10247,13 @@ function _drMetrics(perf, analytics, assetClass) {
     </div>`;
 }
 
+function _drPlCompare(analytics) {
+  _renderPlCompare('dr-pl-compare', analytics.paper_vs_live);
+  if (analytics.paper_vs_live && (analytics.paper_vs_live.paper?.trades || analytics.paper_vs_live.live?.trades)) {
+    $('dr-pl-section').style.display = 'block';
+  }
+}
+
 function _drChart(analytics) {
   const eq = analytics.equity_curve;
   if (!eq || !eq.values || eq.values.length < 2) return;
@@ -10172,6 +10283,11 @@ function _drChart(analytics) {
       }
     }
   });
+  const dd = analytics.drawdown_curve;
+  const ddLabels = dd?.labels?.length ? dd.labels : eq.labels;
+  const ddValues = dd?.values?.length ? dd.values : _ddFromEquity(eq.values);
+  if (drawerDdChart) drawerDdChart.destroy();
+  drawerDdChart = makeDrawdownChart('dr-dd-chart', ddLabels, ddValues);
 }
 
 function _drAdvStats(analytics) {
@@ -10188,6 +10304,7 @@ function _drAdvStats(analytics) {
     <div class="adv-stat"><div class="adv-stat-val pnl-neg">${analytics.worst_streak} ❄️</div><div class="adv-stat-lbl">Worst Loss Streak</div></div>
     ${analytics.long_win_rate !== null ? `<div class="adv-stat"><div class="adv-stat-val ${analytics.long_win_rate>=50?'pnl-pos':'pnl-neg'}">${analytics.long_win_rate}%</div><div class="adv-stat-lbl">Long Win Rate</div></div>` : ''}
     ${analytics.short_win_rate !== null ? `<div class="adv-stat"><div class="adv-stat-val ${analytics.short_win_rate>=50?'pnl-pos':'pnl-neg'}">${analytics.short_win_rate}%</div><div class="adv-stat-lbl">Short Win Rate</div></div>` : ''}
+    <div class="adv-stat"><div class="adv-stat-val">${_fmtHoldMins(analytics.avg_hold_minutes)}</div><div class="adv-stat-lbl">Avg Hold</div></div>
     <div class="adv-stat"><div class="adv-stat-val pnl-pos">+${analytics.avg_win_pct}%</div><div class="adv-stat-lbl">Avg Win</div></div>
     <div class="adv-stat"><div class="adv-stat-val pnl-neg">${analytics.avg_loss_pct}%</div><div class="adv-stat-lbl">Avg Loss</div></div>`;
 }
