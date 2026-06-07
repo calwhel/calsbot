@@ -859,17 +859,32 @@ def compile_live_scan_to_config(sig: Dict, name: Optional[str] = None) -> Dict:
         tp = int(round(tp * 1.1))
 
     label = sig.get("signal") or "ICT"
+    _sess = "all"
+    _sess_label = "All sessions"
+    _sess_filter: dict = {}
+    _scan_sess = (sig.get("session") or "").lower()
+    if _scan_sess and _scan_sess not in ("off-hours", "all"):
+        for bucket, exec_ids in SESSION_EXECUTOR_MAP.items():
+            if bucket in _scan_sess:
+                _sess = exec_ids[0] if exec_ids else "all"
+                _sess_label = sig.get("session") or bucket.title()
+                _sess_filter = {"session": _sess}
+                break
+    confirms = []
+    for cs in (sig.get("confluence_signals") or []):
+        if cs and cs != label:
+            confirms.append({"type": "note", "label": f"Confluence: {cs}"})
     entry = {
         "label": f"Live {label} {pair}",
         "category": "ICT",
         "primaryType": primary_type,
         "primaryCfg": {**primary_cfg, "timeframe": tf},
-        "confirms": [],
+        "confirms": confirms[:3],
         "timeframe": tf,
         "direction": direction,
-        "session": "all",
-        "session_label": "All sessions",
-        "session_filter": {},
+        "session": _sess,
+        "session_label": _sess_label,
+        "session_filter": _sess_filter,
         "sl_pips": sl,
         "tp_pips": tp,
         "style": "scalp",

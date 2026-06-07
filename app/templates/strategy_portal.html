@@ -2535,6 +2535,7 @@ function dismissTgBanner(){
               <button class="opt-chip" data-tf="15m" onclick="setFxScanTf('15m',this)">15m</button>
             </div>
             <div id="forex-scanner-meta" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
+            <div id="forex-best-now" style="display:none;margin-top:8px;padding:10px;border:1px dashed var(--border);border-radius:8px;font-size:11.5px"></div>
             <div id="forex-scanner-list" style="margin-top:10px;max-height:320px;overflow-y:auto">
               <div style="font-size:12px;color:var(--muted);padding:12px 4px">Tap <b>Scan now</b> to load live structure signals.</div>
             </div>
@@ -3065,6 +3066,7 @@ function dismissTgBanner(){
             <button class="dir-btn paper" onclick="setCfgStatus('paper',this)">🧪 Paper</button>
           </div>
           <div class="hint" style="margin-top:6px" id="cfg-status-hint"></div>
+          <div id="cfg-gate-stats" style="display:none;margin-top:10px;padding:10px 12px;background:var(--card2);border-radius:8px;font-size:12px;line-height:1.5"></div>
         </div>
         <div class="form-group cfg-unlocked-only" id="cfg-dir-grp">
           <label>Direction</label>
@@ -4549,6 +4551,28 @@ async function openConfigure(strategyId){
 
   $('cfg-export-link').href=`/api/strategies/${strategyId}/export?uid=${UID}`;
   $('cfg-export-link').onclick=null;
+  loadGateStats(strategyId);
+}
+
+async function loadGateStats(strategyId){
+  const el=$('cfg-gate-stats');
+  if(!el)return;
+  el.style.display='none';
+  try{
+    const r=await fetch(`/api/strategies/${strategyId}/gate-stats?uid=${encodeURIComponent(UID)}`);
+    if(!r.ok)return;
+    const g=await r.json();
+    const stats=g.stats||{};
+    const keys=Object.keys(stats);
+    if(!keys.length)return;
+    const rows=keys.sort((a,b)=>(stats[b]||0)-(stats[a]||0)).map(k=>{
+      const label=k.replace(/^blk_/,'').replace(/_/g,' ');
+      return `<span style="display:inline-block;margin:0 10px 4px 0"><strong>${stats[k]}</strong> ${label}</span>`;
+    }).join('');
+    const when=g.updated_at?` <span style="color:var(--muted);font-weight:400">(${new Date(g.updated_at).toLocaleTimeString()})</span>`:'';
+    el.innerHTML=`<div style="font-size:10px;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Last executor cycle${when}</div>${rows}`;
+    el.style.display='block';
+  }catch(e){}
 }
 
 function updateStatusHint(){
@@ -8240,7 +8264,7 @@ function switchBuildMode(mode) {
   document.getElementById('build-pine-panel').style.display = mode === 'pine' ? '' : 'none';
   document.getElementById('build-scan-panel').style.display = mode === 'scan' ? '' : 'none';
   if (mode === 'scan') {
-    try { loadForexScanner(false); } catch (e) {}
+    try { loadForexScanner(false); loadBestSignals(); } catch (e) {}
   }
   if (mode === 'chat') {
     if (cbMessages.length === 0) {
@@ -9225,6 +9249,22 @@ async function _pollForexScanner(runId, mode){
     }
   }
   throw new Error('Scan timed out — tap Quick scan to try again.');
+}
+async function loadBestSignals(){
+  const el=document.getElementById('forex-best-now');
+  if(!el||!UID) return;
+  try{
+    const r=await _apiFetch('/api/forex/scanner/best?uid='+encodeURIComponent(UID)+'&limit=6',{timeoutMs:35000});
+    if(!r.ok) return;
+    const d=await r.json();
+    const sigs=(d.signals||[]).slice(0,6);
+    if(!sigs.length){ el.style.display='none'; return; }
+    el.style.display='';
+    el.innerHTML='<div style="font-weight:700;margin-bottom:6px">⚡ Best signals now'+(d.source==='cache'?' · cached':'')+'</div>'
+      +sigs.map(s=>'<span style="display:inline-block;margin:2px 4px 2px 0;padding:3px 8px;background:var(--card2);border-radius:6px">'
+        +_gEsc(s.pair)+' '+_gEsc(s.timeframe)+' <b>'+_gEsc(s.signal)+'</b> '+_gEsc(s.direction)
+        +(s.confluence>=2?' ×'+s.confluence:'')+'</span>').join('');
+  }catch(e){}
 }
 async function loadForexScanner(force, mode){
   const list=document.getElementById('forex-scanner-list');
@@ -11501,20 +11541,24 @@ function renderLFPositions(positions) {
       <th style="text-align:left;padding:6px 8px 6px 0">Symbol</th>
       <th style="padding:6px 4px">Dir</th>
       <th style="padding:6px 4px">Entry</th>
+      <th style="padding:6px 4px">Live</th>
       <th style="padding:6px 4px">TP</th>
       <th style="padding:6px 4px">SL</th>
       <th style="text-align:right;padding:6px 0 6px 4px">P&L</th>
     </tr></thead>
     <tbody>
     ${positions.map(p => {
-      const pnl = p.pnl_pct != null ? p.pnl_pct : null;
-      const pnlStr = pnl != null ? `${pnl>=0?'+':''}${pnl.toFixed(2)}%` : '—';
+      const pnl = p.unrealized_pips != null ? p.unrealized_pips : (p.pnl_pct != null ? p.pnl_pct : null);
+      const pnlStr = p.unrealized_pips != null
+        ? `${pnl>=0?'+':''}${pnl} pips`
+        : (p.pnl_pct != null ? `${pnl>=0?'+':''}${pnl.toFixed(2)}%` : '—');
       const pnlC = pnl == null ? '' : pnl >= 0 ? 'color:var(--positive,#3fb68b)' : 'color:var(--negative,#e5484d)';
       const dirC = p.direction === 'LONG' ? 'color:var(--positive,#3fb68b)' : 'color:var(--negative,#e5484d)';
       return `<tr style="border-top:1px solid var(--border,rgba(255,255,255,.06))">
         <td style="padding:8px 8px 8px 0;font-weight:700">${p.symbol}</td>
         <td style="padding:8px 4px;${dirC};font-weight:600">${p.direction}</td>
         <td style="padding:8px 4px;font-family:monospace">${p.entry_price?.toFixed(5)??'—'}</td>
+        <td style="padding:8px 4px;font-family:monospace;color:var(--muted)">${p.mark_price?.toFixed(5)??'—'}</td>
         <td style="padding:8px 4px;font-family:monospace;color:var(--positive,#3fb68b)">${p.tp1_price?.toFixed(5)??'—'}</td>
         <td style="padding:8px 4px;font-family:monospace;color:var(--negative,#e5484d)">${p.sl_price?.toFixed(5)??'—'}</td>
         <td style="padding:8px 0 8px 4px;text-align:right;font-weight:700;${pnlC}">${pnlStr}</td>

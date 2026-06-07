@@ -1630,6 +1630,12 @@ async def _start_executor_tasks():
     # Wrapped in _resilient_task so a transient crash (e.g. DB SSL drop)
     # auto-restarts instead of silently killing the executor permanently.
     asyncio.create_task(_resilient_task("run_strategy_executor", run_strategy_executor, restart_delay=20))
+    try:
+        from app.services.ctrader_order_queue import start_ctrader_order_worker
+        start_ctrader_order_worker()
+        logger.info("cTrader async order queue worker started (executor worker)")
+    except Exception as _oq_err:
+        logger.warning(f"cTrader order queue start error (non-fatal): {_oq_err}")
     asyncio.create_task(_resilient_task("run_forex_executor", run_forex_executor, restart_delay=20))
     # Dedicated fast (~1s) loop that pushes live forex breakeven/trailing SL
     # amendments to cTrader off the real-time spot feed — so gold reaches
@@ -7489,6 +7495,7 @@ class _JsonBodyRequest:
 # ─── Forex multi-pair market structure scanner ───────────────────────────────
 from app.services.live_structure_scanner import (
     build_scan_response,
+    get_shared_scan,
     live_scan_progress,
     run_forex_scanner as _run_forex_scanner,
     start_live_scan,
@@ -7543,6 +7550,63 @@ async def api_forex_scanner(request: Request):
         logger.warning(f"forex scanner error: {e}")
         signals, partial = [], False
     return JSONResponse(content=build_scan_response(signals, mode=mode, partial=partial))
+
+
+@app.get("/api/forex/scanner/best")
+async def api_forex_scanner_best(request: Request):
+    """Top structure signals right now — uses shared 60s cache when available."""
+    uid = request.query_params.get("uid", "")
+    if uid:
+        _auth_scanner_uid(uid)
+    mode = (request.query_params.get("mode") or "fast").lower()
+    if mode not in ("fast", "full"):
+        mode = "fast"
+    limit = min(20, max(1, int(request.query_params.get("limit") or 8)))
+    cached = get_shared_scan(mode)
+    if cached and cached.get("signals"):
+        signals = cached["signals"][:limit]
+        out = dict(cached)
+        out["signals"] = signals
+        out["count"] = len(signals)
+        out["source"] = "cache"
+        return JSONResponse(out)
+    try:
+        signals, partial = await _run_forex_scanner(mode=mode)
+    except Exception as e:
+        logger.warning(f"forex scanner best error: {e}")
+        signals, partial = [], False
+    resp = build_scan_response(signals[:limit], mode=mode, partial=partial)
+    resp["source"] = "live"
+    return JSONResponse(resp)
+
+
+@app.get("/api/strategies/{strategy_id}/gate-stats")
+async def api_strategy_gate_stats(strategy_id: int, uid: str = Query(...)):
+    """Why a strategy did or didn't fire on the last executor cycle."""
+    from app.database import SessionLocal
+    from app.strategy_models import UserStrategy
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        strat = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id,
+            UserStrategy.user_id == user.id,
+        ).first()
+        if not strat:
+            raise HTTPException(status_code=404)
+        strat_name = strat.name
+        strat_status = strat.status
+    finally:
+        db.close()
+    from app.services.ctrader_order_queue import get_gate_stats
+    return JSONResponse({
+        "strategy_id": strategy_id,
+        "name": strat_name,
+        "status": strat_status,
+        **get_gate_stats(strategy_id),
+    })
 
 
 @app.get("/api/markets/catalog")
@@ -10915,6 +10979,22 @@ async def api_live_forex_account(uid: str = Query(...)):
         for p in positions:
             if p.get("fired_at"):
                 p["fired_at"] = p["fired_at"].isoformat()
+            try:
+                from app.services.ctrader_price_feed import get_price as _mkt_px
+                from app.services.forex_engine import pip_size as _pip_sz
+                sym = (p.get("symbol") or "").upper()
+                entry = float(p.get("entry_price") or 0)
+                if sym and entry > 0:
+                    mark = _mkt_px(sym)
+                    if mark:
+                        p["mark_price"] = round(mark, 6)
+                        pip = max(_pip_sz(sym), 1e-10)
+                        if p.get("direction") == "LONG":
+                            p["unrealized_pips"] = round((mark - entry) / pip, 1)
+                        else:
+                            p["unrealized_pips"] = round((entry - mark) / pip, 1)
+            except Exception:
+                pass
 
         live_rows = await strategies_task
         live_strategies = []
