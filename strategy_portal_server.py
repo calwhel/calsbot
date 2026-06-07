@@ -437,6 +437,7 @@ async def _require_bound_uid_for_api(request: Request, call_next):
         "/api/ctrader/callback",
         "/api/ctrader/oauth-progress",
         "/api/markets/catalog",
+        "/api/ping",
     )
     if path.startswith("/api/") and uid and not path.startswith(public_prefixes):
         if not _uid_auth_is_legacy_allowed():
@@ -6115,6 +6116,32 @@ async def portal_page(request: Request, uid: str = Query(...)):
 # API endpoints (used by portal JS)
 # ─────────────────────────────────────────────────────────────────────────────
 
+@app.get("/api/ping")
+async def api_ping():
+    """Lightweight liveness + DB wake-up before heavier portal API calls."""
+    t0 = time.monotonic()
+    try:
+        from sqlalchemy import text as _pt
+        from app.database import SessionLocal as _PSL
+
+        def _db_ping():
+            db = _PSL()
+            try:
+                db.execute(_pt("SELECT 1"))
+                db.commit()
+            finally:
+                db.close()
+
+        await asyncio.wait_for(asyncio.to_thread(_db_ping), timeout=28.0)
+        return {"ok": True, "db_ms": int((time.monotonic() - t0) * 1000)}
+    except Exception as exc:
+        logger.warning(f"[api/ping] db wake failed: {exc}")
+        return JSONResponse(
+            {"ok": False, "error": "database_waking", "detail": str(exc)[:120]},
+            status_code=503,
+        )
+
+
 @app.get("/api/strategies")
 async def api_strategies(uid: str = Query(...)):
     cache_key = f"api_strats_{uid}"
@@ -6234,9 +6261,12 @@ async def api_strategies(uid: str = Query(...)):
             db.close()
 
     try:
-        data = await asyncio.wait_for(asyncio.to_thread(_load), timeout=10.0)
+        data = await asyncio.wait_for(asyncio.to_thread(_load), timeout=25.0)
     except (asyncio.TimeoutError, Exception) as _e:
         logger.warning(f"api_strategies timeout/error for {uid}: {_e}")
+        stale = _CACHE.get(cache_key)
+        if stale:
+            return _cached_json(stale[0], True, 60)
         raise HTTPException(status_code=503, detail="Database busy — please retry in a moment")
     if data is None:
         raise HTTPException(status_code=403)
@@ -9761,7 +9791,7 @@ async def api_portfolio(uid: str = Query(...)):
             db.close()
 
     try:
-        d = await asyncio.wait_for(asyncio.to_thread(_load_portfolio_sync), timeout=10.0)
+        d = await asyncio.wait_for(asyncio.to_thread(_load_portfolio_sync), timeout=25.0)
     except asyncio.TimeoutError:
         stale = _CACHE.get(cache_key)
         if stale:
