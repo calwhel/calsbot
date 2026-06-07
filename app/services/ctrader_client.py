@@ -443,16 +443,25 @@ def get_oauth_url(redirect_uri: str, state: str = "") -> str:
     return url
 
 
+class CTraderTokenError(Exception):
+    """cTrader OAuth token endpoint returned errorCode in JSON body."""
+
+    def __init__(self, error_code: str, description: str = ""):
+        self.error_code = error_code or "UNKNOWN"
+        self.description = description or ""
+        super().__init__(self.error_code)
+
+
 async def exchange_code(code: str, redirect_uri: str) -> dict:
     """Exchange an OAuth authorization code for access + refresh tokens.
 
-    Spotware token endpoint uses POST with query-string params (not form body).
+    Spotware docs require GET (not POST) for grant_type=authorization_code.
     client_id = FULL app ID (e.g. "29040_abc..."); Spotware rejects the numeric-only prefix.
     """
     import httpx
     app_id = CTRADER_CLIENT_ID
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
+        resp = await client.get(
             OAUTH_TOKEN_URL,
             params={
                 "grant_type":    "authorization_code",
@@ -461,9 +470,15 @@ async def exchange_code(code: str, redirect_uri: str) -> dict:
                 "client_id":     app_id,
                 "client_secret": CTRADER_CLIENT_SECRET,
             },
+            headers={"Accept": "application/json"},
         )
         data = resp.json()
         logger.info(f"[ctrader] exchange_code HTTP {resp.status_code} → keys={list(data.keys())}")
+        err = data.get("errorCode")
+        if err:
+            raise CTraderTokenError(str(err), str(data.get("description") or "")[:200])
+        if not (data.get("accessToken") or data.get("access_token")):
+            raise CTraderTokenError("NO_ACCESS_TOKEN", "Token response missing accessToken")
         resp.raise_for_status()
         return data
 

@@ -7599,6 +7599,7 @@ async function _startCtraderOAuth(btn){
       if(el){ el.disabled=false; el.textContent=prev||'Connect via cTrader OAuth →'; }
       return;
     }
+    if(d.redirect_uri) window._ctraderRedirectUri = d.redirect_uri;
     if(d.url){
       toast('Redirecting to cTrader — log in and approve TradeHub','success');
       setTimeout(()=>{ window.location.href=d.url; }, 400);
@@ -8259,12 +8260,16 @@ function _handleCtraderReturnQuery() {
     try { showPage('live-forex', null); } catch (e) { loadLiveForex(); }
     return true;
   }
+  _checkCtraderSetup().then(s => { if (s && s.redirect_uri) window._ctraderRedirectUri = s.redirect_uri; });
   const msg = {
-    access_denied: 'You cancelled cTrader authorisation.',
-    token_exchange_failed: 'cTrader token exchange failed — check redirect URI in Spotware app settings.',
+    access_denied: 'cTrader access denied — you cancelled, or the app needs Spotware approval.',
+    token_exchange_failed: 'cTrader token exchange failed — add this redirect URI in Spotware: ' + (window._ctraderRedirectUri || 'see Live Forex tab'),
+    redirect_uri_mismatch: 'Redirect URI mismatch — register the Railway callback URL in your Spotware app.',
+    invalid_grant: 'Authorization code expired or already used — click Connect again.',
     no_token: 'cTrader did not return an access token.',
+    no_access_token: 'cTrader token response was empty — try Connect again.',
     db_error: 'Connected to cTrader but saving failed — try again.',
-  }[err] || ('cTrader connection failed: ' + err);
+  }[err] || ('cTrader connection failed: ' + err.replace(/_/g, ' '));
   toast(msg, 'error');
   try { showPage('live-forex', null); } catch (e) {}
   return true;
@@ -10518,11 +10523,31 @@ const LF_PAIRS = [
 ];
 
 let _lfPollTimer = null;
+async function _checkCtraderSetup() {
+  try {
+    const r = await fetch('/api/public/ctrader-setup', { credentials: 'same-origin' });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
+
 async function loadLiveForex() {
   const wrap = $('lf-body');
   if (!wrap) return;
   if (_lfPollTimer) { clearTimeout(_lfPollTimer); _lfPollTimer = null; }
   wrap.innerHTML = '<div class="loader">Loading account…</div>';
+  const setup = await _checkCtraderSetup();
+  if (setup && !setup.configured) {
+    wrap.innerHTML = `<div class="lf-card" style="padding:20px;text-align:center">
+      <div style="font-size:28px;margin-bottom:10px">⚙️</div>
+      <div style="font-size:16px;font-weight:700;margin-bottom:8px">cTrader not configured on server</div>
+      <p style="font-size:13px;color:var(--muted);line-height:1.5">Railway needs <code>CTRADER_CLIENT_ID</code> and <code>CTRADER_CLIENT_SECRET</code> from the Spotware Open API portal. Contact support if you are the account owner.</p>
+    </div>`;
+    return;
+  }
+  if (setup && setup.env_redirect_uri && !setup.redirect_match) {
+    toast('Note: OAuth redirect uses this site (' + setup.redirect_uri + ') — add it in Spotware app settings', 'error');
+  }
   try {
     const r = await _apiFetch(`/api/live-forex/account?uid=${UID}`);
     if (r.status === 401) {
