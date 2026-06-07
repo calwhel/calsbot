@@ -1346,6 +1346,16 @@ async def startup():
     asyncio.create_task(_refresh_heavy_caches())
     if is_replit() or is_railway():
         asyncio.create_task(_keepalive_ping_loop())
+
+    async def _prime_spot_store():
+        await asyncio.sleep(3)
+        try:
+            from app.services.spot_price_store import _ensure_table
+            await asyncio.to_thread(_ensure_table)
+        except Exception:
+            pass
+
+    asyncio.create_task(_prime_spot_store())
     logger.info("Strategy portal ready — migrations running in background")
 
 
@@ -10875,22 +10885,42 @@ async def api_ctrader_feed_status():
     except Exception as e:
         out["fmp"]["error"] = str(e)
 
-    if out["ctrader"]["symbol_count"] > 0:
-        out["primary_source"] = "ctrader_realtime"
-    elif out["ctrader"].get("subscribed"):
-        out["primary_source"] = (
-            "ctrader_subscribed" if out["ctrader"].get("forex_market_open") else "ctrader_market_closed"
-        )
-    elif out["fmp"]["symbol_count"] > 0:
-        out["primary_source"] = "fmp_realtime"
-    else:
-        out["primary_source"] = "yfinance_fallback"
+    try:
+        from app.services.spot_price_store import snapshot as _spot_snap, get_mid as _spot_mid
+        shared = _spot_snap(max_age_s=20.0)
+        out["shared_ticks"] = shared
+        out["samples"] = {
+            s: _spot_mid(s)
+            for s in ("EURUSD", "GBPUSD", "XAUUSD", "NAS100", "US30")
+        }
+        shared_n = int(shared.get("symbol_count") or 0)
+        if shared_n > 0:
+            out["symbol_count"] = shared_n
+            out["cached_symbols"] = list(shared.get("symbols") or [])[:30]
+            by_src = shared.get("by_source") or {}
+            if by_src.get("ctrader"):
+                out["primary_source"] = "ctrader_realtime"
+            elif by_src.get("fmp"):
+                out["primary_source"] = "fmp_realtime"
+            out["live"] = True
+    except Exception as e:
+        out["shared_ticks"] = {"error": str(e)[:120]}
 
-    # Back-compat fields used by older UI checks
-    out["live"] = out["fmp"]["live"] or out["ctrader"]["live"]
-    out["cached_symbols"] = out["ctrader"]["cached_symbols"] or out["fmp"]["cached_symbols"]
-    out["symbol_count"] = out["ctrader"]["symbol_count"] + out["fmp"]["symbol_count"]
-    out["source"] = out["primary_source"]
+    if out.get("primary_source") == "yfinance_fallback":
+        if out["ctrader"]["symbol_count"] > 0:
+            out["primary_source"] = "ctrader_realtime"
+        elif out["ctrader"].get("subscribed"):
+            out["primary_source"] = (
+                "ctrader_subscribed" if out["ctrader"].get("forex_market_open") else "ctrader_market_closed"
+            )
+        elif out["fmp"]["symbol_count"] > 0:
+            out["primary_source"] = "fmp_realtime"
+
+    if "symbol_count" not in out or not out.get("symbol_count"):
+        out["live"] = out["fmp"]["live"] or out["ctrader"]["live"]
+        out["cached_symbols"] = out["ctrader"]["cached_symbols"] or out["fmp"]["cached_symbols"]
+        out["symbol_count"] = out["ctrader"]["symbol_count"] + out["fmp"]["symbol_count"]
+    out["source"] = out.get("primary_source", "yfinance_fallback")
     return JSONResponse(out)
 
 

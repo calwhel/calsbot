@@ -132,6 +132,13 @@ async def _check_telegram(client: httpx.AsyncClient) -> Dict[str, Any]:
 async def _check_fmp(forex_open: bool) -> Dict[str, Any]:
     """FMP feed powers forex / metals / index prices."""
     def _run() -> Optional[float]:
+        try:
+            from app.services.spot_price_store import get_mid
+            px = get_mid("EURUSD")
+            if px:
+                return px
+        except Exception:
+            pass
         from app.services import fmp_price_feed
         return fmp_price_feed.get_price("EURUSD")
 
@@ -171,11 +178,17 @@ async def _check_ctrader(forex_open: bool) -> Dict[str, Any]:
         except Exception:
             linked = -1  # unknown
 
-        live = bool(ctrader_price_feed.is_live())
-        syms = ctrader_price_feed.cached_symbols()
+        st = ctrader_price_feed.feed_status()
+        sym_n = int(st.get("symbol_count") or 0)
+        syms = st.get("cached_symbols") or ctrader_price_feed.cached_symbols()
+        live = bool(st.get("live")) or sym_n > 0
 
-        if live:
-            return _result("ctrader", "cTrader feed", "ok", f"streaming {len(syms)} symbols · {linked} linked account(s)")
+        if live and sym_n > 0:
+            sample = syms[0] if syms else "?"
+            return _result(
+                "ctrader", "cTrader feed", "ok",
+                f"{sym_n} live ticks (e.g. {sample}) · {linked} linked account(s)",
+            )
         # Not live. Dormant-when-nobody-linked is expected, not a fault.
         if linked == 0:
             return _result("ctrader", "cTrader feed", "info", "dormant (no linked cTrader accounts)")

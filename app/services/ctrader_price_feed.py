@@ -456,6 +456,14 @@ async def _feed_loop() -> None:
                         ask = ev.ask / 100_000.0 if ev.HasField("ask") else None
                         if bid and ask:
                             _spot_cache[canonical] = (bid, ask, time.monotonic())
+                            try:
+                                from app.services.spot_price_store import upsert_tick
+                                mid = round((bid + ask) / 2.0, 6)
+                                upsert_tick(
+                                    canonical, bid=bid, ask=ask, mid=mid, source="ctrader",
+                                )
+                            except Exception:
+                                pass
 
                 # Heartbeats and subscription confirmations are silently skipped
 
@@ -747,26 +755,34 @@ async def get_klines(
 def get_price(symbol: str) -> Optional[float]:
     """
     Return the mid price for `symbol` from the live cTrader spot feed.
-    Returns None if the symbol is not tracked or the last tick is stale.
+    Falls back to the shared Postgres tick store (other gunicorn workers).
     """
-    entry = _spot_cache.get(symbol.upper())
-    if not entry:
+    sym = symbol.upper()
+    entry = _spot_cache.get(sym)
+    if entry:
+        bid, ask, ts = entry
+        if time.monotonic() - ts <= _SPOT_TTL:
+            return round((bid + ask) / 2.0, 6)
+    try:
+        from app.services.spot_price_store import get_mid
+        return get_mid(sym, max_age_s=_SPOT_TTL)
+    except Exception:
         return None
-    bid, ask, ts = entry
-    if time.monotonic() - ts > _SPOT_TTL:
-        return None
-    return round((bid + ask) / 2.0, 6)
 
 
 def get_bid_ask(symbol: str) -> Optional[Tuple[float, float]]:
     """Return (bid, ask) for `symbol` if a fresh tick is available."""
-    entry = _spot_cache.get(symbol.upper())
-    if not entry:
+    sym = symbol.upper()
+    entry = _spot_cache.get(sym)
+    if entry:
+        bid, ask, ts = entry
+        if time.monotonic() - ts <= _SPOT_TTL:
+            return (bid, ask)
+    try:
+        from app.services.spot_price_store import get_bid_ask as _store_ba
+        return _store_ba(sym, max_age_s=_SPOT_TTL)
+    except Exception:
         return None
-    bid, ask, ts = entry
-    if time.monotonic() - ts > _SPOT_TTL:
-        return None
-    return (bid, ask)
 
 
 def is_live() -> bool:
@@ -808,6 +824,16 @@ def feed_status() -> Dict[str, object]:
     if _spot_cache:
         newest = max(ts for _, _, ts in _spot_cache.values())
         last_tick_age = round(max(0.0, now - newest), 1)
+    shared = {}
+    try:
+        from app.services.spot_price_store import snapshot as _spot_snap
+        shared = _spot_snap(max_age_s=20.0)
+        if shared.get("symbol_count") and not fresh:
+            fresh = list(shared.get("symbols") or [])[:30]
+        if shared.get("last_tick_age_s") is not None and last_tick_age is None:
+            last_tick_age = shared["last_tick_age_s"]
+    except Exception:
+        pass
     forex_open = False
     try:
         from datetime import datetime
@@ -824,12 +850,13 @@ def feed_status() -> Dict[str, object]:
         note = "Feed reconnecting — last prices may be stale."
     return {
         "subscribed":       _feed_live,
-        "live":             _feed_live,
-        "symbol_count":     len(fresh),
+        "live":             _feed_live or bool(shared.get("symbol_count")),
+        "symbol_count":     max(len(fresh), int(shared.get("symbol_count") or 0)),
         "cached_symbols":   fresh[:30],
-        "symbols_seen":     len(all_cached),
+        "symbols_seen":     max(len(all_cached), int(shared.get("symbol_count") or 0)),
         "last_tick_age_s":  last_tick_age,
         "forex_market_open": forex_open,
+        "shared_store":     shared,
         "note":             note,
     }
 
