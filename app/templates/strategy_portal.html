@@ -3623,12 +3623,31 @@ function _fcSet(url,d,ttlMs){_FC.set(url,{d,exp:Date.now()+ttlMs});}
 function _fcDel(url){_FC.delete(url);}
 // Call before mutations that should force a fresh strategies/portfolio reload
 function _clearStratCache(){_fcDel('/api/strategies?uid='+UID);_fcDel('/api/portfolio?uid='+UID);}
+const _FETCH_OPTS={credentials:'same-origin',headers:{'Accept':'application/json'}};
+async function _apiFetch(url,opts={}){
+  const ctrl=new AbortController();
+  const ms=opts.timeoutMs||15000;
+  const t=setTimeout(()=>ctrl.abort(),ms);
+  try{
+    const r=await fetch(url,{..._FETCH_OPTS,...opts,signal:ctrl.signal});
+    clearTimeout(t);
+    return r;
+  }catch(e){
+    clearTimeout(t);
+    throw e;
+  }
+}
+function _apiErrorHtml(msg,retryFn){
+  const retry=retryFn?`<button class="btn primary" onclick="${retryFn}()" style="margin-top:8px">↺ Retry</button>`:'';
+  const login=msg.includes('session')?`<a href="/login?next=/app" class="btn sm" style="margin-top:8px">Log in again</a>`:'';
+  return `<div class="empty"><div class="icon" style="font-size:28px;opacity:.4">⚠️</div><p>${msg}</p>${retry}${login}</div>`;
+}
 (function bootstrapUser(){
-  fetch('/api/me?uid='+UID)
+  _apiFetch('/api/me?uid='+UID)
     .then(r=>r.ok?r.json():null)
     .then(d=>{
-      if(!d)return;
-      const av = d.avatar||'T', name = d.name||'Trader', uname = d.username||'';
+      if(!d||d.logged_in===false)return;
+      const av = d.avatar||'T', name = d.name||d.display||'Trader', uname = d.username||'';
       // Nav
       const ne=document.getElementById('nav-avatar'); if(ne)ne.textContent=av;
       const da=document.getElementById('dd-avatar');  if(da)da.textContent=av;
@@ -3930,12 +3949,16 @@ async function loadTrades(){
     list.innerHTML=skelCards(4);
     sumEl.innerHTML='';
     try{
-      const r=await fetch(_tUrl);
-      if(!r.ok)throw new Error(r.status);
+      const r=await _apiFetch(_tUrl);
+      if(r.status===401){
+        list.innerHTML=_apiErrorHtml('Your session expired — please log in again to load trades.');
+        return;
+      }
+      if(!r.ok)throw new Error('status_'+r.status);
       data=await r.json();
       _fcSet(_tUrl,data,30000);
     }catch(e){
-      list.innerHTML=`<div class="empty"><div class="icon">⚠️</div><p>Couldn't load trades. Check your connection.</p><button class="btn primary" onclick="loadTrades()">↺ Retry</button></div>`;
+      list.innerHTML=_apiErrorHtml('Couldn\u2019t load trades. The server may be busy — try again.','loadTrades');
       return;
     }
   }
@@ -4010,17 +4033,26 @@ async function loadMyStrategies(){
     $('my-list').innerHTML=skelCards(3);
     strats=[]; port={total_strategies:0,active_count:0,open_trades:0,total_trades:0,win_rate:0,pnl_7d:0,pnl_30d:0,pnl_all:0,equity_30d:{labels:[],values:[]}};
     try{
-      const ctrl=new AbortController();
-      const t=setTimeout(()=>ctrl.abort(),15000);
       const [stratsRes,portRes]=await Promise.all([
-        fetch(_sUrl,{signal:ctrl.signal}),
-        fetch(_pUrl,{signal:ctrl.signal})
+        _apiFetch(_sUrl),
+        _apiFetch(_pUrl)
       ]);
-      clearTimeout(t);
+      if(stratsRes.status===401||portRes.status===401){
+        $('my-list').innerHTML=_apiErrorHtml('Your session expired — please log in again to load strategies.');
+        return;
+      }
+      if(!stratsRes.ok&&!portRes.ok){
+        $('my-list').innerHTML=_apiErrorHtml('Couldn\u2019t load strategies. The server may be busy — try again.','loadMyStrategies');
+        return;
+      }
       if(stratsRes.ok){strats=await stratsRes.json();_fcSet(_sUrl,strats,20000);}
       if(portRes.ok)  {port=await portRes.json();  _fcSet(_pUrl,port,20000);}
+      if(!stratsRes.ok&&stratsRes.status===503){
+        $('my-list').innerHTML=_apiErrorHtml('Database is waking up — retry in a few seconds.','loadMyStrategies');
+        return;
+      }
     }catch(e){
-      $('my-list').innerHTML=`<div class="empty"><div class="icon" style="font-size:28px;opacity:.4">⚠️</div><p>Couldn't reach the server. Check your connection.</p><button class="btn primary" onclick="loadMyStrategies()" style="margin-top:8px">↺ Retry</button></div>`;
+      $('my-list').innerHTML=_apiErrorHtml('Couldn\u2019t reach the server. Check your connection and retry.','loadMyStrategies');
       return;
     }
   }

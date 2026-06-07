@@ -367,7 +367,7 @@ def _verify_token(token: str) -> Optional[str]:
     uid, sig = token.rsplit(":", 1)
     expected = hmac.new(_COOKIE_SECRET.encode(), uid.encode(), hashlib.sha256).hexdigest()[:20]
     if hmac.compare_digest(sig, expected):
-        return uid
+        return (uid or "").strip().upper() or None
     return None
 
 
@@ -438,7 +438,12 @@ async def _require_bound_uid_for_api(request: Request, call_next):
         if not _uid_auth_is_legacy_allowed():
             session_uid = _get_session_uid(request)
             token_uid = _get_request_token_uid(request)
-            if uid not in {session_uid, token_uid}:
+            allowed = {
+                (session_uid or "").strip().upper(),
+                (token_uid or "").strip().upper(),
+            }
+            allowed.discard("")
+            if uid not in allowed:
                 return JSONResponse(
                     {"detail": "A signed session token is required for this UID."},
                     status_code=401,
@@ -447,6 +452,7 @@ async def _require_bound_uid_for_api(request: Request, call_next):
 
 
 def _set_session(response, uid: str, request: Request = None):
+    uid = (uid or "").strip().upper()
     _secure = request_is_https(request)
     response.set_cookie(
         key=_COOKIE_NAME,
@@ -571,6 +577,7 @@ def _get_user_by_uid_safe(uid: str, db: Session):
     Raises ``HTTPException(503)`` only when the database is genuinely
     unreachable so the client gets a clean error instead of a hung worker.
     """
+    uid = (uid or "").strip().upper()
     from app.models import User
     from app.database import SessionLocal as _SL
     from sqlalchemy.exc import OperationalError as _SAOperationalError
@@ -2872,6 +2879,7 @@ async def _render_portal(request: Request, uid: str):
         "pnl_7d_pos": True, "pnl_all_pos": True, "win_rate": 0, "total_trades": 0,
     }
     _free = portal_features_free()
+    uid = (uid or "").strip().upper()
     response = templates.TemplateResponse(request, "strategy_portal.html", {
         "user":          _default_user,
         "uid":           uid,
@@ -3369,26 +3377,34 @@ async def api_mobile_delete_account(request: Request):
 
 
 @app.get("/api/me")
-async def api_me(request: Request, db: Session = Depends(get_db)):
-    """Lightweight session probe for client-side UI swaps (auth-aware nav, etc.).
+async def api_me(request: Request, uid: str = Query(None), db: Session = Depends(get_db)):
+    """Session + profile probe for the portal shell and auth-aware nav.
 
     Always returns 200 — anonymous visitors get {"logged_in": false}.
-    Never cached so per-user state can't leak across sessions via intermediaries.
+  When ?uid= is supplied it must match the signed session (middleware).
     """
     no_cache = {"Cache-Control": "private, no-store", "Pragma": "no-cache"}
-    uid = _get_session_uid(request)
-    if not uid:
+    session_uid = _get_session_uid(request)
+    if not session_uid:
         return JSONResponse({"logged_in": False}, headers=no_cache)
-    user = _get_user_by_uid(uid, db)
+    user = _get_user_by_uid(session_uid, db)
     if not user:
         return JSONResponse({"logged_in": False}, headers=no_cache)
     display = (user.username or user.first_name or user.uid or "").strip() or user.uid
+    avatar = (user.first_name or user.username or "T")[0].upper()
+    sub = _get_portal_sub(user.id, db)
+    is_pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
+    is_web = str(getattr(user, "telegram_id", "") or "").startswith("WEB-")
     return JSONResponse({
         "logged_in": True,
-        "uid": user.uid,
-        "username": user.username,
+        "uid": user.uid or session_uid,
+        "username": user.username or "",
         "first_name": user.first_name,
         "display": display,
+        "name": user.first_name or user.username or "Trader",
+        "avatar": avatar,
+        "is_pro": is_pro,
+        "is_web_user": is_web,
     }, headers=no_cache)
 
 
@@ -9312,109 +9328,138 @@ async def api_portfolio_trades(
         return JSONResponse(_ptrades_cached[0])
 
     from app.database import SessionLocal
-    db = SessionLocal()
+    from app.strategy_models import UserStrategy, StrategyExecution
+
+    def _load_rows_sync():
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text as _t
+            db.execute(_t("SET LOCAL statement_timeout = '10000'"))
+            user = _get_user_by_uid_safe(uid, db)
+            if not user:
+                return None
+
+            q = (
+                db.query(StrategyExecution, UserStrategy.name, UserStrategy.id, UserStrategy.asset_class)
+                .join(UserStrategy, StrategyExecution.strategy_id == UserStrategy.id)
+                .filter(UserStrategy.user_id == user.id)
+            )
+
+            f = (filter or "all").lower()
+            if f == "live":
+                q = q.filter(StrategyExecution.is_paper == False)  # noqa: E712
+            elif f == "paper":
+                q = q.filter(StrategyExecution.is_paper == True)   # noqa: E712
+            elif f == "wins":
+                q = q.filter(StrategyExecution.outcome == "WIN")
+            elif f == "losses":
+                q = q.filter(StrategyExecution.outcome == "LOSS")
+            elif f == "open":
+                q = q.filter(StrategyExecution.outcome == "OPEN")
+
+            q = q.order_by(
+                func.coalesce(StrategyExecution.closed_at, StrategyExecution.fired_at).desc()
+            )
+            # Skip q.count() — full-table count was blocking the worker 30s+ under load.
+            probe = q.offset(offset).limit(limit + 1).all()
+            has_more = len(probe) > limit
+            rows = probe[:limit]
+
+            parsed = []
+            for e, sname, sid, sasset in rows:
+                dur = None
+                if e.fired_at and e.closed_at:
+                    dur = int((e.closed_at - e.fired_at).total_seconds() / 60)
+                parsed.append({
+                    "execution": e,
+                    "strategy_name": sname,
+                    "strategy_id": sid,
+                    "asset_class": sasset or "crypto",
+                    "duration_mins": dur,
+                })
+            return {"rows": parsed, "filter": f, "has_more": has_more}
+        finally:
+            db.close()
+
     try:
-        user = _get_user_by_uid_safe(uid, db)
-        if not user:
-            raise HTTPException(status_code=403, detail="Invalid UID")
+        loaded = await asyncio.wait_for(asyncio.to_thread(_load_rows_sync), timeout=12.0)
+    except asyncio.TimeoutError:
+        stale = _CACHE.get(_ptrades_key)
+        if stale:
+            return JSONResponse(stale[0])
+        raise HTTPException(status_code=503, detail="Trades are taking too long to load — please retry.")
+    if loaded is None:
+        raise HTTPException(status_code=403, detail="Invalid UID")
 
-        from app.strategy_models import UserStrategy, StrategyExecution
+    rows = loaded["rows"]
+    f = loaded["filter"]
+    has_more = loaded["has_more"]
 
-        # Build a base query: every execution whose strategy belongs to user.
-        q = (
-            db.query(StrategyExecution, UserStrategy.name, UserStrategy.id, UserStrategy.asset_class)
-            .join(UserStrategy, StrategyExecution.strategy_id == UserStrategy.id)
-            .filter(UserStrategy.user_id == user.id)
-        )
+    open_symbols = list({
+        item["execution"].symbol
+        for item in rows
+        if item["execution"].outcome == "OPEN"
+    })
+    live_prices: dict = {}
+    if open_symbols:
+        try:
+            from app.services.asset_classes import get_symbol as _ac_get
+            tradfi_syms = [s for s in open_symbols
+                           if any(_ac_get(c, s) for c in ("stock", "forex", "index"))]
+            crypto_syms = [s for s in open_symbols if s not in set(tradfi_syms)]
+            async with httpx.AsyncClient() as hc:
+                from app.services.strategy_executor import (
+                    _fetch_live_price_batch, _fetch_live_price_batch_tradfi,
+                )
+                if crypto_syms:
+                    live_prices.update(await _fetch_live_price_batch(crypto_syms, hc))
+                if tradfi_syms:
+                    live_prices.update(await _fetch_live_price_batch_tradfi(tradfi_syms))
+        except Exception as _lpe:
+            logger.debug(f"live price fetch skipped: {_lpe}")
 
-        f = (filter or "all").lower()
-        if f == "live":
-            q = q.filter(StrategyExecution.is_paper == False)  # noqa: E712
-        elif f == "paper":
-            q = q.filter(StrategyExecution.is_paper == True)   # noqa: E712
-        elif f == "wins":
-            q = q.filter(StrategyExecution.outcome == "WIN")
-        elif f == "losses":
-            q = q.filter(StrategyExecution.outcome == "LOSS")
-        elif f == "open":
-            q = q.filter(StrategyExecution.outcome == "OPEN")
+    out = []
+    for item in rows:
+        e = item["execution"]
+        live_px = live_prices.get(e.symbol) if e.outcome == "OPEN" else None
+        unrealised = None
+        if live_px and e.entry_price and e.outcome == "OPEN":
+            lev = e.leverage or 10
+            if e.direction == "LONG":
+                unrealised = round((live_px - e.entry_price) / e.entry_price * 100 * lev, 2)
+            else:
+                unrealised = round((e.entry_price - live_px) / e.entry_price * 100 * lev, 2)
 
-        # newest first; OPEN trades sorted by fired_at, closed by closed_at
-        q = q.order_by(
-            func.coalesce(StrategyExecution.closed_at, StrategyExecution.fired_at).desc()
-        )
+        out.append({
+            "id":             e.id,
+            "strategy_id":    item["strategy_id"],
+            "strategy_name":  item["strategy_name"],
+            "asset_class":    item["asset_class"],
+            "symbol":         e.symbol,
+            "direction":      e.direction,
+            "entry_price":    e.entry_price,
+            "exit_price":     e.exit_price,
+            "leverage":       e.leverage,
+            "outcome":        e.outcome,
+            "pnl_pct":        e.pnl_pct,
+            "is_paper":       e.is_paper,
+            "fired_at":       e.fired_at.isoformat()  if e.fired_at  else None,
+            "closed_at":      e.closed_at.isoformat() if e.closed_at else None,
+            "duration_mins":  item["duration_mins"],
+            "live_price":     live_px,
+            "unrealised_pnl": unrealised,
+        })
 
-        total = q.count()
-        rows = q.offset(offset).limit(limit).all()
-
-        # Live prices for any OPEN positions in this page so unrealised P&L
-        # is meaningful in the global feed too.
-        open_symbols = list({e.symbol for e, _, _, _ in rows if e.outcome == "OPEN"})
-        live_prices: dict = {}
-        if open_symbols:
-            try:
-                from app.services.asset_classes import get_symbol as _ac_get
-                tradfi_syms = [s for s in open_symbols
-                               if any(_ac_get(c, s) for c in ("stock", "forex", "index"))]
-                crypto_syms = [s for s in open_symbols if s not in set(tradfi_syms)]
-                async with httpx.AsyncClient() as hc:
-                    from app.services.strategy_executor import (
-                        _fetch_live_price_batch, _fetch_live_price_batch_tradfi,
-                    )
-                    if crypto_syms:
-                        live_prices.update(await _fetch_live_price_batch(crypto_syms, hc))
-                    if tradfi_syms:
-                        live_prices.update(await _fetch_live_price_batch_tradfi(tradfi_syms))
-            except Exception as _lpe:
-                logger.debug(f"live price fetch skipped: {_lpe}")
-
-        out = []
-        for e, sname, sid, sasset in rows:
-            dur = None
-            if e.fired_at and e.closed_at:
-                dur = int((e.closed_at - e.fired_at).total_seconds() / 60)
-
-            live_px = live_prices.get(e.symbol) if e.outcome == "OPEN" else None
-            unrealised = None
-            if live_px and e.entry_price and e.outcome == "OPEN":
-                lev = e.leverage or 10
-                if e.direction == "LONG":
-                    unrealised = round((live_px - e.entry_price) / e.entry_price * 100 * lev, 2)
-                else:
-                    unrealised = round((e.entry_price - live_px) / e.entry_price * 100 * lev, 2)
-
-            out.append({
-                "id":             e.id,
-                "strategy_id":    sid,
-                "strategy_name":  sname,
-                "asset_class":    sasset or "crypto",
-                "symbol":         e.symbol,
-                "direction":      e.direction,
-                "entry_price":    e.entry_price,
-                "exit_price":     e.exit_price,
-                "leverage":       e.leverage,
-                "outcome":        e.outcome,
-                "pnl_pct":        e.pnl_pct,
-                "is_paper":       e.is_paper,
-                "fired_at":       e.fired_at.isoformat()  if e.fired_at  else None,
-                "closed_at":      e.closed_at.isoformat() if e.closed_at else None,
-                "duration_mins":  dur,
-                "live_price":     live_px,
-                "unrealised_pnl": unrealised,
-            })
-
-        _resp = {
-            "trades":  out,
-            "total":   total,
-            "offset":  offset,
-            "limit":   limit,
-            "filter":  f,
-            "has_more": (offset + len(out)) < total,
-        }
-        _CACHE[_ptrades_key] = (_resp, time.time() + 60)
-        return JSONResponse(_resp)
-    finally:
-        db.close()
+    _resp = {
+        "trades":   out,
+        "total":    offset + len(out) + (1 if has_more else 0),
+        "offset":   offset,
+        "limit":    limit,
+        "filter":   f,
+        "has_more": has_more,
+    }
+    _CACHE[_ptrades_key] = (_resp, time.time() + 60)
+    return JSONResponse(_resp)
 
 
 @app.get("/api/strategies/{strategy_id}/export")
@@ -9457,38 +9502,6 @@ async def api_export_trades(strategy_id: int, uid: str = Query(...)):
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
-    finally:
-        db.close()
-
-
-@app.get("/api/me")
-async def api_me(uid: str = Query(...)):
-    """Lightweight user + plan info — called by the portal shell on load.
-    Cached 5 min per UID so it never blocks the page render."""
-    cache_key = f"me_{uid}"
-    cached = _CACHE.get(cache_key)
-    if cached and time.time() < cached[1]:
-        return cached[0]
-    from app.database import SessionLocal
-    db = SessionLocal()
-    try:
-        user = _get_user_by_uid_safe(uid, db)
-        if not user:
-            raise HTTPException(status_code=403, detail="Invalid UID")
-        sub     = _get_portal_sub(user.id, db)
-        is_pro  = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
-        is_web  = str(getattr(user, "telegram_id", "") or "").startswith("WEB-")
-        avatar  = (user.first_name or user.username or "T")[0].upper()
-        result  = {
-            "name":        user.first_name or user.username or "Trader",
-            "username":    user.username or "",
-            "uid":         user.uid or uid,
-            "is_pro":      is_pro,
-            "is_web_user": is_web,
-            "avatar":      avatar,
-        }
-        _CACHE[cache_key] = (result, time.time() + 300)
-        return result
     finally:
         db.close()
 
