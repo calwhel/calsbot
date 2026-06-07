@@ -1356,6 +1356,19 @@ async def startup():
             pass
 
     asyncio.create_task(_prime_spot_store())
+
+    async def _start_fmp_feed():
+        """FMP REST poll on every worker — writes ticks to shared Postgres store."""
+        await asyncio.sleep(8)
+        try:
+            from app.services.fmp_price_feed import start as _fmp_start, _fmp_api_key
+            if _fmp_api_key():
+                _fmp_start()
+                logger.info("[startup] FMP price feed started on this worker")
+        except Exception as _fe:
+            logger.warning(f"[startup] FMP feed start: {_fe}")
+
+    asyncio.create_task(_start_fmp_feed())
     logger.info("Strategy portal ready — migrations running in background")
 
 
@@ -10873,6 +10886,7 @@ async def api_ctrader_feed_status():
             symbol_count as _fmp_count,
             fmp_in_backoff as _fmp_backoff,
             fmp_backoff_remaining_seconds as _fmp_backoff_s,
+            _fmp_api_key,
         )
         _f_syms = _fmp_syms()
         out["fmp"] = {
@@ -10881,6 +10895,7 @@ async def api_ctrader_feed_status():
             "cached_symbols": _f_syms[:30],
             "rate_limited":   bool(_fmp_backoff()),
             "backoff_seconds": _fmp_backoff_s(),
+            "api_key_set":    bool(_fmp_api_key()),
         }
     except Exception as e:
         out["fmp"]["error"] = str(e)
