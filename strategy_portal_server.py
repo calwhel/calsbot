@@ -44,6 +44,7 @@ from app.deployment import (
     payments_enabled,
     request_is_https,
     public_base_url,
+    railway_app_hostname,
     railway_service_base_url,
     deploy_commit,
     google_auth_enabled,
@@ -2010,7 +2011,7 @@ async def health_deep():
     return {
         "status": "ok",
         "ts": int(time.time()),
-        "v": "railway-free-v2-ctrader-rail-callback",
+        "v": "railway-free-v2-ctrader-rail-fallback",
         "commit": _commit[:12] if _commit else "unknown",
         "gold_scan": "yahoo-chart-v3",
         "features_free": portal_features_free(),
@@ -10225,15 +10226,24 @@ def _ctrader_return_hosts_allowed() -> set:
     return hosts
 
 
+def _ctrader_host_is_railway(host: str) -> bool:
+    host = (host or "").strip().lower()
+    return host.endswith(".up.railway.app") or host.endswith(".railway.app")
+
+
 def _ctrader_oauth_state(uid: str, request: Optional[Request]) -> str:
-    """Encode portal return host so callback can land on the same origin as Connect."""
+    """Encode return host — on Railway prefer *.up.railway.app over dead custom domains."""
     uid = (uid or "").strip().upper()
     if request is None:
         return uid
     host = (request.headers.get("host") or "").split(":")[0].strip().lower()
-    if host and host not in ("localhost", "127.0.0.1"):
-        return f"{uid}{_CTRADER_STATE_SEP}{host}"
-    return uid
+    if not host or host in ("localhost", "127.0.0.1"):
+        return uid
+    if is_railway():
+        rail = railway_app_hostname() or _ctrader_host_from_urlish(railway_service_base_url(request))
+        if rail and not _ctrader_host_is_railway(host):
+            return f"{uid}{_CTRADER_STATE_SEP}{rail}"
+    return f"{uid}{_CTRADER_STATE_SEP}{host}"
 
 
 def _parse_ctrader_oauth_state(state: str) -> Tuple[str, Optional[str]]:
@@ -10251,7 +10261,12 @@ def _ctrader_app_redirect_url(
     state: str,
     query: str,
 ) -> str:
-    """Absolute /app redirect on the host where the user clicked Connect."""
+    """After OAuth, land on Railway if custom domain may be unreachable."""
+    if is_railway():
+        railway_base = railway_service_base_url(request).rstrip("/")
+        if railway_base:
+            return f"{railway_base}/app?{query}#live-forex"
+
     _, return_host = _parse_ctrader_oauth_state(state)
     req_host = ""
     scheme = "https"
@@ -10271,24 +10286,26 @@ def _ctrader_redirect_uri(request: Optional[Request] = None) -> str:
     if explicit and not explicit.endswith("/api/ctrader/callback"):
         explicit = f"{explicit}/api/ctrader/callback"
 
-    # Railway: pin OAuth to *.up.railway.app (registered in Spotware), never
-    # PUBLIC_DOMAIN / custom domain — those are for browsing, not Spotware callback.
+    # Railway: OAuth callback must be *.up.railway.app (Spotware registration).
     if is_railway():
         railway_base = railway_service_base_url(request).rstrip("/")
-        rail_host = _ctrader_host_from_urlish(railway_base)
-        if explicit:
+        if not railway_base:
+            logger.error(
+                "[ctrader] No *.up.railway.app host found — set CTRADER_RAILWAY_HOST "
+                "or CTRADER_REDIRECT_URI to your Railway callback URL"
+            )
+        elif explicit:
             exp_host = _ctrader_host_from_urlish(explicit)
-            if exp_host == rail_host or exp_host.endswith(".up.railway.app"):
+            if _ctrader_host_is_railway(exp_host):
                 return explicit
-            if rail_host:
-                logger.warning(
-                    "[ctrader] CTRADER_REDIRECT_URI host %s != Railway host %s — pinning OAuth to %s",
-                    exp_host, rail_host, railway_base,
-                )
-                return f"{railway_base}/api/ctrader/callback"
-            return explicit
+            logger.warning(
+                "[ctrader] CTRADER_REDIRECT_URI host %s is not Railway — using %s",
+                exp_host, railway_base,
+            )
         if railway_base:
             return f"{railway_base}/api/ctrader/callback"
+        if explicit:
+            return explicit
 
     if request is not None:
         host = (request.headers.get("host") or "").split(":")[0].strip().lower()
@@ -10324,6 +10341,7 @@ async def api_public_ctrader_setup(request: Request):
     req_host = _ctrader_host_from_urlish(host)
     redir_host = _ctrader_host_from_urlish(redirect_uri)
     rail_base = railway_service_base_url(request).rstrip("/") if is_railway() else None
+    rail_host = railway_app_hostname() if is_railway() else ""
     return JSONResponse({
         "configured":       bool(cid and secret),
         "client_id_set":    bool(cid),
@@ -10331,6 +10349,7 @@ async def api_public_ctrader_setup(request: Request):
         "redirect_uri":     redirect_uri,
         "env_redirect_uri": env_redirect,
         "request_host":     host,
+        "railway_app_hostname": rail_host or None,
         "railway_service_base": rail_base,
         "oauth_pinned_railway": is_railway(),
         "redirect_match":   (not env_redirect) or (env_host == redir_host),

@@ -10545,8 +10545,10 @@ async function loadLiveForex() {
     </div>`;
     return;
   }
-  if (setup && setup.env_redirect_uri && !setup.redirect_match) {
-    toast('Note: OAuth redirect uses this site (' + setup.redirect_uri + ') — add it in Spotware app settings', 'error');
+  if (setup && setup.configured && setup.redirect_uri && !setup.redirect_uri.includes('.up.railway.app')) {
+    toast('cTrader OAuth callback is not Railway — set CTRADER_RAILWAY_HOST on the server', 'error');
+  } else if (setup && setup.railway_service_base && setup.request_host && setup.request_host.indexOf('.railway.app') < 0) {
+    toast('Connect uses Railway OAuth; you will return to ' + setup.railway_service_base + '/app after approving', 'success');
   }
   try {
     const r = await _apiFetch(`/api/live-forex/account?uid=${UID}`);
