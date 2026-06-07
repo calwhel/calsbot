@@ -2194,6 +2194,89 @@ async def larknexus_page():
     return FileResponse(_ln_file, media_type="text/html")
 
 
+_ASSET_LANDING_PAGES = {
+    "forex": {
+        "slug": "forex",
+        "page_title": "TradeHub — Forex Strategy Builder & Live cTrader Execution",
+        "meta_description": "Build forex strategies in plain English, paper-test on real ticks, go live on FP Markets via cTrader. Structure scanner + gold-grade execution.",
+        "hero_emoji": "💱",
+        "hero_label": "Forex · cTrader live · Paper-first",
+        "hero_title": "Build forex strategies.<br>Execute on <span style=\"color:var(--green)\">cTrader</span> in minutes.",
+        "hero_sub": "Describe entries in plain English, scan London/NY sessions with the live structure finder, paper-test on broker-matched prices, then connect FP Markets and go live — no Pine Script, no VPS.",
+        "accent": "#22c55e",
+        "lb_asset_class": "forex",
+        "lb_market": "",
+        "features": [
+            ("Structure scanner", "BOS, CHoCH, FVG, order blocks — scanned across major pairs every few seconds."),
+            ("cTrader live link", "OAuth to FP Markets demo or live. Breakeven & trailing SL in under a second."),
+            ("Session filters", "London, NY, Asia — only trade when your edge is statistically active."),
+            ("Paper realism", "1-minute OHLC + live spot append so TP/SL hits match broker behaviour."),
+        ],
+        "build_cta": "/login?next=/app%23build",
+    },
+    "gold": {
+        "slug": "gold",
+        "page_title": "TradeHub — Gold (XAUUSD) Strategy Builder",
+        "meta_description": "Discover and automate XAUUSD strategies. Gold Strategy Finder, paper testing, live cTrader execution.",
+        "hero_emoji": "🥇",
+        "hero_label": "XAUUSD · Metals · Sub-second SL management",
+        "hero_title": "Automate <span style=\"color:#f59e0b\">gold</span> strategies<br>without writing code.",
+        "hero_sub": "Run the Gold Strategy Finder across timeframes, backtest on real XAU candles, paper-trade with live spot detection, then push orders to cTrader when you're ready.",
+        "accent": "#f59e0b",
+        "lb_asset_class": "",
+        "lb_market": "gold",
+        "features": [
+            ("Gold Strategy Finder", "Scans XAUUSD across TFs and ranks setups by backtested edge."),
+            ("Live spot TP/SL", "Synthetic intra-candle prices from cTrader — no waiting for candle close."),
+            ("Fast SL manager", "Dedicated 1s loop amends breakeven/trailing stops on the broker."),
+            ("Risk presets", "Pips-based TP/SL, lot sizing, Friday close & no-overnight guards."),
+        ],
+        "build_cta": "/login?next=/app%23build",
+    },
+    "indices": {
+        "slug": "indices",
+        "page_title": "TradeHub — Index CFD Strategy Builder (NAS100, US30)",
+        "meta_description": "Build and automate index strategies — NASDAQ, US30, and more. Paper test then trade via cTrader.",
+        "hero_emoji": "📊",
+        "hero_label": "NAS100 · US30 · Index CFDs",
+        "hero_title": "Index strategies.<br><span style=\"color:#a855f7\">Backtested. Automated. Tracked.</span>",
+        "hero_sub": "Use the Index Strategy Finder on NAS100 and US30, paper-test with points-based P&L, and connect cTrader for live index CFD execution.",
+        "accent": "#a855f7",
+        "lb_asset_class": "index",
+        "lb_market": "",
+        "features": [
+            ("Index Strategy Finder", "Discovers edge on NAS100, US30 and major indices from live data."),
+            ("Points-based risk", "TP/SL in index points — matches how CFD books quote indices."),
+            ("Multi-source prices", "cTrader ticks with FMP/Yahoo fallbacks when markets are closed."),
+            ("Same portal", "One dashboard for crypto, forex, gold and indices — no separate tools."),
+        ],
+        "build_cta": "/login?next=/app%23build",
+    },
+}
+
+
+def _asset_landing_response(request: Request, key: str):
+    ctx = {"request": request, **_ASSET_LANDING_PAGES[key]}
+    return templates.TemplateResponse("asset_landing.html", ctx)
+
+
+@app.get("/forex", response_class=HTMLResponse)
+async def forex_landing_page(request: Request):
+    return _asset_landing_response(request, "forex")
+
+
+@app.get("/gold", response_class=HTMLResponse)
+@app.get("/xau", response_class=HTMLResponse)
+async def gold_landing_page(request: Request):
+    return _asset_landing_response(request, "gold")
+
+
+@app.get("/indices", response_class=HTMLResponse)
+@app.get("/index", response_class=HTMLResponse)
+async def indices_landing_page(request: Request):
+    return _asset_landing_response(request, "indices")
+
+
 @app.post("/login")
 async def login_submit(request: Request):
     """Verify UID. Two-step: first call validates UID and signals whether a password
@@ -5955,9 +6038,15 @@ async def public_marketplace(limit: int = Query(6, ge=1, le=20)):
 
 
 @app.get("/api/public/leaderboard")
-async def public_leaderboard(limit: int = Query(5, ge=1, le=10)):
+async def public_leaderboard(
+    limit: int = Query(5, ge=1, le=10),
+    asset_class: str = Query("", description="crypto | forex | index | stock"),
+    market: str = Query("", description="gold — forex strategies focused on XAU/gold"),
+):
     """Top strategies by P&L — no auth required. Cached 2 min."""
-    cache_key = f"pub_lb_{limit}"
+    ac = (asset_class or "").strip().lower()
+    mkt = (market or "").strip().lower()
+    cache_key = f"pub_lb_{limit}_{ac}_{mkt}"
     cached = _CACHE.get(cache_key)
     if cached and time.time() < cached[1]:
         return _cached_json(cached[0], True, 120)
@@ -5965,17 +6054,27 @@ async def public_leaderboard(limit: int = Query(5, ge=1, le=10)):
     def _load():
         db = SessionLocal()
         try:
-            rows = (
+            from sqlalchemy import or_, func
+            q = (
                 db.query(StrategyPerformance, UserStrategy)
                 .join(UserStrategy, UserStrategy.id == StrategyPerformance.strategy_id)
                 .filter(StrategyPerformance.total_trades >= 5)
-                .order_by(StrategyPerformance.total_pnl_pct.desc())
-                .limit(limit)
-                .all()
             )
+            if mkt == "gold":
+                q = q.filter(
+                    UserStrategy.asset_class == "forex",
+                    or_(
+                        func.lower(UserStrategy.name).like("%gold%"),
+                        func.lower(UserStrategy.name).like("%xau%"),
+                    ),
+                )
+            elif ac in ("crypto", "forex", "index", "stock"):
+                q = q.filter(UserStrategy.asset_class == ac)
+            rows = q.order_by(StrategyPerformance.total_pnl_pct.desc()).limit(limit).all()
             return [
                 {
                     "name":         r.UserStrategy.name or "Unnamed",
+                    "asset_class":  getattr(r.UserStrategy, "asset_class", None) or "crypto",
                     "total_trades": r.StrategyPerformance.total_trades,
                     "win_rate":     round(r.StrategyPerformance.win_rate, 1),
                     "total_pnl":    round(r.StrategyPerformance.total_pnl_pct, 2),
@@ -8799,6 +8898,139 @@ async def api_strategy_templates():
     return JSONResponse(templates)
 
 
+def _mode_analytics_slice(closed: list) -> dict:
+    """Aggregate stats for a paper or live subset of closed executions."""
+    if not closed:
+        return {"trades": 0, "wins": 0, "win_rate": None, "total_pnl_pct": 0.0, "total_pnl_usd": 0.0}
+    decisive = [e for e in closed if e.outcome in ("WIN", "LOSS")]
+    wins = sum(1 for e in decisive if e.outcome == "WIN")
+    return {
+        "trades": len(closed),
+        "wins": wins,
+        "win_rate": round(wins / len(decisive) * 100, 1) if decisive else None,
+        "total_pnl_pct": round(sum(e.pnl_pct or 0 for e in closed), 2),
+        "total_pnl_usd": round(sum(float(e.pnl_usd or 0) for e in closed), 2),
+    }
+
+
+def _equity_and_drawdown(closed: list) -> tuple:
+    """Build cumulative equity + drawdown series from closed executions."""
+    cumulative = 0.0
+    equity_labels, equity_values = [], []
+    drawdown_labels, drawdown_values = [], []
+    peak = 0.0
+    for e in closed:
+        cumulative += (e.pnl_pct or 0)
+        dt = e.closed_at or e.fired_at
+        label = dt.strftime("%m/%d") if dt else ""
+        equity_labels.append(label)
+        equity_values.append(round(cumulative, 2))
+        peak = max(peak, cumulative)
+        drawdown_labels.append(label)
+        drawdown_values.append(round(cumulative - peak, 2))
+    max_dd = round(abs(min(drawdown_values)), 2) if drawdown_values else 0.0
+    return equity_labels, equity_values, drawdown_labels, drawdown_values, max_dd
+
+
+def _compute_execution_analytics(execs: list, perf=None) -> dict:
+    """Rich analytics payload from StrategyExecution rows (oldest → newest)."""
+    closed = [e for e in execs if e.outcome in ("WIN", "LOSS", "BREAKEVEN") and e.pnl_pct is not None]
+    wins   = [e.pnl_pct for e in closed if e.outcome == "WIN"]
+    losses = [e.pnl_pct for e in closed if e.outcome == "LOSS"]
+
+    eq_labels, eq_values, dd_labels, dd_values, max_dd = _equity_and_drawdown(closed)
+
+    gross_win  = sum(wins) if wins else 0.0
+    gross_loss = abs(sum(losses)) if losses else 0.0
+    profit_factor = round(gross_win / gross_loss, 2) if gross_loss > 0 else (99.0 if gross_win > 0 else 0.0)
+
+    sharpe = 0.0
+    if len(closed) >= 5:
+        import statistics as _st
+        pnls = [e.pnl_pct for e in closed]
+        mean_r = _st.mean(pnls)
+        std_r  = _st.stdev(pnls) if len(pnls) > 1 else 0
+        sharpe = round((mean_r / std_r) * (252 ** 0.5), 2) if std_r > 0 else 0
+
+    best_streak = worst_streak = cur_w = cur_l = 0
+    for e in closed:
+        if e.outcome == "WIN":
+            cur_w += 1
+            cur_l = 0
+            best_streak = max(best_streak, cur_w)
+        elif e.outcome == "LOSS":
+            cur_l += 1
+            cur_w = 0
+            worst_streak = max(worst_streak, cur_l)
+
+    hold_mins = []
+    for e in closed:
+        if e.closed_at and e.fired_at:
+            mins = (e.closed_at - e.fired_at).total_seconds() / 60.0
+            if mins >= 0:
+                hold_mins.append(mins)
+    avg_hold = round(sum(hold_mins) / len(hold_mins), 1) if hold_mins else None
+    median_hold = None
+    if hold_mins:
+        import statistics as _st2
+        median_hold = round(_st2.median(hold_mins), 1)
+
+    paper_closed = [e for e in closed if e.is_paper]
+    live_closed  = [e for e in closed if not e.is_paper]
+
+    def _curve_for(subset):
+        if len(subset) < 2:
+            return {"labels": [], "values": []}
+        _l, _v, _, _, _ = _equity_and_drawdown(subset)
+        return {"labels": _l, "values": _v}
+
+    coin_pnl, coin_trades = {}, {}
+    for e in closed:
+        coin_pnl[e.symbol] = round(coin_pnl.get(e.symbol, 0) + (e.pnl_pct or 0), 2)
+        coin_trades[e.symbol] = coin_trades.get(e.symbol, 0) + 1
+    top_coins = sorted(coin_pnl.items(), key=lambda x: -x[1])
+
+    long_dec  = [e for e in closed if e.direction == "LONG"  and e.outcome in ("WIN", "LOSS")]
+    short_dec = [e for e in closed if e.direction == "SHORT" and e.outcome in ("WIN", "LOSS")]
+    long_wr  = round(len([e for e in long_dec  if e.outcome == "WIN"]) / len(long_dec)  * 100, 1) if long_dec  else None
+    short_wr = round(len([e for e in short_dec if e.outcome == "WIN"]) / len(short_dec) * 100, 1) if short_dec else None
+
+    wr_pct = perf.win_rate if perf else 0
+    health = 0.0
+    if len(closed) >= 3:
+        health += min(wr_pct / 100, 1.0) * 4.0
+        health += min(profit_factor / 2.0, 1.0) * 3.0
+        health += min(max(sharpe, 0) / 2.0, 1.0) * 2.0
+        health += min(len(closed) / 30.0, 1.0) * 1.0
+
+    return {
+        "equity_curve":       {"labels": eq_labels, "values": eq_values},
+        "drawdown_curve":     {"labels": dd_labels, "values": dd_values},
+        "equity_curve_paper": _curve_for(paper_closed),
+        "equity_curve_live":  _curve_for(live_closed),
+        "paper_vs_live": {
+            "paper": _mode_analytics_slice(paper_closed),
+            "live":  _mode_analytics_slice(live_closed),
+        },
+        "profit_factor":      profit_factor,
+        "max_drawdown":       max_dd,
+        "current_drawdown":   dd_values[-1] if dd_values else 0.0,
+        "sharpe_ratio":       sharpe,
+        "best_streak":        best_streak,
+        "worst_streak":       worst_streak,
+        "avg_hold_minutes":   avg_hold,
+        "median_hold_minutes": median_hold,
+        "avg_win_pct":        round(sum(wins) / len(wins), 2) if wins else 0,
+        "avg_loss_pct":       round(sum(losses) / len(losses), 2) if losses else 0,
+        "long_win_rate":      long_wr,
+        "short_win_rate":     short_wr,
+        "coin_breakdown":     [{"symbol": s, "pnl": p, "trades": coin_trades[s]} for s, p in top_coins[:10]],
+        "health_score":       round(health, 1),
+        "total_closed":       len(closed),
+        "total_pnl_usd":      round(sum(float(e.pnl_usd or 0) for e in closed), 2),
+    }
+
+
 @app.get("/api/strategies/{strategy_id}/analytics")
 def api_strategy_analytics(strategy_id: int, uid: str = Query(...)):
     """Advanced analytics: Sharpe, drawdown, profit factor, equity curve, health score."""
@@ -8828,97 +9060,172 @@ def api_strategy_analytics(strategy_id: int, uid: str = Query(...)):
             .all()
         )
         perf = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == strategy_id).first()
-
-        closed = [e for e in execs if e.outcome in ("WIN", "LOSS", "BREAKEVEN") and e.pnl_pct is not None]
-        wins   = [e.pnl_pct for e in closed if e.outcome == "WIN"]
-        losses = [e.pnl_pct for e in closed if e.outcome == "LOSS"]
-
-        # Equity curve (cumulative P&L %)
-        cumulative = 0.0
-        equity_labels = []
-        equity_values = []
-        for e in closed:
-            cumulative += (e.pnl_pct or 0)
-            dt = (e.closed_at or e.fired_at)
-            equity_labels.append(dt.strftime("%m/%d") if dt else "")
-            equity_values.append(round(cumulative, 2))
-
-        # Max drawdown
-        peak = 0.0
-        max_dd = 0.0
-        for v in equity_values:
-            if v > peak: peak = v
-            dd = peak - v
-            if dd > max_dd: max_dd = dd
-
-        # Profit factor
-        gross_win  = sum(wins)  if wins   else 0.0
-        gross_loss = abs(sum(losses)) if losses else 0.0
-        profit_factor = round(gross_win / gross_loss, 2) if gross_loss > 0 else (99.0 if gross_win > 0 else 0.0)
-
-        # Sharpe ratio (simplified — treat each trade as 1 period)
-        sharpe = 0.0
-        if len(closed) >= 5:
-            import statistics as _st
-            pnls = [e.pnl_pct for e in closed]
-            mean_r = _st.mean(pnls)
-            std_r  = _st.stdev(pnls) if len(pnls) > 1 else 0
-            sharpe = round((mean_r / std_r) * (252 ** 0.5), 2) if std_r > 0 else 0
-
-        # Streak
-        best_streak = worst_streak = cur_w = cur_l = 0
-        for e in closed:
-            if e.outcome == "WIN":
-                cur_w += 1; cur_l = 0
-                best_streak = max(best_streak, cur_w)
-            elif e.outcome == "LOSS":
-                cur_l += 1; cur_w = 0
-                worst_streak = max(worst_streak, cur_l)
-
-        # Per-coin breakdown
-        coin_pnl = {}
-        coin_trades = {}
-        for e in closed:
-            coin_pnl[e.symbol]    = round(coin_pnl.get(e.symbol, 0) + (e.pnl_pct or 0), 2)
-            coin_trades[e.symbol] = coin_trades.get(e.symbol, 0) + 1
-        top_coins = sorted(coin_pnl.items(), key=lambda x: -x[1])
-
-        # Win rate by direction
-        long_closed  = [e for e in closed if e.direction == "LONG"]
-        short_closed = [e for e in closed if e.direction == "SHORT"]
-        # Exclude BREAKEVEN from per-direction win-rate denominators too.
-        long_dec  = [e for e in long_closed  if e.outcome in ("WIN", "LOSS")]
-        short_dec = [e for e in short_closed if e.outcome in ("WIN", "LOSS")]
-        long_wr   = round(len([e for e in long_dec  if e.outcome == "WIN"]) / len(long_dec)  * 100, 1) if long_dec  else None
-        short_wr  = round(len([e for e in short_dec if e.outcome == "WIN"]) / len(short_dec) * 100, 1) if short_dec else None
-
-        # Health score (0–10)
-        wr_pct = perf.win_rate if perf else 0
-        health = 0.0
-        if len(closed) >= 3:
-            health += min(wr_pct / 100, 1.0) * 4.0
-            health += min(profit_factor / 2.0, 1.0) * 3.0
-            health += min(max(sharpe, 0) / 2.0, 1.0) * 2.0
-            health += min(len(closed) / 30.0, 1.0) * 1.0
-        health = round(health, 1)
-
-        _an_payload = {
-            "equity_curve":  {"labels": equity_labels, "values": equity_values},
-            "profit_factor": profit_factor,
-            "max_drawdown":  round(max_dd, 2),
-            "sharpe_ratio":  sharpe,
-            "best_streak":   best_streak,
-            "worst_streak":  worst_streak,
-            "avg_win_pct":   round(sum(wins) / len(wins), 2)   if wins   else 0,
-            "avg_loss_pct":  round(sum(losses) / len(losses), 2) if losses else 0,
-            "long_win_rate": long_wr,
-            "short_win_rate": short_wr,
-            "coin_breakdown": [{"symbol": s, "pnl": p, "trades": coin_trades[s]} for s, p in top_coins[:10]],
-            "health_score":  health,
-            "total_closed":  len(closed),
-        }
+        _an_payload = _compute_execution_analytics(execs, perf)
         set_cache(_an_key, _an_payload, 300)
         return _cached_json(_an_payload, False, 300)
+    finally:
+        db.close()
+
+
+@app.get("/api/portfolio/analytics")
+def api_portfolio_analytics(uid: str = Query(...)):
+    """Portfolio-wide performance analytics across all strategies."""
+    _key = f"portfolio_analytics:{uid}"
+    hit = get_cache(_key)
+    if hit is not None:
+        return _cached_json(hit, True, 300)
+
+    from app.database import SessionLocal
+    from app.strategy_models import StrategyExecution, UserStrategy
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        execs = (
+            db.query(StrategyExecution)
+            .join(UserStrategy, UserStrategy.id == StrategyExecution.strategy_id)
+            .filter(UserStrategy.user_id == user.id)
+            .order_by(StrategyExecution.fired_at.asc())
+            .all()
+        )
+        payload = _compute_execution_analytics(execs)
+        set_cache(_key, payload, 300)
+        return _cached_json(payload, False, 300)
+    finally:
+        db.close()
+
+
+def _tax_csv_rows(execs, strategy_name: str = "", year: Optional[int] = None):
+    """Build tax-report CSV rows from execution objects."""
+    import csv, io
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([
+        "opened_at", "closed_at", "strategy", "symbol", "asset_class", "direction",
+        "mode", "outcome", "pnl_pct", "pnl_usd", "pips_pnl", "hold_minutes",
+    ])
+    for e in execs:
+        if e.outcome not in ("WIN", "LOSS", "BREAKEVEN"):
+            continue
+        closed_at = e.closed_at or e.fired_at
+        if year and closed_at and closed_at.year != year:
+            continue
+        hold_m = ""
+        if e.closed_at and e.fired_at:
+            hold_m = round((e.closed_at - e.fired_at).total_seconds() / 60.0, 1)
+        w.writerow([
+            e.fired_at.strftime("%Y-%m-%d %H:%M") if e.fired_at else "",
+            e.closed_at.strftime("%Y-%m-%d %H:%M") if e.closed_at else "",
+            strategy_name,
+            e.symbol,
+            getattr(e, "asset_class", None) or "crypto",
+            e.direction,
+            "paper" if e.is_paper else "live",
+            e.outcome,
+            e.pnl_pct if e.pnl_pct is not None else "",
+            e.pnl_usd if e.pnl_usd is not None else "",
+            e.pips_pnl if getattr(e, "pips_pnl", None) is not None else "",
+            hold_m,
+        ])
+    buf.seek(0)
+    return buf.getvalue()
+
+
+@app.get("/api/strategies/{strategy_id}/export/tax")
+async def api_export_strategy_tax(
+    strategy_id: int,
+    uid: str = Query(...),
+    year: int = Query(None),
+):
+    """Annual tax summary CSV for one strategy."""
+    from fastapi.responses import StreamingResponse
+    from app.database import SessionLocal
+    from app.strategy_models import UserStrategy, StrategyExecution
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        s = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id, UserStrategy.user_id == user.id
+        ).first()
+        if not s:
+            raise HTTPException(status_code=404)
+        execs = (
+            db.query(StrategyExecution)
+            .filter(StrategyExecution.strategy_id == strategy_id)
+            .order_by(StrategyExecution.fired_at.asc())
+            .all()
+        )
+        yr = year or datetime.utcnow().year
+        body = _tax_csv_rows(execs, strategy_name=s.name or f"strategy_{strategy_id}", year=yr)
+        fname = f"tax_{strategy_id}_{yr}.csv"
+        return StreamingResponse(
+            iter([body]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    finally:
+        db.close()
+
+
+@app.get("/api/portfolio/export/tax")
+async def api_export_portfolio_tax(
+    uid: str = Query(...),
+    year: int = Query(None),
+):
+    """Annual tax summary CSV across all strategies for the user."""
+    from fastapi.responses import StreamingResponse
+    from app.database import SessionLocal
+    from app.strategy_models import StrategyExecution, UserStrategy
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        rows = (
+            db.query(StrategyExecution, UserStrategy.name)
+            .join(UserStrategy, UserStrategy.id == StrategyExecution.strategy_id)
+            .filter(UserStrategy.user_id == user.id)
+            .order_by(StrategyExecution.fired_at.asc())
+            .all()
+        )
+        yr = year or datetime.utcnow().year
+        import csv, io
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow([
+            "opened_at", "closed_at", "strategy", "symbol", "asset_class", "direction",
+            "mode", "outcome", "pnl_pct", "pnl_usd", "pips_pnl", "hold_minutes",
+        ])
+        for e, strat_name in rows:
+            if e.outcome not in ("WIN", "LOSS", "BREAKEVEN"):
+                continue
+            closed_at = e.closed_at or e.fired_at
+            if closed_at and closed_at.year != yr:
+                continue
+            hold_m = ""
+            if e.closed_at and e.fired_at:
+                hold_m = round((e.closed_at - e.fired_at).total_seconds() / 60.0, 1)
+            w.writerow([
+                e.fired_at.strftime("%Y-%m-%d %H:%M") if e.fired_at else "",
+                e.closed_at.strftime("%Y-%m-%d %H:%M") if e.closed_at else "",
+                strat_name or "",
+                e.symbol, getattr(e, "asset_class", None) or "crypto",
+                e.direction, "paper" if e.is_paper else "live", e.outcome,
+                e.pnl_pct if e.pnl_pct is not None else "",
+                e.pnl_usd if e.pnl_usd is not None else "",
+                e.pips_pnl if getattr(e, "pips_pnl", None) is not None else "",
+                hold_m,
+            ])
+        buf.seek(0)
+        fname = f"tradehub_tax_{user.uid or uid}_{yr}.csv"
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
     finally:
         db.close()
 

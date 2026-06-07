@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ page_title }}</title>
+<meta name="description" content="{{ meta_description }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<style>
+:root{
+  --bg:#06080f;--surface:#090c18;--card:rgba(255,255,255,.04);
+  --border:rgba(99,130,255,.14);--text:#eef2ff;--text2:#8a9bc8;--muted:#4a5b88;
+  --accent:{{ accent }};--green:#00e5a0;--red:#ff4d72;
+  --font:'Inter',-apple-system,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+nav{
+  position:fixed;top:0;left:0;right:0;z-index:100;height:58px;
+  display:flex;align-items:center;justify-content:space-between;padding:0 32px;
+  background:rgba(6,8,15,.88);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);
+}
+.nav-logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px}
+.nav-mark{width:28px;height:28px;background:linear-gradient(135deg,#5b7fff,#4060f0);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:900;color:#fff}
+.nav-links{display:flex;gap:4px}
+.nav-links a{padding:6px 12px;font-size:12px;color:var(--muted);border-radius:6px}
+.nav-links a:hover,.nav-links a.active{color:var(--text);background:var(--card)}
+.nav-r{display:flex;gap:8px;align-items:center}
+.btn{padding:8px 18px;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid transparent}
+.btn-ghost{color:var(--text2);border-color:var(--border)}
+.btn-primary{background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 70%,#000));color:#fff;box-shadow:0 0 24px color-mix(in srgb,var(--accent) 40%,transparent)}
+.hero{padding:120px 32px 72px;max-width:1080px;margin:0 auto;text-align:center}
+.hero-emoji{font-size:48px;margin-bottom:16px}
+.hero-label{font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--accent);margin-bottom:20px}
+.hero h1{font-size:clamp(28px,4.5vw,46px);font-weight:800;line-height:1.12;letter-spacing:-1px;margin-bottom:18px}
+.hero-sub{font-size:15px;color:var(--text2);line-height:1.75;max-width:640px;margin:0 auto 28px}
+.hero-ctas{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+.section{padding:64px 32px;border-top:1px solid var(--border)}
+.inner{max-width:1080px;margin:0 auto}
+.section-h{font-size:28px;font-weight:800;letter-spacing:-.8px;margin-bottom:8px}
+.section-sub{font-size:14px;color:var(--text2);margin-bottom:32px}
+.feat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+.feat-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:22px}
+.feat-card h3{font-size:15px;font-weight:700;margin-bottom:8px;color:var(--accent)}
+.feat-card p{font-size:13px;color:var(--text2);line-height:1.65}
+.lb-wrap{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.lb-row{display:grid;grid-template-columns:48px 1fr 72px 80px;gap:12px;padding:12px 18px;align-items:center;border-bottom:1px solid rgba(255,255,255,.04);font-size:13px}
+.lb-row:last-child{border-bottom:none}
+.lb-hd{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);background:rgba(0,0,0,.2)}
+.rk{font-weight:800;color:var(--muted);font-size:12px}
+.rk1,.rk2,.rk3{color:var(--accent)}
+.lname{font-weight:600}
+.lsub{font-size:11px;color:var(--muted);margin-top:2px}
+.lwr{text-align:right;color:var(--text2)}
+.lpnl{text-align:right;font-weight:700}
+.ppos{color:var(--green)}.pneg{color:var(--red)}
+.lb-loading{padding:32px;text-align:center;color:var(--muted);font-size:13px}
+footer{padding:40px 32px;text-align:center;font-size:12px;color:var(--muted);border-top:1px solid var(--border)}
+footer a{color:var(--text2);margin:0 10px}
+@media(max-width:640px){.nav-links{display:none}.lb-row{grid-template-columns:36px 1fr 60px}}
+</style>
+</head>
+<body>
+<nav>
+  <a href="/" class="nav-logo"><div class="nav-mark">TH</div>TradeHub</a>
+  <div class="nav-links">
+    <a href="/forex" class="{{ 'active' if slug == 'forex' else '' }}">Forex</a>
+    <a href="/gold" class="{{ 'active' if slug == 'gold' else '' }}">Gold</a>
+    <a href="/indices" class="{{ 'active' if slug == 'indices' else '' }}">Indices</a>
+    <a href="/">Crypto</a>
+  </div>
+  <div class="nav-r">
+    <a href="/login" class="btn btn-ghost">Log in</a>
+    <a href="{{ build_cta }}" class="btn btn-primary">Build free</a>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="hero-emoji">{{ hero_emoji }}</div>
+  <div class="hero-label">{{ hero_label }}</div>
+  <h1>{{ hero_title | safe }}</h1>
+  <p class="hero-sub">{{ hero_sub }}</p>
+  <div class="hero-ctas">
+    <a href="{{ build_cta }}" class="btn btn-primary">Start building →</a>
+    <a href="/login" class="btn btn-ghost">Browse live strategies</a>
+  </div>
+</section>
+
+<section class="section">
+  <div class="inner">
+    <div class="section-h">Built for this market</div>
+    <div class="section-sub">Everything in one portal — scanner, paper test, live execution, Telegram alerts.</div>
+    <div class="feat-grid">
+      {% for title, desc in features %}
+      <div class="feat-card"><h3>{{ title }}</h3><p>{{ desc }}</p></div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="inner">
+    <div class="section-h">Top performers</div>
+    <div class="section-sub">Live leaderboard — strategies with 5+ closed trades, ranked by total P&amp;L.</div>
+    <div class="lb-wrap" id="asset-lb">
+      <div class="lb-loading">Loading rankings…</div>
+    </div>
+  </div>
+</section>
+
+<section class="section" style="text-align:center">
+  <div class="inner">
+    <div class="section-h">Ready in minutes</div>
+    <div class="section-sub" style="margin:0 auto 24px">No code. No VPS. Paper first, then go live when you're confident.</div>
+    <a href="{{ build_cta }}" class="btn btn-primary" style="display:inline-block;padding:14px 32px;font-size:15px">Create your first strategy →</a>
+  </div>
+</section>
+
+<footer>
+  <a href="/">Home</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a>
+  <div style="margin-top:12px">© TradeHub Markets</div>
+</footer>
+
+<script>
+(async function(){
+  const params = new URLSearchParams({ limit: '8' });
+  {% if lb_asset_class %}params.set('asset_class', '{{ lb_asset_class }}');{% endif %}
+  {% if lb_market %}params.set('market', '{{ lb_market }}');{% endif %}
+  const el = document.getElementById('asset-lb');
+  try {
+    const rows = await (await fetch('/api/public/leaderboard?' + params)).json();
+    if (!rows.length) {
+      el.innerHTML = '<div class="lb-loading">No ranked strategies yet — be the first on the leaderboard.</div>';
+      return;
+    }
+    const rank = i => i < 3 ? ['1st','2nd','3rd'][i] : '#' + (i + 1);
+    const body = rows.map((r, i) => `
+      <div class="lb-row">
+        <div class="rk rk${i+1}">${rank(i)}</div>
+        <div><div class="lname">${r.name || 'Unnamed'}</div><div class="lsub">${r.total_trades || 0} trades · ${r.asset_class || ''}</div></div>
+        <div class="lwr">${r.win_rate != null ? r.win_rate + '%' : '—'}</div>
+        <div class="lpnl ${(r.total_pnl||0)>=0?'ppos':'pneg'}">${(r.total_pnl||0)>=0?'+':''}${r.total_pnl != null ? r.total_pnl + '%' : '—'}</div>
+      </div>`).join('');
+    el.innerHTML = `
+      <div class="lb-row lb-hd"><div class="rk">#</div><div>Strategy</div><div style="text-align:right">Win%</div><div style="text-align:right">P&amp;L</div></div>${body}`;
+  } catch (e) {
+    el.innerHTML = '<div class="lb-loading">Could not load leaderboard.</div>';
+  }
+})();
+</script>
+</body>
+</html>
