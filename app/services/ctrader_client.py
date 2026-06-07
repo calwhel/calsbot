@@ -334,39 +334,47 @@ async def _app_auth(
 # is a single round-trip on an already-open socket (~30-80ms vs ~300-500ms
 # for a fresh SSL+app-auth sequence).
 #
-# _conn_lock serialises ALL socket use across both hosts.  Idle timeout is 45s —
-# shorter than Spotware's server-side 60s keep-alive grace period.
+# Per-(host, account) sockets + locks so 20+ cTrader users don't queue behind one
+# global mutex. Token-only calls (account list) use ctid=0 on that host.
 
-_conn_lock:   asyncio.Lock   = None   # created lazily (no running loop at import)
-# Connection state is keyed by host — demo and live accounts use separate
-# sockets so a demo order never tries to ride a live-host socket (and v.v.).
-_conns: dict = {}            # host → {"reader", "writer", "ts"}
-_CONN_MAX_IDLE = 45.0        # force reconnect if socket unused for this long
+_account_locks: dict = {}
+_conns: dict = {}            # (host, ctid) → {"reader", "writer", "ts"}
+_CONN_MAX_IDLE = 45.0
+_balance_cache: dict = {}    # (host, ctid) → (balance, monotonic_ts)
+_BALANCE_CACHE_TTL = 25.0
+
+
+def _acct_conn_key(host: str, ctid: int = 0) -> tuple:
+    return (host, int(ctid))
+
+
+def _get_account_lock(host: str, ctid: int = 0) -> asyncio.Lock:
+    key = _acct_conn_key(host, ctid)
+    lock = _account_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _account_locks[key] = lock
+    return lock
 
 
 def _get_lock() -> asyncio.Lock:
-    global _conn_lock
-    if _conn_lock is None:
-        _conn_lock = asyncio.Lock()
-    return _conn_lock
+    """Host-level lock for access-token operations without a trading account."""
+    return _get_account_lock(CTRADER_HOST, 0)
 
 
 async def _get_persistent_connection(
     host: str = CTRADER_HOST,
+    ctid: int = 0,
 ) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-    """
-    Return a (reader, writer) for `host` that is connected and
-    application-authenticated. Caller MUST hold _get_lock() before calling.
-    Reconnects automatically on idle timeout or detected closure.
-    """
-    st = _conns.get(host)
+    """Return app-authenticated socket for (host, ctid). Caller holds account lock."""
+    key = _acct_conn_key(host, ctid)
+    st = _conns.get(key)
     if st is not None:
         idle = time.monotonic() - st["ts"]
         if st["writer"] is not None and not st["writer"].is_closing() and idle < _CONN_MAX_IDLE:
             return st["reader"], st["writer"]
-        # Close stale connection cleanly (wait for the FD to actually release)
         await _aclose_writer(st.get("writer"))
-        _conns.pop(host, None)
+        _conns.pop(key, None)
 
     r, w = await _open_connection(host)
     ok = await _app_auth(r, w)
@@ -374,24 +382,20 @@ async def _get_persistent_connection(
         await _aclose_writer(w)
         raise RuntimeError("cTrader persistent connection: app auth failed")
 
-    _conns[host] = {"reader": r, "writer": w, "ts": time.monotonic()}
-    logger.debug(f"[cTrader] persistent connection (re)established → {host}")
+    _conns[key] = {"reader": r, "writer": w, "ts": time.monotonic()}
+    logger.debug(f"[cTrader] persistent connection (re)established → {host} acct={ctid}")
     return r, w
 
 
-def _touch_conn(host: str) -> None:
-    """Refresh the last-used timestamp for a host's socket after a good message."""
-    st = _conns.get(host)
+def _touch_conn(host: str, ctid: int = 0) -> None:
+    st = _conns.get(_acct_conn_key(host, ctid))
     if st is not None:
         st["ts"] = time.monotonic()
 
 
-def _invalidate_persistent_connection(host: str = CTRADER_HOST) -> None:
-    """Mark the persistent connection for `host` as dead so next call reconnects."""
-    st = _conns.pop(host, None)
+def _invalidate_persistent_connection(host: str = CTRADER_HOST, ctid: int = 0) -> None:
+    st = _conns.pop(_acct_conn_key(host, ctid), None)
     if st is not None and st.get("writer") is not None:
-        # Schedule a full close (close + wait_closed) so the SSL FD is released,
-        # not just scheduled for close. Falls back to a bare close if no loop.
         try:
             asyncio.ensure_future(_aclose_writer(st["writer"]))
         except Exception:
@@ -649,10 +653,10 @@ async def get_accounts_for_token(access_token: str, host: str = CTRADER_HOST) ->
     """
     if not _PROTO_OK:
         return []
-    async with _get_lock():
+    async with _get_account_lock(host, 0):
         for attempt in (1, 2):
             try:
-                reader, writer = await _get_persistent_connection(host)
+                reader, writer = await _get_persistent_connection(host, 0)
                 req = ProtoOAGetAccountListByAccessTokenReq()
                 req.accessToken = access_token
                 payload = await _send_recv(
@@ -664,7 +668,7 @@ async def get_accounts_for_token(access_token: str, host: str = CTRADER_HOST) ->
                     return []
                 res = ProtoOAGetAccountListByAccessTokenRes()
                 res.ParseFromString(payload)
-                _touch_conn(host)
+                _touch_conn(host, 0)
                 accounts = []
                 for acc in res.ctidTraderAccount:
                     accounts.append({
@@ -676,7 +680,7 @@ async def get_accounts_for_token(access_token: str, host: str = CTRADER_HOST) ->
             except Exception as e:
                 if attempt == 1:
                     logger.warning(f"[cTrader] get_accounts retry after: {e}")
-                    _invalidate_persistent_connection(host)
+                    _invalidate_persistent_connection(host, 0)
                     continue
                 logger.error(f"[cTrader] get_accounts failed: {e}")
                 return []
@@ -814,6 +818,120 @@ def _compute_volume(volume_lots: float, details: Optional[Dict[str, int]]) -> Op
     return vol if vol > 0 else None
 
 
+async def _await_order_fill(
+    reader,
+    writer,
+    first_payload: bytes,
+    entry_price: Optional[float],
+    broker_symbol: str,
+    volume_units: int,
+    host: str,
+    ctid_trader_account_id: int,
+) -> dict:
+    """Drain execution events until FILLED or timeout; shared by forex + index orders."""
+    _terminal = (
+        ProtoOAExecutionType.ORDER_REJECTED,
+        ProtoOAExecutionType.ORDER_CANCELLED,
+        ProtoOAExecutionType.ORDER_EXPIRED,
+    )
+
+    def _parse_exec(_payload):
+        _e = ProtoOAExecutionEvent()
+        _e.ParseFromString(_payload)
+        return _e
+
+    def _terminal_err(_e):
+        if _e.executionType not in _terminal:
+            return None
+        _ec = _e.errorCode if _e.HasField("errorCode") else ""
+        _tname = ProtoOAExecutionType.Name(_e.executionType)
+        logger.error(
+            f"[cTrader] order not filled ({_tname}) errorCode={_ec!r} "
+            f"symbol={broker_symbol} vol={volume_units}"
+        )
+        return {"order_id": None, "actual_fill": None,
+                "error": f"{_tname}: {_ec}" if _ec else _tname}
+
+    ev = _parse_exec(first_payload)
+    _err = _terminal_err(ev)
+    if _err:
+        return _err
+
+    order_id = str(ev.order.orderId) if ev.HasField("order") else None
+
+    def _has_fill(_e):
+        return _e.HasField("deal") and bool(_e.deal.executionPrice)
+
+    def _matches_order(_e):
+        if not order_id:
+            return True
+        _oid = None
+        try:
+            if _e.HasField("order") and _e.order.orderId:
+                _oid = str(_e.order.orderId)
+            elif _e.HasField("deal") and getattr(_e.deal, "orderId", 0):
+                _oid = str(_e.deal.orderId)
+        except Exception:
+            return False
+        return _oid is not None and _oid == order_id
+
+    if not _has_fill(ev):
+        _fill_deadline = time.monotonic() + 15.0
+        while True:
+            _remaining = _fill_deadline - time.monotonic()
+            if _remaining <= 0:
+                break
+            _pt2, _payload2 = await _recv_until(
+                reader,
+                {_PAYLOAD_TYPES["execution_event"],
+                 _PAYLOAD_TYPES["order_error_event"]},
+                timeout=_remaining,
+            )
+            if not _payload2:
+                break
+            if _pt2 == _PAYLOAD_TYPES["order_error_event"]:
+                _err2 = ProtoOAOrderErrorEvent()
+                _err2.ParseFromString(_payload2)
+                if order_id and _err2.HasField("orderId") and str(_err2.orderId) != order_id:
+                    continue
+                _reason2 = (_err2.description or "").strip() or (_err2.errorCode or "").strip() or "order rejected"
+                _detail2 = f"{_err2.errorCode}: {_reason2}" if _err2.errorCode and _err2.errorCode not in _reason2 else _reason2
+                return {"order_id": None, "actual_fill": None, "error": _detail2}
+            ev2 = _parse_exec(_payload2)
+            if not _matches_order(ev2):
+                continue
+            _err2 = _terminal_err(ev2)
+            if _err2:
+                return _err2
+            if ev2.HasField("order") and not order_id:
+                order_id = str(ev2.order.orderId)
+            if _has_fill(ev2):
+                ev = ev2
+                break
+        if not _has_fill(ev):
+            logger.warning(
+                f"[cTrader] order {order_id} accepted but no fill event seen "
+                f"in budget (symbol={broker_symbol})"
+            )
+
+    actual_fill = None
+    position_id = None
+    if ev.HasField("deal"):
+        if ev.deal.executionPrice:
+            _raw = float(ev.deal.executionPrice)
+            if entry_price and entry_price > 0:
+                _cands = [_raw, _raw / 100.0, _raw / 1000.0, _raw / 100_000.0]
+                actual_fill = min(_cands, key=lambda v: abs(v - entry_price))
+            else:
+                actual_fill = _raw
+        if ev.deal.positionId:
+            position_id = str(ev.deal.positionId)
+    return {
+        "order_id": order_id, "actual_fill": actual_fill,
+        "position_id": position_id, "volume": volume_units, "error": None,
+    }
+
+
 async def place_order(
     access_token: str,
     ctid_trader_account_id: int,
@@ -840,10 +958,10 @@ async def place_order(
     if not CTRADER_CLIENT_ID or not CTRADER_CLIENT_SECRET:
         return {"order_id": None, "actual_fill": None, "error": "CTRADER_CLIENT_ID/SECRET not set"}
 
-    async with _get_lock():
+    async with _get_account_lock(host, ctid_trader_account_id):
         for attempt in (1, 2):
             try:
-                reader, writer = await _get_persistent_connection(host)
+                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
                     return {"order_id": None, "actual_fill": None, "error": "account auth failed"}
 
@@ -927,7 +1045,7 @@ async def place_order(
                 if not payload:
                     return {"order_id": None, "actual_fill": None, "error": "no execution event"}
 
-                _touch_conn(host)
+                _touch_conn(host, ctid_trader_account_id)
 
                 # Broker rejected the order outright (unknown symbol, bad volume,
                 # invalid SL/TP, trading disabled, market closed, no margin, …).
@@ -943,156 +1061,15 @@ async def place_order(
                     )
                     return {"order_id": None, "actual_fill": None, "error": _detail}
 
-                _terminal = (
-                    ProtoOAExecutionType.ORDER_REJECTED,
-                    ProtoOAExecutionType.ORDER_CANCELLED,
-                    ProtoOAExecutionType.ORDER_EXPIRED,
+                return await _await_order_fill(
+                    reader, writer, payload, entry_price, broker_symbol, req.volume,
+                    host, ctid_trader_account_id,
                 )
-
-                def _parse_exec(_payload):
-                    _e = ProtoOAExecutionEvent()
-                    _e.ParseFromString(_payload)
-                    return _e
-
-                def _terminal_err(_e):
-                    # An execution event can ALSO be a rejection/cancellation that
-                    # still carries an `order` block — treating that as a fill would
-                    # mark a non-existent live position as live. Only real fills pass.
-                    if _e.executionType not in _terminal:
-                        return None
-                    _ec = _e.errorCode if _e.HasField("errorCode") else ""
-                    _tname = ProtoOAExecutionType.Name(_e.executionType)
-                    logger.error(
-                        f"[cTrader] order not filled ({_tname}) errorCode={_ec!r} "
-                        f"symbol={broker_symbol} vol={req.volume}"
-                    )
-                    return {"order_id": None, "actual_fill": None,
-                            "error": f"{_tname}: {_ec}" if _ec else _tname}
-
-                ev = _parse_exec(payload)
-                _err = _terminal_err(ev)
-                if _err:
-                    return _err
-
-                order_id = str(ev.order.orderId) if ev.HasField("order") else None
-
-                # cTrader sends ORDER_ACCEPTED (carries `order`, NO `deal`) BEFORE
-                # the ORDER_FILLED event that carries the deal (executionPrice +
-                # positionId). _send_recv_any returned the FIRST event, so on the
-                # common ACCEPTED→FILLED sequence we'd otherwise capture NO fill
-                # price (card shows the pre-fill signal price) and NO positionId
-                # (live SL/TP management can't find the position). Keep draining
-                # the same (locked) socket until the deal arrives or it rejects.
-                def _has_fill(_e):
-                    return _e.HasField("deal") and bool(_e.deal.executionPrice)
-
-                def _matches_order(_e):
-                    # Correlate a drained event to OUR order: the account socket can
-                    # carry asynchronous execution events for OTHER trades, and we
-                    # must never misattribute a different order's fill/rejection.
-                    # When we don't yet have an order_id, accept (nothing to match).
-                    # FAIL-CLOSED: once order_id is known, an event we can't correlate
-                    # (no order/deal orderId) is treated as NOT ours and skipped —
-                    # the safe degradation is to fall through to live-without-fill,
-                    # never to attribute a stranger's fill to this order.
-                    if not order_id:
-                        return True
-                    _oid = None
-                    try:
-                        if _e.HasField("order") and _e.order.orderId:
-                            _oid = str(_e.order.orderId)
-                        elif _e.HasField("deal") and getattr(_e.deal, "orderId", 0):
-                            _oid = str(_e.deal.orderId)
-                    except Exception:
-                        return False
-                    if _oid is None:
-                        return False
-                    return _oid == order_id
-
-                if not _has_fill(ev):
-                    # Single ABSOLUTE budget across all iterations (not per-read) so
-                    # a stream of non-fill status events can't extend the wait
-                    # unbounded. Market orders fill (or reject) within seconds.
-                    _fill_deadline = time.monotonic() + 15.0
-                    while True:
-                        _remaining = _fill_deadline - time.monotonic()
-                        if _remaining <= 0:
-                            break  # budget exhausted — fall through with what we have
-                        _pt2, _payload2 = await _recv_until(
-                            reader,
-                            {_PAYLOAD_TYPES["execution_event"],
-                             _PAYLOAD_TYPES["order_error_event"]},
-                            timeout=_remaining,
-                        )
-                        if not _payload2:
-                            break  # no fill event arrived — fall through with what we have
-                        if _pt2 == _PAYLOAD_TYPES["order_error_event"]:
-                            _err2 = ProtoOAOrderErrorEvent()
-                            _err2.ParseFromString(_payload2)
-                            # Only OUR order's rejection aborts the wait.
-                            if order_id and _err2.HasField("orderId") and str(_err2.orderId) != order_id:
-                                continue
-                            _reason2 = (_err2.description or "").strip() or (_err2.errorCode or "").strip() or "order rejected"
-                            _detail2 = f"{_err2.errorCode}: {_reason2}" if _err2.errorCode and _err2.errorCode not in _reason2 else _reason2
-                            logger.error(
-                                f"[cTrader] order REJECTED (post-accept) errorCode={_err2.errorCode!r} "
-                                f"desc={_err2.description!r} symbol={broker_symbol} vol={req.volume}"
-                            )
-                            return {"order_id": None, "actual_fill": None, "error": _detail2}
-                        ev2 = _parse_exec(_payload2)
-                        if not _matches_order(ev2):
-                            continue  # another order's event on the shared socket
-                        _err2 = _terminal_err(ev2)
-                        if _err2:
-                            return _err2
-                        if ev2.HasField("order") and not order_id:
-                            order_id = str(ev2.order.orderId)
-                        if _has_fill(ev2):
-                            ev = ev2
-                            break
-                        # otherwise a non-fill event (e.g. duplicate ACCEPTED) — keep waiting
-                    if not _has_fill(ev):
-                        # Order was ACCEPTED at the broker but we never saw the fill
-                        # within budget. It is a REAL live order — do NOT error
-                        # (that would false-fallback a live position to paper). Return
-                        # order_id with no fill: card shows the signal price and live
-                        # SL management can't manage it, but the broker still enforces
-                        # the SL/TP set at entry.
-                        logger.warning(
-                            f"[cTrader] order {order_id} accepted but no fill event seen "
-                            f"in budget (symbol={broker_symbol}) — tracking live without "
-                            f"fill price / positionId"
-                        )
-
-                actual_fill = None
-                position_id = None
-                if ev.HasField("deal"):
-                    if ev.deal.executionPrice:
-                        # cTrader's deal.executionPrice scaling is SYMBOL-DEPENDENT:
-                        # FX majors arrive scaled (×10^5 → 1.0850 sent as 108500),
-                        # but metals/indices commonly arrive as the true price
-                        # (gold 4452.76 sent as 4452.76). A fixed /100_000 turned
-                        # a real gold fill into 0.0445276. The fill must be near the
-                        # signal entry, so pick whichever interpretation lands
-                        # closest to entry_price (robust across all symbols).
-                        _raw = float(ev.deal.executionPrice)
-                        if entry_price and entry_price > 0:
-                            _cands = [_raw, _raw / 100.0, _raw / 1000.0,
-                                      _raw / 100_000.0]
-                            actual_fill = min(
-                                _cands, key=lambda v: abs(v - entry_price)
-                            )
-                        else:
-                            actual_fill = _raw
-                    if ev.deal.positionId:
-                        position_id = str(ev.deal.positionId)
-                return {"order_id": order_id, "actual_fill": actual_fill,
-                        "position_id": position_id, "volume": req.volume, "error": None}
 
             except Exception as e:
                 if attempt == 1:
                     logger.warning(f"[cTrader] place_order retry after: {e}")
-                    _invalidate_persistent_connection(host)
+                    _invalidate_persistent_connection(host, ctid_trader_account_id)
                     continue
                 logger.error(f"[cTrader] place_order failed: {e}")
                 return {"order_id": None, "actual_fill": None, "error": str(e)}
@@ -1126,10 +1103,10 @@ async def place_order_units(
     contracts = max(1, int(volume_units or 1))
     broker_symbol = _SYMBOL_MAP.get(symbol_name, symbol_name)
 
-    async with _get_lock():
+    async with _get_account_lock(host, ctid_trader_account_id):
         for attempt in (1, 2):
             try:
-                reader, writer = await _get_persistent_connection(host)
+                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
                     return {"order_id": None, "actual_fill": None, "error": "account auth failed"}
 
@@ -1179,7 +1156,7 @@ async def place_order_units(
                 if not payload:
                     return {"order_id": None, "actual_fill": None, "error": "no execution event"}
 
-                _touch_conn(host)
+                _touch_conn(host, ctid_trader_account_id)
 
                 if pt == _PAYLOAD_TYPES["order_error_event"]:
                     err = ProtoOAOrderErrorEvent()
@@ -1188,28 +1165,14 @@ async def place_order_units(
                     _detail = f"{err.errorCode}: {_reason}" if err.errorCode and err.errorCode not in _reason else _reason
                     return {"order_id": None, "actual_fill": None, "error": _detail}
 
-                ev = ProtoOAExecutionEvent()
-                ev.ParseFromString(payload)
-                order_id = str(ev.order.orderId) if ev.HasField("order") else None
-                actual_fill = None
-                position_id = None
-                if ev.HasField("deal") and ev.deal.executionPrice:
-                    _raw = float(ev.deal.executionPrice)
-                    if entry_price and entry_price > 0:
-                        _cands = [_raw, _raw / 100.0, _raw / 1000.0, _raw / 100_000.0]
-                        actual_fill = min(_cands, key=lambda v: abs(v - entry_price))
-                    else:
-                        actual_fill = _raw
-                    if ev.deal.positionId:
-                        position_id = str(ev.deal.positionId)
-                return {
-                    "order_id": order_id, "actual_fill": actual_fill,
-                    "position_id": position_id, "volume": vol, "error": None,
-                }
+                return await _await_order_fill(
+                    reader, writer, payload, entry_price, broker_symbol, vol,
+                    host, ctid_trader_account_id,
+                )
             except Exception as e:
                 if attempt == 1:
                     logger.warning(f"[cTrader] place_order_units retry after: {e}")
-                    _invalidate_persistent_connection(host)
+                    _invalidate_persistent_connection(host, ctid_trader_account_id)
                     continue
                 logger.error(f"[cTrader] place_order_units failed: {e}")
                 return {"order_id": None, "actual_fill": None, "error": str(e)}
@@ -1226,10 +1189,10 @@ async def close_position(
     """Close (or partially close) an open position. Uses persistent connection."""
     if not _PROTO_OK:
         return False
-    async with _get_lock():
+    async with _get_account_lock(host, ctid_trader_account_id):
         for attempt in (1, 2):
             try:
-                reader, writer = await _get_persistent_connection(host)
+                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
                     return False
                 req = ProtoOAClosePositionReq()
@@ -1243,12 +1206,12 @@ async def close_position(
                     timeout=15.0,
                 )
                 if payload is not None:
-                    _touch_conn(host)
+                    _touch_conn(host, ctid_trader_account_id)
                 return payload is not None
             except Exception as e:
                 if attempt == 1:
                     logger.warning(f"[cTrader] close_position retry after: {e}")
-                    _invalidate_persistent_connection(host)
+                    _invalidate_persistent_connection(host, ctid_trader_account_id)
                     continue
                 logger.error(f"[cTrader] close_position failed: {e}")
                 return False
@@ -1279,10 +1242,10 @@ async def modify_position_sltp(
         return False
     if stop_loss_price is None and take_profit_price is None:
         return False
-    async with _get_lock():
+    async with _get_account_lock(host, ctid_trader_account_id):
         for attempt in (1, 2):
             try:
-                reader, writer = await _get_persistent_connection(host)
+                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
                     return False
                 req = ProtoOAAmendPositionSLTPReq()
@@ -1306,12 +1269,12 @@ async def modify_position_sltp(
                     timeout=15.0,
                 )
                 if payload is not None:
-                    _touch_conn(host)
+                    _touch_conn(host, ctid_trader_account_id)
                 return payload is not None
             except Exception as e:
                 if attempt == 1:
                     logger.warning(f"[cTrader] modify_position_sltp retry after: {e}")
-                    _invalidate_persistent_connection(host)
+                    _invalidate_persistent_connection(host, ctid_trader_account_id)
                     continue
                 logger.error(f"[cTrader] modify_position_sltp failed: {e}")
                 return False
@@ -1388,8 +1351,8 @@ async def close_partial_position_for_user(
     # Resolve the symbol's volume grid so the partial close lands on a valid step.
     details = None
     try:
-        async with _get_lock():
-            reader, writer = await _get_persistent_connection(host)
+        async with _get_account_lock(host, ctid):
+            reader, writer = await _get_persistent_connection(host, ctid)
             if await _account_auth(reader, writer, access_token, ctid):
                 broker_symbol = _SYMBOL_MAP.get(symbol, symbol)
                 symbol_id = await _resolve_symbol_id(reader, writer, ctid, broker_symbol, host)
@@ -1435,10 +1398,14 @@ async def _get_account_balance(
     """
     if not _PROTO_OK:
         return None
+    cache_key = _acct_conn_key(host, ctid_trader_account_id)
+    cached = _balance_cache.get(cache_key)
+    if cached and (time.monotonic() - cached[1]) < _BALANCE_CACHE_TTL:
+        return cached[0]
     try:
-        async with _get_lock():
+        async with _get_account_lock(host, ctid_trader_account_id):
             try:
-                reader, writer = await _get_persistent_connection(host)
+                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
                     return None
                 req = ProtoOAReconcileReq()
@@ -1453,17 +1420,12 @@ async def _get_account_balance(
                     return None
                 res = ProtoOAReconcileRes()
                 res.ParseFromString(payload)
-                # balance is in cents (×100)
                 if hasattr(res, "balance") and res.balance:
-                    return res.balance / 100.0
+                    bal = res.balance / 100.0
+                    _balance_cache[cache_key] = (bal, time.monotonic())
+                    return bal
             except asyncio.CancelledError:
-                # An outer asyncio.wait_for() cancelled us mid-flight (e.g. the
-                # live-forex endpoint's balance-fetch timeout). The shared
-                # persistent socket may now hold an unconsumed / partial
-                # reconcile frame, which would desync the NEXT caller (including
-                # live order placement). Drop the socket so the next call
-                # reconnects cleanly, then propagate the cancellation.
-                _invalidate_persistent_connection(host)
+                _invalidate_persistent_connection(host, ctid_trader_account_id)
                 raise
     except asyncio.CancelledError:
         raise
@@ -1486,9 +1448,9 @@ async def _get_open_position_ids(
     if not _PROTO_OK:
         return None
     try:
-        async with _get_lock():
+        async with _get_account_lock(host, ctid_trader_account_id):
             try:
-                reader, writer = await _get_persistent_connection(host)
+                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
                     return None
                 req = ProtoOAReconcileReq()
@@ -1505,10 +1467,7 @@ async def _get_open_position_ids(
                 res.ParseFromString(payload)
                 return {int(p.positionId) for p in res.position}
             except asyncio.CancelledError:
-                # An outer wait_for() cancelled us mid-flight — the shared socket
-                # may hold a partial reconcile frame that would desync the next
-                # caller. Drop it so the next call reconnects cleanly.
-                _invalidate_persistent_connection(host)
+                _invalidate_persistent_connection(host, ctid_trader_account_id)
                 raise
     except asyncio.CancelledError:
         raise

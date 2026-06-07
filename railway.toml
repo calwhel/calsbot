@@ -5,6 +5,6 @@ startCommand = "bash start.sh"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
 healthcheckPath = "/ping"
-healthcheckTimeout = 10
+healthcheckTimeout = 30
 # One replica only — multiple containers each run a [tg-bot] poller → ConflictError.
 numReplicas = 1

@@ -522,10 +522,20 @@ async def _get_eligible_symbols(
     return symbols
 
 
+def _primary_timeframe(config: dict) -> str:
+    conds = (config.get("entry_conditions") or {}).get("conditions") or []
+    if conds and isinstance(conds[0], dict) and conds[0].get("timeframe"):
+        return str(conds[0]["timeframe"])
+    return str(config.get("timeframe") or config.get("_timeframe") or "15m")
+
+
 async def _fetch_price_and_ta(
     symbol: str,
     http_client: httpx.AsyncClient,
     asset_class: str = "crypto",
+    *,
+    user_id: Optional[int] = None,
+    timeframe: Optional[str] = None,
 ) -> Optional[Dict]:
     """
     Fetch price + TA indicators for a symbol. Results are cached per symbol for
@@ -552,22 +562,32 @@ async def _fetch_price_and_ta(
                 get_klines as _tradfi_klines,
                 get_price as _tradfi_live_price,
             )
-            kl = await _tradfi_klines(symbol, asset_class, "15m", 100)
+            tf = timeframe or "15m"
+            kl = await _tradfi_klines(
+                symbol, asset_class, tf, 100,
+                ctrader_user_id=user_id,
+            )
             if not kl:
                 return None
+            # Drop forming bar for signal evaluation (closed-candle only).
+            if len(kl) > 1:
+                kl = kl[:-1]
             closes = [float(row[4]) for row in kl if row and len(row) >= 5]
             if len(closes) < 2:
                 return None
 
-            # ── Live spot price (FMP WebSocket → yfinance fast_info) ──────────
-            # Using closes[-1] (last 15m kline close) as the entry price causes
-            # stale entries — that candle could have closed up to 14 minutes ago
-            # and price may have moved significantly since then, especially for
-            # fast-moving assets like XAUUSD.  Fetch the live spot price so the
-            # entry stamped on the StrategyExecution reflects where price actually
-            # is right now, not where it was at the last 15m close.
             live_px = await _tradfi_live_price(symbol, asset_class)
             price = live_px if live_px else closes[-1]
+            bid = ask = None
+            try:
+                from app.services.ctrader_price_feed import get_bid_ask as _ba
+                _tick = _ba(symbol.upper())
+                if _tick:
+                    bid, ask = _tick
+                    if not live_px:
+                        price = round((bid + ask) / 2.0, 6)
+            except Exception:
+                pass
 
             # Inline RSI(14) — same Wilder's smoothing the social_signals impl uses
             rsi = 50.0
@@ -582,6 +602,10 @@ async def _fetch_price_and_ta(
                 rsi = 100.0 if al == 0 else 100.0 - (100.0 / (1.0 + (ag / al)))
             result = {
                 "price": price,
+                "bid": bid,
+                "ask": ask,
+                "bid_price": bid,
+                "ask_price": ask,
                 "change_24h": ((price - closes[-min(96, len(closes))]) / closes[-min(96, len(closes))] * 100) if closes[-min(96, len(closes))] else 0.0,
                 "volume_24h": 0.0,
                 "high_24h": max(closes[-min(96, len(closes)):]),
@@ -591,6 +615,7 @@ async def _fetch_price_and_ta(
                 "btc_correlation": 0.0,
                 "enhanced_ta": {},
                 "_asset_class": asset_class,
+                "_timeframe": tf,
             }
             _PRICE_TA_CACHE[cache_key] = (result, now)
             return result
@@ -2981,8 +3006,16 @@ async def evaluate_and_fire(
     # Turns O(n × fetch_time) → O(fetch_time).  Results are also stored in the
     # shared _PRICE_TA_CACHE so subsequent calls inside evaluate_strategy_conditions
     # (which fetches its own klines) benefit from the same warm cache.
+    _eval_tf = _primary_timeframe(config)
+    _uid = user.id if user else None
     _price_results = await asyncio.gather(
-        *[_fetch_price_and_ta(sym, http_client, asset_class) for sym in candidate_symbols],
+        *[
+            _fetch_price_and_ta(
+                sym, http_client, asset_class,
+                user_id=_uid, timeframe=_eval_tf,
+            )
+            for sym in candidate_symbols
+        ],
         return_exceptions=True,
     )
     price_map: Dict[str, Dict] = {
@@ -3022,6 +3055,14 @@ async def evaluate_and_fire(
         current_price = price_data.get("price", 0)
         if not current_price:
             continue
+
+        # Directional entry: LONG at ask, SHORT at bid when ticks available.
+        _side_price = current_price
+        if direction_pref == "LONG" and price_data.get("ask"):
+            _side_price = price_data["ask"]
+        elif direction_pref == "SHORT" and price_data.get("bid"):
+            _side_price = price_data["bid"]
+        current_price = _side_price
 
         # ── Forex: spread filter ──────────────────────────────────────────
         # Block this symbol if the live bid/ask spread exceeds max_spread_pips.
@@ -3299,7 +3340,31 @@ async def evaluate_and_fire(
                 ps_type      = risk.get("position_size_type", "pct")
                 _risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None
                 if _broker == "ctrader":
-                    from app.services.ctrader_client import place_ctrader_order_for_user
+                    # Pre-fire drift guard — skip stale scan/signal prices.
+                    try:
+                        from app.services.ctrader_price_feed import get_price as _feed_px
+                        from app.services.forex_engine import pip_size as _psz_drift
+                        _fresh = _feed_px(symbol)
+                        _max_drift = float(risk.get("max_entry_drift_pips") or 15)
+                        if _fresh and _max_drift > 0:
+                            _drift_pips = abs(_fresh - current_price) / max(_psz_drift(symbol), 1e-10)
+                            if _drift_pips > _max_drift:
+                                _bump("blk_entry_drift")
+                                execution.outcome = "CANCELLED"
+                                execution.notes = f"Cancelled: price drift {_drift_pips:.1f} pips"
+                                db.commit()
+                                logger.info(
+                                    f"[Strategy {strategy.id}] {symbol} drift "
+                                    f"{_drift_pips:.1f}p > {_max_drift} — skipped"
+                                )
+                                break
+                    except Exception:
+                        pass
+
+                    from app.services.ctrader_order_queue import (
+                        CtraderOrderJob, enqueue_ctrader_order, start_ctrader_order_worker,
+                    )
+                    start_ctrader_order_worker()
                     # Risk % auto lot sizing: when use_risk_pct=True, the wizard
                     # stored risk_pct_per_trade (% of account to risk).  We pass
                     # it to the cTrader helper which fetches the account balance
@@ -3312,19 +3377,25 @@ async def evaluate_and_fire(
                     # In partial-runner mode the broker TP must be TP2 (final target);
                     # otherwise it stays at the strategy's TP1.
                     _live_tp_pct  = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
-                    order_result = await place_ctrader_order_for_user(
-                        user           = user,
-                        symbol         = symbol,
-                        direction      = direction,
-                        entry_price    = current_price,
-                        tp_pct         = _live_tp_pct,
-                        sl_pct         = sl_pct,
-                        risk_pct       = _risk_pct_per,
-                        risk_usd       = _risk_usd,
-                        use_risk_pct   = _use_risk_pct,
-                        sl_pips        = float(ex_config.get("stop_loss_pips") or 0) or None,
-                        fixed_lots     = _fixed_lots or None,
+                    _job = CtraderOrderJob(
+                        user_id=user.id,
+                        strategy_id=strategy.id,
+                        execution_id=execution.id,
+                        symbol=symbol,
+                        direction=direction,
+                        entry_price=current_price,
+                        tp_pct=_live_tp_pct,
+                        sl_pct=sl_pct,
+                        risk_pct=_risk_pct_per,
+                        risk_usd=_risk_usd,
+                        use_risk_pct=_use_risk_pct,
+                        sl_pips=float(ex_config.get("stop_loss_pips") or 0) or None,
+                        fixed_lots=_fixed_lots or None,
+                        asset_class=asset_class,
+                        partial_close_pct=float(_partial_close_pct) if _partial_close_pct else None,
                     )
+                    _queued = await enqueue_ctrader_order(_job)
+                    order_result = {"order_id": "queued", "queued": True} if _queued else None
                 else:
                     from app.services.strategy_trader import place_bitunix_order_for_user
                     order_result = await place_bitunix_order_for_user(
@@ -3424,6 +3495,49 @@ async def evaluate_and_fire(
                     ))
                 break  # paper execution is now open — stop processing matches
 
+            if order_result and order_result.get("queued"):
+                execution.notes = ((execution.notes or "") + " | order_queued").strip(" |")
+                db.commit()
+                tg_id_live = _telegram_int_id(user)
+                if tg_id_live:
+                    asyncio.create_task(_tg_send(
+                        tg_id_live,
+                        _fmt_open_card(
+                            strategy_name=strategy.name or "Your Strategy",
+                            symbol=symbol,
+                            direction=direction,
+                            entry=current_price,
+                            tp_price=tp_price,
+                            tp_pct=tp_pct,
+                            tp2_price=tp2_price,
+                            tp2_pct=float(tp2_pct) if tp2_pct else None,
+                            sl_price=sl_price,
+                            sl_pct=sl_pct,
+                            leverage=leverage,
+                            conditions=details,
+                            is_paper=False,
+                            asset_class=asset_class,
+                        ) + "\n\n<i>Placing on cTrader…</i>",
+                    ))
+                try:
+                    from app.services.expo_push import notify_user_bg
+                    notify_user_bg(
+                        user.id,
+                        title=f"🎯 Live · {symbol.replace('USDT','')} {direction}",
+                        body=f"{strategy.name} — placing on cTrader",
+                        data={"type": "trade_open", "strategy_id": strategy.id, "kind": "live"},
+                        kind="live",
+                    )
+                except Exception:
+                    pass
+                if not config.get("_locked"):
+                    asyncio.create_task(_propagate_to_subscribers(
+                        source_strategy_id=strategy.id,
+                        source_execution_id=execution.id,
+                        http_client=http_client,
+                    ))
+                break
+
             if order_id:
                 if _broker == "ctrader":
                     execution.ctrader_order_id = str(order_id)
@@ -3431,10 +3545,17 @@ async def evaluate_and_fire(
                     # later amend SL/TP (auto-breakeven + trailing). No dedicated
                     # column exists → stash it as a "pos=<id>" token in notes.
                     if _position_id:
+                        execution.ctrader_position_id = str(_position_id)
+                        if _acct_id:
+                            execution.ctrader_account_id = str(_acct_id)
+                        try:
+                            _v = int(order_result.get("volume") or 0)
+                            if _v > 0:
+                                execution.broker_volume_units = _v
+                        except Exception:
+                            pass
                         _n = (execution.notes or "").strip()
                         _acct_tok = f" | acct={_acct_id}" if _acct_id else ""
-                        # Stash the placed broker volume so the live manager can
-                        # close exactly half at TP1 (partial-runner mode).
                         _vol_tok = ""
                         try:
                             _v = int(order_result.get("volume") or 0)
@@ -3568,6 +3689,13 @@ async def evaluate_and_fire(
             _bump("blk_no_price_data")
         elif _conditions_failed_for_all:
             _bump("blk_ta_conditions")
+
+    if gate_stats is not None:
+        try:
+            from app.services.ctrader_order_queue import record_gate_stats
+            record_gate_stats(strategy.id, gate_stats)
+        except Exception:
+            pass
 
 
 # ─── Subscriber copy-trade propagation ───────────────────────────────────────
@@ -3797,19 +3925,34 @@ async def _propagate_to_subscribers(
                     _sub_risk_usd = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None
                     _sub_fixed_lots = float(sub_risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
                     if _sub_broker == "ctrader":
-                        from app.services.ctrader_client import place_ctrader_order_for_user
-                        order_result = await place_ctrader_order_for_user(
-                            user        = sub_user,
-                            symbol      = symbol,
-                            direction   = direction,
-                            entry_price = entry,
-                            tp_pct      = tp_pct_raw,
-                            sl_pct      = sl_pct_raw,
-                            risk_pct    = float(sub_risk.get("position_size_pct", 5)),
-                            risk_usd    = _sub_risk_usd,
-                            use_risk_pct = bool(sub_risk.get("use_risk_pct")),
-                            fixed_lots  = _sub_fixed_lots or None,
+                        from app.services.ctrader_order_queue import (
+                            CtraderOrderJob, enqueue_ctrader_order, start_ctrader_order_worker,
                         )
+                        start_ctrader_order_worker()
+                        _sub_use_risk_pct = bool(sub_risk.get("use_risk_pct"))
+                        _sub_risk_pct = float(
+                            sub_risk.get("risk_pct_per_trade")
+                            or sub_risk.get("position_size_pct")
+                            or 1.0
+                        )
+                        _job = CtraderOrderJob(
+                            user_id=sub_user.id,
+                            strategy_id=sub_strategy.id,
+                            execution_id=sub_exec.id,
+                            symbol=symbol,
+                            direction=direction,
+                            entry_price=entry,
+                            tp_pct=tp_pct_raw,
+                            sl_pct=sl_pct_raw,
+                            risk_pct=_sub_risk_pct,
+                            risk_usd=_sub_risk_usd,
+                            use_risk_pct=_sub_use_risk_pct,
+                            sl_pips=float(sub_config.get("stop_loss_pips") or 0) or None,
+                            fixed_lots=_sub_fixed_lots or None,
+                            asset_class=_sub_asset_class,
+                        )
+                        _queued = await enqueue_ctrader_order(_job)
+                        order_result = {"order_id": "queued", "queued": True} if _queued else None
                     else:
                         from app.services.strategy_trader import place_bitunix_order_for_user
                         order_result = await place_bitunix_order_for_user(
@@ -3849,10 +3992,42 @@ async def _propagate_to_subscribers(
                             pass
                     continue
 
+                if order_result and order_result.get("queued"):
+                    sub_exec.notes = ((sub_exec.notes or "") + " | order_queued").strip(" |")
+                    _sub_db.commit()
+                    if tg_id:
+                        asyncio.create_task(_tg_send(
+                            tg_id,
+                            _fmt_open_card(
+                                strategy_name=sub_strategy.name,
+                                symbol=symbol,
+                                direction=direction,
+                                entry=entry,
+                                tp_price=tp_price,
+                                tp_pct=round(tp_pct_raw, 2),
+                                tp2_price=tp2_price,
+                                tp2_pct=round(abs(tp2_price - entry) / entry * 100, 2) if tp2_price else None,
+                                sl_price=sl_price,
+                                sl_pct=round(sl_pct_raw, 2),
+                                leverage=leverage,
+                                conditions=sub_exec.conditions_met,
+                                is_paper=False,
+                                asset_class=_sub_asset_class,
+                            ) + "\n\n<i>Placing on cTrader…</i>",
+                        ))
+                    logger.info(
+                        f"[Propagate] Strategy {sub_strategy.id} (user {sub_user.username}) "
+                        f"{symbol} {direction} @ {entry} — queued on cTrader"
+                    )
+                    continue
+
                 if order_id:
                     if _sub_broker == "ctrader":
                         sub_exec.ctrader_order_id = str(order_id)
                         if _position_id:
+                            sub_exec.ctrader_position_id = str(_position_id)
+                            if _acct_id:
+                                sub_exec.ctrader_account_id = str(_acct_id)
                             _sn = (sub_exec.notes or "").strip()
                             _acct_tok = f" | acct={_acct_id}" if _acct_id else ""
                             sub_exec.notes = (f"{_sn} | pos={_position_id}{_acct_tok}".strip(" |"))
@@ -4345,10 +4520,17 @@ def _build_forex_worklist() -> list:
         user_cache: Dict[int, object] = {}
         for ex in open_execs:
             notes = ex.notes or ""
-            m = _re.search(r"pos=(\d+)", notes)
-            if not m:
-                continue  # no broker positionId captured → can't amend
-            position_id = int(m.group(1))
+            position_id = None
+            if ex.ctrader_position_id:
+                try:
+                    position_id = int(ex.ctrader_position_id)
+                except Exception:
+                    position_id = None
+            if position_id is None:
+                m = _re.search(r"pos=(\d+)", notes)
+                if not m:
+                    continue
+                position_id = int(m.group(1))
 
             cached = strat_cache.get(ex.strategy_id)
             if cached is None:

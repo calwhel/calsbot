@@ -1344,6 +1344,8 @@ async def startup():
     asyncio.create_task(_critical_migrations_background())
     asyncio.create_task(_startup_background())
     asyncio.create_task(_refresh_heavy_caches())
+    if is_replit() or is_railway():
+        asyncio.create_task(_keepalive_ping_loop())
     logger.info("Strategy portal ready — migrations running in background")
 
 
@@ -1558,26 +1560,33 @@ async def _maintain_advisory_lock(conn):
 
 async def _keepalive_ping_loop():
     """
-    Ping the app's own health endpoint every 4 minutes so Replit Autoscale
-    never scales to zero while strategies are active.
-    Replit only — Railway does not need this.
+    Ping the app every 4 minutes so idle hosts stay warm.
+
+    Replit Autoscale scales to zero without traffic; Railway free/low tiers
+    can sleep or take 20–40s to accept the first request after idle. A local
+    /ping every 4 min keeps gunicorn workers alive and Neon warm.
     """
-    if not is_replit():
+    if not (is_replit() or is_railway()):
         return
     import aiohttp as _aiohttp
     import os as _os
-    # Resolve the public domain — prefer the custom domain, fall back to replit.app
-    domain = _os.environ.get("PUBLIC_DOMAIN", "tradehubmarkets.com")
-    url = f"https://{domain}/health"
-    await asyncio.sleep(60)   # small initial delay to let the server fully start
+
+    if is_railway():
+        port = int(_os.environ.get("PORT", "5000"))
+        url = f"http://127.0.0.1:{port}/ping"
+    else:
+        domain = _os.environ.get("PUBLIC_DOMAIN", "tradehubmarkets.com")
+        url = f"https://{domain}/health"
+
+    await asyncio.sleep(45)   # let workers bind before first ping
     while True:
         try:
             async with _aiohttp.ClientSession() as _sess:
-                async with _sess.get(url, timeout=_aiohttp.ClientTimeout(total=12)) as r:
-                    logger.debug(f"[Keepalive] ✅ ping {url} → {r.status}")
+                async with _sess.get(url, timeout=_aiohttp.ClientTimeout(total=8)) as r:
+                    logger.debug(f"[Keepalive] ping {url} → {r.status}")
         except Exception as _e:
             logger.debug(f"[Keepalive] ping failed (non-critical): {_e}")
-        await asyncio.sleep(240)   # 4-minute interval
+        await asyncio.sleep(240)   # 4-minute interval — under Neon 5-min idle cutoff
 
 
 async def _resilient_task(name: str, coro_fn, restart_delay: int = 30):
@@ -1598,7 +1607,7 @@ async def _start_executor_tasks():
     """Import and launch the executor + monitor tasks in this worker."""
     await _cancel_ghost_executions()
     asyncio.create_task(_ghost_cleanup_loop())
-    asyncio.create_task(_keepalive_ping_loop())   # keep Autoscale awake
+    # Keepalive runs on every worker via startup(); executor worker no longer sole pinger.
 
     # ── FMP + cTrader price feeds ─────────────────────────────────────────────
     # Started HERE (not in _startup_background) so each runs in EXACTLY ONE worker —
@@ -1630,6 +1639,12 @@ async def _start_executor_tasks():
     # Wrapped in _resilient_task so a transient crash (e.g. DB SSL drop)
     # auto-restarts instead of silently killing the executor permanently.
     asyncio.create_task(_resilient_task("run_strategy_executor", run_strategy_executor, restart_delay=20))
+    try:
+        from app.services.ctrader_order_queue import start_ctrader_order_worker
+        start_ctrader_order_worker()
+        logger.info("cTrader async order queue worker started (executor worker)")
+    except Exception as _oq_err:
+        logger.warning(f"cTrader order queue start error (non-fatal): {_oq_err}")
     asyncio.create_task(_resilient_task("run_forex_executor", run_forex_executor, restart_delay=20))
     # Dedicated fast (~1s) loop that pushes live forex breakeven/trailing SL
     # amendments to cTrader off the real-time spot feed — so gold reaches
@@ -6117,8 +6132,13 @@ async def portal_page(request: Request, uid: str = Query(...)):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/ping")
-async def api_ping():
-    """Lightweight liveness + DB wake-up before heavier portal API calls."""
+async def api_ping(lite: int = Query(0)):
+    """Lightweight liveness + DB wake-up before heavier portal API calls.
+
+    ?lite=1 returns instantly (no DB) — use /ping for Railway cold-start detection.
+    """
+    if lite:
+        return {"ok": True, "lite": True}
     t0 = time.monotonic()
     try:
         from sqlalchemy import text as _pt
@@ -6140,6 +6160,57 @@ async def api_ping():
             {"ok": False, "error": "database_waking", "detail": str(exc)[:120]},
             status_code=503,
         )
+
+
+@app.get("/api/portal/bootstrap")
+async def api_portal_bootstrap(uid: str = Query(...)):
+    """Strategies + portfolio in one round-trip (one Neon wake, shared cold-start)."""
+    import json as _json
+
+    strat_key = f"api_strats_{uid}"
+    port_key = f"portfolio_{uid}"
+    now = time.time()
+    sc = _CACHE.get(strat_key)
+    pc = _CACHE.get(port_key)
+    if sc and pc and now < sc[1] and now < pc[1]:
+        return JSONResponse({"strategies": sc[0], "portfolio": pc[0], "cached": True})
+
+    try:
+        strats_r, port_r = await asyncio.gather(
+            api_strategies(uid),
+            api_portfolio(uid),
+            return_exceptions=True,
+        )
+    except Exception as exc:
+        logger.warning(f"[bootstrap] gather failed uid={uid}: {exc}")
+        raise HTTPException(status_code=503, detail="Portal busy — retry in a moment")
+
+    for item in (strats_r, port_r):
+        if isinstance(item, HTTPException):
+            raise item
+
+    def _body(resp):
+        if isinstance(resp, JSONResponse):
+            return _json.loads(resp.body)
+        if isinstance(resp, dict):
+            return resp
+        return _json.loads(getattr(resp, "body", b"{}") or b"{}")
+
+    try:
+        strats = _body(strats_r)
+        port = _body(port_r)
+    except Exception as exc:
+        logger.warning(f"[bootstrap] parse failed uid={uid}: {exc}")
+        if sc and pc:
+            return JSONResponse({"strategies": sc[0], "portfolio": pc[0], "cached": True, "stale": True})
+        raise HTTPException(status_code=503, detail="Portal busy — retry in a moment")
+
+    if isinstance(strats, dict) and strats.get("detail"):
+        raise HTTPException(status_code=503, detail=str(strats.get("detail")))
+    if isinstance(port, dict) and port.get("error"):
+        raise HTTPException(status_code=503, detail=str(port.get("detail") or "Portfolio busy"))
+
+    return JSONResponse({"strategies": strats, "portfolio": port, "cached": False})
 
 
 @app.get("/api/strategies")
@@ -7487,12 +7558,14 @@ class _JsonBodyRequest:
 
 
 # ─── Forex multi-pair market structure scanner ───────────────────────────────
-from app.services.live_structure_scanner import (
-    build_scan_response,
-    live_scan_progress,
-    run_forex_scanner as _run_forex_scanner,
-    start_live_scan,
-)
+_scanner_mod = None
+
+
+def _scanner():
+    global _scanner_mod
+    if _scanner_mod is None:
+        from app.services import live_structure_scanner as _scanner_mod
+    return _scanner_mod
 
 
 def _auth_scanner_uid(uid: str):
@@ -7518,13 +7591,13 @@ async def api_forex_scanner_start(request: Request):
     mode = (body.get("mode") or "fast").lower()
     if mode not in ("fast", "full"):
         mode = "fast"
-    return JSONResponse(content=start_live_scan(uid, mode=mode))
+    return JSONResponse(content=_scanner().start_live_scan(uid, mode=mode))
 
 
 @app.get("/api/forex/scanner/progress")
 async def api_forex_scanner_progress(uid: str = Query(...)):
     """Poll streaming scan — signals grow until status=done."""
-    return JSONResponse(content=live_scan_progress(uid))
+    return JSONResponse(content=_scanner().live_scan_progress(uid))
 
 
 @app.get("/api/forex/scanner")
@@ -7537,12 +7610,71 @@ async def api_forex_scanner(request: Request):
     mode = (request.query_params.get("mode") or "fast").lower()
     if mode not in ("fast", "full"):
         mode = "fast"
+    sc = _scanner()
     try:
-        signals, partial = await _run_forex_scanner(mode=mode)
+        signals, partial = await sc.run_forex_scanner(mode=mode)
     except Exception as e:
         logger.warning(f"forex scanner error: {e}")
         signals, partial = [], False
-    return JSONResponse(content=build_scan_response(signals, mode=mode, partial=partial))
+    return JSONResponse(content=sc.build_scan_response(signals, mode=mode, partial=partial))
+
+
+@app.get("/api/forex/scanner/best")
+async def api_forex_scanner_best(request: Request):
+    """Top structure signals right now — uses shared 60s cache when available."""
+    uid = request.query_params.get("uid", "")
+    if uid:
+        _auth_scanner_uid(uid)
+    mode = (request.query_params.get("mode") or "fast").lower()
+    if mode not in ("fast", "full"):
+        mode = "fast"
+    limit = min(20, max(1, int(request.query_params.get("limit") or 8)))
+    sc = _scanner()
+    cached = sc.get_shared_scan(mode)
+    if cached and cached.get("signals"):
+        signals = cached["signals"][:limit]
+        out = dict(cached)
+        out["signals"] = signals
+        out["count"] = len(signals)
+        out["source"] = "cache"
+        return JSONResponse(out)
+    try:
+        signals, partial = await sc.run_forex_scanner(mode=mode)
+    except Exception as e:
+        logger.warning(f"forex scanner best error: {e}")
+        signals, partial = [], False
+    resp = sc.build_scan_response(signals[:limit], mode=mode, partial=partial)
+    resp["source"] = "live"
+    return JSONResponse(resp)
+
+
+@app.get("/api/strategies/{strategy_id}/gate-stats")
+async def api_strategy_gate_stats(strategy_id: int, uid: str = Query(...)):
+    """Why a strategy did or didn't fire on the last executor cycle."""
+    from app.database import SessionLocal
+    from app.strategy_models import UserStrategy
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        strat = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id,
+            UserStrategy.user_id == user.id,
+        ).first()
+        if not strat:
+            raise HTTPException(status_code=404)
+        strat_name = strat.name
+        strat_status = strat.status
+    finally:
+        db.close()
+    from app.services.ctrader_order_queue import get_gate_stats
+    return JSONResponse({
+        "strategy_id": strategy_id,
+        "name": strat_name,
+        "status": strat_status,
+        **get_gate_stats(strategy_id),
+    })
 
 
 @app.get("/api/markets/catalog")
@@ -9221,7 +9353,7 @@ async def api_portfolio_trades(
             db.close()
 
     try:
-        loaded = await asyncio.wait_for(asyncio.to_thread(_load_rows_sync), timeout=12.0)
+        loaded = await asyncio.wait_for(asyncio.to_thread(_load_rows_sync), timeout=25.0)
     except asyncio.TimeoutError:
         stale = _CACHE.get(_ptrades_key)
         if stale:
@@ -10915,6 +11047,22 @@ async def api_live_forex_account(uid: str = Query(...)):
         for p in positions:
             if p.get("fired_at"):
                 p["fired_at"] = p["fired_at"].isoformat()
+            try:
+                from app.services.ctrader_price_feed import get_price as _mkt_px
+                from app.services.forex_engine import pip_size as _pip_sz
+                sym = (p.get("symbol") or "").upper()
+                entry = float(p.get("entry_price") or 0)
+                if sym and entry > 0:
+                    mark = _mkt_px(sym)
+                    if mark:
+                        p["mark_price"] = round(mark, 6)
+                        pip = max(_pip_sz(sym), 1e-10)
+                        if p.get("direction") == "LONG":
+                            p["unrealized_pips"] = round((mark - entry) / pip, 1)
+                        else:
+                            p["unrealized_pips"] = round((entry - mark) / pip, 1)
+            except Exception:
+                pass
 
         live_rows = await strategies_task
         live_strategies = []

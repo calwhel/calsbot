@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional
@@ -16,6 +17,14 @@ logger = logging.getLogger(__name__)
 
 _JOB_TTL_SECS = 3600
 _TASKS: Dict[str, asyncio.Task] = {}
+_DISCOVERY_SEM: Optional[asyncio.Semaphore] = None
+
+
+def _discovery_sem() -> asyncio.Semaphore:
+    global _DISCOVERY_SEM
+    if _DISCOVERY_SEM is None:
+        _DISCOVERY_SEM = asyncio.Semaphore(int(os.environ.get("DISCOVERY_MAX_PARALLEL", "2")))
+    return _DISCOVERY_SEM
 
 
 def _job_key(scan_type: str, uid: str) -> str:
@@ -33,11 +42,39 @@ def _row_to_progress(row) -> Dict[str, Any]:
         "message": row.message or "",
         "scan_type": row.scan_type,
     }
-    if row.status == "done" and row.result_json is not None:
-        out["result"] = row.result_json
+    if row.result_json is not None:
+        if row.status == "done":
+            out["result"] = row.result_json
+        elif row.status == "running" and isinstance(row.result_json, dict):
+            out.update(row.result_json)
     if row.status == "error" and row.error:
         out["error"] = row.error
     return out
+
+
+def write_job_progress(scan_type: str, uid: str, *, message: str = None, partial: dict = None) -> None:
+    """Persist in-progress scan state (streaming) for multi-worker polling."""
+    key = _job_key(scan_type, uid)
+    if not get_job(scan_type, uid):
+        from app.strategy_models import DiscoveryScanJob
+        db = _db_session()
+        try:
+            db.add(DiscoveryScanJob(
+                job_key=key,
+                scan_type=scan_type,
+                uid=uid.strip(),
+                status="running",
+                message=message or "Starting…",
+            ))
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        finally:
+            db.close()
+    _write_job(key, status="running", message=message, result=partial)
 
 
 def _prune_old_jobs() -> None:
@@ -162,7 +199,8 @@ def start_discovery_job(
             _write_job(key, message=msg)
 
         try:
-            result = await runner(_progress)
+            async with _discovery_sem():
+                result = await runner(_progress)
             if isinstance(result, dict) and result.get("ok"):
                 _write_job(key, status="done", message="Scan complete",
                            result=result, finished=True)

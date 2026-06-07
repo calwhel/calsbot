@@ -57,6 +57,9 @@ class StrategyExecution(Base):
     closed_at       = Column(DateTime, nullable=True)
     bitunix_order_id  = Column(String(80), nullable=True)
     ctrader_order_id  = Column(String(80), nullable=True)  # cTrader live forex orders
+    ctrader_position_id = Column(String(40), nullable=True)
+    ctrader_account_id  = Column(String(40), nullable=True)
+    broker_volume_units = Column(Integer, nullable=True)
     notes           = Column(Text, nullable=True)
     is_paper        = Column(Boolean, default=False)       # paper trade — no real order placed
     asset_class     = Column(String(16), nullable=False, default="crypto", server_default="crypto", index=True)
@@ -259,6 +262,9 @@ def init_strategy_tables(engine):
             ("tp2_price",            "FLOAT"),
             ("pips_pnl",             "FLOAT"),
             ("spread_pips_applied",  "FLOAT"),
+            ("ctrader_position_id",  "VARCHAR(40)"),
+            ("ctrader_account_id",   "VARCHAR(40)"),
+            ("broker_volume_units",  "INTEGER"),
         ]:
             if ("strategy_executions", col) not in existing_cols:
                 try:

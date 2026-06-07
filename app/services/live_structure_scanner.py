@@ -354,13 +354,80 @@ async def run_forex_scanner(
     return all_results, partial
 
 
+def _scan_type_for_mode(mode: str) -> str:
+    return "live_full" if mode == "full" else "live_fast"
+
+
+def _shared_scan_type(mode: str) -> str:
+    return f"structure_shared_{mode}"
+
+
+def _save_shared_scan(mode: str, signals: list, partial: bool) -> None:
+    try:
+        from app.services.discovery_jobs import write_job_progress, get_job, _job_key
+        from app.strategy_models import DiscoveryScanJob
+        from app.services.discovery_jobs import _db_session
+        key = _job_key(_shared_scan_type(mode), "_shared")
+        payload = build_scan_response(signals, mode=mode, partial=partial)
+        db = _db_session()
+        try:
+            row = db.query(DiscoveryScanJob).filter(DiscoveryScanJob.job_key == key).first()
+            if not row:
+                row = DiscoveryScanJob(
+                    job_key=key,
+                    scan_type=_shared_scan_type(mode),
+                    uid="_shared",
+                    status="done",
+                    message="Shared structure cache",
+                )
+                db.add(row)
+            row.status = "done"
+            row.result_json = payload
+            row.updated_at = datetime.utcnow()
+            row.finished_at = datetime.utcnow()
+            db.commit()
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.debug(f"shared scan cache write failed: {exc}")
+
+
+def get_shared_scan(mode: str = "fast", max_age_secs: int = 60) -> Optional[dict]:
+    try:
+        from app.services.discovery_jobs import get_job
+        row = get_job(_shared_scan_type(mode), "_shared")
+        if not row or not row.result_json or row.status != "done":
+            return None
+        age = (datetime.utcnow() - (row.updated_at or datetime.utcnow())).total_seconds()
+        if age > max_age_secs:
+            return None
+        return dict(row.result_json)
+    except Exception:
+        return None
+
+
 def live_scan_progress(uid: str) -> dict:
     uid = uid.strip()
+    for mode in ("fast", "full"):
+        try:
+            from app.services.discovery_jobs import get_job, job_progress
+            st = _scan_type_for_mode(mode)
+            row = get_job(st, uid)
+            if row and row.status in ("running", "done", "error"):
+                prog = job_progress(st, uid)
+                if row.status == "running" and isinstance(row.result_json, dict):
+                    prog.update(row.result_json)
+                if prog.get("status") != "idle":
+                    return _enrich_progress(prog, mode)
+        except Exception:
+            pass
     state = _LIVE_SCAN_STATE.get(uid)
     if not state:
         return {"status": "idle", "signals": [], "count": 0}
-    out = dict(state)
-    mode = out.get("mode", "fast")
+    return _enrich_progress(dict(state), state.get("mode", "fast"))
+
+
+def _enrich_progress(out: dict, mode: str) -> dict:
     meta = build_scan_response(
         out.get("signals") or [],
         mode=mode,
@@ -385,6 +452,15 @@ def start_live_scan(uid: str, mode: str = "fast") -> dict:
         return {"ok": True, "started": False, "status": "running", **existing}
 
     items = _work_items("full" if mode == "full" else "fast")
+    scan_type = _scan_type_for_mode(mode)
+    try:
+        from app.services.discovery_jobs import write_job_progress
+        write_job_progress(scan_type, uid, message="Starting scan…", partial={
+            "status": "running", "mode": mode, "done": 0, "total": len(items),
+            "signals": [], "count": 0,
+        })
+    except Exception:
+        pass
     _LIVE_SCAN_STATE[key] = {
         "status": "running",
         "mode": mode,
@@ -401,6 +477,8 @@ def start_live_scan(uid: str, mode: str = "fast") -> dict:
     async def _worker():
         state = _LIVE_SCAN_STATE[key]
 
+        scan_type = _scan_type_for_mode(mode)
+
         def _on_batch(pair, tf, batch, all_so_far):
             state["current"] = f"{pair} {tf}"
             state["done"] = min(state.get("done", 0) + 1, state["total"])
@@ -410,19 +488,48 @@ def start_live_scan(uid: str, mode: str = "fast") -> dict:
                 f"Found {state['count']} signal{'s' if state['count'] != 1 else ''} · "
                 f"{pair} {tf} ({state['done']}/{state['total']})"
             )
+            try:
+                from app.services.discovery_jobs import write_job_progress
+                write_job_progress(scan_type, uid, message=state["message"], partial=dict(state))
+            except Exception:
+                pass
 
         try:
-            signals, partial = await run_forex_scanner(mode=mode, on_batch=_on_batch)
-            state["signals"] = signals
-            state["count"] = len(signals)
-            state["partial"] = partial
-            state["done"] = state["total"]
-            state["status"] = "done"
-            state["message"] = (
-                f"Done — {len(signals)} signal{'s' if len(signals) != 1 else ''}"
-                + (" (partial)" if partial else "")
-            )
-            state["scanned_at"] = datetime.utcnow().isoformat() + "Z"
+            shared = get_shared_scan(mode)
+            if shared and shared.get("signals"):
+                state.update({
+                    "signals": shared.get("signals", []),
+                    "count": shared.get("count", 0),
+                    "partial": shared.get("partial", False),
+                    "done": state["total"],
+                    "status": "done",
+                    "message": f"Done — {shared.get('count', 0)} signals (shared cache)",
+                    "scanned_at": shared.get("scanned_at"),
+                })
+            else:
+                signals, partial = await run_forex_scanner(mode=mode, on_batch=_on_batch)
+                state["signals"] = signals
+                state["count"] = len(signals)
+                state["partial"] = partial
+                state["done"] = state["total"]
+                state["status"] = "done"
+                state["message"] = (
+                    f"Done — {len(signals)} signal{'s' if len(signals) != 1 else ''}"
+                    + (" (partial)" if partial else "")
+                )
+                state["scanned_at"] = datetime.utcnow().isoformat() + "Z"
+                _save_shared_scan(mode, signals, partial)
+            try:
+                from app.services.discovery_jobs import _write_job, _job_key
+                _write_job(
+                    _job_key(scan_type, uid),
+                    status=state["status"],
+                    message=state["message"],
+                    result=dict(state),
+                    finished=True,
+                )
+            except Exception:
+                pass
         except Exception as exc:
             logger.exception(f"live scan failed for {uid}")
             state["status"] = "error"
