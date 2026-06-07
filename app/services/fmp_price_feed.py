@@ -568,7 +568,8 @@ async def _stream():
 
     try:
         while True:
-            if not await asyncio.to_thread(_try_fmp_poll_lock):
+            lock_conn = await asyncio.to_thread(_acquire_fmp_poll_lock)
+            if not lock_conn:
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
             try:
@@ -604,7 +605,7 @@ async def _stream():
                 else:
                     await asyncio.sleep(_POLL_INTERVAL)
             finally:
-                await asyncio.to_thread(_release_fmp_poll_lock)
+                await asyncio.to_thread(_release_fmp_poll_lock, lock_conn)
     except asyncio.CancelledError:
         logger.info("[FMPFeed] polling task cancelled")
         raise
