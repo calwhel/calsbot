@@ -244,8 +244,8 @@ def _forex_open(now_utc: datetime) -> bool:
     # Saturday → closed
     if wd == 5:
         return False
-    # Sunday before 22:00 → closed
-    if wd == 6 and hr < 22:
+    # Sunday before 21:00 UTC → closed (Sydney open ~22:00; FP Markets ~21:00)
+    if wd == 6 and hr < 21:
         return False
     return True
 
