@@ -10194,10 +10194,18 @@ def _ctrader_redirect_uri(request: Optional[Request] = None) -> str:
     """Canonical OAuth callback URL — must match Spotware app settings exactly."""
     explicit = (os.environ.get("CTRADER_REDIRECT_URI") or "").strip()
     if explicit:
-        return explicit
+        return explicit.rstrip("/")
     if os.environ.get("REPLIT_DEV_DOMAIN"):
         return f"https://{os.environ['REPLIT_DEV_DOMAIN']}/api/ctrader/callback"
-    return f"{public_base_url(request)}/api/ctrader/callback"
+    # Prefer the Host the user actually hit (Railway URL vs custom domain).
+    # PUBLIC_DOMAIN can point at dead DNS while Railway still works — a wrong
+    # redirect_uri makes Spotware reject the whole OAuth flow silently.
+    if request is not None:
+        host = (request.headers.get("host") or "").split(":")[0].strip()
+        if host and host not in ("localhost", "127.0.0.1"):
+            scheme = "https" if request_is_https(request) else "http"
+            return f"{scheme}://{host}/api/ctrader/callback"
+    return f"{public_base_url(request).rstrip('/')}/api/ctrader/callback"
 
 
 @app.get("/api/ctrader/auth-url")
@@ -10215,7 +10223,8 @@ async def api_ctrader_auth_url(uid: str = Query(...), request: Request = None):
                 "Contact support."
             ),
         )
-    if not (uid or "").strip():
+    uid = (uid or "").strip().upper()
+    if not uid:
         raise HTTPException(status_code=400, detail="Missing user id — please log in again.")
 
     from app.database import SessionLocal
@@ -10228,7 +10237,7 @@ async def api_ctrader_auth_url(uid: str = Query(...), request: Request = None):
             raise HTTPException(status_code=403, detail="Account suspended.")
         redirect_uri = _ctrader_redirect_uri(request)
         logger.info(f"[ctrader] auth-url uid={uid} redirect_uri={redirect_uri}")
-        url = get_oauth_url(redirect_uri=redirect_uri, state=uid)
+        url = get_oauth_url(redirect_uri=redirect_uri, state=uid.upper())
         if not url or "client_id=" not in url:
             raise HTTPException(status_code=503, detail="Could not build cTrader OAuth URL.")
         return JSONResponse({"url": url, "redirect_uri": redirect_uri})
@@ -10306,7 +10315,7 @@ async def api_ctrader_callback(
     session AFTER the HTTP call guarantees a live connection.
     """
     if error:
-        return RedirectResponse(url=f"/?ctrader_error={error}")
+        return RedirectResponse(url=f"/app?ctrader_error={urllib.parse.quote(str(error))}#live-forex")
 
     from app.database import SessionLocal
     from app.models import UserPreference
@@ -10322,7 +10331,7 @@ async def api_ctrader_callback(
 
     db1 = SessionLocal()
     try:
-        uid  = state or ""
+        uid  = (state or "").strip().upper()
         user = _get_user_by_uid(uid, db1) if uid else None
         if not user and request:
             session_uid = _get_session_uid(request)
@@ -10353,13 +10362,13 @@ async def api_ctrader_callback(
             f"[cTrader callback] exchange_code failed: "
             f"{type(e).__name__} status={status}"
         )
-        return RedirectResponse(url="/?ctrader_error=token_exchange_failed")
+        return RedirectResponse(url="/app?ctrader_error=token_exchange_failed#live-forex")
 
     access_token  = token_data.get("accessToken")  or token_data.get("access_token",  "")
     refresh_token = token_data.get("refreshToken") or token_data.get("refresh_token", "")
     if not access_token:
         logger.error("[cTrader callback] no access_token in response")
-        return RedirectResponse(url="/?ctrader_error=no_token")
+        return RedirectResponse(url="/app?ctrader_error=no_token#live-forex")
 
     # ── Step 3: save token via raw SQL UPSERT (atomic, bypasses ORM state) ───────
     import traceback as _traceback
@@ -10399,7 +10408,7 @@ async def api_ctrader_callback(
             db2.rollback()
         except Exception:
             pass
-        return RedirectResponse(url="/?ctrader_error=db_error")
+        return RedirectResponse(url="/app?ctrader_error=db_error#live-forex")
     finally:
         db2.close()
 
@@ -10412,7 +10421,7 @@ async def api_ctrader_callback(
             name_str, uname_str, tg_id_str,
         )
 
-    return RedirectResponse(url="/app#live-forex")
+    return RedirectResponse(url="/app?ctrader=linked#live-forex")
 
 
 
@@ -10618,6 +10627,26 @@ async def api_live_forex_account(uid: str = Query(...)):
 
         if not connected:
             return JSONResponse({"connected": False, "forex_approved": forex_approved, "accounts": accounts, "balance": None, "equity": None})
+
+        # Right after OAuth the background account fetch may still be running — if
+        # the UI polls before it finishes, proactively refresh from cTrader here.
+        if connected and not accounts and prefs and prefs.ctrader_access_token:
+            try:
+                from app.services.ctrader_client import get_accounts_for_token
+                fetched = await asyncio.wait_for(
+                    get_accounts_for_token(prefs.ctrader_access_token), timeout=12.0
+                )
+                if fetched:
+                    accounts = fetched
+                    prefs.ctrader_accounts = _json.dumps(fetched)
+                    live = [a for a in fetched if a.get("isLive")]
+                    if not prefs.ctrader_account_id:
+                        chosen = live[0] if len(live) == 1 else (fetched[0] if len(fetched) == 1 else None)
+                        if chosen:
+                            prefs.ctrader_account_id = str(chosen["ctidTraderAccountId"])
+                    db.commit()
+            except Exception as _ae:
+                logger.warning(f"[live-forex] inline accounts refresh failed uid={uid}: {type(_ae).__name__}")
 
         # Fetch live balance from cTrader — cached 20s per user to avoid hammering
         # the persistent TLS connection on every frontend poll cycle.
