@@ -10693,6 +10693,20 @@ function renderLiveForex(d, wrap) {
     ? ''
     : `<div class="lf-pending-badge">⏳ Awaiting approval — strategies run in paper mode until approved. Send <b>/forex</b> to <a href="https://t.me/TradehubStrategyBot" target="_blank" style="color:inherit;font-weight:700">@TradehubStrategyBot</a> on Telegram to request access.</div>`;
 
+  const pf = d.price_feed || {};
+  const feedLine = (() => {
+    const n = pf.symbol_count || 0;
+    const sub = !!pf.subscribed;
+    const mkt = pf.forex_market_open !== false;
+    if (n > 0) {
+      const syms = (pf.cached_symbols || []).slice(0, 5).join(', ');
+      return `<span style="color:var(--positive,#3fb68b)">● Live ticks</span> · ${n} symbols` + (syms ? ` (${escHtml(syms)}…)` : '');
+    }
+    if (sub && !mkt) return `<span style="color:var(--warning,#d6a35c)">● cTrader linked</span> · market closed — ticks resume when forex opens`;
+    if (sub) return `<span style="color:var(--warning,#d6a35c)">● cTrader linked</span> · waiting for live ticks (paper scans use Yahoo until ticks arrive)`;
+    return `<span style="color:var(--muted)">○ Price feed connecting</span> · paper scans use Yahoo fallback`;
+  })();
+
   wrap.innerHTML = `
     ${approvedBanner}
 
@@ -10701,7 +10715,8 @@ function renderLiveForex(d, wrap) {
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <div>
           <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px">FP Markets · cTrader</div>
-          <div style="font-size:11px;color:var(--muted)">Account #${d.account_id}</div>
+          <div style="font-size:11px;color:var(--muted)">Account #${escHtml(String(d.account_id))}</div>
+          <div style="font-size:11px;margin-top:6px;line-height:1.4">${feedLine}</div>
         </div>
         <div style="text-align:right">
           <div style="font-size:11px;color:var(--muted);margin-bottom:2px">Balance</div>

@@ -10682,6 +10682,12 @@ async def _complete_ctrader_oauth_in_background(code: str, state: str, redirect_
         _set_ctrader_oauth_progress(uid, "ok")
 
     try:
+        from app.services.ctrader_price_feed import notify_account_linked
+        notify_account_linked()
+    except Exception:
+        pass
+
+    try:
         await _fetch_and_store_ctrader_accounts(
             user_row["id"], access_token, user_row["is_admin"],
             user_row["name"], user_row["uname"], user_row["tg_id"],
@@ -10869,11 +10875,16 @@ async def api_ctrader_feed_status():
     }
     try:
         from app.services import ctrader_price_feed as _ctf
-        _c_syms = _ctf.cached_symbols()
+        _st = _ctf.feed_status()
         out["ctrader"] = {
-            "live":           bool(_ctf.is_live()),
-            "symbol_count":   len(_c_syms),
-            "cached_symbols": _c_syms[:30],
+            "live":              bool(_st.get("live")),
+            "subscribed":        bool(_st.get("subscribed")),
+            "symbol_count":      int(_st.get("symbol_count") or 0),
+            "cached_symbols":    list(_st.get("cached_symbols") or [])[:30],
+            "symbols_seen":      int(_st.get("symbols_seen") or 0),
+            "last_tick_age_s":   _st.get("last_tick_age_s"),
+            "forex_market_open": _st.get("forex_market_open"),
+            "note":              _st.get("note"),
         }
     except Exception as e:
         out["ctrader"]["error"] = str(e)
@@ -10899,6 +10910,10 @@ async def api_ctrader_feed_status():
 
     if out["ctrader"]["symbol_count"] > 0:
         out["primary_source"] = "ctrader_realtime"
+    elif out["ctrader"].get("subscribed"):
+        out["primary_source"] = (
+            "ctrader_subscribed" if out["ctrader"].get("forex_market_open") else "ctrader_market_closed"
+        )
     elif out["fmp"]["symbol_count"] > 0:
         out["primary_source"] = "fmp_realtime"
     else:
@@ -11133,6 +11148,13 @@ async def api_live_forex_account(uid: str = Query(...)):
                 "timeframe":     _tf or "—",
             })
 
+        feed_info: Dict[str, object] = {}
+        try:
+            from app.services import ctrader_price_feed as _ctf
+            feed_info = _ctf.feed_status()
+        except Exception:
+            feed_info = {}
+
         return JSONResponse({
             "connected":       True,
             "forex_approved":  forex_approved,
@@ -11142,6 +11164,7 @@ async def api_live_forex_account(uid: str = Query(...)):
             "equity":          round(balance, 2) if balance is not None else None,
             "open_positions":  positions,
             "live_strategies": live_strategies,
+            "price_feed":      feed_info,
         })
     finally:
         db.close()

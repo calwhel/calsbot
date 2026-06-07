@@ -129,6 +129,7 @@ _TB_IDLE_MAX = 25.0  # cTrader drops idle conns ~30s → proactively reopen past
 
 _feed_live: bool = False
 _feed_task: Optional[asyncio.Task] = None
+_wake_event: Optional[asyncio.Event] = None
 # Cached symbol-ID map from the last successful connection.
 # Symbol IDs differ per host/account, so the cache is scoped to the
 # (host, ctid) it was resolved from — switching host/account forces a
@@ -346,8 +347,14 @@ async def _feed_loop() -> None:
 
             creds = await _get_connected_account()
             if not creds:
-                logger.info("[CTraderFeed] no connected cTrader accounts — sleeping 120s")
-                await asyncio.sleep(120)
+                logger.info("[CTraderFeed] no connected cTrader accounts — waiting up to 120s")
+                wake = _get_wake_event()
+                try:
+                    await asyncio.wait_for(wake.wait(), timeout=120.0)
+                    wake.clear()
+                    logger.info("[CTraderFeed] woken — checking for newly linked account")
+                except asyncio.TimeoutError:
+                    pass
                 continue
 
             access_token, ctid, _uid, _is_live = creds
@@ -763,7 +770,7 @@ def get_bid_ask(symbol: str) -> Optional[Tuple[float, float]]:
 
 
 def is_live() -> bool:
-    """True when the streaming connection is up and receiving ticks."""
+    """True when the streaming connection is subscribed to spot prices."""
     return _feed_live
 
 
@@ -774,6 +781,57 @@ def cached_symbols() -> List[str]:
         sym for sym, (_, _, ts) in _spot_cache.items()
         if now - ts <= _SPOT_TTL
     ]
+
+
+def _get_wake_event() -> asyncio.Event:
+    global _wake_event
+    if _wake_event is None:
+        _wake_event = asyncio.Event()
+    return _wake_event
+
+
+def notify_account_linked() -> None:
+    """Wake the feed loop immediately after OAuth links a cTrader account."""
+    start()
+    try:
+        _get_wake_event().set()
+    except Exception:
+        pass
+
+
+def feed_status() -> Dict[str, object]:
+    """Diagnostics for /api/ctrader/feed-status and Live Forex UI."""
+    now = time.monotonic()
+    fresh = cached_symbols()
+    all_cached = list(_spot_cache.keys())
+    last_tick_age = None
+    if _spot_cache:
+        newest = max(ts for _, _, ts in _spot_cache.values())
+        last_tick_age = round(max(0.0, now - newest), 1)
+    forex_open = False
+    try:
+        from datetime import datetime
+        from app.services.asset_classes import is_market_open
+        forex_open = bool(is_market_open("forex", datetime.utcnow()))
+    except Exception:
+        pass
+    note = None
+    if _feed_live and not fresh and not forex_open:
+        note = "Forex market closed — live ticks resume when sessions open (Sun ~10pm UTC)."
+    elif _feed_live and not fresh:
+        note = "Subscribed to cTrader — waiting for first tick (can take ~30s after connect)."
+    elif not _feed_live and all_cached:
+        note = "Feed reconnecting — last prices may be stale."
+    return {
+        "subscribed":       _feed_live,
+        "live":             _feed_live,
+        "symbol_count":     len(fresh),
+        "cached_symbols":   fresh[:30],
+        "symbols_seen":     len(all_cached),
+        "last_tick_age_s":  last_tick_age,
+        "forex_market_open": forex_open,
+        "note":             note,
+    }
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────
@@ -793,6 +851,7 @@ def start() -> None:
     if _feed_task and not _feed_task.done():
         return  # already running
     try:
+        _get_wake_event()
         loop = asyncio.get_event_loop()
         _feed_task = loop.create_task(_feed_loop())
         logger.info("[CTraderFeed] background streaming task started")
