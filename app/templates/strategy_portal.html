@@ -7582,35 +7582,11 @@ async function testExchangeConnection(){
 // ─── cTrader / FP Markets Connect/Disconnect ──────────────────────────────
 async function _startCtraderOAuth(btn){
   if(!UID){ toast('Please log in first','error'); return; }
-  const el=btn||$('ctrader-connect-btn');
-  const prev=el?el.textContent:'';
+  const el=btn||$('ctrader-connect-btn')||$('lf-connect-btn');
   if(el){ el.disabled=true; el.textContent='Opening cTrader…'; }
-  try{
-    const r=await _apiFetch(`/api/ctrader/auth-url?uid=${encodeURIComponent(UID)}`);
-    let d={};
-    try{ d=await r.json(); }catch(_e){}
-    if(r.status===401){
-      toast('Session expired — log in again, then retry Connect','error');
-      if(el){ el.disabled=false; el.textContent=prev||'Connect via cTrader OAuth →'; }
-      return;
-    }
-    if(!r.ok){
-      toast(d.detail||`Could not start connection (${r.status})`,'error');
-      if(el){ el.disabled=false; el.textContent=prev||'Connect via cTrader OAuth →'; }
-      return;
-    }
-    if(d.redirect_uri) window._ctraderRedirectUri = d.redirect_uri;
-    if(d.url){
-      toast('Redirecting to cTrader — log in and approve TradeHub','success');
-      setTimeout(()=>{ window.location.href=d.url; }, 400);
-    }else{
-      toast(d.detail||'Could not get OAuth URL','error');
-      if(el){ el.disabled=false; el.textContent=prev||'Connect via cTrader OAuth →'; }
-    }
-  }catch(e){
-    toast('Network error — could not reach server','error');
-    if(el){ el.disabled=false; el.textContent=prev||'Connect via cTrader OAuth →'; }
-  }
+  toast('Opening cTrader — log in and approve TradeHub','success');
+  // Full-page redirect avoids mobile fetch timeouts on slow Neon cold starts.
+  window.location.href = `/api/ctrader/start?uid=${encodeURIComponent(UID)}`;
 }
 
 async function loadCtraderCard(){
@@ -8337,6 +8313,8 @@ function _handleCtraderReturnQuery() {
     no_token: 'cTrader did not return an access token.',
     no_access_token: 'cTrader token response was empty — try Connect again.',
     db_error: 'Connected to cTrader but saving failed — try again.',
+    ctrader_not_configured: 'cTrader is not configured on the server — contact support.',
+    oauth_start_failed: 'Could not start cTrader connection — log in and try again.',
   }[err] || ('cTrader connection failed: ' + err.replace(/_/g, ' '));
   toast(msg, 'error');
   try { showPage('live-forex', null); } catch (e) {}

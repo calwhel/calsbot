@@ -2012,7 +2012,7 @@ async def health_deep():
     return {
         "status": "ok",
         "ts": int(time.time()),
-        "v": "railway-free-v2-live-forex-connect",
+        "v": "railway-free-v2-ctrader-start-redirect",
         "commit": _commit[:12] if _commit else "unknown",
         "gold_scan": "yahoo-chart-v3",
         "features_free": portal_features_free(),
@@ -10371,9 +10371,9 @@ async def api_public_ctrader_setup(request: Request):
     })
 
 
-@app.get("/api/ctrader/auth-url")
-async def api_ctrader_auth_url(uid: str = Query(...), request: Request = None):
-    """Return the Spotware OAuth URL the user should be redirected to."""
+async def _ctrader_oauth_url_for_uid(uid: str, request: Optional[Request]) -> Tuple[str, str]:
+    """Build Spotware OAuth URL + callback redirect_uri for this portal user."""
+    from app.database import SessionLocal
     from app.services.ctrader_client import (
         CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET, get_oauth_url,
     )
@@ -10390,26 +10390,58 @@ async def api_ctrader_auth_url(uid: str = Query(...), request: Request = None):
     if not uid:
         raise HTTPException(status_code=400, detail="Missing user id — please log in again.")
 
-    from app.database import SessionLocal
-    db = SessionLocal()
+    def _verify_user():
+        db = SessionLocal()
+        try:
+            user = _get_user_by_uid(uid, db)
+            if not user:
+                return None
+            if getattr(user, "banned", False):
+                return False
+            return True
+        finally:
+            db.close()
+
+    verified = await asyncio.to_thread(_verify_user)
+    if verified is None:
+        raise HTTPException(status_code=403, detail="Session expired — please log in again.")
+    if verified is False:
+        raise HTTPException(status_code=403, detail="Account suspended.")
+
+    redirect_uri = _ctrader_redirect_uri(request)
+    oauth_state = _ctrader_oauth_state(uid, request)
+    logger.info(
+        "[ctrader] oauth-start uid=%s redirect_uri=%s return_host=%s",
+        uid, redirect_uri, _parse_ctrader_oauth_state(oauth_state)[1],
+    )
+    url = get_oauth_url(redirect_uri=redirect_uri, state=oauth_state)
+    if not url or "client_id=" not in url:
+        raise HTTPException(status_code=503, detail="Could not build cTrader OAuth URL.")
+    return url, redirect_uri
+
+
+@app.get("/api/ctrader/start")
+async def api_ctrader_start(uid: str = Query(...), request: Request = None):
+    """Mobile-safe OAuth kickoff — browser redirect (no JSON fetch / JS timeout)."""
+    uid_norm = (uid or "").strip().upper()
     try:
-        user = _get_user_by_uid(uid, db)
-        if not user:
-            raise HTTPException(status_code=403, detail="Session expired — please log in again.")
-        if getattr(user, "banned", False):
-            raise HTTPException(status_code=403, detail="Account suspended.")
-        redirect_uri = _ctrader_redirect_uri(request)
-        oauth_state = _ctrader_oauth_state(uid, request)
-        logger.info(
-            "[ctrader] auth-url uid=%s redirect_uri=%s return_host=%s",
-            uid, redirect_uri, _parse_ctrader_oauth_state(oauth_state)[1],
-        )
-        url = get_oauth_url(redirect_uri=redirect_uri, state=oauth_state)
-        if not url or "client_id=" not in url:
-            raise HTTPException(status_code=503, detail="Could not build cTrader OAuth URL.")
-        return JSONResponse({"url": url, "redirect_uri": redirect_uri})
-    finally:
-        db.close()
+        url, _redirect_uri = await _ctrader_oauth_url_for_uid(uid, request)
+        return RedirectResponse(url=url, status_code=302)
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            return RedirectResponse(url="/login?next=/app%23live-forex&msg=session_expired")
+        code = "oauth_start_failed"
+        if exc.status_code == 503:
+            code = "ctrader_not_configured"
+        q = f"ctrader_error={urllib.parse.quote(code)}"
+        return RedirectResponse(url=_ctrader_app_redirect_url(request, uid_norm, q))
+
+
+@app.get("/api/ctrader/auth-url")
+async def api_ctrader_auth_url(uid: str = Query(...), request: Request = None):
+    """Return the Spotware OAuth URL the user should be redirected to."""
+    url, redirect_uri = await _ctrader_oauth_url_for_uid(uid, request)
+    return JSONResponse({"url": url, "redirect_uri": redirect_uri})
 
 
 async def _fetch_and_store_ctrader_accounts(
