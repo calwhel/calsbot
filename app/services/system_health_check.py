@@ -230,7 +230,11 @@ def _check_executor(forex_open: bool) -> Dict[str, Any]:
             return ts is not None and (now - ts) <= _HEARTBEAT_FRESH_SECS
 
         # Crypto loop should always be cycling (24/7 market).
-        loops = {"crypto_executor": True}
+        loops = {
+            "crypto_executor": True,
+            "paper_monitor": True,
+            "live_monitor": True,
+        }
         # Forex loops only cycle meaningfully while the forex market is open.
         if forex_open:
             loops["forex_executor"] = True

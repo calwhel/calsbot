@@ -35,7 +35,8 @@ FOREX_SCAN_INTERVAL_SECONDS = int(_os_env.environ.get("EXECUTOR_FOREX_SCAN_INTER
 # cTrader real-time spot feed (per-tick) — NOT the DB — so a 1s cadence is cheap:
 # the open-position worklist is rebuilt from the DB only every _FX_WORKLIST_TTL.
 FOREX_MANAGE_INTERVAL_SECONDS = float(_os_env.environ.get("EXECUTOR_FOREX_MANAGE_INTERVAL", "1"))
-PAPER_MONITOR_INTERVAL      = int(_os_env.environ.get("EXECUTOR_MONITOR_INTERVAL", "20"))
+PAPER_MONITOR_INTERVAL      = int(_os_env.environ.get("EXECUTOR_MONITOR_INTERVAL", "10"))
+LIVE_MONITOR_INTERVAL       = int(_os_env.environ.get("EXECUTOR_LIVE_MONITOR_INTERVAL", "8"))
 MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "3"))
 # Forex executor runs more strategies in parallel than crypto: after per-cycle
 # batch-loading of users/subs/prefs, each forex strategy holds a DB connection
@@ -1936,7 +1937,10 @@ async def run_paper_position_monitor():
     from app.database import BgSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution
 
-    logger.info("🧪 Paper position monitor started (30s interval, full-history candle scan)")
+    logger.info(
+        f"🧪 Paper position monitor started ({PAPER_MONITOR_INTERVAL}s interval, "
+        "full-history candle scan)"
+    )
 
     async def _sweep(http_client):
         """
@@ -2103,6 +2107,7 @@ async def run_paper_position_monitor():
     async with httpx.AsyncClient() as http_client:
         # ── Startup catch-up: immediately resolve any positions missed while down ──
         try:
+            mark_heartbeat("paper_monitor")
             await _sweep(http_client)
         except Exception as e:
             logger.error(f"Startup catch-up sweep error: {e}", exc_info=True)
@@ -2110,6 +2115,7 @@ async def run_paper_position_monitor():
         while True:
             await asyncio.sleep(PAPER_MONITOR_INTERVAL)
             try:
+                mark_heartbeat("paper_monitor")
                 await _sweep(http_client)
             except Exception as e:
                 logger.error(f"Paper monitor loop error: {e}", exc_info=True)
@@ -2203,9 +2209,7 @@ async def run_live_position_monitor():
     from app.strategy_models import StrategyExecution, UserStrategy
     from app.models import User
 
-    logger.info("🔴 Live position monitor started (10s interval)")
-
-    LIVE_MONITOR_INTERVAL = 10
+    logger.info(f"🔴 Live position monitor started ({LIVE_MONITOR_INTERVAL}s interval)")
 
     async def _close_live_execution_and_notify(ex, outcome, exit_price, db, source="price"):
         """Shared helper: commit a live execution close and fire the Telegram DM.
@@ -2568,12 +2572,14 @@ async def run_live_position_monitor():
     async with httpx.AsyncClient() as http_client:
         # Startup catch-up
         try:
+            mark_heartbeat("live_monitor")
             await _sweep_live(http_client)
         except Exception as e:
             logger.error(f"[live-monitor] startup sweep error: {e}", exc_info=True)
         while True:
             await asyncio.sleep(LIVE_MONITOR_INTERVAL)
             try:
+                mark_heartbeat("live_monitor")
                 await _sweep_live(http_client)
             except Exception as e:
                 logger.error(f"[live-monitor] loop error: {e}", exc_info=True)
@@ -4309,7 +4315,7 @@ async def run_strategy_executor():
 
 
 _FX_MIN_TRAIL_STEP_FRAC = 0.001  # 0.1% of price — don't hammer the broker every tick
-_FX_WORKLIST_TTL = 6.0           # rebuild the live-position worklist from DB this often
+_FX_WORKLIST_TTL = 3.0           # rebuild the live-position worklist from DB this often
 
 
 def _build_forex_worklist() -> list:

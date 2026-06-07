@@ -1218,12 +1218,15 @@ async def _monitor_open_trades() -> None:
         db.close()
 
 
+_TRADE_MONITOR_INTERVAL = int(__import__("os").environ.get("EXECUTOR_TRADE_MONITOR_INTERVAL", "15"))
+
+
 async def run_trade_monitor() -> None:
     """Long-running background task — call once at server startup."""
-    logger.info("[monitor] Trade monitor started — checking every 30 s")
+    logger.info(f"[monitor] Trade monitor started — checking every {_TRADE_MONITOR_INTERVAL}s")
     while True:
         try:
             await _monitor_open_trades()
         except Exception as e:
             logger.error(f"[monitor] Uncaught loop error: {e}")
-        await asyncio.sleep(30)
+        await asyncio.sleep(_TRADE_MONITOR_INTERVAL)

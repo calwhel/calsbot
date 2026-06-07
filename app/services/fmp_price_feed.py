@@ -23,6 +23,7 @@ _PRICE_TTL = timedelta(seconds=10)
 _PRICE_STALE_TTL = timedelta(seconds=120)  # serve last-good during rate limits
 
 _RUNNING = False
+_feed_task: Optional[asyncio.Task] = None
 
 # ── Rate-limit circuit breaker (FMP free/starter tiers are tight) ─────────────
 _FMP_BACKOFF_UNTIL: Optional[datetime] = None
@@ -82,7 +83,7 @@ _TF_MINUTES: Dict[str, int] = {
 }
 
 # Poll interval for REST price updates (env: FMP_POLL_INTERVAL_SECONDS)
-_POLL_INTERVAL = max(5, int(os.environ.get("FMP_POLL_INTERVAL_SECONDS", "15")))
+_POLL_INTERVAL = max(5, int(os.environ.get("FMP_POLL_INTERVAL_SECONDS", "8")))
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -500,41 +501,63 @@ async def _stream():
     errors = 0
     _ctrader_skip_logged = False
 
-    while True:
-        if _ctrader_feed_active():
-            if not _ctrader_skip_logged:
-                _ctrader_skip_logged = True
-                logger.info(
-                    "[FMPFeed] cTrader live ticks active — pausing FMP polls "
-                    "(FMP remains fallback if cTrader drops)"
+    try:
+        while True:
+            if _ctrader_feed_active():
+                if not _ctrader_skip_logged:
+                    _ctrader_skip_logged = True
+                    logger.info(
+                        "[FMPFeed] cTrader live ticks active — pausing FMP polls "
+                        "(FMP remains fallback if cTrader drops)"
+                    )
+                await asyncio.sleep(max(120, _POLL_INTERVAL))
+                continue
+            _ctrader_skip_logged = False
+
+            if fmp_in_backoff():
+                await asyncio.sleep(max(_POLL_INTERVAL, fmp_backoff_remaining_seconds()))
+                continue
+            try:
+                await asyncio.gather(
+                    _poll_forex(),
+                    _poll_indices(),
+                    return_exceptions=True,
                 )
-            await asyncio.sleep(max(120, _POLL_INTERVAL))
-            continue
-        _ctrader_skip_logged = False
+                errors = 0
+            except Exception as e:
+                errors += 1
+                logger.debug(f"[FMPFeed] poll cycle error ({errors}): {e}")
 
-        if fmp_in_backoff():
-            await asyncio.sleep(max(_POLL_INTERVAL, fmp_backoff_remaining_seconds()))
-            continue
-        try:
-            await asyncio.gather(
-                _poll_forex(),
-                _poll_indices(),
-                return_exceptions=True,
-            )
-            errors = 0
-        except Exception as e:
-            errors += 1
-            logger.debug(f"[FMPFeed] poll cycle error ({errors}): {e}")
-
-        if errors > 10:
-            logger.warning("[FMPFeed] too many consecutive errors — pausing 60s")
-            await asyncio.sleep(60)
-            errors = 0
-        else:
-            await asyncio.sleep(_POLL_INTERVAL)
+            if errors > 10:
+                logger.warning("[FMPFeed] too many consecutive errors — pausing 60s")
+                await asyncio.sleep(60)
+                errors = 0
+            else:
+                await asyncio.sleep(_POLL_INTERVAL)
+    except asyncio.CancelledError:
+        logger.info("[FMPFeed] polling task cancelled")
+        raise
+    finally:
+        _RUNNING = False
 
 
 def start():
-    """Schedule the polling loop as a background asyncio task."""
-    asyncio.create_task(_stream())
-    logger.info("[FMPFeed] background streaming task started")
+    """Schedule the polling loop as a background asyncio task (executor worker only)."""
+    global _feed_task
+    if _feed_task and not _feed_task.done():
+        return
+    try:
+        loop = asyncio.get_event_loop()
+        _feed_task = loop.create_task(_stream())
+        logger.info("[FMPFeed] background streaming task started")
+    except Exception as e:
+        logger.error(f"[FMPFeed] failed to start task: {e}")
+
+
+def stop() -> None:
+    """Cancel the background polling task when the executor lock is lost."""
+    global _feed_task
+    if _feed_task and not _feed_task.done():
+        _feed_task.cancel()
+        logger.info("[FMPFeed] background streaming task cancelled (lock lost)")
+    _feed_task = None
