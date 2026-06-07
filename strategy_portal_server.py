@@ -6132,8 +6132,13 @@ async def portal_page(request: Request, uid: str = Query(...)):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/ping")
-async def api_ping():
-    """Lightweight liveness + DB wake-up before heavier portal API calls."""
+async def api_ping(lite: int = Query(0)):
+    """Lightweight liveness + DB wake-up before heavier portal API calls.
+
+    ?lite=1 returns instantly (no DB) — use /ping for Railway cold-start detection.
+    """
+    if lite:
+        return {"ok": True, "lite": True}
     t0 = time.monotonic()
     try:
         from sqlalchemy import text as _pt
@@ -6155,6 +6160,57 @@ async def api_ping():
             {"ok": False, "error": "database_waking", "detail": str(exc)[:120]},
             status_code=503,
         )
+
+
+@app.get("/api/portal/bootstrap")
+async def api_portal_bootstrap(uid: str = Query(...)):
+    """Strategies + portfolio in one round-trip (one Neon wake, shared cold-start)."""
+    import json as _json
+
+    strat_key = f"api_strats_{uid}"
+    port_key = f"portfolio_{uid}"
+    now = time.time()
+    sc = _CACHE.get(strat_key)
+    pc = _CACHE.get(port_key)
+    if sc and pc and now < sc[1] and now < pc[1]:
+        return JSONResponse({"strategies": sc[0], "portfolio": pc[0], "cached": True})
+
+    try:
+        strats_r, port_r = await asyncio.gather(
+            api_strategies(uid),
+            api_portfolio(uid),
+            return_exceptions=True,
+        )
+    except Exception as exc:
+        logger.warning(f"[bootstrap] gather failed uid={uid}: {exc}")
+        raise HTTPException(status_code=503, detail="Portal busy — retry in a moment")
+
+    for item in (strats_r, port_r):
+        if isinstance(item, HTTPException):
+            raise item
+
+    def _body(resp):
+        if isinstance(resp, JSONResponse):
+            return _json.loads(resp.body)
+        if isinstance(resp, dict):
+            return resp
+        return _json.loads(getattr(resp, "body", b"{}") or b"{}")
+
+    try:
+        strats = _body(strats_r)
+        port = _body(port_r)
+    except Exception as exc:
+        logger.warning(f"[bootstrap] parse failed uid={uid}: {exc}")
+        if sc and pc:
+            return JSONResponse({"strategies": sc[0], "portfolio": pc[0], "cached": True, "stale": True})
+        raise HTTPException(status_code=503, detail="Portal busy — retry in a moment")
+
+    if isinstance(strats, dict) and strats.get("detail"):
+        raise HTTPException(status_code=503, detail=str(strats.get("detail")))
+    if isinstance(port, dict) and port.get("error"):
+        raise HTTPException(status_code=503, detail=str(port.get("detail") or "Portfolio busy"))
+
+    return JSONResponse({"strategies": strats, "portfolio": port, "cached": False})
 
 
 @app.get("/api/strategies")
@@ -9297,7 +9353,7 @@ async def api_portfolio_trades(
             db.close()
 
     try:
-        loaded = await asyncio.wait_for(asyncio.to_thread(_load_rows_sync), timeout=12.0)
+        loaded = await asyncio.wait_for(asyncio.to_thread(_load_rows_sync), timeout=25.0)
     except asyncio.TimeoutError:
         stale = _CACHE.get(_ptrades_key)
         if stale:
