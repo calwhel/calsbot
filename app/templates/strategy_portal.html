@@ -8454,6 +8454,20 @@ function goldReset(){
   document.getElementById('gold-footer').style.display='none';
 }
 function _gEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function _discNetworkMsg(e, fallback){
+  if(e&&(e.name==='AbortError'||String(e).includes('abort'))) return 'Request timed out — tap New Scan and try again.';
+  if(e&&e.message) return e.message;
+  return fallback||'Network error — check connection and try again.';
+}
+async function _discoveryPost(scanType, body){
+  return _apiFetch('/api/backtest/'+scanType+'-discovery', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    credentials:'same-origin',
+    body:JSON.stringify(body),
+    timeoutMs:45000,
+  });
+}
 async function _pollDiscoveryJob(scanType, onDone, onErr){
   const progId = {gold:'gold-progress-msg', index:'index-progress-msg', forex:'forex-progress-msg'}[scanType];
   const maxMs = 600000;
@@ -8461,12 +8475,17 @@ async function _pollDiscoveryJob(scanType, onDone, onErr){
   while(Date.now() - start < maxMs){
     await new Promise(r=>setTimeout(r, 1400));
     try{
-      const pr=await fetch('/api/backtest/'+scanType+'-discovery/progress?uid='+encodeURIComponent(UID));
+      const pr=await _apiFetch('/api/backtest/'+scanType+'-discovery/progress?uid='+encodeURIComponent(UID),{timeoutMs:20000});
+      if(pr.status===401){
+        onErr('Session expired — refresh the page and log in again.');
+        return;
+      }
       const pd=await pr.json();
       const progEl=document.getElementById(progId);
       if(pd.message&&progEl) progEl.textContent=pd.message;
       if(pd.status==='done'&&pd.result){ onDone(pd.result); return; }
       if(pd.status==='error'){ onErr(pd.error||pd.message||'Scan failed'); return; }
+      if(pd.status==='running'&&progEl&&!pd.message) progEl.textContent='Scan running…';
     }catch(e){}
   }
   onErr('Scan timed out — please try again.');
@@ -8484,20 +8503,23 @@ async function runGoldFinder(){
   document.getElementById('gold-progress').style.display='';
   const progEl=document.getElementById('gold-progress-msg');
   if(progEl) progEl.textContent='Starting gold scan…';
+  let postOk = false;
   try{
-    const res = await fetch('/api/backtest/gold-discovery', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ uid:UID, days:GOLD.days, direction:GOLD.dir })
-    });
-    const data = await res.json();
-    if(!res.ok){
-      renderGoldError(data && (data.message||data.error||data.detail) || 'Scan failed.');
-      return;
+    try{
+      const res = await _discoveryPost('gold', { uid:UID, days:GOLD.days, direction:GOLD.dir });
+      const data = await res.json();
+      if(!res.ok){
+        renderGoldError(data && (data.message||data.error||data.detail) || 'Scan failed.');
+        return;
+      }
+      postOk = true;
+      if(data.status==='done'&&data.result){ GOLD.result=data.result; renderGoldResults(data.result); return; }
+    }catch(postErr){
+      if(progEl) progEl.textContent='Reconnecting… checking if scan started';
     }
-    if(data.status==='done'&&data.result){ GOLD.result=data.result; renderGoldResults(data.result); return; }
     await _pollDiscoveryJob('gold', r=>{ GOLD.result=r; renderGoldResults(r); }, renderGoldError);
   }catch(e){
-    renderGoldError('Network error — please try again.');
+    renderGoldError(_discNetworkMsg(e, postOk ? 'Scan interrupted — try again.' : 'Network error — please try again.'));
   }
 }
 function renderGoldError(msg){
@@ -8701,19 +8723,20 @@ async function runForexFinder(){
   const progEl=document.getElementById('forex-progress-msg');
   if(progEl) progEl.textContent='Starting forex scan…';
   try{
-    const res = await fetch('/api/backtest/forex-discovery', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ uid:UID, symbol:FOREX.sym, days:FOREX.days, direction:FOREX.dir })
-    });
-    const data = await res.json();
-    if(!res.ok){
-      renderForexError(data && (data.message||data.error||data.detail) || 'Scan failed.');
-      return;
+    try{
+      const res = await _discoveryPost('forex', { uid:UID, symbol:FOREX.sym, days:FOREX.days, direction:FOREX.dir });
+      const data = await res.json();
+      if(!res.ok){
+        renderForexError(data && (data.message||data.error||data.detail) || 'Scan failed.');
+        return;
+      }
+      if(data.status==='done'&&data.result){ FOREX.result=data.result; renderForexResults(data.result); return; }
+    }catch(e){
+      if(progEl) progEl.textContent='Reconnecting… checking if scan started';
     }
-    if(data.status==='done'&&data.result){ FOREX.result=data.result; renderForexResults(data.result); return; }
     await _pollDiscoveryJob('forex', r=>{ FOREX.result=r; renderForexResults(r); }, renderForexError);
   }catch(e){
-    renderForexError('Network error — please try again.');
+    renderForexError(_discNetworkMsg(e));
   }
 }
 function renderForexError(msg){
@@ -8864,19 +8887,20 @@ async function runIndexFinder(){
   const progEl=document.getElementById('index-progress-msg');
   if(progEl) progEl.textContent='Starting NASDAQ scan…';
   try{
-    const res = await fetch('/api/backtest/index-discovery', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ uid:UID, symbol:INDEX.sym, days:INDEX.days, direction:INDEX.dir })
-    });
-    const data = await res.json();
-    if(!res.ok){
-      renderIndexError(data && (data.message||data.error||data.detail) || 'Scan failed.');
-      return;
+    try{
+      const res = await _discoveryPost('index', { uid:UID, symbol:INDEX.sym, days:INDEX.days, direction:INDEX.dir });
+      const data = await res.json();
+      if(!res.ok){
+        renderIndexError(data && (data.message||data.error||data.detail) || 'Scan failed.');
+        return;
+      }
+      if(data.status==='done'&&data.result){ INDEX.result=data.result; renderIndexResults(data.result); return; }
+    }catch(e){
+      if(progEl) progEl.textContent='Reconnecting… checking if scan started';
     }
-    if(data.status==='done'&&data.result){ INDEX.result=data.result; renderIndexResults(data.result); return; }
     await _pollDiscoveryJob('index', r=>{ INDEX.result=r; renderIndexResults(r); }, renderIndexError);
   }catch(e){
-    renderIndexError('Network error — please try again.');
+    renderIndexError(_discNetworkMsg(e));
   }
 }
 function renderIndexError(msg){

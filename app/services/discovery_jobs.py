@@ -1,50 +1,20 @@
 """
-In-process background jobs for tradfi discovery scans (gold / index / forex).
+Background jobs for tradfi discovery scans (gold / index / forex).
 
-POST /api/backtest/*-discovery returns immediately; the client polls
-/api/backtest/*-discovery/progress until status is done|error.
-
-This avoids gunicorn HTTP timeouts on 2–5 minute Claude + backtest runs.
-Jobs are keyed by scan_type + uid (one active scan per type per user).
+POST returns immediately; progress is polled via GET …/progress.
+Job state is stored in Postgres so all gunicorn workers share the same status.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-_JOB_TTL_SECS = 3600  # keep finished results for 1h so slow clients can fetch
-
-
-@dataclass
-class DiscoveryJob:
-    scan_type: str
-    uid: str
-    status: str = "queued"          # queued | running | done | error
-    message: str = ""
-    result: Optional[Dict] = None
-    error: Optional[str] = None
-    started_at: float = field(default_factory=time.time)
-    finished_at: Optional[float] = None
-
-    def to_progress(self) -> Dict[str, Any]:
-        out: Dict[str, Any] = {
-            "status": self.status,
-            "message": self.message or "",
-            "scan_type": self.scan_type,
-        }
-        if self.status == "done" and self.result is not None:
-            out["result"] = self.result
-        if self.status == "error" and self.error:
-            out["error"] = self.error
-        return out
-
-
-_JOBS: Dict[str, DiscoveryJob] = {}
+_JOB_TTL_SECS = 3600
 _TASKS: Dict[str, asyncio.Task] = {}
 
 
@@ -52,84 +22,172 @@ def _job_key(scan_type: str, uid: str) -> str:
     return f"{scan_type}:{uid.strip()}"
 
 
+def _db_session():
+    from app.database import SessionLocal
+    return SessionLocal()
+
+
+def _row_to_progress(row) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "status": row.status or "idle",
+        "message": row.message or "",
+        "scan_type": row.scan_type,
+    }
+    if row.status == "done" and row.result_json is not None:
+        out["result"] = row.result_json
+    if row.status == "error" and row.error:
+        out["error"] = row.error
+    return out
+
+
 def _prune_old_jobs() -> None:
-    now = time.time()
-    stale = [
-        k for k, j in _JOBS.items()
-        if j.finished_at and (now - j.finished_at) > _JOB_TTL_SECS
-    ]
-    for k in stale:
-        _JOBS.pop(k, None)
-        _TASKS.pop(k, None)
+    cutoff = datetime.utcnow() - timedelta(seconds=_JOB_TTL_SECS)
+    db = _db_session()
+    try:
+        from app.strategy_models import DiscoveryScanJob
+        db.query(DiscoveryScanJob).filter(
+            DiscoveryScanJob.finished_at.isnot(None),
+            DiscoveryScanJob.finished_at < cutoff,
+        ).delete(synchronize_session=False)
+        db.commit()
+    except Exception as e:
+        logger.debug(f"[discovery-job] prune failed: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
 
 
-def get_job(scan_type: str, uid: str) -> Optional[DiscoveryJob]:
-    _prune_old_jobs()
-    return _JOBS.get(_job_key(scan_type, uid))
+def get_job(scan_type: str, uid: str):
+    from app.strategy_models import DiscoveryScanJob
+    db = _db_session()
+    try:
+        return db.query(DiscoveryScanJob).filter(
+            DiscoveryScanJob.job_key == _job_key(scan_type, uid)
+        ).first()
+    finally:
+        db.close()
 
 
 def job_progress(scan_type: str, uid: str) -> Dict[str, Any]:
-    job = get_job(scan_type, uid)
-    if not job:
+    _prune_old_jobs()
+    row = get_job(scan_type, uid)
+    if not row:
         return {"status": "idle", "message": ""}
-    return job.to_progress()
+    return _row_to_progress(row)
+
+
+def _write_job(key: str, *, status: str = None, message: str = None,
+               result=None, error: str = None, finished: bool = False) -> None:
+    from app.strategy_models import DiscoveryScanJob
+    db = _db_session()
+    try:
+        row = db.query(DiscoveryScanJob).filter(DiscoveryScanJob.job_key == key).first()
+        if not row:
+            return
+        if status is not None:
+            row.status = status
+        if message is not None:
+            row.message = message
+        if result is not None:
+            row.result_json = result
+        if error is not None:
+            row.error = error
+        if finished:
+            row.finished_at = datetime.utcnow()
+        row.updated_at = datetime.utcnow()
+        db.commit()
+    except Exception as e:
+        logger.warning(f"[discovery-job] write {key} failed: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
 
 
 def start_discovery_job(
     scan_type: str,
     uid: str,
     runner: Callable[[Callable[[str], None]], Any],
-    *,
-    loop: Optional[asyncio.AbstractEventLoop] = None,
 ) -> Dict[str, Any]:
     """
-    Start a discovery scan in the background if none is running for this uid+type.
-    `runner` is an async callable: async def run(progress_cb) -> dict
+    Queue a discovery scan. Returns immediately; runner executes in background.
     """
     _prune_old_jobs()
     key = _job_key(scan_type, uid)
-    existing = _JOBS.get(key)
+    existing = get_job(scan_type, uid)
     if existing and existing.status in ("queued", "running"):
-        return {"ok": True, "started": False, "status": existing.status, **existing.to_progress()}
+        prog = _row_to_progress(existing)
+        return {"ok": True, "started": False, "status": existing.status, **prog}
 
-    job = DiscoveryJob(scan_type=scan_type, uid=uid, status="queued", message="Queued…")
-    _JOBS[key] = job
+    from app.strategy_models import DiscoveryScanJob
+    db = _db_session()
+    try:
+        row = db.query(DiscoveryScanJob).filter(DiscoveryScanJob.job_key == key).first()
+        if row:
+            row.status = "queued"
+            row.message = "Queued…"
+            row.result_json = None
+            row.error = None
+            row.finished_at = None
+            row.updated_at = datetime.utcnow()
+        else:
+            row = DiscoveryScanJob(
+                job_key=key,
+                scan_type=scan_type,
+                uid=uid.strip(),
+                status="queued",
+                message="Queued…",
+            )
+            db.add(row)
+        db.commit()
+    except Exception as e:
+        logger.exception(f"[discovery-job] create {key} failed: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return {"ok": False, "error": f"Could not start scan: {type(e).__name__}"}
+    finally:
+        db.close()
 
     async def _wrapped() -> None:
-        job.status = "running"
-        job.message = "Starting scan…"
+        _write_job(key, status="running", message="Starting scan…")
 
         def _progress(msg: str) -> None:
-            job.message = msg
+            _write_job(key, message=msg)
 
         try:
             result = await runner(_progress)
             if isinstance(result, dict) and result.get("ok"):
-                job.status = "done"
-                job.result = result
-                job.message = "Scan complete"
+                _write_job(key, status="done", message="Scan complete",
+                           result=result, finished=True)
             else:
-                job.status = "error"
-                job.error = (
+                err = (
                     (result or {}).get("error")
                     or (result or {}).get("message")
                     or "Scan failed"
                 )
-                job.message = job.error
-                job.result = result if isinstance(result, dict) else None
+                _write_job(key, status="error", message=err, error=err,
+                           result=result if isinstance(result, dict) else None,
+                           finished=True)
         except Exception as e:
             logger.exception(f"[discovery-job] {scan_type} failed for {uid}")
-            job.status = "error"
-            job.error = f"{type(e).__name__}: {e}"
-            job.message = job.error
+            err = f"{type(e).__name__}: {e}"
+            _write_job(key, status="error", message=err, error=err, finished=True)
         finally:
-            job.finished_at = time.time()
             _TASKS.pop(key, None)
+
+    if key in _TASKS and not _TASKS[key].done():
+        return {"ok": True, "started": True, "status": "running", "message": "Queued…"}
 
     try:
         task = asyncio.get_running_loop().create_task(_wrapped())
     except RuntimeError:
-        ev = loop or asyncio.get_event_loop()
-        task = ev.create_task(_wrapped())
+        task = asyncio.get_event_loop().create_task(_wrapped())
     _TASKS[key] = task
-    return {"ok": True, "started": True, "status": "running", "message": job.message}
+    return {"ok": True, "started": True, "status": "running", "message": "Queued…"}
