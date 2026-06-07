@@ -1356,19 +1356,6 @@ async def startup():
             pass
 
     asyncio.create_task(_prime_spot_store())
-
-    async def _start_fmp_feed():
-        """FMP REST poll on every worker — writes ticks to shared Postgres store."""
-        await asyncio.sleep(8)
-        try:
-            from app.services.fmp_price_feed import start as _fmp_start, _fmp_api_key
-            if _fmp_api_key():
-                _fmp_start()
-                logger.info("[startup] FMP price feed started on this worker")
-        except Exception as _fe:
-            logger.warning(f"[startup] FMP feed start: {_fe}")
-
-    asyncio.create_task(_start_fmp_feed())
     logger.info("Strategy portal ready — migrations running in background")
 
 
