@@ -1636,6 +1636,29 @@ async def _start_executor_tasks():
         logger.info("cTrader real-time spot feed task scheduled (executor worker)")
     except Exception as _ctf_err:
         logger.warning(f"cTrader price feed start error (non-fatal): {_ctf_err}")
+
+    async def _spot_price_primer_loop():
+        """Keep shared spot store warm when FMP is in backoff and cTrader is idle."""
+        _KEYS = [
+            ("EURUSD", "forex"), ("GBPUSD", "forex"), ("USDJPY", "forex"),
+            ("XAUUSD", "forex"), ("NAS100", "index"), ("US30", "index"),
+        ]
+        await asyncio.sleep(20)
+        while True:
+            try:
+                from app.services.spot_price_store import snapshot as _snap
+                from app.services.tradfi_prices import get_price as _tf_px
+                if int((_snap(max_age_s=30.0) or {}).get("symbol_count") or 0) < 3:
+                    for sym, ac in _KEYS:
+                        try:
+                            await _tf_px(sym, ac)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            await asyncio.sleep(90)
+
+    asyncio.create_task(_spot_price_primer_loop())
     from app.services.strategy_executor import (
         run_strategy_executor, run_live_position_monitor,
         run_forex_executor, run_forex_live_manager_fast,
