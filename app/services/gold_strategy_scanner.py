@@ -79,6 +79,8 @@ SESSION_EXECUTOR_MAP = {
 #     price). _eval_candidate maps these to engine/exit config keys.
 RISK_VARIANTS = [
     # ── Scalps (tight stop, fast, realistic 1:2 targets) ──────────────────────
+    (15, 35,  "scalp", "breakeven"),   # tight London open scalp
+    (18, 40,  "scalp", "breakeven"),   # NY overlap scalp
     (20, 40,  "scalp", "breakeven"),   # 1:2, SL→entry at +20 pips
     (25, 50,  "scalp", "trail"),       # 1:2, trailing stop
     (30, 60,  "scalp", "fixed"),       # 1:2, plain
@@ -527,6 +529,43 @@ def _score(stats: Dict, min_trades: int = MIN_TRADES) -> float:
     return round(credibility * raw, 3)
 
 
+# Session edge multipliers — gold moves hardest London/NY; indices at US cash.
+_SESSION_EDGE_MULT: Dict[str, Dict[str, float]] = {
+    "XAUUSD": {
+        "all": 1.0, "asian": 0.94, "london": 1.08, "new_york": 1.10, "overlap": 1.14,
+    },
+    "XAGUSD": {
+        "all": 1.0, "asian": 0.95, "london": 1.06, "new_york": 1.08, "overlap": 1.10,
+    },
+    "NAS100": {
+        "all": 1.0, "asian": 0.88, "london": 1.02, "new_york": 1.14, "overlap": 1.18,
+    },
+    "SPX500": {
+        "all": 1.0, "asian": 0.90, "london": 1.02, "new_york": 1.12, "overlap": 1.15,
+    },
+    "US30": {
+        "all": 1.0, "asian": 0.90, "london": 1.02, "new_york": 1.12, "overlap": 1.15,
+    },
+    "_INDEX_DEFAULT": {
+        "all": 1.0, "asian": 0.92, "london": 1.03, "new_york": 1.10, "overlap": 1.12,
+    },
+    "_FOREX_DEFAULT": {
+        "all": 1.0, "asian": 0.96, "london": 1.06, "new_york": 1.08, "overlap": 1.10,
+    },
+}
+
+
+def _session_edge_multiplier(symbol: str, asset_class: str, session: str) -> float:
+    sym = (symbol or "").upper()
+    sess = (session or "all").lower()
+    table = (
+        _SESSION_EDGE_MULT.get(sym)
+        or (_SESSION_EDGE_MULT["_INDEX_DEFAULT"] if asset_class == "index" else None)
+        or _SESSION_EDGE_MULT["_FOREX_DEFAULT"]
+    )
+    return float(table.get(sess, 1.0))
+
+
 def _score_with_walkforward(
     train_stats: Dict,
     test_stats: Optional[Dict],
@@ -622,6 +661,7 @@ async def _eval_candidate(
                     score = _score_with_walkforward(train_st, test_st, min_tr)
                 else:
                     score = _score(st, min_tr)
+                score = round(score * _session_edge_multiplier(symbol, asset_class, session), 3)
                 if _has_killzone(cand) and st["closed_trades"] < MIN_TRADES and days < 180:
                     st["low_sample_warning"] = "ICT killzone — try 180-day window for more trades"
                 results.append({
@@ -754,6 +794,92 @@ def compile_scan_entry_to_config(
         "_build_mode": "paper",
         "_category": entry.get("category") or style,
     }
+
+
+def _live_sig_to_primary(sig_type: str, sub: str, mode: Optional[str], direction: str):
+    """Map live structure scanner sig_key parts → backtest primaryType + primaryCfg."""
+    is_long = (direction or "LONG").upper() == "LONG"
+    bull = "bullish" if is_long else "bearish"
+    st = (sig_type or "").lower()
+    sub = (sub or "").lower()
+
+    if st == "market_structure":
+        cond = sub or ("bos_bullish" if is_long else "bos_bearish")
+        return "market_structure", {"condition": cond}
+    if st == "fvg":
+        cfg = {"fvg_dir": bull, "min_gap_pct": 0.1}
+        if mode == "retest":
+            cfg["condition"] = "retest"
+        return "fvg", cfg
+    if st == "ifvg":
+        return "ifvg", {"direction": bull, "min_gap_pct": 0.2}
+    if st == "order_block":
+        return "order_block", {"ob_type": bull}
+    if st == "liquidity_sweep":
+        return "liquidity_sweep", {"direction": bull}
+    if st == "breaker_block":
+        return "breaker_block", {"direction": bull}
+    if st == "fx_displacement":
+        return "fx_displacement", {"direction": bull, "min_body_ratio": 2.0}
+    if st == "mss":
+        return "mss", {"direction": bull}
+    return "market_structure", {"condition": "bos_bullish" if is_long else "bos_bearish"}
+
+
+def compile_live_scan_to_config(sig: Dict, name: Optional[str] = None) -> Dict:
+    """
+    Convert a live structure scanner hit into a saveable paper strategy config.
+    Uses realistic scalp SL/TP defaults per asset class.
+    """
+    pair = (sig.get("pair") or "EURUSD").upper()
+    tf = str(sig.get("timeframe") or "15m")
+    direction = str(sig.get("direction") or "LONG").upper()
+    asset_class = (sig.get("asset_class") or ("index" if pair in (
+        "NAS100", "SPX500", "US30", "GER40", "UK100", "NDX", "SPX",
+    ) else "forex")).lower()
+
+    parts = (sig.get("sig_key") or "").split(":")
+    sig_type = parts[0] if parts else ""
+    sub = parts[1] if len(parts) > 1 else ""
+    mode = parts[2] if len(parts) > 2 else None
+    primary_type, primary_cfg = _live_sig_to_primary(sig_type, sub, mode, direction)
+
+    if asset_class == "index":
+        sl, tp = (15, 40) if pair == "NAS100" else (20, 50)
+    elif pair in ("XAUUSD", "XAGUSD"):
+        sl, tp = 20, 40
+    else:
+        sl, tp = 10, 20
+
+    # Boost confluence setups with slightly wider target
+    conf = int(sig.get("confluence") or 1)
+    if conf >= 3:
+        tp = int(round(tp * 1.25))
+    elif conf >= 2:
+        tp = int(round(tp * 1.1))
+
+    label = sig.get("signal") or "ICT"
+    entry = {
+        "label": f"Live {label} {pair}",
+        "category": "ICT",
+        "primaryType": primary_type,
+        "primaryCfg": {**primary_cfg, "timeframe": tf},
+        "confirms": [],
+        "timeframe": tf,
+        "direction": direction,
+        "session": "all",
+        "session_label": "All sessions",
+        "session_filter": {},
+        "sl_pips": sl,
+        "tp_pips": tp,
+        "style": "scalp",
+        "management": "breakeven",
+        "breakeven_at_pct": 50,
+    }
+    build_name = name or f"{pair} {label} {tf} {direction}"[:60]
+    return compile_scan_entry_to_config(
+        entry, symbol=pair, asset_class=asset_class, name=build_name,
+    )
 
 
 # ── Claude: synthesize / pick the best from the leaderboard ─────────────────────

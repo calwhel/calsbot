@@ -3205,7 +3205,7 @@ function dismissTgBanner(){
     <div class="modal-body" id="gold-body" style="padding:18px 20px 8px">
       <!-- config -->
       <div id="gold-config">
-        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">Claude backtests dozens of gold (XAUUSD) strategies across <b>1m–4h</b> timeframes and every trading session. Results use <b>walk-forward validation</b> (train 70% / test 30%). Uses your <b>cTrader demo candles</b> when connected. ~1–2 min.</div>
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">Claude backtests dozens of gold (XAUUSD) strategies across <b>1m–4h</b> timeframes and every trading session — <b>London/NY sessions ranked higher</b>. Walk-forward validated. Runs in the <b>background</b> (no timeout). Uses <b>cTrader demo candles</b> when connected.</div>
         <div style="margin-bottom:14px">
           <div class="pine-label">Direction</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="gold-dir-chips">
@@ -3296,7 +3296,7 @@ function dismissTgBanner(){
     <div class="modal-hd"><h3>📊 Index Strategy Finder</h3><span class="modal-close" onclick="closeModal('modal-index')">&times;</span></div>
     <div class="modal-body" id="index-body" style="padding:18px 20px 8px">
       <div id="index-config">
-        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">Claude backtests index CFD strategies across <b>1m–1h</b> timeframes and US/EU trading sessions. Walk-forward validated (70% train / 30% test). Connect <b>cTrader demo</b> in Settings for broker-matched NASDAQ candles. ~1–2 min.</div>
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">Claude backtests index CFD strategies across <b>1m–1h</b> — <b>NAS100 uses tighter scalp targets</b> and US cash-session bias. Walk-forward validated. Runs in the <b>background</b> (no timeout). Connect <b>cTrader demo</b> for broker-matched NASDAQ candles.</div>
         <div style="margin-bottom:14px">
           <div class="pine-label">Instrument</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="index-sym-chips">
@@ -8454,6 +8454,23 @@ function goldReset(){
   document.getElementById('gold-footer').style.display='none';
 }
 function _gEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+async function _pollDiscoveryJob(scanType, onDone, onErr){
+  const progId = {gold:'gold-progress-msg', index:'index-progress-msg', forex:'forex-progress-msg'}[scanType];
+  const maxMs = 600000;
+  const start = Date.now();
+  while(Date.now() - start < maxMs){
+    await new Promise(r=>setTimeout(r, 1400));
+    try{
+      const pr=await fetch('/api/backtest/'+scanType+'-discovery/progress?uid='+encodeURIComponent(UID));
+      const pd=await pr.json();
+      const progEl=document.getElementById(progId);
+      if(pd.message&&progEl) progEl.textContent=pd.message;
+      if(pd.status==='done'&&pd.result){ onDone(pd.result); return; }
+      if(pd.status==='error'){ onErr(pd.error||pd.message||'Scan failed'); return; }
+    }catch(e){}
+  }
+  onErr('Scan timed out — please try again.');
+}
 let _goldProgressTimer = null;
 function _goldConfBadge(c){
   const m={high:'#3fb950',medium:'#d9a441',low:'#e05858'};
@@ -8466,30 +8483,21 @@ async function runGoldFinder(){
   document.getElementById('gold-footer').style.display='none';
   document.getElementById('gold-progress').style.display='';
   const progEl=document.getElementById('gold-progress-msg');
-  if(_goldProgressTimer) clearInterval(_goldProgressTimer);
-  _goldProgressTimer=setInterval(async()=>{
-    try{
-      const pr=await fetch('/api/backtest/gold-discovery/progress?uid='+encodeURIComponent(UID));
-      const pd=await pr.json();
-      if(pd.message&&progEl) progEl.textContent=pd.message;
-    }catch(e){}
-  },1200);
+  if(progEl) progEl.textContent='Starting gold scan…';
   try{
     const res = await fetch('/api/backtest/gold-discovery', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ uid:UID, days:GOLD.days, direction:GOLD.dir })
     });
     const data = await res.json();
-    if(!res.ok || !data.ok){
-      renderGoldError(data && (data.message||data.error) || 'Scan failed. Please try again.');
+    if(!res.ok){
+      renderGoldError(data && (data.message||data.error||data.detail) || 'Scan failed.');
       return;
     }
-    GOLD.result = data;
-    renderGoldResults(data);
+    if(data.status==='done'&&data.result){ GOLD.result=data.result; renderGoldResults(data.result); return; }
+    await _pollDiscoveryJob('gold', r=>{ GOLD.result=r; renderGoldResults(r); }, renderGoldError);
   }catch(e){
     renderGoldError('Network error — please try again.');
-  }finally{
-    if(_goldProgressTimer){ clearInterval(_goldProgressTimer); _goldProgressTimer=null; }
   }
 }
 function renderGoldError(msg){
@@ -8685,37 +8693,27 @@ function forexReset(){
   document.getElementById('forex-results').style.display='none';
   document.getElementById('forex-footer').style.display='none';
 }
-let _forexProgressTimer = null;
 async function runForexFinder(){
   document.getElementById('forex-config').style.display='none';
   document.getElementById('forex-results').style.display='none';
   document.getElementById('forex-footer').style.display='none';
   document.getElementById('forex-progress').style.display='';
   const progEl=document.getElementById('forex-progress-msg');
-  if(_forexProgressTimer) clearInterval(_forexProgressTimer);
-  _forexProgressTimer=setInterval(async()=>{
-    try{
-      const pr=await fetch('/api/backtest/forex-discovery/progress?uid='+encodeURIComponent(UID));
-      const pd=await pr.json();
-      if(pd.message&&progEl) progEl.textContent=pd.message;
-    }catch(e){}
-  },1200);
+  if(progEl) progEl.textContent='Starting forex scan…';
   try{
     const res = await fetch('/api/backtest/forex-discovery', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ uid:UID, symbol:FOREX.sym, days:FOREX.days, direction:FOREX.dir })
     });
     const data = await res.json();
-    if(!res.ok || !data.ok){
-      renderForexError(data && (data.message||data.error) || 'Scan failed. Please try again.');
+    if(!res.ok){
+      renderForexError(data && (data.message||data.error||data.detail) || 'Scan failed.');
       return;
     }
-    FOREX.result = data;
-    renderForexResults(data);
+    if(data.status==='done'&&data.result){ FOREX.result=data.result; renderForexResults(data.result); return; }
+    await _pollDiscoveryJob('forex', r=>{ FOREX.result=r; renderForexResults(r); }, renderForexError);
   }catch(e){
     renderForexError('Network error — please try again.');
-  }finally{
-    if(_forexProgressTimer){ clearInterval(_forexProgressTimer); _forexProgressTimer=null; }
   }
 }
 function renderForexError(msg){
@@ -8858,37 +8856,27 @@ function indexReset(){
   document.getElementById('index-results').style.display='none';
   document.getElementById('index-footer').style.display='none';
 }
-let _indexProgressTimer = null;
 async function runIndexFinder(){
   document.getElementById('index-config').style.display='none';
   document.getElementById('index-results').style.display='none';
   document.getElementById('index-footer').style.display='none';
   document.getElementById('index-progress').style.display='';
   const progEl=document.getElementById('index-progress-msg');
-  if(_indexProgressTimer) clearInterval(_indexProgressTimer);
-  _indexProgressTimer=setInterval(async()=>{
-    try{
-      const pr=await fetch('/api/backtest/index-discovery/progress?uid='+encodeURIComponent(UID));
-      const pd=await pr.json();
-      if(pd.message&&progEl) progEl.textContent=pd.message;
-    }catch(e){}
-  },1200);
+  if(progEl) progEl.textContent='Starting NASDAQ scan…';
   try{
     const res = await fetch('/api/backtest/index-discovery', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ uid:UID, symbol:INDEX.sym, days:INDEX.days, direction:INDEX.dir })
     });
     const data = await res.json();
-    if(!res.ok || !data.ok){
-      renderIndexError(data && (data.message||data.error) || 'Scan failed. Please try again.');
+    if(!res.ok){
+      renderIndexError(data && (data.message||data.error||data.detail) || 'Scan failed.');
       return;
     }
-    INDEX.result = data;
-    renderIndexResults(data);
+    if(data.status==='done'&&data.result){ INDEX.result=data.result; renderIndexResults(data.result); return; }
+    await _pollDiscoveryJob('index', r=>{ INDEX.result=r; renderIndexResults(r); }, renderIndexError);
   }catch(e){
     renderIndexError('Network error — please try again.');
-  }finally{
-    if(_indexProgressTimer){ clearInterval(_indexProgressTimer); _indexProgressTimer=null; }
   }
 }
 function renderIndexError(msg){
@@ -9051,6 +9039,27 @@ function _filterFxSignals(signals){
     return true;
   });
 }
+function _fxScanRow(idx){
+  const filtered = _filterFxSignals((_fxScanData&&_fxScanData.signals)||[]);
+  return filtered[idx] || null;
+}
+async function buildFromLiveScan(sig, btn){
+  if(!sig) return;
+  if(btn){ btn.disabled=true; btn.textContent='…'; }
+  try{
+    const r=await fetch('/api/build-from-live-scan',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ uid:UID, signal:sig })
+    });
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||d.error||'Build failed');
+    if(btn){ btn.textContent='✓'; btn.style.color='#3fb950'; }
+    if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
+  }catch(e){
+    if(btn){ btn.disabled=false; btn.textContent='⚡ Paper'; }
+    alert('Build failed: '+(e.message||e));
+  }
+}
 function _renderFxScanList(d){
   const list=document.getElementById('forex-scanner-list');
   const meta=document.getElementById('forex-scanner-meta');
@@ -9074,18 +9083,20 @@ function _renderFxScanList(d){
     list.innerHTML='<div style="padding:12px;color:var(--muted)">No signals match filters — try All or scan again.</div>';
     return;
   }
-  let h='<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr style="color:var(--muted);text-align:left"><th style="padding:5px 6px">Pair</th><th>TF</th><th>Signal</th><th>Dir</th><th>Conf.</th><th>Detail</th></tr>';
-  filtered.slice(0,50).forEach(sig=>{
+  let h='<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr style="color:var(--muted);text-align:left"><th style="padding:5px 6px">Pair</th><th>TF</th><th>Signal</th><th>Dir</th><th>Conf.</th><th>Detail</th><th></th></tr>';
+  filtered.slice(0,50).forEach((sig,idx)=>{
     const dc=sig.direction==='SHORT'?'#e05858':'#3fb950';
     const idxBadge=_isIndexSym(sig.pair)?' <span style="font-size:9px;color:#a855f7;font-weight:700">IDX</span>':'';
     const conf = sig.confluence>=2 ? '<span style="font-size:10px;font-weight:700;color:#d9a441">×'+sig.confluence+'</span>' : '—';
     const confTitle = (sig.confluence_signals||[]).join('+');
+    const rowId = 'fxbuild-'+idx;
     h+='<tr style="border-top:1px solid var(--border)"><td style="padding:6px;font-weight:700">'+_gEsc(sig.pair)+idxBadge+'</td>'
       +'<td style="padding:6px">'+_gEsc(sig.timeframe)+'</td>'
       +'<td style="padding:6px;font-weight:600">'+_gEsc(sig.signal)+'</td>'
       +'<td style="padding:6px;color:'+dc+'">'+_gEsc(sig.direction)+'</td>'
       +'<td style="padding:6px" title="'+_gEsc(confTitle)+'">'+conf+'</td>'
-      +'<td style="padding:6px;color:var(--muted)">'+_gEsc(sig.desc||sig.detail||'')+'</td></tr>';
+      +'<td style="padding:6px;color:var(--muted)">'+_gEsc(sig.desc||sig.detail||'')+'</td>'
+      +'<td style="padding:4px 6px"><button class="btn" style="font-size:10px;padding:4px 8px" id="'+rowId+'" onclick="buildFromLiveScan(_fxScanRow('+idx+'),this)">⚡ Paper</button></td></tr>';
   });
   h+='</table>';
   list.innerHTML=h;

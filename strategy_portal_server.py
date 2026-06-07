@@ -7412,6 +7412,50 @@ async def api_build_from_scan(request: Request):
     return JSONResponse({"config": config, "compiled": "deterministic"})
 
 
+@app.post("/api/build-from-live-scan")
+async def api_build_from_live_scan(request: Request):
+    """
+    Compile a live structure scanner hit into a paper strategy and save it.
+    Body: { uid, signal: <scanner row>, name? }
+    """
+    body = await request.json()
+    uid = body.get("uid")
+    if not uid:
+        raise HTTPException(status_code=400, detail="uid required")
+    signal = body.get("signal")
+    if not isinstance(signal, dict):
+        raise HTTPException(status_code=400, detail="signal object required")
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or user.banned:
+            raise HTTPException(status_code=403)
+    finally:
+        db.close()
+
+    from app.services.gold_strategy_scanner import compile_live_scan_to_config
+    try:
+        config = compile_live_scan_to_config(signal, name=body.get("name"))
+    except Exception as e:
+        logger.warning(f"build-from-live-scan compile failed: {e}")
+        raise HTTPException(status_code=422, detail=f"Could not compile live signal: {e}")
+
+    config["_build_mode"] = "paper"
+    save_res = await api_save_strategy(_MockRequest(uid, config))
+    return save_res
+
+
+class _MockRequest:
+    """Minimal request shim so build-from-live-scan can reuse api_save_strategy."""
+    def __init__(self, uid, config):
+        self._body = {"uid": uid, "config": config}
+
+    async def json(self):
+        return self._body
+
+
 # ─── Forex multi-pair market structure scanner ───────────────────────────────
 
 _FOREX_SCANNER_CACHE: dict = {}          # key → (signals, expires_ts)
@@ -14546,110 +14590,101 @@ async def backtest_scan(request: Request):
     }
 
 
-_GOLD_SCAN_PROGRESS: Dict[str, str] = {}
-_INDEX_SCAN_PROGRESS: Dict[str, str] = {}
-_FOREX_SCAN_PROGRESS: Dict[str, str] = {}
+def _discovery_user_id(uid: str) -> Optional[int]:
+    from app.database import SessionLocal
+    try:
+        db = SessionLocal()
+        try:
+            u = _get_user_by_uid_safe(uid, db)
+            return int(u.id) if u else None
+        finally:
+            db.close()
+    except Exception:
+        return None
 
 
-@app.get("/api/backtest/gold-discovery/progress")
-async def gold_discovery_progress(uid: str = Query(...)):
-    """Poll scan status while gold discovery runs (uid = TH- code)."""
-    return {"message": _GOLD_SCAN_PROGRESS.get(uid.strip(), "")}
-
-
-@app.post("/api/backtest/gold-discovery")
-async def backtest_gold_discovery(request: Request):
-    """
-    Claude-driven GOLD (XAUUSD) strategy discovery scanner.
-
-    Backtests a wide roster of candidate strategies (base roster + Claude-proposed)
-    across multiple timeframes AND the four FX trading sessions (Asian / London /
-    New York / overlap), ranks every combination by a composite profitability
-    score, then asks Claude to pick & explain the single best strategy.
-
-    Body: { uid, days (30|90|180), direction ("BOTH"|"LONG"|"SHORT") }
-    Pro subscribers only.
-    """
-    body = await request.json()
-    uid  = (body.get("uid") or "").strip()
-    days = int(body.get("days", 90))
-    direction_mode = (body.get("direction") or "BOTH").upper()
-
-    # ── Auth + Pro check (mirrors /api/backtest/scan) ─────────────────────────
+async def _discovery_pro_auth(uid: str) -> str:
+    """Return ok | not_pro | bad_uid."""
     from app.database import SessionLocal
     import asyncio as _asyncio
-    auth_status = None
     for _attempt in range(3):
         try:
             db = SessionLocal()
             try:
                 user = _get_user_by_uid_safe(uid, db)
                 if not user:
-                    auth_status = "bad_uid"; break
+                    return "bad_uid"
                 sub = _get_portal_sub(user.id, db)
                 is_pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
-                auth_status = "ok" if is_pro else "not_pro"
-                break
+                return "ok" if is_pro else "not_pro"
             finally:
                 db.close()
         except HTTPException:
             await _asyncio.sleep(0.3)
-            continue
         except Exception:
             await _asyncio.sleep(0.3)
-            continue
-    if auth_status in (None, "bad_uid"):
+    return "bad_uid"
+
+
+def _discovery_progress_response(scan_type: str, uid: str) -> dict:
+    from app.services.discovery_jobs import job_progress
+    prog = job_progress(scan_type, uid.strip())
+    # Back-compat: legacy clients read `message` only
+    if "message" not in prog:
+        prog["message"] = ""
+    return prog
+
+
+@app.get("/api/backtest/gold-discovery/progress")
+async def gold_discovery_progress(uid: str = Query(...)):
+    """Poll gold discovery job — status idle|running|done|error + result when done."""
+    return _discovery_progress_response("gold", uid)
+
+
+@app.post("/api/backtest/gold-discovery")
+async def backtest_gold_discovery(request: Request):
+    """
+    Start Claude-driven GOLD (XAUUSD) discovery in the background.
+    Poll GET /api/backtest/gold-discovery/progress until status=done.
+    Body: { uid, days (30|90|180), direction ("BOTH"|"LONG"|"SHORT") }
+    """
+    body = await request.json()
+    uid  = (body.get("uid") or "").strip()
+    days = int(body.get("days", 90))
+    direction_mode = (body.get("direction") or "BOTH").upper()
+
+    auth = await _discovery_pro_auth(uid)
+    if auth == "bad_uid":
         raise HTTPException(status_code=403, detail="Invalid UID")
-    if auth_status == "not_pro":
+    if auth == "not_pro":
         return JSONResponse(status_code=403, content={
             "ok": False,
             "message": "A Pro subscription is required to use the Gold Strategy Finder."})
 
+    user_id = _discovery_user_id(uid)
+    from app.services.discovery_jobs import start_discovery_job
     from app.services.gold_strategy_scanner import run_gold_discovery
-    _scan_user_id = None
-    try:
-        _db2 = SessionLocal()
-        try:
-            _u2 = _get_user_by_uid_safe(uid, _db2)
-            if _u2:
-                _scan_user_id = int(_u2.id)
-        finally:
-            _db2.close()
-    except Exception:
-        pass
-    def _progress(msg: str):
-        _GOLD_SCAN_PROGRESS[uid] = msg
 
-    try:
-        result = await run_gold_discovery(
-            days=days,
-            direction_mode=direction_mode,
-            user_id=_scan_user_id,
-            progress_cb=_progress,
+    async def _runner(progress_cb):
+        return await run_gold_discovery(
+            days=days, direction_mode=direction_mode,
+            user_id=user_id, progress_cb=progress_cb,
         )
-    except Exception as e:
-        logger.exception("gold-discovery scan failed")
-        return JSONResponse(status_code=500, content={
-            "ok": False, "error": f"Scan failed: {type(e).__name__}"})
-    finally:
-        _GOLD_SCAN_PROGRESS.pop(uid, None)
-    return JSONResponse(content=result)
+
+    return JSONResponse(content=start_discovery_job("gold", uid, _runner))
 
 
 @app.get("/api/backtest/index-discovery/progress")
 async def index_discovery_progress(uid: str = Query(...)):
-    """Poll scan status while index discovery runs (uid = TH- code)."""
-    return {"message": _INDEX_SCAN_PROGRESS.get(uid.strip(), "")}
+    """Poll index discovery job — status idle|running|done|error + result when done."""
+    return _discovery_progress_response("index", uid)
 
 
 @app.post("/api/backtest/index-discovery")
 async def backtest_index_discovery(request: Request):
     """
-    Claude-driven index CFD strategy discovery (NASDAQ, S&P 500, …).
-
-    Body: { uid, symbol (NAS100|SPX500|US30|…), days (30|90|180),
-            direction ("BOTH"|"LONG"|"SHORT") }
-    Pro subscribers only. Uses cTrader demo candles when connected.
+    Start index CFD discovery in the background.
+    Body: { uid, symbol, days, direction }
     """
     body = await request.json()
     uid  = (body.get("uid") or "").strip()
@@ -14657,82 +14692,38 @@ async def backtest_index_discovery(request: Request):
     direction_mode = (body.get("direction") or "BOTH").upper()
     symbol = (body.get("symbol") or "NAS100").strip()
 
-    from app.database import SessionLocal
-    import asyncio as _asyncio
-    auth_status = None
-    for _attempt in range(3):
-        try:
-            db = SessionLocal()
-            try:
-                user = _get_user_by_uid_safe(uid, db)
-                if not user:
-                    auth_status = "bad_uid"; break
-                sub = _get_portal_sub(user.id, db)
-                is_pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
-                auth_status = "ok" if is_pro else "not_pro"
-                break
-            finally:
-                db.close()
-        except HTTPException:
-            await _asyncio.sleep(0.3)
-            continue
-        except Exception:
-            await _asyncio.sleep(0.3)
-            continue
-    if auth_status in (None, "bad_uid"):
+    auth = await _discovery_pro_auth(uid)
+    if auth == "bad_uid":
         raise HTTPException(status_code=403, detail="Invalid UID")
-    if auth_status == "not_pro":
+    if auth == "not_pro":
         return JSONResponse(status_code=403, content={
             "ok": False,
             "message": "A Pro subscription is required to use the Index Strategy Finder."})
 
+    user_id = _discovery_user_id(uid)
+    from app.services.discovery_jobs import start_discovery_job
     from app.services.index_strategy_scanner import run_index_discovery
-    _scan_user_id = None
-    try:
-        _db2 = SessionLocal()
-        try:
-            _u2 = _get_user_by_uid_safe(uid, _db2)
-            if _u2:
-                _scan_user_id = int(_u2.id)
-        finally:
-            _db2.close()
-    except Exception:
-        pass
 
-    def _progress(msg: str):
-        _INDEX_SCAN_PROGRESS[uid] = msg
-
-    try:
-        result = await run_index_discovery(
-            symbol=symbol,
-            days=days,
-            direction_mode=direction_mode,
-            user_id=_scan_user_id,
-            progress_cb=_progress,
+    async def _runner(progress_cb):
+        return await run_index_discovery(
+            symbol=symbol, days=days, direction_mode=direction_mode,
+            user_id=user_id, progress_cb=progress_cb,
         )
-    except Exception as e:
-        logger.exception("index-discovery scan failed")
-        return JSONResponse(status_code=500, content={
-            "ok": False, "error": f"Scan failed: {type(e).__name__}"})
-    finally:
-        _INDEX_SCAN_PROGRESS.pop(uid, None)
-    return JSONResponse(content=result)
+
+    return JSONResponse(content=start_discovery_job("index", uid, _runner))
 
 
 @app.get("/api/backtest/forex-discovery/progress")
 async def forex_discovery_progress(uid: str = Query(...)):
-    """Poll scan status while forex pair discovery runs (uid = TH- code)."""
-    return {"message": _FOREX_SCAN_PROGRESS.get(uid.strip(), "")}
+    """Poll forex pair discovery job."""
+    return _discovery_progress_response("forex", uid)
 
 
 @app.post("/api/backtest/forex-discovery")
 async def backtest_forex_discovery(request: Request):
     """
-    Claude-driven major FX pair strategy discovery (EURUSD, GBPUSD, …).
-
-    Body: { uid, symbol (EURUSD|GBPUSD|…), days (30|90|180),
-            direction ("BOTH"|"LONG"|"SHORT") }
-    Pro subscribers only. Uses cTrader demo candles when connected.
+    Start major FX pair discovery in the background.
+    Body: { uid, symbol, days, direction }
     """
     body = await request.json()
     uid  = (body.get("uid") or "").strip()
@@ -14740,66 +14731,25 @@ async def backtest_forex_discovery(request: Request):
     direction_mode = (body.get("direction") or "BOTH").upper()
     symbol = (body.get("symbol") or "EURUSD").strip()
 
-    from app.database import SessionLocal
-    import asyncio as _asyncio
-    auth_status = None
-    for _attempt in range(3):
-        try:
-            db = SessionLocal()
-            try:
-                user = _get_user_by_uid_safe(uid, db)
-                if not user:
-                    auth_status = "bad_uid"; break
-                sub = _get_portal_sub(user.id, db)
-                is_pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
-                auth_status = "ok" if is_pro else "not_pro"
-                break
-            finally:
-                db.close()
-        except HTTPException:
-            await _asyncio.sleep(0.3)
-            continue
-        except Exception:
-            await _asyncio.sleep(0.3)
-            continue
-    if auth_status in (None, "bad_uid"):
+    auth = await _discovery_pro_auth(uid)
+    if auth == "bad_uid":
         raise HTTPException(status_code=403, detail="Invalid UID")
-    if auth_status == "not_pro":
+    if auth == "not_pro":
         return JSONResponse(status_code=403, content={
             "ok": False,
             "message": "A Pro subscription is required to use the Forex Strategy Finder."})
 
+    user_id = _discovery_user_id(uid)
+    from app.services.discovery_jobs import start_discovery_job
     from app.services.forex_pair_strategy_scanner import run_forex_discovery
-    _scan_user_id = None
-    try:
-        _db2 = SessionLocal()
-        try:
-            _u2 = _get_user_by_uid_safe(uid, _db2)
-            if _u2:
-                _scan_user_id = int(_u2.id)
-        finally:
-            _db2.close()
-    except Exception:
-        pass
 
-    def _progress(msg: str):
-        _FOREX_SCAN_PROGRESS[uid] = msg
-
-    try:
-        result = await run_forex_discovery(
-            symbol=symbol,
-            days=days,
-            direction_mode=direction_mode,
-            user_id=_scan_user_id,
-            progress_cb=_progress,
+    async def _runner(progress_cb):
+        return await run_forex_discovery(
+            symbol=symbol, days=days, direction_mode=direction_mode,
+            user_id=user_id, progress_cb=progress_cb,
         )
-    except Exception as e:
-        logger.exception("forex-discovery scan failed")
-        return JSONResponse(status_code=500, content={
-            "ok": False, "error": f"Scan failed: {type(e).__name__}"})
-    finally:
-        _FOREX_SCAN_PROGRESS.pop(uid, None)
-    return JSONResponse(content=result)
+
+    return JSONResponse(content=start_discovery_job("forex", uid, _runner))
 
 
 @app.post("/api/backtest/run")
