@@ -8248,21 +8248,41 @@ function _updateScanGridEst() {
   const eta = Math.max(8, Math.round(total * 0.08));
   el.textContent = `${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × ${stratCount} strategies = ${total} backtests · ~${eta}s`;
 }
+async function _finishCtraderLinkUi() {
+  _ctraderLinking = false;
+  _OANDA_CONNECTED = true;
+  toast('cTrader connected — loading your dashboard…', 'success');
+  try { showPage('live-forex', null); } catch (e) {}
+  loadCtraderCard();
+  await loadLiveForex();
+}
+
 async function _pollCtraderLinkComplete(attempt) {
   if (!UID) {
+    _ctraderLinking = false;
     toast('Log in on this site, then open Live Forex to finish cTrader setup', 'error');
     return;
   }
-  if (attempt > 24) {
-    toast('Connection is taking longer than expected — wait a moment and refresh Live Forex', 'error');
+  if (attempt > 40) {
+    _ctraderLinking = false;
+    toast('Connection taking longer than expected — tap Refresh on Live Forex', 'error');
     try { loadLiveForex(); } catch (e) {}
     return;
   }
   try {
+    const sr = await _apiFetch(`/api/ctrader/status?uid=${encodeURIComponent(UID)}`);
+    if (sr.ok) {
+      const d = await sr.json();
+      if (d.connected) {
+        await _finishCtraderLinkUi();
+        return;
+      }
+    }
     const pr = await fetch(`/api/ctrader/oauth-progress?uid=${encodeURIComponent(UID)}`, { credentials: 'same-origin' });
     if (pr.ok) {
       const p = await pr.json();
       if (p.status === 'error') {
+        _ctraderLinking = false;
         const err = (p.error || 'token_exchange_failed').toLowerCase();
         const msg = {
           token_exchange_failed: 'cTrader token exchange failed — check Spotware redirect URI matches Railway',
@@ -8273,27 +8293,15 @@ async function _pollCtraderLinkComplete(attempt) {
         }[err] || ('cTrader connection failed: ' + err.replace(/_/g, ' '));
         toast(msg, 'error');
         try { showPage('live-forex', null); } catch (e) {}
+        loadLiveForex();
         return;
       }
       if (p.status === 'ok') {
-        toast('cTrader connected — loading your accounts…', 'success');
-        try { showPage('live-forex', null); } catch (e) { loadLiveForex(); }
-        loadCtraderCard();
-        loadLiveForex();
+        await _finishCtraderLinkUi();
         return;
       }
     }
-    const sr = await _apiFetch(`/api/ctrader/status?uid=${encodeURIComponent(UID)}`);
-    if (sr.ok) {
-      const d = await sr.json();
-      if (d.connected) {
-        toast('cTrader connected — loading your accounts…', 'success');
-        try { showPage('live-forex', null); } catch (e) { loadLiveForex(); }
-        loadCtraderCard();
-        loadLiveForex();
-        return;
-      }
-    }
+    if (attempt % 3 === 0) loadLiveForex();
   } catch (e) { /* retry */ }
   setTimeout(() => _pollCtraderLinkComplete(attempt + 1), 1500);
 }
@@ -8308,14 +8316,16 @@ function _handleCtraderReturnQuery() {
   const clean = window.location.pathname + (window.location.hash || '');
   try { history.replaceState(null, '', clean); } catch (e) {}
   if (linking) {
+    _ctraderLinking = true;
     toast('Finishing cTrader connection…', 'success');
     try { showPage('live-forex', null); } catch (e) { loadLiveForex(); }
     _pollCtraderLinkComplete(0);
     return true;
   }
   if (linked) {
-    toast('cTrader connected — loading your accounts…', 'success');
-    try { showPage('live-forex', null); } catch (e) { loadLiveForex(); }
+    _ctraderLinking = true;
+    try { showPage('live-forex', null); } catch (e) {}
+    _pollCtraderLinkComplete(0);
     return true;
   }
   _checkCtraderSetup().then(s => { if (s && s.redirect_uri) window._ctraderRedirectUri = s.redirect_uri; });
@@ -10581,6 +10591,18 @@ const LF_PAIRS = [
 ];
 
 let _lfPollTimer = null;
+let _ctraderLinking = false;
+
+function renderLFConnecting(wrap, msg) {
+  wrap.innerHTML = `<div class="lf-card" style="text-align:center;padding:28px 20px">
+    <div style="font-size:28px;margin-bottom:10px">🔗</div>
+    <div style="font-size:16px;font-weight:700;margin-bottom:8px">Finishing cTrader connection</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.5">${escHtml(msg || 'Saving your FP Markets access and loading accounts…')}</div>
+    <div class="loader" style="margin:0 auto 16px"></div>
+    <button class="btn primary sm" onclick="loadLiveForex()">↻ Refresh now</button>
+  </div>`;
+}
+
 async function _checkCtraderSetup() {
   try {
     const r = await fetch('/api/public/ctrader-setup', { credentials: 'same-origin' });
@@ -10593,7 +10615,8 @@ async function loadLiveForex() {
   const wrap = $('lf-body');
   if (!wrap) return;
   if (_lfPollTimer) { clearTimeout(_lfPollTimer); _lfPollTimer = null; }
-  wrap.innerHTML = '<div class="loader">Loading account…</div>';
+  if (_ctraderLinking) renderLFConnecting(wrap);
+  else wrap.innerHTML = '<div class="loader">Loading account…</div>';
   const setup = await _checkCtraderSetup();
   if (setup && !setup.configured) {
     wrap.innerHTML = `<div class="lf-card" style="padding:20px;text-align:center">
@@ -10624,9 +10647,16 @@ async function loadLiveForex() {
 
 function renderLiveForex(d, wrap) {
   if (!d.connected) {
+    if (_ctraderLinking) {
+      renderLFConnecting(wrap, 'Still connecting — this usually takes a few seconds after you tap Allow.');
+      _lfPollTimer = setTimeout(loadLiveForex, 2000);
+      return;
+    }
     renderLFOnboarding(wrap);
     return;
   }
+  _ctraderLinking = false;
+  _OANDA_CONNECTED = true;
 
   const accounts = d.accounts || [];
   const hasAccount = !!d.account_id;

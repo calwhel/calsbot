@@ -2012,7 +2012,7 @@ async def health_deep():
     return {
         "status": "ok",
         "ts": int(time.time()),
-        "v": "railway-free-v2-ctrader-instant-cb",
+        "v": "railway-free-v2-live-forex-connect",
         "commit": _commit[:12] if _commit else "unknown",
         "gold_scan": "yahoo-chart-v3",
         "features_free": portal_features_free(),
@@ -10232,6 +10232,14 @@ def _ctrader_host_is_railway(host: str) -> bool:
     return host.endswith(".up.railway.app") or host.endswith(".railway.app")
 
 
+def _ctrader_auto_pick_account(accounts: list) -> Optional[dict]:
+    """Pick default cTrader account — prefer first live, else first listed."""
+    if not accounts:
+        return None
+    live = [a for a in accounts if a.get("isLive")]
+    return live[0] if live else accounts[0]
+
+
 def _ctrader_oauth_state(uid: str, request: Optional[Request]) -> str:
     """Encode return host — on Railway prefer *.up.railway.app over dead custom domains."""
     uid = (uid or "").strip().upper()
@@ -10438,7 +10446,7 @@ async def _fetch_and_store_ctrader_accounts(
             live = [a for a in accounts if a.get("isLive")]
             # Auto-select if unambiguous (one live account, or only one account total)
             if not prefs.ctrader_account_id:
-                chosen = live[0] if len(live) == 1 else (accounts[0] if len(accounts) == 1 else None)
+                chosen = _ctrader_auto_pick_account(accounts)
                 if chosen:
                     prefs.ctrader_account_id = str(chosen["ctidTraderAccountId"])
             db.commit()
@@ -10890,12 +10898,29 @@ async def api_live_forex_account(uid: str = Query(...)):
                     prefs.ctrader_accounts = _json.dumps(fetched)
                     live = [a for a in fetched if a.get("isLive")]
                     if not prefs.ctrader_account_id:
-                        chosen = live[0] if len(live) == 1 else (fetched[0] if len(fetched) == 1 else None)
+                        chosen = _ctrader_auto_pick_account(fetched)
                         if chosen:
                             prefs.ctrader_account_id = str(chosen["ctidTraderAccountId"])
                     db.commit()
             except Exception as _ae:
                 logger.warning(f"[live-forex] inline accounts refresh failed uid={uid}: {type(_ae).__name__}")
+
+        # Connected with token but still no account_id — force one more account sync.
+        if connected and prefs and prefs.ctrader_access_token and not (prefs.ctrader_account_id or "").strip():
+            try:
+                from app.services.ctrader_client import get_accounts_for_token
+                fetched = await asyncio.wait_for(
+                    get_accounts_for_token(prefs.ctrader_access_token), timeout=15.0
+                )
+                if fetched:
+                    accounts = fetched
+                    prefs.ctrader_accounts = _json.dumps(fetched)
+                    chosen = _ctrader_auto_pick_account(fetched)
+                    if chosen:
+                        prefs.ctrader_account_id = str(chosen["ctidTraderAccountId"])
+                    db.commit()
+            except Exception as _ae2:
+                logger.warning(f"[live-forex] account auto-pick failed uid={uid}: {type(_ae2).__name__}")
 
         # Fetch live balance from cTrader — cached 20s per user to avoid hammering
         # the persistent TLS connection on every frontend poll cycle.
