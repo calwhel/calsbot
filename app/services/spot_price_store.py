@@ -88,12 +88,12 @@ def upsert_tick(
         logger.debug(f"[spot_store] upsert {sym}: {e}")
 
 
-def get_mid(symbol: str, max_age_s: float = 15.0) -> Optional[float]:
+def get_mid(symbol: str, max_age_s: float = 45.0) -> Optional[float]:
     row = _get_row(symbol.upper(), max_age_s)
     return float(row["mid"]) if row else None
 
 
-def get_bid_ask(symbol: str, max_age_s: float = 15.0) -> Optional[Tuple[float, float]]:
+def get_bid_ask(symbol: str, max_age_s: float = 45.0) -> Optional[Tuple[float, float]]:
     row = _get_row(symbol.upper(), max_age_s)
     if not row:
         return None

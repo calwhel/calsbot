@@ -83,7 +83,8 @@ _TF_MINUTES: Dict[str, int] = {
 }
 
 # Poll interval for REST price updates (env: FMP_POLL_INTERVAL_SECONDS)
-_POLL_INTERVAL = max(5, int(os.environ.get("FMP_POLL_INTERVAL_SECONDS", "8")))
+_POLL_INTERVAL = max(8, int(os.environ.get("FMP_POLL_INTERVAL_SECONDS", "15")))
+_FMP_POLL_LOCK_ID = 708_110_005
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -519,6 +520,37 @@ def _ctrader_feed_active() -> bool:
         return False
 
 
+def _acquire_fmp_poll_lock():
+    """Hold a dedicated DB session for the poll cycle (session advisory lock)."""
+    try:
+        import psycopg2
+        from app.config import settings
+        conn = psycopg2.connect(settings.get_database_url())
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (_FMP_POLL_LOCK_ID,))
+        if not cur.fetchone()[0]:
+            conn.close()
+            return None
+        return conn
+    except Exception:
+        return None
+
+
+def _release_fmp_poll_lock(conn) -> None:
+    if not conn:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT pg_advisory_unlock(%s)", (_FMP_POLL_LOCK_ID,))
+    except Exception:
+        pass
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
 async def _stream():
     global _RUNNING
     api_key = _fmp_api_key()
@@ -526,44 +558,53 @@ async def _stream():
         logger.warning("[FMPFeed] FMP API key not set — real-time feed disabled")
         return
 
-    logger.info(f"[FMPFeed] REST polling started — {len(_FOREX_SYMBOLS)} forex + {len(_INDEX_FMP)} indices every {_POLL_INTERVAL}s")
+    logger.info(
+        f"[FMPFeed] REST polling task — {len(_FOREX_SYMBOLS)} forex + "
+        f"{len(_INDEX_FMP)} indices every {_POLL_INTERVAL}s (single global poller)"
+    )
     _RUNNING = True
     errors = 0
     _ctrader_skip_logged = False
 
     try:
         while True:
-            if _ctrader_feed_active():
-                if not _ctrader_skip_logged:
-                    _ctrader_skip_logged = True
-                    logger.info(
-                        "[FMPFeed] cTrader live ticks active — pausing FMP polls "
-                        "(FMP remains fallback if cTrader drops)"
-                    )
-                await asyncio.sleep(max(120, _POLL_INTERVAL))
-                continue
-            _ctrader_skip_logged = False
-
-            if fmp_in_backoff():
-                await asyncio.sleep(max(_POLL_INTERVAL, fmp_backoff_remaining_seconds()))
+            if not await asyncio.to_thread(_try_fmp_poll_lock):
+                await asyncio.sleep(_POLL_INTERVAL)
                 continue
             try:
-                await asyncio.gather(
-                    _poll_forex(),
-                    _poll_indices(),
-                    return_exceptions=True,
-                )
-                errors = 0
-            except Exception as e:
-                errors += 1
-                logger.debug(f"[FMPFeed] poll cycle error ({errors}): {e}")
+                if _ctrader_feed_active():
+                    if not _ctrader_skip_logged:
+                        _ctrader_skip_logged = True
+                        logger.info(
+                            "[FMPFeed] cTrader live ticks active — pausing FMP polls "
+                            "(FMP remains fallback if cTrader drops)"
+                        )
+                    await asyncio.sleep(max(120, _POLL_INTERVAL))
+                    continue
+                _ctrader_skip_logged = False
 
-            if errors > 10:
-                logger.warning("[FMPFeed] too many consecutive errors — pausing 60s")
-                await asyncio.sleep(60)
-                errors = 0
-            else:
-                await asyncio.sleep(_POLL_INTERVAL)
+                if fmp_in_backoff():
+                    await asyncio.sleep(max(_POLL_INTERVAL, fmp_backoff_remaining_seconds()))
+                    continue
+                try:
+                    await asyncio.gather(
+                        _poll_forex(),
+                        _poll_indices(),
+                        return_exceptions=True,
+                    )
+                    errors = 0
+                except Exception as e:
+                    errors += 1
+                    logger.debug(f"[FMPFeed] poll cycle error ({errors}): {e}")
+
+                if errors > 10:
+                    logger.warning("[FMPFeed] too many consecutive errors — pausing 60s")
+                    await asyncio.sleep(60)
+                    errors = 0
+                else:
+                    await asyncio.sleep(_POLL_INTERVAL)
+            finally:
+                await asyncio.to_thread(_release_fmp_poll_lock)
     except asyncio.CancelledError:
         logger.info("[FMPFeed] polling task cancelled")
         raise

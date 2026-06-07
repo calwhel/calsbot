@@ -476,6 +476,11 @@ async def get_price(symbol: str, asset_class: str) -> Optional[float]:
         price = await asyncio.to_thread(_yf_fast_price_blocking, ticker)
         if price:
             _PRICE_CACHE[ticker] = (price, now)
+            try:
+                from app.services.spot_price_store import upsert_tick
+                upsert_tick(symbol.upper(), mid=float(price), source="yfinance")
+            except Exception:
+                pass
             return price
         logger.warning(f"[tradfi] fast_info returned no price for {ticker}")
     except Exception as e:
