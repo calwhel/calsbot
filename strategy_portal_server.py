@@ -2012,7 +2012,7 @@ async def health_deep():
     return {
         "status": "ok",
         "ts": int(time.time()),
-        "v": "railway-free-v2-ctrader-token-fix",
+        "v": "railway-free-v2-live-forex-feed",
         "commit": _commit[:12] if _commit else "unknown",
         "gold_scan": "yahoo-chart-v3",
         "features_free": portal_features_free(),
