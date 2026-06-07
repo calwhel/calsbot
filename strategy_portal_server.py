@@ -1628,13 +1628,17 @@ async def _start_executor_tasks():
     asyncio.create_task(_ghost_cleanup_loop())
     asyncio.create_task(_keepalive_ping_loop())   # keep Autoscale awake
 
-    # ── cTrader live spot feed ────────────────────────────────────────────────
-    # Started HERE (not in _startup_background) so it runs in EXACTLY ONE worker —
-    # the same one that runs the executor (its only consumer). Multiple gunicorn
-    # workers each opening a feed connection to the SAME cTrader account caused the
-    # broker to kick duplicate sessions (constant reconnect churn + "app auth
-    # failed"). Co-locating it with the executor also means it never runs in dev
-    # (executor is prod-only), so dev stops competing for the same account.
+    # ── FMP + cTrader price feeds ─────────────────────────────────────────────
+    # Started HERE (not in _startup_background) so each runs in EXACTLY ONE worker —
+    # the same one that runs the executor (their only consumer). With gunicorn -w 2,
+    # starting feeds per-worker doubled FMP API calls (429 storms) and opened duplicate
+    # cTrader sessions (broker kicks + reconnect churn).
+    try:
+        from app.services.fmp_price_feed import start as _fmp_feed_start
+        _fmp_feed_start()
+        logger.info("FMP real-time price feed task scheduled (executor worker)")
+    except Exception as _fmp_err:
+        logger.warning(f"FMP price feed start error (non-fatal): {_fmp_err}")
     try:
         from app.services.ctrader_price_feed import start as _ctrader_feed_start
         _ctrader_feed_start()
@@ -1788,7 +1792,7 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
                         f"[executor] reclaimed lock {_EXECUTOR_LOCK_ID} — "
                         f"terminated {n} stale holder(s); retrying acquire"
                     )
-            await asyncio.sleep(15)  # Retry every 15 s until lock is free
+            await asyncio.sleep(5)  # Retry every 5 s until lock is free
 
 
 async def _keepalive_then_reclaim(conn):
@@ -1799,6 +1803,11 @@ async def _keepalive_then_reclaim(conn):
     # Stop the cTrader feed so this former lock-holder doesn't keep a second
     # connection open once another worker wins the lock and starts its own feed
     # (duplicate sessions are exactly what triggers the broker's reconnect kicks).
+    try:
+        from app.services.fmp_price_feed import stop as _fmp_feed_stop
+        _fmp_feed_stop()
+    except Exception as _fe:
+        logger.warning(f"FMP feed stop on lock-loss error (non-fatal): {_fe}")
     try:
         from app.services.ctrader_price_feed import stop as _ctrader_feed_stop
         _ctrader_feed_stop()
@@ -1884,22 +1893,10 @@ async def _startup_background():
     except Exception as e:
         logger.warning(f"close_stale_open_executions error (non-fatal): {e}")
 
-    # ── FMP real-time price feed ──────────────────────────────────────────────
-    # Persistent WebSocket to FMP streaming server — no account linking needed.
-    # Streams live bid/ask for all forex + index symbols. tradfi_prices.py
-    # consults this feed first (TTL=10s); falls back to yfinance when cold.
-    try:
-        from app.services.fmp_price_feed import start as _fmp_feed_start
-        _fmp_feed_start()
-        logger.info("FMP real-time price feed task scheduled")
-    except Exception as _fmp_err:
-        logger.warning(f"FMP price feed start error (non-fatal): {_fmp_err}")
-
-    # ── cTrader live spot feed ────────────────────────────────────────────────
+    # ── FMP + cTrader price feeds ─────────────────────────────────────────────
     # NOTE: started in _start_executor_tasks() (the single executor-winning
-    # worker), NOT here — running it per-worker opened duplicate connections to
-    # the same cTrader account and the broker kicked the duplicates (reconnect
-    # churn + "app auth failed"). See _start_executor_tasks for details.
+    # worker), NOT here — per-worker feeds doubled FMP 429s and duplicate
+    # cTrader sessions. See _start_executor_tasks for details.
 
     # Only run the strategy executor in production (Railway/Replit) or FORCE_EXECUTOR=1.
     # In dev, both the dev portal and production share the same Neon DB, so
@@ -2009,6 +2006,20 @@ async def health():
             db.close()
     except Exception as _ex_err:
         _exec_status["error"] = str(_ex_err)[:120]
+    if _executor_running_in_this_worker:
+        _exec_status["running_in_this_worker"] = True
+        try:
+            import time as _time
+            from app.services.strategy_executor import get_heartbeats
+            _now = _time.time()
+            _hb = get_heartbeats()
+            _exec_status["heartbeats"] = {
+                k: {"age_s": round(_now - ts, 1)} for k, ts in sorted(_hb.items())
+            }
+        except Exception as _hb_err:
+            _exec_status["heartbeat_error"] = str(_hb_err)[:80]
+    else:
+        _exec_status["running_in_this_worker"] = False
     return {
         "status": "ok",
         "ts": int(__import__("time").time()),
@@ -12247,11 +12258,14 @@ async def executor_force_start(request: Request):
             conn.autocommit = True
             cur = conn.cursor()
             # Forcefully terminate any backend holding our lock
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT pid FROM pg_locks l
                 JOIN pg_stat_activity a ON a.pid = l.pid
-                WHERE l.locktype='advisory' AND l.objid=42424242 AND l.granted=true
-            """)
+                WHERE l.locktype='advisory' AND l.objid=%s AND l.granted=true
+                """,
+                (_EXECUTOR_LOCK_ID,),
+            )
             holders = cur.fetchall()
             for (pid,) in holders:
                 cur.execute("SELECT pg_terminate_backend(%s)", (pid,))
