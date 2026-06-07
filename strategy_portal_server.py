@@ -293,12 +293,15 @@ templates = Jinja2Templates(directory="app/templates")
 
 @app.middleware("http")
 async def redirect_www_and_log_500(request: Request, call_next):
-    host = request.headers.get("host", "")
-    if host.startswith("www."):
-        url = request.url
-        non_www = host[4:]
-        redirect_url = str(url).replace(f"://{host}", f"://{non_www}", 1)
-        return RedirectResponse(url=redirect_url, status_code=301)
+    # Do NOT redirect www → apex. Apex DNS often still points at a dead host
+    # (Replit/GCP) while www CNAME targets Railway — that redirect broke the site.
+    # Optional CANONICAL_HOST=www.example.com redirects bare apex → www when both
+    # domains are attached in Railway.
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    canonical = (os.getenv("CANONICAL_HOST") or "").strip().lower()
+    if canonical and canonical.startswith("www.") and host == canonical[4:]:
+        url = str(request.url).replace(f"://{host}", f"://{canonical}", 1)
+        return RedirectResponse(url=url, status_code=301)
     try:
         return await call_next(request)
     except Exception as exc:
@@ -1929,11 +1932,23 @@ async def _startup_background():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Health check — responds immediately, even before migrations finish
+# Health check — /health is instant (Railway probe). Deep checks → /health/deep.
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
+    """Instant liveness probe — no DB or Telegram calls (those blocked workers 30–80s)."""
+    _commit = deploy_commit()
+    return {
+        "status": "ok",
+        "ts": int(time.time()),
+        "commit": _commit[:12] if _commit else "unknown",
+    }
+
+
+@app.get("/health/deep")
+async def health_deep():
+    """Full diagnostics: executor locks, Telegram poller, heartbeats."""
     _commit = deploy_commit()
     _tg_lock = {}
     _tg_status = {"configured": False, "poll_disabled": False, "bot_username": None, "bot_id": None}
@@ -2009,9 +2024,8 @@ async def health():
     if _executor_running_in_this_worker:
         _exec_status["running_in_this_worker"] = True
         try:
-            import time as _time
             from app.services.strategy_executor import get_heartbeats
-            _now = _time.time()
+            _now = time.time()
             _hb = get_heartbeats()
             _exec_status["heartbeats"] = {
                 k: {"age_s": round(_now - ts, 1)} for k, ts in sorted(_hb.items())
@@ -2022,7 +2036,7 @@ async def health():
         _exec_status["running_in_this_worker"] = False
     return {
         "status": "ok",
-        "ts": int(__import__("time").time()),
+        "ts": int(time.time()),
         "v": "railway-free-v2-ctrader",
         "commit": _commit[:12] if _commit else "unknown",
         "gold_scan": "yahoo-chart-v3",
