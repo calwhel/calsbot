@@ -44,6 +44,7 @@ from app.deployment import (
     payments_enabled,
     request_is_https,
     public_base_url,
+    railway_service_base_url,
     deploy_commit,
     google_auth_enabled,
 )
@@ -10215,9 +10216,12 @@ def _ctrader_return_hosts_allowed() -> set:
         h = _ctrader_host_from_urlish(os.getenv(key) or "")
         if h:
             hosts.add(h)
-    rail = _ctrader_host_from_urlish(public_base_url())
+    rail = _ctrader_host_from_urlish(railway_service_base_url())
     if rail:
         hosts.add(rail)
+    pub = _ctrader_host_from_urlish(public_base_url())
+    if pub:
+        hosts.add(pub)
     return hosts
 
 
@@ -10267,20 +10271,24 @@ def _ctrader_redirect_uri(request: Optional[Request] = None) -> str:
     if explicit and not explicit.endswith("/api/ctrader/callback"):
         explicit = f"{explicit}/api/ctrader/callback"
 
-    # Railway: pin OAuth to the deployed host (registered in Spotware), not the
-    # browser Host header — custom domains may differ from the callback URI.
+    # Railway: pin OAuth to *.up.railway.app (registered in Spotware), never
+    # PUBLIC_DOMAIN / custom domain — those are for browsing, not Spotware callback.
     if is_railway():
-        railway_base = public_base_url(request).rstrip("/")
+        railway_base = railway_service_base_url(request).rstrip("/")
         rail_host = _ctrader_host_from_urlish(railway_base)
         if explicit:
             exp_host = _ctrader_host_from_urlish(explicit)
-            if exp_host == rail_host:
+            if exp_host == rail_host or exp_host.endswith(".up.railway.app"):
                 return explicit
-            logger.warning(
-                "[ctrader] CTRADER_REDIRECT_URI host %s != Railway host %s — pinning OAuth to %s",
-                exp_host, rail_host, railway_base,
-            )
-        return f"{railway_base}/api/ctrader/callback"
+            if rail_host:
+                logger.warning(
+                    "[ctrader] CTRADER_REDIRECT_URI host %s != Railway host %s — pinning OAuth to %s",
+                    exp_host, rail_host, railway_base,
+                )
+                return f"{railway_base}/api/ctrader/callback"
+            return explicit
+        if railway_base:
+            return f"{railway_base}/api/ctrader/callback"
 
     if request is not None:
         host = (request.headers.get("host") or "").split(":")[0].strip().lower()
@@ -10315,6 +10323,7 @@ async def api_public_ctrader_setup(request: Request):
     env_host = _ctrader_host_from_urlish(env_redirect or "")
     req_host = _ctrader_host_from_urlish(host)
     redir_host = _ctrader_host_from_urlish(redirect_uri)
+    rail_base = railway_service_base_url(request).rstrip("/") if is_railway() else None
     return JSONResponse({
         "configured":       bool(cid and secret),
         "client_id_set":    bool(cid),
@@ -10322,6 +10331,7 @@ async def api_public_ctrader_setup(request: Request):
         "redirect_uri":     redirect_uri,
         "env_redirect_uri": env_redirect,
         "request_host":     host,
+        "railway_service_base": rail_base,
         "oauth_pinned_railway": is_railway(),
         "redirect_match":   (not env_redirect) or (env_host == redir_host),
         "request_matches_oauth_callback": req_host == redir_host,

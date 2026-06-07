@@ -83,6 +83,23 @@ def request_is_https(request=None) -> bool:
   return False
 
 
+def railway_service_base_url(request=None) -> str:
+  """Railway deploy hostname — ignores marketing PUBLIC_DOMAIN (e.g. custom domain)."""
+  for key in ("RAILWAY_PUBLIC_DOMAIN", "RAILWAY_STATIC_URL"):
+    raw = (os.getenv(key) or "").strip()
+    if not raw:
+      continue
+    if raw.startswith("http"):
+      return raw.rstrip("/")
+    return f"https://{raw.split(',')[0].strip()}"
+  if request is not None:
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    if host.endswith(".up.railway.app") or host.endswith(".railway.app"):
+      return f"https://{host}"
+    return str(request.base_url).rstrip("/")
+  return ""
+
+
 def public_base_url(request=None) -> str:
   for key in ("PUBLIC_DOMAIN", "RAILWAY_PUBLIC_DOMAIN", "RAILWAY_STATIC_URL"):
     raw = (os.getenv(key) or "").strip()
