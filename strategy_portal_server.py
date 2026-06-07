@@ -7443,14 +7443,14 @@ async def api_build_from_live_scan(request: Request):
         raise HTTPException(status_code=422, detail=f"Could not compile live signal: {e}")
 
     config["_build_mode"] = "paper"
-    save_res = await api_save_strategy(_MockRequest(uid, config))
-    return save_res
+    return await api_save_strategy(_JsonBodyRequest({"uid": uid, "config": config}))
 
 
-class _MockRequest:
+class _JsonBodyRequest:
     """Minimal request shim so build-from-live-scan can reuse api_save_strategy."""
-    def __init__(self, uid, config):
-        self._body = {"uid": uid, "config": config}
+    def __init__(self, body: dict):
+        self._body = body
+        self.headers: dict = {}
 
     async def json(self):
         return self._body
