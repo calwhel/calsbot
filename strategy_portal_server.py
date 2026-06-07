@@ -435,6 +435,7 @@ async def _require_bound_uid_for_api(request: Request, call_next):
         "/api/mobile/login",
         "/api/webhooks/tv/",
         "/api/ctrader/callback",
+        "/api/ctrader/oauth-progress",
         "/api/markets/catalog",
     )
     if path.startswith("/api/") and uid and not path.startswith(public_prefixes):
@@ -2011,7 +2012,7 @@ async def health_deep():
     return {
         "status": "ok",
         "ts": int(time.time()),
-        "v": "railway-free-v2-ctrader-rail-fallback",
+        "v": "railway-free-v2-ctrader-instant-cb",
         "commit": _commit[:12] if _commit else "unknown",
         "gold_scan": "yahoo-chart-v3",
         "features_free": portal_features_free(),
@@ -10454,6 +10455,189 @@ async def _fetch_and_store_ctrader_accounts(
         db.close()
 
 
+def _ctrader_oauth_cache_key(uid: str) -> str:
+    return f"ctrader_oauth:{(uid or '').strip().upper()}"
+
+
+def _set_ctrader_oauth_progress(uid: str, status: str, error: str = "") -> None:
+    if not uid:
+        return
+    set_cache(_ctrader_oauth_cache_key(uid), {"status": status, "error": error or ""}, 300)
+
+
+def _ctrader_callback_finishing_html(continue_url: str) -> str:
+    """Instant 200 HTML so id.ctrader.com does not spin waiting for token exchange."""
+    import html as _html
+    esc = _html.escape(continue_url, quote=True)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="1;url={esc}">
+  <title>Connecting cTrader</title>
+  <style>
+    body {{ font-family: system-ui, -apple-system, sans-serif; background: #0b0f14; color: #e8ecf0;
+           display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }}
+    .box {{ text-align: center; padding: 24px; max-width: 320px; line-height: 1.5; }}
+    a {{ color: #3fb68b; }}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <p><strong>Approved.</strong> Finishing your cTrader connection…</p>
+    <p style="font-size:14px;color:#9aa5b1">If you are not redirected, <a href="{esc}">tap here</a>.</p>
+  </div>
+</body>
+</html>"""
+
+
+async def _complete_ctrader_oauth_in_background(code: str, state: str, redirect_uri: str) -> None:
+    """Exchange OAuth code and save tokens — runs after instant callback HTML."""
+    from app.database import SessionLocal
+    from app.services.ctrader_client import exchange_code, CTraderTokenError
+    from sqlalchemy import text as _sql_text
+
+    uid, _return_host = _parse_ctrader_oauth_state(state or "")
+    if uid:
+        _set_ctrader_oauth_progress(uid, "pending")
+
+    def _resolve_user():
+        db = SessionLocal()
+        try:
+            user = _get_user_by_uid(uid, db) if uid else None
+            if not user:
+                return None
+            return {
+                "id": user.id,
+                "is_admin": bool(getattr(user, "is_admin", False)),
+                "tg_id": str(user.telegram_id) if getattr(user, "telegram_id", None) else "",
+                "uname": getattr(user, "username", "") or "",
+                "name": user.first_name or user.username or "User",
+            }
+        finally:
+            db.close()
+
+    try:
+        user_row = await asyncio.to_thread(_resolve_user)
+    except Exception as e:
+        logger.error(f"[cTrader callback] user lookup failed: {type(e).__name__}")
+        if uid:
+            _set_ctrader_oauth_progress(uid, "error", "db_error")
+        return
+
+    if not user_row:
+        logger.warning(f"[cTrader callback] uid={uid!r} not found (background)")
+        if uid:
+            _set_ctrader_oauth_progress(uid, "error", "session_expired")
+        return
+
+    try:
+        token_data = await asyncio.wait_for(
+            exchange_code(code=code, redirect_uri=redirect_uri),
+            timeout=20.0,
+        )
+    except Exception as e:
+        err_code = "token_exchange_failed"
+        if isinstance(e, CTraderTokenError):
+            err_code = (e.error_code or "token_exchange_failed").lower()
+            logger.error(
+                "[cTrader callback] exchange_code errorCode=%s redirect_host=%s",
+                e.error_code,
+                urllib.parse.urlparse(redirect_uri).netloc,
+            )
+        elif isinstance(e, asyncio.TimeoutError):
+            err_code = "token_exchange_timeout"
+            logger.error("[cTrader callback] exchange_code timed out")
+        else:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            logger.error(
+                f"[cTrader callback] exchange_code failed: "
+                f"{type(e).__name__} status={status}"
+            )
+        if uid:
+            _set_ctrader_oauth_progress(uid, "error", err_code)
+        return
+
+    access_token  = token_data.get("accessToken")  or token_data.get("access_token",  "")
+    refresh_token = token_data.get("refreshToken") or token_data.get("refresh_token", "")
+    if not access_token:
+        logger.error("[cTrader callback] no access_token in response")
+        if uid:
+            _set_ctrader_oauth_progress(uid, "error", "no_token")
+        return
+
+    def _save_tokens():
+        db = SessionLocal()
+        try:
+            db.execute(
+                _sql_text("""
+                    INSERT INTO user_preferences
+                        (user_id, ctrader_access_token, ctrader_refresh_token, forex_approved)
+                    VALUES (:uid, :tok, :ref, :fa)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        ctrader_access_token  = EXCLUDED.ctrader_access_token,
+                        ctrader_refresh_token = EXCLUDED.ctrader_refresh_token,
+                        forex_approved        = CASE WHEN :fa THEN TRUE
+                                                    ELSE user_preferences.forex_approved END
+                """),
+                {"uid": user_row["id"], "tok": access_token,
+                 "ref": refresh_token, "fa": user_row["is_admin"]},
+            )
+            db.commit()
+            row = db.execute(
+                _sql_text(
+                    "SELECT ctrader_access_token IS NOT NULL AS has_token "
+                    "FROM user_preferences WHERE user_id = :uid"
+                ),
+                {"uid": user_row["id"]},
+            ).fetchone()
+            return bool(row and row[0])
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            db.close()
+
+    try:
+        ok = await asyncio.to_thread(_save_tokens)
+        logger.info(
+            f"[cTrader callback] token UPSERT ok user_id={user_row['id']} "
+            f"token_len={len(access_token)} verify_has_token={ok}"
+        )
+    except Exception as e:
+        logger.error(f"[cTrader callback] UPSERT failed: {type(e).__name__}")
+        if uid:
+            _set_ctrader_oauth_progress(uid, "error", "db_error")
+        return
+
+    if uid:
+        _set_ctrader_oauth_progress(uid, "ok")
+
+    try:
+        await _fetch_and_store_ctrader_accounts(
+            user_row["id"], access_token, user_row["is_admin"],
+            user_row["name"], user_row["uname"], user_row["tg_id"],
+        )
+    except Exception as e:
+        logger.warning(f"[cTrader callback] accounts fetch failed: {type(e).__name__}")
+
+
+@app.get("/api/ctrader/oauth-progress")
+async def api_ctrader_oauth_progress(uid: str = Query(...)):
+    """Poll while /api/ctrader/callback finishes token exchange in background."""
+    uid = (uid or "").strip().upper()
+    if not uid:
+        raise HTTPException(status_code=400, detail="Missing uid")
+    prog = get_cache(_ctrader_oauth_cache_key(uid))
+    if not prog:
+        return JSONResponse({"status": "unknown"})
+    return JSONResponse(prog)
+
+
 @app.get("/api/ctrader/callback")
 async def api_ctrader_callback(
     code:  str = Query(None),
@@ -10463,134 +10647,30 @@ async def api_ctrader_callback(
     background_tasks: BackgroundTasks = None,
 ):
     """
-    Spotware OAuth callback. Exchanges code for tokens, saves immediately,
-    then fetches account list in background.
-
-    IMPORTANT: We intentionally close the first DB session BEFORE the slow
-    exchange_code() HTTP call.  Neon drops idle connections after a few seconds
-    of inactivity, so a session opened before the ~5s Spotware round-trip will
-    have a dead TCP connection by the time we try to commit.  Opening a fresh
-    session AFTER the HTTP call guarantees a live connection.
+    Spotware OAuth callback. Return HTML immediately (id.ctrader.com waits for
+    this response) and finish token exchange in a background task.
     """
     if error:
         q = f"ctrader_error={urllib.parse.quote(str(error))}"
         return RedirectResponse(url=_ctrader_app_redirect_url(request, state or "", q))
 
-    from app.database import SessionLocal
-    from app.models import UserPreference
-    from app.services.ctrader_client import exchange_code
-
-    # ── Step 1: resolve user from a SHORT-LIVED session (close before slow IO) ──
-    user_id_saved  = None
-    is_admin_saved = False
-    tg_id_str      = ""
-    uname_str      = ""
-    name_str       = "User"
-    redirect_uri   = ""
-
-    db1 = SessionLocal()
-    try:
-        uid, _return_host = _parse_ctrader_oauth_state(state or "")
-        user = _get_user_by_uid(uid, db1) if uid else None
-        if not user and request:
-            session_uid = _get_session_uid(request)
-            if session_uid:
-                user = _get_user_by_uid(session_uid, db1)
-        if not user:
-            logger.warning(f"[cTrader callback] uid={uid!r} not found")
-            return RedirectResponse(url="/login?next=/app%23live-forex&msg=session_expired")
-
-        user_id_saved  = user.id
-        is_admin_saved = bool(getattr(user, "is_admin", False))
-        tg_id_str      = str(user.telegram_id) if getattr(user, "telegram_id", None) else ""
-        uname_str      = getattr(user, "username", "") or ""
-        name_str       = user.first_name or user.username or "User"
-
-        redirect_uri = _ctrader_redirect_uri(request)
-    finally:
-        db1.close()  # ← close BEFORE the slow HTTP call so Neon doesn't drop it
-
-    # ── Step 2: exchange code (slow ~5s HTTP round-trip) ──────────────────────
-    try:
-        from app.services.ctrader_client import CTraderTokenError
-        token_data = await exchange_code(code=code, redirect_uri=redirect_uri)
-    except Exception as e:
-        from app.services.ctrader_client import CTraderTokenError
-        err_code = "token_exchange_failed"
-        if isinstance(e, CTraderTokenError):
-            err_code = (e.error_code or "token_exchange_failed").lower()
-            logger.error(
-                "[cTrader callback] exchange_code errorCode=%s redirect_host=%s",
-                e.error_code,
-                urllib.parse.urlparse(redirect_uri).netloc,
-            )
-        else:
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            logger.error(
-                f"[cTrader callback] exchange_code failed: "
-                f"{type(e).__name__} status={status}"
-            )
-        q = f"ctrader_error={urllib.parse.quote(err_code)}"
+    if not code or not state:
+        q = "ctrader_error=missing_code"
         return RedirectResponse(url=_ctrader_app_redirect_url(request, state or "", q))
 
-    access_token  = token_data.get("accessToken")  or token_data.get("access_token",  "")
-    refresh_token = token_data.get("refreshToken") or token_data.get("refresh_token", "")
-    if not access_token:
-        logger.error("[cTrader callback] no access_token in response")
-        return RedirectResponse(url=_ctrader_app_redirect_url(request, state or "", "ctrader_error=no_token"))
+    redirect_uri = _ctrader_redirect_uri(request)
+    uid, _ = _parse_ctrader_oauth_state(state or "")
+    if uid:
+        _set_ctrader_oauth_progress(uid, "pending")
 
-    # ── Step 3: save token via raw SQL UPSERT (atomic, bypasses ORM state) ───────
-    import traceback as _traceback
-    from sqlalchemy import text as _sql_text
-    db2 = SessionLocal()
-    try:
-        db2.execute(
-            _sql_text("""
-                INSERT INTO user_preferences
-                    (user_id, ctrader_access_token, ctrader_refresh_token, forex_approved)
-                VALUES (:uid, :tok, :ref, :fa)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    ctrader_access_token  = EXCLUDED.ctrader_access_token,
-                    ctrader_refresh_token = EXCLUDED.ctrader_refresh_token,
-                    forex_approved        = CASE WHEN :fa THEN TRUE
-                                                ELSE user_preferences.forex_approved END
-            """),
-            {"uid": user_id_saved, "tok": access_token,
-             "ref": refresh_token, "fa": is_admin_saved},
-        )
-        db2.commit()
-        # Read back immediately to verify the commit actually landed
-        row = db2.execute(
-            _sql_text("SELECT ctrader_access_token IS NOT NULL AS has_token FROM user_preferences WHERE user_id = :uid"),
-            {"uid": user_id_saved},
-        ).fetchone()
-        logger.info(
-            f"[cTrader callback] token UPSERT ok user_id={user_id_saved} "
-            f"token_len={len(access_token)} verify_has_token={row and row[0]}"
-        )
-    except Exception as e:
-        # Do NOT log raw `e`/traceback — this runs right after binding the access
-        # and refresh tokens as SQL params, and SQLAlchemy/driver errors + traces
-        # can echo bound parameter values (the tokens). Log only the type.
-        logger.error(f"[cTrader callback] UPSERT failed: {type(e).__name__}")
-        try:
-            db2.rollback()
-        except Exception:
-            pass
-        return RedirectResponse(url=_ctrader_app_redirect_url(request, state or "", "ctrader_error=db_error"))
-    finally:
-        db2.close()
-
-    # ── Step 4: fetch & cache account list in background (uses BackgroundTasks,
-    #    not asyncio.ensure_future — safe with anyio/Starlette task groups) ─────
     if background_tasks is not None:
         background_tasks.add_task(
-            _fetch_and_store_ctrader_accounts,
-            user_id_saved, access_token, is_admin_saved,
-            name_str, uname_str, tg_id_str,
+            _complete_ctrader_oauth_in_background,
+            code, state, redirect_uri,
         )
 
-    return RedirectResponse(url=_ctrader_app_redirect_url(request, state or "", "ctrader=linked"))
+    continue_url = _ctrader_app_redirect_url(request, state or "", "ctrader=linking")
+    return HTMLResponse(_ctrader_callback_finishing_html(continue_url), status_code=200)
 
 
 

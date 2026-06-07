@@ -8248,13 +8248,71 @@ function _updateScanGridEst() {
   const eta = Math.max(8, Math.round(total * 0.08));
   el.textContent = `${coins.length} coin${coins.length>1?'s':''} × ${_scanTfs.length} timeframe${_scanTfs.length>1?'s':''} × ${stratCount} strategies = ${total} backtests · ~${eta}s`;
 }
+async function _pollCtraderLinkComplete(attempt) {
+  if (!UID) {
+    toast('Log in on this site, then open Live Forex to finish cTrader setup', 'error');
+    return;
+  }
+  if (attempt > 24) {
+    toast('Connection is taking longer than expected — wait a moment and refresh Live Forex', 'error');
+    try { loadLiveForex(); } catch (e) {}
+    return;
+  }
+  try {
+    const pr = await fetch(`/api/ctrader/oauth-progress?uid=${encodeURIComponent(UID)}`, { credentials: 'same-origin' });
+    if (pr.ok) {
+      const p = await pr.json();
+      if (p.status === 'error') {
+        const err = (p.error || 'token_exchange_failed').toLowerCase();
+        const msg = {
+          token_exchange_failed: 'cTrader token exchange failed — check Spotware redirect URI matches Railway',
+          token_exchange_timeout: 'cTrader token exchange timed out — tap Connect and try again',
+          session_expired: 'Session expired — log in and connect cTrader again',
+          no_token: 'cTrader did not return an access token',
+          db_error: 'Connected to cTrader but saving failed — try again',
+        }[err] || ('cTrader connection failed: ' + err.replace(/_/g, ' '));
+        toast(msg, 'error');
+        try { showPage('live-forex', null); } catch (e) {}
+        return;
+      }
+      if (p.status === 'ok') {
+        toast('cTrader connected — loading your accounts…', 'success');
+        try { showPage('live-forex', null); } catch (e) { loadLiveForex(); }
+        loadCtraderCard();
+        loadLiveForex();
+        return;
+      }
+    }
+    const sr = await _apiFetch(`/api/ctrader/status?uid=${encodeURIComponent(UID)}`);
+    if (sr.ok) {
+      const d = await sr.json();
+      if (d.connected) {
+        toast('cTrader connected — loading your accounts…', 'success');
+        try { showPage('live-forex', null); } catch (e) { loadLiveForex(); }
+        loadCtraderCard();
+        loadLiveForex();
+        return;
+      }
+    }
+  } catch (e) { /* retry */ }
+  setTimeout(() => _pollCtraderLinkComplete(attempt + 1), 1500);
+}
+
 function _handleCtraderReturnQuery() {
   const params = new URLSearchParams(window.location.search);
   const err = params.get('ctrader_error');
-  const linked = params.get('ctrader') === 'linked';
-  if (!err && !linked) return false;
+  const ctrader = params.get('ctrader');
+  const linked = ctrader === 'linked';
+  const linking = ctrader === 'linking';
+  if (!err && !linked && !linking) return false;
   const clean = window.location.pathname + (window.location.hash || '');
   try { history.replaceState(null, '', clean); } catch (e) {}
+  if (linking) {
+    toast('Finishing cTrader connection…', 'success');
+    try { showPage('live-forex', null); } catch (e) { loadLiveForex(); }
+    _pollCtraderLinkComplete(0);
+    return true;
+  }
   if (linked) {
     toast('cTrader connected — loading your accounts…', 'success');
     try { showPage('live-forex', null); } catch (e) { loadLiveForex(); }
