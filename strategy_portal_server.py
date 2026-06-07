@@ -7419,8 +7419,9 @@ _FOREX_SCANNER_TTL = 60                  # seconds between rescans per pair+tf
 
 # (symbol, asset_class) — indices use index OHLC path in tradfi_prices.
 _SCANNER_INSTRUMENTS = [
-    # US indices first — primary focus for cTrader demo testing
+    # US + EU indices first — primary focus for cTrader demo / NAS day trading
     ("NAS100", "index"), ("SPX500", "index"), ("US30", "index"),
+    ("GER40", "index"), ("UK100", "index"),
     ("EURUSD", "forex"), ("GBPUSD", "forex"), ("USDJPY", "forex"), ("AUDUSD", "forex"),
     ("USDCAD", "forex"), ("USDCHF", "forex"), ("NZDUSD", "forex"), ("EURJPY", "forex"),
     ("GBPJPY", "forex"), ("XAUUSD", "forex"), ("XAGUSD", "forex"),
@@ -7462,6 +7463,66 @@ _MS_LABELS = {
 }
 _BIAS_DIR = {"bullish": "LONG", "bearish": "SHORT"}
 
+_SCANNER_SESSION_HOURS = {
+    "asian":    (0, 8),
+    "london":   (7, 16),
+    "new_york": (13, 22),
+    "overlap":  (13, 16),
+}
+_SCANNER_SESSION_LABELS = {
+    "asian":    "Asian",
+    "london":   "London",
+    "new_york": "New York",
+    "overlap":  "London-NY overlap",
+}
+
+
+def _scanner_active_sessions_utc() -> list:
+    """Return active FX session ids at current UTC hour."""
+    hour = datetime.utcnow().hour
+    return [
+        sid for sid, (start, end) in _SCANNER_SESSION_HOURS.items()
+        if start <= hour < end
+    ]
+
+
+def _scanner_session_label() -> str:
+    active = _scanner_active_sessions_utc()
+    if not active:
+        return "Off-hours"
+    return " · ".join(_SCANNER_SESSION_LABELS.get(s, s) for s in active)
+
+
+def _scanner_annotate_confluence(results: list) -> list:
+    """Add confluence count + signal stack per (pair, timeframe, direction)."""
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for entry in results:
+        key = (entry["pair"], entry["timeframe"], entry["direction"])
+        groups[key].append(entry)
+    for entry in results:
+        stack = groups[(entry["pair"], entry["timeframe"], entry["direction"])]
+        entry["confluence"] = len(stack)
+        entry["confluence_signals"] = sorted({s["signal"] for s in stack})
+    return results
+
+
+def _scanner_sort_results(results: list) -> list:
+    _tf_rank = {"1m": 0, "5m": 1, "15m": 2, "1h": 3}
+    _sig_rank = {
+        "CHoCH": 0, "MSS": 1, "BOS": 2, "FVG": 3, "IFVG": 4,
+        "LQS": 5, "BRK": 6, "DISP": 7, "OB": 8,
+    }
+    _index_pri = {"NAS100": 0, "SPX500": 1, "US30": 2, "GER40": 3, "UK100": 4}
+    results.sort(key=lambda x: (
+        -x.get("confluence", 1),
+        _index_pri.get(x["pair"], 5),
+        _tf_rank.get(x["timeframe"], 4),
+        _sig_rank.get(x["signal"], 9),
+        x["pair"],
+    ))
+    return results
+
 
 def _scanner_timeframes_for(asset_class: str) -> list:
     if asset_class == "index":
@@ -7501,7 +7562,7 @@ def _scanner_signal_meta(sig_type: str, sub: str, mode: Optional[str]):
     return ("Signal", d, sub)
 
 
-async def _run_forex_scanner() -> list:
+async def _run_forex_scanner(timeout_secs: float = 115.0) -> tuple:
     """
     Scan indices + forex for ICT / day-trader structure signals on 1m/5m/15m.
 
@@ -7509,6 +7570,9 @@ async def _run_forex_scanner() -> list:
     shared across all signal evaluators.
 
     Results cached per (pair, tf, signal_key) for _FOREX_SCANNER_TTL seconds.
+
+    Returns (signals, partial) — partial=True when the scan timed out before
+    every instrument finished (still returns completed hits).
     """
     import httpx as _httpx
     from app.services.strategy_ta import (
@@ -7649,31 +7713,32 @@ async def _run_forex_scanner() -> list:
 
     async with _httpx.AsyncClient(timeout=12) as _scan_http:
         tasks = [
-            _scan_pair_tf(pair, tf, ac, _http=_scan_http)
+            asyncio.create_task(_scan_pair_tf(pair, tf, ac, _http=_scan_http))
             for pair, ac in _SCANNER_INSTRUMENTS
             for tf in _scanner_timeframes_for(ac)
         ]
-        raw = await asyncio.gather(*tasks, return_exceptions=True)
+        done, pending = await asyncio.wait(tasks, timeout=timeout_secs)
+        partial = bool(pending)
+        if pending:
+            for t in pending:
+                t.cancel()
+        raw = []
+        for t in done:
+            try:
+                raw.append(t.result())
+            except Exception:
+                raw.append([])
     results = [
         entry
         for batch in raw
         if isinstance(batch, list)
         for entry in batch
     ]
-
-    _tf_rank = {"1m": 0, "5m": 1, "15m": 2, "1h": 3}
-    _sig_rank = {
-        "CHoCH": 0, "MSS": 1, "BOS": 2, "FVG": 3, "IFVG": 4,
-        "LQS": 5, "BRK": 6, "DISP": 7, "OB": 8,
-    }
-    _index_pri = {"NAS100": 0, "SPX500": 1, "US30": 2}
-    results.sort(key=lambda x: (
-        _index_pri.get(x["pair"], 5),
-        _tf_rank.get(x["timeframe"], 4),
-        _sig_rank.get(x["signal"], 9),
-        x["pair"],
-    ))
-    return results
+    session = _scanner_session_label()
+    for entry in results:
+        entry["session"] = session
+    results = _scanner_annotate_confluence(results)
+    return _scanner_sort_results(results), partial
 
 
 @app.get("/api/forex/scanner")
@@ -7694,19 +7759,34 @@ async def api_forex_scanner(request: Request):
         db.close()
 
     import asyncio
+    from app.services.asset_classes import is_market_open
+    partial = False
     try:
-        signals = await asyncio.wait_for(_run_forex_scanner(), timeout=120)
-    except asyncio.TimeoutError:
+        signals, partial = await _run_forex_scanner(timeout_secs=115.0)
+    except Exception as e:
+        logger.warning(f"forex scanner error: {e}")
         signals = []
     import datetime
+    now_utc = datetime.utcnow()
+    index_syms = {p for p, ac in _SCANNER_INSTRUMENTS if ac == "index"}
     return JSONResponse({
         "signals": signals,
         "count": len(signals),
         "pairs_scanned": len(_SCANNER_PAIRS),
+        "instruments_index": len(index_syms),
+        "instruments_forex": len(_SCANNER_PAIRS) - len(index_syms),
         "timeframes_index": _SCANNER_TIMEFRAMES_INDEX,
         "timeframes_forex": _SCANNER_TIMEFRAMES_FOREX,
-        "scanned_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "scanned_at": now_utc.isoformat() + "Z",
         "cache_ttl": _FOREX_SCANNER_TTL,
+        "partial": partial,
+        "session": _scanner_session_label(),
+        "active_sessions": _scanner_active_sessions_utc(),
+        "market_open": {
+            "forex": is_market_open("forex", now_utc),
+            "index": is_market_open("index", now_utc),
+        },
+        "confluence_hits": sum(1 for s in signals if s.get("confluence", 0) >= 2),
     })
 
 
@@ -14468,6 +14548,7 @@ async def backtest_scan(request: Request):
 
 _GOLD_SCAN_PROGRESS: Dict[str, str] = {}
 _INDEX_SCAN_PROGRESS: Dict[str, str] = {}
+_FOREX_SCAN_PROGRESS: Dict[str, str] = {}
 
 
 @app.get("/api/backtest/gold-discovery/progress")
@@ -14635,6 +14716,89 @@ async def backtest_index_discovery(request: Request):
             "ok": False, "error": f"Scan failed: {type(e).__name__}"})
     finally:
         _INDEX_SCAN_PROGRESS.pop(uid, None)
+    return JSONResponse(content=result)
+
+
+@app.get("/api/backtest/forex-discovery/progress")
+async def forex_discovery_progress(uid: str = Query(...)):
+    """Poll scan status while forex pair discovery runs (uid = TH- code)."""
+    return {"message": _FOREX_SCAN_PROGRESS.get(uid.strip(), "")}
+
+
+@app.post("/api/backtest/forex-discovery")
+async def backtest_forex_discovery(request: Request):
+    """
+    Claude-driven major FX pair strategy discovery (EURUSD, GBPUSD, …).
+
+    Body: { uid, symbol (EURUSD|GBPUSD|…), days (30|90|180),
+            direction ("BOTH"|"LONG"|"SHORT") }
+    Pro subscribers only. Uses cTrader demo candles when connected.
+    """
+    body = await request.json()
+    uid  = (body.get("uid") or "").strip()
+    days = int(body.get("days", 90))
+    direction_mode = (body.get("direction") or "BOTH").upper()
+    symbol = (body.get("symbol") or "EURUSD").strip()
+
+    from app.database import SessionLocal
+    import asyncio as _asyncio
+    auth_status = None
+    for _attempt in range(3):
+        try:
+            db = SessionLocal()
+            try:
+                user = _get_user_by_uid_safe(uid, db)
+                if not user:
+                    auth_status = "bad_uid"; break
+                sub = _get_portal_sub(user.id, db)
+                is_pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
+                auth_status = "ok" if is_pro else "not_pro"
+                break
+            finally:
+                db.close()
+        except HTTPException:
+            await _asyncio.sleep(0.3)
+            continue
+        except Exception:
+            await _asyncio.sleep(0.3)
+            continue
+    if auth_status in (None, "bad_uid"):
+        raise HTTPException(status_code=403, detail="Invalid UID")
+    if auth_status == "not_pro":
+        return JSONResponse(status_code=403, content={
+            "ok": False,
+            "message": "A Pro subscription is required to use the Forex Strategy Finder."})
+
+    from app.services.forex_pair_strategy_scanner import run_forex_discovery
+    _scan_user_id = None
+    try:
+        _db2 = SessionLocal()
+        try:
+            _u2 = _get_user_by_uid_safe(uid, _db2)
+            if _u2:
+                _scan_user_id = int(_u2.id)
+        finally:
+            _db2.close()
+    except Exception:
+        pass
+
+    def _progress(msg: str):
+        _FOREX_SCAN_PROGRESS[uid] = msg
+
+    try:
+        result = await run_forex_discovery(
+            symbol=symbol,
+            days=days,
+            direction_mode=direction_mode,
+            user_id=_scan_user_id,
+            progress_cb=_progress,
+        )
+    except Exception as e:
+        logger.exception("forex-discovery scan failed")
+        return JSONResponse(status_code=500, content={
+            "ok": False, "error": f"Scan failed: {type(e).__name__}"})
+    finally:
+        _FOREX_SCAN_PROGRESS.pop(uid, None)
     return JSONResponse(content=result)
 
 

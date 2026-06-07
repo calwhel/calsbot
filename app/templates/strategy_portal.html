@@ -2490,24 +2490,43 @@ function dismissTgBanner(){
             <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#caa12c,#b8860b)" onclick="openGoldFinder()">🏆 Find Best Gold Strategy →</button>
           </div>
 
+          <!-- Forex Pair Strategy Finder -->
+          <div style="margin-bottom:16px;padding:14px;border:1px solid #3b82f655;border-radius:10px;background:linear-gradient(135deg,#0f1a2a10,#3b82f614)">
+            <div style="font-size:14px;font-weight:800;letter-spacing:-.2px">💱 Best Forex Strategy Finder <span style="font-size:10px;color:var(--muted);font-weight:600">· AI · EUR/GBP/JPY</span></div>
+            <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">Claude backtests major FX pairs across <b>1m–1h</b> timeframes &amp; every session (London, NY, Asian). Walk-forward validated. Best for <b>EURUSD</b> &amp; <b>GBPUSD</b> day trading.</div>
+            <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#3b82f6,#2563eb)" onclick="openForexFinder()">💱 Find Best Forex Strategy →</button>
+          </div>
+
           <!-- Index Strategy Finder (NASDAQ / S&P via cTrader) -->
           <div style="margin-bottom:16px;padding:14px;border:1px solid #a855f755;border-radius:10px;background:linear-gradient(135deg,#1a0f2a10,#a855f714)">
             <div style="font-size:14px;font-weight:800;letter-spacing:-.2px">📊 Index Strategy Finder <span style="font-size:10px;color:var(--muted);font-weight:600">· NASDAQ · cTrader</span></div>
-            <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">Backtest dozens of strategies on <b>NASDAQ 100 (NAS100)</b>, S&amp;P 500, or Dow. <b>No cTrader needed to start</b> — use <b>Build all (paper)</b> and watch signals fire in <b>My Strategies</b> + <b>Trades</b> with full point-based P&amp;L tracking.</div>
+            <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">Backtest dozens of strategies on <b>NASDAQ 100 (NAS100)</b>, S&amp;P 500, Dow, DAX &amp; FTSE. Point-based scalps (40–120 pt targets). <b>Build all (paper)</b> to watch signals in <b>My Strategies</b>.</div>
             <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#a855f7,#7c3aed)" onclick="openIndexFinder()">📊 Find Best NASDAQ Strategy →</button>
           </div>
 
-          <!-- Live Forex Scanner (web) -->
+          <!-- Live Structure Scanner (indices + forex) -->
           <div id="forex-scanner-card" style="margin-bottom:16px;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--card2)">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
               <div>
-                <div style="font-size:14px;font-weight:800;letter-spacing:-.2px">📡 Live Forex Scanner</div>
-                <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">1m/5m/15m · BOS · CHoCH · MSS · FVG · IFVG · OB · LQS · BRK · DISP — <b>NAS100</b> &amp; <b>SPX500</b> first.</div>
+                <div style="font-size:14px;font-weight:800;letter-spacing:-.2px">📡 Live Structure Scanner</div>
+                <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">1m/5m/15m · BOS · CHoCH · MSS · FVG · IFVG · OB · LQS · BRK · DISP — <b>NAS100</b> first, then majors &amp; metals. Confluence = multiple signals aligned.</div>
               </div>
               <button class="btn primary" style="font-size:12px;padding:8px 14px" onclick="loadForexScanner(true)">↻ Scan now</button>
             </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px" id="fx-scan-class-chips">
+              <button class="opt-chip active" data-cls="all" onclick="setFxScanClass('all',this)">All</button>
+              <button class="opt-chip" data-cls="index" onclick="setFxScanClass('index',this)">📊 Indices</button>
+              <button class="opt-chip" data-cls="forex" onclick="setFxScanClass('forex',this)">💱 Forex</button>
+              <button class="opt-chip" data-cls="metal" onclick="setFxScanClass('metal',this)">🥇 Metals</button>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px" id="fx-scan-tf-chips">
+              <button class="opt-chip active" data-tf="all" onclick="setFxScanTf('all',this)">All TFs</button>
+              <button class="opt-chip" data-tf="1m" onclick="setFxScanTf('1m',this)">1m</button>
+              <button class="opt-chip" data-tf="5m" onclick="setFxScanTf('5m',this)">5m</button>
+              <button class="opt-chip" data-tf="15m" onclick="setFxScanTf('15m',this)">15m</button>
+            </div>
             <div id="forex-scanner-meta" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
-            <div id="forex-scanner-list" style="margin-top:10px;max-height:280px;overflow-y:auto">
+            <div id="forex-scanner-list" style="margin-top:10px;max-height:320px;overflow-y:auto">
               <div style="font-size:12px;color:var(--muted);padding:12px 4px">Tap <b>Scan now</b> to load live structure signals.</div>
             </div>
           </div>
@@ -3222,19 +3241,70 @@ function dismissTgBanner(){
   </div>
 </div>
 
+<!-- Forex Strategy Finder -->
+<div class="modal-bg" id="modal-forex">
+  <div class="modal" style="max-width:760px">
+    <div class="modal-hd"><h3>💱 Forex Strategy Finder</h3><span class="modal-close" onclick="closeModal('modal-forex')">&times;</span></div>
+    <div class="modal-body" id="forex-body" style="padding:18px 20px 8px">
+      <div id="forex-config">
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">Claude backtests major FX pairs across <b>1m–1h</b> timeframes and every trading session. Walk-forward validated (70% train / 30% test). Connect <b>cTrader demo</b> for broker-matched candles. ~1–2 min.</div>
+        <div style="margin-bottom:14px">
+          <div class="pine-label">Pair</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="forex-sym-chips">
+            <button class="opt-chip active" data-sym="EURUSD" onclick="setForexSym('EURUSD',this)">EUR/USD</button>
+            <button class="opt-chip" data-sym="GBPUSD" onclick="setForexSym('GBPUSD',this)">GBP/USD</button>
+            <button class="opt-chip" data-sym="USDJPY" onclick="setForexSym('USDJPY',this)">USD/JPY</button>
+            <button class="opt-chip" data-sym="AUDUSD" onclick="setForexSym('AUDUSD',this)">AUD/USD</button>
+          </div>
+        </div>
+        <div style="margin-bottom:14px">
+          <div class="pine-label">Direction</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="forex-dir-chips">
+            <button class="opt-chip active" data-dir="BOTH" onclick="setForexDir('BOTH',this)">Both (best long + short)</button>
+            <button class="opt-chip" data-dir="LONG" onclick="setForexDir('LONG',this)">Long only</button>
+            <button class="opt-chip" data-dir="SHORT" onclick="setForexDir('SHORT',this)">Short only</button>
+          </div>
+        </div>
+        <div style="margin-bottom:18px">
+          <div class="pine-label">Test window</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="forex-days-chips">
+            <button class="opt-chip" data-days="30" onclick="setForexDays(30,this)">30 days</button>
+            <button class="opt-chip active" data-days="90" onclick="setForexDays(90,this)">90 days</button>
+            <button class="opt-chip" data-days="180" onclick="setForexDays(180,this)">180 days</button>
+          </div>
+        </div>
+        <button class="pine-analyse-btn" style="background:linear-gradient(135deg,#3b82f6,#2563eb)" onclick="runForexFinder()">💱 Run Forex Scan →</button>
+      </div>
+      <div id="forex-progress" style="display:none;text-align:center;padding:30px 10px">
+        <div class="loader" style="margin:0 auto 14px"></div>
+        <div id="forex-progress-msg" style="font-size:13px;color:var(--text);font-weight:600">Scanning forex strategies…</div>
+        <div style="font-size:11.5px;color:var(--muted);margin-top:6px">Backtesting across timeframes &amp; sessions, then asking Claude to pick the winner.</div>
+      </div>
+      <div id="forex-results" style="display:none"></div>
+    </div>
+    <div class="modal-footer" id="forex-footer" style="display:none">
+      <button class="btn" onclick="forexReset()">↺ New Scan</button>
+      <button class="btn" id="forex-build-all-btn" onclick="forexBuildAll()">⚡ Build all (paper)</button>
+      <button class="btn primary" id="forex-build-btn" onclick="forexBuildInAI()">💬 Build this in AI Builder</button>
+    </div>
+  </div>
+</div>
+
 <!-- Index Strategy Finder -->
 <div class="modal-bg" id="modal-index">
   <div class="modal" style="max-width:760px">
     <div class="modal-hd"><h3>📊 Index Strategy Finder</h3><span class="modal-close" onclick="closeModal('modal-index')">&times;</span></div>
     <div class="modal-body" id="index-body" style="padding:18px 20px 8px">
       <div id="index-config">
-        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">Claude backtests index CFD strategies across <b>5m–4h</b> timeframes and US/EU trading sessions. Walk-forward validated (70% train / 30% test). Connect <b>cTrader demo</b> in Settings for broker-matched NASDAQ candles. ~1–2 min.</div>
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.5">Claude backtests index CFD strategies across <b>1m–1h</b> timeframes and US/EU trading sessions. Walk-forward validated (70% train / 30% test). Connect <b>cTrader demo</b> in Settings for broker-matched NASDAQ candles. ~1–2 min.</div>
         <div style="margin-bottom:14px">
           <div class="pine-label">Instrument</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="index-sym-chips">
             <button class="opt-chip active" data-sym="NAS100" onclick="setIndexSym('NAS100',this)">NASDAQ 100</button>
             <button class="opt-chip" data-sym="SPX500" onclick="setIndexSym('SPX500',this)">S&amp;P 500</button>
             <button class="opt-chip" data-sym="US30" onclick="setIndexSym('US30',this)">Dow 30</button>
+            <button class="opt-chip" data-sym="GER40" onclick="setIndexSym('GER40',this)">DAX 40</button>
+            <button class="opt-chip" data-sym="UK100" onclick="setIndexSym('UK100',this)">FTSE 100</button>
           </div>
         </div>
         <div style="margin-bottom:14px">
@@ -8602,6 +8672,179 @@ async function goldBuildAll(){
   if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
 }
 
+// ── Forex Strategy Finder ─────────────────────────────────────────────────────
+let FOREX = { sym:'EURUSD', dir:'BOTH', days:90, result:null };
+function openForexFinder(){ forexReset(); showModal('modal-forex'); }
+function setForexSym(s,el){ FOREX.sym=s; document.querySelectorAll('#forex-sym-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
+function setForexDir(d,el){ FOREX.dir=d; document.querySelectorAll('#forex-dir-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
+function setForexDays(d,el){ FOREX.days=d; document.querySelectorAll('#forex-days-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
+function forexReset(){
+  FOREX.result=null;
+  document.getElementById('forex-config').style.display='';
+  document.getElementById('forex-progress').style.display='none';
+  document.getElementById('forex-results').style.display='none';
+  document.getElementById('forex-footer').style.display='none';
+}
+let _forexProgressTimer = null;
+async function runForexFinder(){
+  document.getElementById('forex-config').style.display='none';
+  document.getElementById('forex-results').style.display='none';
+  document.getElementById('forex-footer').style.display='none';
+  document.getElementById('forex-progress').style.display='';
+  const progEl=document.getElementById('forex-progress-msg');
+  if(_forexProgressTimer) clearInterval(_forexProgressTimer);
+  _forexProgressTimer=setInterval(async()=>{
+    try{
+      const pr=await fetch('/api/backtest/forex-discovery/progress?uid='+encodeURIComponent(UID));
+      const pd=await pr.json();
+      if(pd.message&&progEl) progEl.textContent=pd.message;
+    }catch(e){}
+  },1200);
+  try{
+    const res = await fetch('/api/backtest/forex-discovery', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ uid:UID, symbol:FOREX.sym, days:FOREX.days, direction:FOREX.dir })
+    });
+    const data = await res.json();
+    if(!res.ok || !data.ok){
+      renderForexError(data && (data.message||data.error) || 'Scan failed. Please try again.');
+      return;
+    }
+    FOREX.result = data;
+    renderForexResults(data);
+  }catch(e){
+    renderForexError('Network error — please try again.');
+  }finally{
+    if(_forexProgressTimer){ clearInterval(_forexProgressTimer); _forexProgressTimer=null; }
+  }
+}
+function renderForexError(msg){
+  document.getElementById('forex-progress').style.display='none';
+  const box=document.getElementById('forex-results');
+  box.style.display='';
+  box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">⚠️ '+_gEsc(msg)+'</div>';
+  document.getElementById('forex-footer').style.display='';
+  document.getElementById('forex-build-btn').style.display='none';
+}
+function renderForexResults(d){
+  document.getElementById('forex-progress').style.display='none';
+  const b=d.best, s=b.stats;
+  const symLabel = d.symbol || FOREX.sym || 'EURUSD';
+  let html = '<div style="font-size:11px;color:var(--muted);margin-bottom:10px">Pair: <b>'+_gEsc(symLabel)+'</b> · pip-based P&amp;L · cTrader-ready</div>';
+  if(d.direction_mode==='BOTH' && (d.best_long||d.best_short)){
+    html += _goldWinnerCard('🟢 Best LONG', d.best_long, '#3fb950');
+    html += _goldWinnerCard('🔴 Best SHORT', d.best_short, '#e05858');
+  }
+  const dirBadge = b.direction==='SHORT' ? '<span style="color:#e05858;font-weight:700">SHORT</span>' : '<span style="color:#3fb950;font-weight:700">LONG</span>';
+  html += '<div style="padding:16px;border:1px solid #3b82f666;border-radius:12px;background:linear-gradient(135deg,#0f1a2a14,#3b82f61f);margin-bottom:16px">';
+  html += '<div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#3b82f6;font-weight:700;margin-bottom:4px">🏆 Claude\'s Pick · '+_goldConfBadge(s.confidence)+'</div>';
+  html += '<div style="font-size:18px;font-weight:800;letter-spacing:-.3px">'+_gEsc(b.strategy_name)+'</div>';
+  html += '<div style="font-size:12.5px;color:var(--muted);margin-top:6px;display:flex;gap:14px;flex-wrap:wrap">'
+        + '<span>'+_gEsc(b.label)+' · '+dirBadge+'</span>'
+        + '<span>⏱ '+_gEsc(b.timeframe)+'</span>'
+        + '<span>🕒 '+_gEsc(b.session_label)+'</span>'
+        + '<span>🎯 SL '+b.sl_pips+' / TP '+b.tp_pips+' pips</span>'
+        + '</div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px">'
+        + _goldStat('Win rate', s.win_rate+'%')
+        + _goldStat('Profit factor', s.profit_factor)
+        + _goldStat('Net pips', (s.total_pips>0?'+':'')+s.total_pips)
+        + _goldStat('Max drawdown', s.max_drawdown+'%')
+        + _goldStat('Trades', s.closed_trades)
+        + _goldStat('Return', (s.total_pnl>0?'+':'')+s.total_pnl+'%')
+        + '</div>';
+  if(b.rationale) html += '<div style="font-size:12.5px;color:var(--text);margin-top:14px;line-height:1.55;border-top:1px solid var(--border);padding-top:12px">'+_gEsc(b.rationale)+'</div>';
+  html += '</div>';
+  if(Array.isArray(d.leaderboard) && d.leaderboard.length){
+    html += '<div style="font-size:12px;font-weight:700;margin:12px 0 8px">Leaderboard</div>';
+    html += '<div style="max-height:220px;overflow-y:auto">';
+    d.leaderboard.slice(0,8).forEach((e,i)=>{
+      html += '<div style="font-size:12px;padding:8px 10px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:8px">'
+           + '<span>#'+(i+1)+' '+_gEsc(e.label)+' · '+_gEsc(e.timeframe)+' · '+_gEsc(e.session_label)+'</span>'
+           + '<span style="color:var(--muted);white-space:nowrap">PF '+e.stats.profit_factor+' · '+e.stats.closed_trades+' tr</span></div>';
+    });
+    html += '</div>';
+  }
+  const box=document.getElementById('forex-results');
+  box.style.display=''; box.innerHTML=html;
+  document.getElementById('forex-footer').style.display='';
+  document.getElementById('forex-build-btn').style.display='';
+}
+function forexBuildInAI(){
+  if(!FOREX.result || !FOREX.result.best) return;
+  const prompt = FOREX.result.best.build_prompt || '';
+  closeModal('modal-forex');
+  switchBuildMode('chat');
+  try{ if(typeof cbSetMarket==='function') cbSetMarket('forex'); }catch(e){}
+  setTimeout(()=>{
+    const inp=document.getElementById('cb-input');
+    if(inp){ inp.value=prompt; inp.focus(); }
+  }, 150);
+}
+async function _forexBuildOne(entry){
+  const sym = (FOREX.result && FOREX.result.symbol) || FOREX.sym || 'EURUSD';
+  const cRes = await fetch('/api/build-from-scan', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ uid:UID, entry, symbol:sym, asset_class:'forex', name:(entry.build_name||entry.label||'Forex strategy') })
+  });
+  const cData = await cRes.json();
+  if(!cRes.ok || !cData.config) throw new Error((cData && (cData.error||cData.message||cData.detail)) || 'compile failed');
+  const cfg = cData.config;
+  cfg.name = (entry.build_name||entry.label||'Forex strategy');
+  cfg.asset_class = 'forex';
+  cfg.universe = { type:'specific', symbols:[sym] };
+  cfg._build_mode = 'paper';
+  if(entry.session_filter && entry.session_filter.sessions && entry.session_filter.sessions.length){
+    cfg.filters = cfg.filters || {};
+    cfg.filters.session = entry.session_filter;
+  }
+  cfg.exit = cfg.exit || {};
+  const _mgmt = entry.management || 'fixed';
+  if(_mgmt==='breakeven'){
+    cfg.exit.breakeven_at_pct = entry.breakeven_at_pct || 50;
+    cfg.exit.trailing_stop = false;
+  } else if(_mgmt==='trail'){
+    cfg.exit.trailing_stop = true;
+    cfg.exit.trailing_stop_pct = entry.trailing_stop_pct || 0;
+    cfg.exit.breakeven_at_pct = 0;
+  } else {
+    cfg.exit.breakeven_at_pct = 0;
+    cfg.exit.trailing_stop = false;
+  }
+  const sRes = await fetch('/api/save-strategy', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ uid:UID, config:cfg })
+  });
+  const sData = await sRes.json();
+  if(!sRes.ok || !sData.id) throw new Error((sData && (sData.detail||sData.error)) || 'save failed');
+  return sData.id;
+}
+async function forexBuildAll(){
+  if(!FOREX.result || !Array.isArray(FOREX.result.leaderboard) || !FOREX.result.leaderboard.length) return;
+  const list = FOREX.result.leaderboard;
+  const allBtn = document.getElementById('forex-build-all-btn');
+  const oneBtn = document.getElementById('forex-build-btn');
+  if(!confirm('Build all '+list.length+' forex strategies as PAPER? Review in Strategies tab before going live.')) return;
+  allBtn.disabled = true; oneBtn.disabled = true;
+  let ok=0, fail=0, done=0;
+  const setLbl = ()=>{ allBtn.textContent = '⚙️ Building '+done+'/'+list.length+' ('+ok+' ✓'+(fail?' · '+fail+' ✗':'')+')'; };
+  setLbl();
+  let cursor=0;
+  async function worker(){
+    while(cursor < list.length){
+      const idx = cursor++;
+      try{ await _forexBuildOne(list[idx]); ok++; }
+      catch(e){ fail++; console.warn('forex build-all entry failed', e); }
+      done++; setLbl();
+    }
+  }
+  await Promise.all([worker(),worker(),worker()]);
+  allBtn.disabled = false; oneBtn.disabled = false;
+  allBtn.textContent = '✅ Built '+ok+(fail?' · '+fail+' failed':'');
+  alert('Built '+ok+' paper forex strateg'+(ok===1?'y':'ies')+(fail?(' ('+fail+' failed)'):'')+'. Open My Strategies to review.');
+  if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
+}
+
 // ── Index Strategy Finder ──────────────────────────────────────────────────────
 let INDEX = { sym:'NAS100', dir:'BOTH', days:90, result:null };
 function openIndexFinder(){ indexReset(); showModal('modal-index'); }
@@ -8779,34 +9022,90 @@ async function indexBuildAll(){
   if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
 }
 
-// ── Live Forex Scanner (web) ─────────────────────────────────────────────────
+// ── Live Structure Scanner (web) ───────────────────────────────────────────────
 let _fxScanAt = 0;
-async function loadForexScanner(force){
+let _fxScanData = null;
+let _fxScanClass = 'all';
+let _fxScanTf = 'all';
+function setFxScanClass(cls, el){
+  _fxScanClass = cls;
+  document.querySelectorAll('#fx-scan-class-chips .opt-chip').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+  if(_fxScanData) _renderFxScanList(_fxScanData);
+}
+function setFxScanTf(tf, el){
+  _fxScanTf = tf;
+  document.querySelectorAll('#fx-scan-tf-chips .opt-chip').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+  if(_fxScanData) _renderFxScanList(_fxScanData);
+}
+function _fxScanClassOf(sig){
+  if(_isIndexSym(sig.pair) || sig.asset_class==='index') return 'index';
+  if(sig.pair==='XAUUSD'||sig.pair==='XAGUSD') return 'metal';
+  return 'forex';
+}
+function _filterFxSignals(signals){
+  return (signals||[]).filter(sig=>{
+    if(_fxScanClass!=='all' && _fxScanClassOf(sig)!==_fxScanClass) return false;
+    if(_fxScanTf!=='all' && sig.timeframe!==_fxScanTf) return false;
+    return true;
+  });
+}
+function _renderFxScanList(d){
   const list=document.getElementById('forex-scanner-list');
   const meta=document.getElementById('forex-scanner-meta');
   if(!list) return;
-  if(!force && _fxScanAt && Date.now()-_fxScanAt<55000) return;
-  list.innerHTML='<div style="padding:14px;text-align:center;color:var(--muted)">Scanning pairs…</div>';
+  const filtered = _filterFxSignals(d.signals);
+  const n = filtered.length;
+  let metaTxt = (d.pairs_scanned||0)+' instruments';
+  if(d.session) metaTxt += ' · '+d.session;
+  if(d.market_open){
+    const mo=[];
+    if(d.market_open.index===false) mo.push('indices closed');
+    if(d.market_open.forex===false) mo.push('forex closed');
+    if(mo.length) metaTxt += ' · '+mo.join(', ');
+  }
+  metaTxt += ' · '+(d.scanned_at?new Date(d.scanned_at).toLocaleTimeString():'now');
+  if(d.confluence_hits) metaTxt += ' · '+d.confluence_hits+' confluence';
+  if(d.partial) metaTxt += ' · partial scan';
+  metaTxt += ' · '+n+' shown';
+  if(meta) meta.textContent = metaTxt;
+  if(!n){
+    list.innerHTML='<div style="padding:12px;color:var(--muted)">No signals match filters — try All or scan again.</div>';
+    return;
+  }
+  let h='<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr style="color:var(--muted);text-align:left"><th style="padding:5px 6px">Pair</th><th>TF</th><th>Signal</th><th>Dir</th><th>Conf.</th><th>Detail</th></tr>';
+  filtered.slice(0,50).forEach(sig=>{
+    const dc=sig.direction==='SHORT'?'#e05858':'#3fb950';
+    const idxBadge=_isIndexSym(sig.pair)?' <span style="font-size:9px;color:#a855f7;font-weight:700">IDX</span>':'';
+    const conf = sig.confluence>=2 ? '<span style="font-size:10px;font-weight:700;color:#d9a441">×'+sig.confluence+'</span>' : '—';
+    const confTitle = (sig.confluence_signals||[]).join('+');
+    h+='<tr style="border-top:1px solid var(--border)"><td style="padding:6px;font-weight:700">'+_gEsc(sig.pair)+idxBadge+'</td>'
+      +'<td style="padding:6px">'+_gEsc(sig.timeframe)+'</td>'
+      +'<td style="padding:6px;font-weight:600">'+_gEsc(sig.signal)+'</td>'
+      +'<td style="padding:6px;color:'+dc+'">'+_gEsc(sig.direction)+'</td>'
+      +'<td style="padding:6px" title="'+_gEsc(confTitle)+'">'+conf+'</td>'
+      +'<td style="padding:6px;color:var(--muted)">'+_gEsc(sig.desc||sig.detail||'')+'</td></tr>';
+  });
+  h+='</table>';
+  list.innerHTML=h;
+}
+async function loadForexScanner(force){
+  const list=document.getElementById('forex-scanner-list');
+  if(!list) return;
+  if(!force && _fxScanAt && Date.now()-_fxScanAt<55000 && _fxScanData){
+    _renderFxScanList(_fxScanData);
+    return;
+  }
+  list.innerHTML='<div style="padding:14px;text-align:center;color:var(--muted)">Scanning instruments…</div>';
   try{
     const r=await fetch('/api/forex/scanner?uid='+encodeURIComponent(UID));
     const d=await r.json();
     if(!r.ok){ list.innerHTML='<div style="padding:12px;color:#e05858">'+_gEsc(d.detail||'Scan failed')+'</div>'; return; }
     _fxScanAt=Date.now();
-    const n=d.count||0;
-    if(meta) meta.textContent=(d.pairs_scanned||0)+' instruments · '+(d.scanned_at?new Date(d.scanned_at).toLocaleTimeString():'now')+' · '+n+' signal'+(n===1?'':'s');
-    if(!n){ list.innerHTML='<div style="padding:12px;color:var(--muted)">No structure signals right now — market may be quiet or closed.</div>'; return; }
-    let h='<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr style="color:var(--muted);text-align:left"><th style="padding:5px 6px">Pair</th><th>TF</th><th>Signal</th><th>Dir</th><th>Detail</th></tr>';
-    (d.signals||[]).slice(0,40).forEach(sig=>{
-      const dc=sig.direction==='SHORT'?'#e05858':'#3fb950';
-      const idxBadge=_isIndexSym(sig.pair)?' <span style="font-size:9px;color:#a855f7;font-weight:700">IDX</span>':'';
-      h+='<tr style="border-top:1px solid var(--border)"><td style="padding:6px;font-weight:700">'+_gEsc(sig.pair)+idxBadge+'</td>'
-        +'<td style="padding:6px">'+_gEsc(sig.timeframe)+'</td>'
-        +'<td style="padding:6px;font-weight:600">'+_gEsc(sig.signal)+'</td>'
-        +'<td style="padding:6px;color:'+dc+'">'+_gEsc(sig.direction)+'</td>'
-        +'<td style="padding:6px;color:var(--muted)">'+_gEsc(sig.desc||sig.detail||'')+'</td></tr>';
-    });
-    h+='</table>';
-    list.innerHTML=h;
+    _fxScanData = d;
+    if(!d.count){ list.innerHTML='<div style="padding:12px;color:var(--muted)">No structure signals right now — market may be quiet or closed.</div>'; return; }
+    _renderFxScanList(d);
   }catch(e){
     list.innerHTML='<div style="padding:12px;color:#e05858">Network error</div>';
   }
