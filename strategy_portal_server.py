@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple, List
 
 from fastapi import FastAPI, Request, HTTPException, Query, Depends, BackgroundTasks
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.cors import CORSMiddleware
@@ -1286,14 +1286,9 @@ def _ensure_tables():
         logger.warning(f"[migration] asset_class backfill failed (non-fatal): {_e}")
 
 
-@app.on_event("startup")
-async def startup():
-    # ── Critical migrations — run in a thread so the event loop stays free ─────
-    # These add new ORM-mapped columns that SQLAlchemy includes in every SELECT.
-    # If they're deferred to the background task, the first DB query errors with
-    # "column does not exist".  IF NOT EXISTS makes each ALTER idempotent.
-    # asyncio.to_thread() ensures the synchronous engine.connect() never blocks
-    # the uvicorn event loop (which caused the server to hang waiting for a lock).
+async def _critical_migrations_background():
+    """Idempotent column adds — must NOT block worker readiness (Neon cold wake
+    on deploy was holding gunicorn workers up to 120s → site timed out)."""
     _critical_ddls = [
         "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS pips_pnl FLOAT",
         "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS spread_pips_applied FLOAT",
@@ -1301,81 +1296,43 @@ async def startup():
         "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS avg_pips_per_trade FLOAT",
     ]
 
-    def _run_critical_migs():
-        """Fast path: check which columns are missing, then only ALTER TABLE for
-        those.  information_schema reads are lock-free, so the check is always
-        instant regardless of executor activity.  ALTER TABLE is only issued (with
-        lock-timeout retry) on the rare first-deployment scenario where columns
-        are genuinely absent."""
+    def _run():
         import sqlalchemy as _sa
-        import time as _t
-
-        # --- fast existence check (no table locks required) ---
-        with engine.connect() as _chk:
-            _rows = _chk.execute(_sa.text("""
-                SELECT table_name, column_name
-                FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND (
-                    (table_name = 'strategy_executions'
-                     AND column_name IN ('pips_pnl', 'spread_pips_applied'))
-                    OR
-                    (table_name = 'strategy_performance'
-                     AND column_name IN ('total_pips_pnl', 'avg_pips_per_trade'))
-                  )
-            """)).fetchall()
-        _existing = {(r[0], r[1]) for r in _rows}
-
-        _col_map = {
-            "ALTER TABLE strategy_executions  ADD COLUMN pips_pnl FLOAT":
-                ("strategy_executions",  "pips_pnl"),
-            "ALTER TABLE strategy_executions  ADD COLUMN spread_pips_applied FLOAT":
-                ("strategy_executions",  "spread_pips_applied"),
-            "ALTER TABLE strategy_performance ADD COLUMN total_pips_pnl FLOAT":
-                ("strategy_performance", "total_pips_pnl"),
-            "ALTER TABLE strategy_performance ADD COLUMN avg_pips_per_trade FLOAT":
-                ("strategy_performance", "avg_pips_per_trade"),
-        }
-        _needed = [ddl for ddl, key in _col_map.items() if key not in _existing]
-        if not _needed:
-            return  # all columns present — nothing to do, returns instantly
-
-        # --- first-deployment path: retry with short lock_timeout ---
-        for _ddl in _needed:
-            for _attempt in range(25):
-                _conn = engine.connect()
+        conn = engine.connect()
+        try:
+            conn.execute(_sa.text("SET lock_timeout = '3s'"))
+            conn.execute(_sa.text("SET statement_timeout = '15000'"))
+            for ddl in _critical_ddls:
                 try:
-                    _conn.execute(_sa.text("SET lock_timeout = '3s'"))
-                    _conn.execute(_sa.text("SET statement_timeout = '10s'"))
-                    _conn.execute(_sa.text(_ddl))
-                    _conn.commit()
-                    break
-                except Exception as _e:
-                    _em = str(_e)
+                    conn.execute(_sa.text(ddl))
+                    conn.commit()
+                except Exception as e:
                     try:
-                        _conn.rollback()
+                        conn.rollback()
                     except Exception:
                         pass
-                    if "already exists" in _em or "duplicate column" in _em:
-                        break
-                    _t.sleep(2)
-                finally:
-                    try:
-                        _conn.close()
-                    except Exception:
-                        pass
+                    if "already exists" not in str(e).lower():
+                        logger.warning(f"startup: critical DDL warning: {e}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     try:
-        await asyncio.wait_for(asyncio.to_thread(_run_critical_migs), timeout=120)
-        logger.info("startup: critical pip columns ready")
+        await asyncio.to_thread(_run)
+        logger.info("startup: critical pip columns ready (background)")
     except Exception as _ce:
         logger.warning(f"startup: critical column migration warning: {_ce}")
 
-    # Run remaining schema migrations in the background so the server starts
-    # accepting requests immediately instead of blocking on DB round-trips.
+
+@app.on_event("startup")
+async def startup():
+    # Never await DB work here — each gunicorn worker must accept HTTP immediately.
+    asyncio.create_task(_critical_migrations_background())
     asyncio.create_task(_startup_background())
     asyncio.create_task(_refresh_heavy_caches())
-    logger.info("Strategy portal started on port 5000 (migrations running in background)")
+    logger.info("Strategy portal ready — migrations running in background")
 
 
 def _do_refresh_heavy_caches_sync():
@@ -1934,6 +1891,12 @@ async def _startup_background():
 # ─────────────────────────────────────────────────────────────────────────────
 # Health check — /health is instant (Railway probe). Deep checks → /health/deep.
 # ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/ping")
+async def ping():
+    """Lightest possible liveness probe for Railway."""
+    return PlainTextResponse("ok")
+
 
 @app.get("/health")
 async def health():
