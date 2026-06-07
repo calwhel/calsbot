@@ -23,6 +23,20 @@ INDEX_TF_MAX_DAYS = {"1m": 7, "5m": 30, "15m": 90, "1h": 180}
 # prior 160–240 pt targets were unrealistic intraday moonshots on Nasdaq.
 # Breakeven-heavy roster — at 1× leverage, SL→entry after half the stop distance
 # in profit protects scalps on choppy Nasdaq days and lifts effective win rate.
+# NAS100 day-trade scalps — tighter stops for volatile Nasdaq cash session.
+NAS100_RISK_VARIANTS = [
+    (12, 35,  "scalp", "breakeven"),
+    (15, 40,  "scalp", "breakeven"),
+    (18, 45,  "scalp", "breakeven"),
+    (20, 50,  "scalp", "breakeven"),
+    (25, 60,  "scalp", "breakeven"),
+    (15, 40,  "scalp", "trail"),
+    (30, 70,  "scalp", "breakeven"),
+    (35, 80,  "scalp", "breakeven"),
+    (40, 100, "swing", "breakeven"),
+    (50, 120, "swing", "breakeven"),
+]
+
 INDEX_RISK_VARIANTS = [
     (15, 40,  "scalp", "breakeven"),
     (20, 40,  "scalp", "breakeven"),
@@ -49,6 +63,7 @@ async def run_index_discovery(
     if sym not in SUPPORTED_SYMBOLS:
         sym = DEFAULT_SYMBOL
     label = f"{index_display_name(sym)} ({sym})"
+    risk = NAS100_RISK_VARIANTS if sym == "NAS100" else INDEX_RISK_VARIANTS
     return await run_tradfi_discovery(
         symbol=sym,
         asset_class="index",
@@ -58,7 +73,7 @@ async def run_index_discovery(
         user_id=user_id,
         instrument_label=label,
         name_prefix=sym,
-        risk_variants=INDEX_RISK_VARIANTS,
+        risk_variants=risk,
         fetch_candles_fn=fetch_index_scan_candles,
         timeframes=INDEX_TIMEFRAMES,
         tf_max_days=INDEX_TF_MAX_DAYS,

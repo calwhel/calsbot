@@ -7412,6 +7412,50 @@ async def api_build_from_scan(request: Request):
     return JSONResponse({"config": config, "compiled": "deterministic"})
 
 
+@app.post("/api/build-from-live-scan")
+async def api_build_from_live_scan(request: Request):
+    """
+    Compile a live structure scanner hit into a paper strategy and save it.
+    Body: { uid, signal: <scanner row>, name? }
+    """
+    body = await request.json()
+    uid = body.get("uid")
+    if not uid:
+        raise HTTPException(status_code=400, detail="uid required")
+    signal = body.get("signal")
+    if not isinstance(signal, dict):
+        raise HTTPException(status_code=400, detail="signal object required")
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or user.banned:
+            raise HTTPException(status_code=403)
+    finally:
+        db.close()
+
+    from app.services.gold_strategy_scanner import compile_live_scan_to_config
+    try:
+        config = compile_live_scan_to_config(signal, name=body.get("name"))
+    except Exception as e:
+        logger.warning(f"build-from-live-scan compile failed: {e}")
+        raise HTTPException(status_code=422, detail=f"Could not compile live signal: {e}")
+
+    config["_build_mode"] = "paper"
+    save_res = await api_save_strategy(_MockRequest(uid, config))
+    return save_res
+
+
+class _MockRequest:
+    """Minimal request shim so build-from-live-scan can reuse api_save_strategy."""
+    def __init__(self, uid, config):
+        self._body = {"uid": uid, "config": config}
+
+    async def json(self):
+        return self._body
+
+
 # ─── Forex multi-pair market structure scanner ───────────────────────────────
 
 _FOREX_SCANNER_CACHE: dict = {}          # key → (signals, expires_ts)
@@ -7419,8 +7463,9 @@ _FOREX_SCANNER_TTL = 60                  # seconds between rescans per pair+tf
 
 # (symbol, asset_class) — indices use index OHLC path in tradfi_prices.
 _SCANNER_INSTRUMENTS = [
-    # US indices first — primary focus for cTrader demo testing
+    # US + EU indices first — primary focus for cTrader demo / NAS day trading
     ("NAS100", "index"), ("SPX500", "index"), ("US30", "index"),
+    ("GER40", "index"), ("UK100", "index"),
     ("EURUSD", "forex"), ("GBPUSD", "forex"), ("USDJPY", "forex"), ("AUDUSD", "forex"),
     ("USDCAD", "forex"), ("USDCHF", "forex"), ("NZDUSD", "forex"), ("EURJPY", "forex"),
     ("GBPJPY", "forex"), ("XAUUSD", "forex"), ("XAGUSD", "forex"),
@@ -7462,6 +7507,66 @@ _MS_LABELS = {
 }
 _BIAS_DIR = {"bullish": "LONG", "bearish": "SHORT"}
 
+_SCANNER_SESSION_HOURS = {
+    "asian":    (0, 8),
+    "london":   (7, 16),
+    "new_york": (13, 22),
+    "overlap":  (13, 16),
+}
+_SCANNER_SESSION_LABELS = {
+    "asian":    "Asian",
+    "london":   "London",
+    "new_york": "New York",
+    "overlap":  "London-NY overlap",
+}
+
+
+def _scanner_active_sessions_utc() -> list:
+    """Return active FX session ids at current UTC hour."""
+    hour = datetime.utcnow().hour
+    return [
+        sid for sid, (start, end) in _SCANNER_SESSION_HOURS.items()
+        if start <= hour < end
+    ]
+
+
+def _scanner_session_label() -> str:
+    active = _scanner_active_sessions_utc()
+    if not active:
+        return "Off-hours"
+    return " · ".join(_SCANNER_SESSION_LABELS.get(s, s) for s in active)
+
+
+def _scanner_annotate_confluence(results: list) -> list:
+    """Add confluence count + signal stack per (pair, timeframe, direction)."""
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for entry in results:
+        key = (entry["pair"], entry["timeframe"], entry["direction"])
+        groups[key].append(entry)
+    for entry in results:
+        stack = groups[(entry["pair"], entry["timeframe"], entry["direction"])]
+        entry["confluence"] = len(stack)
+        entry["confluence_signals"] = sorted({s["signal"] for s in stack})
+    return results
+
+
+def _scanner_sort_results(results: list) -> list:
+    _tf_rank = {"1m": 0, "5m": 1, "15m": 2, "1h": 3}
+    _sig_rank = {
+        "CHoCH": 0, "MSS": 1, "BOS": 2, "FVG": 3, "IFVG": 4,
+        "LQS": 5, "BRK": 6, "DISP": 7, "OB": 8,
+    }
+    _index_pri = {"NAS100": 0, "SPX500": 1, "US30": 2, "GER40": 3, "UK100": 4}
+    results.sort(key=lambda x: (
+        -x.get("confluence", 1),
+        _index_pri.get(x["pair"], 5),
+        _tf_rank.get(x["timeframe"], 4),
+        _sig_rank.get(x["signal"], 9),
+        x["pair"],
+    ))
+    return results
+
 
 def _scanner_timeframes_for(asset_class: str) -> list:
     if asset_class == "index":
@@ -7501,7 +7606,7 @@ def _scanner_signal_meta(sig_type: str, sub: str, mode: Optional[str]):
     return ("Signal", d, sub)
 
 
-async def _run_forex_scanner() -> list:
+async def _run_forex_scanner(timeout_secs: float = 115.0) -> tuple:
     """
     Scan indices + forex for ICT / day-trader structure signals on 1m/5m/15m.
 
@@ -7509,6 +7614,9 @@ async def _run_forex_scanner() -> list:
     shared across all signal evaluators.
 
     Results cached per (pair, tf, signal_key) for _FOREX_SCANNER_TTL seconds.
+
+    Returns (signals, partial) — partial=True when the scan timed out before
+    every instrument finished (still returns completed hits).
     """
     import httpx as _httpx
     from app.services.strategy_ta import (
@@ -7649,31 +7757,32 @@ async def _run_forex_scanner() -> list:
 
     async with _httpx.AsyncClient(timeout=12) as _scan_http:
         tasks = [
-            _scan_pair_tf(pair, tf, ac, _http=_scan_http)
+            asyncio.create_task(_scan_pair_tf(pair, tf, ac, _http=_scan_http))
             for pair, ac in _SCANNER_INSTRUMENTS
             for tf in _scanner_timeframes_for(ac)
         ]
-        raw = await asyncio.gather(*tasks, return_exceptions=True)
+        done, pending = await asyncio.wait(tasks, timeout=timeout_secs)
+        partial = bool(pending)
+        if pending:
+            for t in pending:
+                t.cancel()
+        raw = []
+        for t in done:
+            try:
+                raw.append(t.result())
+            except Exception:
+                raw.append([])
     results = [
         entry
         for batch in raw
         if isinstance(batch, list)
         for entry in batch
     ]
-
-    _tf_rank = {"1m": 0, "5m": 1, "15m": 2, "1h": 3}
-    _sig_rank = {
-        "CHoCH": 0, "MSS": 1, "BOS": 2, "FVG": 3, "IFVG": 4,
-        "LQS": 5, "BRK": 6, "DISP": 7, "OB": 8,
-    }
-    _index_pri = {"NAS100": 0, "SPX500": 1, "US30": 2}
-    results.sort(key=lambda x: (
-        _index_pri.get(x["pair"], 5),
-        _tf_rank.get(x["timeframe"], 4),
-        _sig_rank.get(x["signal"], 9),
-        x["pair"],
-    ))
-    return results
+    session = _scanner_session_label()
+    for entry in results:
+        entry["session"] = session
+    results = _scanner_annotate_confluence(results)
+    return _scanner_sort_results(results), partial
 
 
 @app.get("/api/forex/scanner")
@@ -7694,19 +7803,34 @@ async def api_forex_scanner(request: Request):
         db.close()
 
     import asyncio
+    from app.services.asset_classes import is_market_open
+    partial = False
     try:
-        signals = await asyncio.wait_for(_run_forex_scanner(), timeout=120)
-    except asyncio.TimeoutError:
+        signals, partial = await _run_forex_scanner(timeout_secs=115.0)
+    except Exception as e:
+        logger.warning(f"forex scanner error: {e}")
         signals = []
     import datetime
+    now_utc = datetime.utcnow()
+    index_syms = {p for p, ac in _SCANNER_INSTRUMENTS if ac == "index"}
     return JSONResponse({
         "signals": signals,
         "count": len(signals),
         "pairs_scanned": len(_SCANNER_PAIRS),
+        "instruments_index": len(index_syms),
+        "instruments_forex": len(_SCANNER_PAIRS) - len(index_syms),
         "timeframes_index": _SCANNER_TIMEFRAMES_INDEX,
         "timeframes_forex": _SCANNER_TIMEFRAMES_FOREX,
-        "scanned_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "scanned_at": now_utc.isoformat() + "Z",
         "cache_ttl": _FOREX_SCANNER_TTL,
+        "partial": partial,
+        "session": _scanner_session_label(),
+        "active_sessions": _scanner_active_sessions_utc(),
+        "market_open": {
+            "forex": is_market_open("forex", now_utc),
+            "index": is_market_open("index", now_utc),
+        },
+        "confluence_hits": sum(1 for s in signals if s.get("confluence", 0) >= 2),
     })
 
 
@@ -14466,109 +14590,101 @@ async def backtest_scan(request: Request):
     }
 
 
-_GOLD_SCAN_PROGRESS: Dict[str, str] = {}
-_INDEX_SCAN_PROGRESS: Dict[str, str] = {}
+def _discovery_user_id(uid: str) -> Optional[int]:
+    from app.database import SessionLocal
+    try:
+        db = SessionLocal()
+        try:
+            u = _get_user_by_uid_safe(uid, db)
+            return int(u.id) if u else None
+        finally:
+            db.close()
+    except Exception:
+        return None
 
 
-@app.get("/api/backtest/gold-discovery/progress")
-async def gold_discovery_progress(uid: str = Query(...)):
-    """Poll scan status while gold discovery runs (uid = TH- code)."""
-    return {"message": _GOLD_SCAN_PROGRESS.get(uid.strip(), "")}
-
-
-@app.post("/api/backtest/gold-discovery")
-async def backtest_gold_discovery(request: Request):
-    """
-    Claude-driven GOLD (XAUUSD) strategy discovery scanner.
-
-    Backtests a wide roster of candidate strategies (base roster + Claude-proposed)
-    across multiple timeframes AND the four FX trading sessions (Asian / London /
-    New York / overlap), ranks every combination by a composite profitability
-    score, then asks Claude to pick & explain the single best strategy.
-
-    Body: { uid, days (30|90|180), direction ("BOTH"|"LONG"|"SHORT") }
-    Pro subscribers only.
-    """
-    body = await request.json()
-    uid  = (body.get("uid") or "").strip()
-    days = int(body.get("days", 90))
-    direction_mode = (body.get("direction") or "BOTH").upper()
-
-    # ── Auth + Pro check (mirrors /api/backtest/scan) ─────────────────────────
+async def _discovery_pro_auth(uid: str) -> str:
+    """Return ok | not_pro | bad_uid."""
     from app.database import SessionLocal
     import asyncio as _asyncio
-    auth_status = None
     for _attempt in range(3):
         try:
             db = SessionLocal()
             try:
                 user = _get_user_by_uid_safe(uid, db)
                 if not user:
-                    auth_status = "bad_uid"; break
+                    return "bad_uid"
                 sub = _get_portal_sub(user.id, db)
                 is_pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
-                auth_status = "ok" if is_pro else "not_pro"
-                break
+                return "ok" if is_pro else "not_pro"
             finally:
                 db.close()
         except HTTPException:
             await _asyncio.sleep(0.3)
-            continue
         except Exception:
             await _asyncio.sleep(0.3)
-            continue
-    if auth_status in (None, "bad_uid"):
+    return "bad_uid"
+
+
+def _discovery_progress_response(scan_type: str, uid: str) -> dict:
+    from app.services.discovery_jobs import job_progress
+    prog = job_progress(scan_type, uid.strip())
+    # Back-compat: legacy clients read `message` only
+    if "message" not in prog:
+        prog["message"] = ""
+    return prog
+
+
+@app.get("/api/backtest/gold-discovery/progress")
+async def gold_discovery_progress(uid: str = Query(...)):
+    """Poll gold discovery job — status idle|running|done|error + result when done."""
+    return _discovery_progress_response("gold", uid)
+
+
+@app.post("/api/backtest/gold-discovery")
+async def backtest_gold_discovery(request: Request):
+    """
+    Start Claude-driven GOLD (XAUUSD) discovery in the background.
+    Poll GET /api/backtest/gold-discovery/progress until status=done.
+    Body: { uid, days (30|90|180), direction ("BOTH"|"LONG"|"SHORT") }
+    """
+    body = await request.json()
+    uid  = (body.get("uid") or "").strip()
+    days = int(body.get("days", 90))
+    direction_mode = (body.get("direction") or "BOTH").upper()
+
+    auth = await _discovery_pro_auth(uid)
+    if auth == "bad_uid":
         raise HTTPException(status_code=403, detail="Invalid UID")
-    if auth_status == "not_pro":
+    if auth == "not_pro":
         return JSONResponse(status_code=403, content={
             "ok": False,
             "message": "A Pro subscription is required to use the Gold Strategy Finder."})
 
+    user_id = _discovery_user_id(uid)
+    from app.services.discovery_jobs import start_discovery_job
     from app.services.gold_strategy_scanner import run_gold_discovery
-    _scan_user_id = None
-    try:
-        _db2 = SessionLocal()
-        try:
-            _u2 = _get_user_by_uid_safe(uid, _db2)
-            if _u2:
-                _scan_user_id = int(_u2.id)
-        finally:
-            _db2.close()
-    except Exception:
-        pass
-    def _progress(msg: str):
-        _GOLD_SCAN_PROGRESS[uid] = msg
 
-    try:
-        result = await run_gold_discovery(
-            days=days,
-            direction_mode=direction_mode,
-            user_id=_scan_user_id,
-            progress_cb=_progress,
+    async def _runner(progress_cb):
+        return await run_gold_discovery(
+            days=days, direction_mode=direction_mode,
+            user_id=user_id, progress_cb=progress_cb,
         )
-    except Exception as e:
-        logger.exception("gold-discovery scan failed")
-        return JSONResponse(status_code=500, content={
-            "ok": False, "error": f"Scan failed: {type(e).__name__}"})
-    finally:
-        _GOLD_SCAN_PROGRESS.pop(uid, None)
-    return JSONResponse(content=result)
+
+    return JSONResponse(content=start_discovery_job("gold", uid, _runner))
 
 
 @app.get("/api/backtest/index-discovery/progress")
 async def index_discovery_progress(uid: str = Query(...)):
-    """Poll scan status while index discovery runs (uid = TH- code)."""
-    return {"message": _INDEX_SCAN_PROGRESS.get(uid.strip(), "")}
+    """Poll index discovery job — status idle|running|done|error + result when done."""
+    return _discovery_progress_response("index", uid)
 
 
 @app.post("/api/backtest/index-discovery")
 async def backtest_index_discovery(request: Request):
     """
-    Claude-driven index CFD strategy discovery (NASDAQ, S&P 500, …).
-
-    Body: { uid, symbol (NAS100|SPX500|US30|…), days (30|90|180),
-            direction ("BOTH"|"LONG"|"SHORT") }
-    Pro subscribers only. Uses cTrader demo candles when connected.
+    Start index CFD discovery in the background.
+    Body: { uid, symbol, days, direction }
     """
     body = await request.json()
     uid  = (body.get("uid") or "").strip()
@@ -14576,66 +14692,64 @@ async def backtest_index_discovery(request: Request):
     direction_mode = (body.get("direction") or "BOTH").upper()
     symbol = (body.get("symbol") or "NAS100").strip()
 
-    from app.database import SessionLocal
-    import asyncio as _asyncio
-    auth_status = None
-    for _attempt in range(3):
-        try:
-            db = SessionLocal()
-            try:
-                user = _get_user_by_uid_safe(uid, db)
-                if not user:
-                    auth_status = "bad_uid"; break
-                sub = _get_portal_sub(user.id, db)
-                is_pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
-                auth_status = "ok" if is_pro else "not_pro"
-                break
-            finally:
-                db.close()
-        except HTTPException:
-            await _asyncio.sleep(0.3)
-            continue
-        except Exception:
-            await _asyncio.sleep(0.3)
-            continue
-    if auth_status in (None, "bad_uid"):
+    auth = await _discovery_pro_auth(uid)
+    if auth == "bad_uid":
         raise HTTPException(status_code=403, detail="Invalid UID")
-    if auth_status == "not_pro":
+    if auth == "not_pro":
         return JSONResponse(status_code=403, content={
             "ok": False,
             "message": "A Pro subscription is required to use the Index Strategy Finder."})
 
+    user_id = _discovery_user_id(uid)
+    from app.services.discovery_jobs import start_discovery_job
     from app.services.index_strategy_scanner import run_index_discovery
-    _scan_user_id = None
-    try:
-        _db2 = SessionLocal()
-        try:
-            _u2 = _get_user_by_uid_safe(uid, _db2)
-            if _u2:
-                _scan_user_id = int(_u2.id)
-        finally:
-            _db2.close()
-    except Exception:
-        pass
 
-    def _progress(msg: str):
-        _INDEX_SCAN_PROGRESS[uid] = msg
-
-    try:
-        result = await run_index_discovery(
-            symbol=symbol,
-            days=days,
-            direction_mode=direction_mode,
-            user_id=_scan_user_id,
-            progress_cb=_progress,
+    async def _runner(progress_cb):
+        return await run_index_discovery(
+            symbol=symbol, days=days, direction_mode=direction_mode,
+            user_id=user_id, progress_cb=progress_cb,
         )
-    except Exception as e:
-        logger.exception("index-discovery scan failed")
-        return JSONResponse(status_code=500, content={
-            "ok": False, "error": f"Scan failed: {type(e).__name__}"})
-    finally:
-        _INDEX_SCAN_PROGRESS.pop(uid, None)
-    return JSONResponse(content=result)
+
+    return JSONResponse(content=start_discovery_job("index", uid, _runner))
+
+
+@app.get("/api/backtest/forex-discovery/progress")
+async def forex_discovery_progress(uid: str = Query(...)):
+    """Poll forex pair discovery job."""
+    return _discovery_progress_response("forex", uid)
+
+
+@app.post("/api/backtest/forex-discovery")
+async def backtest_forex_discovery(request: Request):
+    """
+    Start major FX pair discovery in the background.
+    Body: { uid, symbol, days, direction }
+    """
+    body = await request.json()
+    uid  = (body.get("uid") or "").strip()
+    days = int(body.get("days", 90))
+    direction_mode = (body.get("direction") or "BOTH").upper()
+    symbol = (body.get("symbol") or "EURUSD").strip()
+
+    auth = await _discovery_pro_auth(uid)
+    if auth == "bad_uid":
+        raise HTTPException(status_code=403, detail="Invalid UID")
+    if auth == "not_pro":
+        return JSONResponse(status_code=403, content={
+            "ok": False,
+            "message": "A Pro subscription is required to use the Forex Strategy Finder."})
+
+    user_id = _discovery_user_id(uid)
+    from app.services.discovery_jobs import start_discovery_job
+    from app.services.forex_pair_strategy_scanner import run_forex_discovery
+
+    async def _runner(progress_cb):
+        return await run_forex_discovery(
+            symbol=symbol, days=days, direction_mode=direction_mode,
+            user_id=user_id, progress_cb=progress_cb,
+        )
+
+    return JSONResponse(content=start_discovery_job("forex", uid, _runner))
 
 
 @app.post("/api/backtest/run")

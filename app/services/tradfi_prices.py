@@ -326,6 +326,62 @@ async def fetch_metal_scan_candles(
     return best[-limit:] if best else []
 
 
+async def fetch_forex_scan_candles(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    user_id: Optional[int] = None,
+) -> List[List[float]]:
+    """
+    Multi-source fetch for major FX pair backtest scanners (EURUSD, GBPUSD, …).
+    Prefers linked cTrader demo/live candles when available.
+    """
+    sym = symbol.upper().replace("/", "").replace("-", "")
+    yahoo_ticker = yf_ticker("forex", sym)
+    best: List[List[float]] = []
+
+    async def _keep(rows: List[List[float]], label: str) -> None:
+        nonlocal best
+        if rows and len(rows) > len(best):
+            best = rows
+            logger.info(f"[tradfi] forex-scan best={label} {sym} {timeframe} → {len(rows)} bars")
+
+    if user_id:
+        await _keep(
+            await _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
+            "ctrader-user",
+        )
+        if len(best) >= 120:
+            return best[-limit:]
+
+    if yahoo_ticker:
+        await _keep(await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit), "yahoo")
+        if len(best) >= 120:
+            return best[-limit:]
+
+    if _env_fmp_api_key():
+        try:
+            from app.services.fmp_price_feed import get_klines as _fmp_klines
+            await _keep(await _fmp_klines(sym, "forex", timeframe, limit), "fmp")
+        except Exception:
+            pass
+        if len(best) >= 120:
+            return best[-limit:]
+
+    await _keep(
+        await _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
+        "ctrader",
+    )
+    if len(best) >= 120:
+        return best[-limit:]
+
+    tradfi_rows = await _get_klines_impl(
+        sym, "forex", timeframe, limit, for_backtest=True, ctrader_user_id=user_id,
+    )
+    await _keep(tradfi_rows, "tradfi-chain")
+    return best[-limit:] if best else []
+
+
 def _yf_download_blocking(ticker: str, interval: str, period: str):
     """yfinance is sync — run inside a thread executor."""
     import yfinance as yf
