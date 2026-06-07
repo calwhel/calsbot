@@ -10791,80 +10791,60 @@ async def api_live_forex_account(uid: str = Query(...)):
         if not connected:
             return JSONResponse({"connected": False, "forex_approved": forex_approved, "accounts": accounts, "balance": None, "equity": None})
 
-        # Right after OAuth the background account fetch may still be running — if
-        # the UI polls before it finishes, proactively refresh from cTrader here.
-        if connected and not accounts and prefs and prefs.ctrader_access_token:
+        balance = None
+
+        async def _sync_ctrader_accounts():
+            nonlocal accounts
+            if not (prefs and prefs.ctrader_access_token):
+                return
+            need = (not accounts) or not (prefs.ctrader_account_id or "").strip()
+            if not need:
+                return
             try:
                 from app.services.ctrader_client import get_accounts_for_token
                 fetched = await asyncio.wait_for(
-                    get_accounts_for_token(prefs.ctrader_access_token), timeout=12.0
+                    get_accounts_for_token(prefs.ctrader_access_token), timeout=10.0
                 )
                 if fetched:
                     accounts = fetched
                     prefs.ctrader_accounts = _json.dumps(fetched)
-                    live = [a for a in fetched if a.get("isLive")]
-                    if not prefs.ctrader_account_id:
+                    if not (prefs.ctrader_account_id or "").strip():
                         chosen = _ctrader_auto_pick_account(fetched)
                         if chosen:
                             prefs.ctrader_account_id = str(chosen["ctidTraderAccountId"])
                     db.commit()
             except Exception as _ae:
-                logger.warning(f"[live-forex] inline accounts refresh failed uid={uid}: {type(_ae).__name__}")
+                logger.warning(f"[live-forex] account sync failed uid={uid}: {type(_ae).__name__}")
 
-        # Connected with token but still no account_id — force one more account sync.
-        if connected and prefs and prefs.ctrader_access_token and not (prefs.ctrader_account_id or "").strip():
-            try:
-                from app.services.ctrader_client import get_accounts_for_token
-                fetched = await asyncio.wait_for(
-                    get_accounts_for_token(prefs.ctrader_access_token), timeout=15.0
-                )
-                if fetched:
-                    accounts = fetched
-                    prefs.ctrader_accounts = _json.dumps(fetched)
-                    chosen = _ctrader_auto_pick_account(fetched)
-                    if chosen:
-                        prefs.ctrader_account_id = str(chosen["ctidTraderAccountId"])
-                    db.commit()
-            except Exception as _ae2:
-                logger.warning(f"[live-forex] account auto-pick failed uid={uid}: {type(_ae2).__name__}")
-
-        # Fetch live balance from cTrader — cached 20s per user to avoid hammering
-        # the persistent TLS connection on every frontend poll cycle.
-        balance = None
-        _acct_id = prefs.ctrader_account_id if prefs else None
-        if _acct_id:
+        async def _fetch_balance():
+            nonlocal balance
+            _acct_id = (prefs.ctrader_account_id or "").strip() if prefs else ""
+            if not _acct_id:
+                return
             from app.cache import get_cache, set_cache
             _bal_key = f"ctrader_balance:{user.id}"
             _cached = get_cache(_bal_key)
-            # Sentinel string marks a recent failed/timed-out fetch so repeat
-            # polls don't each re-wait the full upstream timeout (negative cache).
             if _cached == "__miss__":
                 balance = None
-            elif _cached is not None:
+                return
+            if _cached is not None:
                 balance = _cached
-            else:
-                try:
-                    from app.services.ctrader_client import _get_account_balance
-                    # 12s outer cap: on a cold socket (e.g. weekends when the FX
-                    # executor isn't keeping the persistent connection warm) the
-                    # balance flow needs a full reconnect — SSL handshake +
-                    # app-auth + account-auth + reconcile round-trips — which can
-                    # exceed a few seconds. The result is cached 20s so only the
-                    # first poll after a cold start pays this cost.
-                    balance = await asyncio.wait_for(
-                        _get_account_balance(prefs.ctrader_access_token, int(_acct_id)),
-                        timeout=12.0,
-                    )
-                    if balance is not None:
-                        set_cache(_bal_key, balance, ttl_seconds=20)
-                    else:
-                        set_cache(_bal_key, "__miss__", ttl_seconds=15)
-                except Exception as _be:
-                    logger.warning(
-                        f"[live-forex] balance fetch failed uid={uid}: "
-                        f"{type(_be).__name__}: {_be}"
-                    )
+                return
+            try:
+                from app.services.ctrader_client import _get_account_balance
+                balance = await asyncio.wait_for(
+                    _get_account_balance(prefs.ctrader_access_token, int(_acct_id)),
+                    timeout=10.0,
+                )
+                if balance is not None:
+                    set_cache(_bal_key, balance, ttl_seconds=20)
+                else:
                     set_cache(_bal_key, "__miss__", ttl_seconds=15)
+            except Exception as _be:
+                logger.warning(
+                    f"[live-forex] balance fetch failed uid={uid}: {type(_be).__name__}: {_be}"
+                )
+                set_cache(_bal_key, "__miss__", ttl_seconds=15)
 
         # Fetch open positions from strategy_executions (forex/index live trades)
         def _get_open_positions():
@@ -10890,16 +10870,6 @@ async def api_live_forex_account(uid: str = Query(...)):
             finally:
                 _db.close()
 
-        positions = await asyncio.to_thread(_get_open_positions)
-        # Serialise datetime objects
-        for p in positions:
-            if p.get("fired_at"):
-                p["fired_at"] = p["fired_at"].isoformat()
-
-        # Which of the user's strategies are LIVE on forex/index/metals — i.e.
-        # status='active' with a forex-family asset class.  Since this endpoint
-        # already requires a connected (+approved) cTrader account, an active
-        # forex strategy is genuinely placing live FP Markets orders.
         def _get_live_strategies():
             from app.database import SessionLocal as _SL
             from sqlalchemy import text as _t
@@ -10930,7 +10900,23 @@ async def api_live_forex_account(uid: str = Query(...)):
             finally:
                 _db.close()
 
-        live_rows = await asyncio.to_thread(_get_live_strategies)
+        positions_task = asyncio.create_task(asyncio.to_thread(_get_open_positions))
+        strategies_task = asyncio.create_task(asyncio.to_thread(_get_live_strategies))
+
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(_sync_ctrader_accounts(), _fetch_balance(), return_exceptions=True),
+                timeout=14.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"[live-forex] ctrader enrich timed out uid={uid}")
+
+        positions = await positions_task
+        for p in positions:
+            if p.get("fired_at"):
+                p["fired_at"] = p["fired_at"].isoformat()
+
+        live_rows = await strategies_task
         live_strategies = []
         for s in live_rows:
             cfg = s.get("config") or {}

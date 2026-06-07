@@ -8361,7 +8361,7 @@ async function _pollCtraderLinkComplete(attempt) {
     return;
   }
   try {
-    const sr = await _apiFetch(`/api/ctrader/status?uid=${encodeURIComponent(UID)}`);
+    const sr = await _apiFetchRetry(`/api/ctrader/status?uid=${encodeURIComponent(UID)}`, { timeoutMs: 35000 });
     if (sr.ok) {
       const d = await sr.json();
       if (d.connected) {
@@ -11085,16 +11085,23 @@ async function loadLiveForex() {
     toast('Connect uses Railway OAuth; you will return to ' + setup.railway_service_base + '/app after approving', 'success');
   }
   try {
-    const r = await _apiFetch(`/api/live-forex/account?uid=${UID}`);
+    const warmed = await _warmDb(true);
+    if (!warmed && !_ctraderLinking) {
+      wrap.innerHTML = '<div class="loader">Waking server… first load can take 20–30s on mobile</div>';
+    }
+    const r = await _apiFetchRetry(`/api/live-forex/account?uid=${encodeURIComponent(UID)}`, { timeoutMs: 55000 });
     if (r.status === 401) {
       wrap.innerHTML = _apiErrorHtml('Your session expired — log in again to use Live Forex.');
       return;
+    }
+    if (r.status === 502 || r.status === 503) {
+      throw new Error('Server waking up — tap Retry in a few seconds');
     }
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
     renderLiveForex(d, wrap);
   } catch(e) {
-    wrap.innerHTML = _apiErrorHtml(`Could not load Live Forex. ${e.message||'Try again.'}`, 'loadLiveForex');
+    wrap.innerHTML = _apiErrorHtml(`Could not load Live Forex. ${_discNetworkMsg(e, 'Try again.')}`, 'loadLiveForex');
   }
 }
 
@@ -11250,9 +11257,15 @@ function renderLiveForex(d, wrap) {
     </div>
   `;
 
-  renderLFSessions();
+  _startLfSessionsClock();
   lfCalc();
-  setInterval(renderLFSessions, 30000);
+}
+
+let _lfSessionsTimer = null;
+function _startLfSessionsClock() {
+  renderLFSessions();
+  if (_lfSessionsTimer) return;
+  _lfSessionsTimer = setInterval(renderLFSessions, 30000);
 }
 
 function renderLFOnboarding(wrap) {
@@ -11332,8 +11345,7 @@ function renderLFOnboarding(wrap) {
       </div>
     </div>
   `;
-  renderLFSessions();
-  setInterval(renderLFSessions, 30000);
+  _startLfSessionsClock();
 }
 
 function renderLFSessions() {
@@ -11557,7 +11569,7 @@ async function lfTestTrade(symbol) {
   document.querySelectorAll('#lf-body button').forEach(b=>{ if(b.textContent.includes('Test')) b.setAttribute('disabled','1'); });
   if (out) out.innerHTML = '<span style="color:var(--muted)">Placing test order on cTrader…</span>';
   try {
-    const r = await fetch(`/api/ctrader/test-trade?uid=${UID}&symbol=${encodeURIComponent(symbol)}`, {method:'POST'});
+    const r = await _apiFetch(`/api/ctrader/test-trade?uid=${encodeURIComponent(UID)}&symbol=${encodeURIComponent(symbol)}`, {method:'POST', timeoutMs: 60000});
     const j = await r.json().catch(()=>({}));
     if (j && j.success) {
       const fill = (j.fill!=null) ? ` @ ${(+j.fill).toFixed(isIdx?2:5)}` : '';
