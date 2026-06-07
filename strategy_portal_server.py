@@ -10192,20 +10192,52 @@ async def api_get_settings(uid: str = Query(...)):
 
 def _ctrader_redirect_uri(request: Optional[Request] = None) -> str:
     """Canonical OAuth callback URL — must match Spotware app settings exactly."""
-    explicit = (os.environ.get("CTRADER_REDIRECT_URI") or "").strip()
-    if explicit:
-        return explicit.rstrip("/")
-    if os.environ.get("REPLIT_DEV_DOMAIN"):
-        return f"https://{os.environ['REPLIT_DEV_DOMAIN']}/api/ctrader/callback"
-    # Prefer the Host the user actually hit (Railway URL vs custom domain).
-    # PUBLIC_DOMAIN can point at dead DNS while Railway still works — a wrong
-    # redirect_uri makes Spotware reject the whole OAuth flow silently.
     if request is not None:
-        host = (request.headers.get("host") or "").split(":")[0].strip()
+        host = (request.headers.get("host") or "").split(":")[0].strip().lower()
         if host and host not in ("localhost", "127.0.0.1"):
             scheme = "https" if request_is_https(request) else "http"
-            return f"{scheme}://{host}/api/ctrader/callback"
+            derived = f"{scheme}://{host}/api/ctrader/callback"
+            explicit = (os.environ.get("CTRADER_REDIRECT_URI") or "").strip().rstrip("/")
+            if explicit:
+                exp_host = (urllib.parse.urlparse(explicit).netloc or "").split(":")[0].strip().lower()
+                if exp_host == host:
+                    return explicit
+                # Stale env (e.g. dead tradehubmarkets.com) while user hits Railway.
+                logger.warning(
+                    "[ctrader] CTRADER_REDIRECT_URI host %s != request host %s — using %s",
+                    exp_host, host, derived,
+                )
+            return derived
+    explicit = (os.environ.get("CTRADER_REDIRECT_URI") or "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    if os.environ.get("REPLIT_DEV_DOMAIN"):
+        return f"https://{os.environ['REPLIT_DEV_DOMAIN']}/api/ctrader/callback"
     return f"{public_base_url(request).rstrip('/')}/api/ctrader/callback"
+
+
+@app.get("/api/public/ctrader-setup")
+async def api_public_ctrader_setup(request: Request):
+    """Diagnostics for cTrader OAuth — no secrets, helps debug connect failures."""
+    from app.services.ctrader_client import CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET
+    cid = (CTRADER_CLIENT_ID or os.getenv("CTRADER_CLIENT_ID") or "").strip()
+    secret = (CTRADER_CLIENT_SECRET or os.getenv("CTRADER_CLIENT_SECRET") or "").strip()
+    host = (request.headers.get("host") or "").split(":")[0]
+    env_redirect = (os.environ.get("CTRADER_REDIRECT_URI") or "").strip() or None
+    redirect_uri = _ctrader_redirect_uri(request)
+    return JSONResponse({
+        "configured":       bool(cid and secret),
+        "client_id_set":    bool(cid),
+        "client_secret_set": bool(secret),
+        "redirect_uri":     redirect_uri,
+        "env_redirect_uri": env_redirect,
+        "request_host":     host,
+        "redirect_match":   (not env_redirect) or (urllib.parse.urlparse(env_redirect).netloc.split(":")[0].lower() == host.lower()),
+        "hint": (
+            None if (cid and secret) else
+            "Set CTRADER_CLIENT_ID and CTRADER_CLIENT_SECRET on Railway."
+        ),
+    })
 
 
 @app.get("/api/ctrader/auth-url")
@@ -10353,16 +10385,25 @@ async def api_ctrader_callback(
 
     # ── Step 2: exchange code (slow ~5s HTTP round-trip) ──────────────────────
     try:
+        from app.services.ctrader_client import CTraderTokenError
         token_data = await exchange_code(code=code, redirect_uri=redirect_uri)
     except Exception as e:
-        # Do NOT interpolate `e` — httpx.HTTPStatusError's string includes the
-        # full URL, which carries `code` + client_secret in the query string.
-        status = getattr(getattr(e, "response", None), "status_code", None)
-        logger.error(
-            f"[cTrader callback] exchange_code failed: "
-            f"{type(e).__name__} status={status}"
-        )
-        return RedirectResponse(url="/app?ctrader_error=token_exchange_failed#live-forex")
+        from app.services.ctrader_client import CTraderTokenError
+        err_code = "token_exchange_failed"
+        if isinstance(e, CTraderTokenError):
+            err_code = (e.error_code or "token_exchange_failed").lower()
+            logger.error(
+                "[cTrader callback] exchange_code errorCode=%s redirect_host=%s",
+                e.error_code,
+                urllib.parse.urlparse(redirect_uri).netloc,
+            )
+        else:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            logger.error(
+                f"[cTrader callback] exchange_code failed: "
+                f"{type(e).__name__} status={status}"
+            )
+        return RedirectResponse(url=f"/app?ctrader_error={urllib.parse.quote(err_code)}#live-forex")
 
     access_token  = token_data.get("accessToken")  or token_data.get("access_token",  "")
     refresh_token = token_data.get("refreshToken") or token_data.get("refresh_token", "")
