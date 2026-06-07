@@ -7487,381 +7487,62 @@ class _JsonBodyRequest:
 
 
 # ─── Forex multi-pair market structure scanner ───────────────────────────────
-
-_FOREX_SCANNER_CACHE: dict = {}          # key → (signals, expires_ts)
-_FOREX_SCANNER_TTL = 60                  # seconds between rescans per pair+tf
-
-# (symbol, asset_class) — indices use index OHLC path in tradfi_prices.
-_SCANNER_INSTRUMENTS = [
-    # US + EU indices first — primary focus for cTrader demo / NAS day trading
-    ("NAS100", "index"), ("SPX500", "index"), ("US30", "index"),
-    ("GER40", "index"), ("UK100", "index"),
-    ("EURUSD", "forex"), ("GBPUSD", "forex"), ("USDJPY", "forex"), ("AUDUSD", "forex"),
-    ("USDCAD", "forex"), ("USDCHF", "forex"), ("NZDUSD", "forex"), ("EURJPY", "forex"),
-    ("GBPJPY", "forex"), ("XAUUSD", "forex"), ("XAGUSD", "forex"),
-]
-_SCANNER_PAIRS = [p for p, _ in _SCANNER_INSTRUMENTS]
-# NAS indices: 1m/5m/15m for day trading. Forex/metals: same intraday set.
-_SCANNER_TIMEFRAMES_INDEX = ["1m", "5m", "15m"]
-_SCANNER_TIMEFRAMES_FOREX = ["1m", "5m", "15m"]
-
-# (sig_type, sub, mode) — mode disambiguates FVG fresh vs retest, etc.
-_SCANNER_SIGNALS = [
-    ("market_structure", "bos_bullish",   None),
-    ("market_structure", "bos_bearish",   None),
-    ("market_structure", "choch_bullish", None),
-    ("market_structure", "choch_bearish", None),
-    ("fvg",             "bullish",       "just_formed"),
-    ("fvg",             "bearish",       "just_formed"),
-    ("fvg",             "bullish",       "retest"),
-    ("fvg",             "bearish",       "retest"),
-    ("ifvg",            "bullish",       "retest"),
-    ("ifvg",            "bearish",       "retest"),
-    ("order_block",     "bullish",       None),
-    ("order_block",     "bearish",       None),
-    ("liquidity_sweep", "bullish",       None),
-    ("liquidity_sweep", "bearish",       None),
-    ("breaker_block",   "bullish",       None),
-    ("breaker_block",   "bearish",       None),
-    ("fx_displacement", "bullish",       None),
-    ("fx_displacement", "bearish",       None),
-    ("mss",             "bullish",       None),
-    ("mss",             "bearish",       None),
-]
-
-_MS_LABELS = {
-    "bos_bullish":   ("BOS", "LONG",  "Bullish Break of Structure"),
-    "bos_bearish":   ("BOS", "SHORT", "Bearish Break of Structure"),
-    "choch_bullish": ("CHoCH", "LONG", "Bullish Change of Character"),
-    "choch_bearish": ("CHoCH", "SHORT", "Bearish Change of Character"),
-}
-_BIAS_DIR = {"bullish": "LONG", "bearish": "SHORT"}
-
-_SCANNER_SESSION_HOURS = {
-    "asian":    (0, 8),
-    "london":   (7, 16),
-    "new_york": (13, 22),
-    "overlap":  (13, 16),
-}
-_SCANNER_SESSION_LABELS = {
-    "asian":    "Asian",
-    "london":   "London",
-    "new_york": "New York",
-    "overlap":  "London-NY overlap",
-}
+from app.services.live_structure_scanner import (
+    build_scan_response,
+    live_scan_progress,
+    run_forex_scanner as _run_forex_scanner,
+    start_live_scan,
+)
 
 
-def _scanner_active_sessions_utc() -> list:
-    """Return active FX session ids at current UTC hour."""
-    hour = datetime.utcnow().hour
-    return [
-        sid for sid, (start, end) in _SCANNER_SESSION_HOURS.items()
-        if start <= hour < end
-    ]
-
-
-def _scanner_session_label() -> str:
-    active = _scanner_active_sessions_utc()
-    if not active:
-        return "Off-hours"
-    return " · ".join(_SCANNER_SESSION_LABELS.get(s, s) for s in active)
-
-
-def _scanner_annotate_confluence(results: list) -> list:
-    """Add confluence count + signal stack per (pair, timeframe, direction)."""
-    from collections import defaultdict
-    groups: dict = defaultdict(list)
-    for entry in results:
-        key = (entry["pair"], entry["timeframe"], entry["direction"])
-        groups[key].append(entry)
-    for entry in results:
-        stack = groups[(entry["pair"], entry["timeframe"], entry["direction"])]
-        entry["confluence"] = len(stack)
-        entry["confluence_signals"] = sorted({s["signal"] for s in stack})
-    return results
-
-
-def _scanner_sort_results(results: list) -> list:
-    _tf_rank = {"1m": 0, "5m": 1, "15m": 2, "1h": 3}
-    _sig_rank = {
-        "CHoCH": 0, "MSS": 1, "BOS": 2, "FVG": 3, "IFVG": 4,
-        "LQS": 5, "BRK": 6, "DISP": 7, "OB": 8,
-    }
-    _index_pri = {"NAS100": 0, "SPX500": 1, "US30": 2, "GER40": 3, "UK100": 4}
-    results.sort(key=lambda x: (
-        -x.get("confluence", 1),
-        _index_pri.get(x["pair"], 5),
-        _tf_rank.get(x["timeframe"], 4),
-        _sig_rank.get(x["signal"], 9),
-        x["pair"],
-    ))
-    return results
-
-
-def _scanner_timeframes_for(asset_class: str) -> list:
-    if asset_class == "index":
-        return list(_SCANNER_TIMEFRAMES_INDEX)
-    return list(_SCANNER_TIMEFRAMES_FOREX)
-
-
-def _scanner_signal_meta(sig_type: str, sub: str, mode: Optional[str]):
-    """Return (label, direction, description) for a scanner hit."""
-    if sig_type == "market_structure":
-        return _MS_LABELS.get(sub, ("MS", "LONG", sub))
-    d = _BIAS_DIR.get(sub, "LONG")
-    if sig_type == "fvg":
-        fresh = (mode or "just_formed") == "just_formed"
-        return (
-            "FVG",
-            d,
-            f"{'Bullish' if sub == 'bullish' else 'Bearish'} Fair Value Gap "
-            f"({'just formed' if fresh else 'retest / in gap'})",
-        )
-    if sig_type == "ifvg":
-        return (
-            "IFVG",
-            d,
-            f"{'Bullish' if sub == 'bullish' else 'Bearish'} Inverse FVG retest",
-        )
-    if sig_type == "order_block":
-        return ("OB", d, f"{'Bullish' if sub == 'bullish' else 'Bearish'} Order Block touch")
-    if sig_type == "liquidity_sweep":
-        return ("LQS", d, f"{'Bullish' if sub == 'bullish' else 'Bearish'} Liquidity sweep")
-    if sig_type == "breaker_block":
-        return ("BRK", d, f"{'Bullish' if sub == 'bullish' else 'Bearish'} Breaker block retest")
-    if sig_type == "fx_displacement":
-        return ("DISP", d, f"{'Bullish' if sub == 'bullish' else 'Bearish'} Displacement candle")
-    if sig_type == "mss":
-        return ("MSS", d, f"{'Bullish' if sub == 'bullish' else 'Bearish'} Market structure shift")
-    return ("Signal", d, sub)
-
-
-async def _run_forex_scanner(timeout_secs: float = 115.0) -> tuple:
-    """
-    Scan indices + forex for ICT / day-trader structure signals on 1m/5m/15m.
-
-    Grouped by (pair, timeframe) so klines are fetched once per pair+TF and
-    shared across all signal evaluators.
-
-    Results cached per (pair, tf, signal_key) for _FOREX_SCANNER_TTL seconds.
-
-    Returns (signals, partial) — partial=True when the scan timed out before
-    every instrument finished (still returns completed hits).
-    """
-    import httpx as _httpx
-    from app.services.strategy_ta import (
-        eval_market_structure, eval_fvg, eval_order_block,
-        eval_bt_klines_cond, eval_fx_displacement, eval_fx_breaker,
-    )
-    from app.services.tradfi_prices import get_price as _tradfi_price
-    import asyncio, time
-
-    import os as _os_scan
-    now = time.monotonic()
-    sem = asyncio.Semaphore(int(_os_scan.environ.get("FOREX_SCANNER_PARALLEL", "8")))
-
-    def _cache_key(pair, tf, sig_type, sub, sig_mode):
-        return f"{pair}|{tf}|{sig_type}|{sub}|{sig_mode or ''}"
-
-    async def _scan_pair_tf(pair, tf, asset_class="forex", _http=None):
-        all_keys = [
-            _cache_key(pair, tf, st, sub, mode)
-            for st, sub, mode in _SCANNER_SIGNALS
-        ]
-        fresh = [_FOREX_SCANNER_CACHE.get(k) for k in all_keys]
-        if all(f and f[1] > now for f in fresh):
-            return [f[0] for f in fresh if f and f[0]]
-
-        entries = []
-        try:
-            async with sem:
-                price = await asyncio.wait_for(_tradfi_price(pair, asset_class), timeout=8)
-                if not price:
-                    return []
-
-                shared_cache = {"__asset_class__": asset_class}
-                _client = _http or _httpx.AsyncClient(timeout=12)
-                for sig_type, sub, sig_mode in _SCANNER_SIGNALS:
-                    cache_key = _cache_key(pair, tf, sig_type, sub, sig_mode)
-                    cached = _FOREX_SCANNER_CACHE.get(cache_key)
-                    if cached and cached[1] > now:
-                        if cached[0]:
-                            entries.append(cached[0])
-                        continue
-
-                    entry = None
-                    try:
-                        if sig_type == "market_structure":
-                            ok, msg = await asyncio.wait_for(
-                                eval_market_structure(
-                                    {"condition": sub, "timeframe": tf},
-                                    pair, price, _client, shared_cache,
-                                ),
-                                timeout=15,
-                            )
-                        elif sig_type == "fvg":
-                            cond = {
-                                "direction": sub,
-                                "timeframe": tf,
-                                "condition": sig_mode or "just_formed",
-                            }
-                            ok, msg = await asyncio.wait_for(
-                                eval_fvg(cond, pair, price, _client, shared_cache),
-                                timeout=15,
-                            )
-                        elif sig_type == "ifvg":
-                            ok, msg = await asyncio.wait_for(
-                                eval_bt_klines_cond(
-                                    {"type": "ifvg", "direction": sub, "timeframe": tf},
-                                    pair, _client, shared_cache,
-                                ),
-                                timeout=15,
-                            )
-                        elif sig_type == "order_block":
-                            ok, msg = await asyncio.wait_for(
-                                eval_order_block(
-                                    {"ob_type": sub, "direction": sub, "timeframe": tf},
-                                    pair, price, _client, shared_cache,
-                                ),
-                                timeout=15,
-                            )
-                        elif sig_type == "liquidity_sweep":
-                            ok, msg = await asyncio.wait_for(
-                                eval_bt_klines_cond(
-                                    {"type": "liquidity_sweep", "direction": sub, "timeframe": tf},
-                                    pair, _client, shared_cache,
-                                ),
-                                timeout=15,
-                            )
-                        elif sig_type == "breaker_block":
-                            ok, msg = await asyncio.wait_for(
-                                eval_fx_breaker(
-                                    {"direction": sub, "timeframe": tf},
-                                    pair, price, _client, shared_cache,
-                                ),
-                                timeout=15,
-                            )
-                        elif sig_type == "fx_displacement":
-                            ok, msg = await asyncio.wait_for(
-                                eval_fx_displacement(
-                                    {"direction": sub, "timeframe": tf},
-                                    pair, _client, shared_cache,
-                                ),
-                                timeout=15,
-                            )
-                        elif sig_type == "mss":
-                            ok, msg = await asyncio.wait_for(
-                                eval_bt_klines_cond(
-                                    {"type": "mss", "direction": sub, "timeframe": tf},
-                                    pair, _client, shared_cache,
-                                ),
-                                timeout=15,
-                            )
-                        else:
-                            continue
-
-                        if ok:
-                            label, direction, desc = _scanner_signal_meta(sig_type, sub, sig_mode)
-                            entry = {
-                                "pair":      pair,
-                                "timeframe": tf,
-                                "signal":    label,
-                                "direction": direction,
-                                "desc":      desc,
-                                "price":     round(price, 6),
-                                "detail":    msg,
-                                "sig_key":   f"{sig_type}:{sub}" + (f":{sig_mode}" if sig_mode else ""),
-                                "asset_class": asset_class,
-                            }
-                            entries.append(entry)
-
-                    except Exception as _se:
-                        logger.debug(f"Scanner {pair}/{tf}/{sig_type}/{sub}: {_se}")
-
-                    _FOREX_SCANNER_CACHE[cache_key] = (entry, now + _FOREX_SCANNER_TTL)
-
-        except Exception as _e:
-            logger.debug(f"Scanner pair+tf {pair}/{tf}: {_e}")
-
-        return entries
-
-    async with _httpx.AsyncClient(timeout=12) as _scan_http:
-        tasks = [
-            asyncio.create_task(_scan_pair_tf(pair, tf, ac, _http=_scan_http))
-            for pair, ac in _SCANNER_INSTRUMENTS
-            for tf in _scanner_timeframes_for(ac)
-        ]
-        done, pending = await asyncio.wait(tasks, timeout=timeout_secs)
-        partial = bool(pending)
-        if pending:
-            for t in pending:
-                t.cancel()
-        raw = []
-        for t in done:
-            try:
-                raw.append(t.result())
-            except Exception:
-                raw.append([])
-    results = [
-        entry
-        for batch in raw
-        if isinstance(batch, list)
-        for entry in batch
-    ]
-    session = _scanner_session_label()
-    for entry in results:
-        entry["session"] = session
-    results = _scanner_annotate_confluence(results)
-    return _scanner_sort_results(results), partial
-
-
-@app.get("/api/forex/scanner")
-async def api_forex_scanner(request: Request):
-    """Live structure scanner — BOS, CHoCH, FVG, IFVG, OB, LQS, BRK, DISP, MSS on 1m/5m/15m."""
-    uid = request.query_params.get("uid", "")
-    if not uid:
-        raise HTTPException(status_code=400, detail="uid required")
-
-    import time
+def _auth_scanner_uid(uid: str):
     from app.database import SessionLocal
     db = SessionLocal()
     try:
         user = _get_user_by_uid(uid, db)
         if not user or user.banned:
             raise HTTPException(status_code=403)
+        return user
     finally:
         db.close()
 
-    import asyncio
-    from app.services.asset_classes import is_market_open
-    partial = False
+
+@app.post("/api/forex/scanner/start")
+async def api_forex_scanner_start(request: Request):
+    """Start a streaming live scan — poll GET /api/forex/scanner/progress for results."""
+    body = await request.json()
+    uid = (body.get("uid") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="uid required")
+    _auth_scanner_uid(uid)
+    mode = (body.get("mode") or "fast").lower()
+    if mode not in ("fast", "full"):
+        mode = "fast"
+    return JSONResponse(content=start_live_scan(uid, mode=mode))
+
+
+@app.get("/api/forex/scanner/progress")
+async def api_forex_scanner_progress(uid: str = Query(...)):
+    """Poll streaming scan — signals grow until status=done."""
+    return JSONResponse(content=live_scan_progress(uid))
+
+
+@app.get("/api/forex/scanner")
+async def api_forex_scanner(request: Request):
+    """Sync fast scan (legacy/mobile). Prefer POST start + progress for streaming."""
+    uid = request.query_params.get("uid", "")
+    if not uid:
+        raise HTTPException(status_code=400, detail="uid required")
+    _auth_scanner_uid(uid)
+    mode = (request.query_params.get("mode") or "fast").lower()
+    if mode not in ("fast", "full"):
+        mode = "fast"
     try:
-        signals, partial = await _run_forex_scanner(timeout_secs=115.0)
+        signals, partial = await _run_forex_scanner(mode=mode)
     except Exception as e:
         logger.warning(f"forex scanner error: {e}")
-        signals = []
-    import datetime
-    now_utc = datetime.utcnow()
-    index_syms = {p for p, ac in _SCANNER_INSTRUMENTS if ac == "index"}
-    return JSONResponse({
-        "signals": signals,
-        "count": len(signals),
-        "pairs_scanned": len(_SCANNER_PAIRS),
-        "instruments_index": len(index_syms),
-        "instruments_forex": len(_SCANNER_PAIRS) - len(index_syms),
-        "timeframes_index": _SCANNER_TIMEFRAMES_INDEX,
-        "timeframes_forex": _SCANNER_TIMEFRAMES_FOREX,
-        "scanned_at": now_utc.isoformat() + "Z",
-        "cache_ttl": _FOREX_SCANNER_TTL,
-        "partial": partial,
-        "session": _scanner_session_label(),
-        "active_sessions": _scanner_active_sessions_utc(),
-        "market_open": {
-            "forex": is_market_open("forex", now_utc),
-            "index": is_market_open("index", now_utc),
-        },
-        "confluence_hits": sum(1 for s in signals if s.get("confluence", 0) >= 2),
-    })
+        signals, partial = [], False
+    return JSONResponse(content=build_scan_response(signals, mode=mode, partial=partial))
 
 
 @app.get("/api/markets/catalog")

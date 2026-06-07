@@ -2509,9 +2509,18 @@ function dismissTgBanner(){
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
               <div>
                 <div style="font-size:14px;font-weight:800;letter-spacing:-.2px">📡 Live Structure Scanner</div>
-                <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">1m/5m/15m · BOS · CHoCH · MSS · FVG · IFVG · OB · LQS · BRK · DISP — <b>NAS100</b> first, then majors &amp; metals. Confluence = multiple signals aligned.</div>
+                <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">Quick scan: <b>NAS100</b>, SPX, EUR/GBP, Gold on 5m/15m — signals stream in live. Full scan covers all instruments on 1m/5m/15m.</div>
               </div>
-              <button class="btn primary" style="font-size:12px;padding:8px 14px" onclick="loadForexScanner(true)">↻ Scan now</button>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <button class="btn primary" id="fx-scan-quick-btn" style="font-size:12px;padding:8px 14px" onclick="loadForexScanner(true,'fast')">↻ Quick scan</button>
+                <button class="btn" id="fx-scan-full-btn" style="font-size:12px;padding:8px 14px" onclick="loadForexScanner(true,'full')">Scan all</button>
+              </div>
+            </div>
+            <div id="forex-scanner-progress" style="display:none;margin-top:10px">
+              <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+                <div id="forex-scanner-bar" style="width:0%;height:100%;background:linear-gradient(90deg,#3b82f6,#a855f7);transition:width .35s ease"></div>
+              </div>
+              <div id="forex-scanner-status" style="font-size:11px;color:var(--muted);margin-top:5px">Starting scan…</div>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px" id="fx-scan-class-chips">
               <button class="opt-chip active" data-cls="all" onclick="setFxScanClass('all',this)">All</button>
@@ -9075,6 +9084,8 @@ async function indexBuildAll(){
 let _fxScanAt = 0;
 let _fxScanData = null;
 let _fxScanClass = 'all';
+let _fxScanMode = 'fast';
+let _fxScanRunId = 0;
 let _fxScanTf = 'all';
 function setFxScanClass(cls, el){
   _fxScanClass = cls;
@@ -9162,24 +9173,113 @@ function _renderFxScanList(d){
   h+='</table>';
   list.innerHTML=h;
 }
-async function loadForexScanner(force){
+function _fxScanShowProgress(show){
+  const prog=document.getElementById('forex-scanner-progress');
+  if(prog) prog.style.display=show?'':'none';
+}
+function _fxScanUpdateProgress(pd){
+  const bar=document.getElementById('forex-scanner-bar');
+  const status=document.getElementById('forex-scanner-status');
+  const total=pd.total||1;
+  const done=Math.min(pd.done||0,total);
+  const pct=pd.status==='done'?100:Math.max(8,Math.round((done/total)*92));
+  if(bar) bar.style.width=pct+'%';
+  if(status){
+    const msg=pd.message||(pd.current?('Scanning '+pd.current+'…'):'Scanning…');
+    status.textContent=msg+(pd.status==='running'?' ('+done+'/'+total+')':'');
+  }
+}
+function _fxScanShowScanning(pd){
   const list=document.getElementById('forex-scanner-list');
   if(!list) return;
+  const n=(pd&&pd.count)||0;
+  if(n>0) return;
+  const cur=pd&&pd.current?pd.current:'instruments';
+  list.innerHTML='<div style="padding:14px;text-align:center;color:var(--muted)">'
+    +'<div style="font-size:13px;margin-bottom:4px">Scanning <b>'+_gEsc(cur)+'</b>…</div>'
+    +'<div style="font-size:11px">Signals appear here as they are found</div></div>';
+}
+async function _pollForexScanner(runId, mode){
+  const maxMs=mode==='fast'?90000:150000;
+  const start=Date.now();
+  while(Date.now()-start<maxMs){
+    if(runId!==_fxScanRunId) return null;
+    await new Promise(r=>setTimeout(r,900));
+    try{
+      const pr=await _apiFetch('/api/forex/scanner/progress?uid='+encodeURIComponent(UID),{timeoutMs:20000});
+      if(runId!==_fxScanRunId) return null;
+      if(pr.status===401) throw new Error('Session expired — refresh and log in again.');
+      const pd=await pr.json();
+      _fxScanUpdateProgress(pd);
+      if(pd.signals&&pd.signals.length){
+        _fxScanData=pd;
+        _renderFxScanList(pd);
+      }else{
+        _fxScanShowScanning(pd);
+      }
+      if(pd.status==='done') return pd;
+      if(pd.status==='error') throw new Error(pd.error||pd.message||'Scan failed');
+    }catch(e){
+      if(runId!==_fxScanRunId) return null;
+      if(e&&e.message&&e.message.includes('Session expired')) throw e;
+    }
+  }
+  throw new Error('Scan timed out — tap Quick scan to try again.');
+}
+async function loadForexScanner(force, mode){
+  const list=document.getElementById('forex-scanner-list');
+  if(!list) return;
+  mode=(mode||_fxScanMode||'fast').toLowerCase()==='full'?'full':'fast';
+  _fxScanMode=mode;
   if(!force && _fxScanAt && Date.now()-_fxScanAt<55000 && _fxScanData){
     _renderFxScanList(_fxScanData);
     return;
   }
-  list.innerHTML='<div style="padding:14px;text-align:center;color:var(--muted)">Scanning instruments…</div>';
+  const runId=++_fxScanRunId;
+  const quickBtn=document.getElementById('fx-scan-quick-btn');
+  const fullBtn=document.getElementById('fx-scan-full-btn');
+  let scanFinished=false;
+  if(quickBtn){ quickBtn.disabled=true; }
+  if(fullBtn){ fullBtn.disabled=true; }
+  _fxScanShowProgress(true);
+  _fxScanUpdateProgress({status:'running',done:0,total:mode==='fast'?10:48,message:'Starting '+mode+' scan…',current:''});
+  _fxScanShowScanning({current:mode==='fast'?'NAS100 5m':'instruments'});
   try{
-    const r=await fetch('/api/forex/scanner?uid='+encodeURIComponent(UID));
-    const d=await r.json();
-    if(!r.ok){ list.innerHTML='<div style="padding:12px;color:#e05858">'+_gEsc(d.detail||'Scan failed')+'</div>'; return; }
+    const res=await _apiFetch('/api/forex/scanner/start',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body:JSON.stringify({uid:UID,mode}),
+      timeoutMs:30000,
+    });
+    if(runId!==_fxScanRunId) return;
+    const startData=await res.json();
+    if(!res.ok) throw new Error(startData.detail||startData.error||'Could not start scan');
+    if(startData.total) _fxScanUpdateProgress({status:'running',done:0,total:startData.total,message:'Scanning…',current:''});
+    const pd=await _pollForexScanner(runId, mode);
+    if(runId!==_fxScanRunId||!pd) return;
     _fxScanAt=Date.now();
-    _fxScanData = d;
-    if(!d.count){ list.innerHTML='<div style="padding:12px;color:var(--muted)">No structure signals right now — market may be quiet or closed.</div>'; return; }
-    _renderFxScanList(d);
+    _fxScanData=pd;
+    _fxScanUpdateProgress(pd);
+    if(!pd.count){
+      list.innerHTML='<div style="padding:12px;color:var(--muted)">No structure signals right now — market may be quiet or closed. Try Scan all or check back in a few minutes.</div>';
+      const meta=document.getElementById('forex-scanner-meta');
+      if(meta) meta.textContent=(pd.session||'')+(pd.market_open&&pd.market_open.index===false?' · indices closed':'');
+      return;
+    }
+    _renderFxScanList(pd);
+    scanFinished=true;
   }catch(e){
-    list.innerHTML='<div style="padding:12px;color:#e05858">Network error</div>';
+    if(runId!==_fxScanRunId) return;
+    list.innerHTML='<div style="padding:12px;color:#e05858">'+_gEsc(_discNetworkMsg(e,'Network error — tap Quick scan to try again.'))+'</div>';
+    const status=document.getElementById('forex-scanner-status');
+    if(status) status.textContent='Scan failed';
+  }finally{
+    if(runId===_fxScanRunId){
+      if(quickBtn){ quickBtn.disabled=false; }
+      if(fullBtn){ fullBtn.disabled=false; }
+      setTimeout(()=>_fxScanShowProgress(false), scanFinished?1200:0);
+    }
   }
 }
 
