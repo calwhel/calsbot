@@ -30,9 +30,10 @@ else
   ( sleep "${_tg_delay}"; exec python3 -m uvicorn main:app --host 127.0.0.1 --port 8080 2>&1 | sed 's/^/[tg-bot] /' ) &
 fi
 
-# One worker on Railway: executor/FMP/cTrader already single-lock; 2 workers doubled
-# startup DB blocking and left the site timing out during deploys / Neon cold wake.
-_GUNICORN_WORKERS="${GUNICORN_WORKERS:-1}"
+# Two workers: one can hold the executor advisory lock while the other serves HTTP.
+# Startup migrations are non-blocking now (PR #20), so an extra worker no longer
+# stalls deploy healthchecks. Set GUNICORN_WORKERS=1 only if memory is tight.
+_GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
 echo "[railway] Starting Strategy Portal on port ${PORT:-5000} (workers=${_GUNICORN_WORKERS})..."
 exec gunicorn -w "${_GUNICORN_WORKERS}" -k uvicorn.workers.UvicornWorker \
   --max-requests 300 --max-requests-jitter 30 \

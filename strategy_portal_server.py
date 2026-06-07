@@ -1612,9 +1612,9 @@ async def _start_executor_tasks():
         backfill_ghost_cancelled_executions,
         close_stale_open_executions,
     )
-    # Run stale-position cleanup BEFORE starting the scan loops so the
-    # max_open gate isn't blocked by ghost trades from previous sessions.
-    await close_stale_open_executions(stale_after_hours=48)
+    # Stale-position cleanup before scan loops — fire-and-forget so HTTP workers
+    # are not blocked if Neon is slow on the first connection after deploy.
+    asyncio.create_task(close_stale_open_executions(stale_after_hours=48))
     # Wrapped in _resilient_task so a transient crash (e.g. DB SSL drop)
     # auto-restarts instead of silently killing the executor permanently.
     asyncio.create_task(_resilient_task("run_strategy_executor", run_strategy_executor, restart_delay=20))
@@ -1868,8 +1868,9 @@ async def _startup_background():
         # Each worker enters the claim loop.  The first to win acquires the lock
         # and starts the executor; the rest keep retrying every 30 s so they
         # can take over automatically if the current holder's connection drops.
-        # first_attempt_delay=0 → try immediately on startup
-        asyncio.create_task(_executor_claim_loop(first_attempt_delay=0))
+        # Brief delay so at least one worker is serving HTTP before executor tasks spin up.
+        _exec_delay = int(os.getenv("EXECUTOR_START_DELAY", "8"))
+        asyncio.create_task(_executor_claim_loop(first_attempt_delay=_exec_delay))
     else:
         logger.info("Strategy executor DISABLED (dev environment — only production runs it)")
 

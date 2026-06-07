@@ -12,7 +12,7 @@
 <meta property="og:description" content="Build and automate crypto trading strategies. Zero code. Paper test free.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://tradehubmarkets.com/app">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" crossorigin="anonymous" onerror="window.__CHART_LOAD_FAILED=1"></script>
 <style>
 /* ═══════════════════════════════════════════════════════════════
    TRADEHUB  —  CLEAN LIGHT DESIGN SYSTEM
@@ -3741,9 +3741,14 @@ document.addEventListener('keydown',e=>{
 });
 
 // ─── Charts ────────────────────────────────────────────────
-Chart.defaults.color='#696985';Chart.defaults.borderColor='#252535';
+const _chartOk = typeof Chart !== 'undefined';
+if (_chartOk) {
+  Chart.defaults.color = '#696985';
+  Chart.defaults.borderColor = '#252535';
+}
 
 function makeLineChart(canvasId,labels,values,label='P&L %'){
+  if (!_chartOk) return null;
   const ctx=$(canvasId);if(!ctx)return null;
   const pos=values.length>0&&values[values.length-1]>=0;
   const color=pos?'#00d4aa':'#ff4d6d';
@@ -3755,6 +3760,7 @@ function makeLineChart(canvasId,labels,values,label='P&L %'){
 }
 
 function makeDrawdownChart(canvasId, labels, values) {
+  if (!_chartOk) return null;
   const ctx = $(canvasId);
   if (!ctx || !values || values.length < 2) return null;
   const existing = Chart.getChart(canvasId);
@@ -3810,23 +3816,41 @@ function _ddFromEquity(values) {
 }
 
 // ─── Page nav ──────────────────────────────────────────────
+const _PORTAL_PAGES = ['my-strats','trades','marketplace','leaderboard','build','feed','live-forex','purchases','settings'];
 function showPage(id,el,startPaper){
-  try{window.scrollTo(0,0);}catch(e){}
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
-  $(id).classList.add('active');
-  if(el)el.classList.add('active');
-  else{const pages=['my-strats','trades','marketplace','leaderboard','build','feed','purchases','settings'];pages.forEach((p,i)=>{if(p===id)document.querySelectorAll('.nav-tab')[i+1]?.classList.add('active');});}
-  if(id==='my-strats')loadMyStrategies();
-  if(id==='trades')loadTrades();
-  if(id==='marketplace')loadMarketplace();
-  if(id==='leaderboard')loadLeaderboard();
-  if(id==='feed')loadFeed();
-  if(id==='live-forex')loadLiveForex();
-  if(id==='purchases')loadPurchases();
-  if(id==='settings'){loadSettings();loadReferralInfo();loadOandaCard();}
-  if(id==='build'){renderCurrentStep();if(startPaper!==undefined){WZ.mode=startPaper?'paper':'live';}}
+  try{
+    try{window.scrollTo(0,0);}catch(e){}
+    const pageEl = $(id);
+    if(!pageEl){console.warn('[portal] unknown page', id);return;}
+    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+    document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
+    pageEl.classList.add('active');
+    if(el)el.classList.add('active');
+    else{
+      const navTabs = document.querySelectorAll('.nav-tab');
+      _PORTAL_PAGES.forEach((p,i)=>{
+        if(p===id) navTabs[i+1]?.classList.add('active');
+      });
+    }
+    try{history.replaceState(null,'','#'+id);}catch(e){}
+    if(id==='my-strats')loadMyStrategies();
+    else if(id==='trades')loadTrades();
+    else if(id==='marketplace')loadMarketplace();
+    else if(id==='leaderboard')loadLeaderboard();
+    else if(id==='feed')loadFeed();
+    else if(id==='live-forex')loadLiveForex();
+    else if(id==='purchases')loadPurchases();
+    else if(id==='settings'){loadSettings();loadReferralInfo();loadOandaCard();}
+    else if(id==='build'){
+      if(typeof renderCurrentStep==='function')renderCurrentStep();
+      if(startPaper!==undefined && typeof WZ!=='undefined'){WZ.mode=startPaper?'paper':'live';}
+    }
+  }catch(err){
+    console.error('[portal] showPage failed', id, err);
+    toast('Could not switch tab — please refresh','error');
+  }
 }
+window.showPage = showPage;
 
 // ─── TRADES (global feed) ──────────────────────────────────
 let TRADE_FILTER='all';
@@ -3987,7 +4011,7 @@ async function loadMyStrategies(){
     strats=[]; port={total_strategies:0,active_count:0,open_trades:0,total_trades:0,win_rate:0,pnl_7d:0,pnl_30d:0,pnl_all:0,equity_30d:{labels:[],values:[]}};
     try{
       const ctrl=new AbortController();
-      const t=setTimeout(()=>ctrl.abort(),8000);
+      const t=setTimeout(()=>ctrl.abort(),15000);
       const [stratsRes,portRes]=await Promise.all([
         fetch(_sUrl,{signal:ctrl.signal}),
         fetch(_pUrl,{signal:ctrl.signal})
@@ -4015,8 +4039,10 @@ async function loadMyStrategies(){
     $('port-pnl-label').textContent=pS(port.pnl_30d);
     $('port-pnl-label').className=(port.pnl_30d>=0?'pnl-pos':'pnl-neg');
     requestAnimationFrame(()=>{
-      makeLineChart('portChart',eq.labels,eq.values,'Portfolio P&L');
-      makeDrawdownChart('portDdChart',eq.labels,_ddFromEquity(eq.values));
+      try{
+        makeLineChart('portChart',eq.labels,eq.values,'Portfolio P&L');
+        makeDrawdownChart('portDdChart',eq.labels,_ddFromEquity(eq.values));
+      }catch(e){console.warn('[portal] portfolio chart render failed', e);}
     });
   }
   if ((port.live_closed_30d || port.paper_closed_30d)) {
@@ -8045,7 +8071,7 @@ async function submitRating(){
   // Allow direct deep-links like /app?p=trades or /app?p=marketplace to open
   // a specific page on first load. Falls back to "my-strats" (the default).
   try {
-    const valid = new Set(['my-strats','trades','marketplace','leaderboard','build','feed','purchases','settings']);
+    const valid = new Set(_PORTAL_PAGES);
     const p = new URLSearchParams(window.location.search).get('p');
     if (p && valid.has(p) && p !== 'my-strats') {
       showPage(p);
@@ -8184,7 +8210,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // without this the first paint shows the empty SSR shell and never populates.
   // Honour a deep-link hash (e.g. /app#marketplace) if present.
   const _hash = (location.hash || '').replace('#', '');
-  const _valid = ['my-strats','trades','marketplace','leaderboard','build','feed','live-forex','purchases','settings'];
+  const _valid = _PORTAL_PAGES;
   if (_hash && _valid.includes(_hash) && _hash !== 'my-strats') {
     try { showPage(_hash, null); } catch (e) { loadMyStrategies(); }
   } else {
@@ -10255,6 +10281,7 @@ function _drPlCompare(analytics) {
 }
 
 function _drChart(analytics) {
+  if (!_chartOk) return;
   const eq = analytics.equity_curve;
   if (!eq || !eq.values || eq.values.length < 2) return;
   $('dr-chart-section').style.display = 'block';
