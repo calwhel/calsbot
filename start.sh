@@ -30,8 +30,11 @@ else
   ( sleep "${_tg_delay}"; exec python3 -m uvicorn main:app --host 127.0.0.1 --port 8080 2>&1 | sed 's/^/[tg-bot] /' ) &
 fi
 
-echo "[railway] Starting Strategy Portal on port ${PORT:-5000}..."
-exec gunicorn -w 2 -k uvicorn.workers.UvicornWorker --reuse-port \
+# One worker on Railway: executor/FMP/cTrader already single-lock; 2 workers doubled
+# startup DB blocking and left the site timing out during deploys / Neon cold wake.
+_GUNICORN_WORKERS="${GUNICORN_WORKERS:-1}"
+echo "[railway] Starting Strategy Portal on port ${PORT:-5000} (workers=${_GUNICORN_WORKERS})..."
+exec gunicorn -w "${_GUNICORN_WORKERS}" -k uvicorn.workers.UvicornWorker \
   --max-requests 300 --max-requests-jitter 30 \
   --bind "0.0.0.0:${PORT:-5000}" --timeout 120 --graceful-timeout 30 \
   --log-level info strategy_portal_server:app
