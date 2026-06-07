@@ -1344,6 +1344,8 @@ async def startup():
     asyncio.create_task(_critical_migrations_background())
     asyncio.create_task(_startup_background())
     asyncio.create_task(_refresh_heavy_caches())
+    if is_replit() or is_railway():
+        asyncio.create_task(_keepalive_ping_loop())
     logger.info("Strategy portal ready — migrations running in background")
 
 
@@ -1558,26 +1560,33 @@ async def _maintain_advisory_lock(conn):
 
 async def _keepalive_ping_loop():
     """
-    Ping the app's own health endpoint every 4 minutes so Replit Autoscale
-    never scales to zero while strategies are active.
-    Replit only — Railway does not need this.
+    Ping the app every 4 minutes so idle hosts stay warm.
+
+    Replit Autoscale scales to zero without traffic; Railway free/low tiers
+    can sleep or take 20–40s to accept the first request after idle. A local
+    /ping every 4 min keeps gunicorn workers alive and Neon warm.
     """
-    if not is_replit():
+    if not (is_replit() or is_railway()):
         return
     import aiohttp as _aiohttp
     import os as _os
-    # Resolve the public domain — prefer the custom domain, fall back to replit.app
-    domain = _os.environ.get("PUBLIC_DOMAIN", "tradehubmarkets.com")
-    url = f"https://{domain}/health"
-    await asyncio.sleep(60)   # small initial delay to let the server fully start
+
+    if is_railway():
+        port = int(_os.environ.get("PORT", "5000"))
+        url = f"http://127.0.0.1:{port}/ping"
+    else:
+        domain = _os.environ.get("PUBLIC_DOMAIN", "tradehubmarkets.com")
+        url = f"https://{domain}/health"
+
+    await asyncio.sleep(45)   # let workers bind before first ping
     while True:
         try:
             async with _aiohttp.ClientSession() as _sess:
-                async with _sess.get(url, timeout=_aiohttp.ClientTimeout(total=12)) as r:
-                    logger.debug(f"[Keepalive] ✅ ping {url} → {r.status}")
+                async with _sess.get(url, timeout=_aiohttp.ClientTimeout(total=8)) as r:
+                    logger.debug(f"[Keepalive] ping {url} → {r.status}")
         except Exception as _e:
             logger.debug(f"[Keepalive] ping failed (non-critical): {_e}")
-        await asyncio.sleep(240)   # 4-minute interval
+        await asyncio.sleep(240)   # 4-minute interval — under Neon 5-min idle cutoff
 
 
 async def _resilient_task(name: str, coro_fn, restart_delay: int = 30):
@@ -1598,7 +1607,7 @@ async def _start_executor_tasks():
     """Import and launch the executor + monitor tasks in this worker."""
     await _cancel_ghost_executions()
     asyncio.create_task(_ghost_cleanup_loop())
-    asyncio.create_task(_keepalive_ping_loop())   # keep Autoscale awake
+    # Keepalive runs on every worker via startup(); executor worker no longer sole pinger.
 
     # ── FMP + cTrader price feeds ─────────────────────────────────────────────
     # Started HERE (not in _startup_background) so each runs in EXACTLY ONE worker —
@@ -7493,13 +7502,14 @@ class _JsonBodyRequest:
 
 
 # ─── Forex multi-pair market structure scanner ───────────────────────────────
-from app.services.live_structure_scanner import (
-    build_scan_response,
-    get_shared_scan,
-    live_scan_progress,
-    run_forex_scanner as _run_forex_scanner,
-    start_live_scan,
-)
+_scanner_mod = None
+
+
+def _scanner():
+    global _scanner_mod
+    if _scanner_mod is None:
+        from app.services import live_structure_scanner as _scanner_mod
+    return _scanner_mod
 
 
 def _auth_scanner_uid(uid: str):
@@ -7525,13 +7535,13 @@ async def api_forex_scanner_start(request: Request):
     mode = (body.get("mode") or "fast").lower()
     if mode not in ("fast", "full"):
         mode = "fast"
-    return JSONResponse(content=start_live_scan(uid, mode=mode))
+    return JSONResponse(content=_scanner().start_live_scan(uid, mode=mode))
 
 
 @app.get("/api/forex/scanner/progress")
 async def api_forex_scanner_progress(uid: str = Query(...)):
     """Poll streaming scan — signals grow until status=done."""
-    return JSONResponse(content=live_scan_progress(uid))
+    return JSONResponse(content=_scanner().live_scan_progress(uid))
 
 
 @app.get("/api/forex/scanner")
@@ -7544,12 +7554,13 @@ async def api_forex_scanner(request: Request):
     mode = (request.query_params.get("mode") or "fast").lower()
     if mode not in ("fast", "full"):
         mode = "fast"
+    sc = _scanner()
     try:
-        signals, partial = await _run_forex_scanner(mode=mode)
+        signals, partial = await sc.run_forex_scanner(mode=mode)
     except Exception as e:
         logger.warning(f"forex scanner error: {e}")
         signals, partial = [], False
-    return JSONResponse(content=build_scan_response(signals, mode=mode, partial=partial))
+    return JSONResponse(content=sc.build_scan_response(signals, mode=mode, partial=partial))
 
 
 @app.get("/api/forex/scanner/best")
@@ -7562,7 +7573,8 @@ async def api_forex_scanner_best(request: Request):
     if mode not in ("fast", "full"):
         mode = "fast"
     limit = min(20, max(1, int(request.query_params.get("limit") or 8)))
-    cached = get_shared_scan(mode)
+    sc = _scanner()
+    cached = sc.get_shared_scan(mode)
     if cached and cached.get("signals"):
         signals = cached["signals"][:limit]
         out = dict(cached)
@@ -7571,11 +7583,11 @@ async def api_forex_scanner_best(request: Request):
         out["source"] = "cache"
         return JSONResponse(out)
     try:
-        signals, partial = await _run_forex_scanner(mode=mode)
+        signals, partial = await sc.run_forex_scanner(mode=mode)
     except Exception as e:
         logger.warning(f"forex scanner best error: {e}")
         signals, partial = [], False
-    resp = build_scan_response(signals[:limit], mode=mode, partial=partial)
+    resp = sc.build_scan_response(signals[:limit], mode=mode, partial=partial)
     resp["source"] = "live"
     return JSONResponse(resp)
 

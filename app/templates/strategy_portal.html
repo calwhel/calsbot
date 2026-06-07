@@ -4050,7 +4050,6 @@ function tradeRowHTML(t){
   </div>`;
 }
 async function loadTrades(){
-  await _warmDb();
   const _tUrl=`/api/portfolio/trades?uid=${UID}&limit=200&filter=${TRADE_FILTER}`;
   const list=$('trades-list');
   const sumEl=$('trades-summary');
@@ -4059,7 +4058,10 @@ async function loadTrades(){
     list.innerHTML=skelCards(4);
     sumEl.innerHTML='';
     try{
-      const r=await _apiFetchRetry(_tUrl);
+      const r=await Promise.all([
+        _warmDb(true).catch(()=>false),
+        _apiFetchRetry(_tUrl),
+      ]).then(([,res])=>res);
       if(r.status===401){
         list.innerHTML=_apiErrorHtml('Your session expired — please log in again to load trades.');
         return;
@@ -4146,11 +4148,11 @@ async function loadMyStrategies(){
     $('my-list').innerHTML='<div class="empty"><div class="loader" style="margin:0 auto 12px"></div><p style="color:var(--muted);font-size:13px">Loading strategies…</p></div>';
     strats=[]; port={total_strategies:0,active_count:0,open_trades:0,total_trades:0,win_rate:0,pnl_7d:0,pnl_30d:0,pnl_all:0,equity_30d:{labels:[],values:[]}};
     try{
-      await _warmDb();
       const [stratsRes,portRes]=await Promise.all([
+        _warmDb(true).catch(()=>false),
         _apiFetchRetry(_sUrl),
         _apiFetchRetry(_pUrl)
-      ]);
+      ]).then(([,sr,pr])=>[sr,pr]);
       if(stratsRes.status===401||portRes.status===401){
         $('my-list').innerHTML=_apiErrorHtml('Your session expired — please log in again to load strategies.');
         return;
@@ -8472,10 +8474,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if (_handleCtraderReturnQuery()) return;
 
   // Wake Neon DB before the first heavy API burst (mobile/Railway cold start).
-  const _boot = async () => {
+  const _boot = () => {
     const _hash = (location.hash || '').replace('#', '');
     const _valid = _PORTAL_PAGES;
-    try { await _warmDb(true); } catch (e) {}
+    _warmDb(true).catch(()=>{});
     if (_hash && _valid.includes(_hash) && _hash !== 'my-strats') {
       try { showPage(_hash, null); } catch (e) { loadMyStrategies(); }
     } else {
