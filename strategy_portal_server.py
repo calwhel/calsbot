@@ -14590,21 +14590,8 @@ async def backtest_scan(request: Request):
     }
 
 
-def _discovery_user_id(uid: str) -> Optional[int]:
-    from app.database import SessionLocal
-    try:
-        db = SessionLocal()
-        try:
-            u = _get_user_by_uid_safe(uid, db)
-            return int(u.id) if u else None
-        finally:
-            db.close()
-    except Exception:
-        return None
-
-
-async def _discovery_pro_auth(uid: str) -> str:
-    """Return ok | not_pro | bad_uid."""
+async def _discovery_auth(uid: str) -> tuple:
+    """Single DB round-trip: (status, user_id) where status is ok|not_pro|bad_uid."""
     from app.database import SessionLocal
     import asyncio as _asyncio
     for _attempt in range(3):
@@ -14613,17 +14600,17 @@ async def _discovery_pro_auth(uid: str) -> str:
             try:
                 user = _get_user_by_uid_safe(uid, db)
                 if not user:
-                    return "bad_uid"
+                    return "bad_uid", None
                 sub = _get_portal_sub(user.id, db)
                 is_pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
-                return "ok" if is_pro else "not_pro"
+                return ("ok" if is_pro else "not_pro"), int(user.id)
             finally:
                 db.close()
         except HTTPException:
-            await _asyncio.sleep(0.3)
+            await _asyncio.sleep(0.25)
         except Exception:
-            await _asyncio.sleep(0.3)
-    return "bad_uid"
+            await _asyncio.sleep(0.25)
+    return "bad_uid", None
 
 
 def _discovery_progress_response(scan_type: str, uid: str) -> dict:
@@ -14653,7 +14640,7 @@ async def backtest_gold_discovery(request: Request):
     days = int(body.get("days", 90))
     direction_mode = (body.get("direction") or "BOTH").upper()
 
-    auth = await _discovery_pro_auth(uid)
+    auth, user_id = await _discovery_auth(uid)
     if auth == "bad_uid":
         raise HTTPException(status_code=403, detail="Invalid UID")
     if auth == "not_pro":
@@ -14661,11 +14648,10 @@ async def backtest_gold_discovery(request: Request):
             "ok": False,
             "message": "A Pro subscription is required to use the Gold Strategy Finder."})
 
-    user_id = _discovery_user_id(uid)
     from app.services.discovery_jobs import start_discovery_job
-    from app.services.gold_strategy_scanner import run_gold_discovery
 
     async def _runner(progress_cb):
+        from app.services.gold_strategy_scanner import run_gold_discovery
         return await run_gold_discovery(
             days=days, direction_mode=direction_mode,
             user_id=user_id, progress_cb=progress_cb,
@@ -14692,7 +14678,7 @@ async def backtest_index_discovery(request: Request):
     direction_mode = (body.get("direction") or "BOTH").upper()
     symbol = (body.get("symbol") or "NAS100").strip()
 
-    auth = await _discovery_pro_auth(uid)
+    auth, user_id = await _discovery_auth(uid)
     if auth == "bad_uid":
         raise HTTPException(status_code=403, detail="Invalid UID")
     if auth == "not_pro":
@@ -14700,11 +14686,10 @@ async def backtest_index_discovery(request: Request):
             "ok": False,
             "message": "A Pro subscription is required to use the Index Strategy Finder."})
 
-    user_id = _discovery_user_id(uid)
     from app.services.discovery_jobs import start_discovery_job
-    from app.services.index_strategy_scanner import run_index_discovery
 
     async def _runner(progress_cb):
+        from app.services.index_strategy_scanner import run_index_discovery
         return await run_index_discovery(
             symbol=symbol, days=days, direction_mode=direction_mode,
             user_id=user_id, progress_cb=progress_cb,
@@ -14731,7 +14716,7 @@ async def backtest_forex_discovery(request: Request):
     direction_mode = (body.get("direction") or "BOTH").upper()
     symbol = (body.get("symbol") or "EURUSD").strip()
 
-    auth = await _discovery_pro_auth(uid)
+    auth, user_id = await _discovery_auth(uid)
     if auth == "bad_uid":
         raise HTTPException(status_code=403, detail="Invalid UID")
     if auth == "not_pro":
@@ -14739,11 +14724,10 @@ async def backtest_forex_discovery(request: Request):
             "ok": False,
             "message": "A Pro subscription is required to use the Forex Strategy Finder."})
 
-    user_id = _discovery_user_id(uid)
     from app.services.discovery_jobs import start_discovery_job
-    from app.services.forex_pair_strategy_scanner import run_forex_discovery
 
     async def _runner(progress_cb):
+        from app.services.forex_pair_strategy_scanner import run_forex_discovery
         return await run_forex_discovery(
             symbol=symbol, days=days, direction_mode=direction_mode,
             user_id=user_id, progress_cb=progress_cb,

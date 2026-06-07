@@ -180,6 +180,23 @@ class PortalSubscription(Base):
     updated_at          = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class DiscoveryScanJob(Base):
+    """Background gold/index/forex discovery scans — shared across gunicorn workers."""
+    __tablename__ = "discovery_scan_jobs"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    job_key     = Column(String(96), unique=True, nullable=False, index=True)  # e.g. gold:TH-ABC
+    scan_type   = Column(String(20), nullable=False, index=True)
+    uid         = Column(String(40), nullable=False, index=True)
+    status      = Column(String(20), default="queued")   # queued | running | done | error
+    message     = Column(Text, default="")
+    result_json = Column(JSON, nullable=True)
+    error       = Column(Text, nullable=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+
 class PortalPayment(Base):
     """Tracks OxaPay invoices so the webhook can match payment → user."""
     __tablename__ = "portal_payments"
@@ -209,6 +226,7 @@ def init_strategy_tables(engine):
         PortalSubscription.__table__,
         PortalPayment.__table__,
         StrategyOffer.__table__,
+        DiscoveryScanJob.__table__,
     ])
     # Add new columns only if genuinely missing — avoids table locks when multiple
     # portal instances (dev + production) share the same Neon database.
