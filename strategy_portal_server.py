@@ -39,6 +39,7 @@ from app.social_models import init_social_tables
 from app.deployment import (
     is_production_deploy,
     is_replit,
+    is_railway,
     portal_features_free,
     payments_enabled,
     request_is_https,
@@ -10190,25 +10191,111 @@ async def api_get_settings(uid: str = Query(...)):
 
 # ── cTrader / FP Markets forex broker OAuth ───────────────────────────────────
 
+_CTRADER_STATE_SEP = "|"
+
+
+def _ctrader_host_from_urlish(raw: str) -> str:
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    if "://" in raw:
+        return (urllib.parse.urlparse(raw).netloc or "").split(":")[0].strip().lower()
+    return raw.split(",")[0].strip().split(":")[0].strip().lower()
+
+
+def _ctrader_return_hosts_allowed() -> set:
+    """Hosts we may send the user back to after OAuth (session cookie domain)."""
+    hosts: set = set()
+    for key in (
+        "RAILWAY_PUBLIC_DOMAIN",
+        "PUBLIC_DOMAIN",
+        "CANONICAL_HOST",
+        "CTRADER_REDIRECT_URI",
+    ):
+        h = _ctrader_host_from_urlish(os.getenv(key) or "")
+        if h:
+            hosts.add(h)
+    rail = _ctrader_host_from_urlish(public_base_url())
+    if rail:
+        hosts.add(rail)
+    return hosts
+
+
+def _ctrader_oauth_state(uid: str, request: Optional[Request]) -> str:
+    """Encode portal return host so callback can land on the same origin as Connect."""
+    uid = (uid or "").strip().upper()
+    if request is None:
+        return uid
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    if host and host not in ("localhost", "127.0.0.1"):
+        return f"{uid}{_CTRADER_STATE_SEP}{host}"
+    return uid
+
+
+def _parse_ctrader_oauth_state(state: str) -> Tuple[str, Optional[str]]:
+    raw = (state or "").strip()
+    if _CTRADER_STATE_SEP in raw:
+        uid_part, host_part = raw.split(_CTRADER_STATE_SEP, 1)
+        uid = (uid_part or "").strip().upper()
+        host = (host_part or "").strip().lower().split(":")[0]
+        return uid, host or None
+    return (raw or "").upper(), None
+
+
+def _ctrader_app_redirect_url(
+    request: Optional[Request],
+    state: str,
+    query: str,
+) -> str:
+    """Absolute /app redirect on the host where the user clicked Connect."""
+    _, return_host = _parse_ctrader_oauth_state(state)
+    req_host = ""
+    scheme = "https"
+    if request is not None:
+        req_host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+        scheme = "https" if request_is_https(request) else "http"
+    allowed = _ctrader_return_hosts_allowed()
+    target = return_host if return_host and return_host in allowed else req_host
+    if target and (target in allowed or target == req_host):
+        return f"{scheme}://{target}/app?{query}#live-forex"
+    return f"/app?{query}#live-forex"
+
+
 def _ctrader_redirect_uri(request: Optional[Request] = None) -> str:
     """Canonical OAuth callback URL — must match Spotware app settings exactly."""
+    explicit = (os.environ.get("CTRADER_REDIRECT_URI") or "").strip().rstrip("/")
+    if explicit and not explicit.endswith("/api/ctrader/callback"):
+        explicit = f"{explicit}/api/ctrader/callback"
+
+    # Railway: pin OAuth to the deployed host (registered in Spotware), not the
+    # browser Host header — custom domains may differ from the callback URI.
+    if is_railway():
+        railway_base = public_base_url(request).rstrip("/")
+        rail_host = _ctrader_host_from_urlish(railway_base)
+        if explicit:
+            exp_host = _ctrader_host_from_urlish(explicit)
+            if exp_host == rail_host:
+                return explicit
+            logger.warning(
+                "[ctrader] CTRADER_REDIRECT_URI host %s != Railway host %s — pinning OAuth to %s",
+                exp_host, rail_host, railway_base,
+            )
+        return f"{railway_base}/api/ctrader/callback"
+
     if request is not None:
         host = (request.headers.get("host") or "").split(":")[0].strip().lower()
         if host and host not in ("localhost", "127.0.0.1"):
             scheme = "https" if request_is_https(request) else "http"
             derived = f"{scheme}://{host}/api/ctrader/callback"
-            explicit = (os.environ.get("CTRADER_REDIRECT_URI") or "").strip().rstrip("/")
             if explicit:
-                exp_host = (urllib.parse.urlparse(explicit).netloc or "").split(":")[0].strip().lower()
+                exp_host = _ctrader_host_from_urlish(explicit)
                 if exp_host == host:
                     return explicit
-                # Stale env (e.g. dead tradehubmarkets.com) while user hits Railway.
                 logger.warning(
                     "[ctrader] CTRADER_REDIRECT_URI host %s != request host %s — using %s",
                     exp_host, host, derived,
                 )
             return derived
-    explicit = (os.environ.get("CTRADER_REDIRECT_URI") or "").strip().rstrip("/")
     if explicit:
         return explicit
     if os.environ.get("REPLIT_DEV_DOMAIN"):
@@ -10225,6 +10312,9 @@ async def api_public_ctrader_setup(request: Request):
     host = (request.headers.get("host") or "").split(":")[0]
     env_redirect = (os.environ.get("CTRADER_REDIRECT_URI") or "").strip() or None
     redirect_uri = _ctrader_redirect_uri(request)
+    env_host = _ctrader_host_from_urlish(env_redirect or "")
+    req_host = _ctrader_host_from_urlish(host)
+    redir_host = _ctrader_host_from_urlish(redirect_uri)
     return JSONResponse({
         "configured":       bool(cid and secret),
         "client_id_set":    bool(cid),
@@ -10232,7 +10322,10 @@ async def api_public_ctrader_setup(request: Request):
         "redirect_uri":     redirect_uri,
         "env_redirect_uri": env_redirect,
         "request_host":     host,
-        "redirect_match":   (not env_redirect) or (urllib.parse.urlparse(env_redirect).netloc.split(":")[0].lower() == host.lower()),
+        "oauth_pinned_railway": is_railway(),
+        "redirect_match":   (not env_redirect) or (env_host == redir_host),
+        "request_matches_oauth_callback": req_host == redir_host,
+        "allowed_return_hosts": sorted(_ctrader_return_hosts_allowed()),
         "hint": (
             None if (cid and secret) else
             "Set CTRADER_CLIENT_ID and CTRADER_CLIENT_SECRET on Railway."
@@ -10268,8 +10361,12 @@ async def api_ctrader_auth_url(uid: str = Query(...), request: Request = None):
         if getattr(user, "banned", False):
             raise HTTPException(status_code=403, detail="Account suspended.")
         redirect_uri = _ctrader_redirect_uri(request)
-        logger.info(f"[ctrader] auth-url uid={uid} redirect_uri={redirect_uri}")
-        url = get_oauth_url(redirect_uri=redirect_uri, state=uid.upper())
+        oauth_state = _ctrader_oauth_state(uid, request)
+        logger.info(
+            "[ctrader] auth-url uid=%s redirect_uri=%s return_host=%s",
+            uid, redirect_uri, _parse_ctrader_oauth_state(oauth_state)[1],
+        )
+        url = get_oauth_url(redirect_uri=redirect_uri, state=oauth_state)
         if not url or "client_id=" not in url:
             raise HTTPException(status_code=503, detail="Could not build cTrader OAuth URL.")
         return JSONResponse({"url": url, "redirect_uri": redirect_uri})
@@ -10347,7 +10444,8 @@ async def api_ctrader_callback(
     session AFTER the HTTP call guarantees a live connection.
     """
     if error:
-        return RedirectResponse(url=f"/app?ctrader_error={urllib.parse.quote(str(error))}#live-forex")
+        q = f"ctrader_error={urllib.parse.quote(str(error))}"
+        return RedirectResponse(url=_ctrader_app_redirect_url(request, state or "", q))
 
     from app.database import SessionLocal
     from app.models import UserPreference
@@ -10363,7 +10461,7 @@ async def api_ctrader_callback(
 
     db1 = SessionLocal()
     try:
-        uid  = (state or "").strip().upper()
+        uid, _return_host = _parse_ctrader_oauth_state(state or "")
         user = _get_user_by_uid(uid, db1) if uid else None
         if not user and request:
             session_uid = _get_session_uid(request)
@@ -10403,13 +10501,14 @@ async def api_ctrader_callback(
                 f"[cTrader callback] exchange_code failed: "
                 f"{type(e).__name__} status={status}"
             )
-        return RedirectResponse(url=f"/app?ctrader_error={urllib.parse.quote(err_code)}#live-forex")
+        q = f"ctrader_error={urllib.parse.quote(err_code)}"
+        return RedirectResponse(url=_ctrader_app_redirect_url(request, state or "", q))
 
     access_token  = token_data.get("accessToken")  or token_data.get("access_token",  "")
     refresh_token = token_data.get("refreshToken") or token_data.get("refresh_token", "")
     if not access_token:
         logger.error("[cTrader callback] no access_token in response")
-        return RedirectResponse(url="/app?ctrader_error=no_token#live-forex")
+        return RedirectResponse(url=_ctrader_app_redirect_url(request, state or "", "ctrader_error=no_token"))
 
     # ── Step 3: save token via raw SQL UPSERT (atomic, bypasses ORM state) ───────
     import traceback as _traceback
@@ -10449,7 +10548,7 @@ async def api_ctrader_callback(
             db2.rollback()
         except Exception:
             pass
-        return RedirectResponse(url="/app?ctrader_error=db_error#live-forex")
+        return RedirectResponse(url=_ctrader_app_redirect_url(request, state or "", "ctrader_error=db_error"))
     finally:
         db2.close()
 
@@ -10462,7 +10561,7 @@ async def api_ctrader_callback(
             name_str, uname_str, tg_id_str,
         )
 
-    return RedirectResponse(url="/app?ctrader=linked#live-forex")
+    return RedirectResponse(url=_ctrader_app_redirect_url(request, state or "", "ctrader=linked"))
 
 
 
