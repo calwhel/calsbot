@@ -123,15 +123,22 @@ def _fmp_note_success() -> None:
 
 
 def get_price(symbol: str) -> Optional[float]:
-    """Mid price from live cache; returns stale up to _PRICE_STALE_TTL when cold."""
-    entry = _PRICE_CACHE.get(symbol.upper())
-    if not entry:
-        return None
-    age = datetime.utcnow() - entry[1]
-    if age < _PRICE_TTL:
-        return entry[0]
-    if age < _PRICE_STALE_TTL:
-        return entry[0]
+    """Mid price from live cache; shared DB store; stale up to _PRICE_STALE_TTL."""
+    sym = symbol.upper()
+    entry = _PRICE_CACHE.get(sym)
+    if entry:
+        age = datetime.utcnow() - entry[1]
+        if age < _PRICE_TTL:
+            return entry[0]
+        if age < _PRICE_STALE_TTL:
+            return entry[0]
+    try:
+        from app.services.spot_price_store import get_mid
+        px = get_mid(sym, max_age_s=_PRICE_TTL.total_seconds())
+        if px is not None:
+            return px
+    except Exception:
+        pass
     return None
 
 
@@ -390,7 +397,13 @@ def _mid_from_quote_item(item: dict) -> Optional[float]:
 
 def _store_fmp_price(display_sym: str, mid: float, now: datetime) -> None:
     if mid > 0:
-        _PRICE_CACHE[display_sym.upper()] = (mid, now)
+        sym = display_sym.upper()
+        _PRICE_CACHE[sym] = (mid, now)
+        try:
+            from app.services.spot_price_store import upsert_tick
+            upsert_tick(sym, mid=mid, source="fmp")
+        except Exception:
+            pass
 
 
 async def _poll_forex():
@@ -434,6 +447,26 @@ async def _poll_forex():
             continue
     if got:
         _fmp_note_success()
+        return
+
+    # Fallback: stable per-pair quotes when batch endpoint is empty/unavailable.
+    for sym in ("EURUSD", "GBPUSD", "USDJPY", "XAUUSD"):
+        status, data = await _fmp_http_get(
+            f"{_FMP_STABLE_BASE}/quote",
+            {"symbol": sym, "apikey": api_key},
+        )
+        if status != 200 or not isinstance(data, list) or not data:
+            continue
+        item = data[0] if isinstance(data[0], dict) else None
+        if not item:
+            continue
+        mid = _mid_from_quote_item(item)
+        if mid is not None:
+            _store_fmp_price(sym, mid, now)
+            got += 1
+    if got:
+        _fmp_note_success()
+        logger.info(f"[FMPFeed] forex fallback quotes stored: {got} pairs")
 
 
 async def _poll_indices():
@@ -475,15 +508,12 @@ async def _poll_indices():
 
 
 def _ctrader_feed_active() -> bool:
-    """True when cTrader is streaming fresh ticks — FMP can stay dormant."""
+    """True only when cTrader has fresh ticks — not merely 'subscribed'."""
     try:
         from app.services import ctrader_price_feed as _ctf
-        if not _ctf.is_live():
-            return False
         syms = set(_ctf.cached_symbols())
         if len(syms) >= 8:
             return True
-        # A few key symbols is enough to prove the broker feed is healthy.
         return len(syms & {"EURUSD", "NAS100", "XAUUSD", "GBPUSD", "US30"}) >= 2
     except Exception:
         return False
