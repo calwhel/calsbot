@@ -476,7 +476,12 @@ async def exchange_code(code: str, redirect_uri: str) -> dict:
         logger.info(f"[ctrader] exchange_code HTTP {resp.status_code} → keys={list(data.keys())}")
         err = data.get("errorCode")
         if err:
-            raise CTraderTokenError(str(err), str(data.get("description") or "")[:200])
+            desc = str(data.get("description") or data.get("error_description") or "")[:200]
+            logger.error(
+                "[ctrader] exchange_code errorCode=%s description=%s redirect_uri=%s",
+                err, desc, redirect_uri,
+            )
+            raise CTraderTokenError(str(err), desc)
         if not (data.get("accessToken") or data.get("access_token")):
             raise CTraderTokenError("NO_ACCESS_TOKEN", "Token response missing accessToken")
         resp.raise_for_status()

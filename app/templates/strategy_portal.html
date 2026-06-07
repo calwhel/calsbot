@@ -8261,13 +8261,17 @@ async function _pollCtraderLinkComplete(attempt) {
         _ctraderLinking = false;
         const err = (p.error || 'token_exchange_failed').toLowerCase();
         const msg = {
-          token_exchange_failed: 'cTrader token exchange failed — check Spotware redirect URI matches Railway',
+          token_exchange_failed: 'cTrader token exchange failed — register https://calsbot-production.up.railway.app/api/ctrader/callback in Spotware',
+          invalid_grant: 'Authorization expired — tap Connect and complete Allow within 60 seconds',
+          invalid_request: 'cTrader rejected the request — check redirect URI in Spotware matches Railway',
+          access_denied: 'cTrader access denied',
           token_exchange_timeout: 'cTrader token exchange timed out — tap Connect and try again',
           session_expired: 'Session expired — log in and connect cTrader again',
           no_token: 'cTrader did not return an access token',
           db_error: 'Connected to cTrader but saving failed — try again',
         }[err] || ('cTrader connection failed: ' + err.replace(/_/g, ' '));
-        toast(msg, 'error');
+        const detail = (p.detail || '').trim();
+        toast(detail ? (msg + ' (' + detail + ')') : msg, 'error');
         try { showPage('live-forex', null); } catch (e) {}
         loadLiveForex();
         return;

@@ -10295,26 +10295,20 @@ def _ctrader_redirect_uri(request: Optional[Request] = None) -> str:
     if explicit and not explicit.endswith("/api/ctrader/callback"):
         explicit = f"{explicit}/api/ctrader/callback"
 
-    # Railway: OAuth callback must be *.up.railway.app (Spotware registration).
+    # Railway: always use *.up.railway.app callback (Spotware registration).
     if is_railway():
+        rail_host = railway_app_hostname() or _ctrader_host_from_urlish(railway_service_base_url(request))
+        if rail_host:
+            return f"https://{rail_host}/api/ctrader/callback"
         railway_base = railway_service_base_url(request).rstrip("/")
-        if not railway_base:
-            logger.error(
-                "[ctrader] No *.up.railway.app host found — set CTRADER_RAILWAY_HOST "
-                "or CTRADER_REDIRECT_URI to your Railway callback URL"
-            )
-        elif explicit:
-            exp_host = _ctrader_host_from_urlish(explicit)
-            if _ctrader_host_is_railway(exp_host):
-                return explicit
-            logger.warning(
-                "[ctrader] CTRADER_REDIRECT_URI host %s is not Railway — using %s",
-                exp_host, railway_base,
-            )
         if railway_base:
             return f"{railway_base}/api/ctrader/callback"
-        if explicit:
+        if explicit and _ctrader_host_is_railway(_ctrader_host_from_urlish(explicit)):
             return explicit
+        logger.error(
+            "[ctrader] No Railway callback host — set CTRADER_RAILWAY_HOST="
+            "calsbot-production.up.railway.app on Railway"
+        )
 
     if request is not None:
         host = (request.headers.get("host") or "").split(":")[0].strip().lower()
@@ -10414,6 +10408,7 @@ async def _ctrader_oauth_url_for_uid(uid: str, request: Optional[Request]) -> Tu
         "[ctrader] oauth-start uid=%s redirect_uri=%s return_host=%s",
         uid, redirect_uri, _parse_ctrader_oauth_state(oauth_state)[1],
     )
+    _pin_ctrader_oauth_redirect_uri(uid, redirect_uri)
     url = get_oauth_url(redirect_uri=redirect_uri, state=oauth_state)
     if not url or "client_id=" not in url:
         raise HTTPException(status_code=503, detail="Could not build cTrader OAuth URL.")
@@ -10499,10 +10494,30 @@ def _ctrader_oauth_cache_key(uid: str) -> str:
     return f"ctrader_oauth:{(uid or '').strip().upper()}"
 
 
-def _set_ctrader_oauth_progress(uid: str, status: str, error: str = "") -> None:
+def _ctrader_oauth_redirect_cache_key(uid: str) -> str:
+    return f"ctrader_oauth_ru:{(uid or '').strip().upper()}"
+
+
+def _pin_ctrader_oauth_redirect_uri(uid: str, redirect_uri: str) -> None:
+    if uid and redirect_uri:
+        set_cache(_ctrader_oauth_redirect_cache_key(uid), redirect_uri, 600)
+
+
+def _get_pinned_ctrader_oauth_redirect_uri(uid: str) -> Optional[str]:
+    if not uid:
+        return None
+    val = get_cache(_ctrader_oauth_redirect_cache_key(uid))
+    return val if isinstance(val, str) and val else None
+
+
+def _set_ctrader_oauth_progress(uid: str, status: str, error: str = "", detail: str = "") -> None:
     if not uid:
         return
-    set_cache(_ctrader_oauth_cache_key(uid), {"status": status, "error": error or ""}, 300)
+    set_cache(
+        _ctrader_oauth_cache_key(uid),
+        {"status": status, "error": error or "", "detail": (detail or "")[:200]},
+        300,
+    )
 
 
 def _ctrader_callback_finishing_html(continue_url: str) -> str:
@@ -10542,6 +10557,42 @@ async def _complete_ctrader_oauth_in_background(code: str, state: str, redirect_
     if uid:
         _set_ctrader_oauth_progress(uid, "pending")
 
+    effective_redirect = _get_pinned_ctrader_oauth_redirect_uri(uid) or redirect_uri
+    if uid and effective_redirect != redirect_uri:
+        logger.info(
+            "[cTrader callback] using pinned redirect_uri for uid=%s (callback had %s)",
+            uid, redirect_uri,
+        )
+
+    # Spotware auth codes expire in ~60s — exchange BEFORE any DB work.
+    try:
+        token_data = await asyncio.wait_for(
+            exchange_code(code=code, redirect_uri=effective_redirect),
+            timeout=20.0,
+        )
+    except Exception as e:
+        err_code = "token_exchange_failed"
+        err_detail = ""
+        if isinstance(e, CTraderTokenError):
+            err_code = (e.error_code or "token_exchange_failed").lower()
+            err_detail = e.description or ""
+            logger.error(
+                "[cTrader callback] exchange_code errorCode=%s desc=%s redirect_uri=%s",
+                e.error_code, (err_detail or "")[:120], effective_redirect,
+            )
+        elif isinstance(e, asyncio.TimeoutError):
+            err_code = "token_exchange_timeout"
+            logger.error("[cTrader callback] exchange_code timed out")
+        else:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            logger.error(
+                f"[cTrader callback] exchange_code failed: "
+                f"{type(e).__name__} status={status}"
+            )
+        if uid:
+            _set_ctrader_oauth_progress(uid, "error", err_code, err_detail)
+        return
+
     def _resolve_user():
         db = SessionLocal()
         try:
@@ -10570,33 +10621,6 @@ async def _complete_ctrader_oauth_in_background(code: str, state: str, redirect_
         logger.warning(f"[cTrader callback] uid={uid!r} not found (background)")
         if uid:
             _set_ctrader_oauth_progress(uid, "error", "session_expired")
-        return
-
-    try:
-        token_data = await asyncio.wait_for(
-            exchange_code(code=code, redirect_uri=redirect_uri),
-            timeout=20.0,
-        )
-    except Exception as e:
-        err_code = "token_exchange_failed"
-        if isinstance(e, CTraderTokenError):
-            err_code = (e.error_code or "token_exchange_failed").lower()
-            logger.error(
-                "[cTrader callback] exchange_code errorCode=%s redirect_host=%s",
-                e.error_code,
-                urllib.parse.urlparse(redirect_uri).netloc,
-            )
-        elif isinstance(e, asyncio.TimeoutError):
-            err_code = "token_exchange_timeout"
-            logger.error("[cTrader callback] exchange_code timed out")
-        else:
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            logger.error(
-                f"[cTrader callback] exchange_code failed: "
-                f"{type(e).__name__} status={status}"
-            )
-        if uid:
-            _set_ctrader_oauth_progress(uid, "error", err_code)
         return
 
     access_token  = token_data.get("accessToken")  or token_data.get("access_token",  "")
@@ -10702,12 +10726,12 @@ async def api_ctrader_callback(
     uid, _ = _parse_ctrader_oauth_state(state or "")
     if uid:
         _set_ctrader_oauth_progress(uid, "pending")
+        _pin_ctrader_oauth_redirect_uri(uid, redirect_uri)
 
-    if background_tasks is not None:
-        background_tasks.add_task(
-            _complete_ctrader_oauth_in_background,
-            code, state, redirect_uri,
-        )
+    # Start token exchange immediately (auth codes expire in ~60s).
+    asyncio.create_task(
+        _complete_ctrader_oauth_in_background(code, state, redirect_uri)
+    )
 
     continue_url = _ctrader_app_redirect_url(request, state or "", "ctrader=linking")
     return HTMLResponse(_ctrader_callback_finishing_html(continue_url), status_code=200)
