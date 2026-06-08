@@ -1942,10 +1942,13 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
                         if row:
                             # INFO, not WARNING: a sibling holding the lock and
                             # running the executor is the healthy steady state.
+                            # Report standby uptime (not a raw retry counter) so a
+                            # climbing number never reads as repeated failures.
+                            _standby_min = (_wait_attempts * 5) // 60
                             logger.info(
-                                f"[executor] lock {_EXECUTOR_LOCK_ID} held by pid={row[0]} "
-                                f"state={row[1]} — this worker on standby (executor runs "
-                                f"on the holder; attempt {_wait_attempts})"
+                                f"[executor] healthy — executor active on pid={row[0]} "
+                                f"(state={row[1]}); this is the HTTP/standby worker "
+                                f"(standby {_standby_min}m, normal)"
                             )
                         else:
                             logger.warning(
