@@ -7,9 +7,8 @@ Price path:
   Others: FMP real-time WebSocket → yfinance fast_info fallback.
 
 Kline path:
-  Metals (XAUUSD/XAGUSD): cTrader trendbars → FMP historical-chart → Binance spot.
-  FMP is preferred over Binance because spot metals pairs are geo-blocked on
-  Binance from our infra; yfinance GC=F futures are intentionally skipped.
+  Metals (XAUUSD/XAGUSD): cTrader trendbars → FMP → Binance spot → Yahoo.
+  Forex live: cTrader → Yahoo chart → FMP → yfinance.
   Others: yfinance download() — intraday OHLC for forex/indices.
 
 Returned shapes mirror the crypto helpers so the strategy executor can
@@ -27,6 +26,7 @@ from typing import Dict, List, Optional, Tuple
 
 from app.services.asset_classes import (
     ASSET_CLASS_CRYPTO,
+    ASSET_CLASS_FOREX,
     normalize_asset_class,
     yf_ticker,
 )
@@ -409,10 +409,8 @@ async def get_price(symbol: str, asset_class: str) -> Optional[float]:
     # ── 0a. cTrader live spot feed — matches the broker that fills orders ─────
     # FP Markets / cTrader is where forex/metal/index orders actually execute,
     # so its spot feed is the ONLY source that matches the user's chart and
-    # fills in real time. (FMP's legacy endpoints are dead and Binance metals
-    # are geo-restricted / a different instrument, so both lag or mismatch.)
-    # Returns None when there's no fresh tick (cold feed / no connected
-    # account) → falls through to the legacy sources below.
+    # fills in real time. Returns None when there's no fresh tick (cold feed /
+    # no connected account) → falls through to the legacy sources below.
     try:
         from app.services import ctrader_price_feed as _ctf
         _cpx = _ctf.get_price(symbol)
@@ -664,6 +662,66 @@ async def _fetch_ctrader_klines(
         return []
 
 
+async def _fetch_binance_metals_klines(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+) -> List[List[float]]:
+    """Closed OHLC from Binance spot XAUUSDT / XAGUSDT (forming bar stripped)."""
+    _bn_sym = _METALS_BINANCE_MAP.get(symbol.upper())
+    if not _bn_sym:
+        return []
+
+    _bn_interval = _BINANCE_INTERVAL_MAP.get(timeframe, timeframe)
+    now = datetime.utcnow()
+    key = (_bn_sym, _bn_interval, limit)
+    cached = _KLINE_CACHE.get(key)
+    if cached and (now - cached[1]) < _KLINE_TTL:
+        return cached[0]
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as _c:
+            r = await _c.get(
+                f"{_BINANCE_SPOT_BASE}/klines",
+                params={
+                    "symbol": _bn_sym,
+                    "interval": _bn_interval,
+                    "limit": limit + 1,
+                },
+            )
+        if r.status_code == 200:
+            raw = r.json()
+            if raw and isinstance(raw, list):
+                complete = raw[:-1] if len(raw) > 1 else raw
+                rows: List[List[float]] = []
+                for bar in complete[-limit:]:
+                    try:
+                        rows.append([
+                            int(bar[0]),
+                            float(bar[1]),
+                            float(bar[2]),
+                            float(bar[3]),
+                            float(bar[4]),
+                            float(bar[5]),
+                        ])
+                    except Exception:
+                        continue
+                if rows:
+                    _KLINE_CACHE[key] = (rows, now)
+                    logger.info(
+                        f"[tradfi] klines ok (Binance spot): "
+                        f"{_bn_sym} {_bn_interval} → {len(rows)} bars"
+                    )
+                    return rows
+    except Exception as _be:
+        logger.debug(
+            f"[tradfi] Binance spot klines failed for {_bn_sym} "
+            f"({_bn_interval}): {_be}"
+        )
+    return []
+
+
 async def _get_klines_impl(
     symbol: str,
     asset_class: str,
@@ -729,59 +787,37 @@ async def _get_klines_impl(
             if _crows:
                 return _crows
 
-    # ── Binance spot metals path (XAUUSDT / XAGUSDT) ─────────────────────────
-    _bn_sym = _METALS_BINANCE_MAP.get(symbol.upper())
-    if _bn_sym:
-        _bn_interval = _BINANCE_INTERVAL_MAP.get(timeframe, timeframe)
-        key = (_bn_sym, _bn_interval, limit)
-        cached = _KLINE_CACHE.get(key)
-        if cached and (now - cached[1]) < _KLINE_TTL:
-            return cached[0]
-        try:
-            import httpx
-            # Fetch limit+1 bars so after dropping the still-forming last bar
-            # we still have `limit` complete, closed candles.
-            async with httpx.AsyncClient(timeout=5.0) as _c:
-                r = await _c.get(
-                    f"{_BINANCE_SPOT_BASE}/klines",
-                    params={
-                        "symbol":   _bn_sym,
-                        "interval": _bn_interval,
-                        "limit":    limit + 1,
-                    },
+    # ── Live forex: Yahoo chart + FMP (same chain as fetch_forex_scan_candles) ─
+    # cTrader alone often returns [] on Railway (no linked account / cold feed);
+    # yfinance download() is also unreliable server-side. Yahoo chart + FMP are
+    # what keep the UI scanner finding signals — the executor must use them too.
+    if cls == ASSET_CLASS_FOREX and not is_metal and not for_backtest:
+        yahoo_ticker = yf_ticker(cls, symbol)
+        if yahoo_ticker:
+            _yrows = await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit)
+            if _yrows:
+                logger.info(
+                    f"[tradfi] klines ok (Yahoo): {symbol.upper()} {timeframe} "
+                    f"→ {len(_yrows)} bars"
                 )
-            if r.status_code == 200:
-                raw = r.json()
-                if raw and isinstance(raw, list):
-                    # Drop the last bar — it is the still-forming current candle.
-                    # All preceding bars are fully closed.
-                    complete = raw[:-1] if len(raw) > 1 else raw
-                    rows: List[List[float]] = []
-                    for bar in complete[-limit:]:
-                        try:
-                            rows.append([
-                                int(bar[0]),      # open_time ms
-                                float(bar[1]),    # open
-                                float(bar[2]),    # high
-                                float(bar[3]),    # low
-                                float(bar[4]),    # close
-                                float(bar[5]),    # volume
-                            ])
-                        except Exception:
-                            continue
-                    if rows:
-                        _KLINE_CACHE[key] = (rows, now)
-                        logger.info(
-                            f"[tradfi] klines ok (Binance spot): "
-                            f"{_bn_sym} {_bn_interval} → {len(rows)} bars"
-                        )
-                        return rows
-        except Exception as _be:
-            logger.debug(
-                f"[tradfi] Binance spot klines failed for {_bn_sym} "
-                f"({_bn_interval}): {_be}"
-            )
-        # fall through to yfinance below
+                return _yrows
+        if _env_fmp_api_key():
+            try:
+                from app.services.fmp_price_feed import fmp_in_backoff, get_klines as _fmp_klines
+                if not fmp_in_backoff():
+                    _frows = await _fmp_klines(symbol, asset_class, timeframe, limit)
+                    if _frows:
+                        return _frows
+            except Exception as _fe:
+                logger.debug(
+                    f"[tradfi] FMP forex klines failed {symbol} {timeframe}: {_fe}"
+                )
+
+    # ── Binance spot metals fallback (backtest / after cTrader+FMP miss) ───────
+    if is_metal:
+        _brows = await _fetch_binance_metals_klines(symbol, timeframe, limit)
+        if _brows:
+            return _brows
 
     # ── FMP 1-minute REST — primary source for forex paper evaluation ─────────
     if timeframe == "1m" and _env_fmp_api_key():

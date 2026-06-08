@@ -94,6 +94,7 @@ _TRACKED: Dict[str, str] = {
     "AUDUSD": "AUDUSD", "USDCAD": "USDCAD", "USDCHF": "USDCHF",
     "NZDUSD": "NZDUSD", "EURJPY": "EURJPY", "GBPJPY": "GBPJPY",
     "XAUUSD": "XAUUSD",
+    "XAGUSD": "XAGUSD",
     # Indices — canonical cTrader names (FP Markets contract names)
     "NAS100": "US100", "NDX": "US100", "US100": "US100",
     "SPX500": "US500", "SPX": "US500",  "US500": "US500",
@@ -755,7 +756,8 @@ async def get_klines(
 def get_price(symbol: str) -> Optional[float]:
     """
     Return the mid price for `symbol` from the live cTrader spot feed.
-    Falls back to the shared Postgres tick store (other gunicorn workers).
+    Falls back to the shared Postgres tick store (other gunicorn workers),
+    but only when that tick is source=ctrader — never Binance/Coinbase fallbacks.
     """
     sym = symbol.upper()
     entry = _spot_cache.get(sym)
@@ -764,14 +766,17 @@ def get_price(symbol: str) -> Optional[float]:
         if time.monotonic() - ts <= _SPOT_TTL:
             return round((bid + ask) / 2.0, 6)
     try:
-        from app.services.spot_price_store import get_mid
-        return get_mid(sym, max_age_s=_SPOT_TTL)
+        from app.services.spot_price_store import get_tick
+        row = get_tick(sym, max_age_s=_SPOT_TTL)
+        if row and (row.get("source") or "").lower() == "ctrader":
+            return float(row["mid"])
     except Exception:
-        return None
+        pass
+    return None
 
 
 def get_bid_ask(symbol: str) -> Optional[Tuple[float, float]]:
-    """Return (bid, ask) for `symbol` if a fresh tick is available."""
+    """Return (bid, ask) for `symbol` if a fresh cTrader tick is available."""
     sym = symbol.upper()
     entry = _spot_cache.get(sym)
     if entry:
@@ -779,10 +784,17 @@ def get_bid_ask(symbol: str) -> Optional[Tuple[float, float]]:
         if time.monotonic() - ts <= _SPOT_TTL:
             return (bid, ask)
     try:
-        from app.services.spot_price_store import get_bid_ask as _store_ba
-        return _store_ba(sym, max_age_s=_SPOT_TTL)
+        from app.services.spot_price_store import get_tick
+        row = get_tick(sym, max_age_s=_SPOT_TTL)
+        if row and (row.get("source") or "").lower() == "ctrader":
+            bid, ask = row.get("bid"), row.get("ask")
+            if bid is not None and ask is not None:
+                return (float(bid), float(ask))
+            mid = float(row["mid"])
+            return (mid, mid)
     except Exception:
-        return None
+        pass
+    return None
 
 
 def is_live() -> bool:
