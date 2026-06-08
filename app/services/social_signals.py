@@ -559,8 +559,11 @@ def is_blocked_top25(symbol: str) -> bool:
 def _is_slow_highcap(sym: str) -> bool:
     return is_blocked_top25(sym)
 
-# Scanning control
-SOCIAL_SCANNING_ENABLED = True
+# Scanning control — portal/Railway disables legacy Telegram social scanner by default.
+import os as _os_env
+SOCIAL_SCANNING_ENABLED = _os_env.getenv(
+    "DISABLE_SOCIAL_SCANNING", ""
+).lower() not in ("1", "true", "yes")
 _social_scanning_active = False
 
 # Cooldowns to prevent over-trading

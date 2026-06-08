@@ -695,10 +695,8 @@ async def _fetch_price_and_ta(
             return None
 
     try:
-        from app.services.social_signals import SocialSignalService
-        svc = SocialSignalService()
-        svc.http_client = http_client
-        result = await svc.fetch_price_data(symbol)
+        from app.services.bitunix_market_data import fetch_crypto_price_and_ta
+        result = await fetch_crypto_price_and_ta(http_client, symbol)
         if result:
             _PRICE_TA_CACHE[cache_key] = (result, now)
         return result
@@ -4570,9 +4568,6 @@ async def run_strategy_executor():
                     )
                     _ac_counts[_ac] = _ac_counts.get(_ac, 0) + 1
                 _ac_str = " ".join(f"{k}={v}" for k, v in sorted(_ac_counts.items()))
-                logger.info(
-                    f"🤖 Strategy executor: {active_count} live · {paper_count} paper [{_ac_str}]"
-                )
 
                 # Locked subscriber copies MUST NOT evaluate independently —
                 # they are triggered by _propagate_to_subscribers when the source fires,
@@ -4600,6 +4595,10 @@ async def run_strategy_executor():
                         f"[Executor] Skipping {skipped} locked subscriber copies "
                         f"(will be triggered by source propagation)"
                     )
+                logger.info(
+                    f"🤖 Portal crypto strategies: {len(eval_snapshots)} scanning "
+                    f"({active_count} live · {paper_count} paper in pool) [{_ac_str}]"
+                )
 
                 # Pre-fetch tickers ONCE for the entire cycle.
                 shared_tickers = await _get_raw_tickers(http_client)
