@@ -879,6 +879,7 @@ def _daily_execution_count(strategy_id: int, db) -> int:
     return db.query(StrategyExecution).filter(
         StrategyExecution.strategy_id == strategy_id,
         StrategyExecution.fired_at >= today,
+        StrategyExecution.outcome.notin_(["CANCELLED", "EXPIRED"]),
     ).count()
 
 
@@ -2834,7 +2835,10 @@ async def evaluate_and_fire(
     from app.services.strategy_ta import evaluate_strategy_conditions
     from app.strategy_models import StrategyExecution, StrategyPortalSettings
 
+    _strategy_gates: Dict[str, int] = {}
+
     def _bump(key: str):
+        _strategy_gates[key] = _strategy_gates.get(key, 0) + 1
         if gate_stats is not None:
             gate_stats[key] = gate_stats.get(key, 0) + 1
 
@@ -3892,12 +3896,11 @@ async def evaluate_and_fire(
         elif _conditions_failed_for_all:
             _bump("blk_ta_conditions")
 
-    if gate_stats is not None:
-        try:
-            from app.services.ctrader_order_queue import record_gate_stats
-            record_gate_stats(strategy.id, gate_stats)
-        except Exception:
-            pass
+    try:
+        from app.services.ctrader_order_queue import record_gate_stats
+        record_gate_stats(strategy.id, _strategy_gates, persist_db=False)
+    except Exception:
+        pass
 
 
 # ─── Subscriber copy-trade propagation ───────────────────────────────────────
@@ -4668,6 +4671,12 @@ async def run_strategy_executor():
                                     pass
 
                 await asyncio.gather(*[_run_one(s) for s in eval_snapshots])
+
+                try:
+                    from app.services.ctrader_order_queue import flush_gate_stats_to_db
+                    flush_gate_stats_to_db([s["id"] for s in eval_snapshots])
+                except Exception:
+                    pass
 
                 # Cycle gate diagnostics — shows exactly which gate blocked each strategy.
                 # Helps diagnose "why aren't trades firing?" without spelunking logs.
@@ -5535,6 +5544,7 @@ async def run_forex_executor():
             _cycle_db_skipped = []  # initialised before try so the adaptive
                                     # backoff below is safe even if the cycle
                                     # throws before its own assignment.
+            _cycle_t0 = datetime.utcnow()
             try:
                 mark_heartbeat("forex_executor")
                 _list_db = SessionLocal()
@@ -5748,6 +5758,12 @@ async def run_forex_executor():
 
                 await asyncio.gather(*[_run_one_fx(s) for s in open_snaps])
 
+                try:
+                    from app.services.ctrader_order_queue import flush_gate_stats_to_db
+                    flush_gate_stats_to_db([s["id"] for s in open_snaps])
+                except Exception:
+                    pass
+
                 # Live SL amendments (auto-breakeven + trailing) for open LIVE
                 # forex positions run on the dedicated run_forex_live_manager_fast
                 # loop (sub-second cadence via the cTrader spot feed), so the scan
@@ -5769,6 +5785,13 @@ async def run_forex_executor():
                         for k, v in sorted(cycle_gate_stats.items(), key=lambda kv: -kv[1])
                     )
                     logger.info(f"[FX Executor] cycle gates → {_gate_summary}")
+
+                _cycle_s = (datetime.utcnow() - _cycle_t0).total_seconds()
+                if open_snaps:
+                    logger.info(
+                        f"[FX Executor] cycle done in {_cycle_s:.1f}s "
+                        f"({len(open_snaps)} strategies)"
+                    )
 
             except Exception as e:
                 logger.error(f"Forex executor loop error: {e}", exc_info=True)
