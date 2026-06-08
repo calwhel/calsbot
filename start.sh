@@ -34,7 +34,10 @@ fi
 # forex scan cycles (klines/cTrader) never freeze the website. Feeds start only
 # on the executor-winning worker (see _start_executor_tasks).
 _GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
-_GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-120}"
+# 90 tradfi + 168 crypto strategies per cycle can exceed 120s (klines + DB +
+# per-strategy gate writes). Sub-120s timeouts caused WORKER TIMEOUT SIGABRT
+# mid-scan — zero completed forex cycles and no fires. Production script uses 300.
+_GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-300}"
 echo "[railway] Starting Strategy Portal on port ${PORT:-5000} (workers=${_GUNICORN_WORKERS}, timeout=${_GUNICORN_TIMEOUT})..."
 exec gunicorn -w "${_GUNICORN_WORKERS}" -k uvicorn.workers.UvicornWorker \
   --max-requests 300 --max-requests-jitter 30 \

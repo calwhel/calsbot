@@ -5544,6 +5544,7 @@ async def run_forex_executor():
             _cycle_db_skipped = []  # initialised before try so the adaptive
                                     # backoff below is safe even if the cycle
                                     # throws before its own assignment.
+            _cycle_t0 = datetime.utcnow()
             try:
                 mark_heartbeat("forex_executor")
                 _list_db = SessionLocal()
@@ -5784,6 +5785,13 @@ async def run_forex_executor():
                         for k, v in sorted(cycle_gate_stats.items(), key=lambda kv: -kv[1])
                     )
                     logger.info(f"[FX Executor] cycle gates → {_gate_summary}")
+
+                _cycle_s = (datetime.utcnow() - _cycle_t0).total_seconds()
+                if open_snaps:
+                    logger.info(
+                        f"[FX Executor] cycle done in {_cycle_s:.1f}s "
+                        f"({len(open_snaps)} strategies)"
+                    )
 
             except Exception as e:
                 logger.error(f"Forex executor loop error: {e}", exc_info=True)
