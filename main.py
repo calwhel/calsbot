@@ -110,9 +110,12 @@ async def lifespan(app: FastAPI):
     else:
         logging.info("OxaPay poller skipped (free portal / no merchant key)")
     
-    # Twitter auto-posting — strategy leaderboard + market content
-    from app.services.twitter_poster import auto_post_loop
-    twitter_task = asyncio.create_task(auto_post_loop())
+    # Twitter auto-posting — strategy leaderboard + market content.
+    # Gated by an advisory lock (run_auto_post_loop_singleton) so this companion
+    # and the always-up web worker never both post; whichever wins the lock runs,
+    # the other stands by and takes over automatically on failover.
+    from app.services.twitter_poster import run_auto_post_loop_singleton
+    twitter_task = asyncio.create_task(run_auto_post_loop_singleton())
 
     # Wall intel — schema init + background watch alerts
     from app.services.wall_intel import init_wall_intel_schema, watch_loop

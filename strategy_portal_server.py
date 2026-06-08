@@ -1836,6 +1836,21 @@ async def _start_executor_tasks():
     except Exception as e:
         logger.error(f"Failed to launch trade tracker monitor: {e}")
 
+    # X / Twitter auto-posting — runs on this always-up web worker (gated by its
+    # own advisory lock) so posting survives even when the Telegram bot companion
+    # process is not running. The lock guarantees exactly one poster across the
+    # web worker(s) + companion, so there is never a double-tweet.
+    try:
+        from app.services.twitter_poster import run_auto_post_loop_singleton
+        asyncio.create_task(
+            _resilient_task(
+                "twitter_auto_post", run_auto_post_loop_singleton, restart_delay=120
+            )
+        )
+        logger.info("✅ X auto-poster launched (advisory-lock single-runner)")
+    except Exception as e:
+        logger.error(f"Failed to launch X auto-poster: {e}")
+
 
 async def _executor_claim_loop(first_attempt_delay: int = 0):
     """
