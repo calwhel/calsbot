@@ -10927,6 +10927,7 @@ async def api_ctrader_accounts_list(uid: str = Query(...)):
 @app.post("/api/ctrader/select-account")
 async def api_ctrader_select_account(uid: str = Query(...), request: Request = None):
     """Save which cTrader account the user wants to trade on."""
+    import json as _json
     from app.database import SessionLocal
     from app.models import UserPreference
     body = await request.json()
@@ -10941,8 +10942,36 @@ async def api_ctrader_select_account(uid: str = Query(...), request: Request = N
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         if not prefs or not prefs.ctrader_access_token:
             raise HTTPException(status_code=400, detail="Not connected")
+        try:
+            from app.services.ctrader_client import (
+                get_accounts_for_token, _invalidate_persistent_connection,
+                CTRADER_HOST_LIVE, CTRADER_HOST_DEMO,
+            )
+            accounts = await asyncio.wait_for(
+                get_accounts_for_token(prefs.ctrader_access_token), timeout=15.0,
+            )
+            if accounts:
+                prefs.ctrader_accounts = _json.dumps(accounts)
+                valid = {str(a.get("ctidTraderAccountId")) for a in accounts}
+                if account_id not in valid:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="That account is not linked to your cTrader token",
+                    )
+        except HTTPException:
+            raise
+        except Exception as _ae:
+            logger.warning(f"[ctrader] account refresh on select uid={uid}: {_ae}")
         prefs.ctrader_account_id = account_id
         db.commit()
+        try:
+            from app.services.ctrader_client import (
+                _invalidate_persistent_connection, CTRADER_HOST_LIVE, CTRADER_HOST_DEMO,
+            )
+            for _h in (CTRADER_HOST_LIVE, CTRADER_HOST_DEMO):
+                _invalidate_persistent_connection(_h, int(account_id))
+        except Exception:
+            pass
         _invalidate_user_cache(uid)
         return JSONResponse({"ok": True, "account_id": account_id})
     finally:
@@ -11438,13 +11467,15 @@ async def api_ctrader_test_trade(
                 status_code=400,
             )
         access_token = prefs.ctrader_access_token
-        from app.services.ctrader_client import _host_for_account
         ctid = int(prefs.ctrader_account_id)
-        host = _host_for_account(prefs, ctid)
+        _prefs_snap = prefs
+        _user_id = user.id
     finally:
         db.close()
 
-    from app.services.ctrader_client import place_order, place_order_units, close_position
+    from app.services.ctrader_client import (
+        place_market_order_resilient, close_position, _host_for_account,
+    )
     from app.services.index_symbols import normalize_index_symbol, is_index_symbol
 
     TEST_SYMBOL = (symbol or "EURUSD").upper().strip()
@@ -11453,32 +11484,22 @@ async def api_ctrader_test_trade(
         TEST_SYMBOL = normalize_index_symbol(TEST_SYMBOL)
     TEST_LOTS = 0.01  # forex minimum
     TEST_CONTRACTS = 1
+    host = _host_for_account(_prefs_snap, ctid)
 
     try:
-        if is_index:
-            placed = await asyncio.wait_for(
-                place_order_units(
-                    access_token           = access_token,
-                    ctid_trader_account_id = ctid,
-                    symbol_name            = TEST_SYMBOL,
-                    direction              = "LONG",
-                    volume_units           = TEST_CONTRACTS,
-                    host                   = host,
-                ),
-                timeout=25.0,
-            )
-        else:
-            placed = await asyncio.wait_for(
-                place_order(
-                    access_token           = access_token,
-                    ctid_trader_account_id = ctid,
-                    symbol_name            = TEST_SYMBOL,
-                    direction              = "LONG",
-                    volume_lots            = TEST_LOTS,
-                    host                   = host,
-                ),
-                timeout=25.0,
-            )
+        placed = await asyncio.wait_for(
+            place_market_order_resilient(
+                user_id=_user_id,
+                access_token=access_token,
+                ctid=ctid,
+                prefs=_prefs_snap,
+                symbol_name=TEST_SYMBOL,
+                direction="LONG",
+                volume_units=TEST_CONTRACTS if is_index else None,
+                volume_lots=TEST_LOTS if not is_index else None,
+            ),
+            timeout=30.0,
+        )
     except asyncio.TimeoutError:
         # AMBIGUOUS: the order may have reached the broker even though we timed out
         # waiting for the response — tell the user to verify in cTrader.
@@ -11496,12 +11517,19 @@ async def api_ctrader_test_trade(
 
     if not placed or placed.get("error") or not placed.get("order_id"):
         _perr = (placed or {}).get("error") or "order was not filled"
+        _hint = None
+        if "account auth failed" in _perr.lower():
+            _hint = (
+                "Try switching to the correct account in the dropdown above "
+                "(demo vs live use different servers), then run the test again. "
+                "If it still fails, disconnect and reconnect cTrader."
+            )
         # A clean broker rejection (e.g. NOT_ENOUGH_MONEY) means NO position exists.
         # But "no execution event"/"unexpected exit" are ambiguous — the order could
         # have filled while we lost the response; ask the user to check cTrader.
         _ambiguous = any(t in _perr.lower() for t in ("no execution event", "unexpected exit", "timeout"))
         return JSONResponse(
-            {"success": False, "stage": "place", "error": _perr,
+            {"success": False, "stage": "place", "error": _perr, "hint": _hint,
              "check_open_positions": _ambiguous},
             status_code=200,
         )

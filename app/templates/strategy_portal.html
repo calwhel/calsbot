@@ -11687,8 +11687,9 @@ async function lfTestTrade(symbol) {
       const warn = (j && j.check_open_positions)
         ? `<div style="color:#d6a35c;margin-top:4px">⚠ Check cTrader and close any open ${symbol} test position manually.</div>`
         : '';
+      const hint = (j && j.hint) ? `<div style="color:var(--warning,#d6a35c);margin-top:6px;font-size:12px">${escHtml(j.hint)}</div>` : '';
       out.innerHTML = `<div style="color:var(--negative);font-weight:600">✗ ${symbol} test failed</div>`
-        + `<div style="color:var(--muted)">${err}</div>` + warn;
+        + `<div style="color:var(--muted)">${escHtml(err)}</div>` + hint + warn;
     }
   } catch(e) {
     out.innerHTML = `<div style="color:var(--negative);font-weight:600">✗ Test trade failed</div><div style="color:var(--muted)">Network error — please try again</div>`;

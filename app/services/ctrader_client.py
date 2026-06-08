@@ -645,12 +645,8 @@ async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
             db.close()
 
 
-async def get_accounts_for_token(access_token: str, host: str = CTRADER_HOST) -> list:
-    """
-    Return a list of cTrader trading accounts linked to this access token.
-    Each item: {ctidTraderAccountId, isLive, traderLogin, balance}.
-    Uses the persistent connection so the SSL handshake is amortised.
-    """
+async def _get_accounts_on_host(access_token: str, host: str) -> list:
+    """Fetch linked accounts from one cTrader host (live or demo)."""
     if not _PROTO_OK:
         return []
     async with _get_account_lock(host, 0):
@@ -682,9 +678,137 @@ async def get_accounts_for_token(access_token: str, host: str = CTRADER_HOST) ->
                     logger.warning(f"[cTrader] get_accounts retry after: {e}")
                     _invalidate_persistent_connection(host, 0)
                     continue
-                logger.error(f"[cTrader] get_accounts failed: {e}")
+                logger.error(f"[cTrader] get_accounts failed on {host}: {e}")
                 return []
     return []
+
+
+async def get_accounts_for_token(access_token: str, host: str = CTRADER_HOST) -> list:
+    """
+    Return a list of cTrader trading accounts linked to this access token.
+    Each item: {ctidTraderAccountId, isLive, traderLogin, balance}.
+    Merges results from BOTH live and demo hosts — demo ctids are only
+    reachable on demo.ctraderapi.com and were previously invisible.
+    """
+    if not _PROTO_OK:
+        return []
+    merged: Dict[int, dict] = {}
+    for h in (CTRADER_HOST_LIVE, CTRADER_HOST_DEMO):
+        for acc in await _get_accounts_on_host(access_token, h):
+            merged[int(acc["ctidTraderAccountId"])] = acc
+    return list(merged.values())
+
+
+def _persist_account_host_metadata(user_id: int, ctid: int, host: str) -> None:
+    """Correct stale isLive metadata after auth succeeds on alternate host."""
+    import json as _json
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    is_live = host == CTRADER_HOST_LIVE
+    db = SessionLocal()
+    try:
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
+        if not prefs:
+            return
+        try:
+            accounts = _json.loads(prefs.ctrader_accounts or "[]")
+        except Exception:
+            accounts = []
+        updated = False
+        for a in accounts:
+            if int(a.get("ctidTraderAccountId", -1)) == int(ctid):
+                if bool(a.get("isLive")) != is_live:
+                    a["isLive"] = is_live
+                    updated = True
+                break
+        else:
+            accounts.append({
+                "ctidTraderAccountId": int(ctid),
+                "isLive": is_live,
+                "traderLogin": 0,
+            })
+            updated = True
+        if updated:
+            prefs.ctrader_accounts = _json.dumps(accounts)
+            db.commit()
+            logger.info(
+                f"[cTrader] corrected isLive={is_live} for ctid={ctid} user={user_id}"
+            )
+    except Exception as e:
+        logger.warning(f"[cTrader] persist host metadata failed user={user_id}: {e}")
+    finally:
+        db.close()
+
+
+async def place_market_order_resilient(
+    *,
+    user_id: Optional[int],
+    access_token: str,
+    ctid: int,
+    prefs,
+    symbol_name: str,
+    direction: str,
+    volume_lots: Optional[float] = None,
+    volume_units: Optional[int] = None,
+    stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
+    entry_price: Optional[float] = None,
+    label: str = "TradeHub",
+) -> dict:
+    """
+    Place a market order with token-refresh and live/demo host fallback.
+    Mirrors the price-feed auth path so test trades don't fail when isLive
+    metadata is stale or the access token just expired.
+    """
+    host = _host_for_account(prefs, ctid) if prefs else CTRADER_HOST_LIVE
+    at = access_token
+
+    async def _place_on(h: str) -> dict:
+        if volume_units is not None:
+            return await place_order_units(
+                access_token=at,
+                ctid_trader_account_id=ctid,
+                symbol_name=symbol_name,
+                direction=direction,
+                volume_units=volume_units,
+                stop_loss_price=stop_loss_price,
+                take_profit_price=take_profit_price,
+                entry_price=entry_price,
+                label=label,
+                host=h,
+            )
+        return await place_order(
+            access_token=at,
+            ctid_trader_account_id=ctid,
+            symbol_name=symbol_name,
+            direction=direction,
+            volume_lots=volume_lots or 0.01,
+            stop_loss_price=stop_loss_price,
+            take_profit_price=take_profit_price,
+            entry_price=entry_price,
+            label=label,
+            host=h,
+        )
+
+    result = await _place_on(host)
+
+    if result.get("error") == "account auth failed" and user_id:
+        new_at = await refresh_user_ctrader_token(user_id)
+        if new_at:
+            at = new_at
+            logger.info(f"[cTrader] retrying order for user {user_id} after token refresh")
+            result = await _place_on(host)
+
+    if result.get("error") == "account auth failed":
+        alt = _other_host(host)
+        logger.info(
+            f"[cTrader] account auth failed on {host} — retrying ctid={ctid} on {alt}"
+        )
+        result = await _place_on(alt)
+        if not result.get("error") and user_id:
+            _persist_account_host_metadata(user_id, ctid, alt)
+
+    return result
 
 
 async def _resolve_symbol_id(
@@ -1562,17 +1686,7 @@ async def place_ctrader_order_for_user(
             f"[cTrader] placing {direction} {symbol} (index) {contracts} contracts "
             f"TP={tp_price} SL={sl_price} for user {user.id}"
         )
-        result = await place_order_units(
-            access_token           = access_token,
-            ctid_trader_account_id = ctid_trader_account_id,
-            symbol_name            = _SYMBOL_MAP.get(symbol, symbol),
-            direction              = direction,
-            volume_units           = contracts,
-            stop_loss_price        = sl_price,
-            take_profit_price      = tp_price,
-            entry_price            = entry_price,
-            host                   = primary_host,
-        )
+        _broker_sym = _SYMBOL_MAP.get(symbol, symbol)
     else:
         # Forex: standard lot sizing
         pip       = _PIP_SIZES.get(symbol, 0.0001)
@@ -1622,61 +1736,19 @@ async def place_ctrader_order_for_user(
             f"[cTrader] placing {direction} {symbol} {lots}L "
             f"TP={tp_price} SL={sl_price} for user {user.id}"
         )
-        result = await place_order(
-            access_token           = access_token,
-            ctid_trader_account_id = ctid_trader_account_id,
-            symbol_name            = symbol,
-            direction              = direction,
-            volume_lots            = lots,
-            stop_loss_price        = sl_price,
-            take_profit_price      = tp_price,
-            entry_price            = entry_price,
-            host                   = primary_host,
-        )
-
-    # Local closure so the token-refresh AND wrong-host retries reuse the exact
-    # same sizing/branch without duplicating the index/forex logic.
-    async def _retry_place(_at: str, _host: str) -> dict:
-        if is_index:
-            return await place_order_units(
-                access_token           = _at,
-                ctid_trader_account_id = ctid_trader_account_id,
-                symbol_name            = _SYMBOL_MAP.get(symbol, symbol),
-                direction              = direction,
-                volume_units           = contracts,
-                stop_loss_price        = sl_price,
-                take_profit_price      = tp_price,
-                entry_price            = entry_price,
-                host                   = _host,
-            )
-        return await place_order(
-            access_token           = _at,
-            ctid_trader_account_id = ctid_trader_account_id,
-            symbol_name            = symbol,
-            direction              = direction,
-            volume_lots            = lots,
-            stop_loss_price        = sl_price,
-            take_profit_price      = tp_price,
-            entry_price            = entry_price,
-            host                   = _host,
-        )
-
-    # Expired access token → refresh once and retry the placement. cTrader OAuth
-    # tokens expire (~30d); without this the order silently fails as "account
-    # auth failed" (the original live-order bug).
-    if result.get("error") == "account auth failed":
-        new_at = await refresh_user_ctrader_token(user.id)
-        if new_at:
-            access_token = new_at
-            logger.info(f"[cTrader] retrying {symbol} order for user {user.id} after token refresh")
-            result = await _retry_place(access_token, primary_host)
-
-    # Still "account auth failed" → the stored isLive metadata may be wrong/stale
-    # (demo account on the live host or vice-versa). Try the OTHER host once.
-    if result.get("error") == "account auth failed":
-        alt_host = _other_host(primary_host)
-        logger.info(f"[cTrader] retrying {symbol} for user {user.id} on alternate host {alt_host}")
-        result = await _retry_place(access_token, alt_host)
+    result = await place_market_order_resilient(
+        user_id=user.id,
+        access_token=access_token,
+        ctid=ctid_trader_account_id,
+        prefs=prefs,
+        symbol_name=_broker_sym if is_index else symbol,
+        direction=direction,
+        volume_units=contracts if is_index else None,
+        volume_lots=lots if not is_index else None,
+        stop_loss_price=sl_price,
+        take_profit_price=tp_price,
+        entry_price=entry_price,
+    )
 
     if result.get("error"):
         logger.error(f"[cTrader] order failed for user {user.id}: {result['error']}")
