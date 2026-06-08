@@ -778,7 +778,22 @@ async def _get_klines_impl(
             symbol = symbol.upper()
 
     now = datetime.utcnow()
-    is_metal = symbol.upper() in _METALS_BINANCE_MAP
+    sym_norm = symbol.upper().replace("/", "").replace("-", "")
+    is_metal = sym_norm in _METALS_BINANCE_MAP
+
+    # Live forex majors: same multi-source chain as the UI scanner/backtest tools.
+    # A thin cTrader response (e.g. 3 bars after a broker hiccup) used to return
+    # immediately and skip Yahoo/FMP — every strategy then hit blk_no_price_data /
+    # blk_ta_conditions even though the scanner still found signals.
+    if cls == ASSET_CLASS_FOREX and not is_metal and not for_backtest:
+        try:
+            scan_rows = await fetch_forex_scan_candles(
+                sym_norm, timeframe, limit, user_id=ctrader_user_id,
+            )
+            if scan_rows:
+                return scan_rows[-limit:] if len(scan_rows) > limit else scan_rows
+        except Exception as _fse:
+            logger.debug(f"[tradfi] fetch_forex_scan_candles failed {sym_norm}: {_fse}")
 
     # Live/paper paths prefer broker-matched cTrader OHLC. Backtest discovery
     # (Gold Strategy Finder) prefers FMP first — faster, no protobuf socket auth,
@@ -815,8 +830,14 @@ async def _get_klines_impl(
             _crows = await _fetch_ctrader_klines(
                 symbol, asset_class, timeframe, limit, user_id=ctrader_user_id
             )
-            if _crows:
+            _min_bars = min(limit, max(25, limit // 3))
+            if _crows and len(_crows) >= _min_bars:
                 return _crows
+            if _crows:
+                logger.info(
+                    f"[tradfi] cTrader partial {sym_norm} {timeframe}: "
+                    f"{len(_crows)} bars < {_min_bars} — trying other sources"
+                )
 
     # ── Live forex: Yahoo chart + FMP (same chain as fetch_forex_scan_candles) ─
     # cTrader alone often returns [] on Railway (no linked account / cold feed);

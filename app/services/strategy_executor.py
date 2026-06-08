@@ -5529,6 +5529,8 @@ async def run_forex_executor():
     )
 
     async with httpx.AsyncClient(timeout=_timeout, limits=_limits) as http_client:
+        _fx_empty_cycles = 0
+        _fx_scan_cycle = 0
         while True:
             _cycle_db_skipped = []  # initialised before try so the adaptive
                                     # backoff below is safe even if the cycle
@@ -5561,8 +5563,16 @@ async def run_forex_executor():
                     _list_db.close()
 
                 if not strategy_snapshots:
+                    _fx_empty_cycles += 1
+                    if _fx_empty_cycles == 1 or _fx_empty_cycles % 12 == 0:
+                        logger.info(
+                            f"📈 Forex executor: 0 tradfi strategies in scan pool "
+                            f"({len(strategies)} paper/active rows total — "
+                            "check asset_class is forex/index/stock, not crypto)"
+                        )
                     await asyncio.sleep(FOREX_SCAN_INTERVAL_SECONDS)
                     continue
+                _fx_empty_cycles = 0
 
                 active_source_ids = {
                     s["id"] for s in strategy_snapshots
@@ -5618,6 +5628,18 @@ async def run_forex_executor():
                     logger.info(
                         f"📈 Forex executor: scanning {len(open_snaps)} tradfi strateg"
                         f"{'y' if len(open_snaps) == 1 else 'ies'}"
+                    )
+
+                _fx_scan_cycle += 1
+                if open_snaps and _fx_scan_cycle % 12 == 1:
+                    _sample = ", ".join(
+                        f"#{s['id']} {((s.get('name') or '')[:24]).strip()}"
+                        for s in open_snaps[:4]
+                    )
+                    _more = max(0, len(open_snaps) - 4)
+                    logger.info(
+                        f"📈 Forex executor sample: {_sample}"
+                        + (f" (+{_more} more)" if _more else "")
                     )
 
                 if not open_snaps:
@@ -5681,6 +5703,9 @@ async def run_forex_executor():
                                 if not user or user.banned:
                                     return
                                 if not _portal_trade_entitled(user, has_pro_by_user):
+                                    cycle_gate_stats["blk_not_entitled"] = (
+                                        cycle_gate_stats.get("blk_not_entitled", 0) + 1
+                                    )
                                     return
                                 await evaluate_and_fire(
                                     strategy, user, db_one, _http,
