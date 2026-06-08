@@ -1325,6 +1325,39 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
         pass
 
 
+_TG_OPEN_SENT = "tg_open_sent"
+
+
+def _fmt_queued_open_notice(
+    strategy_name: str, symbol: str, direction: str, *, leverage: int = 1
+) -> str:
+    """Brief Telegram while a live cTrader order is queued — not the full open card."""
+    coin = symbol.upper().replace("USDT", "")
+    return (
+        f"⏳ <b>Placing live order on cTrader</b>\n"
+        f"📋 <b>{_html.escape(str(strategy_name))}</b>\n\n"
+        f"{'🟢' if direction == 'LONG' else '🔴'} <b>${_html.escape(coin)}</b> · "
+        f"{direction} · {leverage}×\n\n"
+        f"<i>Full trade details will arrive once the broker confirms the fill.</i>"
+    )
+
+
+def _claim_tg_open_notify(db, execution_id: int) -> bool:
+    """Atomically claim the open Telegram card for one execution (prevents duplicates)."""
+    from sqlalchemy import text as _text
+
+    result = db.execute(
+        _text(
+            "UPDATE strategy_executions "
+            "SET notes = TRIM(BOTH ' |' FROM COALESCE(notes, '') || ' | tg_open_sent') "
+            "WHERE id = :id AND COALESCE(notes, '') NOT LIKE '%tg_open_sent%'"
+        ),
+        {"id": execution_id},
+    )
+    db.commit()
+    return result.rowcount > 0
+
+
 def _fmt_open_card(
     strategy_name: str, symbol: str, direction: str,
     entry: float, tp_price: float, tp_pct: float,
@@ -3502,22 +3535,12 @@ async def evaluate_and_fire(
                 if tg_id_live:
                     asyncio.create_task(_tg_send(
                         tg_id_live,
-                        _fmt_open_card(
-                            strategy_name=strategy.name or "Your Strategy",
-                            symbol=symbol,
-                            direction=direction,
-                            entry=current_price,
-                            tp_price=tp_price,
-                            tp_pct=tp_pct,
-                            tp2_price=tp2_price,
-                            tp2_pct=float(tp2_pct) if tp2_pct else None,
-                            sl_price=sl_price,
-                            sl_pct=sl_pct,
+                        _fmt_queued_open_notice(
+                            strategy.name or "Your Strategy",
+                            symbol,
+                            direction,
                             leverage=leverage,
-                            conditions=details,
-                            is_paper=False,
-                            asset_class=asset_class,
-                        ) + "\n\n<i>Placing on cTrader…</i>",
+                        ),
                     ))
                 try:
                     from app.services.expo_push import notify_user_bg
@@ -3597,7 +3620,7 @@ async def evaluate_and_fire(
                 db.commit()
                 display_entry = actual_fill if actual_fill else current_price
                 tg_id_live = _telegram_int_id(user)
-                if tg_id_live:
+                if tg_id_live and _claim_tg_open_notify(db, execution.id):
                     try:
                         # Fire-and-forget so a slow/retrying Telegram send never
                         # delays the firing cycle (a latency source).
@@ -3998,22 +4021,12 @@ async def _propagate_to_subscribers(
                     if tg_id:
                         asyncio.create_task(_tg_send(
                             tg_id,
-                            _fmt_open_card(
-                                strategy_name=sub_strategy.name,
-                                symbol=symbol,
-                                direction=direction,
-                                entry=entry,
-                                tp_price=tp_price,
-                                tp_pct=round(tp_pct_raw, 2),
-                                tp2_price=tp2_price,
-                                tp2_pct=round(abs(tp2_price - entry) / entry * 100, 2) if tp2_price else None,
-                                sl_price=sl_price,
-                                sl_pct=round(sl_pct_raw, 2),
+                            _fmt_queued_open_notice(
+                                sub_strategy.name,
+                                symbol,
+                                direction,
                                 leverage=leverage,
-                                conditions=sub_exec.conditions_met,
-                                is_paper=False,
-                                asset_class=_sub_asset_class,
-                            ) + "\n\n<i>Placing on cTrader…</i>",
+                            ),
                         ))
                     logger.info(
                         f"[Propagate] Strategy {sub_strategy.id} (user {sub_user.username}) "
@@ -4059,7 +4072,7 @@ async def _propagate_to_subscribers(
                             tp2_price = sub_exec.tp2_price
                     _sub_db.commit()
                     display_entry = actual_fill if actual_fill else entry
-                    if tg_id:
+                    if tg_id and _claim_tg_open_notify(_sub_db, sub_exec.id):
                         try:
                             await _tg_send(
                                 tg_id,
