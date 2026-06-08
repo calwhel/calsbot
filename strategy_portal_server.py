@@ -11784,9 +11784,10 @@ async def api_executor_diagnostics(uid: str = Query(...)):
         by_class: dict = {}
         tradfi_scanning = 0
         draft_count = 0
+        from app.services.strategy_heal import resolve_strategy_asset_class as _resolve_ac
         for s in strategies:
             by_status[s.status] = by_status.get(s.status, 0) + 1
-            ac = (s.asset_class or "crypto").lower()
+            ac = _resolve_ac(s).lower()
             by_class[ac] = by_class.get(ac, 0) + 1
             if s.status in ("paper", "active") and ac in ("forex", "index", "stock"):
                 tradfi_scanning += 1
