@@ -1342,20 +1342,32 @@ def _fmt_queued_open_notice(
     )
 
 
-def _claim_tg_open_notify(db, execution_id: int) -> bool:
-    """Atomically claim the open Telegram card for one execution (prevents duplicates)."""
+def _claim_tg_note_flag(db, execution_id: int, flag: str) -> bool:
+    """Atomically append a notes flag once (prevents duplicate Telegram alerts)."""
     from sqlalchemy import text as _text
 
+    if not flag or not flag.replace("_", "").isalnum():
+        return False
     result = db.execute(
         _text(
             "UPDATE strategy_executions "
-            "SET notes = TRIM(BOTH ' |' FROM COALESCE(notes, '') || ' | tg_open_sent') "
-            "WHERE id = :id AND COALESCE(notes, '') NOT LIKE '%tg_open_sent%'"
+            "SET notes = TRIM(BOTH ' |' FROM COALESCE(notes, '') || ' | ' || :flag) "
+            "WHERE id = :id AND COALESCE(notes, '') NOT LIKE :pat"
         ),
-        {"id": execution_id},
+        {"id": execution_id, "flag": flag, "pat": f"%{flag}%"},
     )
     db.commit()
     return result.rowcount > 0
+
+
+def _claim_tg_open_notify(db, execution_id: int) -> bool:
+    """Atomically claim the open Telegram card for one execution (prevents duplicates)."""
+    return _claim_tg_note_flag(db, execution_id, "tg_open_sent")
+
+
+def _claim_tg_be_notify(db, execution_id: int) -> bool:
+    """Atomically claim the breakeven Telegram alert for one execution."""
+    return _claim_tg_note_flag(db, execution_id, "tg_be_sent")
 
 
 def _fmt_open_card(
@@ -1894,10 +1906,13 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                             candle_roi = ((ex.entry_price - low) / ex.entry_price) * 100 * ex.leverage
                         be_reached = candle_roi >= be_pct
                         be_log = f"ROI {candle_roi:.1f}% >= {be_pct}%"
-                    if be_reached:
+                    if be_reached and "be_moved" not in (ex.notes or ""):
                         ex.sl_price = ex.entry_price
                         be_activated = True
                         sl_eff_ms = _ts + 1  # entry-stop effective from NEXT candle only
+                        _bn = (ex.notes or "").strip()
+                        if "be_moved" not in _bn:
+                            ex.notes = (f"{_bn} | be_moved".strip(" |")) if _bn else "be_moved"
                         logger.info(f"[PaperMonitor] AUTO-BREAKEVEN: exec #{ex.id} {ex.symbol} {be_log} → SL @ entry")
                         # Push + Telegram alert — once, when BE first activates.
                         try:
@@ -1905,20 +1920,21 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                             from app.strategy_models import UserStrategy as _StratM
                             _u = db.query(_UserM).filter(_UserM.id == ex.user_id).first()
                             _s = db.query(_StratM).filter(_StratM.id == ex.strategy_id).first()
-                            if ex.direction == "LONG":
-                                _mv = (high - ex.entry_price) / ex.entry_price * 100
-                            else:
-                                _mv = (ex.entry_price - low) / ex.entry_price * 100
-                            _notify_breakeven_alert(
-                                user_id=ex.user_id,
-                                telegram_id=(_u.telegram_id if _u else None),
-                                strategy_name=(_s.name if _s else "Strategy"),
-                                symbol=ex.symbol, direction=ex.direction,
-                                leverage=(ex.leverage or 1),
-                                move_pct=_mv * max(1, (ex.leverage or 1)),
-                                strategy_id=ex.strategy_id, execution_id=ex.id,
-                                kind=("paper" if ex.is_paper else "live"),
-                            )
+                            if _claim_tg_be_notify(db, ex.id):
+                                if ex.direction == "LONG":
+                                    _mv = (high - ex.entry_price) / ex.entry_price * 100
+                                else:
+                                    _mv = (ex.entry_price - low) / ex.entry_price * 100
+                                _notify_breakeven_alert(
+                                    user_id=ex.user_id,
+                                    telegram_id=(_u.telegram_id if _u else None),
+                                    strategy_name=(_s.name if _s else "Strategy"),
+                                    symbol=ex.symbol, direction=ex.direction,
+                                    leverage=(ex.leverage or 1),
+                                    move_pct=_mv * max(1, (ex.leverage or 1)),
+                                    strategy_id=ex.strategy_id, execution_id=ex.id,
+                                    kind=("paper" if ex.is_paper else "live"),
+                                )
                         except Exception as _ne:
                             logger.debug(f"[BE-notify] paper exec#{ex.id}: {_ne}")
 
@@ -3316,7 +3332,8 @@ async def evaluate_and_fire(
             try:
                 portal_settings = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
                 tg_id = _telegram_int_id(user)
-                if tg_id and (not portal_settings or portal_settings.dm_paper_alerts):
+                if tg_id and (not portal_settings or portal_settings.dm_paper_alerts) \
+                        and _claim_tg_open_notify(db, execution.id):
                     # Fire-and-forget so a slow/retrying Telegram send never delays
                     # the firing cycle (a stalled await here was a latency source).
                     asyncio.create_task(_tg_send(
@@ -3532,7 +3549,11 @@ async def evaluate_and_fire(
                 execution.notes = ((execution.notes or "") + " | order_queued").strip(" |")
                 db.commit()
                 tg_id_live = _telegram_int_id(user)
-                if tg_id_live:
+                # Optional brief "placing…" DM — off by default because users saw it
+                # as a duplicate when the full open card arrives on fill.
+                if tg_id_live and _os_env.environ.get("TG_QUEUED_OPEN_NOTICE", "").lower() in (
+                    "1", "true", "yes",
+                ):
                     asyncio.create_task(_tg_send(
                         tg_id_live,
                         _fmt_queued_open_notice(
@@ -3913,7 +3934,8 @@ async def _propagate_to_subscribers(
             tg_id = _telegram_int_id(sub_user)
 
             if is_paper:
-                if tg_id and (not portal_settings or portal_settings.dm_paper_alerts):
+                if tg_id and (not portal_settings or portal_settings.dm_paper_alerts) \
+                        and _claim_tg_open_notify(_sub_db, sub_exec.id):
                     try:
                         await _tg_send(
                             tg_id,
@@ -3931,7 +3953,7 @@ async def _propagate_to_subscribers(
                                 leverage      = leverage,
                                 conditions    = sub_exec.conditions_met,
                                 is_paper      = True,
-                                asset_class   = asset_class,
+                                asset_class   = _sub_asset_class,
                             ),
                         )
                     except Exception as _e:
@@ -4018,7 +4040,9 @@ async def _propagate_to_subscribers(
                 if order_result and order_result.get("queued"):
                     sub_exec.notes = ((sub_exec.notes or "") + " | order_queued").strip(" |")
                     _sub_db.commit()
-                    if tg_id:
+                    if tg_id and _os_env.environ.get("TG_QUEUED_OPEN_NOTICE", "").lower() in (
+                        "1", "true", "yes",
+                    ):
                         asyncio.create_task(_tg_send(
                             tg_id,
                             _fmt_queued_open_notice(
@@ -4709,18 +4733,23 @@ async def _do_forex_partial_close(w: dict, price: float) -> None:
         f"SL→entry {entry:.6g} ({'amended' if amend_ok else 'AMEND FAILED'}), runner targets TP2 {tp2}"
     )
 
-    # Breakeven / partial alert (best-effort).
+    # Breakeven / partial alert (best-effort, once per execution).
     try:
-        _u = w.get("user")
-        _notify_breakeven_alert(
-            user_id=getattr(_u, "id", 0) or 0,
-            telegram_id=getattr(_u, "telegram_id", None),
-            strategy_name=w.get("strategy_name", "Strategy"),
-            symbol=w["symbol"], direction=direction,
-            leverage=int(w.get("leverage") or 1), move_pct=0.0,
-            strategy_id=w.get("strategy_id", 0), execution_id=w["exec_id"],
-            kind="live",
-        )
+        _dbn = SessionLocal()
+        try:
+            if _claim_tg_be_notify(_dbn, w["exec_id"]):
+                _u = w.get("user")
+                _notify_breakeven_alert(
+                    user_id=getattr(_u, "id", 0) or 0,
+                    telegram_id=getattr(_u, "telegram_id", None),
+                    strategy_name=w.get("strategy_name", "Strategy"),
+                    symbol=w["symbol"], direction=direction,
+                    leverage=int(w.get("leverage") or 1), move_pct=0.0,
+                    strategy_id=w.get("strategy_id", 0), execution_id=w["exec_id"],
+                    kind="live",
+                )
+        finally:
+            _dbn.close()
     except Exception:
         pass
 
@@ -4867,15 +4896,20 @@ async def _amend_forex_position(w: dict) -> None:
                 else ((entry - price) / entry * 100)
         except Exception:
             _mv = 0.0
-        _notify_breakeven_alert(
-            user_id=getattr(_u, "id", 0) or 0,
-            telegram_id=getattr(_u, "telegram_id", None),
-            strategy_name=w.get("strategy_name", "Strategy"),
-            symbol=w["symbol"], direction=direction,
-            leverage=int(w.get("leverage") or 1), move_pct=_mv,
-            strategy_id=w.get("strategy_id", 0), execution_id=w["exec_id"],
-            kind="live",
-        )
+        _db_be = SessionLocal()
+        try:
+            if _claim_tg_be_notify(_db_be, w["exec_id"]):
+                _notify_breakeven_alert(
+                    user_id=getattr(_u, "id", 0) or 0,
+                    telegram_id=getattr(_u, "telegram_id", None),
+                    strategy_name=w.get("strategy_name", "Strategy"),
+                    symbol=w["symbol"], direction=direction,
+                    leverage=int(w.get("leverage") or 1), move_pct=_mv,
+                    strategy_id=w.get("strategy_id", 0), execution_id=w["exec_id"],
+                    kind="live",
+                )
+        finally:
+            _db_be.close()
 
     if amend_sl is not None:
         logger.info(

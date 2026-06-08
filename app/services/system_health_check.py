@@ -1,7 +1,7 @@
 """
-Hourly system health monitor.
+Periodic system health monitor (default every 4 hours).
 
-Runs once an hour inside the single advisory-locked executor worker and verifies
+Runs inside the single advisory-locked executor worker and verifies
 that every moving part of the platform is in working order:
 
     • Neon database (the single source of truth for all envs)
@@ -13,9 +13,8 @@ that every moving part of the platform is in working order:
     • Bitunix API (crypto broker execution)
     • Executor scan loops (crypto / forex / live-manager heartbeats)
 
-It then DMs the owner on Telegram a single summary card — every hour, whether
-everything is green or something needs attention — so the owner always has an
-up-to-date confirmation that the platform is alive.
+It then DMs the owner on Telegram a summary card on a slow cadence (default
+every 4 hours). Trade TP/SL/open alerts stay instant — this is ops-only.
 
 Each individual check is fully guarded: one failing probe never aborts the rest,
 and a probe that depends on an externally-closed market (forex on weekends) is
@@ -37,7 +36,11 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # How often to run the full sweep (seconds). Override with EXECUTOR_HEALTH_INTERVAL.
-HEALTH_INTERVAL_SECONDS = int(os.getenv("EXECUTOR_HEALTH_INTERVAL", "3600"))
+# Default 4h — trade notifications stay instant; this is owner ops-only.
+HEALTH_INTERVAL_SECONDS = max(
+    3600,
+    int(os.getenv("EXECUTOR_HEALTH_INTERVAL", str(4 * 3600))),
+)
 
 # Public site to probe for the edge/TLS check. Override with PUBLIC_SITE_URL.
 PUBLIC_SITE_URL = os.getenv("PUBLIC_SITE_URL", "https://tradehubmarkets.com").rstrip("/")
@@ -337,8 +340,44 @@ async def _send_report(text: str) -> bool:
     return sent
 
 
+def _claim_health_report_slot() -> bool:
+    """Cross-worker dedup — at most one health DM per interval window."""
+    try:
+        from sqlalchemy import text
+        from app.database import SessionLocal
+
+        gap = max(3600, HEALTH_INTERVAL_SECONDS - 300)
+        db = SessionLocal()
+        try:
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS owner_notification_dedup (
+                    key        VARCHAR(64) PRIMARY KEY,
+                    sent_at    TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+                )
+            """))
+            row = db.execute(
+                text("SELECT sent_at FROM owner_notification_dedup WHERE key = 'health_report'")
+            ).fetchone()
+            if row and row.sent_at:
+                from datetime import datetime, timedelta
+                if datetime.utcnow() - row.sent_at < timedelta(seconds=gap):
+                    return False
+            db.execute(text("""
+                INSERT INTO owner_notification_dedup (key, sent_at)
+                VALUES ('health_report', NOW() AT TIME ZONE 'utc')
+                ON CONFLICT (key) DO UPDATE SET sent_at = EXCLUDED.sent_at
+            """))
+            db.commit()
+            return True
+        finally:
+            db.close()
+    except Exception as e:
+        logger.debug(f"[health] dedup claim failed (sending anyway): {e}")
+        return True
+
+
 async def run_system_health_monitor() -> None:
-    """Hourly loop: run the sweep and DM the owner a summary every cycle."""
+    """Periodic loop: run the sweep and DM the owner on a slow cadence."""
     # In-process singleton guard: the executor reclaim path doesn't cancel
     # previously-started background tasks on advisory-lock churn, so a reclaim
     # in the SAME process could otherwise spawn a second monitor loop → duplicate
@@ -349,19 +388,28 @@ async def run_system_health_monitor() -> None:
         return
     _MONITOR_ACTIVE = True
     try:
-        # Brief startup delay so executor loops can record their first heartbeat
-        # before the first sweep (avoids a spurious "stale loops" first report).
-        await asyncio.sleep(60)
+        # Wait a full interval before the first owner DM — trade alerts are instant;
+        # no health/ops spam right after deploy.
+        await asyncio.sleep(HEALTH_INTERVAL_SECONDS)
         while True:
             try:
                 results = await run_system_health_check()
                 report = format_report(results)
-                sent = await _send_report(report)
                 n_crit = sum(1 for r in results if r["status"] == "crit")
-                if sent:
-                    logger.info(f"[health] hourly sweep delivered — {len(results)} checks, {n_crit} critical")
+                if not _claim_health_report_slot():
+                    logger.info("[health] sweep ran — owner DM skipped (dedup window)")
                 else:
-                    logger.warning(f"[health] hourly sweep NOT delivered — {len(results)} checks, {n_crit} critical")
+                    sent = await _send_report(report)
+                    if sent:
+                        logger.info(
+                            f"[health] periodic sweep delivered — {len(results)} checks, "
+                            f"{n_crit} critical, interval={HEALTH_INTERVAL_SECONDS}s"
+                        )
+                    else:
+                        logger.warning(
+                            f"[health] periodic sweep NOT delivered — {len(results)} checks, "
+                            f"{n_crit} critical"
+                        )
             except Exception as e:
                 logger.error(f"[health] sweep failed: {e}")
             await asyncio.sleep(HEALTH_INTERVAL_SECONDS)
