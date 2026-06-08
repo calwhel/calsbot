@@ -46,6 +46,10 @@ def _get_queue() -> asyncio.Queue:
     return _queue
 
 
+def ctrader_order_worker_running() -> bool:
+    return _worker_started
+
+
 def start_ctrader_order_worker() -> None:
     global _worker_started
     if _worker_started:

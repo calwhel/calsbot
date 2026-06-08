@@ -3992,7 +3992,7 @@ async def _propagate_to_subscribers(
                             risk_pct=_sub_risk_pct,
                             risk_usd=_sub_risk_usd,
                             use_risk_pct=_sub_use_risk_pct,
-                            sl_pips=float(sub_config.get("stop_loss_pips") or 0) or None,
+                            sl_pips=float((sub_config.get("exit") or {}).get("stop_loss_pips") or 0) or None,
                             fixed_lots=_sub_fixed_lots or None,
                             asset_class=_sub_asset_class,
                         )

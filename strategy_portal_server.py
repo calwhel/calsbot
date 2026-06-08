@@ -7856,7 +7856,8 @@ async def api_save_strategy(request: Request):
             try:
                 from app.models import UserPreference as _UP_save
                 _ps = db.query(_UP_save).filter(_UP_save.user_id == user.id).first()
-                _ctrader_live_ok = bool(_ps and _ps.ctrader_access_token and _ps.ctrader_account_id)
+                _ready, _ = _user_ctrader_live_ready(_ps, user)
+                _ctrader_live_ok = _ready
             except Exception:
                 _ctrader_live_ok = False
         if _asset_class in PAPER_ONLY_CLASSES and not _ctrader_live_ok:
@@ -10021,6 +10022,9 @@ async def api_update_strategy(strategy_id: int, request: Request):
                              "message": "A Pro subscription ($50/month) is required to run live strategies."},
                             status_code=403
                         )
+                    _gate = _forex_live_promote_gate(s, user, db)
+                    if _gate:
+                        return _gate
                 s.status = body["status"]
             s.config = config
             db.commit()
@@ -10104,6 +10108,9 @@ async def api_update_strategy(strategy_id: int, request: Request):
                          "message": "A Pro subscription ($50/month) is required to run live strategies."},
                         status_code=403
                     )
+                _gate = _forex_live_promote_gate(s, user, db)
+                if _gate:
+                    return _gate
             s.status = body["status"]
 
         s.config = config
@@ -10274,6 +10281,62 @@ def _ctrader_return_hosts_allowed() -> set:
 def _ctrader_host_is_railway(host: str) -> bool:
     host = (host or "").strip().lower()
     return host.endswith(".up.railway.app") or host.endswith(".railway.app")
+
+
+_CTRADER_BLOCKER_MESSAGES = {
+    "ctrader_not_connected": "Connect cTrader and select an account before going live.",
+    "no_account_selected": "Select a cTrader account on the Live Forex tab.",
+    "forex_not_approved": "Live forex requires approval — send /forex to @TradehubStrategyBot on Telegram.",
+    "ctrader_app_credentials_missing": "Live trading is temporarily unavailable (server config).",
+    "pro_subscription_required": "A Pro subscription is required to run live strategies.",
+}
+
+
+def _strategy_asset_class(strategy) -> str:
+    from app.services.asset_classes import normalize_asset_class
+    cfg = dict(strategy.config or {})
+    col = getattr(strategy, "asset_class", None) or ""
+    cfg_ac = cfg.get("asset_class") or cfg.get("_asset_class") or ""
+    if col == "crypto" and cfg_ac and cfg_ac != "crypto":
+        return normalize_asset_class(cfg_ac)
+    return normalize_asset_class(col or cfg_ac)
+
+
+def _forex_live_promote_gate(strategy, user, db):
+    """Block promoting forex/index strategies to live when cTrader is not ready."""
+    if _strategy_asset_class(strategy) not in ("forex", "index"):
+        return None
+    from app.models import UserPreference as _UP_gate
+    prefs = db.query(_UP_gate).filter(_UP_gate.user_id == user.id).first()
+    ready, blockers = _user_ctrader_live_ready(prefs, user)
+    if ready:
+        return None
+    return JSONResponse({
+        "error": "CTRADER_NOT_READY",
+        "message": _CTRADER_BLOCKER_MESSAGES.get(blockers[0], "cTrader is not ready for live trading."),
+        "blockers": blockers,
+    }, status_code=403)
+
+
+def _user_ctrader_live_ready(prefs, user=None) -> tuple:
+    """Return (ready, blockers) for placing live forex/index orders on cTrader."""
+    blockers: list = []
+    if not prefs or not (prefs.ctrader_access_token or "").strip():
+        blockers.append("ctrader_not_connected")
+    if not (prefs and (prefs.ctrader_account_id or "").strip()):
+        blockers.append("no_account_selected")
+    forex_approved = bool(getattr(prefs, "forex_approved", False)) if prefs else False
+    if user and getattr(user, "is_admin", False):
+        forex_approved = True
+    if not forex_approved:
+        blockers.append("forex_not_approved")
+    try:
+        from app.services.ctrader_client import CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET
+        if not (CTRADER_CLIENT_ID and CTRADER_CLIENT_SECRET):
+            blockers.append("ctrader_app_credentials_missing")
+    except Exception:
+        blockers.append("ctrader_app_credentials_missing")
+    return len(blockers) == 0, blockers
 
 
 def _ctrader_auto_pick_account(accounts: list) -> Optional[dict]:
@@ -11242,6 +11305,8 @@ async def api_live_forex_account(uid: str = Query(...)):
         except Exception:
             feed_info = {}
 
+        exec_ready, exec_blockers = _user_ctrader_live_ready(prefs, user)
+
         return JSONResponse({
             "connected":       True,
             "forex_approved":  forex_approved,
@@ -11252,6 +11317,95 @@ async def api_live_forex_account(uid: str = Query(...)):
             "open_positions":  positions,
             "live_strategies": live_strategies,
             "price_feed":      feed_info,
+            "execution_ready": exec_ready,
+            "execution_blockers": exec_blockers,
+        })
+    finally:
+        db.close()
+
+
+@app.get("/api/live-forex/readiness")
+async def api_live_forex_readiness(uid: str = Query(...)):
+    """Diagnostics for the live forex signal → cTrader order pipeline."""
+    import time as _time
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    from app.deployment import is_production_deploy
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        ready, blockers = _user_ctrader_live_ready(prefs, user)
+
+        from app.strategy_models import UserStrategy
+        active_forex = db.query(UserStrategy).filter(
+            UserStrategy.user_id == user.id,
+            UserStrategy.status == "active",
+            UserStrategy.asset_class.in_(["forex", "index", "metals", "commodity"]),
+        ).count()
+
+        _sub = _get_portal_sub(user.id, db)
+        pro_ok = _is_portal_pro(_sub) or bool(getattr(user, "is_admin", False))
+
+        hb: dict = {}
+        try:
+            from app.services.strategy_executor import get_heartbeats
+            hb = get_heartbeats()
+        except Exception:
+            pass
+        _now = _time.time()
+        _fx_age = (_now - hb["forex_executor"]) if hb.get("forex_executor") else None
+        _mgr_age = (_now - hb["forex_live_manager"]) if hb.get("forex_live_manager") else None
+
+        feed_info: dict = {}
+        try:
+            from app.services import ctrader_price_feed as _ctf
+            feed_info = _ctf.feed_status()
+        except Exception:
+            feed_info = {}
+
+        try:
+            from app.services.ctrader_order_queue import ctrader_order_worker_running
+            queue_worker = ctrader_order_worker_running()
+        except Exception:
+            queue_worker = False
+
+        pipeline_notes = [
+            "Structure scanner (/api/forex/scanner) is discovery-only — live orders "
+            "fire when your active strategy's entry conditions match in the forex executor.",
+        ]
+        if not pro_ok:
+            blockers = list(dict.fromkeys(blockers + ["pro_subscription_required"]))
+        if not is_production_deploy():
+            pipeline_notes.append(
+                "Executor runs on production only — dev/staging will not place live orders."
+            )
+
+        return JSONResponse({
+            "execution_ready": ready and pro_ok,
+            "blockers": blockers + ([] if pro_ok else ["pro_subscription_required"]),
+            "blocker_messages": {
+                k: _CTRADER_BLOCKER_MESSAGES.get(k, k)
+                for k in (blockers + ([] if pro_ok else ["pro_subscription_required"]))
+            },
+            "connected": bool(prefs and prefs.ctrader_access_token),
+            "forex_approved": bool(getattr(prefs, "forex_approved", False)) or bool(getattr(user, "is_admin", False)),
+            "account_id": (prefs.ctrader_account_id or "") if prefs else "",
+            "pro_subscription": pro_ok,
+            "active_live_strategies": active_forex,
+            "executor": {
+                "production_deploy": is_production_deploy(),
+                "forex_executor_age_sec": round(_fx_age, 1) if _fx_age is not None else None,
+                "forex_live_manager_age_sec": round(_mgr_age, 1) if _mgr_age is not None else None,
+                "forex_executor_alive": _fx_age is not None and _fx_age < 120,
+            },
+            "order_queue_worker_started": queue_worker,
+            "price_feed": feed_info,
+            "pipeline_notes": pipeline_notes,
+            "test_trade_url": f"/api/ctrader/test-trade?uid={uid}&symbol=EURUSD",
         })
     finally:
         db.close()

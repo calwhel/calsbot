@@ -1570,6 +1570,7 @@ async def place_ctrader_order_for_user(
             volume_units           = contracts,
             stop_loss_price        = sl_price,
             take_profit_price      = tp_price,
+            entry_price            = entry_price,
             host                   = primary_host,
         )
     else:
@@ -1645,6 +1646,7 @@ async def place_ctrader_order_for_user(
                 volume_units           = contracts,
                 stop_loss_price        = sl_price,
                 take_profit_price      = tp_price,
+                entry_price            = entry_price,
                 host                   = _host,
             )
         return await place_order(
