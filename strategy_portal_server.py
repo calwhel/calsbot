@@ -8096,9 +8096,11 @@ async def api_tradingview_webhook(token: str, request: Request):
         db.commit()
 
         try:
-            from app.services.strategy_executor import _telegram_int_id, _tg_send, _fmt_open_card
+            from app.services.strategy_executor import (
+                _claim_tg_open_notify, _telegram_int_id, _tg_send, _fmt_open_card,
+            )
             tg_id = _telegram_int_id(user)
-            if tg_id:
+            if tg_id and _claim_tg_open_notify(db, execution.id):
                 portal_settings = db.query(StrategyPortalSettings).filter(
                     StrategyPortalSettings.user_id == user.id
                 ).first()

@@ -164,8 +164,11 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
         if user and strategy and (not portal_settings or portal_settings.dm_live_alerts):
             try:
                 from app.services.strategy_executor import (
+                    _claim_tg_open_notify,
                     _fmt_open_card, _telegram_int_id, _tg_send,
                 )
+                if not _claim_tg_open_notify(db, execution.id):
+                    return
                 tg_id = _telegram_int_id(user)
                 if tg_id and execution.entry_price and execution.tp_price and execution.sl_price:
                     entry = actual_fill if actual_fill and actual_fill > 0 else execution.entry_price
