@@ -73,6 +73,31 @@ def _cached_json(payload, hit: bool, ttl_seconds: int | None = None, status_code
     return JSONResponse(payload, status_code=status_code, headers=headers)
 
 
+def _slim_strategy_config(cfg: dict) -> dict:
+    """Card-view config slice — drops heavy entry_conditions/universe blobs."""
+    if not cfg:
+        return {}
+    risk = cfg.get("risk") or {}
+    exit_ = cfg.get("exit") or {}
+    slim_risk = {
+        k: risk[k] for k in (
+            "leverage", "position_size_type", "position_size_pct",
+            "position_size_usd", "position_size_lots",
+        ) if risk.get(k) is not None
+    }
+    slim_exit = {
+        k: exit_[k] for k in ("take_profit_pct", "stop_loss_pct")
+        if exit_.get(k) is not None
+    }
+    return {
+        "asset_class": cfg.get("asset_class") or cfg.get("_asset_class") or "crypto",
+        "direction": cfg.get("direction"),
+        "_locked": cfg.get("_locked"),
+        "risk": slim_risk,
+        "exit": slim_exit,
+    }
+
+
 def _html_error_page(status: int, title: str, message: str) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -3472,7 +3497,7 @@ async def api_mobile_delete_account(request: Request):
 
 
 @app.get("/api/me")
-async def api_me(request: Request, uid: str = Query(None), db: Session = Depends(get_db)):
+async def api_me(request: Request, uid: str = Query(None)):
     """Session + profile probe for the portal shell and auth-aware nav.
 
     Always returns 200 — anonymous visitors get {"logged_in": false}.
@@ -3482,25 +3507,46 @@ async def api_me(request: Request, uid: str = Query(None), db: Session = Depends
     session_uid = _get_session_uid(request)
     if not session_uid:
         return JSONResponse({"logged_in": False}, headers=no_cache)
-    user = _get_user_by_uid(session_uid, db)
-    if not user:
+
+    _me_key = f"api_me:{session_uid}"
+    _me_cached = get_cache(_me_key)
+    if isinstance(_me_cached, dict):
+        return JSONResponse(_me_cached, headers={**no_cache, "X-Cache": "HIT"})
+
+    def _load_me():
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            user = _get_user_by_uid(session_uid, db)
+            if not user:
+                return None
+            display = (user.username or user.first_name or user.uid or "").strip() or user.uid
+            avatar = (user.first_name or user.username or "T")[0].upper()
+            sub = _get_portal_sub(user.id, db)
+            is_pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
+            is_web = str(getattr(user, "telegram_id", "") or "").startswith("WEB-")
+            return {
+                "logged_in": True,
+                "uid": user.uid or session_uid,
+                "username": user.username or "",
+                "first_name": user.first_name,
+                "display": display,
+                "name": user.first_name or user.username or "Trader",
+                "avatar": avatar,
+                "is_pro": is_pro,
+                "is_web_user": is_web,
+            }
+        finally:
+            db.close()
+
+    try:
+        payload = await asyncio.wait_for(asyncio.to_thread(_load_me), timeout=8.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Database busy")
+    if not payload:
         return JSONResponse({"logged_in": False}, headers=no_cache)
-    display = (user.username or user.first_name or user.uid or "").strip() or user.uid
-    avatar = (user.first_name or user.username or "T")[0].upper()
-    sub = _get_portal_sub(user.id, db)
-    is_pro = _is_portal_pro(sub) or bool(getattr(user, "is_admin", False))
-    is_web = str(getattr(user, "telegram_id", "") or "").startswith("WEB-")
-    return JSONResponse({
-        "logged_in": True,
-        "uid": user.uid or session_uid,
-        "username": user.username or "",
-        "first_name": user.first_name,
-        "display": display,
-        "name": user.first_name or user.username or "Trader",
-        "avatar": avatar,
-        "is_pro": is_pro,
-        "is_web_user": is_web,
-    }, headers=no_cache)
+    set_cache(_me_key, payload, ttl_seconds=15)
+    return JSONResponse(payload, headers=no_cache)
 
 
 @app.get("/api/walls/{symbol}")
@@ -6373,7 +6419,7 @@ async def api_strategies(uid: str = Query(...)):
                     "name":         s.name,
                     "description":  s.description,
                     "status":       s.status,
-                    "config":       cfg,
+                    "config":       _slim_strategy_config(cfg),
                     "is_locked":    bool(cfg.get("_locked")),
                     "is_public":    s.is_public,
                     "created_at":   s.created_at.isoformat() if s.created_at else None,
@@ -6447,6 +6493,9 @@ async def api_toggle_strategy(strategy_id: int, uid: str = Query(...)):
         db.commit()
         invalidate_prefix(f"api_strats_{uid}")
         invalidate_prefix(f"api_mkt:{uid}")
+        invalidate_cache(f"portfolio_{uid}")
+        invalidate_prefix(f"portfolio_trades:{uid}:")
+        invalidate_cache(f"live_forex_acct:{(uid or '').strip().upper()}")
         return {"status": strategy.status}
     finally:
         db.close()
@@ -9364,6 +9413,7 @@ async def api_portfolio_trades(
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
     filter: str = Query("all"),  # all | live | paper | wins | losses | open
+    live: bool = Query(False),   # fetch mark prices for OPEN rows (slower)
 ):
     """Aggregate trade executions across ALL of the caller's strategies.
 
@@ -9371,7 +9421,7 @@ async def api_portfolio_trades(
     parent strategy's id + name so the client can deep-link to the strategy
     detail screen without an extra round-trip.
     """
-    _ptrades_key = f"portfolio_trades:{uid}:{filter}:{offset}:{limit}"
+    _ptrades_key = f"portfolio_trades:{uid}:{filter}:{offset}:{limit}:{int(live)}"
     _ptrades_cached = _CACHE.get(_ptrades_key)
     if _ptrades_cached and time.time() < _ptrades_cached[1]:
         return JSONResponse(_ptrades_cached[0])
@@ -9450,20 +9500,41 @@ async def api_portfolio_trades(
         if item["execution"].outcome == "OPEN"
     })
     live_prices: dict = {}
-    if open_symbols:
-        try:
+    if live and open_symbols:
+        async def _quick_marks() -> dict:
+            out: dict = {}
             from app.services.asset_classes import get_symbol as _ac_get
             tradfi_syms = [s for s in open_symbols
                            if any(_ac_get(c, s) for c in ("stock", "forex", "index"))]
             crypto_syms = [s for s in open_symbols if s not in set(tradfi_syms)]
-            async with httpx.AsyncClient() as hc:
-                from app.services.strategy_executor import (
-                    _fetch_live_price_batch, _fetch_live_price_batch_tradfi,
-                )
-                if crypto_syms:
-                    live_prices.update(await _fetch_live_price_batch(crypto_syms, hc))
-                if tradfi_syms:
-                    live_prices.update(await _fetch_live_price_batch_tradfi(tradfi_syms))
+            if crypto_syms:
+                try:
+                    from app.services.price_cache import get_multiple_cached_prices
+                    out.update(await get_multiple_cached_prices(crypto_syms[:20]))
+                except Exception:
+                    pass
+            if tradfi_syms:
+                try:
+                    from app.services.strategy_executor import _fetch_live_price_batch_tradfi
+                    out.update(await _fetch_live_price_batch_tradfi(tradfi_syms[:12]))
+                except Exception:
+                    pass
+            missing = [s for s in open_symbols if s not in out][:8]
+            if missing:
+                try:
+                    from app.services.ctrader_price_feed import get_price as _ctf_px
+                    for sym in missing:
+                        px = _ctf_px(sym)
+                        if px and px > 0:
+                            out[sym] = px
+                except Exception:
+                    pass
+            return out
+
+        try:
+            live_prices = await asyncio.wait_for(_quick_marks(), timeout=2.5)
+        except asyncio.TimeoutError:
+            logger.debug("[portfolio/trades] live marks timed out — skipped")
         except Exception as _lpe:
             logger.debug(f"live price fetch skipped: {_lpe}")
 
@@ -9702,14 +9773,25 @@ async def api_portfolio(uid: str = Query(...)):
             return _cached_json(stale[0], True, 60)
         raise
 
-    # Affiliate check — async upstream call, runs on the event loop. Fail-soft.
+    # Affiliate check — cached 10 min so bootstrap isn't blocked on Bitunix HTTP.
     aff_ok, aff_reason = False, "no_bitunix_uid"
     if d["bitunix_uid"]:
-        try:
-            from app.services.bitunix_partner import is_uid_affiliated
-            aff_ok, aff_reason = await is_uid_affiliated(d["bitunix_uid"])
-        except Exception as e:
-            aff_reason = f"check_error:{type(e).__name__}"
+        _aff_key = f"affiliate_ok:{uid}"
+        _aff_cached = get_cache(_aff_key)
+        if isinstance(_aff_cached, dict):
+            aff_ok = bool(_aff_cached.get("ok"))
+            aff_reason = str(_aff_cached.get("reason") or "cached")
+        else:
+            try:
+                from app.services.bitunix_partner import is_uid_affiliated
+                aff_ok, aff_reason = await asyncio.wait_for(
+                    is_uid_affiliated(d["bitunix_uid"]), timeout=4.0,
+                )
+            except asyncio.TimeoutError:
+                aff_reason = "check_timeout"
+            except Exception as e:
+                aff_reason = f"check_error:{type(e).__name__}"
+            set_cache(_aff_key, {"ok": aff_ok, "reason": aff_reason}, ttl_seconds=600)
 
     payload = {
         "total_strategies": d["total_strategies"],
@@ -11105,252 +11187,266 @@ async def api_ctrader_feed_status():
 
 
 @app.get("/api/live-forex/account")
-async def api_live_forex_account(uid: str = Query(...)):
+async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(False)):
     """
     Returns live cTrader account data (balance, equity, open positions)
     plus connection/approval state for the Live Forex tab.
     """
-    from app.database import SessionLocal
-    from app.models import UserPreference
-    db = SessionLocal()
+    import json as _json
+    _uid_key = (uid or "").strip().upper()
+    _cache_key = f"live_forex_acct:{_uid_key}"
+    if not refresh:
+        _cached = get_cache(_cache_key)
+        if isinstance(_cached, dict):
+            return JSONResponse({**_cached, "cached": True})
+
+    def _load_db_snapshot():
+        from app.database import SessionLocal
+        from app.models import UserPreference
+        from sqlalchemy import text as _t
+        db = SessionLocal()
+        try:
+            db.execute(_t("SET LOCAL statement_timeout = '8000'"))
+            user = _get_user_by_uid(uid, db)
+            if not user:
+                return None
+            prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+            connected = bool(prefs and prefs.ctrader_access_token)
+            forex_approved = bool(getattr(prefs, "forex_approved", False)) if prefs else False
+            if not forex_approved and getattr(user, "is_admin", False):
+                forex_approved = True
+                if prefs:
+                    prefs.forex_approved = True
+                    db.commit()
+            accounts = _json.loads(prefs.ctrader_accounts or "[]") if prefs else []
+            positions = db.execute(_t("""
+                SELECT e.id, e.symbol, e.direction, e.entry_price,
+                       e.tp_price AS tp1_price, e.sl_price, e.pnl_pct,
+                       e.fired_at, s.name AS strategy_name, e.asset_class
+                FROM strategy_executions e
+                JOIN user_strategies s ON s.id = e.strategy_id
+                WHERE s.user_id = :uid
+                  AND e.outcome = 'OPEN' AND e.is_paper = false
+                  AND e.asset_class IN ('forex', 'index', 'metals', 'commodity')
+                ORDER BY e.fired_at DESC LIMIT 20
+            """), {"uid": user.id}).fetchall()
+            live_rows = db.execute(_t("""
+                SELECT s.id, s.name, s.status, s.asset_class, s.config,
+                       COUNT(e.id) FILTER (WHERE e.outcome='OPEN' AND e.is_paper=false) AS open_count,
+                       COUNT(e.id) FILTER (
+                           WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.is_paper=false
+                       ) AS closed_count,
+                       COUNT(e.id) FILTER (WHERE e.outcome='WIN' AND e.is_paper=false) AS win_count,
+                       COALESCE(SUM(e.pnl_pct) FILTER (
+                           WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.is_paper=false
+                       ), 0) AS total_pnl_pct
+                FROM user_strategies s
+                LEFT JOIN strategy_executions e ON e.strategy_id = s.id
+                WHERE s.user_id = :uid
+                  AND s.status IN ('active','paused')
+                  AND s.asset_class IN ('forex','index','metals','commodity')
+                GROUP BY s.id
+                ORDER BY (s.status='active') DESC, s.updated_at DESC
+                LIMIT 30
+            """), {"uid": user.id}).fetchall()
+            return {
+                "user": user,
+                "prefs": prefs,
+                "connected": connected,
+                "forex_approved": forex_approved,
+                "accounts": accounts,
+                "positions": [dict(r._mapping) for r in positions],
+                "live_rows": [dict(r._mapping) for r in live_rows],
+            }
+        finally:
+            db.close()
+
     try:
-        user = _get_user_by_uid(uid, db)
-        if not user:
-            raise HTTPException(status_code=403, detail="Invalid UID")
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        connected = bool(prefs and prefs.ctrader_access_token)
-        forex_approved = bool(getattr(prefs, "forex_approved", False)) if prefs else False
-        # Admins are always approved — auto-persist if not already set
-        if not forex_approved and getattr(user, "is_admin", False):
-            forex_approved = True
-            if prefs:
-                prefs.forex_approved = True
-                db.commit()
+        snap = await asyncio.wait_for(asyncio.to_thread(_load_db_snapshot), timeout=12.0)
+    except asyncio.TimeoutError:
+        stale = get_cache(_cache_key)
+        if isinstance(stale, dict):
+            return JSONResponse({**stale, "cached": True, "stale": True})
+        raise HTTPException(status_code=503, detail="Database busy — retry in a moment")
+    if snap is None:
+        raise HTTPException(status_code=403, detail="Invalid UID")
 
-        import json as _json
-        accounts = _json.loads(prefs.ctrader_accounts or "[]") if prefs else []
+    user = snap["user"]
+    prefs = snap["prefs"]
+    if not snap["connected"]:
+        payload = {
+            "connected": False,
+            "forex_approved": snap["forex_approved"],
+            "accounts": snap["accounts"],
+            "balance": None,
+            "equity": None,
+        }
+        set_cache(_cache_key, payload, ttl_seconds=15)
+        return JSONResponse(payload)
 
-        if not connected:
-            return JSONResponse({"connected": False, "forex_approved": forex_approved, "accounts": accounts, "balance": None, "equity": None})
+    balance = None
+    accounts = snap["accounts"]
 
-        balance = None
-
-        async def _sync_ctrader_accounts():
-            nonlocal accounts
-            if not (prefs and prefs.ctrader_access_token):
+    async def _sync_ctrader_accounts():
+        nonlocal accounts
+        if not (prefs and prefs.ctrader_access_token):
+            return
+        need = (not accounts) or not (prefs.ctrader_account_id or "").strip()
+        if not need:
+            return
+        from app.database import SessionLocal
+        from app.models import UserPreference
+        try:
+            from app.services.ctrader_client import get_accounts_for_token
+            fetched = await asyncio.wait_for(
+                get_accounts_for_token(prefs.ctrader_access_token), timeout=6.0,
+            )
+            if not fetched:
                 return
-            need = (not accounts) or not (prefs.ctrader_account_id or "").strip()
-            if not need:
-                return
+            accounts = fetched
+            db2 = SessionLocal()
             try:
-                from app.services.ctrader_client import get_accounts_for_token
-                fetched = await asyncio.wait_for(
-                    get_accounts_for_token(prefs.ctrader_access_token), timeout=10.0
-                )
-                if fetched:
-                    accounts = fetched
-                    prefs.ctrader_accounts = _json.dumps(fetched)
-                    if not (prefs.ctrader_account_id or "").strip():
+                p2 = db2.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+                if p2:
+                    p2.ctrader_accounts = _json.dumps(fetched)
+                    if not (p2.ctrader_account_id or "").strip():
                         chosen = _ctrader_auto_pick_account(fetched)
                         if chosen:
-                            prefs.ctrader_account_id = str(chosen["ctidTraderAccountId"])
-                    db.commit()
-            except Exception as _ae:
-                logger.warning(f"[live-forex] account sync failed uid={uid}: {type(_ae).__name__}")
-
-        async def _fetch_balance():
-            nonlocal balance
-            _acct_id = (prefs.ctrader_account_id or "").strip() if prefs else ""
-            if not _acct_id:
-                return
-            from app.cache import get_cache, set_cache
-            _bal_key = f"ctrader_balance:{user.id}"
-            _cached = get_cache(_bal_key)
-            if _cached == "__miss__":
-                balance = None
-                return
-            if _cached is not None:
-                balance = _cached
-                return
-            try:
-                from app.services.ctrader_client import _get_account_balance
-                balance = await asyncio.wait_for(
-                    _get_account_balance(prefs.ctrader_access_token, int(_acct_id)),
-                    timeout=10.0,
-                )
-                if balance is not None:
-                    set_cache(_bal_key, balance, ttl_seconds=20)
-                else:
-                    set_cache(_bal_key, "__miss__", ttl_seconds=15)
-            except Exception as _be:
-                logger.warning(
-                    f"[live-forex] balance fetch failed uid={uid}: {type(_be).__name__}: {_be}"
-                )
-                set_cache(_bal_key, "__miss__", ttl_seconds=15)
-
-        # Fetch open positions from strategy_executions (forex/index live trades)
-        def _get_open_positions():
-            from app.database import SessionLocal as _SL
-            from sqlalchemy import text as _t
-            _db = _SL()
-            try:
-                rows = _db.execute(_t("""
-                    SELECT e.id, e.symbol, e.direction, e.entry_price,
-                           e.tp_price AS tp1_price, e.sl_price, e.pnl_pct,
-                           e.fired_at, s.name AS strategy_name,
-                           e.asset_class
-                    FROM strategy_executions e
-                    JOIN user_strategies s ON s.id = e.strategy_id
-                    WHERE s.user_id = :uid
-                      AND e.outcome = 'OPEN'
-                      AND e.is_paper = false
-                      AND e.asset_class IN ('forex', 'index', 'metals', 'commodity')
-                    ORDER BY e.fired_at DESC
-                    LIMIT 20
-                """), {"uid": user.id}).fetchall()
-                return [dict(r._mapping) for r in rows]
+                            p2.ctrader_account_id = str(chosen["ctidTraderAccountId"])
+                    db2.commit()
+                    prefs.ctrader_account_id = p2.ctrader_account_id
             finally:
-                _db.close()
+                db2.close()
+        except Exception as _ae:
+            logger.warning(f"[live-forex] account sync failed uid={uid}: {type(_ae).__name__}")
 
-        def _get_live_strategies():
-            from app.database import SessionLocal as _SL
-            from sqlalchemy import text as _t
-            _db = _SL()
-            try:
-                rows = _db.execute(_t("""
-                    SELECT s.id, s.name, s.status, s.asset_class, s.config,
-                           COUNT(e.id) FILTER (
-                               WHERE e.outcome='OPEN' AND e.is_paper=false) AS open_count,
-                           COUNT(e.id) FILTER (
-                               WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN')
-                                 AND e.is_paper=false) AS closed_count,
-                           COUNT(e.id) FILTER (
-                               WHERE e.outcome='WIN' AND e.is_paper=false) AS win_count,
-                           COALESCE(SUM(e.pnl_pct) FILTER (
-                               WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN')
-                                 AND e.is_paper=false), 0) AS total_pnl_pct
-                    FROM user_strategies s
-                    LEFT JOIN strategy_executions e ON e.strategy_id = s.id
-                    WHERE s.user_id = :uid
-                      AND s.status IN ('active','paused')
-                      AND s.asset_class IN ('forex','index','metals','commodity')
-                    GROUP BY s.id
-                    ORDER BY (s.status='active') DESC, s.updated_at DESC
-                    LIMIT 30
-                """), {"uid": user.id}).fetchall()
-                return [dict(r._mapping) for r in rows]
-            finally:
-                _db.close()
-
-        positions_task = asyncio.create_task(asyncio.to_thread(_get_open_positions))
-        strategies_task = asyncio.create_task(asyncio.to_thread(_get_live_strategies))
-
+    async def _fetch_balance():
+        nonlocal balance
+        _acct_id = (prefs.ctrader_account_id or "").strip() if prefs else ""
+        if not _acct_id:
+            return
+        _bal_key = f"ctrader_balance:{user.id}"
+        _cached = get_cache(_bal_key)
+        if _cached == "__miss__":
+            return
+        if _cached is not None:
+            balance = _cached
+            return
         try:
-            await asyncio.wait_for(
-                asyncio.gather(_sync_ctrader_accounts(), _fetch_balance(), return_exceptions=True),
-                timeout=14.0,
+            from app.services.ctrader_client import _get_account_balance
+            balance = await asyncio.wait_for(
+                _get_account_balance(prefs.ctrader_access_token, int(_acct_id)),
+                timeout=4.0,
             )
-        except asyncio.TimeoutError:
-            logger.warning(f"[live-forex] ctrader enrich timed out uid={uid}")
-
-        positions = await positions_task
-        for p in positions:
-            if p.get("fired_at"):
-                p["fired_at"] = p["fired_at"].isoformat()
-            try:
-                from app.services.ctrader_price_feed import get_price as _mkt_px
-                from app.services.forex_engine import pip_size as _pip_sz
-                sym = (p.get("symbol") or "").upper()
-                entry = float(p.get("entry_price") or 0)
-                if sym and entry > 0:
-                    mark = _mkt_px(sym)
-                    if mark:
-                        p["mark_price"] = round(mark, 6)
-                        pip = max(_pip_sz(sym), 1e-10)
-                        if p.get("direction") == "LONG":
-                            p["unrealized_pips"] = round((mark - entry) / pip, 1)
-                        else:
-                            p["unrealized_pips"] = round((entry - mark) / pip, 1)
-            except Exception:
-                pass
-
-        live_rows = await strategies_task
-        live_strategies = []
-        for s in live_rows:
-            cfg = s.get("config") or {}
-            if isinstance(cfg, str):
-                try: cfg = _json.loads(cfg)
-                except Exception: cfg = {}
-            risk = cfg.get("risk") or {}
-            uni  = cfg.get("universe") or {}
-            syms = (uni.get("symbols") or cfg.get("tradfi_symbols")
-                    or cfg.get("symbols") or [])
-            if isinstance(syms, str):
-                syms = [syms]
-            # Timeframe is stored per entry condition; surface the primary one.
-            _tf = cfg.get("timeframe") or cfg.get("_timeframe")
-            if not _tf:
-                _conds = (cfg.get("entry_conditions") or {}).get("conditions") or []
-                if _conds and isinstance(_conds[0], dict):
-                    _tf = _conds[0].get("timeframe")
-            pst = (risk.get("position_size_type") or "pct").lower()
-            if pst == "lots":
-                size_value = float(risk.get("position_size_lots", 0.1) or 0.1)
-                size_label = f"{size_value:g} lots"
-            elif pst == "fixed":
-                size_value = float(risk.get("position_size_usd", 50) or 50)
-                size_label = f"${size_value:g} fixed"
-            elif risk.get("use_risk_pct"):
-                size_value = float(risk.get("risk_pct_per_trade", 1) or 1)
-                size_label = f"{size_value:g}% risk"
-                pst = "risk_pct"
+            if balance is not None:
+                set_cache(_bal_key, balance, ttl_seconds=60)
             else:
-                size_value = float(risk.get("position_size_pct", 5) or 5)
-                size_label = f"{size_value:g}% balance"
-                pst = "pct"
-            _closed = int(s["closed_count"] or 0)
-            _wins   = int(s["win_count"] or 0)
-            live_strategies.append({
-                "id":            s["id"],
-                "name":          s["name"],
-                "status":        s["status"],
-                "asset_class":   s["asset_class"],
-                "symbols":       [str(x).upper() for x in syms][:8],
-                "open_count":    int(s["open_count"] or 0),
-                "closed_count":  _closed,
-                "win_count":     _wins,
-                "win_rate":      round(_wins / _closed * 100, 1) if _closed else None,
-                "total_pnl_pct": round(float(s["total_pnl_pct"] or 0), 2),
-                "size_type":     pst,
-                "size_value":    round(size_value, 4),
-                "size_label":    size_label,
-                "timeframe":     _tf or "—",
-            })
+                set_cache(_bal_key, "__miss__", ttl_seconds=20)
+        except Exception as _be:
+            logger.warning(f"[live-forex] balance fetch uid={uid}: {type(_be).__name__}")
+            set_cache(_bal_key, "__miss__", ttl_seconds=20)
 
-        feed_info: Dict[str, object] = {}
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(_sync_ctrader_accounts(), _fetch_balance(), return_exceptions=True),
+            timeout=4.5,
+        )
+    except asyncio.TimeoutError:
+        _stale_bal = get_cache(f"ctrader_balance:{user.id}")
+        if isinstance(_stale_bal, (int, float)):
+            balance = _stale_bal
+
+    positions = snap["positions"]
+    for p in positions:
+        if p.get("fired_at"):
+            p["fired_at"] = p["fired_at"].isoformat()
         try:
-            from app.services import ctrader_price_feed as _ctf
-            feed_info = _ctf.feed_status()
+            from app.services.ctrader_price_feed import get_price as _mkt_px
+            from app.services.forex_engine import pip_size as _pip_sz
+            sym = (p.get("symbol") or "").upper()
+            entry = float(p.get("entry_price") or 0)
+            if sym and entry > 0:
+                mark = _mkt_px(sym)
+                if mark:
+                    p["mark_price"] = round(mark, 6)
+                    pip = max(_pip_sz(sym), 1e-10)
+                    if p.get("direction") == "LONG":
+                        p["unrealized_pips"] = round((mark - entry) / pip, 1)
+                    else:
+                        p["unrealized_pips"] = round((entry - mark) / pip, 1)
         except Exception:
-            feed_info = {}
+            pass
 
-        exec_ready, exec_blockers = _user_ctrader_live_ready(prefs, user)
-
-        return JSONResponse({
-            "connected":       True,
-            "forex_approved":  forex_approved,
-            "account_id":      prefs.ctrader_account_id or "",
-            "accounts":        accounts,
-            "balance":         round(balance, 2) if balance is not None else None,
-            "equity":          round(balance, 2) if balance is not None else None,
-            "open_positions":  positions,
-            "live_strategies": live_strategies,
-            "price_feed":      feed_info,
-            "execution_ready": exec_ready,
-            "execution_blockers": exec_blockers,
+    live_strategies = []
+    for s in snap["live_rows"]:
+        cfg = s.get("config") or {}
+        if isinstance(cfg, str):
+            try:
+                cfg = _json.loads(cfg)
+            except Exception:
+                cfg = {}
+        risk = cfg.get("risk") or {}
+        uni = cfg.get("universe") or {}
+        syms = (uni.get("symbols") or cfg.get("tradfi_symbols") or cfg.get("symbols") or [])
+        if isinstance(syms, str):
+            syms = [syms]
+        _tf = cfg.get("timeframe") or cfg.get("_timeframe")
+        if not _tf:
+            _conds = (cfg.get("entry_conditions") or {}).get("conditions") or []
+            if _conds and isinstance(_conds[0], dict):
+                _tf = _conds[0].get("timeframe")
+        pst = (risk.get("position_size_type") or "pct").lower()
+        if pst == "lots":
+            size_value = float(risk.get("position_size_lots", 0.1) or 0.1)
+            size_label = f"{size_value:g} lots"
+        elif pst == "fixed":
+            size_value = float(risk.get("position_size_usd", 50) or 50)
+            size_label = f"${size_value:g} fixed"
+        elif risk.get("use_risk_pct"):
+            size_value = float(risk.get("risk_pct_per_trade", 1) or 1)
+            size_label = f"{size_value:g}% risk"
+            pst = "risk_pct"
+        else:
+            size_value = float(risk.get("position_size_pct", 5) or 5)
+            size_label = f"{size_value:g}% balance"
+            pst = "pct"
+        _closed = int(s["closed_count"] or 0)
+        _wins = int(s["win_count"] or 0)
+        live_strategies.append({
+            "id": s["id"], "name": s["name"], "status": s["status"],
+            "asset_class": s["asset_class"],
+            "symbols": [str(x).upper() for x in syms][:8],
+            "open_count": int(s["open_count"] or 0),
+            "closed_count": _closed, "win_count": _wins,
+            "win_rate": round(_wins / _closed * 100, 1) if _closed else None,
+            "total_pnl_pct": round(float(s["total_pnl_pct"] or 0), 2),
+            "size_type": pst, "size_value": round(size_value, 4),
+            "size_label": size_label, "timeframe": _tf or "—",
         })
-    finally:
-        db.close()
+
+    feed_info: Dict[str, object] = {}
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        feed_info = _ctf.feed_status()
+    except Exception:
+        pass
+
+    exec_ready, exec_blockers = _user_ctrader_live_ready(prefs, user)
+    payload = {
+        "connected": True,
+        "forex_approved": snap["forex_approved"],
+        "account_id": (prefs.ctrader_account_id or "") if prefs else "",
+        "accounts": accounts,
+        "balance": round(balance, 2) if balance is not None else None,
+        "equity": round(balance, 2) if balance is not None else None,
+        "open_positions": positions,
+        "live_strategies": live_strategies,
+        "price_feed": feed_info,
+        "execution_ready": exec_ready,
+        "execution_blockers": exec_blockers,
+    }
+    set_cache(_cache_key, payload, ttl_seconds=12)
+    return JSONResponse(payload)
 
 
 @app.get("/api/live-forex/readiness")
