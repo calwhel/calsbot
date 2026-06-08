@@ -13,7 +13,9 @@ Bitunix order/execution code.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+from datetime import datetime
 from typing import Dict, List, Optional
 
 import httpx
@@ -152,3 +154,189 @@ async def fetch_klines(
     # Bitunix returns newest-first; consumers expect oldest-first (MEXC order).
     out.sort(key=lambda r: r[0])
     return out
+
+
+# Symbols MEXC returns 400 for — skip without retrying every cycle.
+_mexc_missing: set = set()
+_btc_closes_cache: Optional[list] = None
+_btc_closes_at: Optional[datetime] = None
+
+
+async def _fetch_mexc_klines(
+    http_client: httpx.AsyncClient, symbol: str, interval: str, limit: int,
+) -> List[list]:
+    if symbol in _mexc_missing:
+        return []
+    mexc_interval = interval.replace("1h", "60m").replace("2h", "120m")
+    url = (
+        f"https://api.mexc.com/api/v3/klines"
+        f"?symbol={symbol}&interval={mexc_interval}&limit={limit}"
+    )
+    try:
+        resp = await http_client.get(url, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data and isinstance(data, list):
+                return data
+        elif resp.status_code == 400:
+            _mexc_missing.add(symbol)
+    except Exception:
+        pass
+    return []
+
+
+async def _fetch_mexc_ticker(
+    http_client: httpx.AsyncClient, symbol: str,
+) -> Optional[Dict]:
+    if symbol in _mexc_missing:
+        return None
+    try:
+        resp = await http_client.get(
+            f"https://api.mexc.com/api/v3/ticker/24hr?symbol={symbol}",
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, dict) and float(data.get("lastPrice", 0) or 0) > 0:
+                return data
+        elif resp.status_code == 400:
+            _mexc_missing.add(symbol)
+    except Exception:
+        pass
+    return None
+
+
+async def _fetch_klines_chain(
+    http_client: httpx.AsyncClient, symbol: str, interval: str, limit: int,
+) -> List[list]:
+    rows = await _fetch_mexc_klines(http_client, symbol, interval, limit)
+    if rows:
+        return rows
+    return await fetch_klines(http_client, symbol, interval, limit)
+
+
+async def _fetch_ticker_chain(
+    http_client: httpx.AsyncClient, symbol: str,
+) -> Optional[Dict]:
+    t = await _fetch_mexc_ticker(http_client, symbol)
+    if t:
+        return t
+    return await fetch_ticker(http_client, symbol)
+
+
+def _calc_rsi(closes: list) -> float:
+    if len(closes) < 14:
+        return 50.0
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [d if d > 0 else 0.0 for d in deltas]
+    losses = [-d if d < 0 else 0.0 for d in deltas]
+    avg_gain = sum(gains[-14:]) / 14
+    avg_loss = sum(losses[-14:]) / 14
+    if avg_loss > 0:
+        return 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
+    return 100.0
+
+
+def _calc_volume_ratio(volumes: list) -> float:
+    if len(volumes) < 5:
+        return 1.0
+    avg_vol = sum(volumes[:-1]) / len(volumes[:-1])
+    return volumes[-1] / avg_vol if avg_vol > 0 else 1.0
+
+
+async def _get_btc_closes(http_client: httpx.AsyncClient) -> list:
+    global _btc_closes_cache, _btc_closes_at
+    now = datetime.utcnow()
+    if (
+        _btc_closes_cache
+        and _btc_closes_at
+        and (now - _btc_closes_at).total_seconds() < 300
+    ):
+        return _btc_closes_cache
+    try:
+        klines = await _fetch_klines_chain(http_client, "BTCUSDT", "15m", 20)
+        if klines:
+            closes = [float(k[4]) for k in klines]
+            _btc_closes_cache = closes
+            _btc_closes_at = now
+            return closes
+    except Exception:
+        pass
+    return _btc_closes_cache or []
+
+
+def _calc_correlation(coin_closes: list, btc_closes: list) -> float:
+    n = min(len(coin_closes), len(btc_closes))
+    if n < 6:
+        return 0.0
+    coin_closes = coin_closes[-n:]
+    btc_closes = btc_closes[-n:]
+    coin_returns = [
+        (coin_closes[i] - coin_closes[i - 1]) / coin_closes[i - 1]
+        for i in range(1, n)
+        if coin_closes[i - 1] != 0
+    ]
+    btc_returns = [
+        (btc_closes[i] - btc_closes[i - 1]) / btc_closes[i - 1]
+        for i in range(1, n)
+        if btc_closes[i - 1] != 0
+    ]
+    m = min(len(coin_returns), len(btc_returns))
+    if m < 5:
+        return 0.0
+    coin_returns = coin_returns[-m:]
+    btc_returns = btc_returns[-m:]
+    mean_c = sum(coin_returns) / m
+    mean_b = sum(btc_returns) / m
+    num = sum((coin_returns[i] - mean_c) * (btc_returns[i] - mean_b) for i in range(m))
+    den_c = sum((coin_returns[i] - mean_c) ** 2 for i in range(m)) ** 0.5
+    den_b = sum((btc_returns[i] - mean_b) ** 2 for i in range(m)) ** 0.5
+    if den_c > 0 and den_b > 0:
+        return num / (den_c * den_b)
+    return 0.0
+
+
+async def fetch_crypto_price_and_ta(
+    http_client: httpx.AsyncClient,
+    symbol: str,
+) -> Optional[Dict]:
+    """
+    Price + TA for portal crypto strategy evaluation.
+
+    Uses MEXC → Bitunix public market data only. Intentionally NOT the legacy
+    SocialSignalService (that path logged 📱 social-scanner lines and confused
+    portal strategy scans with the old Telegram social-signals bot).
+    """
+    try:
+        from app.services.enhanced_ta import analyze_klines
+
+        ticker, klines_15m, klines_1h = await asyncio.gather(
+            _fetch_ticker_chain(http_client, symbol),
+            _fetch_klines_chain(http_client, symbol, "15m", 50),
+            _fetch_klines_chain(http_client, symbol, "1h", 30),
+        )
+        if not ticker:
+            return None
+
+        closes = [float(k[4]) for k in klines_15m] if klines_15m else []
+        volumes = [float(k[5]) for k in klines_15m] if klines_15m else []
+        rsi = _calc_rsi(closes)
+        volume_ratio = _calc_volume_ratio(volumes)
+        btc_closes = await _get_btc_closes(http_client)
+        btc_corr = _calc_correlation(closes, btc_closes) if closes and btc_closes else 0.0
+        enhanced_ta = analyze_klines(klines_15m, klines_1h)
+
+        return {
+            "price": float(ticker.get("lastPrice", 0)),
+            "change_24h": float(ticker.get("priceChangePercent", 0)),
+            "volume_24h": float(ticker.get("quoteVolume", 0)),
+            "high_24h": float(ticker.get("highPrice", 0)),
+            "low_24h": float(ticker.get("lowPrice", 0)),
+            "rsi": rsi,
+            "volume_ratio": volume_ratio,
+            "btc_correlation": btc_corr,
+            "enhanced_ta": enhanced_ta,
+        }
+    except Exception as exc:
+        logger.debug("[crypto-md] price/TA failed %s: %s", symbol, exc)
+        return None

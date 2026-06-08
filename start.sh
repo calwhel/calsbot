@@ -4,6 +4,8 @@ set -e
 # Railway defaults — free portal features + live strategy executor
 export PORTAL_FEATURES_FREE="${PORTAL_FEATURES_FREE:-1}"
 export FORCE_EXECUTOR="${FORCE_EXECUTOR:-1}"
+# Legacy Telegram social-signals scanner — off on portal/Railway; user strategies only.
+export DISABLE_SOCIAL_SCANNING="${DISABLE_SOCIAL_SCANNING:-1}"
 
 # Optional Telegram bot companion (background; does not bind $PORT).
 # ONE process only — no inner restart loop (that spawned overlapping pollers →
