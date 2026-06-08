@@ -77,6 +77,5 @@ class TestStrategyHeal(unittest.TestCase):
         self.assertTrue(_execution_lacks_position_id("ctrader ok"))
         self.assertFalse(_execution_lacks_position_id("live | pos=12345"))
 
-
 if __name__ == "__main__":
     unittest.main()

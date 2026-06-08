@@ -334,6 +334,62 @@ async def expire_untracked_forex_opens_when_broker_empty(
         db.close()
 
 
+def raise_daily_trade_caps(
+    db,
+    user_id: int,
+    *,
+    min_cap: int = 10,
+) -> Dict[str, Any]:
+    """
+    Raise risk.max_trades_per_day on every strategy owned by this user.
+    Only increases caps below min_cap — never lowers a higher value.
+    """
+    from app.strategy_models import UserStrategy
+
+    target = max(1, min(int(min_cap), 100))
+    raised = 0
+    already_ok = 0
+    samples: List[Dict[str, Any]] = []
+
+    rows = db.query(UserStrategy).filter(UserStrategy.user_id == user_id).all()
+    for strat in rows:
+        cfg = dict(strat.config or {})
+        risk = dict(cfg.get("risk") or {})
+        cur = int(risk.get("max_trades_per_day") or 3)
+        if cur >= target:
+            already_ok += 1
+            continue
+        risk["max_trades_per_day"] = target
+        cfg["risk"] = risk
+        strat.config = cfg
+        strat.updated_at = datetime.utcnow()
+        raised += 1
+        if len(samples) < 8:
+            samples.append({
+                "id": strat.id,
+                "name": strat.name,
+                "was": cur,
+                "now": target,
+            })
+
+    if raised:
+        db.commit()
+        logger.info(
+            "[strategy-heal] user=%s raised daily cap on %s strategies → %s/day",
+            user_id,
+            raised,
+            target,
+        )
+
+    return {
+        "max_trades_per_day": target,
+        "raised": raised,
+        "already_at_or_above": already_ok,
+        "total_strategies": len(rows),
+        "samples": samples,
+    }
+
+
 def heal_user_account(db, user_id: int) -> Dict[str, Any]:
     """Full heal for one portal user."""
     stats = heal_strategies(db, user_id=user_id)
