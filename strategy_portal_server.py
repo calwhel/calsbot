@@ -1546,16 +1546,19 @@ async def _ghost_cleanup_loop():
 # Must fit PostgreSQL int32 for pg_locks.objid queries. Old id 42424242 was
 # held by a zombie Replit/Railway session (pid ~10481) that blocked the executor.
 _EXECUTOR_LOCK_ID = 708_110_004
-# Keepalive cadence for the lock-holding connection. Must stay comfortably BELOW
-# _EXECUTOR_LOCK_STALE_IDLE_SECS so a live executor worker's idle time never
-# crosses the "stale" threshold a sibling HTTP worker uses to reclaim the lock.
-_EXECUTOR_LOCK_KEEPALIVE_SECS = 30
+# Keepalive cadence for the lock-holding connection. Pinged from a DEDICATED
+# DAEMON THREAD (not the asyncio loop, which the executor's scan cycles block for
+# tens of seconds), so it must stay comfortably BELOW _EXECUTOR_LOCK_STALE_IDLE_SECS.
+_EXECUTOR_LOCK_KEEPALIVE_SECS = 20
 # A waiting worker only force-terminates the current lock holder if it has been
 # idle (un-pinged) at least this long — i.e. it is a genuine zombie from a dead
 # deploy, NOT the live sibling worker that legitimately holds the lock. With
 # GUNICORN_WORKERS=2 the HTTP worker would otherwise kill the executor worker's
-# lock connection every ~15s, thrashing the executor so NO trades fire.
-_EXECUTOR_LOCK_STALE_IDLE_SECS = 90
+# lock connection, thrashing the executor so NO trades fire. The margin over the
+# keepalive cadence (6x) absorbs event-loop / GIL pauses on the busy executor
+# worker; genuine zombies are still reclaimed (and Postgres TCP keepalives reap
+# a truly-dead connection in ~80s regardless).
+_EXECUTOR_LOCK_STALE_IDLE_SECS = 120
 
 def _try_acquire_executor_lock():
     """
@@ -1594,22 +1597,54 @@ def _try_acquire_executor_lock():
 _executor_running_in_this_worker = False
 
 
-async def _maintain_advisory_lock(conn):
-    """
-    Keep the psycopg2 advisory-lock connection alive with periodic pings.
-    Neon drops idle connections after ~5 min, so we ping every 2 minutes.
-    Returns when the connection dies (signal to the claim loop to retry).
-    """
-    loop = asyncio.get_event_loop()
-    while True:
-        # Ping well under _EXECUTOR_LOCK_STALE_IDLE_SECS so a sibling worker never
-        # mistakes this live holder for a stale/zombie connection and kills it.
-        await asyncio.sleep(_EXECUTOR_LOCK_KEEPALIVE_SECS)
+def _advisory_lock_keepalive_thread(conn, stop_event, lost_event):
+    """Ping the advisory-lock connection on a fixed cadence from a DEDICATED
+    THREAD — independent of the asyncio event loop, which the executor's scan
+    cycles can block for tens of seconds at a time. Keeping the connection's
+    `state_change` fresh is what stops a sibling worker from mistaking this live
+    holder for a stale/zombie connection and terminating it. Sets `lost_event`
+    if the connection dies so the async side can re-enter the claim loop."""
+    import time as _t
+    while not stop_event.is_set():
+        # Sleep in 1s steps so shutdown is prompt.
+        for _ in range(_EXECUTOR_LOCK_KEEPALIVE_SECS):
+            if stop_event.is_set():
+                return
+            _t.sleep(1)
         try:
-            await loop.run_in_executor(None, lambda: conn.cursor().execute("SELECT 1"))
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.close()
         except Exception as e:
             logger.warning(f"Advisory lock keepalive failed: {e} — will attempt re-claim")
-            break
+            lost_event.set()
+            return
+
+
+async def _maintain_advisory_lock(conn):
+    """
+    Keep the psycopg2 advisory-lock connection alive via a dedicated daemon
+    thread (NOT the event loop — the executor blocks it for 30s+ during scans,
+    which previously let the connection go idle long enough that a sibling worker
+    falsely reclaimed the lock and thrashed the executor). Returns when the
+    connection dies (signal to the claim loop to retry).
+    """
+    import threading
+    stop_event = threading.Event()
+    lost_event = threading.Event()
+    t = threading.Thread(
+        target=_advisory_lock_keepalive_thread,
+        args=(conn, stop_event, lost_event),
+        daemon=True,
+    )
+    t.start()
+    try:
+        # Loss detection may lag if the loop is blocked, but that only delays the
+        # (harmless) re-claim — the THREAD keeps the connection warm regardless.
+        while not lost_event.is_set():
+            await asyncio.sleep(5)
+    finally:
+        stop_event.set()
 
 
 async def _keepalive_ping_loop():
