@@ -21,12 +21,20 @@ class MetalsSpotFeedTest(unittest.IsolatedAsyncioTestCase):
             px = await msf._fetch_coinbase("XAU-USD")
         self.assertAlmostEqual(px, 2650.12)
 
-    async def test_poll_skips_when_ctrader_fresh(self):
+    async def test_poll_stores_binance_when_available(self):
         from app.services import metals_spot_feed as msf
 
-        with patch.object(msf, "_ctrader_fresh", return_value=True):
+        fetchers = {
+            "binance": AsyncMock(return_value=4325.0),
+            "coinbase": AsyncMock(return_value=None),
+            "kraken": AsyncMock(return_value=None),
+        }
+        with patch.dict(msf._FETCHERS, fetchers, clear=True), patch.object(
+            msf, "_store"
+        ) as mock_store:
             ok = await msf._poll_symbol("XAUUSD")
-        self.assertFalse(ok)
+        self.assertTrue(ok)
+        mock_store.assert_called_once_with("XAUUSD", 4325.0, "binance")
 
     async def test_poll_stores_coinbase_when_binance_fails(self):
         from app.services import metals_spot_feed as msf
@@ -36,7 +44,7 @@ class MetalsSpotFeedTest(unittest.IsolatedAsyncioTestCase):
             "coinbase": AsyncMock(return_value=4318.5),
             "kraken": AsyncMock(return_value=None),
         }
-        with patch.object(msf, "_ctrader_fresh", return_value=False), patch.dict(
+        with patch.dict(
             msf._FETCHERS, fetchers, clear=True
         ), patch.object(msf, "_store") as mock_store:
             ok = await msf._poll_symbol("XAUUSD")
