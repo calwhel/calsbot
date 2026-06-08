@@ -86,20 +86,25 @@ async def send_dm(
                         },
                     )
                 if r.status_code == 200:
+                    # Any HTTP 200 counts as delivered — retrying after a 200 can
+                    # duplicate the message if Telegram accepted it but the body
+                    # was slow/unparseable or the client timed out reading it.
                     try:
                         if (r.json() or {}).get("ok"):
                             return True
                         last = f"HTTP 200 but ok!=true: {(r.text or '')[:200]}"
                     except Exception as je:
-                        last = (
-                            f"HTTP 200 unparseable body ({type(je).__name__}): "
-                            f"{(r.text or '')[:200]}"
+                        logger.warning(
+                            "Telegram DM %s: HTTP 200 unparseable (%s) — treating as delivered",
+                            chat_id,
+                            type(je).__name__,
                         )
-                else:
-                    last = f"HTTP {r.status_code}: {(r.text or '')[:200]}"
-                    if 400 <= r.status_code < 500:
-                        # Bad chat / parse error — try next token, not more retries.
-                        continue
+                        return True
+                    return True
+                last = f"HTTP {r.status_code}: {(r.text or '')[:200]}"
+                if 400 <= r.status_code < 500:
+                    # Bad chat / parse error — try next token, not more retries.
+                    continue
             except Exception as e:
                 last = f"{type(e).__name__}: {e or '(no message)'}"
         if attempt < 2:

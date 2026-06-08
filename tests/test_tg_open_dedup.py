@@ -26,6 +26,13 @@ class TgOpenDedupTest(unittest.TestCase):
         self.assertIn("Placing live order", text)
         self.assertNotIn("LIVE TRADE OPENED", text)
 
+    def test_be_claim_returns_false_when_already_sent(self):
+        from app.services.strategy_executor import _claim_tg_be_notify
+
+        db = MagicMock()
+        db.execute.return_value.rowcount = 0
+        self.assertFalse(_claim_tg_be_notify(db, 99))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -36,6 +36,23 @@ class TelegramDmSendTest(unittest.IsolatedAsyncioTestCase):
                 ok = await telegram_dm.send_dm(123, "hello")
         self.assertTrue(ok)
 
+    async def test_send_dm_treats_200_ok_false_as_delivered(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ok": False, "description": "bad"}
+        mock_resp.text = '{"ok":false}'
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(telegram_dm, "bot_tokens", return_value=["tok"]):
+            with patch("app.services.telegram_dm.httpx.AsyncClient", return_value=mock_client):
+                ok = await telegram_dm.send_dm(123, "hello")
+        self.assertTrue(ok)
+        self.assertEqual(mock_client.post.await_count, 1)
+
     async def test_send_dm_tries_second_token_on_403(self):
         bad = MagicMock(status_code=403, text='{"ok":false}', json=lambda: {"ok": False})
         good = MagicMock(status_code=200, text='{"ok":true}', json=lambda: {"ok": True})
