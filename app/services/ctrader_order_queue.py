@@ -272,14 +272,26 @@ _GATE_STATS: Dict[int, Dict[str, int]] = {}
 _GATE_STATS_AT: Dict[int, str] = {}
 
 
-def record_gate_stats(strategy_id: int, stats: Dict[str, int]) -> None:
+def record_gate_stats(
+    strategy_id: int,
+    stats: Dict[str, int],
+    *,
+    persist_db: bool = True,
+) -> None:
+    """Record per-strategy gate blockers from the last evaluate_and_fire pass."""
     _GATE_STATS[strategy_id] = dict(stats)
     at = datetime.utcnow().isoformat() + "Z"
     _GATE_STATS_AT[strategy_id] = at
+    if persist_db:
+        _persist_gate_stats_db(strategy_id, dict(stats), at)
+
+
+def _persist_gate_stats_db(strategy_id: int, stats: Dict[str, int], at: str) -> None:
     try:
-        from app.services.discovery_jobs import write_job_progress, _job_key
+        from app.services.discovery_jobs import _job_key
         from app.strategy_models import DiscoveryScanJob
         from app.services.discovery_jobs import _db_session
+
         key = _job_key("executor_gate", str(strategy_id))
         payload = {"stats": dict(stats), "updated_at": at}
         db = _db_session()
@@ -302,6 +314,16 @@ def record_gate_stats(strategy_id: int, stats: Dict[str, int]) -> None:
             db.close()
     except Exception:
         pass
+
+
+def flush_gate_stats_to_db(strategy_ids: list) -> None:
+    """Batch-persist in-memory gate stats once per executor cycle (not per strategy)."""
+    for sid in strategy_ids:
+        stats = _GATE_STATS.get(sid)
+        if stats is None:
+            continue
+        at = _GATE_STATS_AT.get(sid) or (datetime.utcnow().isoformat() + "Z")
+        _persist_gate_stats_db(sid, stats, at)
 
 
 def get_gate_stats(strategy_id: int) -> Dict[str, Any]:

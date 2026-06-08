@@ -879,6 +879,7 @@ def _daily_execution_count(strategy_id: int, db) -> int:
     return db.query(StrategyExecution).filter(
         StrategyExecution.strategy_id == strategy_id,
         StrategyExecution.fired_at >= today,
+        StrategyExecution.outcome.notin_(["CANCELLED", "EXPIRED"]),
     ).count()
 
 
@@ -2834,7 +2835,10 @@ async def evaluate_and_fire(
     from app.services.strategy_ta import evaluate_strategy_conditions
     from app.strategy_models import StrategyExecution, StrategyPortalSettings
 
+    _strategy_gates: Dict[str, int] = {}
+
     def _bump(key: str):
+        _strategy_gates[key] = _strategy_gates.get(key, 0) + 1
         if gate_stats is not None:
             gate_stats[key] = gate_stats.get(key, 0) + 1
 
@@ -3892,12 +3896,11 @@ async def evaluate_and_fire(
         elif _conditions_failed_for_all:
             _bump("blk_ta_conditions")
 
-    if gate_stats is not None:
-        try:
-            from app.services.ctrader_order_queue import record_gate_stats
-            record_gate_stats(strategy.id, gate_stats)
-        except Exception:
-            pass
+    try:
+        from app.services.ctrader_order_queue import record_gate_stats
+        record_gate_stats(strategy.id, _strategy_gates, persist_db=False)
+    except Exception:
+        pass
 
 
 # ─── Subscriber copy-trade propagation ───────────────────────────────────────
@@ -4668,6 +4671,12 @@ async def run_strategy_executor():
                                     pass
 
                 await asyncio.gather(*[_run_one(s) for s in eval_snapshots])
+
+                try:
+                    from app.services.ctrader_order_queue import flush_gate_stats_to_db
+                    flush_gate_stats_to_db([s["id"] for s in eval_snapshots])
+                except Exception:
+                    pass
 
                 # Cycle gate diagnostics — shows exactly which gate blocked each strategy.
                 # Helps diagnose "why aren't trades firing?" without spelunking logs.
@@ -5747,6 +5756,12 @@ async def run_forex_executor():
                                     pass
 
                 await asyncio.gather(*[_run_one_fx(s) for s in open_snaps])
+
+                try:
+                    from app.services.ctrader_order_queue import flush_gate_stats_to_db
+                    flush_gate_stats_to_db([s["id"] for s in open_snaps])
+                except Exception:
+                    pass
 
                 # Live SL amendments (auto-breakeven + trailing) for open LIVE
                 # forex positions run on the dedicated run_forex_live_manager_fast
