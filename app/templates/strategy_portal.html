@@ -4205,6 +4205,17 @@ async function loadMyStrategies(retry=0){
         const data=await bootRes.json();
         strats=data.strategies||[];
         port=data.portfolio||port;
+        if(data.heal){
+          const h=data.heal;
+          const n=(h.promoted_to_paper||0)+(h.rows_touched||0);
+          const stale=h.stale_expired||0;
+          if(n>0||stale>0){
+            let msg='';
+            if(h.promoted_to_paper) msg+=h.promoted_to_paper+' strateg'+(h.promoted_to_paper===1?'y':'ies')+' set to Paper';
+            if(stale) msg+=(msg?' · ':'')+stale+' stale position'+(stale===1?'':'s')+' cleared';
+            if(msg) try{ toast(msg,'success'); }catch(e){}
+          }
+        }
         _fcSet(_bootUrl,data,20000);
         _fcSet(_sUrl,strats,20000);
         _fcSet(_pUrl,port,20000);

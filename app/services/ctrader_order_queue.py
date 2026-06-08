@@ -270,11 +270,49 @@ _GATE_STATS_AT: Dict[int, str] = {}
 
 def record_gate_stats(strategy_id: int, stats: Dict[str, int]) -> None:
     _GATE_STATS[strategy_id] = dict(stats)
-    _GATE_STATS_AT[strategy_id] = datetime.utcnow().isoformat() + "Z"
+    at = datetime.utcnow().isoformat() + "Z"
+    _GATE_STATS_AT[strategy_id] = at
+    try:
+        from app.services.discovery_jobs import write_job_progress, _job_key
+        from app.strategy_models import DiscoveryScanJob
+        from app.services.discovery_jobs import _db_session
+        key = _job_key("executor_gate", str(strategy_id))
+        payload = {"stats": dict(stats), "updated_at": at}
+        db = _db_session()
+        try:
+            row = db.query(DiscoveryScanJob).filter(DiscoveryScanJob.job_key == key).first()
+            if not row:
+                row = DiscoveryScanJob(
+                    job_key=key,
+                    scan_type="executor_gate",
+                    uid="_shared",
+                    status="done",
+                    message="Executor gate stats",
+                )
+                db.add(row)
+            row.status = "done"
+            row.result_json = payload
+            row.updated_at = datetime.utcnow()
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        pass
 
 
 def get_gate_stats(strategy_id: int) -> Dict[str, Any]:
-    return {
-        "stats": _GATE_STATS.get(strategy_id, {}),
-        "updated_at": _GATE_STATS_AT.get(strategy_id),
-    }
+    mem_stats = _GATE_STATS.get(strategy_id, {})
+    mem_at = _GATE_STATS_AT.get(strategy_id)
+    if mem_stats:
+        return {"stats": mem_stats, "updated_at": mem_at}
+    try:
+        from app.services.discovery_jobs import get_job
+        row = get_job("executor_gate", str(strategy_id))
+        if row and row.result_json:
+            return {
+                "stats": row.result_json.get("stats") or {},
+                "updated_at": row.result_json.get("updated_at"),
+            }
+    except Exception:
+        pass
+    return {"stats": {}, "updated_at": None}

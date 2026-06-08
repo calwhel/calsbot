@@ -1558,7 +1558,14 @@ def _try_acquire_executor_lock():
     try:
         import psycopg2
         from app.config import settings
-        conn = psycopg2.connect(settings.get_database_url())
+        conn = psycopg2.connect(
+            settings.get_database_url(),
+            connect_timeout=10,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+        )
         conn.autocommit = True
         cur = conn.cursor()
         cur.execute("SELECT pg_try_advisory_lock(%s)", (_EXECUTOR_LOCK_ID,))
@@ -1580,12 +1587,12 @@ _executor_running_in_this_worker = False
 async def _maintain_advisory_lock(conn):
     """
     Keep the psycopg2 advisory-lock connection alive with periodic pings.
-    Neon drops idle connections after ~5 min, so we ping every 4 minutes.
+    Neon drops idle connections after ~5 min, so we ping every 2 minutes.
     Returns when the connection dies (signal to the claim loop to retry).
     """
     loop = asyncio.get_event_loop()
     while True:
-        await asyncio.sleep(240)   # 4 minutes
+        await asyncio.sleep(120)   # 2 minutes
         try:
             await loop.run_in_executor(None, lambda: conn.cursor().execute("SELECT 1"))
         except Exception as e:
@@ -1690,6 +1697,17 @@ async def _start_executor_tasks():
             await asyncio.sleep(90)
 
     asyncio.create_task(_spot_price_primer_loop())
+
+    async def _executor_startup_heal():
+        try:
+            from app.services.strategy_heal import heal_on_executor_startup
+            stats = await heal_on_executor_startup()
+            logger.info("[executor] strategy heal on startup: %s", stats)
+        except Exception as _heal_err:
+            logger.warning("[executor] strategy heal failed (non-fatal): %s", _heal_err)
+
+    asyncio.create_task(_executor_startup_heal())
+
     from app.services.strategy_executor import (
         run_strategy_executor, run_live_position_monitor,
         run_forex_executor, run_forex_live_manager_fast,
@@ -6283,6 +6301,9 @@ async def api_ping(lite: int = Query(0)):
         )
 
 
+_HEAL_USER_AT: dict = {}
+
+
 @app.get("/api/portal/bootstrap")
 async def api_portal_bootstrap(uid: str = Query(...)):
     """Strategies + portfolio in one round-trip (one Neon wake, shared cold-start)."""
@@ -6291,10 +6312,32 @@ async def api_portal_bootstrap(uid: str = Query(...)):
     strat_key = f"api_strats_{uid}"
     port_key = f"portfolio_{uid}"
     now = time.time()
+    heal_info = None
+    if uid and now - _HEAL_USER_AT.get(uid, 0) >= 300:
+        _HEAL_USER_AT[uid] = now
+        try:
+            from app.database import SessionLocal
+            from app.services.strategy_heal import heal_user_account
+            _hdb = SessionLocal()
+            try:
+                _huser = _get_user_by_uid(uid, _hdb)
+                if _huser:
+                    heal_info = heal_user_account(_hdb, _huser.id)
+                    if heal_info.get("rows_touched") or heal_info.get("stale_expired"):
+                        _CACHE.pop(strat_key, None)
+                        _CACHE.pop(port_key, None)
+            finally:
+                _hdb.close()
+        except Exception as _he:
+            logger.warning("[bootstrap] strategy heal uid=%s: %s", uid, _he)
+
     sc = _CACHE.get(strat_key)
     pc = _CACHE.get(port_key)
     if sc and pc and now < sc[1] and now < pc[1]:
-        return JSONResponse({"strategies": sc[0], "portfolio": pc[0], "cached": True})
+        out = {"strategies": sc[0], "portfolio": pc[0], "cached": True}
+        if heal_info:
+            out["heal"] = heal_info
+        return JSONResponse(out)
 
     try:
         strats_r, port_r = await asyncio.gather(
@@ -6331,7 +6374,35 @@ async def api_portal_bootstrap(uid: str = Query(...)):
     if isinstance(port, dict) and port.get("error"):
         raise HTTPException(status_code=503, detail=str(port.get("detail") or "Portfolio busy"))
 
-    return JSONResponse({"strategies": strats, "portfolio": port, "cached": False})
+    payload = {"strategies": strats, "portfolio": port, "cached": False}
+    if heal_info:
+        payload["heal"] = heal_info
+    return JSONResponse(payload)
+
+
+@app.post("/api/strategies/ensure-firing")
+async def api_strategies_ensure_firing(request: Request):
+    """
+    One-tap repair: promote draft/paused → paper, fix asset_class/universe,
+    expire stale OPEN ghosts blocking max_open. Safe to call repeatedly.
+    """
+    body = await request.json()
+    uid = (body.get("uid") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="uid required")
+    from app.database import SessionLocal
+    from app.services.strategy_heal import heal_user_account
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or user.banned:
+            raise HTTPException(status_code=403)
+        stats = heal_user_account(db, user.id)
+        _CACHE.pop(f"api_strats_{uid}", None)
+        _CACHE.pop(f"portfolio_{uid}", None)
+        return JSONResponse({"ok": True, **stats})
+    finally:
+        db.close()
 
 
 @app.get("/api/strategies")
@@ -7909,7 +7980,9 @@ async def api_save_strategy(request: Request):
                 _ctrader_live_ok = _ready
             except Exception:
                 _ctrader_live_ok = False
-        if _asset_class in PAPER_ONLY_CLASSES and not _ctrader_live_ok:
+        # Tradfi strategies always start as paper so the executor scans them
+        # immediately — never leave forex/index on draft waiting for manual promote.
+        if _asset_class in PAPER_ONLY_CLASSES:
             initial_status = "paper"
             config["_build_mode"] = "paper"
         if _asset_class in PAPER_ONLY_CLASSES:
