@@ -111,8 +111,18 @@ def _start_keepalive(lock_id: int) -> None:
     t.start()
 
 
-def _terminate_other_lock_holders(lock_id: int) -> int:
-    """Drop advisory-lock DB sessions held by other hosts (e.g. stale Replit VM)."""
+def _terminate_other_lock_holders(lock_id: int, min_idle_seconds: float = 0.0) -> int:
+    """Drop advisory-lock DB sessions held by other backends (e.g. stale Replit VM).
+
+    ``min_idle_seconds`` guards against killing a *live sibling* holder: when set
+    (> 0), a holder is only terminated if it has been idle (no query) for at least
+    that long. A genuinely stale/zombie connection from a dead deploy stops being
+    pinged, so its idle age grows without bound and crosses the threshold; a live
+    holder that keeps its lock connection warm (the executor pings every few tens
+    of seconds) never does. This is essential with ``GUNICORN_WORKERS>1`` — the
+    HTTP worker would otherwise terminate the executor worker's lock connection on
+    every claim attempt, thrashing the executor and halting all trade firing.
+    """
     import psycopg2
 
     db_url = _get_db_url()
@@ -125,7 +135,10 @@ def _terminate_other_lock_holders(lock_id: int) -> int:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT l.pid, COALESCE(a.state, 'gone'), a.application_name
+                SELECT l.pid,
+                       COALESCE(a.state, 'gone'),
+                       a.application_name,
+                       EXTRACT(EPOCH FROM (now() - a.state_change))
                 FROM pg_locks l
                 LEFT JOIN pg_stat_activity a ON a.pid = l.pid
                 WHERE l.locktype = 'advisory'
@@ -136,7 +149,18 @@ def _terminate_other_lock_holders(lock_id: int) -> int:
                 (lock_id,),
             )
             rows = cur.fetchall()
-            for pid, state, app in rows:
+            for pid, state, app, idle_secs in rows:
+                # Protect a live sibling: a holder that is an active client
+                # session and was recently pinged (idle < threshold) is the
+                # legitimate current lock owner — never terminate it.
+                if min_idle_seconds > 0 and state != "gone" and idle_secs is not None:
+                    if float(idle_secs) < float(min_idle_seconds):
+                        logger.info(
+                            f"[tg-lock] keeping live holder pid={pid} state={state} "
+                            f"idle={float(idle_secs):.0f}s < {min_idle_seconds:.0f}s "
+                            f"for lock {lock_id} (sibling worker, not stale)"
+                        )
+                        continue
                 try:
                     cur.execute("SELECT pg_terminate_backend(%s)", (pid,))
                     ok = cur.fetchone()[0]
@@ -144,7 +168,9 @@ def _terminate_other_lock_holders(lock_id: int) -> int:
                         terminated += 1
                         logger.warning(
                             f"[tg-lock] terminated stale holder pid={pid} "
-                            f"state={state} app={app!r} for lock {lock_id}"
+                            f"state={state} app={app!r} idle="
+                            f"{(f'{float(idle_secs):.0f}s' if idle_secs is not None else 'n/a')} "
+                            f"for lock {lock_id}"
                         )
                 except Exception as te:
                     logger.warning(f"[tg-lock] could not terminate pid={pid}: {te}")

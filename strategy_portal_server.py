@@ -1546,6 +1546,16 @@ async def _ghost_cleanup_loop():
 # Must fit PostgreSQL int32 for pg_locks.objid queries. Old id 42424242 was
 # held by a zombie Replit/Railway session (pid ~10481) that blocked the executor.
 _EXECUTOR_LOCK_ID = 708_110_004
+# Keepalive cadence for the lock-holding connection. Must stay comfortably BELOW
+# _EXECUTOR_LOCK_STALE_IDLE_SECS so a live executor worker's idle time never
+# crosses the "stale" threshold a sibling HTTP worker uses to reclaim the lock.
+_EXECUTOR_LOCK_KEEPALIVE_SECS = 30
+# A waiting worker only force-terminates the current lock holder if it has been
+# idle (un-pinged) at least this long — i.e. it is a genuine zombie from a dead
+# deploy, NOT the live sibling worker that legitimately holds the lock. With
+# GUNICORN_WORKERS=2 the HTTP worker would otherwise kill the executor worker's
+# lock connection every ~15s, thrashing the executor so NO trades fire.
+_EXECUTOR_LOCK_STALE_IDLE_SECS = 90
 
 def _try_acquire_executor_lock():
     """
@@ -1592,7 +1602,9 @@ async def _maintain_advisory_lock(conn):
     """
     loop = asyncio.get_event_loop()
     while True:
-        await asyncio.sleep(120)   # 2 minutes
+        # Ping well under _EXECUTOR_LOCK_STALE_IDLE_SECS so a sibling worker never
+        # mistakes this live holder for a stale/zombie connection and kills it.
+        await asyncio.sleep(_EXECUTOR_LOCK_KEEPALIVE_SECS)
         try:
             await loop.run_in_executor(None, lambda: conn.cursor().execute("SELECT 1"))
         except Exception as e:
@@ -1889,8 +1901,16 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
                     logger.warning(f"[executor] lock status check failed: {_le}")
             if _wait_attempts >= 3 and _wait_attempts % 3 == 0:
                 from app.services.telegram_poller_lock import terminate_advisory_lock_holders
+                # Only reclaim from a GENUINELY stale holder (idle past the
+                # threshold). A live sibling worker pings every
+                # _EXECUTOR_LOCK_KEEPALIVE_SECS, so it is never killed here —
+                # this is what prevents the two-worker lock-thrash that halts
+                # the executor (and therefore all trade firing).
                 n = await loop.run_in_executor(
-                    None, terminate_advisory_lock_holders, _EXECUTOR_LOCK_ID
+                    None,
+                    terminate_advisory_lock_holders,
+                    _EXECUTOR_LOCK_ID,
+                    _EXECUTOR_LOCK_STALE_IDLE_SECS,
                 )
                 if n:
                     logger.warning(
