@@ -1919,7 +1919,11 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
             return  # This worker is now the executor; stop trying
         else:
             _wait_attempts += 1
-            if _wait_attempts == 1 or _wait_attempts % 3 == 0:
+            # Once a worker is the steady-state executor, the sibling sits here
+            # forever — log/poll only occasionally (first attempt, then ~every
+            # 60s) so the healthy standby state doesn't drown out executor logs.
+            _STATUS_EVERY = 12  # 12 × 5s ≈ 60s
+            if _wait_attempts == 1 or _wait_attempts % _STATUS_EVERY == 0:
                 try:
                     from app.database import SessionLocal
                     from sqlalchemy import text
@@ -1936,9 +1940,12 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
                             {"lid": _EXECUTOR_LOCK_ID},
                         ).fetchone()
                         if row:
-                            logger.warning(
+                            # INFO, not WARNING: a sibling holding the lock and
+                            # running the executor is the healthy steady state.
+                            logger.info(
                                 f"[executor] lock {_EXECUTOR_LOCK_ID} held by pid={row[0]} "
-                                f"state={row[1]} — trade scanning waiting (attempt {_wait_attempts})"
+                                f"state={row[1]} — this worker on standby (executor runs "
+                                f"on the holder; attempt {_wait_attempts})"
                             )
                         else:
                             logger.warning(
@@ -1949,7 +1956,7 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
                         db.close()
                 except Exception as _le:
                     logger.warning(f"[executor] lock status check failed: {_le}")
-            if _wait_attempts >= 3 and _wait_attempts % 3 == 0:
+            if _wait_attempts >= _STATUS_EVERY and _wait_attempts % _STATUS_EVERY == 0:
                 from app.services.telegram_poller_lock import terminate_advisory_lock_holders
                 # Only reclaim from a GENUINELY stale holder (idle past the
                 # threshold). A live sibling worker pings every
