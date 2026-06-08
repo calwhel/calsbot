@@ -1701,9 +1701,8 @@ async def _start_executor_tasks():
     except Exception as e:
         logger.error(f"Failed to launch alerts engine: {e}")
 
-    # Hourly system health monitor — verifies website + all data/broker
-    # connections + executor loops and DMs the owner a Telegram summary every
-    # hour. Single-fired here (advisory-locked worker) so it never double-sends.
+    # Periodic system health monitor (default every 4h) — verifies website +
+    # data/broker connections + executor loops. Trade alerts stay instant.
     try:
         from app.services.system_health_check import run_system_health_monitor
         asyncio.create_task(_resilient_task("run_system_health_monitor", run_system_health_monitor, restart_delay=60))
@@ -1711,9 +1710,17 @@ async def _start_executor_tasks():
     except Exception as e:
         logger.error(f"Failed to launch system health monitor: {e}")
 
-    # One-shot owner ping so a deploy/restart is immediately visible on Telegram.
+    # Optional one-shot owner ping on deploy — OFF by default (lock reclaim was
+    # sending duplicate "executor online" DMs; trade alerts stay instant).
     async def _executor_startup_ping():
+        import os as _os_ping
+        if _os_ping.environ.get("EXECUTOR_STARTUP_PING", "").lower() not in (
+            "1", "true", "yes",
+        ):
+            return
         try:
+            from sqlalchemy import text as _txt
+            from app.database import SessionLocal
             from app.services.telegram_dm import owner_chat_id, send_dm
             from app.deployment import deploy_commit
 
@@ -1722,12 +1729,41 @@ async def _start_executor_tasks():
                 logger.warning("[executor] OWNER_TELEGRAM_ID not set — startup ping skipped")
                 return
             commit = (deploy_commit() or "unknown")[:12]
+            dedup_key = f"startup_ping:{commit}"
+            db = SessionLocal()
+            try:
+                db.execute(_txt("""
+                    CREATE TABLE IF NOT EXISTS owner_notification_dedup (
+                        key        VARCHAR(64) PRIMARY KEY,
+                        sent_at    TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                exists = db.execute(
+                    _txt("SELECT 1 FROM owner_notification_dedup WHERE key = :k"),
+                    {"k": dedup_key},
+                ).fetchone()
+                if exists:
+                    logger.info("[executor] startup ping already sent for this commit — skipped")
+                    return
+            finally:
+                db.close()
+
             msg = (
                 "🟢 <b>TradeHub executor online</b>\n\n"
                 f"Commit: <code>{commit}</code>\n"
-                "Trade alerts + hourly health reports are active on this worker."
+                "Live trade alerts are active. Periodic health reports run every few hours."
             )
             if await send_dm(owner, msg):
+                db2 = SessionLocal()
+                try:
+                    db2.execute(_txt("""
+                        INSERT INTO owner_notification_dedup (key, sent_at)
+                        VALUES (:k, NOW() AT TIME ZONE 'utc')
+                        ON CONFLICT (key) DO NOTHING
+                    """), {"k": dedup_key})
+                    db2.commit()
+                finally:
+                    db2.close()
                 logger.info("[executor] startup Telegram ping delivered to owner")
             else:
                 logger.warning("[executor] startup Telegram ping NOT delivered — check OWNER_TELEGRAM_ID + bot token")
