@@ -1652,10 +1652,16 @@ async def _start_executor_tasks():
         await asyncio.sleep(20)
         while True:
             try:
-                from app.services.spot_price_store import snapshot as _snap
+                from app.services.spot_price_store import snapshot as _snap, get_mid as _spot_mid
                 from app.services.tradfi_prices import get_price as _tf_px
-                if int((_snap(max_age_s=30.0) or {}).get("symbol_count") or 0) < 3:
-                    for sym, ac in _KEYS:
+                snap = _snap(max_age_s=30.0) or {}
+                cold = int(snap.get("symbol_count") or 0) < 3
+                gold_missing = _spot_mid("XAUUSD", max_age_s=25.0) is None
+                if cold or gold_missing:
+                    keys = list(_KEYS)
+                    if gold_missing and not cold:
+                        keys = [("XAUUSD", "forex")]
+                    for sym, ac in keys:
                         try:
                             await _tf_px(sym, ac)
                         except Exception:
@@ -1839,6 +1845,11 @@ async def _keepalive_then_reclaim(conn):
         _ctrader_feed_stop()
     except Exception as _fe:
         logger.warning(f"cTrader feed stop on lock-loss error (non-fatal): {_fe}")
+    try:
+        from app.services.metals_spot_feed import stop as _metals_feed_stop
+        _metals_feed_stop()
+    except Exception as _fe:
+        logger.warning(f"Metals feed stop on lock-loss error (non-fatal): {_fe}")
     logger.warning("Advisory lock connection lost — re-entering claim loop")
     asyncio.create_task(_executor_claim_loop(first_attempt_delay=5))
 
@@ -10976,6 +10987,27 @@ async def api_ctrader_feed_status():
     return JSONResponse(out)
 
 
+@app.get("/api/forex/price")
+@app.get("/api/gold/price")
+async def api_forex_spot_price(symbol: str = Query("XAUUSD")):
+    """
+    Live spot quote for a forex pair or metal (default XAUUSD / gold).
+
+    cTrader-first when streaming; falls back to the dedicated metals poller
+    (Binance XAUUSDT → Coinbase → Kraken) and FMP when the broker feed is cold.
+    No auth — read-only.
+    """
+    from app.services.forex_spot_price import get_forex_spot_quote
+    sym = (symbol or "XAUUSD").upper().strip()
+    quote = await get_forex_spot_quote(sym)
+    if not quote:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No live price for {sym} — market may be closed or feeds still warming",
+        )
+    return JSONResponse(quote)
+
+
 @app.get("/api/live-forex/account")
 async def api_live_forex_account(uid: str = Query(...)):
     """
@@ -11130,12 +11162,12 @@ async def api_live_forex_account(uid: str = Query(...)):
             if p.get("fired_at"):
                 p["fired_at"] = p["fired_at"].isoformat()
             try:
-                from app.services.ctrader_price_feed import get_price as _mkt_px
+                from app.services.forex_spot_price import get_forex_spot_mid
                 from app.services.forex_engine import pip_size as _pip_sz
                 sym = (p.get("symbol") or "").upper()
                 entry = float(p.get("entry_price") or 0)
                 if sym and entry > 0:
-                    mark = _mkt_px(sym)
+                    mark = await get_forex_spot_mid(sym)
                     if mark:
                         p["mark_price"] = round(mark, 6)
                         pip = max(_pip_sz(sym), 1e-10)

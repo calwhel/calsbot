@@ -11139,6 +11139,7 @@ const LF_PAIRS = [
 ];
 
 let _lfPollTimer = null;
+let _lfGoldTimer = null;
 let _ctraderLinking = false;
 
 function renderLFConnecting(wrap, msg) {
@@ -11163,6 +11164,7 @@ async function loadLiveForex(retry=0) {
   const wrap = $('lf-body');
   if (!wrap) return;
   if (_lfPollTimer) { clearTimeout(_lfPollTimer); _lfPollTimer = null; }
+  if (_lfGoldTimer) { clearTimeout(_lfGoldTimer); _lfGoldTimer = null; }
   if (_ctraderLinking) renderLFConnecting(wrap);
   else wrap.innerHTML = retry ? _wakeLoadingHtml('Still waking server…') : '<div class="loader">Loading account…</div>';
   const setup = await _checkCtraderSetup();
@@ -11306,6 +11308,13 @@ function renderLiveForex(d, wrap) {
         <button class="btn ghost sm" style="color:var(--negative)" onclick="lfDisconnect()">Disconnect</button>
       </div>
       <div id="lf-test-result" style="margin-top:8px;font-size:12px;line-height:1.5"></div>
+      <div id="lf-gold-tick" style="margin-top:12px;padding:10px 12px;background:var(--card-hi,#22252a);border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div>
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Gold spot</div>
+          <div style="font-size:18px;font-weight:800;letter-spacing:-.3px" id="lf-gold-mid">—</div>
+        </div>
+        <div style="text-align:right;font-size:11px;color:var(--muted);line-height:1.45" id="lf-gold-meta">Loading…</div>
+      </div>
       ${acctSwitcher}
     </div>
 
@@ -11355,7 +11364,28 @@ function renderLiveForex(d, wrap) {
   `;
 
   _startLfSessionsClock();
+  lfPollGoldPrice();
   lfCalc();
+}
+
+async function lfPollGoldPrice(){
+  if(_lfGoldTimer){clearTimeout(_lfGoldTimer);_lfGoldTimer=null;}
+  const midEl=$('lf-gold-mid'), metaEl=$('lf-gold-meta');
+  if(!midEl||!metaEl)return;
+  try{
+    const r=await _apiFetch('/api/gold/price?symbol=XAUUSD');
+    if(r.ok){
+      const q=await r.json();
+      const px=Number(q.mid);
+      if(px>0){
+        midEl.textContent='$'+px.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+        const src=(q.source||'live').replace(/_/g,' ');
+        const age=q.age_s!=null?` · ${q.age_s}s ago`:'';
+        metaEl.textContent=`XAUUSD · ${src}${age}`;
+      }else metaEl.textContent='No tick yet';
+    }else metaEl.textContent='Feed warming…';
+  }catch(e){metaEl.textContent='Gold price unavailable';}
+  _lfGoldTimer=setTimeout(lfPollGoldPrice,8000);
 }
 
 let _lfSessionsTimer = null;
