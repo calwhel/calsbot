@@ -2176,7 +2176,10 @@ async def _startup_background():
     import os as _os
     _is_production = is_production_deploy()
     _executor_disabled = _os.environ.get("DISABLE_EXECUTOR", "").lower() in ("1", "true", "yes")
-    if _is_production and not _executor_disabled:
+    _gunicorn_executor_disabled = _os.environ.get(
+        "DISABLE_EXECUTOR_IN_GUNICORN", ""
+    ).lower() in ("1", "true", "yes")
+    if _is_production and not _executor_disabled and not _gunicorn_executor_disabled:
         # Each worker enters the claim loop.  The first to win acquires the lock
         # and starts the executor; the rest keep retrying every 30 s so they
         # can take over automatically if the current holder's connection drops.

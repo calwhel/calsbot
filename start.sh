@@ -30,9 +30,17 @@ else
   ( sleep "${_tg_delay}"; exec python3 -m uvicorn main:app --host 127.0.0.1 --port 8080 2>&1 | sed 's/^/[tg-bot] /' ) &
 fi
 
-# Two workers: one holds the executor advisory lock; the other serves HTTP so
-# forex scan cycles (klines/cTrader) never freeze the website. Feeds start only
-# on the executor-winning worker (see _start_executor_tasks).
+# Strategy executor runs in a dedicated process (not gunicorn). Scan cycles for
+# 90 forex + 168 crypto strategies exceed gunicorn worker timeout even at 300s,
+# causing WORKER TIMEOUT SIGABRT mid-scan and zero trade fires.
+if [ "${DISABLE_STANDALONE_EXECUTOR}" != "1" ]; then
+  _ex_delay="${EXECUTOR_START_DELAY:-8}"
+  echo "[railway] Standalone strategy executor starts in ${_ex_delay}s…"
+  ( sleep "${_ex_delay}"; EXECUTOR_STANDALONE=1 exec python3 -m app.executor_runner 2>&1 | sed 's/^/[executor] /' ) &
+fi
+export DISABLE_EXECUTOR_IN_GUNICORN="${DISABLE_EXECUTOR_IN_GUNICORN:-1}"
+
+# Two gunicorn workers serve HTTP only; executor + feeds run in the process above.
 _GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
 # 90 tradfi + 168 crypto strategies per cycle can exceed 120s (klines + DB +
 # per-strategy gate writes). Sub-120s timeouts caused WORKER TIMEOUT SIGABRT

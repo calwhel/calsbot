@@ -348,7 +348,16 @@ async def fetch_forex_scan_candles(
             best = rows
             logger.info(f"[tradfi] forex-scan best={label} {sym} {timeframe} → {len(rows)} bars")
 
-    if user_id:
+    _ctrader_live = False
+    try:
+        from app.services.ctrader_price_feed import is_live as _ct_live
+        _ctrader_live = bool(_ct_live())
+    except Exception:
+        pass
+
+    # Cold/disconnected cTrader costs ~10s per symbol before Yahoo fallback — on
+    # executor startup that alone blows past gunicorn timeout. Skip until LIVE.
+    if user_id and _ctrader_live:
         await _keep(
             await _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
             "ctrader-user",
@@ -673,9 +682,12 @@ async def _fetch_ctrader_klines(
 ) -> List[List[float]]:
     try:
         from app.services import ctrader_price_feed as _ctf
-        # Keep broker trendbar waits short — a slow miss + Yahoo fallback must
-        # stay under gunicorn/Railway ~30s worker budgets on HTTP workers.
-        timeout = min(10.0, 5.0 + limit / 200.0)
+        # Short timeout when feed is cold — Yahoo fallback is the scan workhorse.
+        try:
+            _live = bool(_ctf.is_live())
+        except Exception:
+            _live = False
+        timeout = min(10.0, 5.0 + limit / 200.0) if _live else 3.0
         return await asyncio.wait_for(
             _ctf.get_klines(symbol, asset_class, timeframe, limit, user_id=user_id),
             timeout=timeout,
