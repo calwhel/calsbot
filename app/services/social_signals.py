@@ -1179,35 +1179,50 @@ class SocialSignalService:
         MEXC uses 60m instead of 1h — we translate automatically.
         Symbols returning 400 on MEXC are cached so we don't retry them every cycle.
         """
-        if symbol in self._mexc_missing:
-            return []
-        mexc_interval = interval.replace("1h", "60m").replace("2h", "120m").replace("4h", "4h")
-        url = f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval={mexc_interval}&limit={limit}"
+        if symbol not in self._mexc_missing:
+            mexc_interval = interval.replace("1h", "60m").replace("2h", "120m").replace("4h", "4h")
+            url = f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval={mexc_interval}&limit={limit}"
+            try:
+                resp = await self.http_client.get(url, timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data and isinstance(data, list):
+                        return data
+                elif resp.status_code == 400:
+                    self._mexc_missing.add(symbol)
+            except Exception:
+                pass
+        # Fallback: Bitunix futures klines (reachable when MEXC is geo-blocked on
+        # Railway) so RSI / enhanced-TA still compute for crypto strategies.
         try:
-            resp = await self.http_client.get(url, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data and isinstance(data, list):
-                    return data
-            elif resp.status_code == 400:
-                self._mexc_missing.add(symbol)
+            from app.services.bitunix_market_data import fetch_klines as _bx_klines
+            bk = await _bx_klines(self.http_client, symbol, interval, limit)
+            if bk:
+                return bk
         except Exception:
             pass
         return []
 
     async def _fetch_ticker(self, symbol: str) -> Optional[Dict]:
         """Fetch 24hr ticker from MEXC spot only (Binance is blocked 451 on Replit)."""
-        if symbol in self._mexc_missing:
-            return None
-        url = f"https://api.mexc.com/api/v3/ticker/24hr?symbol={symbol}"
+        if symbol not in self._mexc_missing:
+            url = f"https://api.mexc.com/api/v3/ticker/24hr?symbol={symbol}"
+            try:
+                resp = await self.http_client.get(url, timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, dict) and float(data.get("lastPrice", 0) or 0) > 0:
+                        return data
+                elif resp.status_code == 400:
+                    self._mexc_missing.add(symbol)
+            except Exception:
+                pass
+        # Fallback: Bitunix tickers (reachable when MEXC is geo-blocked on Railway).
         try:
-            resp = await self.http_client.get(url, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, dict) and float(data.get("lastPrice", 0) or 0) > 0:
-                    return data
-            elif resp.status_code == 400:
-                self._mexc_missing.add(symbol)
+            from app.services.bitunix_market_data import fetch_ticker as _bx_ticker
+            t = await _bx_ticker(self.http_client, symbol)
+            if t:
+                return t
         except Exception:
             pass
         return None
