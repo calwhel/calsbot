@@ -320,3 +320,45 @@ def get_gate_stats(strategy_id: int) -> Dict[str, Any]:
     except Exception:
         pass
     return {"stats": {}, "updated_at": None}
+
+
+def get_gate_stats_bulk(strategy_ids: list) -> Dict[int, Dict[str, Any]]:
+    """One DB round-trip for diagnostics — avoids N× get_job() on large accounts."""
+    out: Dict[int, Dict[str, Any]] = {}
+    if not strategy_ids:
+        return out
+    for sid in strategy_ids:
+        mem = _GATE_STATS.get(sid)
+        if mem:
+            out[sid] = {"stats": mem, "updated_at": _GATE_STATS_AT.get(sid)}
+    missing = [sid for sid in strategy_ids if sid not in out]
+    if not missing:
+        return out
+    try:
+        from app.services.discovery_jobs import _job_key, _db_session
+        from app.strategy_models import DiscoveryScanJob
+
+        keys = [_job_key("executor_gate", str(sid)) for sid in missing]
+        db = _db_session()
+        try:
+            rows = (
+                db.query(DiscoveryScanJob)
+                .filter(DiscoveryScanJob.job_key.in_(keys))
+                .all()
+            )
+            by_key = {r.job_key: r for r in rows}
+            for sid in missing:
+                row = by_key.get(_job_key("executor_gate", str(sid)))
+                if row and row.result_json:
+                    out[sid] = {
+                        "stats": row.result_json.get("stats") or {},
+                        "updated_at": row.result_json.get("updated_at"),
+                    }
+                else:
+                    out[sid] = {"stats": {}, "updated_at": None}
+        finally:
+            db.close()
+    except Exception:
+        for sid in missing:
+            out.setdefault(sid, {"stats": {}, "updated_at": None})
+    return out

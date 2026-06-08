@@ -11740,26 +11740,27 @@ async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(Fa
     return JSONResponse(payload)
 
 
-@app.get("/api/executor/diagnostics")
-async def api_executor_diagnostics(uid: str = Query(...)):
+async def _build_executor_diagnostics(
+    db,
+    user,
+    *,
+    run_heal: bool = False,
+    run_deep: bool = False,
+) -> dict:
     """
-    Why strategies are or aren't firing — executor health, gate blockers,
-    Telegram link, klines probe, and a live condition check on one strategy.
-    Auto-runs strategy heal (draft→paper, stale OPEN expiry) on each call.
+    Executor diagnostics payload. Default is fast (<3s) for large accounts.
+    Heavy work (heal, klines, TA probe) is opt-in — the full endpoint used to
+    run heal + N× DB gate lookups per strategy and caused Cloudflare 524 timeouts.
     """
     import time as _time
     from datetime import datetime, timedelta
-    from app.database import SessionLocal
     from app.deployment import is_production_deploy
     from app.strategy_models import UserStrategy, StrategyExecution
+    from app.services.strategy_heal import resolve_strategy_asset_class as _resolve_ac
 
-    db = SessionLocal()
-    try:
-        user = _get_user_by_uid(uid, db)
-        if not user:
-            raise HTTPException(status_code=403, detail="Invalid UID")
-
-        heal_stats: dict = {}
+    heal_stats: dict = {"skipped": True, "hint": "POST /api/strategies/ensure-firing"}
+    if run_heal:
+        heal_stats = {}
         try:
             from app.services.strategy_heal import (
                 heal_user_account,
@@ -11774,79 +11775,85 @@ async def api_executor_diagnostics(uid: str = Query(...)):
                     min_age_minutes=30,
                     user_id=user.id,
                 ),
-                timeout=12.0,
+                timeout=8.0,
             )
         except Exception as _he:
             heal_stats = {"error": str(_he)[:200]}
 
-        strategies = db.query(UserStrategy).filter(UserStrategy.user_id == user.id).all()
-        by_status: dict = {}
-        by_class: dict = {}
-        tradfi_scanning = 0
-        draft_count = 0
-        from app.services.strategy_heal import resolve_strategy_asset_class as _resolve_ac
-        for s in strategies:
-            by_status[s.status] = by_status.get(s.status, 0) + 1
-            ac = _resolve_ac(s).lower()
-            by_class[ac] = by_class.get(ac, 0) + 1
-            if s.status in ("paper", "active") and ac in ("forex", "index", "stock"):
-                tradfi_scanning += 1
-            if s.status in ("draft", "paused"):
-                draft_count += 1
+    strategies = db.query(UserStrategy).filter(UserStrategy.user_id == user.id).all()
+    by_status: dict = {}
+    by_class: dict = {}
+    tradfi_scanning = 0
+    draft_count = 0
+    active_ids: list = []
+    for s in strategies:
+        by_status[s.status] = by_status.get(s.status, 0) + 1
+        ac = _resolve_ac(s).lower()
+        by_class[ac] = by_class.get(ac, 0) + 1
+        if s.status in ("paper", "active") and ac in ("forex", "index", "stock"):
+            tradfi_scanning += 1
+        if s.status in ("draft", "paused"):
+            draft_count += 1
+        if s.status in ("paper", "active"):
+            active_ids.append(s.id)
 
-        since = datetime.utcnow() - timedelta(hours=24)
-        fires_24h = db.query(StrategyExecution).filter(
-            StrategyExecution.user_id == user.id,
-            StrategyExecution.fired_at >= since,
-        ).count()
-        open_rows = db.query(StrategyExecution).filter(
-            StrategyExecution.user_id == user.id,
-            StrategyExecution.outcome == "OPEN",
-        ).count()
+    since = datetime.utcnow() - timedelta(hours=24)
+    fires_24h = db.query(StrategyExecution).filter(
+        StrategyExecution.user_id == user.id,
+        StrategyExecution.fired_at >= since,
+    ).count()
+    open_rows = db.query(StrategyExecution).filter(
+        StrategyExecution.user_id == user.id,
+        StrategyExecution.outcome == "OPEN",
+    ).count()
 
-        from app.services.ctrader_order_queue import get_gate_stats
-        gate_agg: dict = {}
-        strategy_rows = []
-        for s in strategies:
-            if s.status not in ("paper", "active"):
-                continue
-            gs = get_gate_stats(s.id).get("stats") or {}
-            for k, v in gs.items():
-                gate_agg[k] = gate_agg.get(k, 0) + int(v)
-            if gs:
-                top = max(gs.items(), key=lambda kv: kv[1])
-                strategy_rows.append({
-                    "id": s.id,
-                    "name": s.name,
-                    "status": s.status,
-                    "asset_class": s.asset_class,
-                    "top_blocker": top[0].replace("blk_", ""),
-                    "top_count": top[1],
-                    "updated_at": get_gate_stats(s.id).get("updated_at"),
-                })
-        strategy_rows.sort(key=lambda r: r.get("top_count", 0), reverse=True)
+    from app.services.ctrader_order_queue import get_gate_stats_bulk
+    gate_by_id = get_gate_stats_bulk(active_ids)
+    gate_agg: dict = {}
+    strategy_rows = []
+    for s in strategies:
+        if s.id not in gate_by_id:
+            continue
+        gs_entry = gate_by_id[s.id]
+        gs = gs_entry.get("stats") or {}
+        for k, v in gs.items():
+            gate_agg[k] = gate_agg.get(k, 0) + int(v)
+        if gs:
+            top = max(gs.items(), key=lambda kv: kv[1])
+            strategy_rows.append({
+                "id": s.id,
+                "name": s.name,
+                "status": s.status,
+                "asset_class": s.asset_class,
+                "top_blocker": top[0].replace("blk_", ""),
+                "top_count": top[1],
+                "updated_at": gs_entry.get("updated_at"),
+            })
+    strategy_rows.sort(key=lambda r: r.get("top_count", 0), reverse=True)
 
-        top_blockers = sorted(
-            [{"gate": k.replace("blk_", ""), "count": v} for k, v in gate_agg.items()],
-            key=lambda x: -x["count"],
-        )[:12]
+    top_blockers = sorted(
+        [{"gate": k.replace("blk_", ""), "count": v} for k, v in gate_agg.items()],
+        key=lambda x: -x["count"],
+    )[:12]
 
-        hb: dict = {}
-        try:
-            from app.services.strategy_executor import get_heartbeats
-            hb = get_heartbeats()
-        except Exception:
-            pass
-        _now = _time.time()
-        fx_age = (_now - hb["forex_executor"]) if hb.get("forex_executor") else None
+    hb: dict = {}
+    try:
+        from app.services.strategy_executor import get_heartbeats
+        hb = get_heartbeats()
+    except Exception:
+        pass
+    _now = _time.time()
+    fx_age = (_now - hb["forex_executor"]) if hb.get("forex_executor") else None
 
-        klines_probe: dict = {}
+    klines_probe: dict = {"skipped": True}
+    probe: dict = {"skipped": True}
+    if run_deep:
+        klines_probe = {}
         try:
             from app.services.tradfi_prices import get_klines as _gk
-            import asyncio as _aio
-            _bars = await _aio.wait_for(
-                _gk("EURUSD", "forex", "15m", 50, ctrader_user_id=user.id, max_wait_s=12.0),
-                timeout=14.0,
+            _bars = await asyncio.wait_for(
+                _gk("EURUSD", "forex", "15m", 50, ctrader_user_id=user.id, max_wait_s=6.0),
+                timeout=8.0,
             )
             klines_probe = {
                 "eurusd_15m_bars": len(_bars or []),
@@ -11855,7 +11862,7 @@ async def api_executor_diagnostics(uid: str = Query(...)):
         except Exception as _ke:
             klines_probe = {"ok": False, "error": str(_ke)[:160]}
 
-        probe: dict = {}
+        probe = {}
         try:
             import httpx
             from app.services.strategy_executor import _fetch_price_and_ta, _primary_timeframe
@@ -11878,7 +11885,7 @@ async def api_executor_diagnostics(uid: str = Query(...)):
                 ac = resolve_strategy_asset_class(pick)
                 _syms = ((cfg.get("universe") or {}).get("symbols") or [])
                 sym = str(_syms[0]).upper()
-                async with httpx.AsyncClient(timeout=15.0) as _hc:
+                async with httpx.AsyncClient(timeout=8.0) as _hc:
                     px = await _fetch_price_and_ta(
                         sym, _hc, ac, user_id=user.id,
                         timeframe=_primary_timeframe(cfg),
@@ -11905,52 +11912,123 @@ async def api_executor_diagnostics(uid: str = Query(...)):
         except Exception as _pe:
             probe = {"error": str(_pe)[:200]}
 
-        telegram_status: dict = {}
+    telegram_status: dict = {}
+    if run_deep:
         try:
             from app.services.telegram_alert_status import build_telegram_alert_status
-            telegram_status = await build_telegram_alert_status(user, db)
+            telegram_status = await asyncio.wait_for(
+                build_telegram_alert_status(user, db),
+                timeout=4.0,
+            )
         except Exception:
             pass
 
-        notes = []
-        if draft_count:
-            notes.append(f"{draft_count} strateg{'y' if draft_count == 1 else 'ies'} still draft/paused — heal promotes to paper automatically.")
-        if open_rows:
-            notes.append(f"{open_rows} OPEN execution(s) — may block max_open_positions until TP/SL or auto-expire (4h).")
-        if not fires_24h and tradfi_scanning:
-            top = top_blockers[0]["gate"] if top_blockers else "unknown"
-            notes.append(
-                f"Executor is scanning {tradfi_scanning} tradfi strateg"
-                f"{'y' if tradfi_scanning == 1 else 'ies'} but 0 fires in 24h. "
-                f"Top blocker: {top}. "
-                "Scanned strategies need ALL entry conditions to align live (same as backtest AND logic)."
-            )
-        if telegram_status.get("blockers"):
-            notes.append("Telegram: " + "; ".join(telegram_status["blockers"][:3]))
+    notes = []
+    if draft_count:
+        notes.append(
+            f"{draft_count} strateg{'y' if draft_count == 1 else 'ies'} still draft/paused "
+            "— use Settings → Repair strategies or POST /api/strategies/ensure-firing."
+        )
+    if open_rows:
+        notes.append(
+            f"{open_rows} OPEN execution(s) — may block max_open_positions until TP/SL or auto-expire."
+        )
+    if not fires_24h and tradfi_scanning:
+        top = top_blockers[0]["gate"] if top_blockers else "unknown"
+        notes.append(
+            f"Executor is scanning {tradfi_scanning} tradfi strateg"
+            f"{'y' if tradfi_scanning == 1 else 'ies'} but 0 fires in 24h. "
+            f"Top blocker: {top}."
+        )
+    if telegram_status.get("blockers"):
+        notes.append("Telegram: " + "; ".join(telegram_status["blockers"][:3]))
+    if not run_deep:
+        notes.append(
+            "Fast diagnostics — add ?deep=1 for klines/condition probe, "
+            "?heal=1 to run repair (or use Settings → Repair strategies)."
+        )
 
-        return JSONResponse({
-            "ok": True,
-            "heal": heal_stats,
-            "executor": {
-                "production": is_production_deploy(),
-                "forex_executor_age_sec": round(fx_age, 1) if fx_age is not None else None,
-                "forex_executor_alive": fx_age is not None and fx_age < 120,
+    return {
+        "ok": True,
+        "heal": heal_stats,
+        "executor": {
+            "production": is_production_deploy(),
+            "forex_executor_age_sec": round(fx_age, 1) if fx_age is not None else None,
+            "forex_executor_alive": fx_age is not None and fx_age < 120,
+        },
+        "strategies": {
+            "total": len(strategies),
+            "by_status": by_status,
+            "by_asset_class": by_class,
+            "tradfi_scanning": tradfi_scanning,
+        },
+        "executions": {"fires_24h": fires_24h, "open": open_rows},
+        "top_blockers": top_blockers,
+        "strategies_with_gates": strategy_rows[:15],
+        "klines_probe": klines_probe,
+        "condition_probe": probe,
+        "telegram": telegram_status,
+        "notes": notes,
+        "ensure_firing_url": "/api/strategies/ensure-firing",
+    }
+
+
+@app.get("/api/executor/diagnostics/quick")
+async def api_executor_diagnostics_quick(uid: str = Query(...)):
+    """Lightweight diagnostics — safe on large accounts; avoids Cloudflare 524."""
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        payload = await asyncio.wait_for(
+            _build_executor_diagnostics(db, user, run_heal=False, run_deep=False),
+            timeout=12.0,
+        )
+        return JSONResponse(payload)
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            {"ok": False, "error": "diagnostics timeout — try again in 30s"},
+            status_code=504,
+        )
+    finally:
+        db.close()
+
+
+@app.get("/api/executor/diagnostics")
+async def api_executor_diagnostics(
+    uid: str = Query(...),
+    heal: bool = Query(False, description="Run strategy heal (slow on large accounts)"),
+    deep: bool = Query(False, description="Run klines + live condition probe"),
+):
+    """
+    Why strategies are or aren't firing — executor health and gate blockers.
+    Default is fast. Use ?deep=1 for klines/TA probe; ?heal=1 or ensure-firing for repair.
+    """
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        _budget = 25.0 if deep or heal else 12.0
+        payload = await asyncio.wait_for(
+            _build_executor_diagnostics(db, user, run_heal=heal, run_deep=deep),
+            timeout=_budget,
+        )
+        return JSONResponse(payload)
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "diagnostics timeout",
+                "quick_url": f"/api/executor/diagnostics/quick?uid={uid}",
             },
-            "strategies": {
-                "total": len(strategies),
-                "by_status": by_status,
-                "by_asset_class": by_class,
-                "tradfi_scanning": tradfi_scanning,
-            },
-            "executions": {"fires_24h": fires_24h, "open": open_rows},
-            "top_blockers": top_blockers,
-            "strategies_with_gates": strategy_rows[:15],
-            "klines_probe": klines_probe,
-            "condition_probe": probe,
-            "telegram": telegram_status,
-            "notes": notes,
-            "ensure_firing_url": "/api/strategies/ensure-firing",
-        })
+            status_code=504,
+        )
     finally:
         db.close()
 
