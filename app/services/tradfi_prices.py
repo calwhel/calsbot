@@ -145,6 +145,8 @@ async def _fetch_yahoo_chart_klines(
     yahoo_ticker: str,
     timeframe: str,
     limit: int,
+    *,
+    http_timeout_s: float = 20.0,
 ) -> List[List[float]]:
     """OHLC from Yahoo Finance chart API — works on Railway without yfinance."""
     interval, range_ = _YAHOO_CHART_TF.get(timeframe, ("15m", "60d"))
@@ -156,7 +158,7 @@ async def _fetch_yahoo_chart_klines(
     try:
         import httpx
         async with httpx.AsyncClient(
-            timeout=20.0,
+            timeout=http_timeout_s,
             headers={"User-Agent": "Mozilla/5.0 (compatible; TradeHub/1.0)"},
         ) as client:
             resp = await client.get(
@@ -546,6 +548,7 @@ async def get_klines(
     limit: int = 200,
     for_backtest: bool = False,
     ctrader_user_id: Optional[int] = None,
+    max_wait_s: Optional[float] = None,
 ) -> List[List[float]]:
     """
     Return up to `limit` OHLC bars in MEXC-shape: [[ts_ms, o, h, l, c, v], ...]
@@ -587,14 +590,20 @@ async def get_klines(
         fut = running.create_future()
         _KLINE_INFLIGHT[key] = fut
         try:
-            result = await _get_klines_impl(
-                symbol,
-                asset_class,
-                timeframe,
-                limit,
-                for_backtest=for_backtest,
-                ctrader_user_id=ctrader_user_id,
-            )
+            async def _run():
+                return await _get_klines_impl(
+                    symbol,
+                    asset_class,
+                    timeframe,
+                    limit,
+                    for_backtest=for_backtest,
+                    ctrader_user_id=ctrader_user_id,
+                )
+
+            if max_wait_s and max_wait_s > 0:
+                result = await asyncio.wait_for(_run(), timeout=max_wait_s)
+            else:
+                result = await _run()
             if not fut.done():
                 fut.set_result(result)
             return result
@@ -604,6 +613,14 @@ async def get_klines(
             if not fut.done():
                 fut.cancel()
             raise
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[tradfi] get_klines budget hit for {symbol.upper()} "
+                f"{timeframe} (max_wait_s={max_wait_s})"
+            )
+            if not fut.done():
+                fut.set_result([])
+            return []
         except Exception:
             if not fut.done():
                 fut.set_result([])
@@ -613,7 +630,7 @@ async def get_klines(
                 _KLINE_INFLIGHT.pop(key, None)
 
     # No running loop (shouldn't happen for an async caller) — fetch directly.
-    return await _get_klines_impl(
+    coro = _get_klines_impl(
         symbol,
         asset_class,
         timeframe,
@@ -621,6 +638,9 @@ async def get_klines(
         for_backtest=for_backtest,
         ctrader_user_id=ctrader_user_id,
     )
+    if max_wait_s and max_wait_s > 0:
+        return await asyncio.wait_for(coro, timeout=max_wait_s)
+    return await coro
 
 
 async def _fetch_fmp_metals_klines(
@@ -653,12 +673,23 @@ async def _fetch_ctrader_klines(
 ) -> List[List[float]]:
     try:
         from app.services import ctrader_price_feed as _ctf
-        timeout = min(45.0, 12.0 + limit / 150.0)
+        # Keep broker trendbar waits short — a slow miss + Yahoo fallback must
+        # stay under gunicorn/Railway ~30s worker budgets on HTTP workers.
+        timeout = min(10.0, 5.0 + limit / 200.0)
         return await asyncio.wait_for(
             _ctf.get_klines(symbol, asset_class, timeframe, limit, user_id=user_id),
             timeout=timeout,
         )
-    except Exception:
+    except asyncio.TimeoutError:
+        logger.info(
+            f"[tradfi] cTrader klines timeout {symbol.upper()} {timeframe} "
+            f"(limit={limit})"
+        )
+        return []
+    except Exception as exc:
+        logger.debug(
+            f"[tradfi] cTrader klines failed {symbol.upper()} {timeframe}: {exc}"
+        )
         return []
 
 
@@ -794,10 +825,12 @@ async def _get_klines_impl(
     if cls == ASSET_CLASS_FOREX and not is_metal and not for_backtest:
         yahoo_ticker = yf_ticker(cls, symbol)
         if yahoo_ticker:
-            _yrows = await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit)
+            _yrows = await _fetch_yahoo_chart_klines(
+                yahoo_ticker, timeframe, limit, http_timeout_s=10.0,
+            )
             if _yrows:
                 logger.info(
-                    f"[tradfi] klines ok (Yahoo): {symbol.upper()} {timeframe} "
+                    f"[tradfi] klines ok (Yahoo fallback): {symbol.upper()} {timeframe} "
                     f"→ {len(_yrows)} bars"
                 )
                 return _yrows
