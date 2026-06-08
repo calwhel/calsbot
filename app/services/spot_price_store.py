@@ -88,6 +88,11 @@ def upsert_tick(
         logger.debug(f"[spot_store] upsert {sym}: {e}")
 
 
+def get_tick(symbol: str, max_age_s: float = 45.0) -> Optional[dict]:
+    """Fresh tick row (symbol, bid, ask, mid, source, updated_at) or None."""
+    return _get_row(symbol.upper(), max_age_s)
+
+
 def get_mid(symbol: str, max_age_s: float = 45.0) -> Optional[float]:
     row = _get_row(symbol.upper(), max_age_s)
     return float(row["mid"]) if row else None

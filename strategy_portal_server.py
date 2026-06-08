@@ -1636,6 +1636,12 @@ async def _start_executor_tasks():
         logger.info("cTrader real-time spot feed task scheduled (executor worker)")
     except Exception as _ctf_err:
         logger.warning(f"cTrader price feed start error (non-fatal): {_ctf_err}")
+    try:
+        from app.services.metals_spot_feed import start as _metals_feed_start
+        _metals_feed_start()
+        logger.info("Metals spot feed (XAUUSD/XAGUSD) scheduled (executor worker)")
+    except Exception as _met_err:
+        logger.warning(f"Metals spot feed start error (non-fatal): {_met_err}")
 
     async def _spot_price_primer_loop():
         """Keep shared spot store warm when FMP is in backoff and cTrader is idle."""
@@ -10929,9 +10935,28 @@ async def api_ctrader_feed_status():
                 out["primary_source"] = "ctrader_realtime"
             elif by_src.get("fmp"):
                 out["primary_source"] = "fmp_realtime"
+            elif by_src.get("binance") or by_src.get("coinbase") or by_src.get("kraken"):
+                out["primary_source"] = "metals_realtime"
             out["live"] = True
     except Exception as e:
         out["shared_ticks"] = {"error": str(e)[:120]}
+
+    try:
+        from app.services.metals_spot_feed import (
+            is_live as _metals_live,
+            cached_symbols as _metals_syms,
+            symbol_count as _metals_count,
+            get_price as _metals_px,
+        )
+        out["metals"] = {
+            "live": bool(_metals_live()),
+            "symbol_count": _metals_count(),
+            "cached_symbols": _metals_syms(),
+            "xauusd": _metals_px("XAUUSD"),
+            "xagusd": _metals_px("XAGUSD"),
+        }
+    except Exception as e:
+        out["metals"] = {"error": str(e)[:120]}
 
     if out.get("primary_source") == "yfinance_fallback":
         if out["ctrader"]["symbol_count"] > 0:

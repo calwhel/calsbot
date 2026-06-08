@@ -421,6 +421,30 @@ async def get_price(symbol: str, asset_class: str) -> Optional[float]:
     except Exception:
         pass
 
+    # ── 0b. Shared metals ticks (dedicated poller: binance / coinbase / kraken) ─
+    if symbol.upper() in _METALS_BINANCE_MAP:
+        try:
+            from app.services.spot_price_store import get_mid as _store_mid
+            _spx = _store_mid(symbol.upper(), max_age_s=20.0)
+            if _spx is not None:
+                return _spx
+        except Exception:
+            pass
+        try:
+            from app.services.metals_spot_feed import get_price as _metals_px
+            _mpx = _metals_px(symbol)
+            if _mpx is not None:
+                return _mpx
+        except Exception:
+            pass
+        try:
+            from app.services.metals_spot_feed import fetch_now as _metals_fetch
+            _mpx = await _metals_fetch(symbol)
+            if _mpx is not None:
+                return _mpx
+        except Exception:
+            pass
+
     # ── 0. Binance spot — metals only (XAUUSDT / XAGUSDT) ────────────────────
     _bn_sym = _METALS_BINANCE_MAP.get(symbol.upper())
     if _bn_sym:
@@ -437,12 +461,40 @@ async def get_price(symbol: str, asset_class: str) -> Optional[float]:
                     params={"symbol": _bn_sym},
                 )
             if r.status_code == 200:
-                px = float(r.json().get("price", 0))
+                body = r.json()
+                if isinstance(body, dict) and body.get("code") not in (None, 0):
+                    raise ValueError(body.get("msg") or "binance error")
+                px = float(body.get("price", 0))
                 if px:
                     _PRICE_CACHE[_cache_key] = (px, now)
+                    try:
+                        from app.services.spot_price_store import upsert_tick
+                        upsert_tick(symbol.upper(), mid=px, source="binance")
+                    except Exception:
+                        pass
                     return px
         except Exception as _be:
             logger.debug(f"[tradfi] Binance spot price failed for {_bn_sym}: {_be}")
+        # Coinbase works from US/Railway where Binance spot is geo-blocked.
+        _cb_pair = {"XAUUSDT": "XAU-USD", "XAGUSDT": "XAG-USD"}.get(_bn_sym)
+        if _cb_pair:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=4.0) as _c:
+                    r = await _c.get(f"https://api.coinbase.com/v2/prices/{_cb_pair}/spot")
+                if r.status_code == 200:
+                    amount = ((r.json() or {}).get("data") or {}).get("amount")
+                    px = float(amount) if amount else 0.0
+                    if px > 0:
+                        _PRICE_CACHE[_cache_key] = (px, now)
+                        try:
+                            from app.services.spot_price_store import upsert_tick
+                            upsert_tick(symbol.upper(), mid=px, source="coinbase")
+                        except Exception:
+                            pass
+                        return px
+            except Exception as _ce:
+                logger.debug(f"[tradfi] Coinbase spot price failed for {_cb_pair}: {_ce}")
         # fall through to FMP / yfinance below
 
     # ── 1. FMP real-time WebSocket feed (by-the-second, always active) ────────
