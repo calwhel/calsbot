@@ -693,8 +693,25 @@ async def get_accounts_for_token(access_token: str, host: str = CTRADER_HOST) ->
     if not _PROTO_OK:
         return []
     merged: Dict[int, dict] = {}
-    for h in (CTRADER_HOST_LIVE, CTRADER_HOST_DEMO):
-        for acc in await _get_accounts_on_host(access_token, h):
+    async def _timed(host: str) -> list:
+        try:
+            return await asyncio.wait_for(
+                _get_accounts_on_host(access_token, host), timeout=8.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"[cTrader] get_accounts timed out on {host}")
+            return []
+
+    batches = await asyncio.gather(
+        _timed(CTRADER_HOST_LIVE),
+        _timed(CTRADER_HOST_DEMO),
+        return_exceptions=True,
+    )
+    for batch in batches:
+        if isinstance(batch, Exception):
+            logger.warning(f"[cTrader] get_accounts host batch failed: {batch}")
+            continue
+        for acc in batch:
             merged[int(acc["ctidTraderAccountId"])] = acc
     return list(merged.values())
 
@@ -806,7 +823,7 @@ async def place_market_order_resilient(
         )
         result = await _place_on(alt)
         if not result.get("error") and user_id:
-            _persist_account_host_metadata(user_id, ctid, alt)
+            await asyncio.to_thread(_persist_account_host_metadata, user_id, ctid, alt)
 
     return result
 
