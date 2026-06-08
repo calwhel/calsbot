@@ -30,11 +30,10 @@ else
   ( sleep "${_tg_delay}"; exec python3 -m uvicorn main:app --host 127.0.0.1 --port 8080 2>&1 | sed 's/^/[tg-bot] /' ) &
 fi
 
-# Default 1 worker on Railway: executor + cTrader/FMP feeds must run in a single
-# process (duplicate workers doubled API 429s, cTrader reconnect churn, and
-# 30s gunicorn worker kills from stacked kline fetches). Set GUNICORN_WORKERS=2
-# only if you have headroom and accept the trade-offs.
-_GUNICORN_WORKERS="${GUNICORN_WORKERS:-1}"
+# Two workers: one holds the executor advisory lock; the other serves HTTP so
+# forex scan cycles (klines/cTrader) never freeze the website. Feeds start only
+# on the executor-winning worker (see _start_executor_tasks).
+_GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
 _GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-120}"
 echo "[railway] Starting Strategy Portal on port ${PORT:-5000} (workers=${_GUNICORN_WORKERS}, timeout=${_GUNICORN_TIMEOUT})..."
 exec gunicorn -w "${_GUNICORN_WORKERS}" -k uvicorn.workers.UvicornWorker \

@@ -6315,19 +6315,24 @@ async def api_portal_bootstrap(uid: str = Query(...)):
     heal_info = None
     if uid and now - _HEAL_USER_AT.get(uid, 0) >= 300:
         _HEAL_USER_AT[uid] = now
-        try:
+
+        def _heal_sync():
             from app.database import SessionLocal
             from app.services.strategy_heal import heal_user_account
             _hdb = SessionLocal()
             try:
                 _huser = _get_user_by_uid(uid, _hdb)
                 if _huser:
-                    heal_info = heal_user_account(_hdb, _huser.id)
-                    if heal_info.get("rows_touched") or heal_info.get("stale_expired"):
-                        _CACHE.pop(strat_key, None)
-                        _CACHE.pop(port_key, None)
+                    return heal_user_account(_hdb, _huser.id)
             finally:
                 _hdb.close()
+            return None
+
+        try:
+            heal_info = await asyncio.wait_for(asyncio.to_thread(_heal_sync), timeout=4.0)
+            if heal_info and (heal_info.get("rows_touched") or heal_info.get("stale_expired")):
+                _CACHE.pop(strat_key, None)
+                _CACHE.pop(port_key, None)
         except Exception as _he:
             logger.warning("[bootstrap] strategy heal uid=%s: %s", uid, _he)
 
@@ -11548,7 +11553,10 @@ async def api_executor_diagnostics(uid: str = Query(...)):
         heal_stats: dict = {}
         try:
             from app.services.strategy_heal import heal_user_account
-            heal_stats = heal_user_account(db, user.id)
+            heal_stats = await asyncio.wait_for(
+                asyncio.to_thread(heal_user_account, db, user.id),
+                timeout=5.0,
+            )
         except Exception as _he:
             heal_stats = {"error": str(_he)[:200]}
 
