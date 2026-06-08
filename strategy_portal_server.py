@@ -920,6 +920,154 @@ async def _send_otp_via_telegram(telegram_id: str, otp: str, name: str):
             raise ValueError(f"Telegram API error {r.status_code}: {r.text[:200]}")
 
 
+_SCHEMA_MIGRATION_LOCK_ID = 708110002
+
+
+def _ensure_additive_columns(
+    engine,
+    *,
+    lock_id: int,
+    migrations: list,
+    label: str,
+) -> None:
+    """
+    Run ADD COLUMN migrations under a single-worker advisory lock.
+
+    Skips ALTER when the column already exists (information_schema) so hot
+    strategy_executions traffic does not stall on repeated ACCESS EXCLUSIVE
+    attempts from every gunicorn worker at boot.
+    """
+    import sqlalchemy as sa
+
+    def _benign(exc: Exception) -> bool:
+        es = str(exc).lower()
+        return (
+            "already exists" in es
+            or "duplicate" in es
+            or "locknotavailable" in es
+            or "lock timeout" in es
+        )
+
+    conn = engine.connect()
+    try:
+        got = conn.execute(
+            sa.text("SELECT pg_try_advisory_lock(:lid)"),
+            {"lid": lock_id},
+        ).scalar()
+        if not got:
+            logger.info(
+                f"_ensure_additive_columns({label}): another worker migrating — skip"
+            )
+            return
+        try:
+            conn.execute(sa.text("SET lock_timeout = '8s'"))
+            conn.execute(sa.text("SET statement_timeout = '30000'"))
+            for table, col, ddl in migrations:
+                exists = conn.execute(
+                    sa.text(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_schema = 'public' "
+                        "AND table_name = :t AND column_name = :c LIMIT 1"
+                    ),
+                    {"t": table, "c": col},
+                ).scalar()
+                if exists:
+                    continue
+                try:
+                    conn.execute(sa.text(ddl))
+                    conn.commit()
+                    logger.info(f"_ensure_additive_columns({label}): added {table}.{col}")
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    if _benign(e):
+                        logger.info(
+                            f"_ensure_additive_columns({label}): {table}.{col} "
+                            f"skipped ({type(e).__name__})"
+                        )
+                    else:
+                        logger.warning(
+                            f"_ensure_additive_columns({label}): {table}.{col}: {e}"
+                        )
+        finally:
+            try:
+                conn.execute(
+                    sa.text("SELECT pg_advisory_unlock(:lid)"),
+                    {"lid": lock_id},
+                )
+            except Exception:
+                pass
+    except Exception as e:
+        if _benign(e):
+            logger.info(f"_ensure_additive_columns({label}) outer skip: {type(e).__name__}")
+        else:
+            logger.warning(f"_ensure_additive_columns({label}) outer: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+_PIP_COLUMN_MIGRATIONS = [
+    (
+        "strategy_executions",
+        "pips_pnl",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS pips_pnl FLOAT",
+    ),
+    (
+        "strategy_executions",
+        "spread_pips_applied",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS spread_pips_applied FLOAT",
+    ),
+    (
+        "strategy_performance",
+        "total_pips_pnl",
+        "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS total_pips_pnl FLOAT",
+    ),
+    (
+        "strategy_performance",
+        "avg_pips_per_trade",
+        "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS avg_pips_per_trade FLOAT",
+    ),
+]
+
+_CTRADER_COLUMN_MIGRATIONS = [
+    (
+        "strategy_executions",
+        "ctrader_order_id",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS ctrader_order_id VARCHAR(80)",
+    ),
+    (
+        "user_preferences",
+        "ctrader_access_token",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_access_token VARCHAR",
+    ),
+    (
+        "user_preferences",
+        "ctrader_refresh_token",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_refresh_token VARCHAR",
+    ),
+    (
+        "user_preferences",
+        "ctrader_account_id",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_account_id VARCHAR",
+    ),
+    (
+        "user_preferences",
+        "ctrader_accounts",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_accounts TEXT",
+    ),
+    (
+        "user_preferences",
+        "forex_approved",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS forex_approved BOOLEAN DEFAULT FALSE",
+    ),
+]
+
+
 def _ensure_tables():
     import sqlalchemy as sa
     import time as _time
@@ -1045,42 +1193,20 @@ def _ensure_tables():
     except Exception as e:
         logger.warning(f"_ensure_tables(indexes outer): {e}")
 
-    # Forex pip P&L tracking + spread audit columns (additive, nullable).
-    # lock_timeout prevents ACCESS EXCLUSIVE lock starvation under DB load.
-    for _ddl in (
-        "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS pips_pnl FLOAT",
-        "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS spread_pips_applied FLOAT",
-        "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS total_pips_pnl FLOAT",
-        "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS avg_pips_per_trade FLOAT",
-    ):
-        try:
-            with engine.begin() as _conn:
-                _conn.execute(sa.text("SET LOCAL lock_timeout = '2s'"))
-                _conn.execute(sa.text(_ddl))
-        except Exception as _pe:
-            _ps = str(_pe)
-            if "already exists" not in _ps and "duplicate" not in _ps and "LockNotAvailable" not in _ps:
-                logger.warning(f"_ensure_tables(pip column {_ddl[:60]}): {_pe}")
+    # Forex pip + cTrader columns — one worker only; skip when column already exists.
+    _ensure_additive_columns(
+        engine,
+        lock_id=_SCHEMA_MIGRATION_LOCK_ID,
+        migrations=_PIP_COLUMN_MIGRATIONS,
+        label="pip_columns",
+    )
     logger.info("_ensure_tables: forex pip columns ready")
-
-    # cTrader forex broker columns (replaces OANDA). OAuth2 tokens from
-    # Spotware Open API. Additive nullable ALTERs — safe for multi-worker race.
-    for _ddl in (
-        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS ctrader_order_id VARCHAR(80)",
-        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_access_token VARCHAR",
-        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_refresh_token VARCHAR",
-        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_account_id VARCHAR",
-        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_accounts TEXT",
-        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS forex_approved BOOLEAN DEFAULT FALSE",
-    ):
-        try:
-            with engine.begin() as _conn:
-                _conn.execute(sa.text("SET LOCAL lock_timeout = '2s'"))
-                _conn.execute(sa.text(_ddl))
-        except Exception as _ce:
-            _cs = str(_ce)
-            if "already exists" not in _cs and "duplicate" not in _cs and "LockNotAvailable" not in _cs:
-                logger.warning(f"_ensure_tables(ctrader {_ddl[:60]}): {_ce}")
+    _ensure_additive_columns(
+        engine,
+        lock_id=_SCHEMA_MIGRATION_LOCK_ID,
+        migrations=_CTRADER_COLUMN_MIGRATIONS,
+        label="ctrader_columns",
+    )
     logger.info("_ensure_tables: ctrader columns ready")
 
     # Auto-promote admin users to lifetime Pro + forex-approved so they always
@@ -1323,50 +1449,11 @@ def _ensure_tables():
         logger.warning(f"[migration] asset_class backfill failed (non-fatal): {_e}")
 
 
-async def _critical_migrations_background():
-    """Idempotent column adds — must NOT block worker readiness (Neon cold wake
-    on deploy was holding gunicorn workers up to 120s → site timed out)."""
-    _critical_ddls = [
-        "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS pips_pnl FLOAT",
-        "ALTER TABLE strategy_executions  ADD COLUMN IF NOT EXISTS spread_pips_applied FLOAT",
-        "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS total_pips_pnl FLOAT",
-        "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS avg_pips_per_trade FLOAT",
-    ]
-
-    def _run():
-        import sqlalchemy as _sa
-        conn = engine.connect()
-        try:
-            conn.execute(_sa.text("SET lock_timeout = '3s'"))
-            conn.execute(_sa.text("SET statement_timeout = '15000'"))
-            for ddl in _critical_ddls:
-                try:
-                    conn.execute(_sa.text(ddl))
-                    conn.commit()
-                except Exception as e:
-                    try:
-                        conn.rollback()
-                    except Exception:
-                        pass
-                    if "already exists" not in str(e).lower():
-                        logger.warning(f"startup: critical DDL warning: {e}")
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    try:
-        await asyncio.to_thread(_run)
-        logger.info("startup: critical pip columns ready (background)")
-    except Exception as _ce:
-        logger.warning(f"startup: critical column migration warning: {_ce}")
-
-
 @app.on_event("startup")
 async def startup():
     # Never await DB work here — each gunicorn worker must accept HTTP immediately.
-    asyncio.create_task(_critical_migrations_background())
+    # Schema ADD COLUMN migrations run once inside _startup_background → _ensure_tables
+    # (advisory-locked; duplicate startup DDL removed to avoid lock-timeout noise).
     asyncio.create_task(_startup_background())
     asyncio.create_task(_refresh_heavy_caches())
     if is_replit() or is_railway():
