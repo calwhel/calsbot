@@ -44,7 +44,25 @@ MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT",
 # to ~100 strategies within the 5s cycle without exhausting bg_engine's pool
 # (size 5 + overflow 6 = 11; crypto's 3 + this 6 = 9 peak).
 FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "6"))
+# Evaluate strategies in batches so Railway logs show progress during long first cycles
+# (90 forex + 168 crypto can run 5–15 min with no other INFO lines).
+EXECUTOR_SCAN_BATCH_SIZE    = int(_os_env.environ.get("EXECUTOR_SCAN_BATCH_SIZE", "20"))
+# Let forex finish its first batch before crypto hammers the same Neon pool + APIs.
+EXECUTOR_CRYPTO_START_DELAY = int(_os_env.environ.get("EXECUTOR_CRYPTO_START_DELAY", "45"))
 PAPER_MAX_HOLD_HOURS        = 168   # auto-expire paper positions after this many hours (7 days)
+
+async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size: int = 0) -> None:
+    """Run evaluate tasks in chunks and log progress (visible in Railway during long scans)."""
+    size = batch_size or EXECUTOR_SCAN_BATCH_SIZE
+    total = len(snapshots)
+    if not total:
+        return
+    for i in range(0, total, max(1, size)):
+        batch = snapshots[i : i + size]
+        await asyncio.gather(*[run_one(s) for s in batch])
+        done = min(i + len(batch), total)
+        logger.info(f"[{label}] progress {done}/{total} strategies evaluated")
+
 
 # ─── Shared API caches ───────────────────────────────────────────────────────
 # Raw ticker list — fetched once per scan cycle, shared by ALL strategies.
@@ -4454,6 +4472,12 @@ async def run_strategy_executor():
 
     init_strategy_tables(engine)
     logger.info("🤖 Strategy executor started (active + paper modes)")
+    if EXECUTOR_CRYPTO_START_DELAY > 0:
+        logger.info(
+            f"🤖 Crypto executor: waiting {EXECUTOR_CRYPTO_START_DELAY}s before first scan "
+            "(forex warm-up — avoids silent log gap on deploy)"
+        )
+        await asyncio.sleep(EXECUTOR_CRYPTO_START_DELAY)
 
     # Spawn paper monitor and session alert loop as concurrent sibling tasks
     asyncio.create_task(run_paper_position_monitor())
@@ -4670,7 +4694,9 @@ async def run_strategy_executor():
                                 except Exception:
                                     pass
 
-                await asyncio.gather(*[_run_one(s) for s in eval_snapshots])
+                await _gather_eval_batches(
+                    "Crypto Executor", eval_snapshots, _run_one,
+                )
 
                 try:
                     from app.services.ctrader_order_queue import flush_gate_stats_to_db
@@ -5756,7 +5782,13 @@ async def run_forex_executor():
                                 except Exception:
                                     pass
 
-                await asyncio.gather(*[_run_one_fx(s) for s in open_snaps])
+                logger.info(
+                    f"[FX Executor] evaluating {len(open_snaps)} strategies "
+                    f"(batch size {EXECUTOR_SCAN_BATCH_SIZE})…"
+                )
+                await _gather_eval_batches(
+                    "FX Executor", open_snaps, _run_one_fx,
+                )
 
                 try:
                     from app.services.ctrader_order_queue import flush_gate_stats_to_db
