@@ -64,6 +64,37 @@ _PRICE_TA_TTL    = 15  # seconds — fresher data for faster signal detection
 # 20s cache in tradfi_prices — only the in-memory FMP spot price is re-read.
 _PRICE_TA_TTL_TRADFI = 5
 
+# Opt-in verbose per-strategy TA logging. Set EXECUTOR_VERBOSE_TA=1 (Railway env)
+# to watch each saved strategy being evaluated — symbol + which entry conditions
+# pass/fail each scan — without ever spamming logs by default. Throttled per
+# (strategy, symbol) so a 90-strategy forex cycle stays readable; a real fire is
+# always logged regardless of the throttle.
+_TA_VERBOSE_LAST: Dict[tuple, float] = {}
+_TA_VERBOSE_THROTTLE_S = 30.0
+
+
+def _maybe_log_ta_eval(strategy, symbol, direction, passed, details) -> None:
+    if _os_env.environ.get("EXECUTOR_VERBOSE_TA", "").lower() not in ("1", "true", "yes"):
+        return
+    key = (getattr(strategy, "id", 0), symbol)
+    now = time.monotonic()
+    if not passed and (now - _TA_VERBOSE_LAST.get(key, 0.0)) < _TA_VERBOSE_THROTTLE_S:
+        return  # throttle repeated "not met" lines; always log a fire
+    _TA_VERBOSE_LAST[key] = now
+    try:
+        _det = details or []
+        n_pass = sum(1 for d in _det if str(d).lstrip().startswith("✅"))
+        summary = " | ".join(str(d) for d in _det[:6])
+        logger.info(
+            f"[TA] Strategy {getattr(strategy, 'id', '?')} "
+            f"'{getattr(strategy, 'name', '') or ''}' {symbol} {direction}: "
+            f"{n_pass}/{len(_det)} conditions "
+            f"{'✅ MET → firing' if passed else 'not met'} :: {summary}"
+        )
+    except Exception:
+        pass
+
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _portal_trade_entitled(
@@ -3261,6 +3292,7 @@ async def evaluate_and_fire(
             strictness_level=strictness_level,
             ctrader_user_id=_uid,
         )
+        _maybe_log_ta_eval(strategy, symbol, direction_pref, passed, details)
         if not passed:
             continue
         _conditions_failed_for_all = False
