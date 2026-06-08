@@ -206,7 +206,11 @@ async def _get_klines(
             return cache[_ckey]
         try:
             from app.services.tradfi_prices import get_klines as _tradfi_klines
-            kl = await _tradfi_klines(symbol, _asset_class, interval, max(limit, 200))
+            _uid = (cache or {}).get("__ctrader_user_id__")
+            kl = await _tradfi_klines(
+                symbol, _asset_class, interval, max(limit, 200),
+                ctrader_user_id=_uid,
+            )
         except Exception as _e:
             logger.debug(f"tradfi klines fetch failed for {symbol} ({_asset_class}): {_e}")
             kl = []
@@ -3800,6 +3804,7 @@ async def evaluate_strategy_conditions(
     enhanced_ta: Dict,
     http_client,
     strictness_level: int = 0,
+    ctrader_user_id: Optional[int] = None,
 ) -> Tuple[bool, List[str]]:
     """
     Evaluate all entry_conditions in a strategy config.
@@ -3819,6 +3824,8 @@ async def evaluate_strategy_conditions(
     _ac = strategy_config.get("asset_class") or price_data.get("_asset_class")
     if _ac and _ac != "crypto":
         cache["__asset_class__"] = _ac
+    if ctrader_user_id is not None:
+        cache["__ctrader_user_id__"] = int(ctrader_user_id)
 
     # Override operator based on strictness
     if strictness_level >= 1:

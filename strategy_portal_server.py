@@ -11526,6 +11526,207 @@ async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(Fa
     return JSONResponse(payload)
 
 
+@app.get("/api/executor/diagnostics")
+async def api_executor_diagnostics(uid: str = Query(...)):
+    """
+    Why strategies are or aren't firing — executor health, gate blockers,
+    Telegram link, klines probe, and a live condition check on one strategy.
+    Auto-runs strategy heal (draft→paper, stale OPEN expiry) on each call.
+    """
+    import time as _time
+    from datetime import datetime, timedelta
+    from app.database import SessionLocal
+    from app.deployment import is_production_deploy
+    from app.strategy_models import UserStrategy, StrategyExecution
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+
+        heal_stats: dict = {}
+        try:
+            from app.services.strategy_heal import heal_user_account
+            heal_stats = heal_user_account(db, user.id)
+        except Exception as _he:
+            heal_stats = {"error": str(_he)[:200]}
+
+        strategies = db.query(UserStrategy).filter(UserStrategy.user_id == user.id).all()
+        by_status: dict = {}
+        by_class: dict = {}
+        tradfi_scanning = 0
+        draft_count = 0
+        for s in strategies:
+            by_status[s.status] = by_status.get(s.status, 0) + 1
+            ac = (s.asset_class or "crypto").lower()
+            by_class[ac] = by_class.get(ac, 0) + 1
+            if s.status in ("paper", "active") and ac in ("forex", "index", "stock"):
+                tradfi_scanning += 1
+            if s.status in ("draft", "paused"):
+                draft_count += 1
+
+        since = datetime.utcnow() - timedelta(hours=24)
+        fires_24h = db.query(StrategyExecution).filter(
+            StrategyExecution.user_id == user.id,
+            StrategyExecution.fired_at >= since,
+        ).count()
+        open_rows = db.query(StrategyExecution).filter(
+            StrategyExecution.user_id == user.id,
+            StrategyExecution.outcome == "OPEN",
+        ).count()
+
+        from app.services.ctrader_order_queue import get_gate_stats
+        gate_agg: dict = {}
+        strategy_rows = []
+        for s in strategies:
+            if s.status not in ("paper", "active"):
+                continue
+            gs = get_gate_stats(s.id).get("stats") or {}
+            for k, v in gs.items():
+                gate_agg[k] = gate_agg.get(k, 0) + int(v)
+            if gs:
+                top = max(gs.items(), key=lambda kv: kv[1])
+                strategy_rows.append({
+                    "id": s.id,
+                    "name": s.name,
+                    "status": s.status,
+                    "asset_class": s.asset_class,
+                    "top_blocker": top[0].replace("blk_", ""),
+                    "top_count": top[1],
+                    "updated_at": get_gate_stats(s.id).get("updated_at"),
+                })
+        strategy_rows.sort(key=lambda r: r.get("top_count", 0), reverse=True)
+
+        top_blockers = sorted(
+            [{"gate": k.replace("blk_", ""), "count": v} for k, v in gate_agg.items()],
+            key=lambda x: -x["count"],
+        )[:12]
+
+        hb: dict = {}
+        try:
+            from app.services.strategy_executor import get_heartbeats
+            hb = get_heartbeats()
+        except Exception:
+            pass
+        _now = _time.time()
+        fx_age = (_now - hb["forex_executor"]) if hb.get("forex_executor") else None
+
+        klines_probe: dict = {}
+        try:
+            from app.services.tradfi_prices import get_klines as _gk
+            import asyncio as _aio
+            _bars = await _aio.wait_for(
+                _gk("EURUSD", "forex", "15m", 50, ctrader_user_id=user.id, max_wait_s=12.0),
+                timeout=14.0,
+            )
+            klines_probe = {
+                "eurusd_15m_bars": len(_bars or []),
+                "ok": len(_bars or []) >= 20,
+            }
+        except Exception as _ke:
+            klines_probe = {"ok": False, "error": str(_ke)[:160]}
+
+        probe: dict = {}
+        try:
+            import httpx
+            from app.services.strategy_executor import _fetch_price_and_ta, _primary_timeframe
+            from app.services.strategy_ta import evaluate_strategy_conditions
+            from app.services.strategy_heal import resolve_strategy_asset_class
+
+            pick = None
+            for s in strategies:
+                if s.status not in ("paper", "active"):
+                    continue
+                ac = resolve_strategy_asset_class(s)
+                if ac not in ("forex", "index", "stock"):
+                    continue
+                syms = ((s.config or {}).get("universe") or {}).get("symbols") or []
+                if syms:
+                    pick = s
+                    break
+            if pick:
+                cfg = dict(pick.config or {})
+                ac = resolve_strategy_asset_class(pick)
+                _syms = ((cfg.get("universe") or {}).get("symbols") or [])
+                sym = str(_syms[0]).upper()
+                async with httpx.AsyncClient(timeout=15.0) as _hc:
+                    px = await _fetch_price_and_ta(
+                        sym, _hc, ac, user_id=user.id,
+                        timeframe=_primary_timeframe(cfg),
+                    )
+                if px:
+                    passed, details = await evaluate_strategy_conditions(
+                        cfg, sym, px, px.get("enhanced_ta", {}), _hc,
+                        ctrader_user_id=user.id,
+                    )
+                    probe = {
+                        "strategy_id": pick.id,
+                        "strategy_name": pick.name,
+                        "symbol": sym,
+                        "would_fire": passed,
+                        "conditions": details[:8],
+                    }
+                else:
+                    probe = {
+                        "strategy_id": pick.id,
+                        "strategy_name": pick.name,
+                        "symbol": sym,
+                        "error": "no_price_data",
+                    }
+        except Exception as _pe:
+            probe = {"error": str(_pe)[:200]}
+
+        telegram_status: dict = {}
+        try:
+            from app.services.telegram_alert_status import build_telegram_alert_status
+            telegram_status = await build_telegram_alert_status(user, db)
+        except Exception:
+            pass
+
+        notes = []
+        if draft_count:
+            notes.append(f"{draft_count} strateg{'y' if draft_count == 1 else 'ies'} still draft/paused — heal promotes to paper automatically.")
+        if open_rows:
+            notes.append(f"{open_rows} OPEN execution(s) — may block max_open_positions until TP/SL or auto-expire (4h).")
+        if not fires_24h and tradfi_scanning:
+            top = top_blockers[0]["gate"] if top_blockers else "unknown"
+            notes.append(
+                f"Executor is scanning {tradfi_scanning} tradfi strateg"
+                f"{'y' if tradfi_scanning == 1 else 'ies'} but 0 fires in 24h. "
+                f"Top blocker: {top}. "
+                "Scanned strategies need ALL entry conditions to align live (same as backtest AND logic)."
+            )
+        if telegram_status.get("blockers"):
+            notes.append("Telegram: " + "; ".join(telegram_status["blockers"][:3]))
+
+        return JSONResponse({
+            "ok": True,
+            "heal": heal_stats,
+            "executor": {
+                "production": is_production_deploy(),
+                "forex_executor_age_sec": round(fx_age, 1) if fx_age is not None else None,
+                "forex_executor_alive": fx_age is not None and fx_age < 120,
+            },
+            "strategies": {
+                "total": len(strategies),
+                "by_status": by_status,
+                "by_asset_class": by_class,
+                "tradfi_scanning": tradfi_scanning,
+            },
+            "executions": {"fires_24h": fires_24h, "open": open_rows},
+            "top_blockers": top_blockers,
+            "strategies_with_gates": strategy_rows[:15],
+            "klines_probe": klines_probe,
+            "condition_probe": probe,
+            "telegram": telegram_status,
+            "notes": notes,
+            "ensure_firing_url": "/api/strategies/ensure-firing",
+        })
+    finally:
+        db.close()
+
+
 @app.get("/api/live-forex/readiness")
 async def api_live_forex_readiness(uid: str = Query(...)):
     """Diagnostics for the live forex signal → cTrader order pipeline."""

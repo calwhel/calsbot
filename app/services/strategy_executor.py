@@ -3210,7 +3210,8 @@ async def evaluate_and_fire(
 
         passed, details = await evaluate_strategy_conditions(
             config, symbol, price_data, enhanced_ta, http_client,
-            strictness_level=strictness_level
+            strictness_level=strictness_level,
+            ctrader_user_id=_uid,
         )
         if not passed:
             continue
