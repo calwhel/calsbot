@@ -3551,6 +3551,57 @@ def get_twitter_schedule() -> Dict:
     }
 
 
+async def run_auto_post_loop_singleton():
+    """Run auto_post_loop under a Postgres advisory lock so EXACTLY ONE process
+    posts to X — across both gunicorn web workers and the Telegram bot companion.
+
+    Why: auto-posting historically ran only inside the bot companion process,
+    which is started conditionally (needs TELEGRAM_BOT_TOKEN) and dies on its own
+    without restarting the container — so X posting silently stopped. Starting
+    this on the always-up web worker AND the companion, both gated by the same
+    advisory lock, means posting keeps running wherever a process is alive while
+    never double-posting. The lock auto-releases on process death, so a survivor
+    transparently takes over.
+    """
+    from app.services.telegram_poller_lock import (
+        try_acquire_persistent_lock,
+        release_poller_lock,
+        TWITTER_POSTER_LOCK_ID,
+    )
+
+    while True:
+        got = False
+        try:
+            got = await asyncio.to_thread(
+                try_acquire_persistent_lock, TWITTER_POSTER_LOCK_ID
+            )
+            if got:
+                logger.info(
+                    "🐦 X-poster advisory lock acquired — this process will auto-post"
+                )
+                # Normally never returns (posts forever); only returns on an init
+                # failure (no accounts / not configured). Release + retry so the
+                # other contender can try and so newly-added accounts get picked up.
+                await auto_post_loop()
+                logger.warning(
+                    "🐦 auto_post_loop exited (init failure?) — releasing X-poster "
+                    "lock, will retry in 120s"
+                )
+            else:
+                logger.info(
+                    "🐦 X-poster lock held by another process — standing by (retry 120s)"
+                )
+        except Exception as e:
+            logger.warning(f"🐦 X-poster singleton error: {e}")
+        finally:
+            if got:
+                try:
+                    release_poller_lock(TWITTER_POSTER_LOCK_ID)
+                except Exception:
+                    pass
+        await asyncio.sleep(120)
+
+
 async def auto_post_loop():
     """Background loop for automated posting - 20 posts per day per account"""
     global POSTED_SLOTS, LAST_POSTED_DAY, SLOT_OFFSETS

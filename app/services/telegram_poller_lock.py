@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 # lock queries (OID out of range) and prevented the bot from ever polling.
 MAIN_POLLER_LOCK_ID = 708_110_002
 FOREX_POLLER_LOCK_ID = 708_110_003
+# X / Twitter auto-poster — single-runner across the web workers AND the bot
+# companion process so exactly ONE process posts (no double tweets / rate bans).
+TWITTER_POSTER_LOCK_ID = 708_110_005
 
 KEEPALIVE_INTERVAL = 20
 _instance_id = str(os.getpid())
@@ -220,6 +223,24 @@ def release_poller_lock(lock_id: int) -> None:
 
 def holds_lock(lock_id: int) -> bool:
     return lock_id in _lock_conns
+
+
+def try_acquire_persistent_lock(lock_id: int) -> bool:
+    """Non-blocking advisory-lock acquire + keepalive — NEVER terminates others.
+
+    Returns True if this process now holds ``lock_id`` (or already held it). Use
+    for single-runner background jobs (e.g. the X auto-poster) where several
+    processes contend and we just want one winner; losers retry later. Unlike
+    ``wait_for_poller_lock``, this never kills the current holder, so a live
+    sibling is never disrupted. The session-level lock auto-releases if this
+    process dies, letting another contender take over.
+    """
+    if holds_lock(lock_id):
+        return True
+    if _try_acquire(lock_id):
+        _start_keepalive(lock_id)
+        return True
+    return False
 
 
 async def describe_bot_token(token: str, label: str) -> dict:
