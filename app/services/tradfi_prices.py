@@ -27,6 +27,7 @@ from typing import Dict, List, Optional, Tuple
 
 from app.services.asset_classes import (
     ASSET_CLASS_CRYPTO,
+    ASSET_CLASS_FOREX,
     normalize_asset_class,
     yf_ticker,
 )
@@ -728,6 +729,32 @@ async def _get_klines_impl(
             )
             if _crows:
                 return _crows
+
+    # ── Live forex: Yahoo chart + FMP (same chain as fetch_forex_scan_candles) ─
+    # cTrader alone often returns [] on Railway (no linked account / cold feed);
+    # yfinance download() is also unreliable server-side. Yahoo chart + FMP are
+    # what keep the UI scanner finding signals — the executor must use them too.
+    if cls == ASSET_CLASS_FOREX and not is_metal and not for_backtest:
+        yahoo_ticker = yf_ticker(cls, symbol)
+        if yahoo_ticker:
+            _yrows = await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit)
+            if _yrows:
+                logger.info(
+                    f"[tradfi] klines ok (Yahoo): {symbol.upper()} {timeframe} "
+                    f"→ {len(_yrows)} bars"
+                )
+                return _yrows
+        if _env_fmp_api_key():
+            try:
+                from app.services.fmp_price_feed import fmp_in_backoff, get_klines as _fmp_klines
+                if not fmp_in_backoff():
+                    _frows = await _fmp_klines(symbol, asset_class, timeframe, limit)
+                    if _frows:
+                        return _frows
+            except Exception as _fe:
+                logger.debug(
+                    f"[tradfi] FMP forex klines failed {symbol} {timeframe}: {_fe}"
+                )
 
     # ── Binance spot metals path (XAUUSDT / XAGUSDT) ─────────────────────────
     _bn_sym = _METALS_BINANCE_MAP.get(symbol.upper())
