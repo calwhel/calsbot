@@ -5422,6 +5422,14 @@ async def _reconcile_forex_closes() -> None:
     if len(_FX_RECONCILE_MISSING) > 500:
         _FX_RECONCILE_MISSING.clear()
 
+    # Untracked OPEN rows (no pos= in notes) cannot enter the reconcile worklist
+    # but still trip max_open_positions — expire when broker is flat.
+    try:
+        from app.services.strategy_heal import expire_untracked_forex_opens_when_broker_empty
+        await expire_untracked_forex_opens_when_broker_empty(min_age_minutes=30)
+    except Exception as _orph:
+        logger.debug(f"[FX-reconcile] orphan untracked OPEN sweep failed: {_orph}")
+
 
 async def _manage_live_forex_positions():
     """One-shot pass over all live forex positions (back-compat / manual use).

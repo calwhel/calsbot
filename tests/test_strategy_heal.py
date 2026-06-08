@@ -2,7 +2,11 @@
 import unittest
 from unittest.mock import MagicMock
 
-from app.services.strategy_heal import heal_strategy_row, resolve_strategy_asset_class
+from app.services.strategy_heal import (
+    _execution_lacks_position_id,
+    heal_strategy_row,
+    resolve_strategy_asset_class,
+)
 
 
 class TestStrategyHeal(unittest.TestCase):
@@ -67,6 +71,11 @@ class TestStrategyHeal(unittest.TestCase):
         strat.asset_class = "crypto"
         strat.config = {"asset_class": "forex"}
         self.assertEqual(resolve_strategy_asset_class(strat), "forex")
+
+    def test_untracked_position_detection(self):
+        self.assertTrue(_execution_lacks_position_id(None))
+        self.assertTrue(_execution_lacks_position_id("ctrader ok"))
+        self.assertFalse(_execution_lacks_position_id("live | pos=12345"))
 
 
 if __name__ == "__main__":

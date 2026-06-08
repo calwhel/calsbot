@@ -6476,13 +6476,20 @@ async def api_strategies_ensure_firing(request: Request):
     if not uid:
         raise HTTPException(status_code=400, detail="uid required")
     from app.database import SessionLocal
-    from app.services.strategy_heal import heal_user_account
+    from app.services.strategy_heal import (
+        heal_user_account,
+        expire_untracked_forex_opens_when_broker_empty,
+    )
     db = SessionLocal()
     try:
         user = _get_user_by_uid(uid, db)
         if not user or user.banned:
             raise HTTPException(status_code=403)
         stats = heal_user_account(db, user.id)
+        stats["orphan_forex_expired"] = await expire_untracked_forex_opens_when_broker_empty(
+            min_age_minutes=30,
+            user_id=user.id,
+        )
         _CACHE.pop(f"api_strats_{uid}", None)
         _CACHE.pop(f"portfolio_{uid}", None)
         return JSONResponse({"ok": True, **stats})
@@ -11632,10 +11639,20 @@ async def api_executor_diagnostics(uid: str = Query(...)):
 
         heal_stats: dict = {}
         try:
-            from app.services.strategy_heal import heal_user_account
+            from app.services.strategy_heal import (
+                heal_user_account,
+                expire_untracked_forex_opens_when_broker_empty,
+            )
             heal_stats = await asyncio.wait_for(
                 asyncio.to_thread(heal_user_account, db, user.id),
                 timeout=5.0,
+            )
+            heal_stats["orphan_forex_expired"] = await asyncio.wait_for(
+                expire_untracked_forex_opens_when_broker_empty(
+                    min_age_minutes=30,
+                    user_id=user.id,
+                ),
+                timeout=12.0,
             )
         except Exception as _he:
             heal_stats = {"error": str(_he)[:200]}

@@ -6,6 +6,7 @@ Fixes the most common silent failures without manual per-strategy edits:
   • asset_class column out of sync with config (mobile vs web)
   • empty tradfi universe when a symbol can be inferred
   • stale OPEN executions blocking max_open_positions
+  • live forex OPEN rows with no pos= token when broker has zero positions
   • performance.open_trades counter drift after auto-expire
 """
 from __future__ import annotations
@@ -195,6 +196,144 @@ def close_stale_opens_for_user(
     return count
 
 
+_POS_TOKEN_RE = re.compile(r"pos=\d+")
+
+
+def _execution_lacks_position_id(notes: Optional[str]) -> bool:
+    return not _POS_TOKEN_RE.search(notes or "")
+
+
+def _expire_open_executions(db, executions: List, note_suffix: str) -> int:
+    """Mark OPEN rows EXPIRED and refresh StrategyPerformance.open_trades."""
+    from app.strategy_models import StrategyExecution, StrategyPerformance
+
+    if not executions:
+        return 0
+    touched_strategies = set()
+    count = 0
+    for ex in executions:
+        try:
+            ex.outcome = "EXPIRED"
+            ex.closed_at = datetime.utcnow()
+            ex.exit_price = ex.entry_price
+            ex.pnl_pct = 0.0
+            ex.notes = (ex.notes or "") + note_suffix
+            touched_strategies.add(ex.strategy_id)
+            count += 1
+        except Exception as exc:
+            logger.warning("[strategy-heal] expire exec %s failed: %s", ex.id, exc)
+    if count:
+        db.commit()
+        for sid in touched_strategies:
+            open_cnt = (
+                db.query(StrategyExecution)
+                .filter(
+                    StrategyExecution.strategy_id == sid,
+                    StrategyExecution.outcome == "OPEN",
+                )
+                .count()
+            )
+            perf = (
+                db.query(StrategyPerformance)
+                .filter(StrategyPerformance.strategy_id == sid)
+                .first()
+            )
+            if perf:
+                perf.open_trades = open_cnt
+        db.commit()
+    return count
+
+
+def list_untracked_live_forex_opens(
+    db,
+    *,
+    min_age_minutes: int = 30,
+    user_id: Optional[int] = None,
+) -> Dict[int, List]:
+    """
+    OPEN live forex/index executions with no pos=<id> in notes — these cannot
+  be broker-reconciled and often block max_open_positions indefinitely.
+    """
+    from app.strategy_models import StrategyExecution
+
+    cutoff = datetime.utcnow() - timedelta(minutes=min_age_minutes)
+    q = db.query(StrategyExecution).filter(
+        StrategyExecution.outcome == "OPEN",
+        StrategyExecution.is_paper == False,  # noqa: E712
+        StrategyExecution.asset_class.in_(("forex", "index")),
+        StrategyExecution.closed_at.is_(None),
+        StrategyExecution.fired_at <= cutoff,
+    )
+    if user_id is not None:
+        q = q.filter(StrategyExecution.user_id == user_id)
+    rows = q.all()
+    by_user: Dict[int, List] = {}
+    for ex in rows:
+        if not _execution_lacks_position_id(ex.notes):
+            continue
+        by_user.setdefault(ex.user_id, []).append(ex)
+    return by_user
+
+
+async def expire_untracked_forex_opens_when_broker_empty(
+    *,
+    min_age_minutes: int = 30,
+    user_id: Optional[int] = None,
+) -> int:
+    """
+    When cTrader reports zero open positions, expire untracked OPEN live forex
+    rows (no pos= token). Frees max_open without waiting 4–48h time-based heal.
+
+    Fail-closed: if the broker poll returns None (outage / no creds), do nothing.
+    """
+    from app.database import BgSessionLocal as SessionLocal
+    from app.models import User
+    from app.services.ctrader_client import get_open_position_ids_for_user
+
+    db = SessionLocal()
+    try:
+        by_user = list_untracked_live_forex_opens(
+            db, min_age_minutes=min_age_minutes, user_id=user_id,
+        )
+        if not by_user:
+            return 0
+
+        total = 0
+        for uid, execs in by_user.items():
+            user = db.query(User).filter(User.id == uid).first()
+            if not user:
+                continue
+            try:
+                open_ids = await get_open_position_ids_for_user(user)
+            except Exception as exc:
+                logger.debug(
+                    "[strategy-heal] broker open-positions check failed user=%s: %s",
+                    uid, exc,
+                )
+                continue
+            if open_ids is None:
+                continue
+            if open_ids:
+                # Broker still has positions but we lack pos= — cannot safely expire.
+                continue
+            n = _expire_open_executions(
+                db,
+                execs,
+                " | auto-expired: no broker position (untracked open)",
+            )
+            if n:
+                logger.warning(
+                    "[strategy-heal] user=%s expired %s untracked OPEN forex "
+                    "execution(s) — broker flat, max_open unblocked",
+                    uid,
+                    n,
+                )
+                total += n
+        return total
+    finally:
+        db.close()
+
+
 def heal_user_account(db, user_id: int) -> Dict[str, Any]:
     """Full heal for one portal user."""
     stats = heal_strategies(db, user_id=user_id)
@@ -212,6 +351,14 @@ async def heal_on_executor_startup() -> Dict[str, Any]:
         stats = heal_strategies(db)
     finally:
         db.close()
+
+    try:
+        stats["orphan_forex_expired"] = await expire_untracked_forex_opens_when_broker_empty(
+            min_age_minutes=30,
+        )
+    except Exception as exc:
+        logger.warning("[strategy-heal] orphan forex expire failed: %s", exc)
+        stats["orphan_forex_expired"] = 0
 
     try:
         stats["stale_expired_global"] = await close_stale_open_executions(
