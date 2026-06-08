@@ -386,13 +386,35 @@ async def _get_raw_tickers(http_client: httpx.AsyncClient) -> Optional[list]:
             _last_err = f"{url.split('//')[1].split('/')[0]} {type(e).__name__}: {e or '(no msg)'}"
             continue
 
+    # MEXC + Binance unreachable (e.g. geo-blocked / ConnectTimeout on Railway's
+    # datacenter egress). Fall back to Bitunix — the crypto execution venue,
+    # always reachable from Railway — reshaped to MEXC 24hr-ticker format so the
+    # eligibility filter and price path are unchanged. Without this the universe
+    # is empty and EVERY crypto strategy is skipped.
+    try:
+        from app.services.bitunix_market_data import fetch_tickers as _bx_tickers
+        _bx = await _bx_tickers(http_client)
+        if _bx:
+            _RAW_TICKERS_CACHE = _bx
+            _RAW_TICKERS_AT = now
+            _RAW_TICKERS_LAST_FAIL_AT = None
+            if _RAW_TICKERS_WARN_LAST is None or (now - _RAW_TICKERS_WARN_LAST).total_seconds() >= 60:
+                _RAW_TICKERS_WARN_LAST = now
+                logger.info(
+                    f"Ticker list via Bitunix fallback ({len(_bx)} symbols) — "
+                    f"MEXC/Binance unreachable ({_last_err or 'all sources failed'})"
+                )
+            return _RAW_TICKERS_CACHE
+    except Exception as _bxe:
+        _last_err = f"{_last_err or 'mexc/binance failed'}; bitunix: {type(_bxe).__name__}"
+
     # All sources failed — record + throttled warning + sticky fallback.
     _RAW_TICKERS_LAST_FAIL_AT = now
     if _RAW_TICKERS_WARN_LAST is None or (now - _RAW_TICKERS_WARN_LAST).total_seconds() >= 60:
         _RAW_TICKERS_WARN_LAST = now
         _have = len(_RAW_TICKERS_CACHE) if _RAW_TICKERS_CACHE else 0
         logger.warning(
-            f"Could not refresh MEXC/Binance ticker list: {_last_err or 'all sources failed'}"
+            f"Could not refresh MEXC/Binance/Bitunix ticker list: {_last_err or 'all sources failed'}"
             f" — continuing with {_have} cached symbols "
             f"({'sticky cache' if _have else 'NO cache — strategies will be skipped'})"
         )
@@ -795,6 +817,15 @@ async def _check_htf_trend(
                         break
             except Exception:
                 continue
+        if len(closes) < 10:
+            # MEXC/Binance unreachable (Railway geo-block) → Bitunix fallback.
+            try:
+                from app.services.bitunix_market_data import fetch_klines as _bx_klines
+                _bk = await _bx_klines(http_client, symbol, "1h", 30)
+                if _bk and len(_bk) >= 10:
+                    closes = [float(k[4]) for k in _bk]
+            except Exception:
+                pass
 
     if len(closes) < 10:
         return True   # can't determine — allow through
@@ -1070,7 +1101,24 @@ async def _fetch_candles_since_entry(
                 logger.debug(f"Candle fetch failed {url} {symbol}: {e}")
                 continue
 
-        if not fetched or needed < chunk:
+        if not fetched:
+            # MEXC/Binance unreachable (Railway geo-block) → one-shot Bitunix
+            # recent 1m candles (not startTime-paged) so open crypto paper
+            # positions still get TP/SL detection. Best-effort: covers the most
+            # recent ~200 minutes, enough for recently-fired positions.
+            try:
+                from app.services.bitunix_market_data import fetch_klines as _bx_klines
+                _bk = await _bx_klines(http_client, symbol, "1m", min(max(needed, 60), 200))
+                for k in _bk:
+                    _ts = int(k[0])
+                    if _ts >= start_ms:
+                        all_candles.append(
+                            (_ts, float(k[1]), float(k[2]), float(k[3]), float(k[4]))
+                        )
+            except Exception:
+                pass
+            break
+        if needed < chunk:
             break
         # Advance start to the last fetched candle's open + 1m
         if all_candles:

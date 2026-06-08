@@ -269,6 +269,23 @@ async def _get_klines(
         except Exception as e:
             logger.debug(f"Klines fetch failed ({url}) {symbol} {interval}: {e}")
             continue
+
+    # MEXC + Binance unreachable (geo-blocked on Railway) → Bitunix public klines
+    # (the execution venue, reachable). Reshaped to MEXC list format so all the
+    # indicator math below is unchanged. Without this, crypto condition eval has
+    # no OHLC and never fires.
+    try:
+        from app.services.bitunix_market_data import fetch_klines as _bx_klines
+        _bk = await _bx_klines(http_client, symbol, interval, fetch_limit)
+        if _bk:
+            _KLINE_PERSIST_CACHE[_pkey] = (_bk, _now, len(_bk))
+            sliced = _bk[-limit:] if len(_bk) > limit else _bk
+            if cache is not None:
+                cache[key] = sliced
+                cache[(symbol, interval, len(_bk))] = _bk
+            return sliced
+    except Exception as e:
+        logger.debug(f"Bitunix klines fallback failed {symbol} {interval}: {e}")
     return None
 
 
