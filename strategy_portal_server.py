@@ -6465,6 +6465,41 @@ async def api_portal_bootstrap(uid: str = Query(...)):
     return JSONResponse(payload)
 
 
+@app.post("/api/strategies/raise-daily-cap")
+async def api_strategies_raise_daily_cap(request: Request):
+    """
+    Raise max_trades_per_day on every strategy for this user (default → 10).
+    Only increases values below the target — never lowers a higher cap.
+    Takes effect immediately; strategies that already hit today's old cap can
+    fire again if the new cap is higher than today's fire count.
+    """
+    body = await request.json()
+    uid = (body.get("uid") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="uid required")
+    try:
+        min_cap = int(body.get("max_trades_per_day", 10))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="max_trades_per_day must be an integer")
+    if min_cap < 1 or min_cap > 100:
+        raise HTTPException(status_code=400, detail="max_trades_per_day must be between 1 and 100")
+
+    from app.database import SessionLocal
+    from app.services.strategy_heal import raise_daily_trade_caps
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or user.banned:
+            raise HTTPException(status_code=403)
+        stats = raise_daily_trade_caps(db, user.id, min_cap=min_cap)
+        _CACHE.pop(f"api_strats_{uid}", None)
+        _CACHE.pop(f"portfolio_{uid}", None)
+        return JSONResponse({"ok": True, **stats})
+    finally:
+        db.close()
+
+
 @app.post("/api/strategies/ensure-firing")
 async def api_strategies_ensure_firing(request: Request):
     """
@@ -6476,13 +6511,20 @@ async def api_strategies_ensure_firing(request: Request):
     if not uid:
         raise HTTPException(status_code=400, detail="uid required")
     from app.database import SessionLocal
-    from app.services.strategy_heal import heal_user_account
+    from app.services.strategy_heal import (
+        heal_user_account,
+        expire_untracked_forex_opens_when_broker_empty,
+    )
     db = SessionLocal()
     try:
         user = _get_user_by_uid(uid, db)
         if not user or user.banned:
             raise HTTPException(status_code=403)
         stats = heal_user_account(db, user.id)
+        stats["orphan_forex_expired"] = await expire_untracked_forex_opens_when_broker_empty(
+            min_age_minutes=30,
+            user_id=user.id,
+        )
         _CACHE.pop(f"api_strats_{uid}", None)
         _CACHE.pop(f"portfolio_{uid}", None)
         return JSONResponse({"ok": True, **stats})
@@ -11632,10 +11674,20 @@ async def api_executor_diagnostics(uid: str = Query(...)):
 
         heal_stats: dict = {}
         try:
-            from app.services.strategy_heal import heal_user_account
+            from app.services.strategy_heal import (
+                heal_user_account,
+                expire_untracked_forex_opens_when_broker_empty,
+            )
             heal_stats = await asyncio.wait_for(
                 asyncio.to_thread(heal_user_account, db, user.id),
                 timeout=5.0,
+            )
+            heal_stats["orphan_forex_expired"] = await asyncio.wait_for(
+                expire_untracked_forex_opens_when_broker_empty(
+                    min_age_minutes=30,
+                    user_id=user.id,
+                ),
+                timeout=12.0,
             )
         except Exception as _he:
             heal_stats = {"error": str(_he)[:200]}

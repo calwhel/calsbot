@@ -22,7 +22,7 @@ import { SectionLabel } from '@/components/SectionLabel';
 import { RiskDisclaimer } from '@/components/RiskDisclaimer';
 import { colors, font, glow, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { apiGet, apiPut, apiDelete, type Portfolio, type PushPrefs } from '@/lib/api';
+import { apiGet, apiPut, apiDelete, apiPostFlex, type Portfolio, type PushPrefs } from '@/lib/api';
 
 export default function SettingsScreen() {
   const { user, uid, signOut, refreshUser } = useAuth();
@@ -245,6 +245,12 @@ export default function SettingsScreen() {
       </View>
       <PushPrefsCard uid={uid} />
 
+      {/* Strategy maintenance — no code pasting required */}
+      <View style={{ marginTop: spacing.xl }}>
+        <SectionLabel label="Strategy tools" />
+      </View>
+      <StrategyToolsCard uid={uid} />
+
       {/* Broker connections */}
       <View style={{ marginTop: spacing.xl }}>
         <SectionLabel label="Brokers" />
@@ -377,6 +383,129 @@ export default function SettingsScreen() {
 }
 
 const MIN_USD_OPTIONS = [0, 10, 25, 50, 100] as const;
+
+type RaiseCapResponse = {
+  ok?: boolean;
+  raised?: number;
+  already_at_or_above?: number;
+  max_trades_per_day?: number;
+  detail?: string;
+  error?: string;
+};
+
+type HealResponse = {
+  ok?: boolean;
+  promoted_to_paper?: number;
+  stale_expired?: number;
+  orphan_forex_expired?: number;
+  detail?: string;
+  error?: string;
+};
+
+function StrategyToolsCard({ uid }: { uid: string | null | undefined }) {
+  const [busy, setBusy] = useState<'cap' | 'heal' | null>(null);
+
+  const onRaiseDailyCap = useCallback(() => {
+    if (!uid || busy) return;
+    Alert.alert(
+      'Raise daily trade limit?',
+      'Sets max trades per day to 10 on every strategy currently below 10. Takes effect immediately — strategies that already hit today\'s low cap can fire again.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Raise to 10/day',
+          onPress: async () => {
+            setBusy('cap');
+            try {
+              const r = await apiPostFlex<RaiseCapResponse>(
+                '/api/strategies/raise-daily-cap',
+                { uid, max_trades_per_day: 10 },
+              );
+              if (r.ok) {
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                Alert.alert(
+                  'Daily cap raised',
+                  `Updated ${r.raised ?? 0} strategies to ${r.max_trades_per_day ?? 10} trades/day.` +
+                    ((r.already_at_or_above ?? 0) > 0
+                      ? ` ${r.already_at_or_above} were already at or above that limit.`
+                      : ''),
+                );
+              } else {
+                Alert.alert('Could not update', r.detail || r.error || 'The server may need an update first — try the web portal.');
+              }
+            } catch (e: unknown) {
+              const msg = e instanceof Error ? e.message : 'Request failed';
+              Alert.alert('Error', msg);
+            } finally {
+              setBusy(null);
+            }
+          },
+        },
+      ],
+    );
+  }, [uid, busy]);
+
+  const onRepairStrategies = useCallback(() => {
+    if (!uid || busy) return;
+    Alert.alert(
+      'Repair strategies?',
+      'Promotes draft strategies to paper, fixes missing symbols, and clears stuck open trades that block new entries.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Repair now',
+          onPress: async () => {
+            setBusy('heal');
+            try {
+              const r = await apiPostFlex<HealResponse>(
+                '/api/strategies/ensure-firing',
+                { uid },
+              );
+              if (r.ok) {
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                const parts = [
+                  r.promoted_to_paper ? `${r.promoted_to_paper} promoted to paper` : null,
+                  r.stale_expired ? `${r.stale_expired} stale opens cleared` : null,
+                  r.orphan_forex_expired ? `${r.orphan_forex_expired} orphan forex rows cleared` : null,
+                ].filter(Boolean);
+                Alert.alert(
+                  'Repair complete',
+                  parts.length ? parts.join(' · ') : 'No changes needed — strategies look healthy.',
+                );
+              } else {
+                Alert.alert('Repair failed', r.detail || r.error || 'Try again later.');
+              }
+            } catch (e: unknown) {
+              const msg = e instanceof Error ? e.message : 'Request failed';
+              Alert.alert('Error', msg);
+            } finally {
+              setBusy(null);
+            }
+          },
+        },
+      ],
+    );
+  }, [uid, busy]);
+
+  return (
+    <View style={styles.section}>
+      <SettingsLink
+        icon="trending-up-outline"
+        tone="positive"
+        label={busy === 'cap' ? 'Raising daily cap…' : 'Raise daily trade limit'}
+        hint="Set all strategies to 10 trades/day (if currently lower)"
+        onPress={onRaiseDailyCap}
+      />
+      <SettingsLink
+        icon="build-outline"
+        tone="warning"
+        label={busy === 'heal' ? 'Repairing…' : 'Repair strategies'}
+        hint="Clear stuck opens and fix strategies not scanning"
+        onPress={onRepairStrategies}
+      />
+    </View>
+  );
+}
 
 function PushPrefsCard({ uid }: { uid: string | null | undefined }) {
   const [paper, setPaper] = useState(true);
