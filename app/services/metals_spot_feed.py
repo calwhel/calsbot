@@ -1,12 +1,12 @@
 """
 Dedicated XAUUSD / XAGUSD spot price poller.
 
-Polls Binance spot (XAUUSDT / XAGUSDT) as the primary real-time gold/silver source.
-cTrader may still supply broker-matched ticks elsewhere, but this feed always
-refreshes Binance so the executor and scanners have live spot data even when the
-broker feed is cold or unsubscribed.
+cTrader is the authoritative source when linked and streaming, but gold ticks are
+often missing (no account, idle session, symbol not subscribed). FMP pauses entirely
+when cTrader is active for majors — leaving XAUUSD null in the shared spot store.
 
 This feed fills that gap:
+  • Skips a symbol when cTrader already has a fresh tick in the shared store
   • Binance spot (XAUUSDT / XAGUSDT) when reachable
   • Coinbase spot (XAU-USD / XAG-USD) — works from US / Railway where Binance is blocked
   • Kraken PAXGUSD as a final gold fallback (tokenized gold, tracks spot closely)
@@ -41,6 +41,7 @@ _METALS: Dict[str, List[Tuple[str, str]]] = {
 }
 
 _PRICE_CACHE: Dict[str, Tuple[float, datetime]] = {}
+_FRESH_CTRADER_S = 12.0
 _FRESH_ANY_S = 8.0
 _POLL_INTERVAL = max(5, int(os.environ.get("METALS_POLL_INTERVAL_SECONDS", "8")))
 
@@ -73,6 +74,23 @@ def get_price(symbol: str) -> Optional[float]:
     except Exception:
         pass
     return None
+
+
+def _ctrader_fresh(symbol: str) -> bool:
+    """True when cTrader already owns a fresh tick — skip external polls."""
+    try:
+        from app.services.spot_price_store import get_tick
+        row = get_tick(symbol.upper(), _FRESH_CTRADER_S)
+        if row and (row.get("source") or "").lower() == "ctrader":
+            return True
+    except Exception:
+        pass
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        px = _ctf.get_price(symbol)
+        return px is not None
+    except Exception:
+        return False
 
 
 def _store(symbol: str, mid: float, source: str) -> None:
@@ -156,12 +174,16 @@ async def fetch_now(symbol: str) -> Optional[float]:
     sym = symbol.upper()
     if sym not in _METALS:
         return None
+    if _ctrader_fresh(sym):
+        return get_price(sym)
     if await _poll_symbol(sym):
         return get_price(sym)
     return None
 
 
 async def _poll_symbol(symbol: str) -> bool:
+    if _ctrader_fresh(symbol):
+        return False
     for source, key in _METALS.get(symbol.upper(), []):
         fetcher = _FETCHERS.get(source)
         if not fetcher:
@@ -207,7 +229,7 @@ async def _stream() -> None:
     global _RUNNING
     logger.info(
         f"[MetalsFeed] started — XAUUSD/XAGUSD every {_POLL_INTERVAL}s "
-        "(binance → coinbase → kraken)"
+        "(binance → coinbase → kraken; skipped when cTrader fresh)"
     )
     _RUNNING = True
     try:

@@ -7,9 +7,8 @@ Price path:
   Others: FMP real-time WebSocket → yfinance fast_info fallback.
 
 Kline path:
-  Metals (XAUUSD/XAGUSD): Binance spot (XAUUSDT/XAGUSDT) → cTrader → FMP → Yahoo.
-  Live executor prefers Binance real-time closed candles; Coinbase/kraken back
-  spot prices when Binance is geo-blocked.
+  Metals (XAUUSD/XAGUSD): cTrader trendbars → FMP → Binance spot → Yahoo.
+  Forex live: cTrader → Yahoo chart → FMP → yfinance.
   Others: yfinance download() — intraday OHLC for forex/indices.
 
 Returned shapes mirror the crypto helpers so the strategy executor can
@@ -291,7 +290,7 @@ async def fetch_metal_scan_candles(
             best = rows
             logger.info(f"[tradfi] metal-scan best={label} {sym} {timeframe} → {len(rows)} bars")
 
-    # Linked cTrader account → broker OHLC when available.
+    # Linked cTrader account → broker OHLC first (matches demo/live charts).
     if user_id:
         await _keep(
             await _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
@@ -299,10 +298,6 @@ async def fetch_metal_scan_candles(
         )
         if len(best) >= 120:
             return best[-limit:]
-
-    await _keep(await _fetch_binance_metals_klines(sym, timeframe, limit), "binance")
-    if len(best) >= 120:
-        return best[-limit:]
 
     if yahoo_ticker:
         await _keep(await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit), "yahoo")
@@ -411,7 +406,20 @@ async def get_price(symbol: str, asset_class: str) -> Optional[float]:
     if cls == ASSET_CLASS_CRYPTO:
         return None
 
-    # ── Metals: Binance spot first (XAUUSDT / XAGUSDT) — real-time spot data ───
+    # ── 0a. cTrader live spot feed — matches the broker that fills orders ─────
+    # FP Markets / cTrader is where forex/metal/index orders actually execute,
+    # so its spot feed is the ONLY source that matches the user's chart and
+    # fills in real time. Returns None when there's no fresh tick (cold feed /
+    # no connected account) → falls through to the legacy sources below.
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        _cpx = _ctf.get_price(symbol)
+        if _cpx is not None:
+            return _cpx
+    except Exception:
+        pass
+
+    # ── 0b. Shared metals ticks (dedicated poller: binance / coinbase / kraken) ─
     if symbol.upper() in _METALS_BINANCE_MAP:
         try:
             from app.services.spot_price_store import get_mid as _store_mid
@@ -485,15 +493,7 @@ async def get_price(symbol: str, asset_class: str) -> Optional[float]:
                         return px
             except Exception as _ce:
                 logger.debug(f"[tradfi] Coinbase spot price failed for {_cb_pair}: {_ce}")
-
-    # ── cTrader live spot — broker-matched fallback when Binance unavailable ───
-    try:
-        from app.services import ctrader_price_feed as _ctf
-        _cpx = _ctf.get_price(symbol)
-        if _cpx is not None:
-            return _cpx
-    except Exception:
-        pass
+        # fall through to FMP / yfinance below
 
     # ── 1. FMP real-time WebSocket feed (by-the-second, always active) ────────
     try:
@@ -749,14 +749,10 @@ async def _get_klines_impl(
     now = datetime.utcnow()
     is_metal = symbol.upper() in _METALS_BINANCE_MAP
 
-    # Live metals: Binance spot candles first (real-time XAUUSDT/XAGUSDT).
-    # Backtest discovery prefers FMP (longer history, no socket auth).
+    # Live/paper paths prefer broker-matched cTrader OHLC. Backtest discovery
+    # (Gold Strategy Finder) prefers FMP first — faster, no protobuf socket auth,
+    # and avoids cTrader timing out on multi-thousand-bar requests.
     is_index = cls == "index"
-    if is_metal and not for_backtest:
-        _brows = await _fetch_binance_metals_klines(symbol, timeframe, limit)
-        if _brows:
-            return _brows
-
     if is_metal and for_backtest:
         _sources = ("fmp", "ctrader")
     elif is_index:
