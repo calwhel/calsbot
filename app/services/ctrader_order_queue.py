@@ -128,6 +128,7 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
                             f"Strategy: <b>{strategy.name}</b>\n"
                             f"Signal: {job.symbol} {job.direction}\n"
                             f"Error: <code>{(order_err or 'no order id')[:120]}</code>",
+                            asset_class=job.asset_class or "forex",
                         ))
                 except Exception:
                     pass
@@ -169,7 +170,7 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
             try:
                 from app.services.strategy_executor import (
                     _claim_tg_open_notify,
-                    _fmt_open_card, _telegram_int_id, _tg_send,
+                    _fmt_open_card, _telegram_int_id, _schedule_tg_open_notify,
                 )
                 if not _claim_tg_open_notify(db, execution.id):
                     return
@@ -181,7 +182,9 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
                     tp2_pct = None
                     if execution.tp2_price and entry:
                         tp2_pct = abs(execution.tp2_price - entry) / entry * 100
-                    asyncio.create_task(_tg_send(
+                    _ac = job.asset_class or "forex"
+                    _schedule_tg_open_notify(
+                        execution.id,
                         tg_id,
                         _fmt_open_card(
                             strategy_name=strategy.name or "Your Strategy",
@@ -198,9 +201,10 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
                             conditions=execution.conditions_met or [],
                             is_paper=False,
                             order_id=str(order_id),
-                            asset_class=job.asset_class,
+                            asset_class=_ac,
                         ),
-                    ))
+                        asset_class=_ac,
+                    )
             except Exception as notify_err:
                 logger.warning(f"[ctrader-queue] fill notify exec #{job.execution_id}: {notify_err}")
     except Exception as e:

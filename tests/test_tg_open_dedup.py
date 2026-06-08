@@ -33,6 +33,14 @@ class TgOpenDedupTest(unittest.TestCase):
         db.execute.return_value.rowcount = 0
         self.assertFalse(_claim_tg_be_notify(db, 99))
 
+    def test_release_open_notify_calls_update(self):
+        from app.services.strategy_executor import _release_tg_open_notify
+
+        db = MagicMock()
+        _release_tg_open_notify(db, 7)
+        db.execute.assert_called_once()
+        db.commit.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2910,10 +2910,12 @@ function dismissTgBanner(){
         <div><div class="toggle-lbl">Live Trade Alerts</div><div class="toggle-sub">Telegram DM when a live strategy fires or closes a trade</div></div>
         <div class="switch on" id="set-dm-sw"></div>
       </div>
-      <div class="toggle-row" onclick="toggleSw('set-paper-dm-sw')" style="margin-bottom:0">
+      <div class="toggle-row" onclick="toggleSw('set-paper-dm-sw')" style="margin-bottom:12px">
         <div><div class="toggle-lbl">Paper Trade Alerts</div><div class="toggle-sub">Telegram DM when a paper strategy fires or closes</div></div>
         <div class="switch on" id="set-paper-dm-sw"></div>
       </div>
+      <div id="tg-alert-status" style="display:none;padding:12px;border-radius:8px;background:var(--card2);border:1px solid var(--border);font-size:12px;line-height:1.55;margin-bottom:10px"></div>
+      <button type="button" class="btn sm ghost" id="tg-test-alert-btn" onclick="testTelegramAlert()">📲 Send test Telegram alert</button>
     </div>
 
     <!-- Security / Password -->
@@ -7497,6 +7499,49 @@ function selectTemplate(tpl){applyTemplate(tpl);}
 function toggleOpt(swId,rowId){const sw=$(swId);if(!sw)return;const on=sw.classList.toggle('on');const row=$(rowId);if(row)row.style.display=on?'block':'none';}
 
 // ─── SETTINGS ──────────────────────────────────────────────
+async function loadTelegramAlertStatus(){
+  const el=$('tg-alert-status');
+  if(!el||!UID) return;
+  try{
+    const r=await fetch(`/api/telegram/alert-status?uid=${encodeURIComponent(UID)}`);
+    if(!r.ok){ el.style.display='none'; return; }
+    const d=await r.json();
+    el.style.display='';
+    const bots=d.bots||{};
+    const mainBot=bots.main||'AISIGNALPERPBOT';
+    const fxBot=bots.forex||'TradehubStrategyBot';
+    let html='<div style="font-weight:700;margin-bottom:6px">Telegram trade alerts</div>';
+    if(!d.telegram_linked){
+      html+='<div style="color:#e05858">⚠ Not linked — log in with Telegram to receive trade DMs.</div>';
+    }else if(d.alerts_ready){
+      html+=`<div style="color:var(--green)">✓ Ready · ${d.scanning_strategies} strateg${d.scanning_strategies===1?'y':'ies'} scanning</div>`;
+    }else{
+      html+='<div style="color:#d9a441">⚠ Setup incomplete</div>';
+    }
+    html+=`<div style="color:var(--muted);margin-top:6px">Fires (24h): <b>${d.fires_last_24h||0}</b>`;
+    if(d.last_fire_at) html+=` · last ${new Date(d.last_fire_at).toLocaleString()}`;
+    html+='</div>';
+    if((d.draft_or_paused||0)>0) html+=`<div style="color:var(--muted);margin-top:4px">${d.draft_or_paused} still draft/paused — open My Strategies to auto-activate.</div>`;
+    html+=`<div style="margin-top:8px">Start chats: <a href="https://t.me/${mainBot}" target="_blank" rel="noopener">@${mainBot}</a> · <a href="https://t.me/${fxBot}" target="_blank" rel="noopener">@${fxBot}</a> → tap <b>/start</b></div>`;
+    if(d.hints&&d.hints.length) html+='<div style="margin-top:8px;color:var(--muted)">'+d.hints.map(h=>'• '+escHtml(h)).join('<br>')+'</div>';
+    el.innerHTML=html;
+  }catch(e){ el.style.display='none'; }
+}
+async function testTelegramAlert(){
+  const btn=$('tg-test-alert-btn');
+  if(btn){ btn.disabled=true; btn.textContent='Sending…'; }
+  try{
+    const r=await fetch('/api/telegram/test-alert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID})});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||d.error||'Send failed');
+    toast('Test alert sent — check Telegram','success');
+    loadTelegramAlertStatus();
+  }catch(e){
+    toast('Test failed: '+(e.message||e),'error');
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent='📲 Send test Telegram alert'; }
+  }
+}
 async function loadSettings(){
   const res=await fetch(`/api/settings?uid=${UID}`);
   if(!res.ok)return;
@@ -7521,6 +7566,7 @@ async function loadSettings(){
   if(s.auto_activate)$('set-auto-sw').classList.add('on');else $('set-auto-sw').classList.remove('on');
   if(s.dm_live_alerts)$('set-dm-sw').classList.add('on');else $('set-dm-sw').classList.remove('on');
   if(s.dm_paper_alerts)$('set-paper-dm-sw').classList.add('on');else $('set-paper-dm-sw').classList.remove('on');
+  try{ loadTelegramAlertStatus(); }catch(e){}
 
   // Risk chips
   const active=new Set(Array.isArray(s.accepted_risk_levels)?s.accepted_risk_levels:[]);

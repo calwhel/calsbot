@@ -11582,6 +11582,18 @@ async def api_live_forex_readiness(uid: str = Query(...)):
                 "Executor runs on production only — dev/staging will not place live orders."
             )
 
+        paper_scanning = db.query(UserStrategy).filter(
+            UserStrategy.user_id == user.id,
+            UserStrategy.status.in_(["paper", "active"]),
+        ).count()
+
+        telegram_status: dict = {}
+        try:
+            from app.services.telegram_alert_status import build_telegram_alert_status
+            telegram_status = await build_telegram_alert_status(user, db)
+        except Exception:
+            pass
+
         return JSONResponse({
             "execution_ready": ready and pro_ok,
             "blockers": blockers + ([] if pro_ok else ["pro_subscription_required"]),
@@ -11594,6 +11606,8 @@ async def api_live_forex_readiness(uid: str = Query(...)):
             "account_id": (prefs.ctrader_account_id or "") if prefs else "",
             "pro_subscription": pro_ok,
             "active_live_strategies": active_forex,
+            "scanning_strategies": paper_scanning,
+            "telegram": telegram_status,
             "executor": {
                 "production_deploy": is_production_deploy(),
                 "forex_executor_age_sec": round(_fx_age, 1) if _fx_age is not None else None,
@@ -11605,6 +11619,63 @@ async def api_live_forex_readiness(uid: str = Query(...)):
             "pipeline_notes": pipeline_notes,
             "test_trade_url": f"/api/ctrader/test-trade?uid={uid}&symbol=EURUSD",
         })
+    finally:
+        db.close()
+
+
+@app.get("/api/telegram/alert-status")
+async def api_telegram_alert_status(uid: str = Query(...)):
+    """Why trade Telegram alerts may or may not be arriving."""
+    from app.database import SessionLocal
+    from app.services.telegram_alert_status import build_telegram_alert_status
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        return JSONResponse(await build_telegram_alert_status(user, db))
+    finally:
+        db.close()
+
+
+@app.post("/api/telegram/test-alert")
+async def api_telegram_test_alert(request: Request):
+    """Send a sample paper-trade alert DM to the logged-in user."""
+    body = await request.json()
+    uid = (body.get("uid") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="uid required")
+    from app.database import SessionLocal
+    from app.services.strategy_executor import _telegram_int_id, _tg_send
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or user.banned:
+            raise HTTPException(status_code=403)
+        tg_id = _telegram_int_id(user)
+        if not tg_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Telegram not linked — log in with Telegram or link your account in Settings.",
+            )
+        ok = await _tg_send(
+            tg_id,
+            "🧪 <b>TradeHub test alert</b>\n\n"
+            "If you see this, paper + live trade notifications can reach you.\n"
+            "Make sure <b>Paper alerts</b> and <b>Live alerts</b> are on in Settings.",
+            asset_class="forex",
+        )
+        if not ok:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Telegram rejected the message. Open @AISIGNALPERPBOT and "
+                    "@TradehubStrategyBot and tap /start on each, then retry."
+                ),
+            )
+        return JSONResponse({"ok": True, "delivered": True, "telegram_id": tg_id})
     finally:
         db.close()
 

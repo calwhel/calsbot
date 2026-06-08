@@ -15,7 +15,7 @@ import asyncio
 import logging
 import os
 import threading
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import httpx
 
@@ -41,6 +41,39 @@ def bot_tokens() -> List[str]:
             if tok and tok not in tokens:
                 tokens.append(tok)
     return tokens
+
+
+def bot_tokens_for_asset(asset_class: Optional[str] = None) -> List[str]:
+    """
+    Token order for trade alerts.
+    Forex/index users usually /start @TradehubStrategyBot — try forex token first.
+    """
+    tokens = bot_tokens()
+    if not tokens:
+        return tokens
+    ac = (asset_class or "").lower()
+    if ac in ("forex", "index", "stock", "metals", "commodity") and len(tokens) > 1:
+        return [tokens[1], tokens[0]]
+    return tokens
+
+
+async def bot_usernames() -> Dict[str, Optional[str]]:
+    """Resolve @usernames for configured bots (for UI hints)."""
+    out: Dict[str, Optional[str]] = {"main": None, "forex": None}
+    tokens = bot_tokens()
+    labels = ("main", "forex")
+    async with httpx.AsyncClient(timeout=8) as client:
+        for label, tok in zip(labels, tokens[:2]):
+            if not tok:
+                continue
+            try:
+                r = await client.get(f"https://api.telegram.org/bot{tok}/getMe")
+                if r.status_code == 200:
+                    data = (r.json() or {}).get("result") or {}
+                    out[label] = data.get("username")
+            except Exception:
+                pass
+    return out
 
 
 def owner_chat_id() -> Optional[str]:

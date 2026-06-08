@@ -1365,6 +1365,83 @@ def _claim_tg_open_notify(db, execution_id: int) -> bool:
     return _claim_tg_note_flag(db, execution_id, "tg_open_sent")
 
 
+def _release_tg_open_notify(db, execution_id: int) -> None:
+    """Allow a retry if Telegram delivery failed after claim."""
+    from sqlalchemy import text as _text
+
+    try:
+        db.execute(
+            _text(
+                "UPDATE strategy_executions "
+                "SET notes = TRIM(BOTH ' |' FROM REPLACE(COALESCE(notes, ''), :flag, '')) "
+                "WHERE id = :id"
+            ),
+            {"id": execution_id, "flag": _TG_OPEN_SENT},
+        )
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+async def _tg_send(telegram_id: int, text: str, *, asset_class: str = "crypto") -> bool:
+    """Send a trade-notification Telegram DM (forex-aware token order)."""
+    from app.services.telegram_dm import send_dm, bot_tokens_for_asset
+    return await send_dm(
+        telegram_id,
+        text,
+        tokens=bot_tokens_for_asset(asset_class),
+    )
+
+
+async def _deliver_tg_open_notify(
+    execution_id: int,
+    telegram_id: int,
+    text: str,
+    *,
+    asset_class: str = "crypto",
+) -> None:
+    """Send open card; release dedup claim if Telegram rejects delivery."""
+    ok = await _tg_send(telegram_id, text, asset_class=asset_class)
+    if ok:
+        return
+    from app.database import BgSessionLocal as SessionLocal
+    db = SessionLocal()
+    try:
+        _release_tg_open_notify(db, execution_id)
+        logger.warning(
+            "[TG] open notify not delivered exec#%s chat=%s asset=%s",
+            execution_id,
+            telegram_id,
+            asset_class,
+        )
+    finally:
+        db.close()
+
+
+def _schedule_tg_open_notify(
+    execution_id: int,
+    telegram_id: int,
+    text: str,
+    *,
+    asset_class: str = "crypto",
+) -> None:
+    """Fire-and-forget open alert with delivery verification."""
+    try:
+        asyncio.create_task(
+            _deliver_tg_open_notify(
+                execution_id,
+                telegram_id,
+                text,
+                asset_class=asset_class,
+            )
+        )
+    except Exception as exc:
+        logger.warning("[TG] schedule open notify failed exec#%s: %s", execution_id, exc)
+
+
 def _claim_tg_be_notify(db, execution_id: int) -> bool:
     """Atomically claim the breakeven Telegram alert for one execution."""
     return _claim_tg_note_flag(db, execution_id, "tg_be_sent")
@@ -1558,14 +1635,8 @@ def _fmt_close_card(
     )
 
 
-async def _tg_send(telegram_id: int, text: str) -> bool:
-    """Send a trade-notification Telegram DM (multi-token fallback + delivery verify)."""
-    from app.services.telegram_dm import send_dm
-    return await send_dm(telegram_id, text)
-
-
-async def _send_paper_close_dm(telegram_id: int, text: str):
-    await _tg_send(telegram_id, text)
+async def _send_paper_close_dm(telegram_id: int, text: str, *, asset_class: str = "crypto"):
+    await _tg_send(telegram_id, text, asset_class=asset_class)
 
 
 def _notify_breakeven_alert(
@@ -3334,9 +3405,8 @@ async def evaluate_and_fire(
                 tg_id = _telegram_int_id(user)
                 if tg_id and (not portal_settings or portal_settings.dm_paper_alerts) \
                         and _claim_tg_open_notify(db, execution.id):
-                    # Fire-and-forget so a slow/retrying Telegram send never delays
-                    # the firing cycle (a stalled await here was a latency source).
-                    asyncio.create_task(_tg_send(
+                    _schedule_tg_open_notify(
+                        execution.id,
                         tg_id,
                         _fmt_open_card(
                             strategy_name = strategy.name or "Your Strategy",
@@ -3354,7 +3424,14 @@ async def evaluate_and_fire(
                             is_paper      = True,
                             asset_class   = asset_class,
                         ),
-                    ))
+                        asset_class=asset_class,
+                    )
+                elif not tg_id:
+                    logger.info(
+                        "[Strategy %s] Paper fire %s — no Telegram (link Telegram in Settings)",
+                        strategy.id,
+                        symbol,
+                    )
                 # Mobile push (fire-and-forget; never raises)
                 from app.services.expo_push import notify_user_bg
                 _coin = symbol.replace("USDT", "")
