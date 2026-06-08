@@ -725,27 +725,49 @@ async def get_klines(
     if cached and (time.monotonic() - cached[1]) < _KLINE_TTL:
         return cached[0]
 
-    creds = await _get_connected_account(user_id=user_id)
-    if not creds:
-        return []
+    async def _pull(creds_tuple) -> List[List[float]]:
+        access_token, ctid, uid, is_live = creds_tuple
+        primary_host = _HOST_LIVE if is_live else _HOST_DEMO
+        rows = await _fetch_trendbars(
+            sym_up, timeframe, limit, access_token, ctid, primary_host,
+        )
+        if not rows:
+            try:
+                from app.services.ctrader_client import refresh_user_ctrader_token
+                new_at = await refresh_user_ctrader_token(uid)
+            except Exception:
+                new_at = None
+            if new_at:
+                access_token = new_at
+                rows = await _fetch_trendbars(
+                    sym_up, timeframe, limit, access_token, ctid, primary_host,
+                )
+        if not rows:
+            fallback_host = _HOST_DEMO if primary_host == _HOST_LIVE else _HOST_LIVE
+            rows = await _fetch_trendbars(
+                sym_up, timeframe, limit, access_token, ctid, fallback_host,
+            )
+        return rows
 
-    access_token, ctid, _uid, _is_live = creds
-    _primary_host = _HOST_LIVE if _is_live else _HOST_DEMO
-    rows = await _fetch_trendbars(sym_up, timeframe, limit, access_token, ctid, _primary_host)
-    if not rows:
-        # Possibly an expired token — refresh once and retry on the primary host.
-        try:
-            from app.services.ctrader_client import refresh_user_ctrader_token
-            new_at = await refresh_user_ctrader_token(_uid)
-        except Exception:
-            new_at = None
-        if new_at:
-            access_token = new_at
-            rows = await _fetch_trendbars(sym_up, timeframe, limit, access_token, ctid, _primary_host)
-    if not rows:
-        # Still nothing — try the other host (wrong/stale isLive metadata).
-        _fallback_host = _HOST_DEMO if _primary_host == _HOST_LIVE else _HOST_LIVE
-        rows = await _fetch_trendbars(sym_up, timeframe, limit, access_token, ctid, _fallback_host)
+    creds = await _get_connected_account(user_id=user_id)
+    rows: List[List[float]] = []
+    if creds:
+        rows = await _pull(creds)
+    # Spot stream may be live via another user's linked account — use the same
+    # broker session for trendbars when a per-user lookup misses.
+    if not rows and user_id is not None:
+        shared = await _get_connected_account()
+        if shared and shared != creds:
+            rows = await _pull(shared)
+            if rows:
+                logger.info(
+                    f"[CTraderFeed] klines via shared account: {sym_up} {timeframe} "
+                    f"→ {len(rows)} bars"
+                )
+    if not rows and is_live():
+        logger.warning(
+            f"[CTraderFeed] spot feed LIVE but trendbars empty for {sym_up} {timeframe}"
+        )
     if rows:
         _kline_cache[cache_key] = (rows, time.monotonic())
     return rows

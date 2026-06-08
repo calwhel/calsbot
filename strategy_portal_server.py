@@ -9953,7 +9953,11 @@ async def api_execution_detail(exec_id: int, uid: str = Query(...)):
                     # to the same fired_at±window so the chart frames the trigger.
                     from app.services.tradfi_prices import get_klines as _tradfi_klines
                     tf_for_tradfi = tf_raw if tf_raw in ("1m","5m","15m","30m","1h","1d") else "15m"
-                    raw = await _tradfi_klines(sym, exec_asset_class, tf_for_tradfi, 600)
+                    raw = await _tradfi_klines(
+                        sym, exec_asset_class, tf_for_tradfi, 200,
+                        ctrader_user_id=user.id,
+                        max_wait_s=18.0,
+                    )
                     start_ms = int(start_dt.timestamp() * 1000)
                     end_ms   = int(end_dt2.timestamp() * 1000)
                     for k in raw:

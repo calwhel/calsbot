@@ -30,12 +30,14 @@ else
   ( sleep "${_tg_delay}"; exec python3 -m uvicorn main:app --host 127.0.0.1 --port 8080 2>&1 | sed 's/^/[tg-bot] /' ) &
 fi
 
-# Two workers: one can hold the executor advisory lock while the other serves HTTP.
-# Startup migrations are non-blocking now (PR #20), so an extra worker no longer
-# stalls deploy healthchecks. Set GUNICORN_WORKERS=1 only if memory is tight.
-_GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
-echo "[railway] Starting Strategy Portal on port ${PORT:-5000} (workers=${_GUNICORN_WORKERS})..."
+# Default 1 worker on Railway: executor + cTrader/FMP feeds must run in a single
+# process (duplicate workers doubled API 429s, cTrader reconnect churn, and
+# 30s gunicorn worker kills from stacked kline fetches). Set GUNICORN_WORKERS=2
+# only if you have headroom and accept the trade-offs.
+_GUNICORN_WORKERS="${GUNICORN_WORKERS:-1}"
+_GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-120}"
+echo "[railway] Starting Strategy Portal on port ${PORT:-5000} (workers=${_GUNICORN_WORKERS}, timeout=${_GUNICORN_TIMEOUT})..."
 exec gunicorn -w "${_GUNICORN_WORKERS}" -k uvicorn.workers.UvicornWorker \
   --max-requests 300 --max-requests-jitter 30 \
-  --bind "0.0.0.0:${PORT:-5000}" --timeout 120 --graceful-timeout 30 \
+  --bind "0.0.0.0:${PORT:-5000}" --timeout "${_GUNICORN_TIMEOUT}" --graceful-timeout 30 \
   --log-level info strategy_portal_server:app
