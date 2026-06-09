@@ -44,6 +44,10 @@ _PRICE_TTL = timedelta(seconds=20)
 
 _KLINE_CACHE: Dict[Tuple[str, str, int], Tuple[List[List[float]], datetime]] = {}
 _KLINE_TTL = timedelta(seconds=20)
+_METAL_KLINE_TTL = timedelta(
+    seconds=max(15, int(os.environ.get("METAL_KLINE_CACHE_SECONDS", "30")))
+)
+_KRAKEN_KLINE_TIMEOUT_S = float(os.environ.get("KRAKEN_KLINE_TIMEOUT_SECONDS", "8"))
 
 # Single-flight registry — collapses concurrent identical candle requests into
 # ONE underlying fetch. The forex executor evaluates up to ~40 strategies per
@@ -122,10 +126,60 @@ _METAL_KLINE_SOURCE_RANK = {
 METAL_KLINE_LIVE_MAX_DRIFT_PCT = float(
     os.environ.get("METAL_KLINE_LIVE_MAX_DRIFT_PCT", "0.4")
 )
+# Spot-aligned kline sources (Binance/Kraken PAXG/cTrader) naturally diverge
+# ~0.25–0.35% from XAUUSD spot — use a looser cap than the GC=F guard.
+METAL_SPOT_KLINE_MAX_DRIFT_PCT = float(
+    os.environ.get("METAL_SPOT_KLINE_MAX_DRIFT_PCT", "0.5")
+)
+_SPOT_ALIGNED_KLINE_SOURCES = frozenset({
+    "binance", "ctrader-user", "ctrader", "fmp", "kraken",
+})
+# Winning metal kline provider per (symbol, timeframe, limit) — for drift rules.
+_METAL_KLINE_SOURCE_CACHE: Dict[Tuple[str, str, int], Tuple[str, datetime]] = {}
+_METAL_LIVE_FETCH_SEM: Optional[asyncio.Semaphore] = None
 
 
 def is_metal_symbol(symbol: str) -> bool:
     return symbol.upper().replace("/", "").replace("-", "") in _METALS_BINANCE_MAP
+
+
+def metal_kline_drift_limit(source: Optional[str] = None) -> float:
+    """Source-aware drift cap — spot proxies (PAXG) need more headroom than GC=F."""
+    if source and str(source).lower() in _SPOT_ALIGNED_KLINE_SOURCES:
+        return METAL_SPOT_KLINE_MAX_DRIFT_PCT
+    return METAL_KLINE_LIVE_MAX_DRIFT_PCT
+
+
+def get_metal_kline_source(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+) -> Optional[str]:
+    """Return the provider label from the most recent metal-live kline fetch."""
+    sym = symbol.upper().replace("/", "").replace("-", "")
+    entry = _METAL_KLINE_SOURCE_CACHE.get((sym, timeframe, int(limit)))
+    if not entry:
+        return None
+    label, fetched_at = entry
+    if (datetime.utcnow() - fetched_at) > _METAL_KLINE_TTL:
+        return None
+    return label
+
+
+def _metal_live_fetch_sem() -> asyncio.Semaphore:
+    global _METAL_LIVE_FETCH_SEM
+    if _METAL_LIVE_FETCH_SEM is None:
+        n = max(1, int(os.environ.get("METAL_KLINE_FETCH_CONCURRENT", "2")))
+        _METAL_LIVE_FETCH_SEM = asyncio.Semaphore(n)
+    return _METAL_LIVE_FETCH_SEM
+
+
+def _metal_kline_cache_ttl(cache_key: Tuple) -> timedelta:
+    """Metal spot kline keys use a longer TTL to survive multi-shard scan cycles."""
+    key0 = str(cache_key[0]) if cache_key else ""
+    if key0.startswith("kraken:") or key0 in _METALS_BINANCE_MAP.values():
+        return _METAL_KLINE_TTL
+    return _KLINE_TTL
 
 
 async def metal_klines_match_live_spot(
@@ -371,12 +425,12 @@ async def _fetch_kraken_metals_klines(
     now = datetime.utcnow()
     key = (f"kraken:{pair}", timeframe, limit)
     cached = _KLINE_CACHE.get(key)
-    if cached and (now - cached[1]) < _KLINE_TTL:
+    if cached and (now - cached[1]) < _metal_kline_cache_ttl(key):
         return cached[0]
 
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=6.0) as client:
+        async with httpx.AsyncClient(timeout=_KRAKEN_KLINE_TIMEOUT_S) as client:
             r = await client.get(
                 "https://api.kraken.com/0/public/OHLC",
                 params={"pair": pair, "interval": interval},
@@ -431,91 +485,101 @@ async def fetch_metal_live_candles(
     """
     sym = symbol.upper()
     min_bars = _metal_kline_min_bars(limit)
+    _kraken_timeout = max(5.0, _KRAKEN_KLINE_TIMEOUT_S)
 
-    ctrader_live = False
-    try:
-        from app.services.ctrader_price_feed import is_live as _ct_live
-        ctrader_live = bool(_ct_live())
-    except Exception:
-        pass
+    async with _metal_live_fetch_sem():
+        ctrader_live = False
+        try:
+            from app.services.ctrader_price_feed import is_live as _ct_live
+            ctrader_live = bool(_ct_live())
+        except Exception:
+            pass
 
-    async def _labeled(label: str, coro, timeout_s: float) -> Tuple[str, List[List[float]]]:
-        rows = await _fetch_with_kline_timeout(
-            coro,
-            timeout_s=timeout_s,
-            label=label,
-            symbol=sym,
-            timeframe=timeframe,
-        )
-        return label, rows
-
-    tasks = [
-        _labeled("binance", _fetch_binance_metals_klines(sym, timeframe, limit), 4.0),
-    ]
-    if user_id and ctrader_live:
-        tasks.append(_labeled(
-            "ctrader-user",
-            _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
-            6.0,
-        ))
-    if ctrader_live:
-        tasks.append(_labeled(
-            "ctrader",
-            _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
-            6.0,
-        ))
-    if _env_fmp_api_key():
-        tasks.append(_labeled(
-            "fmp",
-            _fetch_fmp_metals_klines(sym, "forex", timeframe, limit),
-            5.0,
-        ))
-    if sym in _KRAKEN_METAL_MAP:
-        tasks.append(_labeled(
-            "kraken",
-            _fetch_kraken_metals_klines(sym, timeframe, limit),
-            5.0,
-        ))
-
-    results = await asyncio.gather(*tasks)
-
-    candidates: List[Tuple[int, int, str, List[List[float]]]] = []
-    thin: List[Tuple[int, str, List[List[float]]]] = []
-    for label, rows in results:
-        if not rows:
-            continue
-        rank = _METAL_KLINE_SOURCE_RANK.get(label, 99)
-        if len(rows) >= min_bars:
-            candidates.append((rank, len(rows), label, rows))
-        elif len(rows) >= 15:
-            thin.append((rank, label, rows))
-            logger.info(
-                f"[tradfi] metal-live partial {label} {sym} {timeframe}: "
-                f"{len(rows)} bars < {min_bars}"
+        async def _labeled(label: str, coro, timeout_s: float) -> Tuple[str, List[List[float]]]:
+            rows = await _fetch_with_kline_timeout(
+                coro,
+                timeout_s=timeout_s,
+                label=label,
+                symbol=sym,
+                timeframe=timeframe,
             )
+            return label, rows
 
-    if candidates:
-        candidates.sort(key=lambda x: (x[0], -x[1]))
-        label, rows = candidates[0][2], candidates[0][3]
-        logger.info(
-            f"[tradfi] metal-live best={label} {sym} {timeframe} → {len(rows)} bars"
+        tasks = [
+            _labeled("binance", _fetch_binance_metals_klines(sym, timeframe, limit), 6.0),
+        ]
+        if user_id and ctrader_live:
+            tasks.append(_labeled(
+                "ctrader-user",
+                _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
+                6.0,
+            ))
+        if ctrader_live:
+            tasks.append(_labeled(
+                "ctrader",
+                _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
+                6.0,
+            ))
+        if _env_fmp_api_key():
+            tasks.append(_labeled(
+                "fmp",
+                _fetch_fmp_metals_klines(sym, "forex", timeframe, limit),
+                5.0,
+            ))
+        if sym in _KRAKEN_METAL_MAP:
+            tasks.append(_labeled(
+                "kraken",
+                _fetch_kraken_metals_klines(sym, timeframe, limit),
+                _kraken_timeout,
+            ))
+
+        results = await asyncio.gather(*tasks)
+
+        candidates: List[Tuple[int, int, str, List[List[float]]]] = []
+        thin: List[Tuple[int, str, List[List[float]]]] = []
+        for label, rows in results:
+            if not rows:
+                continue
+            rank = _METAL_KLINE_SOURCE_RANK.get(label, 99)
+            if len(rows) >= min_bars:
+                candidates.append((rank, len(rows), label, rows))
+            elif len(rows) >= 15:
+                thin.append((rank, label, rows))
+                logger.info(
+                    f"[tradfi] metal-live partial {label} {sym} {timeframe}: "
+                    f"{len(rows)} bars < {min_bars}"
+                )
+
+        if candidates:
+            candidates.sort(key=lambda x: (x[0], -x[1]))
+            label, rows = candidates[0][2], candidates[0][3]
+            logger.info(
+                f"[tradfi] metal-live best={label} {sym} {timeframe} → {len(rows)} bars"
+            )
+            out = rows[-limit:] if len(rows) > limit else rows
+            _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
+                label, datetime.utcnow(),
+            )
+            return out
+
+        if thin:
+            thin.sort(key=lambda x: x[0])
+            label, rows = thin[0][1], thin[0][2]
+            logger.info(
+                f"[tradfi] metal-live thin fallback {label} {sym} {timeframe} "
+                f"→ {len(rows)} bars"
+            )
+            out = rows[-limit:] if len(rows) > limit else rows
+            _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
+                label, datetime.utcnow(),
+            )
+            return out
+
+        logger.warning(
+            f"[tradfi] metal-live no spot klines for {sym} {timeframe} "
+            f"(binance/ctrader/fmp/kraken all missed)"
         )
-        return rows[-limit:] if len(rows) > limit else rows
-
-    if thin:
-        thin.sort(key=lambda x: x[0])
-        label, rows = thin[0][1], thin[0][2]
-        logger.info(
-            f"[tradfi] metal-live thin fallback {label} {sym} {timeframe} "
-            f"→ {len(rows)} bars"
-        )
-        return rows[-limit:] if len(rows) > limit else rows
-
-    logger.warning(
-        f"[tradfi] metal-live no spot klines for {sym} {timeframe} "
-        f"(binance/ctrader/fmp/kraken all missed)"
-    )
-    return []
+        return []
 
 
 async def fetch_metal_scan_candles(
@@ -670,7 +734,7 @@ async def confirm_entry_price(
         return None, "no_live_spot_at_fire"
 
     max_drift = (
-        METAL_KLINE_LIVE_MAX_DRIFT_PCT
+        METAL_SPOT_KLINE_MAX_DRIFT_PCT
         if is_metal_symbol(symbol)
         else float(os.environ.get("ENTRY_PRICE_MAX_DRIFT_PCT", "0.15"))
     )
@@ -911,7 +975,7 @@ async def _fetch_binance_metals_klines(
     now = datetime.utcnow()
     key = (_bn_sym, _bn_interval, limit)
     cached = _KLINE_CACHE.get(key)
-    if cached and (now - cached[1]) < _KLINE_TTL:
+    if cached and (now - cached[1]) < _metal_kline_cache_ttl(key):
         return cached[0]
 
     try:

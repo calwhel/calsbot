@@ -692,7 +692,11 @@ async def _fetch_price_and_ta(
             if len(closes) < 2:
                 return None
 
-            from app.services.tradfi_prices import is_metal_symbol as _is_metal_sym
+            from app.services.tradfi_prices import (
+                get_metal_kline_source as _metal_kline_src,
+                is_metal_symbol as _is_metal_sym,
+                metal_kline_drift_limit as _metal_drift_limit,
+            )
 
             live_px = await _tradfi_live_price(symbol, asset_class)
             bid = ask = None
@@ -707,8 +711,10 @@ async def _fetch_price_and_ta(
                 pass
 
             kline_close = closes[-1]
+            kline_source = None
             _is_metal = _is_metal_sym(symbol)
             if _is_metal:
+                kline_source = _metal_kline_src(symbol, tf, EXECUTOR_KLINE_BARS)
                 if not live_px or live_px <= 0:
                     logger.warning(
                         f"[executor] {symbol.upper()}: no live spot price — "
@@ -720,14 +726,13 @@ async def _fetch_price_and_ta(
                     if kline_close > 0
                     else 0.0
                 )
-                _max_drift = float(
-                    _os_env.environ.get("METAL_KLINE_LIVE_MAX_DRIFT_PCT", "0.4")
-                )
+                _max_drift = _metal_drift_limit(kline_source)
                 if _drift_pct > _max_drift:
                     logger.warning(
                         f"[executor] {symbol.upper()}: kline/live drift "
-                        f"{_drift_pct:.2f}% (kline={kline_close:.2f} live={live_px:.2f}) "
-                        f"— skip eval (futures vs spot mismatch)"
+                        f"{_drift_pct:.2f}% (kline={kline_close:.2f} live={live_px:.2f} "
+                        f"src={kline_source or 'unknown'} max={_max_drift:.2f}%) "
+                        f"— skip eval"
                     )
                     return None
                 price = live_px
@@ -751,6 +756,7 @@ async def _fetch_price_and_ta(
                 "price": price,
                 "price_source": price_source,
                 "kline_close": kline_close,
+                "kline_source": kline_source,
                 "bid": bid,
                 "ask": ask,
                 "bid_price": bid,
@@ -791,7 +797,12 @@ _SESSION_HOURS = {
     "london":   (7, 16),  "europe":   (7, 16),
     "new_york": (13, 22), "ny":       (13, 22),
     "overlap":  (13, 16),
+    # ICT killzones — mirror strategy_ta.eval_fx_killzone / backtest_engine
+    "london_kz": (7, 9),
+    "ny_kz":     (12, 14),
+    "asian_kz":  (20, 23),
 }
+_KZ_SESSION_IDS = frozenset({"london_kz", "ny_kz", "asian_kz", "any_kz"})
 
 # ── Session alert dedup + windows ─────────────────────────────────────────────
 # Keyed as (user_id, session_id, "YYYY-MM-DD") so each alert fires at most once
@@ -871,6 +882,10 @@ def _check_time_filter(filters: Dict) -> bool:
                         active.append(name)
                 elif s <= hour < e:
                     active.append(name)
+            if "any_kz" in wanted:
+                wanted = [w for w in wanted if w != "any_kz"] + [
+                    k for k in _KZ_SESSION_IDS if k != "any_kz"
+                ]
             if not any(s in active for s in wanted):
                 return False
 
@@ -3633,6 +3648,9 @@ async def evaluate_and_fire(
                 _exec_notes_parts.append(f"kline_close={float(_kc):.4f}")
             except (TypeError, ValueError):
                 pass
+        _ks = price_data.get("kline_source")
+        if _ks:
+            _exec_notes_parts.append(f"kline_src={_ks}")
         _exec_notes = " | ".join(_exec_notes_parts) if _exec_notes_parts else None
 
         execution = StrategyExecution(
@@ -4532,10 +4550,32 @@ async def _prefetch_price_ta_for_cycle(
         return 0
 
     sem = asyncio.Semaphore(EXECUTOR_PREFETCH_CONCURRENT)
+    _metal_sem = asyncio.Semaphore(
+        max(1, int(_os_env.environ.get("METAL_KLINE_FETCH_CONCURRENT", "2")))
+    )
     t0 = time.monotonic()
 
+    # Warm metal klines sequentially first — 5 shards share one process; this
+    # seeds the 30s cache before parallel per-strategy prefetches hammer Kraken.
+    _metal_warm = sorted({
+        (sym, tf) for sym, ac, tf in jobs if sym in ("XAUUSD", "XAGUSD")
+    })
+    if _metal_warm:
+        from app.services.tradfi_prices import get_klines as _metal_gk
+        _mw_t0 = time.monotonic()
+        for _msym, _mtf in _metal_warm:
+            try:
+                await _metal_gk(_msym, "forex", _mtf, EXECUTOR_KLINE_BARS)
+            except Exception:
+                pass
+        logger.info(
+            f"[{_log_ts()}] [{label}] metal kline warm: {len(_metal_warm)} tf(s) "
+            f"in {time.monotonic() - _mw_t0:.1f}s"
+        )
+
     async def _warm(sym: str, ac: str, tf: str) -> None:
-        async with sem:
+        _use = _metal_sem if sym in ("XAUUSD", "XAGUSD") else sem
+        async with _use:
             try:
                 await _fetch_price_and_ta(sym, http_client, ac, timeframe=tf)
             except Exception:
