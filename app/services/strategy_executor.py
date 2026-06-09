@@ -3509,7 +3509,11 @@ async def evaluate_and_fire(
         if asset_class in ("forex", "index", "stock"):
             from app.services.tradfi_prices import confirm_entry_price as _confirm_px
             _confirmed_px, _confirm_reason = await _confirm_px(
-                symbol, asset_class, current_price, paper_ok=is_paper,
+                symbol,
+                asset_class,
+                current_price,
+                paper_ok=is_paper,
+                user_id=_uid,
             )
             if _confirmed_px is None:
                 _bump("blk_entry_price_stale")

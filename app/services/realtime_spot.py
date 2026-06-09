@@ -4,13 +4,15 @@ Unified real-time spot price resolver for tradfi (forex / metals / indices).
 Trading paths must never use stale ticks. This module:
   • Reads only ticks younger than REALTIME_SPOT_MAX_AGE_* (default 3s metals, 5s forex)
   • Fetches all available sources in parallel when cache is cold
-  • Prefers cTrader (broker-matched fills) when fresh, else fastest external spot
+  • Prefers cTrader (broker-matched fills) when fresh; on cache miss actively
+    waits for stream ticks or pulls a 1m trendbar before FMP/yfinance
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -44,6 +46,9 @@ _SOURCE_RANK = {
     "store": 99,
 }
 _PAPER_MAX_AGE_S = float(os.environ.get("REALTIME_SPOT_MAX_AGE_PAPER_S", "15"))
+_CTRADER_ON_DEMAND_WAIT_S = float(os.environ.get("CTRADER_ON_DEMAND_WAIT_S", "2.5"))
+_CTRADER_SPOT_BAR_TF = os.environ.get("CTRADER_SPOT_BAR_TF", "1m")
+_CTRADER_SPOT_BAR_MINUTES = int(os.environ.get("CTRADER_SPOT_BAR_MINUTES", "1"))
 
 
 def _norm(symbol: str) -> str:
@@ -339,22 +344,80 @@ def _ctrader_fresh(symbol: str, max_age: float) -> Optional[Tuple[float, str]]:
     return _read_ctrader(symbol, max_age)
 
 
+async def _fetch_ctrader_on_demand(
+    symbol: str,
+    asset_class: str,
+    max_age: float,
+    *,
+    paper_ok: bool = False,
+    user_id: Optional[int] = None,
+) -> Optional[Tuple[float, str]]:
+    """
+    Active cTrader path when cache is cold: wait for stream tick, then 1m bar close.
+    """
+    sym = _norm(symbol)
+    try:
+        from app.services import ctrader_price_feed as ctf
+        if not ctf.broker_session_ready(sym):
+            return None
+        feed_live = bool(ctf.is_live())
+    except Exception:
+        return None
+
+    if feed_live and _CTRADER_ON_DEMAND_WAIT_S > 0:
+        deadline = time.monotonic() + _CTRADER_ON_DEMAND_WAIT_S
+        while time.monotonic() < deadline:
+            hit = _read_ctrader(sym, max_age)
+            if hit:
+                return hit
+            await asyncio.sleep(0.25)
+
+    try:
+        from app.services import ctrader_price_feed as ctf
+
+        timeout = 12.0 if feed_live else 6.0
+        rows = await asyncio.wait_for(
+            ctf.get_klines(
+                sym, asset_class, _CTRADER_SPOT_BAR_TF, 2, user_id=user_id,
+            ),
+            timeout=timeout,
+        )
+        if not rows:
+            return None
+        bar = rows[-1]
+        if not bar or len(bar) < 5:
+            return None
+        ts_ms, close = float(bar[0]), float(bar[4])
+        if close <= 0:
+            return None
+        bar_end_s = ts_ms / 1000.0 + _CTRADER_SPOT_BAR_MINUTES * 60.0
+        bar_age = time.time() - bar_end_s
+        if bar_age > max_age:
+            return None
+        _persist_tick(sym, close, "ctrader")
+        return (close, "ctrader")
+    except Exception:
+        return None
+
+
 async def fetch_parallel(
     symbol: str,
     asset_class: str,
     *,
     paper_ok: bool = False,
+    user_id: Optional[int] = None,
 ) -> Optional[Tuple[float, str]]:
     """
     Hit live sources; return best fresh tick.
 
     Priority: cTrader (broker) → FMP on-demand → yfinance → metals externals.
+    cTrader is queried from cache first, then on-demand (stream wait + trendbar).
     """
     sym = _norm(symbol)
     age_limit = _effective_max_age(sym, asset_class, paper_ok=paper_ok)
     candidates: List[Tuple[float, str]] = []
 
-    # 1) cTrader — always checked first (in-memory + shared store).
+    # 1) cTrader cache — in-memory + shared Postgres store.
     ct = _ctrader_fresh(sym, age_limit)
     if ct:
         candidates.append(ct)
@@ -363,17 +426,23 @@ async def fetch_parallel(
     if cached and cached not in candidates:
         candidates.append(cached)
 
+    parallel: List = []
+    if not ct:
+        parallel.append(
+            _fetch_ctrader_on_demand(
+                sym, asset_class, age_limit, paper_ok=paper_ok, user_id=user_id,
+            )
+        )
     if sym in _METALS:
-        ext = await _fetch_metals_parallel(sym)
-        if ext:
-            candidates.append(ext)
+        parallel.append(_fetch_metals_parallel(sym))
     else:
-        # 2) FMP — cache then on-demand quote (forex + indices).
-        fmp = await _fetch_fmp_on_demand(sym, age_limit)
-        if fmp and fmp not in candidates:
-            candidates.append(fmp)
+        parallel.append(_fetch_fmp_on_demand(sym, age_limit))
 
-        # 3) yfinance — when cTrader missing, or always for paper confirmation.
+    for result in await asyncio.gather(*parallel, return_exceptions=True):
+        if isinstance(result, tuple) and len(result) == 2 and result not in candidates:
+            candidates.append(result)
+
+    if sym not in _METALS:
         need_yf = paper_ok or not any(
             (c[1] or "").lower() == "ctrader" for c in candidates
         )
@@ -391,6 +460,7 @@ async def get_realtime_spot(
     *,
     force_fetch: bool = False,
     paper_ok: bool = False,
+    user_id: Optional[int] = None,
 ) -> Optional[float]:
     """
     Latest real-time spot mid. Returns None when no source has a tick within
@@ -406,7 +476,9 @@ async def get_realtime_spot(
         if cached:
             return cached[0]
 
-    fetched = await fetch_parallel(sym, asset_class, paper_ok=paper_ok)
+    fetched = await fetch_parallel(
+        sym, asset_class, paper_ok=paper_ok, user_id=user_id,
+    )
     return fetched[0] if fetched else None
 
 
