@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 
 import os as _os_env
 
+
+def _log_ts() -> str:
+    """UTC timestamp prefix for trade / executor logs (Railway-visible)."""
+    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
 # Env-overridable so we can dial pressure on prod without a redeploy.
 # Defaults raised from 3→10s and 5→3 because Neon's compute was getting
 # saturated — every QueryCanceled in the executor cascaded into HTTP 500s
@@ -1401,6 +1406,19 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
         # Another worker already closed this execution — skip notification.
         return
 
+    _close_ac = (getattr(ex, "asset_class", "crypto") or "crypto").upper()
+    logger.info(
+        "[%s] [PaperMonitor] %s (%s): %s %s entry=%s exit=%s pnl=%+.1f%%",
+        _log_ts(),
+        outcome,
+        _close_ac,
+        ex.symbol,
+        ex.direction,
+        ex.entry_price,
+        exit_price,
+        pnl_pct,
+    )
+
     # Sync in-memory object so callers that still hold a reference see the
     # updated state (prevents a second evaluation loop from re-closing it).
     ex.outcome    = outcome
@@ -1576,13 +1594,21 @@ async def _deliver_tg_open_notify(
     """Send open card; release dedup claim if Telegram rejects delivery."""
     ok = await _tg_send(telegram_id, text, asset_class=asset_class)
     if ok:
+        logger.info(
+            "[%s] [TG] open notify sent exec#%s chat=%s asset=%s",
+            _log_ts(),
+            execution_id,
+            telegram_id,
+            asset_class,
+        )
         return
     from app.database import BgSessionLocal as SessionLocal
     db = SessionLocal()
     try:
         _release_tg_open_notify(db, execution_id)
         logger.warning(
-            "[TG] open notify not delivered exec#%s chat=%s asset=%s",
+            "[%s] [TG] open notify not delivered exec#%s chat=%s asset=%s",
+            _log_ts(),
             execution_id,
             telegram_id,
             asset_class,
@@ -1609,7 +1635,12 @@ def _schedule_tg_open_notify(
             )
         )
     except Exception as exc:
-        logger.warning("[TG] schedule open notify failed exec#%s: %s", execution_id, exc)
+        logger.warning(
+            "[%s] [TG] schedule open notify failed exec#%s: %s",
+            _log_ts(),
+            execution_id,
+            exc,
+        )
 
 
 def _claim_tg_be_notify(db, execution_id: int) -> bool:
@@ -1676,6 +1707,7 @@ def _fmt_open_card(
 
     order_line = f"\n<i>Order #{_html.escape(str(order_id))}</i>" if order_id else ""
     footer     = "📄 <i>Paper trade · no real funds used</i>" if is_paper else "✅ <i>Live trade executed</i>"
+    fired_line = f"\n🕐 <i>{_log_ts()}</i>"
 
     return (
         f"{header}\n"
@@ -1683,7 +1715,7 @@ def _fmt_open_card(
         f"{dir_icon} <b>{_html.escape(str(symbol))}</b> · {direction} · {leverage}×\n\n"
         f"{price_block}"
         f"{why}\n\n"
-        f"{footer}{order_line}"
+        f"{footer}{fired_line}{order_line}"
     )
 
 
@@ -1795,13 +1827,14 @@ def _fmt_close_card(
             )
 
     paper_tag = "📄 <i>Paper trade result</i>" if is_paper else "✅ <i>Live trade result</i>"
+    closed_line = f"\n🕐 <i>{closed_at.strftime('%Y-%m-%d %H:%M:%S UTC') if closed_at else _log_ts()}</i>"
 
     return (
         f"{icon} <b>{result} · {_html.escape(str(strategy_name))}</b>\n\n"
         f"{dir_icon} <b>${_html.escape(str(coin))}</b> · {direction} · {leverage}×\n\n"
         f"{price_block}"
         f"{why}\n\n"
-        f"{paper_tag}"
+        f"{paper_tag}{closed_line}"
     )
 
 
@@ -2583,8 +2616,10 @@ async def run_live_position_monitor():
 
         _update_performance(ex.strategy_id, db)
 
+        _live_ac = (getattr(ex, "asset_class", "crypto") or "crypto").upper()
         logger.info(
-            f"[live-monitor] {'TP' if outcome == 'WIN' else 'SL'} HIT ({source}): "
+            f"[{_log_ts()}] [live-monitor] "
+            f"{'TP' if outcome == 'WIN' else 'SL'} HIT ({source}) [{_live_ac}]: "
             f"{ex.symbol} {ex.direction} entry={ex.entry_price} "
             f"exit={exit_price} pnl={pnl_pct:+.1f}%"
         )
@@ -3404,7 +3439,7 @@ async def evaluate_and_fire(
                         if _spread_pips > float(_max_sp):
                             _bump("blk_spread_filter")
                             logger.info(
-                                f"[Strategy {strategy.id}] {symbol} spread "
+                                f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} spread "
                                 f"{_spread_pips:.1f} pips > max {_max_sp} — skipping"
                             )
                             continue
@@ -3431,21 +3466,23 @@ async def evaluate_and_fire(
             if _confirmed_px is None:
                 _bump("blk_entry_price_stale")
                 logger.warning(
-                    f"[Strategy {strategy.id}] {symbol} fire blocked — "
+                    f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} fire blocked — "
                     f"{_confirm_reason} (scan_price={current_price:.4f})"
                 )
                 continue
             if abs(_confirmed_px - current_price) / max(_confirmed_px, 1e-9) > 0.00005:
                 logger.info(
-                    f"[Strategy {strategy.id}] {symbol} entry adjusted "
+                    f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} entry adjusted "
                     f"{current_price:.4f} → {_confirmed_px:.4f} ({_confirm_reason})"
                 )
             current_price = _confirmed_px
 
         mode_tag = "🧪 [PAPER]" if is_paper else "🎯"
+        _ac_tag = asset_class.upper()
         logger.info(
-            f"{mode_tag} [Strategy {strategy.id}] {strategy.name} — "
-            f"{symbol} @ {current_price:.4f} conditions met! {direction_pref}"
+            f"[{_log_ts()}] {mode_tag} [{_ac_tag}] [Strategy {strategy.id}] "
+            f"{strategy.name} — {symbol} @ {current_price:.4f} "
+            f"conditions met! {direction_pref}"
         )
 
         ex_config = config.get("exit") or {}
@@ -3662,7 +3699,9 @@ async def evaluate_and_fire(
                     )
                 elif not tg_id:
                     logger.info(
-                        "[Strategy %s] Paper fire %s — no Telegram (link Telegram in Settings)",
+                        "[%s] [Strategy %s] Paper fire %s — no Telegram "
+                        "(link Telegram in Settings)",
+                        _log_ts(),
                         strategy.id,
                         symbol,
                     )
@@ -3715,7 +3754,7 @@ async def evaluate_and_fire(
                                 execution.notes = f"Cancelled: price drift {_drift_pips:.1f} pips"
                                 db.commit()
                                 logger.info(
-                                    f"[Strategy {strategy.id}] {symbol} drift "
+                                    f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} drift "
                                     f"{_drift_pips:.1f}p > {_max_drift} — skipped"
                                 )
                                 break
@@ -3935,7 +3974,7 @@ async def evaluate_and_fire(
                     # the signal price and SL/TP that are ~slippage pips off).
                     _delta = actual_fill - execution.entry_price
                     logger.info(
-                        f"[Strategy {strategy.id}] entry/SL/TP shifted to fill: "
+                        f"[{_log_ts()}] [Strategy {strategy.id}] entry/SL/TP shifted to fill: "
                         f"signal={execution.entry_price:.6g} → fill={actual_fill:.6g} "
                         f"(Δ={_delta:+.6g})"
                     )
@@ -3996,9 +4035,9 @@ async def evaluate_and_fire(
                 execution.notes    = f"Live→Paper fallback: {_broker} returned no order_id{_reason_note}"
                 db.commit()
                 logger.warning(
-                    f"[Strategy {strategy.id}] Live order for {symbol} returned no order_id "
-                    f"({_order_err or 'no reason'}) — converting execution #{execution.id} "
-                    f"to paper trade for ROI tracking."
+                    f"[{_log_ts()}] [Strategy {strategy.id}] Live order for {symbol} "
+                    f"returned no order_id ({_order_err or 'no reason'}) — "
+                    f"converting execution #{execution.id} to paper trade for ROI tracking."
                 )
                 tg_id_live = _telegram_int_id(user)
                 if tg_id_live:
@@ -4504,7 +4543,7 @@ async def _prefetch_price_ta_for_cycle(
 
     await asyncio.gather(*[_warm(s, a, t) for s, a, t in jobs], return_exceptions=True)
     logger.info(
-        f"[{label}] prefetched {len(jobs)} unique symbol(s) in "
+        f"[{_log_ts()}] [{label}] prefetched {len(jobs)} unique symbol(s) in "
         f"{time.monotonic() - t0:.1f}s (cache warm for evaluate)"
     )
     return len(jobs)
@@ -4747,6 +4786,7 @@ async def _run_crypto_executor_shard(
     _hb_name = "crypto_executor" if shard_count <= 1 else f"crypto_executor_s{shard_index}"
 
     while True:
+            _cycle_t0 = datetime.utcnow()
             try:
                 mark_heartbeat(_hb_name)
                 # Load strategy list with a short-lived session — close it
@@ -4943,10 +4983,19 @@ async def _run_crypto_executor_shard(
                         f"{k.replace('blk_', '')}={v}"
                         for k, v in sorted(cycle_gate_stats.items(), key=lambda kv: -kv[1])
                     )
-                    logger.info(f"[{_crypto_lbl}] cycle gates → {_gate_summary}")
+                    logger.info(
+                        f"[{_log_ts()}] [{_crypto_lbl}] cycle gates → {_gate_summary}"
+                    )
+
+                _cycle_s = (datetime.utcnow() - _cycle_t0).total_seconds()
+                if eval_snapshots:
+                    logger.info(
+                        f"[{_log_ts()}] [{_crypto_lbl}] cycle done in {_cycle_s:.1f}s "
+                        f"({len(eval_snapshots)} strategies)"
+                    )
 
             except Exception as e:
-                logger.error(f"{_crypto_lbl} loop error: {e}", exc_info=True)
+                logger.error(f"[{_log_ts()}] {_crypto_lbl} loop error: {e}", exc_info=True)
 
             await asyncio.sleep(SCAN_INTERVAL_SECONDS)
 
@@ -6047,7 +6096,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 )
 
                 logger.info(
-                    f"[{_fx_lbl}] evaluating {len(open_snaps)} strategies "
+                    f"[{_log_ts()}] [{_fx_lbl}] evaluating {len(open_snaps)} strategies "
                     f"(batch size {EXECUTOR_SCAN_BATCH_SIZE})…"
                 )
                 await _gather_eval_batches(
@@ -6080,12 +6129,14 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                         f"{k.replace('blk_', '')}={v}"
                         for k, v in sorted(cycle_gate_stats.items(), key=lambda kv: -kv[1])
                     )
-                    logger.info(f"[{_fx_lbl}] cycle gates → {_gate_summary}")
+                    logger.info(
+                        f"[{_log_ts()}] [{_fx_lbl}] cycle gates → {_gate_summary}"
+                    )
 
                 _cycle_s = (datetime.utcnow() - _cycle_t0).total_seconds()
                 if open_snaps:
                     logger.info(
-                        f"[{_fx_lbl}] cycle done in {_cycle_s:.1f}s "
+                        f"[{_log_ts()}] [{_fx_lbl}] cycle done in {_cycle_s:.1f}s "
                         f"({len(open_snaps)} strategies)"
                     )
 
