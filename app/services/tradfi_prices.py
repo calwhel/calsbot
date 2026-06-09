@@ -757,12 +757,17 @@ async def get_price_fresh(
     asset_class: str,
     *,
     paper_ok: bool = False,
+    user_id: Optional[int] = None,
 ) -> Optional[float]:
     """Bypass caches — cTrader first, then FMP/yfinance before entry_price."""
     try:
         from app.services.realtime_spot import get_realtime_spot
         px = await get_realtime_spot(
-            symbol, asset_class, force_fetch=True, paper_ok=paper_ok,
+            symbol,
+            asset_class,
+            force_fetch=True,
+            paper_ok=paper_ok,
+            user_id=user_id,
         )
         if px is not None and px > 0:
             return px
@@ -777,6 +782,7 @@ async def confirm_entry_price(
     proposed: float,
     *,
     paper_ok: bool = False,
+    user_id: Optional[int] = None,
 ) -> Tuple[Optional[float], str]:
     """
     Re-fetch live spot at fire time; reject stale proposed prices.
@@ -784,7 +790,9 @@ async def confirm_entry_price(
     """
     if not proposed or proposed <= 0:
         return None, "invalid_proposed"
-    live = await get_price_fresh(symbol, asset_class, paper_ok=paper_ok)
+    live = await get_price_fresh(
+        symbol, asset_class, paper_ok=paper_ok, user_id=user_id,
+    )
     if not live or live <= 0:
         return None, "no_live_spot_at_fire"
 

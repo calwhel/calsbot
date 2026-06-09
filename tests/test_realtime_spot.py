@@ -89,6 +89,50 @@ class TestRealtimeSpotAsync(unittest.IsolatedAsyncioTestCase):
             hit = await rs.fetch_parallel("NAS100", "index")
         self.assertEqual(hit, (28790.0, "fmp"))
 
+    async def test_fetch_parallel_ctrader_on_demand_beats_fmp(self):
+        with patch.object(rs, "_ctrader_fresh", return_value=None), patch.object(
+            rs, "read_fresh_cached", return_value=None
+        ), patch.object(
+            rs, "_fetch_ctrader_on_demand",
+            new_callable=AsyncMock,
+            return_value=(28786.0, "ctrader"),
+        ), patch.object(
+            rs, "_fetch_fmp_on_demand",
+            new_callable=AsyncMock,
+            return_value=(28780.0, "fmp"),
+        ), patch.object(
+            rs, "_fetch_yfinance_spot", new_callable=AsyncMock, return_value=None
+        ):
+            hit = await rs.fetch_parallel("NAS100", "index")
+        self.assertEqual(hit, (28786.0, "ctrader"))
+
+    async def test_fetch_ctrader_on_demand_waits_for_stream(self):
+        with patch("app.services.ctrader_price_feed.broker_session_ready", return_value=True), patch(
+            "app.services.ctrader_price_feed.is_live", return_value=True
+        ), patch.object(
+            rs, "_read_ctrader", side_effect=[None, None, (1.0851, "ctrader")]
+        ), patch.object(rs, "_CTRADER_ON_DEMAND_WAIT_S", 1.0):
+            hit = await rs._fetch_ctrader_on_demand(
+                "EURUSD", "forex", max_age=5.0,
+            )
+        self.assertEqual(hit, (1.0851, "ctrader"))
+
+    async def test_fetch_ctrader_on_demand_trendbar_close(self):
+        import time as _time
+        bar_ts = int((_time.time() - 65) * 1000)
+        with patch("app.services.ctrader_price_feed.broker_session_ready", return_value=True), patch(
+            "app.services.ctrader_price_feed.is_live", return_value=False
+        ), patch.object(rs, "_CTRADER_ON_DEMAND_WAIT_S", 0.0), patch(
+            "app.services.ctrader_price_feed.get_klines",
+            new_callable=AsyncMock,
+            return_value=[[bar_ts, 1.0, 1.1, 0.9, 1.0850, 0.0]],
+        ), patch.object(rs, "_persist_tick") as mock_store:
+            hit = await rs._fetch_ctrader_on_demand(
+                "EURUSD", "forex", max_age=15.0, paper_ok=True,
+            )
+        self.assertEqual(hit, (1.0850, "ctrader"))
+        mock_store.assert_called_once_with("EURUSD", 1.0850, "ctrader")
+
     async def test_fetch_metals_parallel_stores_best(self):
         with patch.object(rs, "_fetch_binance", new_callable=AsyncMock, return_value=2650.0), patch.object(
             rs, "_fetch_coinbase", new_callable=AsyncMock, return_value=2649.5
