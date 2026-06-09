@@ -11714,23 +11714,31 @@ async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(Fa
             balance = _cached
             return
         try:
-            from app.services.ctrader_client import _get_account_balance
+            from app.services.ctrader_client import get_account_balance_resilient
             balance = await asyncio.wait_for(
-                _get_account_balance(prefs.ctrader_access_token, int(_acct_id)),
-                timeout=4.0,
+                get_account_balance_resilient(
+                    prefs.ctrader_access_token,
+                    int(_acct_id),
+                    prefs=prefs,
+                    user_id=user.id,
+                ),
+                timeout=8.0,
             )
             if balance is not None:
                 set_cache(_bal_key, balance, ttl_seconds=60)
             else:
-                set_cache(_bal_key, "__miss__", ttl_seconds=20)
+                set_cache(_bal_key, "__miss__", ttl_seconds=30)
         except Exception as _be:
-            logger.warning(f"[live-forex] balance fetch uid={uid}: {type(_be).__name__}")
-            set_cache(_bal_key, "__miss__", ttl_seconds=20)
+            logger.warning(
+                f"[live-forex] balance fetch uid={uid} ctid={_acct_id}: "
+                f"{type(_be).__name__}"
+            )
+            set_cache(_bal_key, "__miss__", ttl_seconds=30)
 
     try:
         await asyncio.wait_for(
             asyncio.gather(_sync_ctrader_accounts(), _fetch_balance(), return_exceptions=True),
-            timeout=4.5,
+            timeout=9.0,
         )
     except asyncio.TimeoutError:
         _stale_bal = get_cache(f"ctrader_balance:{user.id}")

@@ -1575,6 +1575,47 @@ async def _get_account_balance(
     return None
 
 
+async def get_account_balance_resilient(
+    access_token: str,
+    ctid_trader_account_id: int,
+    *,
+    prefs=None,
+    user_id: Optional[int] = None,
+) -> Optional[float]:
+    """
+    Fetch account balance with correct live/demo host, token refresh, and fallback.
+    UI paths should use this instead of raw _get_account_balance(host=LIVE default).
+    """
+    host = _host_for_account(prefs, ctid_trader_account_id) if prefs else CTRADER_HOST_LIVE
+    at = (access_token or "").strip()
+    if not at:
+        return None
+    hosts = [host, _other_host(host)]
+    for h in hosts:
+        bal = await _get_account_balance(at, ctid_trader_account_id, host=h)
+        if bal is not None and bal > 0:
+            if user_id and h != host:
+                await asyncio.to_thread(
+                    _persist_account_host_metadata, user_id, ctid_trader_account_id, h,
+                )
+            return bal
+        if user_id:
+            new_at = await refresh_user_ctrader_token(user_id)
+            if new_at:
+                at = new_at
+                bal = await _get_account_balance(at, ctid_trader_account_id, host=h)
+                if bal is not None and bal > 0:
+                    if h != host:
+                        await asyncio.to_thread(
+                            _persist_account_host_metadata,
+                            user_id,
+                            ctid_trader_account_id,
+                            h,
+                        )
+                    return bal
+    return None
+
+
 async def _get_open_position_ids(
     access_token: str,
     ctid_trader_account_id: int,
