@@ -50,7 +50,29 @@ EXECUTOR_CRYPTO_START_DELAY = int(_os_env.environ.get("EXECUTOR_CRYPTO_START_DEL
 EXECUTOR_KLINE_BARS           = int(_os_env.environ.get("EXECUTOR_KLINE_BARS", "80"))
 # Parallel Yahoo/Bitunix prefetches at cycle start (unique symbols across all strategies).
 EXECUTOR_PREFETCH_CONCURRENT  = int(_os_env.environ.get("EXECUTOR_PREFETCH_CONCURRENT", "25"))
+# Split strategies across N parallel scan loops in one executor process (id % N).
+# Each shard prefetches + evaluates its slice concurrently — ~Nx throughput vs one loop.
+EXECUTOR_SHARD_COUNT          = max(1, int(_os_env.environ.get("EXECUTOR_SHARD_COUNT", "1")))
+EXECUTOR_SHARD_STAGGER_SECONDS = int(_os_env.environ.get("EXECUTOR_SHARD_STAGGER_SECONDS", "2"))
 PAPER_MAX_HOLD_HOURS        = 168   # auto-expire paper positions after this many hours (7 days)
+
+
+def strategy_shard_index(strategy_id: int, shard_count: int = EXECUTOR_SHARD_COUNT) -> int:
+    return int(strategy_id) % max(1, shard_count)
+
+
+def strategy_on_shard(
+    strategy_id: int,
+    shard_index: int,
+    shard_count: int = EXECUTOR_SHARD_COUNT,
+) -> bool:
+    return strategy_shard_index(strategy_id, shard_count) == shard_index
+
+
+def _executor_shard_label(base: str, shard_index: int, shard_count: int) -> str:
+    if shard_count <= 1:
+        return base
+    return f"{base} S{shard_index}/{shard_count}"
 
 async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size: int = 0) -> None:
     """Run evaluate tasks in chunks and log progress (visible in Railway during long scans)."""
@@ -4591,8 +4613,6 @@ async def run_strategy_executor():
     asyncio.create_task(run_paper_position_monitor())
     asyncio.create_task(run_session_alert_loop())
 
-    sem = asyncio.Semaphore(MAX_CONCURRENT)
-
     # Explicit timeouts: 15s total, 5s connect, 8s pool-wait — prevents hung
     # requests from blocking semaphore slots indefinitely. Pool wait is
     # explicit so PoolTimeout fails fast rather than blocking the full 15s.
@@ -4634,9 +4654,39 @@ async def run_strategy_executor():
                 "the list is available (fail-closed)"
             )
 
-        while True:
+        count = EXECUTOR_SHARD_COUNT
+        if count <= 1:
+            await _run_crypto_executor_shard(0, 1, http_client)
+            return
+        logger.info(
+            f"🤖 Crypto executor launching {count} parallel scan shards "
+            f"(~{MAX_CONCURRENT} concurrent evals per shard)"
+        )
+        await asyncio.gather(
+            *(_run_crypto_executor_shard(i, count, http_client) for i in range(count))
+        )
+
+
+async def _run_crypto_executor_shard(
+    shard_index: int,
+    shard_count: int,
+    http_client: httpx.AsyncClient,
+):
+    """Crypto scan loop for strategies where ``strategy_id % shard_count == shard_index``."""
+    from app.database import BgSessionLocal as SessionLocal
+    from app.models import User
+    from app.strategy_models import UserStrategy
+
+    _crypto_lbl = _executor_shard_label("Crypto Executor", shard_index, shard_count)
+    if shard_index > 0 and EXECUTOR_SHARD_STAGGER_SECONDS > 0:
+        await asyncio.sleep(shard_index * EXECUTOR_SHARD_STAGGER_SECONDS)
+
+    sem = asyncio.Semaphore(MAX_CONCURRENT)
+    _hb_name = "crypto_executor" if shard_count <= 1 else f"crypto_executor_s{shard_index}"
+
+    while True:
             try:
-                mark_heartbeat("crypto_executor")
+                mark_heartbeat(_hb_name)
                 # Load strategy list with a short-lived session — close it
                 # immediately so no stale transaction lingers during evaluation.
                 _list_db = SessionLocal()
@@ -4699,16 +4749,22 @@ async def run_strategy_executor():
                     # Forex / index / stock handled by run_forex_executor (dedicated loop)
                     and _snap_asset_class(s) not in ("forex", "index", "stock")
                 ]
+                eval_snapshots = [
+                    s for s in eval_snapshots
+                    if strategy_on_shard(s["id"], shard_index, shard_count)
+                ]
                 skipped = len(strategy_snapshots) - len(eval_snapshots)
                 if skipped:
                     logger.debug(
                         f"[Executor] Skipping {skipped} locked subscriber copies "
                         f"(will be triggered by source propagation)"
                     )
-                logger.info(
-                    f"🤖 Portal crypto strategies: {len(eval_snapshots)} scanning "
-                    f"({active_count} live · {paper_count} paper in pool) [{_ac_str}]"
-                )
+                if eval_snapshots or shard_index == 0:
+                    logger.info(
+                        f"🤖 {_crypto_lbl}: {len(eval_snapshots)} crypto strateg"
+                        f"{'y' if len(eval_snapshots) == 1 else 'ies'} on this shard "
+                        f"({active_count} live · {paper_count} paper in pool) [{_ac_str}]"
+                    )
 
                 # Pre-fetch tickers ONCE for the entire cycle.
                 shared_tickers = await _get_raw_tickers(http_client)
@@ -4805,11 +4861,11 @@ async def run_strategy_executor():
                     eval_snapshots,
                     http_client,
                     {"crypto"},
-                    label="Crypto Executor",
+                    label=_crypto_lbl,
                 )
 
                 await _gather_eval_batches(
-                    "Crypto Executor", eval_snapshots, _run_one,
+                    _crypto_lbl, eval_snapshots, _run_one,
                 )
 
                 try:
@@ -4825,10 +4881,10 @@ async def run_strategy_executor():
                         f"{k.replace('blk_', '')}={v}"
                         for k, v in sorted(cycle_gate_stats.items(), key=lambda kv: -kv[1])
                     )
-                    logger.info(f"[Executor] cycle gates → {_gate_summary}")
+                    logger.info(f"[{_crypto_lbl}] cycle gates → {_gate_summary}")
 
             except Exception as e:
-                logger.error(f"Strategy executor loop error: {e}", exc_info=True)
+                logger.error(f"{_crypto_lbl} loop error: {e}", exc_info=True)
 
             await asyncio.sleep(SCAN_INTERVAL_SECONDS)
 
@@ -5646,27 +5702,43 @@ async def run_forex_live_manager_fast():
 # ─── Dedicated forex / index / stock executor loop ───────────────────────────
 
 async def run_forex_executor():
-    """
-    Dedicated scan loop for forex, index, and stock strategies.
+    """Launch one or more parallel forex/index scan shards."""
+    count = EXECUTOR_SHARD_COUNT
+    if count <= 1:
+        await _run_forex_executor_shard(0, 1)
+        return
+    logger.info(
+        f"📈 Forex executor launching {count} parallel scan shards "
+        f"(~{FOREX_MAX_CONCURRENT} concurrent evals per shard)"
+    )
+    await asyncio.gather(
+        *(_run_forex_executor_shard(i, count) for i in range(count))
+    )
 
-    Runs on a shorter independent cycle (EXECUTOR_FOREX_SCAN_INTERVAL, default
-    30 s) so these strategies are not forced to wait for the full crypto cycle
-    (which can take 30-60 s due to MEXC/Bitunix API calls).  Forex price data
-    comes from yfinance, so no MEXC ticker pre-fetch is needed and no Bitunix
-    symbol pre-warm is required.
+
+async def _run_forex_executor_shard(shard_index: int, shard_count: int):
+    """
+    Dedicated scan loop for forex, index, and stock strategies (one shard).
+
+    Strategies are partitioned by ``strategy_id % shard_count`` so multiple
+    shards evaluate disjoint subsets in parallel without double-firing.
     """
     from app.database import BgSessionLocal as SessionLocal, bg_engine as engine
     from app.models import User
     from app.strategy_models import UserStrategy, init_strategy_tables
 
     init_strategy_tables(engine)
+    _fx_lbl = _executor_shard_label("FX Executor", shard_index, shard_count)
     logger.info(
-        f"📈 Forex/index executor started (cycle={FOREX_SCAN_INTERVAL_SECONDS}s)"
+        f"📈 {_fx_lbl} started (cycle={FOREX_SCAN_INTERVAL_SECONDS}s)"
     )
+    if shard_index > 0 and EXECUTOR_SHARD_STAGGER_SECONDS > 0:
+        await asyncio.sleep(shard_index * EXECUTOR_SHARD_STAGGER_SECONDS)
 
     _TRADFI_CLASSES = {"forex", "index", "stock"}
 
     sem = asyncio.Semaphore(FOREX_MAX_CONCURRENT)
+    _fx_hb = "forex_executor" if shard_count <= 1 else f"forex_executor_s{shard_index}"
 
     # Lighter pool — yfinance calls are outbound Python HTTP, not MEXC REST;
     # a handful of concurrent connections is plenty.
@@ -5686,7 +5758,7 @@ async def run_forex_executor():
                                     # throws before its own assignment.
             _cycle_t0 = datetime.utcnow()
             try:
-                mark_heartbeat("forex_executor")
+                mark_heartbeat(_fx_hb)
                 _list_db = SessionLocal()
                 try:
                     strategies = (
@@ -5763,21 +5835,28 @@ async def run_forex_executor():
                     else:
                         _closed_by_class[_ac] = _closed_by_class.get(_ac, 0) + 1
 
+                open_snaps = [
+                    s for s in open_snaps
+                    if strategy_on_shard(s["id"], shard_index, shard_count)
+                ]
+
                 _forex_open = _ac_open("forex")
 
-                if _closed_by_class:
+                if _closed_by_class and shard_index == 0:
                     _closed_summary = " ".join(
                         f"{k}={v}" for k, v in sorted(_closed_by_class.items())
                     )
                     logger.info(
-                        f"📈 Forex executor: {len(open_snaps)} open-market strateg"
-                        f"{'y' if len(open_snaps) == 1 else 'ies'} to scan "
-                        f"(skipped market-closed: {_closed_summary})"
+                        f"📈 Forex executor: shard {shard_index}/{shard_count} — "
+                        f"{len(open_snaps)} strateg"
+                        f"{'y' if len(open_snaps) == 1 else 'ies'} on this shard "
+                        f"(market-closed skipped: {_closed_summary})"
                     )
-                else:
+                elif open_snaps or shard_index == 0:
                     logger.info(
-                        f"📈 Forex executor: scanning {len(open_snaps)} tradfi strateg"
-                        f"{'y' if len(open_snaps) == 1 else 'ies'}"
+                        f"📈 Forex executor: shard {shard_index}/{shard_count} — "
+                        f"{len(open_snaps)} tradfi strateg"
+                        f"{'y' if len(open_snaps) == 1 else 'ies'} to scan"
                     )
 
                 _fx_scan_cycle += 1
@@ -5788,7 +5867,7 @@ async def run_forex_executor():
                     )
                     _more = max(0, len(open_snaps) - 4)
                     logger.info(
-                        f"📈 Forex executor sample: {_sample}"
+                        f"📈 {_fx_lbl} sample: {_sample}"
                         + (f" (+{_more} more)" if _more else "")
                     )
 
@@ -5902,15 +5981,15 @@ async def run_forex_executor():
                     open_snaps,
                     http_client,
                     {"forex", "index", "stock"},
-                    label="FX Executor",
+                    label=_fx_lbl,
                 )
 
                 logger.info(
-                    f"[FX Executor] evaluating {len(open_snaps)} strategies "
+                    f"[{_fx_lbl}] evaluating {len(open_snaps)} strategies "
                     f"(batch size {EXECUTOR_SCAN_BATCH_SIZE})…"
                 )
                 await _gather_eval_batches(
-                    "FX Executor", open_snaps, _run_one_fx,
+                    _fx_lbl, open_snaps, _run_one_fx,
                 )
 
                 try:
@@ -5930,7 +6009,7 @@ async def run_forex_executor():
                     _skipped = len(_cycle_db_skipped)
                     _err_types = ", ".join(sorted({e for _, e in _cycle_db_skipped}))
                     logger.warning(
-                        f"[FX Executor] DB unreachable — skipped {_skipped}/{_total} "
+                        f"[{_fx_lbl}] DB unreachable — skipped {_skipped}/{_total} "
                         f"strategies this cycle ({_err_types}). Will retry next cycle."
                     )
 
@@ -5939,12 +6018,12 @@ async def run_forex_executor():
                         f"{k.replace('blk_', '')}={v}"
                         for k, v in sorted(cycle_gate_stats.items(), key=lambda kv: -kv[1])
                     )
-                    logger.info(f"[FX Executor] cycle gates → {_gate_summary}")
+                    logger.info(f"[{_fx_lbl}] cycle gates → {_gate_summary}")
 
                 _cycle_s = (datetime.utcnow() - _cycle_t0).total_seconds()
                 if open_snaps:
                     logger.info(
-                        f"[FX Executor] cycle done in {_cycle_s:.1f}s "
+                        f"[{_fx_lbl}] cycle done in {_cycle_s:.1f}s "
                         f"({len(open_snaps)} strategies)"
                     )
 
@@ -5963,7 +6042,7 @@ async def run_forex_executor():
             if _cycle_db_skipped:
                 _sleep_s = max(FOREX_SCAN_INTERVAL_SECONDS * 3, 15)
                 logger.warning(
-                    f"[FX Executor] DB stress detected — backing off to {_sleep_s}s "
+                    f"[{_fx_lbl}] DB stress detected — backing off to {_sleep_s}s "
                     f"this cycle (normal cadence {FOREX_SCAN_INTERVAL_SECONDS}s)"
                 )
             else:
