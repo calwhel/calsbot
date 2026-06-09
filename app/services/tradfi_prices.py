@@ -752,11 +752,18 @@ def _yf_download_blocking(ticker: str, interval: str, period: str):
     )
 
 
-async def get_price_fresh(symbol: str, asset_class: str) -> Optional[float]:
-    """Bypass caches — parallel fetch from all live sources before entry_price."""
+async def get_price_fresh(
+    symbol: str,
+    asset_class: str,
+    *,
+    paper_ok: bool = False,
+) -> Optional[float]:
+    """Bypass caches — cTrader first, then FMP/yfinance before entry_price."""
     try:
         from app.services.realtime_spot import get_realtime_spot
-        px = await get_realtime_spot(symbol, asset_class, force_fetch=True)
+        px = await get_realtime_spot(
+            symbol, asset_class, force_fetch=True, paper_ok=paper_ok,
+        )
         if px is not None and px > 0:
             return px
     except Exception:
@@ -768,6 +775,8 @@ async def confirm_entry_price(
     symbol: str,
     asset_class: str,
     proposed: float,
+    *,
+    paper_ok: bool = False,
 ) -> Tuple[Optional[float], str]:
     """
     Re-fetch live spot at fire time; reject stale proposed prices.
@@ -775,7 +784,7 @@ async def confirm_entry_price(
     """
     if not proposed or proposed <= 0:
         return None, "invalid_proposed"
-    live = await get_price_fresh(symbol, asset_class)
+    live = await get_price_fresh(symbol, asset_class, paper_ok=paper_ok)
     if not live or live <= 0:
         return None, "no_live_spot_at_fire"
 

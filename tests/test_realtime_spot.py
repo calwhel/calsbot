@@ -48,6 +48,47 @@ class TestRealtimeSpot(unittest.TestCase):
 
 
 class TestRealtimeSpotAsync(unittest.IsolatedAsyncioTestCase):
+    async def test_fetch_parallel_ctrader_beats_yfinance(self):
+        with patch.object(rs, "_ctrader_fresh", return_value=(28786.0, "ctrader")), patch.object(
+            rs, "read_fresh_cached", return_value=None
+        ), patch.object(
+            rs, "_fetch_fmp_on_demand", new_callable=AsyncMock, return_value=None
+        ), patch.object(
+            rs, "_fetch_yfinance_spot",
+            new_callable=AsyncMock,
+            return_value=(28780.0, "yfinance"),
+        ):
+            hit = await rs.fetch_parallel("NAS100", "index")
+        self.assertEqual(hit, (28786.0, "ctrader"))
+
+    async def test_fetch_parallel_yfinance_when_ctrader_missing(self):
+        with patch.object(rs, "_ctrader_fresh", return_value=None), patch.object(
+            rs, "read_fresh_cached", return_value=None
+        ), patch.object(
+            rs, "_fetch_fmp_on_demand", new_callable=AsyncMock, return_value=None
+        ), patch.object(
+            rs, "_fetch_yfinance_spot",
+            new_callable=AsyncMock,
+            return_value=(1.0852, "yfinance"),
+        ):
+            hit = await rs.fetch_parallel("EURUSD", "forex", paper_ok=True)
+        self.assertEqual(hit, (1.0852, "yfinance"))
+
+    async def test_fetch_parallel_fmp_before_yfinance(self):
+        with patch.object(rs, "_ctrader_fresh", return_value=None), patch.object(
+            rs, "read_fresh_cached", return_value=None
+        ), patch.object(
+            rs, "_fetch_fmp_on_demand",
+            new_callable=AsyncMock,
+            return_value=(28790.0, "fmp"),
+        ), patch.object(
+            rs, "_fetch_yfinance_spot",
+            new_callable=AsyncMock,
+            return_value=(28780.0, "yfinance"),
+        ):
+            hit = await rs.fetch_parallel("NAS100", "index")
+        self.assertEqual(hit, (28790.0, "fmp"))
+
     async def test_fetch_metals_parallel_stores_best(self):
         with patch.object(rs, "_fetch_binance", new_callable=AsyncMock, return_value=2650.0), patch.object(
             rs, "_fetch_coinbase", new_callable=AsyncMock, return_value=2649.5

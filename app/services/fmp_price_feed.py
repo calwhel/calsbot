@@ -123,6 +123,53 @@ def _fmp_note_success() -> None:
     _FMP_BACKOFF_UNTIL = None
 
 
+def _fmp_quote_ticker(symbol: str) -> str:
+    """FMP API symbol for a display symbol (forex pair or ^INDEX)."""
+    sym = symbol.upper()
+    if sym in _INDEX_FMP:
+        return _INDEX_FMP[sym].replace("%5E", "^")
+    return sym
+
+
+async def fetch_quote(symbol: str) -> Optional[float]:
+    """
+    On-demand FMP quote for one symbol — used when the poll cache is cold or
+    rate-limited batch missed this pair. Updates cache + market_spot_ticks.
+    """
+    sym = symbol.upper()
+    api_key = _fmp_api_key()
+    if not api_key or fmp_in_backoff():
+        return None
+
+    now = datetime.utcnow()
+    fmp_sym = _fmp_quote_ticker(sym)
+
+    attempts = [
+        (f"{_FMP_STABLE_BASE}/quote", {"symbol": sym, "apikey": api_key}),
+        (
+            f"{_FMP_LEGACY_BASE}/quote/{fmp_sym.replace('^', '%5E')}",
+            {"apikey": api_key},
+        ),
+    ]
+    for url, params in attempts:
+        status, data = await _fmp_http_get(url, params, timeout=6.0)
+        if status != 200 or not isinstance(data, list) or not data:
+            continue
+        item = data[0] if isinstance(data[0], dict) else None
+        if not item:
+            continue
+        mid = _mid_from_quote_item(item)
+        if mid is not None and mid > 0:
+            display = (
+                _FMP_TO_DISPLAY.get(fmp_sym.replace("^", "%5E"))
+                or _FMP_TO_DISPLAY.get(sym)
+                or sym
+            )
+            _store_fmp_price(display, mid, now)
+            return float(mid)
+    return None
+
+
 def get_price(symbol: str) -> Optional[float]:
     """Mid price from live cache; shared DB store; stale up to _PRICE_STALE_TTL."""
     sym = symbol.upper()

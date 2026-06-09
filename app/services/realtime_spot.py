@@ -39,7 +39,11 @@ _SOURCE_RANK = {
     "coinbase": 2,
     "fmp": 3,
     "kraken": 4,
+    "yfinance": 5,
+    "metals_cache": 6,
+    "store": 99,
 }
+_PAPER_MAX_AGE_S = float(os.environ.get("REALTIME_SPOT_MAX_AGE_PAPER_S", "15"))
 
 
 def _norm(symbol: str) -> str:
@@ -139,15 +143,29 @@ def _read_fmp_fresh(symbol: str, max_age: float) -> Optional[Tuple[float, str]]:
     return None
 
 
+def _effective_max_age(
+    symbol: str,
+    asset_class: str,
+    *,
+    max_age: Optional[float] = None,
+    paper_ok: bool = False,
+) -> float:
+    base = max_age if max_age is not None else max_age_s(symbol, asset_class)
+    if paper_ok:
+        return max(base, _PAPER_MAX_AGE_S)
+    return base
+
+
 def read_fresh_cached(
     symbol: str,
     asset_class: str,
     *,
     max_age: Optional[float] = None,
+    paper_ok: bool = False,
 ) -> Optional[Tuple[float, str]]:
     """Return (price, source) from in-memory / Postgres caches only."""
     sym = _norm(symbol)
-    age_limit = max_age if max_age is not None else max_age_s(sym, asset_class)
+    age_limit = _effective_max_age(sym, asset_class, max_age=max_age, paper_ok=paper_ok)
     candidates: List[Tuple[float, str]] = []
 
     hit = _read_ctrader(sym, age_limit)
@@ -276,17 +294,73 @@ async def _fetch_metals_parallel(symbol: str) -> Optional[Tuple[float, str]]:
     return best
 
 
-async def fetch_parallel(
+async def _fetch_yfinance_spot(
     symbol: str,
     asset_class: str,
 ) -> Optional[Tuple[float, str]]:
-    """Hit all live sources concurrently; return best fresh tick."""
+    """yfinance fast_info — forex/index spot when broker feeds are cold."""
+    try:
+        from app.services.tradfi_prices import _resolve_ticker, _yf_fast_price_blocking
+
+        ticker = _resolve_ticker(asset_class, symbol)
+        if not ticker:
+            return None
+        px = await asyncio.to_thread(_yf_fast_price_blocking, ticker)
+        if px is not None and px > 0:
+            _persist_tick(symbol, float(px), "yfinance")
+            return (float(px), "yfinance")
+    except Exception:
+        pass
+    return None
+
+
+async def _fetch_fmp_on_demand(
+    symbol: str,
+    max_age: float,
+) -> Optional[Tuple[float, str]]:
+    """Poll cache first, then a single-symbol FMP HTTP quote."""
     sym = _norm(symbol)
-    age_limit = max_age_s(sym, asset_class)
+    hit = _read_fmp_fresh(sym, max_age)
+    if hit:
+        return hit
+    try:
+        from app.services.fmp_price_feed import fetch_quote
+
+        px = await fetch_quote(sym)
+        if px is not None and px > 0:
+            return (float(px), "fmp")
+    except Exception:
+        pass
+    return None
+
+
+def _ctrader_fresh(symbol: str, max_age: float) -> Optional[Tuple[float, str]]:
+    """Broker-matched tick from cTrader feed or Postgres store."""
+    return _read_ctrader(symbol, max_age)
+
+
+async def fetch_parallel(
+    symbol: str,
+    asset_class: str,
+    *,
+    paper_ok: bool = False,
+) -> Optional[Tuple[float, str]]:
+    """
+    Hit live sources; return best fresh tick.
+
+    Priority: cTrader (broker) → FMP on-demand → yfinance → metals externals.
+    """
+    sym = _norm(symbol)
+    age_limit = _effective_max_age(sym, asset_class, paper_ok=paper_ok)
     candidates: List[Tuple[float, str]] = []
 
-    cached = read_fresh_cached(sym, asset_class, max_age=age_limit)
-    if cached:
+    # 1) cTrader — always checked first (in-memory + shared store).
+    ct = _ctrader_fresh(sym, age_limit)
+    if ct:
+        candidates.append(ct)
+
+    cached = read_fresh_cached(sym, asset_class, max_age=age_limit, paper_ok=paper_ok)
+    if cached and cached not in candidates:
         candidates.append(cached)
 
     if sym in _METALS:
@@ -294,10 +368,19 @@ async def fetch_parallel(
         if ext:
             candidates.append(ext)
     else:
-        # cTrader is sync — already in cache read; FMP may update on next WS tick.
-        fmp = _read_fmp_fresh(sym, age_limit)
-        if fmp:
+        # 2) FMP — cache then on-demand quote (forex + indices).
+        fmp = await _fetch_fmp_on_demand(sym, age_limit)
+        if fmp and fmp not in candidates:
             candidates.append(fmp)
+
+        # 3) yfinance — when cTrader missing, or always for paper confirmation.
+        need_yf = paper_ok or not any(
+            (c[1] or "").lower() == "ctrader" for c in candidates
+        )
+        if need_yf:
+            yf = await _fetch_yfinance_spot(sym, asset_class)
+            if yf:
+                candidates.append(yf)
 
     return _pick_best(candidates)
 
@@ -307,20 +390,23 @@ async def get_realtime_spot(
     asset_class: str,
     *,
     force_fetch: bool = False,
+    paper_ok: bool = False,
 ) -> Optional[float]:
     """
     Latest real-time spot mid. Returns None when no source has a tick within
-    the strict max-age window (never serves stale / futures fallbacks).
+    the max-age window (never serves stale / futures fallbacks for metals).
     """
     sym = _norm(symbol)
-    age_limit = max_age_s(sym, asset_class)
+    age_limit = _effective_max_age(sym, asset_class, paper_ok=paper_ok)
 
     if not force_fetch:
-        cached = read_fresh_cached(sym, asset_class, max_age=age_limit)
+        cached = read_fresh_cached(
+            sym, asset_class, max_age=age_limit, paper_ok=paper_ok,
+        )
         if cached:
             return cached[0]
 
-    fetched = await fetch_parallel(sym, asset_class)
+    fetched = await fetch_parallel(sym, asset_class, paper_ok=paper_ok)
     return fetched[0] if fetched else None
 
 
