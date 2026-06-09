@@ -4620,6 +4620,23 @@ async function deleteStrat(id,name){
   );
 }
 
+async function _bulkDeleteChunk(strategyIds){
+  const r=await fetch(`/api/strategies/bulk-delete?uid=${encodeURIComponent(UID)}`,{
+    method:'POST',
+    credentials:'same-origin',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({uid:UID,strategy_ids:strategyIds}),
+  });
+  let d={};
+  const raw=await r.text();
+  try{d=raw?JSON.parse(raw):{};}catch(_){d={detail:raw||`HTTP ${r.status}`};}
+  if(!r.ok){
+    const msg=typeof d.detail==='string'?d.detail:(Array.isArray(d.detail)?d.detail.map(x=>x.msg||x).join(', '):'Bulk delete failed');
+    throw new Error(msg||`HTTP ${r.status}`);
+  }
+  return d;
+}
+
 async function bulkDeleteStrats(){
   const ids=[..._stratSelected];
   if(!ids.length)return;
@@ -4633,28 +4650,27 @@ async function bulkDeleteStrats(){
     'background:var(--red);color:#fff;border-color:var(--red)',
     async ()=>{
       const btn=$('strat-bulk-delete-btn');
-      if(btn){btn.disabled=true;btn.textContent='Deleting…';}
+      const CHUNK=20;
+      let deletedTotal=0;
       try{
-        const r=await fetch('/api/strategies/bulk-delete',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({uid:UID,strategy_ids:ids}),
-        });
-        const d=await r.json();
-        if(!r.ok){
-          toast(d.detail||'Bulk delete failed','error');
-          updateStratSelectBar();
-          return;
+        if(btn){btn.disabled=true;}
+        for(let i=0;i<ids.length;i+=CHUNK){
+          const chunk=ids.slice(i,i+CHUNK);
+          if(btn){btn.textContent=`Deleting ${Math.min(i+chunk.length,ids.length)}/${ids.length}…`;}
+          const d=await _bulkDeleteChunk(chunk);
+          deletedTotal+=d.deleted_count||chunk.length;
         }
-        toast(`Deleted ${d.deleted_count||ids.length} strateg${(d.deleted_count||ids.length)===1?'y':'ies'}`,'success');
+        toast(`Deleted ${deletedTotal} strateg${deletedTotal===1?'y':'ies'}`,'success');
         _stratSelectMode=false;
         _stratSelected.clear();
         updateStratSelectBar();
         _clearStratCache();
         loadMyStrategies();
       }catch(e){
-        toast('Network error — try again','error');
+        toast(e.message||'Delete failed — try fewer at a time','error');
         updateStratSelectBar();
+      }finally{
+        if(btn){btn.disabled=_stratSelected.size===0;updateStratSelectBar();}
       }
     }
   );
