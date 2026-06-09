@@ -37,12 +37,10 @@ FOREX_SCAN_INTERVAL_SECONDS = int(_os_env.environ.get("EXECUTOR_FOREX_SCAN_INTER
 FOREX_MANAGE_INTERVAL_SECONDS = float(_os_env.environ.get("EXECUTOR_FOREX_MANAGE_INTERVAL", "1"))
 PAPER_MONITOR_INTERVAL      = int(_os_env.environ.get("EXECUTOR_MONITOR_INTERVAL", "10"))
 LIVE_MONITOR_INTERVAL       = int(_os_env.environ.get("EXECUTOR_LIVE_MONITOR_INTERVAL", "8"))
-MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "3"))
-# Forex runs more strategies in parallel than crypto, but each task holds a
-# bg_engine session for the whole evaluate_and_fire (including async kline/TA
-# fetches). Peak ≈ FOREX_MAX_CONCURRENT + MAX_CONCURRENT + monitor overhead —
-# keep under BG_POOL_SIZE + BG_POOL_OVERFLOW (default 18).
-FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "4"))
+MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "2"))
+# Each forex eval holds bg_engine across async kline/TA fetches. Total checkout
+# slots are capped by app.database.bg_db_slot() (pool hard limit − reserve).
+FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "3"))
 # Evaluate strategies in batches so Railway logs show progress during long first cycles
 # (90 forex + 168 crypto can run 5–15 min with no other INFO lines).
 EXECUTOR_SCAN_BATCH_SIZE    = int(_os_env.environ.get("EXECUTOR_SCAN_BATCH_SIZE", "20"))
@@ -2196,21 +2194,27 @@ async def run_paper_position_monitor():
         the paper monitor concurrently and hold a connection across awaits.
         """
         # ── Phase 1: Read ─────────────────────────────────────────────────────
-        db = SessionLocal()
+        from app.database import bg_db_slot
+        from sqlalchemy.exc import TimeoutError as _SATimeoutError
+
         try:
-            open_papers = (
-                db.query(StrategyExecution)
-                .filter(
-                    StrategyExecution.outcome == "OPEN",
-                    StrategyExecution.is_paper == True,
-                )
-                .all()
-            )
-            # Detach objects so they remain readable after the session closes.
-            # All scalar columns are already loaded by .all(); lazy refs are gone.
-            db.expunge_all()
-        finally:
-            db.close()  # ← released BEFORE any async I/O
+            async with bg_db_slot():
+                db = SessionLocal()
+                try:
+                    open_papers = (
+                        db.query(StrategyExecution)
+                        .filter(
+                            StrategyExecution.outcome == "OPEN",
+                            StrategyExecution.is_paper == True,
+                        )
+                        .all()
+                    )
+                    db.expunge_all()
+                finally:
+                    db.close()
+        except _SATimeoutError:
+            logger.warning("[PaperMonitor] DB pool busy — skipping sweep this cycle")
+            return
 
         if not open_papers:
             return
@@ -2287,63 +2291,69 @@ async def run_paper_position_monitor():
                             f"{_elapsed_h:.1f}h open. Check FMP/yfinance connectivity."
                         )
             # One DB session per (symbol, asset_class) bucket — not per position.
-            write_db = SessionLocal()
+            from app.database import bg_db_slot as _bg_slot
             try:
-                for ex in positions:
+                async with _bg_slot():
+                    write_db = SessionLocal()
                     try:
-                        managed = write_db.merge(ex)
-
-                        # ── Forex day-trading force-close guards ──────────────
-                        _ex_ac = getattr(managed, "asset_class", None) or "crypto"
-                        if _ex_ac == "forex":
-                            _forced = False
-                            _force_reason = None
+                        for ex in positions:
                             try:
-                                from app.strategy_models import UserStrategy as _US2
-                                _strat2 = write_db.query(_US2).filter(
-                                    _US2.id == managed.strategy_id
-                                ).first()
-                                if _strat2 and _strat2.config:
-                                    _risk2 = (_strat2.config or {}).get("risk", {})
+                                managed = write_db.merge(ex)
 
-                                    if _risk2.get("friday_close_protection"):
-                                        if (_sweep_wd == 4 and _sweep_h >= 21) or _sweep_wd >= 5:
-                                            _forced = True
-                                            _force_reason = "friday_close_protection"
-
-                                    if not _forced and _risk2.get("no_overnight_positions"):
-                                        if _sweep_wd < 4 and _sweep_h >= 22:
-                                            _forced = True
-                                            _force_reason = "no_overnight_positions"
-                            except Exception as _fce:
-                                logger.debug(
-                                    f"[PaperMonitor] Force-close config read ex#{ex.id}: {_fce}"
-                                )
-
-                            if _forced:
-                                _fc_price = managed.entry_price
-                                if candles:
+                                # ── Forex day-trading force-close guards ──────────
+                                _ex_ac = getattr(managed, "asset_class", None) or "crypto"
+                                if _ex_ac == "forex":
+                                    _forced = False
+                                    _force_reason = None
                                     try:
-                                        _fc_price = float(candles[-1][4])
-                                    except Exception:
-                                        pass
-                                logger.info(
-                                    f"[PaperMonitor] FORCE-CLOSE ({_force_reason}): "
-                                    f"exec #{managed.id} {managed.symbol} {managed.direction} "
-                                    f"@ {_fc_price} — day-trading rule triggered"
-                                )
-                                _close_paper_execution(managed, "CANCELLED", _fc_price, write_db)
-                                continue
+                                        from app.strategy_models import UserStrategy as _US2
+                                        _strat2 = write_db.query(_US2).filter(
+                                            _US2.id == managed.strategy_id
+                                        ).first()
+                                        if _strat2 and _strat2.config:
+                                            _risk2 = (_strat2.config or {}).get("risk", {})
 
-                        _evaluate_paper_position_against_candles(managed, candles, write_db)
-                    except Exception as e:
-                        logger.warning(f"Position {ex.id} eval error: {e}")
-                        try:
-                            write_db.rollback()
-                        except Exception:
-                            pass
-            finally:
-                write_db.close()
+                                            if _risk2.get("friday_close_protection"):
+                                                if (_sweep_wd == 4 and _sweep_h >= 21) or _sweep_wd >= 5:
+                                                    _forced = True
+                                                    _force_reason = "friday_close_protection"
+
+                                            if not _forced and _risk2.get("no_overnight_positions"):
+                                                if _sweep_wd < 4 and _sweep_h >= 22:
+                                                    _forced = True
+                                                    _force_reason = "no_overnight_positions"
+                                    except Exception as _fce:
+                                        logger.debug(
+                                            f"[PaperMonitor] Force-close config read ex#{ex.id}: {_fce}"
+                                        )
+
+                                    if _forced:
+                                        _fc_price = managed.entry_price
+                                        if candles:
+                                            try:
+                                                _fc_price = float(candles[-1][4])
+                                            except Exception:
+                                                pass
+                                        logger.info(
+                                            f"[PaperMonitor] FORCE-CLOSE ({_force_reason}): "
+                                            f"exec #{managed.id} {managed.symbol} {managed.direction} "
+                                            f"@ {_fc_price} — day-trading rule triggered"
+                                        )
+                                        _close_paper_execution(managed, "CANCELLED", _fc_price, write_db)
+                                        continue
+
+                                _evaluate_paper_position_against_candles(managed, candles, write_db)
+                            except Exception as e:
+                                logger.warning(f"Position {ex.id} eval error: {e}")
+                                try:
+                                    write_db.rollback()
+                                except Exception:
+                                    pass
+                    finally:
+                        write_db.close()
+            except _SATimeoutError:
+                logger.debug("[PaperMonitor] skipped bucket write — pool busy")
+                continue
 
     async with httpx.AsyncClient() as http_client:
         # ── Startup catch-up: immediately resolve any positions missed while down ──
@@ -2560,29 +2570,34 @@ async def run_live_position_monitor():
         """
         # ── Phase 1: Read ─────────────────────────────────────────────────────
         from app.models import UserPreference
-        db = SessionLocal()
+        from app.database import bg_db_slot
+        from sqlalchemy.exc import TimeoutError as _SATimeoutError
+
         try:
-            open_lives = (
-                db.query(StrategyExecution)
-                .filter(
-                    StrategyExecution.outcome == "OPEN",
-                    StrategyExecution.is_paper == False,
-                    StrategyExecution.bitunix_order_id.isnot(None),
-                )
-                .all()
-            )
-            # Pre-fetch user API credentials while the session is still open.
-            # We do this unconditionally so the finally block can close cleanly.
-            user_ids   = list({ex.user_id for ex in open_lives}) if open_lives else []
-            prefs_list = (
-                db.query(UserPreference)
-                .filter(UserPreference.user_id.in_(user_ids))
-                .all()
-            ) if user_ids else []
-            # Detach everything so objects remain readable after session close.
-            db.expunge_all()
-        finally:
-            db.close()  # ← released BEFORE any async I/O
+            async with bg_db_slot():
+                db = SessionLocal()
+                try:
+                    open_lives = (
+                        db.query(StrategyExecution)
+                        .filter(
+                            StrategyExecution.outcome == "OPEN",
+                            StrategyExecution.is_paper == False,
+                            StrategyExecution.bitunix_order_id.isnot(None),
+                        )
+                        .all()
+                    )
+                    user_ids = list({ex.user_id for ex in open_lives}) if open_lives else []
+                    prefs_list = (
+                        db.query(UserPreference)
+                        .filter(UserPreference.user_id.in_(user_ids))
+                        .all()
+                    ) if user_ids else []
+                    db.expunge_all()
+                finally:
+                    db.close()
+        except _SATimeoutError:
+            logger.warning("[live-monitor] DB pool busy — skipping sweep this cycle")
+            return
 
         if not open_lives:
             return
@@ -2605,6 +2620,7 @@ async def run_live_position_monitor():
         # can trigger false TP/SL hits on coins like ALICE.
         price_closed_ids: set = set()
 
+        note_updates: list = []
         for ex in open_lives:
             live_px = live_prices.get(ex.symbol)
             if not live_px or not ex.entry_price:
@@ -2614,22 +2630,29 @@ async def run_live_position_monitor():
                 pnl_pct = (live_px - ex.entry_price) / ex.entry_price * 100 * leverage
             else:
                 pnl_pct = (ex.entry_price - live_px) / ex.entry_price * 100 * leverage
-            note = (
+            note_updates.append((
+                ex.id,
                 f"open · live={live_px:.6g} · "
-                f"unrealised {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%"
-            )
-            note_db = SessionLocal()
+                f"unrealised {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%",
+            ))
+        if note_updates:
             try:
-                from sqlalchemy import text as _text2
-                note_db.execute(
-                    _text2("UPDATE strategy_executions SET notes=:n WHERE id=:id"),
-                    {"n": note, "id": ex.id},
-                )
-                note_db.commit()
-            except Exception:
-                note_db.rollback()
-            finally:
-                note_db.close()
+                async with bg_db_slot():
+                    note_db = SessionLocal()
+                    try:
+                        from sqlalchemy import text as _text2
+                        for ex_id, note in note_updates:
+                            note_db.execute(
+                                _text2("UPDATE strategy_executions SET notes=:n WHERE id=:id"),
+                                {"n": note, "id": ex_id},
+                            )
+                        note_db.commit()
+                    except Exception:
+                        note_db.rollback()
+                    finally:
+                        note_db.close()
+            except _SATimeoutError:
+                logger.debug("[live-monitor] skipped unrealised P&L notes — pool busy")
 
         # ── Bitunix reconciliation (async HTTP per user, no global DB held) ────
         # Accuracy rules:
@@ -2794,14 +2817,19 @@ async def run_live_position_monitor():
                             f"exit={exit_price} realized_pnl={realized_pnl:+.4f} "
                             f"close_type='{close_type}' source=bitunix-reconcile"
                         )
-                        # Brief write session for each reconcile close
-                        rec_db = SessionLocal()
                         try:
-                            await _close_live_execution_and_notify(
-                                ex, outcome, exit_price, rec_db, source="bitunix-reconcile"
+                            async with bg_db_slot():
+                                rec_db = SessionLocal()
+                                try:
+                                    await _close_live_execution_and_notify(
+                                        ex, outcome, exit_price, rec_db, source="bitunix-reconcile"
+                                    )
+                                finally:
+                                    rec_db.close()
+                        except _SATimeoutError:
+                            logger.debug(
+                                f"[live-monitor] skipped reconcile close exec#{ex.id} — pool busy"
                             )
-                        finally:
-                            rec_db.close()
 
                 except Exception as ue:
                     logger.error(f"[live-monitor] Reconcile error user {user_id}: {ue}", exc_info=True)
@@ -4635,59 +4663,61 @@ async def run_strategy_executor():
                     """
                     from sqlalchemy.exc import OperationalError as _SAOperationalError
                     from sqlalchemy.exc import TimeoutError as _SATimeoutError
+                    from app.database import bg_db_slot
                     async with sem:
-                        for _attempt in (1, 3):
-                            db_one = SessionLocal()
-                            try:
-                                row = (
-                                    db_one.query(UserStrategy, User)
-                                    .join(User, User.id == UserStrategy.user_id)
-                                    .filter(UserStrategy.id == snap["id"])
-                                    .first()
-                                )
-                                if not row:
-                                    return
-                                strategy, user = row
-                                if not user or user.banned:
-                                    return
-                                if not _portal_trade_entitled(user, has_pro_by_user):
-                                    return
-                                await evaluate_and_fire(
-                                    strategy, user, db_one, http_client,
-                                    raw_tickers=_tickers,
-                                    gate_stats=cycle_gate_stats,
-                                )
-                                return
-                            except (_SAOperationalError, _SATimeoutError) as _db_err:
-                                _err_name = type(_db_err).__name__
-                                if getattr(_db_err, "orig", None) is not None:
-                                    _err_name = type(_db_err.orig).__name__
-                                if _attempt < 3:
-                                    logger.warning(
-                                        f"[Strategy {snap['id']}] Transient DB error "
-                                        f"({_err_name}) — retry {_attempt}/3"
+                        async with bg_db_slot():
+                            for _attempt in (1, 3):
+                                db_one = SessionLocal()
+                                try:
+                                    row = (
+                                        db_one.query(UserStrategy, User)
+                                        .join(User, User.id == UserStrategy.user_id)
+                                        .filter(UserStrategy.id == snap["id"])
+                                        .first()
                                     )
+                                    if not row:
+                                        return
+                                    strategy, user = row
+                                    if not user or user.banned:
+                                        return
+                                    if not _portal_trade_entitled(user, has_pro_by_user):
+                                        return
+                                    await evaluate_and_fire(
+                                        strategy, user, db_one, http_client,
+                                        raw_tickers=_tickers,
+                                        gate_stats=cycle_gate_stats,
+                                    )
+                                    return
+                                except (_SAOperationalError, _SATimeoutError) as _db_err:
+                                    _err_name = type(_db_err).__name__
+                                    if getattr(_db_err, "orig", None) is not None:
+                                        _err_name = type(_db_err.orig).__name__
+                                    if _attempt < 3:
+                                        logger.warning(
+                                            f"[Strategy {snap['id']}] Transient DB error "
+                                            f"({_err_name}) — retry {_attempt}/3"
+                                        )
+                                        try:
+                                            db_one.rollback()
+                                        except Exception:
+                                            pass
+                                        await asyncio.sleep(0.5 * _attempt)
+                                        continue
+                                    logger.warning(
+                                        f"[Strategy {snap['id']}] Skipping cycle — "
+                                        f"DB error persisted ({_err_name})"
+                                    )
+                                    return
+                                except Exception as e:
+                                    logger.error(
+                                        f"[Strategy {snap['id']}] Error: {e}", exc_info=True
+                                    )
+                                    return
+                                finally:
                                     try:
-                                        db_one.rollback()
+                                        db_one.close()
                                     except Exception:
                                         pass
-                                    await asyncio.sleep(0.5 * _attempt)
-                                    continue
-                                logger.warning(
-                                    f"[Strategy {snap['id']}] Skipping cycle — "
-                                    f"DB error persisted ({_err_name})"
-                                )
-                                return
-                            except Exception as e:
-                                logger.error(
-                                    f"[Strategy {snap['id']}] Error: {e}", exc_info=True
-                                )
-                                return
-                            finally:
-                                try:
-                                    db_one.close()
-                                except Exception:
-                                    pass
 
                 await _gather_eval_batches(
                     "Crypto Executor", eval_snapshots, _run_one,
@@ -5718,65 +5748,66 @@ async def run_forex_executor():
                 async def _run_one_fx(snap, _http=http_client):
                     from sqlalchemy.exc import OperationalError as _SAOperationalError
                     from sqlalchemy.exc import TimeoutError as _SATimeoutError
+                    from app.database import bg_db_slot
                     async with sem:
-                        for _attempt in (1, 3):
-                            db_one = SessionLocal()
-                            try:
-                                # One round-trip for strategy + user (was two).
-                                row = (
-                                    db_one.query(UserStrategy, User)
-                                    .join(User, User.id == UserStrategy.user_id)
-                                    .filter(UserStrategy.id == snap["id"])
-                                    .first()
-                                )
-                                if not row:
-                                    return
-                                strategy, user = row
-                                if not user or user.banned:
-                                    return
-                                if not _portal_trade_entitled(user, has_pro_by_user):
-                                    cycle_gate_stats["blk_not_entitled"] = (
-                                        cycle_gate_stats.get("blk_not_entitled", 0) + 1
+                        async with bg_db_slot():
+                            for _attempt in (1, 3):
+                                db_one = SessionLocal()
+                                try:
+                                    row = (
+                                        db_one.query(UserStrategy, User)
+                                        .join(User, User.id == UserStrategy.user_id)
+                                        .filter(UserStrategy.id == snap["id"])
+                                        .first()
+                                    )
+                                    if not row:
+                                        return
+                                    strategy, user = row
+                                    if not user or user.banned:
+                                        return
+                                    if not _portal_trade_entitled(user, has_pro_by_user):
+                                        cycle_gate_stats["blk_not_entitled"] = (
+                                            cycle_gate_stats.get("blk_not_entitled", 0) + 1
+                                        )
+                                        return
+                                    await evaluate_and_fire(
+                                        strategy, user, db_one, _http,
+                                        raw_tickers=[],
+                                        gate_stats=cycle_gate_stats,
+                                        prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
                                     )
                                     return
-                                await evaluate_and_fire(
-                                    strategy, user, db_one, _http,
-                                    raw_tickers=[],
-                                    gate_stats=cycle_gate_stats,
-                                    prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
-                                )
-                                return
-                            except (_SAOperationalError, _SATimeoutError) as _db_err:
-                                _err_name = type(_db_err).__name__
-                                if getattr(_db_err, "orig", None) is not None:
-                                    _err_name = type(_db_err.orig).__name__
-                                if _attempt < 3:
+                                except (_SAOperationalError, _SATimeoutError) as _db_err:
+                                    _err_name = type(_db_err).__name__
+                                    if getattr(_db_err, "orig", None) is not None:
+                                        _err_name = type(_db_err.orig).__name__
+                                    if _attempt < 3:
+                                        logger.debug(
+                                            f"[FX Strategy {snap['id']}] DB error "
+                                            f"({_err_name}) — retry {_attempt}/3"
+                                        )
+                                        try:
+                                            db_one.rollback()
+                                        except Exception:
+                                            pass
+                                        await asyncio.sleep(0.5 * _attempt)
+                                        continue
+                                    _cycle_db_skipped.append((snap["id"], _err_name))
                                     logger.debug(
-                                        f"[FX Strategy {snap['id']}] DB error "
-                                        f"({_err_name}) — retry {_attempt}/3"
+                                        f"[FX Strategy {snap['id']}] Skipping — "
+                                        f"DB error persisted ({_err_name})"
                                     )
+                                    return
+                                except Exception as e:
+                                    logger.error(
+                                        f"[FX Strategy {snap['id']}] Error: {e}", exc_info=True
+                                    )
+                                    return
+                                finally:
                                     try:
-                                        db_one.rollback()
+                                        db_one.close()
                                     except Exception:
                                         pass
-                                    await asyncio.sleep(0.5 * _attempt)
-                                    continue
-                                _cycle_db_skipped.append((snap["id"], _err_name))
-                                logger.debug(
-                                    f"[FX Strategy {snap['id']}] Skipping — "
-                                    f"DB error persisted ({_err_name})"
-                                )
-                                return
-                            except Exception as e:
-                                logger.error(
-                                    f"[FX Strategy {snap['id']}] Error: {e}", exc_info=True
-                                )
-                                return
-                            finally:
-                                try:
-                                    db_one.close()
-                                except Exception:
-                                    pass
 
                 logger.info(
                     f"[FX Executor] evaluating {len(open_snaps)} strategies "

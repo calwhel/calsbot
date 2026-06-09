@@ -7,7 +7,9 @@ export FORCE_EXECUTOR="${FORCE_EXECUTOR:-1}"
 # Background executor pool — forex+crypto evals hold sessions across async fetches.
 export BG_POOL_SIZE="${BG_POOL_SIZE:-8}"
 export BG_POOL_OVERFLOW="${BG_POOL_OVERFLOW:-10}"
-export EXECUTOR_FOREX_MAX_CONCURRENT="${EXECUTOR_FOREX_MAX_CONCURRENT:-4}"
+export BG_DB_RESERVE="${BG_DB_RESERVE:-5}"
+export EXECUTOR_MAX_CONCURRENT="${EXECUTOR_MAX_CONCURRENT:-2}"
+export EXECUTOR_FOREX_MAX_CONCURRENT="${EXECUTOR_FOREX_MAX_CONCURRENT:-3}"
 # Legacy Telegram social-signals scanner — off on portal/Railway; user strategies only.
 export DISABLE_SOCIAL_SCANNING="${DISABLE_SOCIAL_SCANNING:-1}"
 

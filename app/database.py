@@ -1,4 +1,6 @@
-from contextlib import contextmanager
+import asyncio
+from contextlib import asynccontextmanager, contextmanager
+from typing import Optional
 from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -63,6 +65,7 @@ engine = create_engine(
 # the 60 s statement_timeout the executor needs for heavy analytical work.
 _bg_pool_size = int(os.getenv("BG_POOL_SIZE", "8"))
 _bg_pool_overflow = int(os.getenv("BG_POOL_OVERFLOW", "10"))
+BG_DB_RESERVE = int(os.getenv("BG_DB_RESERVE", "5"))
 bg_engine = create_engine(
     _db_url,
     # Isolated from HTTP pool. Peak load ≈ FOREX_MAX_CONCURRENT + MAX_CONCURRENT
@@ -96,6 +99,38 @@ for _eng in (engine, bg_engine):
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 BgSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=bg_engine)
+
+_bg_db_sem: Optional[asyncio.Semaphore] = None
+
+
+def bg_pool_hard_limit() -> int:
+    return _bg_pool_size + _bg_pool_overflow
+
+
+def bg_db_slot_limit() -> int:
+    """Max concurrent bg_engine checkouts across executor + monitors."""
+    explicit = os.getenv("BG_DB_MAX_CONCURRENT", "").strip()
+    if explicit:
+        return max(2, int(explicit))
+    return max(4, bg_pool_hard_limit() - BG_DB_RESERVE)
+
+
+def _get_bg_db_sem() -> asyncio.Semaphore:
+    global _bg_db_sem
+    if _bg_db_sem is None:
+        _bg_db_sem = asyncio.Semaphore(bg_db_slot_limit())
+    return _bg_db_sem
+
+
+@asynccontextmanager
+async def bg_db_slot():
+    """Gate background DB usage so scans cannot starve monitors of pool slots."""
+    sem = _get_bg_db_sem()
+    await sem.acquire()
+    try:
+        yield
+    finally:
+        sem.release()
 
 
 @contextmanager
