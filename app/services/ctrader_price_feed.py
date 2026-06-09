@@ -83,7 +83,9 @@ _AUTH_TERMINAL_BACKOFF_S = float(
 # immediately so the sub-second feed blackout is negligible. A growing backoff
 # is reserved ONLY for genuine connect/auth/subscribe failures so we never
 # hammer the broker while still being effectively always-on.
-_READ_TIMEOUT          = 35.0   # max stream silence before declaring the socket dead
+_READ_TIMEOUT          = float(
+    os.environ.get("CTRADER_READ_TIMEOUT_S", "90")
+)  # max inbound silence before recycle (quiet FX needs headroom)
 _HEALTHY_SESSION_SECS  = 20.0   # a session alive ≥ this counts as "healthy"
 _RECONNECT_FAST        = 2.0    # delay after a healthy drop (near-seamless)
 _RECONNECT_BACKOFF_MIN = 3.0    # initial backoff for connect/auth failures
@@ -146,6 +148,7 @@ _tb_lock: Optional["asyncio.Lock"] = None
 _tb_conn: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
 _tb_conn_ctx: Optional[Tuple[str, int]] = None  # (host, ctid) the conn is authed for
 _tb_last_use: float = 0.0
+_tb_hb_task: Optional[asyncio.Task] = None
 _TB_IDLE_MAX = 25.0  # cTrader drops idle conns ~30s → proactively reopen past this
 
 _feed_live: bool = False
@@ -209,7 +212,10 @@ async def _read_frame(
         if length > 4_000_000:
             logger.warning(f"[CTraderFeed] oversized frame {length} — skipping")
             return None
-        body = await asyncio.wait_for(reader.readexactly(length), timeout=20.0)
+        body = await asyncio.wait_for(
+            reader.readexactly(length),
+            timeout=max(1.0, timeout),
+        )
         return _decode(body)
     except (asyncio.TimeoutError, asyncio.IncompleteReadError):
         return None
@@ -358,6 +364,25 @@ def _remote_feed_mode() -> bool:
             "true",
             "yes",
         )
+
+
+def _trendbar_fetch_allowed() -> bool:
+    """
+    False when opening a trendbar socket would compete with the spot feed.
+
+    A second account-auth TLS session on the same ctid causes cTrader to recycle
+    the spot stream — the #1 source of LIVE flapping in production logs.
+    """
+    if _feed_live:
+        return False
+    try:
+        from app.ctrader_feed_lock import feed_disabled_in_executor
+        if feed_disabled_in_executor():
+            return False
+    except Exception:
+        if _remote_feed_mode():
+            return False
+    return True
 
 
 def _shared_ctrader_ticks_fresh(max_age_s: float = 30.0) -> bool:
@@ -733,7 +758,10 @@ def _get_tb_lock() -> "asyncio.Lock":
 
 async def _invalidate_tb_conn() -> None:
     """Close and drop the persistent trendbar connection (forces a reopen)."""
-    global _tb_conn, _tb_conn_ctx
+    global _tb_conn, _tb_conn_ctx, _tb_hb_task
+    if _tb_hb_task:
+        _tb_hb_task.cancel()
+        _tb_hb_task = None
     conn = _tb_conn
     _tb_conn = None
     _tb_conn_ctx = None
@@ -749,7 +777,10 @@ def _drop_tb_conn_sync() -> None:
     (no awaits, so it can run while a CancelledError is propagating). Used to make
     a cancelled/timed-out request connection-fatal: a late response left in the
     socket buffer must never be read as the answer to the NEXT request."""
-    global _tb_conn, _tb_conn_ctx
+    global _tb_conn, _tb_conn_ctx, _tb_hb_task
+    if _tb_hb_task:
+        _tb_hb_task.cancel()
+        _tb_hb_task = None
     conn = _tb_conn
     _tb_conn = None
     _tb_conn_ctx = None
@@ -804,6 +835,19 @@ async def _get_tb_conn(
             except Exception:
                 pass
         raise
+    global _tb_hb_task
+    if _tb_hb_task:
+        _tb_hb_task.cancel()
+
+    async def _tb_heartbeat(w):
+        try:
+            while True:
+                await asyncio.sleep(10)
+                await _send(w, ProtoHeartbeatEvent(), _PT_HEARTBEAT)
+        except (asyncio.CancelledError, Exception):
+            return
+
+    _tb_hb_task = asyncio.create_task(_tb_heartbeat(writer))
     _tb_conn = (reader, writer)
     _tb_conn_ctx = (host, ctid)
     _tb_last_use = now
@@ -945,6 +989,9 @@ async def get_klines(
     if sym_up not in _TRACKED:
         return []
 
+    if not _trendbar_fetch_allowed():
+        return []
+
     cache_key = (sym_up, timeframe, limit)
     cached = _kline_cache.get(cache_key)
     if cached and (time.monotonic() - cached[1]) < _KLINE_TTL:
@@ -1084,21 +1131,17 @@ def get_stream_creds() -> Optional[Tuple[str, int, int, str]]:
 
 def broker_session_ready(symbol: str = "XAUUSD") -> bool:
     """
-    True when an active cTrader broker session can serve trendbars.
+    True when cTrader trendbars can be fetched without opening a competing socket.
 
-    Stale Postgres ticks alone do NOT count — after OAuth dies, old ticks would
-    otherwise route metal fetches through cTrader (timeouts) instead of Kraken.
+    When the spot feed is LIVE we must NOT open a second authed socket (same ctid);
+    callers should use Kraken/Yahoo for scan klines instead.
     """
     if _is_terminal_auth_error(_last_auth_error):
         return False
-    if _feed_live or _stream_creds is not None:
+    if not _trendbar_fetch_allowed():
+        return False
+    if _stream_creds is not None:
         return True
-    sym = symbol.upper()
-    entry = _spot_cache.get(sym)
-    if entry:
-        _, _, ts = entry
-        if time.monotonic() - ts <= _SPOT_TTL:
-            return True
     if _remote_feed_mode():
         return _shared_ctrader_ticks_fresh(max_age_s=_SPOT_TTL * 2)
     return False

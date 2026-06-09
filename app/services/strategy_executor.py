@@ -51,8 +51,8 @@ FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCUR
 EXECUTOR_SCAN_BATCH_SIZE    = int(_os_env.environ.get("EXECUTOR_SCAN_BATCH_SIZE", "20"))
 # Let forex finish its first batch before crypto hammers the same Neon pool + APIs.
 EXECUTOR_CRYPTO_START_DELAY = int(_os_env.environ.get("EXECUTOR_CRYPTO_START_DELAY", "45"))
-# Klines fetched per symbol during scans — 80 bars is enough for RSI(14) + ICT signals.
-EXECUTOR_KLINE_BARS           = int(_os_env.environ.get("EXECUTOR_KLINE_BARS", "80"))
+# Klines fetched per symbol during scans — must match strategy_ta max(limit, 200).
+EXECUTOR_KLINE_BARS           = int(_os_env.environ.get("EXECUTOR_KLINE_BARS", "200"))
 # Parallel Yahoo/Bitunix prefetches at cycle start (unique symbols across all strategies).
 EXECUTOR_PREFETCH_CONCURRENT  = int(_os_env.environ.get("EXECUTOR_PREFETCH_CONCURRENT", "25"))
 # Split strategies across N parallel scan loops in one executor process (id % N).
@@ -667,7 +667,10 @@ async def _fetch_price_and_ta(
     """
     global _PRICE_TA_CACHE
     now = datetime.utcnow()
-    cache_key = f"{asset_class}:{symbol}" if asset_class != "crypto" else symbol
+    tf = timeframe or "15m"
+    cache_key = (
+        f"{asset_class}:{symbol}:{tf}" if asset_class != "crypto" else symbol
+    )
     if metal_paper_ok and asset_class != "crypto":
         from app.services.tradfi_prices import is_metal_symbol as _metal_ck
         if _metal_ck(symbol):
@@ -685,7 +688,6 @@ async def _fetch_price_and_ta(
                 get_klines as _tradfi_klines,
                 get_price as _tradfi_live_price,
             )
-            tf = timeframe or "15m"
             kl = await _tradfi_klines(
                 symbol, asset_class, tf, EXECUTOR_KLINE_BARS,
                 ctrader_user_id=user_id,
@@ -4564,6 +4566,7 @@ async def _prefetch_price_ta_for_cycle(
     http_client: httpx.AsyncClient,
     allowed_asset_classes: set,
     label: str = "Executor",
+    ctrader_user_id: Optional[int] = None,
 ) -> int:
     """
     Warm _PRICE_TA_CACHE + tradfi kline cache for every unique symbol in this
@@ -4618,13 +4621,20 @@ async def _prefetch_price_ta_for_cycle(
                 else:
                     from app.services.tradfi_prices import get_klines as _metal_gk
                     _mw_t0 = time.monotonic()
-                    for _msym, _mtf in _metal_warm:
+
+                    async def _warm_metal(_msym: str, _mtf: str) -> None:
                         try:
                             await _metal_gk(
                                 _msym, "forex", _mtf, EXECUTOR_KLINE_BARS,
+                                ctrader_user_id=ctrader_user_id,
                             )
                         except Exception:
                             pass
+
+                    await asyncio.gather(
+                        *[_warm_metal(s, t) for s, t in _metal_warm],
+                        return_exceptions=True,
+                    )
                     _METAL_WARM_GLOBAL_AT = time.monotonic()
                     logger.info(
                         f"[{_log_ts()}] [{label}] metal kline warm: "
@@ -4636,7 +4646,11 @@ async def _prefetch_price_ta_for_cycle(
         _use = _metal_sem if sym in ("XAUUSD", "XAGUSD") else sem
         async with _use:
             try:
-                await _fetch_price_and_ta(sym, http_client, ac, timeframe=tf)
+                await _fetch_price_and_ta(
+                    sym, http_client, ac,
+                    user_id=ctrader_user_id,
+                    timeframe=tf,
+                )
             except Exception:
                 pass
 
@@ -6187,11 +6201,16 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                     except Exception:
                                         pass
 
+                _prefetch_ct_uid = next(
+                    (uid for uid, ok in ctrader_ok_by_user.items() if ok),
+                    None,
+                )
                 await _prefetch_price_ta_for_cycle(
                     open_snaps,
                     http_client,
                     {"forex", "index", "stock"},
                     label=_fx_lbl,
+                    ctrader_user_id=_prefetch_ct_uid,
                 )
 
                 logger.info(

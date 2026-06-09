@@ -21,12 +21,17 @@ class TestCtraderFeedAuth(unittest.TestCase):
         self.assertFalse(feed._is_live_for_ctid(prefs, 999))
         self.assertTrue(feed._is_live_for_ctid(prefs, 111))
 
-    def test_broker_session_ready_when_live(self):
+    def test_broker_session_ready_false_when_feed_live(self):
+        """Spot feed owns the socket — trendbars must not open a second session."""
         feed._feed_live = True
-        self.assertTrue(feed.broker_session_ready())
+        self.assertFalse(feed.broker_session_ready())
 
-    def test_broker_session_ready_when_fresh_spot(self):
+    def test_broker_session_ready_false_on_stale_spot_only(self):
         feed._spot_cache["XAUUSD"] = (2650.0, 2651.0, time.monotonic())
+        self.assertFalse(feed.broker_session_ready("XAUUSD"))
+
+    def test_broker_session_ready_when_stream_creds_idle(self):
+        feed._stream_creds = ("tok", 47516246, 1, feed._HOST_DEMO)
         self.assertTrue(feed.broker_session_ready("XAUUSD"))
 
     def test_broker_session_ready_false_on_terminal_auth(self):
@@ -37,6 +42,10 @@ class TestCtraderFeedAuth(unittest.TestCase):
     def test_get_stream_creds_roundtrip(self):
         feed._stream_creds = ("tok", 47516246, 1, feed._HOST_DEMO)
         self.assertEqual(feed.get_stream_creds()[1], 47516246)
+
+    def test_trendbar_fetch_blocked_when_feed_live(self):
+        feed._feed_live = True
+        self.assertFalse(feed._trendbar_fetch_allowed())
 
 
 if __name__ == "__main__":

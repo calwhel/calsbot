@@ -518,42 +518,35 @@ async def fetch_metal_live_candles(
         except Exception:
             pass
 
-        # When the broker session is up, trendbars are the best source — try them
-        # first (serialized on _tb_lock) instead of racing Kraken/Binance in
-        # parallel with short caps that lose under shard load.
+        # When a dedicated trendbar socket is allowed, try cTrader once — never
+        # block the scan on 2×15s retries while the spot feed owns the account.
         ctrader_tried = False
         if broker_ready:
             ctrader_tried = True
-            ct_rows: List[List[float]] = []
-            for attempt in range(2):
-                ct_rows = await _fetch_ctrader_klines(
-                    sym, "forex", timeframe, limit, user_id=user_id,
-                )
-                if ct_rows:
-                    break
-                if attempt == 0:
-                    await asyncio.sleep(1.0)
-            if ct_rows:
-                label = "ctrader-user" if user_id else "ctrader"
-                if len(ct_rows) >= min_bars or len(ct_rows) >= 15:
-                    _tag = (
-                        "cTrader feed LIVE — skipped externals"
-                        if feed_live
-                        else "cTrader broker session — skipped externals"
-                    )
-                    logger.info(
-                        f"[tradfi] metal-live best={label} {sym} {timeframe} "
-                        f"→ {len(ct_rows)} bars ({_tag})"
-                    )
-                    out = ct_rows[-limit:] if len(ct_rows) > limit else ct_rows
-                    _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
-                        label, datetime.utcnow(),
-                    )
-                    return out
-            logger.info(
-                f"[tradfi] metal-live cTrader empty {sym} {timeframe} "
-                f"— falling back to externals"
+            ct_rows = await _fetch_ctrader_klines(
+                sym, "forex", timeframe, limit, user_id=user_id,
             )
+            if ct_rows and (len(ct_rows) >= min_bars or len(ct_rows) >= 15):
+                label = "ctrader-user" if user_id else "ctrader"
+                logger.info(
+                    f"[tradfi] metal-live best={label} {sym} {timeframe} "
+                    f"→ {len(ct_rows)} bars (cTrader broker session)"
+                )
+                out = ct_rows[-limit:] if len(ct_rows) > limit else ct_rows
+                _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
+                    label, datetime.utcnow(),
+                )
+                return out
+            if ct_rows:
+                logger.debug(
+                    f"[tradfi] metal-live cTrader thin {sym} {timeframe} "
+                    f"({len(ct_rows)} bars) — trying externals"
+                )
+            else:
+                logger.info(
+                    f"[tradfi] metal-live cTrader empty {sym} {timeframe} "
+                    f"— falling back to externals"
+                )
 
         async def _labeled(label: str, coro, timeout_s: float) -> Tuple[str, List[List[float]]]:
             rows = await _fetch_with_kline_timeout(
@@ -1023,7 +1016,7 @@ async def _fetch_ctrader_klines(
         except Exception:
             _live = False
         timeout = (
-            _CTRADER_KLINE_TIMEOUT_LIVE_S
+            min(_CTRADER_KLINE_TIMEOUT_LIVE_S, 8.0)
             if _live
             else min(6.0, 3.0 + limit / 200.0)
         )
