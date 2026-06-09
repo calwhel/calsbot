@@ -29,6 +29,38 @@ class TestMetalLiveKlines(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 80)
         self.assertAlmostEqual(rows[-1][4], 2650.0)
 
+    async def test_ctrader_first_when_feed_live(self):
+        with patch.object(
+            tp, "_fetch_ctrader_klines",
+            new_callable=AsyncMock, return_value=_bars(80),
+        ) as mock_ct, patch.object(
+            tp, "_fetch_binance_metals_klines",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("binance should be skipped when cTrader LIVE"),
+        ), patch(
+            "app.services.ctrader_price_feed.is_live", return_value=True,
+        ):
+            rows = await tp.fetch_metal_live_candles("XAUUSD", "5m", 80)
+        self.assertEqual(len(rows), 80)
+        mock_ct.assert_awaited_once()
+
+    async def test_ctrader_live_falls_through_on_miss(self):
+        with patch.object(
+            tp, "_fetch_ctrader_klines",
+            new_callable=AsyncMock, return_value=[],
+        ), patch.object(
+            tp, "_fetch_binance_metals_klines",
+            new_callable=AsyncMock, return_value=_bars(80),
+        ), patch.object(
+            tp, "_fetch_fmp_metals_klines", new_callable=AsyncMock, return_value=[],
+        ), patch.object(
+            tp, "_fetch_kraken_metals_klines", new_callable=AsyncMock, return_value=[],
+        ), patch(
+            "app.services.ctrader_price_feed.is_live", return_value=True,
+        ):
+            rows = await tp.fetch_metal_live_candles("XAUUSD", "5m", 80)
+        self.assertEqual(len(rows), 80)
+
     async def test_kraken_fallback_when_binance_empty(self):
         with patch.object(
             tp, "_fetch_binance_metals_klines",

@@ -796,7 +796,9 @@ async def _fetch_trendbars(
                 # Read frames until we get the trendbars response (skipping any
                 # interleaved heartbeats). Kept under the caller's wait_for budget
                 # so a warm round-trip completes before any forced cancellation.
-                deadline = time.monotonic() + 6.0
+                deadline = time.monotonic() + (
+                    12.0 if _feed_live else 6.0
+                )
                 while time.monotonic() < deadline:
                     remaining = deadline - time.monotonic()
                     msg = await _read_frame(reader, timeout=remaining)

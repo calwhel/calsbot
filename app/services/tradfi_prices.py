@@ -137,6 +137,9 @@ _SPOT_ALIGNED_KLINE_SOURCES = frozenset({
 # Winning metal kline provider per (symbol, timeframe, limit) — for drift rules.
 _METAL_KLINE_SOURCE_CACHE: Dict[Tuple[str, str, int], Tuple[str, datetime]] = {}
 _METAL_LIVE_FETCH_SEM: Optional[asyncio.Semaphore] = None
+_CTRADER_KLINE_TIMEOUT_LIVE_S = float(
+    os.environ.get("CTRADER_KLINE_TIMEOUT_LIVE_S", "15")
+)
 
 
 def is_metal_symbol(symbol: str) -> bool:
@@ -495,6 +498,32 @@ async def fetch_metal_live_candles(
         except Exception:
             pass
 
+        # When the spot stream is LIVE, broker trendbars are the best source — try
+        # them first (serialized on _tb_lock) instead of racing Kraken/Binance in
+        # parallel with a short cap that always loses under shard load.
+        ctrader_tried = False
+        if ctrader_live:
+            ctrader_tried = True
+            ct_rows = await _fetch_ctrader_klines(
+                sym, "forex", timeframe, limit, user_id=user_id,
+            )
+            if ct_rows:
+                label = "ctrader-user" if user_id else "ctrader"
+                if len(ct_rows) >= min_bars or len(ct_rows) >= 15:
+                    logger.info(
+                        f"[tradfi] metal-live best={label} {sym} {timeframe} "
+                        f"→ {len(ct_rows)} bars (cTrader feed LIVE — skipped externals)"
+                    )
+                    out = ct_rows[-limit:] if len(ct_rows) > limit else ct_rows
+                    _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
+                        label, datetime.utcnow(),
+                    )
+                    return out
+            logger.info(
+                f"[tradfi] metal-live cTrader empty {sym} {timeframe} "
+                f"— falling back to externals"
+            )
+
         async def _labeled(label: str, coro, timeout_s: float) -> Tuple[str, List[List[float]]]:
             rows = await _fetch_with_kline_timeout(
                 coro,
@@ -508,17 +537,11 @@ async def fetch_metal_live_candles(
         tasks = [
             _labeled("binance", _fetch_binance_metals_klines(sym, timeframe, limit), 6.0),
         ]
-        if user_id and ctrader_live:
-            tasks.append(_labeled(
-                "ctrader-user",
-                _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
-                6.0,
-            ))
-        if ctrader_live:
+        if ctrader_live and not ctrader_tried:
             tasks.append(_labeled(
                 "ctrader",
                 _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
-                6.0,
+                _CTRADER_KLINE_TIMEOUT_LIVE_S,
             ))
         if _env_fmp_api_key():
             tasks.append(_labeled(
@@ -943,7 +966,11 @@ async def _fetch_ctrader_klines(
             _live = bool(_ctf.is_live())
         except Exception:
             _live = False
-        timeout = min(10.0, 5.0 + limit / 200.0) if _live else 3.0
+        timeout = (
+            _CTRADER_KLINE_TIMEOUT_LIVE_S
+            if _live
+            else min(6.0, 3.0 + limit / 200.0)
+        )
         return await asyncio.wait_for(
             _ctf.get_klines(symbol, asset_class, timeframe, limit, user_id=user_id),
             timeout=timeout,
