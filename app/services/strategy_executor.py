@@ -6164,43 +6164,53 @@ async def close_stale_open_executions(stale_after_hours: int = 48) -> int:
     Runs once at startup before the scan loops begin.
     """
     from app.database import BgSessionLocal as SessionLocal
+    from app.db_resilience import is_transient_db_error
     from app.strategy_models import StrategyExecution
     cutoff = datetime.utcnow() - timedelta(hours=stale_after_hours)
-    db = SessionLocal()
-    try:
-        stale = (
-            db.query(StrategyExecution)
-            .filter(
-                StrategyExecution.outcome == "OPEN",
-                StrategyExecution.closed_at.is_(None),
-                StrategyExecution.fired_at <= cutoff,
+    for attempt in range(1, 4):
+        db = SessionLocal()
+        try:
+            stale = (
+                db.query(StrategyExecution)
+                .filter(
+                    StrategyExecution.outcome == "OPEN",
+                    StrategyExecution.closed_at.is_(None),
+                    StrategyExecution.fired_at <= cutoff,
+                )
+                .all()
             )
-            .all()
-        )
-        if not stale:
-            logger.info("close_stale_open_executions: no stale positions found")
+            if not stale:
+                logger.info("close_stale_open_executions: no stale positions found")
+                return 0
+            logger.warning(
+                f"close_stale_open_executions: closing {len(stale)} position(s) "
+                f"stuck OPEN >{stale_after_hours}h — these were blocking the max_open gate"
+            )
+            count = 0
+            for ex in stale:
+                try:
+                    ex.outcome    = "EXPIRED"
+                    ex.closed_at  = ex.fired_at + timedelta(hours=stale_after_hours)
+                    ex.exit_price = ex.entry_price
+                    ex.pnl_pct    = 0.0
+                    ex.notes      = (ex.notes or "") + " | auto-expired: stuck open > 48h"
+                    db.commit()
+                    count += 1
+                except Exception as e:
+                    db.rollback()
+                    logger.error(f"close_stale_open_executions: failed for exec {ex.id}: {e}")
+            logger.info(f"close_stale_open_executions: expired {count}/{len(stale)} stale position(s)")
+            return count
+        except Exception as e:
+            if is_transient_db_error(e) and attempt < 3:
+                logger.warning(
+                    f"close_stale_open_executions: transient DB error "
+                    f"(attempt {attempt}/3) — retrying: {e}"
+                )
+                await asyncio.sleep(0.5 * attempt)
+                continue
+            logger.error(f"close_stale_open_executions: query failed: {e}")
             return 0
-        logger.warning(
-            f"close_stale_open_executions: closing {len(stale)} position(s) "
-            f"stuck OPEN >{stale_after_hours}h — these were blocking the max_open gate"
-        )
-        count = 0
-        for ex in stale:
-            try:
-                ex.outcome    = "EXPIRED"
-                ex.closed_at  = ex.fired_at + timedelta(hours=stale_after_hours)
-                ex.exit_price = ex.entry_price
-                ex.pnl_pct    = 0.0
-                ex.notes      = (ex.notes or "") + " | auto-expired: stuck open > 48h"
-                db.commit()
-                count += 1
-            except Exception as e:
-                db.rollback()
-                logger.error(f"close_stale_open_executions: failed for exec {ex.id}: {e}")
-        logger.info(f"close_stale_open_executions: expired {count}/{len(stale)} stale position(s)")
-        return count
-    except Exception as e:
-        logger.error(f"close_stale_open_executions: query failed: {e}")
-        return 0
-    finally:
-        db.close()
+        finally:
+            db.close()
+    return 0

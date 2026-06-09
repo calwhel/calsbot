@@ -937,7 +937,10 @@ def _ensure_additive_columns(
     strategy_executions traffic does not stall on repeated ACCESS EXCLUSIVE
     attempts from every gunicorn worker at boot.
     """
+    import time as _time
+
     import sqlalchemy as sa
+    from app.db_resilience import is_transient_db_error
 
     def _benign(exc: Exception) -> bool:
         es = str(exc).lower()
@@ -946,8 +949,40 @@ def _ensure_additive_columns(
             or "duplicate" in es
             or "locknotavailable" in es
             or "lock timeout" in es
+            or is_transient_db_error(exc)
         )
 
+    for _attempt in range(1, 4):
+        try:
+            _run_ensure_additive_columns_inner(
+                engine, lock_id=lock_id, migrations=migrations, label=label,
+                sa=sa, _benign=_benign,
+            )
+            return
+        except Exception as e:
+            if is_transient_db_error(e) and _attempt < 3:
+                logger.warning(
+                    f"_ensure_additive_columns({label}): transient DB error "
+                    f"(attempt {_attempt}/3) — retrying: {e}"
+                )
+                _time.sleep(0.5 * _attempt)
+                continue
+            if _benign(e):
+                logger.info(f"_ensure_additive_columns({label}) outer skip: {type(e).__name__}")
+            else:
+                logger.warning(f"_ensure_additive_columns({label}) outer: {e}")
+            return
+
+
+def _run_ensure_additive_columns_inner(
+    engine,
+    *,
+    lock_id: int,
+    migrations: list,
+    label: str,
+    sa,
+    _benign,
+) -> None:
     conn = engine.connect()
     try:
         got = conn.execute(
@@ -999,11 +1034,6 @@ def _ensure_additive_columns(
                 )
             except Exception:
                 pass
-    except Exception as e:
-        if _benign(e):
-            logger.info(f"_ensure_additive_columns({label}) outer skip: {type(e).__name__}")
-        else:
-            logger.warning(f"_ensure_additive_columns({label}) outer: {e}")
     finally:
         try:
             conn.close()

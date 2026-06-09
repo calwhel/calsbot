@@ -6,6 +6,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 from app.config import settings
+from app.db_resilience import is_transient_db_error, run_with_db_retry
 import logging
 import os
 
@@ -27,8 +28,8 @@ def _neon_connect_args(statement_timeout_ms: int) -> dict:
         # the pool never hands out a connection older than Neon's idle timeout.
         args["sslmode"] = "require"
         args["keepalives"] = 1
-        args["keepalives_idle"] = 30
-        args["keepalives_interval"] = 10
+        args["keepalives_idle"] = 10
+        args["keepalives_interval"] = 5
         args["keepalives_count"] = 5
     return args
 
@@ -51,7 +52,7 @@ engine = create_engine(
     pool_size=6,
     max_overflow=8,
     pool_timeout=30,
-    pool_recycle=240,
+    pool_recycle=180,
     pool_pre_ping=True,
     connect_args=_neon_connect_args(60000),
 )
@@ -75,13 +76,13 @@ bg_engine = create_engine(
     pool_size=_bg_pool_size,
     max_overflow=_bg_pool_overflow,
     pool_timeout=int(os.getenv("BG_POOL_TIMEOUT", "30")),
-    pool_recycle=240,
+    pool_recycle=180,
     pool_pre_ping=True,
     connect_args=_neon_connect_args(60000),
 )
 
 
-for _eng in (engine, bg_engine):
+def _register_pool_events(_eng):
     @event.listens_for(_eng, "checkin")
     def _on_checkin(dbapi_connection, connection_record):
         try:
@@ -95,6 +96,15 @@ for _eng in (engine, bg_engine):
             dbapi_connection.rollback()
         except Exception:
             pass
+
+    @event.listens_for(_eng, "handle_error")
+    def _on_handle_error(exception_context):
+        if is_transient_db_error(exception_context.original_exception):
+            exception_context.is_disconnect = True
+
+
+for _eng in (engine, bg_engine):
+    _register_pool_events(_eng)
 
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
