@@ -121,6 +121,7 @@ _RAW_TICKERS_TTL    = 60  # seconds
 # hit the cache instead of each making an independent candle + indicator call.
 _PRICE_TA_CACHE: Dict[str, tuple] = {}  # symbol -> (data_dict, fetched_at)
 _METAL_WARM_LOCK: Optional[asyncio.Lock] = None  # one metal warm at a time / process
+_METAL_WARM_GLOBAL_AT: float = 0.0  # skip repeat warm across FX shards
 _PRICE_TA_TTL    = 15  # seconds — fresher data for faster signal detection
 # Forex/index: the FMP price feed refreshes every 5s, so a 15s cache would make
 # a faster scan loop pointless (it'd re-evaluate stale prices). Match the cache
@@ -4593,21 +4594,39 @@ async def _prefetch_price_ta_for_cycle(
         (sym, tf) for sym, ac, tf in jobs if sym in ("XAUUSD", "XAGUSD")
     })
     if _metal_warm:
-        global _METAL_WARM_LOCK
-        if _METAL_WARM_LOCK is None:
-            _METAL_WARM_LOCK = asyncio.Lock()
-        async with _METAL_WARM_LOCK:
-            from app.services.tradfi_prices import get_klines as _metal_gk
-            _mw_t0 = time.monotonic()
-            for _msym, _mtf in _metal_warm:
-                try:
-                    await _metal_gk(_msym, "forex", _mtf, EXECUTOR_KLINE_BARS)
-                except Exception:
-                    pass
-            logger.info(
-                f"[{_log_ts()}] [{label}] metal kline warm: {len(_metal_warm)} tf(s) "
-                f"in {time.monotonic() - _mw_t0:.1f}s"
+        global _METAL_WARM_LOCK, _METAL_WARM_GLOBAL_AT
+        _warm_ttl = max(
+            60.0,
+            float(_os_env.environ.get("METAL_WARM_GLOBAL_TTL_S", "120")),
+        )
+        _since_global = time.monotonic() - _METAL_WARM_GLOBAL_AT
+        if _since_global < _warm_ttl:
+            logger.debug(
+                f"[{_log_ts()}] [{label}] metal kline warm skipped "
+                f"(global warm {_since_global:.0f}s ago)"
             )
+        else:
+            if _METAL_WARM_LOCK is None:
+                _METAL_WARM_LOCK = asyncio.Lock()
+            async with _METAL_WARM_LOCK:
+                if time.monotonic() - _METAL_WARM_GLOBAL_AT < _warm_ttl:
+                    pass
+                else:
+                    from app.services.tradfi_prices import get_klines as _metal_gk
+                    _mw_t0 = time.monotonic()
+                    for _msym, _mtf in _metal_warm:
+                        try:
+                            await _metal_gk(
+                                _msym, "forex", _mtf, EXECUTOR_KLINE_BARS,
+                            )
+                        except Exception:
+                            pass
+                    _METAL_WARM_GLOBAL_AT = time.monotonic()
+                    logger.info(
+                        f"[{_log_ts()}] [{label}] metal kline warm: "
+                        f"{len(_metal_warm)} tf(s) in "
+                        f"{time.monotonic() - _mw_t0:.1f}s"
+                    )
 
     async def _warm(sym: str, ac: str, tf: str) -> None:
         _use = _metal_sem if sym in ("XAUUSD", "XAGUSD") else sem

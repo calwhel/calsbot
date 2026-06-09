@@ -560,6 +560,14 @@ def is_refresh_denied(user_id: int) -> bool:
     return time.monotonic() < denied[1]
 
 
+def clear_ctrader_oauth_denied(user_id: Optional[int] = None) -> None:
+    """Clear in-process OAuth denial state after a successful re-link."""
+    if user_id is not None:
+        _refresh_denied.pop(int(user_id), None)
+    else:
+        _refresh_denied.clear()
+
+
 def _mark_refresh_denied(user_id: int, refresh_token: str, err: str) -> None:
     _refresh_denied[user_id] = (
         refresh_token,

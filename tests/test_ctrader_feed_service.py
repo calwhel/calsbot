@@ -39,10 +39,10 @@ class TestCtraderFeedService(unittest.TestCase):
             with patch.object(feed, "_shared_ctrader_ticks_fresh", return_value=True):
                 self.assertTrue(feed.is_live())
 
-    def test_broker_session_ready_reads_shared_store(self):
-        row = {"mid": 2650.0, "source": "ctrader"}
-        with patch("app.services.spot_price_store.get_tick", return_value=row):
-            self.assertTrue(feed.broker_session_ready("XAUUSD"))
+    def test_broker_session_ready_remote_feed_from_store(self):
+        with patch.dict(os.environ, {"CTRADER_REMOTE_FEED": "1"}, clear=False):
+            with patch.object(feed, "_shared_ctrader_ticks_fresh", return_value=True):
+                self.assertTrue(feed.broker_session_ready("XAUUSD"))
 
     def test_start_skipped_when_remote_feed(self):
         feed._feed_task = None

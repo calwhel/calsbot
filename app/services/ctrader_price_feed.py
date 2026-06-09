@@ -962,11 +962,20 @@ async def get_klines(
             sym_up, timeframe, limit, access_token, ctid, primary_host,
         )
         if not rows:
-            try:
-                from app.services.ctrader_client import refresh_user_ctrader_token
-                new_at = await refresh_user_ctrader_token(uid)
-            except Exception:
-                new_at = None
+            new_at = None
+            # Only the spot feed loop should refresh tokens while streaming — a
+            # trendbar miss must not race the rotating refresh token (bricks OAuth).
+            _may_refresh = not _feed_live and not _is_terminal_auth_error(_last_auth_error)
+            if _may_refresh:
+                try:
+                    from app.services.ctrader_client import (
+                        is_refresh_denied,
+                        refresh_user_ctrader_token,
+                    )
+                    if not is_refresh_denied(uid):
+                        new_at = await refresh_user_ctrader_token(uid)
+                except Exception:
+                    new_at = None
             if new_at:
                 access_token = new_at
                 if _stream_creds and _stream_creds[2] == uid:
@@ -1075,9 +1084,13 @@ def get_stream_creds() -> Optional[Tuple[str, int, int, str]]:
 
 def broker_session_ready(symbol: str = "XAUUSD") -> bool:
     """
-    True when cTrader trendbars are likely reachable — feed LIVE, warm session
-    creds cached, or a fresh broker spot tick is in memory / shared store.
+    True when an active cTrader broker session can serve trendbars.
+
+    Stale Postgres ticks alone do NOT count — after OAuth dies, old ticks would
+    otherwise route metal fetches through cTrader (timeouts) instead of Kraken.
     """
+    if _is_terminal_auth_error(_last_auth_error):
+        return False
     if _feed_live or _stream_creds is not None:
         return True
     sym = symbol.upper()
@@ -1086,16 +1099,8 @@ def broker_session_ready(symbol: str = "XAUUSD") -> bool:
         _, _, ts = entry
         if time.monotonic() - ts <= _SPOT_TTL:
             return True
-    if _remote_feed_mode() or not _feed_live:
-        try:
-            from app.services.spot_price_store import get_tick
-            row = get_tick(sym, max_age_s=_SPOT_TTL * 3)
-            if row and (row.get("source") or "").lower() == "ctrader":
-                return True
-        except Exception:
-            pass
-        if _shared_ctrader_ticks_fresh(max_age_s=_SPOT_TTL * 3):
-            return True
+    if _remote_feed_mode():
+        return _shared_ctrader_ticks_fresh(max_age_s=_SPOT_TTL * 2)
     return False
 
 
@@ -1115,11 +1120,16 @@ def _get_wake_event() -> asyncio.Event:
     return _wake_event
 
 
-def notify_account_linked() -> None:
+def notify_account_linked(user_id: Optional[int] = None) -> None:
     """Wake the feed loop immediately after OAuth links a cTrader account."""
     global _auth_backoff_until, _last_auth_error
     _auth_backoff_until = 0.0
     _last_auth_error = None
+    try:
+        from app.services.ctrader_client import clear_ctrader_oauth_denied
+        clear_ctrader_oauth_denied(user_id)
+    except Exception:
+        pass
     start()
     try:
         _get_wake_event().set()

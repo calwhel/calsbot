@@ -11,6 +11,8 @@ class TestCtraderFeedAuth(unittest.TestCase):
         feed._feed_live = False
         feed._stream_creds = None
         feed._spot_cache.clear()
+        feed._last_auth_error = None
+        feed._auth_backoff_until = 0.0
 
     def test_is_live_for_ctid_reads_json(self):
         prefs = MagicMock(
@@ -26,6 +28,11 @@ class TestCtraderFeedAuth(unittest.TestCase):
     def test_broker_session_ready_when_fresh_spot(self):
         feed._spot_cache["XAUUSD"] = (2650.0, 2651.0, time.monotonic())
         self.assertTrue(feed.broker_session_ready("XAUUSD"))
+
+    def test_broker_session_ready_false_on_terminal_auth(self):
+        feed._last_auth_error = "CH_ACCESS_TOKEN_INVALID: Invalid access token"
+        feed._spot_cache["XAUUSD"] = (2650.0, 2651.0, time.monotonic())
+        self.assertFalse(feed.broker_session_ready("XAUUSD"))
 
     def test_get_stream_creds_roundtrip(self):
         feed._stream_creds = ("tok", 47516246, 1, feed._HOST_DEMO)

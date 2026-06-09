@@ -11262,7 +11262,7 @@ async def _complete_ctrader_oauth_in_background(code: str, state: str, redirect_
 
     try:
         from app.services.ctrader_price_feed import notify_account_linked
-        notify_account_linked()
+        notify_account_linked(user_row["id"])
     except Exception:
         pass
 
