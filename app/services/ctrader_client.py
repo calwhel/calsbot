@@ -493,21 +493,32 @@ async def exchange_code(code: str, redirect_uri: str) -> dict:
 
 
 async def refresh_access_token(refresh_token: str) -> dict:
-    """Use a refresh token to get a new access token."""
+    """Use a refresh token to get a new access token (retries transient timeouts)."""
     import httpx
+
     app_id = CTRADER_CLIENT_ID
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            OAUTH_TOKEN_URL,
-            params={
-                "grant_type":    "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id":     app_id,
-                "client_secret": CTRADER_CLIENT_SECRET,
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()
+    params = {
+        "grant_type":    "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id":     app_id,
+        "client_secret": CTRADER_CLIENT_SECRET,
+    }
+    last_exc: Optional[Exception] = None
+    for attempt in (1, 2, 3):
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(OAUTH_TOKEN_URL, params=params)
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as exc:
+            last_exc = exc
+            if attempt < 3:
+                await asyncio.sleep(1.5 * attempt)
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+    return {}
 
 
 # Serialise token refreshes within a process so two coroutines (feed + executor)
@@ -533,6 +544,31 @@ _TOKEN_REFRESH_PG_LOCK_NS = 42_424_244
 # to a new value) clears it automatically without any cross-module coupling.
 _refresh_denied: dict = {}
 _REFRESH_DENY_COOLDOWN = 300.0  # seconds
+_REFRESH_TERMINAL_CODES = frozenset({
+    "ACCESS_DENIED",
+    "CH_ACCESS_TOKEN_INVALID",
+    "INVALID_ACCESS_TOKEN",
+    "INVALID_REFRESH_TOKEN",
+})
+
+
+def is_refresh_denied(user_id: int) -> bool:
+    """True when this user's refresh chain is in terminal cooldown."""
+    denied = _refresh_denied.get(int(user_id))
+    if not denied:
+        return False
+    return time.monotonic() < denied[1]
+
+
+def _mark_refresh_denied(user_id: int, refresh_token: str, err: str) -> None:
+    _refresh_denied[user_id] = (
+        refresh_token,
+        time.monotonic() + _REFRESH_DENY_COOLDOWN,
+    )
+    logger.warning(
+        f"[cTrader] token refresh denied for user {user_id}: "
+        f"{err} — user must re-link cTrader"
+    )
 
 
 async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
@@ -601,18 +637,9 @@ async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
                 )
                 return None
             if res.get("errorCode"):
-                err = res.get("errorCode")
-                # Only a hard ACCESS_DENIED means the chain is dead and re-link is
-                # required — cooldown that. Other errors may be transient, so don't
-                # suppress retries for them.
-                if err == "ACCESS_DENIED":
-                    _refresh_denied[user_id] = (
-                        refresh_token, time.monotonic() + _REFRESH_DENY_COOLDOWN
-                    )
-                    logger.warning(
-                        f"[cTrader] token refresh denied for user {user_id}: "
-                        f"{err} — user must re-link cTrader"
-                    )
+                err = str(res.get("errorCode"))
+                if err in _REFRESH_TERMINAL_CODES:
+                    _mark_refresh_denied(user_id, refresh_token, err)
                 else:
                     logger.warning(
                         f"[cTrader] token refresh error for user {user_id}: {err}"
@@ -626,9 +653,22 @@ async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
             if new_rt:
                 prefs.ctrader_refresh_token = new_rt  # MUST persist rotated token
             _refresh_denied.pop(user_id, None)
-            db.commit()
-            logger.info(f"[cTrader] access token refreshed + persisted for user {user_id}")
-            return new_at
+            for persist_try in (1, 2, 3):
+                try:
+                    db.commit()
+                    logger.info(
+                        f"[cTrader] access token refreshed + persisted for user {user_id}"
+                    )
+                    return new_at
+                except Exception:
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                    if persist_try < 3:
+                        await asyncio.sleep(0.75 * persist_try)
+                        continue
+                    raise
         except Exception as e:
             # Sanitized: SQLAlchemy errors can include bound parameter values
             # (which may be token columns) — log only the exception type.

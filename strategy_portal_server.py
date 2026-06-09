@@ -1790,8 +1790,10 @@ def _ensure_executor_feeds_running():
     except Exception as _fmp_err:
         logger.warning(f"FMP feed restart error (non-fatal): {_fmp_err}")
     try:
-        from app.services.ctrader_price_feed import start as _ctrader_feed_start
-        _ctrader_feed_start()
+        from app.ctrader_feed_lock import feed_disabled_in_executor
+        if not feed_disabled_in_executor():
+            from app.services.ctrader_price_feed import start as _ctrader_feed_start
+            _ctrader_feed_start()
     except Exception as _ctf_err:
         logger.warning(f"cTrader feed restart error (non-fatal): {_ctf_err}")
     try:
@@ -1864,9 +1866,16 @@ async def _start_executor_tasks():
     except Exception as _fmp_err:
         logger.warning(f"FMP price feed start error (non-fatal): {_fmp_err}")
     try:
-        from app.services.ctrader_price_feed import start as _ctrader_feed_start
-        _ctrader_feed_start()
-        logger.info("cTrader real-time spot feed task scheduled (executor worker)")
+        from app.ctrader_feed_lock import feed_disabled_in_executor, remote_feed_enabled
+        if feed_disabled_in_executor():
+            logger.info(
+                "cTrader spot feed SKIPPED — remote feed enabled "
+                "(ticks read from market_spot_ticks)"
+            )
+        else:
+            from app.services.ctrader_price_feed import start as _ctrader_feed_start
+            _ctrader_feed_start()
+            logger.info("cTrader real-time spot feed task scheduled (executor worker)")
     except Exception as _ctf_err:
         logger.warning(f"cTrader price feed start error (non-fatal): {_ctf_err}")
     try:
@@ -11478,11 +11487,17 @@ async def api_ctrader_feed_status():
         out["ctrader"] = {
             "live":              bool(_st.get("live")),
             "subscribed":        bool(_st.get("subscribed")),
+            "remote_feed":       bool(_st.get("remote_feed")),
+            "remote_live":       bool(_st.get("remote_live")),
+            "local_subscribed":  bool(_st.get("local_subscribed")),
             "symbol_count":      int(_st.get("symbol_count") or 0),
             "cached_symbols":    list(_st.get("cached_symbols") or [])[:30],
             "symbols_seen":      int(_st.get("symbols_seen") or 0),
             "last_tick_age_s":   _st.get("last_tick_age_s"),
             "forex_market_open": _st.get("forex_market_open"),
+            "last_auth_error":   _st.get("last_auth_error"),
+            "needs_relink":      bool(_st.get("needs_relink")),
+            "auth_backoff_s":    _st.get("auth_backoff_s"),
             "note":              _st.get("note"),
         }
     except Exception as e:

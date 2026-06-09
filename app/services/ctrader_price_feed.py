@@ -62,6 +62,18 @@ _PROACTIVE_REFRESH_INTERVAL_S = float(
 )
 _last_proactive_refresh: Dict[int, float] = {}  # user_id → monotonic
 _last_auth_error: Optional[str] = None
+_auth_backoff_until: float = 0.0  # monotonic — pause reconnect after dead OAuth
+
+# Terminal auth errors — user must disconnect + re-link cTrader in the portal.
+_AUTH_TERMINAL_MARKERS = (
+    "ACCESS_DENIED",
+    "CH_ACCESS_TOKEN_INVALID",
+    "INVALID_ACCESS_TOKEN",
+    "INVALID_REFRESH_TOKEN",
+)
+_AUTH_TERMINAL_BACKOFF_S = float(
+    os.environ.get("CTRADER_AUTH_TERMINAL_BACKOFF_S", "300")
+)
 
 # ── Reconnect tuning ─────────────────────────────────────────────────────────
 # cTrader periodically recycles long-lived spot sessions (especially when a
@@ -308,11 +320,53 @@ async def _account_auth(reader, writer, access_token: str, ctid: int) -> bool:
             except Exception:
                 pass
             _last_auth_error = detail
+            _note_terminal_auth(detail)
             logger.warning(f"[CTraderFeed] account auth rejected — {detail}")
             return False
     _last_auth_error = f"ctid={ctid} timeout waiting for auth response"
     logger.warning(f"[CTraderFeed] {_last_auth_error}")
     return False
+
+
+def _is_terminal_auth_error(detail: Optional[str]) -> bool:
+    if not detail:
+        return False
+    up = detail.upper()
+    return any(marker in up for marker in _AUTH_TERMINAL_MARKERS)
+
+
+def _note_terminal_auth(detail: Optional[str]) -> None:
+    """Back off reconnect loops when OAuth is dead until the user re-links."""
+    global _auth_backoff_until
+    if not _is_terminal_auth_error(detail):
+        return
+    _auth_backoff_until = time.monotonic() + _AUTH_TERMINAL_BACKOFF_S
+    logger.warning(
+        "[CTraderFeed] terminal auth (%s) — pausing reconnect for "
+        f"{_AUTH_TERMINAL_BACKOFF_S:.0f}s (user must re-link cTrader)",
+        (detail or "")[:120],
+    )
+
+
+def _remote_feed_mode() -> bool:
+    try:
+        from app.ctrader_feed_lock import remote_feed_enabled
+        return remote_feed_enabled()
+    except Exception:
+        return os.environ.get("CTRADER_REMOTE_FEED", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+
+
+def _shared_ctrader_ticks_fresh(max_age_s: float = 30.0) -> bool:
+    try:
+        from app.services.spot_price_store import snapshot
+        snap = snapshot(max_age_s=max_age_s)
+        return bool((snap.get("by_source") or {}).get("ctrader"))
+    except Exception:
+        return False
 
 
 async def _maybe_refresh_access_token(
@@ -328,7 +382,12 @@ async def _maybe_refresh_access_token(
     if not force and (now - last) < _PROACTIVE_REFRESH_INTERVAL_S:
         return at
     try:
-        from app.services.ctrader_client import refresh_user_ctrader_token
+        from app.services.ctrader_client import (
+            is_refresh_denied,
+            refresh_user_ctrader_token,
+        )
+        if is_refresh_denied(user_id):
+            return at
         new_at = await refresh_user_ctrader_token(user_id)
     except Exception as exc:
         logger.warning(
@@ -504,6 +563,21 @@ async def _feed_loop() -> None:
         healthy = False                # True once spots are flowing
         session_start = time.monotonic()
         try:
+            if time.monotonic() < _auth_backoff_until:
+                wait_s = _auth_backoff_until - time.monotonic()
+                logger.info(
+                    "[CTraderFeed] auth backoff — retry in %.0fs (%s)",
+                    wait_s,
+                    (_last_auth_error or "terminal OAuth")[:80],
+                )
+                wake = _get_wake_event()
+                try:
+                    await asyncio.wait_for(wake.wait(), timeout=min(wait_s, 120.0))
+                    wake.clear()
+                    logger.info("[CTraderFeed] woken during auth backoff — retrying")
+                except asyncio.TimeoutError:
+                    continue
+
             _feed_live = False
             _stream_creds = None
 
@@ -542,6 +616,7 @@ async def _feed_loop() -> None:
                     break
             if not session or reader is None or writer is None:
                 detail = _last_auth_error or "no valid session"
+                _note_terminal_auth(detail)
                 raise ConnectionError(f"account auth failed on all hosts/users ({detail})")
 
             name_to_id = await _resolve_symbols(reader, writer, ctid, _host)
@@ -985,8 +1060,12 @@ def get_bid_ask(symbol: str) -> Optional[Tuple[float, float]]:
 
 
 def is_live() -> bool:
-    """True when the streaming connection is subscribed to spot prices."""
-    return _feed_live
+    """True when spot ticks are streaming (local feed or remote Postgres store)."""
+    if _feed_live:
+        return True
+    if _remote_feed_mode():
+        return _shared_ctrader_ticks_fresh(max_age_s=_SPOT_TTL * 3)
+    return False
 
 
 def get_stream_creds() -> Optional[Tuple[str, int, int, str]]:
@@ -997,7 +1076,7 @@ def get_stream_creds() -> Optional[Tuple[str, int, int, str]]:
 def broker_session_ready(symbol: str = "XAUUSD") -> bool:
     """
     True when cTrader trendbars are likely reachable — feed LIVE, warm session
-    creds cached, or a fresh broker spot tick is in memory.
+    creds cached, or a fresh broker spot tick is in memory / shared store.
     """
     if _feed_live or _stream_creds is not None:
         return True
@@ -1006,6 +1085,16 @@ def broker_session_ready(symbol: str = "XAUUSD") -> bool:
     if entry:
         _, _, ts = entry
         if time.monotonic() - ts <= _SPOT_TTL:
+            return True
+    if _remote_feed_mode() or not _feed_live:
+        try:
+            from app.services.spot_price_store import get_tick
+            row = get_tick(sym, max_age_s=_SPOT_TTL * 3)
+            if row and (row.get("source") or "").lower() == "ctrader":
+                return True
+        except Exception:
+            pass
+        if _shared_ctrader_ticks_fresh(max_age_s=_SPOT_TTL * 3):
             return True
     return False
 
@@ -1028,6 +1117,9 @@ def _get_wake_event() -> asyncio.Event:
 
 def notify_account_linked() -> None:
     """Wake the feed loop immediately after OAuth links a cTrader account."""
+    global _auth_backoff_until, _last_auth_error
+    _auth_backoff_until = 0.0
+    _last_auth_error = None
     start()
     try:
         _get_wake_event().set()
@@ -1068,9 +1160,21 @@ def feed_status() -> Dict[str, object]:
         note = "Subscribed to cTrader — waiting for first tick (can take ~30s after connect)."
     elif not _feed_live and all_cached:
         note = "Feed reconnecting — last prices may be stale."
+    needs_relink = _is_terminal_auth_error(_last_auth_error)
+    if needs_relink and not note:
+        note = (
+            "cTrader OAuth expired — disconnect and reconnect cTrader in Settings "
+            "to restore live forex ticks."
+        )
+    remote = _remote_feed_mode()
+    local_live = _feed_live
+    remote_live = bool((shared.get("by_source") or {}).get("ctrader"))
     return {
         "subscribed":       _feed_live,
-        "live":             _feed_live or bool(shared.get("symbol_count")),
+        "live":             local_live or remote_live or bool(shared.get("symbol_count")),
+        "remote_feed":      remote,
+        "local_subscribed": local_live,
+        "remote_live":      remote_live,
         "symbol_count":     max(len(fresh), int(shared.get("symbol_count") or 0)),
         "cached_symbols":   fresh[:30],
         "symbols_seen":     max(len(all_cached), int(shared.get("symbol_count") or 0)),
@@ -1078,6 +1182,8 @@ def feed_status() -> Dict[str, object]:
         "forex_market_open": forex_open,
         "shared_store":     shared,
         "last_auth_error":  _last_auth_error,
+        "needs_relink":     needs_relink,
+        "auth_backoff_s":   max(0.0, _auth_backoff_until - now) if needs_relink else 0.0,
         "note":             note,
     }
 
@@ -1090,6 +1196,16 @@ def start() -> None:
     Safe to call multiple times — ignored if already running.
     """
     global _feed_task
+    try:
+        from app.ctrader_feed_lock import feed_disabled_in_executor, is_feed_only_process
+        if feed_disabled_in_executor() and not is_feed_only_process():
+            logger.info(
+                "[CTraderFeed] spot stream skipped — remote feed enabled "
+                "(CTRADER_REMOTE_FEED / DISABLE_CTRADER_FEED_IN_EXECUTOR)"
+            )
+            return
+    except Exception:
+        pass
     if not _PROTO_OK:
         logger.warning("[CTraderFeed] protobuf unavailable — feed disabled")
         return

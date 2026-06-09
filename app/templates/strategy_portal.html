@@ -7865,9 +7865,13 @@ async function loadCtraderCard(){
           const fd=await fr.json();
           const ct=fd.ctrader||{};
           const n=ct.symbol_count||0;
-          if(ct.live&&n>0){
+          if(ct.needs_relink){
+            const err=ct.last_auth_error?` (${escHtml(String(ct.last_auth_error).slice(0,80))})`:'';
+            feedLine=`<span style="color:var(--red,#ef4444)">⚠️ cTrader session expired${err} — <b>disconnect and reconnect</b> cTrader below to restore live forex ticks.</span>`;
+          }else if(ct.live&&n>0){
             const syms=(ct.cached_symbols||[]).slice(0,6).join(', ');
-            feedLine=`Live ticks: <b>${n}</b> symbols`+(syms?` (${escHtml(syms)}…)`:'')+` · prices from <b>cTrader</b>`;
+            const src=ct.remote_live&&!ct.local_subscribed?'remote feed':'cTrader';
+            feedLine=`Live ticks: <b>${n}</b> symbols`+(syms?` (${escHtml(syms)}…)`:'')+` · prices from <b>${src}</b>`;
           }else if(ct.error){
             feedLine=`OAuth linked, but server feed not streaming yet (${escHtml(ct.error)}). Paper still works via Yahoo.`;
           }else{

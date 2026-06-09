@@ -1,6 +1,18 @@
 #!/bin/bash
 set -e
 
+# ── Dedicated cTrader feed service (separate Railway replica) ────────────────
+# Set CTRADER_FEED_ONLY=1 on a lightweight service that only streams broker
+# ticks into Postgres (market_spot_ticks). Main portal sets CTRADER_REMOTE_FEED=1
+# so the executor does not open a competing cTrader session.
+if [ "${CTRADER_REMOTE_FEED}" = "1" ]; then
+  export DISABLE_CTRADER_FEED_IN_EXECUTOR="${DISABLE_CTRADER_FEED_IN_EXECUTOR:-1}"
+fi
+if [ "${CTRADER_FEED_ONLY}" = "1" ]; then
+  echo "[railway] cTrader feed-only service — spot stream + Postgres ticks"
+  exec python3 -m app.ctrader_feed_runner
+fi
+
 # Railway defaults — free portal features + live strategy executor
 export PORTAL_FEATURES_FREE="${PORTAL_FEATURES_FREE:-1}"
 export FORCE_EXECUTOR="${FORCE_EXECUTOR:-1}"
@@ -31,6 +43,7 @@ if [ "${RAILWAY_PRO}" = "1" ] || [ "${RAILWAY_EXECUTOR_TIER}" = "pro" ]; then
   export KRAKEN_KLINE_TIMEOUT_SECONDS="${KRAKEN_KLINE_TIMEOUT_SECONDS:-8}"
   export CTRADER_PROACTIVE_REFRESH_INTERVAL_S="${CTRADER_PROACTIVE_REFRESH_INTERVAL_S:-2700}"
   export CTRADER_KLINE_TIMEOUT_LIVE_S="${CTRADER_KLINE_TIMEOUT_LIVE_S:-15}"
+  export CTRADER_AUTH_TERMINAL_BACKOFF_S="${CTRADER_AUTH_TERMINAL_BACKOFF_S:-300}"
   export METALS_POLL_INTERVAL_SECONDS="${METALS_POLL_INTERVAL_SECONDS:-3}"
   export REALTIME_SPOT_MAX_AGE_METALS_S="${REALTIME_SPOT_MAX_AGE_METALS_S:-5}"
   export REALTIME_SPOT_MAX_AGE_FOREX_S="${REALTIME_SPOT_MAX_AGE_FOREX_S:-5}"
