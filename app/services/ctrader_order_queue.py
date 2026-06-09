@@ -166,6 +166,14 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
 
         db.commit()
 
+        from datetime import datetime as _dt
+        _fill_px = actual_fill if actual_fill and actual_fill > 0 else execution.entry_price
+        logger.info(
+            f"[{_dt.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}] "
+            f"[ctrader-queue] live fill exec#{job.execution_id} "
+            f"{job.symbol} {job.direction} @ {_fill_px}"
+        )
+
         if user and strategy and (not portal_settings or portal_settings.dm_live_alerts):
             try:
                 from app.services.strategy_executor import (
@@ -206,7 +214,11 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
                         asset_class=_ac,
                     )
             except Exception as notify_err:
-                logger.warning(f"[ctrader-queue] fill notify exec #{job.execution_id}: {notify_err}")
+                from datetime import datetime as _dt
+                logger.warning(
+                    f"[{_dt.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}] "
+                    f"[ctrader-queue] fill notify exec #{job.execution_id}: {notify_err}"
+                )
     except Exception as e:
         logger.exception(f"[ctrader-queue] apply result exec #{job.execution_id}: {e}")
         try:
