@@ -114,9 +114,9 @@ _KRAKEN_INTERVAL: Dict[str, int] = {
     "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440,
 }
 _METAL_KLINE_SOURCE_RANK = {
-    "binance": 0,
-    "ctrader-user": 1,
-    "ctrader": 2,
+    "ctrader-user": 0,
+    "ctrader": 1,
+    "binance": 2,
     "fmp": 3,
     "kraken": 4,
 }

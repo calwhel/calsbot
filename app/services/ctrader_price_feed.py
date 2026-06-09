@@ -54,6 +54,14 @@ _PT_TRENDBARS_REQ = 2137
 _PT_TRENDBARS_RES = 2138
 _PT_HEARTBEAT     = 51    # ProtoHeartbeatEvent — client MUST send ~every 10s or
                          # cTrader drops the socket (the "stream read timeout" churn)
+_PT_ERROR_RES     = 2142  # ProtoOAErrorRes — account auth / request failures
+
+# Proactive OAuth refresh — access tokens expire ~1h; refresh before they brick the feed.
+_PROACTIVE_REFRESH_INTERVAL_S = float(
+    os.environ.get("CTRADER_PROACTIVE_REFRESH_INTERVAL_S", str(45 * 60))
+)
+_last_proactive_refresh: Dict[int, float] = {}  # user_id → monotonic
+_last_auth_error: Optional[str] = None
 
 # ── Reconnect tuning ─────────────────────────────────────────────────────────
 # cTrader periodically recycles long-lived spot sessions (especially when a
@@ -264,12 +272,71 @@ async def _app_auth(reader, writer) -> bool:
 
 
 async def _account_auth(reader, writer, access_token: str, ctid: int) -> bool:
+    """Account auth — logs ProtoOAErrorRes instead of failing silently."""
+    global _last_auth_error
+    if not _PROTO_OK:
+        _last_auth_error = "ctrader_open_api unavailable"
+        return False
     req = ProtoOAAccountAuthReq()
     req.ctidTraderAccountId = ctid
-    req.accessToken = access_token
+    req.accessToken = (access_token or "").strip()
+    if not req.accessToken:
+        _last_auth_error = "empty access token"
+        return False
     await _send(writer, req, _PT_ACCT_AUTH_REQ)
-    msg = await _read_frame(reader, timeout=15.0)
-    return msg is not None and msg.payloadType == _PT_ACCT_AUTH_RES
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        msg = await _read_frame(reader, timeout=max(0.1, remaining))
+        if not msg:
+            break
+        if msg.payloadType == _PT_ACCT_AUTH_RES:
+            _last_auth_error = None
+            return True
+        if msg.payloadType == _PT_ERROR_RES:
+            detail = f"ctid={ctid}"
+            try:
+                from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAErrorRes
+                err = ProtoOAErrorRes()
+                err.ParseFromString(msg.payload)
+                detail = (
+                    f"ctid={ctid} {err.errorCode}: "
+                    f"{(err.description or '').strip() or 'no description'}"
+                )
+            except Exception:
+                pass
+            _last_auth_error = detail
+            logger.warning(f"[CTraderFeed] account auth rejected — {detail}")
+            return False
+    _last_auth_error = f"ctid={ctid} timeout waiting for auth response"
+    logger.warning(f"[CTraderFeed] {_last_auth_error}")
+    return False
+
+
+async def _maybe_refresh_access_token(
+    user_id: int,
+    access_token: str,
+    *,
+    force: bool = False,
+) -> str:
+    """Refresh OAuth access token when due or after an auth failure."""
+    at = (access_token or "").strip()
+    now = time.monotonic()
+    last = _last_proactive_refresh.get(user_id, 0.0)
+    if not force and (now - last) < _PROACTIVE_REFRESH_INTERVAL_S:
+        return at
+    try:
+        from app.services.ctrader_client import refresh_user_ctrader_token
+        new_at = await refresh_user_ctrader_token(user_id)
+    except Exception as exc:
+        logger.warning(
+            f"[CTraderFeed] token refresh failed uid={user_id}: {type(exc).__name__}"
+        )
+        return at
+    if new_at:
+        _last_proactive_refresh[user_id] = now
+        return new_at.strip()
+    return at
 
 
 async def _resolve_symbols(reader, writer, ctid: int, host: str = _HOST_LIVE) -> Dict[str, int]:
@@ -314,20 +381,25 @@ async def _resolve_symbols(reader, writer, ctid: int, host: str = _HOST_LIVE) ->
 
 # ── DB helper ─────────────────────────────────────────────────────────────────
 
-async def _get_connected_account(
-    user_id: Optional[int] = None,
-) -> Optional[Tuple[str, int, int, bool]]:
-    """Return (access_token, ctid, user_id, is_live) for a connected cTrader user.
-
-    When `user_id` is given, use that user's linked account (e.g. gold scan for
-    the logged-in portal user). Otherwise fall back to the first connected row.
-
-    is_live is resolved from the stored ctrader_accounts list (matching the
-    chosen ctid) so we connect to the matching host; defaults to True when the
-    metadata is unavailable (loop falls back to the other host on auth failure).
-    """
+def _is_live_for_ctid(prefs, ctid: int) -> bool:
+    import json as _json
     try:
-        import json as _json
+        raw = getattr(prefs, "ctrader_accounts", None)
+        if raw:
+            for a in _json.loads(raw):
+                if int(a.get("ctidTraderAccountId", -1)) == int(ctid):
+                    return bool(a.get("isLive", True))
+    except Exception:
+        pass
+    return True
+
+
+async def _list_connected_accounts(
+    user_id: Optional[int] = None,
+) -> List[Tuple[str, int, int, bool]]:
+    """All linked cTrader accounts — forex-approved users first."""
+    out: List[Tuple[str, int, int, bool]] = []
+    try:
         from app.database import SessionLocal
         from app.models import UserPreference
         db = SessionLocal()
@@ -338,24 +410,83 @@ async def _get_connected_account(
             )
             if user_id is not None:
                 q = q.filter(UserPreference.user_id == int(user_id))
-            prefs = q.first()
-            if prefs:
-                ctid = int(prefs.ctrader_account_id)
-                is_live = True
+            rows = (
+                q.order_by(
+                    UserPreference.forex_approved.desc(),
+                    UserPreference.user_id.desc(),
+                )
+                .all()
+            )
+            for prefs in rows:
+                at = (prefs.ctrader_access_token or "").strip()
+                aid = (prefs.ctrader_account_id or "").strip()
+                if not at or not aid:
+                    continue
                 try:
-                    raw = getattr(prefs, "ctrader_accounts", None)
-                    if raw:
-                        for a in _json.loads(raw):
-                            if int(a.get("ctidTraderAccountId", -1)) == ctid:
-                                is_live = bool(a.get("isLive", True))
-                                break
-                except Exception:
-                    pass
-                return (prefs.ctrader_access_token, ctid, int(prefs.user_id), is_live)
+                    ctid = int(aid)
+                except (TypeError, ValueError):
+                    continue
+                out.append(
+                    (at, ctid, int(prefs.user_id), _is_live_for_ctid(prefs, ctid))
+                )
         finally:
             db.close()
     except Exception as e:
         logger.debug(f"[CTraderFeed] DB lookup error: {e}")
+    return out
+
+
+async def _get_connected_account(
+    user_id: Optional[int] = None,
+) -> Optional[Tuple[str, int, int, bool]]:
+    """Return the best linked account (forex-approved first)."""
+    accounts = await _list_connected_accounts(user_id=user_id)
+    return accounts[0] if accounts else None
+
+
+async def _authenticate_stream(
+    access_token: str,
+    ctid: int,
+    user_id: int,
+    is_live: bool,
+) -> Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter, str, str]]:
+    """
+    Open a streaming connection with app+account auth.
+    Returns (reader, writer, access_token, host) or None.
+    """
+    at = await _maybe_refresh_access_token(user_id, access_token, force=False)
+    primary_host = _HOST_LIVE if is_live else _HOST_DEMO
+    hosts = [primary_host, _HOST_DEMO if primary_host == _HOST_LIVE else _HOST_LIVE]
+
+    for host in hosts:
+        reader = writer = None
+        try:
+            reader, writer = await _open_conn(host)
+            if not await _app_auth(reader, writer):
+                raise ConnectionError("app auth failed")
+            authed = await _account_auth(reader, writer, at, ctid)
+            if not authed:
+                at = await _maybe_refresh_access_token(user_id, at, force=True)
+                authed = await _account_auth(reader, writer, at, ctid)
+            if authed:
+                if host != primary_host:
+                    from app.services.ctrader_client import _persist_account_host_metadata
+                    await asyncio.to_thread(
+                        _persist_account_host_metadata, user_id, ctid, host,
+                    )
+                return reader, writer, at, host
+            logger.warning(
+                f"[CTraderFeed] account auth failed uid={user_id} ctid={ctid} "
+                f"host={host}"
+                + (f" ({_last_auth_error})" if _last_auth_error else "")
+            )
+        except Exception as exc:
+            logger.warning(
+                f"[CTraderFeed] connect/auth error uid={user_id} ctid={ctid} "
+                f"host={host}: {exc}"
+            )
+        if writer is not None:
+            await _aclose_writer(writer)
     return None
 
 
@@ -373,8 +504,8 @@ async def _feed_loop() -> None:
         try:
             _feed_live = False
 
-            creds = await _get_connected_account()
-            if not creds:
+            candidates = await _list_connected_accounts()
+            if not candidates:
                 logger.info("[CTraderFeed] no connected cTrader accounts — waiting up to 120s")
                 wake = _get_wake_event()
                 try:
@@ -385,45 +516,30 @@ async def _feed_loop() -> None:
                     pass
                 continue
 
-            access_token, ctid, _uid, _is_live = creds
-            # Connect to the host matching the account type; if auth fails there,
-            # fall back to the other host (handles stale/missing isLive metadata).
-            _primary_host = _HOST_LIVE if _is_live else _HOST_DEMO
-            _hosts = [_primary_host, _HOST_DEMO if _primary_host == _HOST_LIVE else _HOST_LIVE]
-            logger.info(
-                f"[CTraderFeed] connecting with account {ctid} "
-                f"({'live' if _is_live else 'demo'} → {_primary_host})…"
-            )
-
-            authed = False
-            for _hi, _host in enumerate(_hosts):
-                if writer:
-                    await _aclose_writer(writer)
-                reader, writer = await _open_conn(_host)
-                if not await _app_auth(reader, writer):
-                    raise ConnectionError("app auth failed")
-                if await _account_auth(reader, writer, access_token, ctid):
-                    authed = True
-                    if _hi > 0:
-                        logger.info(f"[CTraderFeed] authed on fallback host {_host}")
+            reader = writer = None
+            access_token = ""
+            ctid = 0
+            _uid = 0
+            _host = _HOST_LIVE
+            session = None
+            for at, acct_ctid, uid, is_live in candidates:
+                logger.info(
+                    f"[CTraderFeed] connecting uid={uid} ctid={acct_ctid} "
+                    f"({'live' if is_live else 'demo'})…"
+                )
+                session = await _authenticate_stream(at, acct_ctid, uid, is_live)
+                if session:
+                    reader, writer, access_token, _host = session
+                    ctid, _uid = acct_ctid, uid
+                    if uid != candidates[0][2]:
+                        logger.info(
+                            f"[CTraderFeed] authenticated via uid={uid} ctid={ctid} "
+                            f"(primary candidate failed)"
+                        )
                     break
-                # First host failed — try a token refresh once before the fallback.
-                if _hi == 0:
-                    try:
-                        from app.services.ctrader_client import refresh_user_ctrader_token
-                        new_at = await refresh_user_ctrader_token(_uid)
-                    except Exception as _re:
-                        new_at = None
-                        logger.warning(f"[CTraderFeed] token refresh error: {_re}")
-                    if new_at:
-                        access_token = new_at
-                        logger.info("[CTraderFeed] token refreshed — retrying account auth")
-                        if await _account_auth(reader, writer, access_token, ctid):
-                            authed = True
-                            break
-                logger.warning(f"[CTraderFeed] account auth failed on {_host}")
-            if not authed:
-                raise ConnectionError("account auth failed on all hosts")
+            if not session or reader is None or writer is None:
+                detail = _last_auth_error or "no valid session"
+                raise ConnectionError(f"account auth failed on all hosts/users ({detail})")
 
             name_to_id = await _resolve_symbols(reader, writer, ctid, _host)
 
@@ -918,6 +1034,7 @@ def feed_status() -> Dict[str, object]:
         "last_tick_age_s":  last_tick_age,
         "forex_market_open": forex_open,
         "shared_store":     shared,
+        "last_auth_error":  _last_auth_error,
         "note":             note,
     }
 
