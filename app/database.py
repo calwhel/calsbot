@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 from app.config import settings
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -60,17 +61,17 @@ engine = create_engine(
 # the root cause of /app, /api/strategies, /api/portfolio all timing out
 # while the executor held every connection waiting on slow queries. Keeps
 # the 60 s statement_timeout the executor needs for heavy analytical work.
+_bg_pool_size = int(os.getenv("BG_POOL_SIZE", "8"))
+_bg_pool_overflow = int(os.getenv("BG_POOL_OVERFLOW", "10"))
 bg_engine = create_engine(
     _db_url,
-    # Raised from (3 + 4) to (5 + 6) so the faster forex executor can run more
-    # strategies concurrently (FOREX_MAX_CONCURRENT) without PoolTimeout, while
-    # staying well below the per-cycle batch-loading footprint that previously
-    # saturated Neon. Peak concurrent bg connections ≈ crypto MAX_CONCURRENT
-    # (3) + FOREX_MAX_CONCURRENT (6) = 9, under the 11 ceiling here.
+    # Isolated from HTTP pool. Peak load ≈ FOREX_MAX_CONCURRENT + MAX_CONCURRENT
+    # (eval tasks hold a session across async kline/TA fetches) + live/paper
+    # monitors + gate-stats flush. Defaults 8+10=18; tune via BG_POOL_* env.
     poolclass=QueuePool,
-    pool_size=5,
-    max_overflow=6,
-    pool_timeout=15,
+    pool_size=_bg_pool_size,
+    max_overflow=_bg_pool_overflow,
+    pool_timeout=int(os.getenv("BG_POOL_TIMEOUT", "30")),
     pool_recycle=240,
     pool_pre_ping=True,
     connect_args=_neon_connect_args(60000),

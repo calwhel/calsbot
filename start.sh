@@ -4,6 +4,10 @@ set -e
 # Railway defaults — free portal features + live strategy executor
 export PORTAL_FEATURES_FREE="${PORTAL_FEATURES_FREE:-1}"
 export FORCE_EXECUTOR="${FORCE_EXECUTOR:-1}"
+# Background executor pool — forex+crypto evals hold sessions across async fetches.
+export BG_POOL_SIZE="${BG_POOL_SIZE:-8}"
+export BG_POOL_OVERFLOW="${BG_POOL_OVERFLOW:-10}"
+export EXECUTOR_FOREX_MAX_CONCURRENT="${EXECUTOR_FOREX_MAX_CONCURRENT:-4}"
 # Legacy Telegram social-signals scanner — off on portal/Railway; user strategies only.
 export DISABLE_SOCIAL_SCANNING="${DISABLE_SOCIAL_SCANNING:-1}"
 

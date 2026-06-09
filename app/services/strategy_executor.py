@@ -38,12 +38,11 @@ FOREX_MANAGE_INTERVAL_SECONDS = float(_os_env.environ.get("EXECUTOR_FOREX_MANAGE
 PAPER_MONITOR_INTERVAL      = int(_os_env.environ.get("EXECUTOR_MONITOR_INTERVAL", "10"))
 LIVE_MONITOR_INTERVAL       = int(_os_env.environ.get("EXECUTOR_LIVE_MONITOR_INTERVAL", "8"))
 MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "3"))
-# Forex executor runs more strategies in parallel than crypto: after per-cycle
-# batch-loading of users/subs/prefs, each forex strategy holds a DB connection
-# only briefly (one JOINed strategy+user lookup), so higher concurrency scales
-# to ~100 strategies within the 5s cycle without exhausting bg_engine's pool
-# (size 5 + overflow 6 = 11; crypto's 3 + this 6 = 9 peak).
-FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "6"))
+# Forex runs more strategies in parallel than crypto, but each task holds a
+# bg_engine session for the whole evaluate_and_fire (including async kline/TA
+# fetches). Peak ≈ FOREX_MAX_CONCURRENT + MAX_CONCURRENT + monitor overhead —
+# keep under BG_POOL_SIZE + BG_POOL_OVERFLOW (default 18).
+FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "4"))
 # Evaluate strategies in batches so Railway logs show progress during long first cycles
 # (90 forex + 168 crypto can run 5–15 min with no other INFO lines).
 EXECUTOR_SCAN_BATCH_SIZE    = int(_os_env.environ.get("EXECUTOR_SCAN_BATCH_SIZE", "20"))
@@ -1029,15 +1028,16 @@ def _update_performance(strategy_id: int, db):
 
     db.commit()
 
-    # Pool health monitor — warn when connections are nearly exhausted.
-    # pool_size=6, max_overflow=8 → hard limit 14; warn at 9+ to give early notice.
+    # Pool health monitor — warn when bg connections are nearly exhausted.
     try:
-        from app.database import engine as _pool_eng
-        _co = _pool_eng.pool.checkedout()
-        if _co > 8:
+        from app.database import bg_engine as _pool_eng
+        _pool = _pool_eng.pool
+        _co = _pool.checkedout()
+        _limit = _pool.size() + _pool._max_overflow  # type: ignore[attr-defined]
+        if _co > max(6, _limit - 4):
             logger.warning(
-                f"[PoolMonitor] {_co}/14 DB connections checked out "
-                f"(pool_size=6, max_overflow=8). Consider reducing concurrent scans."
+                f"[PoolMonitor] bg pool {_co}/{_limit} connections checked out — "
+                "consider lowering EXECUTOR_*_MAX_CONCURRENT"
             )
     except Exception:
         pass
@@ -4631,17 +4631,14 @@ async def run_strategy_executor():
                 async def _run_one(snap, _tickers=shared_tickers):
                     """Each strategy evaluation runs in its own isolated DB session.
 
-                    Retries once with a fresh session on transient Neon errors
-                    (SSL connection drops or PK-lookup statement timeouts that
-                    occasionally occur during Neon compute scaling/autovacuum).
-                    Permanent errors are logged with traceback as before.
+                    Retries with a fresh session on transient Neon / pool errors.
                     """
                     from sqlalchemy.exc import OperationalError as _SAOperationalError
+                    from sqlalchemy.exc import TimeoutError as _SATimeoutError
                     async with sem:
-                        for _attempt in (1, 2):
+                        for _attempt in (1, 3):
                             db_one = SessionLocal()
                             try:
-                                # One round-trip for strategy + user (was two).
                                 row = (
                                     db_one.query(UserStrategy, User)
                                     .join(User, User.id == UserStrategy.user_id)
@@ -4660,28 +4657,27 @@ async def run_strategy_executor():
                                     raw_tickers=_tickers,
                                     gate_stats=cycle_gate_stats,
                                 )
-                                return  # success
-                            except _SAOperationalError as _db_err:
-                                # Most likely a transient Neon SSL drop or a
-                                # PK-lookup statement timeout. Discard this
-                                # session and retry once with a fresh one.
-                                _err_name = type(_db_err.orig).__name__ if getattr(_db_err, "orig", None) else type(_db_err).__name__
-                                if _attempt == 1:
+                                return
+                            except (_SAOperationalError, _SATimeoutError) as _db_err:
+                                _err_name = type(_db_err).__name__
+                                if getattr(_db_err, "orig", None) is not None:
+                                    _err_name = type(_db_err.orig).__name__
+                                if _attempt < 3:
                                     logger.warning(
                                         f"[Strategy {snap['id']}] Transient DB error "
-                                        f"({_err_name}) — retrying with fresh session"
+                                        f"({_err_name}) — retry {_attempt}/3"
                                     )
                                     try:
                                         db_one.rollback()
                                     except Exception:
                                         pass
+                                    await asyncio.sleep(0.5 * _attempt)
                                     continue
-                                else:
-                                    logger.warning(
-                                        f"[Strategy {snap['id']}] Skipping cycle — "
-                                        f"DB error persisted after retry ({_err_name})"
-                                    )
-                                    return
+                                logger.warning(
+                                    f"[Strategy {snap['id']}] Skipping cycle — "
+                                    f"DB error persisted ({_err_name})"
+                                )
+                                return
                             except Exception as e:
                                 logger.error(
                                     f"[Strategy {snap['id']}] Error: {e}", exc_info=True
@@ -5721,8 +5717,9 @@ async def run_forex_executor():
 
                 async def _run_one_fx(snap, _http=http_client):
                     from sqlalchemy.exc import OperationalError as _SAOperationalError
+                    from sqlalchemy.exc import TimeoutError as _SATimeoutError
                     async with sem:
-                        for _attempt in (1, 2):
+                        for _attempt in (1, 3):
                             db_one = SessionLocal()
                             try:
                                 # One round-trip for strategy + user (was two).
@@ -5749,27 +5746,27 @@ async def run_forex_executor():
                                     prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
                                 )
                                 return
-                            except _SAOperationalError as _db_err:
-                                _err_name = type(_db_err.orig).__name__ if getattr(_db_err, "orig", None) else type(_db_err).__name__
-                                if _attempt == 1:
-                                    # Quiet retry — cycle summary logged after gather
+                            except (_SAOperationalError, _SATimeoutError) as _db_err:
+                                _err_name = type(_db_err).__name__
+                                if getattr(_db_err, "orig", None) is not None:
+                                    _err_name = type(_db_err.orig).__name__
+                                if _attempt < 3:
                                     logger.debug(
                                         f"[FX Strategy {snap['id']}] DB error "
-                                        f"({_err_name}) — retrying"
+                                        f"({_err_name}) — retry {_attempt}/3"
                                     )
                                     try:
                                         db_one.rollback()
                                     except Exception:
                                         pass
+                                    await asyncio.sleep(0.5 * _attempt)
                                     continue
-                                else:
-                                    # Both attempts failed — record for cycle summary
-                                    _cycle_db_skipped.append((snap["id"], _err_name))
-                                    logger.debug(
-                                        f"[FX Strategy {snap['id']}] Skipping — "
-                                        f"DB error persisted ({_err_name})"
-                                    )
-                                    return
+                                _cycle_db_skipped.append((snap["id"], _err_name))
+                                logger.debug(
+                                    f"[FX Strategy {snap['id']}] Skipping — "
+                                    f"DB error persisted ({_err_name})"
+                                )
+                                return
                             except Exception as e:
                                 logger.error(
                                     f"[FX Strategy {snap['id']}] Error: {e}", exc_info=True
