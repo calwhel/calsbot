@@ -227,13 +227,40 @@ async def _aclose_writer(writer) -> None:
         pass
 
 
+def _ctrader_app_credentials() -> Tuple[str, str]:
+    """Read Open API app id/secret (env is authoritative on Railway)."""
+    cid = (os.environ.get("CTRADER_CLIENT_ID") or "").strip()
+    secret = (os.environ.get("CTRADER_CLIENT_SECRET") or "").strip()
+    if not cid or not secret:
+        try:
+            from app.services.ctrader_client import CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET
+            cid = cid or (CTRADER_CLIENT_ID or "").strip()
+            secret = secret or (CTRADER_CLIENT_SECRET or "").strip()
+        except Exception:
+            pass
+    return cid, secret
+
+
 async def _app_auth(reader, writer) -> bool:
+    cid, secret = _ctrader_app_credentials()
+    if not cid or not secret:
+        logger.warning("[CTraderFeed] CTRADER_CLIENT_ID/SECRET missing — app auth skipped")
+        return False
     req = ProtoOAApplicationAuthReq()
-    req.clientId = os.environ.get("CTRADER_CLIENT_ID", "")
-    req.clientSecret = os.environ.get("CTRADER_CLIENT_SECRET", "")
+    req.clientId = cid
+    req.clientSecret = secret
     await _send(writer, req, _PT_APP_AUTH_REQ)
     msg = await _read_frame(reader, timeout=15.0)
-    return msg is not None and msg.payloadType == _PT_APP_AUTH_RES
+    if msg is not None and msg.payloadType == _PT_APP_AUTH_RES:
+        return True
+    if msg is None:
+        logger.warning("[CTraderFeed] app auth: no response (timeout)")
+    else:
+        logger.warning(
+            f"[CTraderFeed] app auth rejected (payloadType={msg.payloadType}, "
+            f"expected={_PT_APP_AUTH_RES}) — check CTRADER_CLIENT_ID/SECRET"
+        )
+    return False
 
 
 async def _account_auth(reader, writer, access_token: str, ctid: int) -> bool:

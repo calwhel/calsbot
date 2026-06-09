@@ -53,6 +53,7 @@ REFERRAL_URL       = os.environ.get("BITUNIX_REFERRAL_URL", "https://www.bitunix
 # In-memory cache: (uid_set, fetched_at_epoch, total_count_or_None).
 _cache: Tuple[Set[str], float, Optional[int]] = (set(), 0.0, None)
 _cache_lock = asyncio.Lock()
+_last_partner_error_log: float = 0.0
 
 
 class PartnerError(Exception):
@@ -116,7 +117,13 @@ async def _fetch_page(page: int) -> Tuple[Set[str], int]:
         async with sess.get(url, headers=hdrs) as r:
             text = await r.text()
             if r.status != 200:
-                raise PartnerError(f"HTTP {r.status}: {text[:200]}")
+                hint = ""
+                if r.status == 405:
+                    hint = (
+                        f" — HTTP 405 usually means BITUNIX_PARTNER_LIST_PATH ({LIST_PATH!r}) "
+                        "or BITUNIX_PARTNER_BASE_URL is wrong for your partner dashboard"
+                    )
+                raise PartnerError(f"HTTP {r.status}: {text[:200]}{hint}")
             try:
                 body = json.loads(text)
             except Exception:
@@ -182,7 +189,13 @@ async def is_uid_affiliated(bitunix_uid: Optional[str]) -> Tuple[bool, str]:
     try:
         uids = await refresh_affiliate_uids()
     except PartnerError as e:
-        logger.warning(f"[BitunixPartner] affiliate check failed (fail-closed): {e}")
+        global _last_partner_error_log
+        now = time.time()
+        if now - _last_partner_error_log > 300:
+            _last_partner_error_log = now
+            logger.warning(f"[BitunixPartner] affiliate check failed (fail-closed): {e}")
+        else:
+            logger.debug(f"[BitunixPartner] affiliate check failed (fail-closed): {e}")
         # Fall back to the cache if we have something stale-but-non-empty.
         if _cache[0]:
             uids = _cache[0]

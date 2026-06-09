@@ -379,12 +379,15 @@ async def fetch_forex_scan_candles(
         if len(best) >= 120:
             return best[-limit:]
 
-    await _keep(
-        await _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
-        "ctrader",
-    )
-    if len(best) >= 120:
-        return best[-limit:]
+    # Only hit cTrader when the spot feed is LIVE — otherwise each symbol pays a
+    # 3s timeout before Yahoo (already tried above) can win.
+    if _ctrader_live:
+        await _keep(
+            await _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
+            "ctrader",
+        )
+        if len(best) >= 120:
+            return best[-limit:]
 
     tradfi_rows = await _get_klines_impl(
         sym, "forex", timeframe, limit, for_backtest=True, ctrader_user_id=user_id,
@@ -839,6 +842,12 @@ async def _get_klines_impl(
             if _frows:
                 return _frows
         elif src == "ctrader":
+            try:
+                from app.services.ctrader_price_feed import is_live as _ct_live
+                if not _ct_live():
+                    continue
+            except Exception:
+                continue
             _crows = await _fetch_ctrader_klines(
                 symbol, asset_class, timeframe, limit, user_id=ctrader_user_id
             )

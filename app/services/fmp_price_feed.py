@@ -73,8 +73,8 @@ _FMP_LEGACY_BASE = "https://financialmodelingprep.com/api/v3"
 
 # FMP lists gold/silver under both forex (XAUUSD) and commodities (GCUSD) tickers.
 _METALS_FMP_ALIASES: Dict[str, List[str]] = {
-    "XAUUSD": ["XAUUSD", "GCUSD"],
-    "XAGUSD": ["XAGUSD", "SIUSD"],
+    "XAUUSD": ["XAUUSD", "GCUSD", "GC", "GC=F"],
+    "XAGUSD": ["XAGUSD", "SIUSD", "SI", "SI=F"],
 }
 
 _TF_MINUTES: Dict[str, int] = {
@@ -362,6 +362,11 @@ async def get_klines(
     if rows:
         _KLINE_CACHE[cache_key] = (rows, now)
         logger.info(f"[FMPFeed] klines ok: {sym} {timeframe} → {len(rows)} bars")
+    elif sym in _METALS_FMP_ALIASES:
+        logger.debug(
+            f"[FMPFeed] klines empty for {sym} {timeframe} (limit={limit}) — "
+            "Yahoo/Binance metals fallback will be used"
+        )
     else:
         logger.warning(f"[FMPFeed] klines empty for {sym} {timeframe} (limit={limit})")
     return rows
