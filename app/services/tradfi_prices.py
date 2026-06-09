@@ -10,7 +10,8 @@ Kline path:
   Metals live: parallel Binance spot → cTrader → FMP → Kraken (never GC=F).
   Metals backtest: Binance → cTrader → FMP → Yahoo (GC=F only if spot-aligned).
   Forex live: cTrader → Yahoo chart → FMP → yfinance.
-  Others: yfinance download() — intraday OHLC for forex/indices.
+  Index live: cTrader → Yahoo chart → FMP (same chain as forex scanner).
+  Others: yfinance download() — intraday OHLC fallback.
 
 Returned shapes mirror the crypto helpers so the strategy executor can
 consume them without branching:
@@ -28,6 +29,7 @@ from typing import Dict, List, Optional, Tuple
 from app.services.asset_classes import (
     ASSET_CLASS_CRYPTO,
     ASSET_CLASS_FOREX,
+    ASSET_CLASS_INDEX,
     normalize_asset_class,
     yf_ticker,
 )
@@ -333,8 +335,8 @@ async def fetch_index_scan_candles(
     user_id: Optional[int] = None,
 ) -> List[List[float]]:
     """
-    Multi-source fetch for index backtest scanners (NASDAQ, S&P, etc.).
-    Prefers linked cTrader demo/live candles when available.
+    Multi-source fetch for index scanners and executor (NASDAQ, S&P, etc.).
+    Prefers linked cTrader demo/live candles when broker session is up.
     """
     try:
         from app.services.index_symbols import normalize_index_symbol, yf_ticker_for_index
@@ -345,6 +347,7 @@ async def fetch_index_scan_candles(
         yahoo_ticker = None
 
     best: List[List[float]] = []
+    _min_bars = _scan_min_bars(limit)
 
     async def _keep(rows: List[List[float]], label: str) -> None:
         nonlocal best
@@ -352,17 +355,27 @@ async def fetch_index_scan_candles(
             best = rows
             logger.info(f"[tradfi] index-scan best={label} {sym} {timeframe} → {len(rows)} bars")
 
-    if user_id:
-        await _keep(
-            await _fetch_ctrader_klines(sym, "index", timeframe, min(limit, 500), user_id=user_id),
-            "ctrader-user",
+    _broker_ready = False
+    try:
+        from app.services.ctrader_price_feed import broker_session_ready as _ct_ready
+        _broker_ready = bool(_ct_ready(sym))
+    except Exception:
+        pass
+
+    async def _try_ctrader(label: str) -> bool:
+        rows = await _fetch_ctrader_klines(
+            sym, "index", timeframe, min(limit, 500), user_id=user_id,
         )
-        if len(best) >= 120:
+        await _keep(rows, label)
+        return len(best) >= _min_bars
+
+    if _broker_ready:
+        if await _try_ctrader("ctrader-user" if user_id else "ctrader"):
             return best[-limit:]
 
     if yahoo_ticker:
         await _keep(await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit), "yahoo")
-        if len(best) >= 120:
+        if len(best) >= _min_bars:
             return best[-limit:]
 
     if _env_fmp_api_key():
@@ -371,15 +384,12 @@ async def fetch_index_scan_candles(
             await _keep(await _fmp_klines(sym, "index", timeframe, limit), "fmp")
         except Exception:
             pass
-        if len(best) >= 120:
+        if len(best) >= _min_bars:
             return best[-limit:]
 
-    await _keep(
-        await _fetch_ctrader_klines(sym, "index", timeframe, min(limit, 500), user_id=user_id),
-        "ctrader",
-    )
-    if len(best) >= 120:
-        return best[-limit:]
+    if _broker_ready and user_id:
+        if await _try_ctrader("ctrader"):
+            return best[-limit:]
 
     tradfi_rows = await _get_klines_impl(
         sym, "index", timeframe, limit, for_backtest=True, ctrader_user_id=user_id,
@@ -390,6 +400,11 @@ async def fetch_index_scan_candles(
 
 def _metal_kline_min_bars(limit: int) -> int:
     return min(limit, max(25, limit // 3))
+
+
+def _scan_min_bars(limit: int) -> int:
+    """Min bars to accept from a scan source (executor uses ~80 bars)."""
+    return max(15, min(limit, 80))
 
 
 async def _fetch_with_kline_timeout(
@@ -699,7 +714,7 @@ async def fetch_forex_scan_candles(
     except Exception:
         pass
 
-    _min_bars = max(15, min(limit, 80))
+    _min_bars = _scan_min_bars(limit)
 
     async def _try_ctrader(label: str) -> bool:
         rows = await _fetch_ctrader_klines(
@@ -1149,6 +1164,17 @@ async def _get_klines_impl(
                 return scan_rows[-limit:] if len(scan_rows) > limit else scan_rows
         except Exception as _fse:
             logger.debug(f"[tradfi] fetch_forex_scan_candles failed {sym_norm}: {_fse}")
+
+    # Live/paper indices: Yahoo chart chain (executor used to skip this → yfinance-only).
+    if cls == ASSET_CLASS_INDEX and not for_backtest:
+        try:
+            scan_rows = await fetch_index_scan_candles(
+                sym_norm, timeframe, limit, user_id=ctrader_user_id,
+            )
+            if scan_rows:
+                return scan_rows[-limit:] if len(scan_rows) > limit else scan_rows
+        except Exception as _ise:
+            logger.debug(f"[tradfi] fetch_index_scan_candles failed {sym_norm}: {_ise}")
 
     # Live/paper paths prefer broker-matched cTrader OHLC. Backtest discovery
     # (Gold Strategy Finder) prefers FMP first — faster, no protobuf socket auth,

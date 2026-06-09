@@ -20,6 +20,8 @@ if [ "${PROFILE}" = "pro" ]; then
   echo "Setting Railway Pro executor profile..."
   railway variables set \
     RAILWAY_PRO=1 \
+    CTRADER_REMOTE_FEED=1 \
+    DISABLE_CTRADER_FEED_IN_EXECUTOR=1 \
     BG_POOL_SIZE=12 \
     BG_POOL_OVERFLOW=15 \
     BG_DB_RESERVE=6 \
@@ -53,5 +55,8 @@ echo ""
 echo "IMPORTANT (Pro plan): In Railway → your service → Settings → Deploy → Replica Limits"
 echo "  set Memory to at least 4096 MB (8 GB recommended for ~250 strategies)."
 echo "  Pro plan allows up to 24 GB — the default autoscaler may still start at 512 MB."
+echo ""
+echo "cTrader split feed (optional): ./scripts/railway_set_ctrader_feed_split.sh feed"
+echo "  on a second Railway service — see script header."
 echo ""
 echo "Verify: https://tradehubmarkets.com/health/deep"
