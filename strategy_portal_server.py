@@ -1656,24 +1656,16 @@ def _try_acquire_executor_lock():
     connection (i.e. the process) closes.
     """
     try:
-        import psycopg2
-        from app.config import settings
-        conn = psycopg2.connect(
-            settings.get_database_url(),
-            connect_timeout=10,
-            keepalives=1,
-            keepalives_idle=30,
-            keepalives_interval=10,
-            keepalives_count=5,
+        from app.executor_lock import (
+            close_lock_connection,
+            create_lock_connection,
+            try_acquire_lock,
         )
-        conn.autocommit = True
-        cur = conn.cursor()
-        cur.execute("SELECT pg_try_advisory_lock(%s)", (_EXECUTOR_LOCK_ID,))
-        acquired = cur.fetchone()[0]
-        cur.close()
-        if acquired:
-            return conn          # caller keeps this connection open
-        conn.close()
+
+        conn = create_lock_connection()
+        if try_acquire_lock(conn, _EXECUTOR_LOCK_ID):
+            return conn
+        close_lock_connection(conn)
         return None
     except Exception as e:
         logger.warning(f"Advisory lock attempt failed: {e}")
@@ -1682,28 +1674,53 @@ def _try_acquire_executor_lock():
 # Tracks whether THIS uvicorn worker is currently running the executor.
 # Used by the claim loop to avoid double-starting.
 _executor_running_in_this_worker = False
+# Set after _start_executor_tasks() runs once — prevents duplicate scan loops
+# when Neon SSL drops the lock session and we re-acquire without a full restart.
+_executor_tasks_started = False
+# Standalone force-reclaim runs once at process boot (executor_runner), not on
+# every lock reconnect — otherwise we terminate our own stale session and
+# restart prefetch from zero in a thrash loop.
+_initial_executor_reclaim_done = False
 
 
-def _advisory_lock_keepalive_thread(conn, stop_event, lost_event):
+def _advisory_lock_keepalive_thread(conn_holder, stop_event, lost_event):
     """Ping the advisory-lock connection on a fixed cadence from a DEDICATED
     THREAD — independent of the asyncio event loop, which the executor's scan
     cycles can block for tens of seconds at a time. Keeping the connection's
     `state_change` fresh is what stops a sibling worker from mistaking this live
-    holder for a stale/zombie connection and terminating it. Sets `lost_event`
-    if the connection dies so the async side can re-enter the claim loop."""
+    holder for a stale/zombie connection and terminating it.
+
+    On Neon SSL blips, reconnect in-place and keep holding the executor lock
+    without tearing down scan loops. Only sets `lost_event` when reconnect is
+    exhausted so the async side can re-enter the claim loop."""
     import time as _t
+    from app.executor_lock import reconnect_lock_connection
+
     while not stop_event.is_set():
         # Sleep in 1s steps so shutdown is prompt.
         for _ in range(_EXECUTOR_LOCK_KEEPALIVE_SECS):
             if stop_event.is_set():
                 return
             _t.sleep(1)
+        conn = conn_holder.get("conn")
         try:
             cur = conn.cursor()
             cur.execute("SELECT 1")
             cur.close()
         except Exception as e:
-            logger.warning(f"Advisory lock keepalive failed: {e} — will attempt re-claim")
+            logger.warning(
+                f"Advisory lock keepalive failed: {e} — reconnecting lock session"
+            )
+            new_conn = reconnect_lock_connection(conn)
+            if new_conn:
+                conn_holder["conn"] = new_conn
+                logger.info(
+                    "Advisory lock connection restored — executor scans continue"
+                )
+                continue
+            logger.error(
+                "Advisory lock reconnect exhausted — will re-enter claim loop"
+            )
             lost_event.set()
             return
 
@@ -1714,14 +1731,15 @@ async def _maintain_advisory_lock(conn):
     thread (NOT the event loop — the executor blocks it for 30s+ during scans,
     which previously let the connection go idle long enough that a sibling worker
     falsely reclaimed the lock and thrashed the executor). Returns when the
-    connection dies (signal to the claim loop to retry).
+    connection dies and in-thread reconnect failed (signal to claim loop).
     """
     import threading
     stop_event = threading.Event()
     lost_event = threading.Event()
+    conn_holder = {"conn": conn}
     t = threading.Thread(
         target=_advisory_lock_keepalive_thread,
-        args=(conn, stop_event, lost_event),
+        args=(conn_holder, stop_event, lost_event),
         daemon=True,
     )
     t.start()
@@ -1732,6 +1750,25 @@ async def _maintain_advisory_lock(conn):
             await asyncio.sleep(5)
     finally:
         stop_event.set()
+
+
+def _ensure_executor_feeds_running():
+    """Restart price feeds after lock loss without duplicating scan loops."""
+    try:
+        from app.services.fmp_price_feed import start as _fmp_feed_start
+        _fmp_feed_start()
+    except Exception as _fmp_err:
+        logger.warning(f"FMP feed restart error (non-fatal): {_fmp_err}")
+    try:
+        from app.services.ctrader_price_feed import start as _ctrader_feed_start
+        _ctrader_feed_start()
+    except Exception as _ctf_err:
+        logger.warning(f"cTrader feed restart error (non-fatal): {_ctf_err}")
+    try:
+        from app.services.metals_spot_feed import start as _metals_feed_start
+        _metals_feed_start()
+    except Exception as _met_err:
+        logger.warning(f"Metals feed restart error (non-fatal): {_met_err}")
 
 
 async def _keepalive_ping_loop():
@@ -1982,7 +2019,8 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
       that worker calls this function again — racing all other workers.
     - Safe: pg_try_advisory_lock is non-blocking and only one worker wins.
     """
-    global _executor_running_in_this_worker
+    global _executor_running_in_this_worker, _executor_tasks_started
+    global _initial_executor_reclaim_done
     loop = asyncio.get_event_loop()
 
     if first_attempt_delay:
@@ -1996,11 +2034,13 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
         if _executor_running_in_this_worker:
             return  # Already running in this worker — nothing to do
 
-        # Standalone process is the sole executor — reclaim any external holder
-        # (old deploy pid, dev machine) before each acquire attempt on first try.
-        if _standalone and _wait_attempts == 0:
+        # Standalone: force-reclaim external ghosts once per process boot only.
+        # Re-running on every SSL blip was killing our own session and spawning
+        # duplicate executor loops (prefetch 80s → 800s, zero cycle-done lines).
+        if _standalone and not _initial_executor_reclaim_done:
             from app.executor_lock import reclaim_executor_lock
             await loop.run_in_executor(None, lambda: reclaim_executor_lock(force=True))
+            _initial_executor_reclaim_done = True
 
         lock_conn = await loop.run_in_executor(None, _try_acquire_executor_lock)
         if lock_conn:
@@ -2009,7 +2049,15 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
             # Start keepalive; when it returns the connection died → re-enter claim loop
             asyncio.create_task(_keepalive_then_reclaim(lock_conn))
             try:
-                await _start_executor_tasks()
+                if not _executor_tasks_started:
+                    await _start_executor_tasks()
+                    _executor_tasks_started = True
+                else:
+                    logger.info(
+                        "Executor lock re-acquired — scan loops already running "
+                        "(skipped duplicate task spawn)"
+                    )
+                    _ensure_executor_feeds_running()
             except Exception as e:
                 logger.error(f"Failed to start executor tasks: {e}")
             return  # This worker is now the executor; stop trying
@@ -2075,7 +2123,7 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
 async def _keepalive_then_reclaim(conn):
     """Keeps the advisory-lock connection alive; when it dies, re-enters the claim loop."""
     global _executor_running_in_this_worker
-    await _maintain_advisory_lock(conn)      # blocks until connection dies
+    await _maintain_advisory_lock(conn)      # blocks until reconnect exhausted
     _executor_running_in_this_worker = False
     # Stop the cTrader feed so this former lock-holder doesn't keep a second
     # connection open once another worker wins the lock and starts its own feed
@@ -13869,6 +13917,7 @@ async def executor_status(request: Request):
 
     return {
         "executor_running_in_this_worker": _executor_running_in_this_worker,
+        "executor_tasks_started": _executor_tasks_started,
         "is_production": is_prod,
         "advisory_lock_holder": lock_info,
         "lock_id": _EXECUTOR_LOCK_ID,
@@ -13956,7 +14005,7 @@ async def executor_force_start(request: Request):
     import os as _os
     _require_admin_bearer(request)
 
-    global _executor_running_in_this_worker
+    global _executor_running_in_this_worker, _executor_tasks_started
     if _executor_running_in_this_worker:
         return {"status": "already_running", "message": "Executor already active in this worker"}
 
@@ -14002,7 +14051,11 @@ async def executor_force_start(request: Request):
     _executor_running_in_this_worker = True
     asyncio.create_task(_keepalive_then_reclaim(lock_conn))
     try:
-        await _start_executor_tasks()
+        if not _executor_tasks_started:
+            await _start_executor_tasks()
+            _executor_tasks_started = True
+        else:
+            _ensure_executor_feeds_running()
         return {"status": "started", "message": "Executor started successfully in this worker"}
     except Exception as e:
         logger.error(f"[force-start] Failed to start tasks: {e}")

@@ -38,6 +38,10 @@ async def _run_forever() -> None:
     from app.executor_lock import reclaim_executor_lock
     reclaim_executor_lock(force=True)
 
+    import strategy_portal_server as _portal
+    # Claim loop must not force-reclaim again on every Neon SSL reconnect.
+    _portal._initial_executor_reclaim_done = True
+
     from strategy_portal_server import _executor_claim_loop
 
     logger.info("Standalone executor process starting — acquiring advisory lock…")
