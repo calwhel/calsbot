@@ -33,6 +33,11 @@ async def _run_forever() -> None:
     except Exception as exc:
         logger.warning("DB reachability check failed (non-fatal): %s", exc)
 
+    # Drop ghost holders (old Railway container, dev laptop, etc.) before the
+    # slow strategy_portal_server import — otherwise we sit in standby for hours.
+    from app.executor_lock import reclaim_executor_lock
+    reclaim_executor_lock(force=True)
+
     from strategy_portal_server import _executor_claim_loop
 
     logger.info("Standalone executor process starting — acquiring advisory lock…")

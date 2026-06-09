@@ -1988,10 +1988,19 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
     if first_attempt_delay:
         await asyncio.sleep(first_attempt_delay)
 
+    import os as _os
+    _standalone = _os.environ.get("EXECUTOR_STANDALONE", "").lower() in ("1", "true", "yes")
+
     _wait_attempts = 0
     while True:
         if _executor_running_in_this_worker:
             return  # Already running in this worker — nothing to do
+
+        # Standalone process is the sole executor — reclaim any external holder
+        # (old deploy pid, dev machine) before each acquire attempt on first try.
+        if _standalone and _wait_attempts == 0:
+            from app.executor_lock import reclaim_executor_lock
+            await loop.run_in_executor(None, lambda: reclaim_executor_lock(force=True))
 
         lock_conn = await loop.run_in_executor(None, _try_acquire_executor_lock)
         if lock_conn:
@@ -2047,17 +2056,13 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
                 except Exception as _le:
                     logger.warning(f"[executor] lock status check failed: {_le}")
             if _wait_attempts >= _STATUS_EVERY and _wait_attempts % _STATUS_EVERY == 0:
-                from app.services.telegram_poller_lock import terminate_advisory_lock_holders
-                # Only reclaim from a GENUINELY stale holder (idle past the
-                # threshold). A live sibling worker pings every
-                # _EXECUTOR_LOCK_KEEPALIVE_SECS, so it is never killed here —
-                # this is what prevents the two-worker lock-thrash that halts
-                # the executor (and therefore all trade firing).
+                from app.executor_lock import reclaim_executor_lock
+                # Standalone process: force-reclaim any holder (external ghost).
+                # Gunicorn siblings: only reclaim genuinely idle zombies so the
+                # live executor worker is never terminated.
                 n = await loop.run_in_executor(
                     None,
-                    terminate_advisory_lock_holders,
-                    _EXECUTOR_LOCK_ID,
-                    _EXECUTOR_LOCK_STALE_IDLE_SECS,
+                    lambda: reclaim_executor_lock(force=_standalone),
                 )
                 if n:
                     logger.warning(
@@ -2186,8 +2191,13 @@ async def _startup_background():
         # Brief delay so at least one worker is serving HTTP before executor tasks spin up.
         _exec_delay = int(os.getenv("EXECUTOR_START_DELAY", "8"))
         asyncio.create_task(_executor_claim_loop(first_attempt_delay=_exec_delay))
+    elif _gunicorn_executor_disabled and _is_production:
+        logger.info(
+            "Strategy executor in gunicorn SKIPPED (DISABLE_EXECUTOR_IN_GUNICORN=1 — "
+            "standalone executor process runs scans)"
+        )
     else:
-        logger.info("Strategy executor DISABLED (dev environment — only production runs it)")
+        logger.info("Strategy executor DISABLED (not a production deploy)")
 
     # AI Strategy Generator — autonomous content engine for the marketplace.
     # Runs only in production (or with ENABLE_AI_GENERATOR=1) so dev never
