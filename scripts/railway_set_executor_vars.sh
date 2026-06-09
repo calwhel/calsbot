@@ -20,8 +20,6 @@ if [ "${PROFILE}" = "pro" ]; then
   echo "Setting Railway Pro executor profile..."
   railway variables set \
     RAILWAY_PRO=1 \
-    CTRADER_REMOTE_FEED=1 \
-    DISABLE_CTRADER_FEED_IN_EXECUTOR=1 \
     BG_POOL_SIZE=12 \
     BG_POOL_OVERFLOW=15 \
     BG_DB_RESERVE=6 \

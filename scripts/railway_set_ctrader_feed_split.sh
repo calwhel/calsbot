@@ -53,7 +53,16 @@ case "${TARGET}" in
 esac
 
 echo ""
-echo "After both services are configured, redeploy and verify:"
-echo "  Feed logs:  'streaming spot ticks to Postgres'"
+echo "── Railway UI (second service) ─────────────────────────────────────"
+echo "  1. Project → + New → GitHub Repo → same repo as main"
+echo "  2. Name it e.g. ctrader-feed"
+echo "  3. Variables → Reference DATABASE_URL from main (or paste same Neon URL)"
+echo "  4. Copy CTRADER_CLIENT_ID + CTRADER_CLIENT_SECRET from main"
+echo "  5. Run: $0 feed   (while railway link points at ctrader-feed service)"
+echo "  6. Deploy feed first; when logs show 'streaming spot ticks', run: $0 main"
+echo "  7. Redeploy main"
+echo ""
+echo "Verify:"
+echo "  Feed logs:  'streaming spot ticks to Postgres' + 'Feed health server'"
 echo "  Main logs:  'spot stream skipped — remote feed enabled'"
 echo "  API:        /api/ctrader/feed-status → remote_feed: true"

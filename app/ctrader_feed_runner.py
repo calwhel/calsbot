@@ -24,6 +24,35 @@ logging.basicConfig(
 logger = logging.getLogger("ctrader_feed_runner")
 
 
+def _start_ping_server() -> None:
+    """Railway healthcheck expects PORT + /ping — feed process has no gunicorn."""
+    port = int(os.environ.get("PORT", "8080"))
+
+    def _serve():
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path.rstrip("/") in ("", "/ping", "/health"):
+                    body = b"ok"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def log_message(self, *_args):
+                pass
+
+        HTTPServer(("0.0.0.0", port), _Handler).serve_forever()
+
+    threading.Thread(target=_serve, name="feed-ping", daemon=True).start()
+    logger.info("Feed health server on :%s/ping", port)
+
+
 def _lock_keepalive_thread(conn_holder: list, stop_event: threading.Event) -> None:
     """Ping the advisory-lock session so Neon idle drops do not release the lock."""
     while not stop_event.is_set():
@@ -127,6 +156,7 @@ async def _claim_loop() -> None:
 
 async def _run_forever() -> None:
     os.environ["CTRADER_FEED_ONLY"] = "1"
+    _start_ping_server()
     try:
         from app.database import init_db_minimal
 
