@@ -4,6 +4,7 @@ from unittest import mock
 
 from app.services.tradfi_prices import (
     METAL_KLINE_LIVE_MAX_DRIFT_PCT,
+    confirm_entry_price,
     is_metal_symbol,
     metal_klines_match_live_spot,
 )
@@ -37,6 +38,30 @@ class TestMetalEntryPrice(unittest.TestCase):
 
     def test_drift_threshold_sane_default(self):
         self.assertLessEqual(METAL_KLINE_LIVE_MAX_DRIFT_PCT, 1.0)
+
+    def test_confirm_entry_rejects_stale_proposed(self):
+        with mock.patch(
+            "app.services.tradfi_prices.get_price_fresh",
+            mock.AsyncMock(return_value=2650.0),
+        ):
+            import asyncio
+            px, reason = asyncio.run(
+                confirm_entry_price("XAUUSD", "forex", 2600.0)
+            )
+        self.assertIsNone(px)
+        self.assertIn("drift", reason)
+
+    def test_confirm_entry_accepts_fresh_proposed(self):
+        with mock.patch(
+            "app.services.tradfi_prices.get_price_fresh",
+            mock.AsyncMock(return_value=2650.0),
+        ):
+            import asyncio
+            px, reason = asyncio.run(
+                confirm_entry_price("XAUUSD", "forex", 2649.0)
+            )
+        self.assertEqual(px, 2650.0)
+        self.assertIn("confirmed", reason)
 
 
 if __name__ == "__main__":

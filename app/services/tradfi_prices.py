@@ -453,6 +453,86 @@ def _yf_download_blocking(ticker: str, interval: str, period: str):
     )
 
 
+async def get_price_fresh(symbol: str, asset_class: str) -> Optional[float]:
+    """Bypass short-lived caches — use immediately before recording entry_price."""
+    sym = symbol.upper()
+    if is_metal_symbol(sym):
+        try:
+            from app.services.metals_spot_feed import fetch_now as _metals_fetch
+            px = await _metals_fetch(sym)
+            if px and px > 0:
+                return px
+        except Exception:
+            pass
+        _bn_sym = _METALS_BINANCE_MAP.get(sym)
+        if _bn_sym:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=4.0) as _c:
+                    r = await _c.get(
+                        f"{_BINANCE_SPOT_BASE}/ticker/price",
+                        params={"symbol": _bn_sym},
+                    )
+                if r.status_code == 200:
+                    px = float((r.json() or {}).get("price") or 0)
+                    if px > 0:
+                        return px
+            except Exception:
+                pass
+            _cb_pair = {"XAUUSDT": "XAU-USD", "XAGUSDT": "XAG-USD"}.get(_bn_sym)
+            if _cb_pair:
+                try:
+                    import httpx
+                    async with httpx.AsyncClient(timeout=4.0) as _c:
+                        r = await _c.get(
+                            f"https://api.coinbase.com/v2/prices/{_cb_pair}/spot"
+                        )
+                    if r.status_code == 200:
+                        amount = ((r.json() or {}).get("data") or {}).get("amount")
+                        px = float(amount) if amount else 0.0
+                        if px > 0:
+                            return px
+                except Exception:
+                    pass
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        _cpx = _ctf.get_price(sym)
+        if _cpx is not None:
+            return _cpx
+    except Exception:
+        pass
+    return await get_price(symbol, asset_class)
+
+
+async def confirm_entry_price(
+    symbol: str,
+    asset_class: str,
+    proposed: float,
+) -> Tuple[Optional[float], str]:
+    """
+    Re-fetch live spot at fire time; reject stale proposed prices.
+    Returns (confirmed_entry, reason) or (None, reason).
+    """
+    if not proposed or proposed <= 0:
+        return None, "invalid_proposed"
+    live = await get_price_fresh(symbol, asset_class)
+    if not live or live <= 0:
+        return None, "no_live_spot_at_fire"
+
+    max_drift = (
+        METAL_KLINE_LIVE_MAX_DRIFT_PCT
+        if is_metal_symbol(symbol)
+        else float(os.environ.get("ENTRY_PRICE_MAX_DRIFT_PCT", "0.15"))
+    )
+    drift_pct = abs(live - proposed) / live * 100.0
+    if drift_pct > max_drift:
+        return None, (
+            f"proposed_stale drift={drift_pct:.2f}% "
+            f"proposed={proposed:.4f} live={live:.4f}"
+        )
+    return live, "fresh_spot_confirmed"
+
+
 async def get_price(symbol: str, asset_class: str) -> Optional[float]:
     """
     Latest trade price.

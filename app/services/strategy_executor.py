@@ -3422,10 +3422,30 @@ async def evaluate_and_fire(
         _conditions_failed_for_all = False
         # break out of "failure tracking" — we have a real fire below
 
+        # ── Pre-fire entry price confirmation (metals + tradfi) ─────────────
+        if asset_class in ("forex", "index", "stock"):
+            from app.services.tradfi_prices import confirm_entry_price as _confirm_px
+            _confirmed_px, _confirm_reason = await _confirm_px(
+                symbol, asset_class, current_price,
+            )
+            if _confirmed_px is None:
+                _bump("blk_entry_price_stale")
+                logger.warning(
+                    f"[Strategy {strategy.id}] {symbol} fire blocked — "
+                    f"{_confirm_reason} (scan_price={current_price:.4f})"
+                )
+                continue
+            if abs(_confirmed_px - current_price) / max(_confirmed_px, 1e-9) > 0.00005:
+                logger.info(
+                    f"[Strategy {strategy.id}] {symbol} entry adjusted "
+                    f"{current_price:.4f} → {_confirmed_px:.4f} ({_confirm_reason})"
+                )
+            current_price = _confirmed_px
+
         mode_tag = "🧪 [PAPER]" if is_paper else "🎯"
         logger.info(
             f"{mode_tag} [Strategy {strategy.id}] {strategy.name} — "
-            f"{symbol} conditions met! {direction_pref}"
+            f"{symbol} @ {current_price:.4f} conditions met! {direction_pref}"
         )
 
         ex_config = config.get("exit") or {}
