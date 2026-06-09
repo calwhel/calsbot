@@ -46,6 +46,10 @@ FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCUR
 EXECUTOR_SCAN_BATCH_SIZE    = int(_os_env.environ.get("EXECUTOR_SCAN_BATCH_SIZE", "20"))
 # Let forex finish its first batch before crypto hammers the same Neon pool + APIs.
 EXECUTOR_CRYPTO_START_DELAY = int(_os_env.environ.get("EXECUTOR_CRYPTO_START_DELAY", "45"))
+# Klines fetched per symbol during scans — 80 bars is enough for RSI(14) + ICT signals.
+EXECUTOR_KLINE_BARS           = int(_os_env.environ.get("EXECUTOR_KLINE_BARS", "80"))
+# Parallel Yahoo/Bitunix prefetches at cycle start (unique symbols across all strategies).
+EXECUTOR_PREFETCH_CONCURRENT  = int(_os_env.environ.get("EXECUTOR_PREFETCH_CONCURRENT", "25"))
 PAPER_MAX_HOLD_HOURS        = 168   # auto-expire paper positions after this many hours (7 days)
 
 async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size: int = 0) -> None:
@@ -649,7 +653,7 @@ async def _fetch_price_and_ta(
             )
             tf = timeframe or "15m"
             kl = await _tradfi_klines(
-                symbol, asset_class, tf, 100,
+                symbol, asset_class, tf, EXECUTOR_KLINE_BARS,
                 ctrader_user_id=user_id,
             )
             if not kl:
@@ -4361,6 +4365,67 @@ async def _propagate_to_subscribers(
 
 # ─── Asset-class helper (shared by both executor loops) ──────────────────────
 
+def _symbols_for_snapshot(snap: dict, max_symbols: int = 20) -> List[str]:
+    """Universe symbols for prefetch — capped so wide rosters don't explode HTTP."""
+    cfg = snap.get("config") or {}
+    raw = (cfg.get("universe") or {}).get("symbols") or []
+    out: List[str] = []
+    for s in raw:
+        if not isinstance(s, str) or not s.strip():
+            continue
+        sym = s.upper().replace("/", "").replace("-", "")
+        if sym and sym not in out:
+            out.append(sym)
+        if len(out) >= max_symbols:
+            break
+    return out
+
+
+async def _prefetch_price_ta_for_cycle(
+    snapshots: list,
+    http_client: httpx.AsyncClient,
+    allowed_asset_classes: set,
+    label: str = "Executor",
+) -> int:
+    """
+    Warm _PRICE_TA_CACHE + tradfi kline cache for every unique symbol in this
+    cycle BEFORE per-strategy evaluate_and_fire. Cuts scan time from O(strategies
+    × symbols) sequential waves to O(unique symbols) parallel prefetch.
+    """
+    jobs: List[Tuple[str, str, str]] = []
+    seen: set = set()
+    for snap in snapshots:
+        ac = _snap_asset_class(snap)
+        if ac not in allowed_asset_classes:
+            continue
+        tf = _primary_timeframe(snap.get("config") or {})
+        for sym in _symbols_for_snapshot(snap):
+            key = (sym, ac, tf)
+            if key in seen:
+                continue
+            seen.add(key)
+            jobs.append(key)
+    if not jobs:
+        return 0
+
+    sem = asyncio.Semaphore(EXECUTOR_PREFETCH_CONCURRENT)
+    t0 = time.monotonic()
+
+    async def _warm(sym: str, ac: str, tf: str) -> None:
+        async with sem:
+            try:
+                await _fetch_price_and_ta(sym, http_client, ac, timeframe=tf)
+            except Exception:
+                pass
+
+    await asyncio.gather(*[_warm(s, a, t) for s, a, t in jobs], return_exceptions=True)
+    logger.info(
+        f"[{label}] prefetched {len(jobs)} unique symbol(s) in "
+        f"{time.monotonic() - t0:.1f}s (cache warm for evaluate)"
+    )
+    return len(jobs)
+
+
 def _snap_asset_class(snap: dict) -> str:
     """Return the normalised asset_class for a strategy snapshot dict.
     Mobile wizard saves asset_class as '_asset_class' in config; web portal
@@ -4735,6 +4800,13 @@ async def run_strategy_executor():
                                         db_one.close()
                                     except Exception:
                                         pass
+
+                await _prefetch_price_ta_for_cycle(
+                    eval_snapshots,
+                    http_client,
+                    {"crypto"},
+                    label="Crypto Executor",
+                )
 
                 await _gather_eval_batches(
                     "Crypto Executor", eval_snapshots, _run_one,
@@ -5825,6 +5897,13 @@ async def run_forex_executor():
                                         db_one.close()
                                     except Exception:
                                         pass
+
+                await _prefetch_price_ta_for_cycle(
+                    open_snaps,
+                    http_client,
+                    {"forex", "index", "stock"},
+                    label="FX Executor",
+                )
 
                 logger.info(
                     f"[FX Executor] evaluating {len(open_snaps)} strategies "
