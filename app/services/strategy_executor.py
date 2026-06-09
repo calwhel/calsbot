@@ -54,11 +54,28 @@ async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size:
     total = len(snapshots)
     if not total:
         return
-    for i in range(0, total, max(1, size)):
+    n_batches = (total + size - 1) // max(1, size)
+    done = 0
+    done_lock = asyncio.Lock()
+    # Log every N completions so long first cycles (78 forex × Yahoo klines)
+    # don't look stuck for 5–10 min before the first batch finishes.
+    _PROGRESS_EVERY = max(5, min(10, size // 2 or 5))
+
+    async def _one(snap):
+        nonlocal done
+        await run_one(snap)
+        async with done_lock:
+            done += 1
+            if done == total or done % _PROGRESS_EVERY == 0:
+                logger.info(f"[{label}] progress {done}/{total} strategies evaluated")
+
+    for bi, i in enumerate(range(0, total, max(1, size))):
         batch = snapshots[i : i + size]
-        await asyncio.gather(*[run_one(s) for s in batch])
-        done = min(i + len(batch), total)
-        logger.info(f"[{label}] progress {done}/{total} strategies evaluated")
+        logger.info(
+            f"[{label}] batch {bi + 1}/{n_batches} starting — "
+            f"{len(batch)} strategies ({done}/{total} done so far)"
+        )
+        await asyncio.gather(*[_one(s) for s in batch])
 
 
 # ─── Shared API caches ───────────────────────────────────────────────────────
