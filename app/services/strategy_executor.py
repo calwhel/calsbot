@@ -687,8 +687,9 @@ async def _fetch_price_and_ta(
             if len(closes) < 2:
                 return None
 
+            from app.services.tradfi_prices import is_metal_symbol as _is_metal_sym
+
             live_px = await _tradfi_live_price(symbol, asset_class)
-            price = live_px if live_px else closes[-1]
             bid = ask = None
             try:
                 from app.services.ctrader_price_feed import get_bid_ask as _ba
@@ -696,9 +697,39 @@ async def _fetch_price_and_ta(
                 if _tick:
                     bid, ask = _tick
                     if not live_px:
-                        price = round((bid + ask) / 2.0, 6)
+                        live_px = round((bid + ask) / 2.0, 6)
             except Exception:
                 pass
+
+            kline_close = closes[-1]
+            _is_metal = _is_metal_sym(symbol)
+            if _is_metal:
+                if not live_px or live_px <= 0:
+                    logger.warning(
+                        f"[executor] {symbol.upper()}: no live spot price — "
+                        f"skip eval (refusing kline close {kline_close:.2f})"
+                    )
+                    return None
+                _drift_pct = (
+                    abs(live_px - kline_close) / live_px * 100.0
+                    if kline_close > 0
+                    else 0.0
+                )
+                _max_drift = float(
+                    _os_env.environ.get("METAL_KLINE_LIVE_MAX_DRIFT_PCT", "0.4")
+                )
+                if _drift_pct > _max_drift:
+                    logger.warning(
+                        f"[executor] {symbol.upper()}: kline/live drift "
+                        f"{_drift_pct:.2f}% (kline={kline_close:.2f} live={live_px:.2f}) "
+                        f"— skip eval (futures vs spot mismatch)"
+                    )
+                    return None
+                price = live_px
+                price_source = "spot_live"
+            else:
+                price = live_px if live_px else kline_close
+                price_source = "spot_live" if live_px else "kline_close"
 
             # Inline RSI(14) — same Wilder's smoothing the social_signals impl uses
             rsi = 50.0
@@ -713,6 +744,8 @@ async def _fetch_price_and_ta(
                 rsi = 100.0 if al == 0 else 100.0 - (100.0 / (1.0 + (ag / al)))
             result = {
                 "price": price,
+                "price_source": price_source,
+                "kline_close": kline_close,
                 "bid": bid,
                 "ask": ask,
                 "bid_price": bid,
@@ -3532,9 +3565,18 @@ async def evaluate_and_fire(
             and asset_class == "forex"
         ):
             _partial_close_pct = 50.0
-        _exec_notes = None
+        _exec_notes_parts: List[str] = []
         if _partial_close_pct and float(_partial_close_pct) > 0:
-            _exec_notes = f"partial_close_pct={float(_partial_close_pct):.0f}"
+            _exec_notes_parts.append(f"partial_close_pct={float(_partial_close_pct):.0f}")
+        _ps = price_data.get("price_source") or "unknown"
+        _exec_notes_parts.append(f"entry_src={_ps}")
+        _kc = price_data.get("kline_close")
+        if _kc is not None:
+            try:
+                _exec_notes_parts.append(f"kline_close={float(_kc):.4f}")
+            except (TypeError, ValueError):
+                pass
+        _exec_notes = " | ".join(_exec_notes_parts) if _exec_notes_parts else None
 
         execution = StrategyExecution(
             strategy_id    = strategy.id,

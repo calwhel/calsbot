@@ -100,6 +100,49 @@ _METALS_YAHOO_TICKER: Dict[str, str] = {
     "XAGUSD": "SI=F",
 }
 
+# Gold futures (GC=F) can sit $5–$50 away from XAUUSD spot — never fire trades
+# on futures kline closes when live spot disagrees by more than this %.
+METAL_KLINE_LIVE_MAX_DRIFT_PCT = float(
+    os.environ.get("METAL_KLINE_LIVE_MAX_DRIFT_PCT", "0.4")
+)
+
+
+def is_metal_symbol(symbol: str) -> bool:
+    return symbol.upper().replace("/", "").replace("-", "") in _METALS_BINANCE_MAP
+
+
+async def metal_klines_match_live_spot(
+    symbol: str,
+    rows: List[List[float]],
+    *,
+    asset_class: str = ASSET_CLASS_FOREX,
+) -> bool:
+    """False when OHLC last close diverges from live spot (futures vs spot mismatch)."""
+    if not rows:
+        return False
+    try:
+        close = float(rows[-1][4])
+    except (IndexError, TypeError, ValueError):
+        return False
+    if close <= 0:
+        return False
+    live = await get_price(symbol, asset_class)
+    if not live or live <= 0:
+        return False
+    drift_pct = abs(live - close) / live * 100.0
+    if drift_pct > METAL_KLINE_LIVE_MAX_DRIFT_PCT:
+        logger.warning(
+            "[tradfi] %s klines rejected — last close %.2f vs live spot %.2f "
+            "(%.2f%% > %.2f%% max; likely GC=F futures vs XAUUSD spot)",
+            symbol.upper(),
+            close,
+            live,
+            drift_pct,
+            METAL_KLINE_LIVE_MAX_DRIFT_PCT,
+        )
+        return False
+    return True
+
 
 def _resolve_ticker(asset_class: str, symbol: str) -> Optional[str]:
     cls = normalize_asset_class(asset_class)
@@ -796,6 +839,16 @@ async def _get_klines_impl(
     sym_norm = symbol.upper().replace("/", "").replace("-", "")
     is_metal = sym_norm in _METALS_BINANCE_MAP
 
+    # Live/paper metals: prefer Binance spot OHLC (matches spot entry price).
+    if is_metal and not for_backtest:
+        _brows = await _fetch_binance_metals_klines(symbol, timeframe, limit)
+        if _brows:
+            logger.info(
+                f"[tradfi] klines ok (Binance spot): {sym_norm} {timeframe} "
+                f"→ {len(_brows)} bars"
+            )
+            return _brows
+
     # Live forex majors: same multi-source chain as the UI scanner/backtest tools.
     # A thin cTrader response (e.g. 3 bars after a broker hiccup) used to return
     # immediately and skip Yahoo/FMP — every strategy then hit blk_no_price_data /
@@ -905,16 +958,26 @@ async def _get_klines_impl(
         except Exception as _fe:
             logger.debug(f"[tradfi] FMP 1min failed {symbol}: {_fe}")
 
-    # ── Yahoo chart API — metals futures (GC=F / SI=F) before yfinance lib ─────
+    # ── Yahoo chart API — metals futures (GC=F / SI=F) ONLY if aligned with spot ─
     if is_metal:
         _yt = _METALS_YAHOO_TICKER.get(symbol.upper())
         if _yt:
             _yrows = await _fetch_yahoo_chart_klines(_yt, timeframe, limit)
-            if _yrows:
+            if _yrows and not for_backtest:
+                if await metal_klines_match_live_spot(symbol, _yrows, asset_class=cls):
+                    return _yrows
+                _yrows = []
+            elif _yrows:
                 return _yrows
+        if not for_backtest:
+            logger.warning(
+                f"[tradfi] metals spot klines unavailable for {symbol.upper()} {timeframe} "
+                f"— refusing GC=F futures (spot feed required for live/paper fires)"
+            )
+            return []
         logger.warning(
             f"[tradfi] metals spot klines unavailable for {symbol.upper()} {timeframe} "
-            f"— trying yfinance futures as last resort"
+            f"— trying yfinance futures as last resort (backtest only)"
         )
 
     # ── yfinance download() ───────────────────────────────────────────────────
@@ -948,6 +1011,9 @@ async def _get_klines_impl(
                 ])
             except Exception:
                 continue
+        if is_metal and not for_backtest:
+            if not await metal_klines_match_live_spot(symbol, rows, asset_class=cls):
+                return []
         _KLINE_CACHE[key] = (rows, now)
         logger.info(f"[tradfi] klines ok: {ticker} {yf_interval} → {len(rows)} bars")
         return rows
