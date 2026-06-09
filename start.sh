@@ -4,12 +4,31 @@ set -e
 # Railway defaults — free portal features + live strategy executor
 export PORTAL_FEATURES_FREE="${PORTAL_FEATURES_FREE:-1}"
 export FORCE_EXECUTOR="${FORCE_EXECUTOR:-1}"
-# Background executor pool — forex+crypto evals hold sessions across async fetches.
-export BG_POOL_SIZE="${BG_POOL_SIZE:-8}"
-export BG_POOL_OVERFLOW="${BG_POOL_OVERFLOW:-10}"
-export BG_DB_RESERVE="${BG_DB_RESERVE:-5}"
-export EXECUTOR_MAX_CONCURRENT="${EXECUTOR_MAX_CONCURRENT:-2}"
-export EXECUTOR_FOREX_MAX_CONCURRENT="${EXECUTOR_FOREX_MAX_CONCURRENT:-3}"
+
+# Executor resource profile — set RAILWAY_PRO=1 (or RAILWAY_EXECUTOR_TIER=pro) on Pro plan.
+# Hobby/conservative defaults avoid pool exhaustion on 512MB–1GB replicas; Pro raises
+# concurrency + DB pool so ~90 forex + ~168 crypto cycles complete faster.
+if [ "${RAILWAY_PRO}" = "1" ] || [ "${RAILWAY_EXECUTOR_TIER}" = "pro" ]; then
+  _EXEC_PROFILE="pro"
+  export BG_POOL_SIZE="${BG_POOL_SIZE:-12}"
+  export BG_POOL_OVERFLOW="${BG_POOL_OVERFLOW:-15}"
+  export BG_DB_RESERVE="${BG_DB_RESERVE:-6}"
+  export EXECUTOR_MAX_CONCURRENT="${EXECUTOR_MAX_CONCURRENT:-4}"
+  export EXECUTOR_FOREX_MAX_CONCURRENT="${EXECUTOR_FOREX_MAX_CONCURRENT:-5}"
+  export EXECUTOR_FOREX_SCAN_INTERVAL="${EXECUTOR_FOREX_SCAN_INTERVAL:-8}"
+  export EXECUTOR_SCAN_INTERVAL="${EXECUTOR_SCAN_INTERVAL:-10}"
+  export EXECUTOR_CRYPTO_START_DELAY="${EXECUTOR_CRYPTO_START_DELAY:-60}"
+  export EXECUTOR_SCAN_BATCH_SIZE="${EXECUTOR_SCAN_BATCH_SIZE:-25}"
+  _GUNICORN_WORKERS_DEFAULT=3
+else
+  _EXEC_PROFILE="hobby"
+  export BG_POOL_SIZE="${BG_POOL_SIZE:-8}"
+  export BG_POOL_OVERFLOW="${BG_POOL_OVERFLOW:-10}"
+  export BG_DB_RESERVE="${BG_DB_RESERVE:-5}"
+  export EXECUTOR_MAX_CONCURRENT="${EXECUTOR_MAX_CONCURRENT:-2}"
+  export EXECUTOR_FOREX_MAX_CONCURRENT="${EXECUTOR_FOREX_MAX_CONCURRENT:-3}"
+  _GUNICORN_WORKERS_DEFAULT=2
+fi
 # Legacy Telegram social-signals scanner — off on portal/Railway; user strategies only.
 export DISABLE_SOCIAL_SCANNING="${DISABLE_SOCIAL_SCANNING:-1}"
 
@@ -48,12 +67,13 @@ if [ "${DISABLE_STANDALONE_EXECUTOR}" != "1" ]; then
 fi
 export DISABLE_EXECUTOR_IN_GUNICORN="${DISABLE_EXECUTOR_IN_GUNICORN:-1}"
 
-# Two gunicorn workers serve HTTP only; executor + feeds run in the process above.
-_GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
+# Gunicorn serves HTTP only; executor + feeds run in the standalone process above.
+_GUNICORN_WORKERS="${GUNICORN_WORKERS:-${_GUNICORN_WORKERS_DEFAULT}}"
 # 90 tradfi + 168 crypto strategies per cycle can exceed 120s (klines + DB +
 # per-strategy gate writes). Sub-120s timeouts caused WORKER TIMEOUT SIGABRT
 # mid-scan — zero completed forex cycles and no fires. Production script uses 300.
 _GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-300}"
+echo "[railway] Executor profile=${_EXEC_PROFILE} bg_pool=${BG_POOL_SIZE}+${BG_POOL_OVERFLOW} forex_conc=${EXECUTOR_FOREX_MAX_CONCURRENT} crypto_conc=${EXECUTOR_MAX_CONCURRENT}"
 echo "[railway] Starting Strategy Portal on port ${PORT:-5000} (workers=${_GUNICORN_WORKERS}, timeout=${_GUNICORN_TIMEOUT})..."
 exec gunicorn -w "${_GUNICORN_WORKERS}" -k uvicorn.workers.UvicornWorker \
   --max-requests 300 --max-requests-jitter 30 \

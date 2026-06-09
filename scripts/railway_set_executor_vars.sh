@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Set optional executor tuning vars on Railway.
+# Set executor tuning vars on Railway.
 # Requires: railway CLI logged in (`npm i -g @railway/cli && railway login`)
 #
-# These are OPTIONAL — the app already uses these defaults in code.
-# Only run if you want to override them without a code change.
+# Usage:
+#   ./scripts/railway_set_executor_vars.sh pro    # after upgrading to Railway Pro
+#   ./scripts/railway_set_executor_vars.sh hobby  # conservative (small replica)
 
 set -euo pipefail
+
+PROFILE="${1:-pro}"
 
 if ! command -v railway >/dev/null 2>&1; then
   echo "Install Railway CLI: npm i -g @railway/cli"
@@ -13,17 +16,40 @@ if ! command -v railway >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Setting executor tuning variables on linked Railway service..."
-railway variables set \
-  EXECUTOR_SCAN_INTERVAL=10 \
-  EXECUTOR_FOREX_SCAN_INTERVAL=5 \
-  EXECUTOR_MONITOR_INTERVAL=10 \
-  EXECUTOR_LIVE_MONITOR_INTERVAL=8 \
-  EXECUTOR_TRADE_MONITOR_INTERVAL=15 \
-  FMP_POLL_INTERVAL_SECONDS=8 \
-  EXECUTOR_MAX_CONCURRENT=3 \
-  EXECUTOR_FOREX_MAX_CONCURRENT=6 \
-  FOREX_SCANNER_PARALLEL=6
+if [ "${PROFILE}" = "pro" ]; then
+  echo "Setting Railway Pro executor profile..."
+  railway variables set \
+    RAILWAY_PRO=1 \
+    BG_POOL_SIZE=12 \
+    BG_POOL_OVERFLOW=15 \
+    BG_DB_RESERVE=6 \
+    EXECUTOR_MAX_CONCURRENT=4 \
+    EXECUTOR_FOREX_MAX_CONCURRENT=5 \
+    EXECUTOR_FOREX_SCAN_INTERVAL=8 \
+    EXECUTOR_SCAN_INTERVAL=10 \
+    EXECUTOR_CRYPTO_START_DELAY=60 \
+    EXECUTOR_SCAN_BATCH_SIZE=25 \
+    GUNICORN_WORKERS=3
+else
+  echo "Setting hobby/conservative executor profile..."
+  railway variables set \
+    RAILWAY_PRO=0 \
+    BG_POOL_SIZE=8 \
+    BG_POOL_OVERFLOW=10 \
+    BG_DB_RESERVE=5 \
+    EXECUTOR_MAX_CONCURRENT=2 \
+    EXECUTOR_FOREX_MAX_CONCURRENT=3 \
+    EXECUTOR_FOREX_SCAN_INTERVAL=15 \
+    EXECUTOR_SCAN_INTERVAL=20 \
+    EXECUTOR_CRYPTO_START_DELAY=120 \
+    GUNICORN_WORKERS=2
+fi
 
-echo "Done. Redeploy or wait for next deploy to pick up changes."
-echo "Verify feeds: https://YOUR-APP.up.railway.app/api/ctrader/feed-status"
+echo ""
+echo "Done. Trigger a redeploy (or push to main) to pick up changes."
+echo ""
+echo "IMPORTANT (Pro plan): In Railway → your service → Settings → Deploy → Replica Limits"
+echo "  set Memory to at least 4096 MB (8 GB recommended for ~250 strategies)."
+echo "  Pro plan allows up to 24 GB — the default autoscaler may still start at 512 MB."
+echo ""
+echo "Verify: https://tradehubmarkets.com/health/deep"
