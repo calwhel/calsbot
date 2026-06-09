@@ -1877,25 +1877,24 @@ async def _start_executor_tasks():
         logger.warning(f"Metals spot feed start error (non-fatal): {_met_err}")
 
     async def _spot_price_primer_loop():
-        """Keep shared spot store warm when FMP is in backoff and cTrader is idle."""
+        """Keep shared spot store warm — real-time ticks for metals + majors."""
         _KEYS = [
+            ("XAUUSD", "forex"), ("XAGUSD", "forex"),
             ("EURUSD", "forex"), ("GBPUSD", "forex"), ("USDJPY", "forex"),
-            ("XAUUSD", "forex"), ("NAS100", "index"), ("US30", "index"),
+            ("AUDUSD", "forex"), ("USDCAD", "forex"),
+            ("NAS100", "index"), ("US30", "index"), ("SPX500", "index"),
         ]
-        await asyncio.sleep(20)
+        _primer_s = max(3, int(os.environ.get("SPOT_PRIMER_INTERVAL_SECONDS", "5")))
+        await asyncio.sleep(8)
         while True:
             try:
-                from app.services.spot_price_store import snapshot as _snap
-                from app.services.tradfi_prices import get_price as _tf_px
-                if int((_snap(max_age_s=30.0) or {}).get("symbol_count") or 0) < 3:
-                    for sym, ac in _KEYS:
-                        try:
-                            await _tf_px(sym, ac)
-                        except Exception:
-                            pass
+                from app.services.realtime_spot import prime_symbols
+                n = await prime_symbols(_KEYS)
+                if n:
+                    logger.debug(f"[spot-primer] refreshed {n} symbol(s)")
             except Exception:
                 pass
-            await asyncio.sleep(90)
+            await asyncio.sleep(_primer_s)
 
     asyncio.create_task(_spot_price_primer_loop())
 

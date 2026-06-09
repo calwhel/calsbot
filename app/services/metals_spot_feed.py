@@ -1,17 +1,10 @@
 """
 Dedicated XAUUSD / XAGUSD spot price poller.
 
-cTrader is the authoritative source when linked and streaming, but gold ticks are
-often missing (no account, idle session, symbol not subscribed). FMP pauses entirely
-when cTrader is active for majors — leaving XAUUSD null in the shared spot store.
-
-This feed fills that gap:
-  • Skips a symbol when cTrader already has a fresh tick in the shared store
-  • Binance spot (XAUUSDT / XAGUSDT) when reachable
-  • Coinbase spot (XAU-USD / XAG-USD) — works from US / Railway where Binance is blocked
-  • Kraken PAXGUSD as a final gold fallback (tokenized gold, tracks spot closely)
-
-Runs as a single global poller on the executor worker (advisory lock 708_110_006).
+cTrader is authoritative when linked, but gold ticks are often missing. This feed
+keeps metals spot fresh by polling Binance / Coinbase / Kraken in parallel every
+few seconds — even when cTrader is connected but its tick is older than the strict
+real-time window.
 """
 from __future__ import annotations
 
@@ -27,7 +20,7 @@ _RUNNING = False
 _feed_task: Optional[asyncio.Task] = None
 _POLL_LOCK_ID = 708_110_006
 
-# Canonical symbol → list of (source_label, fetch_key, fetcher_name)
+# Canonical symbol → list of (source_label, fetch_key)
 _METALS: Dict[str, List[Tuple[str, str]]] = {
     "XAUUSD": [
         ("binance", "XAUUSDT"),
@@ -41,9 +34,9 @@ _METALS: Dict[str, List[Tuple[str, str]]] = {
 }
 
 _PRICE_CACHE: Dict[str, Tuple[float, datetime]] = {}
-_FRESH_CTRADER_S = 12.0
-_FRESH_ANY_S = 8.0
-_POLL_INTERVAL = max(5, int(os.environ.get("METALS_POLL_INTERVAL_SECONDS", "8")))
+_FRESH_CTRADER_S = float(os.environ.get("REALTIME_SPOT_MAX_AGE_METALS_S", "3"))
+_FRESH_ANY_S = _FRESH_CTRADER_S
+_POLL_INTERVAL = max(2, int(os.environ.get("METALS_POLL_INTERVAL_SECONDS", "3")))
 
 
 def is_live() -> bool:
@@ -59,16 +52,16 @@ def symbol_count() -> int:
 
 
 def get_price(symbol: str) -> Optional[float]:
-    """Mid from in-process cache or shared Postgres store."""
+    """Mid from in-process cache or shared Postgres store (strict freshness)."""
     sym = symbol.upper()
     entry = _PRICE_CACHE.get(sym)
     if entry:
         age = (datetime.utcnow() - entry[1]).total_seconds()
-        if age < _FRESH_ANY_S * 2:
+        if age <= _FRESH_ANY_S:
             return entry[0]
     try:
         from app.services.spot_price_store import get_mid
-        px = get_mid(sym, max_age_s=_FRESH_ANY_S * 2)
+        px = get_mid(sym, max_age_s=_FRESH_ANY_S)
         if px is not None:
             return px
     except Exception:
@@ -76,21 +69,14 @@ def get_price(symbol: str) -> Optional[float]:
     return None
 
 
-def _ctrader_fresh(symbol: str) -> bool:
-    """True when cTrader already owns a fresh tick — skip external polls."""
+def _has_fresh_tick(symbol: str) -> bool:
+    """True when any source has a tick within the real-time window."""
+    sym = symbol.upper()
     try:
-        from app.services.spot_price_store import get_tick
-        row = get_tick(symbol.upper(), _FRESH_CTRADER_S)
-        if row and (row.get("source") or "").lower() == "ctrader":
-            return True
+        from app.services.realtime_spot import read_fresh_cached
+        return read_fresh_cached(sym, "forex", max_age=_FRESH_ANY_S) is not None
     except Exception:
-        pass
-    try:
-        from app.services import ctrader_price_feed as _ctf
-        px = _ctf.get_price(symbol)
-        return px is not None
-    except Exception:
-        return False
+        return get_price(sym) is not None
 
 
 def _store(symbol: str, mid: float, source: str) -> None:
@@ -109,7 +95,7 @@ def _store(symbol: str, mid: float, source: str) -> None:
 async def _fetch_binance(pair: str) -> Optional[float]:
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             r = await client.get(
                 "https://api.binance.com/api/v3/ticker/price",
                 params={"symbol": pair},
@@ -126,9 +112,11 @@ async def _fetch_binance(pair: str) -> Optional[float]:
 
 
 async def _fetch_coinbase(pair: str) -> Optional[float]:
+    if not pair:
+        return None
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             r = await client.get(f"https://api.coinbase.com/v2/prices/{pair}/spot")
         if r.status_code != 200:
             return None
@@ -142,7 +130,7 @@ async def _fetch_coinbase(pair: str) -> Optional[float]:
 async def _fetch_kraken(pair: str) -> Optional[float]:
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=4.0) as client:
             r = await client.get(
                 "https://api.kraken.com/0/public/Ticker",
                 params={"pair": pair},
@@ -168,13 +156,26 @@ _FETCHERS = {
     "kraken": _fetch_kraken,
 }
 
+_COINBASE_PAIR = {"XAUUSDT": "XAU-USD", "XAGUSDT": "XAG-USD"}
+
+
+async def _fetch_source(source: str, key: str) -> Optional[Tuple[float, str]]:
+    fetcher = _FETCHERS.get(source)
+    if not fetcher:
+        return None
+    pair = _COINBASE_PAIR.get(key, key) if source == "coinbase" else key
+    px = await fetcher(pair)
+    if px is not None and px > 0:
+        return (float(px), source)
+    return None
+
 
 async def fetch_now(symbol: str) -> Optional[float]:
-    """On-demand metals price (for spot primer / cold start)."""
+    """On-demand metals price — parallel fetch from all externals."""
     sym = symbol.upper()
     if sym not in _METALS:
         return None
-    if _ctrader_fresh(sym):
+    if _has_fresh_tick(sym):
         return get_price(sym)
     if await _poll_symbol(sym):
         return get_price(sym)
@@ -182,17 +183,30 @@ async def fetch_now(symbol: str) -> Optional[float]:
 
 
 async def _poll_symbol(symbol: str) -> bool:
-    if _ctrader_fresh(symbol):
+    sym = symbol.upper()
+    if _has_fresh_tick(sym):
+        return True
+
+    tasks = [
+        _fetch_source(source, key)
+        for source, key in _METALS.get(sym, [])
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    candidates: List[Tuple[float, str]] = []
+    for r in results:
+        if isinstance(r, tuple) and len(r) == 2:
+            candidates.append(r)
+
+    if not candidates:
         return False
-    for source, key in _METALS.get(symbol.upper(), []):
-        fetcher = _FETCHERS.get(source)
-        if not fetcher:
-            continue
-        px = await fetcher(key)
-        if px is not None:
-            _store(symbol, px, source)
-            return True
-    return False
+
+    # Prefer binance > coinbase > kraken when multiple succeed.
+    rank = {"binance": 0, "coinbase": 1, "kraken": 2}
+    candidates.sort(key=lambda x: rank.get(x[1], 99))
+    mid, source = candidates[0]
+    _store(sym, mid, source)
+    return True
 
 
 def _acquire_lock():
@@ -229,7 +243,7 @@ async def _stream() -> None:
     global _RUNNING
     logger.info(
         f"[MetalsFeed] started — XAUUSD/XAGUSD every {_POLL_INTERVAL}s "
-        "(binance → coinbase → kraken; skipped when cTrader fresh)"
+        "(parallel binance/coinbase/kraken; always-on real-time spot)"
     )
     _RUNNING = True
     try:
@@ -245,7 +259,7 @@ async def _stream() -> None:
                 )
                 got = sum(1 for r in results if r is True)
                 if got:
-                    logger.debug(f"[MetalsFeed] stored {got} metal tick(s)")
+                    logger.debug(f"[MetalsFeed] fresh tick(s) for {got} metal(s)")
             finally:
                 await asyncio.to_thread(_release_lock, lock_conn)
             await asyncio.sleep(_POLL_INTERVAL)

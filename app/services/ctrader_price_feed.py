@@ -106,7 +106,7 @@ _TRACKED: Dict[str, str] = {
 # Broker symbol → canonical name (reverse map, built at start)
 _BROKER_TO_CANONICAL: Dict[str, str] = {v: k for k, v in _TRACKED.items()}
 
-_SPOT_TTL = 10.0  # seconds before a cached bid/ask is considered stale
+_SPOT_TTL = float(os.environ.get("REALTIME_SPOT_MAX_AGE_FOREX_S", "5"))
 
 # ── Module-level shared state ─────────────────────────────────────────────────
 # symbol → (bid, ask, monotonic_ts)

@@ -1,0 +1,337 @@
+"""
+Unified real-time spot price resolver for tradfi (forex / metals / indices).
+
+Trading paths must never use stale ticks. This module:
+  • Reads only ticks younger than REALTIME_SPOT_MAX_AGE_* (default 3s metals, 5s forex)
+  • Fetches all available sources in parallel when cache is cold
+  • Prefers cTrader (broker-matched fills) when fresh, else fastest external spot
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
+from app.services.asset_classes import (
+    ASSET_CLASS_FOREX,
+    ASSET_CLASS_INDEX,
+    normalize_asset_class,
+)
+
+logger = logging.getLogger(__name__)
+
+# Strict max tick age for trading / entry confirmation (seconds).
+_MAX_AGE_METALS = float(os.environ.get("REALTIME_SPOT_MAX_AGE_METALS_S", "3"))
+_MAX_AGE_FOREX = float(os.environ.get("REALTIME_SPOT_MAX_AGE_FOREX_S", "5"))
+_MAX_AGE_INDEX = float(os.environ.get("REALTIME_SPOT_MAX_AGE_INDEX_S", "5"))
+
+_METALS = frozenset({"XAUUSD", "XAGUSD"})
+_BINANCE_MAP = {"XAUUSD": "XAUUSDT", "XAGUSD": "XAGUSDT"}
+_COINBASE_MAP = {"XAUUSDT": "XAU-USD", "XAGUSDT": "XAG-USD"}
+_BINANCE_BASE = "https://api.binance.com/api/v3"
+
+# Source preference when multiple fresh ticks arrive (lower = better).
+_SOURCE_RANK = {
+    "ctrader": 0,
+    "binance": 1,
+    "coinbase": 2,
+    "fmp": 3,
+    "kraken": 4,
+}
+
+
+def _norm(symbol: str) -> str:
+    return symbol.upper().replace("/", "").replace("-", "")
+
+
+def is_metal(symbol: str) -> bool:
+    return _norm(symbol) in _METALS
+
+
+def max_age_s(symbol: str, asset_class: str) -> float:
+    sym = _norm(symbol)
+    if sym in _METALS:
+        return _MAX_AGE_METALS
+    cls = normalize_asset_class(asset_class)
+    if cls == ASSET_CLASS_INDEX:
+        return _MAX_AGE_INDEX
+    return _MAX_AGE_FOREX
+
+
+def _rank(source: str) -> int:
+    return _SOURCE_RANK.get((source or "").lower(), 99)
+
+
+def _pick_best(candidates: List[Tuple[float, str]]) -> Optional[Tuple[float, str]]:
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: (_rank(x[1]), -x[0]))
+    return candidates[0]
+
+
+def _read_ctrader(symbol: str, max_age: float) -> Optional[Tuple[float, str]]:
+    sym = _norm(symbol)
+    try:
+        from app.services import ctrader_price_feed as ctf
+        px = ctf.get_price(sym)
+        if px is not None and px > 0:
+            return (float(px), "ctrader")
+    except Exception:
+        pass
+    try:
+        from app.services.spot_price_store import get_tick
+        row = get_tick(sym, max_age_s=max_age)
+        if row and (row.get("source") or "").lower() == "ctrader":
+            mid = float(row["mid"])
+            if mid > 0:
+                return (mid, "ctrader")
+    except Exception:
+        pass
+    return None
+
+
+def _read_store(symbol: str, max_age: float) -> Optional[Tuple[float, str]]:
+    sym = _norm(symbol)
+    try:
+        from app.services.spot_price_store import get_tick
+        row = get_tick(sym, max_age_s=max_age)
+        if row:
+            mid = float(row["mid"])
+            src = (row.get("source") or "store").lower()
+            if mid > 0:
+                return (mid, src)
+    except Exception:
+        pass
+    return None
+
+
+def _read_metals_cache(symbol: str, max_age: float) -> Optional[Tuple[float, str]]:
+    sym = _norm(symbol)
+    if sym not in _METALS:
+        return None
+    try:
+        from app.services import metals_spot_feed as msf
+        entry = msf._PRICE_CACHE.get(sym)  # noqa: SLF001 — shared freshness gate
+        if entry:
+            px, ts = entry
+            age = (datetime.utcnow() - ts).total_seconds()
+            if age <= max_age and px > 0:
+                return (float(px), "metals_cache")
+    except Exception:
+        pass
+    return None
+
+
+def _read_fmp_fresh(symbol: str, max_age: float) -> Optional[Tuple[float, str]]:
+    sym = _norm(symbol)
+    try:
+        from app.services import fmp_price_feed as fmp
+        entry = fmp._PRICE_CACHE.get(sym)  # noqa: SLF001
+        if entry:
+            px, ts = entry
+            age = (datetime.utcnow() - ts).total_seconds()
+            if age <= max_age and px > 0:
+                return (float(px), "fmp")
+    except Exception:
+        pass
+    return None
+
+
+def read_fresh_cached(
+    symbol: str,
+    asset_class: str,
+    *,
+    max_age: Optional[float] = None,
+) -> Optional[Tuple[float, str]]:
+    """Return (price, source) from in-memory / Postgres caches only."""
+    sym = _norm(symbol)
+    age_limit = max_age if max_age is not None else max_age_s(sym, asset_class)
+    candidates: List[Tuple[float, str]] = []
+
+    hit = _read_ctrader(sym, age_limit)
+    if hit:
+        candidates.append(hit)
+
+    if sym in _METALS:
+        hit = _read_metals_cache(sym, age_limit)
+        if hit:
+            candidates.append(hit)
+
+    hit = _read_store(sym, age_limit)
+    if hit and hit not in candidates:
+        candidates.append(hit)
+
+    if sym not in _METALS:
+        hit = _read_fmp_fresh(sym, age_limit)
+        if hit:
+            candidates.append(hit)
+
+    return _pick_best(candidates)
+
+
+async def _fetch_binance(pair: str) -> Optional[float]:
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            r = await client.get(
+                f"{_BINANCE_BASE}/ticker/price",
+                params={"symbol": pair},
+            )
+        if r.status_code != 200:
+            return None
+        body = r.json()
+        if isinstance(body, dict) and body.get("code") not in (None, 0):
+            return None
+        px = float(body.get("price", 0))
+        return px if px > 0 else None
+    except Exception:
+        return None
+
+
+async def _fetch_coinbase(pair: str) -> Optional[float]:
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            r = await client.get(f"https://api.coinbase.com/v2/prices/{pair}/spot")
+        if r.status_code != 200:
+            return None
+        amount = ((r.json() or {}).get("data") or {}).get("amount")
+        px = float(amount) if amount else 0.0
+        return px if px > 0 else None
+    except Exception:
+        return None
+
+
+async def _fetch_kraken(pair: str) -> Optional[float]:
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            r = await client.get(
+                "https://api.kraken.com/0/public/Ticker",
+                params={"pair": pair},
+            )
+        if r.status_code != 200:
+            return None
+        result = (r.json() or {}).get("result") or {}
+        for v in result.values():
+            if not isinstance(v, dict):
+                continue
+            c = v.get("c") or []
+            if c:
+                px = float(c[0])
+                return px if px > 0 else None
+    except Exception:
+        pass
+    return None
+
+
+def _persist_tick(symbol: str, mid: float, source: str) -> None:
+    sym = _norm(symbol)
+    try:
+        from app.services.spot_price_store import upsert_tick
+        upsert_tick(sym, mid=mid, source=source[:20])
+    except Exception:
+        pass
+    if sym in _METALS:
+        try:
+            from app.services import metals_spot_feed as msf
+            msf._PRICE_CACHE[sym] = (mid, datetime.utcnow())  # noqa: SLF001
+        except Exception:
+            pass
+
+
+async def _fetch_metals_parallel(symbol: str) -> Optional[Tuple[float, str]]:
+    sym = _norm(symbol)
+    bn = _BINANCE_MAP.get(sym)
+    if not bn:
+        return None
+
+    async def _try(source: str, coro) -> Optional[Tuple[float, str]]:
+        try:
+            px = await coro
+            if px is not None and px > 0:
+                return (float(px), source)
+        except Exception:
+            pass
+        return None
+
+    tasks = [
+        _try("binance", _fetch_binance(bn)),
+        _try("coinbase", _fetch_coinbase(_COINBASE_MAP.get(bn, ""))),
+    ]
+    if sym == "XAUUSD":
+        tasks.append(_try("kraken", _fetch_kraken("PAXGUSD")))
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    candidates: List[Tuple[float, str]] = []
+    for r in results:
+        if isinstance(r, tuple) and len(r) == 2:
+            candidates.append(r)
+
+    best = _pick_best(candidates)
+    if best:
+        _persist_tick(sym, best[0], best[1])
+    return best
+
+
+async def fetch_parallel(
+    symbol: str,
+    asset_class: str,
+) -> Optional[Tuple[float, str]]:
+    """Hit all live sources concurrently; return best fresh tick."""
+    sym = _norm(symbol)
+    age_limit = max_age_s(sym, asset_class)
+    candidates: List[Tuple[float, str]] = []
+
+    cached = read_fresh_cached(sym, asset_class, max_age=age_limit)
+    if cached:
+        candidates.append(cached)
+
+    if sym in _METALS:
+        ext = await _fetch_metals_parallel(sym)
+        if ext:
+            candidates.append(ext)
+    else:
+        # cTrader is sync — already in cache read; FMP may update on next WS tick.
+        fmp = _read_fmp_fresh(sym, age_limit)
+        if fmp:
+            candidates.append(fmp)
+
+    return _pick_best(candidates)
+
+
+async def get_realtime_spot(
+    symbol: str,
+    asset_class: str,
+    *,
+    force_fetch: bool = False,
+) -> Optional[float]:
+    """
+    Latest real-time spot mid. Returns None when no source has a tick within
+    the strict max-age window (never serves stale / futures fallbacks).
+    """
+    sym = _norm(symbol)
+    age_limit = max_age_s(sym, asset_class)
+
+    if not force_fetch:
+        cached = read_fresh_cached(sym, asset_class, max_age=age_limit)
+        if cached:
+            return cached[0]
+
+    fetched = await fetch_parallel(sym, asset_class)
+    return fetched[0] if fetched else None
+
+
+async def prime_symbols(symbols: List[Tuple[str, str]]) -> int:
+    """Warm spot store for key symbols; returns count refreshed."""
+    refreshed = 0
+    for sym, ac in symbols:
+        try:
+            px = await get_realtime_spot(sym, ac, force_fetch=True)
+            if px is not None and px > 0:
+                refreshed += 1
+        except Exception:
+            pass
+    return refreshed

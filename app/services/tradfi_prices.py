@@ -126,7 +126,7 @@ async def metal_klines_match_live_spot(
         return False
     if close <= 0:
         return False
-    live = await get_price(symbol, asset_class)
+    live = await get_price_fresh(symbol, asset_class)
     if not live or live <= 0:
         return False
     drift_pct = abs(live - close) / live * 100.0
@@ -454,54 +454,15 @@ def _yf_download_blocking(ticker: str, interval: str, period: str):
 
 
 async def get_price_fresh(symbol: str, asset_class: str) -> Optional[float]:
-    """Bypass short-lived caches — use immediately before recording entry_price."""
-    sym = symbol.upper()
-    if is_metal_symbol(sym):
-        try:
-            from app.services.metals_spot_feed import fetch_now as _metals_fetch
-            px = await _metals_fetch(sym)
-            if px and px > 0:
-                return px
-        except Exception:
-            pass
-        _bn_sym = _METALS_BINANCE_MAP.get(sym)
-        if _bn_sym:
-            try:
-                import httpx
-                async with httpx.AsyncClient(timeout=4.0) as _c:
-                    r = await _c.get(
-                        f"{_BINANCE_SPOT_BASE}/ticker/price",
-                        params={"symbol": _bn_sym},
-                    )
-                if r.status_code == 200:
-                    px = float((r.json() or {}).get("price") or 0)
-                    if px > 0:
-                        return px
-            except Exception:
-                pass
-            _cb_pair = {"XAUUSDT": "XAU-USD", "XAGUSDT": "XAG-USD"}.get(_bn_sym)
-            if _cb_pair:
-                try:
-                    import httpx
-                    async with httpx.AsyncClient(timeout=4.0) as _c:
-                        r = await _c.get(
-                            f"https://api.coinbase.com/v2/prices/{_cb_pair}/spot"
-                        )
-                    if r.status_code == 200:
-                        amount = ((r.json() or {}).get("data") or {}).get("amount")
-                        px = float(amount) if amount else 0.0
-                        if px > 0:
-                            return px
-                except Exception:
-                    pass
+    """Bypass caches — parallel fetch from all live sources before entry_price."""
     try:
-        from app.services import ctrader_price_feed as _ctf
-        _cpx = _ctf.get_price(sym)
-        if _cpx is not None:
-            return _cpx
+        from app.services.realtime_spot import get_realtime_spot
+        px = await get_realtime_spot(symbol, asset_class, force_fetch=True)
+        if px is not None and px > 0:
+            return px
     except Exception:
         pass
-    return await get_price(symbol, asset_class)
+    return None
 
 
 async def confirm_entry_price(
@@ -536,103 +497,27 @@ async def confirm_entry_price(
 async def get_price(symbol: str, asset_class: str) -> Optional[float]:
     """
     Latest trade price.
-    Metals: Binance spot (XAUUSDT/XAGUSDT) → FMP → yfinance fallback.
+    Metals/forex/index: strict real-time spot resolver (never stale / futures).
     Others: FMP real-time feed → yfinance fast_info fallback.
     """
     cls = normalize_asset_class(asset_class)
     if cls == ASSET_CLASS_CRYPTO:
         return None
 
-    # ── 0a. cTrader live spot feed — matches the broker that fills orders ─────
-    # FP Markets / cTrader is where forex/metal/index orders actually execute,
-    # so its spot feed is the ONLY source that matches the user's chart and
-    # fills in real time. Returns None when there's no fresh tick (cold feed /
-    # no connected account) → falls through to the legacy sources below.
+    # ── Real-time spot (cTrader → shared store → parallel externals) ─────────
     try:
-        from app.services import ctrader_price_feed as _ctf
-        _cpx = _ctf.get_price(symbol)
-        if _cpx is not None:
-            return _cpx
+        from app.services.realtime_spot import get_realtime_spot
+        px = await get_realtime_spot(symbol, asset_class, force_fetch=False)
+        if px is not None and px > 0:
+            return px
     except Exception:
         pass
 
-    # ── 0b. Shared metals ticks (dedicated poller: binance / coinbase / kraken) ─
+    # Metals must NOT fall through to yfinance GC=F — that's gold FUTURES.
     if symbol.upper() in _METALS_BINANCE_MAP:
-        try:
-            from app.services.spot_price_store import get_mid as _store_mid
-            _spx = _store_mid(symbol.upper(), max_age_s=20.0)
-            if _spx is not None:
-                return _spx
-        except Exception:
-            pass
-        try:
-            from app.services.metals_spot_feed import get_price as _metals_px
-            _mpx = _metals_px(symbol)
-            if _mpx is not None:
-                return _mpx
-        except Exception:
-            pass
-        try:
-            from app.services.metals_spot_feed import fetch_now as _metals_fetch
-            _mpx = await _metals_fetch(symbol)
-            if _mpx is not None:
-                return _mpx
-        except Exception:
-            pass
+        return None
 
-    # ── 0. Binance spot — metals only (XAUUSDT / XAGUSDT) ────────────────────
-    _bn_sym = _METALS_BINANCE_MAP.get(symbol.upper())
-    if _bn_sym:
-        _cache_key = f"binance:{_bn_sym}"
-        now = datetime.utcnow()
-        cached = _PRICE_CACHE.get(_cache_key)
-        if cached and (now - cached[1]) < _PRICE_TTL:
-            return cached[0]
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=3.0) as _c:
-                r = await _c.get(
-                    f"{_BINANCE_SPOT_BASE}/ticker/price",
-                    params={"symbol": _bn_sym},
-                )
-            if r.status_code == 200:
-                body = r.json()
-                if isinstance(body, dict) and body.get("code") not in (None, 0):
-                    raise ValueError(body.get("msg") or "binance error")
-                px = float(body.get("price", 0))
-                if px:
-                    _PRICE_CACHE[_cache_key] = (px, now)
-                    try:
-                        from app.services.spot_price_store import upsert_tick
-                        upsert_tick(symbol.upper(), mid=px, source="binance")
-                    except Exception:
-                        pass
-                    return px
-        except Exception as _be:
-            logger.debug(f"[tradfi] Binance spot price failed for {_bn_sym}: {_be}")
-        # Coinbase works from US/Railway where Binance spot is geo-blocked.
-        _cb_pair = {"XAUUSDT": "XAU-USD", "XAGUSDT": "XAG-USD"}.get(_bn_sym)
-        if _cb_pair:
-            try:
-                import httpx
-                async with httpx.AsyncClient(timeout=4.0) as _c:
-                    r = await _c.get(f"https://api.coinbase.com/v2/prices/{_cb_pair}/spot")
-                if r.status_code == 200:
-                    amount = ((r.json() or {}).get("data") or {}).get("amount")
-                    px = float(amount) if amount else 0.0
-                    if px > 0:
-                        _PRICE_CACHE[_cache_key] = (px, now)
-                        try:
-                            from app.services.spot_price_store import upsert_tick
-                            upsert_tick(symbol.upper(), mid=px, source="coinbase")
-                        except Exception:
-                            pass
-                        return px
-            except Exception as _ce:
-                logger.debug(f"[tradfi] Coinbase spot price failed for {_cb_pair}: {_ce}")
-        # fall through to FMP / yfinance below
-
-    # ── 1. FMP real-time WebSocket feed (by-the-second, always active) ────────
+    # ── FMP (forex/index only — may serve slightly stale during rate limits) ─
     try:
         from app.services.fmp_price_feed import get_price as _fmp_price
         px = _fmp_price(symbol)
@@ -640,14 +525,6 @@ async def get_price(symbol: str, asset_class: str) -> Optional[float]:
             return px
     except Exception:
         pass
-
-    # Metals must NOT fall through to yfinance GC=F — that's gold FUTURES, a
-    # DIFFERENT instrument from XAUUSD spot (carries a contango premium of
-    # several dollars), so it mismatches the cTrader broker quote and can
-    # falsely trigger tight TP/SL. Better to return None (skip the tick) than
-    # feed a wrong-instrument price into live/paper trade evaluation.
-    if symbol.upper() in _METALS_BINANCE_MAP:
-        return None
 
     # ── 2. yfinance fast_info — real-time mid price (no exchange delay) ────────
     ticker = _resolve_ticker(cls, symbol)

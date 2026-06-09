@@ -19,7 +19,7 @@ class TestMetalEntryPrice(unittest.TestCase):
     def test_klines_rejected_when_futures_diverge(self):
         rows = [[0, 2600, 2610, 2590, 2600.0, 0]]
         with mock.patch(
-            "app.services.tradfi_prices.get_price",
+            "app.services.tradfi_prices.get_price_fresh",
             mock.AsyncMock(return_value=2650.0),
         ):
             import asyncio
@@ -29,7 +29,7 @@ class TestMetalEntryPrice(unittest.TestCase):
     def test_klines_accepted_when_aligned(self):
         rows = [[0, 2648, 2652, 2645, 2650.0, 0]]
         with mock.patch(
-            "app.services.tradfi_prices.get_price",
+            "app.services.tradfi_prices.get_price_fresh",
             mock.AsyncMock(return_value=2650.0),
         ):
             import asyncio
