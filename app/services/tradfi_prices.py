@@ -7,7 +7,8 @@ Price path:
   Others: FMP real-time WebSocket → yfinance fast_info fallback.
 
 Kline path:
-  Metals (XAUUSD/XAGUSD): cTrader trendbars → FMP → Binance spot → Yahoo.
+  Metals live: parallel Binance spot → cTrader → FMP → Kraken (never GC=F).
+  Metals backtest: Binance → cTrader → FMP → Yahoo (GC=F only if spot-aligned).
   Forex live: cTrader → Yahoo chart → FMP → yfinance.
   Others: yfinance download() — intraday OHLC for forex/indices.
 
@@ -98,6 +99,22 @@ _YAHOO_CHART_TF: Dict[str, Tuple[str, str]] = {
 _METALS_YAHOO_TICKER: Dict[str, str] = {
     "XAUUSD": "GC=F",
     "XAGUSD": "SI=F",
+}
+
+# Kraken public OHLC — works from US/Railway when Binance spot is geo-blocked.
+_KRAKEN_METAL_MAP: Dict[str, str] = {
+    "XAUUSD": "PAXGUSD",
+    "XAGUSD": "XAGUSD",
+}
+_KRAKEN_INTERVAL: Dict[str, int] = {
+    "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440,
+}
+_METAL_KLINE_SOURCE_RANK = {
+    "binance": 0,
+    "ctrader-user": 1,
+    "ctrader": 2,
+    "fmp": 3,
+    "kraken": 4,
 }
 
 # Gold futures (GC=F) can sit $5–$50 away from XAUUSD spot — never fire trades
@@ -314,6 +331,193 @@ async def fetch_index_scan_candles(
     return best[-limit:] if best else []
 
 
+def _metal_kline_min_bars(limit: int) -> int:
+    return min(limit, max(25, limit // 3))
+
+
+async def _fetch_with_kline_timeout(
+    coro,
+    *,
+    timeout_s: float,
+    label: str,
+    symbol: str,
+    timeframe: str,
+) -> List[List[float]]:
+    try:
+        rows = await asyncio.wait_for(coro, timeout=timeout_s)
+        return rows if isinstance(rows, list) else []
+    except asyncio.TimeoutError:
+        logger.info(
+            f"[tradfi] {label} klines timeout {symbol} {timeframe} "
+            f"(>{timeout_s:.0f}s)"
+        )
+        return []
+    except Exception as exc:
+        logger.debug(f"[tradfi] {label} klines failed {symbol} {timeframe}: {exc}")
+        return []
+
+
+async def _fetch_kraken_metals_klines(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+) -> List[List[float]]:
+    """Closed OHLC from Kraken PAXGUSD / XAGUSD (US-accessible spot proxy)."""
+    pair = _KRAKEN_METAL_MAP.get(symbol.upper())
+    interval = _KRAKEN_INTERVAL.get(timeframe)
+    if not pair or not interval:
+        return []
+
+    now = datetime.utcnow()
+    key = (f"kraken:{pair}", timeframe, limit)
+    cached = _KLINE_CACHE.get(key)
+    if cached and (now - cached[1]) < _KLINE_TTL:
+        return cached[0]
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            r = await client.get(
+                "https://api.kraken.com/0/public/OHLC",
+                params={"pair": pair, "interval": interval},
+            )
+        if r.status_code != 200:
+            return []
+        result = (r.json() or {}).get("result") or {}
+        raw_bars = None
+        for k, v in result.items():
+            if k != "last" and isinstance(v, list):
+                raw_bars = v
+                break
+        if not raw_bars:
+            return []
+
+        complete = raw_bars[:-1] if len(raw_bars) > 1 else raw_bars
+        rows: List[List[float]] = []
+        for bar in complete[-limit:]:
+            try:
+                rows.append([
+                    int(bar[0]) * 1000,
+                    float(bar[1]),
+                    float(bar[2]),
+                    float(bar[3]),
+                    float(bar[4]),
+                    float(bar[6]) if len(bar) > 6 else 0.0,
+                ])
+            except Exception:
+                continue
+        if rows:
+            _KLINE_CACHE[key] = (rows, now)
+            logger.info(
+                f"[tradfi] klines ok (Kraken): {pair} {timeframe} → {len(rows)} bars"
+            )
+            return rows
+    except Exception as exc:
+        logger.warning(
+            f"[tradfi] Kraken klines failed for {pair} {timeframe}: {exc}"
+        )
+    return []
+
+
+async def fetch_metal_live_candles(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    user_id: Optional[int] = None,
+) -> List[List[float]]:
+    """
+    Parallel spot-metal OHLC for executor live/paper scans.
+    Never returns GC=F futures — only spot-aligned sources.
+    """
+    sym = symbol.upper()
+    min_bars = _metal_kline_min_bars(limit)
+
+    ctrader_live = False
+    try:
+        from app.services.ctrader_price_feed import is_live as _ct_live
+        ctrader_live = bool(_ct_live())
+    except Exception:
+        pass
+
+    async def _labeled(label: str, coro, timeout_s: float) -> Tuple[str, List[List[float]]]:
+        rows = await _fetch_with_kline_timeout(
+            coro,
+            timeout_s=timeout_s,
+            label=label,
+            symbol=sym,
+            timeframe=timeframe,
+        )
+        return label, rows
+
+    tasks = [
+        _labeled("binance", _fetch_binance_metals_klines(sym, timeframe, limit), 4.0),
+    ]
+    if user_id and ctrader_live:
+        tasks.append(_labeled(
+            "ctrader-user",
+            _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
+            6.0,
+        ))
+    if ctrader_live:
+        tasks.append(_labeled(
+            "ctrader",
+            _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
+            6.0,
+        ))
+    if _env_fmp_api_key():
+        tasks.append(_labeled(
+            "fmp",
+            _fetch_fmp_metals_klines(sym, "forex", timeframe, limit),
+            5.0,
+        ))
+    if sym in _KRAKEN_METAL_MAP:
+        tasks.append(_labeled(
+            "kraken",
+            _fetch_kraken_metals_klines(sym, timeframe, limit),
+            5.0,
+        ))
+
+    results = await asyncio.gather(*tasks)
+
+    candidates: List[Tuple[int, int, str, List[List[float]]]] = []
+    thin: List[Tuple[int, str, List[List[float]]]] = []
+    for label, rows in results:
+        if not rows:
+            continue
+        rank = _METAL_KLINE_SOURCE_RANK.get(label, 99)
+        if len(rows) >= min_bars:
+            candidates.append((rank, len(rows), label, rows))
+        elif len(rows) >= 15:
+            thin.append((rank, label, rows))
+            logger.info(
+                f"[tradfi] metal-live partial {label} {sym} {timeframe}: "
+                f"{len(rows)} bars < {min_bars}"
+            )
+
+    if candidates:
+        candidates.sort(key=lambda x: (x[0], -x[1]))
+        label, rows = candidates[0][2], candidates[0][3]
+        logger.info(
+            f"[tradfi] metal-live best={label} {sym} {timeframe} → {len(rows)} bars"
+        )
+        return rows[-limit:] if len(rows) > limit else rows
+
+    if thin:
+        thin.sort(key=lambda x: x[0])
+        label, rows = thin[0][1], thin[0][2]
+        logger.info(
+            f"[tradfi] metal-live thin fallback {label} {sym} {timeframe} "
+            f"→ {len(rows)} bars"
+        )
+        return rows[-limit:] if len(rows) > limit else rows
+
+    logger.warning(
+        f"[tradfi] metal-live no spot klines for {sym} {timeframe} "
+        f"(binance/ctrader/fmp/kraken all missed)"
+    )
+    return []
+
+
 async def fetch_metal_scan_candles(
     symbol: str,
     timeframe: str,
@@ -321,48 +525,33 @@ async def fetch_metal_scan_candles(
     user_id: Optional[int] = None,
 ) -> List[List[float]]:
     """
-    Aggressive multi-source fetch for gold/silver backtest scanners.
-    When a user has cTrader linked, broker trendbars are preferred (demo/live
-    matched). Otherwise Yahoo → FMP → cTrader (app creds) → tradfi chain.
+    Multi-source fetch for gold/silver backtest scanners.
+    Spot sources first; Yahoo GC=F only as a late backtest fallback.
     """
     sym = symbol.upper()
     yahoo_ticker = _METALS_YAHOO_TICKER.get(sym)
     best: List[List[float]] = []
+    best_label = ""
 
     async def _keep(rows: List[List[float]], label: str) -> None:
-        nonlocal best
+        nonlocal best, best_label
         if rows and len(rows) > len(best):
             best = rows
-            logger.info(f"[tradfi] metal-scan best={label} {sym} {timeframe} → {len(rows)} bars")
+            best_label = label
+            logger.info(
+                f"[tradfi] metal-scan best={label} {sym} {timeframe} → {len(rows)} bars"
+            )
 
-    # Linked cTrader account → broker OHLC first (matches demo/live charts).
-    if user_id:
-        await _keep(
-            await _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
-            "ctrader-user",
-        )
-        if len(best) >= 120:
-            return best[-limit:]
+    live_rows = await fetch_metal_live_candles(sym, timeframe, limit, user_id=user_id)
+    if live_rows:
+        return live_rows[-limit:] if len(live_rows) > limit else live_rows
 
     if yahoo_ticker:
-        await _keep(await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit), "yahoo")
+        yrows = await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit)
+        if yrows and await metal_klines_match_live_spot(sym, yrows, asset_class="forex"):
+            await _keep(yrows, "yahoo-aligned")
         if len(best) >= 120:
             return best[-limit:]
-
-    if _env_fmp_api_key():
-        await _keep(
-            await _fetch_fmp_metals_klines(sym, "forex", timeframe, limit),
-            "fmp",
-        )
-        if len(best) >= 120:
-            return best[-limit:]
-
-    await _keep(
-        await _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
-        "ctrader",
-    )
-    if len(best) >= 120:
-        return best[-limit:]
 
     tradfi_rows = await _get_klines_impl(
         sym, "forex", timeframe, limit, for_backtest=True, ctrader_user_id=user_id,
@@ -761,7 +950,7 @@ async def _fetch_binance_metals_klines(
                     )
                     return rows
     except Exception as _be:
-        logger.debug(
+        logger.warning(
             f"[tradfi] Binance spot klines failed for {_bn_sym} "
             f"({_bn_interval}): {_be}"
         )
@@ -796,15 +985,24 @@ async def _get_klines_impl(
     sym_norm = symbol.upper().replace("/", "").replace("-", "")
     is_metal = sym_norm in _METALS_BINANCE_MAP
 
-    # Live/paper metals: prefer Binance spot OHLC (matches spot entry price).
+    # Live/paper metals: parallel spot OHLC — never GC=F futures on this path.
     if is_metal and not for_backtest:
-        _brows = await _fetch_binance_metals_klines(symbol, timeframe, limit)
-        if _brows:
-            logger.info(
-                f"[tradfi] klines ok (Binance spot): {sym_norm} {timeframe} "
-                f"→ {len(_brows)} bars"
+        try:
+            scan_rows = await fetch_metal_live_candles(
+                sym_norm, timeframe, limit, user_id=ctrader_user_id,
             )
-            return _brows
+            if scan_rows:
+                return scan_rows[-limit:] if len(scan_rows) > limit else scan_rows
+        except Exception as _mse:
+            logger.warning(
+                f"[tradfi] fetch_metal_live_candles failed {sym_norm} "
+                f"{timeframe}: {_mse}"
+            )
+        logger.warning(
+            f"[tradfi] metals spot klines unavailable for {sym_norm} {timeframe} "
+            f"— refusing GC=F futures (spot feed required for live/paper fires)"
+        )
+        return []
 
     # Live forex majors: same multi-source chain as the UI scanner/backtest tools.
     # A thin cTrader response (e.g. 3 bars after a broker hiccup) used to return
