@@ -768,6 +768,7 @@ async def get_price_fresh(
             force_fetch=True,
             paper_ok=paper_ok,
             user_id=user_id,
+            twelve_data_ok=True,
         )
         if px is not None and px > 0:
             return px

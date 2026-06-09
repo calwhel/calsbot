@@ -133,6 +133,40 @@ class TestRealtimeSpotAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hit, (1.0850, "ctrader"))
         mock_store.assert_called_once_with("EURUSD", 1.0850, "ctrader")
 
+    async def test_fetch_parallel_twelve_data_fire_time_only(self):
+        with patch.object(rs, "_ctrader_fresh", return_value=None), patch.object(
+            rs, "read_fresh_cached", return_value=None
+        ), patch.object(
+            rs, "_fetch_fmp_on_demand", new_callable=AsyncMock, return_value=None
+        ), patch.object(
+            rs, "_fetch_twelve_data_on_demand",
+            new_callable=AsyncMock,
+            return_value=(28786.0, "twelvedata"),
+        ) as mock_td, patch.object(
+            rs, "_fetch_yfinance_spot", new_callable=AsyncMock, return_value=None
+        ):
+            hit = await rs.fetch_parallel(
+                "NAS100", "index", twelve_data_ok=True,
+            )
+        self.assertEqual(hit, (28786.0, "twelvedata"))
+        mock_td.assert_awaited_once()
+
+    async def test_fetch_parallel_skips_twelve_data_without_flag(self):
+        with patch.object(rs, "_ctrader_fresh", return_value=None), patch.object(
+            rs, "read_fresh_cached", return_value=None
+        ), patch.object(
+            rs, "_fetch_fmp_on_demand", new_callable=AsyncMock, return_value=None
+        ), patch.object(
+            rs, "_fetch_twelve_data_on_demand", new_callable=AsyncMock,
+        ) as mock_td, patch.object(
+            rs, "_fetch_yfinance_spot",
+            new_callable=AsyncMock,
+            return_value=(28780.0, "yfinance"),
+        ):
+            hit = await rs.fetch_parallel("NAS100", "index", paper_ok=True)
+        mock_td.assert_not_awaited()
+        self.assertEqual(hit, (28780.0, "yfinance"))
+
     async def test_fetch_metals_parallel_stores_best(self):
         with patch.object(rs, "_fetch_binance", new_callable=AsyncMock, return_value=2650.0), patch.object(
             rs, "_fetch_coinbase", new_callable=AsyncMock, return_value=2649.5
