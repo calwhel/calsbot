@@ -762,7 +762,11 @@ async def get_price_fresh(
     try:
         from app.services.realtime_spot import get_realtime_spot
         px = await get_realtime_spot(
-            symbol, asset_class, force_fetch=True, paper_ok=paper_ok,
+            symbol,
+            asset_class,
+            force_fetch=True,
+            paper_ok=paper_ok,
+            twelve_data_ok=True,
         )
         if px is not None and px > 0:
             return px

@@ -38,9 +38,10 @@ _SOURCE_RANK = {
     "binance": 1,
     "coinbase": 2,
     "fmp": 3,
-    "kraken": 4,
-    "yfinance": 5,
-    "metals_cache": 6,
+    "twelvedata": 4,
+    "kraken": 5,
+    "yfinance": 6,
+    "metals_cache": 7,
     "store": 99,
 }
 _PAPER_MAX_AGE_S = float(os.environ.get("REALTIME_SPOT_MAX_AGE_PAPER_S", "15"))
@@ -128,6 +129,20 @@ def _read_metals_cache(symbol: str, max_age: float) -> Optional[Tuple[float, str
     return None
 
 
+def _read_twelve_data_fresh(symbol: str, max_age: float) -> Optional[Tuple[float, str]]:
+    sym = _norm(symbol)
+    try:
+        from app.services import twelve_data_feed as td
+        if not td.is_active_window():
+            return None
+        px = td.read_cached_quote(sym, max_age)
+        if px is not None and px > 0:
+            return (float(px), "twelvedata")
+    except Exception:
+        pass
+    return None
+
+
 def _read_fmp_fresh(symbol: str, max_age: float) -> Optional[Tuple[float, str]]:
     sym = _norm(symbol)
     try:
@@ -183,6 +198,9 @@ def read_fresh_cached(
 
     if sym not in _METALS:
         hit = _read_fmp_fresh(sym, age_limit)
+        if hit:
+            candidates.append(hit)
+        hit = _read_twelve_data_fresh(sym, age_limit)
         if hit:
             candidates.append(hit)
 
@@ -314,6 +332,27 @@ async def _fetch_yfinance_spot(
     return None
 
 
+async def _fetch_twelve_data_on_demand(
+    symbol: str,
+    asset_class: str,
+    max_age: float,
+) -> Optional[Tuple[float, str]]:
+    """Fire-time only — 09:00–18:00 UTC, rate-capped Twelve Data /price."""
+    sym = _norm(symbol)
+    hit = _read_twelve_data_fresh(sym, max_age)
+    if hit:
+        return hit
+    try:
+        from app.services.twelve_data_feed import fetch_quote
+
+        px = await fetch_quote(sym, asset_class, max_age=max_age)
+        if px is not None and px > 0:
+            return (float(px), "twelvedata")
+    except Exception:
+        pass
+    return None
+
+
 async def _fetch_fmp_on_demand(
     symbol: str,
     max_age: float,
@@ -344,11 +383,12 @@ async def fetch_parallel(
     asset_class: str,
     *,
     paper_ok: bool = False,
+    twelve_data_ok: bool = False,
 ) -> Optional[Tuple[float, str]]:
     """
     Hit live sources; return best fresh tick.
 
-    Priority: cTrader (broker) → FMP on-demand → yfinance → metals externals.
+    Priority: cTrader → FMP → Twelve Data (09–18 UTC, fire-time only) → yfinance.
     """
     sym = _norm(symbol)
     age_limit = _effective_max_age(sym, asset_class, paper_ok=paper_ok)
@@ -373,9 +413,15 @@ async def fetch_parallel(
         if fmp and fmp not in candidates:
             candidates.append(fmp)
 
-        # 3) yfinance — when cTrader missing, or always for paper confirmation.
+        # 3) Twelve Data — fire-time only, London+US window (09:00–18:00 UTC).
+        if twelve_data_ok:
+            td = await _fetch_twelve_data_on_demand(sym, asset_class, age_limit)
+            if td and td not in candidates:
+                candidates.append(td)
+
+        # 4) yfinance — when cTrader missing, or always for paper confirmation.
         need_yf = paper_ok or not any(
-            (c[1] or "").lower() == "ctrader" for c in candidates
+            (c[1] or "").lower() in ("ctrader", "twelvedata") for c in candidates
         )
         if need_yf:
             yf = await _fetch_yfinance_spot(sym, asset_class)
@@ -391,6 +437,7 @@ async def get_realtime_spot(
     *,
     force_fetch: bool = False,
     paper_ok: bool = False,
+    twelve_data_ok: bool = False,
 ) -> Optional[float]:
     """
     Latest real-time spot mid. Returns None when no source has a tick within
@@ -406,7 +453,9 @@ async def get_realtime_spot(
         if cached:
             return cached[0]
 
-    fetched = await fetch_parallel(sym, asset_class, paper_ok=paper_ok)
+    fetched = await fetch_parallel(
+        sym, asset_class, paper_ok=paper_ok, twelve_data_ok=twelve_data_ok,
+    )
     return fetched[0] if fetched else None
 
 
