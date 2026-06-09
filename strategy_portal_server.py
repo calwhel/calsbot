@@ -6959,6 +6959,43 @@ async def api_update_strategy_sizing(strategy_id: int, request: Request):
         db.close()
 
 
+def _delete_owned_strategy(db, strategy) -> None:
+    """Remove FK children then delete a UserStrategy row (caller commits)."""
+    from sqlalchemy import text
+
+    strategy_id = strategy.id
+    try:
+        db.execute(text("""
+            DELETE FROM earnings_transactions
+            WHERE purchase_id IN (
+                SELECT id FROM strategy_purchases WHERE strategy_id = :sid
+            )
+        """), {"sid": strategy_id})
+        db.execute(text(
+            "DELETE FROM strategy_purchases WHERE strategy_id = :sid"
+        ), {"sid": strategy_id})
+        db.execute(text("""
+            UPDATE strategy_purchases
+            SET cloned_strategy_id = NULL
+            WHERE cloned_strategy_id = :sid
+        """), {"sid": strategy_id})
+        db.execute(text("""
+            DELETE FROM strategy_ratings
+            WHERE listing_id IN (
+                SELECT id FROM strategy_marketplace WHERE strategy_id = :sid
+            )
+        """), {"sid": strategy_id})
+        db.execute(text(
+            "DELETE FROM strategy_marketplace WHERE strategy_id = :sid"
+        ), {"sid": strategy_id})
+        db.execute(text(
+            "DELETE FROM strategy_offers WHERE strategy_id = :sid"
+        ), {"sid": strategy_id})
+    except Exception as _clean_err:
+        logger.warning(f"[DeleteStrategy] Cleanup warning (non-fatal): {_clean_err}")
+    db.delete(strategy)
+
+
 @app.delete("/api/strategies/{strategy_id}")
 async def api_delete_strategy(strategy_id: int, uid: str = Query(...)):
     from app.database import SessionLocal
@@ -6976,53 +7013,65 @@ async def api_delete_strategy(strategy_id: int, uid: str = Query(...)):
         if not strategy:
             raise HTTPException(status_code=404)
 
-        # Clean up all FK-constrained child records before deleting the strategy.
-        # Use raw SQL to handle non-nullable FKs and complex dependency chains.
-        from sqlalchemy import text
-        try:
-            # 1) Delete earnings_transactions tied to purchases of this strategy
-            db.execute(text("""
-                DELETE FROM earnings_transactions
-                WHERE purchase_id IN (
-                    SELECT id FROM strategy_purchases WHERE strategy_id = :sid
-                )
-            """), {"sid": strategy_id})
-
-            # 2) Delete purchases where this strategy was the source listing
-            db.execute(text(
-                "DELETE FROM strategy_purchases WHERE strategy_id = :sid"
-            ), {"sid": strategy_id})
-
-            # 3) Null out cloned_strategy_id for subscriptions that cloned this strategy
-            db.execute(text("""
-                UPDATE strategy_purchases
-                SET cloned_strategy_id = NULL
-                WHERE cloned_strategy_id = :sid
-            """), {"sid": strategy_id})
-
-            # 4) Delete ratings tied to this strategy's marketplace listing
-            db.execute(text("""
-                DELETE FROM strategy_ratings
-                WHERE listing_id IN (
-                    SELECT id FROM strategy_marketplace WHERE strategy_id = :sid
-                )
-            """), {"sid": strategy_id})
-
-            # 5) Delete the marketplace listing itself
-            db.execute(text(
-                "DELETE FROM strategy_marketplace WHERE strategy_id = :sid"
-            ), {"sid": strategy_id})
-
-            # 6) Delete strategy offers
-            db.execute(text(
-                "DELETE FROM strategy_offers WHERE strategy_id = :sid"
-            ), {"sid": strategy_id})
-        except Exception as _clean_err:
-            logger.warning(f"[DeleteStrategy] Cleanup warning (non-fatal): {_clean_err}")
-
-        db.delete(strategy)
+        _delete_owned_strategy(db, strategy)
         db.commit()
         return {"deleted": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.post("/api/strategies/bulk-delete")
+async def api_bulk_delete_strategies(request: Request):
+    """Delete multiple owned strategies in one request (portal bulk-select UI)."""
+    body = await request.json()
+    uid = (body.get("uid") or "").strip()
+    raw_ids = body.get("strategy_ids") or body.get("ids") or []
+    if not uid:
+        raise HTTPException(status_code=400, detail="uid required")
+    try:
+        strategy_ids = sorted({int(i) for i in raw_ids})
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="strategy_ids must be integers")
+    if not strategy_ids:
+        raise HTTPException(status_code=400, detail="strategy_ids required")
+    if len(strategy_ids) > 200:
+        raise HTTPException(status_code=400, detail="Maximum 200 strategies per request")
+
+    from app.database import SessionLocal
+    from app.strategy_models import UserStrategy
+
+    db = SessionLocal()
+    deleted: list = []
+    not_found: list = []
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+
+        rows = (
+            db.query(UserStrategy)
+            .filter(
+                UserStrategy.user_id == user.id,
+                UserStrategy.id.in_(strategy_ids),
+            )
+            .all()
+        )
+        found_ids = {s.id for s in rows}
+        not_found = [i for i in strategy_ids if i not in found_ids]
+        for strategy in rows:
+            _delete_owned_strategy(db, strategy)
+            deleted.append(strategy.id)
+        db.commit()
+        return {
+            "deleted": deleted,
+            "deleted_count": len(deleted),
+            "not_found": not_found,
+        }
     except HTTPException:
         raise
     except Exception as e:
