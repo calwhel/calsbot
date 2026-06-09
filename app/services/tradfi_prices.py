@@ -491,28 +491,44 @@ async def fetch_metal_live_candles(
     _kraken_timeout = max(5.0, _KRAKEN_KLINE_TIMEOUT_S)
 
     async with _metal_live_fetch_sem():
-        ctrader_live = False
+        feed_live = False
+        broker_ready = False
         try:
-            from app.services.ctrader_price_feed import is_live as _ct_live
-            ctrader_live = bool(_ct_live())
+            from app.services.ctrader_price_feed import (
+                broker_session_ready as _ct_ready,
+                is_live as _ct_live,
+            )
+            feed_live = bool(_ct_live())
+            broker_ready = bool(_ct_ready(sym))
         except Exception:
             pass
 
-        # When the spot stream is LIVE, broker trendbars are the best source — try
-        # them first (serialized on _tb_lock) instead of racing Kraken/Binance in
-        # parallel with a short cap that always loses under shard load.
+        # When the broker session is up, trendbars are the best source — try them
+        # first (serialized on _tb_lock) instead of racing Kraken/Binance in
+        # parallel with short caps that lose under shard load.
         ctrader_tried = False
-        if ctrader_live:
+        if broker_ready:
             ctrader_tried = True
-            ct_rows = await _fetch_ctrader_klines(
-                sym, "forex", timeframe, limit, user_id=user_id,
-            )
+            ct_rows: List[List[float]] = []
+            for attempt in range(2):
+                ct_rows = await _fetch_ctrader_klines(
+                    sym, "forex", timeframe, limit, user_id=user_id,
+                )
+                if ct_rows:
+                    break
+                if attempt == 0:
+                    await asyncio.sleep(1.0)
             if ct_rows:
                 label = "ctrader-user" if user_id else "ctrader"
                 if len(ct_rows) >= min_bars or len(ct_rows) >= 15:
+                    _tag = (
+                        "cTrader feed LIVE — skipped externals"
+                        if feed_live
+                        else "cTrader broker session — skipped externals"
+                    )
                     logger.info(
                         f"[tradfi] metal-live best={label} {sym} {timeframe} "
-                        f"→ {len(ct_rows)} bars (cTrader feed LIVE — skipped externals)"
+                        f"→ {len(ct_rows)} bars ({_tag})"
                     )
                     out = ct_rows[-limit:] if len(ct_rows) > limit else ct_rows
                     _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
@@ -534,20 +550,24 @@ async def fetch_metal_live_candles(
             )
             return label, rows
 
-        tasks = [
-            _labeled("binance", _fetch_binance_metals_klines(sym, timeframe, limit), 6.0),
-        ]
-        if ctrader_live and not ctrader_tried:
+        tasks: List = []
+        # When feed is strictly LIVE, externals rarely beat broker — only Kraken
+        # as a single fallback to avoid 5-shard Binance/FMP timeout storms.
+        if not feed_live:
+            tasks.append(
+                _labeled("binance", _fetch_binance_metals_klines(sym, timeframe, limit), 6.0),
+            )
+            if _env_fmp_api_key():
+                tasks.append(_labeled(
+                    "fmp",
+                    _fetch_fmp_metals_klines(sym, "forex", timeframe, limit),
+                    5.0,
+                ))
+        if broker_ready and not ctrader_tried:
             tasks.append(_labeled(
                 "ctrader",
                 _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
                 _CTRADER_KLINE_TIMEOUT_LIVE_S,
-            ))
-        if _env_fmp_api_key():
-            tasks.append(_labeled(
-                "fmp",
-                _fetch_fmp_metals_klines(sym, "forex", timeframe, limit),
-                5.0,
             ))
         if sym in _KRAKEN_METAL_MAP:
             tasks.append(_labeled(

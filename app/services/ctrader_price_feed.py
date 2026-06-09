@@ -137,6 +137,8 @@ _tb_last_use: float = 0.0
 _TB_IDLE_MAX = 25.0  # cTrader drops idle conns ~30s → proactively reopen past this
 
 _feed_live: bool = False
+# Active spot-stream session — avoids DB round-trips for trendbars while LIVE.
+_stream_creds: Optional[Tuple[str, int, int, str]] = None  # token, ctid, uid, host
 _feed_task: Optional[asyncio.Task] = None
 _wake_event: Optional[asyncio.Event] = None
 # Cached symbol-ID map from the last successful connection.
@@ -493,7 +495,7 @@ async def _authenticate_stream(
 # ── Background streaming task ─────────────────────────────────────────────────
 
 async def _feed_loop() -> None:
-    global _feed_live
+    global _feed_live, _stream_creds
     fail_backoff = _RECONNECT_BACKOFF_MIN  # grows ONLY on connect/auth failures
 
     while True:
@@ -503,6 +505,7 @@ async def _feed_loop() -> None:
         session_start = time.monotonic()
         try:
             _feed_live = False
+            _stream_creds = None
 
             candidates = await _list_connected_accounts()
             if not candidates:
@@ -564,6 +567,7 @@ async def _feed_loop() -> None:
                 f"[CTraderFeed] subscribed to {len(sub_ids)} symbols — LIVE"
             )
             _feed_live = True
+            _stream_creds = (access_token, ctid, _uid, _host)
             session_start = time.monotonic()
             fail_backoff = _RECONNECT_BACKOFF_MIN  # reset after a clean subscribe
 
@@ -613,6 +617,7 @@ async def _feed_loop() -> None:
 
         except Exception as exc:
             _feed_live = False
+            _stream_creds = None
             _last_exc = exc
         else:
             _last_exc = None
@@ -870,9 +875,14 @@ async def get_klines(
     if cached and (time.monotonic() - cached[1]) < _KLINE_TTL:
         return cached[0]
 
-    async def _pull(creds_tuple) -> List[List[float]]:
+    async def _pull(
+        creds_tuple,
+        *,
+        preferred_host: Optional[str] = None,
+    ) -> List[List[float]]:
+        global _stream_creds
         access_token, ctid, uid, is_live = creds_tuple
-        primary_host = _HOST_LIVE if is_live else _HOST_DEMO
+        primary_host = preferred_host or (_HOST_LIVE if is_live else _HOST_DEMO)
         rows = await _fetch_trendbars(
             sym_up, timeframe, limit, access_token, ctid, primary_host,
         )
@@ -884,6 +894,8 @@ async def get_klines(
                 new_at = None
             if new_at:
                 access_token = new_at
+                if _stream_creds and _stream_creds[2] == uid:
+                    _stream_creds = (access_token, ctid, uid, primary_host)
                 rows = await _fetch_trendbars(
                     sym_up, timeframe, limit, access_token, ctid, primary_host,
                 )
@@ -894,9 +906,17 @@ async def get_klines(
             )
         return rows
 
-    creds = await _get_connected_account(user_id=user_id)
     rows: List[List[float]] = []
-    if creds:
+    sc = get_stream_creds()
+    if sc:
+        at, ctid, uid, host = sc
+        rows = await _pull(
+            (at, ctid, uid, host == _HOST_LIVE),
+            preferred_host=host,
+        )
+
+    creds = await _get_connected_account(user_id=user_id)
+    if creds and not rows:
         rows = await _pull(creds)
     # Spot stream may be live via another user's linked account — use the same
     # broker session for trendbars when a per-user lookup misses.
@@ -967,6 +987,27 @@ def get_bid_ask(symbol: str) -> Optional[Tuple[float, float]]:
 def is_live() -> bool:
     """True when the streaming connection is subscribed to spot prices."""
     return _feed_live
+
+
+def get_stream_creds() -> Optional[Tuple[str, int, int, str]]:
+    """(access_token, ctid, user_id, host) for the active spot stream, if any."""
+    return _stream_creds
+
+
+def broker_session_ready(symbol: str = "XAUUSD") -> bool:
+    """
+    True when cTrader trendbars are likely reachable — feed LIVE, warm session
+    creds cached, or a fresh broker spot tick is in memory.
+    """
+    if _feed_live or _stream_creds is not None:
+        return True
+    sym = symbol.upper()
+    entry = _spot_cache.get(sym)
+    if entry:
+        _, _, ts = entry
+        if time.monotonic() - ts <= _SPOT_TTL:
+            return True
+    return False
 
 
 def cached_symbols() -> List[str]:

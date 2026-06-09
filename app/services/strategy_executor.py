@@ -120,6 +120,7 @@ _RAW_TICKERS_TTL    = 60  # seconds
 # When multiple strategies scan the same symbol in the same cycle they all
 # hit the cache instead of each making an independent candle + indicator call.
 _PRICE_TA_CACHE: Dict[str, tuple] = {}  # symbol -> (data_dict, fetched_at)
+_METAL_WARM_LOCK: Optional[asyncio.Lock] = None  # one metal warm at a time / process
 _PRICE_TA_TTL    = 15  # seconds — fresher data for faster signal detection
 # Forex/index: the FMP price feed refreshes every 5s, so a 15s cache would make
 # a faster scan loop pointless (it'd re-evaluate stale prices). Match the cache
@@ -698,21 +699,28 @@ async def _fetch_price_and_ta(
                 metal_kline_drift_limit as _metal_drift_limit,
             )
 
-            live_px = await _tradfi_live_price(symbol, asset_class)
+            from app.services.tradfi_prices import get_price_fresh as _tradfi_price_fresh
+
+            _is_metal = _is_metal_sym(symbol)
+            live_px = None
             bid = ask = None
             try:
                 from app.services.ctrader_price_feed import get_bid_ask as _ba
                 _tick = _ba(symbol.upper())
                 if _tick:
                     bid, ask = _tick
-                    if not live_px:
-                        live_px = round((bid + ask) / 2.0, 6)
+                    live_px = round((bid + ask) / 2.0, 6)
             except Exception:
                 pass
+            if _is_metal:
+                if not live_px or live_px <= 0:
+                    live_px = await _tradfi_price_fresh(symbol, asset_class)
+            else:
+                if not live_px:
+                    live_px = await _tradfi_live_price(symbol, asset_class)
 
             kline_close = closes[-1]
             kline_source = None
-            _is_metal = _is_metal_sym(symbol)
             if _is_metal:
                 kline_source = _metal_kline_src(symbol, tf, EXECUTOR_KLINE_BARS)
                 if not live_px or live_px <= 0:
@@ -4561,17 +4569,21 @@ async def _prefetch_price_ta_for_cycle(
         (sym, tf) for sym, ac, tf in jobs if sym in ("XAUUSD", "XAGUSD")
     })
     if _metal_warm:
-        from app.services.tradfi_prices import get_klines as _metal_gk
-        _mw_t0 = time.monotonic()
-        for _msym, _mtf in _metal_warm:
-            try:
-                await _metal_gk(_msym, "forex", _mtf, EXECUTOR_KLINE_BARS)
-            except Exception:
-                pass
-        logger.info(
-            f"[{_log_ts()}] [{label}] metal kline warm: {len(_metal_warm)} tf(s) "
-            f"in {time.monotonic() - _mw_t0:.1f}s"
-        )
+        global _METAL_WARM_LOCK
+        if _METAL_WARM_LOCK is None:
+            _METAL_WARM_LOCK = asyncio.Lock()
+        async with _METAL_WARM_LOCK:
+            from app.services.tradfi_prices import get_klines as _metal_gk
+            _mw_t0 = time.monotonic()
+            for _msym, _mtf in _metal_warm:
+                try:
+                    await _metal_gk(_msym, "forex", _mtf, EXECUTOR_KLINE_BARS)
+                except Exception:
+                    pass
+            logger.info(
+                f"[{_log_ts()}] [{label}] metal kline warm: {len(_metal_warm)} tf(s) "
+                f"in {time.monotonic() - _mw_t0:.1f}s"
+            )
 
     async def _warm(sym: str, ac: str, tf: str) -> None:
         _use = _metal_sem if sym in ("XAUUSD", "XAGUSD") else sem
