@@ -688,25 +688,34 @@ async def fetch_forex_scan_candles(
             logger.info(f"[tradfi] forex-scan best={label} {sym} {timeframe} → {len(rows)} bars")
 
     _ctrader_live = False
+    _broker_ready = False
     try:
-        from app.services.ctrader_price_feed import is_live as _ct_live
+        from app.services.ctrader_price_feed import (
+            broker_session_ready as _ct_ready,
+            is_live as _ct_live,
+        )
         _ctrader_live = bool(_ct_live())
+        _broker_ready = bool(_ct_ready(sym))
     except Exception:
         pass
 
-    # Cold/disconnected cTrader costs ~10s per symbol before Yahoo fallback — on
-    # executor startup that alone blows past gunicorn timeout. Skip until LIVE.
-    if user_id and _ctrader_live:
-        await _keep(
-            await _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
-            "ctrader-user",
+    _min_bars = max(15, min(limit, 80))
+
+    async def _try_ctrader(label: str) -> bool:
+        rows = await _fetch_ctrader_klines(
+            sym, "forex", timeframe, min(limit, 500), user_id=user_id,
         )
-        if len(best) >= 120:
+        await _keep(rows, label)
+        return len(best) >= _min_bars
+
+    # Broker session up → cTrader first (stream creds avoid DB SSL failures).
+    if _broker_ready:
+        if await _try_ctrader("ctrader-user" if user_id else "ctrader"):
             return best[-limit:]
 
     if yahoo_ticker:
         await _keep(await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit), "yahoo")
-        if len(best) >= 120:
+        if len(best) >= _min_bars:
             return best[-limit:]
 
     if _env_fmp_api_key():
@@ -715,17 +724,11 @@ async def fetch_forex_scan_candles(
             await _keep(await _fmp_klines(sym, "forex", timeframe, limit), "fmp")
         except Exception:
             pass
-        if len(best) >= 120:
+        if len(best) >= _min_bars:
             return best[-limit:]
 
-    # Only hit cTrader when the spot feed is LIVE — otherwise each symbol pays a
-    # 3s timeout before Yahoo (already tried above) can win.
-    if _ctrader_live:
-        await _keep(
-            await _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
-            "ctrader",
-        )
-        if len(best) >= 120:
+    if _broker_ready and user_id:
+        if await _try_ctrader("ctrader"):
             return best[-limit:]
 
     tradfi_rows = await _get_klines_impl(

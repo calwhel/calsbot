@@ -653,6 +653,7 @@ async def _fetch_price_and_ta(
     *,
     user_id: Optional[int] = None,
     timeframe: Optional[str] = None,
+    metal_paper_ok: bool = False,
 ) -> Optional[Dict]:
     """
     Fetch price + TA indicators for a symbol. Results are cached per symbol for
@@ -666,6 +667,10 @@ async def _fetch_price_and_ta(
     global _PRICE_TA_CACHE
     now = datetime.utcnow()
     cache_key = f"{asset_class}:{symbol}" if asset_class != "crypto" else symbol
+    if metal_paper_ok and asset_class != "crypto":
+        from app.services.tradfi_prices import is_metal_symbol as _metal_ck
+        if _metal_ck(symbol):
+            cache_key = f"{cache_key}:paper"
     cached = _PRICE_TA_CACHE.get(cache_key)
     if cached:
         data, fetched_at = cached
@@ -723,28 +728,46 @@ async def _fetch_price_and_ta(
             kline_source = None
             if _is_metal:
                 kline_source = _metal_kline_src(symbol, tf, EXECUTOR_KLINE_BARS)
+                _spot_sources = frozenset({
+                    "binance", "ctrader", "ctrader-user", "fmp", "kraken",
+                })
                 if not live_px or live_px <= 0:
-                    logger.warning(
-                        f"[executor] {symbol.upper()}: no live spot price — "
-                        f"skip eval (refusing kline close {kline_close:.2f})"
+                    _ks = (kline_source or "").lower()
+                    if (
+                        metal_paper_ok
+                        and kline_close > 0
+                        and (not _ks or _ks in _spot_sources)
+                    ):
+                        logger.info(
+                            f"[executor] {symbol.upper()}: paper eval using kline "
+                            f"close {kline_close:.2f} (src={kline_source or 'spot'}, "
+                            f"no live tick)"
+                        )
+                        price = kline_close
+                        price_source = "kline_close_paper"
+                    else:
+                        logger.warning(
+                            f"[executor] {symbol.upper()}: no live spot price — "
+                            f"skip eval (refusing kline close {kline_close:.2f})"
+                        )
+                        return None
+                else:
+                    _drift_pct = (
+                        abs(live_px - kline_close) / live_px * 100.0
+                        if kline_close > 0
+                        else 0.0
                     )
-                    return None
-                _drift_pct = (
-                    abs(live_px - kline_close) / live_px * 100.0
-                    if kline_close > 0
-                    else 0.0
-                )
-                _max_drift = _metal_drift_limit(kline_source)
-                if _drift_pct > _max_drift:
-                    logger.warning(
-                        f"[executor] {symbol.upper()}: kline/live drift "
-                        f"{_drift_pct:.2f}% (kline={kline_close:.2f} live={live_px:.2f} "
-                        f"src={kline_source or 'unknown'} max={_max_drift:.2f}%) "
-                        f"— skip eval"
-                    )
-                    return None
-                price = live_px
-                price_source = "spot_live"
+                    _max_drift = _metal_drift_limit(kline_source)
+                    if _drift_pct > _max_drift:
+                        logger.warning(
+                            f"[executor] {symbol.upper()}: kline/live drift "
+                            f"{_drift_pct:.2f}% (kline={kline_close:.2f} live={live_px:.2f} "
+                            f"src={kline_source or 'unknown'} max={_max_drift:.2f}%) "
+                            f"— skip eval"
+                        )
+                        return None
+                    price = live_px
+                    price_source = "spot_live"
             else:
                 price = live_px if live_px else kline_close
                 price_source = "spot_live" if live_px else "kline_close"
@@ -3394,6 +3417,7 @@ async def evaluate_and_fire(
             _fetch_price_and_ta(
                 sym, http_client, asset_class,
                 user_id=_uid, timeframe=_eval_tf,
+                metal_paper_ok=is_paper and asset_class == "forex",
             )
             for sym in candidate_symbols
         ],
