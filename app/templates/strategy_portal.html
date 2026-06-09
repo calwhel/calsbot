@@ -384,6 +384,37 @@ body {
 
 /* ─── Strategy cards ──────────────────────────────────────────── */
 .strategies-list { display: flex; flex-direction: column; gap: 8px; }
+.strat-select-bar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.strat-select-bar .sel-count { font-size: 12px; color: var(--muted); margin-right: auto; }
+.strat-card.select-mode { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; align-items: start; }
+.strat-card.select-mode .strat-select-wrap {
+  grid-row: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  padding-top: 14px;
+}
+.strat-card.select-mode .strat-select-wrap input {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.strat-card.select-mode .card-hd,
+.strat-card.select-mode .card-meta,
+.strat-card.select-mode .card-metrics,
+.strat-card.select-mode .mini-trades,
+.strat-card.select-mode .card-scanning { grid-column: 2; }
+.strat-card.select-mode .card-acts { display: none; }
 .strat-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -1915,10 +1946,17 @@ function dismissTgBanner(){
         <option value="trades">Most trades</option>
         <option value="live">Live first</option>
       </select>
+      <button class="btn sm ghost" id="strat-select-toggle" onclick="toggleStratSelectMode()">Select</button>
       <button class="btn sm" onclick="openPortfolioReview()" style="color:#d4a017;border-color:rgba(212,160,23,.35)">📊 Portfolio Review</button>
       <button class="btn sm paper-btn" onclick="showPage('build',null,true)">New Paper</button>
       <button class="btn sm" onclick="showPage('build',null,false)" style="color:var(--accent);border-color:rgba(91,108,247,.3)">Build New</button>
     </div>
+  </div>
+  <div class="strat-select-bar" id="strat-select-bar">
+    <span class="sel-count" id="strat-select-count">0 selected</span>
+    <button class="btn sm ghost" onclick="selectAllStrats()">Select all</button>
+    <button class="btn sm ghost" onclick="clearStratSelection()">Clear</button>
+    <button class="btn sm danger" id="strat-bulk-delete-btn" onclick="bulkDeleteStrats()" disabled>Delete selected</button>
   </div>
   <div class="strategies-list" id="my-list"></div>
 </div>
@@ -4289,6 +4327,44 @@ async function loadMyStrategies(retry=0){
   renderStratList(strats);
 }
 let _loadedStrats=[];
+let _stratSelectMode=false;
+let _stratSelected=new Set();
+
+function toggleStratSelectMode(){
+  _stratSelectMode=!_stratSelectMode;
+  if(!_stratSelectMode)_stratSelected.clear();
+  updateStratSelectBar();
+  if(_loadedStrats.length)renderStratList([..._loadedStrats]);
+}
+function toggleStratSelected(id,checked){
+  if(checked)_stratSelected.add(id);
+  else _stratSelected.delete(id);
+  updateStratSelectBar();
+}
+function selectAllStrats(){
+  _loadedStrats.forEach(s=>_stratSelected.add(s.id));
+  updateStratSelectBar();
+  if(_loadedStrats.length)renderStratList([..._loadedStrats]);
+}
+function clearStratSelection(){
+  _stratSelected.clear();
+  updateStratSelectBar();
+  if(_loadedStrats.length)renderStratList([..._loadedStrats]);
+}
+function updateStratSelectBar(){
+  const bar=$('strat-select-bar');
+  if(bar)bar.style.display=_stratSelectMode?'flex':'none';
+  const toggle=$('strat-select-toggle');
+  if(toggle)toggle.textContent=_stratSelectMode?'Cancel':'Select';
+  const n=_stratSelected.size;
+  const cnt=$('strat-select-count');
+  if(cnt)cnt.textContent=n===1?'1 selected':`${n} selected`;
+  const del=$('strat-bulk-delete-btn');
+  if(del){
+    del.textContent=n?`Delete ${n} selected`:'Delete selected';
+    del.disabled=!n;
+  }
+}
 function applyStratSort(){if(_loadedStrats.length)renderStratList([..._loadedStrats]);}
 function renderStratList(strats){
   const _sv=document.getElementById('strat-sort')?.value||'newest';
@@ -4319,7 +4395,10 @@ function renderStratList(strats){
     else if(risk.position_size_pct)metaParts.push(`<span class="card-meta-sep"></span><span>${risk.position_size_pct}% size</span>`);
 
     const isLocked=s.is_locked||false;
-    return`<div class="strat-card ${s.status==='active'?'live-card':isPaper?'paper-card':''}">
+    const selCls=_stratSelectMode?' select-mode':'';
+    const chk=_stratSelectMode?`<label class="strat-select-wrap" onclick="event.stopPropagation()"><input type="checkbox" ${_stratSelected.has(s.id)?'checked':''} onchange="toggleStratSelected(${s.id},this.checked)" aria-label="Select ${(s.name||'strategy').replace(/"/g,'&quot;')}"></label>`:'';
+    return`<div class="strat-card${selCls} ${s.status==='active'?'live-card':isPaper?'paper-card':''}">
+      ${chk}
       <div class="card-hd">
         <div class="dot ${s.status}"></div>
         <div class="card-name">${s.name||'Unnamed Strategy'}</div>
@@ -4537,6 +4616,46 @@ async function deleteStrat(id,name){
     async ()=>{
       await fetch(`/api/strategies/${id}?uid=${UID}`,{method:'DELETE'});
       toast('Strategy deleted','error');_clearStratCache();loadMyStrategies();
+    }
+  );
+}
+
+async function bulkDeleteStrats(){
+  const ids=[..._stratSelected];
+  if(!ids.length)return;
+  const names=_loadedStrats.filter(s=>_stratSelected.has(s.id)).map(s=>s.name||'Unnamed');
+  const preview=names.slice(0,5).map(n=>`• ${n}`).join('\n');
+  const more=names.length>5?`\n…and ${names.length-5} more`:'';
+  showConfirm(
+    'Delete Selected Strategies',
+    `Permanently delete ${ids.length} strateg${ids.length===1?'y':'ies'}? This cannot be undone.\n\n${preview}${more}`,
+    `Delete ${ids.length}`,
+    'background:var(--red);color:#fff;border-color:var(--red)',
+    async ()=>{
+      const btn=$('strat-bulk-delete-btn');
+      if(btn){btn.disabled=true;btn.textContent='Deleting…';}
+      try{
+        const r=await fetch('/api/strategies/bulk-delete',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({uid:UID,strategy_ids:ids}),
+        });
+        const d=await r.json();
+        if(!r.ok){
+          toast(d.detail||'Bulk delete failed','error');
+          updateStratSelectBar();
+          return;
+        }
+        toast(`Deleted ${d.deleted_count||ids.length} strateg${(d.deleted_count||ids.length)===1?'y':'ies'}`,'success');
+        _stratSelectMode=false;
+        _stratSelected.clear();
+        updateStratSelectBar();
+        _clearStratCache();
+        loadMyStrategies();
+      }catch(e){
+        toast('Network error — try again','error');
+        updateStratSelectBar();
+      }
     }
   );
 }
