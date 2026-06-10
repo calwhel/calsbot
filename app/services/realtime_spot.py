@@ -37,13 +37,12 @@ _BINANCE_BASE = "https://api.binance.com/api/v3"
 # Source preference when multiple fresh ticks arrive (lower = better).
 _SOURCE_RANK = {
     "ctrader": 0,
-    "binance": 1,
-    "coinbase": 2,
+    "coinbase": 1,
+    "kraken": 2,
     "fmp": 3,
     "twelvedata": 4,
-    "kraken": 5,
-    "yfinance": 6,
-    "metals_cache": 7,
+    "yfinance": 5,
+    "metals_cache": 6,
     "store": 99,
 }
 _PAPER_MAX_AGE_S = float(os.environ.get("REALTIME_SPOT_MAX_AGE_PAPER_S", "15"))

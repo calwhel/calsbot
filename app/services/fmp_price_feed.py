@@ -78,7 +78,8 @@ _KLINE_TTL_BY_TF: Dict[str, timedelta] = {
     "4hour": timedelta(seconds=300),
     "1day": timedelta(seconds=300),
 }
-_FMP_MAX_REQUESTS_PER_MIN = int(os.environ.get("FMP_MAX_REQUESTS_PER_MIN", "750"))
+# Free/starter tiers are tight — default 30 req/min; raise via env on paid plans.
+_FMP_MAX_REQUESTS_PER_MIN = int(os.environ.get("FMP_MAX_REQUESTS_PER_MIN", "30"))
 _FMP_REQUEST_TIMES: Deque[float] = deque()
 _FMP_RATE_LOCK: Optional[asyncio.Lock] = None
 _FMP_KLINE_INFLIGHT: Dict[Tuple[str, str, int], asyncio.Future] = {}
@@ -98,7 +99,7 @@ _TF_MINUTES: Dict[str, int] = {
 }
 
 # Poll interval for REST price updates (env: FMP_POLL_INTERVAL_SECONDS)
-_POLL_INTERVAL = max(8, int(os.environ.get("FMP_POLL_INTERVAL_SECONDS", "15")))
+_POLL_INTERVAL = max(15, int(os.environ.get("FMP_POLL_INTERVAL_SECONDS", "30")))
 _FMP_POLL_LOCK_ID = 708_110_005
 
 
@@ -131,12 +132,20 @@ async def _fmp_rate_limit_wait() -> None:
         if len(_FMP_REQUEST_TIMES) >= _FMP_MAX_REQUESTS_PER_MIN:
             wait_s = 60.0 - (now - _FMP_REQUEST_TIMES[0]) + 0.05
             if wait_s > 0:
-                logger.debug(
-                    "[FMPFeed] rate limiter wait %.1fs (%d req/min)",
-                    wait_s, len(_FMP_REQUEST_TIMES),
+                logger.info(
+                    "[FMPFeed] rate limiter wait %.1fs (%d/%d req/min)",
+                    wait_s,
+                    len(_FMP_REQUEST_TIMES),
+                    _FMP_MAX_REQUESTS_PER_MIN,
                 )
                 await asyncio.sleep(wait_s)
         _FMP_REQUEST_TIMES.append(time.monotonic())
+        if len(_FMP_REQUEST_TIMES) >= max(1, _FMP_MAX_REQUESTS_PER_MIN - 2):
+            logger.debug(
+                "[FMPFeed] request budget %d/%d per min",
+                len(_FMP_REQUEST_TIMES),
+                _FMP_MAX_REQUESTS_PER_MIN,
+            )
 
 
 def _kline_fresh_ttl(fmp_interval: str) -> timedelta:

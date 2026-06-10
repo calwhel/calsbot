@@ -168,14 +168,14 @@ class TestRealtimeSpotAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hit, (28780.0, "yfinance"))
 
     async def test_fetch_metals_parallel_stores_best(self):
-        with patch.object(rs, "_fetch_binance", new_callable=AsyncMock, return_value=2650.0), patch.object(
+        with patch.object(
             rs, "_fetch_coinbase", new_callable=AsyncMock, return_value=2649.5
-        ), patch.object(rs, "_fetch_kraken", new_callable=AsyncMock, return_value=None), patch.object(
+        ), patch.object(rs, "_fetch_kraken", new_callable=AsyncMock, return_value=2650.0), patch.object(
             rs, "_persist_tick"
         ) as mock_store:
             hit = await rs._fetch_metals_parallel("XAUUSD")
-        self.assertEqual(hit, (2650.0, "binance"))
-        mock_store.assert_called_once_with("XAUUSD", 2650.0, "binance")
+        self.assertEqual(hit, (2649.5, "coinbase"))
+        mock_store.assert_called_once_with("XAUUSD", 2649.5, "coinbase")
 
 
 if __name__ == "__main__":

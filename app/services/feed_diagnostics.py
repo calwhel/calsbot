@@ -139,6 +139,10 @@ async def _probe_yahoo() -> bool:
 
 
 async def _probe_binance() -> bool:
+    """Skipped on Railway — Binance is geo-blocked (HTTP 451) from US datacenters."""
+    import os
+    if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"):
+        return False
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.get(
