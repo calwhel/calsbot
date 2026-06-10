@@ -212,6 +212,9 @@ def read_fresh_cached(
 
 
 async def _fetch_binance(pair: str) -> Optional[float]:
+    import os
+    if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"):
+        return None
     try:
         import httpx
         async with httpx.AsyncClient(timeout=4.0) as client:

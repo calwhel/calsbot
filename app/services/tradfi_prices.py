@@ -475,6 +475,9 @@ async def _fetch_with_kline_timeout(
     symbol: str,
     timeframe: str,
 ) -> List[List[float]]:
+    from app.services.prefetch_fast import provider_timeout_s
+
+    timeout_s = provider_timeout_s(timeout_s)
     try:
         rows = await asyncio.wait_for(coro, timeout=timeout_s)
         return rows if isinstance(rows, list) else []
@@ -704,7 +707,8 @@ async def _fetch_coinbase_metals_klines(
             return _stale_fallback("parse_empty")
         except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as exc:
             last_exc = exc
-            if attempt == 0:
+            from app.services.prefetch_fast import prefetch_fast_active
+            if attempt == 0 and not prefetch_fast_active():
                 await asyncio.sleep(0.75)
                 continue
             if diag is not None:
@@ -830,10 +834,13 @@ async def fetch_metal_live_candles(
     Never returns GC=F futures — only spot-aligned sources.
     Falls back to synthetic spot-built candles when all providers miss.
     """
+    from app.services.prefetch_fast import provider_timeout_s
+
     sym = symbol.upper()
     min_bars = _metal_kline_min_bars(limit)
-    _kraken_timeout = max(8.0, _KRAKEN_KLINE_TIMEOUT_S)
-    _fmp_timeout = max(8.0, _FMP_KLINE_TIMEOUT_S)
+    _kraken_timeout = provider_timeout_s(max(8.0, _KRAKEN_KLINE_TIMEOUT_S))
+    _fmp_timeout = provider_timeout_s(max(8.0, _FMP_KLINE_TIMEOUT_S))
+    _ct_timeout = provider_timeout_s(_CTRADER_KLINE_TIMEOUT_LIVE_S)
     trace: List[MetalProviderDiagnostic] = []
 
     async with _metal_live_fetch_sem():
@@ -856,7 +863,7 @@ async def fetch_metal_live_candles(
                 _fetch_ctrader_klines(
                     sym, "forex", timeframe, limit, user_id=user_id, diag=ct_diag,
                 ),
-                timeout_s=_CTRADER_KLINE_TIMEOUT_LIVE_S,
+                timeout_s=_ct_timeout,
                 label=ct_diag.provider,
                 symbol=sym,
                 timeframe=timeframe,
@@ -928,7 +935,9 @@ async def fetch_metal_live_candles(
             return None
 
         # Sequential failover — sources after FMP ordered by Railway reliability.
-        _cb_probe_timeout = _COINBASE_CONNECT_TIMEOUT_S + _COINBASE_KLINE_TIMEOUT_S + 3.0
+        _cb_probe_timeout = provider_timeout_s(
+            _COINBASE_CONNECT_TIMEOUT_S + _COINBASE_KLINE_TIMEOUT_S + 3.0
+        )
         _kraken_entry = (
             "kraken",
             f"https://api.kraken.com/0/public/OHLC?pair={_kraken_pair}&interval={_kraken_iv}",

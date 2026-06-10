@@ -123,23 +123,42 @@ def _fmp_rate_lock() -> asyncio.Lock:
     return _FMP_RATE_LOCK
 
 
-async def _fmp_rate_limit_wait() -> None:
-    """Global cap — max 750 FMP HTTP requests per rolling minute (free tier)."""
+async def _fmp_rate_limit_wait() -> bool:
+    """Acquire a slot in the global FMP request budget.
+
+    Returns False when the caller must skip (429 backoff, hot-path quota full,
+    or background poll would sleep >2s). Never blocks prefetch for minutes.
+    """
+    from app.services.prefetch_fast import prefetch_fast_active
+
+    if fmp_in_backoff():
+        return False
+
     async with _fmp_rate_lock():
         now = time.monotonic()
         while _FMP_REQUEST_TIMES and (now - _FMP_REQUEST_TIMES[0]) >= 60.0:
             _FMP_REQUEST_TIMES.popleft()
         if len(_FMP_REQUEST_TIMES) >= _FMP_MAX_REQUESTS_PER_MIN:
+            if prefetch_fast_active():
+                logger.debug(
+                    "[FMPFeed] rate limit skip (hot path) %d/%d req/min",
+                    len(_FMP_REQUEST_TIMES),
+                    _FMP_MAX_REQUESTS_PER_MIN,
+                )
+                return False
             wait_s = 60.0 - (now - _FMP_REQUEST_TIMES[0]) + 0.05
-            if wait_s > 0:
+            if wait_s > 2.0:
                 logger.info(
-                    "[FMPFeed] rate limiter wait %.1fs (%d/%d req/min)",
+                    "[FMPFeed] rate limiter skip (would wait %.1fs, %d/%d req/min)",
                     wait_s,
                     len(_FMP_REQUEST_TIMES),
                     _FMP_MAX_REQUESTS_PER_MIN,
                 )
+                return False
+            if wait_s > 0:
                 await asyncio.sleep(wait_s)
         _FMP_REQUEST_TIMES.append(time.monotonic())
+        return True
         if len(_FMP_REQUEST_TIMES) >= max(1, _FMP_MAX_REQUESTS_PER_MIN - 2):
             logger.debug(
                 "[FMPFeed] request budget %d/%d per min",
@@ -331,9 +350,13 @@ def _resample_klines(
 
 async def _fmp_http_get(url: str, params: dict, timeout: float = 8.0) -> Tuple[int, Optional[object]]:
     """Return (status_code, json_or_none)."""
+    from app.services.prefetch_fast import provider_timeout_s
+
     if fmp_in_backoff():
         return 0, None
-    await _fmp_rate_limit_wait()
+    if not await _fmp_rate_limit_wait():
+        return 0, None
+    timeout = provider_timeout_s(timeout)
     try:
         import httpx
         async with httpx.AsyncClient(timeout=timeout) as client:
