@@ -58,6 +58,8 @@ async def run_index_discovery(
     direction_mode: str = "BOTH",
     progress_cb: Optional[Callable[[str], None]] = None,
     user_id: Optional[int] = None,
+    quality_cfg: Optional[Dict] = None,
+    categories: Optional[list] = None,
 ) -> Dict:
     sym = normalize_index_symbol(symbol or DEFAULT_SYMBOL)
     if sym not in SUPPORTED_SYMBOLS:
@@ -86,4 +88,6 @@ async def run_index_discovery(
             f"Could not fetch {sym} historical data from any source "
             "(cTrader, Yahoo, FMP). Connect cTrader demo in Settings for best results."
         ),
+        quality_cfg=quality_cfg,
+        categories=categories,
     )

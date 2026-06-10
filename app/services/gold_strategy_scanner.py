@@ -664,6 +664,9 @@ async def _eval_candidate(
                 score = round(score * _session_edge_multiplier(symbol, asset_class, session), 3)
                 if _has_killzone(cand) and st["closed_trades"] < MIN_TRADES and days < 180:
                     st["low_sample_warning"] = "ICT killzone — try 180-day window for more trades"
+                row_trades = trades
+                if split_ts:
+                    row_trades = [t for t in trades if int(t.get("entry_ts", 0) or 0) >= split_ts]
                 results.append({
                     "label": cand["label"],
                     "category": cand["category"],
@@ -686,7 +689,9 @@ async def _eval_candidate(
                     "trailing_stop_pct": trail_pct,
                     "stats": st,
                     "score": score,
+                    "legacy_score": score,
                     "min_trades_required": min_tr,
+                    "_all_trades": trades,
                 })
     return results
 
@@ -990,6 +995,19 @@ async def _claude_pick_best(
 
 
 # ── Public entry points ─────────────────────────────────────────────────────────
+def _filter_candidates_by_categories(
+    candidates: List[Dict],
+    categories: Optional[List[str]],
+) -> List[Dict]:
+    """Keep only roster entries whose category is in the selected set."""
+    if not categories:
+        return candidates
+    allowed = {str(c).strip().lower() for c in categories if str(c).strip()}
+    if not allowed:
+        return candidates
+    return [c for c in candidates if (c.get("category") or "").lower() in allowed]
+
+
 async def run_tradfi_discovery(
     symbol: str,
     asset_class: str,
@@ -1007,6 +1025,8 @@ async def run_tradfi_discovery(
     log_prefix: str = "tradfi-scan",
     no_trades_error: str = "No strategy produced enough trades to rank. Try a longer window.",
     fetch_error: str = "Could not fetch historical data. Please try again in a minute.",
+    quality_cfg: Optional[Dict] = None,
+    categories: Optional[List[str]] = None,
 ) -> Dict:
     """
     Run the full Claude-driven gold strategy discovery scan.
@@ -1124,7 +1144,20 @@ async def run_tradfi_discovery(
         seen.add(sig)
         merged.append(c)
 
+    merged = _filter_candidates_by_categories(merged, categories)
+    if not merged:
+        return {
+            "ok": False,
+            "error": "No strategies match the selected signal categories. Pick more types or clear the filter.",
+        }
+
     wf_splits = {tf: _walk_forward_split_ts(ks) for tf, ks in candle_map.items()}
+    for tf, split_ts in wf_splits.items():
+        if split_ts:
+            logger.info(
+                "[scan] walk-forward split %s %s train_end_ts=%s",
+                symbol, tf, split_ts,
+            )
 
     # 3) Backtest every candidate × timeframe × risk, bucket by session (parallel).
     _progress(
@@ -1141,14 +1174,32 @@ async def run_tradfi_discovery(
             )
 
     nested = await asyncio.gather(*[_run_one(c) for c in merged])
-    all_results: List[Dict] = [row for batch in nested for row in batch]
+    raw_results: List[Dict] = [row for batch in nested for row in batch]
 
-    if not all_results:
+    if not raw_results:
         return {"ok": False, "error": no_trades_error}
 
-    # 4) Rank. Keep best variant per (label, direction) so the board isn't
+    # 4) Grade each combo on TEST-split stats + confirmation quality.
+    from app.services.setup_quality import apply_quality_grades, normalize_quality_cfg
+    qcfg = normalize_quality_cfg(quality_cfg)
+    _progress("Grading setups (walk-forward test split + confirmations)…")
+    all_results = apply_quality_grades(
+        raw_results, candle_map, symbol, qcfg, wf_splits=wf_splits,
+    )
+
+    if not all_results:
+        mode = qcfg.get("quality_mode", "strict")
+        if mode == "strict":
+            return {
+                "ok": False,
+                "error": "No A–C setups passed strict quality filters. Loosen filters or try again later.",
+                "quality_mode": mode,
+            }
+        return {"ok": False, "error": no_trades_error}
+
+    # 5) Rank. Keep best variant per (label, direction) so the board isn't
     #    dominated by RR/session permutations of one idea.
-    all_results.sort(key=lambda r: r["score"], reverse=True)
+    all_results.sort(key=lambda r: r.get("score", 0), reverse=True)
 
     # Keep only the single best (timeframe × session × risk) variant per strategy
     # IDEA so the board surfaces diverse ideas rather than permutations of one.
@@ -1186,14 +1237,14 @@ async def run_tradfi_discovery(
     _take(scalp_best, half)                 # ~half the board reserved for scalps
     _take(swing_best, LEADERBOARD_SIZE)     # fill remainder with swing ideas
     _take(scalp_best, LEADERBOARD_SIZE)     # backfill leftover scalps if swings ran out
-    leaderboard.sort(key=lambda r: r["score"], reverse=True)
+    leaderboard.sort(key=lambda r: r.get("score", 0), reverse=True)
 
     # When scanning BOTH directions, surface the best long and best short explicitly.
     best_long_row = None
     best_short_row = None
     if direction_mode == "BOTH":
-        longs = sorted([r for r in all_results if r.get("direction") == "LONG"], key=lambda x: x["score"], reverse=True)
-        shorts = sorted([r for r in all_results if r.get("direction") == "SHORT"], key=lambda x: x["score"], reverse=True)
+        longs = sorted([r for r in all_results if r.get("direction") == "LONG"], key=lambda x: x.get("score", 0), reverse=True)
+        shorts = sorted([r for r in all_results if r.get("direction") == "SHORT"], key=lambda x: x.get("score", 0), reverse=True)
         if longs:
             best_long_row = longs[0]
         if shorts:
@@ -1206,7 +1257,7 @@ async def run_tradfi_discovery(
             if idea not in used_ideas and extra not in leaderboard:
                 leaderboard.append(extra)
                 used_ideas.add(idea)
-        leaderboard.sort(key=lambda r: r["score"], reverse=True)
+        leaderboard.sort(key=lambda r: r.get("score", 0), reverse=True)
         leaderboard = leaderboard[:LEADERBOARD_SIZE]
 
     # Attach a build name + NL build prompt to EVERY leaderboard entry so the UI
@@ -1248,8 +1299,12 @@ async def run_tradfi_discovery(
         "coverage_days": coverage,
         "sessions": SESSIONS,
         "walk_forward": True,
+        "quality_mode": qcfg.get("quality_mode", "strict"),
+        "quality_cfg": qcfg,
+        "categories_filter": categories or [],
         "candidates_tested": len(merged),
-        "combos_evaluated": len(all_results),
+        "combos_evaluated": len(raw_results),
+        "combos_passed": len(all_results),
         "leaderboard": leaderboard,
         "best": best_entry,
         "best_long": best_long_row,
@@ -1259,9 +1314,14 @@ async def run_tradfi_discovery(
     }
 
 
-async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
-                             progress_cb: Optional[Callable[[str], None]] = None,
-                             user_id: Optional[int] = None) -> Dict:
+async def run_gold_discovery(
+    days: int = 90,
+    direction_mode: str = "BOTH",
+    progress_cb: Optional[Callable[[str], None]] = None,
+    user_id: Optional[int] = None,
+    quality_cfg: Optional[Dict] = None,
+    categories: Optional[List[str]] = None,
+) -> Dict:
     """Run the full Claude-driven gold strategy discovery scan."""
     from app.services.tradfi_prices import fetch_metal_scan_candles
     return await run_tradfi_discovery(
@@ -1277,6 +1337,8 @@ async def run_gold_discovery(days: int = 90, direction_mode: str = "BOTH",
         fetch_candles_fn=fetch_metal_scan_candles,
         timeframes=TIMEFRAMES,
         tf_max_days=_TF_MAX_DAYS,
+        quality_cfg=quality_cfg,
+        categories=categories,
         log_prefix="gold-scan",
         no_trades_error="No strategy produced enough trades on gold to rank. Try a longer window.",
         fetch_error=(

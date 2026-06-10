@@ -2025,6 +2025,14 @@ async def _start_executor_tasks():
         asyncio.create_task(
             _resilient_task("run_session_alert_loop", run_session_alert_loop, restart_delay=30)
         )
+        try:
+            from app.services.scan_schedule_runner import run_scan_schedule_loop
+            asyncio.create_task(
+                _resilient_task("run_scan_schedule_loop", run_scan_schedule_loop, restart_delay=60)
+            )
+            logger.info("✅ Scan schedule loop launched (gold/forex/index)")
+        except Exception as _ss_err:
+            logger.warning(f"Scan schedule loop start error (non-fatal): {_ss_err}")
     # Wrapped in _resilient_task so a transient crash (e.g. DB SSL drop)
     # auto-restarts instead of silently killing the executor permanently.
     if not crypto_executor_disabled():
@@ -15916,6 +15924,23 @@ async def _discovery_auth(uid: str) -> tuple:
     return "bad_uid", None
 
 
+def _discovery_scan_options(body: dict) -> tuple:
+    """Parse quality_cfg + signal categories from discovery POST body."""
+    from app.services.setup_quality import normalize_quality_cfg
+
+    quality_cfg = dict(body.get("quality_cfg") or {})
+    if body.get("strict_quality") is not None:
+        quality_cfg["quality_mode"] = "strict" if body.get("strict_quality", True) else "all"
+    quality_cfg = normalize_quality_cfg(quality_cfg)
+
+    categories = body.get("categories") or body.get("signal_categories")
+    if isinstance(categories, list):
+        categories = [str(c).strip() for c in categories if str(c).strip()]
+    else:
+        categories = None
+    return quality_cfg, categories
+
+
 def _discovery_progress_response(scan_type: str, uid: str) -> dict:
     from app.services.discovery_jobs import job_progress
     prog = job_progress(scan_type, uid.strip())
@@ -15923,6 +15948,149 @@ def _discovery_progress_response(scan_type: str, uid: str) -> dict:
     if "message" not in prog:
         prog["message"] = ""
     return prog
+
+
+# ─── Scheduled discovery scans (gold / forex / index) ─────────────────────────
+@app.get("/api/scan-schedules")
+async def api_scan_schedules_list(uid: str = Query(...)):
+    """List scheduled discovery scans for a user. Pro-gated."""
+    uid = (uid or "").strip()
+    auth, user_id = await _discovery_auth(uid)
+    if auth == "bad_uid":
+        raise HTTPException(status_code=403, detail="Invalid UID")
+    if auth == "not_pro":
+        return JSONResponse(status_code=402, content={"error": "PRO_REQUIRED"})
+    from app.database import SessionLocal
+    from app.strategy_models import ScanSchedule
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(ScanSchedule)
+            .filter(ScanSchedule.uid == uid)
+            .order_by(ScanSchedule.created_at.desc())
+            .all()
+        )
+        return JSONResponse({
+            "schedules": [
+                {
+                    "id": r.id,
+                    "name": r.name,
+                    "scan_type": r.scan_type,
+                    "symbol": r.symbol,
+                    "categories": r.categories_json,
+                    "quality_cfg": r.quality_cfg_json,
+                    "scan_params": r.scan_params_json,
+                    "interval_minutes": r.interval_minutes,
+                    "min_grade_alert": r.min_grade_alert,
+                    "enabled": bool(r.enabled),
+                    "last_run_at": r.last_run_at.isoformat() + "Z" if r.last_run_at else None,
+                    "created_at": r.created_at.isoformat() + "Z" if r.created_at else None,
+                }
+                for r in rows
+            ]
+        })
+    finally:
+        db.close()
+
+
+@app.post("/api/scan-schedules")
+async def api_scan_schedules_create(request: Request):
+    """Create a scheduled discovery scan. Pro-gated."""
+    body = await request.json()
+    uid = (body.get("uid") or "").strip()
+    auth, user_id = await _discovery_auth(uid)
+    if auth == "bad_uid":
+        raise HTTPException(status_code=403, detail="Invalid UID")
+    if auth == "not_pro":
+        return JSONResponse(status_code=402, content={"error": "PRO_REQUIRED", "message": "Pro required for scheduled scans."})
+
+    scan_type = (body.get("scan_type") or "gold").lower()
+    if scan_type not in ("gold", "forex", "index"):
+        raise HTTPException(status_code=400, detail="scan_type must be gold, forex, or index")
+
+    quality_cfg, categories = _discovery_scan_options(body)
+    from app.database import SessionLocal
+    from app.strategy_models import ScanSchedule
+    db = SessionLocal()
+    try:
+        row = ScanSchedule(
+            uid=uid,
+            user_id=user_id,
+            name=(body.get("name") or f"{scan_type.title()} scan")[:120],
+            scan_type=scan_type,
+            symbol=(body.get("symbol") or "").strip().upper() or None,
+            categories_json=categories,
+            quality_cfg_json=quality_cfg,
+            scan_params_json={
+                "days": int(body.get("days", 90)),
+                "direction": (body.get("direction") or "BOTH").upper(),
+            },
+            interval_minutes=max(15, min(1440, int(body.get("interval_minutes", 60)))),
+            min_grade_alert=(body.get("min_grade_alert") or "B").upper()[:1],
+            enabled=True,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return JSONResponse({"ok": True, "id": row.id})
+    finally:
+        db.close()
+
+
+@app.patch("/api/scan-schedules/{schedule_id}")
+async def api_scan_schedules_update(schedule_id: int, request: Request):
+    body = await request.json()
+    uid = (body.get("uid") or "").strip()
+    auth, _ = await _discovery_auth(uid)
+    if auth == "bad_uid":
+        raise HTTPException(status_code=403, detail="Invalid UID")
+    if auth == "not_pro":
+        return JSONResponse(status_code=402, content={"error": "PRO_REQUIRED"})
+    from app.database import SessionLocal
+    from app.strategy_models import ScanSchedule
+    db = SessionLocal()
+    try:
+        row = db.query(ScanSchedule).filter(
+            ScanSchedule.id == schedule_id, ScanSchedule.uid == uid,
+        ).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Schedule not found")
+        if "enabled" in body:
+            row.enabled = bool(body["enabled"])
+        if body.get("name"):
+            row.name = str(body["name"])[:120]
+        if body.get("interval_minutes") is not None:
+            row.interval_minutes = max(15, min(1440, int(body["interval_minutes"])))
+        if body.get("min_grade_alert"):
+            row.min_grade_alert = str(body["min_grade_alert"]).upper()[:1]
+        db.commit()
+        return JSONResponse({"ok": True})
+    finally:
+        db.close()
+
+
+@app.delete("/api/scan-schedules/{schedule_id}")
+async def api_scan_schedules_delete(schedule_id: int, uid: str = Query(...)):
+    uid = (uid or "").strip()
+    auth, _ = await _discovery_auth(uid)
+    if auth == "bad_uid":
+        raise HTTPException(status_code=403, detail="Invalid UID")
+    if auth == "not_pro":
+        return JSONResponse(status_code=402, content={"error": "PRO_REQUIRED"})
+    from app.database import SessionLocal
+    from app.strategy_models import ScanSchedule
+    db = SessionLocal()
+    try:
+        row = db.query(ScanSchedule).filter(
+            ScanSchedule.id == schedule_id, ScanSchedule.uid == uid,
+        ).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Schedule not found")
+        db.delete(row)
+        db.commit()
+        return JSONResponse({"ok": True})
+    finally:
+        db.close()
 
 
 @app.get("/api/backtest/gold-discovery/progress")
@@ -15936,12 +16104,13 @@ async def backtest_gold_discovery(request: Request):
     """
     Start Claude-driven GOLD (XAUUSD) discovery in the background.
     Poll GET /api/backtest/gold-discovery/progress until status=done.
-    Body: { uid, days (30|90|180), direction ("BOTH"|"LONG"|"SHORT") }
+    Body: { uid, days, direction, strict_quality?, quality_cfg?, categories? }
     """
     body = await request.json()
     uid  = (body.get("uid") or "").strip()
     days = int(body.get("days", 90))
     direction_mode = (body.get("direction") or "BOTH").upper()
+    quality_cfg, categories = _discovery_scan_options(body)
 
     auth, user_id = await _discovery_auth(uid)
     if auth == "bad_uid":
@@ -15958,6 +16127,7 @@ async def backtest_gold_discovery(request: Request):
         return await run_gold_discovery(
             days=days, direction_mode=direction_mode,
             user_id=user_id, progress_cb=progress_cb,
+            quality_cfg=quality_cfg, categories=categories,
         )
 
     return JSONResponse(content=start_discovery_job("gold", uid, _runner))
@@ -15980,6 +16150,7 @@ async def backtest_index_discovery(request: Request):
     days = int(body.get("days", 90))
     direction_mode = (body.get("direction") or "BOTH").upper()
     symbol = (body.get("symbol") or "NAS100").strip()
+    quality_cfg, categories = _discovery_scan_options(body)
 
     auth, user_id = await _discovery_auth(uid)
     if auth == "bad_uid":
@@ -15996,6 +16167,7 @@ async def backtest_index_discovery(request: Request):
         return await run_index_discovery(
             symbol=symbol, days=days, direction_mode=direction_mode,
             user_id=user_id, progress_cb=progress_cb,
+            quality_cfg=quality_cfg, categories=categories,
         )
 
     return JSONResponse(content=start_discovery_job("index", uid, _runner))
@@ -16018,6 +16190,7 @@ async def backtest_forex_discovery(request: Request):
     days = int(body.get("days", 90))
     direction_mode = (body.get("direction") or "BOTH").upper()
     symbol = (body.get("symbol") or "EURUSD").strip()
+    quality_cfg, categories = _discovery_scan_options(body)
 
     auth, user_id = await _discovery_auth(uid)
     if auth == "bad_uid":
@@ -16034,6 +16207,7 @@ async def backtest_forex_discovery(request: Request):
         return await run_forex_discovery(
             symbol=symbol, days=days, direction_mode=direction_mode,
             user_id=user_id, progress_cb=progress_cb,
+            quality_cfg=quality_cfg, categories=categories,
         )
 
     return JSONResponse(content=start_discovery_job("forex", uid, _runner))

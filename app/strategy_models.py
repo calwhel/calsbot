@@ -189,6 +189,26 @@ class PortalSubscription(Base):
     updated_at          = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class ScanSchedule(Base):
+    """Scheduled gold/forex/index discovery scans with Telegram alerts."""
+    __tablename__ = "scan_schedules"
+
+    id                 = Column(Integer, primary_key=True, index=True)
+    uid                = Column(String(40), nullable=False, index=True)
+    user_id            = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    name               = Column(String(120), default="")
+    scan_type          = Column(String(20), nullable=False, index=True)  # gold | forex | index
+    symbol             = Column(String(20), nullable=True)
+    categories_json    = Column(JSON, nullable=True)
+    quality_cfg_json   = Column(JSON, nullable=True)
+    scan_params_json   = Column(JSON, nullable=True)   # days, direction, etc.
+    interval_minutes   = Column(Integer, default=60)
+    min_grade_alert    = Column(String(1), default="B")
+    enabled            = Column(Boolean, default=True)
+    last_run_at        = Column(DateTime, nullable=True)
+    created_at         = Column(DateTime, default=datetime.utcnow)
+
+
 class DiscoveryScanJob(Base):
     """Background gold/index/forex discovery scans — shared across gunicorn workers."""
     __tablename__ = "discovery_scan_jobs"
@@ -236,6 +256,7 @@ def init_strategy_tables(engine):
         PortalPayment.__table__,
         StrategyOffer.__table__,
         DiscoveryScanJob.__table__,
+        ScanSchedule.__table__,
     ])
     # Add new columns only if genuinely missing — avoids table locks when multiple
     # portal instances (dev + production) share the same Neon database.

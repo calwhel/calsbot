@@ -2542,6 +2542,18 @@ function dismissTgBanner(){
             <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#a855f7,#7c3aed)" onclick="openIndexFinder()">📊 Find Best NASDAQ Strategy →</button>
           </div>
 
+          <!-- Scheduled discovery scans (Pro) -->
+          <div id="scan-schedules-card" style="margin-bottom:16px;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--card2)">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+              <div>
+                <div style="font-size:14px;font-weight:800">⏰ Scheduled Scans <span style="font-size:10px;color:var(--muted);font-weight:600">· Pro · Telegram alerts</span></div>
+                <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">Auto-run Gold / Forex / Index finders on an interval. Get Telegram alerts when grade ≥ your minimum (default B).</div>
+              </div>
+              <button class="btn" style="font-size:12px" onclick="loadScanSchedules()">↻ Refresh</button>
+            </div>
+            <div id="scan-schedules-list" style="margin-top:10px;font-size:12px;color:var(--muted)">Open a finder and tap <b>Save &amp; schedule</b>, or refresh to load saved schedules.</div>
+          </div>
+
           <!-- Live Structure Scanner (indices + forex) -->
           <div id="forex-scanner-card" style="margin-bottom:16px;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--card2)">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
@@ -3273,6 +3285,19 @@ function dismissTgBanner(){
             <button class="opt-chip" data-days="180" onclick="setGoldDays(180,this)">180 days <span style="opacity:.7">(ICT)</span></button>
           </div>
         </div>
+        <div class="disc-quality-block" style="margin-bottom:14px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--card2)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+            <div class="pine-label" style="margin:0">Quality filters</div>
+            <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="gold-strict-quality" checked> Strict quality (A–C only)</label>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;font-size:11.5px">
+            <label>Min confirmations<input type="number" id="gold-min-conf" value="3" min="0" max="6" style="width:100%;margin-top:3px;padding:5px 7px"></label>
+            <label>Min win %<input type="number" id="gold-min-wr" value="58" min="40" max="90" style="width:100%;margin-top:3px;padding:5px 7px"></label>
+            <label>Min confluences<input type="number" id="gold-min-confl" value="2" min="0" max="6" style="width:100%;margin-top:3px;padding:5px 7px"></label>
+          </div>
+          <div class="pine-label">Signal types <span style="font-weight:400;text-transform:none;letter-spacing:0">— select few for faster scans</span></div>
+          <div id="gold-cat-chips" style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px"></div>
+        </div>
         <button class="pine-analyse-btn" style="background:linear-gradient(135deg,#caa12c,#b8860b)" onclick="runGoldFinder()">🏆 Run Scan →</button>
       </div>
       <!-- progress -->
@@ -3286,7 +3311,9 @@ function dismissTgBanner(){
     </div>
     <div class="modal-footer" id="gold-footer" style="display:none">
       <button class="btn" onclick="goldReset()">↺ New Scan</button>
-      <button class="btn" id="gold-build-all-btn" onclick="goldBuildAll()">⚡ Build all (paper)</button>
+      <button class="btn" id="gold-build-selected-btn" onclick="goldBuildSelected()">⚡ Build selected</button>
+      <button class="btn" id="gold-build-all-btn" onclick="goldBuildAll()">Build all</button>
+      <button class="btn" onclick="saveDiscSchedule('gold')">⏰ Save &amp; schedule</button>
       <button class="btn primary" id="gold-build-btn" onclick="goldBuildInAI()">💬 Build this in AI Builder</button>
     </div>
   </div>
@@ -3324,6 +3351,19 @@ function dismissTgBanner(){
             <button class="opt-chip" data-days="180" onclick="setForexDays(180,this)">180 days</button>
           </div>
         </div>
+        <div class="disc-quality-block" style="margin-bottom:14px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--card2)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+            <div class="pine-label" style="margin:0">Quality filters</div>
+            <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="forex-strict-quality" checked> Strict quality (A–C only)</label>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;font-size:11.5px">
+            <label>Min confirmations<input type="number" id="forex-min-conf" value="3" min="0" max="6" style="width:100%;margin-top:3px;padding:5px 7px"></label>
+            <label>Min win %<input type="number" id="forex-min-wr" value="58" min="40" max="90" style="width:100%;margin-top:3px;padding:5px 7px"></label>
+            <label>Min confluences<input type="number" id="forex-min-confl" value="2" min="0" max="6" style="width:100%;margin-top:3px;padding:5px 7px"></label>
+          </div>
+          <div class="pine-label">Signal types <span style="font-weight:400;text-transform:none;letter-spacing:0">— select few for faster scans</span></div>
+          <div id="forex-cat-chips" style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px"></div>
+        </div>
         <button class="pine-analyse-btn" style="background:linear-gradient(135deg,#3b82f6,#2563eb)" onclick="runForexFinder()">💱 Run Forex Scan →</button>
       </div>
       <div id="forex-progress" style="display:none;text-align:center;padding:30px 10px">
@@ -3335,7 +3375,9 @@ function dismissTgBanner(){
     </div>
     <div class="modal-footer" id="forex-footer" style="display:none">
       <button class="btn" onclick="forexReset()">↺ New Scan</button>
-      <button class="btn" id="forex-build-all-btn" onclick="forexBuildAll()">⚡ Build all (paper)</button>
+      <button class="btn" id="forex-build-selected-btn" onclick="forexBuildSelected()">⚡ Build selected</button>
+      <button class="btn" id="forex-build-all-btn" onclick="forexBuildAll()">Build all</button>
+      <button class="btn" onclick="saveDiscSchedule('forex')">⏰ Save &amp; schedule</button>
       <button class="btn primary" id="forex-build-btn" onclick="forexBuildInAI()">💬 Build this in AI Builder</button>
     </div>
   </div>
@@ -3374,6 +3416,19 @@ function dismissTgBanner(){
             <button class="opt-chip" data-days="180" onclick="setIndexDays(180,this)">180 days</button>
           </div>
         </div>
+        <div class="disc-quality-block" style="margin-bottom:14px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--card2)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+            <div class="pine-label" style="margin:0">Quality filters</div>
+            <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="index-strict-quality" checked> Strict quality (A–C only)</label>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;font-size:11.5px">
+            <label>Min confirmations<input type="number" id="index-min-conf" value="3" min="0" max="6" style="width:100%;margin-top:3px;padding:5px 7px"></label>
+            <label>Min win %<input type="number" id="index-min-wr" value="58" min="40" max="90" style="width:100%;margin-top:3px;padding:5px 7px"></label>
+            <label>Min confluences<input type="number" id="index-min-confl" value="2" min="0" max="6" style="width:100%;margin-top:3px;padding:5px 7px"></label>
+          </div>
+          <div class="pine-label">Signal types <span style="font-weight:400;text-transform:none;letter-spacing:0">— select few for faster scans</span></div>
+          <div id="index-cat-chips" style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px"></div>
+        </div>
         <button class="pine-analyse-btn" style="background:linear-gradient(135deg,#a855f7,#7c3aed)" onclick="runIndexFinder()">📊 Run NASDAQ Scan →</button>
       </div>
       <div id="index-progress" style="display:none;text-align:center;padding:30px 10px">
@@ -3385,7 +3440,9 @@ function dismissTgBanner(){
     </div>
     <div class="modal-footer" id="index-footer" style="display:none">
       <button class="btn" onclick="indexReset()">↺ New Scan</button>
-      <button class="btn" id="index-build-all-btn" onclick="indexBuildAll()">⚡ Build all (paper)</button>
+      <button class="btn" id="index-build-selected-btn" onclick="indexBuildSelected()">⚡ Build selected</button>
+      <button class="btn" id="index-build-all-btn" onclick="indexBuildAll()">Build all</button>
+      <button class="btn" onclick="saveDiscSchedule('index')">⏰ Save &amp; schedule</button>
       <button class="btn primary" id="index-build-btn" onclick="indexBuildInAI()">💬 Build this in AI Builder</button>
     </div>
   </div>
@@ -8636,7 +8693,7 @@ function switchBuildMode(mode) {
   document.getElementById('build-pine-panel').style.display = mode === 'pine' ? '' : 'none';
   document.getElementById('build-scan-panel').style.display = mode === 'scan' ? '' : 'none';
   if (mode === 'scan') {
-    try { loadForexScanner(false); loadBestSignals(); } catch (e) {}
+    try { loadForexScanner(false); loadBestSignals(); loadScanSchedules(); } catch (e) {}
   }
   if (mode === 'chat') {
     if (cbMessages.length === 0) {
@@ -8883,9 +8940,176 @@ function resetScan() {
   if (bar) bar.style.width = '0%';
 }
 
+// ── Discovery quality UI (gold / forex / index finders) ───────────────────────
+const DISC_CATEGORIES = ['Trend','Momentum','Mean Rev','Volatility','Breakout','Price Action','Divergence','Smart Money','ICT','Combo','Supply/Demand','Structure'];
+function _initDiscCatChips(prefix){
+  const el=document.getElementById(prefix+'-cat-chips');
+  if(!el||el.dataset.init) return;
+  el.dataset.init='1';
+  DISC_CATEGORIES.forEach(cat=>{
+    const b=document.createElement('button');
+    b.type='button'; b.className='opt-chip active'; b.dataset.cat=cat;
+    b.style.fontSize='10.5px'; b.style.padding='3px 8px';
+    b.textContent=cat;
+    b.onclick=()=>b.classList.toggle('active');
+    el.appendChild(b);
+  });
+}
+function _discSelectedCats(prefix){
+  const chips=document.querySelectorAll('#'+prefix+'-cat-chips .opt-chip.active');
+  const cats=Array.from(chips).map(c=>c.dataset.cat).filter(Boolean);
+  return cats.length>=DISC_CATEGORIES.length?[]:cats;
+}
+function _discoveryScanBody(prefix, extra){
+  const strictEl=document.getElementById(prefix+'-strict-quality');
+  const strictOn=!strictEl||strictEl.checked;
+  const body=Object.assign({}, extra||{}, {
+    uid:UID,
+    strict_quality:strictOn,
+    quality_cfg:{
+      quality_mode:strictOn?'strict':'all',
+      min_confirmations:parseInt(document.getElementById(prefix+'-min-conf')?.value)||3,
+      min_winrate:(parseFloat(document.getElementById(prefix+'-min-wr')?.value)||58)/100,
+      min_confluences:parseInt(document.getElementById(prefix+'-min-confl')?.value)||2,
+    },
+    categories:_discSelectedCats(prefix),
+  });
+  return body;
+}
+function _gradeColor(g){
+  return {A:'#3fb950',B:'#5b6cf7',C:'#d9a441',D:'#f59e0b',F:'#e05858'}[g]||'var(--muted)';
+}
+function _gradeBadge(entry){
+  const g=entry.grade||'—';
+  const sc=entry.score!=null?entry.score:'—';
+  const col=_gradeColor(g);
+  return '<span style="display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:6px;background:'+col+'22;color:'+col+'">'+_gEsc(g)+' · '+sc+'</span>';
+}
+function _confChips(entry){
+  return (entry.confirmations||[]).map(c=>'<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--card2);color:#3fb950;margin:1px 2px 1px 0">✓ '+_gEsc(c)+'</span>').join('');
+}
+function _discReasonsBlock(entry){
+  const rs=entry.reasons||[];
+  if(!rs.length) return '';
+  const id='disc-reasons-'+Math.random().toString(36).slice(2,8);
+  return '<details style="margin-top:8px;font-size:11px;color:var(--muted)"><summary style="cursor:pointer;color:var(--text)">Why this grade?</summary><ul style="margin:6px 0 0 16px;line-height:1.45">'
+    +rs.map(r=>'<li>'+_gEsc(r)+'</li>').join('')+'</ul></details>';
+}
+function _discWinnerExtras(entry){
+  const n=entry.confluence_count||(entry.confluences||[]).length;
+  let h='<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+_gradeBadge(entry);
+  if(n) h+='<span style="font-size:11px;font-weight:700;color:#d9a441">🔥 '+n+' confluence'+(n!==1?'s':'')+'</span>';
+  h+='</div><div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">'+_confChips(entry)+'</div>';
+  h+=_discReasonsBlock(entry);
+  return h;
+}
+function _discLbCheckbox(prefix, idx, checked){
+  return '<input type="checkbox" class="disc-lb-cb" data-prefix="'+prefix+'" data-idx="'+idx+'"'+(checked!==false?' checked':'')+'>';
+}
+function _discStrictEmpty(){
+  return 'No A–C setups right now — loosen filters or check back later.';
+}
+function _renderDiscLeaderboard(d, prefix, best, unitLabel){
+  const ul=unitLabel||'pips';
+  let html='<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin:6px 0 8px">Graded results ('+(d.combos_passed!=null?d.combos_passed:d.leaderboard.length)+' passed · '+d.combos_evaluated+' tested)</div>';
+  html+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px">';
+  html+='<tr style="text-align:left;color:var(--muted)"><th style="padding:5px 6px"></th><th>#</th><th>Grade</th><th>Strategy</th><th>Dir</th><th>TF</th><th>Session</th><th>Confirmations</th><th>Win%</th><th>'+ul+'</th><th>OOS</th></tr>';
+  d.leaderboard.forEach((e,i)=>{
+    const st=e.stats||{};
+    const hl=(best&&e.label===best.label&&e.direction===best.direction&&e.timeframe===best.timeframe&&e.session===best.session);
+    const n=(e.confluence_count||(e.confluences||[]).length);
+    html+='<tr style="border-top:1px solid var(--border)'+(hl?';background:rgba(91,108,247,.08)':'')+'">'
+      +'<td style="padding:5px 6px">'+_discLbCheckbox(prefix,i,true)+'</td>'
+      +'<td style="padding:5px 6px;color:var(--muted)">'+(i+1)+'</td>'
+      +'<td style="padding:5px 6px">'+_gradeBadge(e)+'</td>'
+      +'<td style="padding:5px 6px;font-weight:600">'+_gEsc(e.label)+'</td>'
+      +'<td style="padding:5px 6px">'+(e.direction==='SHORT'?'🔴':'🟢')+'</td>'
+      +'<td style="padding:5px 6px">'+_gEsc(e.timeframe)+'</td>'
+      +'<td style="padding:5px 6px">'+_gEsc(e.session_label)+'</td>'
+      +'<td style="padding:5px 6px;max-width:140px">'+_confChips(e)+(n?'<div style="font-size:10px;color:#d9a441;margin-top:2px">🔥 ×'+n+'</div>':'')+'</td>'
+      +'<td style="padding:5px 6px">'+st.win_rate+'%</td>'
+      +'<td style="padding:5px 6px;color:'+(st.total_pips>0?'#3fb950':'#e05858')+'">'+(st.total_pips>0?'+':'')+st.total_pips+'</td>'
+      +'<td style="padding:5px 6px;color:var(--muted)">'+(st.test_trades!=null?st.test_trades+' / '+st.test_win_rate+'%':'—')+'</td>'
+      +'</tr>';
+  });
+  html+='</table></div>';
+  return html;
+}
+async function saveDiscSchedule(scanType){
+  const prefix=scanType;
+  const state={gold:GOLD,forex:FOREX,index:INDEX}[scanType]||{};
+  const interval=parseInt(prompt('Run every how many minutes? (min 15)', '60')||'60',10)||60;
+  const minGrade=(prompt('Minimum grade to alert (A/B/C/D)?','B')||'B').toUpperCase().slice(0,1);
+  const body=_discoveryScanBody(prefix, {
+    scan_type:scanType,
+    name:(scanType==='gold'?'Gold':scanType==='forex'?'Forex':'Index')+' scan',
+    days:state.days||90,
+    direction:state.dir||'BOTH',
+    symbol:state.sym||undefined,
+    interval_minutes:Math.max(15,interval),
+    min_grade_alert:minGrade,
+  });
+  try{
+    const r=await fetch('/api/scan-schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(r.status===402){ alert('Scheduled scans require Pro.'); return; }
+    if(!r.ok) throw new Error(d.detail||d.message||d.error||'Save failed');
+    alert('Scheduled — alerts when grade ≥ '+minGrade+' every '+interval+' min.');
+    loadScanSchedules();
+  }catch(e){ alert('Could not save schedule: '+(e.message||e)); }
+}
+async function loadScanSchedules(){
+  const el=document.getElementById('scan-schedules-list');
+  if(!el||!UID) return;
+  el.textContent='Loading…';
+  try{
+    const r=await fetch('/api/scan-schedules?uid='+encodeURIComponent(UID));
+    const d=await r.json();
+    if(r.status===402){ el.innerHTML='<span style="color:var(--muted)">Scheduled scans require <b>Pro</b>.</span>'; return; }
+    if(!r.ok) throw new Error(d.detail||'Failed');
+    const rows=d.schedules||[];
+    if(!rows.length){ el.innerHTML='<span style="color:var(--muted)">No schedules yet — use <b>Save &amp; schedule</b> in a finder modal.</span>'; return; }
+    el.innerHTML=rows.map(s=>'<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--border)">'
+      +'<div><b>'+_gEsc(s.name)+'</b> · '+_gEsc(s.scan_type)+(s.symbol?' '+_gEsc(s.symbol):'')
+      +' · every '+s.interval_minutes+'m · alert ≥'+_gEsc(s.min_grade_alert)
+      +(s.last_run_at?' · last '+new Date(s.last_run_at).toLocaleString():'')
+      +'</div><div style="display:flex;gap:4px">'
+      +'<button class="btn" style="font-size:10px;padding:4px 8px" onclick="toggleScanSchedule('+s.id+','+(!s.enabled)+')">'+(s.enabled?'Pause':'Enable')+'</button>'
+      +'<button class="btn" style="font-size:10px;padding:4px 8px;color:#e05858" onclick="deleteScanSchedule('+s.id+')">Delete</button>'
+      +'</div></div>').join('');
+  }catch(e){ el.textContent='Could not load schedules.'; }
+}
+async function toggleScanSchedule(id, enabled){
+  await fetch('/api/scan-schedules/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,enabled})});
+  loadScanSchedules();
+}
+async function deleteScanSchedule(id){
+  if(!confirm('Delete this scheduled scan?')) return;
+  await fetch('/api/scan-schedules/'+id+'?uid='+encodeURIComponent(UID),{method:'DELETE'});
+  loadScanSchedules();
+}
+
+async function _discBuildSelected(prefix, state, buildOneFn){
+  const res=state.result;
+  if(!res||!Array.isArray(res.leaderboard)||!res.leaderboard.length) return;
+  const checked=Array.from(document.querySelectorAll('.disc-lb-cb[data-prefix="'+prefix+'"]:checked')).map(cb=>parseInt(cb.dataset.idx,10));
+  const list=checked.map(i=>res.leaderboard[i]).filter(Boolean);
+  if(!list.length){ alert('Select at least one result to build.'); return; }
+  const btn=document.getElementById(prefix+'-build-selected-btn');
+  if(btn) btn.disabled=true;
+  let ok=0,fail=0;
+  for(const entry of list){
+    try{ await buildOneFn(entry); ok++; }
+    catch(e){ fail++; console.warn(prefix+' build selected failed', e); }
+  }
+  if(btn){ btn.disabled=false; btn.textContent='✅ Built '+ok+(fail?' ('+fail+' failed)':''); }
+  alert('Built '+ok+' paper strateg'+(ok===1?'y':'ies')+(fail?(' ('+fail+' failed)'):'')+'.');
+  if(typeof loadMyStrategies==='function'){ try{ loadMyStrategies(); }catch(e){} }
+}
+
 // ── Gold Strategy Finder ─────────────────────────────────────────────────────
 let GOLD = { dir:'BOTH', days:90, result:null };
-function openGoldFinder(){ goldReset(); showModal('modal-gold'); }
+function openGoldFinder(){ _initDiscCatChips('gold'); goldReset(); showModal('modal-gold'); }
 function setGoldDir(d,el){ GOLD.dir=d; document.querySelectorAll('#gold-dir-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
 function setGoldDays(d,el){ GOLD.days=d; document.querySelectorAll('#gold-days-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
 function goldReset(){
@@ -8948,7 +9172,7 @@ async function runGoldFinder(){
   let postOk = false;
   try{
     try{
-      const res = await _discoveryPost('gold', { uid:UID, days:GOLD.days, direction:GOLD.dir });
+      const res = await _discoveryPost('gold', _discoveryScanBody('gold', { days:GOLD.days, direction:GOLD.dir }));
       const data = await res.json();
       if(!res.ok){
         renderGoldError(data && (data.message||data.error||data.detail) || 'Scan failed.');
@@ -8981,12 +9205,16 @@ function _goldWinnerCard(title, b, accent){
   h+='<div style="font-size:16px;font-weight:800">'+_gEsc(b.strategy_name||b.label)+'</div>';
   h+='<div style="font-size:12px;color:var(--muted);margin-top:6px;display:flex;gap:12px;flex-wrap:wrap">';
   h+='<span>'+_gEsc(b.label)+' · '+dirBadge+'</span><span>⏱ '+_gEsc(b.timeframe)+'</span><span>🕒 '+_gEsc(b.session_label)+'</span>';
-  if(s.test_trades){ h+='<span>📊 OOS: '+s.test_trades+' tr · '+s.test_pnl+'%</span>'; }
-  h+='</div></div>';
+  if(s.test_trades){ h+='<span>📊 OOS: '+s.test_trades+' tr · '+s.test_win_rate+'% WR</span>'; }
+  h+='</div>'+_discWinnerExtras(b)+'</div>';
   return h;
 }
 function renderGoldResults(d){
   document.getElementById('gold-progress').style.display='none';
+  if(!d||!d.leaderboard||!d.leaderboard.length){
+    renderGoldError(_discStrictEmpty());
+    return;
+  }
   const b=d.best, s=b.stats;
   const dirBadge = b.direction==='SHORT' ? '<span style="color:#e05858;font-weight:700">SHORT</span>' : '<span style="color:#3fb950;font-weight:700">LONG</span>';
   let html = '';
@@ -9017,40 +9245,19 @@ function renderGoldResults(d){
         + '</div>';
   if(d.walk_forward){ html += '<div style="font-size:11px;color:var(--muted);margin-top:10px">Walk-forward: ranked on first 70% of data, validated on last 30%.</div>'; }
   if(b.rationale){ html += '<div style="font-size:12.5px;color:var(--text);margin-top:14px;line-height:1.55;padding-top:12px;border-top:1px solid var(--border)">💡 '+_gEsc(b.rationale)+'</div>'; }
+  html += _discWinnerExtras(b);
   html += '</div>';
-  // Leaderboard
-  let covTxt='';
-  if(d.coverage_days){ covTxt = ' · '+Object.keys(d.coverage_days).map(tf=>tf+' ~'+d.coverage_days[tf]+'d').join(', '); }
-  html += '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin:6px 0 8px">Top strategies tested ('+d.combos_evaluated+' combos · '+d.candidates_tested+' strategies'+covTxt+')</div>';
-  html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">';
-  html += '<tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px">#</th><th style="padding:6px 8px">Strategy</th><th style="padding:6px 8px">Dir</th><th style="padding:6px 8px">TF</th><th style="padding:6px 8px">Session</th><th style="padding:6px 8px">Conf.</th><th style="padding:6px 8px">Style</th><th style="padding:6px 8px">SL/TP</th><th style="padding:6px 8px">Win%</th><th style="padding:6px 8px">PF</th><th style="padding:6px 8px">Pips</th><th style="padding:6px 8px">OOS</th></tr>';
-  d.leaderboard.forEach((e,i)=>{
-    const st=e.stats;
-    const hl = (e.label===b.label && e.direction===b.direction && e.timeframe===b.timeframe && e.session===b.session && e.style===b.style);
-    const styleBadge = e.style==='scalp' ? '<span style="color:#3f9af5">⚡ scalp</span>' : (e.style==='swing' ? '<span style="color:#c08fe0">🌊 swing</span>' : _gEsc(e.style||''));
-    const mgmt = e.management||'fixed';
-    const mgmtBadge = mgmt==='breakeven' ? '<span style="color:#3fb950">🛡️ breakeven</span>' : (mgmt==='trail' ? '<span style="color:#d9a441">📈 trailing</span>' : '<span style="color:var(--muted)">fixed</span>');
-    html += '<tr style="border-top:1px solid var(--border)'+(hl?';background:#b8860b14':'')+'">'
-          + '<td style="padding:6px 8px;color:var(--muted)">'+(i+1)+'</td>'
-          + '<td style="padding:6px 8px;font-weight:600">'+_gEsc(e.label)+'</td>'
-          + '<td style="padding:6px 8px">'+(e.direction==='SHORT'?'🔴':'🟢')+'</td>'
-          + '<td style="padding:6px 8px">'+_gEsc(e.timeframe)+'</td>'
-          + '<td style="padding:6px 8px">'+_gEsc(e.session_label)+'</td>'
-          + '<td style="padding:6px 8px">'+_goldConfBadge(st.confidence)+'</td>'
-          + '<td style="padding:6px 8px">'+styleBadge+'</td>'
-          + '<td style="padding:6px 8px">'+e.sl_pips+'/'+e.tp_pips+'</td>'
-          + '<td style="padding:6px 8px">'+st.win_rate+'%</td>'
-          + '<td style="padding:6px 8px">'+st.profit_factor+'</td>'
-          + '<td style="padding:6px 8px;color:'+(st.total_pips>0?'#3fb950':'#e05858')+'">'+(st.total_pips>0?'+':'')+st.total_pips+'</td>'
-          + '<td style="padding:6px 8px;color:var(--muted)">'+(st.test_trades!=null?st.test_trades+' / '+st.test_pnl+'%':'—')+'</td>'
-          + '</tr>';
-  });
-  html += '</table></div>';
+  html += _renderDiscLeaderboard(d, 'gold', b, 'Pips');
   html += '<div style="font-size:10.5px;color:var(--muted);margin-top:10px;line-height:1.4">Backtested on historical XAUUSD candles with realistic spread, slippage &amp; fees. Past performance does not guarantee future results.</div>';
   const box=document.getElementById('gold-results');
   box.style.display=''; box.innerHTML=html;
   document.getElementById('gold-footer').style.display='';
   document.getElementById('gold-build-btn').style.display='';
+  const selBtn=document.getElementById('gold-build-selected-btn');
+  if(selBtn) selBtn.style.display='';
+}
+async function goldBuildSelected(){
+  await _discBuildSelected('gold', GOLD, _goldBuildOne);
 }
 function _goldStat(label,val){
   return '<div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:8px 10px">'
@@ -9146,7 +9353,7 @@ async function goldBuildAll(){
 
 // ── Forex Strategy Finder ─────────────────────────────────────────────────────
 let FOREX = { sym:'EURUSD', dir:'BOTH', days:90, result:null };
-function openForexFinder(){ forexReset(); showModal('modal-forex'); }
+function openForexFinder(){ _initDiscCatChips('forex'); forexReset(); showModal('modal-forex'); }
 function setForexSym(s,el){ FOREX.sym=s; document.querySelectorAll('#forex-sym-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
 function setForexDir(d,el){ FOREX.dir=d; document.querySelectorAll('#forex-dir-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
 function setForexDays(d,el){ FOREX.days=d; document.querySelectorAll('#forex-days-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
@@ -9166,7 +9373,7 @@ async function runForexFinder(){
   if(progEl) progEl.textContent='Starting forex scan…';
   try{
     try{
-      const res = await _discoveryPost('forex', { uid:UID, symbol:FOREX.sym, days:FOREX.days, direction:FOREX.dir });
+      const res = await _discoveryPost('forex', _discoveryScanBody('forex', { symbol:FOREX.sym, days:FOREX.days, direction:FOREX.dir }));
       const data = await res.json();
       if(!res.ok){
         renderForexError(data && (data.message||data.error||data.detail) || 'Scan failed.');
@@ -9191,6 +9398,10 @@ function renderForexError(msg){
 }
 function renderForexResults(d){
   document.getElementById('forex-progress').style.display='none';
+  if(!d||!d.leaderboard||!d.leaderboard.length){
+    renderForexError(_discStrictEmpty());
+    return;
+  }
   const b=d.best, s=b.stats;
   const symLabel = d.symbol || FOREX.sym || 'EURUSD';
   let html = '<div style="font-size:11px;color:var(--muted);margin-bottom:10px">Pair: <b>'+_gEsc(symLabel)+'</b> · pip-based P&amp;L · cTrader-ready</div>';
@@ -9217,21 +9428,18 @@ function renderForexResults(d){
         + _goldStat('Return', (s.total_pnl>0?'+':'')+s.total_pnl+'%')
         + '</div>';
   if(b.rationale) html += '<div style="font-size:12.5px;color:var(--text);margin-top:14px;line-height:1.55;border-top:1px solid var(--border);padding-top:12px">'+_gEsc(b.rationale)+'</div>';
+  html += _discWinnerExtras(b);
   html += '</div>';
-  if(Array.isArray(d.leaderboard) && d.leaderboard.length){
-    html += '<div style="font-size:12px;font-weight:700;margin:12px 0 8px">Leaderboard</div>';
-    html += '<div style="max-height:220px;overflow-y:auto">';
-    d.leaderboard.slice(0,8).forEach((e,i)=>{
-      html += '<div style="font-size:12px;padding:8px 10px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:8px">'
-           + '<span>#'+(i+1)+' '+_gEsc(e.label)+' · '+_gEsc(e.timeframe)+' · '+_gEsc(e.session_label)+'</span>'
-           + '<span style="color:var(--muted);white-space:nowrap">PF '+e.stats.profit_factor+' · '+e.stats.closed_trades+' tr</span></div>';
-    });
-    html += '</div>';
-  }
+  html += _renderDiscLeaderboard(d, 'forex', b, 'Pips');
   const box=document.getElementById('forex-results');
   box.style.display=''; box.innerHTML=html;
   document.getElementById('forex-footer').style.display='';
   document.getElementById('forex-build-btn').style.display='';
+  const selBtn=document.getElementById('forex-build-selected-btn');
+  if(selBtn) selBtn.style.display='';
+}
+async function forexBuildSelected(){
+  await _discBuildSelected('forex', FOREX, _forexBuildOne);
 }
 function forexBuildInAI(){
   if(!FOREX.result || !FOREX.result.best) return;
@@ -9310,7 +9518,7 @@ async function forexBuildAll(){
 
 // ── Index Strategy Finder ──────────────────────────────────────────────────────
 let INDEX = { sym:'NAS100', dir:'BOTH', days:90, result:null };
-function openIndexFinder(){ indexReset(); showModal('modal-index'); }
+function openIndexFinder(){ _initDiscCatChips('index'); indexReset(); showModal('modal-index'); }
 function setIndexSym(s,el){ INDEX.sym=s; document.querySelectorAll('#index-sym-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
 function setIndexDir(d,el){ INDEX.dir=d; document.querySelectorAll('#index-dir-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
 function setIndexDays(d,el){ INDEX.days=d; document.querySelectorAll('#index-days-chips .opt-chip').forEach(c=>c.classList.remove('active')); el.classList.add('active'); }
@@ -9330,7 +9538,7 @@ async function runIndexFinder(){
   if(progEl) progEl.textContent='Starting NASDAQ scan…';
   try{
     try{
-      const res = await _discoveryPost('index', { uid:UID, symbol:INDEX.sym, days:INDEX.days, direction:INDEX.dir });
+      const res = await _discoveryPost('index', _discoveryScanBody('index', { symbol:INDEX.sym, days:INDEX.days, direction:INDEX.dir }));
       const data = await res.json();
       if(!res.ok){
         renderIndexError(data && (data.message||data.error||data.detail) || 'Scan failed.');
@@ -9355,6 +9563,10 @@ function renderIndexError(msg){
 }
 function renderIndexResults(d){
   document.getElementById('index-progress').style.display='none';
+  if(!d||!d.leaderboard||!d.leaderboard.length){
+    renderIndexError(_discStrictEmpty());
+    return;
+  }
   const b=d.best, s=b.stats;
   const symLabel = d.symbol || INDEX.sym || 'NAS100';
   let html = '<div style="font-size:11px;color:var(--muted);margin-bottom:10px">Instrument: <b>'+_gEsc(symLabel)+'</b> · asset class index · cTrader-ready</div>';
@@ -9381,21 +9593,18 @@ function renderIndexResults(d){
         + _goldStat('Return', (s.total_pnl>0?'+':'')+s.total_pnl+'%')
         + '</div>';
   if(b.rationale) html += '<div style="font-size:12.5px;color:var(--text);margin-top:14px;line-height:1.55;border-top:1px solid var(--border);padding-top:12px">'+_gEsc(b.rationale)+'</div>';
+  html += _discWinnerExtras(b);
   html += '</div>';
-  if(Array.isArray(d.leaderboard) && d.leaderboard.length){
-    html += '<div style="font-size:12px;font-weight:700;margin:12px 0 8px">Leaderboard</div>';
-    html += '<div style="max-height:220px;overflow-y:auto">';
-    d.leaderboard.slice(0,8).forEach((e,i)=>{
-      html += '<div style="font-size:12px;padding:8px 10px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:8px">'
-           + '<span>#'+(i+1)+' '+_gEsc(e.label)+' · '+_gEsc(e.timeframe)+' · '+_gEsc(e.session_label)+'</span>'
-           + '<span style="color:var(--muted);white-space:nowrap">PF '+e.stats.profit_factor+' · '+e.stats.closed_trades+' tr</span></div>';
-    });
-    html += '</div>';
-  }
+  html += _renderDiscLeaderboard(d, 'index', b, 'Pts');
   const box=document.getElementById('index-results');
   box.style.display=''; box.innerHTML=html;
   document.getElementById('index-footer').style.display='';
   document.getElementById('index-build-btn').style.display='';
+  const selBtn=document.getElementById('index-build-selected-btn');
+  if(selBtn) selBtn.style.display='';
+}
+async function indexBuildSelected(){
+  await _discBuildSelected('index', INDEX, _indexBuildOne);
 }
 function indexBuildInAI(){
   if(!INDEX.result || !INDEX.result.best) return;
