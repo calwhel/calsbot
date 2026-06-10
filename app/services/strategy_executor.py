@@ -1016,32 +1016,84 @@ async def _check_htf_trend(
     return is_bullish if direction == "LONG" else not is_bullish
 
 
+def _db_rollback_safe(db) -> None:
+    """Clear a poisoned SQLAlchemy session after Neon SSL drops."""
+    try:
+        db.rollback()
+    except Exception:
+        pass
+
+
+def _db_count_safe(db, query_callable):
+    """Run a DB count/first query; rollback session on transient errors."""
+    from sqlalchemy.exc import OperationalError, PendingRollbackError
+
+    try:
+        return query_callable()
+    except (OperationalError, PendingRollbackError):
+        _db_rollback_safe(db)
+        raise
+
+
+async def _commit_db_with_retry(db, *, attempts: int = 3, label: str = "") -> None:
+    """Commit with rollback + retry — critical after conditions-met fires."""
+    from sqlalchemy.exc import OperationalError, PendingRollbackError
+
+    _tag = f" ({label})" if label else ""
+    for attempt in range(1, attempts + 1):
+        try:
+            db.commit()
+            return
+        except (OperationalError, PendingRollbackError) as exc:
+            _db_rollback_safe(db)
+            if attempt >= attempts:
+                logger.warning(
+                    f"[{_log_ts()}] DB commit failed{_tag} after {attempts} attempts: {exc}"
+                )
+                raise
+            logger.warning(
+                f"[{_log_ts()}] DB commit transient error{_tag} — "
+                f"retry {attempt}/{attempts}"
+            )
+            await asyncio.sleep(0.5 * attempt)
+
+
 def _daily_execution_count(strategy_id: int, db) -> int:
     from app.strategy_models import StrategyExecution
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    return db.query(StrategyExecution).filter(
-        StrategyExecution.strategy_id == strategy_id,
-        StrategyExecution.fired_at >= today,
-        StrategyExecution.outcome.notin_(["CANCELLED", "EXPIRED"]),
-    ).count()
+    return _db_count_safe(
+        db,
+        lambda: db.query(StrategyExecution).filter(
+            StrategyExecution.strategy_id == strategy_id,
+            StrategyExecution.fired_at >= today,
+            StrategyExecution.outcome.notin_(["CANCELLED", "EXPIRED"]),
+        ).count(),
+    )
 
 
 def _open_execution_count(strategy_id: int, db) -> int:
     from app.strategy_models import StrategyExecution
-    return db.query(StrategyExecution).filter(
-        StrategyExecution.strategy_id == strategy_id,
-        StrategyExecution.outcome == "OPEN",
-    ).count()
+    return _db_count_safe(
+        db,
+        lambda: db.query(StrategyExecution).filter(
+            StrategyExecution.strategy_id == strategy_id,
+            StrategyExecution.outcome == "OPEN",
+        ).count(),
+    )
 
 
 def _fired_today_for_symbol(strategy_id: int, symbol: str, db) -> bool:
     from app.strategy_models import StrategyExecution
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    return db.query(StrategyExecution).filter(
-        StrategyExecution.strategy_id == strategy_id,
-        StrategyExecution.symbol == symbol,
-        StrategyExecution.fired_at >= today,
-    ).first() is not None
+    return _db_count_safe(
+        db,
+        lambda: db.query(StrategyExecution).filter(
+            StrategyExecution.strategy_id == strategy_id,
+            StrategyExecution.symbol == symbol,
+            StrategyExecution.fired_at >= today,
+        ).first()
+        is not None,
+    )
 
 
 def _last_any_fired_time(strategy_id: int, db) -> Optional[datetime]:
@@ -3239,6 +3291,7 @@ async def evaluate_and_fire(
                 config["entry_conditions"] = _src.config.get("entry_conditions", {})
         except Exception as _e:
             logger.warning(f"Locked strategy {strategy.id}: could not fetch source conditions: {_e}")
+            _db_rollback_safe(db)
 
     risk     = config.get("risk") or {}
     filters  = config.get("filters") or {}
@@ -3710,7 +3763,7 @@ async def evaluate_and_fire(
             notes          = _exec_notes,
         )
         db.add(execution)
-        db.commit()
+        await _commit_db_with_retry(db, label=f"exec#{strategy.id}")
         db.refresh(execution)
 
         # Only increment open_trades counter — do NOT recompute from scratch
@@ -3724,7 +3777,7 @@ async def evaluate_and_fire(
         else:
             _perf = StrategyPerformance(strategy_id=strategy.id, open_trades=1)
             db.add(_perf)
-        db.commit()
+        await _commit_db_with_retry(db, label=f"perf#{strategy.id}")
 
         if is_paper:
             # Paper trade: notify user and skip Bitunix
@@ -5015,6 +5068,7 @@ async def _run_crypto_executor_shard(
                     Retries with a fresh session on transient Neon / pool errors.
                     """
                     from sqlalchemy.exc import OperationalError as _SAOperationalError
+                    from sqlalchemy.exc import PendingRollbackError as _SAPendingRollbackError
                     from sqlalchemy.exc import TimeoutError as _SATimeoutError
                     from app.database import bg_db_slot
                     async with sem:
@@ -5041,7 +5095,11 @@ async def _run_crypto_executor_shard(
                                         gate_stats=cycle_gate_stats,
                                     )
                                     return
-                                except (_SAOperationalError, _SATimeoutError) as _db_err:
+                                except (
+                                    _SAOperationalError,
+                                    _SAPendingRollbackError,
+                                    _SATimeoutError,
+                                ) as _db_err:
                                     _err_name = type(_db_err).__name__
                                     if getattr(_db_err, "orig", None) is not None:
                                         _err_name = type(_db_err.orig).__name__
@@ -5050,10 +5108,7 @@ async def _run_crypto_executor_shard(
                                             f"[Strategy {snap['id']}] Transient DB error "
                                             f"({_err_name}) — retry {_attempt}/3"
                                         )
-                                        try:
-                                            db_one.rollback()
-                                        except Exception:
-                                            pass
+                                        _db_rollback_safe(db_one)
                                         await asyncio.sleep(0.5 * _attempt)
                                         continue
                                     logger.warning(
@@ -5065,6 +5120,7 @@ async def _run_crypto_executor_shard(
                                     logger.error(
                                         f"[Strategy {snap['id']}] Error: {e}", exc_info=True
                                     )
+                                    _db_rollback_safe(db_one)
                                     return
                                 finally:
                                     try:
@@ -6139,6 +6195,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
 
                 async def _run_one_fx(snap, _http=http_client):
                     from sqlalchemy.exc import OperationalError as _SAOperationalError
+                    from sqlalchemy.exc import PendingRollbackError as _SAPendingRollbackError
                     from sqlalchemy.exc import TimeoutError as _SATimeoutError
                     from app.database import bg_db_slot
                     async with sem:
@@ -6169,24 +6226,25 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                         prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
                                     )
                                     return
-                                except (_SAOperationalError, _SATimeoutError) as _db_err:
+                                except (
+                                    _SAOperationalError,
+                                    _SAPendingRollbackError,
+                                    _SATimeoutError,
+                                ) as _db_err:
                                     _err_name = type(_db_err).__name__
                                     if getattr(_db_err, "orig", None) is not None:
                                         _err_name = type(_db_err.orig).__name__
                                     if _attempt < 3:
-                                        logger.debug(
-                                            f"[FX Strategy {snap['id']}] DB error "
+                                        logger.warning(
+                                            f"[FX Strategy {snap['id']}] Transient DB error "
                                             f"({_err_name}) — retry {_attempt}/3"
                                         )
-                                        try:
-                                            db_one.rollback()
-                                        except Exception:
-                                            pass
+                                        _db_rollback_safe(db_one)
                                         await asyncio.sleep(0.5 * _attempt)
                                         continue
                                     _cycle_db_skipped.append((snap["id"], _err_name))
-                                    logger.debug(
-                                        f"[FX Strategy {snap['id']}] Skipping — "
+                                    logger.warning(
+                                        f"[FX Strategy {snap['id']}] Skipping cycle — "
                                         f"DB error persisted ({_err_name})"
                                     )
                                     return
@@ -6194,6 +6252,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                     logger.error(
                                         f"[FX Strategy {snap['id']}] Error: {e}", exc_info=True
                                     )
+                                    _db_rollback_safe(db_one)
                                     return
                                 finally:
                                     try:

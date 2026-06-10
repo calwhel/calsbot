@@ -63,6 +63,27 @@ class TestMetalEntryPrice(unittest.TestCase):
         self.assertEqual(px, 2650.0)
         self.assertIn("confirmed", reason)
 
+    def test_confirm_entry_paper_fallback_when_no_spot(self):
+        with mock.patch(
+            "app.services.tradfi_prices.get_price_fresh",
+            mock.AsyncMock(return_value=None),
+        ), mock.patch(
+            "app.services.realtime_spot.read_fresh_cached",
+            return_value=None,
+        ), mock.patch(
+            "app.services.ctrader_price_feed.get_price",
+            return_value=None,
+        ), mock.patch(
+            "app.services.ctrader_price_feed.get_bid_ask",
+            return_value=None,
+        ):
+            import asyncio
+            px, reason = asyncio.run(
+                confirm_entry_price("XAUUSD", "forex", 2650.0, paper_ok=True)
+            )
+        self.assertEqual(px, 2650.0)
+        self.assertIn("paper", reason)
+
 
 if __name__ == "__main__":
     unittest.main()

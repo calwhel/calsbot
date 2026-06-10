@@ -803,6 +803,27 @@ async def confirm_entry_price(
         symbol, asset_class, paper_ok=paper_ok, user_id=user_id,
     )
     if not live or live <= 0:
+        try:
+            from app.services.realtime_spot import read_fresh_cached
+            hit = read_fresh_cached(symbol, asset_class, paper_ok=paper_ok)
+            if hit and hit[0] > 0:
+                live = float(hit[0])
+        except Exception:
+            pass
+    if not live or live <= 0:
+        try:
+            from app.services.ctrader_price_feed import get_bid_ask as _ba, get_price as _ctp
+            sym = symbol.upper().replace("/", "").replace("-", "")
+            live = _ctp(sym)
+            if not live or live <= 0:
+                tick = _ba(sym)
+                if tick:
+                    live = round((tick[0] + tick[1]) / 2.0, 6)
+        except Exception:
+            pass
+    if not live or live <= 0:
+        if paper_ok:
+            return proposed, "paper_proposed_at_fire"
         return None, "no_live_spot_at_fire"
 
     max_drift = (
