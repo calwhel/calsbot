@@ -13,18 +13,20 @@ def _bars(n: int, close: float = 2650.0) -> list:
 
 
 class TestMetalLiveKlines(unittest.IsolatedAsyncioTestCase):
-    async def test_picks_fmp_over_kraken(self):
+    async def test_picks_coinbase_before_fmp(self):
         with patch.object(
             tp, "_fetch_fmp_metals_klines",
-            new_callable=AsyncMock, return_value=_bars(80),
+            new_callable=AsyncMock, return_value=_bars(80, 2640.0),
         ), patch.object(
             tp, "_fetch_coinbase_metals_klines",
-            new_callable=AsyncMock, return_value=[],
+            new_callable=AsyncMock, return_value=_bars(80, 2650.0),
         ), patch.object(
             tp, "_fetch_kraken_metals_klines",
-            new_callable=AsyncMock, return_value=_bars(80, 2649.0),
+            new_callable=AsyncMock, return_value=[],
         ), patch(
             "app.services.ctrader_price_feed.broker_session_ready", return_value=False,
+        ), patch(
+            "app.services.fmp_price_feed.fmp_in_backoff", return_value=False,
         ), patch.object(tp, "_env_fmp_api_key", return_value=True):
             rows = await tp.fetch_metal_live_candles("XAUUSD", "15m", 80)
         self.assertEqual(len(rows), 80)
@@ -39,6 +41,8 @@ class TestMetalLiveKlines(unittest.IsolatedAsyncioTestCase):
             side_effect=AssertionError("Binance must not be called for metal live klines"),
         ), patch(
             "app.services.ctrader_price_feed.broker_session_ready", return_value=False,
+        ), patch(
+            "app.services.fmp_price_feed.fmp_in_backoff", return_value=False,
         ), patch.object(tp, "_env_fmp_api_key", return_value=True):
             rows = await tp.fetch_metal_live_candles("XAUUSD", "15m", 80)
         self.assertEqual(len(rows), 80)

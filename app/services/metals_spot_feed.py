@@ -91,25 +91,6 @@ def _store(symbol: str, mid: float, source: str) -> None:
         pass
 
 
-async def _fetch_binance(pair: str) -> Optional[float]:
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=4.0) as client:
-            r = await client.get(
-                "https://api.binance.com/api/v3/ticker/price",
-                params={"symbol": pair},
-            )
-        if r.status_code != 200:
-            return None
-        body = r.json()
-        if isinstance(body, dict) and body.get("code") not in (None, 0):
-            return None
-        px = float(body.get("price", 0))
-        return px if px > 0 else None
-    except Exception:
-        return None
-
-
 async def _fetch_coinbase(pair: str) -> Optional[float]:
     if not pair:
         return None
@@ -155,7 +136,6 @@ async def _fetch_kraken(pair: str) -> Optional[float]:
 
 
 _FETCHERS = {
-    "binance": _fetch_binance,
     "coinbase": _fetch_coinbase,
     "kraken": _fetch_kraken,
 }

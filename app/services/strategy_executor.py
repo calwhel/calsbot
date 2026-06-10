@@ -6037,6 +6037,35 @@ _FX_RECONCILE_INTERVAL = float(
 )
 
 
+async def _close_live_forex_execution_with_db_retry(
+    ex_id: int,
+    outcome: str,
+    exit_price: float,
+    source: str = "ctrader-reconcile",
+) -> bool:
+    """Close+notify with fresh-session retry on Neon SSL blips."""
+    from app.db_resilience import is_transient_db_error
+
+    for attempt in range(3):
+        try:
+            return await _close_live_forex_execution_and_notify(
+                ex_id, outcome, exit_price, source=source,
+            )
+        except Exception as exc:
+            if is_transient_db_error(exc) and attempt < 2:
+                logger.warning(
+                    "[FX-reconcile] close transient DB error exec#%s (retry %s/3): %s",
+                    ex_id,
+                    attempt + 1,
+                    exc,
+                )
+                await asyncio.sleep(1.0 * (attempt + 1))
+                continue
+            logger.warning(f"[FX-reconcile] close error exec#{ex_id}: {exc}")
+            return False
+    return False
+
+
 async def _close_live_forex_execution_and_notify(
     ex_id: int, outcome: str, exit_price: float, source: str = "ctrader-reconcile"
 ) -> bool:
@@ -6280,15 +6309,34 @@ async def _reconcile_forex_closes() -> None:
     sweeps it classifies WIN/LOSS/BREAKEVEN via price-vs-TP/SL distance and fires
     `_close_live_forex_execution_and_notify`.
     """
+    from app.db_resilience import is_transient_db_error, run_with_db_retry
     from app.services.ctrader_client import (
         get_open_position_ids_for_user,
         get_position_close_detail_for_user,
     )
 
-    try:
-        work = await asyncio.to_thread(_build_forex_reconcile_worklist)
-    except Exception as e:
-        logger.warning(f"[FX-reconcile] worklist build failed: {e}")
+    work = None
+    for attempt in range(3):
+        try:
+            work = await asyncio.to_thread(
+                lambda: run_with_db_retry(
+                    _build_forex_reconcile_worklist,
+                    label="FX-reconcile-worklist",
+                )
+            )
+            break
+        except Exception as e:
+            if is_transient_db_error(e) and attempt < 2:
+                logger.warning(
+                    "[FX-reconcile] worklist transient DB error (retry %s/3): %s",
+                    attempt + 1,
+                    e,
+                )
+                await asyncio.sleep(1.0 * (attempt + 1))
+                continue
+            logger.warning(f"[FX-reconcile] worklist build failed: {e}")
+            return
+    if work is None:
         return
     if not work:
         return
@@ -6331,7 +6379,7 @@ async def _reconcile_forex_closes() -> None:
                     f"[FX-reconcile] {w['symbol']} exec#{ex_id} broker closed "
                     f"pos={w['position_id']} @ {exit_price} → {outcome}"
                 )
-                await _close_live_forex_execution_and_notify(
+                await _close_live_forex_execution_with_db_retry(
                     ex_id, outcome, exit_price, source="ctrader-reconcile-broker"
                 )
                 continue
@@ -6392,7 +6440,7 @@ async def _reconcile_forex_closes() -> None:
                 continue
 
             _FX_RECONCILE_MISSING.pop(ex_id, None)
-            await _close_live_forex_execution_and_notify(
+            await _close_live_forex_execution_with_db_retry(
                 ex_id, outcome, float(exit_price), source="ctrader-reconcile"
             )
 
@@ -6447,7 +6495,13 @@ async def run_forex_live_manager_fast():
             now_m = time.monotonic()
             if not work or (now_m - last_build) >= _FX_WORKLIST_TTL:
                 try:
-                    work = await asyncio.to_thread(_build_forex_worklist)
+                    from app.db_resilience import run_with_db_retry
+                    work = await asyncio.to_thread(
+                        lambda: run_with_db_retry(
+                            _build_forex_worklist,
+                            label="FX-fast-worklist",
+                        )
+                    )
                 except Exception as _be:
                     logger.warning(f"[FX-fast] worklist build failed: {_be}")
                     work = []

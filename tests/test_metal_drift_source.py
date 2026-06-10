@@ -9,7 +9,7 @@ from app.services.strategy_executor import _check_time_filter
 class TestMetalKlineDrift(unittest.TestCase):
     def test_spot_source_uses_looser_cap(self):
         self.assertEqual(tp.metal_kline_drift_limit("kraken"), tp.METAL_SPOT_KLINE_MAX_DRIFT_PCT)
-        self.assertEqual(tp.metal_kline_drift_limit("binance"), tp.METAL_SPOT_KLINE_MAX_DRIFT_PCT)
+        self.assertEqual(tp.metal_kline_drift_limit("coinbase"), tp.METAL_SPOT_KLINE_MAX_DRIFT_PCT)
 
     def test_unknown_source_uses_strict_cap(self):
         self.assertEqual(tp.metal_kline_drift_limit(None), tp.METAL_KLINE_LIVE_MAX_DRIFT_PCT)
@@ -49,7 +49,7 @@ class TestMetalLiveFetchSource(unittest.IsolatedAsyncioTestCase):
     async def test_fetch_stores_kline_source(self):
         tp._METAL_KLINE_SOURCE_CACHE.clear()
         with patch.object(
-            tp, "_fetch_binance_metals_klines",
+            tp, "_fetch_coinbase_metals_klines",
             new_callable=AsyncMock, return_value=[],
         ), patch.object(
             tp, "_fetch_kraken_metals_klines",

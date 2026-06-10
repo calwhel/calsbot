@@ -28,11 +28,10 @@ class MetalsSpotFeedTest(unittest.IsolatedAsyncioTestCase):
             ok = await msf._poll_symbol("XAUUSD")
         self.assertTrue(ok)
 
-    async def test_poll_stores_coinbase_when_binance_fails(self):
+    async def test_poll_stores_coinbase_when_kraken_fails(self):
         from app.services import metals_spot_feed as msf
 
         fetchers = {
-            "binance": AsyncMock(return_value=None),
             "coinbase": AsyncMock(return_value=4318.5),
             "kraken": AsyncMock(return_value=None),
         }

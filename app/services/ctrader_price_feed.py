@@ -26,6 +26,7 @@ import logging
 import os
 import ssl
 import struct
+import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -85,8 +86,11 @@ _AUTH_TERMINAL_BACKOFF_S = float(
 # is reserved ONLY for genuine connect/auth/subscribe failures so we never
 # hammer the broker while still being effectively always-on.
 _READ_TIMEOUT          = float(
-    os.environ.get("CTRADER_READ_TIMEOUT_S", "90")
-)  # max inbound silence before recycle (quiet FX needs headroom)
+    os.environ.get("CTRADER_READ_TIMEOUT_S", "35")
+)  # detect dead sessions quickly; client heartbeat should keep reads flowing
+_HEARTBEAT_INTERVAL_S  = float(
+    os.environ.get("CTRADER_CLIENT_HEARTBEAT_S", "8")
+)  # cTrader requires client ProtoHeartbeatEvent ~every 10s
 _HEALTHY_SESSION_SECS  = 20.0   # a session alive ≥ this counts as "healthy"
 _RECONNECT_FAST        = 2.0    # delay after a healthy drop (near-seamless)
 _RECONNECT_BACKOFF_MIN = 3.0    # initial backoff for connect/auth failures
@@ -153,6 +157,7 @@ _tb_hb_task: Optional[asyncio.Task] = None
 _TB_IDLE_MAX = 25.0  # cTrader drops idle conns ~30s → proactively reopen past this
 
 _feed_live: bool = False
+_last_spot_tick_mono: float = 0.0  # monotonic — for price-gap logging on reconnect
 # Active spot-stream session — avoids DB round-trips for trendbars while LIVE.
 _stream_creds: Optional[Tuple[str, int, int, str]] = None  # token, ctid, uid, host
 _feed_task: Optional[asyncio.Task] = None
@@ -228,6 +233,34 @@ async def _read_frame(
 async def _send(writer: asyncio.StreamWriter, proto_req, payload_type: int) -> None:
     writer.write(_encode(proto_req, payload_type))
     await writer.drain()
+
+
+def _start_heartbeat_thread(
+    loop: asyncio.AbstractEventLoop,
+    writer_holder: Dict[str, asyncio.StreamWriter],
+    stop_event: threading.Event,
+) -> threading.Thread:
+    """Send ProtoHeartbeatEvent from a daemon thread — immune to executor scan blocking the loop."""
+
+    def _run() -> None:
+        while not stop_event.is_set():
+            if stop_event.wait(_HEARTBEAT_INTERVAL_S):
+                break
+            writer = writer_holder.get("writer")
+            if writer is None or not _PROTO_OK:
+                continue
+            try:
+                fut = asyncio.run_coroutine_threadsafe(
+                    _send(writer, ProtoHeartbeatEvent(), _PT_HEARTBEAT),
+                    loop,
+                )
+                fut.result(timeout=8.0)
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_run, daemon=True, name="ctrader-feed-hb")
+    t.start()
+    return t
 
 
 async def _open_conn(host: str = _HOST_LIVE) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
@@ -616,14 +649,20 @@ async def _authenticate_stream(
 # ── Background streaming task ─────────────────────────────────────────────────
 
 async def _feed_loop() -> None:
-    global _feed_live, _stream_creds
+    global _feed_live, _stream_creds, _last_spot_tick_mono
     fail_backoff = _RECONNECT_BACKOFF_MIN  # grows ONLY on connect/auth failures
 
     while True:
         reader = writer = None
-        hb_task = None
+        hb_stop: Optional[threading.Event] = None
+        hb_thread: Optional[threading.Thread] = None
         healthy = False                # True once spots are flowing
         session_start = time.monotonic()
+        gap_before_connect = (
+            time.monotonic() - _last_spot_tick_mono
+            if _last_spot_tick_mono > 0
+            else 0.0
+        )
         try:
             if time.monotonic() < _auth_backoff_until:
                 wait_s = _auth_backoff_until - time.monotonic()
@@ -708,18 +747,13 @@ async def _feed_loop() -> None:
             session_start = time.monotonic()
             fail_backoff = _RECONNECT_BACKOFF_MIN  # reset after a clean subscribe
 
-            # cTrader drops any connection that doesn't send a client heartbeat
-            # within ~30s (even while spot events stream IN). Send one every 10s.
-            async def _heartbeat(w):
-                try:
-                    while True:
-                        await asyncio.sleep(10)
-                        await _send(w, ProtoHeartbeatEvent(), _PT_HEARTBEAT)
-                except (asyncio.CancelledError, Exception):
-                    # Cancelled on disconnect, or the writer is already closing —
-                    # the read loop will surface the real disconnect; stay quiet.
-                    return
-            hb_task = asyncio.create_task(_heartbeat(writer))
+            # Client heartbeat MUST run even when the asyncio loop is blocked by
+            # long executor scans — use a dedicated thread (same pattern as the
+            # advisory-lock keepalive).
+            loop = asyncio.get_event_loop()
+            writer_holder: Dict[str, asyncio.StreamWriter] = {"writer": writer}
+            hb_stop = threading.Event()
+            hb_thread = _start_heartbeat_thread(loop, writer_holder, hb_stop)
 
             # Stream indefinitely — each SpotEvent updates the cache
             while True:
@@ -727,10 +761,14 @@ async def _feed_loop() -> None:
                 if not msg:
                     raise ConnectionError("stream read timeout / disconnect")
 
-                # Any inbound frame (spot event OR server heartbeat) proves the
-                # socket is genuinely alive — only then treat a later drop as a
-                # benign broker recycle (fast reconnect) rather than a failure.
                 healthy = True
+
+                if msg.payloadType == _PT_HEARTBEAT:
+                    try:
+                        await _send(writer, ProtoHeartbeatEvent(), _PT_HEARTBEAT)
+                    except Exception:
+                        pass
+                    continue
 
                 if msg.payloadType == _PT_SPOT_EVENT:
                     ev = ProtoOASpotEvent()
@@ -740,7 +778,8 @@ async def _feed_loop() -> None:
                         bid = ev.bid / 100_000.0 if ev.HasField("bid") else None
                         ask = ev.ask / 100_000.0 if ev.HasField("ask") else None
                         if bid and ask:
-                            _spot_cache[canonical] = (bid, ask, time.monotonic())
+                            _last_spot_tick_mono = time.monotonic()
+                            _spot_cache[canonical] = (bid, ask, _last_spot_tick_mono)
                             try:
                                 from app.services.spot_price_store import upsert_tick
                                 mid = round((bid + ask) / 2.0, 6)
@@ -759,21 +798,21 @@ async def _feed_loop() -> None:
         else:
             _last_exc = None
         finally:
-            if hb_task:
-                hb_task.cancel()
+            if hb_stop is not None:
+                hb_stop.set()
             if writer:
                 await _aclose_writer(writer)
 
-        # Decide the reconnect delay. A session that streamed fine for a while
-        # then dropped is just cTrader recycling the socket — reconnect almost
-        # immediately so the sub-second feed is effectively never down. Only a
-        # connection that never became healthy (connect/auth/subscribe failing)
-        # gets the growing backoff, so we don't hammer the broker.
         alive = time.monotonic() - session_start
         if healthy and alive >= _HEALTHY_SESSION_SECS:
+            _gap_note = (
+                f", price gap {gap_before_connect:.0f}s"
+                if gap_before_connect >= 1.0
+                else ""
+            )
             logger.info(
                 f"[CTraderFeed] session dropped after {alive:.0f}s "
-                f"({_last_exc}) — reconnecting in {_RECONNECT_FAST:.0f}s"
+                f"({_last_exc}){_gap_note} — reconnecting in {_RECONNECT_FAST:.0f}s"
             )
             await asyncio.sleep(_RECONNECT_FAST)
         else:

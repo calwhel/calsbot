@@ -24,7 +24,8 @@ def get_executor_lock_id() -> int:
 # locks are released when the SSL session dies — re-claim on a FRESH connection
 # (never revive the dead psycopg2 session).
 LOCK_RECONNECT_ATTEMPTS = 15
-LOCK_RECONNECT_DELAY_SECS = 1.5
+LOCK_RECONNECT_DELAY_SECS = 5.0
+LOCK_ZOMBIE_TERMINATE_AFTER = 5  # re-claim attempts before pg_terminate_backend on stale holder
 
 
 def is_standalone_executor() -> bool:
@@ -102,6 +103,26 @@ def reconnect_lock_connection(
                 attempt,
                 max_attempts,
             )
+            if attempt >= LOCK_ZOMBIE_TERMINATE_AFTER and attempt % LOCK_ZOMBIE_TERMINATE_AFTER == 0:
+                try:
+                    from app.services.telegram_poller_lock import (
+                        terminate_advisory_lock_holders,
+                    )
+                    n = terminate_advisory_lock_holders(lock_id, min_idle_seconds=0.0)
+                    if n:
+                        logger.warning(
+                            "Executor lock re-claim: terminated %s zombie holder(s) "
+                            "for lock %s (attempt %s)",
+                            n,
+                            lock_id,
+                            attempt,
+                        )
+                except Exception as term_exc:
+                    logger.warning(
+                        "Executor lock zombie terminate failed (attempt %s): %s",
+                        attempt,
+                        term_exc,
+                    )
         except Exception as exc:
             close_lock_connection(conn)
             logger.warning(
