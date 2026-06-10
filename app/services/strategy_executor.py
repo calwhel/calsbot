@@ -1061,6 +1061,50 @@ def _db_rollback_safe(db) -> None:
         pass
 
 
+def _rebind_session(db, *instances) -> None:
+    """Re-attach ORM rows after rollback so a retry commit can persist them."""
+    from sqlalchemy.orm import object_session
+
+    for inst in instances:
+        if inst is None:
+            continue
+        try:
+            if object_session(inst) is db:
+                continue
+        except Exception:
+            pass
+        try:
+            db.add(inst)
+        except Exception:
+            try:
+                db.merge(inst)
+            except Exception:
+                pass
+
+
+def _refresh_db_row(db, instance):
+    """Refresh a row or reload by PK after commit/rollback churn (Neon SSL blips)."""
+    from sqlalchemy.exc import InvalidRequestError
+    from sqlalchemy.orm import object_session
+
+    if instance is None:
+        return None
+    pk = getattr(instance, "id", None)
+    if pk is not None:
+        fresh = db.get(type(instance), pk)
+        if fresh is not None:
+            return fresh
+    try:
+        if object_session(instance) is db:
+            db.refresh(instance)
+    except InvalidRequestError:
+        if pk is not None:
+            return db.get(type(instance), pk)
+    except Exception:
+        pass
+    return instance
+
+
 def _db_count_safe(db, query_callable):
     """Run a DB count/first query; rollback session on transient errors."""
     from sqlalchemy.exc import OperationalError, PendingRollbackError
@@ -1072,7 +1116,13 @@ def _db_count_safe(db, query_callable):
         raise
 
 
-async def _commit_db_with_retry(db, *, attempts: int = 3, label: str = "") -> None:
+async def _commit_db_with_retry(
+    db,
+    *,
+    attempts: int = 3,
+    label: str = "",
+    instances: Optional[tuple] = None,
+) -> None:
     """Commit with rollback + retry — critical after conditions-met fires."""
     from sqlalchemy.exc import OperationalError, PendingRollbackError
 
@@ -1083,6 +1133,8 @@ async def _commit_db_with_retry(db, *, attempts: int = 3, label: str = "") -> No
             return
         except (OperationalError, PendingRollbackError) as exc:
             _db_rollback_safe(db)
+            if instances:
+                _rebind_session(db, *instances)
             if attempt >= attempts:
                 logger.warning(
                     f"[{_log_ts()}] DB commit failed{_tag} after {attempts} attempts: {exc}"
@@ -3430,6 +3482,7 @@ async def evaluate_and_fire(
         except Exception as _e:
             logger.warning(f"Locked strategy {strategy.id}: could not fetch source conditions: {_e}")
             _db_rollback_safe(db)
+            _rebind_session(db, strategy, user)
 
     risk     = config.get("risk") or {}
     filters  = config.get("filters") or {}
@@ -3901,8 +3954,16 @@ async def evaluate_and_fire(
             notes          = _exec_notes,
         )
         db.add(execution)
-        await _commit_db_with_retry(db, label=f"exec#{strategy.id}")
-        db.refresh(execution)
+        await _commit_db_with_retry(
+            db, label=f"exec#{strategy.id}", instances=(execution,)
+        )
+        execution = _refresh_db_row(db, execution)
+        if execution is None or not getattr(execution, "id", None):
+            logger.error(
+                f"[Strategy {strategy.id}] execution row missing after commit — "
+                f"aborting fire for {symbol}"
+            )
+            return
 
         # Only increment open_trades counter — do NOT recompute from scratch
         # (full recompute wipes historical performance data if no closed trades exist yet)
@@ -3915,7 +3976,9 @@ async def evaluate_and_fire(
         else:
             _perf = StrategyPerformance(strategy_id=strategy.id, open_trades=1)
             db.add(_perf)
-        await _commit_db_with_retry(db, label=f"perf#{strategy.id}")
+        await _commit_db_with_retry(
+            db, label=f"perf#{strategy.id}", instances=(_perf,)
+        )
 
         if is_paper:
             # Paper trade: notify user and skip Bitunix
@@ -4164,7 +4227,12 @@ async def evaluate_and_fire(
                     (execution.notes or "")
                     + " | Live→Paper fallback (cTrader order not queued)"
                 ).strip(" |")
-                await _commit_db_with_retry(db, label=f"ctrader-queue-fail#{execution.id}")
+                await _commit_db_with_retry(
+                    db,
+                    label=f"ctrader-queue-fail#{execution.id}",
+                    instances=(execution,),
+                )
+                execution = _refresh_db_row(db, execution)
                 logger.warning(
                     f"[Strategy {strategy.id}] {symbol} live exec#{execution.id} — "
                     f"cTrader order never queued; tracking as paper"
@@ -4188,7 +4256,12 @@ async def evaluate_and_fire(
 
             if order_result and order_result.get("queued"):
                 execution.notes = ((execution.notes or "") + " | order_queued").strip(" |")
-                db.commit()
+                await _commit_db_with_retry(
+                    db,
+                    label=f"ctrader-queued#{execution.id}",
+                    instances=(execution,),
+                )
+                execution = _refresh_db_row(db, execution)
                 tg_id_live = _telegram_int_id(user)
                 _portal_live = db.query(StrategyPortalSettings).filter(
                     StrategyPortalSettings.user_id == user.id
