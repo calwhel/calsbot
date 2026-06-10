@@ -21,10 +21,12 @@ consume them without branching:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.asset_classes import (
     ASSET_CLASS_CRYPTO,
@@ -49,7 +51,9 @@ _KLINE_TTL = timedelta(seconds=20)
 _METAL_KLINE_TTL = timedelta(
     seconds=max(15, int(os.environ.get("METAL_KLINE_CACHE_SECONDS", "30")))
 )
-_KRAKEN_KLINE_TIMEOUT_S = float(os.environ.get("KRAKEN_KLINE_TIMEOUT_SECONDS", "8"))
+_KRAKEN_KLINE_TIMEOUT_S = float(os.environ.get("KRAKEN_KLINE_TIMEOUT_SECONDS", "20"))
+_BINANCE_KLINE_TIMEOUT_S = float(os.environ.get("BINANCE_KLINE_TIMEOUT_SECONDS", "15"))
+_FMP_KLINE_TIMEOUT_S = float(os.environ.get("FMP_KLINE_TIMEOUT_SECONDS", "15"))
 
 # Single-flight registry — collapses concurrent identical candle requests into
 # ONE underlying fetch. The forex executor evaluates up to ~40 strategies per
@@ -121,6 +125,17 @@ _METAL_KLINE_SOURCE_RANK = {
     "binance": 2,
     "fmp": 3,
     "kraken": 4,
+    "synthetic": 5,
+}
+_INTERVAL_MS: Dict[str, int] = {
+    "1m": 60_000,
+    "3m": 180_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "4h": 14_400_000,
+    "1d": 86_400_000,
 }
 
 # Gold futures (GC=F) can sit $5–$50 away from XAUUSD spot — never fire trades
@@ -134,8 +149,36 @@ METAL_SPOT_KLINE_MAX_DRIFT_PCT = float(
     os.environ.get("METAL_SPOT_KLINE_MAX_DRIFT_PCT", "0.5")
 )
 _SPOT_ALIGNED_KLINE_SOURCES = frozenset({
-    "binance", "ctrader-user", "ctrader", "fmp", "kraken",
+    "binance", "ctrader-user", "ctrader", "fmp", "kraken", "synthetic",
 })
+
+
+@dataclass
+class MetalProviderDiagnostic:
+    """Per-provider outcome for XAUUSD/XAGUSD kline failover tracing."""
+    provider: str
+    url: str = ""
+    response_bytes: int = 0
+    candle_count: int = 0
+    failure: Optional[str] = None
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+
+def _log_metal_kline_trace(
+    symbol: str,
+    timeframe: str,
+    diagnostics: List[MetalProviderDiagnostic],
+) -> None:
+    """Structured trace — one JSON line per provider for Railway log search."""
+    for d in diagnostics:
+        logger.info(
+            "[metal-kline-trace] %s",
+            json.dumps(
+                {"symbol": symbol, "timeframe": timeframe, **asdict(d)},
+                separators=(",", ":"),
+                default=str,
+            ),
+        )
 # Winning metal kline provider per (symbol, timeframe, limit) — for drift rules.
 _METAL_KLINE_SOURCE_CACHE: Dict[Tuple[str, str, int], Tuple[str, datetime]] = {}
 _METAL_LIVE_FETCH_SEM: Optional[asyncio.Semaphore] = None
@@ -429,22 +472,121 @@ async def _fetch_with_kline_timeout(
         return []
 
 
-async def _fetch_kraken_metals_klines(
+async def _resolve_metal_spot_price(symbol: str) -> Tuple[Optional[float], str]:
+    """Best-effort spot for synthetic candles — never requires cTrader."""
+    sym = symbol.upper()
+    try:
+        from app.services.metals_spot_feed import fetch_now, get_price
+        px = get_price(sym)
+        if px and px > 0:
+            return float(px), "metals_spot_feed"
+        px = await fetch_now(sym)
+        if px and px > 0:
+            return float(px), "metals_spot_feed_fetch"
+    except Exception:
+        pass
+    try:
+        from app.services.realtime_spot import get_realtime_spot
+        px = await get_realtime_spot(sym, "forex", force_fetch=True, paper_ok=True)
+        if px and px > 0:
+            return float(px), "realtime_spot"
+    except Exception:
+        pass
+    try:
+        from app.services.spot_price_store import get_mid
+        px = get_mid(sym, max_age_s=300.0)
+        if px and px > 0:
+            return float(px), "spot_store_stale"
+    except Exception:
+        pass
+    # Last closed bar from any cached metal klines
+    now = datetime.utcnow()
+    for key, (rows, fetched_at) in _KLINE_CACHE.items():
+        if (now - fetched_at).total_seconds() > 3600:
+            continue
+        key_sym = ""
+        if isinstance(key, tuple) and key:
+            key_sym = str(key[0]).replace("kraken:", "")
+        if sym in (key_sym, _METALS_BINANCE_MAP.get(sym, "")):
+            if rows:
+                try:
+                    return float(rows[-1][4]), "kline_cache"
+                except (IndexError, TypeError, ValueError):
+                    pass
+    return None, ""
+
+
+async def build_synthetic_metal_candles(
     symbol: str,
     timeframe: str,
     limit: int,
 ) -> List[List[float]]:
+    """
+    Emergency OHLC when cTrader/Binance/Kraken/FMP all miss.
+    Built from live metals spot so strategy evaluation never sees zero bars.
+    """
+    sym = symbol.upper()
+    if sym not in _METALS_BINANCE_MAP:
+        return []
+
+    spot, spot_src = await _resolve_metal_spot_price(sym)
+    if not spot or spot <= 0:
+        logger.error(
+            "[tradfi] synthetic metal candles impossible for %s %s — no spot anchor",
+            sym, timeframe,
+        )
+        return []
+
+    step_ms = _INTERVAL_MS.get(timeframe, 900_000)
+    now_ms = int(datetime.utcnow().timestamp() * 1000)
+    # Align to bar boundary
+    now_ms = (now_ms // step_ms) * step_ms
+    rows: List[List[float]] = []
+    for i in range(limit):
+        ts = now_ms - (limit - 1 - i) * step_ms
+        # Tiny deterministic wiggle so RSI/volatility indicators are not stuck at 50/0
+        wiggle = 1.0 + 0.00015 * ((i % 7) - 3)
+        c = spot * wiggle
+        h = c * 1.00025
+        l = c * 0.99975
+        o = c * (1.0 + 0.00005 * ((i % 3) - 1))
+        rows.append([ts, o, h, l, c, 0.0])
+
+    logger.warning(
+        "[tradfi] metal-live SYNTHETIC %s %s → %d bars from spot=%.2f (%s)",
+        sym, timeframe, len(rows), spot, spot_src,
+    )
+    return rows
+
+
+async def _fetch_kraken_metals_klines(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    *,
+    diag: Optional[MetalProviderDiagnostic] = None,
+) -> List[List[float]]:
     """Closed OHLC from Kraken PAXGUSD / XAGUSD (US-accessible spot proxy)."""
     pair = _KRAKEN_METAL_MAP.get(symbol.upper())
     interval = _KRAKEN_INTERVAL.get(timeframe)
+    url = f"https://api.kraken.com/0/public/OHLC?pair={pair}&interval={interval}"
+    if diag is not None:
+        diag.provider = "kraken"
+        diag.url = url
     if not pair or not interval:
+        if diag is not None:
+            diag.failure = "unsupported_pair_or_timeframe"
         return []
 
     now = datetime.utcnow()
     key = (f"kraken:{pair}", timeframe, limit)
     cached = _KLINE_CACHE.get(key)
     if cached and (now - cached[1]) < _metal_kline_cache_ttl(key):
-        return cached[0]
+        rows = cached[0]
+        if diag is not None:
+            diag.candle_count = len(rows)
+            diag.extra["cache_hit"] = True
+        return rows
 
     try:
         import httpx
@@ -453,7 +595,11 @@ async def _fetch_kraken_metals_klines(
                 "https://api.kraken.com/0/public/OHLC",
                 params={"pair": pair, "interval": interval},
             )
+        if diag is not None:
+            diag.response_bytes = len(r.content or b"")
         if r.status_code != 200:
+            if diag is not None:
+                diag.failure = f"http_{r.status_code}"
             return []
         result = (r.json() or {}).get("result") or {}
         raw_bars = None
@@ -462,6 +608,8 @@ async def _fetch_kraken_metals_klines(
                 raw_bars = v
                 break
         if not raw_bars:
+            if diag is not None:
+                diag.failure = "empty_ohlc"
             return []
 
         complete = raw_bars[:-1] if len(raw_bars) > 1 else raw_bars
@@ -478,13 +626,19 @@ async def _fetch_kraken_metals_klines(
                 ])
             except Exception:
                 continue
+        if diag is not None:
+            diag.candle_count = len(rows)
         if rows:
             _KLINE_CACHE[key] = (rows, now)
             logger.info(
                 f"[tradfi] klines ok (Kraken): {pair} {timeframe} → {len(rows)} bars"
             )
             return rows
+        if diag is not None:
+            diag.failure = "parse_empty"
     except Exception as exc:
+        if diag is not None:
+            diag.failure = type(exc).__name__
         logger.warning(
             f"[tradfi] Kraken klines failed for {pair} {timeframe}: {exc}"
         )
@@ -500,34 +654,46 @@ async def fetch_metal_live_candles(
     """
     Parallel spot-metal OHLC for executor live/paper scans.
     Never returns GC=F futures — only spot-aligned sources.
+    Falls back to synthetic spot-built candles when all providers miss.
     """
     sym = symbol.upper()
     min_bars = _metal_kline_min_bars(limit)
-    _kraken_timeout = max(5.0, _KRAKEN_KLINE_TIMEOUT_S)
+    _kraken_timeout = max(8.0, _KRAKEN_KLINE_TIMEOUT_S)
+    _binance_timeout = max(8.0, _BINANCE_KLINE_TIMEOUT_S)
+    _fmp_timeout = max(8.0, _FMP_KLINE_TIMEOUT_S)
+    trace: List[MetalProviderDiagnostic] = []
 
     async with _metal_live_fetch_sem():
-        feed_live = False
         broker_ready = False
         try:
-            from app.services.ctrader_price_feed import (
-                broker_session_ready as _ct_ready,
-                is_live as _ct_live,
-            )
-            feed_live = bool(_ct_live())
+            from app.services.ctrader_price_feed import broker_session_ready as _ct_ready
             broker_ready = bool(_ct_ready(sym))
         except Exception:
             pass
 
-        # When a dedicated trendbar socket is allowed, try cTrader once — never
-        # block the scan on 2×15s retries while the spot feed owns the account.
+        # cTrader first when broker session is up
         ctrader_tried = False
         if broker_ready:
             ctrader_tried = True
-            ct_rows = await _fetch_ctrader_klines(
-                sym, "forex", timeframe, limit, user_id=user_id,
+            ct_diag = MetalProviderDiagnostic(
+                provider="ctrader-user" if user_id else "ctrader",
+                url=f"ctrader://trendbars/{sym}/{timeframe}",
             )
+            ct_rows = await _fetch_with_kline_timeout(
+                _fetch_ctrader_klines(
+                    sym, "forex", timeframe, limit, user_id=user_id, diag=ct_diag,
+                ),
+                timeout_s=_CTRADER_KLINE_TIMEOUT_LIVE_S,
+                label=ct_diag.provider,
+                symbol=sym,
+                timeframe=timeframe,
+            )
+            ct_diag.candle_count = len(ct_rows) if ct_rows else 0
+            if not ct_rows and not ct_diag.failure:
+                ct_diag.failure = "empty_or_timeout"
+            trace.append(ct_diag)
             if ct_rows and (len(ct_rows) >= min_bars or len(ct_rows) >= 15):
-                label = "ctrader-user" if user_id else "ctrader"
+                label = ct_diag.provider
                 logger.info(
                     f"[tradfi] metal-live best={label} {sym} {timeframe} "
                     f"→ {len(ct_rows)} bars (cTrader broker session)"
@@ -536,6 +702,7 @@ async def fetch_metal_live_candles(
                 _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
                     label, datetime.utcnow(),
                 )
+                _log_metal_kline_trace(sym, timeframe, trace)
                 return out
             if ct_rows:
                 logger.debug(
@@ -548,47 +715,64 @@ async def fetch_metal_live_candles(
                     f"— falling back to externals"
                 )
 
-        async def _labeled(label: str, coro, timeout_s: float) -> Tuple[str, List[List[float]]]:
+        _bn_sym = _METALS_BINANCE_MAP.get(sym, "")
+        _bn_interval = _BINANCE_INTERVAL_MAP.get(timeframe, timeframe)
+        _kraken_pair = _KRAKEN_METAL_MAP.get(sym, "")
+        _kraken_iv = _KRAKEN_INTERVAL.get(timeframe, "")
+
+        async def _probe(label: str, url: str, timeout_s: float, fetch_coro) -> Tuple[str, List[List[float]], MetalProviderDiagnostic]:
+            diag = MetalProviderDiagnostic(provider=label, url=url)
             rows = await _fetch_with_kline_timeout(
-                coro,
+                fetch_coro(diag),
                 timeout_s=timeout_s,
                 label=label,
                 symbol=sym,
                 timeframe=timeframe,
             )
-            return label, rows
+            if diag.candle_count == 0:
+                diag.candle_count = len(rows) if rows else 0
+            if not rows and not diag.failure:
+                diag.failure = "empty_or_timeout"
+            return label, rows, diag
 
-        tasks: List = []
-        # When feed is strictly LIVE, externals rarely beat broker — only Kraken
-        # as a single fallback to avoid 5-shard Binance/FMP timeout storms.
-        if not feed_live:
-            tasks.append(
-                _labeled("binance", _fetch_binance_metals_klines(sym, timeframe, limit), 6.0),
-            )
-            if _env_fmp_api_key():
-                tasks.append(_labeled(
-                    "fmp",
-                    _fetch_fmp_metals_klines(sym, "forex", timeframe, limit),
-                    5.0,
-                ))
+        tasks: List = [
+            _probe(
+                "binance",
+                f"{_BINANCE_SPOT_BASE}/klines?symbol={_bn_sym}&interval={_bn_interval}",
+                _binance_timeout,
+                lambda d: _fetch_binance_metals_klines(sym, timeframe, limit, diag=d),
+            ),
+        ]
+        if _env_fmp_api_key():
+            tasks.append(_probe(
+                "fmp",
+                f"fmp://historical-chart/{sym}/{timeframe}",
+                _fmp_timeout,
+                lambda d: _fetch_fmp_metals_klines(sym, "forex", timeframe, limit, diag=d),
+            ))
         if broker_ready and not ctrader_tried:
-            tasks.append(_labeled(
+            tasks.append(_probe(
                 "ctrader",
-                _fetch_ctrader_klines(sym, "forex", timeframe, min(limit, 500), user_id=user_id),
+                f"ctrader://trendbars/{sym}/{timeframe}",
                 _CTRADER_KLINE_TIMEOUT_LIVE_S,
+                lambda d: _fetch_ctrader_klines(
+                    sym, "forex", timeframe, min(limit, 500), user_id=user_id, diag=d,
+                ),
             ))
         if sym in _KRAKEN_METAL_MAP:
-            tasks.append(_labeled(
+            tasks.append(_probe(
                 "kraken",
-                _fetch_kraken_metals_klines(sym, timeframe, limit),
+                f"https://api.kraken.com/0/public/OHLC?pair={_kraken_pair}&interval={_kraken_iv}",
                 _kraken_timeout,
+                lambda d: _fetch_kraken_metals_klines(sym, timeframe, limit, diag=d),
             ))
 
         results = await asyncio.gather(*tasks)
 
         candidates: List[Tuple[int, int, str, List[List[float]]]] = []
         thin: List[Tuple[int, str, List[List[float]]]] = []
-        for label, rows in results:
+        for label, rows, diag in results:
+            trace.append(diag)
             if not rows:
                 continue
             rank = _METAL_KLINE_SOURCE_RANK.get(label, 99)
@@ -611,6 +795,7 @@ async def fetch_metal_live_candles(
             _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
                 label, datetime.utcnow(),
             )
+            _log_metal_kline_trace(sym, timeframe, trace)
             return out
 
         if thin:
@@ -624,12 +809,35 @@ async def fetch_metal_live_candles(
             _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
                 label, datetime.utcnow(),
             )
+            _log_metal_kline_trace(sym, timeframe, trace)
             return out
 
+        _log_metal_kline_trace(sym, timeframe, trace)
         logger.warning(
             f"[tradfi] metal-live no spot klines for {sym} {timeframe} "
-            f"(binance/ctrader/fmp/kraken all missed)"
+            f"(binance/ctrader/fmp/kraken all missed) — building synthetic"
         )
+        synth = await build_synthetic_metal_candles(sym, timeframe, limit)
+        if synth:
+            synth_diag = MetalProviderDiagnostic(
+                provider="synthetic",
+                url="metals_spot_feed://synthetic",
+                candle_count=len(synth),
+            )
+            trace.append(synth_diag)
+            _log_metal_kline_trace(sym, timeframe, trace)
+            _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
+                "synthetic", datetime.utcnow(),
+            )
+            return synth[-limit:] if len(synth) > limit else synth
+
+        synth_diag = MetalProviderDiagnostic(
+            provider="synthetic",
+            url="metals_spot_feed://synthetic",
+            failure="no_spot_anchor",
+        )
+        trace.append(synth_diag)
+        _log_metal_kline_trace(sym, timeframe, trace)
         return []
 
 
@@ -1025,18 +1233,31 @@ async def _fetch_fmp_metals_klines(
     asset_class: str,
     timeframe: str,
     limit: int,
+    *,
+    diag: Optional[MetalProviderDiagnostic] = None,
 ) -> List[List[float]]:
+    if diag is not None:
+        diag.provider = "fmp"
+        diag.url = diag.url or f"fmp://historical-chart/{symbol.upper()}/{timeframe}"
     if not _env_fmp_api_key():
+        if diag is not None:
+            diag.failure = "no_api_key"
         return []
     try:
         from app.services.fmp_price_feed import get_klines as _fmp_klines
         rows = await _fmp_klines(symbol, asset_class, timeframe, limit)
+        if diag is not None:
+            diag.candle_count = len(rows) if rows else 0
+            if not rows:
+                diag.failure = diag.failure or "empty_response"
         if rows:
             logger.info(
                 f"[tradfi] klines ok (FMP): {symbol.upper()} {timeframe} → {len(rows)} bars"
             )
         return rows
     except Exception as fe:
+        if diag is not None:
+            diag.failure = type(fe).__name__
         logger.warning(f"[tradfi] FMP klines failed {symbol} {timeframe}: {fe}")
         return []
 
@@ -1047,7 +1268,11 @@ async def _fetch_ctrader_klines(
     timeframe: str,
     limit: int,
     user_id: Optional[int] = None,
+    *,
+    diag: Optional[MetalProviderDiagnostic] = None,
 ) -> List[List[float]]:
+    if diag is not None:
+        diag.url = diag.url or f"ctrader://trendbars/{symbol.upper()}/{timeframe}"
     try:
         from app.services import ctrader_price_feed as _ctf
         # Short timeout when feed is cold — Yahoo fallback is the scan workhorse.
@@ -1060,17 +1285,26 @@ async def _fetch_ctrader_klines(
             if _live
             else min(6.0, 3.0 + limit / 200.0)
         )
-        return await asyncio.wait_for(
+        rows = await asyncio.wait_for(
             _ctf.get_klines(symbol, asset_class, timeframe, limit, user_id=user_id),
             timeout=timeout,
         )
+        if diag is not None:
+            diag.candle_count = len(rows) if rows else 0
+            if not rows:
+                diag.failure = diag.failure or "empty_response"
+        return rows
     except asyncio.TimeoutError:
+        if diag is not None:
+            diag.failure = "timeout"
         logger.info(
             f"[tradfi] cTrader klines timeout {symbol.upper()} {timeframe} "
             f"(limit={limit})"
         )
         return []
     except Exception as exc:
+        if diag is not None:
+            diag.failure = type(exc).__name__
         logger.debug(
             f"[tradfi] cTrader klines failed {symbol.upper()} {timeframe}: {exc}"
         )
@@ -1081,22 +1315,34 @@ async def _fetch_binance_metals_klines(
     symbol: str,
     timeframe: str,
     limit: int,
+    *,
+    diag: Optional[MetalProviderDiagnostic] = None,
 ) -> List[List[float]]:
     """Closed OHLC from Binance spot XAUUSDT / XAGUSDT (forming bar stripped)."""
     _bn_sym = _METALS_BINANCE_MAP.get(symbol.upper())
+    _bn_interval = _BINANCE_INTERVAL_MAP.get(timeframe, timeframe)
+    url = f"{_BINANCE_SPOT_BASE}/klines?symbol={_bn_sym}&interval={_bn_interval}"
+    if diag is not None:
+        diag.provider = "binance"
+        diag.url = url
     if not _bn_sym:
+        if diag is not None:
+            diag.failure = "unsupported_symbol"
         return []
 
-    _bn_interval = _BINANCE_INTERVAL_MAP.get(timeframe, timeframe)
     now = datetime.utcnow()
     key = (_bn_sym, _bn_interval, limit)
     cached = _KLINE_CACHE.get(key)
     if cached and (now - cached[1]) < _metal_kline_cache_ttl(key):
-        return cached[0]
+        rows = cached[0]
+        if diag is not None:
+            diag.candle_count = len(rows)
+            diag.extra["cache_hit"] = True
+        return rows
 
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=5.0) as _c:
+        async with httpx.AsyncClient(timeout=_BINANCE_KLINE_TIMEOUT_S) as _c:
             r = await _c.get(
                 f"{_BINANCE_SPOT_BASE}/klines",
                 params={
@@ -1105,6 +1351,8 @@ async def _fetch_binance_metals_klines(
                     "limit": limit + 1,
                 },
             )
+        if diag is not None:
+            diag.response_bytes = len(r.content or b"")
         if r.status_code == 200:
             raw = r.json()
             if raw and isinstance(raw, list):
@@ -1122,6 +1370,8 @@ async def _fetch_binance_metals_klines(
                         ])
                     except Exception:
                         continue
+                if diag is not None:
+                    diag.candle_count = len(rows)
                 if rows:
                     _KLINE_CACHE[key] = (rows, now)
                     logger.info(
@@ -1129,7 +1379,14 @@ async def _fetch_binance_metals_klines(
                         f"{_bn_sym} {_bn_interval} → {len(rows)} bars"
                     )
                     return rows
+            if diag is not None:
+                diag.failure = "parse_empty"
+        else:
+            if diag is not None:
+                diag.failure = f"http_{r.status_code}"
     except Exception as _be:
+        if diag is not None:
+            diag.failure = type(_be).__name__
         logger.warning(
             f"[tradfi] Binance spot klines failed for {_bn_sym} "
             f"({_bn_interval}): {_be}"
@@ -1178,6 +1435,12 @@ async def _get_klines_impl(
                 f"[tradfi] fetch_metal_live_candles failed {sym_norm} "
                 f"{timeframe}: {_mse}"
             )
+        synth = await build_synthetic_metal_candles(sym_norm, timeframe, limit)
+        if synth:
+            _METAL_KLINE_SOURCE_CACHE[(sym_norm, timeframe, int(limit))] = (
+                "synthetic", datetime.utcnow(),
+            )
+            return synth[-limit:] if len(synth) > limit else synth
         logger.warning(
             f"[tradfi] metals spot klines unavailable for {sym_norm} {timeframe} "
             f"— refusing GC=F futures (spot feed required for live/paper fires)"

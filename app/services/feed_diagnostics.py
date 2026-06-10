@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from collections import Counter, deque
+from typing import Any, Deque, Dict, List, Optional
 
 import httpx
 
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 _FEED_STATUS: Dict[str, str] = {}
 _SIGNAL_STATUS: Dict[str, Any] = {}
 _PROBE_DONE = False
+_EVAL_RING: Deque[Dict[str, Any]] = deque(maxlen=100)
 
 
 def feed_status() -> Dict[str, str]:
@@ -27,6 +29,68 @@ def feed_status() -> Dict[str, str]:
 
 def signal_status() -> Dict[str, Any]:
     return dict(_SIGNAL_STATUS)
+
+
+def record_eval_metric(
+    *,
+    symbol: str,
+    strategy_id: Optional[int],
+    setup_detected: bool,
+    signal_generated: bool,
+    block_reason: Optional[str] = None,
+) -> None:
+    """Ring buffer for last 100 strategy evaluations (blocker frequency rollup)."""
+    _EVAL_RING.append({
+        "symbol": symbol.upper() if symbol else "",
+        "strategy_id": strategy_id,
+        "setup_detected": setup_detected,
+        "signal_generated": signal_generated,
+        "block_reason": block_reason or (
+            "signal_generated" if signal_generated else (
+                "setup_detected" if setup_detected else "passed_scan"
+            )
+        ),
+    })
+
+
+def summarize_recent_blockers(limit: int = 100) -> Dict[str, Any]:
+    """Aggregate block_reason counts from the last N evaluations."""
+    rows = list(_EVAL_RING)[-limit:]
+    counts: Counter = Counter()
+    for r in rows:
+        reason = r.get("block_reason") or "unknown"
+        counts[str(reason)] += 1
+    top = counts.most_common(1)
+    return {
+        "evaluations": len(rows),
+        "blocker_counts": dict(counts),
+        "top_blocker": top[0][0] if top else None,
+        "top_blocker_count": top[0][1] if top else 0,
+        "recent": rows[-10:],
+    }
+
+
+def log_blocker_rollup(limit: int = 100) -> None:
+    """Log blocker frequency for the last N strategy evaluations."""
+    summary = summarize_recent_blockers(limit)
+    if not summary["evaluations"]:
+        return
+    counts = summary["blocker_counts"]
+    ranked = ", ".join(
+        f"{k}={v}" for k, v in sorted(counts.items(), key=lambda x: -x[1])
+    )
+    logger.info(
+        "[eval-blocker-rollup] last %d evals — %s | top=%s (%d)",
+        summary["evaluations"],
+        ranked,
+        summary["top_blocker"],
+        summary["top_blocker_count"],
+    )
+    for row in summary["recent"]:
+        logger.info(
+            "[eval-blocker-row] %s",
+            json.dumps(row, separators=(",", ":"), default=str),
+        )
 
 
 def log_scan_metric(
@@ -55,6 +119,14 @@ def log_scan_metric(
     if block_reason:
         payload["block_reason"] = block_reason
     logger.info("[scan-metric] %s", json.dumps(payload, separators=(",", ":")))
+    if strategy_evaluated:
+        record_eval_metric(
+            symbol=symbol,
+            strategy_id=strategy_id,
+            setup_detected=setup_detected,
+            signal_generated=signal_generated,
+            block_reason=block_reason,
+        )
 
 
 async def _probe_yahoo() -> bool:
