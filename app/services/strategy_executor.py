@@ -1654,6 +1654,84 @@ def _claim_tg_open_notify(db, execution_id: int) -> bool:
     return _claim_tg_note_flag(db, execution_id, "tg_open_sent")
 
 
+def _should_dm_trade_alerts(portal_settings, is_paper: bool) -> bool:
+    if not portal_settings:
+        return True
+    return bool(
+        portal_settings.dm_paper_alerts if is_paper else portal_settings.dm_live_alerts
+    )
+
+
+def _ensure_open_notify_for_execution(
+    db,
+    ex,
+    *,
+    user,
+    strategy,
+) -> None:
+    """Backfill the OPEN Telegram card when a trade exists but open DM was never sent."""
+    from app.strategy_models import StrategyPortalSettings
+
+    if _TG_OPEN_SENT in (ex.notes or ""):
+        return
+    if not ex.entry_price or not ex.tp_price or not ex.sl_price:
+        return
+    tg_id = _telegram_int_id(user)
+    if not tg_id:
+        return
+    try:
+        portal_settings = db.query(StrategyPortalSettings).filter(
+            StrategyPortalSettings.user_id == ex.user_id
+        ).first()
+    except Exception:
+        portal_settings = None
+    is_paper = bool(ex.is_paper)
+    if not _should_dm_trade_alerts(portal_settings, is_paper):
+        return
+    entry = float(ex.entry_price)
+    tp = float(ex.tp_price)
+    sl = float(ex.sl_price)
+    tp2 = float(ex.tp2_price) if ex.tp2_price else None
+
+    def _dist_pct(target: float) -> float:
+        return abs(target - entry) / max(entry, 1e-9) * 100.0
+
+    tp_pct = _dist_pct(tp)
+    sl_pct = _dist_pct(sl)
+    tp2_pct = _dist_pct(tp2) if tp2 else None
+    conds = ex.conditions_met if isinstance(ex.conditions_met, list) else []
+    ac = ex.asset_class or "crypto"
+    if not _claim_tg_open_notify(db, ex.id):
+        return
+    _schedule_tg_open_notify(
+        ex.id,
+        tg_id,
+        _fmt_open_card(
+            strategy_name=strategy.name if strategy else "Your Strategy",
+            symbol=ex.symbol,
+            direction=ex.direction,
+            entry=entry,
+            tp_price=tp,
+            tp_pct=tp_pct,
+            tp2_price=tp2,
+            tp2_pct=tp2_pct,
+            sl_price=sl,
+            sl_pct=sl_pct,
+            leverage=int(ex.leverage or 1),
+            conditions=conds,
+            is_paper=is_paper,
+            asset_class=ac,
+        ),
+        asset_class=ac,
+    )
+    logger.info(
+        "[%s] [TG] backfilled open notify exec#%s %s",
+        _log_ts(),
+        ex.id,
+        ex.symbol,
+    )
+
+
 def _release_tg_open_notify(db, execution_id: int) -> None:
     """Allow a retry if Telegram delivery failed after claim."""
     from sqlalchemy import text as _text
@@ -2295,6 +2373,10 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                             from app.strategy_models import UserStrategy as _StratM
                             _u = db.query(_UserM).filter(_UserM.id == ex.user_id).first()
                             _s = db.query(_StratM).filter(_StratM.id == ex.strategy_id).first()
+                            if _u and _s:
+                                _ensure_open_notify_for_execution(
+                                    db, ex, user=_u, strategy=_s,
+                                )
                             if _claim_tg_be_notify(db, ex.id):
                                 if ex.direction == "LONG":
                                     _mv = (high - ex.entry_price) / ex.entry_price * 100
@@ -3784,7 +3866,7 @@ async def evaluate_and_fire(
             try:
                 portal_settings = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
                 tg_id = _telegram_int_id(user)
-                if tg_id and (not portal_settings or portal_settings.dm_paper_alerts) \
+                if tg_id and _should_dm_trade_alerts(portal_settings, True) \
                         and _claim_tg_open_notify(db, execution.id):
                     _schedule_tg_open_notify(
                         execution.id,
@@ -4009,9 +4091,35 @@ async def evaluate_and_fire(
                 execution.notes = ((execution.notes or "") + " | order_queued").strip(" |")
                 db.commit()
                 tg_id_live = _telegram_int_id(user)
-                # Optional brief "placing…" DM — off by default because users saw it
-                # as a duplicate when the full open card arrives on fill.
-                if tg_id_live and _os_env.environ.get("TG_QUEUED_OPEN_NOTICE", "").lower() in (
+                _portal_live = db.query(StrategyPortalSettings).filter(
+                    StrategyPortalSettings.user_id == user.id
+                ).first()
+                # Send the full open card at signal time — fill-time notify is a
+                # no-op when tg_open_sent is already set (prevents duplicates).
+                if tg_id_live and _should_dm_trade_alerts(_portal_live, False) \
+                        and _claim_tg_open_notify(db, execution.id):
+                    _schedule_tg_open_notify(
+                        execution.id,
+                        tg_id_live,
+                        _fmt_open_card(
+                            strategy_name=strategy.name or "Your Strategy",
+                            symbol=symbol,
+                            direction=direction,
+                            entry=current_price,
+                            tp_price=tp_price,
+                            tp_pct=tp_pct,
+                            tp2_price=tp2_price,
+                            tp2_pct=float(tp2_pct) if tp2_pct else None,
+                            sl_price=sl_price,
+                            sl_pct=sl_pct,
+                            leverage=leverage,
+                            conditions=details,
+                            is_paper=False,
+                            asset_class=asset_class,
+                        ),
+                        asset_class=asset_class,
+                    )
+                elif tg_id_live and _os_env.environ.get("TG_QUEUED_OPEN_NOTICE", "").lower() in (
                     "1", "true", "yes",
                 ):
                     asyncio.create_task(_tg_send(
@@ -5380,8 +5488,19 @@ async def _do_forex_partial_close(w: dict, price: float) -> None:
     try:
         _dbn = SessionLocal()
         try:
+            from app.strategy_models import UserStrategy as _US_partial
+            _u = w.get("user")
+            ex_p = _dbn.query(StrategyExecution).filter(
+                StrategyExecution.id == w["exec_id"]
+            ).first()
+            strat_p = _dbn.query(_US_partial).filter(
+                _US_partial.id == w.get("strategy_id")
+            ).first()
+            if ex_p and _u:
+                _ensure_open_notify_for_execution(
+                    _dbn, ex_p, user=_u, strategy=strat_p,
+                )
             if _claim_tg_be_notify(_dbn, w["exec_id"]):
-                _u = w.get("user")
                 _notify_breakeven_alert(
                     user_id=getattr(_u, "id", 0) or 0,
                     telegram_id=getattr(_u, "telegram_id", None),
@@ -5541,6 +5660,17 @@ async def _amend_forex_position(w: dict) -> None:
             _mv = 0.0
         _db_be = SessionLocal()
         try:
+            from app.strategy_models import UserStrategy as _US_be
+            ex_be = _db_be.query(StrategyExecution).filter(
+                StrategyExecution.id == w["exec_id"]
+            ).first()
+            strat_be = _db_be.query(_US_be).filter(
+                _US_be.id == w.get("strategy_id")
+            ).first()
+            if ex_be and _u:
+                _ensure_open_notify_for_execution(
+                    _db_be, ex_be, user=_u, strategy=strat_be,
+                )
             if _claim_tg_be_notify(_db_be, w["exec_id"]):
                 _notify_breakeven_alert(
                     user_id=getattr(_u, "id", 0) or 0,
