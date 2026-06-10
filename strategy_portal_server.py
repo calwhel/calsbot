@@ -1802,25 +1802,38 @@ async def _maintain_advisory_lock(conn):
         stop_event.set()
 
 
-def _ensure_executor_feeds_running():
-    """Restart price feeds after lock loss without duplicating scan loops."""
+def _launch_executor_price_feeds():
+    """Start FMP + cTrader + metals feeds on the executor-winning worker."""
     try:
         from app.services.fmp_price_feed import start as _fmp_feed_start
         _fmp_feed_start()
+        logger.info("FMP real-time price feed task scheduled (executor worker)")
     except Exception as _fmp_err:
-        logger.warning(f"FMP feed restart error (non-fatal): {_fmp_err}")
+        logger.warning(f"FMP price feed start error (non-fatal): {_fmp_err}")
     try:
-        from app.ctrader_feed_lock import feed_disabled_in_executor
-        if not feed_disabled_in_executor():
-            from app.services.ctrader_price_feed import start as _ctrader_feed_start
-            _ctrader_feed_start()
+        from app.services.ctrader_price_feed import launch_ctrader_feed
+        launch_ctrader_feed()
     except Exception as _ctf_err:
-        logger.warning(f"cTrader feed restart error (non-fatal): {_ctf_err}")
+        logger.error(
+            "[CTraderFeed] executor feed launch error: %s", _ctf_err, exc_info=True,
+        )
     try:
         from app.services.metals_spot_feed import start as _metals_feed_start
         _metals_feed_start()
+        logger.info("Metals spot feed (XAUUSD/XAGUSD) scheduled (executor worker)")
     except Exception as _met_err:
-        logger.warning(f"Metals feed restart error (non-fatal): {_met_err}")
+        logger.warning(f"Metals spot feed start error (non-fatal): {_met_err}")
+    try:
+        from app.services.economic_calendar import start as _econ_cal_start
+        _econ_cal_start()
+        logger.info("Economic calendar refresh scheduled (executor worker)")
+    except Exception as _cal_err:
+        logger.warning(f"Economic calendar start error (non-fatal): {_cal_err}")
+
+
+def _ensure_executor_feeds_running():
+    """Restart price feeds after lock loss without duplicating scan loops."""
+    _launch_executor_price_feeds()
 
 
 def _lock_loss_should_stop_feeds() -> bool:
@@ -1918,46 +1931,15 @@ async def _start_executor_tasks():
             "(FX-fast will retry migration on UndefinedColumn)"
         )
 
+    # ── Price feeds FIRST (before ghost cleanup / scan loops) ─────────────────
+    # Started HERE (not in _startup_background) so each runs in EXACTLY ONE worker —
+    # the same one that runs the executor (their only consumer).
+    logger.info("[executor] launching price feeds (FMP + cTrader + metals)")
+    _launch_executor_price_feeds()
+
     await _cancel_ghost_executions()
     asyncio.create_task(_ghost_cleanup_loop())
     # Keepalive runs on every worker via startup(); executor worker no longer sole pinger.
-
-    # ── FMP + cTrader price feeds ─────────────────────────────────────────────
-    # Started HERE (not in _startup_background) so each runs in EXACTLY ONE worker —
-    # the same one that runs the executor (their only consumer). With gunicorn -w 2,
-    # starting feeds per-worker doubled FMP API calls (429 storms) and opened duplicate
-    # cTrader sessions (broker kicks + reconnect churn).
-    try:
-        from app.services.fmp_price_feed import start as _fmp_feed_start
-        _fmp_feed_start()
-        logger.info("FMP real-time price feed task scheduled (executor worker)")
-    except Exception as _fmp_err:
-        logger.warning(f"FMP price feed start error (non-fatal): {_fmp_err}")
-    try:
-        from app.ctrader_feed_lock import feed_disabled_in_executor, remote_feed_enabled
-        if feed_disabled_in_executor():
-            logger.info(
-                "cTrader spot feed SKIPPED — remote feed enabled "
-                "(ticks read from market_spot_ticks)"
-            )
-        else:
-            from app.services.ctrader_price_feed import start as _ctrader_feed_start
-            _ctrader_feed_start()
-            logger.info("cTrader real-time spot feed task scheduled (executor worker)")
-    except Exception as _ctf_err:
-        logger.warning(f"cTrader price feed start error (non-fatal): {_ctf_err}")
-    try:
-        from app.services.metals_spot_feed import start as _metals_feed_start
-        _metals_feed_start()
-        logger.info("Metals spot feed (XAUUSD/XAGUSD) scheduled (executor worker)")
-    except Exception as _met_err:
-        logger.warning(f"Metals spot feed start error (non-fatal): {_met_err}")
-    try:
-        from app.services.economic_calendar import start as _econ_cal_start
-        _econ_cal_start()
-        logger.info("Economic calendar refresh scheduled (executor worker)")
-    except Exception as _cal_err:
-        logger.warning(f"Economic calendar start error (non-fatal): {_cal_err}")
 
     async def _spot_price_primer_loop():
         """Keep shared spot store warm — real-time ticks for metals + majors."""

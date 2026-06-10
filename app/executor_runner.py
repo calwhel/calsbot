@@ -78,7 +78,10 @@ async def _run_executor_session() -> None:
 
     from strategy_portal_server import _executor_claim_loop
 
-    logger.info("Standalone executor process starting — acquiring advisory lock…")
+    logger.info(
+        "Standalone executor process starting — acquiring advisory lock "
+        "(cTrader feed starts inside _start_executor_tasks after lock won)"
+    )
     asyncio.create_task(_executor_process_heartbeat_loop())
     await _executor_claim_loop(first_attempt_delay=0)
 

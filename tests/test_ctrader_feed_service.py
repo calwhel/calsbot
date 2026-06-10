@@ -53,8 +53,22 @@ class TestCtraderFeedService(unittest.TestCase):
             clear=False,
         ):
             with patch.object(feed, "_get_wake_event", return_value=MagicMock()):
-                feed.start()
+                ok = feed.launch_ctrader_feed()
+                self.assertFalse(ok)
                 self.assertIsNone(feed._feed_task)
+
+    def test_launch_schedules_task_when_no_linked_account(self):
+        feed._feed_task = None
+        mock_loop = MagicMock()
+        with patch.dict(os.environ, {"CTRADER_CLIENT_ID": "x"}, clear=False):
+            with patch.object(feed, "_PROTO_OK", True):
+                with patch.object(feed, "probe_linked_accounts_sync", return_value=[]):
+                    with patch.object(feed, "_get_wake_event", return_value=MagicMock()):
+                        with patch("asyncio.get_running_loop", side_effect=RuntimeError):
+                            with patch("asyncio.get_event_loop", return_value=mock_loop):
+                                ok = feed.launch_ctrader_feed()
+        self.assertTrue(ok)
+        mock_loop.create_task.assert_called_once()
 
     def test_feed_status_needs_relink(self):
         feed._last_auth_error = "CH_ACCESS_TOKEN_INVALID: Invalid access token"

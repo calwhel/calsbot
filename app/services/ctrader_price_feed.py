@@ -556,6 +556,49 @@ def _is_live_for_ctid(prefs, ctid: int) -> bool:
     return True
 
 
+def _prefs_rows_to_accounts(rows) -> List[Tuple[str, int, int, bool]]:
+    out: List[Tuple[str, int, int, bool]] = []
+    for prefs in rows:
+        at = (prefs.ctrader_access_token or "").strip()
+        aid = (prefs.ctrader_account_id or "").strip()
+        if not at or not aid:
+            continue
+        try:
+            ctid = int(aid)
+        except (TypeError, ValueError):
+            continue
+        out.append((at, ctid, int(prefs.user_id), _is_live_for_ctid(prefs, ctid)))
+    return out
+
+
+def probe_linked_accounts_sync() -> List[Tuple[str, int, int, bool]]:
+    """Synchronous DB read for startup logging — latest persisted OAuth tokens."""
+    try:
+        from app.database import SessionLocal
+        from app.models import UserPreference
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(UserPreference)
+                .filter(
+                    UserPreference.ctrader_access_token.isnot(None),
+                    UserPreference.ctrader_account_id.isnot(None),
+                )
+                .order_by(
+                    UserPreference.forex_approved.desc(),
+                    UserPreference.user_id.desc(),
+                )
+                .all()
+            )
+            return _prefs_rows_to_accounts(rows)
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("[CTraderFeed] DB account probe failed: %s", exc)
+    return []
+
+
 async def _list_connected_accounts(
     user_id: Optional[int] = None,
 ) -> List[Tuple[str, int, int, bool]]:
@@ -579,22 +622,11 @@ async def _list_connected_accounts(
                 )
                 .all()
             )
-            for prefs in rows:
-                at = (prefs.ctrader_access_token or "").strip()
-                aid = (prefs.ctrader_account_id or "").strip()
-                if not at or not aid:
-                    continue
-                try:
-                    ctid = int(aid)
-                except (TypeError, ValueError):
-                    continue
-                out.append(
-                    (at, ctid, int(prefs.user_id), _is_live_for_ctid(prefs, ctid))
-                )
+            out = _prefs_rows_to_accounts(rows)
         finally:
             db.close()
     except Exception as e:
-        logger.debug(f"[CTraderFeed] DB lookup error: {e}")
+        logger.warning("[CTraderFeed] DB lookup error: %s", e)
     return out
 
 
@@ -1321,37 +1353,94 @@ def feed_status() -> Dict[str, object]:
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 
-def start() -> None:
+async def _feed_runner() -> None:
+    """Resilient outer shell — restarts _feed_loop after crashes (never silent)."""
+    delay = float(_RECONNECT_BACKOFF_MIN)
+    while True:
+        try:
+            await _feed_loop()
+            logger.warning(
+                "[CTraderFeed] feed loop exited cleanly — restarting in %.0fs", delay,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "[CTraderFeed] feed loop crashed: %s — restarting in %.0fs",
+                exc,
+                delay,
+                exc_info=True,
+            )
+        await asyncio.sleep(delay)
+        delay = min(delay * 2.0, 120.0)
+
+
+def launch_ctrader_feed() -> bool:
     """
-    Launch the background streaming task.
+    Launch the background streaming task with explicit startup logging.
     Safe to call multiple times — ignored if already running.
+    Returns True when a feed task is running or was just scheduled.
     """
     global _feed_task
+    logger.info("[CTraderFeed] startup: launching feed task")
+
     try:
         from app.ctrader_feed_lock import feed_disabled_in_executor, is_feed_only_process
         if feed_disabled_in_executor() and not is_feed_only_process():
+            reason = "CTRADER_REMOTE_FEED" if _remote_feed_mode() else "DISABLE_CTRADER_FEED_IN_EXECUTOR"
             logger.info(
-                "[CTraderFeed] spot stream skipped — remote feed enabled "
-                "(CTRADER_REMOTE_FEED / DISABLE_CTRADER_FEED_IN_EXECUTOR)"
+                "[CTraderFeed] feed not started — %s (executor reads remote ticks)",
+                reason,
             )
-            return
-    except Exception:
-        pass
+            return False
+    except Exception as exc:
+        logger.warning("[CTraderFeed] feed disable check failed: %s", exc)
+
     if not _PROTO_OK:
-        logger.warning("[CTraderFeed] protobuf unavailable — feed disabled")
-        return
+        logger.warning("[CTraderFeed] feed not started — ctrader_open_api/protobuf unavailable")
+        return False
     if not os.environ.get("CTRADER_CLIENT_ID"):
-        logger.warning("[CTraderFeed] CTRADER_CLIENT_ID not set — feed disabled")
-        return
+        logger.warning("[CTraderFeed] feed not started — CTRADER_CLIENT_ID not set")
+        return False
+
+    linked = probe_linked_accounts_sync()
+    if not linked:
+        logger.warning(
+            "[CTraderFeed] no linked cTrader account in DB — "
+            "feed task will start and wait for OAuth link"
+        )
+    else:
+        _at, ctid, uid, is_live = linked[0]
+        logger.info(
+            "[CTraderFeed] startup: DB token row found uid=%s ctid=%s mode=%s "
+            "(%d linked account(s))",
+            uid,
+            ctid,
+            "live" if is_live else "demo",
+            len(linked),
+        )
+
     if _feed_task and not _feed_task.done():
-        return  # already running
+        logger.info("[CTraderFeed] feed task already running — skip duplicate start")
+        return True
+
     try:
         _get_wake_event()
-        loop = asyncio.get_event_loop()
-        _feed_task = loop.create_task(_feed_loop())
-        logger.info("[CTraderFeed] background streaming task started")
-    except Exception as e:
-        logger.error(f"[CTraderFeed] failed to start task: {e}")
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+        _feed_task = loop.create_task(_feed_runner())
+        logger.info("[CTraderFeed] background streaming task scheduled")
+        return True
+    except Exception as exc:
+        logger.error("[CTraderFeed] failed to schedule feed task: %s", exc, exc_info=True)
+        return False
+
+
+def start() -> None:
+    """Backward-compatible alias for launch_ctrader_feed()."""
+    launch_ctrader_feed()
 
 
 def stop() -> None:
