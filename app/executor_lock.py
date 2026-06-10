@@ -27,6 +27,21 @@ LOCK_RECONNECT_ATTEMPTS = 15
 LOCK_RECONNECT_DELAY_SECS = 5.0
 LOCK_ZOMBIE_TERMINATE_AFTER = 5  # re-claim attempts before pg_terminate_backend on stale holder
 
+# libpq TCP keepalive — prevents Neon from closing the idle SSL session at ~1–2 min.
+NEON_LOCK_CONNECT_KWARGS = {
+    "connect_timeout": 10,
+    "keepalives": 1,
+    "keepalives_idle": 30,
+    "keepalives_interval": 10,
+    "keepalives_count": 5,
+    "sslmode": "require",
+    "options": (
+        "-c tcp_keepalives_idle=30 "
+        "-c statement_timeout=0 "
+        "-c idle_in_transaction_session_timeout=0"
+    ),
+}
+
 
 def is_standalone_executor() -> bool:
     return os.getenv("EXECUTOR_STANDALONE", "").lower() in ("1", "true", "yes")
@@ -37,14 +52,7 @@ def create_lock_connection():
     import psycopg2
     from app.config import settings
 
-    return psycopg2.connect(
-        settings.get_database_url(),
-        connect_timeout=10,
-        keepalives=1,
-        keepalives_idle=10,
-        keepalives_interval=5,
-        keepalives_count=5,
-    )
+    return psycopg2.connect(settings.get_database_url(), **NEON_LOCK_CONNECT_KWARGS)
 
 
 def try_acquire_lock(conn, lock_id: Optional[int] = None) -> bool:
@@ -74,6 +82,7 @@ def reconnect_lock_connection(
     lock_id: Optional[int] = None,
     max_attempts: int = LOCK_RECONNECT_ATTEMPTS,
     retry_delay: float = LOCK_RECONNECT_DELAY_SECS,
+    silent: bool = False,
 ) -> Optional[Any]:
     """Close a dead lock session and re-claim the advisory lock on a fresh session.
 
@@ -85,25 +94,32 @@ def reconnect_lock_connection(
     """
     if lock_id is None:
         lock_id = get_executor_lock_id()
+    _log = logger.debug if silent else logger.warning
+
     close_lock_connection(old_conn)
     for attempt in range(1, max_attempts + 1):
         conn = None
         try:
             conn = create_lock_connection()
             if try_acquire_lock(conn, lock_id):
-                logger.info(
-                    "Executor lock re-claimed on fresh DB session (attempt %s/%s)",
-                    attempt,
-                    max_attempts,
-                )
+                if not silent:
+                    logger.info(
+                        "Executor lock re-claimed on fresh DB session (attempt %s/%s)",
+                        attempt,
+                        max_attempts,
+                    )
                 return conn
             close_lock_connection(conn)
-            logger.warning(
+            _log(
                 "Executor lock re-claim attempt %s/%s: lock held by another backend",
                 attempt,
                 max_attempts,
             )
-            if attempt >= LOCK_ZOMBIE_TERMINATE_AFTER and attempt % LOCK_ZOMBIE_TERMINATE_AFTER == 0:
+            if (
+                not silent
+                and attempt >= LOCK_ZOMBIE_TERMINATE_AFTER
+                and attempt % LOCK_ZOMBIE_TERMINATE_AFTER == 0
+            ):
                 try:
                     from app.services.telegram_poller_lock import (
                         terminate_advisory_lock_holders,
@@ -125,7 +141,7 @@ def reconnect_lock_connection(
                     )
         except Exception as exc:
             close_lock_connection(conn)
-            logger.warning(
+            _log(
                 "Executor lock re-claim attempt %s/%s failed: %s",
                 attempt,
                 max_attempts,

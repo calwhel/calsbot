@@ -4,6 +4,26 @@ from unittest import mock
 
 
 class TestExecutorLockReconnect(unittest.TestCase):
+    def test_neon_lock_connect_kwargs(self):
+        from app.executor_lock import NEON_LOCK_CONNECT_KWARGS
+
+        self.assertEqual(NEON_LOCK_CONNECT_KWARGS["keepalives_idle"], 30)
+        self.assertEqual(NEON_LOCK_CONNECT_KWARGS["keepalives_interval"], 10)
+        self.assertEqual(NEON_LOCK_CONNECT_KWARGS["keepalives_count"], 5)
+        self.assertEqual(NEON_LOCK_CONNECT_KWARGS["sslmode"], "require")
+        self.assertIn("tcp_keepalives_idle=30", NEON_LOCK_CONNECT_KWARGS["options"])
+
+    def test_reconnect_silent_skips_success_log(self):
+        from app import executor_lock as el
+
+        with mock.patch.object(el, "create_lock_connection", return_value=object()), \
+                mock.patch.object(el, "try_acquire_lock", return_value=True), \
+                mock.patch.object(el, "close_lock_connection"), \
+                mock.patch.object(el.logger, "info") as m_info:
+            conn = el.reconnect_lock_connection(None, max_attempts=1, silent=True)
+            self.assertIsNotNone(conn)
+            m_info.assert_not_called()
+
     def test_reconnect_succeeds_on_second_attempt(self):
         from app import executor_lock as el
 

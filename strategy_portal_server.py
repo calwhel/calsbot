@@ -1710,7 +1710,7 @@ from app.executor_lock import (
 # Keepalive cadence for the lock-holding connection. Pinged from a DEDICATED
 # DAEMON THREAD (not the asyncio loop, which the executor's scan cycles block for
 # tens of seconds), so it must stay comfortably BELOW _EXECUTOR_LOCK_STALE_IDLE_SECS.
-_EXECUTOR_LOCK_KEEPALIVE_SECS = 60
+_EXECUTOR_LOCK_KEEPALIVE_SECS = 30
 # A waiting worker only force-terminates the current lock holder if it has been
 # idle (un-pinged) at least this long — i.e. it is a genuine zombie from a dead
 # deploy, NOT the live sibling worker that legitimately holds the lock. With
@@ -1783,6 +1783,15 @@ def _advisory_lock_keepalive_thread(conn_holder, stop_event, lost_event):
             cur.execute("SELECT 1")
             cur.close()
         except Exception as e:
+            # One silent reconnect on the same tick — avoids a full re-claim loop
+            # for a single transient Neon SSL close.
+            new_conn = reconnect_lock_connection(conn, max_attempts=1, silent=True)
+            if new_conn:
+                conn_holder["conn"] = new_conn
+                logger.debug(
+                    "Advisory lock keepalive: silent reconnect succeeded"
+                )
+                continue
             logger.warning(
                 f"Advisory lock keepalive failed: {e} — re-claiming on fresh session"
             )
@@ -2319,17 +2328,16 @@ _aigen_running_in_this_worker = False
 def _try_acquire_aigen_lock():
     """Same shape as _try_acquire_executor_lock but for the AI generator."""
     try:
-        import psycopg2
-        from app.config import settings
-        conn = psycopg2.connect(settings.get_database_url())
-        conn.autocommit = True
-        cur = conn.cursor()
-        cur.execute("SELECT pg_try_advisory_lock(%s)", (_AIGEN_LOCK_ID,))
-        acquired = cur.fetchone()[0]
-        cur.close()
-        if acquired:
+        from app.executor_lock import (
+            close_lock_connection,
+            create_lock_connection,
+            try_acquire_lock,
+        )
+
+        conn = create_lock_connection()
+        if try_acquire_lock(conn, _AIGEN_LOCK_ID):
             return conn
-        conn.close()
+        close_lock_connection(conn)
         return None
     except Exception as e:
         logger.warning(f"[AIGen] advisory lock attempt failed: {e}")
