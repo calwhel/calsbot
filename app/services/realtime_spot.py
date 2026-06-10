@@ -298,8 +298,8 @@ async def _fetch_metals_parallel(symbol: str) -> Optional[Tuple[float, str]]:
             pass
         return None
 
+    # Binance returns HTTP 451 on Railway US — Coinbase/Kraken for metals spot.
     tasks = [
-        _try("binance", _fetch_binance(bn)),
         _try("coinbase", _fetch_coinbase(_COINBASE_MAP.get(bn, ""))),
     ]
     if sym == "XAUUSD":

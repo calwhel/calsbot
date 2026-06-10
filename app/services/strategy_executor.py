@@ -780,7 +780,8 @@ async def _fetch_price_and_ta(
             if _is_metal:
                 kline_source = _metal_kline_src(symbol, tf, EXECUTOR_KLINE_BARS)
                 _spot_sources = frozenset({
-                    "binance", "ctrader", "ctrader-user", "fmp", "kraken", "synthetic",
+                    "coinbase", "ctrader", "ctrader-user", "fmp", "kraken",
+                    "yahoo_gc", "synthetic",
                 })
                 if not live_px or live_px <= 0:
                     _ks = (kline_source or "").lower()

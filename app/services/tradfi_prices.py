@@ -7,7 +7,7 @@ Price path:
   Others: FMP real-time WebSocket → yfinance fast_info fallback.
 
 Kline path:
-  Metals live: parallel Binance spot → cTrader → FMP → Kraken (never GC=F).
+  Metals live: cTrader → FMP → Coinbase → Kraken → GC=F → synthetic (no Binance).
   Metals backtest: Binance → cTrader → FMP → Yahoo (GC=F only if spot-aligned).
   Forex live: cTrader → Yahoo chart → FMP → yfinance.
   Index live: cTrader → Yahoo chart → FMP (same chain as forex scanner).
@@ -119,13 +119,25 @@ _KRAKEN_METAL_MAP: Dict[str, str] = {
 _KRAKEN_INTERVAL: Dict[str, int] = {
     "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440,
 }
+# Coinbase Exchange public candles — no US geo-block (Binance returns HTTP 451).
+_COINBASE_METAL_PRODUCT: Dict[str, str] = {
+    "XAUUSD": "PAXG-USD",
+    "XAGUSD": "XAG-USD",
+}
+_COINBASE_GRANULARITY: Dict[str, int] = {
+    "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+    "1h": 3600, "4h": 14400, "1d": 86400,
+}
+_COINBASE_KLINE_TIMEOUT_S = float(os.environ.get("COINBASE_KLINE_TIMEOUT_SECONDS", "15"))
+
 _METAL_KLINE_SOURCE_RANK = {
     "ctrader-user": 0,
     "ctrader": 1,
-    "binance": 2,
-    "fmp": 3,
+    "fmp": 2,
+    "coinbase": 3,
     "kraken": 4,
-    "synthetic": 5,
+    "yahoo_gc": 5,
+    "synthetic": 6,
 }
 _INTERVAL_MS: Dict[str, int] = {
     "1m": 60_000,
@@ -149,7 +161,7 @@ METAL_SPOT_KLINE_MAX_DRIFT_PCT = float(
     os.environ.get("METAL_SPOT_KLINE_MAX_DRIFT_PCT", "0.5")
 )
 _SPOT_ALIGNED_KLINE_SOURCES = frozenset({
-    "binance", "ctrader-user", "ctrader", "fmp", "kraken", "synthetic",
+    "coinbase", "ctrader-user", "ctrader", "fmp", "kraken", "synthetic",
 })
 
 
@@ -559,6 +571,90 @@ async def build_synthetic_metal_candles(
     return rows
 
 
+async def _fetch_coinbase_metals_klines(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    *,
+    diag: Optional[MetalProviderDiagnostic] = None,
+) -> List[List[float]]:
+    """Closed OHLC from Coinbase Exchange (PAXG-USD / XAG-USD) — US-accessible."""
+    sym = symbol.upper()
+    product = _COINBASE_METAL_PRODUCT.get(sym)
+    gran = _COINBASE_GRANULARITY.get(timeframe)
+    url = f"https://api.exchange.coinbase.com/products/{product}/candles?granularity={gran}"
+    if diag is not None:
+        diag.provider = "coinbase"
+        diag.url = url
+    if not product or not gran:
+        if diag is not None:
+            diag.failure = "unsupported_pair_or_timeframe"
+        return []
+
+    now = datetime.utcnow()
+    key = (f"coinbase:{product}", timeframe, limit)
+    cached = _KLINE_CACHE.get(key)
+    if cached and (now - cached[1]) < _metal_kline_cache_ttl(key):
+        rows = cached[0]
+        if diag is not None:
+            diag.candle_count = len(rows)
+            diag.extra["cache_hit"] = True
+        return rows
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=_COINBASE_KLINE_TIMEOUT_S) as client:
+            r = await client.get(
+                f"https://api.exchange.coinbase.com/products/{product}/candles",
+                params={"granularity": gran},
+            )
+        if diag is not None:
+            diag.response_bytes = len(r.content or b"")
+        if r.status_code != 200:
+            if diag is not None:
+                diag.failure = f"http_{r.status_code}"
+            return []
+        raw = r.json()
+        if not isinstance(raw, list) or not raw:
+            if diag is not None:
+                diag.failure = "empty_ohlc"
+            return []
+
+        # Coinbase returns newest-first; drop forming bar, oldest-first output.
+        complete = raw[1:] if len(raw) > 1 else raw
+        rows: List[List[float]] = []
+        for bar in reversed(complete[-(limit + 1):]):
+            try:
+                rows.append([
+                    int(bar[0]) * 1000,
+                    float(bar[3]),  # open
+                    float(bar[2]),  # high
+                    float(bar[1]),  # low
+                    float(bar[4]),  # close
+                    float(bar[5]) if len(bar) > 5 else 0.0,
+                ])
+            except Exception:
+                continue
+        rows = rows[-limit:]
+        if diag is not None:
+            diag.candle_count = len(rows)
+        if rows:
+            _KLINE_CACHE[key] = (rows, now)
+            logger.info(
+                f"[tradfi] klines ok (Coinbase): {product} {timeframe} → {len(rows)} bars"
+            )
+            return rows
+        if diag is not None:
+            diag.failure = "parse_empty"
+    except Exception as exc:
+        if diag is not None:
+            diag.failure = type(exc).__name__
+        logger.warning(
+            f"[tradfi] Coinbase klines failed for {product} {timeframe}: {exc}"
+        )
+    return []
+
+
 async def _fetch_kraken_metals_klines(
     symbol: str,
     timeframe: str,
@@ -659,7 +755,6 @@ async def fetch_metal_live_candles(
     sym = symbol.upper()
     min_bars = _metal_kline_min_bars(limit)
     _kraken_timeout = max(8.0, _KRAKEN_KLINE_TIMEOUT_S)
-    _binance_timeout = max(8.0, _BINANCE_KLINE_TIMEOUT_S)
     _fmp_timeout = max(8.0, _FMP_KLINE_TIMEOUT_S)
     trace: List[MetalProviderDiagnostic] = []
 
@@ -715,12 +810,13 @@ async def fetch_metal_live_candles(
                     f"— falling back to externals"
                 )
 
-        _bn_sym = _METALS_BINANCE_MAP.get(sym, "")
-        _bn_interval = _BINANCE_INTERVAL_MAP.get(timeframe, timeframe)
         _kraken_pair = _KRAKEN_METAL_MAP.get(sym, "")
         _kraken_iv = _KRAKEN_INTERVAL.get(timeframe, "")
+        _cb_product = _COINBASE_METAL_PRODUCT.get(sym, "")
 
-        async def _probe(label: str, url: str, timeout_s: float, fetch_coro) -> Tuple[str, List[List[float]], MetalProviderDiagnostic]:
+        async def _probe_seq(
+            label: str, url: str, timeout_s: float, fetch_coro,
+        ) -> Tuple[str, List[List[float]], MetalProviderDiagnostic]:
             diag = MetalProviderDiagnostic(provider=label, url=url)
             rows = await _fetch_with_kline_timeout(
                 fetch_coro(diag),
@@ -735,72 +831,61 @@ async def fetch_metal_live_candles(
                 diag.failure = "empty_or_timeout"
             return label, rows, diag
 
-        tasks: List = [
-            _probe(
-                "binance",
-                f"{_BINANCE_SPOT_BASE}/klines?symbol={_bn_sym}&interval={_bn_interval}",
-                _binance_timeout,
-                lambda d: _fetch_binance_metals_klines(sym, timeframe, limit, diag=d),
-            ),
-        ]
+        def _accept(label: str, rows: List[List[float]]) -> Optional[List[List[float]]]:
+            if not rows:
+                return None
+            if len(rows) >= min_bars or len(rows) >= 15:
+                out = rows[-limit:] if len(rows) > limit else rows
+                _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
+                    label, datetime.utcnow(),
+                )
+                logger.info(
+                    f"[tradfi] metal-live best={label} {sym} {timeframe} → {len(out)} bars"
+                )
+                return out
+            logger.info(
+                f"[tradfi] metal-live partial {label} {sym} {timeframe}: "
+                f"{len(rows)} bars < {min_bars}"
+            )
+            return None
+
+        # Sequential failover — slow Kraken cannot block FMP/Coinbase.
+        external_chain: List[Tuple[str, str, float, object]] = []
         if _env_fmp_api_key():
-            tasks.append(_probe(
+            external_chain.append((
                 "fmp",
                 f"fmp://historical-chart/{sym}/{timeframe}",
                 _fmp_timeout,
                 lambda d: _fetch_fmp_metals_klines(sym, "forex", timeframe, limit, diag=d),
             ))
-        if broker_ready and not ctrader_tried:
-            tasks.append(_probe(
-                "ctrader",
-                f"ctrader://trendbars/{sym}/{timeframe}",
-                _CTRADER_KLINE_TIMEOUT_LIVE_S,
-                lambda d: _fetch_ctrader_klines(
-                    sym, "forex", timeframe, min(limit, 500), user_id=user_id, diag=d,
-                ),
+        if _cb_product:
+            external_chain.append((
+                "coinbase",
+                f"https://api.exchange.coinbase.com/products/{_cb_product}/candles",
+                _COINBASE_KLINE_TIMEOUT_S,
+                lambda d: _fetch_coinbase_metals_klines(sym, timeframe, limit, diag=d),
             ))
         if sym in _KRAKEN_METAL_MAP:
-            tasks.append(_probe(
+            external_chain.append((
                 "kraken",
                 f"https://api.kraken.com/0/public/OHLC?pair={_kraken_pair}&interval={_kraken_iv}",
                 _kraken_timeout,
                 lambda d: _fetch_kraken_metals_klines(sym, timeframe, limit, diag=d),
             ))
 
-        results = await asyncio.gather(*tasks)
-
-        candidates: List[Tuple[int, int, str, List[List[float]]]] = []
-        thin: List[Tuple[int, str, List[List[float]]]] = []
-        for label, rows, diag in results:
+        thin_best: Tuple[str, List[List[float]]] = ("", [])
+        for label, url, timeout_s, fetch_fn in external_chain:
+            lbl, rows, diag = await _probe_seq(label, url, timeout_s, fetch_fn)
             trace.append(diag)
-            if not rows:
-                continue
-            rank = _METAL_KLINE_SOURCE_RANK.get(label, 99)
-            if len(rows) >= min_bars:
-                candidates.append((rank, len(rows), label, rows))
-            elif len(rows) >= 15:
-                thin.append((rank, label, rows))
-                logger.info(
-                    f"[tradfi] metal-live partial {label} {sym} {timeframe}: "
-                    f"{len(rows)} bars < {min_bars}"
-                )
+            accepted = _accept(lbl, rows)
+            if accepted is not None:
+                _log_metal_kline_trace(sym, timeframe, trace)
+                return accepted
+            if rows and len(rows) > len(thin_best[1]):
+                thin_best = (lbl, rows)
 
-        if candidates:
-            candidates.sort(key=lambda x: (x[0], -x[1]))
-            label, rows = candidates[0][2], candidates[0][3]
-            logger.info(
-                f"[tradfi] metal-live best={label} {sym} {timeframe} → {len(rows)} bars"
-            )
-            out = rows[-limit:] if len(rows) > limit else rows
-            _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
-                label, datetime.utcnow(),
-            )
-            _log_metal_kline_trace(sym, timeframe, trace)
-            return out
-
-        if thin:
-            thin.sort(key=lambda x: x[0])
-            label, rows = thin[0][1], thin[0][2]
+        if thin_best[1]:
+            label, rows = thin_best
             logger.info(
                 f"[tradfi] metal-live thin fallback {label} {sym} {timeframe} "
                 f"→ {len(rows)} bars"
@@ -811,6 +896,33 @@ async def fetch_metal_live_candles(
             )
             _log_metal_kline_trace(sym, timeframe, trace)
             return out
+
+        # Last resort: Yahoo GC=F futures when all spot sources miss (Railway geo-block).
+        _yt = _METALS_YAHOO_TICKER.get(sym)
+        if _yt:
+            y_diag = MetalProviderDiagnostic(
+                provider="yahoo_gc",
+                url=f"https://query1.finance.yahoo.com/v8/finance/chart/{_yt}",
+            )
+            yrows = await _fetch_with_kline_timeout(
+                _fetch_yahoo_chart_klines(_yt, timeframe, limit),
+                timeout_s=20.0,
+                label="yahoo_gc",
+                symbol=sym,
+                timeframe=timeframe,
+            )
+            y_diag.candle_count = len(yrows) if yrows else 0
+            if not yrows:
+                y_diag.failure = "empty_or_timeout"
+            trace.append(y_diag)
+            accepted = _accept("yahoo_gc", yrows)
+            if accepted is not None:
+                logger.warning(
+                    f"[tradfi] metal-live GC=F fallback {sym} {timeframe} → "
+                    f"{len(accepted)} bars (all spot sources missed)"
+                )
+                _log_metal_kline_trace(sym, timeframe, trace)
+                return accepted
 
         _log_metal_kline_trace(sym, timeframe, trace)
         logger.warning(
@@ -1550,11 +1662,14 @@ async def _get_klines_impl(
                     f"[tradfi] FMP forex klines failed {symbol} {timeframe}: {_fe}"
                 )
 
-    # ── Binance spot metals fallback (backtest / after cTrader+FMP miss) ───────
+    # ── Coinbase spot metals fallback (backtest / after cTrader+FMP miss) ──────
     if is_metal:
-        _brows = await _fetch_binance_metals_klines(symbol, timeframe, limit)
-        if _brows:
-            return _brows
+        _cbrows = await _fetch_coinbase_metals_klines(symbol, timeframe, limit)
+        if _cbrows:
+            return _cbrows
+        _krows = await _fetch_kraken_metals_klines(symbol, timeframe, limit)
+        if _krows:
+            return _krows
 
     # ── FMP 1-minute REST — primary source for forex paper evaluation ─────────
     if timeframe == "1m" and _env_fmp_api_key():
