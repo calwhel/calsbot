@@ -22,6 +22,12 @@ import os
 import time
 from typing import Dict, Optional, Tuple
 
+from app.services.ctrader_sltp import (
+    compute_sltp_prices,
+    relative_sltp_wire as _relative_sltp_wire,
+    validate_sltp_sanity,
+)
+
 logger = logging.getLogger(__name__)
 
 # httpx logs every request URL at INFO — and our OAuth token calls put the
@@ -57,6 +63,7 @@ def _host_for_account(prefs, ctid: int) -> str:
 
 def _other_host(host: str) -> str:
     return CTRADER_HOST_DEMO if host == CTRADER_HOST_LIVE else CTRADER_HOST_LIVE
+
 
 # OAuth endpoints — from official Spotware docs:
 # https://help.ctrader.com/open-api/account-authentication/
@@ -95,6 +102,8 @@ try:
         ProtoOAAmendPositionSLTPReq,
         ProtoOAReconcileReq,
         ProtoOAReconcileRes,
+        ProtoOADealListByPositionIdReq,
+        ProtoOADealListByPositionIdRes,
     )
     from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
         ProtoOATradeSide,
@@ -129,6 +138,8 @@ _PAYLOAD_TYPES = {
     "amend_position_sltp_req": 2110,
     "reconcile_req":         2124,
     "reconcile_res":         2125,
+    "deal_list_by_position_id_req": 2179,
+    "deal_list_by_position_id_res": 2180,
 }
 
 # Forex pip sizes
@@ -804,6 +815,11 @@ async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
                     logger.info(
                         f"[cTrader] access token refreshed + persisted for user {user_id}"
                     )
+                    try:
+                        from app.services.ctrader_price_feed import invalidate_stream_creds
+                        invalidate_stream_creds(user_id)
+                    except Exception:
+                        pass
                     return new_at
                 except Exception:
                     try:
@@ -955,6 +971,8 @@ async def place_market_order_resilient(
     stop_loss_price: Optional[float] = None,
     take_profit_price: Optional[float] = None,
     entry_price: Optional[float] = None,
+    sl_pct: Optional[float] = None,
+    tp_pct: Optional[float] = None,
     label: str = "TradeHub",
 ) -> dict:
     """
@@ -976,6 +994,8 @@ async def place_market_order_resilient(
                 stop_loss_price=stop_loss_price,
                 take_profit_price=take_profit_price,
                 entry_price=entry_price,
+                sl_pct=sl_pct,
+                tp_pct=tp_pct,
                 label=label,
                 host=h,
             )
@@ -988,6 +1008,8 @@ async def place_market_order_resilient(
             stop_loss_price=stop_loss_price,
             take_profit_price=take_profit_price,
             entry_price=entry_price,
+            sl_pct=sl_pct,
+            tp_pct=tp_pct,
             label=label,
             host=h,
         )
@@ -1000,15 +1022,6 @@ async def place_market_order_resilient(
             at = new_at
             logger.info(f"[cTrader] retrying order for user {user_id} after token refresh")
             result = await _place_on(host)
-
-    if result.get("error") == "account auth failed":
-        alt = _other_host(host)
-        logger.info(
-            f"[cTrader] account auth failed on {host} — retrying ctid={ctid} on {alt}"
-        )
-        result = await _place_on(alt)
-        if not result.get("error") and user_id:
-            await asyncio.to_thread(_persist_account_host_metadata, user_id, ctid, alt)
 
     return result
 
@@ -1267,6 +1280,8 @@ async def place_order(
     stop_loss_price: Optional[float] = None,
     take_profit_price: Optional[float] = None,
     entry_price: Optional[float] = None,
+    sl_pct: Optional[float] = None,
+    tp_pct: Optional[float] = None,
     label: str = "TradeHub",
     host: str = CTRADER_HOST,
 ) -> dict:
@@ -1341,19 +1356,20 @@ async def place_order(
                 # cTrader applies them to the ACTUAL fill price, so the SL/TP track
                 # the real entry rather than a possibly-slipped signal price.
                 if entry_price and entry_price > 0:
-                    if stop_loss_price is not None:
+                    rel_sl, rel_tp = _relative_sltp_wire(entry_price, sl_pct, tp_pct)
+                    if rel_sl is not None:
+                        req.relativeStopLoss = rel_sl
+                    elif stop_loss_price is not None:
                         req.relativeStopLoss = max(
                             1, int(round(abs(entry_price - stop_loss_price) * 100_000))
                         )
-                    if take_profit_price is not None:
+                    if rel_tp is not None:
+                        req.relativeTakeProfit = rel_tp
+                    elif take_profit_price is not None:
                         req.relativeTakeProfit = max(
                             1, int(round(abs(entry_price - take_profit_price) * 100_000))
                         )
                 elif stop_loss_price is not None or take_profit_price is not None:
-                    # This is always a MARKET order, which REQUIRES relative SL/TP
-                    # (absolute is rejected). Without an entry reference we can't
-                    # compute the offset — fail explicitly rather than send an
-                    # absolute SL/TP that the broker will reject anyway.
                     logger.error(
                         "[cTrader] cannot place MARKET order with SL/TP — entry_price "
                         f"missing (symbol={symbol_name})"
@@ -1373,9 +1389,6 @@ async def place_order(
 
                 _touch_conn(host, ctid_trader_account_id)
 
-                # Broker rejected the order outright (unknown symbol, bad volume,
-                # invalid SL/TP, trading disabled, market closed, no margin, …).
-                # Surface the real reason instead of dropping it as "no event".
                 if pt == _PAYLOAD_TYPES["order_error_event"]:
                     err = ProtoOAOrderErrorEvent()
                     err.ParseFromString(payload)
@@ -1411,6 +1424,8 @@ async def place_order_units(
     stop_loss_price: Optional[float] = None,
     take_profit_price: Optional[float] = None,
     entry_price: Optional[float] = None,
+    sl_pct: Optional[float] = None,
+    tp_pct: Optional[float] = None,
     label: str = "TradeHub",
     host: str = CTRADER_HOST,
 ) -> dict:
@@ -1463,11 +1478,16 @@ async def place_order_units(
                 req.volume              = vol
                 req.label               = label[:20]
                 if entry_price and entry_price > 0:
-                    if stop_loss_price is not None:
+                    rel_sl, rel_tp = _relative_sltp_wire(entry_price, sl_pct, tp_pct)
+                    if rel_sl is not None:
+                        req.relativeStopLoss = rel_sl
+                    elif stop_loss_price is not None:
                         req.relativeStopLoss = max(
                             1, int(round(abs(entry_price - stop_loss_price) * 100_000))
                         )
-                    if take_profit_price is not None:
+                    if rel_tp is not None:
+                        req.relativeTakeProfit = rel_tp
+                    elif take_profit_price is not None:
                         req.relativeTakeProfit = max(
                             1, int(round(abs(entry_price - take_profit_price) * 100_000))
                         )
@@ -1775,29 +1795,15 @@ async def get_account_balance_resilient(
     at = (access_token or "").strip()
     if not at:
         return None
-    hosts = [host, _other_host(host)]
-    for h in hosts:
-        bal = await _get_account_balance(at, ctid_trader_account_id, host=h)
-        if bal is not None and bal > 0:
-            if user_id and h != host:
-                await asyncio.to_thread(
-                    _persist_account_host_metadata, user_id, ctid_trader_account_id, h,
-                )
-            return bal
-        if user_id:
-            new_at = await refresh_user_ctrader_token(user_id)
-            if new_at:
-                at = new_at
-                bal = await _get_account_balance(at, ctid_trader_account_id, host=h)
-                if bal is not None and bal > 0:
-                    if h != host:
-                        await asyncio.to_thread(
-                            _persist_account_host_metadata,
-                            user_id,
-                            ctid_trader_account_id,
-                            h,
-                        )
-                    return bal
+    bal = await _get_account_balance(at, ctid_trader_account_id, host=host)
+    if bal is not None and bal > 0:
+        return bal
+    if user_id:
+        new_at = await refresh_user_ctrader_token(user_id)
+        if new_at:
+            bal = await _get_account_balance(new_at, ctid_trader_account_id, host=host)
+            if bal is not None and bal > 0:
+                return bal
     return None
 
 
@@ -1862,6 +1868,119 @@ async def get_open_position_ids_for_user(user) -> Optional[set]:
     return await _get_open_position_ids(access_token, ctid_trader_account_id, host=_host)
 
 
+def _normalize_deal_price(raw: float, entry_hint: Optional[float] = None) -> float:
+    """Resolve symbol-dependent deal price scaling (see ctrader-price-scaling.md)."""
+    if raw <= 0:
+        return raw
+    if entry_hint and entry_hint > 0:
+        cands = [raw, raw / 100.0, raw / 1000.0, raw / 100_000.0]
+        return min(cands, key=lambda v: abs(v - entry_hint))
+    if raw > 1000:
+        return raw
+    if raw > 10:
+        return raw
+    return raw / 100_000.0
+
+
+async def _get_position_close_detail(
+    access_token: str,
+    ctid_trader_account_id: int,
+    position_id: int,
+    *,
+    host: str = CTRADER_HOST,
+    entry_hint: Optional[float] = None,
+    direction: Optional[str] = None,
+) -> Optional[dict]:
+    """Broker close truth for a position via ProtoOADealListByPositionIdReq."""
+    if not _PROTO_OK:
+        return None
+    try:
+        async with _get_account_lock(host, ctid_trader_account_id):
+            reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
+            if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                return None
+            req = ProtoOADealListByPositionIdReq()
+            req.ctidTraderAccountId = ctid_trader_account_id
+            req.positionId = int(position_id)
+            payload = await _send_recv(
+                reader, writer, req,
+                _PAYLOAD_TYPES["deal_list_by_position_id_req"],
+                _PAYLOAD_TYPES["deal_list_by_position_id_res"],
+                timeout=15.0,
+            )
+            if not payload:
+                return None
+            res = ProtoOADealListByPositionIdRes()
+            res.ParseFromString(payload)
+            close_deal = None
+            close_ts = None
+            for deal in res.deal:
+                if deal.HasField("closePositionDetail"):
+                    close_deal = deal
+                    if deal.HasField("createTimestamp"):
+                        close_ts = int(deal.createTimestamp)
+                    elif deal.HasField("utcLastUpdateTimestamp"):
+                        close_ts = int(deal.utcLastUpdateTimestamp)
+            if close_deal is None:
+                return None
+            detail = close_deal.closePositionDetail
+            exit_price = _normalize_deal_price(float(detail.entryPrice), entry_hint)
+            gross = int(detail.grossProfit) if detail.HasField("grossProfit") else 0
+            outcome = None
+            if gross > 0:
+                outcome = "WIN"
+            elif gross < 0:
+                outcome = "LOSS"
+            elif entry_hint and direction:
+                if direction == "LONG":
+                    outcome = "WIN" if exit_price >= entry_hint else "LOSS"
+                else:
+                    outcome = "WIN" if exit_price <= entry_hint else "LOSS"
+            return {
+                "exit_price": exit_price,
+                "outcome": outcome or "LOSS",
+                "closed_at_ms": close_ts,
+                "gross_profit": gross,
+            }
+    except Exception as exc:
+        logger.debug(
+            "[cTrader] position close detail pos=%s failed: %s",
+            position_id,
+            exc,
+        )
+    return None
+
+
+async def get_position_close_detail_for_user(
+    user,
+    position_id: int,
+    *,
+    entry_hint: Optional[float] = None,
+    direction: Optional[str] = None,
+) -> Optional[dict]:
+    """High-level wrapper: broker close price/outcome for a user's position."""
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    db = SessionLocal()
+    try:
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+            return None
+        access_token = prefs.ctrader_access_token
+        ctid = int(prefs.ctrader_account_id)
+        host = _host_for_account(prefs, ctid)
+    finally:
+        db.close()
+    return await _get_position_close_detail(
+        access_token,
+        ctid,
+        position_id,
+        host=host,
+        entry_hint=entry_hint,
+        direction=direction,
+    )
+
+
 async def place_ctrader_order_for_user(
     user,
     symbol: str,
@@ -1902,9 +2021,20 @@ async def place_ctrader_order_for_user(
     finally:
         db.close()
 
-    mult     = 1.0 if direction == "LONG" else -1.0
-    tp_price = round(entry_price * (1 + mult * tp_pct / 100), 6)
-    sl_price = round(entry_price * (1 - mult * sl_pct / 100), 6)
+    tp_price, sl_price = compute_sltp_prices(direction, entry_price, tp_pct, sl_pct)
+    if not validate_sltp_sanity(direction, entry_price, sl_price, tp_price):
+        logger.warning(
+            f"[cTrader] inverted SL/TP for {direction} {symbol} entry={entry_price} "
+            f"— re-deriving from entry"
+        )
+        tp_price, sl_price = compute_sltp_prices(direction, entry_price, tp_pct, sl_pct)
+        if not validate_sltp_sanity(direction, entry_price, sl_price, tp_price):
+            logger.error(
+                f"[cTrader] SL/TP sanity check failed for user {user.id} {symbol} "
+                f"{direction} entry={entry_price} sl={sl_price} tp={tp_price}"
+            )
+            return {"order_id": None, "actual_fill": None,
+                    "error": "invalid SL/TP for trade direction"}
 
     try:
         from app.services.index_symbols import normalize_index_symbol, is_index_symbol
@@ -1991,16 +2121,42 @@ async def place_ctrader_order_for_user(
         stop_loss_price=sl_price,
         take_profit_price=tp_price,
         entry_price=entry_price,
+        sl_pct=sl_pct,
+        tp_pct=tp_pct,
     )
 
     if result.get("error"):
         logger.error(f"[cTrader] order failed for user {user.id}: {result['error']}")
-        # Return the dict (order_id is None) so the caller can surface the real
-        # rejection reason instead of a generic "no order id" message.
         return result
-    # Stamp the broker account this order was actually placed on, so close
-    # reconciliation can bind the execution to that account (a later account
-    # relink must not false-close a position opened on the previous account).
+
+    actual_fill = result.get("actual_fill")
+    position_id = result.get("position_id")
+    if actual_fill and actual_fill > 0 and position_id:
+        fill_tp, fill_sl = compute_sltp_prices(direction, actual_fill, tp_pct, sl_pct)
+        if not validate_sltp_sanity(direction, actual_fill, fill_sl, fill_tp):
+            fill_tp, fill_sl = compute_sltp_prices(direction, actual_fill, tp_pct, sl_pct)
+        if validate_sltp_sanity(direction, actual_fill, fill_sl, fill_tp):
+            try:
+                amended = await modify_position_sltp(
+                    access_token,
+                    ctid_trader_account_id,
+                    int(position_id),
+                    stop_loss_price=fill_sl,
+                    take_profit_price=fill_tp,
+                    host=primary_host,
+                )
+                if amended:
+                    result["tp_price"] = fill_tp
+                    result["sl_price"] = fill_sl
+                    logger.info(
+                        f"[cTrader] repriced SL/TP from fill {actual_fill} for "
+                        f"pos={position_id} user={user.id}"
+                    )
+            except Exception as amend_err:
+                logger.warning(
+                    f"[cTrader] post-fill SL/TP amend failed user={user.id}: {amend_err}"
+                )
+
     if isinstance(result, dict) and result.get("order_id"):
         result["account_id"] = ctid_trader_account_id
     return result

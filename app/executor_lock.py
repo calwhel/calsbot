@@ -20,10 +20,11 @@ def get_executor_lock_id() -> int:
         return FOREX_EXECUTOR_LOCK_ID
     return EXECUTOR_LOCK_ID
 
-# Neon SSL blips can drop the dedicated lock session; reconnect before tearing
-# down the whole executor (which restarts prefetch and duplicates scan loops).
-LOCK_RECONNECT_ATTEMPTS = 8
-LOCK_RECONNECT_DELAY_SECS = 2.0
+# Neon SSL blips can drop the dedicated lock session. Session-scoped advisory
+# locks are released when the SSL session dies — re-claim on a FRESH connection
+# (never revive the dead psycopg2 session).
+LOCK_RECONNECT_ATTEMPTS = 15
+LOCK_RECONNECT_DELAY_SECS = 1.5
 
 
 def is_standalone_executor() -> bool:
@@ -73,7 +74,14 @@ def reconnect_lock_connection(
     max_attempts: int = LOCK_RECONNECT_ATTEMPTS,
     retry_delay: float = LOCK_RECONNECT_DELAY_SECS,
 ) -> Optional[Any]:
-    """Close a dead lock session and race to re-acquire on a fresh connection."""
+    """Close a dead lock session and re-claim the advisory lock on a fresh session.
+
+    pg advisory locks are session-scoped: when Neon drops the SSL connection the
+    lock is already released server-side. Opening a new connection and running
+    pg_try_advisory_lock is the correct recovery path — not reconnecting the dead
+    socket. Only returns None when another backend genuinely holds the lock or
+    the DB is unreachable after all attempts.
+    """
     if lock_id is None:
         lock_id = get_executor_lock_id()
     close_lock_connection(old_conn)
@@ -83,16 +91,21 @@ def reconnect_lock_connection(
             conn = create_lock_connection()
             if try_acquire_lock(conn, lock_id):
                 logger.info(
-                    "Executor lock re-acquired on new DB session (attempt %s/%s)",
+                    "Executor lock re-claimed on fresh DB session (attempt %s/%s)",
                     attempt,
                     max_attempts,
                 )
                 return conn
             close_lock_connection(conn)
+            logger.warning(
+                "Executor lock re-claim attempt %s/%s: lock held by another backend",
+                attempt,
+                max_attempts,
+            )
         except Exception as exc:
             close_lock_connection(conn)
             logger.warning(
-                "Executor lock reconnect attempt %s/%s failed: %s",
+                "Executor lock re-claim attempt %s/%s failed: %s",
                 attempt,
                 max_attempts,
                 exc,

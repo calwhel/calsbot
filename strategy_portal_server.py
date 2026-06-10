@@ -1670,7 +1670,7 @@ from app.executor_lock import (
 # Keepalive cadence for the lock-holding connection. Pinged from a DEDICATED
 # DAEMON THREAD (not the asyncio loop, which the executor's scan cycles block for
 # tens of seconds), so it must stay comfortably BELOW _EXECUTOR_LOCK_STALE_IDLE_SECS.
-_EXECUTOR_LOCK_KEEPALIVE_SECS = 20
+_EXECUTOR_LOCK_KEEPALIVE_SECS = 60
 # A waiting worker only force-terminates the current lock holder if it has been
 # idle (un-pinged) at least this long — i.e. it is a genuine zombie from a dead
 # deploy, NOT the live sibling worker that legitimately holds the lock. With
@@ -1744,17 +1744,18 @@ def _advisory_lock_keepalive_thread(conn_holder, stop_event, lost_event):
             cur.close()
         except Exception as e:
             logger.warning(
-                f"Advisory lock keepalive failed: {e} — reconnecting lock session"
+                f"Advisory lock keepalive failed: {e} — re-claiming on fresh session"
             )
             new_conn = reconnect_lock_connection(conn)
             if new_conn:
                 conn_holder["conn"] = new_conn
                 logger.info(
-                    "Advisory lock connection restored — executor scans continue"
+                    "Advisory lock re-claimed on fresh session — executor continues"
                 )
                 continue
             logger.error(
-                "Advisory lock reconnect exhausted — will re-enter claim loop"
+                "Advisory lock re-claim exhausted (another holder or DB down) "
+                "— will re-enter claim loop"
             )
             lost_event.set()
             return
@@ -1806,6 +1807,38 @@ def _ensure_executor_feeds_running():
         _metals_feed_start()
     except Exception as _met_err:
         logger.warning(f"Metals feed restart error (non-fatal): {_met_err}")
+
+
+def _lock_loss_should_stop_feeds() -> bool:
+    """Standalone executor has no sibling workers — keep feeds warm during re-claim."""
+    import os as _os
+    return _os.environ.get("EXECUTOR_STANDALONE", "").lower() not in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+async def _restart_executor_subsystems_after_lock_reacquire():
+    """After Neon SSL re-claim: restart feeds, order worker, and broker reconcile."""
+    logger.info(
+        "Executor lock re-acquired — restarting feeds, order worker, reconcile catch-up"
+    )
+    _ensure_executor_feeds_running()
+    try:
+        from app.services.ctrader_order_queue import start_ctrader_order_worker
+        start_ctrader_order_worker()
+    except Exception as _oq_err:
+        logger.warning(f"cTrader order queue restart error (non-fatal): {_oq_err}")
+    try:
+        from app.services.strategy_executor import (
+            _reconcile_forex_closes,
+            mark_heartbeat,
+        )
+        mark_heartbeat("executor_lock_reacquire")
+        await _reconcile_forex_closes()
+    except Exception as _rc_err:
+        logger.warning(f"Forex reconcile catch-up after re-claim failed: {_rc_err}")
 
 
 async def _keepalive_ping_loop():
@@ -1921,6 +1954,18 @@ async def _start_executor_tasks():
             logger.warning("[executor] strategy heal failed (non-fatal): %s", _heal_err)
 
     asyncio.create_task(_executor_startup_heal())
+
+    async def _executor_startup_reconcile():
+        """Catch up broker-side closes that happened while executor was down."""
+        await asyncio.sleep(3)
+        try:
+            from app.services.strategy_executor import _reconcile_forex_closes
+            await _reconcile_forex_closes()
+            logger.info("[executor] startup forex broker reconcile complete")
+        except Exception as _sr_err:
+            logger.warning("[executor] startup forex reconcile failed: %s", _sr_err)
+
+    asyncio.create_task(_executor_startup_reconcile())
 
     async def _feed_startup_diagnostics():
         await asyncio.sleep(12)
@@ -2132,10 +2177,10 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
                     _executor_tasks_started = True
                 else:
                     logger.info(
-                        "Executor lock re-acquired — scan loops already running "
-                        "(skipped duplicate task spawn)"
+                        "Executor lock re-acquired — restarting feeds + reconcile "
+                        "(scan loops still running via _resilient_task)"
                     )
-                    _ensure_executor_feeds_running()
+                    await _restart_executor_subsystems_after_lock_reacquire()
             except Exception as e:
                 logger.error(f"Failed to start executor tasks: {e}")
             return  # This worker is now the executor; stop trying
@@ -2201,21 +2246,21 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
 async def _keepalive_then_reclaim(conn):
     """Keeps the advisory-lock connection alive; when it dies, re-enters the claim loop."""
     global _executor_running_in_this_worker
-    await _maintain_advisory_lock(conn)      # blocks until reconnect exhausted
+    await _maintain_advisory_lock(conn)      # blocks until in-thread re-claim exhausted
     _executor_running_in_this_worker = False
-    # Stop the cTrader feed so this former lock-holder doesn't keep a second
-    # connection open once another worker wins the lock and starts its own feed
-    # (duplicate sessions are exactly what triggers the broker's reconnect kicks).
-    try:
-        from app.services.fmp_price_feed import stop as _fmp_feed_stop
-        _fmp_feed_stop()
-    except Exception as _fe:
-        logger.warning(f"FMP feed stop on lock-loss error (non-fatal): {_fe}")
-    try:
-        from app.services.ctrader_price_feed import stop as _ctrader_feed_stop
-        _ctrader_feed_stop()
-    except Exception as _fe:
-        logger.warning(f"cTrader feed stop on lock-loss error (non-fatal): {_fe}")
+    # Gunicorn siblings: stop feeds so the new lock-holder doesn't open duplicate
+    # broker sessions. Standalone executor keeps feeds running during re-claim.
+    if _lock_loss_should_stop_feeds():
+        try:
+            from app.services.fmp_price_feed import stop as _fmp_feed_stop
+            _fmp_feed_stop()
+        except Exception as _fe:
+            logger.warning(f"FMP feed stop on lock-loss error (non-fatal): {_fe}")
+        try:
+            from app.services.ctrader_price_feed import stop as _ctrader_feed_stop
+            _ctrader_feed_stop()
+        except Exception as _fe:
+            logger.warning(f"cTrader feed stop on lock-loss error (non-fatal): {_fe}")
     logger.warning("Advisory lock connection lost — re-entering claim loop")
     asyncio.create_task(_executor_claim_loop(first_attempt_delay=5))
 
@@ -14297,7 +14342,7 @@ async def executor_force_start(request: Request):
             await _start_executor_tasks()
             _executor_tasks_started = True
         else:
-            _ensure_executor_feeds_running()
+            await _restart_executor_subsystems_after_lock_reacquire()
         return {"status": "started", "message": "Executor started successfully in this worker"}
     except Exception as e:
         logger.error(f"[force-start] Failed to start tasks: {e}")
