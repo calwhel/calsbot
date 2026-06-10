@@ -90,8 +90,12 @@ def executor_runtime_profile() -> Dict[str, object]:
         "crypto_scan_interval_s": CRYPTO_SCAN_INTERVAL_SECONDS,
         "forex_scan_interval_s": FOREX_SCAN_INTERVAL_SECONDS,
         "forex_manage_interval_s": FOREX_MANAGE_INTERVAL_SECONDS,
-        "forex_worklist_ttl_s": _FX_WORKLIST_TTL,
-        "forex_reconcile_interval_s": _FX_RECONCILE_INTERVAL,
+        "forex_worklist_ttl_s": float(
+            _os_env.environ.get("EXECUTOR_FX_WORKLIST_TTL", "1")
+        ),
+        "forex_reconcile_interval_s": float(
+            _os_env.environ.get("EXECUTOR_FX_RECONCILE_INTERVAL", "5")
+        ),
     }
 
 
