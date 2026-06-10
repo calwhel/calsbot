@@ -38,11 +38,12 @@ _BINANCE_BASE = "https://api.binance.com/api/v3"
 _SOURCE_RANK = {
     "ctrader": 0,
     "coinbase": 1,
-    "kraken": 2,
-    "fmp": 3,
-    "twelvedata": 4,
-    "yfinance": 5,
-    "metals_cache": 6,
+    "binance": 2,
+    "kraken": 3,
+    "fmp": 4,
+    "twelvedata": 5,
+    "yfinance": 6,
+    "metals_cache": 7,
     "store": 99,
 }
 _PAPER_MAX_AGE_S = float(os.environ.get("REALTIME_SPOT_MAX_AGE_PAPER_S", "15"))
@@ -212,23 +213,11 @@ def read_fresh_cached(
 
 
 async def _fetch_binance(pair: str) -> Optional[float]:
-    import os
-    if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"):
-        return None
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=4.0) as client:
-            r = await client.get(
-                f"{_BINANCE_BASE}/ticker/price",
-                params={"symbol": pair},
-            )
-        if r.status_code != 200:
-            return None
-        body = r.json()
-        if isinstance(body, dict) and body.get("code") not in (None, 0):
-            return None
-        px = float(body.get("price", 0))
-        return px if px > 0 else None
+        from app.services.binance_feed import binance_spot_price
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            return await binance_spot_price(client, pair)
     except Exception:
         return None
 
@@ -300,9 +289,9 @@ async def _fetch_metals_parallel(symbol: str) -> Optional[Tuple[float, str]]:
             pass
         return None
 
-    # Binance returns HTTP 451 on Railway US — Coinbase/Kraken for metals spot.
     tasks = [
         _try("coinbase", _fetch_coinbase(_COINBASE_MAP.get(bn, ""))),
+        _try("binance", _fetch_binance(bn)),
     ]
     if sym == "XAUUSD":
         tasks.append(_try("kraken", _fetch_kraken("PAXGUSD")))

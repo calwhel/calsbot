@@ -4384,6 +4384,17 @@ function renderStratList(strats){
     const _MKT_COLOR={crypto:'rgba(91,108,247,.15)',forex:'rgba(34,197,94,.15)',stock:'rgba(251,191,36,.15)',index:'rgba(168,85,247,.15)'};
     const _MKT_TEXT={crypto:'var(--accent)',forex:'#22c55e',stock:'#f59e0b',index:'#a855f7'};
     const mktBadgeHtml=`<span style="font-size:10px;background:${_MKT_COLOR[assetClass]||'rgba(91,108,247,.15)'};color:${_MKT_TEXT[assetClass]||'var(--accent)'};border:1px solid ${_MKT_TEXT[assetClass]||'var(--accent)'}44;border-radius:4px;padding:2px 7px;font-weight:600">${_MKT_LABEL[assetClass]||assetClass}</span>`;
+    const _fb=s=>`<span style="font-size:9px;background:rgba(90,95,126,.12);color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:1px 5px;font-weight:700;letter-spacing:.3px">${s}</span>`;
+    const featBadges=[];
+    if(cfg.breakeven_enabled)featBadges.push(_fb('BE'));
+    if(cfg.trailing_enabled)featBadges.push(_fb('TRAIL'));
+    if(cfg.partial_tp_enabled)featBadges.push(_fb('TP1'));
+    if(cfg.sessions_enabled){
+      const _sn=(cfg.allowed_sessions||[])[0]||'SESSION';
+      featBadges.push(_fb(String(_sn).toUpperCase().slice(0,8)));
+    }
+    if(cfg.news_filter_enabled)featBadges.push(_fb('NEWS'));
+    const featBadgeHtml=featBadges.length?featBadges.join(' '):'';
 
     const metaParts=[];
     if(cfg.direction)metaParts.push(`<span>${cfg.direction}</span>`);
@@ -4404,6 +4415,7 @@ function renderStratList(strats){
         <div class="card-name">${s.name||'Unnamed Strategy'}</div>
         ${healthBadge(s.health_score||0,p.total_trades||0)}
         ${mktBadgeHtml}
+        ${featBadgeHtml}
         ${isLocked?'<span style="font-size:10px;background:rgba(91,108,247,.15);color:var(--accent);border:1px solid rgba(91,108,247,.3);border-radius:4px;padding:2px 7px;font-weight:600">🔒 Subscribed</span>':''}
         ${isPaper?'<span class="paper-badge">🧪 Paper</span>':''}
         <span class="pill ${s.status}">${isPaper?'PAPER':s.status.toUpperCase()}</span>
@@ -4933,6 +4945,8 @@ const WZ={
   tp1Pips:null,tp2Pips:null,slPips:null,bePips:null,
   partialTp:false,tp1Pips:20,tp1Pct:50,tp1MoveBe:true,tmBreakeven:false,beTrigPips:20,beOffPips:1,
   tmTrail:false,trailDistPips:15,trailStepPips:5,
+  sessionsEnabled:false,allowedSessions:[],sessCustomStart:'07:00',sessCustomEnd:'16:00',
+  newsFilter:false,newsBeforeMin:30,newsAfterMin:30,newsImpact:'high',
   leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,posSizeLots:0.10,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,noDuplicateSymbol:false,
   sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',
   timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,
@@ -6450,6 +6464,34 @@ function renderStep5(){
       <label>Distance (${wzPointUnitLabel()}) <input type="number" id="tm-trail-dist" value="${WZ.trailDistPips||15}" style="width:72px;margin-left:8px" onchange="WZ.trailDistPips=Number(this.value)"></label>
       <label style="margin-top:6px;display:block">Step (${wzPointUnitLabel()}) <input type="number" id="tm-trail-step" value="${WZ.trailStepPips||5}" style="width:72px;margin-left:8px" onchange="WZ.trailStepPips=Number(this.value)"></label>
     </div>
+    <div class="section-card" style="margin-top:10px">
+    <div class="sc-title"><div class="sc-icon">🚪</div>Entry Filters</div>
+    <div class="toggle-row" onclick="wzToggleEntryFilter('sess')">
+      <div><div class="toggle-lbl">Session filter</div><div class="toggle-sub">Only enter during selected UTC sessions</div></div>
+      <div class="switch ${WZ.sessionsEnabled?'on':''}" id="sw-ef-sess"></div>
+    </div>
+    <div id="row-ef-sess" style="${WZ.sessionsEnabled?'':'display:none'};padding:8px 0">
+      <div class="hint" style="margin-bottom:8px">Check sessions to allow (UTC). Custom window overrides when set.</div>
+      ${[{id:'sydney',label:'Sydney',time:'21:00–06:00'},{id:'tokyo',label:'Tokyo',time:'00:00–09:00'},{id:'london',label:'London',time:'07:00–16:00'},{id:'newyork',label:'New York',time:'12:00–21:00'},{id:'london_kz',label:'London KZ',time:'07:00–10:00'},{id:'ny_kz',label:'NY KZ',time:'12:00–15:00'}].map(s=>`<label style="display:block;margin:4px 0;font-size:12px"><input type="checkbox" ${(WZ.allowedSessions||[]).includes(s.id)?'checked':''} onchange="wzToggleAllowedSession('${s.id}',this.checked)"> ${s.label} <span style="color:var(--muted)">${s.time} UTC</span></label>`).join('')}
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+        <label style="font-size:12px">Custom <input type="time" value="${WZ.sessCustomStart||'07:00'}" onchange="WZ.sessCustomStart=this.value" style="margin-left:4px"> – <input type="time" value="${WZ.sessCustomEnd||'16:00'}" onchange="WZ.sessCustomEnd=this.value"></label>
+      </div>
+    </div>
+    <div class="toggle-row" onclick="wzToggleEntryFilter('news')" style="margin-bottom:0">
+      <div><div class="toggle-lbl">News filter</div><div class="toggle-sub">Block entries around high-impact calendar events</div></div>
+      <div class="switch ${WZ.newsFilter?'on':''}" id="sw-ef-news"></div>
+    </div>
+    <div id="row-ef-news" style="${WZ.newsFilter?'':'display:none'};padding:8px 0">
+      <label style="display:block;font-size:12px">Buffer before (min) <input type="number" min="0" value="${WZ.newsBeforeMin||30}" style="width:64px;margin-left:8px" onchange="WZ.newsBeforeMin=Number(this.value)"></label>
+      <label style="display:block;margin-top:6px;font-size:12px">Buffer after (min) <input type="number" min="0" value="${WZ.newsAfterMin||30}" style="width:64px;margin-left:8px" onchange="WZ.newsAfterMin=Number(this.value)"></label>
+      <label style="display:block;margin-top:6px;font-size:12px">Impact
+        <select onchange="WZ.newsImpact=this.value" style="margin-left:8px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text)">
+          <option value="high" ${WZ.newsImpact==='high'?'selected':''}>High only</option>
+          <option value="high_medium" ${WZ.newsImpact==='high_medium'?'selected':''}>High + Medium</option>
+        </select>
+      </label>
+    </div>
+  </div>
   </div>`:''}
     <div class="toggle-row" onclick="wzToggleExit('eod')" style="margin-top:8px;margin-bottom:0">
       <div><div class="toggle-lbl">⏰ Intraday / Day-Trade Mode</div><div class="toggle-sub">Force-close all positions before end of trading session — no overnight exposure</div></div>
@@ -6474,6 +6516,22 @@ function wzToggleTm(which){
   if(which==='partial')WZ.partialTp=on;
   if(which==='be2')WZ.tmBreakeven=on;
   if(which==='trail2')WZ.tmTrail=on;
+}
+
+function wzToggleEntryFilter(which){
+  const map={sess:['sw-ef-sess','row-ef-sess'],news:['sw-ef-news','row-ef-news']};
+  const ids=map[which]; if(!ids)return;
+  const sw=document.getElementById(ids[0]); const row=document.getElementById(ids[1]);
+  if(!sw||!row)return;
+  const on=sw.classList.toggle('on'); row.style.display=on?'block':'none';
+  if(which==='sess')WZ.sessionsEnabled=on;
+  if(which==='news')WZ.newsFilter=on;
+}
+
+function wzToggleAllowedSession(id,checked){
+  if(!WZ.allowedSessions)WZ.allowedSessions=[];
+  if(checked&&!WZ.allowedSessions.includes(id))WZ.allowedSessions.push(id);
+  if(!checked)WZ.allowedSessions=WZ.allowedSessions.filter(s=>s!==id);
 }
 
 function wzToggleExit(which){
@@ -7402,6 +7460,13 @@ async function buildStrategy(){
         breakeven_offset_pips:Number(WZ.beOffPips||1),
         trailing_enabled:!!WZ.tmTrail,trailing_distance_pips:Number(WZ.trailDistPips||15),
         trailing_step_pips:Number(WZ.trailStepPips||5),
+        sessions_enabled:!!WZ.sessionsEnabled,
+        allowed_sessions:(WZ.allowedSessions||[]).slice(),
+        session_custom:{start:WZ.sessCustomStart||'07:00',end:WZ.sessCustomEnd||'16:00'},
+        news_filter_enabled:!!WZ.newsFilter,
+        news_buffer_before_min:Number(WZ.newsBeforeMin||30),
+        news_buffer_after_min:Number(WZ.newsAfterMin||30),
+        news_impact:WZ.newsImpact||'high',
       });
     }
     // Forex pip TP/SL — executor converts pips→% at fire time using the live

@@ -1537,6 +1537,55 @@ def _paper_cost_basis_pct(asset_class: str, symbol: str = "") -> float:
     return 0.05            # conservative default
 
 
+def _tp1_blend_exit(ex, exit_price: float) -> float:
+    """Effective exit for P&L when TP1 partial close was taken."""
+    if not getattr(ex, "tp1_done", False):
+        return exit_price
+    try:
+        from app.services.forex_engine import pip_size as _pip_sz
+        ps = _pip_sz(getattr(ex, "symbol", ""))
+        entry = float(ex.entry_price)
+        tp1_pips = float(ex.tp1_realized_pips or 0)
+        if ex.direction == "LONG":
+            tp1_px = entry + tp1_pips * ps
+        else:
+            tp1_px = entry - tp1_pips * ps
+        closed = float(ex.tp1_closed_volume or 0)
+        remain = float(ex.remaining_volume or 0)
+        total = closed + remain
+        frac = (closed / total) if total > 0 else 0.5
+        return frac * tp1_px + (1.0 - frac) * float(exit_price)
+    except Exception:
+        return exit_price
+
+
+def _tp1_blend_pips_line(ex, exit_price: float) -> Optional[str]:
+    """Human-readable blended pips line for close notifications."""
+    if not getattr(ex, "tp1_done", False):
+        return None
+    try:
+        from app.services.forex_engine import pip_size as _pip_sz
+        ps = _pip_sz(getattr(ex, "symbol", ""))
+        if ps <= 0:
+            return None
+        entry = float(ex.entry_price)
+        tp1_pips = float(ex.tp1_realized_pips or 0)
+        if ex.direction == "LONG":
+            runner_pips = (float(exit_price) - entry) / ps
+        else:
+            runner_pips = (entry - float(exit_price)) / ps
+        closed = float(ex.tp1_closed_volume or 0)
+        remain = float(ex.remaining_volume or 0)
+        total = closed + remain
+        pct = round(closed / total * 100) if total > 0 else 50
+        rest_pct = 100 - pct
+        return (
+            f"TP1 +{tp1_pips:.0f}p on {pct}% + runner {runner_pips:+.0f}p on {rest_pct}%"
+        )
+    except Exception:
+        return None
+
+
 def _close_paper_execution(ex, outcome: str, exit_price: float, db):
     """Mark a paper execution as closed and update performance.
 
@@ -1544,20 +1593,7 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
     workers race to close the same position, exactly one wins and sends the
     Telegram notification — preventing duplicate messages.
     """
-    # When TP1 took partial profit and moved the stop to breakeven, realised P&L is
-    # a blend: partial_close_pct% banked at TP1, the remainder closed here at
-    # exit_price. P&L and pips are both LINEAR in exit price, so we feed the existing
-    # formulas an *effective* exit = frac·TP1 + (1-frac)·exit_price. The stored
-    # exit_price (card/record) stays the real final exit.
-    _pnl_exit = exit_price
-    try:
-        if ex.notes and "partial_close_done" in ex.notes and ex.tp_price:
-            import re as _re_blend
-            _m = _re_blend.search(r"partial_close_pct=(\d+(?:\.\d+)?)", ex.notes)
-            _frac = (min(max(float(_m.group(1)), 0.0), 100.0) / 100.0) if _m else 0.5
-            _pnl_exit = _frac * float(ex.tp_price) + (1.0 - _frac) * float(exit_price)
-    except Exception:
-        _pnl_exit = exit_price
+    _pnl_exit = _tp1_blend_exit(ex, exit_price)
 
     if ex.direction == "LONG":
         raw_pnl = (_pnl_exit - ex.entry_price) / ex.entry_price * 100
@@ -1699,6 +1735,7 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
                     closed_at     = closed_at,
                     conditions    = ex.conditions_met,
                     is_paper      = True,
+                    tp1_blend_line = _tp1_blend_pips_line(ex, exit_price),
                 ),
             )
         # Mobile push — trade close (paper)
@@ -2015,6 +2052,7 @@ def _fmt_close_card(
     pnl_pct: float, leverage: int,
     fired_at: datetime = None, closed_at: datetime = None,
     conditions: list = None, is_paper: bool = False,
+    tp1_blend_line: Optional[str] = None,
 ) -> str:
     dir_icon  = "🟢" if direction == "LONG" else "🔴"
     coin      = symbol.replace("USDT", "")
@@ -2085,7 +2123,9 @@ def _fmt_close_card(
     # Signed raw price move (positive = favourable for the trade direction)
     raw_move = (exit_price - entry) if direction == "LONG" else (entry - exit_price)
 
-    if pip_sz is not None and pip_sz > 0:
+    if tp1_blend_line:
+        pnl_display = tp1_blend_line
+    elif pip_sz is not None and pip_sz > 0:
         pips = raw_move / pip_sz
         sign = "+" if pips >= 0 else "−"
         # Whole pips for large values, 1dp for fractional
@@ -3700,6 +3740,29 @@ async def evaluate_and_fire(
         _bump("blk_all_in_cooldown")
         return
 
+    # ── Session filter (forex/tradfi entry only) ─────────────────────────────
+    if asset_class in ("forex", "index", "stock"):
+        from app.services.session_filter import is_in_allowed_session
+
+        _sess_ok, _ = is_in_allowed_session(config, datetime.utcnow())
+        if not _sess_ok:
+            _bump("blk_session_filter")
+            from app.services.feed_diagnostics import log_scan_metric as _lsm_sess
+            _eval_tf_sess = _primary_timeframe(config)
+            for _sym_blk in candidate_symbols:
+                _lsm_sess(
+                    symbol=_sym_blk,
+                    timeframe=_eval_tf_sess,
+                    candles_loaded=0,
+                    strategy_evaluated=True,
+                    setup_detected=False,
+                    signal_generated=False,
+                    signal_sent=False,
+                    strategy_id=strategy.id,
+                    block_reason="session_filter",
+                )
+            return
+
     # ── Step 2: Parallel price + TA fetch for ALL candidates at once ──────────
     # Turns O(n × fetch_time) → O(fetch_time).  Results are also stored in the
     # shared _PRICE_TA_CACHE so subsequent calls inside evaluate_strategy_conditions
@@ -3758,6 +3821,25 @@ async def evaluate_and_fire(
             continue
         _had_any_candidate = True
         _candles_n = int(price_data.get("candles_loaded") or 0)
+
+        if asset_class in ("forex", "index", "stock"):
+            from app.services.economic_calendar import blocking_event as _news_block
+            _news_evt = _news_block(symbol, config, datetime.utcnow())
+            if _news_evt:
+                _bump("blk_news_filter")
+                log_scan_metric(
+                    symbol=symbol,
+                    timeframe=_eval_tf,
+                    candles_loaded=_candles_n,
+                    strategy_evaluated=True,
+                    setup_detected=False,
+                    signal_generated=False,
+                    signal_sent=False,
+                    strategy_id=strategy.id,
+                    block_reason="news_filter",
+                    extra={"event_name": _news_evt},
+                )
+                continue
 
         if filters.get("htf_trend") and not htf_pass.get(symbol):
             logger.debug(f"[Strategy {strategy.id}] HTF trend filter blocked {symbol}")
@@ -6015,18 +6097,8 @@ async def _close_live_forex_execution_and_notify(
         if entry <= 0:
             return False
 
-        # Partial-runner blend: when half was banked at TP1 and the stop moved to
-        # breakeven, realised P&L is frac·TP1 + (1-frac)·exit_price (both linear in
-        # exit price). The stored exit_price stays the real final exit for the card.
-        _pnl_exit = exit_price
-        try:
-            if ex.notes and "partial_close_done" in ex.notes and ex.tp_price:
-                import re as _re_b
-                _m = _re_b.search(r"partial_close_pct=(\d+(?:\.\d+)?)", ex.notes)
-                _frac = (min(max(float(_m.group(1)), 0.0), 100.0) / 100.0) if _m else 0.5
-                _pnl_exit = _frac * float(ex.tp_price) + (1.0 - _frac) * float(exit_price)
-        except Exception:
-            _pnl_exit = exit_price
+        _pnl_exit = _tp1_blend_exit(ex, exit_price)
+        _blend_line = _tp1_blend_pips_line(ex, exit_price)
 
         if ex.direction == "LONG":
             raw_pnl = (_pnl_exit - entry) / entry * 100
@@ -6111,6 +6183,7 @@ async def _close_live_forex_execution_and_notify(
                             outcome=outcome, pnl_pct=pnl_pct, leverage=leverage,
                             fired_at=ex.fired_at, closed_at=closed_at,
                             conditions=ex.conditions_met, is_paper=False,
+                            tp1_blend_line=_blend_line,
                         ),
                     )
             from app.services.expo_push import notify_trade_close_bg
@@ -6435,6 +6508,16 @@ async def run_forex_live_manager_fast():
                     logger.warning(
                         f"[FX-fast] amend error exec#{w.get('exec_id')}: {_ae}"
                     )
+                try:
+                    from app.services.economic_calendar import maybe_warn_open_position
+                    await maybe_warn_open_position(
+                        w.get("exec_id", 0),
+                        w.get("symbol", ""),
+                        w.get("user_id", 0) or getattr(w.get("user"), "id", 0),
+                        asset_class="forex",
+                    )
+                except Exception as _nwe:
+                    logger.debug("[FX-fast] news warn error: %s", _nwe)
             # Periodically reconcile broker-side closes (SL/TP fills) so a live
             # forex stop-out actually notifies the user instead of sitting OPEN.
             if (now_m - last_reconcile) >= _FX_RECONCILE_INTERVAL:

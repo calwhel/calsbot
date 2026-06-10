@@ -25,10 +25,8 @@ logger = logging.getLogger(__name__)
 
 
 def _binance_disabled() -> bool:
-    """Binance returns HTTP 451 from Railway US/EU datacenters — skip entirely."""
-    if os.environ.get("DISABLE_BINANCE", "").lower() in ("1", "true", "yes"):
-        return True
-    return bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
+    from app.services.binance_feed import binance_disabled
+    return binance_disabled()
 
 _BASE = "https://fapi.bitunix.com/api/v1/futures/market"
 
@@ -219,20 +217,8 @@ async def _fetch_binance_futures_klines(
 ) -> List[list]:
     if _binance_disabled():
         return []
-    iv = interval.replace("60m", "1h").replace("120m", "2h").replace("240m", "4h")
-    try:
-        resp = await http_client.get(
-            "https://fapi.binance.com/fapi/v1/klines",
-            params={"symbol": symbol, "interval": iv, "limit": max(int(limit), 1)},
-            timeout=8,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            if isinstance(data, list) and data:
-                return data
-    except Exception as e:
-        logger.debug("[crypto-md] Binance klines %s %s: %s", symbol, interval, e)
-    return []
+    from app.services.binance_feed import binance_futures_klines
+    return await binance_futures_klines(http_client, symbol, interval, limit)
 
 
 async def _fetch_bybit_klines(
@@ -334,7 +320,7 @@ async def _fetch_coingecko_ticker(
 async def _fetch_klines_chain(
     http_client: httpx.AsyncClient, symbol: str, interval: str, limit: int,
 ) -> List[list]:
-    # Railway: Bybit → MEXC → Bitunix (Binance geo-blocked HTTP 451).
+    # Binance primary (EU region) → Bybit → MEXC → Bitunix.
     chain = [
         (_fetch_bybit_klines, "bybit"),
         (_fetch_mexc_klines, "mexc"),
@@ -354,18 +340,14 @@ async def _fetch_binance_futures_ticker(
 ) -> Optional[Dict]:
     if _binance_disabled():
         return None
-    try:
-        resp = await http_client.get(
-            "https://fapi.binance.com/fapi/v1/ticker/24hr",
-            params={"symbol": symbol},
-            timeout=8,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            if isinstance(data, dict) and float(data.get("lastPrice", 0) or 0) > 0:
-                return data
-    except Exception:
-        pass
+    from app.services.binance_feed import binance_get
+    status, data, _ = await binance_get(
+        http_client,
+        "https://fapi.binance.com/fapi/v1/ticker/24hr",
+        {"symbol": symbol},
+    )
+    if status == 200 and isinstance(data, dict) and float(data.get("lastPrice", 0) or 0) > 0:
+        return data
     return None
 
 

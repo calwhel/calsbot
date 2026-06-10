@@ -1962,6 +1962,12 @@ async def _start_executor_tasks():
         logger.info("Metals spot feed (XAUUSD/XAGUSD) scheduled (executor worker)")
     except Exception as _met_err:
         logger.warning(f"Metals spot feed start error (non-fatal): {_met_err}")
+    try:
+        from app.services.economic_calendar import start as _econ_cal_start
+        _econ_cal_start()
+        logger.info("Economic calendar refresh scheduled (executor worker)")
+    except Exception as _cal_err:
+        logger.warning(f"Economic calendar start error (non-fatal): {_cal_err}")
 
     async def _spot_price_primer_loop():
         """Keep shared spot store warm — real-time ticks for metals + majors."""
@@ -10815,6 +10821,20 @@ async def api_update_strategy(strategy_id: int, request: Request):
             config["tp1_close_percent"] = max(
                 10.0, min(90.0, float(config["tp1_close_percent"])),
             )
+
+        _ef_keys = (
+            "sessions_enabled", "allowed_sessions", "session_custom",
+            "news_filter_enabled", "news_buffer_before_min", "news_buffer_after_min",
+            "news_impact",
+        )
+        for k in _ef_keys:
+            if k in body:
+                config[k] = body[k]
+        if config.get("news_impact") not in (None, "high", "high_medium"):
+            config["news_impact"] = "high"
+        for _nb in ("news_buffer_before_min", "news_buffer_after_min"):
+            if config.get(_nb) is not None:
+                config[_nb] = max(0, int(config[_nb]))
 
         # Direction / universe
         if "direction" in body:
