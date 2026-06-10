@@ -1064,39 +1064,6 @@ _PIP_COLUMN_MIGRATIONS = [
     ),
 ]
 
-_TRADE_MGMT_COLUMN_MIGRATIONS = [
-    (
-        "strategy_executions",
-        "breakeven_applied",
-        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS breakeven_applied BOOLEAN DEFAULT FALSE",
-    ),
-    (
-        "strategy_executions",
-        "tp1_done",
-        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS tp1_done BOOLEAN DEFAULT FALSE",
-    ),
-    (
-        "strategy_executions",
-        "tp1_closed_volume",
-        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS tp1_closed_volume NUMERIC",
-    ),
-    (
-        "strategy_executions",
-        "tp1_realized_pips",
-        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS tp1_realized_pips NUMERIC",
-    ),
-    (
-        "strategy_executions",
-        "current_sl",
-        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS current_sl NUMERIC",
-    ),
-    (
-        "strategy_executions",
-        "remaining_volume",
-        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS remaining_volume NUMERIC",
-    ),
-]
-
 _CTRADER_COLUMN_MIGRATIONS = [
     (
         "strategy_executions",
@@ -1271,13 +1238,11 @@ def _ensure_tables():
         label="ctrader_columns",
     )
     logger.info("_ensure_tables: ctrader columns ready")
-    _ensure_additive_columns(
-        engine,
-        lock_id=_SCHEMA_MIGRATION_LOCK_ID,
-        migrations=_TRADE_MGMT_COLUMN_MIGRATIONS,
-        label="trade_mgmt_columns",
-    )
-    logger.info("_ensure_tables: trade management columns ready")
+    from app.trade_mgmt_schema import ensure_trade_mgmt_columns
+    if not ensure_trade_mgmt_columns(engine, wait_seconds=15.0):
+        logger.error("_ensure_tables: trade management columns NOT ready after wait")
+    else:
+        logger.info("_ensure_tables: trade management columns ready")
 
     # Auto-promote admin users to lifetime Pro + forex-approved so they always
     # bypass every Pro gate without needing the in-memory admin-bypass path.
@@ -1937,6 +1902,22 @@ async def _resilient_task(name: str, coro_fn, restart_delay: int = 30):
 
 async def _start_executor_tasks():
     """Import and launch the executor + monitor tasks in this worker."""
+    from app.database import bg_engine
+    from app.trade_mgmt_schema import ensure_trade_mgmt_columns
+
+    ok = await asyncio.to_thread(ensure_trade_mgmt_columns, bg_engine, 15.0)
+    if not ok:
+        logger.error(
+            "[executor] trade_mgmt schema not ready — delaying executor tasks 5s"
+        )
+        await asyncio.sleep(5)
+        ok = await asyncio.to_thread(ensure_trade_mgmt_columns, bg_engine, 15.0)
+    if not ok:
+        logger.error(
+            "[executor] trade_mgmt columns still missing — starting tasks anyway "
+            "(FX-fast will retry migration on UndefinedColumn)"
+        )
+
     await _cancel_ghost_executions()
     asyncio.create_task(_ghost_cleanup_loop())
     # Keepalive runs on every worker via startup(); executor worker no longer sole pinger.

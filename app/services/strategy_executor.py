@@ -5765,7 +5765,33 @@ def _ctrader_position_id_from_execution(ex) -> Optional[int]:
 def _build_forex_worklist() -> list:
     """Build the list of open LIVE forex positions needing breakeven/trailing SL
     management. Pure synchronous DB read so the fast management loop can run it in
-    a thread. Returns a list of work dicts (one per managed position)."""
+    a thread. Returns a list of work dicts (one per managed position).
+
+    On missing trade-mgmt columns, runs schema migration once then retries."""
+    try:
+        return _build_forex_worklist_impl()
+    except Exception as exc:
+        from app.trade_mgmt_schema import (
+            ensure_trade_mgmt_columns,
+            is_trade_mgmt_schema_error,
+        )
+        if not is_trade_mgmt_schema_error(exc):
+            raise
+        logger.error(
+            "[FX-fast] trade_mgmt columns missing (%s) — running schema migration",
+            exc,
+        )
+        from app.database import bg_engine as _bg_eng
+        if ensure_trade_mgmt_columns(_bg_eng, wait_seconds=15.0):
+            return _build_forex_worklist_impl()
+        logger.error(
+            "[FX-fast] trade_mgmt migration failed — worklist empty this cycle"
+        )
+        return []
+
+
+def _build_forex_worklist_impl() -> list:
+    """Inner worklist query — requires trade_mgmt columns on strategy_executions."""
     import re as _re
     from app.database import BgSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution, UserStrategy
@@ -6498,7 +6524,13 @@ async def run_forex_live_manager_fast():
                         )
                     )
                 except Exception as _be:
-                    logger.warning(f"[FX-fast] worklist build failed: {_be}")
+                    from app.trade_mgmt_schema import is_trade_mgmt_schema_error
+                    if is_trade_mgmt_schema_error(_be):
+                        logger.error(
+                            "[FX-fast] worklist build failed (schema): %s", _be,
+                        )
+                    else:
+                        logger.warning(f"[FX-fast] worklist build failed: {_be}")
                     work = []
                 last_build = now_m
             for w in work:

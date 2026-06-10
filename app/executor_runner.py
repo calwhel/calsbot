@@ -51,11 +51,24 @@ async def _run_executor_session() -> None:
             os.environ.get("EXECUTOR_FOREX_SCAN_INTERVAL", "5"),
         )
 
+    from app.database import bg_engine, init_db_minimal
+
     try:
-        from app.database import init_db_minimal
         init_db_minimal()
     except Exception as exc:
         logger.warning("DB reachability check failed (non-fatal): %s", exc)
+
+    try:
+        from app.trade_mgmt_schema import ensure_trade_mgmt_columns
+        if not ensure_trade_mgmt_columns(bg_engine, wait_seconds=15.0):
+            logger.error(
+                "[executor] trade_mgmt columns missing after 15s — "
+                "continuing (worklist will retry migration)"
+            )
+        else:
+            logger.info("[executor] trade_mgmt schema verified before advisory lock")
+    except Exception as exc:
+        logger.error("[executor] trade_mgmt schema check failed: %s", exc)
 
     from app.executor_lock import reclaim_executor_lock
     reclaim_executor_lock(force=True)
