@@ -89,6 +89,13 @@ def executor_runtime_profile() -> Dict[str, object]:
         "forex_disabled": forex_executor_disabled(),
         "crypto_scan_interval_s": CRYPTO_SCAN_INTERVAL_SECONDS,
         "forex_scan_interval_s": FOREX_SCAN_INTERVAL_SECONDS,
+        "forex_manage_interval_s": FOREX_MANAGE_INTERVAL_SECONDS,
+        "forex_worklist_ttl_s": float(
+            _os_env.environ.get("EXECUTOR_FX_WORKLIST_TTL", "1")
+        ),
+        "forex_reconcile_interval_s": float(
+            _os_env.environ.get("EXECUTOR_FX_RECONCILE_INTERVAL", "5")
+        ),
     }
 
 
@@ -5376,7 +5383,20 @@ async def _run_crypto_executor_shard(
 
 
 _FX_MIN_TRAIL_STEP_FRAC = 0.001  # 0.1% of price — don't hammer the broker every tick
-_FX_WORKLIST_TTL = 3.0           # rebuild the live-position worklist from DB this often
+# How often the fast loop reloads open positions from DB (new trades pick up BE/trail).
+_FX_WORKLIST_TTL = float(_os_env.environ.get("EXECUTOR_FX_WORKLIST_TTL", "1"))
+
+
+def _ctrader_position_id_from_execution(ex) -> Optional[int]:
+    """Broker position id from column or pos= token in notes."""
+    import re as _re
+    if ex.ctrader_position_id:
+        try:
+            return int(ex.ctrader_position_id)
+        except Exception:
+            pass
+    m = _re.search(r"pos=(\d+)", ex.notes or "")
+    return int(m.group(1)) if m else None
 
 
 def _build_forex_worklist() -> list:
@@ -5406,17 +5426,9 @@ def _build_forex_worklist() -> list:
         user_cache: Dict[int, object] = {}
         for ex in open_execs:
             notes = ex.notes or ""
-            position_id = None
-            if ex.ctrader_position_id:
-                try:
-                    position_id = int(ex.ctrader_position_id)
-                except Exception:
-                    position_id = None
+            position_id = _ctrader_position_id_from_execution(ex)
             if position_id is None:
-                m = _re.search(r"pos=(\d+)", notes)
-                if not m:
-                    continue
-                position_id = int(m.group(1))
+                continue
 
             cached = strat_cache.get(ex.strategy_id)
             if cached is None:
@@ -5790,7 +5802,10 @@ async def _amend_forex_position(w: dict) -> None:
 
 
 _FX_RECONCILE_MISSING: Dict[int, int] = {}   # exec_id → consecutive missing-sweep count
-_FX_RECONCILE_INTERVAL = 15.0                 # seconds between broker position reconciliations
+# Broker open-position poll — detects SL/TP fills and fires close alerts.
+_FX_RECONCILE_INTERVAL = float(
+    _os_env.environ.get("EXECUTOR_FX_RECONCILE_INTERVAL", "5")
+)
 
 
 async def _close_live_forex_execution_and_notify(
@@ -5967,8 +5982,8 @@ def _build_forex_reconcile_worklist() -> list:
         work = []
         for ex in open_execs:
             notes = ex.notes or ""
-            m = _re.search(r"pos=(\d+)", notes)
-            if not m:
+            position_id = _ctrader_position_id_from_execution(ex)
+            if position_id is None:
                 continue  # no broker positionId captured → can't reconcile
             uid = ex.user_id
             user = user_cache.get(uid)
@@ -6012,7 +6027,7 @@ def _build_forex_reconcile_worklist() -> list:
                 "exec_id":     ex.id,
                 "user_id":     uid,
                 "user":        user,
-                "position_id": int(m.group(1)),
+                "position_id": position_id,
                 "symbol":      ex.symbol,
                 "direction":   ex.direction,
                 "entry":       float(ex.entry_price),
