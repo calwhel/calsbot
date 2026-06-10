@@ -26,6 +26,15 @@ logger = logging.getLogger("executor_runner")
 async def _run_forever() -> None:
     os.environ.setdefault("FORCE_EXECUTOR", "1")
     os.environ["EXECUTOR_STANDALONE"] = "1"
+    if os.environ.get("EXECUTOR_ONLY", "").lower() in ("1", "true", "yes"):
+        os.environ.setdefault("DISABLE_CRYPTO_EXECUTOR", "1")
+        os.environ.setdefault("DISABLE_TELEGRAM_POLL", "1")
+        os.environ.setdefault("EXECUTOR_FOREX_SCAN_INTERVAL", "5")
+        os.environ.setdefault("EXECUTOR_FOREX_MAX_CONCURRENT", "6")
+        logger.info(
+            "EXECUTOR_ONLY forex replica — crypto disabled, forex scan=%ss",
+            os.environ.get("EXECUTOR_FOREX_SCAN_INTERVAL", "5"),
+        )
 
     try:
         from app.database import init_db_minimal

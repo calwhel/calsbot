@@ -54,6 +54,8 @@ echo "IMPORTANT (Pro plan): In Railway → your service → Settings → Deploy 
 echo "  set Memory to at least 4096 MB (8 GB recommended for ~250 strategies)."
 echo "  Pro plan allows up to 24 GB — the default autoscaler may still start at 512 MB."
 echo ""
+echo "Executor split (recommended): ./scripts/railway_set_executor_split.sh portal|forex"
+echo "  — crypto ~10 min on portal, fast forex on a dedicated replica."
 echo "cTrader split feed (optional): ./scripts/railway_set_ctrader_feed_split.sh feed"
 echo "  on a second Railway service — see script header."
 echo ""

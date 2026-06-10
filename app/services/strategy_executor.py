@@ -28,6 +28,13 @@ def _log_ts() -> str:
 # saturated — every QueryCanceled in the executor cascaded into HTTP 500s
 # on /api/strategies because all pool connections were held by hung scans.
 SCAN_INTERVAL_SECONDS       = int(_os_env.environ.get("EXECUTOR_SCAN_INTERVAL", "10"))
+# Crypto scan cadence — decouple from forex so portal can scan crypto every ~10 min.
+CRYPTO_SCAN_INTERVAL_SECONDS = int(
+    _os_env.environ.get(
+        "EXECUTOR_CRYPTO_SCAN_INTERVAL",
+        _os_env.environ.get("EXECUTOR_SCAN_INTERVAL", "10"),
+    )
+)
 # Forex runs at 5s (vs crypto 10s): the forex path fetches fresh OHLC every cycle
 # (it does NOT use the 45s cross-cycle kline cache), so a tighter loop directly
 # lowers signal-to-order latency. Safe because peak DB concurrency stays capped at
@@ -60,6 +67,29 @@ EXECUTOR_PREFETCH_CONCURRENT  = int(_os_env.environ.get("EXECUTOR_PREFETCH_CONCU
 EXECUTOR_SHARD_COUNT          = max(1, int(_os_env.environ.get("EXECUTOR_SHARD_COUNT", "1")))
 EXECUTOR_SHARD_STAGGER_SECONDS = int(_os_env.environ.get("EXECUTOR_SHARD_STAGGER_SECONDS", "2"))
 PAPER_MAX_HOLD_HOURS        = 168   # auto-expire paper positions after this many hours (7 days)
+
+
+def _env_flag(name: str) -> bool:
+    return _os_env.environ.get(name, "").lower() in ("1", "true", "yes")
+
+
+def crypto_executor_disabled() -> bool:
+    return _env_flag("DISABLE_CRYPTO_EXECUTOR")
+
+
+def forex_executor_disabled() -> bool:
+    return _env_flag("DISABLE_FOREX_EXECUTOR")
+
+
+def executor_runtime_profile() -> Dict[str, object]:
+    """Summarise split-executor flags for logs and /health/deep."""
+    return {
+        "executor_only": _env_flag("EXECUTOR_ONLY"),
+        "crypto_disabled": crypto_executor_disabled(),
+        "forex_disabled": forex_executor_disabled(),
+        "crypto_scan_interval_s": CRYPTO_SCAN_INTERVAL_SECONDS,
+        "forex_scan_interval_s": FOREX_SCAN_INTERVAL_SECONDS,
+    }
 
 
 def strategy_shard_index(strategy_id: int, shard_count: int = EXECUTOR_SHARD_COUNT) -> int:
@@ -5031,24 +5061,30 @@ def get_heartbeats() -> Dict[str, float]:
 async def run_strategy_executor():
     """
     Main background loop. Evaluates all active + paper strategies for all users.
-    Also spawns the paper position monitor as a sibling task.
+  Paper monitor is started from _start_executor_tasks (not here).
     """
+    if crypto_executor_disabled():
+        logger.info(
+            "🤖 Crypto executor SKIPPED (DISABLE_CRYPTO_EXECUTOR=1) — "
+            "forex-only or dedicated tradfi replica"
+        )
+        return
+
     from app.database import BgSessionLocal as SessionLocal, bg_engine as engine
     from app.models import User
     from app.strategy_models import UserStrategy, init_strategy_tables
 
     init_strategy_tables(engine)
-    logger.info("🤖 Strategy executor started (active + paper modes)")
+    logger.info(
+        "🤖 Crypto executor started (active + paper modes, "
+        f"cycle={CRYPTO_SCAN_INTERVAL_SECONDS}s)"
+    )
     if EXECUTOR_CRYPTO_START_DELAY > 0:
         logger.info(
             f"🤖 Crypto executor: waiting {EXECUTOR_CRYPTO_START_DELAY}s before first scan "
             "(forex warm-up — avoids silent log gap on deploy)"
         )
         await asyncio.sleep(EXECUTOR_CRYPTO_START_DELAY)
-
-    # Spawn paper monitor and session alert loop as concurrent sibling tasks
-    asyncio.create_task(run_paper_position_monitor())
-    asyncio.create_task(run_session_alert_loop())
 
     # Explicit timeouts: 15s total, 5s connect, 8s pool-wait — prevents hung
     # requests from blocking semaphore slots indefinitely. Pool wait is
@@ -5150,7 +5186,7 @@ async def _run_crypto_executor_shard(
                     _list_db.close()
 
                 if not strategy_snapshots:
-                    await asyncio.sleep(SCAN_INTERVAL_SECONDS)
+                    await asyncio.sleep(CRYPTO_SCAN_INTERVAL_SECONDS)
                     continue
 
                 active_count = sum(1 for s in strategy_snapshots if s["status"] == "active")
@@ -5336,7 +5372,7 @@ async def _run_crypto_executor_shard(
             except Exception as e:
                 logger.error(f"[{_log_ts()}] {_crypto_lbl} loop error: {e}", exc_info=True)
 
-            await asyncio.sleep(SCAN_INTERVAL_SECONDS)
+            await asyncio.sleep(CRYPTO_SCAN_INTERVAL_SECONDS)
 
 
 _FX_MIN_TRAIL_STEP_FRAC = 0.001  # 0.1% of price — don't hammer the broker every tick
@@ -6175,6 +6211,13 @@ async def run_forex_live_manager_fast():
 
 async def run_forex_executor():
     """Launch one or more parallel forex/index scan shards."""
+    if forex_executor_disabled():
+        logger.info(
+            "📈 Forex executor SKIPPED (DISABLE_FOREX_EXECUTOR=1) — "
+            "crypto-only portal replica"
+        )
+        return
+
     count = EXECUTOR_SHARD_COUNT
     if count <= 1:
         await _run_forex_executor_shard(0, 1)
