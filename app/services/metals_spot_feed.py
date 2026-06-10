@@ -113,17 +113,22 @@ async def _fetch_binance(pair: str) -> Optional[float]:
 async def _fetch_coinbase(pair: str) -> Optional[float]:
     if not pair:
         return None
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=4.0) as client:
-            r = await client.get(f"https://api.coinbase.com/v2/prices/{pair}/spot")
-        if r.status_code != 200:
+    import httpx
+    timeout = httpx.Timeout(connect=8.0, read=12.0, write=8.0, pool=8.0)
+    for _ in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                r = await client.get(f"https://api.coinbase.com/v2/prices/{pair}/spot")
+            if r.status_code != 200:
+                return None
+            amount = ((r.json() or {}).get("data") or {}).get("amount")
+            px = float(amount) if amount else 0.0
+            return px if px > 0 else None
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError):
+            await asyncio.sleep(0.5)
+        except Exception:
             return None
-        amount = ((r.json() or {}).get("data") or {}).get("amount")
-        px = float(amount) if amount else 0.0
-        return px if px > 0 else None
-    except Exception:
-        return None
+    return None
 
 
 async def _fetch_kraken(pair: str) -> Optional[float]:

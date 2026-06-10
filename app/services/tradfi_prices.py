@@ -128,7 +128,12 @@ _COINBASE_GRANULARITY: Dict[str, int] = {
     "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
     "1h": 3600, "4h": 14400, "1d": 86400,
 }
-_COINBASE_KLINE_TIMEOUT_S = float(os.environ.get("COINBASE_KLINE_TIMEOUT_SECONDS", "15"))
+_COINBASE_KLINE_TIMEOUT_S = float(os.environ.get("COINBASE_KLINE_TIMEOUT_SECONDS", "25"))
+_COINBASE_CONNECT_TIMEOUT_S = float(os.environ.get("COINBASE_CONNECT_TIMEOUT_SECONDS", "20"))
+_COINBASE_STALE_KLINE_TTL = timedelta(
+    seconds=max(60, int(os.environ.get("COINBASE_KLINE_STALE_SECONDS", "300")))
+)
+_COINBASE_EXCHANGE_BASE = "https://api.exchange.coinbase.com"
 
 _METAL_KLINE_SOURCE_RANK = {
     "ctrader-user": 0,
@@ -571,6 +576,25 @@ async def build_synthetic_metal_candles(
     return rows
 
 
+def _coinbase_candle_window(granularity_s: int, limit: int) -> Tuple[str, str]:
+    """Bounded start/end for Coinbase candles — smaller payloads, faster on Railway."""
+    end_dt = datetime.utcnow()
+    span_s = granularity_s * min(max(limit + 5, 30), 300)
+    start_dt = end_dt - timedelta(seconds=span_s)
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    return start_dt.strftime(fmt), end_dt.strftime(fmt)
+
+
+def _coinbase_httpx_timeout():
+    import httpx
+    return httpx.Timeout(
+        connect=_COINBASE_CONNECT_TIMEOUT_S,
+        read=_COINBASE_KLINE_TIMEOUT_S,
+        write=10.0,
+        pool=10.0,
+    )
+
+
 async def _fetch_coinbase_metals_klines(
     symbol: str,
     timeframe: str,
@@ -582,7 +606,13 @@ async def _fetch_coinbase_metals_klines(
     sym = symbol.upper()
     product = _COINBASE_METAL_PRODUCT.get(sym)
     gran = _COINBASE_GRANULARITY.get(timeframe)
-    url = f"https://api.exchange.coinbase.com/products/{product}/candles?granularity={gran}"
+    start_s, end_s = ("", "")
+    if gran:
+        start_s, end_s = _coinbase_candle_window(gran, limit)
+    url = (
+        f"{_COINBASE_EXCHANGE_BASE}/products/{product}/candles"
+        f"?granularity={gran}&start={start_s}&end={end_s}"
+    )
     if diag is not None:
         diag.provider = "coinbase"
         diag.url = url
@@ -601,58 +631,106 @@ async def _fetch_coinbase_metals_klines(
             diag.extra["cache_hit"] = True
         return rows
 
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=_COINBASE_KLINE_TIMEOUT_S) as client:
-            r = await client.get(
-                f"https://api.exchange.coinbase.com/products/{product}/candles",
-                params={"granularity": gran},
-            )
-        if diag is not None:
-            diag.response_bytes = len(r.content or b"")
-        if r.status_code != 200:
-            if diag is not None:
-                diag.failure = f"http_{r.status_code}"
+    def _stale_fallback(reason: str) -> List[List[float]]:
+        if not cached:
             return []
-        raw = r.json()
-        if not isinstance(raw, list) or not raw:
+        age = now - cached[1]
+        if age < _COINBASE_STALE_KLINE_TTL:
             if diag is not None:
-                diag.failure = "empty_ohlc"
+                diag.candle_count = len(cached[0])
+                diag.failure = reason
+                diag.extra["stale_fallback"] = True
+            logger.info(
+                f"[tradfi] Coinbase stale klines for {product} {timeframe} "
+                f"({reason}, age={age.total_seconds():.0f}s)"
+            )
+            return cached[0]
+        return []
+
+    import httpx
+    params = {"granularity": gran, "start": start_s, "end": end_s}
+    headers = {"User-Agent": "TradeHub/1.0 (metal-klines)"}
+    last_exc: Optional[Exception] = None
+
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(
+                timeout=_coinbase_httpx_timeout(),
+                headers=headers,
+            ) as client:
+                r = await client.get(
+                    f"{_COINBASE_EXCHANGE_BASE}/products/{product}/candles",
+                    params=params,
+                )
+            if diag is not None:
+                diag.response_bytes = len(r.content or b"")
+            if r.status_code != 200:
+                if diag is not None:
+                    diag.failure = f"http_{r.status_code}"
+                stale = _stale_fallback(f"http_{r.status_code}")
+                return stale
+            raw = r.json()
+            if not isinstance(raw, list) or not raw:
+                if diag is not None:
+                    diag.failure = "empty_ohlc"
+                return _stale_fallback("empty_ohlc")
+
+            complete = raw[1:] if len(raw) > 1 else raw
+            rows: List[List[float]] = []
+            for bar in reversed(complete[-(limit + 1):]):
+                try:
+                    rows.append([
+                        int(bar[0]) * 1000,
+                        float(bar[3]),
+                        float(bar[2]),
+                        float(bar[1]),
+                        float(bar[4]),
+                        float(bar[5]) if len(bar) > 5 else 0.0,
+                    ])
+                except Exception:
+                    continue
+            rows = rows[-limit:]
+            if diag is not None:
+                diag.candle_count = len(rows)
+            if rows:
+                _KLINE_CACHE[key] = (rows, now)
+                logger.info(
+                    f"[tradfi] klines ok (Coinbase): {product} {timeframe} "
+                    f"→ {len(rows)} bars"
+                )
+                return rows
+            if diag is not None:
+                diag.failure = "parse_empty"
+            return _stale_fallback("parse_empty")
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as exc:
+            last_exc = exc
+            if attempt == 0:
+                await asyncio.sleep(0.75)
+                continue
+            if diag is not None:
+                diag.failure = type(exc).__name__
+            stale = _stale_fallback(type(exc).__name__)
+            if stale:
+                return stale
+            logger.warning(
+                f"[tradfi] Coinbase klines failed for {product} {timeframe}: {exc}"
+            )
+            return []
+        except Exception as exc:
+            last_exc = exc
+            if diag is not None:
+                diag.failure = type(exc).__name__
+            stale = _stale_fallback(type(exc).__name__)
+            if stale:
+                return stale
+            logger.warning(
+                f"[tradfi] Coinbase klines failed for {product} {timeframe}: {exc}"
+            )
             return []
 
-        # Coinbase returns newest-first; drop forming bar, oldest-first output.
-        complete = raw[1:] if len(raw) > 1 else raw
-        rows: List[List[float]] = []
-        for bar in reversed(complete[-(limit + 1):]):
-            try:
-                rows.append([
-                    int(bar[0]) * 1000,
-                    float(bar[3]),  # open
-                    float(bar[2]),  # high
-                    float(bar[1]),  # low
-                    float(bar[4]),  # close
-                    float(bar[5]) if len(bar) > 5 else 0.0,
-                ])
-            except Exception:
-                continue
-        rows = rows[-limit:]
-        if diag is not None:
-            diag.candle_count = len(rows)
-        if rows:
-            _KLINE_CACHE[key] = (rows, now)
-            logger.info(
-                f"[tradfi] klines ok (Coinbase): {product} {timeframe} → {len(rows)} bars"
-            )
-            return rows
-        if diag is not None:
-            diag.failure = "parse_empty"
-    except Exception as exc:
-        if diag is not None:
-            diag.failure = type(exc).__name__
-        logger.warning(
-            f"[tradfi] Coinbase klines failed for {product} {timeframe}: {exc}"
-        )
-    return []
+    if last_exc and diag is not None:
+        diag.failure = type(last_exc).__name__
+    return _stale_fallback(diag.failure if diag and diag.failure else "unknown")
 
 
 async def _fetch_kraken_metals_klines(
@@ -849,7 +927,20 @@ async def fetch_metal_live_candles(
             )
             return None
 
-        # Sequential failover — slow Kraken cannot block FMP/Coinbase.
+        # Sequential failover — sources after FMP ordered by Railway reliability.
+        _cb_probe_timeout = _COINBASE_CONNECT_TIMEOUT_S + _COINBASE_KLINE_TIMEOUT_S + 3.0
+        _kraken_entry = (
+            "kraken",
+            f"https://api.kraken.com/0/public/OHLC?pair={_kraken_pair}&interval={_kraken_iv}",
+            _kraken_timeout,
+            lambda d: _fetch_kraken_metals_klines(sym, timeframe, limit, diag=d),
+        )
+        _coinbase_entry = (
+            "coinbase",
+            f"{_COINBASE_EXCHANGE_BASE}/products/{_cb_product}/candles",
+            _cb_probe_timeout,
+            lambda d: _fetch_coinbase_metals_klines(sym, timeframe, limit, diag=d),
+        )
         external_chain: List[Tuple[str, str, float, object]] = []
         if _env_fmp_api_key():
             external_chain.append((
@@ -858,20 +949,17 @@ async def fetch_metal_live_candles(
                 _fmp_timeout,
                 lambda d: _fetch_fmp_metals_klines(sym, "forex", timeframe, limit, diag=d),
             ))
-        if _cb_product:
-            external_chain.append((
-                "coinbase",
-                f"https://api.exchange.coinbase.com/products/{_cb_product}/candles",
-                _COINBASE_KLINE_TIMEOUT_S,
-                lambda d: _fetch_coinbase_metals_klines(sym, timeframe, limit, diag=d),
-            ))
-        if sym in _KRAKEN_METAL_MAP:
-            external_chain.append((
-                "kraken",
-                f"https://api.kraken.com/0/public/OHLC?pair={_kraken_pair}&interval={_kraken_iv}",
-                _kraken_timeout,
-                lambda d: _fetch_kraken_metals_klines(sym, timeframe, limit, diag=d),
-            ))
+        # 1m: Coinbase exchange often ConnectTimeout on Railway — Kraken before Coinbase.
+        if timeframe == "1m":
+            if sym in _KRAKEN_METAL_MAP:
+                external_chain.append(_kraken_entry)
+            if _cb_product:
+                external_chain.append(_coinbase_entry)
+        else:
+            if _cb_product:
+                external_chain.append(_coinbase_entry)
+            if sym in _KRAKEN_METAL_MAP:
+                external_chain.append(_kraken_entry)
 
         thin_best: Tuple[str, List[List[float]]] = ("", [])
         for label, url, timeout_s, fetch_fn in external_chain:
