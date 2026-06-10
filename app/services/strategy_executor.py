@@ -61,7 +61,7 @@ EXECUTOR_CRYPTO_START_DELAY = int(_os_env.environ.get("EXECUTOR_CRYPTO_START_DEL
 # Klines fetched per symbol during scans — must match strategy_ta max(limit, 200).
 EXECUTOR_KLINE_BARS           = int(_os_env.environ.get("EXECUTOR_KLINE_BARS", "200"))
 # Parallel Yahoo/Bitunix prefetches at cycle start (unique symbols across all strategies).
-EXECUTOR_PREFETCH_CONCURRENT  = int(_os_env.environ.get("EXECUTOR_PREFETCH_CONCURRENT", "25"))
+EXECUTOR_PREFETCH_CONCURRENT  = int(_os_env.environ.get("EXECUTOR_PREFETCH_CONCURRENT", "10"))
 # Split strategies across N parallel scan loops in one executor process (id % N).
 # Each shard prefetches + evaluates its slice concurrently — ~Nx throughput vs one loop.
 EXECUTOR_SHARD_COUNT          = max(1, int(_os_env.environ.get("EXECUTOR_SHARD_COUNT", "1")))
@@ -159,6 +159,10 @@ _RAW_TICKERS_TTL    = 60  # seconds
 _PRICE_TA_CACHE: Dict[str, tuple] = {}  # symbol -> (data_dict, fetched_at)
 _METAL_WARM_LOCK: Optional[asyncio.Lock] = None  # one metal warm at a time / process
 _METAL_WARM_GLOBAL_AT: float = 0.0  # skip repeat warm across FX shards
+# Active strategy rows — refreshed at most once per TTL (configs change rarely).
+_STRATEGY_SNAPSHOT_CACHE: List[dict] = []
+_STRATEGY_SNAPSHOT_AT: float = 0.0
+_STRATEGY_SNAPSHOT_TTL_S = float(_os_env.environ.get("EXECUTOR_STRATEGY_CACHE_TTL_S", "60"))
 _PRICE_TA_TTL    = 15  # seconds — fresher data for faster signal detection
 # Forex/index: the FMP price feed refreshes every 5s, so a 15s cache would make
 # a faster scan loop pointless (it'd re-evaluate stale prices). Match the cache
@@ -692,6 +696,7 @@ async def _fetch_price_and_ta(
     user_id: Optional[int] = None,
     timeframe: Optional[str] = None,
     metal_paper_ok: bool = False,
+    prefetch: bool = False,
 ) -> Optional[Dict]:
     """
     Fetch price + TA indicators for a symbol. Results are cached per symbol for
@@ -721,6 +726,7 @@ async def _fetch_price_and_ta(
 
     if asset_class != "crypto":
         try:
+            from app.services.prefetch_fast import SYMBOL_BUDGET_S
             from app.services.tradfi_prices import (
                 get_klines as _tradfi_klines,
                 get_price as _tradfi_live_price,
@@ -728,6 +734,7 @@ async def _fetch_price_and_ta(
             kl = await _tradfi_klines(
                 symbol, asset_class, tf, EXECUTOR_KLINE_BARS,
                 ctrader_user_id=user_id,
+                max_wait_s=SYMBOL_BUDGET_S if prefetch else None,
             )
             if not kl:
                 return None
@@ -864,7 +871,9 @@ async def _fetch_price_and_ta(
 
     try:
         from app.services.bitunix_market_data import fetch_crypto_price_and_ta
-        result = await fetch_crypto_price_and_ta(http_client, symbol)
+        result = await fetch_crypto_price_and_ta(
+            http_client, symbol, prefetch=prefetch,
+        )
         if result:
             _PRICE_TA_CACHE[cache_key] = (result, now)
         return result
@@ -4974,6 +4983,62 @@ def _symbols_for_snapshot(snap: dict, max_symbols: int = 20) -> List[str]:
     return out
 
 
+def _load_strategy_snapshots_cached(SessionLocal, UserStrategy) -> List[dict]:
+    """Return active+paper strategy snapshots; DB hit at most once per TTL."""
+    global _STRATEGY_SNAPSHOT_CACHE, _STRATEGY_SNAPSHOT_AT
+    now = time.monotonic()
+    if (
+        _STRATEGY_SNAPSHOT_CACHE
+        and (now - _STRATEGY_SNAPSHOT_AT) < _STRATEGY_SNAPSHOT_TTL_S
+    ):
+        return _STRATEGY_SNAPSHOT_CACHE
+    db = SessionLocal()
+    try:
+        strategies = (
+            db.query(UserStrategy)
+            .filter(UserStrategy.status.in_(["active", "paper"]))
+            .all()
+        )
+        snapshots = [
+            {
+                "id": s.id,
+                "name": s.name,
+                "status": s.status,
+                "config": s.config,
+                "user_id": s.user_id,
+                "_obj": s,
+            }
+            for s in strategies
+        ]
+    finally:
+        db.close()
+    _STRATEGY_SNAPSHOT_CACHE = snapshots
+    _STRATEGY_SNAPSHOT_AT = now
+    return snapshots
+
+
+def _preload_strategy_users(
+    snap_ids: List[int],
+    SessionLocal,
+    UserStrategy,
+    User,
+) -> Dict[int, Tuple]:
+    """Batch-load strategy+user rows for a scan cycle (one query)."""
+    if not snap_ids:
+        return {}
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(UserStrategy, User)
+            .join(User, User.id == UserStrategy.user_id)
+            .filter(UserStrategy.id.in_(snap_ids))
+            .all()
+        )
+        return {strategy.id: (strategy, user) for strategy, user in rows}
+    finally:
+        db.close()
+
+
 async def _prefetch_price_ta_for_cycle(
     snapshots: list,
     http_client: httpx.AsyncClient,
@@ -4983,9 +5048,14 @@ async def _prefetch_price_ta_for_cycle(
 ) -> int:
     """
     Warm _PRICE_TA_CACHE + tradfi kline cache for every unique symbol in this
-    cycle BEFORE per-strategy evaluate_and_fire. Cuts scan time from O(strategies
-    × symbols) sequential waves to O(unique symbols) parallel prefetch.
+    cycle BEFORE per-strategy evaluate_and_fire. All symbols fetch concurrently
+    (semaphore ~10) with a hard per-symbol budget — dead providers never block.
     """
+    from app.services.prefetch_fast import (
+        SYMBOL_BUDGET_S,
+        prefetch_fast_context,
+    )
+
     jobs: List[Tuple[str, str, str]] = []
     seen: set = set()
     for snap in snapshots:
@@ -5003,74 +5073,47 @@ async def _prefetch_price_ta_for_cycle(
         return 0
 
     sem = asyncio.Semaphore(EXECUTOR_PREFETCH_CONCURRENT)
-    _metal_sem = asyncio.Semaphore(
-        max(1, int(_os_env.environ.get("METAL_KLINE_FETCH_CONCURRENT", "2")))
-    )
     t0 = time.monotonic()
+    stats = {"cache": 0, "fetched": 0, "failed": 0}
 
-    # Warm metal klines sequentially first — 5 shards share one process; this
-    # seeds the 30s cache before parallel per-strategy prefetches hammer Kraken.
-    _metal_warm = sorted({
-        (sym, tf) for sym, ac, tf in jobs if sym in ("XAUUSD", "XAGUSD")
-    })
-    if _metal_warm:
-        global _METAL_WARM_LOCK, _METAL_WARM_GLOBAL_AT
-        _warm_ttl = max(
-            60.0,
-            float(_os_env.environ.get("METAL_WARM_GLOBAL_TTL_S", "120")),
-        )
-        _since_global = time.monotonic() - _METAL_WARM_GLOBAL_AT
-        if _since_global < _warm_ttl:
-            logger.debug(
-                f"[{_log_ts()}] [{label}] metal kline warm skipped "
-                f"(global warm {_since_global:.0f}s ago)"
-            )
-        else:
-            if _METAL_WARM_LOCK is None:
-                _METAL_WARM_LOCK = asyncio.Lock()
-            async with _METAL_WARM_LOCK:
-                if time.monotonic() - _METAL_WARM_GLOBAL_AT < _warm_ttl:
-                    pass
-                else:
-                    from app.services.tradfi_prices import get_klines as _metal_gk
-                    _mw_t0 = time.monotonic()
-
-                    async def _warm_metal(_msym: str, _mtf: str) -> None:
-                        try:
-                            await _metal_gk(
-                                _msym, "forex", _mtf, EXECUTOR_KLINE_BARS,
-                                ctrader_user_id=ctrader_user_id,
-                            )
-                        except Exception:
-                            pass
-
-                    await asyncio.gather(
-                        *[_warm_metal(s, t) for s, t in _metal_warm],
-                        return_exceptions=True,
-                    )
-                    _METAL_WARM_GLOBAL_AT = time.monotonic()
-                    logger.info(
-                        f"[{_log_ts()}] [{label}] metal kline warm: "
-                        f"{len(_metal_warm)} tf(s) in "
-                        f"{time.monotonic() - _mw_t0:.1f}s"
-                    )
+    def _cache_fresh(sym: str, ac: str, tf: str) -> bool:
+        cache_key = f"{ac}:{sym}:{tf}" if ac != "crypto" else sym
+        cached = _PRICE_TA_CACHE.get(cache_key)
+        if not cached:
+            return False
+        _data, fetched_at = cached
+        _ttl = _PRICE_TA_TTL if ac == "crypto" else _PRICE_TA_TTL_TRADFI
+        return (datetime.utcnow() - fetched_at).total_seconds() < _ttl
 
     async def _warm(sym: str, ac: str, tf: str) -> None:
-        _use = _metal_sem if sym in ("XAUUSD", "XAGUSD") else sem
-        async with _use:
+        if _cache_fresh(sym, ac, tf):
+            stats["cache"] += 1
+            return
+        async with sem:
             try:
-                await _fetch_price_and_ta(
-                    sym, http_client, ac,
-                    user_id=ctrader_user_id,
-                    timeframe=tf,
-                )
+                async with prefetch_fast_context():
+                    result = await asyncio.wait_for(
+                        _fetch_price_and_ta(
+                            sym, http_client, ac,
+                            user_id=ctrader_user_id,
+                            timeframe=tf,
+                            prefetch=True,
+                        ),
+                        timeout=SYMBOL_BUDGET_S,
+                    )
+                if result:
+                    stats["fetched"] += 1
+                else:
+                    stats["failed"] += 1
             except Exception:
-                pass
+                stats["failed"] += 1
 
     await asyncio.gather(*[_warm(s, a, t) for s, a, t in jobs], return_exceptions=True)
+    elapsed = time.monotonic() - t0
     logger.info(
-        f"[{_log_ts()}] [{label}] prefetched {len(jobs)} unique symbol(s) in "
-        f"{time.monotonic() - t0:.1f}s (cache warm for evaluate)"
+        f"[{_log_ts()}] [{label}] prefetch {len(jobs)} symbols in {elapsed:.1f}s "
+        f"({stats['cache']} from cache, {stats['fetched']} fetched, "
+        f"{stats['failed']} failed)"
     )
     return len(jobs)
 
@@ -5370,29 +5413,9 @@ async def _run_crypto_executor_shard(
             _cycle_t0 = datetime.utcnow()
             try:
                 mark_heartbeat(_hb_name)
-                # Load strategy list with a short-lived session — close it
-                # immediately so no stale transaction lingers during evaluation.
-                _list_db = SessionLocal()
-                try:
-                    strategies = (
-                        _list_db.query(UserStrategy)
-                        .filter(UserStrategy.status.in_(["active", "paper"]))
-                        .all()
-                    )
-                    # Detach objects so they're accessible after the session closes
-                    strategy_snapshots = [
-                        {
-                            "id":          s.id,
-                            "name":        s.name,
-                            "status":      s.status,
-                            "config":      s.config,
-                            "user_id":     s.user_id,
-                            "_obj":        s,
-                        }
-                        for s in strategies
-                    ]
-                finally:
-                    _list_db.close()
+                strategy_snapshots = _load_strategy_snapshots_cached(
+                    SessionLocal, UserStrategy,
+                )
 
                 if not strategy_snapshots:
                     await asyncio.sleep(CRYPTO_SCAN_INTERVAL_SECONDS)
@@ -5476,6 +5499,12 @@ async def _run_crypto_executor_shard(
                 # Per-cycle gate diagnostics — counts which gate blocks each strategy.
                 # Logged at end of cycle so we can see WHY strategies aren't firing.
                 cycle_gate_stats: Dict[str, int] = {}
+                _preloaded_users = _preload_strategy_users(
+                    [s["id"] for s in eval_snapshots],
+                    SessionLocal,
+                    UserStrategy,
+                    User,
+                )
 
                 async def _run_one(snap, _tickers=shared_tickers):
                     """Each strategy evaluation runs in its own isolated DB session.
@@ -5488,22 +5517,19 @@ async def _run_crypto_executor_shard(
                     from app.database import bg_db_slot
                     async with sem:
                         async with bg_db_slot():
+                            row = _preloaded_users.get(snap["id"])
+                            if not row:
+                                return
+                            _strategy_row, _user_row = row
+                            if not _user_row or _user_row.banned:
+                                return
+                            if not _portal_trade_entitled(_user_row, has_pro_by_user):
+                                return
                             for _attempt in (1, 3):
                                 db_one = SessionLocal()
                                 try:
-                                    row = (
-                                        db_one.query(UserStrategy, User)
-                                        .join(User, User.id == UserStrategy.user_id)
-                                        .filter(UserStrategy.id == snap["id"])
-                                        .first()
-                                    )
-                                    if not row:
-                                        return
-                                    strategy, user = row
-                                    if not user or user.banned:
-                                        return
-                                    if not _portal_trade_entitled(user, has_pro_by_user):
-                                        return
+                                    strategy = db_one.merge(_strategy_row)
+                                    user = db_one.merge(_user_row)
                                     await evaluate_and_fire(
                                         strategy, user, db_one, http_client,
                                         raw_tickers=_tickers,
@@ -6593,30 +6619,14 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
             _cycle_t0 = datetime.utcnow()
             try:
                 mark_heartbeat(_fx_hb)
-                _list_db = SessionLocal()
-                try:
-                    strategies = (
-                        _list_db.query(UserStrategy)
-                        .filter(UserStrategy.status.in_(["active", "paper"]))
-                        .all()
-                    )
-                    strategy_snapshots = [
-                        {
-                            "id":      s.id,
-                            "name":    s.name,
-                            "status":  s.status,
-                            "config":  s.config,
-                            "user_id": s.user_id,
-                            "_obj":    s,
-                        }
-                        for s in strategies
-                        if _snap_asset_class({
-                            "_obj":   s,
-                            "config": s.config,
-                        }) in _TRADFI_CLASSES
-                    ]
-                finally:
-                    _list_db.close()
+                _all_snaps = _load_strategy_snapshots_cached(
+                    SessionLocal, UserStrategy,
+                )
+                strategy_snapshots = [
+                    s for s in _all_snaps
+                    if _snap_asset_class(s) in _TRADFI_CLASSES
+                ]
+                strategies = _all_snaps
 
                 if not strategy_snapshots:
                     _fx_empty_cycles += 1
@@ -6746,6 +6756,12 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
 
                 # Shared counters for cycle-level DB health reporting.
                 _cycle_db_skipped: list = []   # (strategy_id, err_name) tuples
+                _preloaded_fx = _preload_strategy_users(
+                    [s["id"] for s in open_snaps],
+                    SessionLocal,
+                    UserStrategy,
+                    User,
+                )
 
                 async def _run_one_fx(snap, _http=http_client):
                     from sqlalchemy.exc import OperationalError as _SAOperationalError
@@ -6754,25 +6770,22 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     from app.database import bg_db_slot
                     async with sem:
                         async with bg_db_slot():
+                            row = _preloaded_fx.get(snap["id"])
+                            if not row:
+                                return
+                            _strategy_row, _user_row = row
+                            if not _user_row or _user_row.banned:
+                                return
+                            if not _portal_trade_entitled(_user_row, has_pro_by_user):
+                                cycle_gate_stats["blk_not_entitled"] = (
+                                    cycle_gate_stats.get("blk_not_entitled", 0) + 1
+                                )
+                                return
                             for _attempt in (1, 3):
                                 db_one = SessionLocal()
                                 try:
-                                    row = (
-                                        db_one.query(UserStrategy, User)
-                                        .join(User, User.id == UserStrategy.user_id)
-                                        .filter(UserStrategy.id == snap["id"])
-                                        .first()
-                                    )
-                                    if not row:
-                                        return
-                                    strategy, user = row
-                                    if not user or user.banned:
-                                        return
-                                    if not _portal_trade_entitled(user, has_pro_by_user):
-                                        cycle_gate_stats["blk_not_entitled"] = (
-                                            cycle_gate_stats.get("blk_not_entitled", 0) + 1
-                                        )
-                                        return
+                                    strategy = db_one.merge(_strategy_row)
+                                    user = db_one.merge(_user_row)
                                     await evaluate_and_fire(
                                         strategy, user, db_one, _http,
                                         raw_tickers=[],

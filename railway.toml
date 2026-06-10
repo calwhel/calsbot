@@ -8,3 +8,4 @@ healthcheckPath = "/ping"
 healthcheckTimeout = 30
 # One replica only — multiple containers each run a [tg-bot] poller → ConflictError.
 numReplicas = 1
+multiRegionConfig = { "europe-west4-drams3a" = { numReplicas = 1 } }

@@ -15,12 +15,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 from typing import Dict, List, Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def _binance_disabled() -> bool:
+    """Binance returns HTTP 451 from Railway US/EU datacenters — skip entirely."""
+    if os.environ.get("DISABLE_BINANCE", "").lower() in ("1", "true", "yes"):
+        return True
+    return bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
 
 _BASE = "https://fapi.bitunix.com/api/v1/futures/market"
 
@@ -209,6 +217,8 @@ async def _fetch_mexc_ticker(
 async def _fetch_binance_futures_klines(
     http_client: httpx.AsyncClient, symbol: str, interval: str, limit: int,
 ) -> List[list]:
+    if _binance_disabled():
+        return []
     iv = interval.replace("60m", "1h").replace("120m", "2h").replace("240m", "4h")
     try:
         resp = await http_client.get(
@@ -324,12 +334,14 @@ async def _fetch_coingecko_ticker(
 async def _fetch_klines_chain(
     http_client: httpx.AsyncClient, symbol: str, interval: str, limit: int,
 ) -> List[list]:
-    # Priority: Binance → Bybit → MEXC → Bitunix
-    for fetcher, label in (
-        (_fetch_binance_futures_klines, "binance"),
+    # Railway: Bybit → MEXC → Bitunix (Binance geo-blocked HTTP 451).
+    chain = [
         (_fetch_bybit_klines, "bybit"),
         (_fetch_mexc_klines, "mexc"),
-    ):
+    ]
+    if not _binance_disabled():
+        chain.insert(0, (_fetch_binance_futures_klines, "binance"))
+    for fetcher, label in chain:
         rows = await fetcher(http_client, symbol, interval, limit)
         if rows:
             logger.debug("[crypto-md] klines %s %s via %s (%d bars)", symbol, interval, label, len(rows))
@@ -340,6 +352,8 @@ async def _fetch_klines_chain(
 async def _fetch_binance_futures_ticker(
     http_client: httpx.AsyncClient, symbol: str,
 ) -> Optional[Dict]:
+    if _binance_disabled():
+        return None
     try:
         resp = await http_client.get(
             "https://fapi.binance.com/fapi/v1/ticker/24hr",
@@ -399,13 +413,15 @@ async def _fetch_bybit_ticker(
 async def _fetch_ticker_chain(
     http_client: httpx.AsyncClient, symbol: str,
 ) -> Optional[Dict]:
-    for fetcher in (
-        _fetch_binance_futures_ticker,
+    fetchers = [
         _fetch_bybit_ticker,
         _fetch_mexc_ticker,
         fetch_ticker,
         _fetch_coingecko_ticker,
-    ):
+    ]
+    if not _binance_disabled():
+        fetchers.insert(0, _fetch_binance_futures_ticker)
+    for fetcher in fetchers:
         t = await fetcher(http_client, symbol)
         if t:
             return t
@@ -487,6 +503,8 @@ def _calc_correlation(coin_closes: list, btc_closes: list) -> float:
 async def fetch_crypto_price_and_ta(
     http_client: httpx.AsyncClient,
     symbol: str,
+    *,
+    prefetch: bool = False,
 ) -> Optional[Dict]:
     """
     Price + TA for portal crypto strategy evaluation.
@@ -497,12 +515,22 @@ async def fetch_crypto_price_and_ta(
     """
     try:
         from app.services.enhanced_ta import analyze_klines
+        from app.services.prefetch_fast import SYMBOL_BUDGET_S
 
-        ticker, klines_15m, klines_1h = await asyncio.gather(
-            _fetch_ticker_chain(http_client, symbol),
-            _fetch_klines_chain(http_client, symbol, "15m", 50),
-            _fetch_klines_chain(http_client, symbol, "1h", 30),
-        )
+        async def _run():
+            ticker, klines_15m, klines_1h = await asyncio.gather(
+                _fetch_ticker_chain(http_client, symbol),
+                _fetch_klines_chain(http_client, symbol, "15m", 50),
+                _fetch_klines_chain(http_client, symbol, "1h", 30),
+            )
+            return ticker, klines_15m, klines_1h
+
+        if prefetch:
+            ticker, klines_15m, klines_1h = await asyncio.wait_for(
+                _run(), timeout=SYMBOL_BUDGET_S,
+            )
+        else:
+            ticker, klines_15m, klines_1h = await _run()
         if not ticker:
             return None
 
