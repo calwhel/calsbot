@@ -10,6 +10,15 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 EXECUTOR_LOCK_ID = 708_110_004
+# Dedicated forex/tradfi executor replica (EXECUTOR_ONLY=1) — separate from portal+crypto.
+FOREX_EXECUTOR_LOCK_ID = 708_110_006
+
+
+def get_executor_lock_id() -> int:
+    """Advisory lock id for this process (portal combined vs forex-only replica)."""
+    if os.getenv("EXECUTOR_ONLY", "").lower() in ("1", "true", "yes"):
+        return FOREX_EXECUTOR_LOCK_ID
+    return EXECUTOR_LOCK_ID
 
 # Neon SSL blips can drop the dedicated lock session; reconnect before tearing
 # down the whole executor (which restarts prefetch and duplicates scan loops).
@@ -36,8 +45,10 @@ def create_lock_connection():
     )
 
 
-def try_acquire_lock(conn, lock_id: int = EXECUTOR_LOCK_ID) -> bool:
+def try_acquire_lock(conn, lock_id: Optional[int] = None) -> bool:
     """Try to acquire a session-level advisory lock on an open connection."""
+    if lock_id is None:
+        lock_id = get_executor_lock_id()
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_id,))
@@ -58,11 +69,13 @@ def close_lock_connection(conn) -> None:
 def reconnect_lock_connection(
     old_conn,
     *,
-    lock_id: int = EXECUTOR_LOCK_ID,
+    lock_id: Optional[int] = None,
     max_attempts: int = LOCK_RECONNECT_ATTEMPTS,
     retry_delay: float = LOCK_RECONNECT_DELAY_SECS,
 ) -> Optional[Any]:
     """Close a dead lock session and race to re-acquire on a fresh connection."""
+    if lock_id is None:
+        lock_id = get_executor_lock_id()
     close_lock_connection(old_conn)
     for attempt in range(1, max_attempts + 1):
         conn = None
@@ -89,7 +102,7 @@ def reconnect_lock_connection(
     return None
 
 
-def reclaim_executor_lock(*, force: bool = False) -> int:
+def reclaim_executor_lock(*, force: bool = False, lock_id: Optional[int] = None) -> int:
     """Terminate other backends holding the executor advisory lock.
 
     ``force=True`` (standalone process) reclaims any holder — including a live
@@ -98,12 +111,13 @@ def reclaim_executor_lock(*, force: bool = False) -> int:
     """
     from app.services.telegram_poller_lock import terminate_advisory_lock_holders
 
+    lid = lock_id if lock_id is not None else get_executor_lock_id()
     min_idle = 0.0 if force else 120.0
-    n = terminate_advisory_lock_holders(EXECUTOR_LOCK_ID, min_idle_seconds=min_idle)
+    n = terminate_advisory_lock_holders(lid, min_idle_seconds=min_idle)
     if n:
         logger.warning(
             "Reclaimed executor lock %s — terminated %s holder(s) (force=%s)",
-            EXECUTOR_LOCK_ID,
+            lid,
             n,
             force,
         )

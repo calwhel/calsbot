@@ -1662,7 +1662,11 @@ async def _ghost_cleanup_loop():
 #    executor, monitors, and ghost-cleanup (not all 4 workers). ─────────────
 # Must fit PostgreSQL int32 for pg_locks.objid queries. Old id 42424242 was
 # held by a zombie Replit/Railway session (pid ~10481) that blocked the executor.
-_EXECUTOR_LOCK_ID = 708_110_004
+from app.executor_lock import (
+    EXECUTOR_LOCK_ID,
+    FOREX_EXECUTOR_LOCK_ID,
+    get_executor_lock_id,
+)
 # Keepalive cadence for the lock-holding connection. Pinged from a DEDICATED
 # DAEMON THREAD (not the asyncio loop, which the executor's scan cycles block for
 # tens of seconds), so it must stay comfortably BELOW _EXECUTOR_LOCK_STALE_IDLE_SECS.
@@ -1689,11 +1693,12 @@ def _try_acquire_executor_lock():
         from app.executor_lock import (
             close_lock_connection,
             create_lock_connection,
+            get_executor_lock_id,
             try_acquire_lock,
         )
 
         conn = create_lock_connection()
-        if try_acquire_lock(conn, _EXECUTOR_LOCK_ID):
+        if try_acquire_lock(conn, get_executor_lock_id()):
             return conn
         close_lock_connection(conn)
         return None
@@ -1920,28 +1925,55 @@ async def _start_executor_tasks():
     from app.services.strategy_executor import (
         run_strategy_executor, run_live_position_monitor,
         run_forex_executor, run_forex_live_manager_fast,
+        run_paper_position_monitor, run_session_alert_loop,
         backfill_cancelled_paper_trades,
         backfill_ghost_cancelled_executions,
         close_stale_open_executions,
+        crypto_executor_disabled, forex_executor_disabled,
+        executor_runtime_profile,
+    )
+    _prof = executor_runtime_profile()
+    logger.info(
+        "[executor] runtime profile: executor_only=%s crypto_disabled=%s "
+        "forex_disabled=%s crypto_cycle=%ss forex_cycle=%ss",
+        _prof["executor_only"],
+        _prof["crypto_disabled"],
+        _prof["forex_disabled"],
+        _prof["crypto_scan_interval_s"],
+        _prof["forex_scan_interval_s"],
     )
     # Stale-position cleanup before scan loops — fire-and-forget so HTTP workers
     # are not blocked if Neon is slow on the first connection after deploy.
     asyncio.create_task(close_stale_open_executions(stale_after_hours=48))
+    asyncio.create_task(
+        _resilient_task("run_paper_position_monitor", run_paper_position_monitor, restart_delay=20)
+    )
+    if not forex_executor_disabled():
+        asyncio.create_task(
+            _resilient_task("run_session_alert_loop", run_session_alert_loop, restart_delay=30)
+        )
     # Wrapped in _resilient_task so a transient crash (e.g. DB SSL drop)
     # auto-restarts instead of silently killing the executor permanently.
-    asyncio.create_task(_resilient_task("run_strategy_executor", run_strategy_executor, restart_delay=20))
-    try:
-        from app.services.ctrader_order_queue import start_ctrader_order_worker
-        start_ctrader_order_worker()
-        logger.info("cTrader async order queue worker started (executor worker)")
-    except Exception as _oq_err:
-        logger.warning(f"cTrader order queue start error (non-fatal): {_oq_err}")
-    asyncio.create_task(_resilient_task("run_forex_executor", run_forex_executor, restart_delay=20))
-    # Dedicated fast (~1s) loop that pushes live forex breakeven/trailing SL
-    # amendments to cTrader off the real-time spot feed — so gold reaches
-    # breakeven in well under a second instead of on the 5s scan cadence.
-    asyncio.create_task(_resilient_task("run_forex_live_manager_fast", run_forex_live_manager_fast, restart_delay=15))
-    asyncio.create_task(_resilient_task("run_live_position_monitor", run_live_position_monitor, restart_delay=15))
+    if not crypto_executor_disabled():
+        asyncio.create_task(_resilient_task("run_strategy_executor", run_strategy_executor, restart_delay=20))
+    if not forex_executor_disabled():
+        try:
+            from app.services.ctrader_order_queue import start_ctrader_order_worker
+            start_ctrader_order_worker()
+            logger.info("cTrader async order queue worker started (executor worker)")
+        except Exception as _oq_err:
+            logger.warning(f"cTrader order queue start error (non-fatal): {_oq_err}")
+        asyncio.create_task(_resilient_task("run_forex_executor", run_forex_executor, restart_delay=20))
+        # Dedicated fast (~1s) loop that pushes live forex breakeven/trailing SL
+        # amendments to cTrader off the real-time spot feed — so gold reaches
+        # breakeven in well under a second instead of on the 5s scan cadence.
+        asyncio.create_task(
+            _resilient_task("run_forex_live_manager_fast", run_forex_live_manager_fast, restart_delay=15)
+        )
+    if not crypto_executor_disabled():
+        asyncio.create_task(
+            _resilient_task("run_live_position_monitor", run_live_position_monitor, restart_delay=15)
+        )
     asyncio.create_task(backfill_cancelled_paper_trades(lookback_days=30))
     asyncio.create_task(backfill_ghost_cancelled_executions(lookback_days=7))
     # Indicator alerts loop — same advisory-lock-protected worker so a
@@ -2033,20 +2065,18 @@ async def _start_executor_tasks():
     except Exception as e:
         logger.error(f"Failed to launch trade tracker monitor: {e}")
 
-    # X / Twitter auto-posting — runs on this always-up web worker (gated by its
-    # own advisory lock) so posting survives even when the Telegram bot companion
-    # process is not running. The lock guarantees exactly one poster across the
-    # web worker(s) + companion, so there is never a double-tweet.
-    try:
-        from app.services.twitter_poster import run_auto_post_loop_singleton
-        asyncio.create_task(
-            _resilient_task(
-                "twitter_auto_post", run_auto_post_loop_singleton, restart_delay=120
+    # X / Twitter auto-posting — portal worker only (skip on EXECUTOR_ONLY replica).
+    if os.environ.get("EXECUTOR_ONLY", "").lower() not in ("1", "true", "yes"):
+        try:
+            from app.services.twitter_poster import run_auto_post_loop_singleton
+            asyncio.create_task(
+                _resilient_task(
+                    "twitter_auto_post", run_auto_post_loop_singleton, restart_delay=120
+                )
             )
-        )
-        logger.info("✅ X auto-poster launched (advisory-lock single-runner)")
-    except Exception as e:
-        logger.error(f"Failed to launch X auto-poster: {e}")
+            logger.info("✅ X auto-poster launched (advisory-lock single-runner)")
+        except Exception as e:
+            logger.error(f"Failed to launch X auto-poster: {e}")
 
 
 async def _executor_claim_loop(first_attempt_delay: int = 0):
@@ -2119,7 +2149,7 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
                                 "WHERE l.locktype='advisory' AND l.objid=:lid "
                                 "AND l.granted=true LIMIT 1"
                             ),
-                            {"lid": _EXECUTOR_LOCK_ID},
+                            {"lid": get_executor_lock_id()},
                         ).fetchone()
                         if row:
                             # INFO, not WARNING: a sibling holding the lock and
@@ -2134,7 +2164,7 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
                             )
                         else:
                             logger.warning(
-                                f"[executor] lock {_EXECUTOR_LOCK_ID} busy but holder unknown "
+                                f"[executor] lock {get_executor_lock_id()} busy but holder unknown "
                                 f"— retrying (attempt {_wait_attempts})"
                             )
                     finally:
@@ -2152,7 +2182,7 @@ async def _executor_claim_loop(first_attempt_delay: int = 0):
                 )
                 if n:
                     logger.warning(
-                        f"[executor] reclaimed lock {_EXECUTOR_LOCK_ID} — "
+                        f"[executor] reclaimed lock {get_executor_lock_id()} — "
                         f"terminated {n} stale holder(s); retrying acquire"
                     )
             await asyncio.sleep(5)  # Retry every 5 s until lock is free
@@ -2368,8 +2398,15 @@ async def health_deep():
         _tg_status["polling_active"] = str(MAIN_POLLER_LOCK_ID) in _tg_lock
     except Exception as _tg_err:
         _tg_status["error"] = str(_tg_err)[:120]
-    _exec_status = {"enabled": False, "lock_id": _EXECUTOR_LOCK_ID, "lock_held": False}
+    _exec_status = {
+        "enabled": False,
+        "this_process_lock_id": get_executor_lock_id(),
+        "locks": {},
+    }
     try:
+        from app.services.strategy_executor import executor_runtime_profile
+
+        _exec_status["runtime_profile"] = executor_runtime_profile()
         _exec_status["enabled"] = (
             is_production_deploy()
             and os.getenv("DISABLE_EXECUTOR", "").lower() not in ("1", "true", "yes")
@@ -2378,20 +2415,27 @@ async def health_deep():
         from sqlalchemy import text
         db = SessionLocal()
         try:
-            erow = db.execute(
+            rows = db.execute(
                 text(
-                    "SELECT l.pid, COALESCE(a.state, 'gone') "
+                    "SELECT l.objid, l.pid, COALESCE(a.state, 'gone') "
                     "FROM pg_locks l "
                     "LEFT JOIN pg_stat_activity a ON a.pid = l.pid "
-                    "WHERE l.locktype='advisory' AND l.objid=:lid AND l.granted=true "
-                    "LIMIT 1"
+                    "WHERE l.locktype='advisory' AND l.granted=true "
+                    "AND l.objid IN (:portal, :forex)"
                 ),
-                {"lid": _EXECUTOR_LOCK_ID},
-            ).fetchone()
-            if erow:
-                _exec_status["lock_held"] = True
-                _exec_status["holder_pid"] = erow[0]
-                _exec_status["holder_state"] = erow[1]
+                {"portal": EXECUTOR_LOCK_ID, "forex": FOREX_EXECUTOR_LOCK_ID},
+            ).fetchall()
+            for objid, pid, state in rows:
+                label = "forex_only" if objid == FOREX_EXECUTOR_LOCK_ID else "portal"
+                _exec_status["locks"][label] = {
+                    "lock_id": objid,
+                    "pid": pid,
+                    "state": state,
+                }
+            _mine = get_executor_lock_id()
+            _exec_status["lock_held"] = any(
+                r[0] == _mine for r in rows
+            )
         finally:
             db.close()
     except Exception as _ex_err:
@@ -14072,7 +14116,7 @@ async def executor_status(request: Request):
                 "WHERE l.locktype='advisory' AND l.objid=:lid AND l.granted=true "
                 "LIMIT 1"
             ),
-            {"lid": _EXECUTOR_LOCK_ID},
+            {"lid": get_executor_lock_id()},
         ).fetchone()
         lock_info = {"pid": row[0], "state": row[1]} if row else None
     except Exception as e:
@@ -14080,12 +14124,19 @@ async def executor_status(request: Request):
     finally:
         db.close()
 
+    try:
+        from app.services.strategy_executor import executor_runtime_profile as _erp
+        _profile = _erp()
+    except Exception:
+        _profile = {}
+
     return {
         "executor_running_in_this_worker": _executor_running_in_this_worker,
         "executor_tasks_started": _executor_tasks_started,
         "is_production": is_prod,
         "advisory_lock_holder": lock_info,
-        "lock_id": _EXECUTOR_LOCK_ID,
+        "lock_id": get_executor_lock_id(),
+        "runtime_profile": _profile,
     }
 
 
@@ -14191,14 +14242,14 @@ async def executor_force_start(request: Request):
                 JOIN pg_stat_activity a ON a.pid = l.pid
                 WHERE l.locktype='advisory' AND l.objid=%s AND l.granted=true
                 """,
-                (_EXECUTOR_LOCK_ID,),
+                (get_executor_lock_id(),),
             )
             holders = cur.fetchall()
             for (pid,) in holders:
                 cur.execute("SELECT pg_terminate_backend(%s)", (pid,))
                 logger.info(f"[force-start] Terminated stale lock holder PID={pid}")
             import time; time.sleep(0.5)  # brief pause for PG to release
-            cur.execute("SELECT pg_try_advisory_lock(%s)", (_EXECUTOR_LOCK_ID,))
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (get_executor_lock_id(),))
             acquired = cur.fetchone()[0]
             cur.close()
             if acquired:

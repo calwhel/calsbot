@@ -13,6 +13,30 @@ if [ "${CTRADER_FEED_ONLY}" = "1" ]; then
   exec python3 -m app.ctrader_feed_runner
 fi
 
+# ── Dedicated forex/tradfi executor replica (no HTTP, no Telegram bot) ───────
+# Pair with portal service: portal runs crypto (~10 min) + DISABLE_FOREX_EXECUTOR=1;
+# this replica runs forex as fast as possible with DISABLE_CRYPTO_EXECUTOR=1.
+if [ "${EXECUTOR_ONLY}" = "1" ]; then
+  echo "[railway] Forex-only executor replica — standalone process (no gunicorn)"
+  export FORCE_EXECUTOR=1
+  export EXECUTOR_STANDALONE=1
+  export DISABLE_EXECUTOR_IN_GUNICORN=1
+  export DISABLE_TELEGRAM_POLL="${DISABLE_TELEGRAM_POLL:-1}"
+  export DISABLE_CRYPTO_EXECUTOR="${DISABLE_CRYPTO_EXECUTOR:-1}"
+  export EXECUTOR_FOREX_SCAN_INTERVAL="${EXECUTOR_FOREX_SCAN_INTERVAL:-5}"
+  export EXECUTOR_FOREX_MAX_CONCURRENT="${EXECUTOR_FOREX_MAX_CONCURRENT:-6}"
+  export EXECUTOR_FOREX_MANAGE_INTERVAL="${EXECUTOR_FOREX_MANAGE_INTERVAL:-1}"
+  export RAILWAY_PRO="${RAILWAY_PRO:-1}"
+  export CTRADER_REMOTE_FEED="${CTRADER_REMOTE_FEED:-1}"
+  export DISABLE_CTRADER_FEED_IN_EXECUTOR="${DISABLE_CTRADER_FEED_IN_EXECUTOR:-1}"
+  exec python3 -m app.executor_runner
+fi
+
+# Portal crypto-only mode: slow crypto cadence when forex runs on another replica.
+if [ "${DISABLE_FOREX_EXECUTOR}" = "1" ]; then
+  export EXECUTOR_CRYPTO_SCAN_INTERVAL="${EXECUTOR_CRYPTO_SCAN_INTERVAL:-600}"
+fi
+
 # Railway defaults — free portal features + live strategy executor
 export PORTAL_FEATURES_FREE="${PORTAL_FEATURES_FREE:-1}"
 export FORCE_EXECUTOR="${FORCE_EXECUTOR:-1}"
