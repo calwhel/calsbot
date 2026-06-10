@@ -285,6 +285,19 @@ def _fmp_api_key() -> str:
     return ""
 
 
+async def fetch_economic_calendar(from_date: str, to_date: str) -> Optional[list]:
+    """FMP /api/v3/economic_calendar — rate-limited via shared FMP client."""
+    api_key = _fmp_api_key()
+    if not api_key:
+        return None
+    url = f"{_FMP_LEGACY_BASE}/economic_calendar"
+    params = {"from": from_date, "to": to_date, "apikey": api_key}
+    status, data = await _fmp_http_get(url, params, timeout=15.0)
+    if status == 200 and isinstance(data, list):
+        return data
+    return None
+
+
 def _parse_fmp_bar_date(date_str: str) -> int:
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
         try:

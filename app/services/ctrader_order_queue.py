@@ -148,8 +148,11 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
         if volume:
             try:
                 execution.broker_volume_units = int(volume)
+                execution.remaining_volume = float(int(volume))
             except Exception:
                 pass
+        if execution.sl_price is not None and execution.current_sl is None:
+            execution.current_sl = float(execution.sl_price)
 
         _n = (execution.notes or "").strip()
         if position_id and f"pos={position_id}" not in _n:
@@ -165,6 +168,8 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
             execution.entry_price = actual_fill
             if execution.sl_price:
                 execution.sl_price += _delta
+            if execution.current_sl:
+                execution.current_sl += _delta
             if execution.tp_price:
                 execution.tp_price += _delta
             if execution.tp2_price:

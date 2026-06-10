@@ -104,6 +104,7 @@ def log_scan_metric(
     signal_sent: bool,
     strategy_id: Optional[int] = None,
     block_reason: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     payload = {
         "symbol": symbol,
@@ -118,6 +119,8 @@ def log_scan_metric(
         payload["strategy_id"] = strategy_id
     if block_reason:
         payload["block_reason"] = block_reason
+    if extra:
+        payload.update(extra)
     logger.info("[scan-metric] %s", json.dumps(payload, separators=(",", ":")))
     if strategy_evaluated:
         record_eval_metric(
@@ -139,9 +142,9 @@ async def _probe_yahoo() -> bool:
 
 
 async def _probe_binance() -> bool:
-    """Skipped on Railway — Binance is geo-blocked (HTTP 451) from US datacenters."""
-    import os
-    if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"):
+    """Binance futures klines probe — respects geo-block circuit breaker."""
+    from app.services.binance_feed import binance_disabled
+    if binance_disabled():
         return False
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:

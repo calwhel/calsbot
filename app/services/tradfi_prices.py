@@ -139,10 +139,11 @@ _METAL_KLINE_SOURCE_RANK = {
     "ctrader-user": 0,
     "ctrader": 1,
     "coinbase": 2,
-    "kraken": 3,
-    "yahoo_gc": 4,
-    "synthetic": 5,
-    "fmp": 6,
+    "binance": 3,
+    "kraken": 4,
+    "yahoo_gc": 5,
+    "synthetic": 6,
+    "fmp": 7,
 }
 _INTERVAL_MS: Dict[str, int] = {
     "1m": 60_000,
@@ -166,7 +167,7 @@ METAL_SPOT_KLINE_MAX_DRIFT_PCT = float(
     os.environ.get("METAL_SPOT_KLINE_MAX_DRIFT_PCT", "0.5")
 )
 _SPOT_ALIGNED_KLINE_SOURCES = frozenset({
-    "coinbase", "ctrader-user", "ctrader", "fmp", "kraken", "synthetic",
+    "binance", "coinbase", "ctrader-user", "ctrader", "fmp", "kraken", "synthetic",
 })
 
 
@@ -950,18 +951,19 @@ async def fetch_metal_live_candles(
             _cb_probe_timeout,
             lambda d: _fetch_coinbase_metals_klines(sym, timeframe, limit, diag=d),
         )
+        _binance_entry = (
+            "binance",
+            f"{_BINANCE_SPOT_BASE}/klines?symbol={_METALS_BINANCE_MAP.get(sym, '')}",
+            provider_timeout_s(5.0),
+            lambda d: _fetch_binance_metals_klines(sym, timeframe, limit, diag=d),
+        )
         external_chain: List[Tuple[str, str, float, object]] = []
-        # 1m: Coinbase exchange often ConnectTimeout on Railway — Kraken before Coinbase.
-        if timeframe == "1m":
-            if sym in _KRAKEN_METAL_MAP:
-                external_chain.append(_kraken_entry)
-            if _cb_product:
-                external_chain.append(_coinbase_entry)
-        else:
-            if _cb_product:
-                external_chain.append(_coinbase_entry)
-            if sym in _KRAKEN_METAL_MAP:
-                external_chain.append(_kraken_entry)
+        if _cb_product:
+            external_chain.append(_coinbase_entry)
+        if sym in _METALS_BINANCE_MAP:
+            external_chain.append(_binance_entry)
+        if sym in _KRAKEN_METAL_MAP:
+            external_chain.append(_kraken_entry)
         # FMP last — often rate-limited on free tier; Coinbase/cTrader are reliable on Railway.
         if _env_fmp_api_key():
             try:
@@ -1545,10 +1547,66 @@ async def _fetch_binance_metals_klines(
     *,
     diag: Optional[MetalProviderDiagnostic] = None,
 ) -> List[List[float]]:
-    """Disabled — Binance spot returns HTTP 451 from Railway US datacenters."""
+    """Closed OHLC from Binance spot XAUUSDT / XAGUSDT (forming bar stripped)."""
+    from app.services.binance_feed import binance_disabled, binance_spot_klines
+
+    sym = symbol.upper()
+    bn_sym = _METALS_BINANCE_MAP.get(sym)
     if diag is not None:
         diag.provider = "binance"
-        diag.failure = "disabled_railway"
+        diag.url = f"{_BINANCE_SPOT_BASE}/klines?symbol={bn_sym}"
+    if not bn_sym or binance_disabled():
+        if diag is not None:
+            diag.failure = "disabled" if binance_disabled() else "unsupported_pair"
+        return []
+
+    bn_interval = _BINANCE_INTERVAL_MAP.get(timeframe, timeframe)
+    now = datetime.utcnow()
+    key = (f"binance:{bn_sym}", timeframe, limit)
+    cached = _KLINE_CACHE.get(key)
+    if cached and (now - cached[1]) < _metal_kline_cache_ttl(key):
+        rows = cached[0]
+        if diag is not None:
+            diag.candle_count = len(rows)
+            diag.extra["cache_hit"] = True
+        return rows
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=_BINANCE_KLINE_TIMEOUT_S) as client:
+            raw = await binance_spot_klines(client, bn_sym, bn_interval, limit)
+        if not raw:
+            if diag is not None:
+                diag.failure = "empty_or_timeout"
+            return []
+        complete = raw[:-1] if len(raw) > 1 else raw
+        rows: List[List[float]] = []
+        for bar in complete[-limit:]:
+            try:
+                rows.append([
+                    int(bar[0]),
+                    float(bar[1]),
+                    float(bar[2]),
+                    float(bar[3]),
+                    float(bar[4]),
+                    float(bar[5]),
+                ])
+            except Exception:
+                continue
+        if diag is not None:
+            diag.candle_count = len(rows)
+        if rows:
+            _KLINE_CACHE[key] = (rows, now)
+            logger.info(
+                f"[tradfi] klines ok (Binance spot): {bn_sym} {bn_interval} → {len(rows)} bars"
+            )
+            return rows
+        if diag is not None:
+            diag.failure = "parse_empty"
+    except Exception as exc:
+        if diag is not None:
+            diag.failure = type(exc).__name__
+        logger.debug(f"[tradfi] Binance spot klines failed {bn_sym}: {exc}")
     return []
 
 
