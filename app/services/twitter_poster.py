@@ -4972,7 +4972,10 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
         if r.status_code != 200:
             return {'success': False, 'error': f'CoinGecko error {r.status_code}'}
 
-        all_coins = r.json()
+        from app.services.coingecko_safe import parse_coin_list
+        all_coins = parse_coin_list(r.json())
+        if not all_coins:
+            return {'success': False, 'error': 'CoinGecko returned no coin list'}
         # Prefer known meme coins that are actually moving; fall back to any top gainer
         meme_gainers = [
             c for c in all_coins
@@ -6423,7 +6426,8 @@ async def post_market_take(account_poster) -> Optional[Dict]:
                     params={"vs_currency": "usd", "ids": "bitcoin", "sparkline": False}
                 )
                 if r.status_code == 200:
-                    data = r.json()
+                    from app.services.coingecko_safe import parse_coin_list
+                    data = parse_coin_list(r.json())
                     if data:
                         btc_price  = data[0].get("current_price", 0)
                         btc_change = data[0].get("price_change_percentage_24h", 0)
@@ -6641,7 +6645,8 @@ async def post_tradehub_promo(account_poster) -> Optional[Dict]:
                     params={"vs_currency": "usd", "ids": "bitcoin", "sparkline": False}
                 )
                 if r.status_code == 200:
-                    data = r.json()
+                    from app.services.coingecko_safe import parse_coin_list
+                    data = parse_coin_list(r.json())
                     if data:
                         btc_price  = data[0].get("current_price", 0)
                         btc_change = data[0].get("price_change_percentage_24h", 0)

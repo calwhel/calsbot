@@ -828,6 +828,7 @@ async def _fetch_price_and_ta(
                 "price_source": price_source,
                 "kline_close": kline_close,
                 "kline_source": kline_source,
+                "candles_loaded": len(kl),
                 "bid": bid,
                 "ask": ask,
                 "bid_price": bid,
@@ -3690,17 +3691,42 @@ async def evaluate_and_fire(
         }
 
     # ── Step 4: Sequential condition evaluation — price data already cached ───
+    from app.services.feed_diagnostics import log_scan_metric
+
     _had_any_candidate = False
     _conditions_failed_for_all = True
     for symbol in candidate_symbols:
         price_data = price_map.get(symbol)
         if not price_data:
+            log_scan_metric(
+                symbol=symbol,
+                timeframe=_eval_tf,
+                candles_loaded=0,
+                strategy_evaluated=True,
+                setup_detected=False,
+                signal_generated=False,
+                signal_sent=False,
+                strategy_id=strategy.id,
+                block_reason="no_price_data",
+            )
             continue
         _had_any_candidate = True
+        _candles_n = int(price_data.get("candles_loaded") or 0)
 
         if filters.get("htf_trend") and not htf_pass.get(symbol):
             logger.debug(f"[Strategy {strategy.id}] HTF trend filter blocked {symbol}")
             _bump("blk_htf_trend_sym")
+            log_scan_metric(
+                symbol=symbol,
+                timeframe=_eval_tf,
+                candles_loaded=_candles_n,
+                strategy_evaluated=True,
+                setup_detected=False,
+                signal_generated=False,
+                signal_sent=False,
+                strategy_id=strategy.id,
+                block_reason="htf_trend",
+            )
             continue
 
         enhanced_ta   = price_data.get("enhanced_ta", {})
@@ -3747,8 +3773,29 @@ async def evaluate_and_fire(
         )
         _maybe_log_ta_eval(strategy, symbol, direction_pref, passed, details)
         if not passed:
+            log_scan_metric(
+                symbol=symbol,
+                timeframe=_eval_tf,
+                candles_loaded=_candles_n,
+                strategy_evaluated=True,
+                setup_detected=False,
+                signal_generated=False,
+                signal_sent=False,
+                strategy_id=strategy.id,
+                block_reason="ta_conditions",
+            )
             continue
         _conditions_failed_for_all = False
+        log_scan_metric(
+            symbol=symbol,
+            timeframe=_eval_tf,
+            candles_loaded=_candles_n,
+            strategy_evaluated=True,
+            setup_detected=True,
+            signal_generated=False,
+            signal_sent=False,
+            strategy_id=strategy.id,
+        )
         # break out of "failure tracking" — we have a real fire below
 
         # ── Pre-fire entry price confirmation (metals + tradfi) ─────────────
@@ -3766,6 +3813,17 @@ async def evaluate_and_fire(
                 logger.warning(
                     f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} fire blocked — "
                     f"{_confirm_reason} (scan_price={current_price:.4f})"
+                )
+                log_scan_metric(
+                    symbol=symbol,
+                    timeframe=_eval_tf,
+                    candles_loaded=_candles_n,
+                    strategy_evaluated=True,
+                    setup_detected=True,
+                    signal_generated=False,
+                    signal_sent=False,
+                    strategy_id=strategy.id,
+                    block_reason="entry_price_stale",
                 )
                 continue
             if abs(_confirmed_px - current_price) / max(_confirmed_px, 1e-9) > 0.00005:
@@ -4465,6 +4523,16 @@ async def evaluate_and_fire(
                 http_client=http_client,
             ))
 
+        log_scan_metric(
+            symbol=symbol,
+            timeframe=_eval_tf,
+            candles_loaded=_candles_n,
+            strategy_evaluated=True,
+            setup_detected=True,
+            signal_generated=True,
+            signal_sent=bool(_telegram_int_id(user)),
+            strategy_id=strategy.id,
+        )
         break  # one trade per strategy per scan cycle
     else:
         # for-loop completed without break → no fire happened.
@@ -5441,6 +5509,27 @@ async def _run_crypto_executor_shard(
                     logger.info(
                         f"[{_log_ts()}] [{_crypto_lbl}] cycle gates → {_gate_summary}"
                     )
+                    try:
+                        from app.services.feed_diagnostics import (
+                            GATE_BLOCK_LOCATIONS,
+                            format_final_report,
+                        )
+                        _locs = [
+                            f"{k}: {GATE_BLOCK_LOCATIONS.get(k, 'strategy_executor.evaluate_and_fire')}"
+                            for k in cycle_gate_stats if k.startswith("blk_")
+                        ]
+                        logger.info(
+                            format_final_report(
+                                scans_running=1,
+                                symbols_scanned=len(eval_snapshots),
+                                candles_loaded=0,
+                                setups_detected=0,
+                                signals_blocked=cycle_gate_stats,
+                                block_locations=_locs,
+                            )
+                        )
+                    except Exception:
+                        pass
 
                 _cycle_s = (datetime.utcnow() - _cycle_t0).total_seconds()
                 if eval_snapshots:
@@ -6632,6 +6721,27 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     logger.info(
                         f"[{_log_ts()}] [{_fx_lbl}] cycle gates → {_gate_summary}"
                     )
+                    try:
+                        from app.services.feed_diagnostics import (
+                            GATE_BLOCK_LOCATIONS,
+                            format_final_report,
+                        )
+                        _locs = [
+                            f"{k}: {GATE_BLOCK_LOCATIONS.get(k, 'strategy_executor.evaluate_and_fire')}"
+                            for k in cycle_gate_stats if k.startswith("blk_")
+                        ]
+                        logger.info(
+                            format_final_report(
+                                scans_running=1,
+                                symbols_scanned=len(open_snaps),
+                                candles_loaded=0,
+                                setups_detected=0,
+                                signals_blocked=cycle_gate_stats,
+                                block_locations=_locs,
+                            )
+                        )
+                    except Exception:
+                        pass
 
                 _cycle_s = (datetime.utcnow() - _cycle_t0).total_seconds()
                 if open_snaps:

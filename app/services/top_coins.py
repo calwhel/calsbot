@@ -41,11 +41,11 @@ COINGECKO_URL = (
 
 async def _fetch_from_coingecko() -> Set[str]:
     try:
+        from app.services.coingecko_safe import fetch_markets, symbols_from_markets
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(COINGECKO_URL)
-            if resp.status_code == 200:
-                data = resp.json()
-                symbols = {coin["symbol"].upper() for coin in data if coin.get("symbol")}
+            coins = await fetch_markets(client)
+            if coins:
+                symbols = symbols_from_markets(coins)
                 logger.info(f"✅ TOP COINS: fetched {len(symbols)} coins from CoinGecko")
                 return symbols
     except Exception as e:

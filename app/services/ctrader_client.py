@@ -508,7 +508,25 @@ async def refresh_access_token(refresh_token: str) -> dict:
         try:
             async with httpx.AsyncClient(timeout=20) as client:
                 resp = await client.post(OAUTH_TOKEN_URL, params=params)
-                resp.raise_for_status()
+                if resp.status_code != 200:
+                    try:
+                        body = resp.json()
+                        err_code = body.get("errorCode") or body.get("error")
+                        desc = body.get("description") or body.get("error_description") or ""
+                        logger.warning(
+                            "[cTrader] refresh_access_token HTTP %s errorCode=%s desc=%s",
+                            resp.status_code,
+                            err_code,
+                            str(desc)[:120],
+                        )
+                        if isinstance(body, dict) and err_code:
+                            return body
+                    except Exception:
+                        logger.warning(
+                            "[cTrader] refresh_access_token HTTP %s (no JSON body)",
+                            resp.status_code,
+                        )
+                    resp.raise_for_status()
                 return resp.json()
         except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as exc:
             last_exc = exc
@@ -574,9 +592,128 @@ def _mark_refresh_denied(user_id: int, refresh_token: str, err: str) -> None:
         time.monotonic() + _REFRESH_DENY_COOLDOWN,
     )
     logger.warning(
-        f"[cTrader] token refresh denied for user {user_id}: "
-        f"{err} — user must re-link cTrader"
+        "[cTrader] token refresh DENIED user=%s reason=%s action=re-link "
+        "(portal → Settings → cTrader OAuth). OAuth app CLIENT_ID=%s",
+        user_id,
+        err,
+        "set" if CTRADER_CLIENT_ID else "MISSING",
     )
+
+
+def audit_ctrader_credentials(user_id: int, prefs=None) -> dict:
+    """
+    Explicit credential audit — never silent. Returns {ok, reason, fields}.
+    """
+    fields = {
+        "CLIENT_ID": bool(CTRADER_CLIENT_ID),
+        "CLIENT_SECRET": bool(CTRADER_CLIENT_SECRET),
+        "ACCESS_TOKEN": False,
+        "REFRESH_TOKEN": False,
+        "ACCOUNT_ID": False,
+    }
+    if not fields["CLIENT_ID"] or not fields["CLIENT_SECRET"]:
+        return {
+            "ok": False,
+            "reason": "missing CTRADER_CLIENT_ID or CTRADER_CLIENT_SECRET env",
+            "fields": fields,
+            "user_id": user_id,
+        }
+    if prefs is None:
+        try:
+            from app.database import SessionLocal
+            from app.models import UserPreference
+            db = SessionLocal()
+            try:
+                prefs = (
+                    db.query(UserPreference)
+                    .filter(UserPreference.user_id == user_id)
+                    .first()
+                )
+            finally:
+                db.close()
+        except Exception as exc:
+            return {
+                "ok": False,
+                "reason": f"DB prefs unreadable: {type(exc).__name__}",
+                "fields": fields,
+                "user_id": user_id,
+            }
+    if not prefs:
+        return {
+            "ok": False,
+            "reason": "no UserPreference row",
+            "fields": fields,
+            "user_id": user_id,
+        }
+    fields["ACCESS_TOKEN"] = bool((prefs.ctrader_access_token or "").strip())
+    fields["REFRESH_TOKEN"] = bool((prefs.ctrader_refresh_token or "").strip())
+    fields["ACCOUNT_ID"] = bool((prefs.ctrader_account_id or "").strip())
+    missing = [k for k, v in fields.items() if k not in ("CLIENT_ID", "CLIENT_SECRET") and not v]
+    if missing:
+        return {
+            "ok": False,
+            "reason": f"missing user fields: {', '.join(missing)}",
+            "fields": fields,
+            "user_id": user_id,
+        }
+    if is_refresh_denied(user_id):
+        return {
+            "ok": False,
+            "reason": "refresh chain denied — re-link cTrader",
+            "fields": fields,
+            "user_id": user_id,
+        }
+    return {"ok": True, "reason": "credentials present", "fields": fields, "user_id": user_id}
+
+
+async def proactive_refresh_linked_users() -> dict:
+    """
+    Refresh OAuth tokens for all linked users at startup.
+    Returns counts: linked_users, refreshed, failed, denied.
+    """
+    stats = {"linked_users": 0, "refreshed": 0, "failed": 0, "denied": 0}
+    try:
+        from app.database import SessionLocal
+        from app.models import UserPreference
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(UserPreference)
+                .filter(UserPreference.ctrader_refresh_token.isnot(None))
+                .all()
+            )
+            stats["linked_users"] = len(rows)
+            for prefs in rows:
+                uid = int(prefs.user_id)
+                audit = audit_ctrader_credentials(uid, prefs)
+                if not audit.get("ok"):
+                    logger.warning(
+                        "[cTrader] startup audit user=%s: %s",
+                        uid, audit.get("reason"),
+                    )
+                    stats["failed"] += 1
+                    continue
+                if is_refresh_denied(uid):
+                    stats["denied"] += 1
+                    continue
+                new_at = await refresh_user_ctrader_token(uid)
+                if new_at:
+                    stats["refreshed"] += 1
+                    try:
+                        from app.services.ctrader_price_feed import notify_account_linked
+                        notify_account_linked(uid)
+                    except Exception:
+                        pass
+                else:
+                    stats["failed"] += 1
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning(
+            "[cTrader] proactive refresh batch failed: %s", type(exc).__name__
+        )
+    logger.info("[cTrader] proactive refresh: %s", stats)
+    return stats
 
 
 async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
