@@ -1064,6 +1064,39 @@ _PIP_COLUMN_MIGRATIONS = [
     ),
 ]
 
+_TRADE_MGMT_COLUMN_MIGRATIONS = [
+    (
+        "strategy_executions",
+        "breakeven_applied",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS breakeven_applied BOOLEAN DEFAULT FALSE",
+    ),
+    (
+        "strategy_executions",
+        "tp1_done",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS tp1_done BOOLEAN DEFAULT FALSE",
+    ),
+    (
+        "strategy_executions",
+        "tp1_closed_volume",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS tp1_closed_volume NUMERIC",
+    ),
+    (
+        "strategy_executions",
+        "tp1_realized_pips",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS tp1_realized_pips NUMERIC",
+    ),
+    (
+        "strategy_executions",
+        "current_sl",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS current_sl NUMERIC",
+    ),
+    (
+        "strategy_executions",
+        "remaining_volume",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS remaining_volume NUMERIC",
+    ),
+]
+
 _CTRADER_COLUMN_MIGRATIONS = [
     (
         "strategy_executions",
@@ -1238,6 +1271,13 @@ def _ensure_tables():
         label="ctrader_columns",
     )
     logger.info("_ensure_tables: ctrader columns ready")
+    _ensure_additive_columns(
+        engine,
+        lock_id=_SCHEMA_MIGRATION_LOCK_ID,
+        migrations=_TRADE_MGMT_COLUMN_MIGRATIONS,
+        label="trade_mgmt_columns",
+    )
+    logger.info("_ensure_tables: trade management columns ready")
 
     # Auto-promote admin users to lifetime Pro + forex-approved so they always
     # bypass every Pro gate without needing the in-memory admin-bypass path.
@@ -10752,6 +10792,29 @@ async def api_update_strategy(strategy_id: int, request: Request):
             if k in body:
                 exit_[k] = body[k]
         config["exit"] = exit_
+
+        _tm_keys = (
+            "breakeven_enabled", "breakeven_trigger_pips", "breakeven_offset_pips",
+            "trailing_enabled", "trailing_distance_pips", "trailing_step_pips",
+            "partial_tp_enabled", "tp1_pips", "tp1_close_percent",
+            "tp1_move_sl_breakeven",
+        )
+        for k in _tm_keys:
+            if k in body:
+                config[k] = body[k]
+        for _pos in (
+            "breakeven_trigger_pips", "breakeven_offset_pips",
+            "trailing_distance_pips", "trailing_step_pips", "tp1_pips",
+        ):
+            if config.get(_pos) is not None and float(config[_pos]) <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{_pos} must be > 0",
+                )
+        if config.get("tp1_close_percent") is not None:
+            config["tp1_close_percent"] = max(
+                10.0, min(90.0, float(config["tp1_close_percent"])),
+            )
 
         # Direction / universe
         if "direction" in body:

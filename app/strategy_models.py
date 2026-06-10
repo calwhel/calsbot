@@ -60,6 +60,12 @@ class StrategyExecution(Base):
     ctrader_position_id = Column(String(40), nullable=True)
     ctrader_account_id  = Column(String(40), nullable=True)
     broker_volume_units = Column(Integer, nullable=True)
+    breakeven_applied   = Column(Boolean, default=False, server_default="false")
+    tp1_done            = Column(Boolean, default=False, server_default="false")
+    tp1_closed_volume   = Column(Float, nullable=True)
+    tp1_realized_pips   = Column(Float, nullable=True)
+    current_sl          = Column(Float, nullable=True)
+    remaining_volume    = Column(Float, nullable=True)
     notes           = Column(Text, nullable=True)
     is_paper        = Column(Boolean, default=False)       # paper trade — no real order placed
     asset_class     = Column(String(16), nullable=False, default="crypto", server_default="crypto", index=True)

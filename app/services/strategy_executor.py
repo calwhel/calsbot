@@ -2263,7 +2263,12 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
       SHORT: bearish candle (close <= open) → price fell first → TP hit first (WIN)
              bullish candle (close >  open) → price rose first → SL hit first (LOSS)
     """
-    if not ex.entry_price or not ex.tp_price or not ex.sl_price:
+    from app.services.trade_management import active_sl
+
+    _eff_sl = active_sl(ex)
+    if _eff_sl is None:
+        _eff_sl = ex.sl_price
+    if not ex.entry_price or not ex.tp_price or not _eff_sl:
         return False
 
     fired_at = ex.fired_at or datetime.utcnow()
@@ -2399,23 +2404,23 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                 _sl_active = not (sl_eff_ms is not None and _ts < sl_eff_ms)
                 if ex.direction == "LONG":
                     tp_hit = high >= ex.tp_price
-                    sl_hit = (low  <= ex.sl_price) and _sl_active
+                    sl_hit = (low  <= _eff_sl) and _sl_active
                     if tp_hit and sl_hit:
                         if close >= open_:
                             _close_paper_execution(ex, "WIN", ex.tp_price, db)
                         else:
                             outcome = _outcome_for_sl()
-                            _close_paper_execution(ex, outcome, ex.sl_price, db)
+                            _close_paper_execution(ex, outcome, _eff_sl, db)
                         return True
                 else:
                     tp_hit = low  <= ex.tp_price
-                    sl_hit = (high >= ex.sl_price) and _sl_active
+                    sl_hit = (high >= _eff_sl) and _sl_active
                     if tp_hit and sl_hit:
                         if close <= open_:
                             _close_paper_execution(ex, "WIN", ex.tp_price, db)
                         else:
                             outcome = _outcome_for_sl()
-                            _close_paper_execution(ex, outcome, ex.sl_price, db)
+                            _close_paper_execution(ex, outcome, _eff_sl, db)
                         return True
 
                 # ── Partial close at TP1 (paper simulation) ───────────────
@@ -2455,7 +2460,7 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                     return True
                 if sl_hit:
                     outcome = _outcome_for_sl()
-                    _close_paper_execution(ex, outcome, ex.sl_price, db)
+                    _close_paper_execution(ex, outcome, _eff_sl, db)
                     return True
 
                 if not be_activated and ex.sl_price != ex.entry_price:
@@ -2751,6 +2756,26 @@ async def run_paper_position_monitor():
                                         _close_paper_execution(managed, "CANCELLED", _fc_price, write_db)
                                         continue
 
+                                if _ex_ac in ("forex", "index"):
+                                    try:
+                                        from app.strategy_models import UserStrategy as _US_tm
+                                        from app.services.trade_management import manage_open_position
+                                        _strat_tm = write_db.query(_US_tm).filter(
+                                            _US_tm.id == managed.strategy_id
+                                        ).first()
+                                        _live_px = float(candles[-1][4]) if candles else None
+                                        if _strat_tm and _live_px and _live_px > 0:
+                                            await manage_open_position(
+                                                managed,
+                                                _strat_tm.config or {},
+                                                _live_px,
+                                                write_db,
+                                            )
+                                    except Exception as _tme:
+                                        logger.warning(
+                                            "[PaperMonitor] trade-mgmt exec#%s: %s",
+                                            managed.id, _tme,
+                                        )
                                 _evaluate_paper_position_against_candles(managed, candles, write_db)
                             except Exception as e:
                                 logger.warning(f"Position {ex.id} eval error: {e}")
@@ -4024,6 +4049,7 @@ async def evaluate_and_fire(
             tp_price       = tp_price,
             tp2_price      = tp2_price,
             sl_price       = sl_price,
+            current_sl     = sl_price,
             leverage       = leverage,
             outcome        = "OPEN",
             conditions_met = details,
@@ -5724,8 +5750,15 @@ def _build_forex_worklist() -> list:
             if trail_enabled and (not trail_pct or float(trail_pct) <= 0):
                 _slp = ex_cfg.get("stop_loss_pct")
                 trail_pct = (float(_slp) / 2.0) if _slp else None
-            if be_trigger is None and not (trail_enabled and trail_pct) and not partial_active:
-                continue  # nothing to manage (no breakeven, trailing, or pending partial)
+            from app.services.trade_management import effective_trade_mgmt_cfg
+            _tm = effective_trade_mgmt_cfg(cfg)
+            if (
+                not any((_tm["breakeven_enabled"], _tm["trailing_enabled"], _tm["partial_tp_enabled"]))
+                and be_trigger is None
+                and not (trail_enabled and trail_pct)
+                and not partial_active
+            ):
+                continue
 
             user = user_cache.get(ex.user_id)
             if user is None:
@@ -5882,17 +5915,11 @@ async def _do_forex_partial_close(w: dict, price: float) -> None:
 
 
 async def _amend_forex_position(w: dict) -> None:
-    """Check one live forex position against the latest price and amend its broker
-    SL (breakeven / trailing) when triggered.
-
-    Reads the cTrader real-time spot feed FIRST (per-tick, broker-matched) so fast
-    instruments like gold react in well under a second, falling back to the 5s FMP
-    feed only when the stream has no fresh price. Mutates ``w`` in place so a fast
-    loop re-using a cached worklist will not re-fire the same move."""
+    """Live forex position management — delegates to trade_management module."""
     from app.services.tradfi_prices import get_price as _tradfi_get_price
-    from app.services.ctrader_client import modify_position_sltp_for_user
     from app.database import BgSessionLocal as SessionLocal
-    from app.strategy_models import StrategyExecution
+    from app.strategy_models import StrategyExecution, UserStrategy
+    from app.services.trade_management import manage_open_position
 
     price = None
     try:
@@ -5905,155 +5932,24 @@ async def _amend_forex_position(w: dict) -> None:
     if not price or price <= 0:
         return
 
-    entry     = w["entry_price"]
-    direction = w["direction"]
-    cur_sl    = w["sl_price"]
-
-    # ── Partial profit at TP1: close half, move stop to breakeven, run to TP2 ──
-    # Runs BEFORE the breakeven/trailing logic and returns early, because the
-    # partial close itself moves the stop to entry and the broker TP is already
-    # parked at TP2.
-    if w.get("partial_active") and w.get("tp1_price"):
-        _tp1 = w["tp1_price"]
-        tp1_hit = (
-            (direction == "LONG"  and price >= _tp1) or
-            (direction == "SHORT" and price <= _tp1)
-        )
-        if tp1_hit:
-            await _do_forex_partial_close(w, price)
-            return
-
-    amend_sl = None   # SL price to send to broker (None = no call)
-    mark_be  = False  # set the be_moved flag in notes this cycle
-
-    # ── Auto-breakeven: move SL to entry once price reaches trigger ──
-    be_hit = (
-        w["be_trigger"] is not None and not w["be_moved"] and (
-            (direction == "LONG"  and price >= w["be_trigger"]) or
-            (direction == "SHORT" and price <= w["be_trigger"])
-        )
-    )
-    if be_hit:
-        mark_be = True
-        tightens = (
-            (direction == "LONG"  and (cur_sl is None or entry > cur_sl)) or
-            (direction == "SHORT" and (cur_sl is None or entry < cur_sl))
-        )
-        if tightens:
-            amend_sl = entry
-
-    # ── Trailing stop: ratchet SL behind current price (only tightens) ─
-    if w["trail_enabled"] and w["trail_pct"]:
-        base = amend_sl if amend_sl is not None else cur_sl
-        if direction == "LONG":
-            cand = price * (1 - w["trail_pct"] / 100.0)
-            if base is None or cand > base:
-                amend_sl = cand
-        else:
-            cand = price * (1 + w["trail_pct"] / 100.0)
-            if base is None or cand < base:
-                amend_sl = cand
-
-    # Skip negligible TRAILING-ONLY changes (avoid broker spam every tick).
-    # Never suppress a breakeven cycle: when mark_be is set the amend must reach
-    # the broker, otherwise we could persist be_moved (below) without the stop
-    # actually moving — leaving the original loss stop in place forever.
-    if (
-        amend_sl is not None and cur_sl is not None
-        and not mark_be
-        and abs(amend_sl - cur_sl) < price * _FX_MIN_TRAIL_STEP_FRAC
-    ):
-        amend_sl = None
-
-    if amend_sl is None and not mark_be:
-        return
-
-    if amend_sl is not None:
-        amend_sl = round(amend_sl, 6)
-        # CRITICAL: always re-send the take-profit alongside the stop-loss.
-        # cTrader's ProtoOAAmendPositionSLTPReq REPLACES both legs — omitting
-        # takeProfit CLEARS the broker's existing TP. Sending SL alone (the old
-        # breakeven/trailing path) silently wiped every live forex TP, so positions
-        # moved to breakeven could never take profit (price hit the target but the
-        # order stayed open). Pass the stored TP every time to preserve it.
-        # For partial-runner positions the broker TP is parked at TP2 (broker_tp),
-        # so re-sending TP1 here would move the take-profit back to TP1.
-        _tp = w.get("broker_tp") or w.get("tp_price")
-        ok = await modify_position_sltp_for_user(
-            w["user"], w["position_id"], stop_loss_price=amend_sl,
-            take_profit_price=_tp,
-        )
-        if not ok:
-            logger.warning(
-                f"[FX-manage] amend SL failed exec#{w['exec_id']} "
-                f"pos={w['position_id']} {w['symbol']}"
-            )
-            return
-
-    # Persist new SL + breakeven flag (re-check still OPEN).
-    persisted_be = False
     _db2 = SessionLocal()
     try:
         ex2 = _db2.query(StrategyExecution).filter(
             StrategyExecution.id == w["exec_id"]
         ).first()
-        if ex2 and ex2.outcome == "OPEN":
-            if amend_sl is not None:
-                ex2.sl_price = amend_sl
-            n = ex2.notes or ""
-            if mark_be and "be_moved" not in n:
-                n = (n + " | be_moved").strip(" |")
-                persisted_be = True
-            ex2.notes = n
-            _db2.commit()
+        strat2 = _db2.query(UserStrategy).filter(
+            UserStrategy.id == w.get("strategy_id")
+        ).first()
+        if ex2 and ex2.outcome == "OPEN" and strat2:
+            await manage_open_position(
+                ex2, strat2.config or {}, float(price), _db2,
+            )
+            if ex2.sl_price is not None:
+                w["sl_price"] = float(ex2.sl_price)
+            if getattr(ex2, "breakeven_applied", False):
+                w["be_moved"] = True
     finally:
         _db2.close()
-
-    # Mutate the cached work item so a re-used worklist (fast loop) won't refire.
-    if amend_sl is not None:
-        w["sl_price"] = amend_sl
-    if mark_be:
-        w["be_moved"] = True
-
-    # Breakeven alert (push + Telegram) — only when newly flagged this pass.
-    if persisted_be:
-        _u = w.get("user")
-        try:
-            _mv = ((price - entry) / entry * 100) if direction == "LONG" \
-                else ((entry - price) / entry * 100)
-        except Exception:
-            _mv = 0.0
-        _db_be = SessionLocal()
-        try:
-            from app.strategy_models import UserStrategy as _US_be
-            ex_be = _db_be.query(StrategyExecution).filter(
-                StrategyExecution.id == w["exec_id"]
-            ).first()
-            strat_be = _db_be.query(_US_be).filter(
-                _US_be.id == w.get("strategy_id")
-            ).first()
-            if ex_be and _u:
-                _ensure_open_notify_for_execution(
-                    _db_be, ex_be, user=_u, strategy=strat_be,
-                )
-            if _claim_tg_be_notify(_db_be, w["exec_id"]):
-                _notify_breakeven_alert(
-                    user_id=getattr(_u, "id", 0) or 0,
-                    telegram_id=getattr(_u, "telegram_id", None),
-                    strategy_name=w.get("strategy_name", "Strategy"),
-                    symbol=w["symbol"], direction=direction,
-                    leverage=int(w.get("leverage") or 1), move_pct=_mv,
-                    strategy_id=w.get("strategy_id", 0), execution_id=w["exec_id"],
-                    kind="live",
-                )
-        finally:
-            _db_be.close()
-
-    if amend_sl is not None:
-        logger.info(
-            f"[FX-manage] exec#{w['exec_id']} {w['symbol']} {direction} "
-            f"SL→{amend_sl} ({'BE ' if mark_be else 'trail '}@ price {price})"
-        )
 
 
 _FX_RECONCILE_MISSING: Dict[int, int] = {}   # exec_id → consecutive missing-sweep count

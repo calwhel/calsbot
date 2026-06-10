@@ -4931,6 +4931,8 @@ const WZ={
   // Forex-only pip TP/SL — emitted to /api/save-strategy only when assetClass==='forex'.
   // Executor converts pips→% at fire time using the live price + the pair's pip size.
   tp1Pips:null,tp2Pips:null,slPips:null,bePips:null,
+  partialTp:false,tp1Pips:20,tp1Pct:50,tp1MoveBe:true,tmBreakeven:false,beTrigPips:20,beOffPips:1,
+  tmTrail:false,trailDistPips:15,trailStepPips:5,
   leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,posSizeLots:0.10,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,noDuplicateSymbol:false,
   sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',
   timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,
@@ -6421,6 +6423,34 @@ function renderStep5(){
       <input type="range" id="be-sl" min="10" max="200" value="${WZ.breakeven||70}" step="5" oninput="WZ.breakeven=Number(this.value);document.getElementById('be-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
       <div class="hint">When ROI hits this % (leveraged), SL moves to your entry price automatically.</div>
     </div>`}
+    ${isFx?`<div class="section-card" style="margin-top:10px">
+    <div class="sc-title"><div class="sc-icon">⚙️</div>Trade Management</div>
+    <div class="toggle-row" onclick="wzToggleTm('partial')">
+      <div><div class="toggle-lbl">Partial TP (TP1)</div><div class="toggle-sub">Close a slice at TP1, run the rest</div></div>
+      <div class="switch ${WZ.partialTp?'on':''}" id="sw-tm-partial"></div>
+    </div>
+    <div id="row-tm-partial" style="${WZ.partialTp?'':'display:none'};padding:8px 0">
+      <label>TP1 (${wzPointUnitLabel()}) <input type="number" id="tm-tp1-pips" min="1" value="${WZ.tp1Pips||20}" style="width:72px;margin-left:8px" onchange="WZ.tp1Pips=Number(this.value)"></label>
+      <label style="margin-top:6px;display:block">Close % <input type="number" id="tm-tp1-pct" min="10" max="90" value="${WZ.tp1Pct||50}" style="width:72px;margin-left:8px" onchange="WZ.tp1Pct=Number(this.value)"></label>
+      <label style="margin-top:6px;display:block"><input type="checkbox" id="tm-tp1-be" ${WZ.tp1MoveBe!==false?'checked':''} onchange="WZ.tp1MoveBe=this.checked"> Move SL to breakeven after TP1</label>
+    </div>
+    <div class="toggle-row" onclick="wzToggleTm('be2')">
+      <div><div class="toggle-lbl">Breakeven (pip)</div><div class="toggle-sub">Lock entry once profit threshold hit</div></div>
+      <div class="switch ${WZ.tmBreakeven?'on':''}" id="sw-tm-be2"></div>
+    </div>
+    <div id="row-tm-be2" style="${WZ.tmBreakeven?'':'display:none'};padding:8px 0">
+      <label>Trigger (${wzPointUnitLabel()}) <input type="number" id="tm-be-trig" value="${WZ.beTrigPips||20}" style="width:72px;margin-left:8px" onchange="WZ.beTrigPips=Number(this.value)"></label>
+      <label style="margin-top:6px;display:block">Offset (${wzPointUnitLabel()}) <input type="number" id="tm-be-off" value="${WZ.beOffPips||1}" style="width:72px;margin-left:8px" onchange="WZ.beOffPips=Number(this.value)"></label>
+    </div>
+    <div class="toggle-row" onclick="wzToggleTm('trail2')" style="margin-bottom:0">
+      <div><div class="toggle-lbl">Trailing (pip)</div><div class="toggle-sub">Ratchet stop behind live price</div></div>
+      <div class="switch ${WZ.tmTrail?'on':''}" id="sw-tm-trail2"></div>
+    </div>
+    <div id="row-tm-trail2" style="${WZ.tmTrail?'':'display:none'};padding:8px 0">
+      <label>Distance (${wzPointUnitLabel()}) <input type="number" id="tm-trail-dist" value="${WZ.trailDistPips||15}" style="width:72px;margin-left:8px" onchange="WZ.trailDistPips=Number(this.value)"></label>
+      <label style="margin-top:6px;display:block">Step (${wzPointUnitLabel()}) <input type="number" id="tm-trail-step" value="${WZ.trailStepPips||5}" style="width:72px;margin-left:8px" onchange="WZ.trailStepPips=Number(this.value)"></label>
+    </div>
+  </div>`:''}
     <div class="toggle-row" onclick="wzToggleExit('eod')" style="margin-top:8px;margin-bottom:0">
       <div><div class="toggle-lbl">⏰ Intraday / Day-Trade Mode</div><div class="toggle-sub">Force-close all positions before end of trading session — no overnight exposure</div></div>
       <div class="switch ${WZ.closeBefore?'on':''}" id="sw-eod"></div>
@@ -6433,6 +6463,17 @@ function renderStep5(){
       <div class="hint">After this cutoff: no new entries, and any open trade is force-closed at the live price. Best for gold, indices, and forex day strategies to avoid overnight gaps and swaps.</div>
     </div>
   </div>`;
+}
+
+function wzToggleTm(which){
+  const map={partial:['sw-tm-partial','row-tm-partial'],be2:['sw-tm-be2','row-tm-be2'],trail2:['sw-tm-trail2','row-tm-trail2']};
+  const ids=map[which]; if(!ids)return;
+  const sw=document.getElementById(ids[0]); const row=document.getElementById(ids[1]);
+  if(!sw||!row)return;
+  const on=sw.classList.toggle('on'); row.style.display=on?'block':'none';
+  if(which==='partial')WZ.partialTp=on;
+  if(which==='be2')WZ.tmBreakeven=on;
+  if(which==='trail2')WZ.tmTrail=on;
 }
 
 function wzToggleExit(which){
@@ -7353,6 +7394,16 @@ async function buildStrategy(){
     // Forex breakeven is pip-based (executor uses pips at 1x leverage, where a
     // leveraged-ROI % trigger would be unreachable).
     if(wzUsesPointSl()){exit.breakeven_at_pips=WZ.bePips||null;exit.breakeven_pct=null;}
+    if(wzUsesPointSl()){
+      Object.assign(data.config,{
+        partial_tp_enabled:!!WZ.partialTp,tp1_pips:Number(WZ.tp1Pips||20),
+        tp1_close_percent:Number(WZ.tp1Pct||50),tp1_move_sl_breakeven:WZ.tp1MoveBe!==false,
+        breakeven_enabled:!!WZ.tmBreakeven,breakeven_trigger_pips:Number(WZ.beTrigPips||20),
+        breakeven_offset_pips:Number(WZ.beOffPips||1),
+        trailing_enabled:!!WZ.tmTrail,trailing_distance_pips:Number(WZ.trailDistPips||15),
+        trailing_step_pips:Number(WZ.trailStepPips||5),
+      });
+    }
     // Forex pip TP/SL — executor converts pips→% at fire time using the live
     // price + the pair's pip size (JPY pairs use 0.01, everything else 0.0001).
     if(wzUsesPointSl()&&(WZ.tp1Pips||WZ.slPips)){

@@ -1653,6 +1653,58 @@ async def modify_position_sltp_for_user(
     )
 
 
+async def amend_position_sl(
+    user_id: int,
+    position_id: int,
+    new_sl: float,
+    *,
+    keep_tp: Optional[float] = None,
+) -> bool:
+    """Amend stop-loss on a live position; preserves take-profit when provided."""
+    from app.database import SessionLocal
+    from app.models import User
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == int(user_id)).first()
+        if not user:
+            return False
+    finally:
+        db.close()
+    return await modify_position_sltp_for_user(
+        user,
+        int(position_id),
+        stop_loss_price=float(new_sl),
+        take_profit_price=keep_tp,
+    )
+
+
+async def partial_close_position(
+    user_id: int,
+    position_id: int,
+    close_vol: int,
+) -> bool:
+    """Partial close via ProtoOAClosePositionReq with explicit volume units."""
+    from app.database import SessionLocal
+    from app.models import UserPreference
+
+    db = SessionLocal()
+    try:
+        prefs = db.query(UserPreference).filter(
+            UserPreference.user_id == int(user_id),
+        ).first()
+        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+            return False
+        access_token = prefs.ctrader_access_token
+        ctid = int(prefs.ctrader_account_id)
+        host = _host_for_account(prefs, ctid)
+    finally:
+        db.close()
+    return await close_position(
+        access_token, ctid, int(position_id), int(close_vol), host=host,
+    )
+
+
 async def close_partial_position_for_user(
     user,
     symbol: str,
