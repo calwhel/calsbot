@@ -16,6 +16,9 @@ from typing import Any, Callable, Dict, Optional
 logger = logging.getLogger(__name__)
 
 _JOB_TTL_SECS = 3600
+# Running jobs with no DB heartbeat longer than this are treated as orphaned
+# (common after Railway deploy / worker restart).
+_DISCOVERY_STALE_SECS = int(os.environ.get("DISCOVERY_STALE_SECS", "240"))
 _TASKS: Dict[str, asyncio.Task] = {}
 _DISCOVERY_SEM: Optional[asyncio.Semaphore] = None
 
@@ -36,12 +39,24 @@ def _db_session():
     return SessionLocal()
 
 
+def _job_is_stale(row) -> bool:
+    if not row or row.status not in ("queued", "running"):
+        return False
+    ts = row.updated_at or row.created_at
+    if not ts:
+        return False
+    age = (datetime.utcnow() - ts).total_seconds()
+    return age > _DISCOVERY_STALE_SECS
+
+
 def _row_to_progress(row) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "status": row.status or "idle",
         "message": row.message or "",
         "scan_type": row.scan_type,
     }
+    if row.updated_at:
+        out["updated_at"] = row.updated_at.isoformat() + "Z"
     if row.result_json is not None:
         if row.status == "done":
             out["result"] = row.result_json
@@ -110,9 +125,23 @@ def get_job(scan_type: str, uid: str):
 
 def job_progress(scan_type: str, uid: str) -> Dict[str, Any]:
     _prune_old_jobs()
+    key = _job_key(scan_type, uid)
     row = get_job(scan_type, uid)
     if not row:
         return {"status": "idle", "message": ""}
+    if _job_is_stale(row):
+        logger.warning(
+            "[discovery-job] stale %s for %s — marking error (age>%ss)",
+            scan_type, uid, _DISCOVERY_STALE_SECS,
+        )
+        _write_job(
+            key,
+            status="error",
+            message="Scan timed out — tap Run again to restart.",
+            error="stale_job",
+            finished=True,
+        )
+        row = get_job(scan_type, uid)
     return _row_to_progress(row)
 
 
@@ -158,8 +187,25 @@ def start_discovery_job(
     key = _job_key(scan_type, uid)
     existing = get_job(scan_type, uid)
     if existing and existing.status in ("queued", "running"):
-        prog = _row_to_progress(existing)
-        return {"ok": True, "started": False, "status": existing.status, **prog}
+        if _job_is_stale(existing):
+            logger.warning(
+                "[discovery-job] recovering stale %s job for %s — restarting",
+                scan_type, uid,
+            )
+            _write_job(
+                key,
+                status="error",
+                message="Previous scan timed out — starting a fresh run…",
+                error="stale_job",
+                finished=True,
+            )
+            local = _TASKS.get(key)
+            if local and not local.done():
+                local.cancel()
+            _TASKS.pop(key, None)
+        else:
+            prog = _row_to_progress(existing)
+            return {"ok": True, "started": False, "status": existing.status, **prog}
 
     from app.strategy_models import DiscoveryScanJob
     db = _db_session()

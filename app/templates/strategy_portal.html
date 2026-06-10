@@ -9138,21 +9138,47 @@ async function _pollDiscoveryJob(scanType, onDone, onErr){
   const progId = {gold:'gold-progress-msg', index:'index-progress-msg', forex:'forex-progress-msg'}[scanType];
   const maxMs = 600000;
   const start = Date.now();
+  let pollFails = 0;
+  let lastMsg = '';
+  let lastBeat = Date.now();
   while(Date.now() - start < maxMs){
     await new Promise(r=>setTimeout(r, 1400));
     try{
       const pr=await _apiFetch('/api/backtest/'+scanType+'-discovery/progress?uid='+encodeURIComponent(UID),{timeoutMs:20000});
+      pollFails = 0;
       if(pr.status===401){
         onErr('Session expired — refresh the page and log in again.');
         return;
       }
       const pd=await pr.json();
       const progEl=document.getElementById(progId);
-      if(pd.message&&progEl) progEl.textContent=pd.message;
+      if(pd.message && pd.message !== lastMsg){
+        lastMsg = pd.message;
+        lastBeat = Date.now();
+        if(progEl) progEl.textContent = pd.message;
+      } else if(progEl && pd.status==='running'){
+        const elapsed = Math.round((Date.now()-start)/1000);
+        progEl.textContent = (pd.message||'Scan running…') + ' · '+elapsed+'s';
+        if(Date.now()-lastBeat > 180000){
+          onErr('Scan stalled — tap New Scan to restart.');
+          return;
+        }
+      }
       if(pd.status==='done'&&pd.result){ onDone(pd.result); return; }
-      if(pd.status==='error'){ onErr(pd.error||pd.message||'Scan failed'); return; }
-      if(pd.status==='running'&&progEl&&!pd.message) progEl.textContent='Scan running…';
-    }catch(e){}
+      if(pd.status==='error'){
+        if(pd.error==='stale_job'||pd.error==='orphaned_job'){
+          onErr(pd.message||'Scan timed out — tap Run again.');
+        }else{
+          onErr(pd.error||pd.message||'Scan failed');
+        }
+        return;
+      }
+    }catch(e){
+      pollFails++;
+      const progEl=document.getElementById(progId);
+      if(progEl && pollFails>=3) progEl.textContent='Connection hiccup — retrying… ('+pollFails+')';
+      if(pollFails>=12){ onErr(_discNetworkMsg(e,'Lost connection to scan — check signal and try again.')); return; }
+    }
   }
   onErr('Scan timed out — please try again.');
 }
@@ -9180,6 +9206,9 @@ async function runGoldFinder(){
       }
       postOk = true;
       if(data.status==='done'&&data.result){ GOLD.result=data.result; renderGoldResults(data.result); return; }
+      if(data.started===false && data.status==='running'){
+        if(progEl) progEl.textContent=(data.message||'Scan already running…')+' — syncing';
+      }
     }catch(postErr){
       if(progEl) progEl.textContent='Reconnecting… checking if scan started';
     }

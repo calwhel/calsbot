@@ -33,7 +33,7 @@ DEFAULT_QUALITY_CFG: Dict[str, Any] = {
     "min_confirmations": 3,
     "min_winrate": 0.58,
     "min_confluences": 2,
-    "min_trades": 20,
+    "min_trades": 8,
     "quality_mode": "strict",  # strict | all
     "allowed_sessions": ["london_kz", "ny_kz"],
 }
@@ -78,9 +78,9 @@ def normalize_quality_cfg(cfg: Optional[Dict] = None) -> Dict[str, Any]:
     except (TypeError, ValueError):
         out["min_confluences"] = 2
     try:
-        out["min_trades"] = max(1, int(out.get("min_trades", 20)))
+        out["min_trades"] = max(1, int(out.get("min_trades", 8)))
     except (TypeError, ValueError):
-        out["min_trades"] = 20
+        out["min_trades"] = 8
     mode = str(out.get("quality_mode") or "strict").lower()
     out["quality_mode"] = mode if mode in ("strict", "all") else "strict"
     sess = out.get("allowed_sessions")
@@ -429,7 +429,7 @@ def grade_setup(
     if n_confl < qcfg["min_confluences"]:
         reasons.append(f"Need {qcfg['min_confluences']} confluences (have {n_confl})")
 
-    logger.info(
+    logger.debug(
         "[scan] grade %s %s %s %s tf=%s score=%.1f grade=%s conf=%d confl=%d passed=%s",
         symbol, signal.get("label", "?"), direction, entry_tf,
         score, grade, n_conf, n_confl, passed,
@@ -505,7 +505,7 @@ def apply_quality_grades(
         if split_ts:
             train_n = int((row.get("stats") or {}).get("closed_trades") or 0)
             test_n = int((test_stats or {}).get("closed_trades") or 0)
-            logger.info(
+            logger.debug(
                 "[scan] walk-forward: train=%s test=%s symbol=%s label=%s tf=%s",
                 train_n, test_n, symbol, row.get("label"), tf,
             )

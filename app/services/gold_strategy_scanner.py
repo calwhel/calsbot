@@ -1090,11 +1090,27 @@ async def run_tradfi_discovery(
         return {"ok": False, "error": fetch_error}
 
     # 2) Build candidate roster (base + Claude proposals).
-    _progress("Asking Claude to propose strategies…")
     candidates = _base_roster(direction_mode)
-    claude_cands = await _claude_propose_candidates(
-        direction_mode, n=12, instrument_label=instrument_label, log_prefix=log_prefix,
-    )
+    _progress("Asking Claude to propose strategies… (up to 1 min)")
+
+    async def _claude_heartbeat():
+        n = 0
+        while True:
+            await asyncio.sleep(18)
+            n += 1
+            _progress(f"Asking Claude to propose strategies… ({n * 18}s)")
+
+    hb = asyncio.create_task(_claude_heartbeat())
+    try:
+        claude_cands = await _claude_propose_candidates(
+            direction_mode, n=12, instrument_label=instrument_label, log_prefix=log_prefix,
+        )
+    finally:
+        hb.cancel()
+        try:
+            await hb
+        except asyncio.CancelledError:
+            pass
 
     def _sig(c: Dict) -> tuple:
         return (c["primaryType"], c["direction"],
@@ -1165,13 +1181,25 @@ async def run_tradfi_discovery(
         f"& {len(SESSIONS)} sessions (walk-forward validated)…"
     )
     _sem = asyncio.Semaphore(max(1, PARALLEL_CANDIDATES))
+    _done = 0
+    _done_lock = asyncio.Lock()
+    _total_cands = len(merged)
 
     async def _run_one(cand: Dict) -> List[Dict]:
+        nonlocal _done
         async with _sem:
-            return await _eval_candidate(
+            batch = await _eval_candidate(
                 cand, candle_map, days, wf_splits,
                 symbol=symbol, asset_class=asset_class, risk_variants=risk_variants,
             )
+        async with _done_lock:
+            _done += 1
+            if _done == 1 or _done % 4 == 0 or _done == _total_cands:
+                _progress(
+                    f"Backtesting… {_done}/{_total_cands} strategies "
+                    f"({len(candle_map)} timeframes, walk-forward)"
+                )
+        return batch
 
     nested = await asyncio.gather(*[_run_one(c) for c in merged])
     raw_results: List[Dict] = [row for batch in nested for row in batch]
@@ -1182,9 +1210,11 @@ async def run_tradfi_discovery(
     # 4) Grade each combo on TEST-split stats + confirmation quality.
     from app.services.setup_quality import apply_quality_grades, normalize_quality_cfg
     qcfg = normalize_quality_cfg(quality_cfg)
-    _progress("Grading setups (walk-forward test split + confirmations)…")
-    all_results = apply_quality_grades(
-        raw_results, candle_map, symbol, qcfg, wf_splits=wf_splits,
+    _progress(f"Grading {len(raw_results)} setups (test split + confirmations)…")
+    all_results = await asyncio.to_thread(
+        apply_quality_grades,
+        raw_results, candle_map, symbol, qcfg,
+        wf_splits=wf_splits,
     )
 
     if not all_results:
