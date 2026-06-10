@@ -2060,11 +2060,17 @@ def _notify_breakeven_alert(
     except (TypeError, ValueError):
         return
     _coin = symbol.upper().replace("USDT", "")
+    _mode = "🧪 PAPER" if (kind or "").lower() == "paper" else "🎯 LIVE"
     _text = (
-        f"🛡️ <b>Breakeven · {_coin}</b>\n"
+        f"🛡️ <b>Breakeven · {_coin}</b> · <i>{_mode}</i>\n"
         f"📋 <b>{_html.escape(str(strategy_name))}</b>\n\n"
         f"Stop moved to entry — this {direction} trade is now risk-free. ✅"
     )
+    if (kind or "").lower() == "paper":
+        _text += (
+            "\n\n📄 <i>Paper/simulated — not on your cTrader account. "
+            "Switch strategy to Live + link cTrader for real orders.</i>"
+        )
     try:
         from app.services.telegram_dm import schedule_dm
         schedule_dm(_tid, _text)
@@ -3230,9 +3236,22 @@ async def evaluate_and_fire(
                 _ctrader_live_ok = False
         is_paper = not (_wants_live and _ctrader_live_ok)
         if _wants_live and is_paper:
-            logger.debug(
-                f"[Strategy {strategy.id}] {asset_class.title()} live strategy downgraded to paper "
-                f"(no cTrader credentials) — signal will still be tracked."
+            _ctrader_blockers = []
+            try:
+                from app.models import UserPreference as _UPb
+                _pb = db.query(_UPb).filter(_UPb.user_id == user.id).first()
+                if not _pb or not (_pb.ctrader_access_token or "").strip():
+                    _ctrader_blockers.append("cTrader not linked")
+                elif not (_pb.ctrader_account_id or "").strip():
+                    _ctrader_blockers.append("no cTrader account selected")
+                elif not getattr(_pb, "forex_approved", False):
+                    _ctrader_blockers.append("forex live not approved")
+            except Exception:
+                _ctrader_blockers.append("cTrader prefs unreadable")
+            logger.warning(
+                f"[Strategy {strategy.id}] LIVE {asset_class} downgraded to PAPER — "
+                f"{'; '.join(_ctrader_blockers) or 'cTrader not ready'} "
+                f"(no broker order will be sent; tracked in TradeHub only)"
             )
     elif asset_class in PAPER_ONLY_CLASSES:
         # Stocks/indices: no broker yet, always paper.
@@ -3987,7 +4006,18 @@ async def evaluate_and_fire(
                         partial_close_pct=float(_partial_close_pct) if _partial_close_pct else None,
                     )
                     _queued = await enqueue_ctrader_order(_job)
-                    order_result = {"order_id": "queued", "queued": True} if _queued else None
+                    if _queued:
+                        logger.info(
+                            f"[{_log_ts()}] [Strategy {strategy.id}] cTrader order queued "
+                            f"exec#{execution.id} {symbol} {direction}"
+                        )
+                        order_result = {"order_id": "queued", "queued": True}
+                    else:
+                        logger.error(
+                            f"[{_log_ts()}] [Strategy {strategy.id}] cTrader order queue "
+                            f"FULL — exec#{execution.id} {symbol} not sent to broker"
+                        )
+                        order_result = None
                 else:
                     from app.services.strategy_trader import place_bitunix_order_for_user
                     order_result = await place_bitunix_order_for_user(
@@ -4086,6 +4116,38 @@ async def evaluate_and_fire(
                         http_client=http_client,
                     ))
                 break  # paper execution is now open — stop processing matches
+
+            if (
+                not is_paper
+                and _broker == "ctrader"
+                and not order_result
+            ):
+                execution.is_paper = True
+                execution.notes = (
+                    (execution.notes or "")
+                    + " | Live→Paper fallback (cTrader order not queued)"
+                ).strip(" |")
+                await _commit_db_with_retry(db, label=f"ctrader-queue-fail#{execution.id}")
+                logger.warning(
+                    f"[Strategy {strategy.id}] {symbol} live exec#{execution.id} — "
+                    f"cTrader order never queued; tracking as paper"
+                )
+                tg_id_ex = _telegram_int_id(user)
+                if tg_id_ex:
+                    try:
+                        await _tg_send(
+                            tg_id_ex,
+                            f"⚠️ <b>cTrader order not placed — paper trade started</b>\n"
+                            f"Strategy: <b>{strategy.name}</b>\n"
+                            f"Signal: {symbol} {direction}\n\n"
+                            f"<i>The live order could not be queued for cTrader "
+                            f"(broker busy or queue full). This position is tracked "
+                            f"as 🧪 paper only — nothing was sent to your broker.</i>",
+                            asset_class=asset_class,
+                        )
+                    except Exception:
+                        pass
+                break
 
             if order_result and order_result.get("queued"):
                 execution.notes = ((execution.notes or "") + " | order_queued").strip(" |")

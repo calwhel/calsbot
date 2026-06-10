@@ -113,10 +113,16 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
 
         if not order_id:
             execution.is_paper = True
-            execution.notes = (
-                f"Live→Paper fallback (queued order): {(order_err or 'no order id')[:180]}"
-            )
+            _err_txt = (order_err or "no order id")[:180]
+            execution.notes = f"Live→Paper fallback (queued order): {_err_txt}"
             db.commit()
+            logger.warning(
+                "[ctrader-queue] exec#%s %s %s — broker order failed: %s",
+                job.execution_id,
+                job.symbol,
+                job.direction,
+                _err_txt,
+            )
             if user and strategy and (not portal_settings or portal_settings.dm_live_alerts):
                 try:
                     from app.services.strategy_executor import _telegram_int_id, _tg_send
@@ -232,6 +238,13 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
 async def _ctrader_order_worker() -> None:
     while True:
         job: CtraderOrderJob = await _get_queue().get()
+        logger.info(
+            "[ctrader-queue] placing exec#%s %s %s user=%s",
+            job.execution_id,
+            job.symbol,
+            job.direction,
+            job.user_id,
+        )
         try:
             from app.database import SessionLocal
             from app.models import User
