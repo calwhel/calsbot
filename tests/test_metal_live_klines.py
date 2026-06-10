@@ -61,17 +61,18 @@ class TestMetalLiveKlines(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 80)
 
     async def test_ctrader_live_falls_through_on_miss(self):
-        """LIVE feed skips Binance/FMP — only Kraken as external fallback."""
+        """When cTrader misses, externals (including Binance) are still tried."""
         with patch.object(
             tp, "_fetch_ctrader_klines",
             new_callable=AsyncMock, return_value=[],
         ), patch.object(
             tp, "_fetch_binance_metals_klines",
-            new_callable=AsyncMock,
-            side_effect=AssertionError("binance skipped when feed LIVE"),
+            new_callable=AsyncMock, return_value=[],
         ), patch.object(
             tp, "_fetch_kraken_metals_klines",
             new_callable=AsyncMock, return_value=_bars(80),
+        ), patch.object(
+            tp, "_fetch_fmp_metals_klines", new_callable=AsyncMock, return_value=[],
         ), patch(
             "app.services.ctrader_price_feed.is_live", return_value=True,
         ), patch(
@@ -101,6 +102,9 @@ class TestMetalLiveKlines(unittest.IsolatedAsyncioTestCase):
     async def test_live_impl_never_returns_gc_f(self):
         with patch.object(
             tp, "fetch_metal_live_candles", new_callable=AsyncMock, return_value=[],
+        ), patch.object(
+            tp, "build_synthetic_metal_candles",
+            new_callable=AsyncMock, return_value=[],
         ), patch.object(
             tp, "_fetch_yahoo_chart_klines", new_callable=AsyncMock,
             return_value=_bars(80, 4350.0),

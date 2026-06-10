@@ -30,6 +30,13 @@ class TestMetalPaperEval(unittest.IsolatedAsyncioTestCase):
         ), patch(
             "app.services.ctrader_price_feed.get_bid_ask",
             return_value=None,
+        ), patch(
+            "app.services.metals_spot_feed.get_price",
+            return_value=None,
+        ), patch(
+            "app.services.metals_spot_feed.fetch_now",
+            new_callable=AsyncMock,
+            return_value=None,
         ):
             out = await se._fetch_price_and_ta(
                 "XAUUSD", MagicMock(), "forex",
@@ -39,7 +46,7 @@ class TestMetalPaperEval(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["price_source"], "kline_close_paper")
         self.assertAlmostEqual(out["price"], 2650.0)
 
-    async def test_live_still_requires_spot(self):
+    async def test_live_uses_metals_spot_feed_when_ctrader_tick_missing(self):
         with patch(
             "app.services.tradfi_prices.get_klines",
             new_callable=AsyncMock,
@@ -54,12 +61,17 @@ class TestMetalPaperEval(unittest.IsolatedAsyncioTestCase):
         ), patch(
             "app.services.ctrader_price_feed.get_bid_ask",
             return_value=None,
+        ), patch(
+            "app.services.metals_spot_feed.get_price",
+            return_value=2651.0,
         ):
             out = await se._fetch_price_and_ta(
                 "XAUUSD", MagicMock(), "forex",
                 timeframe="15m", metal_paper_ok=False,
             )
-        self.assertIsNone(out)
+        self.assertIsNotNone(out)
+        self.assertEqual(out["price_source"], "spot_live")
+        self.assertAlmostEqual(out["price"], 2651.0)
 
 
 if __name__ == "__main__":

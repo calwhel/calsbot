@@ -760,6 +760,17 @@ async def _fetch_price_and_ta(
             if _is_metal:
                 if not live_px or live_px <= 0:
                     live_px = await _tradfi_price_fresh(symbol, asset_class)
+                if not live_px or live_px <= 0:
+                    try:
+                        from app.services.metals_spot_feed import (
+                            fetch_now as _msf_fetch,
+                            get_price as _msf_price,
+                        )
+                        live_px = _msf_price(symbol.upper())
+                        if not live_px or live_px <= 0:
+                            live_px = await _msf_fetch(symbol.upper())
+                    except Exception:
+                        pass
             else:
                 if not live_px:
                     live_px = await _tradfi_live_price(symbol, asset_class)
@@ -769,7 +780,7 @@ async def _fetch_price_and_ta(
             if _is_metal:
                 kline_source = _metal_kline_src(symbol, tf, EXECUTOR_KLINE_BARS)
                 _spot_sources = frozenset({
-                    "binance", "ctrader", "ctrader-user", "fmp", "kraken",
+                    "binance", "ctrader", "ctrader-user", "fmp", "kraken", "synthetic",
                 })
                 if not live_px or live_px <= 0:
                     _ks = (kline_source or "").lower()
@@ -5531,6 +5542,12 @@ async def _run_crypto_executor_shard(
                     except Exception:
                         pass
 
+                try:
+                    from app.services.feed_diagnostics import log_blocker_rollup
+                    log_blocker_rollup(100)
+                except Exception:
+                    pass
+
                 _cycle_s = (datetime.utcnow() - _cycle_t0).total_seconds()
                 if eval_snapshots:
                     logger.info(
@@ -6742,6 +6759,12 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                         )
                     except Exception:
                         pass
+
+                try:
+                    from app.services.feed_diagnostics import log_blocker_rollup
+                    log_blocker_rollup(100)
+                except Exception:
+                    pass
 
                 _cycle_s = (datetime.utcnow() - _cycle_t0).total_seconds()
                 if open_snaps:
