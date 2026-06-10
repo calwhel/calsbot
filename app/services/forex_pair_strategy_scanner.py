@@ -54,6 +54,8 @@ async def run_forex_discovery(
     direction_mode: str = "BOTH",
     progress_cb: Optional[Callable[[str], None]] = None,
     user_id: Optional[int] = None,
+    quality_cfg: Optional[Dict] = None,
+    categories: Optional[list] = None,
 ) -> Dict:
     sym = _normalize_forex_symbol(symbol)
     label = f"{_PAIR_LABELS.get(sym, sym)} ({sym})"
@@ -79,4 +81,6 @@ async def run_forex_discovery(
             f"Could not fetch {sym} historical data from any source "
             "(cTrader, Yahoo, FMP). Connect cTrader demo in Settings for best results."
         ),
+        quality_cfg=quality_cfg,
+        categories=categories,
     )
