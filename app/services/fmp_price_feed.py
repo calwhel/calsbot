@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
+from collections import deque
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 # httpx logs every request URL at INFO — floods logs during 429 storms.
@@ -66,7 +68,20 @@ _TF_TO_FMP = {
 
 _KLINE_CACHE: Dict[Tuple[str, str, int], Tuple[List[List[float]], datetime]] = {}
 _KLINE_TTL = timedelta(seconds=60)
-_KLINE_STALE_TTL = timedelta(seconds=300)
+_KLINE_STALE_TTL = timedelta(hours=1)  # serve during 429 backoff rather than empty
+_KLINE_TTL_BY_TF: Dict[str, timedelta] = {
+    "1min": timedelta(seconds=30),
+    "5min": timedelta(seconds=60),
+    "15min": timedelta(seconds=120),
+    "30min": timedelta(seconds=120),
+    "1hour": timedelta(seconds=300),
+    "4hour": timedelta(seconds=300),
+    "1day": timedelta(seconds=300),
+}
+_FMP_MAX_REQUESTS_PER_MIN = int(os.environ.get("FMP_MAX_REQUESTS_PER_MIN", "750"))
+_FMP_REQUEST_TIMES: Deque[float] = deque()
+_FMP_RATE_LOCK: Optional[asyncio.Lock] = None
+_FMP_KLINE_INFLIGHT: Dict[Tuple[str, str, int], asyncio.Future] = {}
 
 _FMP_STABLE_BASE = "https://financialmodelingprep.com/stable"
 _FMP_LEGACY_BASE = "https://financialmodelingprep.com/api/v3"
@@ -98,6 +113,34 @@ def fmp_backoff_remaining_seconds() -> int:
     if not fmp_in_backoff() or _FMP_BACKOFF_UNTIL is None:
         return 0
     return max(0, int((_FMP_BACKOFF_UNTIL - datetime.utcnow()).total_seconds()))
+
+
+def _fmp_rate_lock() -> asyncio.Lock:
+    global _FMP_RATE_LOCK
+    if _FMP_RATE_LOCK is None:
+        _FMP_RATE_LOCK = asyncio.Lock()
+    return _FMP_RATE_LOCK
+
+
+async def _fmp_rate_limit_wait() -> None:
+    """Global cap — max 750 FMP HTTP requests per rolling minute (free tier)."""
+    async with _fmp_rate_lock():
+        now = time.monotonic()
+        while _FMP_REQUEST_TIMES and (now - _FMP_REQUEST_TIMES[0]) >= 60.0:
+            _FMP_REQUEST_TIMES.popleft()
+        if len(_FMP_REQUEST_TIMES) >= _FMP_MAX_REQUESTS_PER_MIN:
+            wait_s = 60.0 - (now - _FMP_REQUEST_TIMES[0]) + 0.05
+            if wait_s > 0:
+                logger.debug(
+                    "[FMPFeed] rate limiter wait %.1fs (%d req/min)",
+                    wait_s, len(_FMP_REQUEST_TIMES),
+                )
+                await asyncio.sleep(wait_s)
+        _FMP_REQUEST_TIMES.append(time.monotonic())
+
+
+def _kline_fresh_ttl(fmp_interval: str) -> timedelta:
+    return _KLINE_TTL_BY_TF.get(fmp_interval, _KLINE_TTL)
 
 
 def _fmp_note_rate_limit() -> None:
@@ -281,6 +324,7 @@ async def _fmp_http_get(url: str, params: dict, timeout: float = 8.0) -> Tuple[i
     """Return (status_code, json_or_none)."""
     if fmp_in_backoff():
         return 0, None
+    await _fmp_rate_limit_wait()
     try:
         import httpx
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -355,16 +399,12 @@ async def _fetch_fmp_chart_once(
     return []
 
 
-async def get_klines(
+async def _get_klines_impl(
     symbol: str,
     asset_class: str,
-    timeframe: str = "15m",
-    limit: int = 200,
+    timeframe: str,
+    limit: int,
 ) -> List[List[float]]:
-    """
-    OHLC bars from FMP REST historical-chart (stable API first, legacy v3 fallback).
-    Returns [[ts_ms, o, h, l, c, v], ...] oldest-first, up to `limit` rows.
-    """
     api_key = _fmp_api_key()
     if not api_key:
         return []
@@ -373,16 +413,23 @@ async def get_klines(
     fmp_interval = _TF_TO_FMP.get(timeframe, "15min")
     cache_key = (sym, fmp_interval, limit)
     now = datetime.utcnow()
+    fresh_ttl = _kline_fresh_ttl(fmp_interval)
     cached = _KLINE_CACHE.get(cache_key)
     if cached:
         age = now - cached[1]
-        if age < _KLINE_TTL:
+        if age < fresh_ttl:
             return cached[0]
         if fmp_in_backoff() and age < _KLINE_STALE_TTL:
+            logger.debug(
+                f"[FMPFeed] stale klines during 429 backoff: {sym} {timeframe} "
+                f"(age={age.total_seconds():.0f}s)"
+            )
             return cached[0]
 
     if fmp_in_backoff():
-        return cached[0] if cached else []
+        if cached:
+            return cached[0]
+        return []
 
     rows: List[List[float]] = []
     for fmp_sym in _fmp_symbol_candidates(sym):
@@ -390,7 +437,6 @@ async def get_klines(
         if rows:
             break
 
-    # If the target interval is unavailable on this plan, build it from 1m bars.
     if not rows and fmp_interval != "1min":
         need_1m = min(max(limit * _TF_MINUTES.get(fmp_interval, 15), limit), 5000)
         one_min: List[List[float]] = []
@@ -409,14 +455,68 @@ async def get_klines(
     if rows:
         _KLINE_CACHE[cache_key] = (rows, now)
         logger.info(f"[FMPFeed] klines ok: {sym} {timeframe} → {len(rows)} bars")
+    elif cached and fmp_in_backoff():
+        return cached[0]
     elif sym in _METALS_FMP_ALIASES:
         logger.debug(
             f"[FMPFeed] klines empty for {sym} {timeframe} (limit={limit}) — "
-            "Yahoo/Binance metals fallback will be used"
+            "Coinbase/Kraken metals fallback will be used"
         )
     else:
         logger.warning(f"[FMPFeed] klines empty for {sym} {timeframe} (limit={limit})")
     return rows
+
+
+async def get_klines(
+    symbol: str,
+    asset_class: str,
+    timeframe: str = "15m",
+    limit: int = 200,
+) -> List[List[float]]:
+    """
+    OHLC bars from FMP REST historical-chart (stable API first, legacy v3 fallback).
+    Single-flight dedupes concurrent identical requests (e.g. many strategies on EURUSD).
+    Returns [[ts_ms, o, h, l, c, v], ...] oldest-first, up to `limit` rows.
+    """
+    sym = symbol.upper()
+    fmp_interval = _TF_TO_FMP.get(timeframe, "15min")
+    key = (sym, fmp_interval, int(limit))
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+
+    if running is not None:
+        inflight = _FMP_KLINE_INFLIGHT.get(key)
+        if (
+            inflight is not None
+            and not inflight.done()
+            and inflight.get_loop() is running
+        ):
+            try:
+                return await inflight
+            except Exception:
+                cached = _KLINE_CACHE.get(key)
+                return cached[0] if cached else []
+
+        fut = running.create_future()
+        _FMP_KLINE_INFLIGHT[key] = fut
+        try:
+            result = await _get_klines_impl(symbol, asset_class, timeframe, limit)
+            if not fut.done():
+                fut.set_result(result)
+            return result
+        except Exception:
+            cached = _KLINE_CACHE.get(key)
+            result = cached[0] if cached else []
+            if not fut.done():
+                fut.set_result(result)
+            return result
+        finally:
+            if _FMP_KLINE_INFLIGHT.get(key) is fut:
+                _FMP_KLINE_INFLIGHT.pop(key, None)
+
+    return await _get_klines_impl(symbol, asset_class, timeframe, limit)
 
 
 # ── REST polling loop ─────────────────────────────────────────────────────────

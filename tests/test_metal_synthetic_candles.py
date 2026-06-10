@@ -27,18 +27,20 @@ class TestMetalSyntheticCandles(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             tp, "_fetch_ctrader_klines", new_callable=AsyncMock, return_value=[],
         ), patch.object(
-            tp, "_fetch_binance_metals_klines", new_callable=AsyncMock, return_value=[],
+            tp, "_fetch_coinbase_metals_klines", new_callable=AsyncMock, return_value=[],
         ), patch.object(
             tp, "_fetch_fmp_metals_klines", new_callable=AsyncMock, return_value=[],
         ), patch.object(
             tp, "_fetch_kraken_metals_klines", new_callable=AsyncMock, return_value=[],
+        ), patch.object(
+            tp, "_fetch_yahoo_chart_klines", new_callable=AsyncMock, return_value=[],
         ), patch.object(
             tp, "build_synthetic_metal_candles",
             new_callable=AsyncMock,
             return_value=_bars(80),
         ), patch(
             "app.services.ctrader_price_feed.broker_session_ready", return_value=False,
-        ):
+        ), patch.object(tp, "_env_fmp_api_key", return_value=True):
             rows = await tp.fetch_metal_live_candles("XAUUSD", "15m", 80)
         self.assertEqual(len(rows), 80)
         self.assertEqual(

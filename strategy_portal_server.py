@@ -11223,6 +11223,12 @@ async def _fetch_and_store_ctrader_accounts(
                 if chosen:
                     prefs.ctrader_account_id = str(chosen["ctidTraderAccountId"])
             db.commit()
+            if (prefs.ctrader_account_id or "").strip():
+                try:
+                    from app.services.ctrader_price_feed import notify_account_linked
+                    notify_account_linked(user_id)
+                except Exception:
+                    pass
 
         # Notify admin about new connection (skip if this IS the admin)
         if not is_admin:
@@ -11428,18 +11434,23 @@ async def _complete_ctrader_oauth_in_background(code: str, state: str, redirect_
         _set_ctrader_oauth_progress(uid, "ok")
 
     try:
-        from app.services.ctrader_price_feed import notify_account_linked
-        notify_account_linked(user_row["id"])
-    except Exception:
-        pass
-
-    try:
         await _fetch_and_store_ctrader_accounts(
             user_row["id"], access_token, user_row["is_admin"],
             user_row["name"], user_row["uname"], user_row["tg_id"],
         )
     except Exception as e:
         logger.warning(f"[cTrader callback] accounts fetch failed: {type(e).__name__}")
+
+    # Wake feed AFTER account_id is persisted — _list_connected_accounts needs both.
+    try:
+        from app.services.ctrader_price_feed import notify_account_linked
+        notify_account_linked(user_row["id"])
+        logger.info(
+            "[cTrader callback] feed reconnect triggered uid=%s after token+account save",
+            user_row["id"],
+        )
+    except Exception:
+        pass
 
 
 @app.get("/api/ctrader/oauth-progress")
@@ -11609,6 +11620,11 @@ async def api_ctrader_select_account(uid: str = Query(...), request: Request = N
             )
             for _h in (CTRADER_HOST_LIVE, CTRADER_HOST_DEMO):
                 _invalidate_persistent_connection(_h, int(account_id))
+        except Exception:
+            pass
+        try:
+            from app.services.ctrader_price_feed import notify_account_linked
+            notify_account_linked(user.id)
         except Exception:
             pass
         _invalidate_user_cache(uid)

@@ -2,7 +2,7 @@
 Dedicated XAUUSD / XAGUSD spot price poller.
 
 cTrader is authoritative when linked, but gold ticks are often missing. This feed
-keeps metals spot fresh by polling Binance / Coinbase / Kraken in parallel every
+keeps metals spot fresh by polling Coinbase / Kraken in parallel every
 few seconds — even when cTrader is connected but its tick is older than the strict
 real-time window.
 """
@@ -21,14 +21,13 @@ _feed_task: Optional[asyncio.Task] = None
 _POLL_LOCK_ID = 708_110_006
 
 # Canonical symbol → list of (source_label, fetch_key)
+# Binance spot returns HTTP 451 on Railway US — Coinbase/Kraken only.
 _METALS: Dict[str, List[Tuple[str, str]]] = {
     "XAUUSD": [
-        ("binance", "XAUUSDT"),
         ("coinbase", "XAU-USD"),
         ("kraken", "PAXGUSD"),
     ],
     "XAGUSD": [
-        ("binance", "XAGUSDT"),
         ("coinbase", "XAG-USD"),
     ],
 }
@@ -201,8 +200,8 @@ async def _poll_symbol(symbol: str) -> bool:
     if not candidates:
         return False
 
-    # Prefer binance > coinbase > kraken when multiple succeed.
-    rank = {"binance": 0, "coinbase": 1, "kraken": 2}
+    # Prefer coinbase > kraken when multiple succeed.
+    rank = {"coinbase": 0, "kraken": 1}
     candidates.sort(key=lambda x: rank.get(x[1], 99))
     mid, source = candidates[0]
     _store(sym, mid, source)
@@ -243,7 +242,7 @@ async def _stream() -> None:
     global _RUNNING
     logger.info(
         f"[MetalsFeed] started — XAUUSD/XAGUSD every {_POLL_INTERVAL}s "
-        "(parallel binance/coinbase/kraken; always-on real-time spot)"
+        "(parallel coinbase/kraken; always-on real-time spot)"
     )
     _RUNNING = True
     try:
