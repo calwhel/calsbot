@@ -52,7 +52,7 @@ engine = create_engine(
     pool_size=6,
     max_overflow=8,
     pool_timeout=30,
-    pool_recycle=180,
+    pool_recycle=240,
     pool_pre_ping=True,
     connect_args=_neon_connect_args(60000),
 )
@@ -76,7 +76,7 @@ bg_engine = create_engine(
     pool_size=_bg_pool_size,
     max_overflow=_bg_pool_overflow,
     pool_timeout=int(os.getenv("BG_POOL_TIMEOUT", "30")),
-    pool_recycle=180,
+    pool_recycle=240,
     pool_pre_ping=True,
     connect_args=_neon_connect_args(60000),
 )

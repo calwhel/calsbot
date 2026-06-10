@@ -63,6 +63,7 @@ _PROACTIVE_REFRESH_INTERVAL_S = float(
 _last_proactive_refresh: Dict[int, float] = {}  # user_id → monotonic
 _last_auth_error: Optional[str] = None
 _auth_backoff_until: float = 0.0  # monotonic — pause reconnect after dead OAuth
+_auth_terminal_alert_sent: bool = False  # one Telegram alert per terminal OAuth episode
 
 # Terminal auth errors — user must disconnect + re-link cTrader in the portal.
 _AUTH_TERMINAL_MARKERS = (
@@ -341,9 +342,9 @@ def _is_terminal_auth_error(detail: Optional[str]) -> bool:
     return any(marker in up for marker in _AUTH_TERMINAL_MARKERS)
 
 
-def _note_terminal_auth(detail: Optional[str]) -> None:
+def _note_terminal_auth(detail: Optional[str], *, user_id: Optional[int] = None) -> None:
     """Back off reconnect loops when OAuth is dead until the user re-links."""
-    global _auth_backoff_until
+    global _auth_backoff_until, _auth_terminal_alert_sent
     if not _is_terminal_auth_error(detail):
         return
     _auth_backoff_until = time.monotonic() + _AUTH_TERMINAL_BACKOFF_S
@@ -352,6 +353,24 @@ def _note_terminal_auth(detail: Optional[str]) -> None:
         f"{_AUTH_TERMINAL_BACKOFF_S:.0f}s (user must re-link cTrader)",
         (detail or "")[:120],
     )
+    if _auth_terminal_alert_sent:
+        return
+    _auth_terminal_alert_sent = True
+    try:
+        from app.services.telegram_dm import owner_chat_id, send_dm
+        owner = owner_chat_id()
+        if owner:
+            asyncio.get_event_loop().create_task(
+                send_dm(
+                    owner,
+                    "⚠️ <b>cTrader auth failed</b>\n\n"
+                    "The live price feed cannot refresh its OAuth token. "
+                    "Please re-link cTrader in the portal (Settings → cTrader).\n\n"
+                    f"<code>{(detail or 'ACCESS_DENIED')[:100]}</code>",
+                )
+            )
+    except Exception:
+        pass
 
 
 def _remote_feed_mode() -> bool:
@@ -394,35 +413,59 @@ def _shared_ctrader_ticks_fresh(max_age_s: float = 30.0) -> bool:
         return False
 
 
+def invalidate_stream_creds(user_id: Optional[int] = None) -> None:
+    """Drop cached feed credentials so the next cycle reads fresh tokens from DB."""
+    global _stream_creds
+    if user_id is None:
+        _stream_creds = None
+        return
+    if _stream_creds and _stream_creds[2] == int(user_id):
+        _stream_creds = None
+
+
 async def _maybe_refresh_access_token(
     user_id: int,
     access_token: str,
     *,
     force: bool = False,
 ) -> str:
-    """Refresh OAuth access token when due or after an auth failure."""
-    at = (access_token or "").strip()
+    """Refresh OAuth access token — always re-reads refresh_token from DB."""
     now = time.monotonic()
     last = _last_proactive_refresh.get(user_id, 0.0)
     if not force and (now - last) < _PROACTIVE_REFRESH_INTERVAL_S:
-        return at
+        try:
+            from app.database import SessionLocal
+            from app.models import UserPreference
+            db = SessionLocal()
+            try:
+                prefs = db.query(UserPreference).filter(
+                    UserPreference.user_id == user_id
+                ).first()
+                if prefs and prefs.ctrader_access_token:
+                    return prefs.ctrader_access_token.strip()
+            finally:
+                db.close()
+        except Exception:
+            pass
+        return (access_token or "").strip()
     try:
         from app.services.ctrader_client import (
             is_refresh_denied,
             refresh_user_ctrader_token,
         )
         if is_refresh_denied(user_id):
-            return at
+            return (access_token or "").strip()
         new_at = await refresh_user_ctrader_token(user_id)
     except Exception as exc:
         logger.warning(
             f"[CTraderFeed] token refresh failed uid={user_id}: {type(exc).__name__}"
         )
-        return at
+        return (access_token or "").strip()
     if new_at:
         _last_proactive_refresh[user_id] = now
+        invalidate_stream_creds(user_id)
         return new_at.strip()
-    return at
+    return (access_token or "").strip()
 
 
 async def _resolve_symbols(reader, writer, ctid: int, host: str = _HOST_LIVE) -> Dict[str, int]:
@@ -541,38 +584,32 @@ async def _authenticate_stream(
     Returns (reader, writer, access_token, host) or None.
     """
     at = await _maybe_refresh_access_token(user_id, access_token, force=False)
-    primary_host = _HOST_LIVE if is_live else _HOST_DEMO
-    hosts = [primary_host, _HOST_DEMO if primary_host == _HOST_LIVE else _HOST_LIVE]
-
-    for host in hosts:
-        reader = writer = None
-        try:
-            reader, writer = await _open_conn(host)
-            if not await _app_auth(reader, writer):
-                raise ConnectionError("app auth failed")
+    host = _HOST_LIVE if is_live else _HOST_DEMO
+    reader = writer = None
+    try:
+        reader, writer = await _open_conn(host)
+        if not await _app_auth(reader, writer):
+            raise ConnectionError("app auth failed")
+        authed = await _account_auth(reader, writer, at, ctid)
+        if not authed:
+            at = await _maybe_refresh_access_token(user_id, at, force=True)
+            invalidate_stream_creds(user_id)
             authed = await _account_auth(reader, writer, at, ctid)
-            if not authed:
-                at = await _maybe_refresh_access_token(user_id, at, force=True)
-                authed = await _account_auth(reader, writer, at, ctid)
-            if authed:
-                if host != primary_host:
-                    from app.services.ctrader_client import _persist_account_host_metadata
-                    await asyncio.to_thread(
-                        _persist_account_host_metadata, user_id, ctid, host,
-                    )
-                return reader, writer, at, host
-            logger.warning(
-                f"[CTraderFeed] account auth failed uid={user_id} ctid={ctid} "
-                f"host={host}"
-                + (f" ({_last_auth_error})" if _last_auth_error else "")
-            )
-        except Exception as exc:
-            logger.warning(
-                f"[CTraderFeed] connect/auth error uid={user_id} ctid={ctid} "
-                f"host={host}: {exc}"
-            )
-        if writer is not None:
-            await _aclose_writer(writer)
+        if authed:
+            return reader, writer, at, host
+        logger.warning(
+            f"[CTraderFeed] account auth failed uid={user_id} ctid={ctid} "
+            f"host={host}"
+            + (f" ({_last_auth_error})" if _last_auth_error else "")
+        )
+        _note_terminal_auth(_last_auth_error, user_id=user_id)
+    except Exception as exc:
+        logger.warning(
+            f"[CTraderFeed] connect/auth error uid={user_id} ctid={ctid} "
+            f"host={host}: {exc}"
+        )
+    if writer is not None:
+        await _aclose_writer(writer)
     return None
 
 
@@ -641,8 +678,8 @@ async def _feed_loop() -> None:
                     break
             if not session or reader is None or writer is None:
                 detail = _last_auth_error or "no valid session"
-                _note_terminal_auth(detail)
-                raise ConnectionError(f"account auth failed on all hosts/users ({detail})")
+                _note_terminal_auth(detail, user_id=_uid or None)
+                raise ConnectionError(f"account auth failed ({detail})")
 
             name_to_id = await _resolve_symbols(reader, writer, ctid, _host)
 
@@ -1165,9 +1202,11 @@ def _get_wake_event() -> asyncio.Event:
 
 def notify_account_linked(user_id: Optional[int] = None) -> None:
     """Wake the feed loop immediately after OAuth links a cTrader account."""
-    global _auth_backoff_until, _last_auth_error
+    global _auth_backoff_until, _last_auth_error, _auth_terminal_alert_sent
     _auth_backoff_until = 0.0
     _last_auth_error = None
+    _auth_terminal_alert_sent = False
+    invalidate_stream_creds(user_id)
     try:
         from app.services.ctrader_client import clear_ctrader_oauth_denied
         clear_ctrader_oauth_denied(user_id)

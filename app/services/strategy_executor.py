@@ -5218,6 +5218,55 @@ def get_heartbeats() -> Dict[str, float]:
     return dict(_EXECUTOR_HEARTBEATS)
 
 
+async def persist_executor_process_heartbeat() -> None:
+    """Persist standalone executor liveness to DB (30s cadence from executor_runner)."""
+    import os as _os
+
+    mark_heartbeat("executor_process")
+    from sqlalchemy import text as _sql_text
+    from app.database import BgSessionLocal as SessionLocal
+    try:
+        from app.executor_lock import get_executor_lock_id
+        _lock_id = get_executor_lock_id()
+    except Exception:
+        _lock_id = None
+    db = SessionLocal()
+    try:
+        db.execute(_sql_text("""
+            CREATE TABLE IF NOT EXISTS executor_runtime_heartbeat (
+                process_key VARCHAR(32) PRIMARY KEY,
+                last_seen_at TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+                lock_id INTEGER,
+                host_pid INTEGER
+            )
+        """))
+        db.execute(
+            _sql_text("""
+                INSERT INTO executor_runtime_heartbeat
+                    (process_key, last_seen_at, lock_id, host_pid)
+                VALUES
+                    (:pk, NOW() AT TIME ZONE 'utc', :lid, :pid)
+                ON CONFLICT (process_key) DO UPDATE SET
+                    last_seen_at = EXCLUDED.last_seen_at,
+                    lock_id = EXCLUDED.lock_id,
+                    host_pid = EXCLUDED.host_pid
+            """),
+            {
+                "pk": "standalone" if _os.environ.get("EXECUTOR_STANDALONE") else "portal",
+                "lid": _lock_id,
+                "pid": _os.getpid(),
+            },
+        )
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
 async def run_strategy_executor():
     """
     Main background loop. Evaluates all active + paper strategies for all users.
@@ -6231,7 +6280,10 @@ async def _reconcile_forex_closes() -> None:
     sweeps it classifies WIN/LOSS/BREAKEVEN via price-vs-TP/SL distance and fires
     `_close_live_forex_execution_and_notify`.
     """
-    from app.services.ctrader_client import get_open_position_ids_for_user
+    from app.services.ctrader_client import (
+        get_open_position_ids_for_user,
+        get_position_close_detail_for_user,
+    )
 
     try:
         work = await asyncio.to_thread(_build_forex_reconcile_worklist)
@@ -6264,6 +6316,26 @@ async def _reconcile_forex_closes() -> None:
                 _FX_RECONCILE_MISSING.pop(ex_id, None)
                 continue
 
+            # Broker truth: deal history gives actual close price (catches downtime misses).
+            broker_close = await get_position_close_detail_for_user(
+                user_obj[uid],
+                int(w["position_id"]),
+                entry_hint=w["entry"],
+                direction=w["direction"],
+            )
+            if broker_close and broker_close.get("exit_price"):
+                _FX_RECONCILE_MISSING.pop(ex_id, None)
+                outcome = broker_close.get("outcome") or "LOSS"
+                exit_price = float(broker_close["exit_price"])
+                logger.info(
+                    f"[FX-reconcile] {w['symbol']} exec#{ex_id} broker closed "
+                    f"pos={w['position_id']} @ {exit_price} → {outcome}"
+                )
+                await _close_live_forex_execution_and_notify(
+                    ex_id, outcome, exit_price, source="ctrader-reconcile-broker"
+                )
+                continue
+
             miss = _FX_RECONCILE_MISSING.get(ex_id, 0) + 1
             _FX_RECONCILE_MISSING[ex_id] = miss
             if miss < 2:
@@ -6273,7 +6345,7 @@ async def _reconcile_forex_closes() -> None:
                 )
                 continue
 
-            # Confirmed gone — classify the close via current price vs TP/SL.
+            # Fallback when deal list unavailable — classify via TP/SL proximity.
             price = None
             try:
                 from app.services import ctrader_price_feed as _ctf
@@ -6290,7 +6362,6 @@ async def _reconcile_forex_closes() -> None:
             tp, sl, entry = w["tp_price"], w["sl_price"], w["entry"]
 
             def _classify_sl(_sl) -> str:
-                # Shared helper → live == paper == backtest classification.
                 return _classify_sl_outcome(_sl, entry, w["direction"])
 
             outcome = None
@@ -6307,7 +6378,6 @@ async def _reconcile_forex_closes() -> None:
                 exit_price = sl
                 outcome = _classify_sl(sl)
             elif price and price > 0:
-                # No stored TP/SL — fall back to direction vs last price.
                 if w["direction"] == "LONG":
                     outcome = "WIN" if price >= entry else "LOSS"
                 else:
@@ -6316,8 +6386,8 @@ async def _reconcile_forex_closes() -> None:
 
             if outcome is None or exit_price is None:
                 logger.info(
-                    f"[FX-reconcile] {w['symbol']} exec#{ex_id} gone but no price/levels "
-                    f"to classify — retrying next sweep"
+                    f"[FX-reconcile] {w['symbol']} exec#{ex_id} gone but no broker deal "
+                    f"or price to classify — retrying next sweep"
                 )
                 continue
 

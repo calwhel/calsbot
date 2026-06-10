@@ -22,8 +22,23 @@ logging.basicConfig(
 
 logger = logging.getLogger("executor_runner")
 
+_RESTART_DELAY_SECS = 5
+_HEARTBEAT_INTERVAL_SECS = 30
 
-async def _run_forever() -> None:
+
+async def _executor_process_heartbeat_loop() -> None:
+    """30s heartbeat log + DB timestamp so a silent death is visible in logs/DB."""
+    while True:
+        try:
+            from app.services.strategy_executor import persist_executor_process_heartbeat
+            await persist_executor_process_heartbeat()
+            logger.info("[executor] heartbeat OK (standalone process)")
+        except Exception as exc:
+            logger.warning("[executor] heartbeat persist failed: %s", exc)
+        await asyncio.sleep(_HEARTBEAT_INTERVAL_SECS)
+
+
+async def _run_executor_session() -> None:
     os.environ.setdefault("FORCE_EXECUTOR", "1")
     os.environ["EXECUTOR_STANDALONE"] = "1"
     if os.environ.get("EXECUTOR_ONLY", "").lower() in ("1", "true", "yes"):
@@ -42,23 +57,37 @@ async def _run_forever() -> None:
     except Exception as exc:
         logger.warning("DB reachability check failed (non-fatal): %s", exc)
 
-    # Drop ghost holders (old Railway container, dev laptop, etc.) before the
-    # slow strategy_portal_server import — otherwise we sit in standby for hours.
     from app.executor_lock import reclaim_executor_lock
     reclaim_executor_lock(force=True)
 
     import strategy_portal_server as _portal
-    # Claim loop must not force-reclaim again on every Neon SSL reconnect.
     _portal._initial_executor_reclaim_done = True
 
     from strategy_portal_server import _executor_claim_loop
 
     logger.info("Standalone executor process starting — acquiring advisory lock…")
+    asyncio.create_task(_executor_process_heartbeat_loop())
     await _executor_claim_loop(first_attempt_delay=0)
 
-    # Claim loop returns after tasks are scheduled; keep this process alive.
     while True:
         await asyncio.sleep(3600)
+
+
+async def _run_forever() -> None:
+    """Never exit silently — CRITICAL log + 5s restart on any fatal error."""
+    while True:
+        try:
+            await _run_executor_session()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.critical(
+                "Standalone executor exited unexpectedly (%s) — restarting in %ss",
+                exc,
+                _RESTART_DELAY_SECS,
+                exc_info=True,
+            )
+            await asyncio.sleep(_RESTART_DELAY_SECS)
 
 
 def main() -> None:
