@@ -128,13 +128,16 @@ class NewCoinAlertService:
                 return {}
             
             search_data = response.json()
-            coins = search_data.get('coins', [])
-            
-            if not coins:
+            if not isinstance(search_data, dict):
+                return {}
+            coins = search_data.get('coins') or []
+            if not isinstance(coins, list) or not coins:
                 return {}
             
             # Get first match (usually correct)
-            coin_id = coins[0].get('id')
+            coin_id = coins[0].get('id') if isinstance(coins[0], dict) else None
+            if not coin_id:
+                return {}
             
             # Get detailed info
             detail_url = f"{self.coingecko_api}/coins/{coin_id}"
@@ -144,9 +147,12 @@ class NewCoinAlertService:
                 return {}
             
             coin_data = detail_response.json()
+            if not isinstance(coin_data, dict):
+                return {}
             
             # Extract description (first 200 chars)
-            description = coin_data.get('description', {}).get('en', '')
+            desc_block = coin_data.get('description')
+            description = desc_block.get('en', '') if isinstance(desc_block, dict) else ''
             if description:
                 description = description[:200] + '...' if len(description) > 200 else description
             

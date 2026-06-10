@@ -206,22 +206,210 @@ async def _fetch_mexc_ticker(
     return None
 
 
+async def _fetch_binance_futures_klines(
+    http_client: httpx.AsyncClient, symbol: str, interval: str, limit: int,
+) -> List[list]:
+    iv = interval.replace("60m", "1h").replace("120m", "2h").replace("240m", "4h")
+    try:
+        resp = await http_client.get(
+            "https://fapi.binance.com/fapi/v1/klines",
+            params={"symbol": symbol, "interval": iv, "limit": max(int(limit), 1)},
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list) and data:
+                return data
+    except Exception as e:
+        logger.debug("[crypto-md] Binance klines %s %s: %s", symbol, interval, e)
+    return []
+
+
+async def _fetch_bybit_klines(
+    http_client: httpx.AsyncClient, symbol: str, interval: str, limit: int,
+) -> List[list]:
+    _bybit_iv = {
+        "1m": "1", "5m": "5", "15m": "15", "30m": "30",
+        "1h": "60", "60m": "60", "2h": "120", "4h": "240",
+        "1d": "D", "1w": "W",
+    }
+    iv = _bybit_iv.get(interval, "15")
+    try:
+        resp = await http_client.get(
+            "https://api.bybit.com/v5/market/kline",
+            params={
+                "category": "linear",
+                "symbol": symbol,
+                "interval": iv,
+                "limit": max(int(limit), 1),
+            },
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return []
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            return []
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            return []
+        rows_raw = result.get("list") or []
+        if not isinstance(rows_raw, list):
+            return []
+        out: List[list] = []
+        for k in rows_raw:
+            if not isinstance(k, (list, tuple)) or len(k) < 5:
+                continue
+            try:
+                ts = int(k[0])
+                out.append([
+                    ts,
+                    str(k[1]), str(k[2]), str(k[3]), str(k[4]),
+                    str(k[5] if len(k) > 5 else 0),
+                    ts,
+                    "0",
+                ])
+            except Exception:
+                continue
+        out.sort(key=lambda r: r[0])
+        return out
+    except Exception as e:
+        logger.debug("[crypto-md] Bybit klines %s %s: %s", symbol, interval, e)
+    return []
+
+
+async def _fetch_coingecko_ticker(
+    http_client: httpx.AsyncClient, symbol: str,
+) -> Optional[Dict]:
+    """Last-resort spot price when exchange tickers fail (no klines)."""
+    base = symbol.upper().replace("USDT", "").replace("PERP", "")
+    if not base:
+        return None
+    try:
+        from app.services.coingecko_safe import fetch_markets
+        coins = await fetch_markets(
+            http_client,
+            params={
+                "vs_currency": "usd",
+                "ids": "",
+                "order": "market_cap_desc",
+                "per_page": 250,
+                "page": 1,
+            },
+        )
+        match = next(
+            (c for c in coins if (c.get("symbol") or "").upper() == base),
+            None,
+        )
+        if not match:
+            return None
+        px = float(match.get("current_price") or 0)
+        if px <= 0:
+            return None
+        chg = float(match.get("price_change_percentage_24h") or 0)
+        vol = float(match.get("total_volume") or 0)
+        return {
+            "symbol": symbol,
+            "lastPrice": str(px),
+            "priceChangePercent": str(chg),
+            "quoteVolume": str(vol),
+            "highPrice": str(px),
+            "lowPrice": str(px),
+            "openPrice": str(px),
+        }
+    except Exception:
+        return None
+
+
 async def _fetch_klines_chain(
     http_client: httpx.AsyncClient, symbol: str, interval: str, limit: int,
 ) -> List[list]:
-    rows = await _fetch_mexc_klines(http_client, symbol, interval, limit)
-    if rows:
-        return rows
+    # Priority: Binance → Bybit → MEXC → Bitunix
+    for fetcher, label in (
+        (_fetch_binance_futures_klines, "binance"),
+        (_fetch_bybit_klines, "bybit"),
+        (_fetch_mexc_klines, "mexc"),
+    ):
+        rows = await fetcher(http_client, symbol, interval, limit)
+        if rows:
+            logger.debug("[crypto-md] klines %s %s via %s (%d bars)", symbol, interval, label, len(rows))
+            return rows
     return await fetch_klines(http_client, symbol, interval, limit)
+
+
+async def _fetch_binance_futures_ticker(
+    http_client: httpx.AsyncClient, symbol: str,
+) -> Optional[Dict]:
+    try:
+        resp = await http_client.get(
+            "https://fapi.binance.com/fapi/v1/ticker/24hr",
+            params={"symbol": symbol},
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, dict) and float(data.get("lastPrice", 0) or 0) > 0:
+                return data
+    except Exception:
+        pass
+    return None
+
+
+async def _fetch_bybit_ticker(
+    http_client: httpx.AsyncClient, symbol: str,
+) -> Optional[Dict]:
+    try:
+        resp = await http_client.get(
+            "https://api.bybit.com/v5/market/tickers",
+            params={"category": "linear", "symbol": symbol},
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return None
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            return None
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            return None
+        items = result.get("list") or []
+        if not isinstance(items, list) or not items:
+            return None
+        t = items[0] if isinstance(items[0], dict) else None
+        if not t:
+            return None
+        last = float(t.get("lastPrice") or 0)
+        if last <= 0:
+            return None
+        open_ = float(t.get("prevPrice24h") or t.get("openPrice") or last)
+        chg = ((last - open_) / open_ * 100.0) if open_ > 0 else 0.0
+        return {
+            "symbol": symbol,
+            "lastPrice": str(last),
+            "priceChangePercent": str(chg),
+            "quoteVolume": str(float(t.get("turnover24h") or 0)),
+            "highPrice": str(float(t.get("highPrice24h") or last)),
+            "lowPrice": str(float(t.get("lowPrice24h") or last)),
+            "openPrice": str(open_),
+        }
+    except Exception:
+        return None
 
 
 async def _fetch_ticker_chain(
     http_client: httpx.AsyncClient, symbol: str,
 ) -> Optional[Dict]:
-    t = await _fetch_mexc_ticker(http_client, symbol)
-    if t:
-        return t
-    return await fetch_ticker(http_client, symbol)
+    for fetcher in (
+        _fetch_binance_futures_ticker,
+        _fetch_bybit_ticker,
+        _fetch_mexc_ticker,
+        fetch_ticker,
+        _fetch_coingecko_ticker,
+    ):
+        t = await fetcher(http_client, symbol)
+        if t:
+            return t
+    return None
 
 
 def _calc_rsi(closes: list) -> float:
@@ -336,6 +524,7 @@ async def fetch_crypto_price_and_ta(
             "volume_ratio": volume_ratio,
             "btc_correlation": btc_corr,
             "enhanced_ta": enhanced_ta,
+            "candles_loaded": max(len(klines_15m or []), len(klines_1h or [])),
         }
     except Exception as exc:
         logger.debug("[crypto-md] price/TA failed %s: %s", symbol, exc)

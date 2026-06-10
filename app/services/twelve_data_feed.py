@@ -12,7 +12,7 @@ import os
 import time
 from collections import deque
 from datetime import date, datetime, timedelta
-from typing import Deque, Dict, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -222,3 +222,88 @@ def status() -> Dict[str, object]:
         "max_per_minute": _MAX_PER_MINUTE,
         "max_per_day": _MAX_PER_DAY,
     }
+
+
+_INTERVAL_MAP: Dict[str, str] = {
+    "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min",
+    "1h": "1h", "60m": "1h", "4h": "4h", "1d": "1day",
+}
+
+
+async def fetch_klines(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    asset_class: str = "forex",
+    *,
+    scanner_ok: bool = True,
+) -> List[list]:
+    """
+    OHLCV for forex/index scanners. scanner_ok=True bypasses the 09–18 UTC window
+    so scan loops keep running outside London/US overlap.
+    """
+    if not is_enabled():
+        return []
+    if not scanner_ok and not can_request():
+        return []
+
+    td_sym = to_twelve_data_symbol(symbol, asset_class)
+    if not td_sym:
+        return []
+    api_key = _api_key()
+    if not api_key:
+        return []
+
+    interval = _INTERVAL_MAP.get(timeframe, "15min")
+    url = f"{_BASE}/time_series"
+    params = {
+        "symbol": td_sym,
+        "interval": interval,
+        "outputsize": str(min(max(int(limit), 10), 500)),
+        "apikey": api_key,
+        "format": "JSON",
+    }
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, params=params)
+        if resp.status_code == 429:
+            _note_rate_limit()
+            return []
+        if resp.status_code != 200:
+            return []
+        body = resp.json()
+        if not isinstance(body, dict) or body.get("status") == "error":
+            return []
+        values = body.get("values")
+        if not isinstance(values, list):
+            return []
+        rows: List[list] = []
+        for bar in reversed(values):
+            if not isinstance(bar, dict):
+                continue
+            try:
+                from datetime import datetime as _dt
+                dt = _dt.fromisoformat(str(bar.get("datetime", "")).replace("Z", "+00:00"))
+                ts_ms = int(dt.timestamp() * 1000)
+                o = float(bar.get("open") or 0)
+                h = float(bar.get("high") or 0)
+                l = float(bar.get("low") or 0)
+                c = float(bar.get("close") or 0)
+                if c <= 0:
+                    continue
+                rows.append([ts_ms, o, h, l, c, float(bar.get("volume") or 0)])
+            except Exception:
+                continue
+        rows.sort(key=lambda r: r[0])
+        out = rows[-limit:] if rows else []
+        if out:
+            _note_request()
+            logger.info(
+                "[TwelveData] klines ok %s %s → %d bars",
+                symbol, timeframe, len(out),
+            )
+        return out
+    except Exception as exc:
+        logger.debug("[TwelveData] klines failed %s %s: %s", symbol, timeframe, exc)
+        return []

@@ -1922,6 +1922,16 @@ async def _start_executor_tasks():
 
     asyncio.create_task(_executor_startup_heal())
 
+    async def _feed_startup_diagnostics():
+        await asyncio.sleep(12)
+        try:
+            from app.services.feed_diagnostics import run_startup_diagnostics
+            await run_startup_diagnostics()
+        except Exception as _diag_err:
+            logger.warning("[executor] feed diagnostics failed (non-fatal): %s", _diag_err)
+
+    asyncio.create_task(_feed_startup_diagnostics())
+
     from app.services.strategy_executor import (
         run_strategy_executor, run_live_position_monitor,
         run_forex_executor, run_forex_live_manager_fast,
