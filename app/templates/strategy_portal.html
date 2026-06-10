@@ -2542,6 +2542,18 @@ function dismissTgBanner(){
             <button class="pine-analyse-btn" style="margin-top:11px;background:linear-gradient(135deg,#a855f7,#7c3aed)" onclick="openIndexFinder()">📊 Find Best NASDAQ Strategy →</button>
           </div>
 
+          <!-- Scheduled discovery scans (Pro) -->
+          <div id="scan-schedules-card" style="margin-bottom:16px;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--card2)">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+              <div>
+                <div style="font-size:14px;font-weight:800">⏰ Scheduled Scans <span style="font-size:10px;color:var(--muted);font-weight:600">· Pro · Telegram alerts</span></div>
+                <div style="font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.45">Auto-run Gold / Forex / Index finders on an interval. Get Telegram alerts when grade ≥ your minimum (default B).</div>
+              </div>
+              <button class="btn" style="font-size:12px" onclick="loadScanSchedules()">↻ Refresh</button>
+            </div>
+            <div id="scan-schedules-list" style="margin-top:10px;font-size:12px;color:var(--muted)">Open a finder and tap <b>Save &amp; schedule</b>, or refresh to load saved schedules.</div>
+          </div>
+
           <!-- Live Structure Scanner (indices + forex) -->
           <div id="forex-scanner-card" style="margin-bottom:16px;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--card2)">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
@@ -3301,6 +3313,7 @@ function dismissTgBanner(){
       <button class="btn" onclick="goldReset()">↺ New Scan</button>
       <button class="btn" id="gold-build-selected-btn" onclick="goldBuildSelected()">⚡ Build selected</button>
       <button class="btn" id="gold-build-all-btn" onclick="goldBuildAll()">Build all</button>
+      <button class="btn" onclick="saveDiscSchedule('gold')">⏰ Save &amp; schedule</button>
       <button class="btn primary" id="gold-build-btn" onclick="goldBuildInAI()">💬 Build this in AI Builder</button>
     </div>
   </div>
@@ -3364,6 +3377,7 @@ function dismissTgBanner(){
       <button class="btn" onclick="forexReset()">↺ New Scan</button>
       <button class="btn" id="forex-build-selected-btn" onclick="forexBuildSelected()">⚡ Build selected</button>
       <button class="btn" id="forex-build-all-btn" onclick="forexBuildAll()">Build all</button>
+      <button class="btn" onclick="saveDiscSchedule('forex')">⏰ Save &amp; schedule</button>
       <button class="btn primary" id="forex-build-btn" onclick="forexBuildInAI()">💬 Build this in AI Builder</button>
     </div>
   </div>
@@ -3428,6 +3442,7 @@ function dismissTgBanner(){
       <button class="btn" onclick="indexReset()">↺ New Scan</button>
       <button class="btn" id="index-build-selected-btn" onclick="indexBuildSelected()">⚡ Build selected</button>
       <button class="btn" id="index-build-all-btn" onclick="indexBuildAll()">Build all</button>
+      <button class="btn" onclick="saveDiscSchedule('index')">⏰ Save &amp; schedule</button>
       <button class="btn primary" id="index-build-btn" onclick="indexBuildInAI()">💬 Build this in AI Builder</button>
     </div>
   </div>
@@ -8678,7 +8693,7 @@ function switchBuildMode(mode) {
   document.getElementById('build-pine-panel').style.display = mode === 'pine' ? '' : 'none';
   document.getElementById('build-scan-panel').style.display = mode === 'scan' ? '' : 'none';
   if (mode === 'scan') {
-    try { loadForexScanner(false); loadBestSignals(); } catch (e) {}
+    try { loadForexScanner(false); loadBestSignals(); loadScanSchedules(); } catch (e) {}
   }
   if (mode === 'chat') {
     if (cbMessages.length === 0) {
@@ -9020,6 +9035,60 @@ function _renderDiscLeaderboard(d, prefix, best, unitLabel){
   html+='</table></div>';
   return html;
 }
+async function saveDiscSchedule(scanType){
+  const prefix=scanType;
+  const state={gold:GOLD,forex:FOREX,index:INDEX}[scanType]||{};
+  const interval=parseInt(prompt('Run every how many minutes? (min 15)', '60')||'60',10)||60;
+  const minGrade=(prompt('Minimum grade to alert (A/B/C/D)?','B')||'B').toUpperCase().slice(0,1);
+  const body=_discoveryScanBody(prefix, {
+    scan_type:scanType,
+    name:(scanType==='gold'?'Gold':scanType==='forex'?'Forex':'Index')+' scan',
+    days:state.days||90,
+    direction:state.dir||'BOTH',
+    symbol:state.sym||undefined,
+    interval_minutes:Math.max(15,interval),
+    min_grade_alert:minGrade,
+  });
+  try{
+    const r=await fetch('/api/scan-schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(r.status===402){ alert('Scheduled scans require Pro.'); return; }
+    if(!r.ok) throw new Error(d.detail||d.message||d.error||'Save failed');
+    alert('Scheduled — alerts when grade ≥ '+minGrade+' every '+interval+' min.');
+    loadScanSchedules();
+  }catch(e){ alert('Could not save schedule: '+(e.message||e)); }
+}
+async function loadScanSchedules(){
+  const el=document.getElementById('scan-schedules-list');
+  if(!el||!UID) return;
+  el.textContent='Loading…';
+  try{
+    const r=await fetch('/api/scan-schedules?uid='+encodeURIComponent(UID));
+    const d=await r.json();
+    if(r.status===402){ el.innerHTML='<span style="color:var(--muted)">Scheduled scans require <b>Pro</b>.</span>'; return; }
+    if(!r.ok) throw new Error(d.detail||'Failed');
+    const rows=d.schedules||[];
+    if(!rows.length){ el.innerHTML='<span style="color:var(--muted)">No schedules yet — use <b>Save &amp; schedule</b> in a finder modal.</span>'; return; }
+    el.innerHTML=rows.map(s=>'<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--border)">'
+      +'<div><b>'+_gEsc(s.name)+'</b> · '+_gEsc(s.scan_type)+(s.symbol?' '+_gEsc(s.symbol):'')
+      +' · every '+s.interval_minutes+'m · alert ≥'+_gEsc(s.min_grade_alert)
+      +(s.last_run_at?' · last '+new Date(s.last_run_at).toLocaleString():'')
+      +'</div><div style="display:flex;gap:4px">'
+      +'<button class="btn" style="font-size:10px;padding:4px 8px" onclick="toggleScanSchedule('+s.id+','+(!s.enabled)+')">'+(s.enabled?'Pause':'Enable')+'</button>'
+      +'<button class="btn" style="font-size:10px;padding:4px 8px;color:#e05858" onclick="deleteScanSchedule('+s.id+')">Delete</button>'
+      +'</div></div>').join('');
+  }catch(e){ el.textContent='Could not load schedules.'; }
+}
+async function toggleScanSchedule(id, enabled){
+  await fetch('/api/scan-schedules/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,enabled})});
+  loadScanSchedules();
+}
+async function deleteScanSchedule(id){
+  if(!confirm('Delete this scheduled scan?')) return;
+  await fetch('/api/scan-schedules/'+id+'?uid='+encodeURIComponent(UID),{method:'DELETE'});
+  loadScanSchedules();
+}
+
 async function _discBuildSelected(prefix, state, buildOneFn){
   const res=state.result;
   if(!res||!Array.isArray(res.leaderboard)||!res.leaderboard.length) return;
