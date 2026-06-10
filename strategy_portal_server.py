@@ -15916,6 +15916,23 @@ async def _discovery_auth(uid: str) -> tuple:
     return "bad_uid", None
 
 
+def _discovery_scan_options(body: dict) -> tuple:
+    """Parse quality_cfg + signal categories from discovery POST body."""
+    from app.services.setup_quality import normalize_quality_cfg
+
+    quality_cfg = dict(body.get("quality_cfg") or {})
+    if body.get("strict_quality") is not None:
+        quality_cfg["quality_mode"] = "strict" if body.get("strict_quality", True) else "all"
+    quality_cfg = normalize_quality_cfg(quality_cfg)
+
+    categories = body.get("categories") or body.get("signal_categories")
+    if isinstance(categories, list):
+        categories = [str(c).strip() for c in categories if str(c).strip()]
+    else:
+        categories = None
+    return quality_cfg, categories
+
+
 def _discovery_progress_response(scan_type: str, uid: str) -> dict:
     from app.services.discovery_jobs import job_progress
     prog = job_progress(scan_type, uid.strip())
@@ -15936,12 +15953,13 @@ async def backtest_gold_discovery(request: Request):
     """
     Start Claude-driven GOLD (XAUUSD) discovery in the background.
     Poll GET /api/backtest/gold-discovery/progress until status=done.
-    Body: { uid, days (30|90|180), direction ("BOTH"|"LONG"|"SHORT") }
+    Body: { uid, days, direction, strict_quality?, quality_cfg?, categories? }
     """
     body = await request.json()
     uid  = (body.get("uid") or "").strip()
     days = int(body.get("days", 90))
     direction_mode = (body.get("direction") or "BOTH").upper()
+    quality_cfg, categories = _discovery_scan_options(body)
 
     auth, user_id = await _discovery_auth(uid)
     if auth == "bad_uid":
@@ -15958,6 +15976,7 @@ async def backtest_gold_discovery(request: Request):
         return await run_gold_discovery(
             days=days, direction_mode=direction_mode,
             user_id=user_id, progress_cb=progress_cb,
+            quality_cfg=quality_cfg, categories=categories,
         )
 
     return JSONResponse(content=start_discovery_job("gold", uid, _runner))
@@ -15980,6 +15999,7 @@ async def backtest_index_discovery(request: Request):
     days = int(body.get("days", 90))
     direction_mode = (body.get("direction") or "BOTH").upper()
     symbol = (body.get("symbol") or "NAS100").strip()
+    quality_cfg, categories = _discovery_scan_options(body)
 
     auth, user_id = await _discovery_auth(uid)
     if auth == "bad_uid":
@@ -15996,6 +16016,7 @@ async def backtest_index_discovery(request: Request):
         return await run_index_discovery(
             symbol=symbol, days=days, direction_mode=direction_mode,
             user_id=user_id, progress_cb=progress_cb,
+            quality_cfg=quality_cfg, categories=categories,
         )
 
     return JSONResponse(content=start_discovery_job("index", uid, _runner))
@@ -16018,6 +16039,7 @@ async def backtest_forex_discovery(request: Request):
     days = int(body.get("days", 90))
     direction_mode = (body.get("direction") or "BOTH").upper()
     symbol = (body.get("symbol") or "EURUSD").strip()
+    quality_cfg, categories = _discovery_scan_options(body)
 
     auth, user_id = await _discovery_auth(uid)
     if auth == "bad_uid":
@@ -16034,6 +16056,7 @@ async def backtest_forex_discovery(request: Request):
         return await run_forex_discovery(
             symbol=symbol, days=days, direction_mode=direction_mode,
             user_id=user_id, progress_cb=progress_cb,
+            quality_cfg=quality_cfg, categories=categories,
         )
 
     return JSONResponse(content=start_discovery_job("forex", uid, _runner))
