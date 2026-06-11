@@ -124,6 +124,9 @@ async def send_dm(
     *,
     parse_mode: str = "HTML",
     tokens: Optional[List[str]] = None,
+    msg_type: str = "dm",
+    symbol: str = "",
+    exec_id: int = 0,
 ) -> bool:
     """Send a Telegram DM; return True only on confirmed delivery."""
     if not chat_id:
@@ -133,6 +136,8 @@ async def send_dm(
         logger.warning("Telegram DM skipped for %s: no bot token configured", chat_id)
         return False
 
+    sym = (symbol or "?").upper()
+    eid = int(exec_id or 0)
     global _LAST_SEND_ERROR
     last = ""
     attempt = 0
@@ -152,6 +157,9 @@ async def send_dm(
                 if r.status_code == 200:
                     try:
                         if (r.json() or {}).get("ok"):
+                            logger.info(
+                                f"[telegram] sent {msg_type} {sym} exec={eid}"
+                            )
                             return True
                         last = f"HTTP 200 but ok!=true: {(r.text or '')[:200]}"
                     except Exception as je:
@@ -160,9 +168,11 @@ async def send_dm(
                             chat_id,
                             type(je).__name__,
                         )
+                        logger.info(
+                            f"[telegram] sent {msg_type} {sym} exec={eid}"
+                        )
                         return True
-                    return True
-                if r.status_code == 429:
+                elif r.status_code == 429:
                     wait_s = _retry_after_seconds(r)
                     last = f"HTTP 429 retry_after={wait_s:.0f}s"
                     logger.warning(
@@ -172,16 +182,22 @@ async def send_dm(
                     )
                     await asyncio.sleep(wait_s)
                     break  # retry same attempt cycle after backoff
-                last = f"HTTP {r.status_code}: {(r.text or '')[:200]}"
-                if 400 <= r.status_code < 500 and r.status_code != 429:
-                    continue
+                else:
+                    last = f"HTTP {r.status_code}: {(r.text or '')[:200]}"
+                    if 400 <= r.status_code < 500 and r.status_code != 429:
+                        continue
             except Exception as e:
                 last = f"{type(e).__name__}: {e or '(no message)'}"
+                logger.error(
+                    f"[telegram] FAILED {msg_type} {sym} exec={eid}: {e}"
+                )
         if attempt < _MAX_SEND_ATTEMPTS:
             await asyncio.sleep(min(30.0, 1.5 * attempt))
 
     _LAST_SEND_ERROR = last or "(no detail)"
-    logger.warning("Telegram DM failed for %s: %s", chat_id, _LAST_SEND_ERROR)
+    logger.error(
+        f"[telegram] FAILED {msg_type} {sym} exec={eid}: {_LAST_SEND_ERROR}"
+    )
     return False
 
 
@@ -238,24 +254,10 @@ async def _deliver_trade_job(job: _TradeTelegramJob) -> bool:
         job.text,
         parse_mode=job.parse_mode,
         tokens=tokens,
+        msg_type=job.msg_type,
+        symbol=job.symbol,
+        exec_id=job.exec_id,
     )
-    sym = (job.symbol or "?").upper()
-    if ok:
-        logger.info(
-            "[telegram] sent %s %s exec=%s",
-            job.msg_type,
-            sym,
-            job.exec_id or 0,
-        )
-    else:
-        err = _LAST_SEND_ERROR or "delivery not confirmed"
-        logger.warning(
-            "[telegram] FAILED %s %s exec=%s: %s",
-            job.msg_type,
-            sym,
-            job.exec_id or 0,
-            err,
-        )
     return ok
 
 

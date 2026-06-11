@@ -57,12 +57,12 @@ def reclaim_feed_lock(*, force: bool = False) -> bool:
     if not force:
         return False
     try:
-        from app.services.telegram_poller_lock import terminate_advisory_lock_holders
+        from app.executor_lock import terminate_lock_holders
 
-        n = terminate_advisory_lock_holders(
+        n = terminate_lock_holders(
             CTRADER_FEED_LOCK_ID,
             min_idle_seconds=0.0,
-            owner_app_prefix=APP_NAME_CTRADER_FEED,
+            owner_app=APP_NAME_CTRADER_FEED,
             log_prefix="[ctrader-feed-lock]",
         )
         if n:

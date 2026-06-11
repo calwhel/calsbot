@@ -81,8 +81,12 @@ _KLINE_TTL_BY_TF: Dict[str, timedelta] = {
     "1day": timedelta(seconds=300),
 }
 # Free/starter tiers are tight — default 30 req/min; raise via env on paid plans.
-_FMP_MAX_REQUESTS_PER_MIN = int(os.environ.get("FMP_MAX_REQUESTS_PER_MIN", "30"))
+# FMP free tier: 250 requests/day — default 5/min with hard daily cap.
+_FMP_MAX_REQUESTS_PER_MIN = int(os.environ.get("FMP_MAX_REQUESTS_PER_MIN", "5"))
+_FMP_MAX_REQUESTS_PER_DAY = int(os.environ.get("FMP_MAX_REQUESTS_PER_DAY", "240"))
 _FMP_REQUEST_TIMES: Deque[float] = deque()
+_FMP_DAILY_COUNT: int = 0
+_FMP_DAILY_DATE: Optional[str] = None
 _FMP_RATE_LOCK: Optional[asyncio.Lock] = None
 _FMP_KLINE_INFLIGHT: Dict[Tuple[str, str, int], asyncio.Future] = {}
 
@@ -137,6 +141,19 @@ async def _fmp_rate_limit_wait() -> bool:
         return False
 
     async with _fmp_rate_lock():
+        global _FMP_DAILY_COUNT, _FMP_DAILY_DATE
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        if _FMP_DAILY_DATE != today:
+            _FMP_DAILY_DATE = today
+            _FMP_DAILY_COUNT = 0
+        if _FMP_DAILY_COUNT >= _FMP_MAX_REQUESTS_PER_DAY:
+            logger.debug(
+                "[FMPFeed] daily cap reached %d/%d — skip",
+                _FMP_DAILY_COUNT,
+                _FMP_MAX_REQUESTS_PER_DAY,
+            )
+            return False
+
         now = time.monotonic()
         while _FMP_REQUEST_TIMES and (now - _FMP_REQUEST_TIMES[0]) >= 60.0:
             _FMP_REQUEST_TIMES.popleft()
@@ -160,13 +177,8 @@ async def _fmp_rate_limit_wait() -> bool:
             if wait_s > 0:
                 await asyncio.sleep(wait_s)
         _FMP_REQUEST_TIMES.append(time.monotonic())
+        _FMP_DAILY_COUNT += 1
         return True
-        if len(_FMP_REQUEST_TIMES) >= max(1, _FMP_MAX_REQUESTS_PER_MIN - 2):
-            logger.debug(
-                "[FMPFeed] request budget %d/%d per min",
-                len(_FMP_REQUEST_TIMES),
-                _FMP_MAX_REQUESTS_PER_MIN,
-            )
 
 
 def _kline_fresh_ttl(fmp_interval: str) -> timedelta:

@@ -1,8 +1,8 @@
 """
-PostgreSQL advisory locks — one poller per bot token across all hosts/replicas.
+PostgreSQL advisory locks — one poller per deployment across all hosts/replicas.
 
-Main crypto bot and forex bot use separate lock IDs so two different bots can
-poll concurrently without fighting each other.
+Uses TG_POLLER_LOCK_ID exclusively so the Telegram poller never contends with
+the strategy executor lock (EXECUTOR_LOCK_ID).
 """
 
 from __future__ import annotations
@@ -14,16 +14,17 @@ import time
 from typing import Dict, Optional
 
 from app.advisory_lock_ids import (
-    FOREX_POLLER_LOCK_ID,
-    MAIN_POLLER_LOCK_ID,
+    APP_NAME_TG_POLLER,
     TWITTER_POSTER_LOCK_ID,
     application_name_for_lock,
 )
+from app.lock_ids import TG_POLLER_LOCK_ID
 
 logger = logging.getLogger(__name__)
 
 # Re-export for existing imports.
 __all__ = [
+    "TG_POLLER_LOCK_ID",
     "MAIN_POLLER_LOCK_ID",
     "FOREX_POLLER_LOCK_ID",
     "TWITTER_POSTER_LOCK_ID",
@@ -31,11 +32,14 @@ __all__ = [
     "release_poller_lock",
     "holds_lock",
     "try_acquire_persistent_lock",
-    "terminate_advisory_lock_holders",
     "describe_bot_token",
 ]
 
-KEEPALIVE_INTERVAL = 20
+# Backward-compatible aliases — both bots share the single poller lock.
+MAIN_POLLER_LOCK_ID = TG_POLLER_LOCK_ID
+FOREX_POLLER_LOCK_ID = TG_POLLER_LOCK_ID
+
+KEEPALIVE_INTERVAL = 30
 _instance_id = str(os.getpid())
 
 _lock_conns: Dict[int, object] = {}
@@ -48,6 +52,14 @@ def _get_db_url() -> str:
 
 def _try_acquire(lock_id: int) -> bool:
     """Try to acquire lock_id. Fail-closed — never poll without a real lock."""
+    if lock_id != TG_POLLER_LOCK_ID:
+        logger.error(
+            "[tg-lock] refused acquire lock %s — poller may only use %s",
+            lock_id,
+            TG_POLLER_LOCK_ID,
+        )
+        return False
+
     import psycopg2
 
     db_url = _get_db_url()
@@ -68,36 +80,40 @@ def _try_acquire(lock_id: int) -> bool:
         from app.executor_lock import NEON_LOCK_CONNECT_KWARGS
 
         conn_kw = dict(NEON_LOCK_CONNECT_KWARGS)
-        conn_kw["application_name"] = application_name_for_lock(lock_id)
+        conn_kw["application_name"] = APP_NAME_TG_POLLER
         conn = psycopg2.connect(db_url, **conn_kw)
         conn.autocommit = True
         with conn.cursor() as cur:
-            cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_id,))
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (TG_POLLER_LOCK_ID,))
             acquired = bool(cur.fetchone()[0])
 
         if acquired:
             _lock_conns[lock_id] = conn
             logger.info(
-                f"[tg-lock] acquired lock {lock_id} — PID {_instance_id} may poll"
+                f"[tg-lock] acquired lock {TG_POLLER_LOCK_ID} — PID {_instance_id} may poll"
             )
             return True
 
         conn.close()
-        logger.info(f"[tg-lock] lock {lock_id} held elsewhere — waiting")
+        logger.info(f"[tg-lock] lock {TG_POLLER_LOCK_ID} held elsewhere — waiting")
         return False
     except Exception as e:
-        logger.error(f"[tg-lock] acquire {lock_id} failed: {e} — will retry (fail-closed)")
+        logger.error(
+            f"[tg-lock] acquire {TG_POLLER_LOCK_ID} failed: {e} — will retry (fail-closed)"
+        )
         return False
 
 
 def _release(lock_id: int) -> None:
+    if lock_id != TG_POLLER_LOCK_ID:
+        return
     conn = _lock_conns.pop(lock_id, None)
     if conn:
         try:
             conn.close()
         except Exception:
             pass
-        logger.info(f"[tg-lock] released lock {lock_id} (PID {_instance_id})")
+        logger.info(f"[tg-lock] released lock {TG_POLLER_LOCK_ID} (PID {_instance_id})")
 
 
 def _keepalive_loop(lock_id: int) -> None:
@@ -110,7 +126,7 @@ def _keepalive_loop(lock_id: int) -> None:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
         except Exception as e:
-            logger.warning(f"[tg-lock] keepalive failed for {lock_id}: {e}")
+            logger.warning(f"[tg-lock] keepalive failed for {TG_POLLER_LOCK_ID}: {e}")
             break
 
 
@@ -123,42 +139,36 @@ def _start_keepalive(lock_id: int) -> None:
     t.start()
 
 
-def _holder_owned_by_subsystem(app: Optional[str], owner_app_prefix: str) -> bool:
-    """True when ``app`` belongs to the caller's subsystem (or legacy empty)."""
-    app_str = (app or "").strip()
-    if not app_str:
-        # Legacy deploys before application_name — same lock ID scopes the risk.
-        return True
-    return app_str == owner_app_prefix or app_str.startswith(f"{owner_app_prefix}-")
+def _pid_holds_lock(cur, pid: int, lock_id: int) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM pg_locks l
+        WHERE l.locktype = 'advisory'
+          AND l.objid = %s
+          AND l.granted = true
+          AND l.pid = %s
+        LIMIT 1
+        """,
+        (lock_id, pid),
+    )
+    return cur.fetchone() is not None
 
 
-def _terminate_other_lock_holders(
-    lock_id: int,
+def _terminate_poller_lock_holders(
     min_idle_seconds: float = 0.0,
     *,
-    owner_app_prefix: Optional[str] = None,
-    log_prefix: str = "[advisory-lock]",
+    log_prefix: str = "[tg-lock]",
 ) -> int:
-    """Drop advisory-lock DB sessions held by other backends (e.g. stale Replit VM).
-
-    ``min_idle_seconds`` guards against killing a *live sibling* holder: when set
-    (> 0), a holder is only terminated if it has been idle (no query) for at least
-    that long. A genuinely stale/zombie connection from a dead deploy stops being
-    pinged, so its idle age grows without bound and crosses the threshold; a live
-    holder that keeps its lock connection warm (the executor pings every few tens
-    of seconds) never does. This is essential with ``GUNICORN_WORKERS>1`` — the
-    HTTP worker would otherwise terminate the executor worker's lock connection on
-    every claim attempt, thrashing the executor and halting all trade firing.
-
-    When ``owner_app_prefix`` is set, only backends whose ``application_name``
-    matches that subsystem (or legacy empty) are eligible — never another live
-    subsystem even if it somehow held the same lock ID.
-    """
+    """Terminate stale holders of TG_POLLER_LOCK_ID owned by th-tgpoller only."""
     import psycopg2
 
     db_url = _get_db_url()
     if not db_url:
         return 0
+
+    lock_id = TG_POLLER_LOCK_ID
+    owner_app = APP_NAME_TG_POLLER
     terminated = 0
     try:
         conn = psycopg2.connect(db_url, connect_timeout=10)
@@ -181,23 +191,24 @@ def _terminate_other_lock_holders(
             )
             rows = cur.fetchall()
             for pid, state, app, idle_secs in rows:
-                if owner_app_prefix and not _holder_owned_by_subsystem(
-                    app, owner_app_prefix
-                ):
+                app_str = (app or "").strip()
+                if app_str != owner_app:
                     logger.info(
                         f"{log_prefix} skipping pid={pid} app={app!r} "
-                        f"(not owned by {owner_app_prefix!r}) for lock {lock_id}"
+                        f"(not {owner_app!r}) for lock {lock_id}"
                     )
                     continue
-                # Protect a live sibling: a holder that is an active client
-                # session and was recently pinged (idle < threshold) is the
-                # legitimate current lock owner — never terminate it.
+                if not _pid_holds_lock(cur, pid, lock_id):
+                    logger.info(
+                        f"{log_prefix} skipping pid={pid} — no longer holds lock {lock_id}"
+                    )
+                    continue
                 if min_idle_seconds > 0 and state != "gone" and idle_secs is not None:
                     if float(idle_secs) < float(min_idle_seconds):
                         logger.info(
                             f"{log_prefix} keeping live holder pid={pid} state={state} "
                             f"idle={float(idle_secs):.0f}s < {min_idle_seconds:.0f}s "
-                            f"for lock {lock_id} (sibling worker, not stale)"
+                            f"for lock {lock_id}"
                         )
                         continue
                 try:
@@ -215,44 +226,37 @@ def _terminate_other_lock_holders(
                     logger.warning(f"{log_prefix} could not terminate pid={pid}: {te}")
         conn.close()
     except Exception as e:
-        logger.error(f"{log_prefix} terminate_other_lock_holders failed: {e}")
+        logger.error(f"{log_prefix} terminate_poller_lock_holders failed: {e}")
     return terminated
 
 
-# Public alias for executor / other advisory-lock reclaim paths.
-terminate_advisory_lock_holders = _terminate_other_lock_holders
-
-
 async def wait_for_poller_lock(lock_id: int, retry_seconds: int = 15) -> None:
-    """Block until this process holds lock_id.
-
-    If another host (e.g. a zombie Replit deploy) holds the lock without polling,
-    we terminate its DB session after a few waits so Railway can take over.
-    """
+    """Block until this process holds TG_POLLER_LOCK_ID."""
     import asyncio
 
     from app.deployment import is_railway
 
-    owner_app = application_name_for_lock(lock_id)
+    if lock_id != TG_POLLER_LOCK_ID:
+        raise ValueError(
+            f"Telegram poller must use TG_POLLER_LOCK_ID ({TG_POLLER_LOCK_ID}), not {lock_id}"
+        )
+
     attempts = 0
-    # Railway is production — reclaim faster when a ghost Replit holds the lock.
     break_after = 3 if is_railway() else 6
 
     while True:
-        if await asyncio.to_thread(_try_acquire, lock_id):
-            _start_keepalive(lock_id)
+        if await asyncio.to_thread(_try_acquire, TG_POLLER_LOCK_ID):
+            _start_keepalive(TG_POLLER_LOCK_ID)
             return
         attempts += 1
         if attempts >= break_after:
             n = await asyncio.to_thread(
-                _terminate_other_lock_holders,
-                lock_id,
-                owner_app_prefix=owner_app,
+                _terminate_poller_lock_holders,
                 log_prefix="[tg-lock]",
             )
             if n:
                 logger.warning(
-                    f"[tg-lock] reclaimed lock {lock_id} — terminated {n} stale holder(s)"
+                    f"[tg-lock] reclaimed lock {TG_POLLER_LOCK_ID} — terminated {n} stale holder(s)"
                 )
                 attempts = 0
                 continue
@@ -268,20 +272,42 @@ def holds_lock(lock_id: int) -> bool:
 
 
 def try_acquire_persistent_lock(lock_id: int) -> bool:
-    """Non-blocking advisory-lock acquire + keepalive — NEVER terminates others.
+    """Non-blocking acquire for single-runner jobs (e.g. Twitter poster).
 
-    Returns True if this process now holds ``lock_id`` (or already held it). Use
-    for single-runner background jobs (e.g. the X auto-poster) where several
-    processes contend and we just want one winner; losers retry later. Unlike
-    ``wait_for_poller_lock``, this never kills the current holder, so a live
-    sibling is never disrupted. The session-level lock auto-releases if this
-    process dies, letting another contender take over.
+    Telegram polling must use wait_for_poller_lock / TG_POLLER_LOCK_ID only.
     """
+    if lock_id == TG_POLLER_LOCK_ID:
+        if holds_lock(TG_POLLER_LOCK_ID):
+            return True
+        if _try_acquire(TG_POLLER_LOCK_ID):
+            _start_keepalive(TG_POLLER_LOCK_ID)
+            return True
+        return False
+    # Non-TG locks (e.g. TWITTER_POSTER_LOCK_ID) use generic acquire path.
+    import psycopg2
+
+    from app.executor_lock import NEON_LOCK_CONNECT_KWARGS
+
+    db_url = _get_db_url()
+    if not db_url:
+        return False
     if holds_lock(lock_id):
         return True
-    if _try_acquire(lock_id):
-        _start_keepalive(lock_id)
-        return True
+    try:
+        conn_kw = dict(NEON_LOCK_CONNECT_KWARGS)
+        conn_kw["application_name"] = application_name_for_lock(lock_id)
+        conn = psycopg2.connect(db_url, **conn_kw)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_id,))
+            acquired = bool(cur.fetchone()[0])
+        if acquired:
+            _lock_conns[lock_id] = conn
+            _start_keepalive(lock_id)
+            return True
+        conn.close()
+    except Exception:
+        pass
     return False
 
 
