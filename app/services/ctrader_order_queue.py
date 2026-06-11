@@ -1,13 +1,15 @@
 """
 Async cTrader order queue — decouples signal evaluation from broker placement.
 
-The forex executor cycle stays ~5s even when many users fire at once; orders
-are placed sequentially per account (via per-account locks in ctrader_client).
+Orders run on a DEDICATED asyncio event-loop thread so executor scan cycles
+(blocking the main loop for 30–90s) cannot delay live submission.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -16,27 +18,32 @@ logger = logging.getLogger(__name__)
 
 _queue: Optional[asyncio.Queue] = None
 _worker_started = False
+_order_loop: Optional[asyncio.AbstractEventLoop] = None
+_order_thread: Optional[threading.Thread] = None
+_order_loop_ready = threading.Event()
 
 
 @dataclass
 class CtraderOrderJob:
-  user_id: int
-  strategy_id: int
-  execution_id: int
-  symbol: str
-  direction: str
-  entry_price: float
-  tp_pct: float
-  sl_pct: float
-  risk_pct: float = 1.0
-  risk_usd: Optional[float] = None
-  use_risk_pct: bool = False
-  sl_pips: Optional[float] = None
-  fixed_lots: Optional[float] = None
-  asset_class: str = "forex"
-  tp2_pct: Optional[float] = None
-  partial_close_pct: Optional[float] = None
-  broker: str = "ctrader"
+    user_id: int
+    strategy_id: int
+    execution_id: int
+    symbol: str
+    direction: str
+    entry_price: float
+    tp_pct: float
+    sl_pct: float
+    risk_pct: float = 1.0
+    risk_usd: Optional[float] = None
+    use_risk_pct: bool = False
+    sl_pips: Optional[float] = None
+    fixed_lots: Optional[float] = None
+    asset_class: str = "forex"
+    tp2_pct: Optional[float] = None
+    partial_close_pct: Optional[float] = None
+    broker: str = "ctrader"
+    signal_mono: float = field(default_factory=time.monotonic)
+    latency: Any = None
 
 
 def _get_queue() -> asyncio.Queue:
@@ -46,36 +53,176 @@ def _get_queue() -> asyncio.Queue:
     return _queue
 
 
+def _ensure_order_event_loop() -> asyncio.AbstractEventLoop:
+    global _order_loop, _order_thread
+    if _order_loop is not None and _order_thread and _order_thread.is_alive():
+        return _order_loop
+
+    def _run() -> None:
+        global _order_loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _order_loop = loop
+        _order_loop_ready.set()
+        logger.info(
+            "[ctrader-queue] dedicated order event loop started "
+            "(isolated from executor scan / advisory-lock recovery)"
+        )
+        try:
+            loop.run_forever()
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    _order_loop_ready.clear()
+    _order_thread = threading.Thread(
+        target=_run, daemon=True, name="ctrader-order-loop",
+    )
+    _order_thread.start()
+    if not _order_loop_ready.wait(timeout=10.0):
+        raise RuntimeError("cTrader order event loop failed to start within 10s")
+    return _order_loop
+
+
 def ctrader_order_worker_running() -> bool:
     return _worker_started
 
 
 def start_ctrader_order_worker() -> None:
     global _worker_started
+    loop = _ensure_order_event_loop()
     if _worker_started:
         return
-    _worker_started = True
-    try:
-        asyncio.get_running_loop().create_task(_ctrader_order_worker())
-    except RuntimeError:
-        asyncio.get_event_loop().create_task(_ctrader_order_worker())
-    logger.info("[ctrader-queue] order worker started")
+
+    async def _boot() -> None:
+        global _worker_started
+        if _worker_started:
+            return
+        _worker_started = True
+        asyncio.create_task(_ctrader_order_worker())
+        logger.info("[ctrader-queue] order worker started")
+
+    asyncio.run_coroutine_threadsafe(_boot(), loop)
 
 
 async def enqueue_ctrader_order(job: CtraderOrderJob) -> bool:
-    """Queue a live cTrader order. Returns False if queue is full."""
+    """Queue a live cTrader order on the isolated order loop."""
+    from app.services.order_latency import new_order_latency
+
     start_ctrader_order_worker()
+    if job.latency is None:
+        job.latency = new_order_latency(job.execution_id, job.signal_mono)
+    job.latency.mark_queued()
+    loop = _ensure_order_event_loop()
     try:
-        _get_queue().put_nowait(job)
+        fut = asyncio.run_coroutine_threadsafe(_get_queue().put(job), loop)
+        await asyncio.wrap_future(fut)
         return True
-    except asyncio.QueueFull:
-        logger.error(f"[ctrader-queue] full — dropping exec #{job.execution_id}")
+    except Exception as exc:
+        logger.error(
+            "[ctrader-queue] enqueue failed exec#%s: %s",
+            job.execution_id,
+            type(exc).__name__,
+        )
         return False
+
+
+async def _try_reconcile_ambiguous(user, job: CtraderOrderJob, order_result: dict) -> Optional[dict]:
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    from app.services.ctrader_client import (
+        _host_for_account,
+        is_ambiguous_order_error,
+        reconcile_order_fill_after_miss,
+    )
+
+    if not is_ambiguous_order_error(order_result.get("error")):
+        return None
+    db = SessionLocal()
+    try:
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+            return None
+        at = prefs.ctrader_access_token
+        ctid = int(prefs.ctrader_account_id)
+        host = _host_for_account(prefs, ctid)
+    finally:
+        db.close()
+    return await reconcile_order_fill_after_miss(
+        access_token=at,
+        ctid=ctid,
+        host=host,
+        symbol_name=job.symbol,
+        direction=job.direction,
+        entry_hint=job.entry_price,
+    )
+
+
+async def _abort_stale_order(job: CtraderOrderJob, reason: str, age_s: float, slip_pips: float) -> None:
+    from app.database import SessionLocal
+    from app.strategy_models import StrategyExecution
+
+    logger.warning(
+        "[ctrader-queue] exec#%s %s %s — signal stale: %s",
+        job.execution_id,
+        job.symbol,
+        job.direction,
+        reason,
+    )
+    if job.latency is not None:
+        job.latency.log_summary(outcome="stale")
+
+    db = SessionLocal()
+    try:
+        execution = db.query(StrategyExecution).filter(
+            StrategyExecution.id == job.execution_id
+        ).first()
+        if execution:
+            execution.outcome = "CANCELLED"
+            execution.notes = f"Live skip: {reason}"
+            db.commit()
+        from app.models import User
+        from app.strategy_models import StrategyPortalSettings, UserStrategy
+
+        user = db.query(User).filter(User.id == job.user_id).first()
+        strategy = db.query(UserStrategy).filter(UserStrategy.id == job.strategy_id).first()
+        portal_settings = db.query(StrategyPortalSettings).filter(
+            StrategyPortalSettings.user_id == job.user_id
+        ).first()
+        if user and strategy and (not portal_settings or portal_settings.dm_live_alerts):
+            try:
+                from app.services.strategy_executor import _telegram_int_id, _tg_send
+                tg_id = _telegram_int_id(user)
+                if tg_id:
+                    asyncio.create_task(_tg_send(
+                        tg_id,
+                        "⏭️ <b>Live order skipped — signal stale</b>\n"
+                        f"Strategy: <b>{strategy.name}</b>\n"
+                        f"Signal: {job.symbol} {job.direction}\n"
+                        f"<code>{reason}</code>",
+                        asset_class=job.asset_class or "forex",
+                    ))
+            except Exception:
+                pass
+    except Exception as exc:
+        logger.warning("[ctrader-queue] stale abort persist failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
 
 
 async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]) -> None:
     from app.database import SessionLocal
     from app.strategy_models import StrategyExecution, StrategyPerformance
+
+    if job.latency is not None:
+        outcome = "fill" if order_result and order_result.get("actual_fill") else "fail"
+        job.latency.log_summary(outcome=outcome)
 
     db = SessionLocal()
     try:
@@ -111,43 +258,48 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
             StrategyPortalSettings.user_id == job.user_id
         ).first()
 
-        if not order_id or not (actual_fill and actual_fill > 0):
-            execution.is_paper = True
-            _err_txt = (order_err or "no order id")[:180]
-            if order_id and not (actual_fill and actual_fill > 0):
-                _err_txt = (_err_txt + " (no broker fill confirmation)")[:180]
-            execution.notes = f"Live→Paper fallback (queued order): {_err_txt}"
-            db.commit()
-            try:
-                from app.services.strategy_executor import _release_tg_open_notify
-                _release_tg_open_notify(db, execution.id)
-            except Exception:
-                pass
-            logger.warning(
-                "[ctrader-queue] exec#%s %s %s — broker order failed: %s",
-                job.execution_id,
-                job.symbol,
-                job.direction,
-                _err_txt,
-            )
-            if user and strategy and (not portal_settings or portal_settings.dm_live_alerts):
+        _has_fill = bool(actual_fill and actual_fill > 0)
+        _has_broker_ref = bool(order_id or position_id)
+        if not _has_broker_ref or not _has_fill:
+            if position_id and _has_fill:
+                order_id = order_id or "reconciled"
+            else:
+                execution.is_paper = True
+                _err_txt = (order_err or "no order id")[:180]
+                if order_id and not (actual_fill and actual_fill > 0):
+                    _err_txt = (_err_txt + " (no broker fill confirmation)")[:180]
+                execution.notes = f"Live→Paper fallback (queued order): {_err_txt}"
+                db.commit()
                 try:
-                    from app.services.strategy_executor import _telegram_int_id, _tg_send
-                    tg_id = _telegram_int_id(user)
-                    if tg_id:
-                        asyncio.create_task(_tg_send(
-                            tg_id,
-                            f"⚠️ <b>cTrader order failed — paper trade started</b>\n"
-                            f"Strategy: <b>{strategy.name}</b>\n"
-                            f"Signal: {job.symbol} {job.direction}\n"
-                            f"Error: <code>{(order_err or 'no order id')[:120]}</code>",
-                            asset_class=job.asset_class or "forex",
-                        ))
+                    from app.services.strategy_executor import _release_tg_open_notify
+                    _release_tg_open_notify(db, execution.id)
                 except Exception:
                     pass
-            return
+                logger.warning(
+                    "[ctrader-queue] exec#%s %s %s — broker order failed: %s",
+                    job.execution_id,
+                    job.symbol,
+                    job.direction,
+                    _err_txt,
+                )
+                if user and strategy and (not portal_settings or portal_settings.dm_live_alerts):
+                    try:
+                        from app.services.strategy_executor import _telegram_int_id, _tg_send
+                        tg_id = _telegram_int_id(user)
+                        if tg_id:
+                            asyncio.create_task(_tg_send(
+                                tg_id,
+                                f"⚠️ <b>cTrader order failed — paper trade started</b>\n"
+                                f"Strategy: <b>{strategy.name}</b>\n"
+                                f"Signal: {job.symbol} {job.direction}\n"
+                                f"Error: <code>{(order_err or 'no order id')[:120]}</code>",
+                                asset_class=job.asset_class or "forex",
+                            ))
+                    except Exception:
+                        pass
+                return
 
-        execution.ctrader_order_id = str(order_id)
+        execution.ctrader_order_id = str(order_id) if order_id else None
         if position_id:
             execution.ctrader_position_id = str(position_id)
         if account_id:
@@ -254,14 +406,33 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
 async def _ctrader_order_worker() -> None:
     while True:
         job: CtraderOrderJob = await _get_queue().get()
+        if job.latency is not None:
+            job.latency.mark_dequeue()
+        queue_wait_ms = -1
+        if job.latency and job.latency.queued_mono and job.latency.dequeue_mono:
+            queue_wait_ms = int((job.latency.dequeue_mono - job.latency.queued_mono) * 1000)
         logger.info(
-            "[ctrader-queue] placing exec#%s %s %s user=%s",
+            "[ctrader-queue] placing exec#%s %s %s user=%s queue_wait=%sms",
             job.execution_id,
             job.symbol,
             job.direction,
             job.user_id,
+            queue_wait_ms,
         )
         try:
+            from app.services.order_stale_guard import check_signal_stale
+
+            stale = check_signal_stale(
+                symbol=job.symbol,
+                direction=job.direction,
+                signal_price=job.entry_price,
+                signal_mono=job.signal_mono,
+            )
+            if stale:
+                reason, age_s, slip_pips = stale
+                await _abort_stale_order(job, reason, age_s, slip_pips)
+                continue
+
             from app.database import SessionLocal
             from app.models import User
             from app.services.ctrader_client import place_ctrader_order_for_user
@@ -288,6 +459,7 @@ async def _ctrader_order_worker() -> None:
                 use_risk_pct=job.use_risk_pct,
                 sl_pips=job.sl_pips,
                 fixed_lots=job.fixed_lots,
+                latency=job.latency,
             )
             if order_result and not order_result.get("account_id"):
                 from app.models import UserPreference
@@ -300,6 +472,12 @@ async def _ctrader_order_worker() -> None:
                         order_result["account_id"] = prefs.ctrader_account_id
                 finally:
                     db2.close()
+
+            if order_result:
+                recovered = await _try_reconcile_ambiguous(user, job, order_result)
+                if recovered:
+                    order_result = recovered
+
             await _apply_order_result(job, order_result)
         except Exception as e:
             logger.exception(f"[ctrader-queue] job exec #{job.execution_id} failed: {e}")

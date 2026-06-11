@@ -361,8 +361,23 @@ async def _app_auth(
 _account_locks: dict = {}
 _conns: dict = {}            # (host, ctid) → {"reader", "writer", "ts"}
 _CONN_MAX_IDLE = 45.0
+ORDER_SUBMIT_TIMEOUT_S = float(os.environ.get("CTRADER_ORDER_SUBMIT_TIMEOUT_S", "5"))
+ORDER_FILL_WAIT_S = float(os.environ.get("CTRADER_ORDER_FILL_TIMEOUT_S", "5"))
+ORDER_CONNECT_TIMEOUT_S = float(os.environ.get("CTRADER_ORDER_CONNECT_TIMEOUT_S", "5"))
+_AMBIGUOUS_ORDER_ERRORS = frozenset({
+    "no execution event",
+    "unexpected exit",
+    "timeout",
+})
 _balance_cache: dict = {}    # (host, ctid) → (balance, monotonic_ts)
 _BALANCE_CACHE_TTL = 25.0
+
+
+def is_ambiguous_order_error(err: Optional[str]) -> bool:
+    if not err:
+        return False
+    low = str(err).lower()
+    return any(tok in low for tok in _AMBIGUOUS_ORDER_ERRORS)
 
 
 def _acct_conn_key(host: str, ctid: int = 0) -> tuple:
@@ -386,6 +401,8 @@ def _get_lock() -> asyncio.Lock:
 async def _get_persistent_connection(
     host: str = CTRADER_HOST,
     ctid: int = 0,
+    *,
+    connect_timeout: Optional[float] = None,
 ) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Return app-authenticated socket for (host, ctid). Caller holds account lock."""
     key = _acct_conn_key(host, ctid)
@@ -397,12 +414,17 @@ async def _get_persistent_connection(
         await _aclose_writer(st.get("writer"))
         _conns.pop(key, None)
 
-    r, w = await _open_connection(host)
-    ok = await _app_auth(r, w)
-    if not ok:
-        await _aclose_writer(w)
-        raise RuntimeError("cTrader persistent connection: app auth failed")
+    _cto = connect_timeout if connect_timeout is not None else ORDER_CONNECT_TIMEOUT_S
 
+    async def _connect():
+        r, w = await _open_connection(host)
+        ok = await _app_auth(r, w)
+        if not ok:
+            await _aclose_writer(w)
+            raise RuntimeError("cTrader persistent connection: app auth failed")
+        return r, w
+
+    r, w = await asyncio.wait_for(_connect(), timeout=_cto)
     _conns[key] = {"reader": r, "writer": w, "ts": time.monotonic()}
     logger.debug(f"[cTrader] persistent connection (re)established → {host} acct={ctid}")
     return r, w
@@ -1162,6 +1184,7 @@ async def place_market_order_resilient(
     sl_pct: Optional[float] = None,
     tp_pct: Optional[float] = None,
     label: str = "TradeHub",
+    latency=None,
 ) -> dict:
     """
     Place a market order with token-refresh and live/demo host fallback.
@@ -1186,6 +1209,7 @@ async def place_market_order_resilient(
                 tp_pct=tp_pct,
                 label=label,
                 host=h,
+                latency=latency,
             )
         return await place_order(
             access_token=at,
@@ -1200,6 +1224,7 @@ async def place_market_order_resilient(
             tp_pct=tp_pct,
             label=label,
             host=h,
+            latency=latency,
         )
 
     result = await _place_on(host)
@@ -1212,6 +1237,22 @@ async def place_market_order_resilient(
             result = await _place_on(host)
         elif is_refresh_denied(user_id):
             _notify_ctrader_relink_needed(user_id, "account auth failed")
+
+    if is_ambiguous_order_error(result.get("error")):
+        vol = volume_units
+        if vol is None and volume_lots is not None:
+            vol = int(round(float(volume_lots) * 100_000))
+        recovered = await reconcile_order_fill_after_miss(
+            access_token=at,
+            ctid=ctid,
+            host=host,
+            symbol_name=symbol_name,
+            direction=direction,
+            entry_hint=entry_price,
+            volume_units=vol,
+        )
+        if recovered:
+            return recovered
 
     return result
 
@@ -1356,6 +1397,9 @@ async def _await_order_fill(
     volume_units: int,
     host: str,
     ctid_trader_account_id: int,
+    *,
+    fill_timeout: Optional[float] = None,
+    latency=None,
 ) -> dict:
     """Drain execution events until FILLED or timeout; shared by forex + index orders."""
     _terminal = (
@@ -1405,7 +1449,9 @@ async def _await_order_fill(
         return _oid is not None and _oid == order_id
 
     if not _has_fill(ev):
-        _fill_deadline = time.monotonic() + 15.0
+        _fill_deadline = time.monotonic() + float(
+            fill_timeout if fill_timeout is not None else ORDER_FILL_WAIT_S
+        )
         while True:
             _remaining = _fill_deadline - time.monotonic()
             if _remaining <= 0:
@@ -1443,6 +1489,12 @@ async def _await_order_fill(
                 f"in budget (symbol={broker_symbol})"
             )
 
+    if _has_fill(ev) and latency is not None:
+        try:
+            latency.mark_fill()
+        except Exception:
+            pass
+
     actual_fill = None
     position_id = None
     if ev.HasField("deal"):
@@ -1474,6 +1526,8 @@ async def place_order(
     tp_pct: Optional[float] = None,
     label: str = "TradeHub",
     host: str = CTRADER_HOST,
+    *,
+    latency=None,
 ) -> dict:
     """
     Place a market order on cTrader.
@@ -1567,13 +1621,24 @@ async def place_order(
                     return {"order_id": None, "actual_fill": None,
                             "error": "entry_price required for SL/TP on market order"}
 
+                if latency is not None:
+                    try:
+                        latency.mark_submitted()
+                    except Exception:
+                        pass
+
                 pt, payload = await _send_recv_any(
                     reader, writer, req,
                     _PAYLOAD_TYPES["new_order_req"],
                     {_PAYLOAD_TYPES["execution_event"],
                      _PAYLOAD_TYPES["order_error_event"]},
-                    timeout=15.0,
+                    timeout=ORDER_SUBMIT_TIMEOUT_S,
                 )
+                if latency is not None and payload:
+                    try:
+                        latency.mark_broker_ack()
+                    except Exception:
+                        pass
                 if not payload:
                     return {"order_id": None, "actual_fill": None, "error": "no execution event"}
 
@@ -1593,8 +1658,18 @@ async def place_order(
                 return await _await_order_fill(
                     reader, writer, payload, entry_price, broker_symbol, req.volume,
                     host, ctid_trader_account_id,
+                    latency=latency,
                 )
 
+            except asyncio.TimeoutError:
+                _invalidate_persistent_connection(host, ctid_trader_account_id)
+                if attempt == 1:
+                    logger.warning(
+                        "[cTrader] place_order timeout (%.0fs) — one retry",
+                        ORDER_SUBMIT_TIMEOUT_S,
+                    )
+                    continue
+                return {"order_id": None, "actual_fill": None, "error": "timeout"}
             except Exception as e:
                 if attempt == 1:
                     logger.warning(f"[cTrader] place_order retry after: {e}")
@@ -1618,6 +1693,8 @@ async def place_order_units(
     tp_pct: Optional[float] = None,
     label: str = "TradeHub",
     host: str = CTRADER_HOST,
+    *,
+    latency=None,
 ) -> dict:
     """
     Place a market order sized in contracts / index units.
@@ -1682,13 +1759,24 @@ async def place_order_units(
                             1, int(round(abs(entry_price - take_profit_price) * 100_000))
                         )
 
+                if latency is not None:
+                    try:
+                        latency.mark_submitted()
+                    except Exception:
+                        pass
+
                 pt, payload = await _send_recv_any(
                     reader, writer, req,
                     _PAYLOAD_TYPES["new_order_req"],
                     {_PAYLOAD_TYPES["execution_event"],
                      _PAYLOAD_TYPES["order_error_event"]},
-                    timeout=15.0,
+                    timeout=ORDER_SUBMIT_TIMEOUT_S,
                 )
+                if latency is not None and payload:
+                    try:
+                        latency.mark_broker_ack()
+                    except Exception:
+                        pass
                 if not payload:
                     return {"order_id": None, "actual_fill": None, "error": "no execution event"}
 
@@ -1704,7 +1792,17 @@ async def place_order_units(
                 return await _await_order_fill(
                     reader, writer, payload, entry_price, broker_symbol, vol,
                     host, ctid_trader_account_id,
+                    latency=latency,
                 )
+            except asyncio.TimeoutError:
+                _invalidate_persistent_connection(host, ctid_trader_account_id)
+                if attempt == 1:
+                    logger.warning(
+                        "[cTrader] place_order_units timeout (%.0fs) — one retry",
+                        ORDER_SUBMIT_TIMEOUT_S,
+                    )
+                    continue
+                return {"order_id": None, "actual_fill": None, "error": "timeout"}
             except Exception as e:
                 if attempt == 1:
                     logger.warning(f"[cTrader] place_order_units retry after: {e}")
@@ -2091,6 +2189,127 @@ async def _get_open_position_ids(
     return None
 
 
+async def _list_open_positions_detail(
+    access_token: str,
+    ctid_trader_account_id: int,
+    host: str = CTRADER_HOST,
+) -> Optional[list]:
+    """Open positions with symbol/side/price for post-submit reconcile."""
+    if not _PROTO_OK:
+        return None
+    try:
+        async with _get_account_lock(host, ctid_trader_account_id):
+            reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
+            if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                return None
+            req = ProtoOAReconcileReq()
+            req.ctidTraderAccountId = ctid_trader_account_id
+            payload = await _send_recv(
+                reader, writer, req,
+                _PAYLOAD_TYPES["reconcile_req"],
+                _PAYLOAD_TYPES["reconcile_res"],
+                timeout=ORDER_SUBMIT_TIMEOUT_S,
+            )
+            if not payload:
+                return None
+            res = ProtoOAReconcileRes()
+            res.ParseFromString(payload)
+            out = []
+            for p in res.position:
+                item: dict = {"position_id": int(p.positionId)}
+                try:
+                    if p.HasField("price") and p.price:
+                        item["price"] = float(p.price)
+                except Exception:
+                    pass
+                try:
+                    if p.HasField("tradeData"):
+                        td = p.tradeData
+                        if td.HasField("symbolId"):
+                            item["symbol_id"] = int(td.symbolId)
+                        if td.HasField("tradeSide"):
+                            item["trade_side"] = int(td.tradeSide)
+                except Exception:
+                    pass
+                out.append(item)
+            _touch_conn(host, ctid_trader_account_id)
+            return out
+    except Exception as exc:
+        logger.warning("[cTrader] open-positions detail failed: %s", type(exc).__name__)
+    return None
+
+
+async def reconcile_order_fill_after_miss(
+    *,
+    access_token: str,
+    ctid: int,
+    host: str,
+    symbol_name: str,
+    direction: str,
+    entry_hint: Optional[float] = None,
+    volume_units: Optional[int] = None,
+) -> Optional[dict]:
+    """
+    Broker reconcile when submit ack/fill events were lost — avoid paper fallback
+    if a matching open position already exists.
+    """
+    broker_symbol = _SYMBOL_MAP.get(symbol_name, symbol_name)
+    positions = await _list_open_positions_detail(access_token, ctid, host)
+    if positions is None:
+        logger.warning(
+            "[cTrader] reconcile skipped — broker unreachable (exec ambiguous submit)"
+        )
+        return None
+    if not positions:
+        logger.info("[cTrader] reconcile: broker reports zero open positions")
+        return None
+
+    try:
+        async with _get_account_lock(host, ctid):
+            reader, writer = await _get_persistent_connection(host, ctid)
+            if not await _account_auth(reader, writer, access_token, ctid):
+                return None
+            symbol_id = await _resolve_symbol_id(
+                reader, writer, ctid, broker_symbol, host
+            )
+    except Exception:
+        symbol_id = None
+
+    want_side = (
+        ProtoOATradeSide.BUY if direction == "LONG" else ProtoOATradeSide.SELL
+    )
+    for pos in positions:
+        if symbol_id is not None and pos.get("symbol_id") not in (None, symbol_id):
+            continue
+        side = pos.get("trade_side")
+        if side is not None and int(side) != int(want_side):
+            continue
+        raw_px = pos.get("price")
+        actual_fill = None
+        if raw_px is not None:
+            actual_fill = _normalize_deal_price(float(raw_px), entry_hint)
+        logger.info(
+            "[cTrader] reconcile recovered open position pos=%s symbol=%s fill=%s",
+            pos.get("position_id"),
+            broker_symbol,
+            actual_fill,
+        )
+        return {
+            "order_id": None,
+            "actual_fill": actual_fill or entry_hint,
+            "position_id": str(pos.get("position_id")),
+            "volume": volume_units,
+            "error": None,
+            "reconciled": True,
+        }
+    logger.info(
+        "[cTrader] reconcile: no matching open position for %s %s",
+        broker_symbol,
+        direction,
+    )
+    return None
+
+
 async def get_open_position_ids_for_user(user) -> Optional[set]:
     """High-level wrapper: the set of open broker positionIds for a TradeHub user,
     or None when credentials are missing / the broker is unreachable (so callers
@@ -2235,6 +2454,8 @@ async def place_ctrader_order_for_user(
     use_risk_pct: bool = False,
     sl_pips: Optional[float] = None,
     fixed_lots: Optional[float] = None,
+    *,
+    latency=None,
 ) -> Optional[dict]:
     """
     Place a live forex or index CFD order for a user via their connected cTrader account.
@@ -2365,6 +2586,7 @@ async def place_ctrader_order_for_user(
         entry_price=entry_price,
         sl_pct=sl_pct,
         tp_pct=tp_pct,
+        latency=latency,
     )
 
     if result.get("error"):

@@ -4769,7 +4769,9 @@ async def evaluate_and_fire(
                     from app.services.ctrader_order_queue import (
                         CtraderOrderJob, enqueue_ctrader_order, start_ctrader_order_worker,
                     )
+                    from app.services.order_latency import new_order_latency
                     start_ctrader_order_worker()
+                    _signal_mono = time.monotonic()
                     # Risk % auto lot sizing: when use_risk_pct=True, the wizard
                     # stored risk_pct_per_trade (% of account to risk).  We pass
                     # it to the cTrader helper which fetches the account balance
@@ -4798,6 +4800,8 @@ async def evaluate_and_fire(
                         fixed_lots=_fixed_lots or None,
                         asset_class=asset_class,
                         partial_close_pct=float(_partial_close_pct) if _partial_close_pct else None,
+                        signal_mono=_signal_mono,
+                        latency=new_order_latency(execution.id, _signal_mono),
                     )
                     _queued = await enqueue_ctrader_order(_job)
                     if _queued:
@@ -5392,7 +5396,9 @@ async def _propagate_to_subscribers(
                         from app.services.ctrader_order_queue import (
                             CtraderOrderJob, enqueue_ctrader_order, start_ctrader_order_worker,
                         )
+                        from app.services.order_latency import new_order_latency
                         start_ctrader_order_worker()
+                        _sub_signal_mono = time.monotonic()
                         _sub_use_risk_pct = bool(sub_risk.get("use_risk_pct"))
                         _sub_risk_pct = float(
                             sub_risk.get("risk_pct_per_trade")
@@ -5414,6 +5420,8 @@ async def _propagate_to_subscribers(
                             sl_pips=float((sub_config.get("exit") or {}).get("stop_loss_pips") or 0) or None,
                             fixed_lots=_sub_fixed_lots or None,
                             asset_class=_sub_asset_class,
+                            signal_mono=_sub_signal_mono,
+                            latency=new_order_latency(sub_exec.id, _sub_signal_mono),
                         )
                         _queued = await enqueue_ctrader_order(_job)
                         order_result = {"order_id": "queued", "queued": True} if _queued else None
