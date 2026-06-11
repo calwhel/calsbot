@@ -512,9 +512,14 @@ async def _get_raw_tickers(http_client: httpx.AsyncClient) -> Optional[list]:
     from app.services.binance_feed import binance_disabled, binance_http_get
 
     _last_err: Optional[str] = None
-    ticker_urls = [
-        ("https://api.mexc.com/api/v3/ticker/24hr", None, "strategy_executor._get_raw_tickers.mexc"),
-    ]
+    from app.services.geo_block import is_domain_blocked
+
+    ticker_urls = []
+    mexc_url = "https://api.mexc.com/api/v3/ticker/24hr"
+    if not is_domain_blocked(mexc_url):
+        ticker_urls.append(
+            (mexc_url, None, "strategy_executor._get_raw_tickers.mexc"),
+        )
     if not binance_disabled():
         ticker_urls.append(
             ("https://fapi.binance.com/fapi/v1/ticker/24hr", None, "strategy_executor._get_raw_tickers.binance"),
@@ -524,6 +529,10 @@ async def _get_raw_tickers(http_client: httpx.AsyncClient) -> Optional[list]:
             status, data = await binance_http_get(
                 http_client, url, params, timeout_s=10, caller=caller,
             )
+            if status in (451, 403):
+                from app.services.geo_block import note_geo_block
+                note_geo_block(url, status, caller)
+                continue
             if status == 200 and data is not None:
                 _RAW_TICKERS_CACHE = data
                 _RAW_TICKERS_AT    = now
@@ -7025,6 +7034,8 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                     # throws before its own assignment.
             _cycle_t0 = datetime.utcnow()
             try:
+                from app.services.feed_diagnostics import begin_scan_metric_batch
+                begin_scan_metric_batch()
                 mark_heartbeat(_fx_hb)
                 _all_snaps = _load_strategy_snapshots_cached(
                     SessionLocal, UserStrategy,
@@ -7306,7 +7317,11 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                         pass
 
                 try:
-                    from app.services.feed_diagnostics import log_blocker_rollup
+                    from app.services.feed_diagnostics import (
+                        flush_scan_metric_batch,
+                        log_blocker_rollup,
+                    )
+                    flush_scan_metric_batch(_fx_lbl)
                     log_blocker_rollup(100)
                 except Exception:
                     pass
@@ -7320,6 +7335,11 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
 
             except Exception as e:
                 logger.error(f"Forex executor loop error: {e}", exc_info=True)
+                try:
+                    from app.services.feed_diagnostics import flush_scan_metric_batch
+                    flush_scan_metric_batch(_fx_lbl)
+                except Exception:
+                    pass
                 # An outer-cycle failure (e.g. the strategy-list query or session
                 # open failing — the hot-table query that preceded the prior
                 # saturation incident) also counts as DB stress, so trip the

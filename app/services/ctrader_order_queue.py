@@ -347,13 +347,59 @@ def _persist_gate_stats_db(strategy_id: int, stats: Dict[str, int], at: str) -> 
 
 
 def flush_gate_stats_to_db(strategy_ids: list) -> None:
-    """Batch-persist in-memory gate stats once per executor cycle (not per strategy)."""
-    for sid in strategy_ids:
-        stats = _GATE_STATS.get(sid)
-        if stats is None:
-            continue
-        at = _GATE_STATS_AT.get(sid) or (datetime.utcnow().isoformat() + "Z")
-        _persist_gate_stats_db(sid, stats, at)
+    """Batch-persist in-memory gate stats once per executor cycle (single commit)."""
+    if not strategy_ids:
+        return
+    try:
+        from app.services.discovery_jobs import _job_key, _db_session
+        from app.strategy_models import DiscoveryScanJob
+
+        pending = [
+            sid for sid in strategy_ids if _GATE_STATS.get(sid) is not None
+        ]
+        if not pending:
+            return
+        db = _db_session()
+        try:
+            keys = [_job_key("executor_gate", str(sid)) for sid in pending]
+            rows = (
+                db.query(DiscoveryScanJob)
+                .filter(DiscoveryScanJob.job_key.in_(keys))
+                .all()
+            )
+            by_key = {r.job_key: r for r in rows}
+            now = datetime.utcnow()
+            for sid in pending:
+                stats = _GATE_STATS.get(sid)
+                if stats is None:
+                    continue
+                key = _job_key("executor_gate", str(sid))
+                at = _GATE_STATS_AT.get(sid) or (now.isoformat() + "Z")
+                payload = {"stats": dict(stats), "updated_at": at}
+                row = by_key.get(key)
+                if not row:
+                    row = DiscoveryScanJob(
+                        job_key=key,
+                        scan_type="executor_gate",
+                        uid="_shared",
+                        status="done",
+                        message="Executor gate stats",
+                    )
+                    db.add(row)
+                    by_key[key] = row
+                row.status = "done"
+                row.result_json = payload
+                row.updated_at = now
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        for sid in strategy_ids:
+            stats = _GATE_STATS.get(sid)
+            if stats is None:
+                continue
+            at = _GATE_STATS_AT.get(sid) or (datetime.utcnow().isoformat() + "Z")
+            _persist_gate_stats_db(sid, stats, at)
 
 
 def get_gate_stats(strategy_id: int) -> Dict[str, Any]:
