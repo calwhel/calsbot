@@ -69,6 +69,11 @@ _TF_TO_FMP = {
 }
 
 _KLINE_CACHE: Dict[Tuple[str, str, int], Tuple[List[List[float]], datetime]] = {}
+# After 2 empty responses, skip FMP klines for (symbol, timeframe) for 24h.
+_FMP_EMPTY_KLINE_UNTIL: Dict[Tuple[str, str], datetime] = {}
+_FMP_EMPTY_STRIKES: Dict[Tuple[str, str], int] = {}
+_FMP_EMPTY_STRIKE_LIMIT = 2
+_FMP_EMPTY_UNAVAIL_HOURS = 24
 _KLINE_TTL = timedelta(seconds=60)
 _KLINE_STALE_TTL = timedelta(hours=1)  # serve during 429 backoff rather than empty
 _KLINE_TTL_BY_TF: Dict[str, timedelta] = {
@@ -365,6 +370,42 @@ def cached_symbols() -> List[str]:
     return sorted(_PRICE_CACHE.keys())
 
 
+def fmp_klines_marked_unavailable(symbol: str, timeframe: str) -> bool:
+    """True when this (symbol, timeframe) pair repeatedly returned empty FMP bars."""
+    key = (symbol.upper(), timeframe)
+    until = _FMP_EMPTY_KLINE_UNTIL.get(key)
+    if not until:
+        return False
+    if datetime.utcnow() < until:
+        return True
+    _FMP_EMPTY_KLINE_UNTIL.pop(key, None)
+    _FMP_EMPTY_STRIKES.pop(key, None)
+    return False
+
+
+def _record_fmp_empty_klines(symbol: str, timeframe: str) -> None:
+    key = (symbol.upper(), timeframe)
+    strikes = _FMP_EMPTY_STRIKES.get(key, 0) + 1
+    _FMP_EMPTY_STRIKES[key] = strikes
+    if strikes >= _FMP_EMPTY_STRIKE_LIMIT:
+        _FMP_EMPTY_KLINE_UNTIL[key] = datetime.utcnow() + timedelta(
+            hours=_FMP_EMPTY_UNAVAIL_HOURS,
+        )
+        logger.info(
+            "[FMPFeed] %s %s klines marked unavailable %sh "
+            "(repeated empty — plan may not include pair)",
+            symbol.upper(),
+            timeframe,
+            _FMP_EMPTY_UNAVAIL_HOURS,
+        )
+
+
+def _clear_fmp_empty_klines(symbol: str, timeframe: str) -> None:
+    key = (symbol.upper(), timeframe)
+    _FMP_EMPTY_STRIKES.pop(key, None)
+    _FMP_EMPTY_KLINE_UNTIL.pop(key, None)
+
+
 def _fmp_api_key() -> str:
     for name in (
         "FMP_API_KEY",
@@ -555,6 +596,8 @@ async def _get_klines_impl(
         return []
 
     sym = symbol.upper()
+    if fmp_klines_marked_unavailable(sym, timeframe):
+        return []
     fmp_interval = _TF_TO_FMP.get(timeframe, "15min")
     cache_key = (sym, fmp_interval, limit)
     now = datetime.utcnow()
@@ -598,6 +641,7 @@ async def _get_klines_impl(
             )
 
     if rows:
+        _clear_fmp_empty_klines(sym, timeframe)
         _KLINE_CACHE[cache_key] = (rows, now)
         logger.info(f"[FMPFeed] klines ok: {sym} {timeframe} → {len(rows)} bars")
     elif cached and fmp_in_backoff():
@@ -608,7 +652,14 @@ async def _get_klines_impl(
             "Coinbase/Kraken metals fallback will be used"
         )
     else:
-        logger.warning(f"[FMPFeed] klines empty for {sym} {timeframe} (limit={limit})")
+        _record_fmp_empty_klines(sym, timeframe)
+        if not fmp_klines_marked_unavailable(sym, timeframe):
+            logger.warning(f"[FMPFeed] klines empty for {sym} {timeframe} (limit={limit})")
+        else:
+            logger.debug(
+                f"[FMPFeed] klines empty for {sym} {timeframe} — "
+                "negative cache active, skipping warnings"
+            )
     return rows
 
 

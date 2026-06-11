@@ -224,6 +224,75 @@ def metal_kline_drift_limit(source: Optional[str] = None) -> float:
     return METAL_KLINE_LIVE_MAX_DRIFT_PCT
 
 
+def _ctrader_unavailable_reason(symbol: str) -> str:
+    """Human-readable reason cTrader did not serve metal klines this cycle."""
+    sym = symbol.upper()
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        if getattr(_ctf, "_is_terminal_auth_error", lambda _e: False)(
+            getattr(_ctf, "_last_auth_error", None)
+        ):
+            return "oauth expired — relink cTrader"
+        st = _ctf.feed_status()
+        if not st.get("subscribed") and not st.get("remote_live"):
+            return "feed task not running"
+        if st.get("needs_relink"):
+            return "needs relink"
+        if not _ctf.ctrader_spot_ready(sym) and not _ctf.broker_session_ready(sym):
+            tick_age = st.get("last_tick_age_s")
+            if tick_age is not None:
+                return f"no spot ticks (last_tick_age_s={tick_age})"
+            return "no broker session and no spot ticks"
+        if not _ctf._trendbar_fetch_allowed():
+            return "trendbar fetch blocked"
+        return "empty or timed-out trendbars"
+    except Exception as exc:
+        return type(exc).__name__
+
+
+async def sweep_stale_metal_klines(
+    symbols: Optional[List[str]] = None,
+    timeframes: Optional[List[str]] = None,
+) -> int:
+    """Per-cycle sweep across ALL tradfi kline caches (coinbase, kraken, fmp, …)."""
+    from app.services.kline_staleness import check_cached_klines_stale
+
+    targets = {s.upper() for s in symbols} if symbols else {"XAUUSD", "XAGUSD"}
+    tfs = timeframes or ["5m", "15m", "1h"]
+    rebuilt = 0
+    for key in list(_KLINE_CACHE):
+        key0 = str(key[0]).upper()
+        if not any(t in key0 for t in targets):
+            continue
+        tf = key[1] if len(key) > 1 else "15m"
+        if tf not in tfs:
+            continue
+        rows, fetched_at = _KLINE_CACHE.get(key, ([], datetime.utcnow()))
+        if not rows:
+            continue
+        sym_guess = next((t for t in targets if t in key0), "XAUUSD")
+        stale, detail = await check_cached_klines_stale(
+            sym_guess, rows, tf, cache_fetched_at=fetched_at,
+        )
+        if not stale:
+            continue
+        source = key0.split(":")[0] if ":" in key0 else "cache"
+        logger.warning(
+            "[tradfi] kline builder stale for %s — rebuilt (%s, source=%s, tf=%s)",
+            sym_guess,
+            detail,
+            source,
+            tf,
+        )
+        _KLINE_CACHE.pop(key, None)
+        rebuilt += 1
+    if rebuilt:
+        for sym in targets:
+            for tf in tfs:
+                _METAL_KLINE_SOURCE_CACHE.pop((sym, tf, 80), None)
+    return rebuilt
+
+
 def clear_metal_kline_cache(symbols: Optional[List[str]] = None) -> int:
     """Invalidate metal/forex kline caches after cTrader feed reconnect."""
     targets = None
@@ -671,10 +740,22 @@ async def _fetch_coinbase_metals_klines(
     cached = _KLINE_CACHE.get(key)
     if cached and (now - cached[1]) < _metal_kline_cache_ttl(key):
         rows = cached[0]
-        if diag is not None:
-            diag.candle_count = len(rows)
-            diag.extra["cache_hit"] = True
-        return rows
+        from app.services.kline_staleness import check_cached_klines_stale
+        stale, detail = await check_cached_klines_stale(
+            sym, rows, timeframe, cache_fetched_at=cached[1],
+        )
+        if stale:
+            logger.warning(
+                "[tradfi] kline builder stale for %s — rebuilt (%s, source=coinbase)",
+                sym,
+                detail,
+            )
+            _KLINE_CACHE.pop(key, None)
+        else:
+            if diag is not None:
+                diag.candle_count = len(rows)
+                diag.extra["cache_hit"] = True
+            return rows
 
     def _stale_fallback(reason: str) -> List[List[float]]:
         if not cached:
@@ -972,6 +1053,12 @@ async def fetch_metal_live_candles(
                 _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
                     label, datetime.utcnow(),
                 )
+                if label == "coinbase" and ctrader_tried:
+                    logger.warning(
+                        "[prices] %s fell back to coinbase (ctrader feed down: %s)",
+                        sym,
+                        _ctrader_unavailable_reason(sym),
+                    )
                 logger.info(
                     f"[prices] {sym} kline_source={label} {timeframe} → {len(out)} bars"
                 )

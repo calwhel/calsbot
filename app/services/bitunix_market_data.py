@@ -399,7 +399,6 @@ async def _fetch_ticker_chain(
         _fetch_bybit_ticker,
         _fetch_mexc_ticker,
         fetch_ticker,
-        _fetch_coingecko_ticker,
     ]
     if not _binance_disabled():
         fetchers.insert(0, _fetch_binance_futures_ticker)

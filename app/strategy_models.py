@@ -68,6 +68,7 @@ class StrategyExecution(Base):
     remaining_volume    = Column(Float, nullable=True)
     mfe_pips          = Column(Float, nullable=True)   # peak favorable excursion (pips)
     mae_pips          = Column(Float, nullable=True)   # peak adverse excursion (pips)
+    notified_close_at = Column(DateTime, nullable=True)  # close Telegram/push sent once
     notes           = Column(Text, nullable=True)
     is_paper        = Column(Boolean, default=False)       # paper trade — no real order placed
     asset_class     = Column(String(16), nullable=False, default="crypto", server_default="crypto", index=True)
@@ -296,6 +297,7 @@ def init_strategy_tables(engine):
             ("broker_volume_units",  "INTEGER"),
             ("mfe_pips",             "NUMERIC"),
             ("mae_pips",             "NUMERIC"),
+            ("notified_close_at",    "TIMESTAMP"),
         ]:
             if ("strategy_executions", col) not in existing_cols:
                 try:

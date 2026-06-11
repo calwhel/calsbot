@@ -1756,6 +1756,10 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
         # Another worker already closed this execution — skip notification.
         return
 
+    from app.services.close_notify_dedupe import claim_close_notification
+    if not claim_close_notification(db, ex.id):
+        return
+
     _close_ac = (getattr(ex, "asset_class", "crypto") or "crypto").upper()
     logger.info(
         "[%s] [PaperMonitor] %s (%s): %s %s entry=%s exit=%s pnl=%+.1f%%",
@@ -3452,6 +3456,10 @@ async def run_live_position_monitor():
         ex.closed_at  = closed_at
 
         _update_performance(ex.strategy_id, db)
+
+        from app.services.close_notify_dedupe import claim_close_notification
+        if not claim_close_notification(db, ex.id):
+            return True
 
         _live_ac = (getattr(ex, "asset_class", "crypto") or "crypto").upper()
         logger.info(
@@ -6652,6 +6660,10 @@ async def _close_live_forex_execution_and_notify(
         ex.outcome = outcome; ex.exit_price = exit_price
         ex.pnl_pct = pnl_pct; ex.closed_at  = closed_at
 
+        from app.services.close_notify_dedupe import claim_close_notification
+        if not claim_close_notification(db, ex.id):
+            return True
+
         # Append an auditable close note (preserve prior open-time context).
         pnl_sign = "+" if pnl_pct >= 0 else ""
         if outcome == "WIN":
@@ -7201,14 +7213,15 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 if _forex_open:
                     try:
                         from app.services.ctrader_price_feed import sweep_stale_klines
+                        from app.services.tradfi_prices import sweep_stale_metal_klines
                         _stale_syms = {
                             (s.get("symbol") or "").upper()
                             for s in open_snaps
                             if (s.get("symbol") or "").upper()
                         }
-                        await sweep_stale_klines(
-                            symbols=list(_stale_syms) if _stale_syms else None,
-                        )
+                        _sym_list = list(_stale_syms) if _stale_syms else None
+                        await sweep_stale_klines(symbols=_sym_list)
+                        await sweep_stale_metal_klines(symbols=_sym_list)
                     except Exception as _ks_err:
                         logger.debug("[FX Executor] kline staleness sweep: %s", _ks_err)
 

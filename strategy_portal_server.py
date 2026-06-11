@@ -1068,6 +1068,11 @@ _PIP_COLUMN_MIGRATIONS = [
         "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS mae_pips NUMERIC",
     ),
     (
+        "strategy_executions",
+        "notified_close_at",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS notified_close_at TIMESTAMP",
+    ),
+    (
         "strategy_performance",
         "total_pips_pnl",
         "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS total_pips_pnl FLOAT",
