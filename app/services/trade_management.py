@@ -95,11 +95,20 @@ def _round_close_volume(remaining: float, pct: float, step: int, min_vol: int) -
     return raw
 
 
-async def _telegram_trade(user_id: int, text: str, asset_class: str = "forex") -> None:
+async def _telegram_trade(
+    user_id: int,
+    text: str,
+    asset_class: str = "forex",
+    *,
+    msg_type: str = "trade",
+    symbol: str = "",
+    exec_id: int = 0,
+) -> None:
     try:
         from app.database import BgSessionLocal
         from app.models import User
-        from app.services.strategy_executor import _telegram_int_id, _tg_send
+        from app.services.strategy_executor import _telegram_int_id
+        from app.services.telegram_dm import deliver_trade_telegram
 
         db = BgSessionLocal()
         try:
@@ -108,9 +117,22 @@ async def _telegram_trade(user_id: int, text: str, asset_class: str = "forex") -
         finally:
             db.close()
         if tg:
-            await _tg_send(tg, text, asset_class=asset_class)
+            await deliver_trade_telegram(
+                tg,
+                text,
+                msg_type=msg_type,
+                symbol=symbol,
+                exec_id=exec_id,
+                asset_class=asset_class,
+            )
     except Exception as exc:
-        logger.debug("[trade-mgmt] telegram failed: %s", exc)
+        logger.warning(
+            "[telegram] FAILED %s %s exec=%s: %s",
+            msg_type,
+            (symbol or "?").upper(),
+            exec_id or 0,
+            exc,
+        )
 
 
 async def manage_open_position(
@@ -237,6 +259,9 @@ async def manage_open_position(
                     execution.user_id,
                     f"🔒 Breakeven set @ {new_sl:.5g}",
                     asset_class=asset_class,
+                    msg_type="breakeven",
+                    symbol=symbol,
+                    exec_id=int(getattr(execution, "id", 0) or 0),
                 )
         else:
             logger.warning(
