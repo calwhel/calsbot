@@ -43,7 +43,7 @@ def note_geo_block(url: str, status: int, caller: str = "") -> None:
     if status == 451:
         if domain not in _warned_domains:
             _warned_domains.add(domain)
-            logger.warning(f"[geo-block] 451 from {url} caller={caller or provider}")
+            logger.warning(f"[geo-block] 451 from {url}")
         return
 
     if domain in _warned_domains:

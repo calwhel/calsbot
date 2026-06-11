@@ -81,9 +81,10 @@ _KLINE_TTL_BY_TF: Dict[str, timedelta] = {
     "1day": timedelta(seconds=300),
 }
 # Free/starter tiers are tight — default 30 req/min; raise via env on paid plans.
-# FMP free tier: 250 requests/day — default 5/min with hard daily cap.
-_FMP_MAX_REQUESTS_PER_MIN = int(os.environ.get("FMP_MAX_REQUESTS_PER_MIN", "5"))
-_FMP_MAX_REQUESTS_PER_DAY = int(os.environ.get("FMP_MAX_REQUESTS_PER_DAY", "240"))
+# Global (Postgres-backed) budget — survives multi-worker Gunicorn bursts.
+_FMP_MAX_REQUESTS_PER_MIN = int(os.environ.get("FMP_MAX_REQUESTS_PER_MIN", "3"))
+_FMP_MAX_REQUESTS_PER_DAY = int(os.environ.get("FMP_MAX_REQUESTS_PER_DAY", "150"))
+_FMP_RATE_TABLE_READY = False
 _FMP_REQUEST_TIMES: Deque[float] = deque()
 _FMP_DAILY_COUNT: int = 0
 _FMP_DAILY_DATE: Optional[str] = None
@@ -129,6 +130,80 @@ def _fmp_rate_lock() -> asyncio.Lock:
     return _FMP_RATE_LOCK
 
 
+def _ensure_fmp_rate_table() -> None:
+    global _FMP_RATE_TABLE_READY
+    if _FMP_RATE_TABLE_READY:
+        return
+    from sqlalchemy import text
+    from app.database import engine
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS fmp_rate_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_fmp_rate_events_ts "
+                "ON fmp_rate_events (created_at)"
+            )
+        )
+    _FMP_RATE_TABLE_READY = True
+
+
+def _fmp_pg_rate_allow_sync() -> bool:
+    """Cross-process FMP budget (all Gunicorn workers share one counter)."""
+    from sqlalchemy import text
+    from app.database import engine
+
+    try:
+        _ensure_fmp_rate_table()
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "DELETE FROM fmp_rate_events "
+                    "WHERE created_at < NOW() - INTERVAL '2 days'"
+                )
+            )
+            minute = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM fmp_rate_events "
+                    "WHERE created_at >= NOW() - INTERVAL '1 minute'"
+                )
+            ).scalar() or 0
+            if minute >= _FMP_MAX_REQUESTS_PER_MIN:
+                logger.debug(
+                    "[FMPFeed] global rate limit %s/%s req/min — skip",
+                    minute,
+                    _FMP_MAX_REQUESTS_PER_MIN,
+                )
+                return False
+            day = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM fmp_rate_events "
+                    "WHERE created_at >= NOW() - INTERVAL '1 day'"
+                )
+            ).scalar() or 0
+            if day >= _FMP_MAX_REQUESTS_PER_DAY:
+                logger.debug(
+                    "[FMPFeed] global daily cap %s/%s — skip",
+                    day,
+                    _FMP_MAX_REQUESTS_PER_DAY,
+                )
+                return False
+            conn.execute(text("INSERT INTO fmp_rate_events DEFAULT VALUES"))
+            return True
+    except Exception as exc:
+        logger.debug("[FMPFeed] pg rate gate unavailable (%s)", exc)
+        return True
+
+
 async def _fmp_rate_limit_wait() -> bool:
     """Acquire a slot in the global FMP request budget.
 
@@ -138,6 +213,9 @@ async def _fmp_rate_limit_wait() -> bool:
     from app.services.prefetch_fast import prefetch_fast_active
 
     if fmp_in_backoff():
+        return False
+
+    if not await asyncio.to_thread(_fmp_pg_rate_allow_sync):
         return False
 
     async with _fmp_rate_lock():
