@@ -8,6 +8,7 @@ high/low is used to detect TP/SL hits so scalp results are realistic.
 import asyncio
 import html as _html
 import logging
+import math
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -1785,24 +1786,23 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
         strat_name = (strat.name if strat else None) or "Your Strategy"
         tg_id = _telegram_int_id(user)
         if tg_id:
-            from app.services.telegram_dm import schedule_dm
-            schedule_dm(
+            _enqueue_close_telegram(
                 tg_id,
-                _fmt_close_card(
-                    strategy_name = strat_name,
-                    symbol        = ex.symbol,
-                    direction     = ex.direction,
-                    entry         = ex.entry_price,
-                    exit_price    = exit_price,
-                    outcome       = outcome,
-                    pnl_pct       = pnl_pct,
-                    leverage      = ex.leverage,
-                    fired_at      = ex.fired_at,
-                    closed_at     = closed_at,
-                    conditions    = ex.conditions_met,
-                    is_paper      = True,
-                    tp1_blend_line = _tp1_blend_pips_line(ex, exit_price),
-                ),
+                execution_id=ex.id,
+                symbol=ex.symbol,
+                outcome=outcome,
+                asset_class=getattr(ex, "asset_class", "crypto") or "crypto",
+                strategy_name=strat_name,
+                direction=ex.direction,
+                entry=ex.entry_price,
+                exit_price=exit_price,
+                pnl_pct=pnl_pct,
+                leverage=ex.leverage,
+                fired_at=ex.fired_at,
+                closed_at=closed_at,
+                conditions=ex.conditions_met,
+                is_paper=True,
+                tp1_blend_line=_tp1_blend_pips_line(ex, exit_price),
             )
         # Mobile push — trade close (paper)
         from app.services.expo_push import notify_trade_close_bg
@@ -2112,6 +2112,31 @@ def _fmt_open_card(
     )
 
 
+def _coerce_price(value, default: float = 0.0) -> float:
+    try:
+        v = float(value)
+        if math.isnan(v) or math.isinf(v):
+            return default
+        return v
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_pct(value, default: float = 0.0) -> float:
+    return _coerce_price(value, default)
+
+
+def _close_telegram_type(outcome: Optional[str]) -> str:
+    o = (outcome or "").upper()
+    if o == "WIN":
+        return "win"
+    if o == "LOSS":
+        return "loss"
+    if o == "BREAKEVEN":
+        return "breakeven"
+    return "close"
+
+
 def _fmt_close_card(
     strategy_name: str, symbol: str, direction: str,
     entry: float, exit_price: float, outcome: str,
@@ -2120,6 +2145,15 @@ def _fmt_close_card(
     conditions: list = None, is_paper: bool = False,
     tp1_blend_line: Optional[str] = None,
 ) -> str:
+    entry = _coerce_price(entry)
+    exit_price = _coerce_price(exit_price)
+    pnl_pct = _coerce_pct(pnl_pct)
+    leverage = int(leverage or 1)
+    outcome = (outcome or "CLOSED").upper()
+    direction = (direction or "LONG").upper()
+    symbol = str(symbol or "???")
+    strategy_name = str(strategy_name or "Strategy")
+
     dir_icon  = "🟢" if direction == "LONG" else "🔴"
     coin      = symbol.replace("USDT", "")
 
@@ -2187,10 +2221,15 @@ def _fmt_close_card(
 
     pip_sz  = _pip_size(symbol)
     # Signed raw price move (positive = favourable for the trade direction)
-    raw_move = (exit_price - entry) if direction == "LONG" else (entry - exit_price)
+    if entry <= 0 or exit_price <= 0:
+        raw_move = 0.0
+    elif abs(exit_price - entry) <= max(abs(entry) * 1e-12, 1e-9):
+        raw_move = 0.0
+    else:
+        raw_move = (exit_price - entry) if direction == "LONG" else (entry - exit_price)
 
     if tp1_blend_line:
-        pnl_display = tp1_blend_line
+        pnl_display = str(tp1_blend_line)
     elif pip_sz is not None and pip_sz > 0:
         pips = raw_move / pip_sz
         sign = "+" if pips >= 0 else "−"
@@ -2223,10 +2262,13 @@ def _fmt_close_card(
             )
 
     paper_tag = "📄 <i>Paper trade result</i>" if is_paper else "✅ <i>Live trade result</i>"
-    closed_line = f"\n🕐 <i>{closed_at.strftime('%Y-%m-%d %H:%M:%S UTC') if closed_at else _log_ts()}</i>"
+    if closed_at and hasattr(closed_at, "strftime"):
+        closed_line = f"\n🕐 <i>{closed_at.strftime('%Y-%m-%d %H:%M:%S UTC')}</i>"
+    else:
+        closed_line = f"\n🕐 <i>{_log_ts()}</i>"
 
     return (
-        f"{icon} <b>{result} · {_html.escape(str(strategy_name))}</b>\n\n"
+        f"{icon} <b>{result} · {_html.escape(strategy_name)}</b>\n\n"
         f"{dir_icon} <b>${_html.escape(str(coin))}</b> · {direction} · {leverage}×\n\n"
         f"{price_block}"
         f"{why}\n\n"
@@ -2234,8 +2276,260 @@ def _fmt_close_card(
     )
 
 
-async def _send_paper_close_dm(telegram_id: int, text: str, *, asset_class: str = "crypto"):
-    await _tg_send(telegram_id, text, asset_class=asset_class)
+def _fmt_close_fallback(
+    symbol: str,
+    direction: str,
+    outcome: str,
+    *,
+    pnl_display: str = "",
+) -> str:
+    """Minimal close card when the full formatter throws."""
+    o = (outcome or "CLOSED").upper()
+    icon = {"WIN": "✅", "LOSS": "🛑", "BREAKEVEN": "⚖️"}.get(o, "📊")
+    sym = (symbol or "???").upper().replace("USDT", "")
+    dir_ = (direction or "").upper()
+    pl = (pnl_display or "").strip()
+    line = f"{icon} {o} {sym}"
+    if dir_:
+        line += f" {dir_}"
+    if pl:
+        line += f" {pl}"
+    return line
+
+
+def _build_close_telegram_safe(
+    *,
+    execution_id: int = 0,
+    strategy_name: str = "Strategy",
+    symbol: str = "",
+    direction: str = "LONG",
+    entry: float = 0.0,
+    exit_price: float = 0.0,
+    outcome: str = "CLOSED",
+    pnl_pct: float = 0.0,
+    leverage: int = 1,
+    fired_at: datetime = None,
+    closed_at: datetime = None,
+    conditions: list = None,
+    is_paper: bool = False,
+    tp1_blend_line: Optional[str] = None,
+) -> str:
+    fields = {
+        "execution_id": execution_id,
+        "strategy_name": strategy_name,
+        "symbol": symbol,
+        "direction": direction,
+        "entry": entry,
+        "exit_price": exit_price,
+        "outcome": outcome,
+        "pnl_pct": pnl_pct,
+        "leverage": leverage,
+        "tp1_blend_line": tp1_blend_line,
+    }
+    try:
+        return _fmt_close_card(
+            strategy_name=strategy_name,
+            symbol=symbol,
+            direction=direction,
+            entry=entry,
+            exit_price=exit_price,
+            outcome=outcome,
+            pnl_pct=pnl_pct,
+            leverage=leverage,
+            fired_at=fired_at,
+            closed_at=closed_at,
+            conditions=conditions,
+            is_paper=is_paper,
+            tp1_blend_line=tp1_blend_line,
+        )
+    except Exception as exc:
+        logger.exception(
+            "[telegram] close message build failed exec=%s fields=%s: %s",
+            execution_id,
+            fields,
+            exc,
+        )
+        pl = ""
+        try:
+            ps_fn = None
+            from app.services.forex_engine import pip_size as ps_fn
+            ps = ps_fn(symbol) if ps_fn else 0.0
+            ent = _coerce_price(entry)
+            ex = _coerce_price(exit_price)
+            if ps and ps > 0 and ent > 0 and ex > 0:
+                mv = (ex - ent) if (direction or "").upper() == "LONG" else (ent - ex)
+                pips = mv / ps
+                pl = f"{'+' if pips >= 0 else '−'}{abs(pips):.0f} pips"
+            elif pnl_pct is not None:
+                pl = f"{_coerce_pct(pnl_pct):+.2f}%"
+        except Exception:
+            pl = f"{_coerce_pct(pnl_pct):+.2f}%" if pnl_pct is not None else ""
+        return _fmt_close_fallback(symbol, direction, outcome, pnl_display=pl)
+
+
+def _fmt_breakeven_card(
+    strategy_name: str,
+    symbol: str,
+    direction: str,
+    *,
+    kind: str = "live",
+) -> str:
+    sym = str(symbol or "???").upper().replace("USDT", "")
+    dir_ = (direction or "LONG").upper()
+    _mode = "🧪 PAPER" if (kind or "").lower() == "paper" else "🎯 LIVE"
+    text = (
+        f"🛡️ <b>Breakeven · {sym}</b> · <i>{_mode}</i>\n"
+        f"📋 <b>{_html.escape(str(strategy_name or 'Strategy'))}</b>\n\n"
+        f"Stop moved to entry — this {dir_} trade is now risk-free. ✅"
+    )
+    if (kind or "").lower() == "paper":
+        text += (
+            "\n\n📄 <i>Paper/simulated — not on your cTrader account. "
+            "Switch strategy to Live + link cTrader for real orders.</i>"
+        )
+    return text
+
+
+def _fmt_breakeven_fallback(symbol: str, direction: str = "") -> str:
+    sym = (symbol or "???").upper().replace("USDT", "")
+    dir_ = (direction or "").upper()
+    return f"🔒 Breakeven {sym}" + (f" {dir_}" if dir_ else "")
+
+
+def _build_breakeven_telegram_safe(
+    *,
+    execution_id: int = 0,
+    strategy_name: str = "Strategy",
+    symbol: str = "",
+    direction: str = "LONG",
+    kind: str = "live",
+) -> str:
+    fields = {
+        "execution_id": execution_id,
+        "strategy_name": strategy_name,
+        "symbol": symbol,
+        "direction": direction,
+        "kind": kind,
+    }
+    try:
+        return _fmt_breakeven_card(
+            strategy_name=strategy_name,
+            symbol=symbol,
+            direction=direction,
+            kind=kind,
+        )
+    except Exception as exc:
+        logger.exception(
+            "[telegram] breakeven message build failed exec=%s fields=%s: %s",
+            execution_id,
+            fields,
+            exc,
+        )
+        return _fmt_breakeven_fallback(symbol, direction)
+
+
+def _enqueue_close_telegram(
+    telegram_id,
+    *,
+    execution_id: int,
+    symbol: str,
+    outcome: str,
+    asset_class: str = "forex",
+    **card_kwargs,
+) -> None:
+    from app.services.telegram_dm import enqueue_trade_telegram
+
+    text = _build_close_telegram_safe(
+        execution_id=execution_id,
+        symbol=symbol,
+        outcome=outcome,
+        **card_kwargs,
+    )
+    enqueue_trade_telegram(
+        telegram_id,
+        text,
+        msg_type=_close_telegram_type(outcome),
+        symbol=symbol,
+        exec_id=execution_id,
+        asset_class=asset_class,
+    )
+
+
+async def _deliver_close_telegram(
+    telegram_id,
+    *,
+    execution_id: int,
+    symbol: str,
+    outcome: str,
+    asset_class: str = "forex",
+    **card_kwargs,
+) -> bool:
+    from app.services.telegram_dm import deliver_trade_telegram
+
+    text = _build_close_telegram_safe(
+        execution_id=execution_id,
+        symbol=symbol,
+        outcome=outcome,
+        **card_kwargs,
+    )
+    return await deliver_trade_telegram(
+        telegram_id,
+        text,
+        msg_type=_close_telegram_type(outcome),
+        symbol=symbol,
+        exec_id=execution_id,
+        asset_class=asset_class,
+    )
+
+
+def _enqueue_breakeven_telegram(
+    telegram_id,
+    *,
+    execution_id: int = 0,
+    strategy_name: str = "Strategy",
+    symbol: str = "",
+    direction: str = "LONG",
+    kind: str = "live",
+    asset_class: str = "forex",
+) -> None:
+    from app.services.telegram_dm import enqueue_trade_telegram
+
+    text = _build_breakeven_telegram_safe(
+        execution_id=execution_id,
+        strategy_name=strategy_name,
+        symbol=symbol,
+        direction=direction,
+        kind=kind,
+    )
+    enqueue_trade_telegram(
+        telegram_id,
+        text,
+        msg_type="breakeven",
+        symbol=symbol,
+        exec_id=execution_id,
+        asset_class=asset_class,
+    )
+
+
+async def _send_paper_close_dm(
+    telegram_id: int,
+    text: str,
+    *,
+    asset_class: str = "crypto",
+    execution_id: int = 0,
+    symbol: str = "",
+    outcome: str = "CLOSED",
+):
+    from app.services.telegram_dm import deliver_trade_telegram
+
+    await deliver_trade_telegram(
+        telegram_id,
+        text,
+        msg_type=_close_telegram_type(outcome),
+        symbol=symbol,
+        exec_id=execution_id,
+        asset_class=asset_class,
+    )
 
 
 def _notify_breakeven_alert(
@@ -2276,23 +2570,22 @@ def _notify_breakeven_alert(
         _tid = int(telegram_id)
     except (TypeError, ValueError):
         return
-    _coin = symbol.upper().replace("USDT", "")
-    _mode = "🧪 PAPER" if (kind or "").lower() == "paper" else "🎯 LIVE"
-    _text = (
-        f"🛡️ <b>Breakeven · {_coin}</b> · <i>{_mode}</i>\n"
-        f"📋 <b>{_html.escape(str(strategy_name))}</b>\n\n"
-        f"Stop moved to entry — this {direction} trade is now risk-free. ✅"
-    )
-    if (kind or "").lower() == "paper":
-        _text += (
-            "\n\n📄 <i>Paper/simulated — not on your cTrader account. "
-            "Switch strategy to Live + link cTrader for real orders.</i>"
-        )
     try:
-        from app.services.telegram_dm import schedule_dm
-        schedule_dm(_tid, _text)
+        _enqueue_breakeven_telegram(
+            _tid,
+            execution_id=execution_id,
+            strategy_name=strategy_name,
+            symbol=symbol,
+            direction=direction,
+            kind=kind,
+            asset_class="forex",
+        )
     except Exception as _te:
-        logger.debug(f"[BE-notify] telegram schedule failed: {_te}")
+        logger.warning(
+            "[telegram] breakeven enqueue failed exec=%s: %s",
+            execution_id,
+            _te,
+        )
 
 
 def _compute_be_trigger_price(symbol, entry, direction, tp_price, ex_cfg):
@@ -3062,22 +3355,22 @@ async def run_live_position_monitor():
             if user and user.telegram_id:
                 tg_id = _telegram_int_id(user)
                 if tg_id:
-                    await _send_paper_close_dm(
+                    await _deliver_close_telegram(
                         tg_id,
-                        _fmt_close_card(
-                            strategy_name=strat_name,
-                            symbol=ex.symbol,
-                            direction=ex.direction,
-                            entry=ex.entry_price,
-                            exit_price=exit_price,
-                            outcome=outcome,
-                            pnl_pct=pnl_pct,
-                            leverage=leverage,
-                            fired_at=ex.fired_at,
-                            closed_at=closed_at,
-                            conditions=ex.conditions_met,
-                            is_paper=False,
-                        ),
+                        execution_id=ex.id,
+                        symbol=ex.symbol,
+                        outcome=outcome,
+                        asset_class=getattr(ex, "asset_class", "forex") or "forex",
+                        strategy_name=strat_name,
+                        direction=ex.direction,
+                        entry=ex.entry_price,
+                        exit_price=exit_price,
+                        pnl_pct=pnl_pct,
+                        leverage=leverage,
+                        fired_at=ex.fired_at,
+                        closed_at=closed_at,
+                        conditions=ex.conditions_met,
+                        is_paper=False,
                     )
             # Mobile push — trade close (live)
             from app.services.expo_push import notify_trade_close_bg
@@ -6267,16 +6560,23 @@ async def _close_live_forex_execution_and_notify(
             if user and user.telegram_id:
                 tg_id = _telegram_int_id(user)
                 if tg_id:
-                    await _send_paper_close_dm(
+                    await _deliver_close_telegram(
                         tg_id,
-                        _fmt_close_card(
-                            strategy_name=strat_name, symbol=ex.symbol,
-                            direction=ex.direction, entry=entry, exit_price=exit_price,
-                            outcome=outcome, pnl_pct=pnl_pct, leverage=leverage,
-                            fired_at=ex.fired_at, closed_at=closed_at,
-                            conditions=ex.conditions_met, is_paper=False,
-                            tp1_blend_line=_blend_line,
-                        ),
+                        execution_id=ex.id,
+                        symbol=ex.symbol,
+                        outcome=outcome,
+                        asset_class=getattr(ex, "asset_class", "forex") or "forex",
+                        strategy_name=strat_name,
+                        direction=ex.direction,
+                        entry=entry,
+                        exit_price=exit_price,
+                        pnl_pct=pnl_pct,
+                        leverage=leverage,
+                        fired_at=ex.fired_at,
+                        closed_at=closed_at,
+                        conditions=ex.conditions_met,
+                        is_paper=False,
+                        tp1_blend_line=_blend_line,
                     )
             from app.services.expo_push import notify_trade_close_bg
             dur_mins = int((closed_at - ex.fired_at).total_seconds() / 60) if ex.fired_at else 0
