@@ -224,6 +224,26 @@ def metal_kline_drift_limit(source: Optional[str] = None) -> float:
     return METAL_KLINE_LIVE_MAX_DRIFT_PCT
 
 
+def clear_metal_kline_cache(symbols: Optional[List[str]] = None) -> int:
+    """Invalidate metal/forex kline caches after cTrader feed reconnect."""
+    targets = None
+    if symbols:
+        targets = {
+            s.upper().replace("/", "").replace("-", "")
+            for s in symbols
+        }
+    removed = 0
+    for key in list(_KLINE_CACHE):
+        sym_part = str(key[0]).upper().replace(":", "")
+        if targets is None or sym_part in targets or any(t in sym_part for t in targets):
+            _KLINE_CACHE.pop(key, None)
+            removed += 1
+    for key in list(_METAL_KLINE_SOURCE_CACHE):
+        if targets is None or key[0] in targets:
+            _METAL_KLINE_SOURCE_CACHE.pop(key, None)
+    return removed
+
+
 def get_metal_kline_source(
     symbol: str,
     timeframe: str,

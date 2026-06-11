@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlencode
 
 from app.services.geo_block import domain_from_url, is_domain_blocked, note_geo_block
+from app.services.provider_http import provider_http_get
 
 logger = logging.getLogger(__name__)
 
@@ -126,22 +127,12 @@ async def binance_http_get(
     domain = domain_from_url(url)
     if domain.endswith("binance.com") and binance_disabled():
         return 0, None
-    try:
-        resp = await http_client.get(url, params=params or {}, timeout=timeout_s)
-        if resp.status_code in (451, 403):
-            note_geo_block(full, resp.status_code, caller)
-            if domain.endswith("binance.com"):
-                _note_geo_block(resp.status_code, full, caller)
-            return resp.status_code, None
-        if resp.status_code == 200:
-            try:
-                return 200, resp.json()
-            except Exception:
-                return 200, None
-        return resp.status_code, None
-    except Exception as exc:
-        logger.debug("[http] GET %s failed (%s): %s", full, caller, exc)
-        return 0, None
+    status, body = await provider_http_get(
+        http_client, url, params, timeout_s=timeout_s, caller=caller,
+    )
+    if status in (451, 403) and domain.endswith("binance.com"):
+        _note_geo_block(status, full, caller)
+    return status, body
 
 
 async def binance_spot_price(http_client, pair: str) -> Optional[float]:

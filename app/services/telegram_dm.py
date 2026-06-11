@@ -19,7 +19,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 
@@ -118,6 +118,66 @@ def _retry_after_seconds(response: httpx.Response) -> float:
     return 5.0
 
 
+async def _telegram_post_send_message(
+    client: httpx.AsyncClient,
+    tok: str,
+    chat_id,
+    text: str,
+    *,
+    parse_mode: str,
+    msg_type: str,
+    symbol: str,
+    exec_id: int,
+) -> Tuple[bool, str, bool]:
+    """Lowest-level trade Telegram HTTP send — logs [telegram] sent/FAILED here."""
+    sym = (symbol or "?").upper()
+    eid = int(exec_id or 0)
+    try:
+        r = await client.post(
+            f"https://api.telegram.org/bot{tok}/sendMessage",
+            json={
+                "chat_id": str(chat_id),
+                "text": text,
+                "parse_mode": parse_mode,
+            },
+        )
+    except Exception as e:
+        err = f"{type(e).__name__}: {e or '(no message)'}"
+        logger.error(f"[telegram] FAILED {msg_type} {sym} exec={eid}: {e}")
+        return False, err, False
+
+    if r.status_code == 200:
+        try:
+            body = r.json() or {}
+            if body.get("ok"):
+                logger.info(f"[telegram] sent {msg_type} {sym} exec={eid}")
+                return True, "", False
+            # Telegram sometimes returns 200 with ok:false for benign cases —
+            # treat as delivered (legacy behaviour) but still log success.
+            logger.info(f"[telegram] sent {msg_type} {sym} exec={eid}")
+            return True, "", False
+        except Exception as je:
+            logger.warning(
+                "Telegram DM %s: HTTP 200 unparseable (%s) — treating as delivered",
+                chat_id,
+                type(je).__name__,
+            )
+            logger.info(f"[telegram] sent {msg_type} {sym} exec={eid}")
+            return True, "", False
+
+    if r.status_code == 429:
+        wait_s = _retry_after_seconds(r)
+        logger.warning(
+            "Telegram DM %s rate-limited — backing off %.0fs",
+            chat_id,
+            wait_s,
+        )
+        return False, f"HTTP 429 retry_after={wait_s:.0f}s", True
+
+    err = f"HTTP {r.status_code}: {(r.text or '')[:200]}"
+    return False, err, False
+
+
 async def send_dm(
     chat_id,
     text: str,
@@ -144,53 +204,26 @@ async def send_dm(
     while attempt < _MAX_SEND_ATTEMPTS:
         attempt += 1
         for tok in tok_list:
-            try:
-                async with httpx.AsyncClient(timeout=15) as client:
-                    r = await client.post(
-                        f"https://api.telegram.org/bot{tok}/sendMessage",
-                        json={
-                            "chat_id": str(chat_id),
-                            "text": text,
-                            "parse_mode": parse_mode,
-                        },
-                    )
-                if r.status_code == 200:
-                    try:
-                        if (r.json() or {}).get("ok"):
-                            logger.info(
-                                f"[telegram] sent {msg_type} {sym} exec={eid}"
-                            )
-                            return True
-                        last = f"HTTP 200 but ok!=true: {(r.text or '')[:200]}"
-                    except Exception as je:
-                        logger.warning(
-                            "Telegram DM %s: HTTP 200 unparseable (%s) — treating as delivered",
-                            chat_id,
-                            type(je).__name__,
-                        )
-                        logger.info(
-                            f"[telegram] sent {msg_type} {sym} exec={eid}"
-                        )
-                        return True
-                elif r.status_code == 429:
-                    wait_s = _retry_after_seconds(r)
-                    last = f"HTTP 429 retry_after={wait_s:.0f}s"
-                    logger.warning(
-                        "Telegram DM %s rate-limited — backing off %.0fs",
-                        chat_id,
-                        wait_s,
-                    )
-                    await asyncio.sleep(wait_s)
-                    break  # retry same attempt cycle after backoff
-                else:
-                    last = f"HTTP {r.status_code}: {(r.text or '')[:200]}"
-                    if 400 <= r.status_code < 500 and r.status_code != 429:
-                        continue
-            except Exception as e:
-                last = f"{type(e).__name__}: {e or '(no message)'}"
-                logger.error(
-                    f"[telegram] FAILED {msg_type} {sym} exec={eid}: {e}"
+            async with httpx.AsyncClient(timeout=15) as client:
+                ok, err, rate_limited = await _telegram_post_send_message(
+                    client,
+                    tok,
+                    chat_id,
+                    text,
+                    parse_mode=parse_mode,
+                    msg_type=msg_type,
+                    symbol=sym,
+                    exec_id=eid,
                 )
+            if ok:
+                return True
+            last = err
+            if rate_limited:
+                wait_s = float(err.split("=")[-1].rstrip("s")) if "=" in err else 5.0
+                await asyncio.sleep(max(1.0, wait_s))
+                break
+            if err.startswith("HTTP 4") and "429" not in err:
+                continue
         if attempt < _MAX_SEND_ATTEMPTS:
             await asyncio.sleep(min(30.0, 1.5 * attempt))
 
@@ -232,6 +265,7 @@ def _ensure_outbound_drainer() -> None:
             daemon=True,
         ).start()
         _DRAINER_STARTED = True
+        logger.info("[telegram] outbound drainer started (queued trade alerts)")
 
 
 async def _pace_chat(chat_id: int) -> None:

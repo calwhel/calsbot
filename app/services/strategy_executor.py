@@ -1969,6 +1969,7 @@ def _ensure_open_notify_for_execution(
             asset_class=ac,
         ),
         asset_class=ac,
+        symbol=ex.symbol or "",
     )
     logger.info(
         "[%s] [TG] backfilled open notify exec#%s %s",
@@ -1999,13 +2000,24 @@ def _release_tg_open_notify(db, execution_id: int) -> None:
             pass
 
 
-async def _tg_send(telegram_id: int, text: str, *, asset_class: str = "crypto") -> bool:
+async def _tg_send(
+    telegram_id: int,
+    text: str,
+    *,
+    asset_class: str = "crypto",
+    msg_type: str = "dm",
+    symbol: str = "",
+    exec_id: int = 0,
+) -> bool:
     """Send a trade-notification Telegram DM (forex-aware token order)."""
     from app.services.telegram_dm import send_dm, bot_tokens_for_asset
     return await send_dm(
         telegram_id,
         text,
         tokens=bot_tokens_for_asset(asset_class),
+        msg_type=msg_type,
+        symbol=symbol,
+        exec_id=exec_id,
     )
 
 
@@ -2048,16 +2060,19 @@ def _schedule_tg_open_notify(
     text: str,
     *,
     asset_class: str = "crypto",
+    symbol: str = "",
 ) -> None:
-    """Fire-and-forget open alert with delivery verification."""
+    """Queue open alert for durable delivery (same path as close/breakeven)."""
+    from app.services.telegram_dm import enqueue_trade_telegram
+
     try:
-        asyncio.create_task(
-            _deliver_tg_open_notify(
-                execution_id,
-                telegram_id,
-                text,
-                asset_class=asset_class,
-            )
+        enqueue_trade_telegram(
+            telegram_id,
+            text,
+            msg_type="open",
+            symbol=symbol,
+            exec_id=execution_id,
+            asset_class=asset_class,
         )
     except Exception as exc:
         logger.warning(
@@ -4592,6 +4607,7 @@ async def evaluate_and_fire(
                             asset_class   = asset_class,
                         ),
                         asset_class=asset_class,
+                        symbol=symbol,
                     )
                 elif not tg_id:
                     logger.info(
@@ -4875,6 +4891,7 @@ async def evaluate_and_fire(
                             asset_class=asset_class,
                         ),
                         asset_class=asset_class,
+                        symbol=symbol,
                     )
                 elif tg_id_live and _os_env.environ.get("TG_QUEUED_OPEN_NOTICE", "").lower() in (
                     "1", "true", "yes",

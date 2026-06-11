@@ -6,6 +6,7 @@ import logging
 import os
 import time
 from typing import Any, Optional
+from urllib.parse import urlparse, urlunparse
 
 from app.advisory_lock_ids import (
     APP_NAME_EXECUTOR,
@@ -71,6 +72,38 @@ NEON_LOCK_CONNECT_KWARGS = {
     ),
 }
 
+KEEPALIVE_PING_SECS = 30
+_KEEPALIVE_CFG_LOGGED = False
+
+
+def get_lock_database_url() -> str:
+    """Direct Neon endpoint for session advisory locks (not the pooler)."""
+    from app.config import settings
+
+    url = settings.get_database_url()
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if "-pooler" not in host:
+        return url
+    direct_host = host.replace("-pooler", "")
+    netloc = parsed.netloc.replace(host, direct_host, 1)
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
+def log_executor_lock_keepalive_config() -> None:
+    """Once-per-process startup line so deploy logs prove keepalive settings."""
+    global _KEEPALIVE_CFG_LOGGED
+    if _KEEPALIVE_CFG_LOGGED:
+        return
+    _KEEPALIVE_CFG_LOGGED = True
+    logger.info(
+        "[executor_lock] keepalive cfg: idle=%s interval=%s count=%s ping=%ss",
+        NEON_LOCK_CONNECT_KWARGS["keepalives_idle"],
+        NEON_LOCK_CONNECT_KWARGS["keepalives_interval"],
+        NEON_LOCK_CONNECT_KWARGS["keepalives_count"],
+        KEEPALIVE_PING_SECS,
+    )
+
 
 def is_standalone_executor() -> bool:
     return os.getenv("EXECUTOR_STANDALONE", "").lower() in ("1", "true", "yes")
@@ -79,12 +112,12 @@ def is_standalone_executor() -> bool:
 def create_lock_connection(application_name: Optional[str] = None):
     """Dedicated psycopg2 session for pg_advisory_lock (must stay open)."""
     import psycopg2
-    from app.config import settings
 
+    log_executor_lock_keepalive_config()
     kwargs = dict(NEON_LOCK_CONNECT_KWARGS)
     if application_name:
         kwargs["application_name"] = application_name
-    return psycopg2.connect(settings.get_database_url(), **kwargs)
+    return psycopg2.connect(get_lock_database_url(), **kwargs)
 
 
 def try_acquire_lock(conn, lock_id: Optional[int] = None) -> bool:
@@ -133,15 +166,13 @@ def terminate_lock_holders(
 ) -> int:
     """Terminate stale holders of *lock_id* only when app_name exactly matches *owner_app*."""
     import psycopg2
-    from app.config import settings
-
-    db_url = settings.get_database_url()
+    db_url = get_lock_database_url()
     if not db_url:
         return 0
 
     terminated = 0
     try:
-        conn = psycopg2.connect(db_url, connect_timeout=10)
+        conn = psycopg2.connect(db_url, connect_timeout=10, **NEON_LOCK_CONNECT_KWARGS)
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(

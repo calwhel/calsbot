@@ -142,6 +142,8 @@ _spot_cache: Dict[str, Tuple[float, float, float]] = {}
 # (symbol, timeframe, limit) → (rows, monotonic_ts)
 _kline_cache: Dict[Tuple[str, str, int], Tuple[List[List[float]], float]] = {}
 _KLINE_TTL = 60.0
+# canonical symbol → monotonic ts of last successful trendbar fetch
+_last_kline_update: Dict[str, float] = {}
 
 # ── Persistent trendbar (candle) connection ──────────────────────────────────
 # A SINGLE authed connection reused across all trendbar fetches, serialized by a
@@ -770,6 +772,7 @@ async def _feed_loop() -> None:
             )
             _feed_live = True
             _stream_creds = (access_token, ctid, _uid, _host)
+            await _on_spot_stream_connected()
             session_start = time.monotonic()
             fail_backoff = _RECONNECT_BACKOFF_MIN  # reset after a clean subscribe
 
@@ -870,6 +873,51 @@ async def _feed_loop() -> None:
 
 
 # ── On-demand trendbar (kline) fetch ─────────────────────────────────────────
+
+def _kline_stale_limit_s(timeframe: str) -> float:
+    """Max age before klines are stale while live ticks are flowing."""
+    return 2.0 * _TF_MINUTES.get(timeframe, 15) * 60.0
+
+
+def _live_ticks_flowing(max_age_s: float = 30.0) -> bool:
+    return (time.monotonic() - _last_spot_tick_mono) <= max_age_s
+
+
+def clear_kline_cache(symbol: Optional[str] = None) -> int:
+    """Drop cached trendbars (all symbols or one canonical symbol)."""
+    global _kline_cache, _last_kline_update
+    if symbol is None:
+        n = len(_kline_cache)
+        _kline_cache.clear()
+        _last_kline_update.clear()
+        return n
+    sym = symbol.upper()
+    removed = 0
+    for key in list(_kline_cache):
+        if key[0] == sym:
+            _kline_cache.pop(key, None)
+            removed += 1
+    _last_kline_update.pop(sym, None)
+    return removed
+
+
+async def _on_spot_stream_connected() -> None:
+    """After feed reconnect — ticks resume but kline cache may be frozen."""
+    n = clear_kline_cache()
+    await _invalidate_tb_conn()
+    try:
+        from app.services.tradfi_prices import clear_metal_kline_cache
+
+        clear_metal_kline_cache()
+    except Exception:
+        pass
+    if n:
+        logger.info(
+            "[CTraderFeed] feed reconnect — cleared %s kline cache entries "
+            "(trendbar session reset)",
+            n,
+        )
+
 
 def _get_tb_lock() -> "asyncio.Lock":
     global _tb_lock
@@ -1116,8 +1164,22 @@ async def get_klines(
 
     cache_key = (sym_up, timeframe, limit)
     cached = _kline_cache.get(cache_key)
-    if cached and (time.monotonic() - cached[1]) < _KLINE_TTL:
-        return cached[0]
+    if cached:
+        cache_age = time.monotonic() - cached[1]
+        last_up = _last_kline_update.get(sym_up, 0.0)
+        kline_age = time.monotonic() - last_up if last_up else cache_age
+        stale_limit = _kline_stale_limit_s(timeframe)
+        kline_stale = _live_ticks_flowing() and kline_age > stale_limit
+        if cache_age < _KLINE_TTL and not kline_stale:
+            return cached[0]
+        if kline_stale:
+            logger.warning(
+                "[CTraderFeed] kline builder stale for %s — rebuilt "
+                "(klines %.0fs old, ticks flowing)",
+                sym_up,
+                kline_age,
+            )
+            _kline_cache.pop(cache_key, None)
 
     async def _pull(
         creds_tuple,
@@ -1187,7 +1249,9 @@ async def get_klines(
             f"[CTraderFeed] spot feed LIVE but trendbars empty for {sym_up} {timeframe}"
         )
     if rows:
-        _kline_cache[cache_key] = (rows, time.monotonic())
+        now = time.monotonic()
+        _kline_cache[cache_key] = (rows, now)
+        _last_kline_update[sym_up] = now
     return rows
 
 
