@@ -28,7 +28,8 @@ import ssl
 import struct
 import threading
 import time
-from typing import Dict, List, Optional, Tuple
+from collections import deque
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,19 @@ _TB_IDLE_MAX = 25.0  # cTrader drops idle conns ~30s → proactively reopen past
 
 _feed_live: bool = False
 _last_spot_tick_mono: float = 0.0  # monotonic — for price-gap logging on reconnect
+# Trendbars on the LIVE spot socket (no second authed session on same ctid).
+_stream_reader: Optional[asyncio.StreamReader] = None
+_stream_writer: Optional[asyncio.StreamWriter] = None
+_stream_ctid: int = 0
+_stream_io_lock: Optional[asyncio.Lock] = None
+_pending_trendbar: Optional[Dict[str, Any]] = None
+_trendbar_block_reason: Optional[str] = None
+_trendbar_block_until: float = 0.0
+_trendbar_last_ok_log: Dict[str, float] = {}
+_trendbar_last_api: Dict[Tuple[str, str], float] = {}
+_TRENDBAR_MIN_INTERVAL_S = float(os.environ.get("CTRADER_TRENDBAR_MIN_INTERVAL_S", "60"))
+_tick_history: Dict[str, deque] = {}
+_TICK_HISTORY_MAX = 8000
 # Active spot-stream session — avoids DB round-trips for trendbars while LIVE.
 _stream_creds: Optional[Tuple[str, int, int, str]] = None  # token, ctid, uid, host
 _feed_task: Optional[asyncio.Task] = None
@@ -424,16 +438,263 @@ def _remote_feed_mode() -> bool:
         )
 
 
+def trendbar_fetch_blocked_reason() -> Optional[str]:
+    """Why trendbar/kline API is unavailable (None = allowed)."""
+    if _is_terminal_auth_error(_last_auth_error):
+        return "oauth expired"
+    now = time.monotonic()
+    if now < _trendbar_block_until:
+        rem = max(0.0, _trendbar_block_until - now)
+        base = _trendbar_block_reason or "backoff"
+        return f"{base}, retry in {rem:.0f}s"
+    if _feed_live and _stream_writer is None:
+        return "stream session not registered"
+    return None
+
+
 def _trendbar_fetch_allowed() -> bool:
     """
-    False when opening a trendbar socket would compete with the spot feed.
+    True when trendbars can be fetched without opening a competing second socket.
 
-    A second account-auth TLS session on the same ctid causes cTrader to recycle
-    the spot stream — the #1 source of LIVE flapping in production logs.
-    Executor workers without a local spot stream (remote-feed mode) may fetch
-    trendbars on demand — only the feed-only process holds the streaming socket.
+    While the spot feed is LIVE, trendbars use the same TLS session (multiplexed
+    reads in _feed_loop). A separate authed socket on the same ctid recycles the
+    spot stream — only allowed when _feed_live is False (remote/cold executor).
     """
-    return not _feed_live
+    return trendbar_fetch_blocked_reason() is None
+
+
+def _note_trendbar_block(reason: str, retry_s: float = 60.0) -> None:
+    global _trendbar_block_reason, _trendbar_block_until
+    now = time.monotonic()
+    if reason != _trendbar_block_reason or now >= _trendbar_block_until:
+        logger.warning(
+            "[CTraderFeed] trendbars blocked: %s, retry in %.0fs",
+            reason,
+            retry_s,
+        )
+    _trendbar_block_reason = reason
+    _trendbar_block_until = now + retry_s
+
+
+def _note_trendbar_ok(symbol: str) -> None:
+    global _trendbar_block_reason, _trendbar_block_until
+    _trendbar_block_reason = None
+    _trendbar_block_until = 0.0
+    sym = symbol.upper()
+    now = time.monotonic()
+    if now - _trendbar_last_ok_log.get(sym, 0.0) >= 300.0:
+        _trendbar_last_ok_log[sym] = now
+        logger.info("[CTraderFeed] trendbars OK for %s", sym)
+
+
+def _register_live_stream(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    ctid: int,
+) -> None:
+    global _stream_reader, _stream_writer, _stream_ctid, _stream_io_lock
+    _stream_reader = reader
+    _stream_writer = writer
+    _stream_ctid = ctid
+    if _stream_io_lock is None:
+        _stream_io_lock = asyncio.Lock()
+
+
+def _unregister_live_stream() -> None:
+    global _stream_reader, _stream_writer, _stream_ctid, _pending_trendbar
+    _stream_reader = None
+    _stream_writer = None
+    _stream_ctid = 0
+    if _pending_trendbar:
+        fut = _pending_trendbar.get("future")
+        if fut and not fut.done():
+            fut.set_result([])
+    _pending_trendbar = None
+
+
+def _get_stream_io_lock() -> asyncio.Lock:
+    global _stream_io_lock
+    if _stream_io_lock is None:
+        _stream_io_lock = asyncio.Lock()
+    return _stream_io_lock
+
+
+def _record_tick(sym: str, mid: float, ts_ms: Optional[int] = None) -> None:
+    if ts_ms is None:
+        ts_ms = int(time.time() * 1000)
+    hist = _tick_history.setdefault(sym.upper(), deque(maxlen=_TICK_HISTORY_MAX))
+    hist.append((ts_ms, mid))
+
+
+def _apply_live_tick_to_rows(
+    rows: List[List[float]],
+    symbol: str,
+    timeframe: str,
+    limit: int,
+) -> List[List[float]]:
+    """Refresh forming bar OHLC from the live spot mid while API fetch is rate-limited."""
+    if not rows:
+        return rows
+    live = get_price(symbol.upper())
+    if not live or live <= 0:
+        return rows
+    step_ms = _TF_MINUTES.get(timeframe, 15) * 60_000
+    now_ms = int(time.time() * 1000)
+    bar_ts = (now_ms // step_ms) * step_ms
+    out: List[List[float]] = [list(r) for r in rows]
+    last = out[-1]
+    if int(last[0]) == bar_ts:
+        last[4] = live
+        last[2] = max(float(last[2]), live)
+        last[3] = min(float(last[3]), live)
+    elif int(last[0]) < bar_ts:
+        out.append([bar_ts, live, live, live, live, 0.0])
+    return out[-limit:]
+
+
+def _bars_from_trendbar_res(res: "ProtoOAGetTrendbarsRes", limit: int) -> List[List[float]]:
+    rows: List[List[float]] = []
+    for bar in res.trendbar:
+        low = bar.low / 100_000.0
+        open_ = (bar.low + bar.deltaOpen) / 100_000.0
+        high = (bar.low + bar.deltaHigh) / 100_000.0
+        close = (bar.low + bar.deltaClose) / 100_000.0
+        ts_ms = bar.utcTimestampInMinutes * 60 * 1000
+        vol = float(bar.volume)
+        rows.append([ts_ms, open_, high, low, close, vol])
+    return rows[-limit:]
+
+
+def _build_trendbar_req(
+    ctid: int,
+    symbol_id: int,
+    timeframe: str,
+    limit: int,
+) -> "ProtoOAGetTrendbarsReq":
+    period = _TF_TO_PERIOD.get(timeframe)
+    if period is None:
+        raise ValueError(f"unsupported timeframe {timeframe!r}")
+    now_ms = int(time.time() * 1000)
+    _mins = _TF_MINUTES.get(timeframe, 15)
+    _count = min(limit, 4096)
+    _window_ms = _count * _mins * 60_000 * 3
+    req = ProtoOAGetTrendbarsReq()
+    req.ctidTraderAccountId = ctid
+    req.symbolId = symbol_id
+    req.period = period
+    req.count = _count
+    req.fromTimestamp = now_ms - _window_ms
+    req.toTimestamp = now_ms
+    return req
+
+
+def _deliver_trendbar_response(msg) -> None:
+    global _pending_trendbar
+    if not _pending_trendbar:
+        return
+    fut = _pending_trendbar.get("future")
+    lim = int(_pending_trendbar.get("limit") or 200)
+    if fut is None or fut.done():
+        return
+    try:
+        res = ProtoOAGetTrendbarsRes()
+        res.ParseFromString(msg.payload)
+        rows = _bars_from_trendbar_res(res, lim)
+        fut.set_result(rows)
+    except Exception as exc:
+        fut.set_exception(exc)
+
+
+async def _read_trendbars_inline(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    ctid: int,
+    symbol: str,
+    timeframe: str,
+    limit: int,
+) -> List[List[float]]:
+    """Fetch trendbars on an open stream before spot subscribe (no multiplex)."""
+    broker_name = _TRACKED.get(symbol.upper(), symbol.upper())
+    symbol_id = _symbol_id_map.get(broker_name)
+    if not symbol_id:
+        return []
+    try:
+        req = _build_trendbar_req(ctid, symbol_id, timeframe, limit)
+        await _send(writer, req, _PT_TRENDBARS_REQ)
+        deadline = time.monotonic() + 12.0
+        while time.monotonic() < deadline:
+            msg = await _read_frame(reader, timeout=deadline - time.monotonic())
+            if not msg:
+                break
+            if msg.payloadType == _PT_TRENDBARS_RES:
+                res = ProtoOAGetTrendbarsRes()
+                res.ParseFromString(msg.payload)
+                return _bars_from_trendbar_res(res, limit)
+    except Exception as exc:
+        logger.debug("[CTraderFeed] inline trendbar %s %s: %s", symbol, timeframe, exc)
+    return []
+
+
+async def _prefetch_key_trendbars(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    ctid: int,
+) -> None:
+    """Seed kline cache at connect — one fetch per key metal/timeframe."""
+    for sym in ("XAUUSD", "XAGUSD"):
+        for tf in ("5m", "15m"):
+            rows = await _read_trendbars_inline(reader, writer, ctid, sym, tf, 80)
+            if rows:
+                now = time.monotonic()
+                _kline_cache[(sym, tf, 80)] = (rows, now)
+                _last_kline_update[sym] = now
+                _trendbar_last_api[(sym, tf)] = now
+                _note_trendbar_ok(sym)
+
+
+async def _fetch_trendbars_on_live_stream(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+) -> List[List[float]]:
+    """Trendbar fetch multiplexed on the live spot TLS session."""
+    sym_up = symbol.upper()
+    if not _stream_writer or not _stream_reader or not _stream_ctid:
+        return []
+    broker_name = _TRACKED.get(sym_up, sym_up)
+    symbol_id = _symbol_id_map.get(broker_name)
+    if not symbol_id:
+        _note_trendbar_block(f"symbol_id missing for {broker_name}", 60.0)
+        return []
+
+    lock = _get_stream_io_lock()
+    async with lock:
+        loop = asyncio.get_event_loop()
+        fut = loop.create_future()
+        global _pending_trendbar
+        _pending_trendbar = {
+            "future": fut,
+            "symbol": sym_up,
+            "limit": limit,
+        }
+        try:
+            req = _build_trendbar_req(_stream_ctid, symbol_id, timeframe, limit)
+            await _send(_stream_writer, req, _PT_TRENDBARS_REQ)
+            rows = await asyncio.wait_for(fut, timeout=12.0)
+            if rows:
+                _note_trendbar_ok(sym_up)
+                _trendbar_last_api[(sym_up, timeframe)] = time.monotonic()
+            else:
+                _note_trendbar_block(f"empty response {sym_up} {timeframe}", 60.0)
+            return rows
+        except asyncio.TimeoutError:
+            _note_trendbar_block(f"stream timeout {sym_up} {timeframe}", 60.0)
+            return []
+        except Exception as exc:
+            _note_trendbar_block(f"{type(exc).__name__}: {exc}"[:80], 60.0)
+            return []
+        finally:
+            _pending_trendbar = None
 
 
 def _shared_ctrader_ticks_fresh(max_age_s: float = 30.0) -> bool:
@@ -765,6 +1026,9 @@ async def _feed_loop() -> None:
             if not sub_ids:
                 raise ConnectionError("none of our tracked symbols found")
 
+            await _prefetch_key_trendbars(reader, writer, ctid)
+            _register_live_stream(reader, writer, ctid)
+
             req = ProtoOASubscribeSpotsReq()
             req.ctidTraderAccountId = ctid
             req.symbolId.extend(sub_ids)
@@ -802,6 +1066,10 @@ async def _feed_loop() -> None:
                         pass
                     continue
 
+                if msg.payloadType == _PT_TRENDBARS_RES:
+                    _deliver_trendbar_response(msg)
+                    continue
+
                 if msg.payloadType == _PT_EXECUTION_EVENT:
                     try:
                         from app.services.ctrader_execution_events import (
@@ -825,6 +1093,7 @@ async def _feed_loop() -> None:
                             _last_spot_tick_mono = time.monotonic()
                             _spot_cache[canonical] = (bid, ask, _last_spot_tick_mono)
                             mid = round((bid + ask) / 2.0, 6)
+                            _record_tick(canonical, mid)
                             try:
                                 from app.services.spot_price_store import upsert_tick
                                 upsert_tick(
@@ -850,6 +1119,7 @@ async def _feed_loop() -> None:
         else:
             _last_exc = None
         finally:
+            _unregister_live_stream()
             if hb_stop is not None:
                 hb_stop.set()
             if writer:
@@ -1171,6 +1441,10 @@ async def _fetch_trendbars(
 
     broker_name = _TRACKED.get(symbol.upper(), symbol.upper())
 
+    # LIVE spot session: multiplex on the stream — never open a second authed socket.
+    if _feed_live and _stream_writer is not None:
+        return await _fetch_trendbars_on_live_stream(symbol, timeframe, limit)
+
     async with _get_tb_lock():
         for attempt in (1, 2):
             try:
@@ -1276,18 +1550,35 @@ async def get_klines(
     if sym_up not in _TRACKED:
         return []
 
-    if not _trendbar_fetch_allowed():
+    blocked = trendbar_fetch_blocked_reason()
+    if blocked:
+        logger.debug("[CTraderFeed] trendbar fetch skipped %s %s: %s", sym_up, timeframe, blocked)
+        # Still serve tick-updated cache while live.
+        cache_key = (sym_up, timeframe, limit)
+        cached = _kline_cache.get(cache_key)
+        if cached and _feed_live:
+            return _apply_live_tick_to_rows(cached[0], sym_up, timeframe, limit)
         return []
 
     cache_key = (sym_up, timeframe, limit)
     cached = _kline_cache.get(cache_key)
+    rate_key = (sym_up, timeframe)
+    rate_ok = (
+        time.monotonic() - _trendbar_last_api.get(rate_key, 0.0)
+        >= _TRENDBAR_MIN_INTERVAL_S
+    )
     if cached:
         cache_age = time.monotonic() - cached[1]
         kline_stale, stale_detail = _kline_cache_is_stale(
             sym_up, cached[0], timeframe, cache_mono_ts=cached[1],
         )
         if cache_age < _KLINE_TTL and not kline_stale:
-            return cached[0]
+            rows = cached[0]
+            if _feed_live:
+                rows = _apply_live_tick_to_rows(rows, sym_up, timeframe, limit)
+            return rows
+        if not rate_ok and _feed_live and not kline_stale:
+            return _apply_live_tick_to_rows(cached[0], sym_up, timeframe, limit)
         if kline_stale:
             logger.warning(
                 "[CTraderFeed] kline builder stale for %s — rebuilt "
@@ -1451,7 +1742,7 @@ def broker_session_ready(symbol: str = "XAUUSD") -> bool:
     if _is_terminal_auth_error(_last_auth_error):
         return False
     if _feed_live:
-        return False
+        return _stream_writer is not None and trendbar_fetch_blocked_reason() is None
     if _stream_creds is not None:
         return True
     if _remote_feed_mode() and _shared_ctrader_ticks_fresh(max_age_s=_SPOT_TTL * 2):

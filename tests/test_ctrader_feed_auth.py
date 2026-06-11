@@ -43,9 +43,19 @@ class TestCtraderFeedAuth(unittest.TestCase):
         feed._stream_creds = ("tok", 47516246, 1, feed._HOST_DEMO)
         self.assertEqual(feed.get_stream_creds()[1], 47516246)
 
-    def test_trendbar_fetch_blocked_when_feed_live(self):
+    def test_trendbar_allowed_on_live_stream_when_registered(self):
         feed._feed_live = True
-        self.assertFalse(feed._trendbar_fetch_allowed())
+        feed._stream_writer = object()
+        feed._trendbar_block_until = 0.0
+        feed._trendbar_block_reason = None
+        self.assertTrue(feed._trendbar_fetch_allowed())
+
+    def test_trendbar_blocked_when_live_without_stream(self):
+        feed._feed_live = True
+        feed._stream_writer = None
+        feed._trendbar_block_until = 0.0
+        reason = feed.trendbar_fetch_blocked_reason()
+        self.assertIn("stream session", reason or "")
 
 
 if __name__ == "__main__":

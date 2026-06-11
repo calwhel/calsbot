@@ -187,14 +187,21 @@ class MetalProviderDiagnostic:
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
+_metal_kline_trace_counter = 0
+
+
 def _log_metal_kline_trace(
     symbol: str,
     timeframe: str,
     diagnostics: List[MetalProviderDiagnostic],
 ) -> None:
-    """Structured trace — one JSON line per provider for Railway log search."""
+    """Structured trace — sampled DEBUG (fallback line covers ops visibility)."""
+    global _metal_kline_trace_counter
+    _metal_kline_trace_counter += 1
+    if _metal_kline_trace_counter % 20 != 1:
+        return
     for d in diagnostics:
-        logger.info(
+        logger.debug(
             "[metal-kline-trace] %s",
             json.dumps(
                 {"symbol": symbol, "timeframe": timeframe, **asdict(d)},
@@ -243,7 +250,12 @@ def _ctrader_unavailable_reason(symbol: str) -> str:
             if tick_age is not None:
                 return f"no spot ticks (last_tick_age_s={tick_age})"
             return "no broker session and no spot ticks"
-        if not _ctf._trendbar_fetch_allowed():
+        blocked = getattr(_ctf, "trendbar_fetch_blocked_reason", None)
+        if callable(blocked):
+            reason = blocked()
+            if reason:
+                return reason
+        elif not _ctf._trendbar_fetch_allowed():
             return "trendbar fetch blocked"
         return "empty or timed-out trendbars"
     except Exception as exc:
