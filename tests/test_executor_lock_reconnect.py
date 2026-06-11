@@ -30,7 +30,7 @@ class TestExecutorLockReconnect(unittest.TestCase):
         closed = []
         attempts = {"n": 0}
 
-        def _fake_create():
+        def _fake_create(*_args, **_kwargs):
             attempts["n"] += 1
             return object()
 

@@ -1160,21 +1160,10 @@ async def fetch_forex_scan_candles(
         await _keep(rows, label)
         return len(best) >= _min_bars
 
-    # Priority: cTrader → TwelveData → Yahoo → AlphaVantage → FMP → tradfi-chain
+    # Priority: cTrader → Yahoo → AlphaVantage → tradfi-chain → FMP → TwelveData (last)
     if _broker_ready:
         if await _try_ctrader("ctrader-user" if user_id else "ctrader"):
             return best[-limit:]
-
-    try:
-        from app.services.twelve_data_feed import fetch_klines as _td_klines
-        await _keep(
-            await _td_klines(sym, timeframe, limit, "forex", scanner_ok=True),
-            "twelvedata",
-        )
-        if len(best) >= _min_bars:
-            return best[-limit:]
-    except Exception:
-        pass
 
     if yahoo_ticker:
         await _keep(await _fetch_yahoo_chart_klines(yahoo_ticker, timeframe, limit), "yahoo")
@@ -1207,6 +1196,16 @@ async def fetch_forex_scan_candles(
                 await _keep(await _fmp_klines(sym, "forex", timeframe, limit), "fmp")
         except Exception:
             pass
+
+    try:
+        from app.services.twelve_data_feed import can_request, fetch_klines as _td_klines
+        if can_request(scanner_ok=True):
+            await _keep(
+                await _td_klines(sym, timeframe, limit, "forex", scanner_ok=True),
+                "twelvedata",
+            )
+    except Exception:
+        pass
 
     return best[-limit:] if best else []
 

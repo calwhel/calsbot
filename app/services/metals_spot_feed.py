@@ -14,11 +14,13 @@ import os
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+from app.advisory_lock_ids import APP_NAME_METALS_SPOT, METALS_SPOT_POLL_LOCK_ID
+
 logger = logging.getLogger(__name__)
 
 _RUNNING = False
 _feed_task: Optional[asyncio.Task] = None
-_POLL_LOCK_ID = 708_110_006
+_POLL_LOCK_ID = METALS_SPOT_POLL_LOCK_ID
 
 # Canonical symbol → list of (source_label, fetch_key)
 # Binance spot returns HTTP 451 on Railway US — Coinbase/Kraken only.
@@ -197,7 +199,10 @@ def _acquire_lock():
     try:
         import psycopg2
         from app.config import settings
-        conn = psycopg2.connect(settings.get_database_url())
+        conn = psycopg2.connect(
+            settings.get_database_url(),
+            application_name=APP_NAME_METALS_SPOT,
+        )
         conn.autocommit = True
         cur = conn.cursor()
         cur.execute("SELECT pg_try_advisory_lock(%s)", (_POLL_LOCK_ID,))

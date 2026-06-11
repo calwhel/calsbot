@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
+from app.advisory_lock_ids import APP_NAME_WEB
 from app.config import settings
 from app.db_resilience import is_transient_db_error, run_with_db_retry
 import logging
@@ -33,6 +34,7 @@ def _neon_connect_args(statement_timeout_ms: int) -> dict:
         args["keepalives_idle"] = 30
         args["keepalives_interval"] = 10
         args["keepalives_count"] = 5
+    args["application_name"] = APP_NAME_WEB
     return args
 
 

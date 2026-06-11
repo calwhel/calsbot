@@ -15,6 +15,8 @@ from collections import deque
 from datetime import datetime, timedelta
 from typing import Deque, Dict, List, Optional, Tuple
 
+from app.advisory_lock_ids import APP_NAME_FMP_POLL, FMP_POLL_LOCK_ID
+
 logger = logging.getLogger(__name__)
 # httpx logs every request URL at INFO — floods logs during 429 storms.
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -100,7 +102,7 @@ _TF_MINUTES: Dict[str, int] = {
 
 # Poll interval for REST price updates (env: FMP_POLL_INTERVAL_SECONDS)
 _POLL_INTERVAL = max(15, int(os.environ.get("FMP_POLL_INTERVAL_SECONDS", "30")))
-_FMP_POLL_LOCK_ID = 708_110_005
+_FMP_POLL_LOCK_ID = FMP_POLL_LOCK_ID
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -722,7 +724,10 @@ def _acquire_fmp_poll_lock():
     try:
         import psycopg2
         from app.config import settings
-        conn = psycopg2.connect(settings.get_database_url())
+        conn = psycopg2.connect(
+            settings.get_database_url(),
+            application_name=APP_NAME_FMP_POLL,
+        )
         conn.autocommit = True
         cur = conn.cursor()
         cur.execute("SELECT pg_try_advisory_lock(%s)", (_FMP_POLL_LOCK_ID,))

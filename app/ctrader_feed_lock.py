@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 
+from app.advisory_lock_ids import APP_NAME_CTRADER_FEED, CTRADER_FEED_LOCK_ID
 from app.executor_lock import (
     LOCK_RECONNECT_ATTEMPTS,
     LOCK_RECONNECT_DELAY_SECS,
@@ -15,9 +16,6 @@ from app.executor_lock import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Distinct from executor (708_110_004) and aigen (708_110_003).
-CTRADER_FEED_LOCK_ID = 708_110_006
 
 
 def is_feed_only_process() -> bool:
@@ -61,7 +59,12 @@ def reclaim_feed_lock(*, force: bool = False) -> bool:
     try:
         from app.services.telegram_poller_lock import terminate_advisory_lock_holders
 
-        n = terminate_advisory_lock_holders(CTRADER_FEED_LOCK_ID, min_idle_seconds=0.0)
+        n = terminate_advisory_lock_holders(
+            CTRADER_FEED_LOCK_ID,
+            min_idle_seconds=0.0,
+            owner_app_prefix=APP_NAME_CTRADER_FEED,
+            log_prefix="[ctrader-feed-lock]",
+        )
         if n:
             logger.warning(
                 "Reclaimed cTrader feed lock %s — terminated %s holder(s)",
@@ -75,7 +78,7 @@ def reclaim_feed_lock(*, force: bool = False) -> bool:
 
 
 def try_acquire_feed_lock():
-    conn = create_lock_connection()
+    conn = create_lock_connection(APP_NAME_CTRADER_FEED)
     if try_acquire_lock(conn, CTRADER_FEED_LOCK_ID):
         return conn
     close_lock_connection(conn)
@@ -88,4 +91,5 @@ def reconnect_feed_lock(old_conn):
         lock_id=CTRADER_FEED_LOCK_ID,
         max_attempts=LOCK_RECONNECT_ATTEMPTS,
         retry_delay=LOCK_RECONNECT_DELAY_SECS,
+        application_name=APP_NAME_CTRADER_FEED,
     )
