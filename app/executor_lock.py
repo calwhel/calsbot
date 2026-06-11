@@ -10,10 +10,10 @@ from typing import Any, Optional
 from app.advisory_lock_ids import (
     APP_NAME_EXECUTOR,
     APP_NAME_FOREX_EXECUTOR,
-    EXECUTOR_LOCK_ID,
     FOREX_EXECUTOR_LOCK_ID,
     application_name_for_lock,
 )
+from app.lock_ids import EXECUTOR_LOCK_ID
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,113 @@ def close_lock_connection(conn) -> None:
         pass
 
 
+def _pid_holds_lock(cur, pid: int, lock_id: int) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM pg_locks l
+        WHERE l.locktype = 'advisory'
+          AND l.objid = %s
+          AND l.granted = true
+          AND l.pid = %s
+        LIMIT 1
+        """,
+        (lock_id, pid),
+    )
+    return cur.fetchone() is not None
+
+
+def terminate_lock_holders(
+    lock_id: int,
+    min_idle_seconds: float = 0.0,
+    *,
+    owner_app: str,
+    log_prefix: str = "[advisory-lock]",
+) -> int:
+    """Terminate stale holders of *lock_id* only when app_name exactly matches *owner_app*."""
+    import psycopg2
+    from app.config import settings
+
+    db_url = settings.get_database_url()
+    if not db_url:
+        return 0
+
+    terminated = 0
+    try:
+        conn = psycopg2.connect(db_url, connect_timeout=10)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT l.pid,
+                       COALESCE(a.state, 'gone'),
+                       a.application_name,
+                       EXTRACT(EPOCH FROM (now() - a.state_change))
+                FROM pg_locks l
+                LEFT JOIN pg_stat_activity a ON a.pid = l.pid
+                WHERE l.locktype = 'advisory'
+                  AND l.objid = %s
+                  AND l.granted = true
+                  AND l.pid != pg_backend_pid()
+                """,
+                (lock_id,),
+            )
+            rows = cur.fetchall()
+            for pid, state, app, idle_secs in rows:
+                app_str = (app or "").strip()
+                if app_str != owner_app:
+                    logger.info(
+                        f"{log_prefix} skipping pid={pid} app={app!r} "
+                        f"(not {owner_app!r}) for lock {lock_id}"
+                    )
+                    continue
+                if not _pid_holds_lock(cur, pid, lock_id):
+                    logger.info(
+                        f"{log_prefix} skipping pid={pid} — no longer holds lock {lock_id}"
+                    )
+                    continue
+                if min_idle_seconds > 0 and state != "gone" and idle_secs is not None:
+                    if float(idle_secs) < float(min_idle_seconds):
+                        logger.info(
+                            f"{log_prefix} keeping live holder pid={pid} state={state} "
+                            f"idle={float(idle_secs):.0f}s < {min_idle_seconds:.0f}s "
+                            f"for lock {lock_id} (sibling worker, not stale)"
+                        )
+                        continue
+                try:
+                    cur.execute("SELECT pg_terminate_backend(%s)", (pid,))
+                    ok = cur.fetchone()[0]
+                    if ok:
+                        terminated += 1
+                        logger.warning(
+                            f"{log_prefix} terminated stale holder pid={pid} "
+                            f"state={state} app={app!r} idle="
+                            f"{(f'{float(idle_secs):.0f}s' if idle_secs is not None else 'n/a')} "
+                            f"for lock {lock_id}"
+                        )
+                except Exception as te:
+                    logger.warning(f"{log_prefix} could not terminate pid={pid}: {te}")
+        conn.close()
+    except Exception as e:
+        logger.error(f"{log_prefix} terminate_lock_holders failed: {e}")
+    return terminated
+
+
+def _terminate_executor_lock_holders(
+    lock_id: int,
+    min_idle_seconds: float = 0.0,
+    *,
+    owner_app: str,
+    log_prefix: str = "[executor_lock]",
+) -> int:
+    return terminate_lock_holders(
+        lock_id,
+        min_idle_seconds,
+        owner_app=owner_app,
+        log_prefix=log_prefix,
+    )
+
+
 def reconnect_lock_connection(
     old_conn,
     *,
@@ -117,18 +224,11 @@ def reconnect_lock_connection(
     silent: bool = False,
     application_name: Optional[str] = None,
 ) -> Optional[Any]:
-    """Close a dead lock session and re-claim the advisory lock on a fresh session.
-
-    pg advisory locks are session-scoped: when Neon drops the SSL connection the
-    lock is already released server-side. Opening a new connection and running
-    pg_try_advisory_lock is the correct recovery path — not reconnecting the dead
-    socket. Only returns None when another backend genuinely holds the lock or
-    the DB is unreachable after all attempts.
-    """
+    """Close a dead lock session and re-claim the advisory lock on a fresh session."""
     if lock_id is None:
         lock_id = get_executor_lock_id()
     if application_name is None:
-        application_name = application_name_for_lock(lock_id)
+        application_name = get_executor_application_name()
     _log = logger.debug if silent else logger.warning
 
     close_lock_connection(old_conn)
@@ -155,30 +255,19 @@ def reconnect_lock_connection(
                 and attempt >= LOCK_ZOMBIE_TERMINATE_AFTER
                 and attempt % LOCK_ZOMBIE_TERMINATE_AFTER == 0
             ):
-                try:
-                    from app.services.telegram_poller_lock import (
-                        terminate_advisory_lock_holders,
-                    )
-
-                    n = terminate_advisory_lock_holders(
-                        lock_id,
-                        min_idle_seconds=0.0,
-                        owner_app_prefix=application_name,
-                        log_prefix="[executor_lock]",
-                    )
-                    if n:
-                        logger.warning(
-                            "Executor lock re-claim: terminated %s zombie holder(s) "
-                            "for lock %s (attempt %s)",
-                            n,
-                            lock_id,
-                            attempt,
-                        )
-                except Exception as term_exc:
+                n = _terminate_executor_lock_holders(
+                    lock_id,
+                    min_idle_seconds=0.0,
+                    owner_app=application_name,
+                    log_prefix="[executor_lock]",
+                )
+                if n:
                     logger.warning(
-                        "Executor lock zombie terminate failed (attempt %s): %s",
+                        "Executor lock re-claim: terminated %s zombie holder(s) "
+                        "for lock %s (attempt %s)",
+                        n,
+                        lock_id,
                         attempt,
-                        term_exc,
                     )
         except Exception as exc:
             close_lock_connection(conn)
@@ -194,21 +283,14 @@ def reconnect_lock_connection(
 
 
 def reclaim_executor_lock(*, force: bool = False, lock_id: Optional[int] = None) -> int:
-    """Terminate other backends holding the executor advisory lock.
-
-    ``force=True`` (standalone process) reclaims any holder — including a live
-    connection from an old deploy or dev machine on the shared Neon DB. Gunicorn
-    siblings must not use force or they thrash each other.
-    """
-    from app.services.telegram_poller_lock import terminate_advisory_lock_holders
-
+    """Terminate other backends holding the executor advisory lock."""
     lid = lock_id if lock_id is not None else get_executor_lock_id()
     app_name = application_name_for_lock(lid)
     min_idle = 0.0 if force else 120.0
-    n = terminate_advisory_lock_holders(
+    n = _terminate_executor_lock_holders(
         lid,
         min_idle_seconds=min_idle,
-        owner_app_prefix=app_name,
+        owner_app=app_name,
         log_prefix="[executor_lock]",
     )
     if n:

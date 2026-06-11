@@ -250,22 +250,38 @@ async def _get_klines(
     mexc_interval = interval.replace("1h", "60m").replace("2h", "120m").replace("3h", "180m")
     fetch_limit = max(limit, 200)
     sources = [
-        ("https://api.mexc.com/api/v3/klines",     {"symbol": symbol, "interval": mexc_interval, "limit": fetch_limit}),
-        ("https://api.binance.com/api/v3/klines",   {"symbol": symbol, "interval": interval,      "limit": fetch_limit}),
-        ("https://fapi.binance.com/fapi/v1/klines", {"symbol": symbol, "interval": interval,      "limit": fetch_limit}),
+        ("mexc", "https://api.mexc.com/api/v3/klines", {"symbol": symbol, "interval": mexc_interval, "limit": fetch_limit}),
+        ("binance_spot", "https://api.binance.com/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": fetch_limit}),
+        ("binance_futures", "https://fapi.binance.com/fapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": fetch_limit}),
     ]
-    for url, params in sources:
+    from app.services.binance_feed import binance_disabled, binance_http_get
+
+    for label, url, params in sources:
         try:
-            resp = await http_client.get(url, params=params, timeout=2)
-            if resp.status_code == 200:
+            if label.startswith("binance") and binance_disabled():
+                continue
+            if label.startswith("binance"):
+                status, klines = await binance_http_get(
+                    http_client,
+                    url,
+                    params,
+                    timeout_s=2.0,
+                    caller=f"strategy_ta.fetch_klines.{label}",
+                )
+                if status != 200 or not klines:
+                    continue
+            else:
+                resp = await http_client.get(url, params=params, timeout=2)
+                if resp.status_code != 200:
+                    continue
                 klines = resp.json()
-                if klines and isinstance(klines, list):
-                    _KLINE_PERSIST_CACHE[_pkey] = (klines, _now, len(klines))
-                    sliced = klines[-limit:] if len(klines) > limit else klines
-                    if cache is not None:
-                        cache[key] = sliced
-                        cache[(symbol, interval, len(klines))] = klines
-                    return sliced
+            if klines and isinstance(klines, list):
+                _KLINE_PERSIST_CACHE[_pkey] = (klines, _now, len(klines))
+                sliced = klines[-limit:] if len(klines) > limit else klines
+                if cache is not None:
+                    cache[key] = sliced
+                    cache[(symbol, interval, len(klines))] = klines
+                return sliced
         except Exception as e:
             logger.debug(f"Klines fetch failed ({url}) {symbol} {interval}: {e}")
             continue

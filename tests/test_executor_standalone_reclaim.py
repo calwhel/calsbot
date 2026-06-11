@@ -10,7 +10,7 @@ from app.executor_lock import reclaim_executor_lock
 class TestStandaloneReclaim(unittest.TestCase):
     def test_force_reclaim_uses_zero_idle_threshold(self):
         with mock.patch(
-            "app.services.telegram_poller_lock.terminate_advisory_lock_holders",
+            "app.executor_lock._terminate_executor_lock_holders",
             return_value=1,
         ) as term:
             n = reclaim_executor_lock(force=True)
@@ -18,20 +18,20 @@ class TestStandaloneReclaim(unittest.TestCase):
         term.assert_called_once_with(
             EXECUTOR_LOCK_ID,
             min_idle_seconds=0.0,
-            owner_app_prefix=APP_NAME_EXECUTOR,
+            owner_app=APP_NAME_EXECUTOR,
             log_prefix="[executor_lock]",
         )
 
     def test_gentle_reclaim_uses_idle_guard(self):
         with mock.patch(
-            "app.services.telegram_poller_lock.terminate_advisory_lock_holders",
+            "app.executor_lock._terminate_executor_lock_holders",
             return_value=0,
         ) as term:
             reclaim_executor_lock(force=False)
         term.assert_called_once_with(
             EXECUTOR_LOCK_ID,
             min_idle_seconds=120.0,
-            owner_app_prefix=APP_NAME_EXECUTOR,
+            owner_app=APP_NAME_EXECUTOR,
             log_prefix="[executor_lock]",
         )
 

@@ -8,21 +8,20 @@ same subsystem.
 
 from __future__ import annotations
 
+from app.lock_ids import EXECUTOR_LOCK_ID, TG_POLLER_LOCK_ID
+
 # Portal misc one-off (strategy_portal_server startup probe).
 PORTAL_MISC_LOCK_ID = 708_110_001
 
 # Schema migration — must not share an ID with any long-lived poller/executor.
 SCHEMA_MIGRATION_LOCK_ID = 708_110_002
 
-# Strategy executor (portal combined crypto+forex worker).
-EXECUTOR_LOCK_ID = 708_110_004
-
 # Dedicated forex/tradfi executor replica (EXECUTOR_ONLY=1).
 FOREX_EXECUTOR_LOCK_ID = 708_110_012
 
-# Telegram long-polling — one holder per bot token class.
-MAIN_POLLER_LOCK_ID = 708_110_010
-FOREX_POLLER_LOCK_ID = 708_110_011
+# Telegram poller — single lock for main + forex bots (see app.lock_ids).
+MAIN_POLLER_LOCK_ID = TG_POLLER_LOCK_ID
+FOREX_POLLER_LOCK_ID = TG_POLLER_LOCK_ID
 
 # X / Twitter auto-poster single-runner.
 TWITTER_POSTER_LOCK_ID = 708_110_005
@@ -39,8 +38,7 @@ ALL_ADVISORY_LOCK_IDS = frozenset(
         SCHEMA_MIGRATION_LOCK_ID,
         EXECUTOR_LOCK_ID,
         FOREX_EXECUTOR_LOCK_ID,
-        MAIN_POLLER_LOCK_ID,
-        FOREX_POLLER_LOCK_ID,
+        TG_POLLER_LOCK_ID,
         TWITTER_POSTER_LOCK_ID,
         FMP_POLL_LOCK_ID,
         CTRADER_FEED_LOCK_ID,
@@ -52,8 +50,9 @@ ALL_ADVISORY_LOCK_IDS = frozenset(
 APP_NAME_EXECUTOR = "th-executor"
 APP_NAME_FOREX_EXECUTOR = "th-forex-executor"
 APP_NAME_WEB = "th-web"
-APP_NAME_TG_POLLER_MAIN = "th-tgpoller"
-APP_NAME_TG_POLLER_FOREX = "th-tgpoller"
+APP_NAME_TG_POLLER = "th-tgpoller"
+APP_NAME_TG_POLLER_MAIN = APP_NAME_TG_POLLER
+APP_NAME_TG_POLLER_FOREX = APP_NAME_TG_POLLER
 APP_NAME_TWITTER_POSTER = "th-twitter-poster"
 APP_NAME_SCHEMA_MIGRATION = "th-schema-migration"
 APP_NAME_FMP_POLL = "th-fmp-poll"
@@ -63,8 +62,7 @@ APP_NAME_METALS_SPOT = "th-metals-spot"
 _LOCK_APP_NAMES: dict[int, str] = {
     EXECUTOR_LOCK_ID: APP_NAME_EXECUTOR,
     FOREX_EXECUTOR_LOCK_ID: APP_NAME_FOREX_EXECUTOR,
-    MAIN_POLLER_LOCK_ID: APP_NAME_TG_POLLER_MAIN,
-    FOREX_POLLER_LOCK_ID: APP_NAME_TG_POLLER_FOREX,
+    TG_POLLER_LOCK_ID: APP_NAME_TG_POLLER,
     TWITTER_POSTER_LOCK_ID: APP_NAME_TWITTER_POSTER,
     SCHEMA_MIGRATION_LOCK_ID: APP_NAME_SCHEMA_MIGRATION,
     FMP_POLL_LOCK_ID: APP_NAME_FMP_POLL,

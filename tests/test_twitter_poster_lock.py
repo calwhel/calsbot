@@ -79,20 +79,13 @@ class TestTwitterPosterLock(unittest.TestCase):
 
     def test_distinct_lock_ids(self):
         from app.services import telegram_poller_lock as tpl
-        ids = {
-            tpl.MAIN_POLLER_LOCK_ID,
-            tpl.FOREX_POLLER_LOCK_ID,
-            tpl.TWITTER_POSTER_LOCK_ID,
-        }
-        self.assertEqual(len(ids), 3, "poller/poster lock IDs must be unique")
-        from app.advisory_lock_ids import (
-            FOREX_POLLER_LOCK_ID,
-            MAIN_POLLER_LOCK_ID,
-            TWITTER_POSTER_LOCK_ID,
-        )
+        from app.advisory_lock_ids import TWITTER_POSTER_LOCK_ID
+        from app.lock_ids import EXECUTOR_LOCK_ID, TG_POLLER_LOCK_ID
 
-        self.assertEqual(tpl.MAIN_POLLER_LOCK_ID, MAIN_POLLER_LOCK_ID)
-        self.assertEqual(tpl.FOREX_POLLER_LOCK_ID, FOREX_POLLER_LOCK_ID)
+        self.assertEqual(tpl.MAIN_POLLER_LOCK_ID, TG_POLLER_LOCK_ID)
+        self.assertEqual(tpl.FOREX_POLLER_LOCK_ID, TG_POLLER_LOCK_ID)
+        self.assertNotEqual(TG_POLLER_LOCK_ID, EXECUTOR_LOCK_ID)
+        self.assertNotEqual(TG_POLLER_LOCK_ID, TWITTER_POSTER_LOCK_ID)
         self.assertEqual(tpl.TWITTER_POSTER_LOCK_ID, TWITTER_POSTER_LOCK_ID)
 
 
