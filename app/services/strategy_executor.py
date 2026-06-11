@@ -782,8 +782,10 @@ async def _fetch_price_and_ta(
             bid = ask = None
             kline_close = closes[-1]
             kline_source = None
+            kline_synthetic = False
             if _is_metal:
                 kline_source = _metal_kline_src(symbol, tf, EXECUTOR_KLINE_BARS)
+                kline_synthetic = (kline_source or "").lower() == "synthetic"
                 try:
                     from app.services.ctrader_price_feed import (
                         ctrader_spot_ready as _ct_spot_ready,
@@ -931,6 +933,7 @@ async def _fetch_price_and_ta(
                 "price_source": price_source,
                 "kline_close": kline_close,
                 "kline_source": kline_source,
+                "kline_synthetic": kline_synthetic,
                 "candles_loaded": len(kl),
                 "bid": bid,
                 "ask": ask,
@@ -3154,6 +3157,9 @@ async def run_paper_position_monitor():
         _sweep_m   = _now_sweep.minute
 
         for result in fetch_results:
+            if isinstance(result, asyncio.CancelledError):
+                logger.info("Paper sweep candle fetch cancelled — skipping bucket")
+                continue
             if isinstance(result, Exception):
                 logger.warning(f"Candle fetch error in paper sweep: {result}")
                 continue
@@ -3788,7 +3794,10 @@ async def evaluate_and_fire(
     live-eligibility boolean it already resolved (batched once per cycle) so we
     skip a per-strategy UserPreference query. None → resolve it here as before.
     """
-    from app.services.strategy_ta import evaluate_strategy_conditions
+    from app.services.strategy_ta import (
+        StrategyEvalCancelled,
+        evaluate_strategy_conditions,
+    )
     from app.strategy_models import StrategyExecution, StrategyPortalSettings
 
     _strategy_gates: Dict[str, int] = {}
@@ -4330,11 +4339,38 @@ async def evaluate_and_fire(
                 except Exception as _sfe:
                     logger.debug(f"[Strategy {strategy.id}] spread filter error: {_sfe}")
 
-        passed, details = await evaluate_strategy_conditions(
-            config, symbol, price_data, enhanced_ta, http_client,
-            strictness_level=strictness_level,
-            ctrader_user_id=_uid,
-        )
+        if price_data.get("kline_synthetic") or (
+            (price_data.get("kline_source") or "").lower() == "synthetic"
+        ):
+            _bump("blk_synthetic_bars")
+            logger.info(
+                f"[Strategy {strategy.id}] {symbol}: synthetic kline bars — "
+                f"blocking TA/signal eval (price reference only)"
+            )
+            log_scan_metric(
+                symbol=symbol,
+                timeframe=_eval_tf,
+                candles_loaded=_candles_n,
+                strategy_evaluated=True,
+                setup_detected=False,
+                signal_generated=False,
+                signal_sent=False,
+                strategy_id=strategy.id,
+                block_reason="synthetic_bars",
+            )
+            continue
+
+        try:
+            passed, details = await evaluate_strategy_conditions(
+                config, symbol, price_data, enhanced_ta, http_client,
+                strictness_level=strictness_level,
+                ctrader_user_id=_uid,
+            )
+        except StrategyEvalCancelled:
+            logger.info(
+                f"[Strategy {strategy.id}] eval cancelled — skipping cycle"
+            )
+            return
         _maybe_log_ta_eval(strategy, symbol, direction_pref, passed, details)
         if not passed:
             log_scan_metric(
@@ -7228,6 +7264,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     from sqlalchemy.exc import PendingRollbackError as _SAPendingRollbackError
                     from sqlalchemy.exc import TimeoutError as _SATimeoutError
                     from app.database import bg_db_slot
+                    from app.services.strategy_ta import StrategyEvalCancelled
                     async with sem:
                         async with bg_db_slot():
                             row = _preloaded_fx.get(snap["id"])
@@ -7274,6 +7311,13 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                         f"[FX Strategy {snap['id']}] Skipping cycle — "
                                         f"DB error persisted ({_err_name})"
                                     )
+                                    return
+                                except StrategyEvalCancelled:
+                                    logger.info(
+                                        f"[FX Strategy {snap['id']}] eval cancelled — "
+                                        f"skipping cycle"
+                                    )
+                                    _db_rollback_safe(db_one)
                                     return
                                 except Exception as e:
                                     logger.error(

@@ -260,6 +260,15 @@ def get_metal_kline_source(
     return label
 
 
+def is_metal_kline_synthetic(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+) -> bool:
+    """True when the latest metal kline batch was built from flat synthetic spot bars."""
+    return (get_metal_kline_source(symbol, timeframe, limit) or "").lower() == "synthetic"
+
+
 def _metal_live_fetch_sem() -> asyncio.Semaphore:
     global _METAL_LIVE_FETCH_SEM
     if _METAL_LIVE_FETCH_SEM is None:
@@ -602,8 +611,12 @@ async def build_synthetic_metal_candles(
         rows.append([ts, o, h, l, c, 0.0])
 
     logger.warning(
-        "[tradfi] metal-live SYNTHETIC %s %s → %d bars from spot=%.2f (%s)",
+        "[tradfi] metal-live SYNTHETIC %s %s → %d bars from spot=%.2f (%s) "
+        "(price reference only — TA/signal eval blocked)",
         sym, timeframe, len(rows), spot, spot_src,
+    )
+    _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
+        "synthetic", datetime.utcnow(),
     )
     return rows
 

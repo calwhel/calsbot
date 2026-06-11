@@ -22,8 +22,15 @@ class SecurityHardeningSourceTests(unittest.TestCase):
 
     def test_session_secret_supports_railway_session_secret_alias(self):
         self.assertIn("def _load_cookie_secret()", PORTAL)
+        self.assertIn('os.getenv("SECRET_KEY")', PORTAL)
         self.assertIn('os.getenv("SESSION_SECRET")', PORTAL)
-        self.assertIn("using SESSION_SECRET for portal session signing", PORTAL)
+        self.assertRegex(
+            PORTAL,
+            re.compile(
+                r'os\.getenv\("SECRET_KEY"\)\s+or\s+os\.getenv\("SESSION_SECRET"\)',
+                re.S,
+            ),
+        )
 
     def test_uid_api_guard_requires_bound_session_token(self):
         self.assertIn("async def _require_bound_uid_for_api", PORTAL)
