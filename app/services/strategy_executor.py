@@ -779,31 +779,32 @@ async def _fetch_price_and_ta(
                             live_source = "ctrader"
                 except Exception:
                     pass
-                if not live_px or live_px <= 0:
-                    _matched = await _metal_live_for_src(
-                        symbol, kline_source, user_id=user_id,
-                    )
-                    if _matched:
-                        live_px, live_source = _matched
-                if not live_px or live_px <= 0:
-                    live_px = await _tradfi_price_fresh(
-                        symbol, asset_class, user_id=user_id,
-                    )
-                    if live_px and live_px > 0:
-                        live_source = kline_source or "spot"
-                if not live_px or live_px <= 0:
-                    try:
-                        from app.services.metals_spot_feed import (
-                            fetch_now as _msf_fetch,
-                            get_price as _msf_price,
+                if not metal_paper_ok:
+                    if not live_px or live_px <= 0:
+                        try:
+                            from app.services.metals_spot_feed import (
+                                fetch_now as _msf_fetch,
+                                get_price as _msf_price,
+                            )
+                            live_px = _msf_price(symbol.upper())
+                            if not live_px or live_px <= 0:
+                                live_px = await _msf_fetch(symbol.upper())
+                            if live_px and live_px > 0:
+                                live_source = kline_source or "metals_cache"
+                        except Exception:
+                            pass
+                    if not live_px or live_px <= 0:
+                        _matched = await _metal_live_for_src(
+                            symbol, kline_source, user_id=user_id,
                         )
-                        live_px = _msf_price(symbol.upper())
-                        if not live_px or live_px <= 0:
-                            live_px = await _msf_fetch(symbol.upper())
+                        if _matched:
+                            live_px, live_source = _matched
+                    if not live_px or live_px <= 0:
+                        live_px = await _tradfi_price_fresh(
+                            symbol, asset_class, user_id=user_id,
+                        )
                         if live_px and live_px > 0:
-                            live_source = kline_source or "metals_cache"
-                    except Exception:
-                        pass
+                            live_source = kline_source or "spot"
             else:
                 try:
                     from app.services.ctrader_price_feed import get_bid_ask as _ba

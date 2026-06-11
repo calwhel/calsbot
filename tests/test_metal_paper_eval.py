@@ -28,7 +28,14 @@ class TestMetalPaperEval(unittest.IsolatedAsyncioTestCase):
             "app.services.tradfi_prices.get_metal_kline_source",
             return_value="kraken",
         ), patch(
+            "app.services.ctrader_price_feed.ctrader_spot_ready",
+            return_value=False,
+        ), patch(
             "app.services.ctrader_price_feed.get_bid_ask",
+            return_value=None,
+        ), patch(
+            "app.services.tradfi_prices.get_metal_live_for_source",
+            new_callable=AsyncMock,
             return_value=None,
         ), patch(
             "app.services.metals_spot_feed.get_price",
@@ -59,7 +66,14 @@ class TestMetalPaperEval(unittest.IsolatedAsyncioTestCase):
             "app.services.tradfi_prices.get_metal_kline_source",
             return_value="kraken",
         ), patch(
+            "app.services.ctrader_price_feed.ctrader_spot_ready",
+            return_value=False,
+        ), patch(
             "app.services.ctrader_price_feed.get_bid_ask",
+            return_value=None,
+        ), patch(
+            "app.services.tradfi_prices.get_metal_live_for_source",
+            new_callable=AsyncMock,
             return_value=None,
         ), patch(
             "app.services.metals_spot_feed.get_price",
