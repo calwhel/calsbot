@@ -29,18 +29,24 @@ def remote_feed_enabled() -> bool:
     return os.getenv("CTRADER_REMOTE_FEED", "").lower() in ("1", "true", "yes")
 
 
+def _remote_ctrader_ticks_fresh(max_age_s: float = 60.0) -> bool:
+    """Postgres tick store only — avoids importing ctrader_price_feed at startup."""
+    try:
+        from app.services.spot_price_store import snapshot
+
+        snap = snapshot(max_age_s=max_age_s)
+        return bool((snap.get("by_source") or {}).get("ctrader"))
+    except Exception:
+        return False
+
+
 def feed_disabled_in_executor() -> bool:
     """Skip local cTrader socket in executor when remote ticks are healthy."""
     if remote_feed_enabled():
-        try:
-            from app.services.ctrader_price_feed import _shared_ctrader_ticks_fresh
-
-            if _shared_ctrader_ticks_fresh(max_age_s=60.0):
-                return True
-            # Remote feed configured but stale — allow local fallback in executor.
-            return False
-        except Exception:
+        if _remote_ctrader_ticks_fresh(max_age_s=60.0):
             return True
+        # Remote feed configured but stale — allow local fallback in executor.
+        return False
     return os.getenv("DISABLE_CTRADER_FEED_IN_EXECUTOR", "").lower() in (
         "1",
         "true",
