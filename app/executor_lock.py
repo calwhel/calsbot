@@ -7,11 +7,33 @@ import os
 import time
 from typing import Any, Optional
 
+from app.advisory_lock_ids import (
+    APP_NAME_EXECUTOR,
+    APP_NAME_FOREX_EXECUTOR,
+    EXECUTOR_LOCK_ID,
+    FOREX_EXECUTOR_LOCK_ID,
+    application_name_for_lock,
+)
+
 logger = logging.getLogger(__name__)
 
-EXECUTOR_LOCK_ID = 708_110_004
-# Dedicated forex/tradfi executor replica (EXECUTOR_ONLY=1) — separate from portal+crypto.
-FOREX_EXECUTOR_LOCK_ID = 708_110_006
+# Re-export for existing imports (strategy_portal_server, tests, etc.).
+__all__ = [
+    "EXECUTOR_LOCK_ID",
+    "FOREX_EXECUTOR_LOCK_ID",
+    "get_executor_lock_id",
+    "get_executor_application_name",
+    "create_lock_connection",
+    "try_acquire_lock",
+    "close_lock_connection",
+    "reconnect_lock_connection",
+    "reclaim_executor_lock",
+    "is_standalone_executor",
+    "NEON_LOCK_CONNECT_KWARGS",
+    "LOCK_RECONNECT_ATTEMPTS",
+    "LOCK_RECONNECT_DELAY_SECS",
+    "LOCK_ZOMBIE_TERMINATE_AFTER",
+]
 
 
 def get_executor_lock_id() -> int:
@@ -19,6 +41,13 @@ def get_executor_lock_id() -> int:
     if os.getenv("EXECUTOR_ONLY", "").lower() in ("1", "true", "yes"):
         return FOREX_EXECUTOR_LOCK_ID
     return EXECUTOR_LOCK_ID
+
+
+def get_executor_application_name() -> str:
+    if os.getenv("EXECUTOR_ONLY", "").lower() in ("1", "true", "yes"):
+        return APP_NAME_FOREX_EXECUTOR
+    return APP_NAME_EXECUTOR
+
 
 # Neon SSL blips can drop the dedicated lock session. Session-scoped advisory
 # locks are released when the SSL session dies — re-claim on a FRESH connection
@@ -47,12 +76,15 @@ def is_standalone_executor() -> bool:
     return os.getenv("EXECUTOR_STANDALONE", "").lower() in ("1", "true", "yes")
 
 
-def create_lock_connection():
+def create_lock_connection(application_name: Optional[str] = None):
     """Dedicated psycopg2 session for pg_advisory_lock (must stay open)."""
     import psycopg2
     from app.config import settings
 
-    return psycopg2.connect(settings.get_database_url(), **NEON_LOCK_CONNECT_KWARGS)
+    kwargs = dict(NEON_LOCK_CONNECT_KWARGS)
+    if application_name:
+        kwargs["application_name"] = application_name
+    return psycopg2.connect(settings.get_database_url(), **kwargs)
 
 
 def try_acquire_lock(conn, lock_id: Optional[int] = None) -> bool:
@@ -83,6 +115,7 @@ def reconnect_lock_connection(
     max_attempts: int = LOCK_RECONNECT_ATTEMPTS,
     retry_delay: float = LOCK_RECONNECT_DELAY_SECS,
     silent: bool = False,
+    application_name: Optional[str] = None,
 ) -> Optional[Any]:
     """Close a dead lock session and re-claim the advisory lock on a fresh session.
 
@@ -94,13 +127,15 @@ def reconnect_lock_connection(
     """
     if lock_id is None:
         lock_id = get_executor_lock_id()
+    if application_name is None:
+        application_name = application_name_for_lock(lock_id)
     _log = logger.debug if silent else logger.warning
 
     close_lock_connection(old_conn)
     for attempt in range(1, max_attempts + 1):
         conn = None
         try:
-            conn = create_lock_connection()
+            conn = create_lock_connection(application_name)
             if try_acquire_lock(conn, lock_id):
                 if not silent:
                     logger.info(
@@ -124,7 +159,13 @@ def reconnect_lock_connection(
                     from app.services.telegram_poller_lock import (
                         terminate_advisory_lock_holders,
                     )
-                    n = terminate_advisory_lock_holders(lock_id, min_idle_seconds=0.0)
+
+                    n = terminate_advisory_lock_holders(
+                        lock_id,
+                        min_idle_seconds=0.0,
+                        owner_app_prefix=application_name,
+                        log_prefix="[executor_lock]",
+                    )
                     if n:
                         logger.warning(
                             "Executor lock re-claim: terminated %s zombie holder(s) "
@@ -162,8 +203,14 @@ def reclaim_executor_lock(*, force: bool = False, lock_id: Optional[int] = None)
     from app.services.telegram_poller_lock import terminate_advisory_lock_holders
 
     lid = lock_id if lock_id is not None else get_executor_lock_id()
+    app_name = application_name_for_lock(lid)
     min_idle = 0.0 if force else 120.0
-    n = terminate_advisory_lock_holders(lid, min_idle_seconds=min_idle)
+    n = terminate_advisory_lock_holders(
+        lid,
+        min_idle_seconds=min_idle,
+        owner_app_prefix=app_name,
+        log_prefix="[executor_lock]",
+    )
     if n:
         logger.warning(
             "Reclaimed executor lock %s — terminated %s holder(s) (force=%s)",

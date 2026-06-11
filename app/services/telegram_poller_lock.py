@@ -13,15 +13,27 @@ import threading
 import time
 from typing import Dict, Optional
 
+from app.advisory_lock_ids import (
+    FOREX_POLLER_LOCK_ID,
+    MAIN_POLLER_LOCK_ID,
+    TWITTER_POSTER_LOCK_ID,
+    application_name_for_lock,
+)
+
 logger = logging.getLogger(__name__)
 
-# Must fit PostgreSQL int32 — pg_locks.objid is 32-bit. Values >2^31-1 break
-# lock queries (OID out of range) and prevented the bot from ever polling.
-MAIN_POLLER_LOCK_ID = 708_110_002
-FOREX_POLLER_LOCK_ID = 708_110_003
-# X / Twitter auto-poster — single-runner across the web workers AND the bot
-# companion process so exactly ONE process posts (no double tweets / rate bans).
-TWITTER_POSTER_LOCK_ID = 708_110_005
+# Re-export for existing imports.
+__all__ = [
+    "MAIN_POLLER_LOCK_ID",
+    "FOREX_POLLER_LOCK_ID",
+    "TWITTER_POSTER_LOCK_ID",
+    "wait_for_poller_lock",
+    "release_poller_lock",
+    "holds_lock",
+    "try_acquire_persistent_lock",
+    "terminate_advisory_lock_holders",
+    "describe_bot_token",
+]
 
 KEEPALIVE_INTERVAL = 20
 _instance_id = str(os.getpid())
@@ -53,14 +65,11 @@ def _try_acquire(lock_id: int) -> bool:
             except Exception:
                 pass
 
-        conn = psycopg2.connect(
-            db_url,
-            connect_timeout=10,
-            keepalives=1,
-            keepalives_idle=30,
-            keepalives_interval=10,
-            keepalives_count=5,
-        )
+        from app.executor_lock import NEON_LOCK_CONNECT_KWARGS
+
+        conn_kw = dict(NEON_LOCK_CONNECT_KWARGS)
+        conn_kw["application_name"] = application_name_for_lock(lock_id)
+        conn = psycopg2.connect(db_url, **conn_kw)
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_id,))
@@ -114,7 +123,22 @@ def _start_keepalive(lock_id: int) -> None:
     t.start()
 
 
-def _terminate_other_lock_holders(lock_id: int, min_idle_seconds: float = 0.0) -> int:
+def _holder_owned_by_subsystem(app: Optional[str], owner_app_prefix: str) -> bool:
+    """True when ``app`` belongs to the caller's subsystem (or legacy empty)."""
+    app_str = (app or "").strip()
+    if not app_str:
+        # Legacy deploys before application_name — same lock ID scopes the risk.
+        return True
+    return app_str == owner_app_prefix or app_str.startswith(f"{owner_app_prefix}-")
+
+
+def _terminate_other_lock_holders(
+    lock_id: int,
+    min_idle_seconds: float = 0.0,
+    *,
+    owner_app_prefix: Optional[str] = None,
+    log_prefix: str = "[advisory-lock]",
+) -> int:
     """Drop advisory-lock DB sessions held by other backends (e.g. stale Replit VM).
 
     ``min_idle_seconds`` guards against killing a *live sibling* holder: when set
@@ -125,6 +149,10 @@ def _terminate_other_lock_holders(lock_id: int, min_idle_seconds: float = 0.0) -
     of seconds) never does. This is essential with ``GUNICORN_WORKERS>1`` — the
     HTTP worker would otherwise terminate the executor worker's lock connection on
     every claim attempt, thrashing the executor and halting all trade firing.
+
+    When ``owner_app_prefix`` is set, only backends whose ``application_name``
+    matches that subsystem (or legacy empty) are eligible — never another live
+    subsystem even if it somehow held the same lock ID.
     """
     import psycopg2
 
@@ -153,13 +181,21 @@ def _terminate_other_lock_holders(lock_id: int, min_idle_seconds: float = 0.0) -
             )
             rows = cur.fetchall()
             for pid, state, app, idle_secs in rows:
+                if owner_app_prefix and not _holder_owned_by_subsystem(
+                    app, owner_app_prefix
+                ):
+                    logger.info(
+                        f"{log_prefix} skipping pid={pid} app={app!r} "
+                        f"(not owned by {owner_app_prefix!r}) for lock {lock_id}"
+                    )
+                    continue
                 # Protect a live sibling: a holder that is an active client
                 # session and was recently pinged (idle < threshold) is the
                 # legitimate current lock owner — never terminate it.
                 if min_idle_seconds > 0 and state != "gone" and idle_secs is not None:
                     if float(idle_secs) < float(min_idle_seconds):
                         logger.info(
-                            f"[tg-lock] keeping live holder pid={pid} state={state} "
+                            f"{log_prefix} keeping live holder pid={pid} state={state} "
                             f"idle={float(idle_secs):.0f}s < {min_idle_seconds:.0f}s "
                             f"for lock {lock_id} (sibling worker, not stale)"
                         )
@@ -170,16 +206,16 @@ def _terminate_other_lock_holders(lock_id: int, min_idle_seconds: float = 0.0) -
                     if ok:
                         terminated += 1
                         logger.warning(
-                            f"[tg-lock] terminated stale holder pid={pid} "
+                            f"{log_prefix} terminated stale holder pid={pid} "
                             f"state={state} app={app!r} idle="
                             f"{(f'{float(idle_secs):.0f}s' if idle_secs is not None else 'n/a')} "
                             f"for lock {lock_id}"
                         )
                 except Exception as te:
-                    logger.warning(f"[tg-lock] could not terminate pid={pid}: {te}")
+                    logger.warning(f"{log_prefix} could not terminate pid={pid}: {te}")
         conn.close()
     except Exception as e:
-        logger.error(f"[tg-lock] terminate_other_lock_holders failed: {e}")
+        logger.error(f"{log_prefix} terminate_other_lock_holders failed: {e}")
     return terminated
 
 
@@ -197,6 +233,7 @@ async def wait_for_poller_lock(lock_id: int, retry_seconds: int = 15) -> None:
 
     from app.deployment import is_railway
 
+    owner_app = application_name_for_lock(lock_id)
     attempts = 0
     # Railway is production — reclaim faster when a ghost Replit holds the lock.
     break_after = 3 if is_railway() else 6
@@ -207,7 +244,12 @@ async def wait_for_poller_lock(lock_id: int, retry_seconds: int = 15) -> None:
             return
         attempts += 1
         if attempts >= break_after:
-            n = await asyncio.to_thread(_terminate_other_lock_holders, lock_id)
+            n = await asyncio.to_thread(
+                _terminate_other_lock_holders,
+                lock_id,
+                owner_app_prefix=owner_app,
+                log_prefix="[tg-lock]",
+            )
             if n:
                 logger.warning(
                     f"[tg-lock] reclaimed lock {lock_id} — terminated {n} stale holder(s)"

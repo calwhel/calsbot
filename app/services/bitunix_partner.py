@@ -53,7 +53,9 @@ REFERRAL_URL       = os.environ.get("BITUNIX_REFERRAL_URL", "https://www.bitunix
 # In-memory cache: (uid_set, fetched_at_epoch, total_count_or_None).
 _cache: Tuple[Set[str], float, Optional[int]] = (set(), 0.0, None)
 _cache_lock = asyncio.Lock()
-_last_partner_error_log: float = 0.0
+_startup_checked = False
+_api_broken = False
+_startup_warning_logged = False
 
 
 class PartnerError(Exception):
@@ -62,6 +64,10 @@ class PartnerError(Exception):
 
 def is_configured() -> bool:
     return bool(PARTNER_API_KEY and PARTNER_API_SECRET)
+
+
+def api_broken() -> bool:
+    return _api_broken
 
 
 # ── Signing — same recipe as the trading API ───────────────────────────────
@@ -105,39 +111,90 @@ def _extract_uids(payload: Any) -> Set[str]:
     return out
 
 
+def _log_startup_warning(msg: str) -> None:
+    global _startup_warning_logged
+    if _startup_warning_logged:
+        return
+    _startup_warning_logged = True
+    logger.warning("[BitunixPartner] %s", msg)
+
+
+async def startup_check() -> None:
+    """Probe partner API once at boot — one clear warning if misconfigured."""
+    global _startup_checked, _api_broken
+    if _startup_checked:
+        return
+    _startup_checked = True
+    if not REQUIRE_AFFILIATE:
+        return
+    if not is_configured():
+        _log_startup_warning(
+            "Affiliate gate ON but BITUNIX_PARTNER_API_KEY/SECRET missing — "
+            "live trading will fail-closed until configured."
+        )
+        return
+    try:
+        await _fetch_page(1)
+        logger.info("[BitunixPartner] startup probe OK — affiliate roster reachable")
+    except PartnerError as e:
+        _api_broken = True
+        _log_startup_warning(
+            f"Partner API unreachable ({e}) — affiliate checks disabled until fixed. "
+            f"Verify BITUNIX_PARTNER_BASE_URL={BASE_URL!r} and "
+            f"BITUNIX_PARTNER_LIST_PATH={LIST_PATH!r} against partners.bitunix.com docs."
+        )
+    except Exception as e:
+        _api_broken = True
+        _log_startup_warning(
+            f"Partner API startup probe failed: {e} — affiliate checks fail-closed."
+        )
+
+
 # ── Fetch one page ─────────────────────────────────────────────────────────
 async def _fetch_page(page: int) -> Tuple[Set[str], int]:
     if not is_configured():
         raise PartnerError("partner_api_not_configured")
     query = f"page={page}&pageSize={PAGE_SIZE}"
-    url   = BASE_URL + LIST_PATH + "?" + query
-    hdrs  = _headers(body="", query=query)
+    url   = BASE_URL + LIST_PATH
+    body_obj = {"page": page, "pageSize": PAGE_SIZE}
+    body_json = json.dumps(body_obj, separators=(",", ":"))
+    hdrs_post = _headers(body=body_json, query="")
+    hdrs_get  = _headers(body="", query=query)
     timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
     async with aiohttp.ClientSession(timeout=timeout) as sess:
-        async with sess.get(url, headers=hdrs) as r:
+        # Partner dashboards often expect POST with signed JSON body.
+        async with sess.post(url, headers=hdrs_post, data=body_json) as r:
             text = await r.text()
-            if r.status != 200:
-                hint = ""
-                if r.status == 405:
-                    hint = (
-                        f" — HTTP 405 usually means BITUNIX_PARTNER_LIST_PATH ({LIST_PATH!r}) "
-                        "or BITUNIX_PARTNER_BASE_URL is wrong for your partner dashboard"
-                    )
-                raise PartnerError(f"HTTP {r.status}: {text[:200]}{hint}")
-            try:
-                body = json.loads(text)
-            except Exception:
-                raise PartnerError(f"non-JSON response: {text[:120]}")
-            if isinstance(body, dict) and str(body.get("code", "0")) not in ("0", "200"):
-                raise PartnerError(f"partner error {body.get('code')}: {body.get('msg','?')}")
-            uids = _extract_uids(body)
-            return uids, len(uids)
+            status = r.status
+        if status == 405:
+            url_get = url + "?" + query
+            async with sess.get(url_get, headers=hdrs_get) as r:
+                text = await r.text()
+                status = r.status
+        if status != 200:
+            hint = ""
+            if status == 405:
+                hint = (
+                    f" — HTTP 405: wrong BITUNIX_PARTNER_LIST_PATH ({LIST_PATH!r}) "
+                    f"or BITUNIX_PARTNER_BASE_URL ({BASE_URL!r}) for your partner dashboard"
+                )
+            raise PartnerError(f"HTTP {status}: {text[:200]}{hint}")
+        try:
+            body = json.loads(text)
+        except Exception:
+            raise PartnerError(f"non-JSON response: {text[:120]}")
+        if isinstance(body, dict) and str(body.get("code", "0")) not in ("0", "200"):
+            raise PartnerError(f"partner error {body.get('code')}: {body.get('msg','?')}")
+        uids = _extract_uids(body)
+        return uids, len(uids)
 
 
 # ── Public: refresh + cached lookup ────────────────────────────────────────
 async def refresh_affiliate_uids(force: bool = False) -> Set[str]:
     """Fetch every page of affiliated users; populate the in-memory cache."""
-    global _cache
+    global _cache, _api_broken
+    if _api_broken and not force:
+        raise PartnerError("partner_api_broken_at_startup")
     async with _cache_lock:
         if not force:
             uids, fetched_at, _ = _cache
@@ -159,6 +216,7 @@ async def refresh_affiliate_uids(force: bool = False) -> Set[str]:
                 break
 
         _cache = (all_uids, time.time(), len(all_uids))
+        _api_broken = False
         logger.info(f"[BitunixPartner] cached {len(all_uids)} affiliate UIDs (ttl={CACHE_TTL_SEC}s)")
         return all_uids
 
@@ -186,16 +244,14 @@ async def is_uid_affiliated(bitunix_uid: Optional[str]) -> Tuple[bool, str]:
         return False, "no_bitunix_uid_on_user"
     if not is_configured():
         return False, "partner_api_not_configured"
+    if _api_broken:
+        if _cache[0]:
+            uids = _cache[0]
+            return (str(bitunix_uid) in uids, "ok" if str(bitunix_uid) in uids else "uid_not_under_master")
+        return False, "partner_api_broken_at_startup"
     try:
         uids = await refresh_affiliate_uids()
     except PartnerError as e:
-        global _last_partner_error_log
-        now = time.time()
-        if now - _last_partner_error_log > 300:
-            _last_partner_error_log = now
-            logger.warning(f"[BitunixPartner] affiliate check failed (fail-closed): {e}")
-        else:
-            logger.debug(f"[BitunixPartner] affiliate check failed (fail-closed): {e}")
         # Fall back to the cache if we have something stale-but-non-empty.
         if _cache[0]:
             uids = _cache[0]
@@ -209,6 +265,7 @@ def status() -> Dict[str, Any]:
     return {
         "configured":        is_configured(),
         "require_affiliate": REQUIRE_AFFILIATE,
+        "api_broken":        _api_broken,
         "referral_url":      REFERRAL_URL,
         "base_url":          BASE_URL,
         "list_path":         LIST_PATH,

@@ -29,6 +29,7 @@ _minute_calls: Deque[float] = deque()
 _day_count: int = 0
 _day_key: Optional[date] = None
 _backoff_until: float = 0.0
+_last_pause_log_mono: float = 0.0
 
 # canonical symbol → Twelve Data ticker
 _SYMBOL_MAP: Dict[str, str] = {
@@ -84,10 +85,12 @@ def _prune_minute_window() -> None:
         _minute_calls.popleft()
 
 
-def can_request(now_utc: Optional[datetime] = None) -> bool:
-    if not is_enabled() or not is_active_window(now_utc):
+def can_request(now_utc: Optional[datetime] = None, *, scanner_ok: bool = False) -> bool:
+    if not is_enabled():
         return False
     if time.monotonic() < _backoff_until:
+        return False
+    if not scanner_ok and not is_active_window(now_utc):
         return False
     _reset_day_if_needed(now_utc or datetime.utcnow())
     _prune_minute_window()
@@ -105,9 +108,12 @@ def _note_request() -> None:
 
 
 def _note_rate_limit() -> None:
-    global _backoff_until
+    global _backoff_until, _last_pause_log_mono
     _backoff_until = time.monotonic() + 60.0
-    logger.warning("[TwelveData] rate limited — pausing 60s")
+    now = time.monotonic()
+    if now - _last_pause_log_mono >= 60.0:
+        _last_pause_log_mono = now
+        logger.warning("[TwelveData] rate limited — pausing 60s")
 
 
 def to_twelve_data_symbol(symbol: str, asset_class: str = "forex") -> Optional[str]:
@@ -221,6 +227,7 @@ def status() -> Dict[str, object]:
         "calls_today": _day_count,
         "max_per_minute": _MAX_PER_MINUTE,
         "max_per_day": _MAX_PER_DAY,
+        "paused": time.monotonic() < _backoff_until,
     }
 
 
@@ -239,12 +246,9 @@ async def fetch_klines(
     scanner_ok: bool = True,
 ) -> List[list]:
     """
-    OHLCV for forex/index scanners. scanner_ok=True bypasses the 09–18 UTC window
-    so scan loops keep running outside London/US overlap.
+    OHLCV for forex/index scanners. Always respects the global 8/min cap.
     """
-    if not is_enabled():
-        return []
-    if not scanner_ok and not can_request():
+    if not can_request(scanner_ok=scanner_ok):
         return []
 
     td_sym = to_twelve_data_symbol(symbol, asset_class)

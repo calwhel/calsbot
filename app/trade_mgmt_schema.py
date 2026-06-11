@@ -7,7 +7,9 @@ from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_MIGRATION_LOCK_ID = 708_110_002
+from app.advisory_lock_ids import APP_NAME_SCHEMA_MIGRATION, SCHEMA_MIGRATION_LOCK_ID
+
+_SCHEMA_MIGRATION_LOCK_ID = SCHEMA_MIGRATION_LOCK_ID
 
 TRADE_MGMT_COLUMN_MIGRATIONS: List[Tuple[str, str, str]] = [
     (
@@ -84,6 +86,10 @@ def _run_migration_locked(engine) -> bool:
     conn = engine.connect()
     got_lock = False
     try:
+        conn.execute(
+            sa.text("SET application_name TO :n"),
+            {"n": APP_NAME_SCHEMA_MIGRATION},
+        )
         got_lock = bool(
             conn.execute(
                 sa.text("SELECT pg_try_advisory_lock(:lid)"),

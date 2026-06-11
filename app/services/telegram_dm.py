@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # Per-chat pacing — Telegram allows ~20 msgs/min per chat.
 _MIN_GAP_PER_CHAT_S = float(os.environ.get("TELEGRAM_MIN_GAP_PER_CHAT_S", "3.0"))
 _MAX_SEND_ATTEMPTS = int(os.environ.get("TELEGRAM_SEND_MAX_ATTEMPTS", "6"))
+_LAST_SEND_ERROR: str = ""
 
 
 def bot_tokens() -> List[str]:
@@ -132,6 +133,7 @@ async def send_dm(
         logger.warning("Telegram DM skipped for %s: no bot token configured", chat_id)
         return False
 
+    global _LAST_SEND_ERROR
     last = ""
     attempt = 0
     while attempt < _MAX_SEND_ATTEMPTS:
@@ -178,7 +180,8 @@ async def send_dm(
         if attempt < _MAX_SEND_ATTEMPTS:
             await asyncio.sleep(min(30.0, 1.5 * attempt))
 
-    logger.warning("Telegram DM failed for %s: %s", chat_id, last or "(no detail)")
+    _LAST_SEND_ERROR = last or "(no detail)"
+    logger.warning("Telegram DM failed for %s: %s", chat_id, _LAST_SEND_ERROR)
     return False
 
 
@@ -193,6 +196,7 @@ class _TradeTelegramJob:
     tokens: Optional[List[str]]
     parse_mode: str = "HTML"
     done: Optional[asyncio.Future] = None
+    attempt: int = 0
 
 
 _OUTBOUND: queue.Queue = queue.Queue()
@@ -244,11 +248,13 @@ async def _deliver_trade_job(job: _TradeTelegramJob) -> bool:
             job.exec_id or 0,
         )
     else:
+        err = _LAST_SEND_ERROR or "delivery not confirmed"
         logger.warning(
-            "[telegram] FAILED %s %s exec=%s: delivery not confirmed",
+            "[telegram] FAILED %s %s exec=%s: %s",
             job.msg_type,
             sym,
             job.exec_id or 0,
+            err,
         )
     return ok
 
@@ -258,19 +264,50 @@ async def _outbound_drainer_loop() -> None:
         job: _TradeTelegramJob = await asyncio.to_thread(_OUTBOUND.get)
         try:
             ok = await _deliver_trade_job(job)
-            if job.done and not job.done.done():
-                job.done.set_result(ok)
+            if ok:
+                if job.done and not job.done.done():
+                    job.done.set_result(True)
+            elif job.attempt < _MAX_SEND_ATTEMPTS:
+                job.attempt += 1
+                backoff = min(30.0, 2.0 * job.attempt)
+                logger.warning(
+                    "[telegram] retry %s %s exec=%s in %.0fs (attempt %s/%s)",
+                    job.msg_type,
+                    (job.symbol or "?").upper(),
+                    job.exec_id or 0,
+                    backoff,
+                    job.attempt,
+                    _MAX_SEND_ATTEMPTS,
+                )
+                await asyncio.sleep(backoff)
+                _OUTBOUND.put(job)
+            elif job.done and not job.done.done():
+                job.done.set_result(False)
         except Exception as exc:
             sym = (job.symbol or "?").upper()
-            logger.exception(
-                "[telegram] FAILED %s %s exec=%s: %s",
-                job.msg_type,
-                sym,
-                job.exec_id or 0,
-                exc,
-            )
-            if job.done and not job.done.done():
-                job.done.set_result(False)
+            if job.attempt < _MAX_SEND_ATTEMPTS:
+                job.attempt += 1
+                backoff = min(30.0, 2.0 * job.attempt)
+                logger.warning(
+                    "[telegram] retry after error %s %s exec=%s in %.0fs: %s",
+                    job.msg_type,
+                    sym,
+                    job.exec_id or 0,
+                    backoff,
+                    exc,
+                )
+                await asyncio.sleep(backoff)
+                _OUTBOUND.put(job)
+            else:
+                logger.exception(
+                    "[telegram] FAILED %s %s exec=%s: %s",
+                    job.msg_type,
+                    sym,
+                    job.exec_id or 0,
+                    exc,
+                )
+                if job.done and not job.done.done():
+                    job.done.set_result(False)
         finally:
             _OUTBOUND.task_done()
 

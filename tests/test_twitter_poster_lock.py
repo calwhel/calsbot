@@ -85,7 +85,15 @@ class TestTwitterPosterLock(unittest.TestCase):
             tpl.TWITTER_POSTER_LOCK_ID,
         }
         self.assertEqual(len(ids), 3, "poller/poster lock IDs must be unique")
-        self.assertEqual(tpl.TWITTER_POSTER_LOCK_ID, 708_110_005)
+        from app.advisory_lock_ids import (
+            FOREX_POLLER_LOCK_ID,
+            MAIN_POLLER_LOCK_ID,
+            TWITTER_POSTER_LOCK_ID,
+        )
+
+        self.assertEqual(tpl.MAIN_POLLER_LOCK_ID, MAIN_POLLER_LOCK_ID)
+        self.assertEqual(tpl.FOREX_POLLER_LOCK_ID, FOREX_POLLER_LOCK_ID)
+        self.assertEqual(tpl.TWITTER_POSTER_LOCK_ID, TWITTER_POSTER_LOCK_ID)
 
 
 if __name__ == "__main__":

@@ -143,19 +143,18 @@ async def _probe_yahoo() -> bool:
 
 async def _probe_binance() -> bool:
     """Binance futures klines probe — respects geo-block circuit breaker."""
-    from app.services.binance_feed import binance_disabled
+    from app.services.binance_feed import binance_disabled, binance_http_get
     if binance_disabled():
         return False
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(
+            status, data = await binance_http_get(
+                client,
                 "https://fapi.binance.com/fapi/v1/klines",
-                params={"symbol": "BTCUSDT", "interval": "15m", "limit": 5},
+                {"symbol": "BTCUSDT", "interval": "15m", "limit": 5},
+                caller="feed_diagnostics._probe_binance",
             )
-        if resp.status_code != 200:
-            return False
-        data = resp.json()
-        return isinstance(data, list) and len(data) >= 3
+        return status == 200 and isinstance(data, list) and len(data) >= 3
     except Exception:
         return False
 

@@ -509,21 +509,29 @@ async def _get_raw_tickers(http_client: httpx.AsyncClient) -> Optional[list]:
     ):
         return _RAW_TICKERS_CACHE
 
+    from app.services.binance_feed import binance_disabled, binance_http_get
+
     _last_err: Optional[str] = None
-    for url in [
-        "https://api.mexc.com/api/v3/ticker/24hr",
-        "https://fapi.binance.com/fapi/v1/ticker/24hr",
-    ]:
+    ticker_urls = [
+        ("https://api.mexc.com/api/v3/ticker/24hr", None, "strategy_executor._get_raw_tickers.mexc"),
+    ]
+    if not binance_disabled():
+        ticker_urls.append(
+            ("https://fapi.binance.com/fapi/v1/ticker/24hr", None, "strategy_executor._get_raw_tickers.binance"),
+        )
+    for url, params, caller in ticker_urls:
         try:
-            resp = await http_client.get(url, timeout=10)
-            if resp.status_code == 200:
-                _RAW_TICKERS_CACHE = resp.json()
+            status, data = await binance_http_get(
+                http_client, url, params, timeout_s=10, caller=caller,
+            )
+            if status == 200 and data is not None:
+                _RAW_TICKERS_CACHE = data
                 _RAW_TICKERS_AT    = now
                 _RAW_TICKERS_LAST_FAIL_AT = None
                 logger.debug(f"Ticker cache refreshed ({len(_RAW_TICKERS_CACHE)} symbols)")
                 return _RAW_TICKERS_CACHE
-            else:
-                _last_err = f"{url.split('//')[1].split('/')[0]} HTTP {resp.status_code}"
+            if status:
+                _last_err = f"{url.split('//')[1].split('/')[0]} HTTP {status}"
         except Exception as e:
             _last_err = f"{url.split('//')[1].split('/')[0]} {type(e).__name__}: {e or '(no msg)'}"
             continue
@@ -1102,19 +1110,27 @@ async def _check_htf_trend(
         except Exception as e:
             logger.debug(f"tradfi HTF fetch failed for {symbol} ({asset_class}): {e}")
     else:
+        from app.services.binance_feed import binance_disabled, binance_http_get
+
         sources = [
-            ("https://api.mexc.com/api/v3/klines",     {"symbol": symbol, "interval": "1h", "limit": 30}),
-            ("https://fapi.binance.com/fapi/v1/klines", {"symbol": symbol, "interval": "1h", "limit": 30}),
-            ("https://api.binance.com/api/v3/klines",   {"symbol": symbol, "interval": "1h", "limit": 30}),
+            ("https://api.mexc.com/api/v3/klines", {"symbol": symbol, "interval": "1h", "limit": 30},
+             "strategy_executor._htf_trend.mexc"),
         ]
-        for url, params in sources:
+        if not binance_disabled():
+            sources.extend([
+                ("https://fapi.binance.com/fapi/v1/klines", {"symbol": symbol, "interval": "1h", "limit": 30},
+                 "strategy_executor._htf_trend.binance_futures"),
+                ("https://api.binance.com/api/v3/klines", {"symbol": symbol, "interval": "1h", "limit": 30},
+                 "strategy_executor._htf_trend.binance_spot"),
+            ])
+        for url, params, caller in sources:
             try:
-                resp = await http_client.get(url, params=params, timeout=6)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data and len(data) >= 10:
-                        closes = [float(k[4]) for k in data]
-                        break
+                status, data = await binance_http_get(
+                    http_client, url, params, timeout_s=6, caller=caller,
+                )
+                if status == 200 and data and len(data) >= 10:
+                    closes = [float(k[4]) for k in data]
+                    break
             except Exception:
                 continue
         if len(closes) < 10:
@@ -1477,22 +1493,29 @@ async def _fetch_candles_since_entry(
         # All three sources support startTime (ms epoch)
         start_ms = int(start.timestamp() * 1000)
 
+        from app.services.binance_feed import binance_disabled, binance_http_get
+
         sources = [
             ("https://api.mexc.com/api/v3/klines",
-             {"symbol": symbol, "interval": "1m", "startTime": start_ms, "limit": needed}),
-            ("https://api.binance.com/api/v3/klines",
-             {"symbol": symbol, "interval": "1m", "startTime": start_ms, "limit": needed}),
-            ("https://fapi.binance.com/fapi/v1/klines",
-             {"symbol": symbol, "interval": "1m", "startTime": start_ms, "limit": needed}),
+             {"symbol": symbol, "interval": "1m", "startTime": start_ms, "limit": needed},
+             "strategy_executor._fetch_candles.mexc"),
         ]
+        if not binance_disabled():
+            sources.extend([
+                ("https://api.binance.com/api/v3/klines",
+                 {"symbol": symbol, "interval": "1m", "startTime": start_ms, "limit": needed},
+                 "strategy_executor._fetch_candles.binance_spot"),
+                ("https://fapi.binance.com/fapi/v1/klines",
+                 {"symbol": symbol, "interval": "1m", "startTime": start_ms, "limit": needed},
+                 "strategy_executor._fetch_candles.binance_futures"),
+            ])
         fetched = False
-        for url, params in sources:
+        for url, params, caller in sources:
             try:
-                resp = await http_client.get(url, params=params, timeout=8)
-                if resp.status_code != 200:
-                    continue
-                klines = resp.json()
-                if not klines:
+                status, klines = await binance_http_get(
+                    http_client, url, params, timeout_s=8, caller=caller,
+                )
+                if status != 200 or not klines:
                     continue
                 for k in klines:
                     ts    = int(k[0])
@@ -3260,11 +3283,18 @@ async def _fetch_live_price_batch(symbols: list, http_client: httpx.AsyncClient)
 
     async def _binance_futures():
         try:
-            resp = await http_client.get(
-                "https://fapi.binance.com/fapi/v1/ticker/price", timeout=8
+            from app.services.binance_feed import binance_disabled, binance_http_get
+            if binance_disabled():
+                return
+            status, data = await binance_http_get(
+                http_client,
+                "https://fapi.binance.com/fapi/v1/ticker/price",
+                None,
+                timeout_s=8,
+                caller="strategy_executor._live_monitor_prices.binance",
             )
-            if resp.status_code == 200:
-                for item in resp.json():
+            if status == 200 and isinstance(data, list):
+                for item in data:
                     sym = item.get("symbol", "")
                     px  = float(item.get("price") or 0)
                     if px > 0 and sym not in cache:

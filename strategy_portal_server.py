@@ -197,11 +197,11 @@ async def _mobile_uid_header_to_query(request: Request, call_next):
 
 @app.on_event("startup")
 async def _warm_neon_db():
-    """Wake the Neon serverless DB on worker boot + keep it warm with a 4-min
+    """Wake the Neon serverless DB on worker boot + keep it warm with a 30s
     heartbeat. Neon scales to zero after ~5 min idle, and the cold-wake takes
     15-30 s — long enough that the mobile app's fetch times out and shows an
-    infinite spinner on the very first login of a session. A `SELECT 1` ping
-    every 4 minutes keeps the compute online with negligible cost.
+    infinite spinner on the very first login of a session. Frequent `SELECT 1`
+    pings (via pool_pre_ping + TCP keepalives) keep SSL sessions alive.
     """
     async def _ping():
         try:
@@ -217,7 +217,7 @@ async def _warm_neon_db():
                     db.close()
             await asyncio.to_thread(_exec)
             elapsed_ms = int((time.monotonic() - start) * 1000)
-            logger.info("[neon-keepwarm] ping ok in %sms; next ping in 240s", elapsed_ms)
+            logger.info("[neon-keepwarm] ping ok in %sms; next ping in 30s", elapsed_ms)
         except Exception as exc:
             logger.warning(f"[neon-keepwarm] ping failed: {exc}")
 
@@ -226,10 +226,10 @@ async def _warm_neon_db():
 
     async def _loop():
         while True:
-            await asyncio.sleep(240)  # 4 min — under Neon's 5-min idle cutoff
+            await asyncio.sleep(30)
             await _ping()
     asyncio.create_task(_loop())
-    logger.info("[neon-keepwarm] heartbeat scheduled every 240s")
+    logger.info("[neon-keepwarm] heartbeat scheduled every 30s")
 
     async def _backfill_pips():
         """One-time backfill: compute pips_pnl for closed forex/metals executions
@@ -1503,6 +1503,15 @@ async def startup():
             pass
 
     asyncio.create_task(_prime_spot_store())
+
+    async def _bitunix_partner_startup():
+        try:
+            from app.services.bitunix_partner import startup_check
+            await startup_check()
+        except Exception:
+            pass
+
+    asyncio.create_task(_bitunix_partner_startup())
     logger.info("Strategy portal ready — migrations running in background")
 
 
@@ -1702,7 +1711,9 @@ def _try_acquire_executor_lock():
             try_acquire_lock,
         )
 
-        conn = create_lock_connection()
+        from app.executor_lock import get_executor_application_name
+
+        conn = create_lock_connection(get_executor_application_name())
         if try_acquire_lock(conn, get_executor_lock_id()):
             return conn
         close_lock_connection(conn)
@@ -8735,8 +8746,20 @@ async def api_tradingview_webhook(token: str, request: Request):
                 current_price = float(r.json().get("price", 0))
             except Exception:
                 try:
-                    r = await hc.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": symbol})
-                    current_price = float(r.json().get("price", 0))
+                    from app.services.binance_feed import binance_disabled, binance_http_get
+                    if binance_disabled():
+                        raise HTTPException(status_code=502, detail=f"Could not fetch price for {symbol}")
+                    status, data = await binance_http_get(
+                        hc,
+                        "https://api.binance.com/api/v3/ticker/price",
+                        {"symbol": symbol},
+                        caller="strategy_portal_server.webhook_price",
+                    )
+                    current_price = float((data or {}).get("price", 0)) if status == 200 else 0.0
+                    if not current_price:
+                        raise HTTPException(status_code=502, detail=f"Could not fetch price for {symbol}")
+                except HTTPException:
+                    raise
                 except Exception:
                     raise HTTPException(status_code=502, detail=f"Could not fetch price for {symbol}")
 
@@ -16932,25 +16955,32 @@ async def _run_trade_replay_optimizer(
                     while cursor < end_ms:
                         # 1 candle per minute ⇒ minutes-needed = (end-cursor)/60s
                         needed = min(900, max(1, int((end_ms - cursor) / 60000) + 1))
+                        from app.services.binance_feed import binance_disabled, binance_http_get
+
                         sources = [
                             ("https://api.mexc.com/api/v3/klines",
                              {"symbol": ex.symbol, "interval": "1m",
-                              "startTime": cursor, "endTime": end_ms, "limit": needed}),
-                            ("https://api.binance.com/api/v3/klines",
-                             {"symbol": ex.symbol, "interval": "1m",
-                              "startTime": cursor, "endTime": end_ms, "limit": needed}),
-                            ("https://fapi.binance.com/fapi/v1/klines",
-                             {"symbol": ex.symbol, "interval": "1m",
-                              "startTime": cursor, "endTime": end_ms, "limit": needed}),
+                              "startTime": cursor, "endTime": end_ms, "limit": needed},
+                             "strategy_portal_server.replay.mexc"),
                         ]
+                        if not binance_disabled():
+                            sources.extend([
+                                ("https://api.binance.com/api/v3/klines",
+                                 {"symbol": ex.symbol, "interval": "1m",
+                                  "startTime": cursor, "endTime": end_ms, "limit": needed},
+                                 "strategy_portal_server.replay.binance_spot"),
+                                ("https://fapi.binance.com/fapi/v1/klines",
+                                 {"symbol": ex.symbol, "interval": "1m",
+                                  "startTime": cursor, "endTime": end_ms, "limit": needed},
+                                 "strategy_portal_server.replay.binance_futures"),
+                            ])
                         page: list = []
-                        for url, params in sources:
+                        for url, params, caller in sources:
                             try:
-                                resp = await client.get(url, params=params)
-                                if resp.status_code != 200:
-                                    continue
-                                klines = resp.json()
-                                if not klines:
+                                status, klines = await binance_http_get(
+                                    client, url, params, timeout_s=8, caller=caller,
+                                )
+                                if status != 200 or not klines:
                                     continue
                                 for k in klines:
                                     page.append((int(k[0]), float(k[1]), float(k[2]),
