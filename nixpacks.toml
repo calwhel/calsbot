@@ -1,9 +1,0 @@
-# Railway/Nixpacks: Python portal only — ignore mobile/ (Expo app, not deployed here).
-[phases.setup]
-nixPkgs = ["python311", "gcc", "pkg-config", "cairo", "pango", "gdk-pixbuf", "libffi"]
-
-[phases.install]
-cmds = ["pip install -r requirements.txt"]
-
-[start]
-cmd = "bash start.sh"
