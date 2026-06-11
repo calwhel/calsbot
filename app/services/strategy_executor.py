@@ -7198,6 +7198,20 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
 
                 _forex_open = _ac_open("forex")
 
+                if _forex_open:
+                    try:
+                        from app.services.ctrader_price_feed import sweep_stale_klines
+                        _stale_syms = {
+                            (s.get("symbol") or "").upper()
+                            for s in open_snaps
+                            if (s.get("symbol") or "").upper()
+                        }
+                        await sweep_stale_klines(
+                            symbols=list(_stale_syms) if _stale_syms else None,
+                        )
+                    except Exception as _ks_err:
+                        logger.debug("[FX Executor] kline staleness sweep: %s", _ks_err)
+
                 if _closed_by_class and shard_index == 0:
                     _closed_summary = " ".join(
                         f"{k}={v}" for k, v in sorted(_closed_by_class.items())

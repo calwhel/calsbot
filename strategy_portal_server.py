@@ -1754,7 +1754,7 @@ _executor_tasks_started = False
 _initial_executor_reclaim_done = False
 
 
-def _advisory_lock_keepalive_thread(conn_holder, stop_event, lost_event):
+def _advisory_lock_keepalive_thread(conn_holder, stop_event, lost_event, *, lock_path: str = "executor"):
     """Ping the advisory-lock connection on a fixed cadence from a DEDICATED
     THREAD — independent of the asyncio event loop, which the executor's scan
     cycles can block for tens of seconds at a time. Keeping the connection's
@@ -1765,7 +1765,9 @@ def _advisory_lock_keepalive_thread(conn_holder, stop_event, lost_event):
     without tearing down scan loops. Only sets `lost_event` when reconnect is
     exhausted so the async side can re-enter the claim loop."""
     import time as _t
-    from app.executor_lock import reconnect_lock_connection
+    from app.executor_lock import log_executor_lock_keepalive_config, reconnect_lock_connection
+
+    log_executor_lock_keepalive_config(f"strategy_portal_server:{lock_path}")
 
     while not stop_event.is_set():
         # Sleep in 1s steps so shutdown is prompt.
@@ -1806,7 +1808,7 @@ def _advisory_lock_keepalive_thread(conn_holder, stop_event, lost_event):
             return
 
 
-async def _maintain_advisory_lock(conn):
+async def _maintain_advisory_lock(conn, *, lock_path: str = "executor"):
     """
     Keep the psycopg2 advisory-lock connection alive via a dedicated daemon
     thread (NOT the event loop — the executor blocks it for 30s+ during scans,
@@ -1821,6 +1823,7 @@ async def _maintain_advisory_lock(conn):
     t = threading.Thread(
         target=_advisory_lock_keepalive_thread,
         args=(conn_holder, stop_event, lost_event),
+        kwargs={"lock_path": lock_path},
         daemon=True,
     )
     t.start()
@@ -1882,6 +1885,11 @@ async def _restart_executor_subsystems_after_lock_reacquire():
     logger.info(
         "Executor lock re-acquired — restarting feeds, order worker, reconcile catch-up"
     )
+    try:
+        from app.services.ctrader_price_feed import restart_kline_builder
+        await restart_kline_builder("executor_lock_reacquire")
+    except Exception as _kb_err:
+        logger.warning(f"cTrader kline builder restart on re-claim failed: {_kb_err}")
     _ensure_executor_feeds_running()
     try:
         from app.services.ctrader_order_queue import start_ctrader_order_worker
@@ -2336,8 +2344,13 @@ def _try_acquire_aigen_lock():
             try_acquire_lock,
         )
 
-        conn = create_lock_connection()
+        conn = create_lock_connection("th-aigen")
         if try_acquire_lock(conn, _AIGEN_LOCK_ID):
+            logger.info(
+                "[strategy_portal_server:aigen] advisory lock session open "
+                "(psycopg2 direct, keepalive ping=%ss)",
+                30,
+            )
             return conn
         close_lock_connection(conn)
         return None
@@ -2348,7 +2361,7 @@ def _try_acquire_aigen_lock():
 
 async def _aigen_keepalive_then_reclaim(conn):
     global _aigen_running_in_this_worker
-    await _maintain_advisory_lock(conn)
+    await _maintain_advisory_lock(conn, lock_path="aigen")
     _aigen_running_in_this_worker = False
     logger.warning("[AIGen] advisory lock connection lost — re-entering claim loop")
     asyncio.create_task(_aigen_claim_loop(first_attempt_delay=5))
@@ -14419,9 +14432,16 @@ async def executor_force_start(request: Request):
 
     def _force_acquire():
         try:
-            import psycopg2
-            from app.config import settings
-            conn = psycopg2.connect(settings.get_database_url())
+            from app.executor_lock import (
+                build_lock_connection,
+                get_executor_application_name,
+            )
+
+            conn = build_lock_connection(get_executor_application_name())
+            logger.info(
+                "[strategy_portal_server:force-start] advisory lock session open "
+                "(build_lock_connection, keepalive ping=30s)"
+            )
             conn.autocommit = True
             cur = conn.cursor()
             # Forcefully terminate any backend holding our lock

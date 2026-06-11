@@ -882,8 +882,135 @@ def _kline_stale_limit_s(timeframe: str) -> float:
     return 2.0 * _TF_MINUTES.get(timeframe, 15) * 60.0
 
 
+_KLINE_STALE_DRIFT_PCT = float(os.environ.get("CTRADER_KLINE_STALE_DRIFT_PCT", "0.75"))
+
+
 def _live_ticks_flowing(max_age_s: float = 30.0) -> bool:
     return (time.monotonic() - _last_spot_tick_mono) <= max_age_s
+
+
+def _newest_bar_age_s(rows: List[List[float]]) -> float:
+    """Wall-clock age of the newest OHLC bar timestamp."""
+    if not rows:
+        return float("inf")
+    try:
+        newest_ts_ms = int(rows[-1][0])
+        return max(0.0, time.time() - newest_ts_ms / 1000.0)
+    except (IndexError, TypeError, ValueError):
+        return float("inf")
+
+
+def _kline_live_drift_pct(sym_up: str, rows: List[List[float]]) -> Optional[float]:
+    """Percent drift between newest kline close and live cTrader mid."""
+    if not rows:
+        return None
+    try:
+        close = float(rows[-1][4])
+    except (IndexError, TypeError, ValueError):
+        return None
+    if close <= 0:
+        return None
+    live = get_price(sym_up)
+    if not live or live <= 0:
+        return None
+    return abs(live - close) / live * 100.0
+
+
+def _kline_cache_is_stale(
+    sym_up: str,
+    rows: List[List[float]],
+    timeframe: str,
+    *,
+    cache_mono_ts: float = 0.0,
+) -> Tuple[bool, str]:
+    """True when live ticks flow but cached klines are time- or price-stale."""
+    if not _live_ticks_flowing():
+        return False, ""
+    stale_limit = _kline_stale_limit_s(timeframe)
+    bar_age = _newest_bar_age_s(rows)
+    last_up = _last_kline_update.get(sym_up, 0.0)
+    if last_up:
+        fetch_age: Optional[float] = time.monotonic() - last_up
+    elif cache_mono_ts:
+        fetch_age = time.monotonic() - cache_mono_ts
+    else:
+        fetch_age = None
+    if bar_age > stale_limit:
+        return True, f"bar_ts={bar_age:.0f}s"
+    if fetch_age is not None and fetch_age > stale_limit:
+        return True, f"fetch={fetch_age:.0f}s"
+    drift = _kline_live_drift_pct(sym_up, rows)
+    if drift is not None and drift > _KLINE_STALE_DRIFT_PCT:
+        return True, f"drift={drift:.2f}%"
+    return False, ""
+
+
+async def restart_kline_builder(reason: str = "manual") -> None:
+    """Invalidate trendbar session and drop kline caches (reconnect / lock churn)."""
+    n = clear_kline_cache()
+    try:
+        from app.services.tradfi_prices import clear_metal_kline_cache
+        clear_metal_kline_cache()
+    except Exception:
+        pass
+    await _invalidate_tb_conn()
+    logger.info(
+        "[CTraderFeed] kline builder restarted (%s — cleared %s cache entries)",
+        reason,
+        n,
+    )
+
+
+async def sweep_stale_klines(
+    symbols: Optional[List[str]] = None,
+    timeframes: Optional[List[str]] = None,
+) -> int:
+    """Per-cycle staleness sweep — rebuild when ticks flow but klines are frozen."""
+    if not _PROTO_OK or not _live_ticks_flowing():
+        return 0
+
+    syms = [s.upper() for s in (symbols or list(_TRACKED.keys()))]
+    tfs = timeframes or ["5m", "15m", "1h"]
+    rebuilt = 0
+
+    for sym_up in syms:
+        if sym_up not in _TRACKED:
+            continue
+        for tf in tfs:
+            cache_key = None
+            cached_rows = None
+            cache_ts = 0.0
+            for key, (rows, ts) in list(_kline_cache.items()):
+                if key[0] == sym_up and key[1] == tf:
+                    cached_rows = rows
+                    cache_key = key
+                    cache_ts = ts
+                    break
+            if not cached_rows:
+                continue
+            stale, detail = _kline_cache_is_stale(
+                sym_up, cached_rows, tf, cache_mono_ts=cache_ts,
+            )
+            if not stale:
+                continue
+            logger.warning(
+                "[CTraderFeed] kline builder stale for %s — rebuilt (%s, tf=%s)",
+                sym_up,
+                detail,
+                tf,
+            )
+            if cache_key:
+                _kline_cache.pop(cache_key, None)
+            clear_kline_cache(sym_up)
+            try:
+                from app.services.tradfi_prices import clear_metal_kline_cache
+                clear_metal_kline_cache([sym_up])
+            except Exception:
+                pass
+            await _invalidate_tb_conn()
+            await get_klines(sym_up, "forex", tf, 80)
+            rebuilt += 1
+    return rebuilt
 
 
 def clear_kline_cache(symbol: Optional[str] = None) -> int:
@@ -906,20 +1033,7 @@ def clear_kline_cache(symbol: Optional[str] = None) -> int:
 
 async def _on_spot_stream_connected() -> None:
     """After feed reconnect — ticks resume but kline cache may be frozen."""
-    n = clear_kline_cache()
-    await _invalidate_tb_conn()
-    try:
-        from app.services.tradfi_prices import clear_metal_kline_cache
-
-        clear_metal_kline_cache()
-    except Exception:
-        pass
-    if n:
-        logger.info(
-            "[CTraderFeed] feed reconnect — cleared %s kline cache entries "
-            "(trendbar session reset)",
-            n,
-        )
+    await restart_kline_builder("feed_reconnect")
 
 
 def _get_tb_lock() -> "asyncio.Lock":
@@ -1169,20 +1283,25 @@ async def get_klines(
     cached = _kline_cache.get(cache_key)
     if cached:
         cache_age = time.monotonic() - cached[1]
-        last_up = _last_kline_update.get(sym_up, 0.0)
-        kline_age = time.monotonic() - last_up if last_up else cache_age
-        stale_limit = _kline_stale_limit_s(timeframe)
-        kline_stale = _live_ticks_flowing() and kline_age > stale_limit
+        kline_stale, stale_detail = _kline_cache_is_stale(
+            sym_up, cached[0], timeframe, cache_mono_ts=cached[1],
+        )
         if cache_age < _KLINE_TTL and not kline_stale:
             return cached[0]
         if kline_stale:
             logger.warning(
                 "[CTraderFeed] kline builder stale for %s — rebuilt "
-                "(klines %.0fs old, ticks flowing)",
+                "(%s, ticks flowing)",
                 sym_up,
-                kline_age,
+                stale_detail,
             )
             _kline_cache.pop(cache_key, None)
+            try:
+                from app.services.tradfi_prices import clear_metal_kline_cache
+                clear_metal_kline_cache([sym_up])
+            except Exception:
+                pass
+            await _invalidate_tb_conn()
 
     async def _pull(
         creds_tuple,

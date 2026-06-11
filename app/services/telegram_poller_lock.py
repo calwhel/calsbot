@@ -60,8 +60,6 @@ def _try_acquire(lock_id: int) -> bool:
         )
         return False
 
-    import psycopg2
-
     db_url = _get_db_url()
     if not db_url:
         logger.error(
@@ -77,11 +75,10 @@ def _try_acquire(lock_id: int) -> bool:
             except Exception:
                 pass
 
-        from app.executor_lock import NEON_LOCK_CONNECT_KWARGS
+        from app.executor_lock import build_lock_connection, log_executor_lock_keepalive_config
 
-        conn_kw = dict(NEON_LOCK_CONNECT_KWARGS)
-        conn_kw["application_name"] = APP_NAME_TG_POLLER
-        conn = psycopg2.connect(db_url, **conn_kw)
+        log_executor_lock_keepalive_config("telegram_poller_lock:tg_poller")
+        conn = build_lock_connection(APP_NAME_TG_POLLER)
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(%s)", (TG_POLLER_LOCK_ID,))
@@ -117,6 +114,9 @@ def _release(lock_id: int) -> None:
 
 
 def _keepalive_loop(lock_id: int) -> None:
+    from app.executor_lock import log_executor_lock_keepalive_config
+
+    log_executor_lock_keepalive_config("telegram_poller_lock:keepalive")
     while lock_id in _lock_conns:
         time.sleep(KEEPALIVE_INTERVAL)
         conn = _lock_conns.get(lock_id)
@@ -161,8 +161,6 @@ def _terminate_poller_lock_holders(
     log_prefix: str = "[tg-lock]",
 ) -> int:
     """Terminate stale holders of TG_POLLER_LOCK_ID owned by th-tgpoller only."""
-    import psycopg2
-
     db_url = _get_db_url()
     if not db_url:
         return 0
@@ -171,7 +169,9 @@ def _terminate_poller_lock_holders(
     owner_app = APP_NAME_TG_POLLER
     terminated = 0
     try:
-        conn = psycopg2.connect(db_url, connect_timeout=10)
+        from app.executor_lock import build_lock_connection
+
+        conn = build_lock_connection(APP_NAME_TG_POLLER)
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(
@@ -284,19 +284,16 @@ def try_acquire_persistent_lock(lock_id: int) -> bool:
             return True
         return False
     # Non-TG locks (e.g. TWITTER_POSTER_LOCK_ID) use generic acquire path.
-    import psycopg2
+    from app.executor_lock import build_lock_connection, log_executor_lock_keepalive_config
 
-    from app.executor_lock import NEON_LOCK_CONNECT_KWARGS
-
-    db_url = _get_db_url()
-    if not db_url:
+    if not _get_db_url():
         return False
     if holds_lock(lock_id):
         return True
     try:
-        conn_kw = dict(NEON_LOCK_CONNECT_KWARGS)
-        conn_kw["application_name"] = application_name_for_lock(lock_id)
-        conn = psycopg2.connect(db_url, **conn_kw)
+        owner_app = application_name_for_lock(lock_id)
+        log_executor_lock_keepalive_config(f"telegram_poller_lock:{owner_app}")
+        conn = build_lock_connection(owner_app)
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_id,))

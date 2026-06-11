@@ -820,13 +820,10 @@ def _ctrader_feed_active() -> bool:
 def _acquire_fmp_poll_lock():
     """Hold a dedicated DB session for the poll cycle (session advisory lock)."""
     try:
-        import psycopg2
-        from app.config import settings
-        from app.executor_lock import NEON_LOCK_CONNECT_KWARGS
+        from app.executor_lock import build_lock_connection, log_executor_lock_keepalive_config
 
-        conn_kw = dict(NEON_LOCK_CONNECT_KWARGS)
-        conn_kw["application_name"] = APP_NAME_FMP_POLL
-        conn = psycopg2.connect(settings.get_database_url(), **conn_kw)
+        log_executor_lock_keepalive_config("fmp_price_feed:poll_lock")
+        conn = build_lock_connection(APP_NAME_FMP_POLL)
         conn.autocommit = True
         cur = conn.cursor()
         cur.execute("SELECT pg_try_advisory_lock(%s)", (_FMP_POLL_LOCK_ID,))

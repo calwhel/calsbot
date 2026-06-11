@@ -197,13 +197,10 @@ async def _poll_symbol(symbol: str) -> bool:
 
 def _acquire_lock():
     try:
-        import psycopg2
-        from app.config import settings
-        from app.executor_lock import NEON_LOCK_CONNECT_KWARGS
+        from app.executor_lock import build_lock_connection, log_executor_lock_keepalive_config
 
-        conn_kw = dict(NEON_LOCK_CONNECT_KWARGS)
-        conn_kw["application_name"] = APP_NAME_METALS_SPOT
-        conn = psycopg2.connect(settings.get_database_url(), **conn_kw)
+        log_executor_lock_keepalive_config("metals_spot_feed:poll_lock")
+        conn = build_lock_connection(APP_NAME_METALS_SPOT)
         conn.autocommit = True
         cur = conn.cursor()
         cur.execute("SELECT pg_try_advisory_lock(%s)", (_POLL_LOCK_ID,))

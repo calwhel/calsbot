@@ -92,19 +92,29 @@ def get_lock_database_url() -> str:
     return urlunparse(parsed._replace(netloc=netloc))
 
 
-def log_executor_lock_keepalive_config() -> None:
-    """Once-per-process startup line so deploy logs prove keepalive settings."""
+def log_executor_lock_keepalive_config(path: Optional[str] = None) -> None:
+    """Startup line so deploy logs prove keepalive settings (once globally, per-path)."""
     global _KEEPALIVE_CFG_LOGGED
-    if _KEEPALIVE_CFG_LOGGED:
-        return
-    _KEEPALIVE_CFG_LOGGED = True
-    logger.info(
-        "[executor_lock] keepalive cfg: idle=%s interval=%s count=%s ping=%ss",
-        NEON_LOCK_CONNECT_KWARGS["keepalives_idle"],
-        NEON_LOCK_CONNECT_KWARGS["keepalives_interval"],
-        NEON_LOCK_CONNECT_KWARGS["keepalives_count"],
-        KEEPALIVE_PING_SECS,
-    )
+    prefix = f"[{path}] " if path else ""
+    if not _KEEPALIVE_CFG_LOGGED:
+        _KEEPALIVE_CFG_LOGGED = True
+        logger.info(
+            "[executor_lock] keepalive cfg: idle=%s interval=%s count=%s ping=%ss",
+            NEON_LOCK_CONNECT_KWARGS["keepalives_idle"],
+            NEON_LOCK_CONNECT_KWARGS["keepalives_interval"],
+            NEON_LOCK_CONNECT_KWARGS["keepalives_count"],
+            KEEPALIVE_PING_SECS,
+        )
+    if path:
+        logger.info(
+            "%sadvisory-lock keepalive thread started "
+            "(ping=%ss keepalives=1 idle=%s interval=%s count=%s)",
+            prefix,
+            KEEPALIVE_PING_SECS,
+            NEON_LOCK_CONNECT_KWARGS["keepalives_idle"],
+            NEON_LOCK_CONNECT_KWARGS["keepalives_interval"],
+            NEON_LOCK_CONNECT_KWARGS["keepalives_count"],
+        )
 
 
 def build_lock_connection(application_name: Optional[str] = None):
