@@ -21,6 +21,8 @@ _FEED_STATUS: Dict[str, str] = {}
 _SIGNAL_STATUS: Dict[str, Any] = {}
 _PROBE_DONE = False
 _EVAL_RING: Deque[Dict[str, Any]] = deque(maxlen=100)
+_SCAN_METRIC_BUFFER: List[Dict[str, Any]] = []
+_SCAN_METRIC_BATCH = False
 
 
 def feed_status() -> Dict[str, str]:
@@ -93,6 +95,48 @@ def log_blocker_rollup(limit: int = 100) -> None:
         )
 
 
+def begin_scan_metric_batch() -> None:
+    """Defer per-strategy scan-metric logs until flush_scan_metric_batch()."""
+    global _SCAN_METRIC_BATCH, _SCAN_METRIC_BUFFER
+    _SCAN_METRIC_BATCH = True
+    _SCAN_METRIC_BUFFER = []
+
+
+def flush_scan_metric_batch(label: str = "") -> None:
+    """Emit one consolidated scan-metric log + eval ring updates for the cycle."""
+    global _SCAN_METRIC_BATCH, _SCAN_METRIC_BUFFER
+    if not _SCAN_METRIC_BUFFER:
+        _SCAN_METRIC_BATCH = False
+        return
+    blockers: Counter = Counter()
+    for payload in _SCAN_METRIC_BUFFER:
+        if payload.get("strategy_evaluated"):
+            reason = payload.get("block_reason") or (
+                "signal_generated" if payload.get("signal_generated") else (
+                    "setup_detected" if payload.get("setup_detected") else "passed_scan"
+                )
+            )
+            blockers[str(reason)] += 1
+            record_eval_metric(
+                symbol=str(payload.get("symbol") or ""),
+                strategy_id=payload.get("strategy_id"),
+                setup_detected=bool(payload.get("setup_detected")),
+                signal_generated=bool(payload.get("signal_generated")),
+                block_reason=payload.get("block_reason"),
+            )
+    summary = {
+        "label": label or "cycle",
+        "count": len(_SCAN_METRIC_BUFFER),
+        "signals": sum(1 for p in _SCAN_METRIC_BUFFER if p.get("signal_generated")),
+        "setups": sum(1 for p in _SCAN_METRIC_BUFFER if p.get("setup_detected")),
+        "blockers": dict(blockers),
+        "sample": _SCAN_METRIC_BUFFER[:8],
+    }
+    logger.info("[scan-metric-batch] %s", json.dumps(summary, separators=(",", ":")))
+    _SCAN_METRIC_BUFFER = []
+    _SCAN_METRIC_BATCH = False
+
+
 def log_scan_metric(
     *,
     symbol: str,
@@ -121,6 +165,9 @@ def log_scan_metric(
         payload["block_reason"] = block_reason
     if extra:
         payload.update(extra)
+    if _SCAN_METRIC_BATCH:
+        _SCAN_METRIC_BUFFER.append(payload)
+        return
     logger.info("[scan-metric] %s", json.dumps(payload, separators=(",", ":")))
     if strategy_evaluated:
         record_eval_metric(

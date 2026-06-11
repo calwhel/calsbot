@@ -199,10 +199,11 @@ def _acquire_lock():
     try:
         import psycopg2
         from app.config import settings
-        conn = psycopg2.connect(
-            settings.get_database_url(),
-            application_name=APP_NAME_METALS_SPOT,
-        )
+        from app.executor_lock import NEON_LOCK_CONNECT_KWARGS
+
+        conn_kw = dict(NEON_LOCK_CONNECT_KWARGS)
+        conn_kw["application_name"] = APP_NAME_METALS_SPOT
+        conn = psycopg2.connect(settings.get_database_url(), **conn_kw)
         conn.autocommit = True
         cur = conn.cursor()
         cur.execute("SELECT pg_try_advisory_lock(%s)", (_POLL_LOCK_ID,))

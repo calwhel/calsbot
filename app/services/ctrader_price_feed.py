@@ -51,6 +51,7 @@ _PT_SYMBOLS_RES   = 2115
 _PT_SUB_SPOTS_REQ = 2127
 _PT_SUB_SPOTS_RES = 2128
 _PT_SPOT_EVENT    = 2131
+_PT_EXECUTION_EVENT = 2126
 _PT_TRENDBARS_REQ = 2137
 _PT_TRENDBARS_RES = 2138
 _PT_HEARTBEAT     = 51    # ProtoHeartbeatEvent — client MUST send ~every 10s or
@@ -795,6 +796,18 @@ async def _feed_loop() -> None:
                         pass
                     continue
 
+                if msg.payloadType == _PT_EXECUTION_EVENT:
+                    try:
+                        from app.services.ctrader_execution_events import (
+                            schedule_execution_event,
+                        )
+                        schedule_execution_event(
+                            msg.payload, ctid=ctid, user_id=_uid,
+                        )
+                    except Exception as _ee:
+                        logger.debug("[CTraderFeed] execution event: %s", _ee)
+                    continue
+
                 if msg.payloadType == _PT_SPOT_EVENT:
                     ev = ProtoOASpotEvent()
                     ev.ParseFromString(msg.payload)
@@ -805,11 +818,19 @@ async def _feed_loop() -> None:
                         if bid and ask:
                             _last_spot_tick_mono = time.monotonic()
                             _spot_cache[canonical] = (bid, ask, _last_spot_tick_mono)
+                            mid = round((bid + ask) / 2.0, 6)
                             try:
                                 from app.services.spot_price_store import upsert_tick
-                                mid = round((bid + ask) / 2.0, 6)
                                 upsert_tick(
                                     canonical, bid=bid, ask=ask, mid=mid, source="ctrader",
+                                )
+                            except Exception:
+                                pass
+                            try:
+                                from app.services.forex_tick_manager import on_ctrader_tick
+                                asyncio.create_task(
+                                    on_ctrader_tick(canonical, mid),
+                                    name=f"tick-manage-{canonical}",
                                 )
                             except Exception:
                                 pass

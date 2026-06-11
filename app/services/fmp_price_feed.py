@@ -376,6 +376,10 @@ async def _fmp_http_get(url: str, params: dict, timeout: float = 8.0) -> Tuple[i
         import httpx
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(url, params=params)
+            if resp.status_code in (451, 403):
+                from app.services.geo_block import note_geo_block
+                note_geo_block(url, resp.status_code, "fmp_price_feed._fmp_http_get")
+                return resp.status_code, None
             if resp.status_code == 429:
                 _fmp_note_rate_limit()
                 return 429, None
@@ -390,6 +394,10 @@ async def _fmp_http_get(url: str, params: dict, timeout: float = 8.0) -> Tuple[i
             async with session.get(
                 url, params=params, timeout=aiohttp.ClientTimeout(total=timeout)
             ) as resp:
+                if resp.status in (451, 403):
+                    from app.services.geo_block import note_geo_block
+                    note_geo_block(url, resp.status, "fmp_price_feed._fmp_http_get")
+                    return resp.status, None
                 if resp.status == 429:
                     _fmp_note_rate_limit()
                     return 429, None
@@ -724,10 +732,11 @@ def _acquire_fmp_poll_lock():
     try:
         import psycopg2
         from app.config import settings
-        conn = psycopg2.connect(
-            settings.get_database_url(),
-            application_name=APP_NAME_FMP_POLL,
-        )
+        from app.executor_lock import NEON_LOCK_CONNECT_KWARGS
+
+        conn_kw = dict(NEON_LOCK_CONNECT_KWARGS)
+        conn_kw["application_name"] = APP_NAME_FMP_POLL
+        conn = psycopg2.connect(settings.get_database_url(), **conn_kw)
         conn.autocommit = True
         cur = conn.cursor()
         cur.execute("SELECT pg_try_advisory_lock(%s)", (_FMP_POLL_LOCK_ID,))
