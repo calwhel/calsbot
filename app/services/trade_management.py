@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -56,11 +57,237 @@ def effective_trade_mgmt_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def active_sl(execution) -> Optional[float]:
+    """Effective stop for SL-hit checks — prefers current_sl over sl_price."""
     cur = getattr(execution, "current_sl", None)
     if cur is not None:
         return float(cur)
     sl = getattr(execution, "sl_price", None)
     return float(sl) if sl is not None else None
+
+
+def original_sl(execution) -> Optional[float]:
+    """Original stop at fire time (before any breakeven/trailing move)."""
+    notes = getattr(execution, "notes", None) or ""
+    m = re.search(r"orig_sl=([0-9.+-eE]+)", notes)
+    if m:
+        try:
+            return float(m.group(1))
+        except (TypeError, ValueError):
+            pass
+    sl = getattr(execution, "sl_price", None)
+    return float(sl) if sl is not None else None
+
+
+def breakeven_sl_price(
+    symbol: str,
+    entry: float,
+    direction: str,
+    offset_pips: float = 0.0,
+) -> float:
+    """Broker-style breakeven stop: LONG entry+offset, SHORT entry−offset."""
+    from app.services.forex_engine import pip_size as _pip_size
+
+    pip = _pip_size(symbol)
+    off = float(offset_pips or 0.0) * pip
+    if (direction or "").upper() == "SHORT":
+        return round(float(entry) - off, 6)
+    return round(float(entry) + off, 6)
+
+
+def _sl_tolerance(symbol: str, entry: float) -> float:
+    try:
+        from app.services.forex_engine import pip_size as _pip_size
+
+        pip = _pip_size(symbol)
+        return max(float(pip) * 0.5, abs(float(entry)) * 1e-7)
+    except Exception:
+        return abs(float(entry)) * 1e-5
+
+
+def breakeven_was_claimed(execution) -> bool:
+    return bool(getattr(execution, "breakeven_applied", False)) or (
+        "be_moved" in ((getattr(execution, "notes", None) or ""))
+    )
+
+
+def _classify_sl_outcome(sl: float, entry: float, direction: str) -> str:
+    try:
+        if not entry:
+            return "LOSS"
+        tol = abs(entry) * 1e-7
+        if abs(sl - entry) <= tol:
+            return "BREAKEVEN"
+        if direction == "LONG" and sl > entry + tol:
+            return "WIN"
+        if direction == "SHORT" and sl < entry - tol:
+            return "WIN"
+    except Exception:
+        pass
+    return "LOSS"
+
+
+def classify_sl_close_outcome(
+    execution,
+    exit_price: float,
+    *,
+    log_prefix: str = "[trade-mgmt]",
+) -> str:
+    """Classify a stop-out — never label original-SL hits as BREAKEVEN."""
+    entry = float(getattr(execution, "entry_price", 0) or 0)
+    direction = getattr(execution, "direction", "LONG") or "LONG"
+    symbol = getattr(execution, "symbol", "") or ""
+    tol = _sl_tolerance(symbol, entry)
+    exit_px = float(exit_price)
+    eff_sl = active_sl(execution)
+    orig = original_sl(execution)
+
+    if breakeven_was_claimed(execution) and entry > 0:
+        if abs(exit_px - entry) <= tol:
+            return "BREAKEVEN"
+        if orig is not None and abs(exit_px - orig) <= tol and abs(orig - entry) > tol:
+            exec_id = getattr(execution, "id", 0)
+            logger.critical(
+                "%s breakeven was applied but close occurred at original SL — "
+                "SL move failed exec=%s exit=%s orig_sl=%s entry=%s current_sl=%s",
+                log_prefix,
+                exec_id,
+                exit_px,
+                orig,
+                entry,
+                eff_sl,
+            )
+            return "LOSS"
+
+    if eff_sl is not None and entry > 0:
+        return _classify_sl_outcome(float(eff_sl), entry, direction)
+    return "LOSS"
+
+
+def persist_paper_stop_level(
+    execution,
+    new_sl: float,
+    session,
+    *,
+    mark_breakeven: bool = False,
+) -> bool:
+    """Write current_sl + sl_price and commit — required before BE notifications."""
+    new_sl = round(float(new_sl), 6)
+    execution.current_sl = new_sl
+    execution.sl_price = new_sl
+    if mark_breakeven:
+        execution.breakeven_applied = True
+    try:
+        session.commit()
+        session.refresh(execution)
+        return True
+    except Exception as exc:
+        logger.warning(
+            "[trade-mgmt] paper SL persist failed exec=%s: %s",
+            getattr(execution, "id", 0),
+            exc,
+        )
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        return False
+
+
+def audit_mislabeled_breakeven_paper_closes(session, limit: int = 20) -> int:
+    """Log paper closes that were labeled BREAKEVEN but exited at original SL."""
+    from app.strategy_models import StrategyExecution
+
+    rows = (
+        session.query(StrategyExecution)
+        .filter(
+            StrategyExecution.is_paper == True,  # noqa: E712
+            StrategyExecution.outcome == "BREAKEVEN",
+        )
+        .order_by(StrategyExecution.closed_at.desc())
+        .limit(limit)
+        .all()
+    )
+    affected = 0
+    for ex in rows:
+        if not breakeven_was_claimed(ex):
+            continue
+        entry = float(ex.entry_price or 0)
+        exit_px = float(ex.exit_price or 0)
+        orig = original_sl(ex)
+        tol = _sl_tolerance(ex.symbol or "", entry)
+        if (
+            orig is not None
+            and entry > 0
+            and abs(exit_px - orig) <= tol
+            and abs(orig - entry) > tol
+        ):
+            affected += 1
+            logger.warning(
+                "[trade-mgmt] mislabeled BREAKEVEN paper exec=%s %s %s "
+                "entry=%s exit=%s orig_sl=%s pips_pnl=%s",
+                ex.id,
+                ex.symbol,
+                ex.direction,
+                entry,
+                exit_px,
+                orig,
+                ex.pips_pnl,
+            )
+    if affected:
+        logger.warning(
+            "[trade-mgmt] breakeven mislabel audit: %s/%s recent BREAKEVEN "
+            "paper closes exited at original SL",
+            affected,
+            len(rows),
+        )
+    return affected
+
+
+def correct_mislabeled_breakeven_closes(session, limit: int = 20) -> int:
+    """Re-label paper BREAKEVEN closes that actually exited at original SL."""
+    from app.strategy_models import StrategyExecution
+
+    rows = (
+        session.query(StrategyExecution)
+        .filter(
+            StrategyExecution.is_paper == True,  # noqa: E712
+            StrategyExecution.outcome == "BREAKEVEN",
+        )
+        .order_by(StrategyExecution.closed_at.desc())
+        .limit(limit)
+        .all()
+    )
+    fixed = 0
+    for ex in rows:
+        if not breakeven_was_claimed(ex):
+            continue
+        entry = float(ex.entry_price or 0)
+        exit_px = float(ex.exit_price or 0)
+        orig = original_sl(ex)
+        tol = _sl_tolerance(ex.symbol or "", entry)
+        if (
+            orig is not None
+            and entry > 0
+            and abs(exit_px - orig) <= tol
+            and abs(orig - entry) > tol
+        ):
+            ex.outcome = "LOSS"
+            fixed += 1
+            logger.warning(
+                "[trade-mgmt] corrected mislabeled BREAKEVEN → LOSS exec=%s "
+                "%s exit=%s orig_sl=%s",
+                ex.id,
+                ex.symbol,
+                exit_px,
+                orig,
+            )
+    if fixed:
+        try:
+            session.commit()
+        except Exception:
+            session.rollback()
+            return 0
+    return fixed
 
 
 def _profit_pips(symbol: str, entry: float, live_price: float, direction: str) -> float:
@@ -239,22 +466,22 @@ async def manage_open_position(
         and (force_be or profit_pips >= cfg["breakeven_trigger_pips"])
     )
     if be_ready:
-        offset = cfg["breakeven_offset_pips"]
-        from app.services.forex_engine import pip_size as _pip_size
-
-        pip = _pip_size(symbol)
-        if direction == "LONG":
-            new_sl = entry + offset * pip
-        else:
-            new_sl = entry - offset * pip
+        new_sl = breakeven_sl_price(
+            symbol, entry, direction, cfg["breakeven_offset_pips"],
+        )
         if _validate_sl(direction, new_sl, live_price):
-            if await _apply_sl_amend(
-                execution, new_sl, session, is_paper, keep_tp=True,
-            ):
-                execution.breakeven_applied = True
-                execution.current_sl = new_sl
-                execution.sl_price = new_sl
-                session.commit()
+            amended = await _apply_sl_amend(
+                execution,
+                new_sl,
+                session,
+                is_paper,
+                keep_tp=True,
+                mark_breakeven=True,
+            )
+            if amended:
+                if not is_paper:
+                    execution.breakeven_applied = True
+                    session.commit()
                 await _telegram_trade(
                     execution.user_id,
                     f"🔒 Breakeven set @ {new_sl:.5g}",
@@ -309,23 +536,45 @@ async def _apply_sl_amend(
     is_paper: bool,
     *,
     keep_tp: bool = True,
+    mark_breakeven: bool = False,
 ) -> bool:
     new_sl = round(float(new_sl), 6)
     if is_paper:
-        return True
+        return persist_paper_stop_level(
+            execution, new_sl, session, mark_breakeven=mark_breakeven,
+        )
     from app.models import User
     from app.services.ctrader_client import amend_position_sl
 
     user = session.query(User).filter(User.id == execution.user_id).first()
     pos_id = getattr(execution, "ctrader_position_id", None)
     if not user or not pos_id:
+        logger.warning(
+            "[trade-mgmt] live SL amend skipped exec=%s — no broker position",
+            getattr(execution, "id", 0),
+        )
         return False
     tp = float(execution.tp2_price or execution.tp_price) if keep_tp else None
     ok = await amend_position_sl(user.id, int(pos_id), new_sl, keep_tp=tp)
     if not ok:
+        logger.warning(
+            "[trade-mgmt] live SL amend FAILED exec=%s %s new_sl=%s — "
+            "breakeven notification suppressed",
+            getattr(execution, "id", 0),
+            execution.symbol,
+            new_sl,
+        )
         await _telegram_trade(
             execution.user_id,
             f"⚠️ SL amend failed {execution.symbol}: broker rejected amend",
             asset_class=getattr(execution, "asset_class", "forex") or "forex",
         )
-    return ok
+        return False
+    execution.current_sl = new_sl
+    execution.sl_price = new_sl
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        return False
+    return True
