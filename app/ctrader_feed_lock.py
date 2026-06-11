@@ -30,8 +30,17 @@ def remote_feed_enabled() -> bool:
 
 
 def feed_disabled_in_executor() -> bool:
+    """Skip local cTrader socket in executor when remote ticks are healthy."""
     if remote_feed_enabled():
-        return True
+        try:
+            from app.services.ctrader_price_feed import _shared_ctrader_ticks_fresh
+
+            if _shared_ctrader_ticks_fresh(max_age_s=60.0):
+                return True
+            # Remote feed configured but stale — allow local fallback in executor.
+            return False
+        except Exception:
+            return True
     return os.getenv("DISABLE_CTRADER_FEED_IN_EXECUTOR", "").lower() in (
         "1",
         "true",

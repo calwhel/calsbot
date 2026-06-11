@@ -31,7 +31,8 @@ _MAX_AGE_INDEX = float(os.environ.get("REALTIME_SPOT_MAX_AGE_INDEX_S", "5"))
 
 _METALS = frozenset({"XAUUSD", "XAGUSD"})
 _BINANCE_MAP = {"XAUUSD": "XAUUSDT", "XAGUSD": "XAGUSDT"}
-_COINBASE_MAP = {"XAUUSDT": "XAU-USD", "XAGUSDT": "XAG-USD"}
+# XAU klines use PAXG-USD on Coinbase Exchange — live must match (not XAU-USD).
+_COINBASE_MAP = {"XAUUSDT": "PAXG-USD", "XAGUSDT": "XAG-USD"}
 _BINANCE_BASE = "https://api.binance.com/api/v3"
 
 # Source preference when multiple fresh ticks arrive (lower = better).

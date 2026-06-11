@@ -424,17 +424,10 @@ def _trendbar_fetch_allowed() -> bool:
 
     A second account-auth TLS session on the same ctid causes cTrader to recycle
     the spot stream — the #1 source of LIVE flapping in production logs.
+    Executor workers without a local spot stream (remote-feed mode) may fetch
+    trendbars on demand — only the feed-only process holds the streaming socket.
     """
-    if _feed_live:
-        return False
-    try:
-        from app.ctrader_feed_lock import feed_disabled_in_executor
-        if feed_disabled_in_executor():
-            return False
-    except Exception:
-        if _remote_feed_mode():
-            return False
-    return True
+    return not _feed_live
 
 
 def _shared_ctrader_ticks_fresh(max_age_s: float = 30.0) -> bool:
@@ -1241,17 +1234,44 @@ def broker_session_ready(symbol: str = "XAUUSD") -> bool:
     """
     True when cTrader trendbars can be fetched without opening a competing socket.
 
-    When the spot feed is LIVE we must NOT open a second authed socket (same ctid);
-    callers should use Kraken/Yahoo for scan klines instead.
+    When the local spot feed is LIVE we must NOT open a second authed socket
+  (same ctid). Remote-feed executors (no local stream) may pull trendbars while
+    Postgres ticks are fresh; cold start may open a short-lived trendbar socket.
     """
     if _is_terminal_auth_error(_last_auth_error):
         return False
-    if not _trendbar_fetch_allowed():
+    if _feed_live:
         return False
     if _stream_creds is not None:
         return True
-    if _remote_feed_mode():
-        return _shared_ctrader_ticks_fresh(max_age_s=_SPOT_TTL * 2)
+    if _remote_feed_mode() and _shared_ctrader_ticks_fresh(max_age_s=_SPOT_TTL * 2):
+        return True
+    if not _trendbar_fetch_allowed():
+        return False
+    try:
+        if probe_linked_accounts_sync():
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def ctrader_spot_ready(symbol: str = "XAUUSD") -> bool:
+    """True when a fresh cTrader mid is available (local feed or remote store)."""
+    sym = symbol.upper()
+    if get_price(sym) is not None:
+        return True
+    if get_bid_ask(sym) is not None:
+        return True
+    if is_live():
+        return True
+    try:
+        from app.services.spot_price_store import get_tick
+        row = get_tick(sym, max_age_s=_SPOT_TTL * 2)
+        if row and (row.get("source") or "").lower() == "ctrader":
+            return float(row.get("mid") or 0) > 0
+    except Exception:
+        pass
     return False
 
 
@@ -1385,14 +1405,24 @@ def launch_ctrader_feed() -> bool:
     logger.info("[CTraderFeed] startup: launching feed task")
 
     try:
-        from app.ctrader_feed_lock import feed_disabled_in_executor, is_feed_only_process
+        from app.ctrader_feed_lock import (
+            feed_disabled_in_executor,
+            is_feed_only_process,
+            remote_feed_enabled,
+        )
         if feed_disabled_in_executor() and not is_feed_only_process():
-            reason = "CTRADER_REMOTE_FEED" if _remote_feed_mode() else "DISABLE_CTRADER_FEED_IN_EXECUTOR"
+            fresh = _shared_ctrader_ticks_fresh(max_age_s=60.0)
+            reason = "CTRADER_REMOTE_FEED" if remote_feed_enabled() else "DISABLE_CTRADER_FEED_IN_EXECUTOR"
             logger.info(
-                "[CTraderFeed] feed not started — %s (executor reads remote ticks)",
+                "[CTraderFeed] feed not started — %s (remote_ticks_fresh=%s)",
                 reason,
+                fresh,
             )
             return False
+        if remote_feed_enabled() and not is_feed_only_process():
+            logger.warning(
+                "[CTraderFeed] remote feed stale — starting local fallback feed in executor"
+            )
     except Exception as exc:
         logger.warning("[CTraderFeed] feed disable check failed: %s", exc)
 
