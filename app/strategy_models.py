@@ -66,6 +66,8 @@ class StrategyExecution(Base):
     tp1_realized_pips   = Column(Float, nullable=True)
     current_sl          = Column(Float, nullable=True)
     remaining_volume    = Column(Float, nullable=True)
+    mfe_pips          = Column(Float, nullable=True)   # peak favorable excursion (pips)
+    mae_pips          = Column(Float, nullable=True)   # peak adverse excursion (pips)
     notes           = Column(Text, nullable=True)
     is_paper        = Column(Boolean, default=False)       # paper trade — no real order placed
     asset_class     = Column(String(16), nullable=False, default="crypto", server_default="crypto", index=True)
@@ -292,6 +294,8 @@ def init_strategy_tables(engine):
             ("ctrader_position_id",  "VARCHAR(40)"),
             ("ctrader_account_id",   "VARCHAR(40)"),
             ("broker_volume_units",  "INTEGER"),
+            ("mfe_pips",             "NUMERIC"),
+            ("mae_pips",             "NUMERIC"),
         ]:
             if ("strategy_executions", col) not in existing_cols:
                 try:

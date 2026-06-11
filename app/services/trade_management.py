@@ -301,6 +301,42 @@ def _profit_pips(symbol: str, entry: float, live_price: float, direction: str) -
     return (live_price - entry) / pip
 
 
+def _locked_pips(symbol: str, entry: float, sl: float, direction: str) -> float:
+    """Pips locked in by the current stop level (0 if stop is still behind entry)."""
+    from app.services.forex_engine import pip_size as _pip_size
+
+    pip = _pip_size(symbol)
+    if pip <= 0 or sl is None:
+        return 0.0
+    if direction == "SHORT":
+        return max(0.0, (entry - float(sl)) / pip)
+    return max(0.0, (float(sl) - entry) / pip)
+
+
+def update_excursion_pips(execution, profit_pips: float, session) -> bool:
+    """Track peak profit (MFE) and peak drawdown (MAE) — commit only when improved."""
+    changed = False
+    try:
+        cur_mfe = getattr(execution, "mfe_pips", None)
+        if profit_pips > float(cur_mfe or 0.0):
+            execution.mfe_pips = round(profit_pips, 1)
+            changed = True
+        adverse = max(0.0, -float(profit_pips))
+        cur_mae = getattr(execution, "mae_pips", None)
+        if adverse > float(cur_mae or 0.0):
+            execution.mae_pips = round(adverse, 1)
+            changed = True
+        if changed:
+            session.commit()
+    except Exception:
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        changed = False
+    return changed
+
+
 def _validate_sl(direction: str, new_sl: float, live_price: float) -> bool:
     if direction == "LONG":
         return new_sl < live_price
@@ -376,6 +412,12 @@ async def manage_open_position(
     if not execution.entry_price:
         return
 
+    symbol = execution.symbol
+    direction = execution.direction
+    entry = float(execution.entry_price)
+    profit_pips = _profit_pips(symbol, entry, live_price, direction)
+    update_excursion_pips(execution, profit_pips, session)
+
     cfg = effective_trade_mgmt_cfg(strategy_cfg or {})
     if not any((
         cfg["partial_tp_enabled"],
@@ -383,11 +425,6 @@ async def manage_open_position(
         cfg["trailing_enabled"],
     )):
         return
-
-    symbol = execution.symbol
-    direction = execution.direction
-    entry = float(execution.entry_price)
-    profit_pips = _profit_pips(symbol, entry, live_price, direction)
     is_paper = bool(getattr(execution, "is_paper", False))
     asset_class = getattr(execution, "asset_class", "forex") or "forex"
 
@@ -484,7 +521,8 @@ async def manage_open_position(
                     session.commit()
                 await _telegram_trade(
                     execution.user_id,
-                    f"🔒 Breakeven set @ {new_sl:.5g}",
+                    f"🔒 Breakeven set @ {new_sl:.5g} — reached +{profit_pips:.1f} "
+                    f"pips (trigger {cfg['breakeven_trigger_pips']:.0f})",
                     asset_class=asset_class,
                     msg_type="breakeven",
                     symbol=symbol,
@@ -517,6 +555,17 @@ async def manage_open_position(
                         execution.current_sl = candidate
                         execution.sl_price = candidate
                         session.commit()
+                        _locked = _locked_pips(symbol, entry, candidate, direction)
+                        _peak = float(getattr(execution, "mfe_pips", None) or profit_pips)
+                        await _telegram_trade(
+                            execution.user_id,
+                            f"📈 Trailing SL → {candidate:.5g} "
+                            f"(+{_locked:.1f} pips locked, peak +{_peak:.1f} pips)",
+                            asset_class=asset_class,
+                            msg_type="breakeven",
+                            symbol=symbol,
+                            exec_id=int(getattr(execution, "id", 0) or 0),
+                        )
         else:
             candidate = live_price + dist
             if cur_sl is None or candidate < cur_sl - step:
@@ -527,6 +576,17 @@ async def manage_open_position(
                         execution.current_sl = candidate
                         execution.sl_price = candidate
                         session.commit()
+                        _locked = _locked_pips(symbol, entry, candidate, direction)
+                        _peak = float(getattr(execution, "mfe_pips", None) or profit_pips)
+                        await _telegram_trade(
+                            execution.user_id,
+                            f"📈 Trailing SL → {candidate:.5g} "
+                            f"(+{_locked:.1f} pips locked, peak +{_peak:.1f} pips)",
+                            asset_class=asset_class,
+                            msg_type="breakeven",
+                            symbol=symbol,
+                            exec_id=int(getattr(execution, "id", 0) or 0),
+                        )
 
 
 async def _apply_sl_amend(

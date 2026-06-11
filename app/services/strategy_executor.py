@@ -1838,6 +1838,8 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
                 conditions=ex.conditions_met,
                 is_paper=True,
                 tp1_blend_line=_tp1_blend_pips_line(ex, exit_price),
+                mfe_pips=getattr(ex, "mfe_pips", None),
+                mae_pips=getattr(ex, "mae_pips", None),
             )
         # Mobile push — trade close (paper)
         from app.services.expo_push import notify_trade_close_bg
@@ -2195,6 +2197,17 @@ def _close_telegram_type(outcome: Optional[str]) -> str:
     return "close"
 
 
+def _fmt_excursion_telemetry_line(
+    mfe_pips: Optional[float] = None,
+    mae_pips: Optional[float] = None,
+) -> str:
+    if mfe_pips is None and mae_pips is None:
+        return ""
+    mfe = float(mfe_pips or 0.0)
+    mae = float(mae_pips or 0.0)
+    return f"📊 Peak +{mfe:.0f} pips · Worst −{mae:.0f} pips"
+
+
 def _fmt_close_card(
     strategy_name: str, symbol: str, direction: str,
     entry: float, exit_price: float, outcome: str,
@@ -2202,6 +2215,8 @@ def _fmt_close_card(
     fired_at: datetime = None, closed_at: datetime = None,
     conditions: list = None, is_paper: bool = False,
     tp1_blend_line: Optional[str] = None,
+    mfe_pips: Optional[float] = None,
+    mae_pips: Optional[float] = None,
 ) -> str:
     entry = _coerce_price(entry)
     exit_price = _coerce_price(exit_price)
@@ -2307,6 +2322,9 @@ def _fmt_close_card(
         f"🏁 Exit   <b>{exit_price:.6g}</b>  <i>({hit_label})</i>",
         f"{pl_emoji} P/L    <b>{pnl_display}</b>",
     ]
+    _excursion = _fmt_excursion_telemetry_line(mfe_pips, mae_pips)
+    if _excursion:
+        lines.append(_excursion)
     if dur:
         lines.append(f"⏱ Time   <b>{dur}</b>")
     price_block = "\n".join(lines)
@@ -2371,6 +2389,8 @@ def _build_close_telegram_safe(
     conditions: list = None,
     is_paper: bool = False,
     tp1_blend_line: Optional[str] = None,
+    mfe_pips: Optional[float] = None,
+    mae_pips: Optional[float] = None,
 ) -> str:
     fields = {
         "execution_id": execution_id,
@@ -2399,6 +2419,8 @@ def _build_close_telegram_safe(
             conditions=conditions,
             is_paper=is_paper,
             tp1_blend_line=tp1_blend_line,
+            mfe_pips=mfe_pips,
+            mae_pips=mae_pips,
         )
     except Exception as exc:
         logger.exception(
@@ -3462,6 +3484,8 @@ async def run_live_position_monitor():
                         closed_at=closed_at,
                         conditions=ex.conditions_met,
                         is_paper=False,
+                        mfe_pips=getattr(ex, "mfe_pips", None),
+                        mae_pips=getattr(ex, "mae_pips", None),
                     )
             # Mobile push — trade close (live)
             from app.services.expo_push import notify_trade_close_bg
@@ -6676,6 +6700,8 @@ async def _close_live_forex_execution_and_notify(
                         conditions=ex.conditions_met,
                         is_paper=False,
                         tp1_blend_line=_blend_line,
+                        mfe_pips=getattr(ex, "mfe_pips", None),
+                        mae_pips=getattr(ex, "mae_pips", None),
                     )
             from app.services.expo_push import notify_trade_close_bg
             dur_mins = int((closed_at - ex.fired_at).total_seconds() / 60) if ex.fired_at else 0
