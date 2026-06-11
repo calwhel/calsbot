@@ -203,6 +203,9 @@ async def _warm_neon_db():
     infinite spinner on the very first login of a session. Frequent `SELECT 1`
     pings (via pool_pre_ping + TCP keepalives) keep SSL sessions alive.
     """
+    from app.deploy_stamp import log_deploy_stamp
+
+    log_deploy_stamp("gunicorn")
     async def _ping():
         try:
             start = time.monotonic()
@@ -229,6 +232,10 @@ async def _warm_neon_db():
             await asyncio.sleep(30)
             await _ping()
     asyncio.create_task(_loop())
+    logger.info(
+        "[neon-keepwarm] cfg: pool_pre_ping=True pool_recycle=180 "
+        "keepalives_idle=30 interval=10 count=5 ping=30s"
+    )
     logger.info("[neon-keepwarm] heartbeat scheduled every 30s")
 
     async def _backfill_pips():

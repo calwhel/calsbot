@@ -39,6 +39,13 @@ async def _executor_process_heartbeat_loop() -> None:
 
 
 async def _run_executor_session() -> None:
+    from app.deploy_stamp import log_deploy_stamp
+    from app.executor_lock import log_executor_lock_keepalive_config
+
+    log_deploy_stamp("executor_runner")
+    # Prove keepalive settings in [executor] logs before advisory-lock acquire.
+    log_executor_lock_keepalive_config()
+
     os.environ.setdefault("FORCE_EXECUTOR", "1")
     os.environ["EXECUTOR_STANDALONE"] = "1"
     if os.environ.get("EXECUTOR_ONLY", "").lower() in ("1", "true", "yes"):

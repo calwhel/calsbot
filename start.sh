@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+_DEPLOY_COMMIT="${RAILWAY_GIT_COMMIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+echo "[railway] deploy commit=${_DEPLOY_COMMIT}"
+
 # ── Dedicated cTrader feed service (separate Railway replica) ────────────────
 # Set CTRADER_FEED_ONLY=1 on a lightweight service that only streams broker
 # ticks into Postgres (market_spot_ticks). Main portal sets CTRADER_REMOTE_FEED=1

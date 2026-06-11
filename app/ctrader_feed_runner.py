@@ -171,7 +171,12 @@ async def _claim_loop() -> None:
 
 
 async def _run_forever() -> None:
+    from app.deploy_stamp import log_deploy_stamp
+    from app.executor_lock import log_executor_lock_keepalive_config
+
     os.environ["CTRADER_FEED_ONLY"] = "1"
+    log_deploy_stamp("ctrader_feed_runner")
+    log_executor_lock_keepalive_config()
     _start_ping_server()
     try:
         from app.database import init_db_minimal
