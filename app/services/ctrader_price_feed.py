@@ -464,12 +464,10 @@ async def _maybe_refresh_access_token(
     if not force and (now - last) < _PROACTIVE_REFRESH_INTERVAL_S:
         try:
             from app.database import SessionLocal
-            from app.models import UserPreference
+            from app.services.ctrader_client import _read_fresh_ctrader_prefs
             db = SessionLocal()
             try:
-                prefs = db.query(UserPreference).filter(
-                    UserPreference.user_id == user_id
-                ).first()
+                prefs = _read_fresh_ctrader_prefs(db, user_id)
                 if prefs and prefs.ctrader_access_token:
                     return prefs.ctrader_access_token.strip()
             finally:
@@ -546,7 +544,9 @@ def _is_live_for_ctid(prefs, ctid: int) -> bool:
         if raw:
             for a in _json.loads(raw):
                 if int(a.get("ctidTraderAccountId", -1)) == int(ctid):
-                    return bool(a.get("isLive", True))
+                    if "isLive" in a:
+                        return bool(a.get("isLive"))
+                    return False
     except Exception:
         pass
     return True
@@ -1214,6 +1214,9 @@ async def get_klines(
                 rows = await _fetch_trendbars(
                     sym_up, timeframe, limit, access_token, ctid, primary_host,
                 )
+        if not rows and is_live is False:
+            # Demo accounts must stay on demo host — never probe the live host.
+            return rows
         if not rows:
             fallback_host = _HOST_DEMO if primary_host == _HOST_LIVE else _HOST_LIVE
             rows = await _fetch_trendbars(

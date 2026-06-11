@@ -149,6 +149,37 @@ TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
 TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
 
+TWITTER_ENABLED = os.getenv("TWITTER_ENABLED", "false").lower() in ("1", "true", "yes")
+_TWITTER_DISABLED_LOGGED = False
+
+
+def _twitter_credentials_configured() -> bool:
+    """True when env OAuth creds or a bearer token are present."""
+    if (os.getenv("TWITTER_BEARER_TOKEN") or "").strip():
+        return True
+    return all(
+        (os.getenv(k) or "").strip()
+        for k in (
+            "TWITTER_CONSUMER_KEY",
+            "TWITTER_CONSUMER_SECRET",
+            "TWITTER_ACCESS_TOKEN",
+            "TWITTER_ACCESS_TOKEN_SECRET",
+        )
+    )
+
+
+def _log_twitter_poster_disabled(reason: str) -> None:
+    global _TWITTER_DISABLED_LOGGED
+    if _TWITTER_DISABLED_LOGGED:
+        return
+    _TWITTER_DISABLED_LOGGED = True
+    logger.info(f"[twitter] auto-poster disabled — {reason}")
+
+
+def twitter_poster_active() -> bool:
+    return TWITTER_ENABLED and _twitter_credentials_configured()
+
+
 # Posting limits - 25 posts per day (20 regular + 4 campaign + 1 buffer)
 MAX_POSTS_PER_DAY = 25
 POSTS_TODAY = 0
@@ -3149,6 +3180,9 @@ async def _discover_daily_trends() -> dict:
             and _DAILY_TRENDS_CACHE["coins"]):
         return {"coins": _DAILY_TRENDS_CACHE["coins"], "topics": _DAILY_TRENDS_CACHE["topics"]}
 
+    if not TWITTER_ENABLED:
+        return {"coins": [], "topics": []}
+
     bearer = os.environ.get("TWITTER_BEARER_TOKEN")
     if not bearer:
         return {"coins": [], "topics": []}
@@ -3158,6 +3192,7 @@ async def _discover_daily_trends() -> dict:
 
     try:
         client = tweepy.Client(bearer_token=bearer, wait_on_rate_limit=False)
+        _trend_auth_failed = False
 
         # ── Search queries focused on low-cap / memecoin viral content ──────
         # We deliberately skip BTC/ETH dominant searches — they always appear
@@ -3237,7 +3272,23 @@ async def _discover_daily_trends() -> dict:
                             if len(topic_data[canonical]["samples"]) < 2:
                                 topic_data[canonical]["samples"].append(text[:150])
 
+            except tweepy.Unauthorized:
+                if not _trend_auth_failed:
+                    _trend_auth_failed = True
+                    logger.info(
+                        "[twitter] trend search unauthorized — skipping trend discovery "
+                        "(check TWITTER_BEARER_TOKEN or set TWITTER_ENABLED=false)"
+                    )
+                break
             except Exception as _se:
+                if "401" in str(_se) and "Unauthorized" in str(_se):
+                    if not _trend_auth_failed:
+                        _trend_auth_failed = True
+                        logger.info(
+                            "[twitter] trend search unauthorized — skipping trend discovery "
+                            "(check TWITTER_BEARER_TOKEN or set TWITTER_ENABLED=false)"
+                        )
+                    break
                 logger.warning(f"Trend search error: {_se}")
                 continue
 
@@ -3563,6 +3614,18 @@ async def run_auto_post_loop_singleton():
     never double-posting. The lock auto-releases on process death, so a survivor
     transparently takes over.
     """
+    if not TWITTER_ENABLED:
+        _log_twitter_poster_disabled("TWITTER_ENABLED=false")
+        while True:
+            await asyncio.sleep(3600)
+        return
+
+    if not _twitter_credentials_configured():
+        _log_twitter_poster_disabled("API credentials not configured")
+        while True:
+            await asyncio.sleep(3600)
+        return
+
     from app.services.telegram_poller_lock import (
         try_acquire_persistent_lock,
         release_poller_lock,

@@ -355,8 +355,6 @@ def _load_cookie_secret() -> str:
     """
     value = (os.getenv("SECRET_KEY") or os.getenv("SESSION_SECRET") or "").strip()
     if value:
-        if not os.getenv("SECRET_KEY") and os.getenv("SESSION_SECRET"):
-            logger.warning("SECRET_KEY missing; using SESSION_SECRET for portal session signing")
         return value
 
     db_seed = (

@@ -172,7 +172,7 @@ def terminate_lock_holders(
 
     terminated = 0
     try:
-        conn = psycopg2.connect(db_url, connect_timeout=10, **NEON_LOCK_CONNECT_KWARGS)
+        conn = psycopg2.connect(db_url, **NEON_LOCK_CONNECT_KWARGS)
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(

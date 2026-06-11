@@ -187,6 +187,10 @@ def _swing_lows(highs: List[float], lows: List[float], left=2, right=2) -> List[
     return idx
 
 
+class StrategyEvalCancelled(Exception):
+    """A parallel condition task was cancelled — skip this strategy cycle."""
+
+
 # ─── Klines cache ──────────────────────────────────────────────────────────────
 
 _KLINE_PERSIST_CACHE: Dict[tuple, tuple] = {}
@@ -205,10 +209,14 @@ async def _get_klines(
         if cache is not None and _ckey in cache:
             return cache[_ckey]
         try:
-            from app.services.tradfi_prices import get_klines as _tradfi_klines
+            from app.services.tradfi_prices import (
+                get_klines as _tradfi_klines,
+                is_metal_kline_synthetic as _metal_synth,
+            )
             _uid = (cache or {}).get("__ctrader_user_id__")
+            _fetch_limit = max(limit, 200)
             kl = await _tradfi_klines(
-                symbol, _asset_class, interval, max(limit, 200),
+                symbol, _asset_class, interval, _fetch_limit,
                 ctrader_user_id=_uid,
             )
         except Exception as _e:
@@ -219,6 +227,8 @@ async def _get_klines(
         sliced = kl[-limit:] if len(kl) > limit else kl
         if cache is not None:
             cache[_ckey] = sliced
+            if _metal_synth(symbol, interval, _fetch_limit):
+                cache["__synthetic_bars__"] = True
         return sliced
 
     key = (symbol, interval, limit)
@@ -4013,9 +4023,29 @@ async def evaluate_strategy_conditions(
             logger.warning(f"Condition eval error {symbol} {ctype}: {e}")
             return False, f"[ERROR] {ctype}: {e}"
 
-    # Evaluate all conditions in parallel — they are independent of each other
-    raw_results = await asyncio.gather(*[_eval_one(c) for c in conds], return_exceptions=True)
+    # gather(return_exceptions=True) does not capture CancelledError (BaseException).
+    async def _safe_eval_one(cond) -> Tuple[bool, str]:
+        try:
+            return await _eval_one(cond)
+        except asyncio.CancelledError:
+            raise StrategyEvalCancelled(symbol)
+
+    try:
+        raw_results = await asyncio.gather(
+            *[_safe_eval_one(c) for c in conds], return_exceptions=True,
+        )
+    except asyncio.CancelledError:
+        logger.info(
+            f"Strategy condition eval cancelled for {symbol} — skipping cycle"
+        )
+        raise StrategyEvalCancelled(symbol)
+
     for r in raw_results:
+        if isinstance(r, StrategyEvalCancelled):
+            logger.info(
+                f"Strategy condition eval cancelled for {symbol} — skipping cycle"
+            )
+            raise r
         if isinstance(r, Exception):
             results.append(False)
             details.append(f"❌ [ERROR] {r}")

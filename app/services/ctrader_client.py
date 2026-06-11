@@ -45,19 +45,29 @@ CTRADER_HOST = CTRADER_HOST_LIVE   # default / backward-compat
 CTRADER_PORT = 5035
 
 
-def _host_for_account(prefs, ctid: int) -> str:
-    """Pick live vs demo host for a ctid by reading isLive from the stored
-    ctrader_accounts JSON on the user's prefs. Defaults to LIVE when metadata
-    is missing (callers fall back to the other host on auth failure)."""
+def _account_is_live(prefs, ctid: int) -> Optional[bool]:
+    """Return True/False when ctid is in stored account metadata, else None."""
     try:
         import json as _json
         raw = getattr(prefs, "ctrader_accounts", None)
         if raw:
             for a in _json.loads(raw):
                 if int(a.get("ctidTraderAccountId", -1)) == int(ctid):
-                    return CTRADER_HOST_LIVE if bool(a.get("isLive", True)) else CTRADER_HOST_DEMO
+                    if "isLive" in a:
+                        return bool(a.get("isLive"))
+                    return False
     except Exception:
         pass
+    return None
+
+
+def _host_for_account(prefs, ctid: int) -> str:
+    """Pick live vs demo host for a ctid — never guess the alternate host."""
+    is_live = _account_is_live(prefs, ctid)
+    if is_live is False:
+        return CTRADER_HOST_DEMO
+    if is_live is True:
+        return CTRADER_HOST_LIVE
     return CTRADER_HOST_LIVE
 
 
@@ -572,6 +582,7 @@ _TOKEN_REFRESH_PG_LOCK_NS = 42_424_244
 # guard is scoped to the EXACT token value, so a re-link (which rotates the token
 # to a new value) clears it automatically without any cross-module coupling.
 _refresh_denied: dict = {}
+_RELINK_ALERT_SENT: dict = {}  # user_id → monotonic
 _REFRESH_DENY_COOLDOWN = 300.0  # seconds
 _REFRESH_TERMINAL_CODES = frozenset({
     "ACCESS_DENIED",
@@ -597,6 +608,41 @@ def clear_ctrader_oauth_denied(user_id: Optional[int] = None) -> None:
         _refresh_denied.clear()
 
 
+def _notify_ctrader_relink_needed(user_id: int, err: str) -> None:
+    """One Telegram alert per user per cooldown — do not spam on every tick."""
+    now = time.monotonic()
+    if now - _RELINK_ALERT_SENT.get(int(user_id), 0.0) < _REFRESH_DENY_COOLDOWN:
+        return
+    _RELINK_ALERT_SENT[int(user_id)] = now
+    try:
+        from app.database import SessionLocal
+        from app.models import User
+        from app.services.strategy_executor import _telegram_int_id
+        from app.services.telegram_dm import send_dm
+
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == int(user_id)).first()
+            tg_id = _telegram_int_id(user) if user else None
+        finally:
+            db.close()
+        if not tg_id:
+            return
+        asyncio.get_event_loop().create_task(
+            send_dm(
+                tg_id,
+                "⚠️ <b>cTrader re-link needed</b>\n\n"
+                "Your live trading session expired and could not be refreshed. "
+                "Open the portal → Settings → cTrader and connect again.\n\n"
+                f"<code>{(err or 'ACCESS_DENIED')[:120]}</code>",
+                msg_type="ctrader_relink",
+                asset_class="forex",
+            )
+        )
+    except Exception:
+        pass
+
+
 def _mark_refresh_denied(user_id: int, refresh_token: str, err: str) -> None:
     _refresh_denied[user_id] = (
         refresh_token,
@@ -609,6 +655,7 @@ def _mark_refresh_denied(user_id: int, refresh_token: str, err: str) -> None:
         err,
         "set" if CTRADER_CLIENT_ID else "MISSING",
     )
+    _notify_ctrader_relink_needed(user_id, err)
 
 
 def audit_ctrader_credentials(user_id: int, prefs=None) -> dict:
@@ -727,6 +774,21 @@ async def proactive_refresh_linked_users() -> dict:
     return stats
 
 
+def _read_fresh_ctrader_prefs(db, user_id: int):
+    """Re-read persisted OAuth tokens from DB (never use stale in-memory copies)."""
+    from app.models import UserPreference
+
+    try:
+        db.expire_all()
+    except Exception:
+        pass
+    return (
+        db.query(UserPreference)
+        .filter(UserPreference.user_id == int(user_id))
+        .first()
+    )
+
+
 async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
     """Refresh and persist a user's cTrader OAuth token.
 
@@ -762,24 +824,27 @@ async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
                 db.rollback()  # drop the empty txn before sleeping + retrying
                 await asyncio.sleep(0.5)
 
-            prefs = (
-                db.query(UserPreference)
-                .filter(UserPreference.user_id == user_id)
-                .first()
-            )
+            prefs = _read_fresh_ctrader_prefs(db, user_id)
             if not prefs or not prefs.ctrader_refresh_token:
                 return None
             if not acquired:
-                # Another worker is mid-refresh — racing it is exactly what bricks
-                # the rotation chain. Reuse the current access token; by now the
-                # peer has very likely persisted a freshly rotated one.
-                return prefs.ctrader_access_token
-            refresh_token = prefs.ctrader_refresh_token
+                # Another worker is mid-refresh — wait for peer, then re-read DB.
+                await asyncio.sleep(0.75)
+                prefs = _read_fresh_ctrader_prefs(db, user_id)
+                return (
+                    (prefs.ctrader_access_token or "").strip() if prefs else None
+                ) or None
+            refresh_token = (prefs.ctrader_refresh_token or "").strip()
             denied = _refresh_denied.get(user_id)
             if denied and denied[0] == refresh_token and time.monotonic() < denied[1]:
                 # This exact token was already rejected — don't re-hit OAuth until
                 # the user re-links (rotating the token clears this guard).
                 return None
+            # Immediately before OAuth: latest persisted refresh_token only.
+            prefs = _read_fresh_ctrader_prefs(db, user_id)
+            if not prefs or not prefs.ctrader_refresh_token:
+                return None
+            refresh_token = (prefs.ctrader_refresh_token or "").strip()
             try:
                 res = await refresh_access_token(refresh_token)
             except Exception as e:
@@ -809,6 +874,7 @@ async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
             if new_rt:
                 prefs.ctrader_refresh_token = new_rt  # MUST persist rotated token
             _refresh_denied.pop(user_id, None)
+            _RELINK_ALERT_SENT.pop(int(user_id), None)
             for persist_try in (1, 2, 3):
                 try:
                     db.commit()
@@ -818,6 +884,10 @@ async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
                     try:
                         from app.services.ctrader_price_feed import invalidate_stream_creds
                         invalidate_stream_creds(user_id)
+                    except Exception:
+                        pass
+                    try:
+                        db.expire_all()
                     except Exception:
                         pass
                     return new_at
@@ -1022,6 +1092,8 @@ async def place_market_order_resilient(
             at = new_at
             logger.info(f"[cTrader] retrying order for user {user_id} after token refresh")
             result = await _place_on(host)
+        elif is_refresh_denied(user_id):
+            _notify_ctrader_relink_needed(user_id, "account auth failed")
 
     return result
 
