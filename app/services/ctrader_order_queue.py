@@ -111,11 +111,18 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
             StrategyPortalSettings.user_id == job.user_id
         ).first()
 
-        if not order_id:
+        if not order_id or not (actual_fill and actual_fill > 0):
             execution.is_paper = True
             _err_txt = (order_err or "no order id")[:180]
+            if order_id and not (actual_fill and actual_fill > 0):
+                _err_txt = (_err_txt + " (no broker fill confirmation)")[:180]
             execution.notes = f"Live→Paper fallback (queued order): {_err_txt}"
             db.commit()
+            try:
+                from app.services.strategy_executor import _release_tg_open_notify
+                _release_tg_open_notify(db, execution.id)
+            except Exception:
+                pass
             logger.warning(
                 "[ctrader-queue] exec#%s %s %s — broker order failed: %s",
                 job.execution_id,
@@ -185,7 +192,11 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
             f"{job.symbol} {job.direction} @ {_fill_px}"
         )
 
-        if user and strategy and (not portal_settings or portal_settings.dm_live_alerts):
+        if (
+            user and strategy
+            and (not portal_settings or portal_settings.dm_live_alerts)
+            and actual_fill and actual_fill > 0
+        ):
             try:
                 from app.services.strategy_executor import (
                     _claim_tg_open_notify,
@@ -195,7 +206,7 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
                     return
                 tg_id = _telegram_int_id(user)
                 if tg_id and execution.entry_price and execution.tp_price and execution.sl_price:
-                    entry = actual_fill if actual_fill and actual_fill > 0 else execution.entry_price
+                    entry = float(actual_fill)
                     tp_pct = abs(execution.tp_price - entry) / entry * 100 if entry else 0
                     sl_pct = abs(execution.sl_price - entry) / entry * 100 if entry else 0
                     tp2_pct = None

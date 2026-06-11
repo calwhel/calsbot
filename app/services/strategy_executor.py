@@ -1923,6 +1923,14 @@ def _ensure_open_notify_for_execution(
 
     if _TG_OPEN_SENT in (ex.notes or ""):
         return
+    # Live cTrader orders must not backfill until the broker confirms a fill.
+    if (
+        not ex.is_paper
+        and (ex.asset_class or "") in ("forex", "index")
+        and "order_queued" in (ex.notes or "")
+        and not ex.ctrader_order_id
+    ):
+        return
     if not ex.entry_price or not ex.tp_price or not ex.sl_price:
         return
     tg_id = _telegram_int_id(user)
@@ -4928,35 +4936,9 @@ async def evaluate_and_fire(
                 _portal_live = db.query(StrategyPortalSettings).filter(
                     StrategyPortalSettings.user_id == user.id
                 ).first()
-                # Send the full open card at signal time — fill-time notify is a
-                # no-op when tg_open_sent is already set (prevents duplicates).
-                if tg_id_live and _should_dm_trade_alerts(_portal_live, False) \
-                        and _claim_tg_open_notify(db, execution.id):
-                    _schedule_tg_open_notify(
-                        execution.id,
-                        tg_id_live,
-                        _fmt_open_card(
-                            strategy_name=strategy.name or "Your Strategy",
-                            symbol=symbol,
-                            direction=direction,
-                            entry=current_price,
-                            tp_price=tp_price,
-                            tp_pct=tp_pct,
-                            tp2_price=tp2_price,
-                            tp2_pct=float(tp2_pct) if tp2_pct else None,
-                            sl_price=sl_price,
-                            sl_pct=sl_pct,
-                            leverage=leverage,
-                            conditions=details,
-                            is_paper=False,
-                            asset_class=asset_class,
-                        ),
-                        asset_class=asset_class,
-                        symbol=symbol,
-                    )
-                elif tg_id_live and _os_env.environ.get("TG_QUEUED_OPEN_NOTICE", "").lower() in (
-                    "1", "true", "yes",
-                ):
+                # Attempt only — full LIVE card is sent after broker fill confirmation
+                # in ctrader_order_queue (never claim tg_open_sent here).
+                if tg_id_live and _should_dm_trade_alerts(_portal_live, False):
                     asyncio.create_task(_tg_send(
                         tg_id_live,
                         _fmt_queued_open_notice(
@@ -4965,6 +4947,7 @@ async def evaluate_and_fire(
                             direction,
                             leverage=leverage,
                         ),
+                        asset_class=asset_class,
                     ))
                 try:
                     from app.services.expo_push import notify_user_bg
@@ -5452,9 +5435,7 @@ async def _propagate_to_subscribers(
                 if order_result and order_result.get("queued"):
                     sub_exec.notes = ((sub_exec.notes or "") + " | order_queued").strip(" |")
                     _sub_db.commit()
-                    if tg_id and _os_env.environ.get("TG_QUEUED_OPEN_NOTICE", "").lower() in (
-                        "1", "true", "yes",
-                    ):
+                    if tg_id:
                         asyncio.create_task(_tg_send(
                             tg_id,
                             _fmt_queued_open_notice(
@@ -5463,6 +5444,7 @@ async def _propagate_to_subscribers(
                                 direction,
                                 leverage=leverage,
                             ),
+                            asset_class=_sub_asset_class,
                         ))
                     logger.info(
                         f"[Propagate] Strategy {sub_strategy.id} (user {sub_user.username}) "
