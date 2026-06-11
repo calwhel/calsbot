@@ -24,6 +24,7 @@ __all__ = [
     "FOREX_EXECUTOR_LOCK_ID",
     "get_executor_lock_id",
     "get_executor_application_name",
+    "build_lock_connection",
     "create_lock_connection",
     "try_acquire_lock",
     "close_lock_connection",
@@ -31,6 +32,7 @@ __all__ = [
     "reclaim_executor_lock",
     "is_standalone_executor",
     "NEON_LOCK_CONNECT_KWARGS",
+    "KEEPALIVE_PING_SECS",
     "LOCK_RECONNECT_ATTEMPTS",
     "LOCK_RECONNECT_DELAY_SECS",
     "LOCK_ZOMBIE_TERMINATE_AFTER",
@@ -38,7 +40,7 @@ __all__ = [
 
 
 def get_executor_lock_id() -> int:
-    """Advisory lock id for this process (portal combined vs forex-only replica)."""
+    """Advisory lock id for this process (portal combined crypto+forex worker)."""
     if os.getenv("EXECUTOR_ONLY", "").lower() in ("1", "true", "yes"):
         return FOREX_EXECUTOR_LOCK_ID
     return EXECUTOR_LOCK_ID
@@ -105,12 +107,14 @@ def log_executor_lock_keepalive_config() -> None:
     )
 
 
-def is_standalone_executor() -> bool:
-    return os.getenv("EXECUTOR_STANDALONE", "").lower() in ("1", "true", "yes")
+def build_lock_connection(application_name: Optional[str] = None):
+    """Open a dedicated psycopg2 session for advisory locks.
 
-
-def create_lock_connection(application_name: Optional[str] = None):
-    """Dedicated psycopg2 session for pg_advisory_lock (must stay open)."""
+    DO NOT MODIFY — TCP keepalives prevent Neon SSL drops; see incident notes.
+    Single source of truth for all advisory-lock DB connections (executor,
+    terminate_lock_holders, feed lock, pollers). pool_pre_ping / pool_recycle
+    apply to SQLAlchemy pools in database.py; this path uses raw psycopg2.
+    """
     import psycopg2
 
     log_executor_lock_keepalive_config()
@@ -118,6 +122,15 @@ def create_lock_connection(application_name: Optional[str] = None):
     if application_name:
         kwargs["application_name"] = application_name
     return psycopg2.connect(get_lock_database_url(), **kwargs)
+
+
+def is_standalone_executor() -> bool:
+    return os.getenv("EXECUTOR_STANDALONE", "").lower() in ("1", "true", "yes")
+
+
+def create_lock_connection(application_name: Optional[str] = None):
+    """Dedicated psycopg2 session for pg_advisory_lock (must stay open)."""
+    return build_lock_connection(application_name)
 
 
 def try_acquire_lock(conn, lock_id: Optional[int] = None) -> bool:
@@ -165,14 +178,13 @@ def terminate_lock_holders(
     log_prefix: str = "[advisory-lock]",
 ) -> int:
     """Terminate stale holders of *lock_id* only when app_name exactly matches *owner_app*."""
-    import psycopg2
     db_url = get_lock_database_url()
     if not db_url:
         return 0
 
     terminated = 0
     try:
-        conn = psycopg2.connect(db_url, **NEON_LOCK_CONNECT_KWARGS)
+        conn = build_lock_connection(owner_app)
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(

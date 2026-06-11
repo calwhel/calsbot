@@ -1,0 +1,40 @@
+"""cTrader OAuth single-flight refresh — deploy-survival guards."""
+import inspect
+import unittest
+
+
+class TestCtraderTokenRefresh(unittest.TestCase):
+    def test_refresh_lock_id_in_lock_ids(self):
+        from app.lock_ids import CTRADER_TOKEN_REFRESH_LOCK_NS
+
+        self.assertEqual(CTRADER_TOKEN_REFRESH_LOCK_NS, 708_110_021)
+
+    def test_startup_log_helpers(self):
+        from app.services.ctrader_client import (
+            _log_ctrader_token_startup,
+            refresh_user_ctrader_token,
+        )
+
+        self.assertTrue(callable(_log_ctrader_token_startup))
+        src = inspect.getsource(refresh_user_ctrader_token)
+        self.assertIn("async with _token_refresh_lock", src)
+        lock_src = inspect.getsource(
+            __import__(
+                "app.services.ctrader_client",
+                fromlist=["_try_acquire_token_refresh_lock"],
+            )._try_acquire_token_refresh_lock
+        )
+        self.assertIn("pg_try_advisory_xact_lock", lock_src)
+        self.assertIn("_TOKEN_REFRESH_PG_LOCK_NS", lock_src)
+
+    def test_feed_singleton_guard(self):
+        from app.services import ctrader_price_feed as feed
+
+        src = inspect.getsource(feed.launch_ctrader_feed)
+        self.assertIn("_feed_starting", src)
+        self.assertIn("_feed_launch_lock", src)
+        self.assertIn("skip duplicate", src)
+
+
+if __name__ == "__main__":
+    unittest.main()

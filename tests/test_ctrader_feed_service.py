@@ -19,6 +19,9 @@ class TestCtraderFeedService(unittest.TestCase):
     def setUp(self):
         feed._feed_live = False
         feed._stream_creds = None
+        feed._feed_task = None
+        feed._feed_starting = False
+        feed._feed_singleton_uid = None
         feed._spot_cache.clear()
         feed._auth_backoff_until = 0.0
         feed._last_auth_error = None
@@ -56,10 +59,14 @@ class TestCtraderFeedService(unittest.TestCase):
             {"CTRADER_REMOTE_FEED": "1", "CTRADER_CLIENT_ID": "x"},
             clear=False,
         ):
-            with patch.object(feed, "_get_wake_event", return_value=MagicMock()):
-                ok = feed.launch_ctrader_feed()
-                self.assertFalse(ok)
-                self.assertIsNone(feed._feed_task)
+            with patch(
+                "app.ctrader_feed_lock._remote_ctrader_ticks_fresh",
+                return_value=True,
+            ):
+                with patch.object(feed, "_get_wake_event", return_value=MagicMock()):
+                    ok = feed.launch_ctrader_feed()
+                    self.assertFalse(ok)
+                    self.assertIsNone(feed._feed_task)
 
     def test_launch_schedules_task_when_no_linked_account(self):
         feed._feed_task = None

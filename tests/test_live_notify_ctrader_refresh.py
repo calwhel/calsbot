@@ -27,12 +27,15 @@ class TestLiveNotifyGating(unittest.TestCase):
 
 
 class TestCtraderRefreshHardening(unittest.TestCase):
-    def test_refresh_re_reads_prefs_before_oauth(self):
+    def test_refresh_single_flight_db_first_never_wipe(self):
         from app.services import ctrader_client as cc
 
         src = inspect.getsource(cc.refresh_user_ctrader_token)
         self.assertIn("_read_fresh_ctrader_prefs", src)
-        self.assertIn("Immediately before OAuth", src)
+        self.assertIn("_try_acquire_token_refresh_lock", src)
+        self.assertIn("_REFRESH_FAILURE_ROUNDS", src)
+        self.assertIn("_REFRESH_RETRY_WAIT_S", src)
+        self.assertIn("_log_ctrader_token_startup", src)
 
     def test_demo_host_pinned_when_is_live_false(self):
         from app.services.ctrader_client import (
