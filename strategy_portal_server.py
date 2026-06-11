@@ -1720,19 +1720,18 @@ def _try_acquire_executor_lock():
     """
     try:
         from app.executor_lock import (
+            build_lock_connection,
             close_lock_connection,
-            create_lock_connection,
+            get_executor_application_name,
             get_executor_lock_id,
             try_acquire_lock,
         )
 
-        from app.executor_lock import get_executor_application_name
-
-        conn = create_lock_connection(get_executor_application_name())
+        conn = build_lock_connection(get_executor_application_name())
         if try_acquire_lock(conn, get_executor_lock_id()):
             logger.info(
                 "[executor_lock] advisory lock session open "
-                "(psycopg2 direct, keepalive ping=%ss)",
+                "(build_lock_connection, keepalive ping=%ss)",
                 30,
             )
             return conn
@@ -1741,6 +1740,37 @@ def _try_acquire_executor_lock():
     except Exception as e:
         logger.warning(f"Advisory lock attempt failed: {e}")
         return None
+
+
+def _portal_lock_reconnect(
+    old_conn,
+    *,
+    lock_id: int,
+    application_name: str,
+    max_attempts: int = 15,
+    retry_delay: float = 5.0,
+):
+    """Re-claim advisory lock on a fresh build_lock_connection() session."""
+    import time as _t
+    from app.executor_lock import (
+        build_lock_connection,
+        close_lock_connection,
+        try_acquire_lock,
+    )
+
+    close_lock_connection(old_conn)
+    for attempt in range(1, max_attempts + 1):
+        conn = None
+        try:
+            conn = build_lock_connection(application_name)
+            if try_acquire_lock(conn, lock_id):
+                return conn
+            close_lock_connection(conn)
+        except Exception:
+            close_lock_connection(conn)
+        if attempt < max_attempts and retry_delay > 0:
+            _t.sleep(retry_delay)
+    return None
 
 # Tracks whether THIS uvicorn worker is currently running the executor.
 # Used by the claim loop to avoid double-starting.
@@ -1754,7 +1784,15 @@ _executor_tasks_started = False
 _initial_executor_reclaim_done = False
 
 
-def _advisory_lock_keepalive_thread(conn_holder, stop_event, lost_event, *, lock_path: str = "executor"):
+def _advisory_lock_keepalive_thread(
+    conn_holder,
+    stop_event,
+    lost_event,
+    *,
+    lock_path: str = "executor",
+    lock_id: int,
+    application_name: str,
+):
     """Ping the advisory-lock connection on a fixed cadence from a DEDICATED
     THREAD — independent of the asyncio event loop, which the executor's scan
     cycles can block for tens of seconds at a time. Keeping the connection's
@@ -1765,9 +1803,29 @@ def _advisory_lock_keepalive_thread(conn_holder, stop_event, lost_event, *, lock
     without tearing down scan loops. Only sets `lost_event` when reconnect is
     exhausted so the async side can re-enter the claim loop."""
     import time as _t
-    from app.executor_lock import log_executor_lock_keepalive_config, reconnect_lock_connection
+    from app.executor_lock import build_lock_connection, try_acquire_lock, close_lock_connection
 
-    log_executor_lock_keepalive_config(f"strategy_portal_server:{lock_path}")
+    logger.info("[portal-lock] keepalive cfg applied (idle=30 interval=10 count=5)")
+
+    # Hold the lock only on build_lock_connection() sessions (TCP keepalives on).
+    seed = conn_holder.get("conn")
+    migrated = _portal_lock_reconnect(
+        seed,
+        lock_id=lock_id,
+        application_name=application_name,
+        max_attempts=5,
+        retry_delay=0.5,
+    )
+    if migrated:
+        conn_holder["conn"] = migrated
+    elif seed is None or getattr(seed, "closed", 0):
+        fresh = build_lock_connection(application_name)
+        if try_acquire_lock(fresh, lock_id):
+            conn_holder["conn"] = fresh
+        else:
+            close_lock_connection(fresh)
+            lost_event.set()
+            return
 
     while not stop_event.is_set():
         # Sleep in 1s steps so shutdown is prompt.
@@ -1781,9 +1839,15 @@ def _advisory_lock_keepalive_thread(conn_holder, stop_event, lost_event, *, lock
             cur.execute("SELECT 1")
             cur.close()
         except Exception as e:
-            # One silent reconnect on the same tick — avoids a full re-claim loop
+            # One fast reconnect on the same tick — avoids a full re-claim loop
             # for a single transient Neon SSL close.
-            new_conn = reconnect_lock_connection(conn, max_attempts=1, silent=True)
+            new_conn = _portal_lock_reconnect(
+                conn,
+                lock_id=lock_id,
+                application_name=application_name,
+                max_attempts=1,
+                retry_delay=0,
+            )
             if new_conn:
                 conn_holder["conn"] = new_conn
                 logger.debug(
@@ -1793,7 +1857,11 @@ def _advisory_lock_keepalive_thread(conn_holder, stop_event, lost_event, *, lock
             logger.warning(
                 f"Advisory lock keepalive failed: {e} — re-claiming on fresh session"
             )
-            new_conn = reconnect_lock_connection(conn)
+            new_conn = _portal_lock_reconnect(
+                conn,
+                lock_id=lock_id,
+                application_name=application_name,
+            )
             if new_conn:
                 conn_holder["conn"] = new_conn
                 logger.info(
@@ -1808,7 +1876,13 @@ def _advisory_lock_keepalive_thread(conn_holder, stop_event, lost_event, *, lock
             return
 
 
-async def _maintain_advisory_lock(conn, *, lock_path: str = "executor"):
+async def _maintain_advisory_lock(
+    conn,
+    *,
+    lock_path: str = "executor",
+    lock_id: int | None = None,
+    application_name: str | None = None,
+):
     """
     Keep the psycopg2 advisory-lock connection alive via a dedicated daemon
     thread (NOT the event loop — the executor blocks it for 30s+ during scans,
@@ -1816,14 +1890,22 @@ async def _maintain_advisory_lock(conn, *, lock_path: str = "executor"):
     falsely reclaimed the lock and thrashed the executor). Returns when the
     connection dies and in-thread reconnect failed (signal to claim loop).
     """
+    from app.executor_lock import get_executor_application_name, get_executor_lock_id
+
     import threading
     stop_event = threading.Event()
     lost_event = threading.Event()
     conn_holder = {"conn": conn}
+    _lock_id = lock_id if lock_id is not None else get_executor_lock_id()
+    _app = application_name or get_executor_application_name()
     t = threading.Thread(
         target=_advisory_lock_keepalive_thread,
         args=(conn_holder, stop_event, lost_event),
-        kwargs={"lock_path": lock_path},
+        kwargs={
+            "lock_path": lock_path,
+            "lock_id": _lock_id,
+            "application_name": _app,
+        },
         daemon=True,
     )
     t.start()
@@ -2339,12 +2421,12 @@ def _try_acquire_aigen_lock():
     """Same shape as _try_acquire_executor_lock but for the AI generator."""
     try:
         from app.executor_lock import (
+            build_lock_connection,
             close_lock_connection,
-            create_lock_connection,
             try_acquire_lock,
         )
 
-        conn = create_lock_connection("th-aigen")
+        conn = build_lock_connection("th-aigen")
         if try_acquire_lock(conn, _AIGEN_LOCK_ID):
             logger.info(
                 "[strategy_portal_server:aigen] advisory lock session open "
@@ -2361,7 +2443,12 @@ def _try_acquire_aigen_lock():
 
 async def _aigen_keepalive_then_reclaim(conn):
     global _aigen_running_in_this_worker
-    await _maintain_advisory_lock(conn, lock_path="aigen")
+    await _maintain_advisory_lock(
+        conn,
+        lock_path="aigen",
+        lock_id=_AIGEN_LOCK_ID,
+        application_name="th-aigen",
+    )
     _aigen_running_in_this_worker = False
     logger.warning("[AIGen] advisory lock connection lost — re-entering claim loop")
     asyncio.create_task(_aigen_claim_loop(first_attempt_delay=5))
