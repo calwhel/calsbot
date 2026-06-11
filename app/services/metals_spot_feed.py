@@ -24,7 +24,7 @@ _POLL_LOCK_ID = 708_110_006
 # Binance spot returns HTTP 451 on Railway US — Coinbase/Kraken only.
 _METALS: Dict[str, List[Tuple[str, str]]] = {
     "XAUUSD": [
-        ("coinbase", "XAU-USD"),
+        ("coinbase", "PAXG-USD"),
         ("kraken", "PAXGUSD"),
     ],
     "XAGUSD": [
@@ -140,7 +140,7 @@ _FETCHERS = {
     "kraken": _fetch_kraken,
 }
 
-_COINBASE_PAIR = {"XAUUSDT": "XAU-USD", "XAGUSDT": "XAG-USD"}
+_COINBASE_PAIR = {"XAUUSDT": "PAXG-USD", "XAGUSDT": "XAG-USD"}
 
 
 async def _fetch_source(source: str, key: str) -> Optional[Tuple[float, str]]:

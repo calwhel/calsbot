@@ -1,5 +1,6 @@
 """Source-aware metal kline/live drift limits."""
 import unittest
+import unittest.mock
 from unittest.mock import AsyncMock, patch
 
 from app.services import tradfi_prices as tp
@@ -7,17 +8,20 @@ from app.services.strategy_executor import _check_time_filter
 
 
 class TestMetalKlineDrift(unittest.TestCase):
-    def test_spot_source_uses_looser_cap(self):
-        self.assertEqual(tp.metal_kline_drift_limit("kraken"), tp.METAL_SPOT_KLINE_MAX_DRIFT_PCT)
-        self.assertEqual(tp.metal_kline_drift_limit("coinbase"), tp.METAL_SPOT_KLINE_MAX_DRIFT_PCT)
+    def test_paxg_source_uses_widest_cap(self):
+        self.assertEqual(tp.metal_kline_drift_limit("kraken"), tp.METAL_PAXG_KLINE_MAX_DRIFT_PCT)
+        self.assertEqual(tp.metal_kline_drift_limit("coinbase"), tp.METAL_PAXG_KLINE_MAX_DRIFT_PCT)
+
+    def test_ctrader_source_uses_spot_cap(self):
+        self.assertEqual(tp.metal_kline_drift_limit("ctrader"), tp.METAL_SPOT_KLINE_MAX_DRIFT_PCT)
 
     def test_unknown_source_uses_strict_cap(self):
         self.assertEqual(tp.metal_kline_drift_limit(None), tp.METAL_KLINE_LIVE_MAX_DRIFT_PCT)
         self.assertEqual(tp.metal_kline_drift_limit("yahoo"), tp.METAL_KLINE_LIVE_MAX_DRIFT_PCT)
 
-    def test_kraken_paxg_drift_within_spot_cap(self):
-        """PAXG vs XAUUSD ~0.29% must pass the spot-aligned threshold."""
-        self.assertGreaterEqual(tp.METAL_SPOT_KLINE_MAX_DRIFT_PCT, 0.29)
+    def test_kraken_paxg_drift_within_paxg_cap(self):
+        """Closed-bar vs PAXG live ~0.88% must pass the PAXG proxy threshold."""
+        self.assertGreaterEqual(tp.METAL_PAXG_KLINE_MAX_DRIFT_PCT, 0.88)
 
     def test_source_cached_after_fetch(self):
         tp._METAL_KLINE_SOURCE_CACHE.clear()
@@ -43,6 +47,24 @@ class TestKillzoneSessionFilter(unittest.TestCase):
             mock_dt.utcnow.return_value = __import__("datetime").datetime(2026, 6, 8, 13, 0)
             ok = _check_time_filter({"session": {"sessions": ["any_kz"]}})
         self.assertTrue(ok)
+
+
+class TestMetalLiveForSource(unittest.IsolatedAsyncioTestCase):
+    async def test_coinbase_live_uses_paxg_product(self):
+        mock_resp = unittest.mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"data": {"amount": "2650.5"}}
+        mock_get = AsyncMock(return_value=mock_resp)
+        mock_inst = unittest.mock.MagicMock()
+        mock_inst.get = mock_get
+        mock_ctx = unittest.mock.MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_inst)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch("httpx.AsyncClient", return_value=mock_ctx):
+            hit = await tp.get_metal_live_for_source("XAUUSD", "coinbase")
+        self.assertEqual(hit, (2650.5, "coinbase"))
+        call_url = mock_get.call_args[0][0]
+        self.assertIn("PAXG-USD", call_url)
 
 
 class TestMetalLiveFetchSource(unittest.IsolatedAsyncioTestCase):

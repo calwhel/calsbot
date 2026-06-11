@@ -39,11 +39,15 @@ class TestCtraderFeedService(unittest.TestCase):
             with patch.object(feed, "_shared_ctrader_ticks_fresh", return_value=True):
                 self.assertTrue(feed.is_live())
 
-    def test_broker_session_ready_false_on_remote_executor(self):
-        """Executor must not open trendbar sockets when feed runs elsewhere."""
+    def test_broker_session_ready_true_on_remote_executor_with_ticks(self):
+        """Remote-feed executor may fetch trendbars when Postgres ticks are fresh."""
         with patch.dict(os.environ, {"CTRADER_REMOTE_FEED": "1"}, clear=False):
             with patch.object(feed, "_shared_ctrader_ticks_fresh", return_value=True):
-                self.assertFalse(feed.broker_session_ready("XAUUSD"))
+                self.assertTrue(feed.broker_session_ready("XAUUSD"))
+
+    def test_broker_session_ready_false_when_local_feed_live(self):
+        feed._feed_live = True
+        self.assertFalse(feed.broker_session_ready("XAUUSD"))
 
     def test_start_skipped_when_remote_feed(self):
         feed._feed_task = None

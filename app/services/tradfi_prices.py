@@ -166,6 +166,11 @@ METAL_KLINE_LIVE_MAX_DRIFT_PCT = float(
 METAL_SPOT_KLINE_MAX_DRIFT_PCT = float(
     os.environ.get("METAL_SPOT_KLINE_MAX_DRIFT_PCT", "0.5")
 )
+# PAXG proxies (Coinbase/Kraken klines) vs live tick — closed H1 bar can diverge ~1%.
+METAL_PAXG_KLINE_MAX_DRIFT_PCT = float(
+    os.environ.get("METAL_PAXG_KLINE_MAX_DRIFT_PCT", "1.0")
+)
+_PAXG_KLINE_SOURCES = frozenset({"coinbase", "kraken"})
 _SPOT_ALIGNED_KLINE_SOURCES = frozenset({
     "binance", "coinbase", "ctrader-user", "ctrader", "fmp", "kraken", "synthetic",
 })
@@ -211,7 +216,10 @@ def is_metal_symbol(symbol: str) -> bool:
 
 def metal_kline_drift_limit(source: Optional[str] = None) -> float:
     """Source-aware drift cap — spot proxies (PAXG) need more headroom than GC=F."""
-    if source and str(source).lower() in _SPOT_ALIGNED_KLINE_SOURCES:
+    src = str(source or "").lower()
+    if src in _PAXG_KLINE_SOURCES:
+        return METAL_PAXG_KLINE_MAX_DRIFT_PCT
+    if src in _SPOT_ALIGNED_KLINE_SOURCES:
         return METAL_SPOT_KLINE_MAX_DRIFT_PCT
     return METAL_KLINE_LIVE_MAX_DRIFT_PCT
 
@@ -846,15 +854,21 @@ async def fetch_metal_live_candles(
 
     async with _metal_live_fetch_sem():
         broker_ready = False
+        ct_spot_ready = False
         try:
-            from app.services.ctrader_price_feed import broker_session_ready as _ct_ready
+            from app.services.ctrader_price_feed import (
+                broker_session_ready as _ct_ready,
+                ctrader_spot_ready as _ct_spot,
+                is_live as _ct_live,
+            )
             broker_ready = bool(_ct_ready(sym))
+            ct_spot_ready = bool(_ct_spot(sym) or _ct_live())
         except Exception:
             pass
 
-        # cTrader first when broker session is up
+        # cTrader first when broker session is up or spot ticks are streaming
         ctrader_tried = False
-        if broker_ready:
+        if broker_ready or ct_spot_ready:
             ctrader_tried = True
             ct_diag = MetalProviderDiagnostic(
                 provider="ctrader-user" if user_id else "ctrader",
@@ -876,8 +890,8 @@ async def fetch_metal_live_candles(
             if ct_rows and (len(ct_rows) >= min_bars or len(ct_rows) >= 15):
                 label = ct_diag.provider
                 logger.info(
-                    f"[tradfi] metal-live best={label} {sym} {timeframe} "
-                    f"→ {len(ct_rows)} bars (cTrader broker session)"
+                    f"[prices] {sym} kline_source=ctrader {timeframe} "
+                    f"→ {len(ct_rows)} bars (broker_session={broker_ready})"
                 )
                 out = ct_rows[-limit:] if len(ct_rows) > limit else ct_rows
                 _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
@@ -926,7 +940,7 @@ async def fetch_metal_live_candles(
                     label, datetime.utcnow(),
                 )
                 logger.info(
-                    f"[tradfi] metal-live best={label} {sym} {timeframe} → {len(out)} bars"
+                    f"[prices] {sym} kline_source={label} {timeframe} → {len(out)} bars"
                 )
                 return out
             logger.info(
@@ -1209,6 +1223,95 @@ def _yf_download_blocking(ticker: str, interval: str, period: str):
         prepost=False,
         threads=False,
     )
+
+
+async def get_metal_live_for_source(
+    symbol: str,
+    source: Optional[str],
+    *,
+    user_id: Optional[int] = None,
+) -> Optional[Tuple[float, str]]:
+    """
+    Live tick from the same provider as metal klines (for drift guard).
+    Coinbase klines use PAXG-USD — never compare to XAU-USD spot.
+    """
+    sym = symbol.upper().replace("/", "").replace("-", "")
+    src = (source or "").lower()
+    if src in ("ctrader", "ctrader-user"):
+        try:
+            from app.services.ctrader_price_feed import get_bid_ask, get_price
+            tick = get_bid_ask(sym)
+            if tick:
+                mid = round((tick[0] + tick[1]) / 2.0, 6)
+                if mid > 0:
+                    return mid, "ctrader"
+            px = get_price(sym)
+            if px and px > 0:
+                return float(px), "ctrader"
+        except Exception:
+            pass
+        try:
+            from app.services.realtime_spot import _read_ctrader
+            hit = _read_ctrader(sym, max_age=30.0)
+            if hit:
+                return hit
+        except Exception:
+            pass
+        return None
+    if src == "coinbase":
+        product = _COINBASE_METAL_PRODUCT.get(sym)
+        if product:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=4.0) as client:
+                    r = await client.get(
+                        f"https://api.coinbase.com/v2/prices/{product}/spot"
+                    )
+                if r.status_code == 200:
+                    amount = ((r.json() or {}).get("data") or {}).get("amount")
+                    px = float(amount) if amount else 0.0
+                    if px > 0:
+                        return px, "coinbase"
+            except Exception:
+                pass
+        return None
+    if src == "kraken":
+        pair = _KRAKEN_METAL_MAP.get(sym)
+        if pair:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=4.0) as client:
+                    r = await client.get(
+                        "https://api.kraken.com/0/public/Ticker",
+                        params={"pair": pair},
+                    )
+                if r.status_code == 200:
+                    result = (r.json() or {}).get("result") or {}
+                    for v in result.values():
+                        if not isinstance(v, dict):
+                            continue
+                        c = v.get("c") or []
+                        if c:
+                            px = float(c[0])
+                            if px > 0:
+                                return px, "kraken"
+            except Exception:
+                pass
+        return None
+    if src == "binance":
+        from app.services.binance_feed import binance_disabled, binance_spot_price
+        bn_sym = _METALS_BINANCE_MAP.get(sym)
+        if bn_sym and not binance_disabled():
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    px = await binance_spot_price(client, bn_sym)
+                if px and px > 0:
+                    return float(px), "binance"
+            except Exception:
+                pass
+        return None
+    return None
 
 
 async def get_price_fresh(

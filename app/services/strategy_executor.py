@@ -159,6 +159,10 @@ _RAW_TICKERS_TTL    = 60  # seconds
 _PRICE_TA_CACHE: Dict[str, tuple] = {}  # symbol -> (data_dict, fetched_at)
 _METAL_WARM_LOCK: Optional[asyncio.Lock] = None  # one metal warm at a time / process
 _METAL_WARM_GLOBAL_AT: float = 0.0  # skip repeat warm across FX shards
+_METAL_DRIFT_SKIP_STREAK: Dict[str, int] = {}
+_METAL_DRIFT_SKIP_WARN_CYCLES = int(
+    _os_env.environ.get("METAL_DRIFT_SKIP_WARN_CYCLES", "5")
+)
 # Active strategy rows — refreshed at most once per TTL (configs change rarely).
 _STRATEGY_SNAPSHOT_CACHE: List[dict] = []
 _STRATEGY_SNAPSHOT_AT: float = 0.0
@@ -747,6 +751,7 @@ async def _fetch_price_and_ta(
 
             from app.services.tradfi_prices import (
                 get_metal_kline_source as _metal_kline_src,
+                get_metal_live_for_source as _metal_live_for_src,
                 is_metal_symbol as _is_metal_sym,
                 metal_kline_drift_limit as _metal_drift_limit,
             )
@@ -755,18 +760,37 @@ async def _fetch_price_and_ta(
 
             _is_metal = _is_metal_sym(symbol)
             live_px = None
+            live_source = None
             bid = ask = None
-            try:
-                from app.services.ctrader_price_feed import get_bid_ask as _ba
-                _tick = _ba(symbol.upper())
-                if _tick:
-                    bid, ask = _tick
-                    live_px = round((bid + ask) / 2.0, 6)
-            except Exception:
-                pass
+            kline_close = closes[-1]
+            kline_source = None
             if _is_metal:
+                kline_source = _metal_kline_src(symbol, tf, EXECUTOR_KLINE_BARS)
+                try:
+                    from app.services.ctrader_price_feed import (
+                        ctrader_spot_ready as _ct_spot_ready,
+                        get_bid_ask as _ba,
+                    )
+                    if _ct_spot_ready(symbol.upper()):
+                        _tick = _ba(symbol.upper())
+                        if _tick:
+                            bid, ask = _tick
+                            live_px = round((bid + ask) / 2.0, 6)
+                            live_source = "ctrader"
+                except Exception:
+                    pass
                 if not live_px or live_px <= 0:
-                    live_px = await _tradfi_price_fresh(symbol, asset_class)
+                    _matched = await _metal_live_for_src(
+                        symbol, kline_source, user_id=user_id,
+                    )
+                    if _matched:
+                        live_px, live_source = _matched
+                if not live_px or live_px <= 0:
+                    live_px = await _tradfi_price_fresh(
+                        symbol, asset_class, user_id=user_id,
+                    )
+                    if live_px and live_px > 0:
+                        live_source = kline_source or "spot"
                 if not live_px or live_px <= 0:
                     try:
                         from app.services.metals_spot_feed import (
@@ -776,16 +800,23 @@ async def _fetch_price_and_ta(
                         live_px = _msf_price(symbol.upper())
                         if not live_px or live_px <= 0:
                             live_px = await _msf_fetch(symbol.upper())
+                        if live_px and live_px > 0:
+                            live_source = kline_source or "metals_cache"
                     except Exception:
                         pass
             else:
+                try:
+                    from app.services.ctrader_price_feed import get_bid_ask as _ba
+                    _tick = _ba(symbol.upper())
+                    if _tick:
+                        bid, ask = _tick
+                        live_px = round((bid + ask) / 2.0, 6)
+                except Exception:
+                    pass
                 if not live_px:
                     live_px = await _tradfi_live_price(symbol, asset_class)
 
-            kline_close = closes[-1]
-            kline_source = None
             if _is_metal:
-                kline_source = _metal_kline_src(symbol, tf, EXECUTOR_KLINE_BARS)
                 _spot_sources = frozenset({
                     "coinbase", "ctrader", "ctrader-user", "fmp", "kraken",
                     "yahoo_gc", "synthetic",
@@ -817,14 +848,48 @@ async def _fetch_price_and_ta(
                         else 0.0
                     )
                     _max_drift = _metal_drift_limit(kline_source)
-                    if _drift_pct > _max_drift:
-                        logger.warning(
-                            f"[executor] {symbol.upper()}: kline/live drift "
-                            f"{_drift_pct:.2f}% (kline={kline_close:.2f} live={live_px:.2f} "
-                            f"src={kline_source or 'unknown'} max={_max_drift:.2f}%) "
-                            f"— skip eval"
+                    _sym_u = symbol.upper()
+                    _ct_live_proxy_klines = (
+                        live_source == "ctrader"
+                        and kline_source not in ("ctrader", "ctrader-user")
+                    )
+                    if _ct_live_proxy_klines:
+                        _METAL_DRIFT_SKIP_STREAK[_sym_u] = 0
+                        logger.info(
+                            f"[prices] {_sym_u} priced_by=ctrader "
+                            f"(live cTrader, klines from {kline_source or 'fallback'} "
+                            f"for TA only — drift guard skipped)"
                         )
-                        return None
+                    elif _drift_pct > _max_drift:
+                        _streak = _METAL_DRIFT_SKIP_STREAK.get(_sym_u, 0) + 1
+                        _METAL_DRIFT_SKIP_STREAK[_sym_u] = _streak
+                        if _streak >= _METAL_DRIFT_SKIP_WARN_CYCLES:
+                            logger.warning(
+                                f"[executor] {_sym_u}: drift skip persisted "
+                                f"{_streak} cycles — proceeding with live "
+                                f"(kline={kline_close:.2f} src={kline_source or 'unknown'} "
+                                f"live={live_px:.2f} src={live_source or 'unknown'} "
+                                f"drift={_drift_pct:.2f}% max={_max_drift:.2f}%)"
+                            )
+                            _METAL_DRIFT_SKIP_STREAK[_sym_u] = 0
+                        else:
+                            logger.warning(
+                                f"[executor] {_sym_u}: kline/live drift "
+                                f"{_drift_pct:.2f}% (kline={kline_close:.2f} "
+                                f"kline_src={kline_source or 'unknown'} "
+                                f"live={live_px:.2f} live_src={live_source or 'unknown'} "
+                                f"max={_max_drift:.2f}%) — skip eval "
+                                f"({_streak}/{_METAL_DRIFT_SKIP_WARN_CYCLES})"
+                            )
+                            return None
+                    elif not _ct_live_proxy_klines:
+                        _METAL_DRIFT_SKIP_STREAK[_sym_u] = 0
+                        _price_tag = kline_source or live_source or "fallback"
+                        logger.info(
+                            f"[prices] {_sym_u} priced_by={_price_tag} "
+                            f"kline_src={kline_source or 'unknown'} "
+                            f"live_src={live_source or 'unknown'}"
+                        )
                     price = live_px
                     price_source = "spot_live"
             else:
