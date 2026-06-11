@@ -55,18 +55,34 @@ def _start_ping_server() -> None:
 
 def _lock_keepalive_thread(conn_holder: list, stop_event: threading.Event) -> None:
     """Ping the advisory-lock session so Neon idle drops do not release the lock."""
+    from app.advisory_lock_ids import APP_NAME_CTRADER_FEED, CTRADER_FEED_LOCK_ID
+    from app.executor_lock import reconnect_lock_connection
+
     while not stop_event.is_set():
+        for _ in range(30):
+            if stop_event.is_set():
+                return
+            time.sleep(1)
         conn = conn_holder[0] if conn_holder else None
         if conn is None:
-            time.sleep(2)
             continue
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
         except Exception as exc:
+            new_conn = reconnect_lock_connection(
+                conn,
+                lock_id=CTRADER_FEED_LOCK_ID,
+                max_attempts=1,
+                silent=True,
+                application_name=APP_NAME_CTRADER_FEED,
+            )
+            if new_conn:
+                conn_holder[0] = new_conn
+                logger.debug("cTrader feed lock keepalive: silent reconnect ok")
+                continue
             logger.warning("cTrader feed lock keepalive failed: %s", exc)
             break
-        stop_event.wait(30.0)
 
 
 async def _maintain_feed_lock(conn) -> None:

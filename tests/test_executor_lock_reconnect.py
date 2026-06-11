@@ -4,6 +4,30 @@ from unittest import mock
 
 
 class TestExecutorLockReconnect(unittest.TestCase):
+    def test_build_lock_connection_single_source(self):
+        from app import executor_lock as el
+
+        with mock.patch("psycopg2.connect", return_value=object()) as m_connect, \
+                mock.patch.object(el, "get_lock_database_url", return_value="postgresql://x"), \
+                mock.patch.object(el, "log_executor_lock_keepalive_config"):
+            el.build_lock_connection("th-test")
+            m_connect.assert_called_once()
+            kwargs = m_connect.call_args.kwargs
+            self.assertEqual(kwargs["keepalives_idle"], 30)
+            self.assertEqual(kwargs["application_name"], "th-test")
+
+    def test_terminate_lock_holders_uses_build_lock_connection(self):
+        from app import executor_lock as el
+
+        with mock.patch.object(el, "build_lock_connection") as m_build, \
+                mock.patch.object(el, "get_lock_database_url", return_value="postgresql://x"):
+            conn = mock.Mock()
+            conn.cursor.return_value.__enter__ = mock.Mock(return_value=mock.Mock(fetchall=lambda: []))
+            conn.cursor.return_value.__exit__ = mock.Mock(return_value=False)
+            m_build.return_value = conn
+            el.terminate_lock_holders(1, owner_app="th-test")
+            m_build.assert_called_once_with("th-test")
+
     def test_neon_lock_connect_kwargs(self):
         from app.executor_lock import NEON_LOCK_CONNECT_KWARGS
 

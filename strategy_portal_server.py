@@ -1721,9 +1721,6 @@ def _try_acquire_executor_lock():
 
         from app.executor_lock import get_executor_application_name
 
-        from app.executor_lock import log_executor_lock_keepalive_config
-
-        log_executor_lock_keepalive_config()
         conn = create_lock_connection(get_executor_application_name())
         if try_acquire_lock(conn, get_executor_lock_id()):
             logger.info(

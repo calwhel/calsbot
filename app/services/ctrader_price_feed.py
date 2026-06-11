@@ -164,6 +164,9 @@ _last_spot_tick_mono: float = 0.0  # monotonic — for price-gap logging on reco
 # Active spot-stream session — avoids DB round-trips for trendbars while LIVE.
 _stream_creds: Optional[Tuple[str, int, int, str]] = None  # token, ctid, uid, host
 _feed_task: Optional[asyncio.Task] = None
+_feed_starting: bool = False
+_feed_launch_lock = threading.Lock()
+_feed_singleton_uid: Optional[int] = None
 _wake_event: Optional[asyncio.Event] = None
 # Cached symbol-ID map from the last successful connection.
 # Symbol IDs differ per host/account, so the cache is scoped to the
@@ -482,7 +485,7 @@ async def _maybe_refresh_access_token(
         )
         if is_refresh_denied(user_id):
             return (access_token or "").strip()
-        new_at = await refresh_user_ctrader_token(user_id)
+        new_at = await refresh_user_ctrader_token(user_id, force=force)
     except Exception as exc:
         logger.warning(
             f"[CTraderFeed] token refresh failed uid={user_id}: {type(exc).__name__}"
@@ -1461,6 +1464,18 @@ def feed_status() -> Dict[str, object]:
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 
+def _on_feed_task_done(task: asyncio.Task) -> None:
+    global _feed_starting
+    with _feed_launch_lock:
+        _feed_starting = False
+    if not task.cancelled() and task.exception():
+        logger.error(
+            "[CTraderFeed] feed task ended with error: %s",
+            task.exception(),
+            exc_info=task.exception(),
+        )
+
+
 async def _feed_runner() -> None:
     """Resilient outer shell — restarts _feed_loop after crashes (never silent)."""
     delay = float(_RECONNECT_BACKOFF_MIN)
@@ -1489,8 +1504,27 @@ def launch_ctrader_feed() -> bool:
     Safe to call multiple times — ignored if already running.
     Returns True when a feed task is running or was just scheduled.
     """
-    global _feed_task
+    global _feed_task, _feed_starting, _feed_singleton_uid
+    with _feed_launch_lock:
+        if _feed_task and not _feed_task.done():
+            logger.info(
+                "[CTraderFeed] feed task already running uid=%s — skip duplicate start",
+                _feed_singleton_uid,
+            )
+            return True
+        if _feed_starting:
+            logger.info(
+                "[CTraderFeed] feed task already starting uid=%s — skip duplicate launch",
+                _feed_singleton_uid,
+            )
+            return True
+        _feed_starting = True
     logger.info("[CTraderFeed] startup: launching feed task")
+
+    def _abort_feed_launch() -> None:
+        global _feed_starting
+        with _feed_launch_lock:
+            _feed_starting = False
 
     try:
         from app.ctrader_feed_lock import (
@@ -1506,6 +1540,7 @@ def launch_ctrader_feed() -> bool:
                 reason,
                 fresh,
             )
+            _abort_feed_launch()
             return False
         if remote_feed_enabled() and not is_feed_only_process():
             logger.warning(
@@ -1516,9 +1551,11 @@ def launch_ctrader_feed() -> bool:
 
     if not _PROTO_OK:
         logger.warning("[CTraderFeed] feed not started — ctrader_open_api/protobuf unavailable")
+        _abort_feed_launch()
         return False
     if not os.environ.get("CTRADER_CLIENT_ID"):
         logger.warning("[CTraderFeed] feed not started — CTRADER_CLIENT_ID not set")
+        _abort_feed_launch()
         return False
 
     linked = probe_linked_accounts_sync()
@@ -1529,6 +1566,7 @@ def launch_ctrader_feed() -> bool:
         )
     else:
         _at, ctid, uid, is_live = linked[0]
+        _feed_singleton_uid = int(uid)
         logger.info(
             "[CTraderFeed] startup: DB token row found uid=%s ctid=%s mode=%s "
             "(%d linked account(s))",
@@ -1537,10 +1575,12 @@ def launch_ctrader_feed() -> bool:
             "live" if is_live else "demo",
             len(linked),
         )
-
-    if _feed_task and not _feed_task.done():
-        logger.info("[CTraderFeed] feed task already running — skip duplicate start")
-        return True
+        try:
+            from app.services.ctrader_client import _log_ctrader_token_startup
+            if _at:
+                _log_ctrader_token_startup(int(uid), _at.strip())
+        except Exception:
+            pass
 
     try:
         _get_wake_event()
@@ -1548,10 +1588,19 @@ def launch_ctrader_feed() -> bool:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = asyncio.get_event_loop()
-        _feed_task = loop.create_task(_feed_runner())
-        logger.info("[CTraderFeed] background streaming task scheduled")
+        with _feed_launch_lock:
+            if _feed_task and not _feed_task.done():
+                _feed_starting = False
+                return True
+            _feed_task = loop.create_task(_feed_runner())
+            _feed_task.add_done_callback(_on_feed_task_done)
+        logger.info(
+            "[CTraderFeed] background streaming task scheduled uid=%s",
+            _feed_singleton_uid,
+        )
         return True
     except Exception as exc:
+        _abort_feed_launch()
         logger.error("[CTraderFeed] failed to schedule feed task: %s", exc, exc_info=True)
         return False
 
