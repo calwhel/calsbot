@@ -42,6 +42,16 @@ TRADE_MGMT_COLUMN_MIGRATIONS: List[Tuple[str, str, str]] = [
         "remaining_volume",
         "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS remaining_volume NUMERIC",
     ),
+    (
+        "strategy_executions",
+        "mfe_pips",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS mfe_pips NUMERIC",
+    ),
+    (
+        "strategy_executions",
+        "mae_pips",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS mae_pips NUMERIC",
+    ),
 ]
 
 TRADE_MGMT_REQUIRED_COLUMNS = [col for _t, col, _ddl in TRADE_MGMT_COLUMN_MIGRATIONS]

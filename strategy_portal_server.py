@@ -1051,6 +1051,16 @@ _PIP_COLUMN_MIGRATIONS = [
         "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS spread_pips_applied FLOAT",
     ),
     (
+        "strategy_executions",
+        "mfe_pips",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS mfe_pips NUMERIC",
+    ),
+    (
+        "strategy_executions",
+        "mae_pips",
+        "ALTER TABLE strategy_executions ADD COLUMN IF NOT EXISTS mae_pips NUMERIC",
+    ),
+    (
         "strategy_performance",
         "total_pips_pnl",
         "ALTER TABLE strategy_performance ADD COLUMN IF NOT EXISTS total_pips_pnl FLOAT",
@@ -9687,7 +9697,7 @@ def _equity_and_drawdown(closed: list) -> tuple:
     return equity_labels, equity_values, drawdown_labels, drawdown_values, max_dd
 
 
-def _compute_execution_analytics(execs: list, perf=None) -> dict:
+def _compute_execution_analytics(execs: list, perf=None, strategy_config: Optional[dict] = None) -> dict:
     """Rich analytics payload from StrategyExecution rows (oldest → newest)."""
     closed = [e for e in execs if e.outcome in ("WIN", "LOSS", "BREAKEVEN") and e.pnl_pct is not None]
     wins   = [e.pnl_pct for e in closed if e.outcome == "WIN"]
@@ -9783,7 +9793,13 @@ def _compute_execution_analytics(execs: list, perf=None) -> dict:
         "health_score":       round(health, 1),
         "total_closed":       len(closed),
         "total_pnl_usd":      round(sum(float(e.pnl_usd or 0) for e in closed), 2),
+        "tp_tuning":          _tp_tuning_stat(execs, strategy_config),
     }
+
+
+def _tp_tuning_stat(execs: list, cfg: Optional[dict]) -> Optional[dict]:
+    from app.services.execution_analytics import compute_tp_tuning_stat
+    return compute_tp_tuning_stat(execs, cfg)
 
 
 @app.get("/api/strategies/{strategy_id}/analytics")
@@ -9815,7 +9831,7 @@ def api_strategy_analytics(strategy_id: int, uid: str = Query(...)):
             .all()
         )
         perf = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == strategy_id).first()
-        _an_payload = _compute_execution_analytics(execs, perf)
+        _an_payload = _compute_execution_analytics(execs, perf, strategy_config=s.config or {})
         set_cache(_an_key, _an_payload, 300)
         return _cached_json(_an_payload, False, 300)
     finally:
@@ -10671,13 +10687,19 @@ async def api_strategy_detail(strategy_id: int, uid: str = Query(...)):
         user = _get_user_by_uid(uid, db)
         if not user:
             raise HTTPException(status_code=403)
-        from app.strategy_models import UserStrategy, StrategyPerformance
+        from app.strategy_models import UserStrategy, StrategyPerformance, StrategyExecution
         s = db.query(UserStrategy).filter(
             UserStrategy.id == strategy_id, UserStrategy.user_id == user.id
         ).first()
         if not s:
             raise HTTPException(status_code=404)
         perf = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == s.id).first()
+        execs = (
+            db.query(StrategyExecution)
+            .filter(StrategyExecution.strategy_id == s.id)
+            .order_by(StrategyExecution.fired_at.asc())
+            .all()
+        )
         return JSONResponse({
             "id":          s.id,
             "name":        s.name,
@@ -10692,6 +10714,7 @@ async def api_strategy_detail(strategy_id: int, uid: str = Query(...)):
                 "worst_trade":  round(perf.worst_trade, 2) if perf else 0,
                 "wins":         perf.wins if perf else 0,
                 "losses":       perf.losses if perf else 0,
+                "tp_tuning":    _tp_tuning_stat(execs, s.config or {}),
             },
         })
     finally:
