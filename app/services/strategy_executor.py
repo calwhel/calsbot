@@ -6609,10 +6609,35 @@ async def _close_live_forex_execution_and_notify(
     from app.strategy_models import StrategyExecution, UserStrategy
     from app.models import User
     from sqlalchemy import text as _text
+    from sqlalchemy.exc import OperationalError as _SAOperationalError
+    from app.db_resilience import is_transient_db_error
 
-    db = SessionLocal()
+    db = None
+    ex = None
+    for _db_attempt in range(3):
+        db = SessionLocal()
+        try:
+            ex = db.query(StrategyExecution).filter(StrategyExecution.id == ex_id).first()
+            break
+        except _SAOperationalError as _dbe:
+            try:
+                db.close()
+            except Exception:
+                pass
+            db = None
+            if is_transient_db_error(_dbe) and _db_attempt < 2:
+                logger.warning(
+                    "[FX-reconcile] close notify DB session retry %s/3 exec#%s: %s",
+                    _db_attempt + 1,
+                    ex_id,
+                    _dbe,
+                )
+                await asyncio.sleep(1.0 * (_db_attempt + 1))
+                continue
+            raise
+    if db is None:
+        return False
     try:
-        ex = db.query(StrategyExecution).filter(StrategyExecution.id == ex_id).first()
         if not ex or ex.outcome != "OPEN":
             return False
 
