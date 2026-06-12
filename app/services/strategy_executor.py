@@ -931,6 +931,7 @@ async def _fetch_price_and_ta(
             result = {
                 "price": price,
                 "price_source": price_source,
+                "live_source": live_source,
                 "kline_close": kline_close,
                 "kline_source": kline_source,
                 "kline_synthetic": kline_synthetic,
@@ -4313,6 +4314,8 @@ async def evaluate_and_fire(
                 )
             current_price = _confirmed_px
 
+        _signal_generated_at = time.time()
+
         mode_tag = "🧪 [PAPER]" if is_paper else "🎯"
         _ac_tag = asset_class.upper()
         logger.info(
@@ -4614,8 +4617,33 @@ async def evaluate_and_fire(
                         CtraderOrderJob, enqueue_ctrader_order, start_ctrader_order_worker,
                     )
                     from app.services.order_latency import new_order_latency
+                    from app.services.order_stale_guard import check_signal_stale
                     start_ctrader_order_worker()
                     _signal_mono = time.monotonic()
+                    _stale = check_signal_stale(
+                        symbol=symbol,
+                        direction=direction,
+                        signal_price=current_price,
+                        signal_generated_at=_signal_generated_at,
+                        signal_mono=_signal_mono,
+                        price_source=_ps,
+                        kline_source=_ks,
+                        live_source=price_data.get("live_source"),
+                        execution_id=execution.id,
+                    )
+                    if _stale:
+                        _reason, _age_s, _slip, _sig_src, _now_src = _stale
+                        execution.outcome = "CANCELLED"
+                        execution.notes = (
+                            f"{_exec_notes or ''} | stale_guard_blocked | "
+                            f"Live skip: {_reason}"
+                        ).strip(" |")
+                        db.commit()
+                        logger.warning(
+                            f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} "
+                            f"live order pre-blocked: {_reason}"
+                        )
+                        break
                     # Risk % auto lot sizing: when use_risk_pct=True, the wizard
                     # stored risk_pct_per_trade (% of account to risk).  We pass
                     # it to the cTrader helper which fetches the account balance
@@ -4645,6 +4673,10 @@ async def evaluate_and_fire(
                         asset_class=asset_class,
                         partial_close_pct=float(_partial_close_pct) if _partial_close_pct else None,
                         signal_mono=_signal_mono,
+                        signal_generated_at=_signal_generated_at,
+                        signal_price_source=_ps,
+                        signal_kline_source=_ks,
+                        signal_live_source=price_data.get("live_source"),
                         latency=new_order_latency(execution.id, _signal_mono),
                     )
                     _queued = await enqueue_ctrader_order(_job)

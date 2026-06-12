@@ -55,6 +55,10 @@ class CtraderOrderJob:
     partial_close_pct: Optional[float] = None
     broker: str = "ctrader"
     signal_mono: float = field(default_factory=time.monotonic)
+    signal_generated_at: float = 0.0
+    signal_price_source: str = "unknown"
+    signal_kline_source: Optional[str] = None
+    signal_live_source: Optional[str] = None
     latency: Any = None
 
 
@@ -225,7 +229,12 @@ async def _abort_stale_order(job: CtraderOrderJob, reason: str, age_s: float, sl
         ).first()
         if execution:
             execution.outcome = "CANCELLED"
-            execution.notes = f"Live skip: {reason}"
+            _n = (execution.notes or "").strip()
+            execution.notes = (
+                f"{_n} | stale_guard_blocked | Live skip: {reason}".strip(" |")
+                if _n
+                else f"stale_guard_blocked | Live skip: {reason}"
+            )
             db.commit()
         from app.models import User
         from app.strategy_models import StrategyPortalSettings, UserStrategy
@@ -527,16 +536,43 @@ async def _ctrader_order_worker() -> None:
             queue_wait_ms,
         )
         try:
-            from app.services.order_stale_guard import check_signal_stale
+            from app.database import SessionLocal
+            from app.strategy_models import StrategyExecution
+            from app.services.order_stale_guard import check_signal_stale, get_stale_verdict
+
+            _db_pre = SessionLocal()
+            try:
+                _ex_pre = _db_pre.query(StrategyExecution).filter(
+                    StrategyExecution.id == job.execution_id
+                ).first()
+                if _ex_pre:
+                    _notes = _ex_pre.notes or ""
+                    if (
+                        _ex_pre.outcome == "CANCELLED"
+                        or "stale_guard_blocked" in _notes
+                        or get_stale_verdict(job.execution_id) == "blocked"
+                    ):
+                        logger.info(
+                            "[ctrader-queue] exec#%s already stale-blocked — skip placement",
+                            job.execution_id,
+                        )
+                        continue
+            finally:
+                _db_pre.close()
 
             stale = check_signal_stale(
                 symbol=job.symbol,
                 direction=job.direction,
                 signal_price=job.entry_price,
+                signal_generated_at=job.signal_generated_at or None,
                 signal_mono=job.signal_mono,
+                price_source=job.signal_price_source,
+                kline_source=job.signal_kline_source,
+                live_source=job.signal_live_source,
+                execution_id=job.execution_id,
             )
             if stale:
-                reason, age_s, slip_pips = stale
+                reason, age_s, slip_pips, _sig_src, _now_src = stale
                 await _abort_stale_order(job, reason, age_s, slip_pips)
                 continue
 
