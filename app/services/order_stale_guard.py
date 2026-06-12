@@ -32,18 +32,10 @@ def _max_slippage_pips(symbol: str) -> float:
     return _DEFAULT_MAX_SLIPPAGE_PIPS
 
 
-def _pip_size(symbol: str) -> float:
-    try:
-        from app.services.forex_engine import pip_size
+def _platform_pip_size(symbol: str) -> float:
+    from app.services.pip_units import platform_pip_size
 
-        ps = pip_size(symbol)
-        if ps and ps > 0:
-            return float(ps)
-    except Exception:
-        pass
-    from app.services.ctrader_client import _PIP_SIZES
-
-    return float(_PIP_SIZES.get((symbol or "").upper(), 0.0001))
+    return platform_pip_size(symbol)
 
 
 def _signal_src_family(
@@ -253,17 +245,20 @@ def check_signal_stale(
             set_stale_verdict(execution_id, "allowed")
         return None
 
-    pip = _pip_size(symbol)
-    slip_pips = abs(now_px - float(signal_price)) / max(pip, 1e-12)
+    from app.services.pip_units import format_platform_pip_move, platform_pips_from_price_delta
+
+    pip_sz = _platform_pip_size(symbol)
+    slip_pips = platform_pips_from_price_delta(symbol, now_px - float(signal_price))
+    move_desc = format_platform_pip_move(symbol, float(signal_price), now_px)
     max_slip = _max_slippage_pips(symbol)
 
     if slip_pips > _IMPLAUSIBLE_PIPS and age_s < _IMPLAUSIBLE_AGE_S:
         logger.warning(
             "[stale-guard] implausible drift — source mismatch suspected "
-            "exec=%s %s moved %.1f pips in %.1fs (sig_src=%s now_src=%s sig=%.5f now=%.5f)",
+            "exec=%s %s %s in %.1fs (sig_src=%s now_src=%s sig=%.5f now=%.5f)",
             execution_id,
             symbol,
-            slip_pips,
+            move_desc,
             age_s,
             sig_src,
             now_src,
@@ -276,8 +271,8 @@ def check_signal_stale(
 
     if slip_pips > max_slip:
         reason = (
-            f"price moved {slip_pips:.1f} pips in {age_s:.1f}s "
-            f"(max {max_slip:.0f}) (sig_src={sig_src} now_src={now_src})"
+            f"{move_desc} in {age_s:.1f}s (max {max_slip:.0f} platform pips, "
+            f"pip_size={pip_sz}) (sig_src={sig_src} now_src={now_src})"
         )
         if execution_id is not None:
             set_stale_verdict(execution_id, "blocked", reason)
