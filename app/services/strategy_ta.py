@@ -317,21 +317,38 @@ async def _get_klines(
 
 # ─── 1. INDICATOR evaluator ────────────────────────────────────────────────────
 
+def _indicator_op_symbol(op: str) -> str:
+    return {
+        "gt": ">",
+        "gte": ">=",
+        "lt": "<",
+        "lte": "<=",
+        "eq": "=",
+    }.get(op, op)
+
+
 async def eval_indicator(
     cond: Dict, price_data: Dict, enhanced_ta: Dict,
     symbol: str, http_client, cache: Dict
 ) -> Tuple[bool, str]:
-    name = cond.get("name", "").lower()
-    op   = cond.get("operator", "gt")
-    val  = float(cond.get("value", 0))
-    tf   = cond.get("timeframe", "15m")
+    from app.services.trade_management import normalize_indicator_condition
+
+    norm = normalize_indicator_condition(cond)
+    name = norm.get("name", "").lower()
+    op   = norm.get("operator", "gt")
+    val  = float(norm.get("value", 0))
+    tf   = norm.get("timeframe", "15m")
 
     # ── RSI ──────────────────────────────────────────────────────────────────
     if name == "rsi":
         key = "rsi_1h" if "1h" in tf else "rsi_15m"
         rsi = enhanced_ta.get(key) or price_data.get("rsi", 50)
-        if rsi is None: return False, "RSI unavailable"
-        return _cmp(rsi, op, val), f"RSI({tf})={rsi:.1f}"
+        if rsi is None:
+            return False, "RSI unavailable"
+        passed = _cmp(float(rsi), op, val)
+        sym = _indicator_op_symbol(op)
+        detail = f"RSI({tf})={float(rsi):.1f} {sym} {val:g}"
+        return passed, detail
 
     # ── MACD ─────────────────────────────────────────────────────────────────
     if name in ("macd", "macd_hist"):
@@ -3879,9 +3896,12 @@ async def evaluate_strategy_conditions(
     async def _eval_one(cond) -> Tuple[bool, str]:
         ctype = cond.get("type", "")
         try:
-            if ctype == "indicator":
+            if ctype in ("indicator", "rsi"):
+                _ic = {**cond, "type": "indicator"}
+                if ctype == "rsi":
+                    _ic["name"] = "rsi"
                 return await eval_indicator(
-                    cond, price_data, enhanced_ta, symbol, http_client, cache)
+                    _ic, price_data, enhanced_ta, symbol, http_client, cache)
             elif ctype == "price_momentum":
                 return await eval_price_momentum(cond, symbol, http_client, cache)
             elif ctype == "volume_spike":

@@ -1852,6 +1852,147 @@ async def close_position(
     return False
 
 
+def _parse_amend_execution_event(payload: bytes, position_id: int) -> dict:
+    """Classify broker reply to ProtoOAAmendPositionSLTPReq."""
+    _terminal = (
+        ProtoOAExecutionType.ORDER_REJECTED,
+        ProtoOAExecutionType.ORDER_CANCELLED,
+        ProtoOAExecutionType.ORDER_EXPIRED,
+        ProtoOAExecutionType.ORDER_CANCEL_REJECTED,
+    )
+    _success = (
+        ProtoOAExecutionType.ORDER_ACCEPTED,
+        ProtoOAExecutionType.ORDER_REPLACED,
+        ProtoOAExecutionType.ORDER_FILLED,
+        ProtoOAExecutionType.SWAP,
+    )
+    try:
+        ev = ProtoOAExecutionEvent()
+        ev.ParseFromString(payload)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "result": "failed",
+            "broker_reply": {"parse_error": str(exc)},
+        }
+    et = ev.executionType
+    tname = ProtoOAExecutionType.Name(et) if et is not None else "UNKNOWN"
+    err = ev.errorCode if ev.HasField("errorCode") else ""
+    pos = int(ev.position.positionId) if ev.HasField("position") and ev.position.positionId else 0
+    reply = {
+        "execution_type": tname,
+        "error_code": err or None,
+        "position_id": pos or None,
+    }
+    if et in _terminal:
+        return {
+            "ok": False,
+            "result": "failed",
+            "broker_reply": reply,
+            "error": f"{tname}: {err}" if err else tname,
+        }
+    if et in _success:
+        if pos and int(pos) != int(position_id):
+            return {
+                "ok": False,
+                "result": "failed",
+                "broker_reply": reply,
+                "error": f"position_id mismatch want={position_id} got={pos}",
+            }
+        return {"ok": True, "result": "confirmed", "broker_reply": reply}
+    if ev.HasField("order") and et not in _terminal:
+        return {"ok": True, "result": "confirmed", "broker_reply": reply}
+    return {
+        "ok": False,
+        "result": "failed",
+        "broker_reply": reply,
+        "error": f"unexpected execution type {tname}",
+    }
+
+
+async def modify_position_sltp_result(
+    access_token: str,
+    ctid_trader_account_id: int,
+    position_id: int,
+    stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
+    host: str = CTRADER_HOST,
+    *,
+    exec_id: Optional[int] = None,
+) -> dict:
+    """
+    Amend SL/TP and return broker-confirmed result dict:
+    {ok, result: confirmed|failed|timeout, broker_reply, error?}
+    """
+    if not _PROTO_OK:
+        return {"ok": False, "result": "failed", "broker_reply": {}, "error": "proto unavailable"}
+    if stop_loss_price is None and take_profit_price is None:
+        return {"ok": False, "result": "failed", "broker_reply": {}, "error": "no legs to amend"}
+
+    last_reply: dict = {"ok": False, "result": "timeout", "broker_reply": {}}
+    async with _get_account_lock(host, ctid_trader_account_id):
+        for attempt in (1, 2):
+            try:
+                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
+                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                    last_reply = {
+                        "ok": False,
+                        "result": "failed",
+                        "broker_reply": {"error": "account_auth_failed"},
+                        "error": "account_auth_failed",
+                    }
+                    break
+                req = ProtoOAAmendPositionSLTPReq()
+                req.ctidTraderAccountId = ctid_trader_account_id
+                req.positionId = int(position_id)
+                if stop_loss_price is not None:
+                    req.stopLoss = float(stop_loss_price)
+                if take_profit_price is not None:
+                    req.takeProfit = float(take_profit_price)
+                payload = await _send_recv(
+                    reader, writer, req,
+                    _PAYLOAD_TYPES["amend_position_sltp_req"],
+                    _PAYLOAD_TYPES["execution_event"],
+                    timeout=15.0,
+                )
+                if payload is None:
+                    last_reply = {"ok": False, "result": "timeout", "broker_reply": {}}
+                    if attempt == 1:
+                        continue
+                    break
+                parsed = _parse_amend_execution_event(payload, int(position_id))
+                if parsed.get("ok"):
+                    _touch_conn(host, ctid_trader_account_id)
+                last_reply = parsed
+                if parsed.get("ok") or attempt == 2:
+                    break
+            except Exception as e:
+                last_reply = {
+                    "ok": False,
+                    "result": "failed",
+                    "broker_reply": {"exception": type(e).__name__},
+                    "error": str(e),
+                }
+                if attempt == 1:
+                    logger.warning(f"[cTrader] modify_position_sltp retry after: {e}")
+                    _invalidate_persistent_connection(host, ctid_trader_account_id)
+                    continue
+                logger.error(f"[cTrader] modify_position_sltp failed: {e}")
+                break
+
+    _eid = f" exec={exec_id}" if exec_id else ""
+    logger.info(
+        "[sl-amend]%s pos=%s requested_sl=%s requested_tp=%s result=%s broker_reply=%s",
+        _eid,
+        position_id,
+        stop_loss_price,
+        take_profit_price,
+        last_reply.get("result"),
+        last_reply.get("broker_reply"),
+    )
+    return last_reply
+
+
 async def modify_position_sltp(
     access_token: str,
     ctid_trader_account_id: int,
@@ -1876,43 +2017,15 @@ async def modify_position_sltp(
         return False
     if stop_loss_price is None and take_profit_price is None:
         return False
-    async with _get_account_lock(host, ctid_trader_account_id):
-        for attempt in (1, 2):
-            try:
-                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
-                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
-                    return False
-                req = ProtoOAAmendPositionSLTPReq()
-                req.ctidTraderAccountId = ctid_trader_account_id
-                req.positionId          = position_id
-                # ABSOLUTE price fields (double) → send the REAL price unscaled.
-                # The old ×100_000 was wrong: it set gold breakeven stops to
-                # 4452.76*100000 (rejected by the broker), so live breakeven/
-                # trailing silently never reached the broker for metals — and on
-                # one trade a corrupted entry (0.0445276) ×100000 ≈ 4452 was
-                # accepted by accident, firing a false "risk-free" alert on a
-                # position whose stop was never actually moved.
-                if stop_loss_price is not None:
-                    req.stopLoss = float(stop_loss_price)
-                if take_profit_price is not None:
-                    req.takeProfit = float(take_profit_price)
-                payload = await _send_recv(
-                    reader, writer, req,
-                    _PAYLOAD_TYPES["amend_position_sltp_req"],
-                    _PAYLOAD_TYPES["execution_event"],
-                    timeout=15.0,
-                )
-                if payload is not None:
-                    _touch_conn(host, ctid_trader_account_id)
-                return payload is not None
-            except Exception as e:
-                if attempt == 1:
-                    logger.warning(f"[cTrader] modify_position_sltp retry after: {e}")
-                    _invalidate_persistent_connection(host, ctid_trader_account_id)
-                    continue
-                logger.error(f"[cTrader] modify_position_sltp failed: {e}")
-                return False
-    return False
+    res = await modify_position_sltp_result(
+        access_token,
+        ctid_trader_account_id,
+        position_id,
+        stop_loss_price=stop_loss_price,
+        take_profit_price=take_profit_price,
+        host=host,
+    )
+    return bool(res.get("ok"))
 
 
 async def modify_position_sltp_for_user(
@@ -1947,23 +2060,48 @@ async def amend_position_sl(
     new_sl: float,
     *,
     keep_tp: Optional[float] = None,
+    exec_id: Optional[int] = None,
 ) -> bool:
     """Amend stop-loss on a live position; preserves take-profit when provided."""
+    res = await amend_position_sl_result(
+        user_id, position_id, new_sl, keep_tp=keep_tp, exec_id=exec_id,
+    )
+    return bool(res.get("ok"))
+
+
+async def amend_position_sl_result(
+    user_id: int,
+    position_id: int,
+    new_sl: float,
+    *,
+    keep_tp: Optional[float] = None,
+    exec_id: Optional[int] = None,
+) -> dict:
+    """Broker-confirmed SL amend — returns {ok, result, broker_reply, error?}."""
     from app.database import SessionLocal
-    from app.models import User
+    from app.models import User, UserPreference
 
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == int(user_id)).first()
         if not user:
-            return False
+            return {"ok": False, "result": "failed", "broker_reply": {}, "error": "no user"}
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+            return {"ok": False, "result": "failed", "broker_reply": {}, "error": "no ctrader creds"}
+        access_token = prefs.ctrader_access_token
+        ctid = int(prefs.ctrader_account_id)
+        host = _host_for_account(prefs, ctid)
     finally:
         db.close()
-    return await modify_position_sltp_for_user(
-        user,
+    return await modify_position_sltp_result(
+        access_token,
+        ctid,
         int(position_id),
         stop_loss_price=float(new_sl),
         take_profit_price=keep_tp,
+        host=host,
+        exec_id=exec_id,
     )
 
 

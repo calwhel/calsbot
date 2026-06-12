@@ -1688,7 +1688,14 @@ def _tp1_blend_pips_line(ex, exit_price: float) -> Optional[str]:
         return None
 
 
-def _close_paper_execution(ex, outcome: str, exit_price: float, db):
+def _close_paper_execution(
+    ex,
+    outcome: str,
+    exit_price: float,
+    db,
+    *,
+    close_label: Optional[str] = None,
+):
     """Mark a paper execution as closed and update performance.
 
     Uses an atomic UPDATE WHERE outcome='OPEN' so that when multiple uvicorn
@@ -1782,15 +1789,14 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
 
     # Append close note — preserve any original open-time context (e.g. Live→Paper
     # fallback reason) so the history is auditable after close.
+    from app.services.trade_management import close_note_label
+
     pnl_sign   = "+" if pnl_pct >= 0 else ""
-    if outcome == "WIN":
-        close_note = f"TP hit · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
-    elif outcome == "LOSS":
-        close_note = f"SL hit · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
-    elif outcome == "CANCELLED":
+    if outcome == "CANCELLED":
         close_note = "Expired · no TP/SL hit within hold period"
     else:
-        close_note = f"Closed · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
+        label = close_label or close_note_label(ex, outcome, float(exit_price))
+        close_note = f"{label} · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
     # If there's an existing note that isn't just the live-monitor "open · unrealised" noise,
     # keep it prepended so we can always see why a trade went paper even after it closes.
     existing = (ex.notes or "").strip()
@@ -2245,7 +2251,7 @@ def _fmt_close_card(
     elif outcome == "BREAKEVEN":
         icon      = "⚖️"
         result    = "BREAKEVEN"
-        hit_label = "breakeven"
+        hit_label = "breakeven stop"
     else:
         icon      = "📊"
         result    = outcome
@@ -2729,14 +2735,18 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
         active_sl,
         breakeven_sl_price,
         breakeven_was_claimed,
+        check_directional_exit_hit,
         classify_sl_close_outcome,
+        effective_tp,
         effective_trade_mgmt_cfg,
         persist_paper_stop_level,
+        validate_close_sanity,
     )
+    from app.services.forex_tick_manager import unregister_position
 
-    if not ex.entry_price or not ex.tp_price:
+    if not ex.entry_price:
         return False
-    if active_sl(ex) is None and ex.sl_price is None:
+    if effective_tp(ex) is None and active_sl(ex) is None and ex.sl_price is None:
         return False
 
     fired_at = ex.fired_at or datetime.utcnow()
@@ -2855,25 +2865,48 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                 _eff_sl = active_sl(ex)
                 if _eff_sl is None:
                     _eff_sl = ex.sl_price
+                _tp_lvl = effective_tp(ex)
                 if ex.direction == "LONG":
-                    tp_hit = high >= ex.tp_price
-                    sl_hit = (low  <= _eff_sl) and _sl_active
+                    tp_hit = _tp_lvl is not None and high >= float(_tp_lvl)
+                    sl_hit = (_eff_sl is not None and low <= float(_eff_sl)) and _sl_active
                     if tp_hit and sl_hit:
                         if close >= open_:
-                            _close_paper_execution(ex, "WIN", ex.tp_price, db)
+                            outcome, label = validate_close_sanity(
+                                ex, "WIN", float(_tp_lvl), "tp",
+                            )
+                            _close_paper_execution(
+                                ex, outcome, float(_tp_lvl), db, close_label=label,
+                            )
                         else:
                             outcome = _outcome_for_sl(_eff_sl)
-                            _close_paper_execution(ex, outcome, _eff_sl, db)
+                            outcome, label = validate_close_sanity(
+                                ex, outcome, float(_eff_sl), "sl",
+                            )
+                            _close_paper_execution(
+                                ex, outcome, float(_eff_sl), db, close_label=label,
+                            )
+                        unregister_position(ex.id, ex.symbol or "")
                         return True
                 else:
-                    tp_hit = low  <= ex.tp_price
-                    sl_hit = (high >= _eff_sl) and _sl_active
+                    tp_hit = _tp_lvl is not None and low <= float(_tp_lvl)
+                    sl_hit = (_eff_sl is not None and high >= float(_eff_sl)) and _sl_active
                     if tp_hit and sl_hit:
                         if close <= open_:
-                            _close_paper_execution(ex, "WIN", ex.tp_price, db)
+                            outcome, label = validate_close_sanity(
+                                ex, "WIN", float(_tp_lvl), "tp",
+                            )
+                            _close_paper_execution(
+                                ex, outcome, float(_tp_lvl), db, close_label=label,
+                            )
                         else:
                             outcome = _outcome_for_sl(_eff_sl)
-                            _close_paper_execution(ex, outcome, _eff_sl, db)
+                            outcome, label = validate_close_sanity(
+                                ex, outcome, float(_eff_sl), "sl",
+                            )
+                            _close_paper_execution(
+                                ex, outcome, float(_eff_sl), db, close_label=label,
+                            )
+                        unregister_position(ex.id, ex.symbol or "")
                         return True
 
                 # ── Partial close at TP1 (paper simulation) ───────────────
@@ -2882,7 +2915,7 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                 # position and moving the SL to breakeven for the remainder.
                 # The execution record stays OPEN so TP2 / final SL can still
                 # close it — we just record that partial already happened.
-                if tp_hit and partial_close_pct and not partial_close_done and ex.tp2_price:
+                if tp_hit and partial_close_pct and not partial_close_done and ex.tp2_price and _tp_lvl:
                     partial_close_done = True
                     # Move SL to entry price (protect the partial profit). The
                     # entry-stop only applies to candles AFTER this one (chronology
@@ -2912,12 +2945,24 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                     # Remainder continues — skip the full-close below
                     continue
 
-                if tp_hit:
-                    _close_paper_execution(ex, "WIN", ex.tp_price, db)
+                if tp_hit and _tp_lvl is not None:
+                    outcome, label = validate_close_sanity(
+                        ex, "WIN", float(_tp_lvl), "tp",
+                    )
+                    _close_paper_execution(
+                        ex, outcome, float(_tp_lvl), db, close_label=label,
+                    )
+                    unregister_position(ex.id, ex.symbol or "")
                     return True
-                if sl_hit:
+                if sl_hit and _eff_sl is not None:
                     outcome = _outcome_for_sl(_eff_sl)
-                    _close_paper_execution(ex, outcome, _eff_sl, db)
+                    outcome, label = validate_close_sanity(
+                        ex, outcome, float(_eff_sl), "sl",
+                    )
+                    _close_paper_execution(
+                        ex, outcome, float(_eff_sl), db, close_label=label,
+                    )
+                    unregister_position(ex.id, ex.symbol or "")
                     return True
 
                 if not be_activated:
@@ -6522,17 +6567,31 @@ async def _do_forex_partial_close(w: dict, price: float) -> None:
 
 async def _amend_forex_position(w: dict) -> None:
     """Live forex position management — delegates to trade_management module."""
+    await _amend_forex_position_tick(w)
+
+
+async def _amend_forex_position_tick(
+    w: dict,
+    *,
+    tick_mono: Optional[float] = None,
+    mid: Optional[float] = None,
+) -> None:
+    """Tick-driven or poll-driven live forex BE/trail management."""
+    import time as _time
+
     from app.services.tradfi_prices import get_price as _tradfi_get_price
     from app.database import BgSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution, UserStrategy
     from app.services.trade_management import manage_open_position
 
-    price = None
-    try:
-        from app.services import ctrader_price_feed as _ctf
-        price = _ctf.get_price(w["symbol"])
-    except Exception:
-        price = None
+    t0 = tick_mono or _time.monotonic()
+    price = mid
+    if not price or price <= 0:
+        try:
+            from app.services import ctrader_price_feed as _ctf
+            price = _ctf.get_price(w["symbol"])
+        except Exception:
+            price = None
     if not price or price <= 0:
         price = await _tradfi_get_price(w["symbol"], "forex")
     if not price or price <= 0:
@@ -6554,6 +6613,15 @@ async def _amend_forex_position(w: dict) -> None:
                 w["sl_price"] = float(ex2.sl_price)
             if getattr(ex2, "breakeven_applied", False):
                 w["be_moved"] = True
+            dispatch_ms = (_time.monotonic() - t0) * 1000.0
+            if tick_mono is not None and dispatch_ms < 2000:
+                logger.info(
+                    "[trade-mgmt] breakeven via tick (+%.0fms from threshold cross) "
+                    "exec=%s %s",
+                    dispatch_ms,
+                    w.get("exec_id"),
+                    w.get("symbol"),
+                )
     finally:
         _db2.close()
 
@@ -6689,16 +6757,14 @@ async def _close_live_forex_execution_and_notify(
         if not claim_close_notification(db, ex.id):
             return True
 
+        from app.services.trade_management import close_note_label
+        from app.services.forex_tick_manager import unregister_position
+
         # Append an auditable close note (preserve prior open-time context).
         pnl_sign = "+" if pnl_pct >= 0 else ""
-        if outcome == "WIN":
-            cn = f"TP hit · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
-        elif outcome == "BREAKEVEN":
-            cn = f"BE stop · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
-        elif outcome == "LOSS":
-            cn = f"SL hit · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
-        else:
-            cn = f"Closed · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
+        label = close_note_label(ex, outcome, float(exit_price))
+        cn = f"{label} · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
+        unregister_position(ex.id, ex.symbol or "")
         existing = (ex.notes or "").strip()
         if existing and not existing.startswith("open ·"):
             cn = f"{existing} | {cn}"
@@ -6946,64 +7012,49 @@ async def _reconcile_forex_closes() -> None:
             if miss < 2:
                 logger.info(
                     f"[FX-reconcile] {w['symbol']} exec#{ex_id} pos={w['position_id']} "
-                    f"absent from broker (miss {miss}/2) — awaiting confirmation"
+                    f"absent from broker (miss {miss}/2) — awaiting broker deal"
                 )
                 continue
 
-            # Fallback when deal list unavailable — classify via TP/SL proximity.
-            price = None
+            # Never fabricate exit from our SL/TP or spot — mark pending reconcile.
+            from app.database import BgSessionLocal as SessionLocal
+            from app.strategy_models import StrategyExecution
+            from app.services.trade_management import mark_pending_reconcile
+
+            _pdb = SessionLocal()
             try:
-                from app.services import ctrader_price_feed as _ctf
-                price = _ctf.get_price(w["symbol"])
-            except Exception:
-                price = None
-            if not price or price <= 0:
-                try:
-                    from app.services.tradfi_prices import get_price as _tg
-                    price = await _tg(w["symbol"], "forex")
-                except Exception:
-                    price = None
-
-            tp, sl, entry = w["tp_price"], w["sl_price"], w["entry"]
-
-            def _classify_sl(_sl) -> str:
-                return _classify_sl_outcome(_sl, entry, w["direction"])
-
-            outcome = None
-            exit_price = None
-            if tp is not None and sl is not None and price and price > 0:
-                if abs(price - tp) <= abs(price - sl):
-                    outcome, exit_price = "WIN", tp
-                else:
-                    exit_price = sl
-                    outcome = _classify_sl(sl)
-            elif tp is not None and price and price > 0 and abs(price - tp) <= (tp * 0.001):
-                outcome, exit_price = "WIN", tp
-            elif sl is not None:
-                exit_price = sl
-                outcome = _classify_sl(sl)
-            elif price and price > 0:
-                if w["direction"] == "LONG":
-                    outcome = "WIN" if price >= entry else "LOSS"
-                else:
-                    outcome = "WIN" if price <= entry else "LOSS"
-                exit_price = price
-
-            if outcome is None or exit_price is None:
-                logger.info(
-                    f"[FX-reconcile] {w['symbol']} exec#{ex_id} gone but no broker deal "
-                    f"or price to classify — retrying next sweep"
-                )
-                continue
-
+                _pex = _pdb.query(StrategyExecution).filter(
+                    StrategyExecution.id == ex_id,
+                ).first()
+                if _pex and _pex.outcome == "OPEN":
+                    mark_pending_reconcile(
+                        _pex,
+                        _pdb,
+                        reason="broker deal unavailable",
+                    )
+                    logger.warning(
+                        "[FX-reconcile] exec#%s pos=%s pending_reconcile — "
+                        "no broker deal (will not use synthetic SL/TP)",
+                        ex_id,
+                        w["position_id"],
+                    )
+            finally:
+                _pdb.close()
             _FX_RECONCILE_MISSING.pop(ex_id, None)
-            await _close_live_forex_execution_with_db_retry(
-                ex_id, outcome, float(exit_price), source="ctrader-reconcile"
-            )
 
     # Bound the missing-counter dict.
     if len(_FX_RECONCILE_MISSING) > 500:
         _FX_RECONCILE_MISSING.clear()
+
+    # Audit recent closes vs broker deal P/L (corrects mis-recorded exits like #45288097).
+    try:
+        from app.services.trade_management import reconcile_broker_pnl_for_recent_closes
+
+        audit = await reconcile_broker_pnl_for_recent_closes(hours=48)
+        if audit.get("corrected") or audit.get("phantom_paper"):
+            logger.info("[FX-reconcile] 48h close audit: %s", audit)
+    except Exception as _aud:
+        logger.debug("[FX-reconcile] broker P/L audit failed: %s", _aud)
 
     # Untracked OPEN rows (no pos= in notes) cannot enter the reconcile worklist
     # but still trip max_open_positions — expire when broker is flat.

@@ -7,6 +7,7 @@ Orders run on a DEDICATED asyncio event-loop thread so executor scan cycles
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import threading
 import time
@@ -17,10 +18,21 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 _queue: Optional[asyncio.Queue] = None
+_priority_queue: Optional[asyncio.Queue] = None
 _worker_started = False
 _order_loop: Optional[asyncio.AbstractEventLoop] = None
 _order_thread: Optional[threading.Thread] = None
 _order_loop_ready = threading.Event()
+
+
+@dataclass
+class CtraderSlAmendJob:
+    """Priority SL amend — processed before new order placement."""
+    user_id: int
+    exec_id: int
+    position_id: int
+    new_sl: float
+    keep_tp: Optional[float] = None
 
 
 @dataclass
@@ -51,6 +63,38 @@ def _get_queue() -> asyncio.Queue:
     if _queue is None:
         _queue = asyncio.Queue(maxsize=500)
     return _queue
+
+
+def _get_priority_queue() -> asyncio.Queue:
+    global _priority_queue
+    if _priority_queue is None:
+        _priority_queue = asyncio.Queue(maxsize=200)
+    return _priority_queue
+
+
+async def enqueue_ctrader_sl_amend(
+    *,
+    user_id: int,
+    exec_id: int,
+    position_id: int,
+    new_sl: float,
+    keep_tp: Optional[float] = None,
+) -> dict:
+    """Queue SL amend on the priority lane; await broker-confirmed result."""
+    start_ctrader_order_worker()
+    loop = _ensure_order_event_loop()
+    job = CtraderSlAmendJob(
+        user_id=user_id,
+        exec_id=exec_id,
+        position_id=position_id,
+        new_sl=float(new_sl),
+        keep_tp=keep_tp,
+    )
+    result_fut: concurrent.futures.Future = concurrent.futures.Future()
+    job._result_fut = result_fut  # type: ignore[attr-defined]
+    put_fut = asyncio.run_coroutine_threadsafe(_get_priority_queue().put(job), loop)
+    await asyncio.wrap_future(put_fut)
+    return await asyncio.wait_for(asyncio.wrap_future(result_fut), timeout=20.0)
 
 
 def _ensure_order_event_loop() -> asyncio.AbstractEventLoop:
@@ -336,6 +380,21 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
 
         db.commit()
 
+        if position_id and execution.outcome == "OPEN":
+            try:
+                from app.services.forex_tick_manager import register_live_position
+
+                register_live_position({
+                    "exec_id": execution.id,
+                    "symbol": execution.symbol,
+                    "strategy_id": execution.strategy_id,
+                    "user_id": execution.user_id,
+                    "sl_price": float(execution.sl_price) if execution.sl_price else None,
+                    "direction": execution.direction,
+                })
+            except Exception:
+                pass
+
         from datetime import datetime as _dt
         _fill_px = actual_fill if actual_fill and actual_fill > 0 else execution.entry_price
         logger.info(
@@ -403,9 +462,57 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
         db.close()
 
 
+async def _process_sl_amend_job(job: CtraderSlAmendJob) -> None:
+    from app.services.ctrader_client import amend_position_sl_result
+
+    res = await amend_position_sl_result(
+        job.user_id,
+        job.position_id,
+        job.new_sl,
+        keep_tp=job.keep_tp,
+        exec_id=job.exec_id,
+    )
+    fut = getattr(job, "_result_fut", None)
+    if fut and not fut.done():
+        fut.set_result(res)
+
+
+async def _dequeue_next_job():
+    """Priority lane (SL amends) always ahead of new order jobs."""
+    try:
+        return _get_priority_queue().get_nowait()
+    except asyncio.QueueEmpty:
+        pass
+    get_fut = asyncio.ensure_future(_get_queue().get())
+    pri_fut = asyncio.ensure_future(_get_priority_queue().get())
+    done, pending = await asyncio.wait(
+        {get_fut, pri_fut},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for p in pending:
+        p.cancel()
+    return next(iter(done)).result()
+
+
 async def _ctrader_order_worker() -> None:
     while True:
-        job: CtraderOrderJob = await _get_queue().get()
+        job = await _dequeue_next_job()
+        if isinstance(job, CtraderSlAmendJob):
+            try:
+                await _process_sl_amend_job(job)
+            except Exception as exc:
+                fut = getattr(job, "_result_fut", None)
+                if fut and not fut.done():
+                    fut.set_result({
+                        "ok": False,
+                        "result": "failed",
+                        "error": str(exc),
+                        "broker_reply": {},
+                    })
+            finally:
+                _get_priority_queue().task_done()
+            continue
+
         if job.latency is not None:
             job.latency.mark_dequeue()
         queue_wait_ms = -1
