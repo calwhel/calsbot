@@ -152,19 +152,8 @@ _PAYLOAD_TYPES = {
     "deal_list_by_position_id_res": 2180,
 }
 
-# Forex pip sizes
-_PIP_SIZES = {
-    # Forex majors
-    "EURUSD": 0.0001, "GBPUSD": 0.0001, "AUDUSD": 0.0001,
-    "NZDUSD": 0.0001, "USDCAD": 0.0001, "USDCHF": 0.0001,
-    "USDJPY": 0.01,   "EURJPY": 0.01,   "GBPJPY": 0.01,
-    # Metals — retail/broker pip convention (gold pip = $0.10), kept in lockstep
-    # with forex_engine._METAL_PIP_SIZES and the pip_value table below.
-    "XAUUSD": 0.10,
-    # Indices — 1 point = 1.0 index level (FP Markets convention)
-    "NAS100": 1.0, "SPX500": 1.0, "US30": 1.0, "GER40": 1.0, "UK100": 1.0,
-    "NDX": 1.0, "SPX": 1.0, "DJI": 1.0, "DAX": 1.0, "FTSE": 1.0,
-}
+# Platform pip sizes: app.services.pip_units.platform_pip_size (forex_engine).
+# Broker pipPosition metadata: pip_units.broker_pip_size_from_metadata — protocol only.
 
 # FP Markets / cTrader symbol name mapping
 # Indices use broker-specific contract names on FP Markets cTrader.
@@ -1331,10 +1320,12 @@ async def _resolve_symbol_details(
             return None
         s = res.symbol[0]
         details = {
-            "lotSize":    int(s.lotSize)    if s.HasField("lotSize")    else 0,
-            "minVolume":  int(s.minVolume)  if s.HasField("minVolume")  else 0,
-            "maxVolume":  int(s.maxVolume)  if s.HasField("maxVolume")  else 0,
-            "stepVolume": int(s.stepVolume) if s.HasField("stepVolume") else 0,
+            "lotSize":      int(s.lotSize)      if s.HasField("lotSize")      else 0,
+            "minVolume":    int(s.minVolume)    if s.HasField("minVolume")    else 0,
+            "maxVolume":    int(s.maxVolume)    if s.HasField("maxVolume")    else 0,
+            "stepVolume":   int(s.stepVolume)   if s.HasField("stepVolume")   else 0,
+            "digits":       int(s.digits)       if s.HasField("digits")       else 0,
+            "pipPosition":  int(s.pipPosition)  if s.HasField("pipPosition")  else 0,
         }
         if details["lotSize"] > 0:
             _SYMBOL_DETAILS_CACHE[cache_key] = details
@@ -1604,14 +1595,16 @@ async def place_order(
                     if rel_sl is not None:
                         req.relativeStopLoss = rel_sl
                     elif stop_loss_price is not None:
-                        req.relativeStopLoss = max(
-                            1, int(round(abs(entry_price - stop_loss_price) * 100_000))
+                        from app.services.pip_units import to_broker_relative_wire_units
+                        req.relativeStopLoss = to_broker_relative_wire_units(
+                            entry_price - stop_loss_price
                         )
                     if rel_tp is not None:
                         req.relativeTakeProfit = rel_tp
                     elif take_profit_price is not None:
-                        req.relativeTakeProfit = max(
-                            1, int(round(abs(entry_price - take_profit_price) * 100_000))
+                        from app.services.pip_units import to_broker_relative_wire_units
+                        req.relativeTakeProfit = to_broker_relative_wire_units(
+                            entry_price - take_profit_price
                         )
                 elif stop_loss_price is not None or take_profit_price is not None:
                     logger.error(
@@ -1749,14 +1742,16 @@ async def place_order_units(
                     if rel_sl is not None:
                         req.relativeStopLoss = rel_sl
                     elif stop_loss_price is not None:
-                        req.relativeStopLoss = max(
-                            1, int(round(abs(entry_price - stop_loss_price) * 100_000))
+                        from app.services.pip_units import to_broker_relative_wire_units
+                        req.relativeStopLoss = to_broker_relative_wire_units(
+                            entry_price - stop_loss_price
                         )
                     if rel_tp is not None:
                         req.relativeTakeProfit = rel_tp
                     elif take_profit_price is not None:
-                        req.relativeTakeProfit = max(
-                            1, int(round(abs(entry_price - take_profit_price) * 100_000))
+                        from app.services.pip_units import to_broker_relative_wire_units
+                        req.relativeTakeProfit = to_broker_relative_wire_units(
+                            entry_price - take_profit_price
                         )
 
                 if latency is not None:
@@ -2662,22 +2657,13 @@ async def place_ctrader_order_for_user(
         )
         _broker_sym = _SYMBOL_MAP.get(symbol, symbol)
     else:
-        # Forex: standard lot sizing
-        pip       = _PIP_SIZES.get(symbol, 0.0001)
-        # Compute effective SL in pips for lot sizing
-        _sl_pips_eff = sl_pips if sl_pips and sl_pips > 0 else abs(entry_price - sl_price) / max(pip, 1e-10)
-        # pip_value_per_lot: USD P&L per pip per standard lot
-        # For USD-quoted pairs (EURUSD, GBPUSD…): 10 USD/pip/lot
-        # For JPY pairs: ~9.28 USD (yen-based, approx at USDJPY≈148)
-        # For XAU: $10/pip/lot (XAUUSD pip=0.10, lot=100oz → 100×0.10=$10)
-        if symbol.upper() in ("XAUUSD",):
-            pip_value = 10.0   # $10/pip/lot (100oz lot, pip=0.10)
-        elif symbol.upper() in ("XAGUSD",):
-            pip_value = 5.0    # $5/pip/lot approx (5000oz lot, pip=0.001)
-        elif "JPY" in symbol.upper():
-            pip_value = 9.28   # approx USD/pip/lot at USDJPY~148
-        else:
-            pip_value = 10.0   # standard USD/pip/lot for majors
+        # Forex: standard lot sizing — platform pips only (never broker pipPosition).
+        from app.services.pip_units import platform_usd_per_pip_per_lot, sl_pips_platform
+
+        _sl_pips_eff = sl_pips_platform(
+            symbol, entry_price, sl_price, sl_pips_hint=sl_pips,
+        )
+        pip_value = platform_usd_per_pip_per_lot(symbol)
 
         if fixed_lots and fixed_lots > 0:
             # ── Explicit lot size chosen by the user ──────────────────────

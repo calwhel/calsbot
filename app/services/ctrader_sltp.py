@@ -44,11 +44,13 @@ def relative_sltp_wire(
     sl_pct: Optional[float],
     tp_pct: Optional[float],
 ) -> Tuple[Optional[int], Optional[int]]:
-    """Relative SL/TP magnitudes for MARKET orders (1/100000 price units)."""
+    """Relative SL/TP magnitudes for MARKET orders (broker wire units, not platform pips)."""
+    from app.services.pip_units import to_broker_relative_wire_units
+
     rel_sl = rel_tp = None
     if entry_price and entry_price > 0:
         if sl_pct is not None and sl_pct > 0:
-            rel_sl = max(1, int(round(entry_price * (sl_pct / 100) * 100_000)))
+            rel_sl = to_broker_relative_wire_units(entry_price * (sl_pct / 100))
         if tp_pct is not None and tp_pct > 0:
-            rel_tp = max(1, int(round(entry_price * (tp_pct / 100) * 100_000)))
+            rel_tp = to_broker_relative_wire_units(entry_price * (tp_pct / 100))
     return rel_sl, rel_tp

@@ -67,7 +67,8 @@ class TestStaleSignalGuard(unittest.TestCase):
             execution_id=102,
         )
         self.assertIsNotNone(stale)
-        self.assertIn("price moved", stale[0])
+        self.assertIn("moved $15.000", stale[0])
+        self.assertIn("pip_size=0.1", stale[0])
         self.assertIn("sig_src=spot:ctrader", stale[0])
 
     @patch("app.services.order_stale_guard._current_price_same_source")

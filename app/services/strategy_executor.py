@@ -4595,11 +4595,13 @@ async def evaluate_and_fire(
                     # Pre-fire drift guard — skip stale scan/signal prices.
                     try:
                         from app.services.ctrader_price_feed import get_price as _feed_px
-                        from app.services.forex_engine import pip_size as _psz_drift
+                        from app.services.pip_units import platform_pips_from_price_delta
                         _fresh = _feed_px(symbol)
                         _max_drift = float(risk.get("max_entry_drift_pips") or 15)
                         if _fresh and _max_drift > 0:
-                            _drift_pips = abs(_fresh - current_price) / max(_psz_drift(symbol), 1e-10)
+                            _drift_pips = platform_pips_from_price_delta(
+                                symbol, _fresh - current_price,
+                            )
                             if _drift_pips > _max_drift:
                                 _bump("blk_entry_drift")
                                 execution.outcome = "CANCELLED"
