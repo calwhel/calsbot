@@ -907,6 +907,217 @@ async def _apply_sl_amend(
     return True, confirm_ms
 
 
+_FOREX_LIKE_ASSET_CLASSES = frozenset({
+    "forex", "metals", "commodity", "index", "stock",
+})
+
+
+def is_forex_like_asset(asset_class: Optional[str]) -> bool:
+    return (asset_class or "").lower() in _FOREX_LIKE_ASSET_CLASSES
+
+
+def compute_pips_from_prices(
+    entry: float,
+    exit_price: float,
+    direction: str,
+    symbol: str,
+) -> Optional[float]:
+    """Signed pips from original entry vs exit — same formula for paper and live."""
+    try:
+        from app.services.forex_engine import pip_size as _pip_size
+
+        ps = _pip_size(symbol or "")
+        ent = float(entry)
+        ex = float(exit_price)
+        if not ps or ps <= 0 or ent <= 0 or ex <= 0:
+            return None
+        if (direction or "LONG").upper() == "LONG":
+            return round((ex - ent) / ps, 1)
+        return round((ent - ex) / ps, 1)
+    except Exception:
+        return None
+
+
+def compute_execution_pips_pnl(execution, exit_price: Optional[float] = None) -> Optional[float]:
+    """
+    Pips P&L for an execution — always from stored entry fill vs exit.
+    Paper and live share this path; broker deal is only for exit price on LIVE.
+    """
+    ac = (getattr(execution, "asset_class", None) or "crypto").lower()
+    if not is_forex_like_asset(ac):
+        return None
+    entry = float(getattr(execution, "entry_price", 0) or 0)
+    if entry <= 0:
+        return None
+    xp = float(exit_price if exit_price is not None else getattr(execution, "exit_price", 0) or 0)
+    if xp <= 0:
+        return None
+    try:
+        from app.services.strategy_executor import _tp1_blend_exit
+
+        pnl_exit = float(_tp1_blend_exit(execution, xp))
+    except Exception:
+        pnl_exit = xp
+    direction = getattr(execution, "direction", "LONG") or "LONG"
+    symbol = getattr(execution, "symbol", "") or ""
+    pips = compute_pips_from_prices(entry, pnl_exit, direction, symbol)
+    return guard_pips_sanity(
+        getattr(execution, "id", 0),
+        entry,
+        pnl_exit,
+        symbol,
+        direction,
+        pips,
+    )
+
+
+def guard_pips_sanity(
+    exec_id: int,
+    entry: float,
+    exit_price: float,
+    symbol: str,
+    direction: str,
+    pips: Optional[float],
+) -> Optional[float]:
+    """If rounded pips is 0 but price move exceeds half a pip, recompute and log."""
+    if pips is None:
+        return None
+    try:
+        from app.services.forex_engine import pip_size as _pip_size
+
+        ps = _pip_size(symbol or "")
+        if not ps or ps <= 0:
+            return pips
+        move_pips = abs(float(exit_price) - float(entry)) / ps
+        if abs(pips) < 0.05 and move_pips > 0.5:
+            logger.critical(
+                "[pnl-sanity] exec=%s pips=0 but entry=%s exit=%s symbol=%s move=%.1fp",
+                exec_id,
+                entry,
+                exit_price,
+                symbol,
+                move_pips,
+            )
+            raw = compute_pips_from_prices(entry, exit_price, direction, symbol)
+            return raw if raw is not None else pips
+    except Exception:
+        pass
+    return pips
+
+
+def format_pips_display(
+    *,
+    pips_pnl: Optional[float],
+    entry: float,
+    exit_price: float,
+    symbol: str,
+    direction: str,
+    notes: Optional[str] = None,
+    tp1_blend_line: Optional[str] = None,
+    pnl_pct: Optional[float] = None,
+) -> str:
+    """Trade-card P/L line — NULL is 'pending', never fake '0 pips'."""
+    if tp1_blend_line:
+        return str(tp1_blend_line)
+    if pips_pnl is None:
+        if notes and "pending_reconcile" in (notes or ""):
+            return "pending"
+        computed = compute_pips_from_prices(entry, exit_price, direction, symbol)
+        if computed is not None:
+            pips_pnl = computed
+        else:
+            return "pending"
+    sign = "+" if pips_pnl >= 0 else "−"
+    if abs(pips_pnl) >= 1:
+        return f"{sign}{abs(pips_pnl):.0f} pips"
+    return f"{sign}{abs(pips_pnl):.1f} pips"
+
+
+def backfill_missing_pips_pnl(hours: int = 168, limit: int = 500) -> int:
+    """
+    Recompute pips_pnl for closes with NULL/0 pips but entry != exit.
+    Returns count of rows corrected.
+    """
+    from datetime import datetime, timedelta
+
+    from app.database import BgSessionLocal as SessionLocal
+    from app.strategy_models import StrategyExecution
+
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    fixed = 0
+    fixed_strat_ids: set = set()
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.outcome.in_(("WIN", "LOSS", "BREAKEVEN")),
+                StrategyExecution.closed_at >= cutoff,
+                StrategyExecution.entry_price.isnot(None),
+                StrategyExecution.exit_price.isnot(None),
+            )
+            .order_by(StrategyExecution.closed_at.desc())
+            .limit(limit)
+            .all()
+        )
+        for ex in rows:
+            if not is_forex_like_asset(getattr(ex, "asset_class", None)):
+                continue
+            cur = ex.pips_pnl
+            if cur is not None and abs(float(cur)) >= 0.05:
+                continue
+            entry = float(ex.entry_price or 0)
+            exit_px = float(ex.exit_price or 0)
+            if entry <= 0 or exit_px <= 0:
+                continue
+            try:
+                from app.services.forex_engine import pip_size as _pip_size
+
+                ps = _pip_size(ex.symbol or "")
+                if ps and abs(exit_px - entry) <= ps * 0.25:
+                    continue
+            except Exception:
+                if abs(exit_px - entry) <= max(abs(entry) * 1e-8, 1e-6):
+                    continue
+            new_pips = compute_execution_pips_pnl(ex, exit_px)
+            if new_pips is None or abs(new_pips) < 0.05:
+                continue
+            ex.pips_pnl = new_pips
+            fixed += 1
+            fixed_strat_ids.add(ex.strategy_id)
+            logger.info(
+                "[pnl-backfill] exec=%s %s %s pips %s→%s (entry=%s exit=%s)",
+                ex.id,
+                ex.symbol,
+                ex.outcome,
+                cur,
+                new_pips,
+                entry,
+                exit_px,
+            )
+        if fixed:
+            db.commit()
+            try:
+                from app.services.strategy_executor import _update_performance
+
+                for sid in fixed_strat_ids:
+                    _update_performance(sid, db)
+                db.commit()
+            except Exception:
+                pass
+    except Exception as exc:
+        logger.warning("[pnl-backfill] failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+    if fixed:
+        logger.warning("[pnl-backfill] corrected %s closes with missing/zero pips_pnl", fixed)
+    return fixed
+
+
 def mark_pending_reconcile(execution, session, reason: str = "") -> None:
     """Flag OPEN execution awaiting broker deal data — never fabricate close."""
     notes = (execution.notes or "").strip()
@@ -926,18 +1137,11 @@ def _broker_pips_from_deal(
     exit_price: float,
     direction: str,
     symbol: str,
+    *,
+    exec_id: int = 0,
 ) -> Optional[float]:
-    try:
-        from app.services.forex_engine import pip_size as _pip_size
-
-        ps = _pip_size(symbol)
-        if not ps or ps <= 0:
-            return None
-        if direction == "LONG":
-            return round((exit_price - entry) / ps, 1)
-        return round((entry - exit_price) / ps, 1)
-    except Exception:
-        return None
+    pips = compute_pips_from_prices(entry, exit_price, direction, symbol)
+    return guard_pips_sanity(exec_id, entry, exit_price, symbol, direction, pips)
 
 
 async def reconcile_broker_pnl_for_recent_closes(hours: int = 48) -> dict:
@@ -1020,16 +1224,46 @@ async def reconcile_broker_pnl_for_recent_closes(hours: int = 48) -> dict:
             broker_exit = float(broker["exit_price"])
             broker_outcome = broker.get("outcome") or "LOSS"
             our_pips = float(ex.pips_pnl or 0)
+            entry_f = float(ex.entry_price or 0)
+            our_exit = float(ex.exit_price or 0)
+            our_recomputed = compute_execution_pips_pnl(ex, our_exit)
             broker_pips = _broker_pips_from_deal(
-                float(ex.entry_price or 0),
+                entry_f,
                 broker_exit,
                 ex.direction or "LONG",
                 ex.symbol or "",
+                exec_id=int(ex.id),
             )
             if broker_pips is None:
                 continue
+            # LIVE only — never trust broker price normalization that collapses
+            # exit to entry (would zero pips on real wins).
+            try:
+                from app.services.forex_engine import pip_size as _pip_size
+
+                ps = _pip_size(ex.symbol or "")
+                if (
+                    ps
+                    and abs(broker_exit - entry_f) <= ps * 0.25
+                    and our_recomputed is not None
+                    and abs(our_recomputed) > 1.0
+                    and abs(broker_pips) < 0.05
+                ):
+                    logger.warning(
+                        "[reconcile] exec=%s broker exit≈entry — keeping our exit=%s pips=%s",
+                        ex.id,
+                        our_exit,
+                        our_recomputed,
+                    )
+                    broker_exit = our_exit
+                    broker_pips = our_recomputed
+            except Exception:
+                pass
+            if broker_pips is None:
+                continue
             tol = 2.0
-            if abs(our_pips - broker_pips) > tol or ex.outcome != broker_outcome:
+            cmp_our = our_recomputed if our_recomputed is not None else our_pips
+            if abs(cmp_our - broker_pips) > tol or ex.outcome != broker_outcome:
                 stats["broker_mismatch"] += 1
                 logger.warning(
                     "[reconcile] corrected exec=%s our=%s pips=%s broker=%s pips=%s "
@@ -1065,7 +1299,9 @@ async def reconcile_broker_pnl_for_recent_closes(hours: int = 48) -> dict:
                     f"| reconcile-corrected"
                 )
                 stats["corrected"] += 1
-        if stats["corrected"]:
+        bf = backfill_missing_pips_pnl(hours=hours, limit=200)
+        stats["backfilled"] = bf
+        if stats["corrected"] or bf:
             db.commit()
     except Exception as exc:
         logger.warning("[reconcile] broker P/L audit failed: %s", exc)

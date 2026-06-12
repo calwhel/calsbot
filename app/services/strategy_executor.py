@@ -1720,22 +1720,20 @@ def _close_paper_execution(
     pnl_pct   = round(raw_pnl * ex.leverage, 2)
     closed_at = datetime.utcnow()
 
-    # ── Pips P&L and spread audit (forex/metals only) ─────────────────────────
-    pips_pnl:           float | None = None
+    # ── Pips P&L — paper computes from entry vs exit (never broker-sourced) ───
+    from app.services.trade_management import (
+        compute_execution_pips_pnl,
+        is_forex_like_asset,
+    )
+
+    pips_pnl: float | None = None
     spread_pips_stored: float | None = None
     _ex_ac = getattr(ex, "asset_class", "crypto") or "crypto"
-    if _ex_ac in ("forex", "metals", "commodity"):
+    if is_forex_like_asset(_ex_ac):
+        pips_pnl = compute_execution_pips_pnl(ex, float(_pnl_exit))
         try:
-            from app.services.forex_engine import (
-                pip_size as _pip_sz,
-                get_spread_pips as _gsp,
-            )
-            _ps = _pip_sz(getattr(ex, "symbol", ""))
-            if _ps > 0 and ex.entry_price and _pnl_exit:
-                if ex.direction == "LONG":
-                    pips_pnl = round((_pnl_exit - ex.entry_price) / _ps, 1)
-                else:
-                    pips_pnl = round((ex.entry_price - _pnl_exit) / _ps, 1)
+            from app.services.forex_engine import get_spread_pips as _gsp
+
             spread_pips_stored = _gsp(getattr(ex, "symbol", ""))
         except Exception:
             pass
@@ -1850,6 +1848,8 @@ def _close_paper_execution(
                 tp1_blend_line=_tp1_blend_pips_line(ex, exit_price),
                 mfe_pips=getattr(ex, "mfe_pips", None),
                 mae_pips=getattr(ex, "mae_pips", None),
+                pips_pnl=pips_pnl,
+                notes=ex.notes,
             )
         # Mobile push — trade close (paper)
         from app.services.expo_push import notify_trade_close_bg
@@ -2227,6 +2227,8 @@ def _fmt_close_card(
     tp1_blend_line: Optional[str] = None,
     mfe_pips: Optional[float] = None,
     mae_pips: Optional[float] = None,
+    pips_pnl: Optional[float] = None,
+    notes: Optional[str] = None,
 ) -> str:
     entry = _coerce_price(entry)
     exit_price = _coerce_price(exit_price)
@@ -2311,13 +2313,21 @@ def _fmt_close_card(
     else:
         raw_move = (exit_price - entry) if direction == "LONG" else (entry - exit_price)
 
-    if tp1_blend_line:
+    from app.services.trade_management import format_pips_display
+
+    if pip_sz is not None and pip_sz > 0:
+        pnl_display = format_pips_display(
+            pips_pnl=pips_pnl,
+            entry=entry,
+            exit_price=exit_price,
+            symbol=symbol,
+            direction=direction,
+            notes=notes,
+            tp1_blend_line=tp1_blend_line,
+            pnl_pct=pnl_pct,
+        )
+    elif tp1_blend_line:
         pnl_display = str(tp1_blend_line)
-    elif pip_sz is not None and pip_sz > 0:
-        pips = raw_move / pip_sz
-        sign = "+" if pips >= 0 else "−"
-        # Whole pips for large values, 1dp for fractional
-        pnl_display = f"{sign}{abs(pips):.0f} pips" if abs(pips) >= 1 else f"{sign}{abs(pips):.1f} pips"
     else:
         # Crypto: keep % with adaptive precision
         a = abs(pnl_pct)
@@ -2401,6 +2411,8 @@ def _build_close_telegram_safe(
     tp1_blend_line: Optional[str] = None,
     mfe_pips: Optional[float] = None,
     mae_pips: Optional[float] = None,
+    pips_pnl: Optional[float] = None,
+    notes: Optional[str] = None,
 ) -> str:
     fields = {
         "execution_id": execution_id,
@@ -2413,6 +2425,7 @@ def _build_close_telegram_safe(
         "pnl_pct": pnl_pct,
         "leverage": leverage,
         "tp1_blend_line": tp1_blend_line,
+        "pips_pnl": pips_pnl,
     }
     try:
         return _fmt_close_card(
@@ -2431,6 +2444,8 @@ def _build_close_telegram_safe(
             tp1_blend_line=tp1_blend_line,
             mfe_pips=mfe_pips,
             mae_pips=mae_pips,
+            pips_pnl=pips_pnl,
+            notes=notes,
         )
     except Exception as exc:
         logger.exception(
@@ -6724,18 +6739,10 @@ async def _close_live_forex_execution_and_notify(
         pnl_pct   = round(raw_pnl * leverage, 2)
         closed_at = datetime.utcnow()
 
-        # Pips P&L (forex/metals) — broker fill, no synthetic spread deduction.
-        pips_pnl: Optional[float] = None
-        try:
-            from app.services.forex_engine import pip_size as _pip_sz
-            _ps = _pip_sz(ex.symbol or "")
-            if _ps and _ps > 0:
-                if ex.direction == "LONG":
-                    pips_pnl = round((_pnl_exit - entry) / _ps, 1)
-                else:
-                    pips_pnl = round((entry - _pnl_exit) / _ps, 1)
-        except Exception:
-            pips_pnl = None
+        # Pips P&L — from original entry vs broker exit fill (not SL/TP levels).
+        from app.services.trade_management import compute_execution_pips_pnl
+
+        pips_pnl = compute_execution_pips_pnl(ex, float(_pnl_exit))
 
         result = db.execute(
             _text(
@@ -6750,8 +6757,11 @@ async def _close_live_forex_execution_and_notify(
         if result.rowcount == 0:
             return True  # another worker/loop already closed it — no double notify
 
-        ex.outcome = outcome; ex.exit_price = exit_price
-        ex.pnl_pct = pnl_pct; ex.closed_at  = closed_at
+        ex.outcome = outcome
+        ex.exit_price = exit_price
+        ex.pnl_pct = pnl_pct
+        ex.closed_at = closed_at
+        ex.pips_pnl = pips_pnl
 
         from app.services.close_notify_dedupe import claim_close_notification
         if not claim_close_notification(db, ex.id):
@@ -6813,6 +6823,8 @@ async def _close_live_forex_execution_and_notify(
                         tp1_blend_line=_blend_line,
                         mfe_pips=getattr(ex, "mfe_pips", None),
                         mae_pips=getattr(ex, "mae_pips", None),
+                        pips_pnl=pips_pnl,
+                        notes=ex.notes,
                     )
             from app.services.expo_push import notify_trade_close_bg
             dur_mins = int((closed_at - ex.fired_at).total_seconds() / 60) if ex.fired_at else 0
