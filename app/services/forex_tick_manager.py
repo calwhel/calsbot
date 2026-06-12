@@ -164,11 +164,10 @@ async def _manage_paper_on_tick(exec_id: int, symbol: str, mid: float) -> None:
     from app.strategy_models import StrategyExecution, UserStrategy
     from app.services.trade_management import (
         check_directional_exit_hit,
+        classify_and_close_paper,
         manage_open_position,
-        validate_close_sanity,
     )
     from app.services.strategy_executor import (
-        _close_paper_execution,
         _evaluate_paper_position_against_candles,
     )
 
@@ -183,8 +182,7 @@ async def _manage_paper_on_tick(exec_id: int, symbol: str, mid: float) -> None:
         hit = check_directional_exit_hit(ex, mid, mid)
         if hit:
             outcome, exit_px, kind = hit
-            outcome, label = validate_close_sanity(ex, outcome, exit_px, kind)
-            _close_paper_execution(ex, outcome, exit_px, db, close_label=label)
+            classify_and_close_paper(ex, outcome, exit_px, db, hit_kind=kind)
             unregister_position(exec_id, symbol)
             return
         strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
