@@ -436,6 +436,11 @@ body {
 .strat-card:hover { border-color: var(--border2); box-shadow: 0 4px 12px rgba(17,24,39,.1), 0 2px 4px rgba(17,24,39,.06); }
 .strat-card.live-card  { border-color: rgba(34,197,94,.2); }
 .strat-card.live-card::after { background: var(--green); }
+.strat-card.live-card.lf-pnl-pos { border-color: rgba(34,197,94,.22); }
+.strat-card.live-card.lf-pnl-pos::after { background: var(--green); }
+.strat-card.live-card.lf-pnl-neg { border-color: rgba(239,68,68,.22); }
+.strat-card.live-card.lf-pnl-neg::after { background: var(--red); }
+.strat-card.live-card.lf-pnl-flat::after { background: var(--border2); }
 .strat-card.paper-card { border-color: rgba(8,145,178,.25); border-style: dashed; }
 .strat-card.paper-card::after { background: var(--paper); }
 
@@ -4111,6 +4116,7 @@ function showPage(id,el,startPaper){
       if(typeof renderCurrentStep==='function')renderCurrentStep();
       if(startPaper!==undefined && typeof WZ!=='undefined'){WZ.mode=startPaper?'paper':'live';}
     }
+    if(id!=='live-forex') _lfStopLivePoll();
   }catch(err){
     console.error('[portal] showPage failed', id, err);
     toast('Could not switch tab — please refresh','error');
@@ -11694,6 +11700,9 @@ const LF_PAIRS = [
 ];
 
 let _lfPollTimer = null;
+let _lfLivePollTimer = null;
+let _lfLiveData = null;
+let _lfBrokerHealth = null;
 let _ctraderLinking = false;
 
 function renderLFConnecting(wrap, msg) {
@@ -11714,10 +11723,171 @@ async function _checkCtraderSetup() {
   } catch (e) { return null; }
 }
 
+function _lfStopLivePoll() {
+  if (_lfLivePollTimer) { clearInterval(_lfLivePollTimer); _lfLivePollTimer = null; }
+}
+
+function _lfStartLivePoll() {
+  _lfStopLivePoll();
+  if (document.visibilityState !== 'visible') return;
+  _lfLivePollTimer = setInterval(_lfPollLiveUpdates, 5000);
+}
+
+async function _lfPollLiveUpdates() {
+  if (document.visibilityState !== 'visible') { _lfStopLivePoll(); return; }
+  const stratsEl = document.getElementById('lf-live-strats');
+  if (!stratsEl || !_lfLiveData) return;
+  try {
+    const [hRes, pRes] = await Promise.all([
+      _apiFetch(`/api/ctrader/health?uid=${encodeURIComponent(UID)}`, { timeoutMs: 8000 }),
+      _apiFetch(`/api/live-forex/account?uid=${encodeURIComponent(UID)}&positions_only=1`, { timeoutMs: 8000 }),
+    ]);
+    if (hRes.ok) _lfBrokerHealth = await hRes.json();
+    if (pRes.ok) {
+      const pj = await pRes.json();
+      _lfLiveData.open_positions = pj.open_positions || [];
+      _lfRefreshLivePositionRows();
+    }
+    const hdr = document.getElementById('lf-strats-header');
+    if (hdr && _lfBrokerHealth) {
+      const agg = _lfAggLine(_lfLiveData);
+      hdr.innerHTML = _lfStratsHeaderInner(agg, _lfBrokerHealth);
+    }
+    document.querySelectorAll('.lf-broker-chip-slot').forEach(el => {
+      el.innerHTML = _lfBrokerChipHtml(_lfBrokerHealth);
+    });
+  } catch (e) { /* silent — next poll retries */ }
+}
+
+function _lfRefreshLivePositionRows() {
+  if (!_lfLiveData) return;
+  const positions = _lfLiveData.open_positions || [];
+  const byStrat = {};
+  positions.forEach(p => {
+    const sid = p.strategy_id;
+    if (sid == null) return;
+    if (!byStrat[sid]) byStrat[sid] = [];
+    byStrat[sid].push(p);
+  });
+  document.querySelectorAll('[data-lf-strat-id]').forEach(card => {
+    const sid = parseInt(card.getAttribute('data-lf-strat-id'), 10);
+    const row = card.querySelector('.lf-open-rows');
+    if (!row) return;
+    const opens = byStrat[sid] || [];
+    row.innerHTML = opens.length ? opens.map(_lfOpenRowHtml).join('') : '';
+    row.style.display = opens.length ? 'block' : 'none';
+  });
+}
+
+function _lfRelTime(iso) {
+  if (!iso) return '—';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60000) return 'just now';
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+
+function _lfBrokerChipHtml(h) {
+  if (!h) return '';
+  if (h.linked && h.token_valid && h.feed_alive) {
+    return '<span class="lf-broker-chip ok">cTrader ✓</span>';
+  }
+  if (!h.linked || !h.token_valid) {
+    return '<a href="#settings" class="lf-broker-chip warn" onclick="showPage(\'settings\',document.querySelector(\'a[href=\\\'#settings\\\']\'));return false;">cTrader ⚠️ re-link needed</a>';
+  }
+  return '<span class="lf-broker-chip reconnect">feed reconnecting…</span>';
+}
+
+function _lfFeatBadges(tm) {
+  if (!tm) return '';
+  const _fb = s => `<span class="lf-feat-badge">${s}</span>`;
+  const badges = [];
+  if (tm.breakeven_enabled) badges.push(_fb('BE'));
+  if (tm.trailing_enabled) badges.push(_fb('TRAIL'));
+  if (tm.partial_tp_enabled) badges.push(_fb('TP1'));
+  if (tm.sessions_enabled) {
+    const sn = (tm.allowed_sessions || [])[0] || 'SESSION';
+    badges.push(_fb(String(sn).toUpperCase().slice(0, 8)));
+  }
+  if (tm.news_filter_enabled) badges.push(_fb('NEWS'));
+  return badges.join('');
+}
+
+function _lfSparkline(points) {
+  if (!points || points.length < 2) return '';
+  const w = 72, h = 22;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const range = max - min || 1;
+  const coords = points.map((v, i) => {
+    const x = (i / (points.length - 1)) * w;
+    const y = h - 2 - ((v - min) / range) * (h - 4);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const up = points[points.length - 1] >= points[0];
+  const stroke = up ? 'var(--green)' : 'var(--red)';
+  return `<svg class="lf-spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" points="${coords}"/></svg>`;
+}
+
+function _lfOpenRowHtml(p) {
+  const dir = p.direction === 'LONG' ? 'LONG' : 'SHORT';
+  const arrow = p.direction === 'LONG' ? '▲' : '▼';
+  const entry = p.entry_price != null ? Number(p.entry_price).toFixed(5) : '—';
+  const upips = p.unrealized_pips;
+  const pipsStr = upips != null ? `now ${upips >= 0 ? '+' : ''}${upips} pips` : 'now —';
+  const pipsC = upips == null ? '' : upips >= 0 ? 'pos' : 'neg';
+  const sl = p.display_sl != null ? Number(p.display_sl).toFixed(2) : (p.sl_price != null ? Number(p.sl_price).toFixed(2) : '—');
+  let mgmt = '';
+  if (p.breakeven_applied) mgmt = ' 🔒BE';
+  else if (p.sl_trailed) mgmt = ' 📈TRAIL';
+  return `<div class="lf-open-row">
+    <span class="lf-live-dot" aria-hidden="true"></span>
+    <span class="lf-open-txt"><span class="lf-dir ${dir.toLowerCase()}">${arrow} ${dir}</span> @ ${entry} · <span class="lf-upips ${pipsC}">${pipsStr}</span> · SL ${sl}${mgmt}</span>
+  </div>`;
+}
+
+function _lfAggLine(d) {
+  const strats = d.live_strategies || [];
+  const openN = (d.open_positions || []).length;
+  const week = d.week_net_pips;
+  const weekStr = week == null ? '—' : `${week >= 0 ? '+' : ''}${week} pips`;
+  return {
+    nStrats: strats.length,
+    openN,
+    weekStr,
+    activeN: strats.filter(s => s.status === 'active').length,
+  };
+}
+
+function _lfStratsHeaderInner(agg, health) {
+  return `<div class="lf-strats-hd">
+    <div class="lf-strats-agg">${agg.nStrats} live strateg${agg.nStrats === 1 ? 'y' : 'ies'} · ${agg.openN} open position${agg.openN === 1 ? '' : 's'} · net ${agg.weekStr} this week</div>
+    <div class="lf-strats-hd-actions">
+      <span class="lf-broker-chip-slot">${_lfBrokerChipHtml(health)}</span>
+      ${agg.activeN > 0 ? `<button class="btn ghost sm" onclick="lfPauseAll(${agg.activeN})">⏸ Pause all</button>` : ''}
+    </div>
+  </div>`;
+}
+
+if (!window._lfVisBound) {
+  window._lfVisBound = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && document.getElementById('live-forex')?.classList.contains('active')) {
+      _lfStartLivePoll();
+    } else {
+      _lfStopLivePoll();
+    }
+  });
+}
+
 async function loadLiveForex(retry=0) {
   const wrap = $('lf-body');
   if (!wrap) return;
   if (_lfPollTimer) { clearTimeout(_lfPollTimer); _lfPollTimer = null; }
+  _lfStopLivePoll();
   if (_ctraderLinking) renderLFConnecting(wrap);
   else wrap.innerHTML = retry ? _wakeLoadingHtml('Still waking server…') : '<div class="loader">Loading account…</div>';
   const setup = await _checkCtraderSetup();
@@ -11746,7 +11916,13 @@ async function loadLiveForex(retry=0) {
     }
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
+    _lfLiveData = d;
+    try {
+      const hRes = await _apiFetch(`/api/ctrader/health?uid=${encodeURIComponent(UID)}`, { timeoutMs: 8000 });
+      _lfBrokerHealth = hRes.ok ? await hRes.json() : null;
+    } catch (e) { _lfBrokerHealth = null; }
     renderLiveForex(d, wrap);
+    _lfStartLivePoll();
   } catch(e) {
     if (retry < 3) {
       await new Promise(res => setTimeout(res, 3000));
@@ -11871,8 +12047,9 @@ function renderLiveForex(d, wrap) {
 
     <!-- Live strategies -->
     <div class="lf-card" style="margin-bottom:16px">
-      <div class="lf-section-title">Your Live Strategies <span style="font-weight:400;color:var(--muted)">(${(d.live_strategies||[]).length})</span></div>
-      <div id="lf-live-strats">${renderLFLiveStrategies(d.live_strategies||[])}</div>
+      <div class="lf-section-title">Your Live Strategies</div>
+      <div id="lf-strats-header">${_lfStratsHeaderInner(_lfAggLine(d), _lfBrokerHealth)}</div>
+      <div id="lf-live-strats" class="lf-strats-grid">${renderLFLiveStrategies(d.live_strategies||[], d.open_positions||[], _lfBrokerHealth)}</div>
     </div>
 
     <!-- Open positions -->
@@ -12030,48 +12207,113 @@ function renderLFSessions() {
   }).join('');
 }
 
-function renderLFLiveStrategies(strats) {
-  if (!strats || !strats.length) return `<div style="color:var(--muted);font-size:13px;padding:8px 0">No strategies are running live on forex yet. Go to <b>Strategies</b>, open a forex/gold/index strategy, and switch it to <b>Live</b>.</div>`;
+function renderLFLiveStrategies(strats, positions, health) {
+  if (!strats || !strats.length) {
+    return `<div style="color:var(--muted);font-size:13px;padding:8px 0">No strategies are running live on forex yet. Go to <b>Strategies</b>, open a forex/gold/index strategy, and switch it to <b>Live</b>.</div>`;
+  }
+  const byStrat = {};
+  (positions || []).forEach(p => {
+    const sid = p.strategy_id;
+    if (sid == null) return;
+    if (!byStrat[sid]) byStrat[sid] = [];
+    byStrat[sid].push(p);
+  });
   return strats.map(s => {
     const paused = s.status === 'paused';
-    const pnl   = s.total_pnl_pct;
-    const pnlC  = pnl == null ? '' : pnl >= 0 ? 'color:var(--positive,#3fb68b)' : 'color:var(--negative,#e5484d)';
-    const pnlStr= s.closed_count > 0 ? `${pnl>=0?'+':''}${pnl.toFixed(2)}%` : '—';
-    const syms  = (s.symbols||[]).slice(0,6).map(x=>`<span style="background:var(--surface2,rgba(255,255,255,.06));border-radius:5px;padding:2px 7px;font-size:10.5px;font-family:monospace;font-weight:600">${escHtml(x)}</span>`).join(' ');
-    const open  = s.open_count || 0;
-    const wr    = s.win_rate;
-    const wrC   = wr == null ? 'color:var(--muted)' : wr >= 50 ? 'color:var(--positive,#3fb68b)' : 'color:var(--negative,#e5484d)';
-    const dotC  = paused ? 'var(--warning,#d6a35c)' : 'var(--positive,#3fb68b)';
-    return `<div style="border-top:1px solid var(--border,rgba(255,255,255,.06));padding:12px 0">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
-        <div style="min-width:0;flex:1;cursor:pointer" onclick="openStrategy(${s.id})">
-          <div style="display:flex;align-items:center;gap:7px;margin-bottom:6px">
-            <span style="width:7px;height:7px;border-radius:50%;background:${dotC};box-shadow:0 0 0 3px ${paused?'rgba(214,163,92,.15)':'rgba(63,182,139,.15)'};flex-shrink:0"></span>
-            <span style="font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(s.name)}</span>
-            <span style="font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:${paused?'var(--warning,#d6a35c)':'var(--positive,#3fb68b)'};font-weight:700;border:1px solid ${paused?'var(--warning,#d6a35c)':'var(--positive,#3fb68b)'};border-radius:4px;padding:1px 5px;flex-shrink:0">${paused?'PAUSED':'LIVE'}</span>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px">${syms||'<span style="font-size:10.5px;color:var(--muted)">all pairs</span>'}</div>
+    const netPips = s.total_pips_pnl;
+    const hasPips = s.closed_count > 0 && netPips != null;
+    const pipsHero = hasPips ? `${netPips >= 0 ? '+' : ''}${Math.round(netPips)}` : '—';
+    const pipsHeroC = !hasPips ? '' : netPips > 0 ? 'pnl-pos' : netPips < 0 ? 'pnl-neg' : '';
+    const accentCls = !hasPips ? 'lf-pnl-flat' : netPips > 0 ? 'lf-pnl-pos' : netPips < 0 ? 'lf-pnl-neg' : 'lf-pnl-flat';
+    const pct = s.total_pnl_pct;
+    const pctSub = s.closed_count > 0 && pct != null ? `(${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)` : '';
+    const sym = (s.symbols || [])[0] || '—';
+    const wr = s.win_rate != null ? s.win_rate : 0;
+    const wrDisp = s.closed_count > 0 && s.win_rate != null ? `${wr}%` : '—';
+    const wrLow = s.closed_count > 0 && wr < 40;
+    const opens = byStrat[s.id] || [];
+    const spark = _lfSparkline(s.sparkline_7d || []);
+    const featHtml = _lfFeatBadges(s.trade_mgmt || {});
+    const brokerChip = _lfBrokerChipHtml(health);
+    const lastFired = _lfRelTime(s.last_fired_at);
+    const pipsLbl = s.asset_class === 'index' ? 'pts' : 'pips';
+    return `<div class="strat-card live-card ${accentCls}" data-lf-strat-id="${s.id}">
+      <div class="lf-card-top">
+        <div class="card-hd lf-card-hd">
+          <div class="dot ${paused ? 'paused' : 'active'}"></div>
+          <div class="card-name">${escHtml(s.name)}</div>
+          <span class="pill ${paused ? 'paused' : 'active'}">${paused ? 'PAUSED' : 'LIVE'}</span>
+          <span class="lf-broker-chip-slot">${brokerChip}</span>
         </div>
-        <div style="text-align:right;flex-shrink:0">
-          <div style="font-size:15px;font-weight:800;${pnlC}">${pnlStr}</div>
-          <div style="font-size:10px;color:var(--muted)">realized</div>
+        <div class="lf-hero-pnl">
+          <div class="lf-hero-pips ${pipsHeroC}">${pipsHero}</div>
+          <div class="lf-hero-pips-lbl">net ${pipsLbl}</div>
+          ${pctSub ? `<div class="lf-hero-pct">${pctSub}</div>` : ''}
+          ${spark}
         </div>
       </div>
-      <div style="display:flex;gap:14px;flex-wrap:wrap;margin:2px 0 9px;font-size:11px">
-        <span style="color:var(--muted)"><b style="color:var(--text,#fff);font-weight:700">${s.size_label}</b> size</span>
-        <span style="color:var(--muted)">${s.timeframe}</span>
-        <span style="color:var(--muted)"><b style="color:var(--text,#fff);font-weight:700">${open}</b> open</span>
-        <span style="color:var(--muted)"><b style="color:var(--text,#fff);font-weight:700">${s.closed_count}</b> closed</span>
-        <span style="color:var(--muted)">win <b style="${wrC};font-weight:700">${wr==null?'—':wr.toFixed(0)+'%'}</b></span>
+      <div class="card-meta lf-card-meta">
+        <span>${escHtml(sym)}</span>
+        <span class="card-meta-sep"></span>
+        <span>${escHtml(s.size_label || '—')}</span>
+        <span class="card-meta-sep"></span>
+        <span>${escHtml(s.timeframe || '—')}</span>
       </div>
-      <div style="display:flex;gap:7px;flex-wrap:wrap">
-        <button class="btn ghost sm" onclick="lfEditSize(${s.id})">⚖ Edit size</button>
-        <button class="btn ${paused?'primary':'ghost'} sm" onclick="lfToggleStrat(${s.id},'${s.status}')">${paused?'▶ Resume':'⏸ Pause'}</button>
+      ${featHtml ? `<div class="lf-feat-badges">${featHtml}</div>` : ''}
+      <div class="lf-open-rows" style="${opens.length ? '' : 'display:none'}">${opens.map(_lfOpenRowHtml).join('')}</div>
+      <div class="card-metrics lf-card-metrics">
+        <div class="cm-item">
+          <div class="cm-val">${s.closed_count || 0}</div>
+          <div class="cm-lbl">Trades</div>
+        </div>
+        <div class="cm-item">
+          <div class="cm-val ${s.closed_count > 0 ? pC(wr - 50) : ''}">${wrDisp}</div>
+          <div class="cm-lbl">Win Rate</div>
+          ${s.closed_count > 0 ? `<div class="win-bar"><div class="win-fill ${wrLow ? 'low' : ''}" style="width:${Math.min(100, wr)}%"></div></div>` : ''}
+        </div>
+        <div class="cm-item">
+          <div class="cm-val ${hasPips ? pC(netPips) : ''}">${hasPips ? `${netPips >= 0 ? '+' : ''}${Math.round(netPips)}` : '—'}</div>
+          <div class="cm-lbl">Total ${pipsLbl}</div>
+        </div>
+        <div class="cm-item">
+          <div class="cm-val">${s.open_count || 0}</div>
+          <div class="cm-lbl">Open</div>
+        </div>
+        <div class="cm-item">
+          <div class="cm-val lf-last-fired">${lastFired}</div>
+          <div class="cm-lbl">Last fired</div>
+        </div>
       </div>
-      <div id="lf-size-edit-${s.id}" style="display:none;margin-top:9px;padding:11px;border:1px solid var(--border,rgba(255,255,255,.1));border-radius:10px;background:var(--surface2,rgba(255,255,255,.03))"
+      <div class="card-acts">
+        <button class="btn primary sm" onclick="openStrategyDetail(${s.id})">View trades</button>
+        <button class="btn ${paused ? 'success' : 'ghost'} sm" onclick="lfToggleStrat(${s.id},'${s.status}')">${paused ? '▶ Resume' : '⏸ Pause'}</button>
+        <button class="btn sm" onclick="lfEditSize(${s.id})">Edit size</button>
+      </div>
+      <div id="lf-size-edit-${s.id}" class="lf-size-edit" style="display:none"
            data-stype="${s.size_type}" data-sval="${s.size_value}"></div>
     </div>`;
   }).join('');
+}
+
+async function lfPauseAll(activeN) {
+  const n = activeN || (_lfLiveData?.live_strategies || []).filter(s => s.status === 'active').length;
+  if (!n) return;
+  showConfirm(
+    'Pause all live strategies',
+    `Pause all ${n} live strateg${n === 1 ? 'y' : 'ies'}? Open positions keep their SL/TP and continue to be managed.`,
+    'Pause all',
+    null,
+    async () => {
+      const active = (_lfLiveData?.live_strategies || []).filter(s => s.status === 'active');
+      for (const s of active) {
+        try {
+          await fetch(`/api/strategies/${s.id}/toggle?uid=${UID}`, { method: 'POST' });
+        } catch (e) { /* continue */ }
+      }
+      toast('All live strategies paused');
+      loadLiveForex();
+    }
+  );
 }
 
 const LF_SIZE_OPTS = [
@@ -12269,6 +12511,42 @@ async function lfTestTrade(symbol) {
 .lf-input { flex:1;background:var(--card-hi,#22252a);border:1px solid var(--border,rgba(255,255,255,.08));border-radius:6px;padding:7px 10px;color:var(--text,#fff);font-size:13px;outline:none; }
 .lf-result { background:var(--card-hi,#22252a);border-radius:8px;padding:14px 16px;margin-top:4px; }
 @media(max-width:540px){ .lf-row{flex-direction:column;align-items:flex-start} .lf-row label{width:auto} }
+.lf-strats-grid { display:flex; flex-direction:column; gap:12px; margin-top:12px; }
+.lf-strats-hd { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; margin-bottom:4px; }
+.lf-strats-agg { font-size:12px; color:var(--muted); line-height:1.5; flex:1; min-width:0; }
+.lf-strats-hd-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.lf-card-top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:4px; }
+.lf-card-hd { flex:1; min-width:0; margin-bottom:0 !important; }
+.lf-hero-pnl { text-align:right; flex-shrink:0; }
+.lf-hero-pips { font-size:22px; font-weight:800; letter-spacing:-.5px; font-variant-numeric:tabular-nums; line-height:1.1; }
+.lf-hero-pips-lbl { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; font-weight:600; }
+.lf-hero-pct { font-size:11px; color:var(--muted); margin-top:2px; }
+.lf-spark { display:block; margin-top:6px; margin-left:auto; opacity:.85; }
+.lf-card-meta { margin-bottom:8px !important; }
+.lf-feat-badges { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:10px; }
+.lf-feat-badge { font-size:9px; background:rgba(90,95,126,.12); color:var(--muted); border:1px solid var(--border); border-radius:3px; padding:1px 5px; font-weight:700; letter-spacing:.3px; }
+.lf-broker-chip { display:inline-flex; align-items:center; padding:2px 7px; border-radius:4px; font-size:10px; font-weight:700; border:1px solid; text-decoration:none; white-space:nowrap; }
+.lf-broker-chip.ok { background:rgba(34,197,94,.08); color:var(--green); border-color:rgba(34,197,94,.22); }
+.lf-broker-chip.warn { background:rgba(239,68,68,.08); color:var(--red); border-color:rgba(239,68,68,.22); }
+.lf-broker-chip.reconnect { background:rgba(245,158,11,.08); color:var(--yellow); border-color:rgba(245,158,11,.22); }
+.lf-open-rows { margin-bottom:10px; display:flex; flex-direction:column; gap:6px; }
+.lf-open-row { display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--card2); border:1px solid var(--border); border-radius:6px; font-size:11.5px; line-height:1.4; }
+.lf-live-dot { width:7px; height:7px; border-radius:50%; background:var(--green); flex-shrink:0; animation:pulse-dot 1.6s ease-in-out infinite; }
+.lf-open-txt { min-width:0; flex:1; }
+.lf-dir.long { color:var(--green); font-weight:700; }
+.lf-dir.short { color:var(--red); font-weight:700; }
+.lf-upips.pos { color:var(--green); font-weight:700; }
+.lf-upips.neg { color:var(--red); font-weight:700; }
+.lf-card-metrics { grid-template-columns:repeat(5,1fr); margin-bottom:10px; }
+.lf-card-metrics .cm-val.lf-last-fired { font-size:12px; font-weight:600; }
+.lf-size-edit { margin-top:9px; padding:11px; border:1px solid var(--border); border-radius:10px; background:var(--card2); }
+@media(max-width:540px){
+  .lf-card-top { flex-direction:column; }
+  .lf-hero-pnl { text-align:left; display:flex; flex-wrap:wrap; align-items:baseline; gap:8px; }
+  .lf-spark { margin-left:0; }
+  .lf-card-metrics { grid-template-columns:repeat(3,1fr); }
+  .lf-strats-hd { flex-direction:column; align-items:flex-start; }
+}
 </style>
 </body>
 </html>

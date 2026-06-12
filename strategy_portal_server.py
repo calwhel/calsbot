@@ -73,6 +73,28 @@ def _cached_json(payload, hit: bool, ttl_seconds: int | None = None, status_code
     return JSONResponse(payload, status_code=status_code, headers=headers)
 
 
+def _lf_trade_mgmt_flags(cfg: dict) -> dict:
+    """Slim trade-management flags for Live Forex strategy cards."""
+    if isinstance(cfg, str):
+        try:
+            cfg = json.loads(cfg)
+        except Exception:
+            cfg = {}
+    if not cfg:
+        return {}
+    sessions = cfg.get("allowed_sessions") or []
+    if isinstance(sessions, str):
+        sessions = [sessions]
+    return {
+        "breakeven_enabled": bool(cfg.get("breakeven_enabled")),
+        "trailing_enabled": bool(cfg.get("trailing_enabled")),
+        "partial_tp_enabled": bool(cfg.get("partial_tp_enabled")),
+        "sessions_enabled": bool(cfg.get("sessions_enabled")),
+        "news_filter_enabled": bool(cfg.get("news_filter_enabled")),
+        "allowed_sessions": [str(x) for x in sessions][:3],
+    }
+
+
 def _slim_strategy_config(cfg: dict) -> dict:
     """Card-view config slice — drops heavy entry_conditions/universe blobs."""
     if not cfg:
@@ -11923,6 +11945,63 @@ async def api_ctrader_disconnect(uid: str = Query(...)):
         db.close()
 
 
+@app.get("/api/ctrader/health")
+async def api_ctrader_health(uid: str = Query(...)):
+    """
+    Per-user cTrader broker health for Live Forex cards.
+    Reads persisted OAuth state + feed last-tick age — no new background work.
+    """
+    from datetime import timezone
+    from app.database import SessionLocal
+    from app.models import UserPreference
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        linked = bool(prefs and (prefs.ctrader_access_token or "").strip())
+        token_valid = False
+        if linked:
+            try:
+                from app.services.ctrader_client import (
+                    audit_ctrader_credentials,
+                    is_refresh_denied,
+                    _access_token_ttl_seconds,
+                )
+                audit = audit_ctrader_credentials(user.id, prefs)
+                token_valid = bool(audit.get("ok"))
+                if token_valid:
+                    ttl = _access_token_ttl_seconds(prefs.ctrader_access_token)
+                    if ttl is not None and ttl <= 0:
+                        token_valid = bool(
+                            (prefs.ctrader_refresh_token or "").strip()
+                            and not is_refresh_denied(user.id)
+                        )
+            except Exception:
+                token_valid = linked
+        feed_alive = False
+        try:
+            from app.services import ctrader_price_feed as _ctf
+            _st = _ctf.feed_status()
+            _age = _st.get("last_tick_age_s")
+            if _age is not None:
+                feed_alive = float(_age) < 60.0
+            elif _st.get("live") and int(_st.get("symbol_count") or 0) > 0:
+                feed_alive = True
+        except Exception:
+            pass
+        return JSONResponse({
+            "linked": linked,
+            "token_valid": token_valid,
+            "feed_alive": feed_alive,
+            "last_check_ts": datetime.now(timezone.utc).isoformat(),
+        })
+    finally:
+        db.close()
+
+
 @app.get("/api/ctrader/feed-status")
 async def api_ctrader_feed_status():
     """
@@ -12035,8 +12114,48 @@ async def api_ctrader_feed_status():
     return JSONResponse(out)
 
 
+def _lf_enrich_open_positions(positions: list) -> list:
+    """Attach live mark/unrealized pips for open forex executions."""
+    for p in positions:
+        if p.get("fired_at") and hasattr(p["fired_at"], "isoformat"):
+            p["fired_at"] = p["fired_at"].isoformat()
+        try:
+            from app.services.ctrader_price_feed import get_price as _mkt_px
+            from app.services.forex_engine import pip_size as _pip_sz
+            sym = (p.get("symbol") or "").upper()
+            entry = float(p.get("entry_price") or 0)
+            if sym and entry > 0:
+                mark = _mkt_px(sym)
+                if mark:
+                    p["mark_price"] = round(mark, 6)
+                    pip = max(_pip_sz(sym), 1e-10)
+                    if p.get("direction") == "LONG":
+                        p["unrealized_pips"] = round((mark - entry) / pip, 1)
+                    else:
+                        p["unrealized_pips"] = round((entry - mark) / pip, 1)
+        except Exception:
+            pass
+        _sl = p.get("current_sl")
+        if _sl is None:
+            _sl = p.get("sl_price")
+        if _sl is not None:
+            p["display_sl"] = round(float(_sl), 5)
+        orig_sl = p.get("sl_price")
+        if (
+            p.get("current_sl") is not None
+            and orig_sl is not None
+            and abs(float(p["current_sl"]) - float(orig_sl)) > 1e-9
+        ):
+            p["sl_trailed"] = True
+    return positions
+
+
 @app.get("/api/live-forex/account")
-async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(False)):
+async def api_live_forex_account(
+    uid: str = Query(...),
+    refresh: bool = Query(False),
+    positions_only: bool = Query(False),
+):
     """
     Returns live cTrader account data (balance, equity, open positions)
     plus connection/approval state for the Live Forex tab.
@@ -12044,6 +12163,45 @@ async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(Fa
     import json as _json
     _uid_key = (uid or "").strip().upper()
     _cache_key = f"live_forex_acct:{_uid_key}"
+
+    if positions_only:
+        def _load_positions_only():
+            from app.database import SessionLocal
+            from sqlalchemy import text as _t
+            db = SessionLocal()
+            try:
+                db.execute(_t("SET LOCAL statement_timeout = '5000'"))
+                user = _get_user_by_uid(uid, db)
+                if not user:
+                    return None
+                positions = db.execute(_t("""
+                    SELECT e.id, e.strategy_id, e.symbol, e.direction, e.entry_price,
+                           e.tp_price AS tp1_price, e.sl_price, e.current_sl,
+                           e.breakeven_applied, e.pnl_pct, e.fired_at,
+                           s.name AS strategy_name, e.asset_class
+                    FROM strategy_executions e
+                    JOIN user_strategies s ON s.id = e.strategy_id
+                    WHERE s.user_id = :uid
+                      AND e.outcome = 'OPEN' AND e.is_paper = false
+                      AND e.asset_class IN ('forex', 'index', 'metals', 'commodity')
+                    ORDER BY e.fired_at DESC LIMIT 20
+                """), {"uid": user.id}).fetchall()
+                return [dict(r._mapping) for r in positions]
+            finally:
+                db.close()
+
+        try:
+            positions = await asyncio.wait_for(
+                asyncio.to_thread(_load_positions_only), timeout=6.0,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=503, detail="Database busy — retry in a moment")
+        if positions is None:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        return JSONResponse({
+            "open_positions": _lf_enrich_open_positions(positions),
+        })
+
     if not refresh:
         _cached = get_cache(_cache_key)
         if isinstance(_cached, dict):
@@ -12069,9 +12227,10 @@ async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(Fa
                     db.commit()
             accounts = _json.loads(prefs.ctrader_accounts or "[]") if prefs else []
             positions = db.execute(_t("""
-                SELECT e.id, e.symbol, e.direction, e.entry_price,
-                       e.tp_price AS tp1_price, e.sl_price, e.pnl_pct,
-                       e.fired_at, s.name AS strategy_name, e.asset_class
+                SELECT e.id, e.strategy_id, e.symbol, e.direction, e.entry_price,
+                       e.tp_price AS tp1_price, e.sl_price, e.current_sl,
+                       e.breakeven_applied, e.pnl_pct, e.fired_at,
+                       s.name AS strategy_name, e.asset_class
                 FROM strategy_executions e
                 JOIN user_strategies s ON s.id = e.strategy_id
                 WHERE s.user_id = :uid
@@ -12088,7 +12247,11 @@ async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(Fa
                        COUNT(e.id) FILTER (WHERE e.outcome='WIN' AND e.is_paper=false) AS win_count,
                        COALESCE(SUM(e.pnl_pct) FILTER (
                            WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.is_paper=false
-                       ), 0) AS total_pnl_pct
+                       ), 0) AS total_pnl_pct,
+                       COALESCE(SUM(e.pips_pnl) FILTER (
+                           WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.is_paper=false
+                       ), 0) AS total_pips_pnl,
+                       MAX(e.fired_at) AS last_fired_at
                 FROM user_strategies s
                 LEFT JOIN strategy_executions e ON e.strategy_id = s.id
                 WHERE s.user_id = :uid
@@ -12098,6 +12261,39 @@ async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(Fa
                 ORDER BY (s.status='active') DESC, s.updated_at DESC
                 LIMIT 30
             """), {"uid": user.id}).fetchall()
+            strat_ids = [int(r["id"]) for r in live_rows]
+            sparkline_by_id: Dict[int, list] = {}
+            week_net_pips = 0.0
+            if strat_ids:
+                spark_rows = db.execute(_t("""
+                    SELECT e.strategy_id,
+                           DATE_TRUNC('day', e.closed_at) AS day,
+                           COALESCE(SUM(e.pips_pnl), 0) AS day_pips
+                    FROM strategy_executions e
+                    WHERE e.strategy_id = ANY(:ids)
+                      AND e.is_paper = false
+                      AND e.outcome IN ('WIN','LOSS','BREAKEVEN')
+                      AND e.closed_at >= NOW() - INTERVAL '7 days'
+                      AND e.pips_pnl IS NOT NULL
+                    GROUP BY e.strategy_id, DATE_TRUNC('day', e.closed_at)
+                    ORDER BY e.strategy_id, day
+                """), {"ids": strat_ids}).fetchall()
+                for row in spark_rows:
+                    sid = int(row.strategy_id)
+                    if sid not in sparkline_by_id:
+                        sparkline_by_id[sid] = []
+                    sparkline_by_id[sid].append(round(float(row.day_pips or 0), 1))
+                week_row = db.execute(_t("""
+                    SELECT COALESCE(SUM(e.pips_pnl), 0) AS week_pips
+                    FROM strategy_executions e
+                    WHERE e.strategy_id = ANY(:ids)
+                      AND e.is_paper = false
+                      AND e.outcome IN ('WIN','LOSS','BREAKEVEN')
+                      AND e.closed_at >= NOW() - INTERVAL '7 days'
+                      AND e.pips_pnl IS NOT NULL
+                """), {"ids": strat_ids}).fetchone()
+                if week_row:
+                    week_net_pips = round(float(week_row.week_pips or 0), 1)
             return {
                 "user": user,
                 "prefs": prefs,
@@ -12106,6 +12302,8 @@ async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(Fa
                 "accounts": accounts,
                 "positions": [dict(r._mapping) for r in positions],
                 "live_rows": [dict(r._mapping) for r in live_rows],
+                "sparkline_by_id": sparkline_by_id,
+                "week_net_pips": week_net_pips,
             }
         finally:
             db.close()
@@ -12213,26 +12411,9 @@ async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(Fa
         if isinstance(_stale_bal, (int, float)):
             balance = _stale_bal
 
-    positions = snap["positions"]
-    for p in positions:
-        if p.get("fired_at"):
-            p["fired_at"] = p["fired_at"].isoformat()
-        try:
-            from app.services.ctrader_price_feed import get_price as _mkt_px
-            from app.services.forex_engine import pip_size as _pip_sz
-            sym = (p.get("symbol") or "").upper()
-            entry = float(p.get("entry_price") or 0)
-            if sym and entry > 0:
-                mark = _mkt_px(sym)
-                if mark:
-                    p["mark_price"] = round(mark, 6)
-                    pip = max(_pip_sz(sym), 1e-10)
-                    if p.get("direction") == "LONG":
-                        p["unrealized_pips"] = round((mark - entry) / pip, 1)
-                    else:
-                        p["unrealized_pips"] = round((entry - mark) / pip, 1)
-        except Exception:
-            pass
+    positions = _lf_enrich_open_positions(snap["positions"])
+    sparkline_by_id = snap.get("sparkline_by_id") or {}
+    week_net_pips = float(snap.get("week_net_pips") or 0)
 
     live_strategies = []
     for s in snap["live_rows"]:
@@ -12269,6 +12450,16 @@ async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(Fa
             pst = "pct"
         _closed = int(s["closed_count"] or 0)
         _wins = int(s["win_count"] or 0)
+        _total_pips = round(float(s.get("total_pips_pnl") or 0), 1)
+        _last_fired = s.get("last_fired_at")
+        if _last_fired and hasattr(_last_fired, "isoformat"):
+            _last_fired = _last_fired.isoformat()
+        _day_pips = sparkline_by_id.get(int(s["id"])) or []
+        _spark_cum: list = []
+        _run = 0.0
+        for dp in _day_pips:
+            _run = round(_run + dp, 1)
+            _spark_cum.append(_run)
         live_strategies.append({
             "id": s["id"], "name": s["name"], "status": s["status"],
             "asset_class": s["asset_class"],
@@ -12277,6 +12468,10 @@ async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(Fa
             "closed_count": _closed, "win_count": _wins,
             "win_rate": round(_wins / _closed * 100, 1) if _closed else None,
             "total_pnl_pct": round(float(s["total_pnl_pct"] or 0), 2),
+            "total_pips_pnl": _total_pips,
+            "last_fired_at": _last_fired,
+            "trade_mgmt": _lf_trade_mgmt_flags(cfg),
+            "sparkline_7d": _spark_cum if _closed >= 2 and len(_spark_cum) >= 2 else [],
             "size_type": pst, "size_value": round(size_value, 4),
             "size_label": size_label, "timeframe": _tf or "—",
         })
@@ -12298,6 +12493,7 @@ async def api_live_forex_account(uid: str = Query(...), refresh: bool = Query(Fa
         "equity": round(balance, 2) if balance is not None else None,
         "open_positions": positions,
         "live_strategies": live_strategies,
+        "week_net_pips": week_net_pips,
         "price_feed": feed_info,
         "execution_ready": exec_ready,
         "execution_blockers": exec_blockers,
