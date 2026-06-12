@@ -15,7 +15,12 @@ def effective_trade_mgmt_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     ex = cfg.get("exit") or {}
     be_enabled = cfg.get("breakeven_enabled")
     if be_enabled is None:
-        be_enabled = bool(ex.get("breakeven_at_pips") or ex.get("breakeven_pct"))
+        # Pip-based trigger only — legacy breakeven_pct/breakeven_at_pct are ignored
+        # (they fed the removed PaperMonitor ROI AUTO-BREAKEVEN path).
+        be_enabled = bool(
+            ex.get("breakeven_at_pips")
+            or cfg.get("breakeven_trigger_pips")
+        )
     trail_enabled = cfg.get("trailing_enabled")
     if trail_enabled is None:
         trail_enabled = bool(ex.get("trailing_stop"))
@@ -250,6 +255,25 @@ def validate_close_sanity(
     return outcome, close_note_label(execution, outcome, exit_px, hit_kind)
 
 
+def classify_and_close_paper(
+    execution,
+    outcome: str,
+    exit_price: float,
+    session,
+    *,
+    hit_kind: str = "",
+) -> None:
+    """Shared classifier + paper close — use from every paper close site."""
+    outcome, label = validate_close_sanity(
+        execution, outcome, float(exit_price), hit_kind,
+    )
+    from app.services.strategy_executor import _close_paper_execution
+
+    _close_paper_execution(
+        execution, outcome, float(exit_price), session, close_label=label,
+    )
+
+
 def close_note_label(
     execution,
     outcome: str,
@@ -340,11 +364,20 @@ def persist_paper_stop_level(
     mark_breakeven: bool = False,
 ) -> bool:
     """Write current_sl + sl_price and commit — required before BE notifications."""
+    from datetime import datetime
+
     new_sl = round(float(new_sl), 6)
     execution.current_sl = new_sl
     execution.sl_price = new_sl
     if mark_breakeven:
         execution.breakeven_applied = True
+    sleff_ms = int(datetime.utcnow().timestamp() * 1000) + 1
+    notes = (execution.notes or "").strip()
+    notes = re.sub(r"\s*\|?\s*sleff=\d+", "", notes).strip(" |")
+    if mark_breakeven and "be_moved" not in notes:
+        notes = (f"{notes} | be_moved".strip(" |")) if notes else "be_moved"
+    notes = (f"{notes} | sleff={sleff_ms}".strip(" |")) if notes else f"sleff={sleff_ms}"
+    execution.notes = notes
     try:
         session.commit()
         session.refresh(execution)
@@ -456,6 +489,100 @@ def correct_mislabeled_breakeven_closes(session, limit: int = 20) -> int:
         except Exception:
             session.rollback()
             return 0
+    return fixed
+
+
+def reclassify_legacy_autobe_paper_closes(
+    session,
+    *,
+    hours: int = 168,
+    limit: int = 500,
+) -> int:
+    """
+    Reclassify paper WIN/LOSS closes polluted by legacy PaperMonitor AUTO-BREAKEVEN
+    (flat scratch at entry, often mislabeled TP hit). Returns rows corrected.
+    """
+    from datetime import datetime, timedelta
+
+    from app.strategy_models import StrategyExecution
+
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    rows = (
+        session.query(StrategyExecution)
+        .filter(
+            StrategyExecution.is_paper == True,  # noqa: E712
+            StrategyExecution.outcome.in_(("WIN", "LOSS")),
+            StrategyExecution.closed_at >= cutoff,
+            StrategyExecution.entry_price.isnot(None),
+            StrategyExecution.exit_price.isnot(None),
+        )
+        .order_by(StrategyExecution.closed_at.desc())
+        .limit(limit)
+        .all()
+    )
+    fixed = 0
+    fixed_strat_ids: set = set()
+    for ex in rows:
+        entry = float(ex.entry_price or 0)
+        exit_px = float(ex.exit_price or 0)
+        if entry <= 0:
+            continue
+        notes = (ex.notes or "")
+        tol = _sl_tolerance(ex.symbol or "", entry)
+        at_entry = abs(exit_px - entry) <= tol
+        if not at_entry:
+            continue
+        legacy_be = (
+            "be_moved" in notes
+            or "AUTO-BREAKEVEN" in notes
+            or (
+                "TP hit" in notes
+                and breakeven_was_claimed(ex)
+            )
+        )
+        if not legacy_be:
+            continue
+        pnl = float(ex.pnl_pct or 0)
+        if abs(pnl) > 0.15 and not breakeven_was_claimed(ex):
+            continue
+        ex.outcome = "BREAKEVEN"
+        label = close_note_label(ex, "BREAKEVEN", exit_px, "sl")
+        pnl_sign = "+" if pnl >= 0 else ""
+        ex.notes = (
+            f"{label} · {pnl_sign}{pnl}% · exit {exit_px:.6g} "
+            f"| legacy-autobe-reclassified"
+        )
+        fixed += 1
+        fixed_strat_ids.add(ex.strategy_id)
+        logger.info(
+            "[trade-mgmt] legacy AUTO-BE reclassified exec=%s %s → BREAKEVEN "
+            "(entry=%s exit=%s pnl=%s)",
+            ex.id,
+            ex.symbol,
+            entry,
+            exit_px,
+            pnl,
+        )
+    if fixed:
+        try:
+            session.commit()
+            from app.services.strategy_executor import _update_performance
+
+            for sid in fixed_strat_ids:
+                _update_performance(sid, session)
+            session.commit()
+        except Exception as exc:
+            logger.warning("[trade-mgmt] legacy autobe reclassify commit failed: %s", exc)
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            return 0
+    if fixed:
+        logger.warning(
+            "[trade-mgmt] reclassified %s legacy AUTO-BREAKEVEN paper closes → BREAKEVEN",
+            fixed,
+        )
     return fixed
 
 

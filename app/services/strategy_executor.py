@@ -2748,14 +2748,10 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     """
     from app.services.trade_management import (
         active_sl,
-        breakeven_sl_price,
         breakeven_was_claimed,
-        check_directional_exit_hit,
+        classify_and_close_paper,
         classify_sl_close_outcome,
         effective_tp,
-        effective_trade_mgmt_cfg,
-        persist_paper_stop_level,
-        validate_close_sanity,
     )
     from app.services.forex_tick_manager import unregister_position
 
@@ -2772,44 +2768,15 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     # Always scan for a TP/SL hit before considering expiry.  This prevents
     # incorrectly CANCELLING a trade whose TP was already hit but whose
     # fired_at is older than PAPER_MAX_HOLD_HOURS.
-    be_pct = None
-    be_trigger_price = None  # forex: absolute price at which SL jumps to entry
-    partial_close_pct = None
     be_timer_minutes = None
-    trail_enabled = False
-    trail_pct = None
     try:
         from app.strategy_models import UserStrategy
         strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
         if strat and strat.config:
-            ex_cfg  = (strat.config or {}).get("exit", {})
             risk_cfg = (strat.config or {}).get("risk", {})
-            be_pct = ex_cfg.get("breakeven_pct") or ex_cfg.get("breakeven_at_pct")
-            if be_pct is not None:
-                be_pct = float(be_pct)
-            # Forex/index/stock at 1x leverage → leveraged-ROI trigger is unreachable;
-            # use pip/point distance or % of entry→TP instead.
-            _ex_ac = getattr(ex, "asset_class", None) or "crypto"
-            if _ex_ac in ("forex", "index", "stock"):
-                be_trigger_price = _compute_be_trigger_price(
-                    ex.symbol, float(ex.entry_price), ex.direction,
-                    ex.tp_price, ex_cfg,
-                )
-            _pcp = ex_cfg.get("partial_close_pct")
-            if _pcp:
-                partial_close_pct = float(_pcp)
             _bet = risk_cfg.get("be_timer_minutes")
             if _bet:
                 be_timer_minutes = float(_bet)
-            # Trailing stop — price-% distance behind the best price reached.
-            trail_enabled = bool(ex_cfg.get("trailing_stop"))
-            _tsp = ex_cfg.get("trailing_stop_pct")
-            if trail_enabled and _tsp:
-                trail_pct = float(_tsp)
-            if trail_enabled and (trail_pct is None or trail_pct <= 0):
-                # Sensible default: half the stop distance (mirrors the builder).
-                _slp = ex_cfg.get("stop_loss_pct")
-                trail_pct = (float(_slp) / 2.0) if _slp else None
     except Exception:
         pass
 
@@ -2817,13 +2784,7 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     # Check BEFORE candle evaluation — if the timer has expired and SL hasn't
     # moved to entry yet, close at the last known price (market close).
     if be_timer_minutes is not None and elapsed_mins >= be_timer_minutes:
-        # Only fire if the SL hasn't already been moved to entry (be not activated)
-        be_already_at_entry = (
-            ex.sl_price is not None and
-            ex.entry_price is not None and
-            abs(float(ex.sl_price) - float(ex.entry_price)) < float(ex.entry_price) * 0.0001
-        )
-        if not be_already_at_entry:
+        if not breakeven_was_claimed(ex):
             logger.info(
                 f"[PaperMonitor] BE TIMER expired: exec #{ex.id} {ex.symbol} "
                 f"{elapsed_mins:.0f}m elapsed >= {be_timer_minutes:.0f}m limit — "
@@ -2832,22 +2793,8 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
             _close_paper_execution(ex, "CANCELLED", ex.entry_price, db)
             return True
 
-    # Also read partial_close_pct from the execution notes (set at fire time)
-    # as a fallback when the strategy config lookup failed.
-    if partial_close_pct is None and ex.notes:
-        import re as _re
-        _m = _re.search(r"partial_close_pct=(\d+(?:\.\d+)?)", ex.notes or "")
-        if _m:
-            partial_close_pct = float(_m.group(1))
-
-    be_activated = breakeven_was_claimed(ex)
-
     def _outcome_for_sl(exit_px: float) -> str:
         return classify_sl_close_outcome(ex, exit_px, log_prefix="[trade-mgmt]")
-
-    # Track whether we've already performed a partial close for this execution
-    # (stored in notes to survive across monitor cycles).
-    partial_close_done = bool(ex.notes and "partial_close_done" in ex.notes)
 
     # ── Moved-stop chronology guard ───────────────────────────────────────────
     # When the stop is moved tighter (auto-breakeven, partial-close-to-entry or
@@ -2886,19 +2833,13 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                     sl_hit = (_eff_sl is not None and low <= float(_eff_sl)) and _sl_active
                     if tp_hit and sl_hit:
                         if close >= open_:
-                            outcome, label = validate_close_sanity(
-                                ex, "WIN", float(_tp_lvl), "tp",
-                            )
-                            _close_paper_execution(
-                                ex, outcome, float(_tp_lvl), db, close_label=label,
+                            classify_and_close_paper(
+                                ex, "WIN", float(_tp_lvl), db, hit_kind="tp",
                             )
                         else:
                             outcome = _outcome_for_sl(_eff_sl)
-                            outcome, label = validate_close_sanity(
-                                ex, outcome, float(_eff_sl), "sl",
-                            )
-                            _close_paper_execution(
-                                ex, outcome, float(_eff_sl), db, close_label=label,
+                            classify_and_close_paper(
+                                ex, outcome, float(_eff_sl), db, hit_kind="sl",
                             )
                         unregister_position(ex.id, ex.symbol or "")
                         return True
@@ -2907,177 +2848,30 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                     sl_hit = (_eff_sl is not None and high >= float(_eff_sl)) and _sl_active
                     if tp_hit and sl_hit:
                         if close <= open_:
-                            outcome, label = validate_close_sanity(
-                                ex, "WIN", float(_tp_lvl), "tp",
-                            )
-                            _close_paper_execution(
-                                ex, outcome, float(_tp_lvl), db, close_label=label,
+                            classify_and_close_paper(
+                                ex, "WIN", float(_tp_lvl), db, hit_kind="tp",
                             )
                         else:
                             outcome = _outcome_for_sl(_eff_sl)
-                            outcome, label = validate_close_sanity(
-                                ex, outcome, float(_eff_sl), "sl",
-                            )
-                            _close_paper_execution(
-                                ex, outcome, float(_eff_sl), db, close_label=label,
+                            classify_and_close_paper(
+                                ex, outcome, float(_eff_sl), db, hit_kind="sl",
                             )
                         unregister_position(ex.id, ex.symbol or "")
                         return True
 
-                # ── Partial close at TP1 (paper simulation) ───────────────
-                # When partial_close_pct is set and TP1 is hit (but not yet
-                # done), we simulate closing partial_close_pct% of the
-                # position and moving the SL to breakeven for the remainder.
-                # The execution record stays OPEN so TP2 / final SL can still
-                # close it — we just record that partial already happened.
-                if tp_hit and partial_close_pct and not partial_close_done and ex.tp2_price and _tp_lvl:
-                    partial_close_done = True
-                    # Move SL to entry price (protect the partial profit). The
-                    # entry-stop only applies to candles AFTER this one (chronology
-                    # guard) so an earlier dip can't retro-close the remainder.
-                    _be_sl = breakeven_sl_price(
-                        ex.symbol, float(ex.entry_price), ex.direction, 0.0,
-                    )
-                    if not persist_paper_stop_level(ex, _be_sl, db, mark_breakeven=True):
-                        continue
-                    sl_eff_ms = _ts + 1
-                    # Mark partial close in notes (survives across monitor cycles)
-                    _old_notes = ex.notes or ""
-                    # Preserve any existing metadata before the live-pnl suffix
-                    import re as _re_pc
-                    _base_notes = _old_notes.split(" | open")[0].split(" | unrealised")[0].strip(" |")
-                    _base_notes = _re_pc.sub(r"\s*\|?\s*sleff=\d+", "", _base_notes).strip(" |")
-                    ex.notes = (_base_notes + f" | partial_close_done | sleff={sl_eff_ms}").strip(" |")
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-                    logger.info(
-                        f"[PaperMonitor] PARTIAL CLOSE: exec #{ex.id} {ex.symbol} "
-                        f"— {partial_close_pct:.0f}% closed at TP1 {ex.tp_price}, SL→entry. "
-                        f"Remainder runs to TP2 {ex.tp2_price}."
-                    )
-                    # Remainder continues — skip the full-close below
-                    continue
-
                 if tp_hit and _tp_lvl is not None:
-                    outcome, label = validate_close_sanity(
-                        ex, "WIN", float(_tp_lvl), "tp",
-                    )
-                    _close_paper_execution(
-                        ex, outcome, float(_tp_lvl), db, close_label=label,
+                    classify_and_close_paper(
+                        ex, "WIN", float(_tp_lvl), db, hit_kind="tp",
                     )
                     unregister_position(ex.id, ex.symbol or "")
                     return True
                 if sl_hit and _eff_sl is not None:
                     outcome = _outcome_for_sl(_eff_sl)
-                    outcome, label = validate_close_sanity(
-                        ex, outcome, float(_eff_sl), "sl",
-                    )
-                    _close_paper_execution(
-                        ex, outcome, float(_eff_sl), db, close_label=label,
+                    classify_and_close_paper(
+                        ex, outcome, float(_eff_sl), db, hit_kind="sl",
                     )
                     unregister_position(ex.id, ex.symbol or "")
                     return True
-
-                if not be_activated:
-                    be_reached = False
-                    be_log = ""
-                    if be_trigger_price is not None:
-                        # Forex: pip/distance price trigger (reachable at 1x lev).
-                        if ex.direction == "LONG":
-                            be_reached = high >= be_trigger_price
-                        else:
-                            be_reached = low <= be_trigger_price
-                        be_log = f"price reached {be_trigger_price:.5f}"
-                    elif be_pct is not None:
-                        # Crypto: leveraged-ROI trigger.
-                        if ex.direction == "LONG":
-                            candle_roi = ((high - ex.entry_price) / ex.entry_price) * 100 * ex.leverage
-                        else:
-                            candle_roi = ((ex.entry_price - low) / ex.entry_price) * 100 * ex.leverage
-                        be_reached = candle_roi >= be_pct
-                        be_log = f"ROI {candle_roi:.1f}% >= {be_pct}%"
-                    if be_reached and not breakeven_was_claimed(ex):
-                        _tm_cfg = effective_trade_mgmt_cfg(
-                            (strat.config or {}) if strat else {}
-                        )
-                        _new_sl = breakeven_sl_price(
-                            ex.symbol,
-                            float(ex.entry_price),
-                            ex.direction,
-                            _tm_cfg.get("breakeven_offset_pips", 0.0),
-                        )
-                        if persist_paper_stop_level(
-                            ex, _new_sl, db, mark_breakeven=True,
-                        ):
-                            be_activated = True
-                            sl_eff_ms = _ts + 1
-                            _bn = (ex.notes or "").strip()
-                            if "be_moved" not in _bn:
-                                ex.notes = (
-                                    (f"{_bn} | be_moved".strip(" |")) if _bn else "be_moved"
-                                )
-                            try:
-                                db.commit()
-                            except Exception:
-                                db.rollback()
-                            logger.info(
-                                f"[PaperMonitor] AUTO-BREAKEVEN: exec #{ex.id} "
-                                f"{ex.symbol} {be_log} → SL @ {_new_sl:.5f} "
-                                f"(current_sl persisted)"
-                            )
-                            try:
-                                from app.models import User as _UserM
-                                from app.strategy_models import UserStrategy as _StratM
-                                _u = db.query(_UserM).filter(_UserM.id == ex.user_id).first()
-                                _s = db.query(_StratM).filter(_StratM.id == ex.strategy_id).first()
-                                if _u and _s:
-                                    _ensure_open_notify_for_execution(
-                                        db, ex, user=_u, strategy=_s,
-                                    )
-                                if _claim_tg_be_notify(db, ex.id):
-                                    if ex.direction == "LONG":
-                                        _mv = (high - ex.entry_price) / ex.entry_price * 100
-                                    else:
-                                        _mv = (ex.entry_price - low) / ex.entry_price * 100
-                                    _notify_breakeven_alert(
-                                        user_id=ex.user_id,
-                                        telegram_id=(_u.telegram_id if _u else None),
-                                        strategy_name=(_s.name if _s else "Strategy"),
-                                        symbol=ex.symbol, direction=ex.direction,
-                                        leverage=(ex.leverage or 1),
-                                        move_pct=_mv * max(1, (ex.leverage or 1)),
-                                        strategy_id=ex.strategy_id, execution_id=ex.id,
-                                        kind=("paper" if ex.is_paper else "live"),
-                                    )
-                            except Exception as _ne:
-                                logger.debug(f"[BE-notify] paper exec#{ex.id}: {_ne}")
-                        else:
-                            logger.warning(
-                                "[PaperMonitor] AUTO-BREAKEVEN persist failed "
-                                "exec #%s %s — notification suppressed",
-                                ex.id,
-                                ex.symbol,
-                            )
-
-                # ── Trailing stop ─────────────────────────────────────────────
-                # Ratchet the SL behind the best price reached so far by
-                # trail_pct (price %). Only ever TIGHTENS (never loosens), and
-                # uses this candle's extreme so it applies to SUBSEQUENT candles
-                # only — no same-candle look-ahead, same discipline as breakeven.
-                if trail_enabled and trail_pct and trail_pct > 0:
-                    _cur = active_sl(ex) or ex.sl_price
-                    if ex.direction == "LONG":
-                        cand_sl = high * (1 - trail_pct / 100.0)
-                        if _cur is not None and cand_sl > _cur:
-                            if persist_paper_stop_level(ex, cand_sl, db):
-                                sl_eff_ms = _ts + 1
-                    else:
-                        cand_sl = low * (1 + trail_pct / 100.0)
-                        if _cur is not None and cand_sl < _cur:
-                            if persist_paper_stop_level(ex, cand_sl, db):
-                                sl_eff_ms = _ts + 1
 
             last_close = relevant[-1][4]
             if ex.direction == "LONG":
@@ -3094,8 +2888,6 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
             base = _re_notes.sub(r"\s*\|?\s*sleff=\d+", "", base).strip(" |")
             if sl_eff_ms is not None:
                 base = (base + f" | sleff={sl_eff_ms}").strip(" |")
-            if partial_close_done and "partial_close_done" not in base:
-                base = (base + " | partial_close_done").strip(" |")
             ex.notes = (base + " | " + pnl_note).strip(" |") if base else pnl_note
             try:
                 db.commit()
@@ -3145,16 +2937,19 @@ async def run_paper_position_monitor():
             from app.services.trade_management import (
                 audit_mislabeled_breakeven_paper_closes,
                 correct_mislabeled_breakeven_closes,
+                reclassify_legacy_autobe_paper_closes,
             )
 
             _n = audit_mislabeled_breakeven_paper_closes(_audit_db, limit=20)
             _fixed = correct_mislabeled_breakeven_closes(_audit_db, limit=20)
-            if _n or _fixed:
+            _reclass = reclassify_legacy_autobe_paper_closes(_audit_db, hours=168, limit=500)
+            if _n or _fixed or _reclass:
                 logger.warning(
                     "[trade-mgmt] breakeven audit on monitor start: "
-                    "%s mislabeled found, %s corrected",
+                    "%s mislabeled found, %s corrected, %s legacy autobe reclassified",
                     _n,
                     _fixed,
+                    _reclass,
                 )
         finally:
             _audit_db.close()
@@ -3325,26 +3120,25 @@ async def run_paper_position_monitor():
                                         _close_paper_execution(managed, "CANCELLED", _fc_price, write_db)
                                         continue
 
-                                if _ex_ac in ("forex", "index"):
-                                    try:
-                                        from app.strategy_models import UserStrategy as _US_tm
-                                        from app.services.trade_management import manage_open_position
-                                        _strat_tm = write_db.query(_US_tm).filter(
-                                            _US_tm.id == managed.strategy_id
-                                        ).first()
-                                        _live_px = float(candles[-1][4]) if candles else None
-                                        if _strat_tm and _live_px and _live_px > 0:
-                                            await manage_open_position(
-                                                managed,
-                                                _strat_tm.config or {},
-                                                _live_px,
-                                                write_db,
-                                            )
-                                    except Exception as _tme:
-                                        logger.warning(
-                                            "[PaperMonitor] trade-mgmt exec#%s: %s",
-                                            managed.id, _tme,
+                                try:
+                                    from app.strategy_models import UserStrategy as _US_tm
+                                    from app.services.trade_management import manage_open_position
+                                    _strat_tm = write_db.query(_US_tm).filter(
+                                        _US_tm.id == managed.strategy_id
+                                    ).first()
+                                    _live_px = float(candles[-1][4]) if candles else None
+                                    if _strat_tm and _live_px and _live_px > 0:
+                                        await manage_open_position(
+                                            managed,
+                                            _strat_tm.config or {},
+                                            _live_px,
+                                            write_db,
                                         )
+                                except Exception as _tme:
+                                    logger.warning(
+                                        "[PaperMonitor] trade-mgmt exec#%s: %s",
+                                        managed.id, _tme,
+                                    )
                                 _evaluate_paper_position_against_candles(managed, candles, write_db)
                             except Exception as e:
                                 logger.warning(f"Position {ex.id} eval error: {e}")
@@ -4579,13 +4373,9 @@ async def evaluate_and_fire(
                 ex_config = dict(ex_config)  # don't mutate config in-place
                 ex_config["trailing_stop"] = True
                 ex_config["trailing_stop_pct"] = _p2p(symbol, current_price, float(_trail_pips))
-            # Pip-based breakeven trigger → convert to % ROI threshold
-            _be_pips = ex_config.get("breakeven_at_pips")
-            if _be_pips and float(_be_pips) > 0:
-                ex_config = dict(ex_config) if not isinstance(ex_config, dict) or id(ex_config) == id(config.get("exit")) else ex_config
-                _be_pct = _p2p(symbol, current_price, float(_be_pips))
-                # breakeven_at_pct is % leveraged ROI, so multiply by leverage
-                ex_config["breakeven_at_pct"] = _be_pct * max(1, leverage)
+            # breakeven_at_pips is consumed by manage_open_position via
+            # effective_trade_mgmt_cfg — do not mirror to breakeven_at_pct
+            # (that fed the removed PaperMonitor ROI AUTO-BREAKEVEN path).
 
         direction = direction_pref
         if direction == "BOTH":
