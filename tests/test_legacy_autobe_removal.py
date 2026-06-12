@@ -33,7 +33,7 @@ class TestLegacyAutobeRemoval(unittest.TestCase):
         }
         tm = effective_trade_mgmt_cfg(cfg)
         self.assertFalse(tm["breakeven_enabled"])
-        self.assertEqual(tm["breakeven_trigger_pips"], 20.0)
+        self.assertEqual(tm["breakeven_trigger_pips"], 0.0)
 
     def test_effective_cfg_enables_on_pips_only(self):
         cfg = {"exit": {"breakeven_at_pips": 15}}

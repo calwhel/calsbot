@@ -10,17 +10,31 @@ logger = logging.getLogger(__name__)
 _PARTIAL_SKIP_LOGGED: set = set()
 
 
+def _parse_breakeven_trigger_pips(cfg: Dict[str, Any]) -> Optional[float]:
+    """Return trigger pips when explicitly configured and > 0; else None (disabled)."""
+    ex = cfg.get("exit") or {}
+    for raw in (cfg.get("breakeven_trigger_pips"), ex.get("breakeven_at_pips")):
+        if raw is None:
+            continue
+        try:
+            val = float(raw)
+            if val > 0:
+                return val
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def effective_trade_mgmt_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Merge new root-level trade-mgmt keys with legacy exit.* keys."""
     ex = cfg.get("exit") or {}
+    be_trigger = _parse_breakeven_trigger_pips(cfg)
     be_enabled = cfg.get("breakeven_enabled")
     if be_enabled is None:
-        # Pip-based trigger only — legacy breakeven_pct/breakeven_at_pct are ignored
-        # (they fed the removed PaperMonitor ROI AUTO-BREAKEVEN path).
-        be_enabled = bool(
-            ex.get("breakeven_at_pips")
-            or cfg.get("breakeven_trigger_pips")
-        )
+        # Pip-based trigger only — legacy breakeven_pct/breakeven_at_pct are ignored.
+        be_enabled = be_trigger is not None
+    else:
+        be_enabled = bool(be_enabled) and be_trigger is not None
     trail_enabled = cfg.get("trailing_enabled")
     if trail_enabled is None:
         trail_enabled = bool(ex.get("trailing_stop"))
@@ -29,14 +43,7 @@ def effective_trade_mgmt_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
         partial_enabled = bool(ex.get("partial_close_pct") and ex.get("take_profit2_pips"))
     return {
         "breakeven_enabled": bool(be_enabled),
-        "breakeven_trigger_pips": max(
-            1.0,
-            float(
-                cfg.get("breakeven_trigger_pips")
-                or ex.get("breakeven_at_pips")
-                or 20
-            ),
-        ),
+        "breakeven_trigger_pips": float(be_trigger or 0.0),
         "breakeven_offset_pips": float(cfg.get("breakeven_offset_pips", 1)),
         "trailing_enabled": bool(trail_enabled),
         "trailing_distance_pips": float(
@@ -184,6 +191,41 @@ def _close_level_tolerance(symbol: str, entry: float, level: float) -> float:
         return max(abs(float(level)) * 1e-5, abs(float(entry)) * 1e-5)
 
 
+def _breakeven_entry_tolerance(symbol: str) -> float:
+    """2-pip window for breakeven-at-entry classification."""
+    try:
+        from app.services.forex_engine import pip_size as _pip_size
+
+        pip = _pip_size(symbol)
+        return max(float(pip) * 2.0, 0.0)
+    except Exception:
+        return 0.0
+
+
+def _anticipated_pnl_pct(execution, exit_price: float) -> float:
+    """Paper P/L preview — mirrors _close_paper_execution spread deduction."""
+    entry = float(getattr(execution, "entry_price", 0) or 0)
+    if entry <= 0:
+        return 0.0
+    exit_px = float(exit_price)
+    direction = (getattr(execution, "direction", "LONG") or "LONG").upper()
+    if direction == "LONG":
+        raw = (exit_px - entry) / entry * 100
+    else:
+        raw = (entry - exit_px) / entry * 100
+    try:
+        from app.services.strategy_executor import _paper_cost_basis_pct
+
+        raw -= _paper_cost_basis_pct(
+            getattr(execution, "asset_class", "crypto"),
+            getattr(execution, "symbol", ""),
+        )
+    except Exception:
+        pass
+    lev = float(getattr(execution, "leverage", 1) or 1)
+    return round(raw * lev, 2)
+
+
 def check_directional_exit_hit(
     execution,
     high: float,
@@ -217,15 +259,16 @@ def check_directional_exit_hit(
     return None
 
 
-def validate_close_sanity(
+def close_classifier(
     execution,
-    outcome: str,
     exit_price: float,
-    hit_kind: str,
+    *,
+    hit_kind: str = "",
+    proposed_outcome: str = "",
 ) -> Tuple[str, str]:
     """
-    Reject phantom TP/SL labels. Returns (outcome, note_label).
-    Logs CRITICAL on mismatch.
+    Single source of truth for close outcome + label.
+    Enforces proximity checks, breakeven rules, and non-negative WIN pnl.
     """
     symbol = getattr(execution, "symbol", "") or ""
     entry = float(getattr(execution, "entry_price", 0) or 0)
@@ -233,40 +276,89 @@ def validate_close_sanity(
     exec_id = getattr(execution, "id", 0)
     tp = effective_tp(execution)
     sl = active_sl(execution) or getattr(execution, "sl_price", None)
-
     direction = (getattr(execution, "direction", "LONG") or "LONG").upper()
-    tol = _sl_tolerance(symbol, entry)
+    outcome = (proposed_outcome or "LOSS").upper()
+    be_entry_tol = _breakeven_entry_tolerance(symbol)
 
-    if breakeven_was_claimed(execution) and entry > 0:
-        if sl is not None and abs(exit_px - float(sl)) <= tol:
-            return "BREAKEVEN", "breakeven stop"
-        if abs(exit_px - entry) <= tol:
-            return "BREAKEVEN", "breakeven stop"
-
-    if entry > 0 and outcome == "WIN":
-        if direction == "LONG" and exit_px <= entry + tol:
-            outcome = "BREAKEVEN" if breakeven_was_claimed(execution) else "LOSS"
-        elif direction == "SHORT" and exit_px >= entry - tol:
-            outcome = "BREAKEVEN" if breakeven_was_claimed(execution) else "LOSS"
+    if (
+        bool(getattr(execution, "breakeven_applied", False))
+        and entry > 0
+        and abs(exit_px - entry) <= be_entry_tol
+    ):
+        return "BREAKEVEN", "breakeven stop"
 
     if hit_kind == "tp" and tp is not None:
-        tol = _close_level_tolerance(symbol, entry, tp)
-        if abs(exit_px - float(tp)) > tol:
+        tp_tol = _close_level_tolerance(symbol, entry, float(tp))
+        if abs(exit_px - float(tp)) <= tp_tol:
+            outcome = "WIN"
+        else:
             logger.critical(
                 "[close-sanity] exec=%s labeled TP but exit %s vs tp %s (tol=%s)",
-                exec_id, exit_px, tp, tol,
+                exec_id, exit_px, tp, tp_tol,
             )
-            return outcome if outcome != "WIN" else "LOSS", "market close"
-    if hit_kind == "sl" and sl is not None:
-        tol = _close_level_tolerance(symbol, entry, float(sl))
-        if abs(exit_px - float(sl)) > tol:
+            outcome = "LOSS"
+    elif hit_kind == "sl" and sl is not None:
+        sl_tol = _close_level_tolerance(symbol, entry, float(sl))
+        if abs(exit_px - float(sl)) <= sl_tol:
+            outcome = classify_sl_close_outcome(execution, exit_px)
+        else:
             logger.critical(
                 "[close-sanity] exec=%s labeled SL but exit %s vs sl %s (tol=%s)",
-                exec_id, exit_px, sl, tol,
+                exec_id, exit_px, sl, sl_tol,
             )
-            return classify_sl_close_outcome(execution, exit_px), "market close"
+            outcome = classify_sl_close_outcome(execution, exit_px)
 
-    return outcome, close_note_label(execution, outcome, exit_px, hit_kind)
+    if entry > 0 and outcome == "WIN":
+        if direction == "LONG" and exit_px <= entry + be_entry_tol:
+            outcome = (
+                "BREAKEVEN"
+                if bool(getattr(execution, "breakeven_applied", False))
+                else "LOSS"
+            )
+        elif direction == "SHORT" and exit_px >= entry - be_entry_tol:
+            outcome = (
+                "BREAKEVEN"
+                if bool(getattr(execution, "breakeven_applied", False))
+                else "LOSS"
+            )
+
+    pnl_pct = _anticipated_pnl_pct(execution, exit_px)
+    if outcome == "WIN" and pnl_pct < 0:
+        logger.critical(
+            "[close-sanity] exec=%s outcome WIN but anticipated pnl=%s%% exit=%s entry=%s",
+            exec_id, pnl_pct, exit_px, entry,
+        )
+        outcome = (
+            "BREAKEVEN"
+            if bool(getattr(execution, "breakeven_applied", False))
+            else "LOSS"
+        )
+
+    label = close_note_label(execution, outcome, exit_px, hit_kind)
+    if outcome == "WIN" and label == "TP hit" and tp is not None:
+        tp_tol = _close_level_tolerance(symbol, entry, float(tp))
+        if abs(exit_px - float(tp)) > tp_tol:
+            logger.critical(
+                "[close-sanity] exec=%s TP label but exit %s vs tp %s",
+                exec_id, exit_px, tp,
+            )
+            label = "market close"
+    return outcome, label
+
+
+def validate_close_sanity(
+    execution,
+    outcome: str,
+    exit_price: float,
+    hit_kind: str,
+) -> Tuple[str, str]:
+    """Backward-compatible wrapper — delegates to close_classifier."""
+    return close_classifier(
+        execution,
+        float(exit_price),
+        hit_kind=hit_kind,
+        proposed_outcome=outcome,
+    )
 
 
 def classify_and_close_paper(
@@ -278,8 +370,11 @@ def classify_and_close_paper(
     hit_kind: str = "",
 ) -> None:
     """Shared classifier + paper close — use from every paper close site."""
-    outcome, label = validate_close_sanity(
-        execution, outcome, float(exit_price), hit_kind,
+    outcome, label = close_classifier(
+        execution,
+        float(exit_price),
+        hit_kind=hit_kind,
+        proposed_outcome=outcome,
     )
     from app.services.strategy_executor import _close_paper_execution
 
@@ -814,19 +909,23 @@ async def manage_open_position(
                 )
 
     # ── 4. Breakeven ──────────────────────────────────────────────────────
-    be_ready = (
-        cfg["breakeven_enabled"]
-        and cfg["breakeven_trigger_pips"] > 0
-        and not bool(getattr(execution, "breakeven_applied", False))
-        and (force_be or profit_pips >= cfg["breakeven_trigger_pips"])
-    )
-    if be_ready:
+    _be_applied = bool(getattr(execution, "breakeven_applied", False))
+    _be_trigger = cfg["breakeven_trigger_pips"]
+    if cfg["breakeven_enabled"] and profit_pips > 0:
         logger.info(
-            "[trade-mgmt] BE trigger exec=%s profit=%.1f >= trigger=%.0f",
+            "[trade-mgmt] BE check exec=%s profit=%.1fp trigger=%.0fp applied=%s",
             getattr(execution, "id", 0),
             profit_pips,
-            cfg["breakeven_trigger_pips"],
+            _be_trigger,
+            _be_applied,
         )
+    be_ready = (
+        cfg["breakeven_enabled"]
+        and _be_trigger > 0
+        and not _be_applied
+        and (force_be or profit_pips >= _be_trigger)
+    )
+    if be_ready:
         new_sl = breakeven_sl_price(
             symbol, entry, direction, cfg["breakeven_offset_pips"],
         )
@@ -841,6 +940,13 @@ async def manage_open_position(
                 trigger_pips=profit_pips,
                 trigger_cfg=cfg["breakeven_trigger_pips"],
             )
+            if amended:
+                logger.info(
+                    "[trade-mgmt] BE FIRED exec=%s reached=+%.1fp → SL %s",
+                    getattr(execution, "id", 0),
+                    profit_pips,
+                    new_sl,
+                )
             if amended and not is_paper:
                 await _notify_live_breakeven(
                     execution,
@@ -1447,7 +1553,10 @@ async def reconcile_broker_pnl_for_recent_closes(hours: int = 48) -> dict:
                         ex.pnl_pct = round(
                             (entry - broker_exit) / entry * 100 * lev, 2,
                         )
-                label = close_note_label(ex, broker_outcome, broker_exit)
+                broker_outcome, label = close_classifier(
+                    ex, broker_exit, proposed_outcome=broker_outcome,
+                )
+                ex.outcome = broker_outcome
                 pnl_sign = "+" if (ex.pnl_pct or 0) >= 0 else ""
                 ex.notes = (
                     f"{label} · {pnl_sign}{ex.pnl_pct}% · exit {broker_exit:.6g} "

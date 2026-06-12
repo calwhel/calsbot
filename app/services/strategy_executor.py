@@ -1720,11 +1720,19 @@ def _close_paper_execution(
     pnl_pct   = round(raw_pnl * ex.leverage, 2)
     closed_at = datetime.utcnow()
 
-    # ── Pips P&L — paper computes from entry vs exit (never broker-sourced) ───
     from app.services.trade_management import (
+        close_classifier,
         compute_execution_pips_pnl,
         is_forex_like_asset,
     )
+
+    close_label_final = close_label
+    if outcome != "CANCELLED":
+        outcome, close_label_final = close_classifier(
+            ex, float(exit_price), proposed_outcome=outcome,
+        )
+
+    # ── Pips P&L — paper computes from entry vs exit (never broker-sourced) ───
 
     pips_pnl: float | None = None
     spread_pips_stored: float | None = None
@@ -1787,13 +1795,11 @@ def _close_paper_execution(
 
     # Append close note — preserve any original open-time context (e.g. Live→Paper
     # fallback reason) so the history is auditable after close.
-    from app.services.trade_management import close_note_label
-
     pnl_sign   = "+" if pnl_pct >= 0 else ""
     if outcome == "CANCELLED":
         close_note = "Expired · no TP/SL hit within hold period"
     else:
-        label = close_label or close_note_label(ex, outcome, float(exit_price))
+        label = close_label_final or "Closed"
         close_note = f"{label} · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
     # If there's an existing note that isn't just the live-monitor "open · unrealised" noise,
     # keep it prepended so we can always see why a trade went paper even after it closes.
@@ -6537,12 +6543,14 @@ async def _close_live_forex_execution_and_notify(
         if not claim_close_notification(db, ex.id):
             return True
 
-        from app.services.trade_management import close_note_label
+        from app.services.trade_management import close_classifier
         from app.services.forex_tick_manager import unregister_position
 
         # Append an auditable close note (preserve prior open-time context).
         pnl_sign = "+" if pnl_pct >= 0 else ""
-        label = close_note_label(ex, outcome, float(exit_price))
+        outcome, label = close_classifier(
+            ex, float(exit_price), proposed_outcome=outcome,
+        )
         cn = f"{label} · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
         unregister_position(ex.id, ex.symbol or "")
         existing = (ex.notes or "").strip()

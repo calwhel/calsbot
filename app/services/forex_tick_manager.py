@@ -167,9 +167,6 @@ async def _manage_paper_on_tick(exec_id: int, symbol: str, mid: float) -> None:
         classify_and_close_paper,
         manage_open_position,
     )
-    from app.services.strategy_executor import (
-        _evaluate_paper_position_against_candles,
-    )
 
     now_ms = int(datetime.utcnow().timestamp() * 1000)
     candles = [[now_ms, mid, mid, mid, mid]]
@@ -188,6 +185,5 @@ async def _manage_paper_on_tick(exec_id: int, symbol: str, mid: float) -> None:
         strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
         if strat:
             await manage_open_position(ex, strat.config or {}, mid, db)
-        _evaluate_paper_position_against_candles(ex, candles, db)
     finally:
         db.close()

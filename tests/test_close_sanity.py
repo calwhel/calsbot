@@ -3,6 +3,7 @@ import unittest
 
 from app.services.trade_management import (
     check_directional_exit_hit,
+    close_classifier,
     close_note_label,
     validate_close_sanity,
 )
@@ -55,8 +56,20 @@ class TestCloseSanity(unittest.TestCase):
 
     def test_phantom_win_at_entry_without_be_is_loss(self):
         ex = _Ex()
-        outcome, label = validate_close_sanity(ex, "WIN", 4190.0, "tp")
+        outcome, label = close_classifier(ex, 4190.0, hit_kind="tp", proposed_outcome="WIN")
         self.assertNotEqual(outcome, "WIN")
+
+    def test_negative_pnl_never_win(self):
+        ex = _Ex()
+        ex.breakeven_applied = True
+        ex.current_sl = 4190.1
+        ex.sl_price = 4190.1
+        # entry+0.1 on gold: tiny gross profit, negative after spread → not WIN
+        outcome, label = close_classifier(
+            ex, 4190.1, hit_kind="sl", proposed_outcome="WIN",
+        )
+        self.assertEqual(outcome, "BREAKEVEN")
+        self.assertEqual(label, "breakeven stop")
 
 
 if __name__ == "__main__":
