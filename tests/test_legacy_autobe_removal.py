@@ -41,6 +41,14 @@ class TestLegacyAutobeRemoval(unittest.TestCase):
         self.assertTrue(tm["breakeven_enabled"])
         self.assertEqual(tm["breakeven_trigger_pips"], 15.0)
 
+    def test_sweep_has_no_stop_moves(self):
+        import inspect
+        from app.services.strategy_executor import run_paper_position_monitor
+
+        src = inspect.getsource(run_paper_position_monitor)
+        self.assertNotIn("await manage_open_position", src)
+        self.assertNotIn("persist_paper_stop_level", src)
+
     def test_classify_and_close_paper_uses_shared_classifier(self):
         ex = MagicMock()
         ex.id = 1

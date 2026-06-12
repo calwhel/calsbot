@@ -44,6 +44,20 @@ class TestCloseSanity(unittest.TestCase):
         label = close_note_label(ex, "BREAKEVEN", 4190.0, "sl")
         self.assertEqual(label, "breakeven stop")
 
+    def test_win_at_entry_downgraded_when_not_profitable(self):
+        ex = _Ex()
+        ex.breakeven_applied = True
+        ex.current_sl = 4190.1
+        ex.sl_price = 4190.1
+        outcome, label = validate_close_sanity(ex, "WIN", 4190.1, "sl")
+        self.assertEqual(outcome, "BREAKEVEN")
+        self.assertEqual(label, "breakeven stop")
+
+    def test_phantom_win_at_entry_without_be_is_loss(self):
+        ex = _Ex()
+        outcome, label = validate_close_sanity(ex, "WIN", 4190.0, "tp")
+        self.assertNotEqual(outcome, "WIN")
+
 
 if __name__ == "__main__":
     unittest.main()

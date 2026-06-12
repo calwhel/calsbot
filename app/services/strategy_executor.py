@@ -3014,14 +3014,11 @@ async def run_paper_position_monitor():
             candles  = await _fetch_paper_candles_cached(
                 symbol, earliest, http_client, asset_class,
             )
-            # ── Live intra-candle hit detection (forex/index) ──────────────────
-            # Paper SL/TP is normally only seen when the 1m candle CLOSES (and the
-            # broker candle feed can fall back to a delayed source), which made
-            # gold alerts minutes late. Append a synthetic "now" candle built from
-            # the real-time broker spot price (same cTrader feed the live path
-            # uses) so a stop/target/breakeven is detected within the sweep cycle
-            # instead of waiting for the candle to close. Crypto already gets
-            # frequent candles, so this targets forex/index where the lag was worst.
+            # ── Live intra-candle exit detection (forex/index) ─────────────────
+            # Append a synthetic "now" candle from the real-time spot feed so
+            # TP/SL hits are seen within the sweep cycle. Stop moves (breakeven,
+            # trailing, partial) are NEVER done here — only via
+            # trade_management.manage_open_position on the tick path.
             if asset_class in ("forex", "index"):
                 try:
                     from app.services.tradfi_prices import get_price as _spot_px
@@ -3120,25 +3117,8 @@ async def run_paper_position_monitor():
                                         _close_paper_execution(managed, "CANCELLED", _fc_price, write_db)
                                         continue
 
-                                try:
-                                    from app.strategy_models import UserStrategy as _US_tm
-                                    from app.services.trade_management import manage_open_position
-                                    _strat_tm = write_db.query(_US_tm).filter(
-                                        _US_tm.id == managed.strategy_id
-                                    ).first()
-                                    _live_px = float(candles[-1][4]) if candles else None
-                                    if _strat_tm and _live_px and _live_px > 0:
-                                        await manage_open_position(
-                                            managed,
-                                            _strat_tm.config or {},
-                                            _live_px,
-                                            write_db,
-                                        )
-                                except Exception as _tme:
-                                    logger.warning(
-                                        "[PaperMonitor] trade-mgmt exec#%s: %s",
-                                        managed.id, _tme,
-                                    )
+                                # Exit-only: compare candles vs existing TP/SL.
+                                # Never move stops here — trade-mgmt tick path only.
                                 _evaluate_paper_position_against_candles(managed, candles, write_db)
                             except Exception as e:
                                 logger.warning(f"Position {ex.id} eval error: {e}")
