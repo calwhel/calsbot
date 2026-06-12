@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,175 @@ def breakeven_was_claimed(execution) -> bool:
     return bool(getattr(execution, "breakeven_applied", False)) or (
         "be_moved" in ((getattr(execution, "notes", None) or ""))
     )
+
+
+def position_id_from_execution(execution) -> Optional[int]:
+    """Broker position id from column or pos= token in notes."""
+    if getattr(execution, "ctrader_position_id", None):
+        try:
+            return int(execution.ctrader_position_id)
+        except (TypeError, ValueError):
+            pass
+    m = re.search(r"pos=(\d+)", (getattr(execution, "notes", None) or ""))
+    return int(m.group(1)) if m else None
+
+
+def _normalize_operator(raw: Any) -> str:
+    op = str(raw or "gt").strip().lower()
+    aliases = {
+        "above": "gt",
+        "below": "lt",
+        "greater": "gt",
+        "greater_than": "gt",
+        "less": "lt",
+        "less_than": "lt",
+        "overbought": "gt",
+        "oversold": "lt",
+        "rising": "gt",
+        "falling": "lt",
+    }
+    return aliases.get(op, op)
+
+
+def indicator_threshold(cond: Dict[str, Any]) -> float:
+    for key in ("value", "threshold", "level", "rsi_level", "rsi_threshold"):
+        if cond.get(key) is not None:
+            try:
+                return float(cond[key])
+            except (TypeError, ValueError):
+                pass
+    return 0.0
+
+
+def normalize_indicator_condition(cond: Dict[str, Any]) -> Dict[str, Any]:
+    """Unify operator/threshold from wizard + AI config variants."""
+    op = _normalize_operator(cond.get("operator") or cond.get("condition"))
+    val = indicator_threshold(cond)
+    return {**cond, "operator": op, "value": val}
+
+
+def effective_tp(execution) -> Optional[float]:
+    """Active take-profit — TP2 when partial runner still open."""
+    notes = getattr(execution, "notes", None) or ""
+    if ("partial_close_pct=" in notes or "partial_close_done" in notes) and getattr(
+        execution, "tp2_price", None
+    ):
+        return float(execution.tp2_price)
+    tp = getattr(execution, "tp_price", None)
+    return float(tp) if tp is not None else None
+
+
+def _close_level_tolerance(symbol: str, entry: float, level: float) -> float:
+    try:
+        from app.services.forex_engine import pip_size as _pip_size
+
+        pip = _pip_size(symbol)
+        return max(float(pip) * 3.0, abs(float(level)) * 1e-6)
+    except Exception:
+        return max(abs(float(level)) * 1e-5, abs(float(entry)) * 1e-5)
+
+
+def check_directional_exit_hit(
+    execution,
+    high: float,
+    low: float,
+) -> Optional[Tuple[str, float, str]]:
+    """
+    Return (outcome, exit_price, hit_kind) when TP or SL is touched.
+    hit_kind is 'tp' or 'sl'. Uses active_sl / effective_tp only.
+    """
+    direction = (getattr(execution, "direction", "LONG") or "LONG").upper()
+    tp = effective_tp(execution)
+    sl = active_sl(execution)
+    if sl is None:
+        sl = getattr(execution, "sl_price", None)
+    if tp is None and sl is None:
+        return None
+    if direction == "LONG":
+        tp_hit = tp is not None and high >= float(tp)
+        sl_hit = sl is not None and low <= float(sl)
+        if tp_hit and not sl_hit:
+            return "WIN", float(tp), "tp"
+        if sl_hit and not tp_hit:
+            return classify_sl_close_outcome(execution, float(sl)), float(sl), "sl"
+    else:
+        tp_hit = tp is not None and low <= float(tp)
+        sl_hit = sl is not None and high >= float(sl)
+        if tp_hit and not sl_hit:
+            return "WIN", float(tp), "tp"
+        if sl_hit and not tp_hit:
+            return classify_sl_close_outcome(execution, float(sl)), float(sl), "sl"
+    return None
+
+
+def validate_close_sanity(
+    execution,
+    outcome: str,
+    exit_price: float,
+    hit_kind: str,
+) -> Tuple[str, str]:
+    """
+    Reject phantom TP/SL labels. Returns (outcome, note_label).
+    Logs CRITICAL on mismatch.
+    """
+    symbol = getattr(execution, "symbol", "") or ""
+    entry = float(getattr(execution, "entry_price", 0) or 0)
+    exit_px = float(exit_price)
+    exec_id = getattr(execution, "id", 0)
+    tp = effective_tp(execution)
+    sl = active_sl(execution) or getattr(execution, "sl_price", None)
+
+    if breakeven_was_claimed(execution) and entry > 0:
+        if abs(exit_px - entry) <= _sl_tolerance(symbol, entry):
+            return "BREAKEVEN", "breakeven stop"
+
+    if hit_kind == "tp" and tp is not None:
+        tol = _close_level_tolerance(symbol, entry, tp)
+        if abs(exit_px - float(tp)) > tol:
+            logger.critical(
+                "[close-sanity] exec=%s labeled TP but exit %s vs tp %s (tol=%s)",
+                exec_id, exit_px, tp, tol,
+            )
+            return outcome if outcome != "WIN" else "LOSS", "market close"
+    if hit_kind == "sl" and sl is not None:
+        tol = _close_level_tolerance(symbol, entry, float(sl))
+        if abs(exit_px - float(sl)) > tol:
+            logger.critical(
+                "[close-sanity] exec=%s labeled SL but exit %s vs sl %s (tol=%s)",
+                exec_id, exit_px, sl, tol,
+            )
+            return classify_sl_close_outcome(execution, exit_px), "market close"
+
+    return outcome, close_note_label(execution, outcome, exit_px, hit_kind)
+
+
+def close_note_label(
+    execution,
+    outcome: str,
+    exit_price: float,
+    hit_kind: str = "",
+) -> str:
+    """Human-readable close label — never 'SL hit' on breakeven scratch."""
+    symbol = getattr(execution, "symbol", "") or ""
+    entry = float(getattr(execution, "entry_price", 0) or 0)
+    exit_px = float(exit_price)
+    if breakeven_was_claimed(execution) and entry > 0:
+        if abs(exit_px - entry) <= _sl_tolerance(symbol, entry):
+            return "breakeven stop"
+    o = (outcome or "").upper()
+    if o == "BREAKEVEN":
+        return "breakeven stop"
+    if o == "WIN" and hit_kind == "tp":
+        return "TP hit"
+    if o in ("LOSS", "WIN") and hit_kind == "sl":
+        if o == "BREAKEVEN":
+            return "breakeven stop"
+        return "SL hit" if o == "LOSS" else "trailing stop"
+    if o == "WIN":
+        return "TP hit"
+    if o == "LOSS":
+        return "SL hit"
+    return "Closed"
 
 
 def _classify_sl_outcome(sl: float, entry: float, direction: str) -> str:
@@ -507,18 +676,27 @@ async def manage_open_position(
             symbol, entry, direction, cfg["breakeven_offset_pips"],
         )
         if _validate_sl(direction, new_sl, live_price):
-            amended = await _apply_sl_amend(
+            amended, _be_ms = await _apply_sl_amend(
                 execution,
                 new_sl,
                 session,
                 is_paper,
                 keep_tp=True,
                 mark_breakeven=True,
+                trigger_pips=profit_pips,
+                trigger_cfg=cfg["breakeven_trigger_pips"],
             )
-            if amended:
-                if not is_paper:
-                    execution.breakeven_applied = True
-                    session.commit()
+            if amended and not is_paper:
+                await _notify_live_breakeven(
+                    execution,
+                    new_sl,
+                    profit_pips,
+                    cfg["breakeven_trigger_pips"],
+                    session,
+                    asset_class=asset_class,
+                    confirm_ms=_be_ms,
+                )
+            elif amended and is_paper:
                 await _telegram_trade(
                     execution.user_id,
                     f"🔒 Breakeven set @ {new_sl:.5g} — reached +{profit_pips:.1f} "
@@ -549,12 +727,10 @@ async def manage_open_position(
             candidate = live_price - dist
             if cur_sl is None or candidate > cur_sl + step:
                 if _validate_sl(direction, candidate, live_price):
-                    if await _apply_sl_amend(
+                    amended_trail, _ = await _apply_sl_amend(
                         execution, candidate, session, is_paper, keep_tp=True,
-                    ):
-                        execution.current_sl = candidate
-                        execution.sl_price = candidate
-                        session.commit()
+                    )
+                    if amended_trail:
                         _locked = _locked_pips(symbol, entry, candidate, direction)
                         _peak = float(getattr(execution, "mfe_pips", None) or profit_pips)
                         await _telegram_trade(
@@ -570,12 +746,10 @@ async def manage_open_position(
             candidate = live_price + dist
             if cur_sl is None or candidate < cur_sl - step:
                 if _validate_sl(direction, candidate, live_price):
-                    if await _apply_sl_amend(
+                    amended_trail, _ = await _apply_sl_amend(
                         execution, candidate, session, is_paper, keep_tp=True,
-                    ):
-                        execution.current_sl = candidate
-                        execution.sl_price = candidate
-                        session.commit()
+                    )
+                    if amended_trail:
                         _locked = _locked_pips(symbol, entry, candidate, direction)
                         _peak = float(getattr(execution, "mfe_pips", None) or profit_pips)
                         await _telegram_trade(
@@ -589,6 +763,61 @@ async def manage_open_position(
                         )
 
 
+async def _notify_live_breakeven(
+    execution,
+    new_sl: float,
+    profit_pips: float,
+    trigger_pips: float,
+    session,
+    *,
+    asset_class: str = "forex",
+    confirm_ms: float = 0.0,
+) -> None:
+    """Push + Telegram breakeven alert — only after broker-confirmed amend."""
+    try:
+        from app.services.strategy_executor import (
+            _claim_tg_be_notify,
+            _notify_breakeven_alert,
+            _telegram_int_id,
+        )
+        from app.models import User
+        from app.strategy_models import UserStrategy
+
+        exec_id = int(getattr(execution, "id", 0) or 0)
+        if not _claim_tg_be_notify(session, exec_id):
+            return
+        user = session.query(User).filter(User.id == execution.user_id).first()
+        strat = session.query(UserStrategy).filter(
+            UserStrategy.id == execution.strategy_id
+        ).first()
+        entry = float(execution.entry_price or 0)
+        move_pct = abs(profit_pips) * 0.01 if entry else 0.0
+        await _notify_breakeven_alert(
+            user_id=execution.user_id,
+            telegram_id=_telegram_int_id(user) if user else None,
+            strategy_name=(strat.name if strat else None) or "Strategy",
+            symbol=execution.symbol,
+            direction=execution.direction,
+            leverage=int(getattr(execution, "leverage", 1) or 1),
+            move_pct=move_pct,
+            strategy_id=execution.strategy_id,
+            execution_id=exec_id,
+            kind="live",
+        )
+        logger.info(
+            "[trade-mgmt] breakeven via tick (+%.0fms broker confirm) exec=%s @ %s",
+            confirm_ms,
+            exec_id,
+            new_sl,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[trade-mgmt] live breakeven notify failed exec=%s: %s",
+            getattr(execution, "id", 0),
+            exc,
+        )
+
+
 async def _apply_sl_amend(
     execution,
     new_sl: float,
@@ -597,44 +826,260 @@ async def _apply_sl_amend(
     *,
     keep_tp: bool = True,
     mark_breakeven: bool = False,
-) -> bool:
+    trigger_pips: float = 0.0,
+    trigger_cfg: float = 0.0,
+) -> Tuple[bool, float]:
+    """Returns (success, broker_confirm_ms). DB updated only on broker confirm."""
+    import time as _time
+
     new_sl = round(float(new_sl), 6)
+    exec_id = int(getattr(execution, "id", 0) or 0)
     if is_paper:
-        return persist_paper_stop_level(
+        ok = persist_paper_stop_level(
             execution, new_sl, session, mark_breakeven=mark_breakeven,
         )
-    from app.models import User
-    from app.services.ctrader_client import amend_position_sl
+        return ok, 0.0
 
-    user = session.query(User).filter(User.id == execution.user_id).first()
-    pos_id = getattr(execution, "ctrader_position_id", None)
-    if not user or not pos_id:
+    pos_id = position_id_from_execution(execution)
+    if not pos_id:
         logger.warning(
             "[trade-mgmt] live SL amend skipped exec=%s — no broker position",
-            getattr(execution, "id", 0),
+            exec_id,
         )
-        return False
-    tp = float(execution.tp2_price or execution.tp_price) if keep_tp else None
-    ok = await amend_position_sl(user.id, int(pos_id), new_sl, keep_tp=tp)
-    if not ok:
-        logger.warning(
-            "[trade-mgmt] live SL amend FAILED exec=%s %s new_sl=%s — "
-            "breakeven notification suppressed",
-            getattr(execution, "id", 0),
-            execution.symbol,
-            new_sl,
+        return False, 0.0
+
+    tp = None
+    if keep_tp:
+        tp = execution.tp2_price or execution.tp_price
+        tp = float(tp) if tp is not None else None
+        if tp is None:
+            logger.warning(
+                "[sl-amend] exec=%s missing tp_price — amend may clear broker TP",
+                exec_id,
+            )
+
+    orig_sl = active_sl(execution) or getattr(execution, "sl_price", None)
+    t0 = _time.monotonic()
+    try:
+        from app.services.ctrader_order_queue import enqueue_ctrader_sl_amend
+
+        res = await enqueue_ctrader_sl_amend(
+            user_id=int(execution.user_id),
+            exec_id=exec_id,
+            position_id=int(pos_id),
+            new_sl=new_sl,
+            keep_tp=tp,
         )
+    except Exception as exc:
+        res = {"ok": False, "result": "failed", "error": str(exc)}
+    confirm_ms = (_time.monotonic() - t0) * 1000.0
+
+    result = res.get("result") or ("confirmed" if res.get("ok") else "failed")
+    logger.info(
+        "[sl-amend] exec=%s requested=%s result=%s broker_reply=%s",
+        exec_id,
+        new_sl,
+        result,
+        res.get("broker_reply"),
+    )
+
+    if not res.get("ok"):
+        stop_rem = orig_sl if orig_sl is not None else "unknown"
         await _telegram_trade(
             execution.user_id,
-            f"⚠️ SL amend failed {execution.symbol}: broker rejected amend",
+            f"⚠️ SL amend FAILED — stop remains at {stop_rem}",
             asset_class=getattr(execution, "asset_class", "forex") or "forex",
         )
-        return False
+        return False, confirm_ms
+
     execution.current_sl = new_sl
     execution.sl_price = new_sl
+    if mark_breakeven:
+        execution.breakeven_applied = True
+        notes = (execution.notes or "").strip()
+        if "be_moved" not in notes:
+            execution.notes = (f"{notes} | be_moved".strip(" |")) if notes else "be_moved"
     try:
         session.commit()
     except Exception:
         session.rollback()
-        return False
-    return True
+        return False, confirm_ms
+    return True, confirm_ms
+
+
+def mark_pending_reconcile(execution, session, reason: str = "") -> None:
+    """Flag OPEN execution awaiting broker deal data — never fabricate close."""
+    notes = (execution.notes or "").strip()
+    if "pending_reconcile" not in notes:
+        tag = "pending_reconcile"
+        if reason:
+            tag = f"{tag}:{reason[:40]}"
+        execution.notes = (f"{notes} | {tag}".strip(" |")) if notes else tag
+        try:
+            session.commit()
+        except Exception:
+            session.rollback()
+
+
+def _broker_pips_from_deal(
+    entry: float,
+    exit_price: float,
+    direction: str,
+    symbol: str,
+) -> Optional[float]:
+    try:
+        from app.services.forex_engine import pip_size as _pip_size
+
+        ps = _pip_size(symbol)
+        if not ps or ps <= 0:
+            return None
+        if direction == "LONG":
+            return round((exit_price - entry) / ps, 1)
+        return round((entry - exit_price) / ps, 1)
+    except Exception:
+        return None
+
+
+async def reconcile_broker_pnl_for_recent_closes(hours: int = 48) -> dict:
+    """
+    Compare recorded live closes vs broker deal P/L; correct DB when they diverge.
+    Returns audit counts {corrected, phantom_paper, broker_mismatch_checked}.
+    """
+    from datetime import datetime, timedelta
+
+    from app.database import BgSessionLocal as SessionLocal
+    from app.models import User
+    from app.strategy_models import StrategyExecution
+    from app.services.ctrader_client import get_position_close_detail_for_user
+
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    stats = {"corrected": 0, "phantom_paper": 0, "checked": 0, "broker_mismatch": 0}
+
+    db = SessionLocal()
+    try:
+        live_rows = (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.is_paper == False,  # noqa: E712
+                StrategyExecution.outcome.in_(("WIN", "LOSS", "BREAKEVEN")),
+                StrategyExecution.asset_class.in_(("forex", "index")),
+                StrategyExecution.closed_at >= cutoff,
+            )
+            .all()
+        )
+        paper_rows = (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.is_paper == True,  # noqa: E712
+                StrategyExecution.outcome == "WIN",
+                StrategyExecution.asset_class.in_(("forex", "index")),
+                StrategyExecution.closed_at >= cutoff,
+            )
+            .all()
+        )
+        for ex in paper_rows:
+            if not ex.fired_at or not ex.closed_at:
+                continue
+            age_s = (ex.closed_at - ex.fired_at).total_seconds()
+            if age_s >= 60:
+                continue
+            tp = effective_tp(ex)
+            exit_px = float(ex.exit_price or 0)
+            if tp and exit_px and abs(exit_px - float(tp)) > _close_level_tolerance(
+                ex.symbol or "", float(ex.entry_price or 0), float(tp),
+            ):
+                stats["phantom_paper"] += 1
+                logger.critical(
+                    "[close-sanity] phantom paper TP exec=%s age=%.0fs exit=%s tp=%s",
+                    ex.id,
+                    age_s,
+                    exit_px,
+                    tp,
+                )
+
+        user_cache: Dict[int, object] = {}
+        for ex in live_rows:
+            pos_id = position_id_from_execution(ex)
+            if not pos_id:
+                continue
+            stats["checked"] += 1
+            user = user_cache.get(ex.user_id)
+            if user is None:
+                user = db.query(User).filter(User.id == ex.user_id).first()
+                user_cache[ex.user_id] = user
+            if not user:
+                continue
+            broker = await get_position_close_detail_for_user(
+                user,
+                int(pos_id),
+                entry_hint=float(ex.entry_price or 0),
+                direction=ex.direction,
+            )
+            if not broker or not broker.get("exit_price"):
+                continue
+            broker_exit = float(broker["exit_price"])
+            broker_outcome = broker.get("outcome") or "LOSS"
+            our_pips = float(ex.pips_pnl or 0)
+            broker_pips = _broker_pips_from_deal(
+                float(ex.entry_price or 0),
+                broker_exit,
+                ex.direction or "LONG",
+                ex.symbol or "",
+            )
+            if broker_pips is None:
+                continue
+            tol = 2.0
+            if abs(our_pips - broker_pips) > tol or ex.outcome != broker_outcome:
+                stats["broker_mismatch"] += 1
+                logger.warning(
+                    "[reconcile] corrected exec=%s our=%s pips=%s broker=%s pips=%s "
+                    "outcome %s→%s exit %s→%s",
+                    ex.id,
+                    ex.outcome,
+                    our_pips,
+                    broker_outcome,
+                    broker_pips,
+                    ex.outcome,
+                    broker_outcome,
+                    ex.exit_price,
+                    broker_exit,
+                )
+                ex.exit_price = broker_exit
+                ex.outcome = broker_outcome
+                ex.pips_pnl = broker_pips
+                lev = ex.leverage or 1
+                entry = float(ex.entry_price or 0)
+                if entry > 0:
+                    if ex.direction == "LONG":
+                        ex.pnl_pct = round(
+                            (broker_exit - entry) / entry * 100 * lev, 2,
+                        )
+                    else:
+                        ex.pnl_pct = round(
+                            (entry - broker_exit) / entry * 100 * lev, 2,
+                        )
+                label = close_note_label(ex, broker_outcome, broker_exit)
+                pnl_sign = "+" if (ex.pnl_pct or 0) >= 0 else ""
+                ex.notes = (
+                    f"{label} · {pnl_sign}{ex.pnl_pct}% · exit {broker_exit:.6g} "
+                    f"| reconcile-corrected"
+                )
+                stats["corrected"] += 1
+        if stats["corrected"]:
+            db.commit()
+    except Exception as exc:
+        logger.warning("[reconcile] broker P/L audit failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+    if stats["phantom_paper"] or stats["broker_mismatch"]:
+        logger.warning(
+            "[reconcile] 48h audit: phantom_paper=%s broker_mismatch=%s corrected=%s",
+            stats["phantom_paper"],
+            stats["broker_mismatch"],
+            stats["corrected"],
+        )
+    return stats
