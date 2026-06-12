@@ -3886,7 +3886,7 @@ async function _apiFetchRetry(url,opts={},retries=4){
   throw lastErr||new Error('fetch failed');
 }
 function _wakeLoadingHtml(label){
-  return `<div class="empty"><div class="loader" style="margin:0 auto 12px"></div><p style="color:var(--muted);font-size:13px">${label}</p><p style="color:var(--muted);font-size:11px;margin-top:6px">After idle, Railway + Neon can take 30–60s to wake — this retries automatically.</p></div>`;
+  return `<div class="empty"><div class="loader" style="margin:0 auto 12px"></div><p style="color:var(--muted);font-size:13px">${label}</p></div>`;
 }
 function _apiErrorHtml(msg,retryFn){
   const retry=retryFn?`<button class="btn primary" onclick="${retryFn}()" style="margin-top:8px">↺ Retry</button>`:'';
@@ -4200,7 +4200,7 @@ async function loadTrades(retry=0){
   const sumEl=$('trades-summary');
   let data=_fcGet(_tUrl);
   if(!data){
-    list.innerHTML=retry?_wakeLoadingHtml('Still waking server…'):skelCards(4);
+    list.innerHTML=retry?_wakeLoadingHtml('Couldn\'t load — retrying…'):skelCards(4);
     sumEl.innerHTML='';
     try{
       await _ensurePortalReady(retry>0);
@@ -4295,7 +4295,7 @@ async function loadMyStrategies(retry=0){
   const _boot=_fcGet(_bootUrl);
   if(_boot&&_boot.strategies&&_boot.portfolio){ strats=_boot.strategies; port=_boot.portfolio; }
   if(!strats||!port){
-    $('my-list').innerHTML=_wakeLoadingHtml(retry?'Still waking server…':'Loading strategies…');
+    $('my-list').innerHTML=_wakeLoadingHtml(retry?'Couldn\'t load — retrying…':'Loading strategies…');
     strats=[]; port={total_strategies:0,active_count:0,open_trades:0,total_trades:0,win_rate:0,pnl_7d:0,pnl_30d:0,pnl_all:0,equity_30d:{labels:[],values:[]}};
     try{
       await _ensurePortalReady(retry>0);
@@ -11792,6 +11792,9 @@ function _lfRelTime(iso) {
 
 function _lfBrokerChipHtml(h) {
   if (!h) return '';
+  if (h.status_unavailable) {
+    return '<span class="lf-broker-chip muted">status unavailable</span>';
+  }
   if (h.linked && h.token_valid && h.feed_alive) {
     return '<span class="lf-broker-chip ok">cTrader ✓</span>';
   }
@@ -11889,7 +11892,7 @@ async function loadLiveForex(retry=0) {
   if (_lfPollTimer) { clearTimeout(_lfPollTimer); _lfPollTimer = null; }
   _lfStopLivePoll();
   if (_ctraderLinking) renderLFConnecting(wrap);
-  else wrap.innerHTML = retry ? _wakeLoadingHtml('Still waking server…') : '<div class="loader">Loading account…</div>';
+  else wrap.innerHTML = retry ? _wakeLoadingHtml('Couldn\'t load — retrying…') : '<div class="loader">Loading account…</div>';
   const setup = await _checkCtraderSetup();
   if (setup && !setup.configured) {
     wrap.innerHTML = `<div class="lf-card" style="padding:20px;text-align:center">
