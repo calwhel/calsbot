@@ -33,6 +33,7 @@ class CtraderSlAmendJob:
     position_id: int
     new_sl: float
     keep_tp: Optional[float] = None
+    ctrader_account_id: Optional[str] = None
 
 
 @dataclass
@@ -54,6 +55,7 @@ class CtraderOrderJob:
     tp2_pct: Optional[float] = None
     partial_close_pct: Optional[float] = None
     broker: str = "ctrader"
+    ctrader_account_id: Optional[str] = None
     signal_mono: float = field(default_factory=time.monotonic)
     signal_generated_at: float = 0.0
     signal_price_source: str = "unknown"
@@ -83,6 +85,7 @@ async def enqueue_ctrader_sl_amend(
     position_id: int,
     new_sl: float,
     keep_tp: Optional[float] = None,
+    ctrader_account_id: Optional[str] = None,
 ) -> dict:
     """Queue SL amend on the priority lane; await broker-confirmed result."""
     start_ctrader_order_worker()
@@ -93,6 +96,7 @@ async def enqueue_ctrader_sl_amend(
         position_id=position_id,
         new_sl=float(new_sl),
         keep_tp=keep_tp,
+        ctrader_account_id=ctrader_account_id,
     )
     result_fut: concurrent.futures.Future = concurrent.futures.Future()
     job._result_fut = result_fut  # type: ignore[attr-defined]
@@ -184,6 +188,7 @@ async def _try_reconcile_ambiguous(user, job: CtraderOrderJob, order_result: dic
         _host_for_account,
         is_ambiguous_order_error,
         reconcile_order_fill_after_miss,
+        resolve_ctrader_ctid,
     )
 
     if not is_ambiguous_order_error(order_result.get("error")):
@@ -191,10 +196,16 @@ async def _try_reconcile_ambiguous(user, job: CtraderOrderJob, order_result: dic
     db = SessionLocal()
     try:
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+        if not prefs or not prefs.ctrader_access_token:
+            return None
+        ctid_str = resolve_ctrader_ctid(
+            execution_account_id=job.ctrader_account_id,
+            prefs_default=prefs.ctrader_account_id,
+        )
+        if not ctid_str:
             return None
         at = prefs.ctrader_access_token
-        ctid = int(prefs.ctrader_account_id)
+        ctid = int(ctid_str)
         host = _host_for_account(prefs, ctid)
     finally:
         db.close()
@@ -480,6 +491,7 @@ async def _process_sl_amend_job(job: CtraderSlAmendJob) -> None:
         job.new_sl,
         keep_tp=job.keep_tp,
         exec_id=job.exec_id,
+        ctrader_account_id=job.ctrader_account_id,
     )
     fut = getattr(job, "_result_fut", None)
     if fut and not fut.done():
@@ -602,19 +614,23 @@ async def _ctrader_order_worker() -> None:
                 use_risk_pct=job.use_risk_pct,
                 sl_pips=job.sl_pips,
                 fixed_lots=job.fixed_lots,
+                ctid=job.ctrader_account_id,
                 latency=job.latency,
             )
             if order_result and not order_result.get("account_id"):
-                from app.models import UserPreference
-                db2 = SessionLocal()
-                try:
-                    prefs = db2.query(UserPreference).filter(
-                        UserPreference.user_id == user.id
-                    ).first()
-                    if prefs and prefs.ctrader_account_id:
-                        order_result["account_id"] = prefs.ctrader_account_id
-                finally:
-                    db2.close()
+                if job.ctrader_account_id:
+                    order_result["account_id"] = job.ctrader_account_id
+                else:
+                    from app.models import UserPreference
+                    db2 = SessionLocal()
+                    try:
+                        prefs = db2.query(UserPreference).filter(
+                            UserPreference.user_id == user.id
+                        ).first()
+                        if prefs and prefs.ctrader_account_id:
+                            order_result["account_id"] = prefs.ctrader_account_id
+                    finally:
+                        db2.close()
 
             if order_result:
                 recovered = await _try_reconcile_ambiguous(user, job, order_result)

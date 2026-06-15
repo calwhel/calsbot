@@ -71,6 +71,31 @@ def _host_for_account(prefs, ctid: int) -> str:
     return CTRADER_HOST_LIVE
 
 
+def resolve_ctrader_ctid(
+    *,
+    strategy_account_id: Optional[str] = None,
+    execution_account_id: Optional[str] = None,
+    notes: Optional[str] = None,
+    prefs_default: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve which cTrader account (ctid) to route on.
+
+    Priority: execution column → acct= in notes → strategy binding → user default.
+    """
+    if execution_account_id and str(execution_account_id).strip():
+        return str(execution_account_id).strip()
+    if notes:
+        import re as _re
+        _m = _re.search(r"acct=(\d+)", notes)
+        if _m:
+            return _m.group(1)
+    if strategy_account_id and str(strategy_account_id).strip():
+        return str(strategy_account_id).strip()
+    if prefs_default and str(prefs_default).strip():
+        return str(prefs_default).strip()
+    return None
+
+
 def _other_host(host: str) -> str:
     return CTRADER_HOST_DEMO if host == CTRADER_HOST_LIVE else CTRADER_HOST_LIVE
 
@@ -2071,6 +2096,7 @@ async def amend_position_sl_result(
     *,
     keep_tp: Optional[float] = None,
     exec_id: Optional[int] = None,
+    ctrader_account_id: Optional[str] = None,
 ) -> dict:
     """Broker-confirmed SL amend — returns {ok, result, broker_reply, error?}."""
     from app.database import SessionLocal
@@ -2082,10 +2108,30 @@ async def amend_position_sl_result(
         if not user:
             return {"ok": False, "result": "failed", "broker_reply": {}, "error": "no user"}
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+        if not prefs or not prefs.ctrader_access_token:
             return {"ok": False, "result": "failed", "broker_reply": {}, "error": "no ctrader creds"}
         access_token = prefs.ctrader_access_token
-        ctid = int(prefs.ctrader_account_id)
+
+        execution_account_id = ctrader_account_id
+        notes = None
+        if exec_id:
+            from app.strategy_models import StrategyExecution
+            execution = db.query(StrategyExecution).filter(
+                StrategyExecution.id == int(exec_id)
+            ).first()
+            if execution:
+                if not execution_account_id:
+                    execution_account_id = execution.ctrader_account_id
+                notes = execution.notes
+
+        ctid_str = resolve_ctrader_ctid(
+            execution_account_id=execution_account_id,
+            notes=notes,
+            prefs_default=prefs.ctrader_account_id,
+        )
+        if not ctid_str:
+            return {"ok": False, "result": "failed", "broker_reply": {}, "error": "no ctrader account"}
+        ctid = int(ctid_str)
         host = _host_for_account(prefs, ctid)
     finally:
         db.close()
@@ -2443,7 +2489,7 @@ async def reconcile_order_fill_after_miss(
     return None
 
 
-async def get_open_position_ids_for_user(user) -> Optional[set]:
+async def get_open_position_ids_for_user(user, *, ctid: Optional[str] = None) -> Optional[set]:
     """High-level wrapper: the set of open broker positionIds for a TradeHub user,
     or None when credentials are missing / the broker is unreachable (so callers
     never mistake an error for "all positions closed")."""
@@ -2452,10 +2498,16 @@ async def get_open_position_ids_for_user(user) -> Optional[set]:
     db = SessionLocal()
     try:
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+        if not prefs or not prefs.ctrader_access_token:
+            return None
+        ctid_str = resolve_ctrader_ctid(
+            execution_account_id=ctid,
+            prefs_default=prefs.ctrader_account_id,
+        )
+        if not ctid_str:
             return None
         access_token           = prefs.ctrader_access_token
-        ctid_trader_account_id = int(prefs.ctrader_account_id)
+        ctid_trader_account_id = int(ctid_str)
         _host = _host_for_account(prefs, ctid_trader_account_id)
     finally:
         db.close()
@@ -2551,6 +2603,7 @@ async def get_position_close_detail_for_user(
     *,
     entry_hint: Optional[float] = None,
     direction: Optional[str] = None,
+    ctid: Optional[str] = None,
 ) -> Optional[dict]:
     """High-level wrapper: broker close price/outcome for a user's position."""
     from app.database import SessionLocal
@@ -2558,16 +2611,22 @@ async def get_position_close_detail_for_user(
     db = SessionLocal()
     try:
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+        if not prefs or not prefs.ctrader_access_token:
+            return None
+        ctid_str = resolve_ctrader_ctid(
+            execution_account_id=ctid,
+            prefs_default=prefs.ctrader_account_id,
+        )
+        if not ctid_str:
             return None
         access_token = prefs.ctrader_access_token
-        ctid = int(prefs.ctrader_account_id)
-        host = _host_for_account(prefs, ctid)
+        ctid_val = int(ctid_str)
+        host = _host_for_account(prefs, ctid_val)
     finally:
         db.close()
     return await _get_position_close_detail(
         access_token,
-        ctid,
+        ctid_val,
         position_id,
         host=host,
         entry_hint=entry_hint,
@@ -2588,6 +2647,7 @@ async def place_ctrader_order_for_user(
     sl_pips: Optional[float] = None,
     fixed_lots: Optional[float] = None,
     *,
+    ctid: Optional[str] = None,
     latency=None,
 ) -> Optional[dict]:
     """
@@ -2608,11 +2668,18 @@ async def place_ctrader_order_for_user(
     db = SessionLocal()
     try:
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        if not prefs or not prefs.ctrader_access_token or not prefs.ctrader_account_id:
+        if not prefs or not prefs.ctrader_access_token:
             logger.warning(f"[cTrader] user {user.id} has no cTrader credentials")
             return None
+        ctid_str = resolve_ctrader_ctid(
+            execution_account_id=ctid,
+            prefs_default=prefs.ctrader_account_id,
+        )
+        if not ctid_str:
+            logger.warning(f"[cTrader] user {user.id} has no cTrader account resolved")
+            return None
         access_token           = prefs.ctrader_access_token
-        ctid_trader_account_id = int(prefs.ctrader_account_id)
+        ctid_trader_account_id = int(ctid_str)
         primary_host           = _host_for_account(prefs, ctid_trader_account_id)
     finally:
         db.close()
@@ -2746,5 +2813,5 @@ async def place_ctrader_order_for_user(
                 )
 
     if isinstance(result, dict) and result.get("order_id"):
-        result["account_id"] = ctid_trader_account_id
+        result["account_id"] = str(ctid_trader_account_id)
     return result

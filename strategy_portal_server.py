@@ -12608,6 +12608,7 @@ async def api_live_forex_account(
 
     balance = None
     accounts = snap["accounts"]
+    _acct_id_for_bal = (prefs.ctrader_account_id or "").strip() if prefs else ""
 
     async def _sync_ctrader_accounts():
         nonlocal accounts
@@ -12644,10 +12645,9 @@ async def api_live_forex_account(
 
     async def _fetch_balance():
         nonlocal balance
-        _acct_id = (prefs.ctrader_account_id or "").strip() if prefs else ""
-        if not _acct_id:
+        if not _acct_id_for_bal:
             return
-        _bal_key = f"ctrader_balance:{user.id}"
+        _bal_key = f"ctrader_balance:{user.id}:{_acct_id_for_bal}"
         _cached = get_cache(_bal_key)
         if _cached == "__miss__":
             return
@@ -12659,7 +12659,7 @@ async def api_live_forex_account(
             balance = await asyncio.wait_for(
                 get_account_balance_resilient(
                     prefs.ctrader_access_token,
-                    int(_acct_id),
+                    int(_acct_id_for_bal),
                     prefs=prefs,
                     user_id=user.id,
                 ),
@@ -12671,7 +12671,7 @@ async def api_live_forex_account(
                 set_cache(_bal_key, "__miss__", ttl_seconds=30)
         except Exception as _be:
             logger.warning(
-                f"[live-forex] balance fetch uid={uid} ctid={_acct_id}: "
+                f"[live-forex] balance fetch uid={uid} ctid={_acct_id_for_bal}: "
                 f"{type(_be).__name__}"
             )
             set_cache(_bal_key, "__miss__", ttl_seconds=30)
@@ -12682,7 +12682,7 @@ async def api_live_forex_account(
             timeout=9.0,
         )
     except asyncio.TimeoutError:
-        _stale_bal = get_cache(f"ctrader_balance:{user.id}")
+        _stale_bal = get_cache(f"ctrader_balance:{user.id}:{_acct_id_for_bal}")
         if isinstance(_stale_bal, (int, float)):
             balance = _stale_bal
 

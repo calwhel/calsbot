@@ -4658,6 +4658,19 @@ async def evaluate_and_fire(
                     # In partial-runner mode the broker TP must be TP2 (final target);
                     # otherwise it stays at the strategy's TP1.
                     _live_tp_pct  = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
+                    _job_ctid = None
+                    try:
+                        from app.models import UserPreference as _UP_job
+                        from app.services.ctrader_client import resolve_ctrader_ctid
+                        _job_prefs = db.query(_UP_job).filter(_UP_job.user_id == user.id).first()
+                        _job_ctid = resolve_ctrader_ctid(
+                            strategy_account_id=getattr(strategy, "ctrader_account_id", None),
+                            prefs_default=(
+                                _job_prefs.ctrader_account_id if _job_prefs else None
+                            ),
+                        )
+                    except Exception:
+                        pass
                     _job = CtraderOrderJob(
                         user_id=user.id,
                         strategy_id=strategy.id,
@@ -4674,6 +4687,7 @@ async def evaluate_and_fire(
                         fixed_lots=_fixed_lots or None,
                         asset_class=asset_class,
                         partial_close_pct=float(_partial_close_pct) if _partial_close_pct else None,
+                        ctrader_account_id=_job_ctid,
                         signal_mono=_signal_mono,
                         signal_generated_at=_signal_generated_at,
                         signal_price_source=_ps,
@@ -5283,6 +5297,17 @@ async def _propagate_to_subscribers(
                             or sub_risk.get("position_size_pct")
                             or 1.0
                         )
+                        _sub_job_ctid = None
+                        try:
+                            from app.services.ctrader_client import resolve_ctrader_ctid
+                            _sub_job_ctid = resolve_ctrader_ctid(
+                                strategy_account_id=getattr(sub_strategy, "ctrader_account_id", None),
+                                prefs_default=(
+                                    _sub_prefs.ctrader_account_id if _sub_prefs else None
+                                ),
+                            )
+                        except Exception:
+                            pass
                         _job = CtraderOrderJob(
                             user_id=sub_user.id,
                             strategy_id=sub_strategy.id,
@@ -5298,6 +5323,7 @@ async def _propagate_to_subscribers(
                             sl_pips=float((sub_config.get("exit") or {}).get("stop_loss_pips") or 0) or None,
                             fixed_lots=_sub_fixed_lots or None,
                             asset_class=_sub_asset_class,
+                            ctrader_account_id=_sub_job_ctid,
                             signal_mono=_sub_signal_mono,
                             latency=new_order_latency(sub_exec.id, _sub_signal_mono),
                         )
@@ -6664,10 +6690,10 @@ def _build_forex_reconcile_worklist() -> list:
     """Pure-sync DB read of open LIVE forex execs for broker close-reconciliation.
     Returns one dict per tracked position (carrying tp/sl/entry/be flag and a
     detached User for the per-user broker reconcile fetch)."""
-    import re as _re
     from app.database import BgSessionLocal as SessionLocal
-    from app.strategy_models import StrategyExecution
+    from app.strategy_models import StrategyExecution, UserStrategy
     from app.models import User, UserPreference
+    from app.services.ctrader_client import resolve_ctrader_ctid
 
     db = SessionLocal()
     try:
@@ -6683,7 +6709,8 @@ def _build_forex_reconcile_worklist() -> list:
             .all()
         )
         user_cache: Dict[int, object] = {}
-        acct_cache: Dict[int, Optional[int]] = {}   # user_id → current cTrader account id
+        prefs_cache: Dict[int, Optional[str]] = {}
+        strategy_cache: Dict[int, Optional[str]] = {}
         work = []
         for ex in open_execs:
             notes = ex.notes or ""
@@ -6700,25 +6727,30 @@ def _build_forex_reconcile_worklist() -> list:
             if user is None:
                 continue
 
-            # Account binding: if this execution recorded the broker account it was
-            # opened on (acct=<ctid>), only reconcile when that matches the user's
-            # CURRENT cTrader account. A relink to a different account must NOT
-            # false-close a position still open on the original account. Legacy
-            # executions without an acct token fall back to current-account
-            # reconciliation (best-effort, the prior behaviour).
-            am = _re.search(r"acct=(\d+)", notes)
-            if am:
-                if uid not in acct_cache:
-                    _pf = db.query(UserPreference).filter(
-                        UserPreference.user_id == uid
-                    ).first()
-                    acct_cache[uid] = (
-                        int(_pf.ctrader_account_id)
-                        if _pf and _pf.ctrader_account_id else None
-                    )
-                cur_acct = acct_cache[uid]
-                if cur_acct is None or int(am.group(1)) != cur_acct:
-                    continue  # different/unknown account → skip (never false-close)
+            if uid not in prefs_cache:
+                _pf = db.query(UserPreference).filter(
+                    UserPreference.user_id == uid
+                ).first()
+                prefs_cache[uid] = (
+                    _pf.ctrader_account_id if _pf and _pf.ctrader_account_id else None
+                )
+
+            if ex.strategy_id not in strategy_cache:
+                _st = db.query(UserStrategy).filter(
+                    UserStrategy.id == ex.strategy_id
+                ).first()
+                strategy_cache[ex.strategy_id] = (
+                    getattr(_st, "ctrader_account_id", None) if _st else None
+                )
+
+            resolved_ctid = resolve_ctrader_ctid(
+                strategy_account_id=strategy_cache[ex.strategy_id],
+                execution_account_id=ex.ctrader_account_id,
+                notes=notes,
+                prefs_default=prefs_cache[uid],
+            )
+            if not resolved_ctid:
+                continue
 
             # Partial-runner positions park the broker TP at TP2 (the remainder
             # exits there, not at TP1), so reconcile must classify the close against
@@ -6739,6 +6771,7 @@ def _build_forex_reconcile_worklist() -> list:
                 "tp_price":    _rec_tp,
                 "sl_price":    float(ex.sl_price) if ex.sl_price else None,
                 "be_moved":    ("be_moved" in notes),
+                "ctrader_account_id": resolved_ctid,
             })
     finally:
         db.close()
@@ -6788,18 +6821,21 @@ async def _reconcile_forex_closes() -> None:
     if not work:
         return
 
-    # Group by user so we hit the broker once per account.
-    by_user: Dict[int, list] = {}
+    # Group by (user, ctid) so we poll each account that has open positions.
+    by_user_acct: Dict[tuple, list] = {}
     user_obj: Dict[int, object] = {}
     for w in work:
-        by_user.setdefault(w["user_id"], []).append(w)
+        key = (w["user_id"], w["ctrader_account_id"])
+        by_user_acct.setdefault(key, []).append(w)
         user_obj[w["user_id"]] = w["user"]
 
-    for uid, items in by_user.items():
+    for (uid, acct_id), items in by_user_acct.items():
         try:
-            open_ids = await get_open_position_ids_for_user(user_obj[uid])
+            open_ids = await get_open_position_ids_for_user(user_obj[uid], ctid=acct_id)
         except Exception as e:
-            logger.warning(f"[FX-reconcile] open-positions fetch failed user {uid}: {e}")
+            logger.warning(
+                f"[FX-reconcile] open-positions fetch failed user {uid} acct={acct_id}: {e}"
+            )
             continue
         if open_ids is None:
             # Broker unreachable / no creds — never false-close.
@@ -6817,6 +6853,7 @@ async def _reconcile_forex_closes() -> None:
                 int(w["position_id"]),
                 entry_hint=w["entry"],
                 direction=w["direction"],
+                ctid=w["ctrader_account_id"],
             )
             if broker_close and broker_close.get("exit_price"):
                 _FX_RECONCILE_MISSING.pop(ex_id, None)
