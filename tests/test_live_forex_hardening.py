@@ -1,7 +1,9 @@
 """Live Forex tab must not HTTP 500 on partial/malformed data."""
+import asyncio
 import json
 import unittest
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -136,6 +138,58 @@ class TestLiveForexHardening(unittest.TestCase):
     body = r.json()
     self.assertTrue(body.get("status_unavailable"))
     self.assertEqual(body.get("error"), "status unavailable")
+
+  def test_json_safe_converts_decimal(self):
+    payload = {
+      "balance": Decimal("1234.56"),
+      "live_strategies": [{"total_pnl_pct": Decimal("1.25"), "nested": [Decimal("0.1")]}],
+    }
+    safe = sps._lf_json_safe(payload)
+    json.dumps(safe)
+    self.assertEqual(safe["balance"], 1234.56)
+    self.assertIsInstance(safe["live_strategies"][0]["total_pnl_pct"], float)
+
+  def test_decimal_db_values_return_200(self):
+    from decimal import Decimal as D
+    user, db = self._mock_db(live_rows=[
+      Row(
+        id=1, name="EUR", status="active", asset_class="forex", config="{}",
+        open_count=1, closed_count=5, win_count=3,
+        total_pnl_pct=D("12.34"), total_pips_pnl=D("45.6"),
+        last_fired_at=datetime.now(timezone.utc),
+      ),
+    ])
+    with patch("strategy_portal_server._get_user_by_uid", return_value=user), \
+         patch("app.database.SessionLocal", return_value=db), \
+         patch("strategy_portal_server.get_cache", return_value=None), \
+         patch("strategy_portal_server.set_cache"), \
+         patch("app.services.ctrader_price_feed.feed_status", return_value={"live": True, "symbol_count": 1}), \
+         patch("app.services.ctrader_client.get_account_balance_resilient", return_value=D("999.99")):
+      r = self.client.get("/api/live-forex/account?uid=TEST&refresh=true")
+    self.assertEqual(r.status_code, 200)
+    body = r.json()
+    self.assertIsInstance(body["balance"], float)
+    self.assertEqual(body["balance"], 999.99)
+
+  def test_balance_timeout_sets_unavailable_flag(self):
+    user, db = self._mock_db()
+
+    async def slow_balance(*a, **k):
+      await asyncio.sleep(10)
+      return 1000.0
+
+    with patch("strategy_portal_server._get_user_by_uid", return_value=user), \
+         patch("app.database.SessionLocal", return_value=db), \
+         patch("strategy_portal_server.get_cache", return_value=None), \
+         patch("strategy_portal_server.set_cache"), \
+         patch("app.services.ctrader_price_feed.feed_status", return_value={"live": True, "symbol_count": 1}), \
+         patch("app.services.ctrader_client.get_account_balance_resilient", side_effect=slow_balance):
+      r = self.client.get("/api/live-forex/account?uid=TEST&refresh=true")
+    self.assertEqual(r.status_code, 200)
+    body = r.json()
+    self.assertIsNone(body.get("balance"))
+    self.assertTrue(body.get("balance_unavailable"))
+    self.assertTrue(body.get("connected"))
 
 
 if __name__ == "__main__":
