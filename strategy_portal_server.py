@@ -137,7 +137,7 @@ def _lf_safe_ctrader_accounts(raw) -> list:
 
 
 def _lf_json_safe(obj):
-    """Recursively coerce Decimals and other non-JSON types for Live Forex responses."""
+    """Recursively coerce Decimals and other non-JSON types for API responses."""
     from decimal import Decimal
     if obj is None or isinstance(obj, (bool, int, float, str)):
         return obj
@@ -1779,7 +1779,7 @@ def _ensure_tables():
         expected = {
             "indicator_alerts", "trade_indicator_setups",
             "auto_trade_strategies", "auto_trade_paper_trades",
-            "trade_drawings",
+            "trade_drawings", "strategy_account_assignments",
         }
         with engine.connect() as conn:
             present = {
@@ -1901,6 +1901,17 @@ def _ensure_tables():
     _migrate_columns("user_preferences", user_preference_cols)
     _migrate_columns("user_strategies", strategy_cols)
     _migrate_columns("strategy_executions", execution_cols)
+
+    try:
+        from app.services.strategy_account_assignments import (
+            ensure_strategy_account_assignments_table,
+            migrate_legacy_strategy_assignments,
+        )
+        ensure_strategy_account_assignments_table(engine)
+        migrate_legacy_strategy_assignments(engine)
+        logger.info("_ensure_tables: strategy_account_assignments ready")
+    except Exception as e:
+        logger.error(f"_ensure_tables(strategy_account_assignments): {e}", exc_info=True)
 
     # ── Backfill asset_class column from config JSON ───────────────────────────
     # Strategies created before this column was properly set (e.g. forex/index
@@ -12424,41 +12435,81 @@ async def api_strategy_account_assignments(
     from app.models import UserPreference
     from app.strategy_models import UserStrategy
     from app.services.ctrader_client import list_added_ctrader_ctids
-    from app.services.strategy_account_assignments import upsert_strategy_assignments
-
-    body = await request.json()
-    assignments = body.get("assignments") or []
+    from app.services.strategy_account_assignments import (
+        ensure_strategy_account_assignments_table,
+        upsert_strategy_assignments,
+    )
 
     db = SessionLocal()
     try:
-        user = _get_user_by_uid(uid, db)
-        if not user:
-            raise HTTPException(status_code=403)
-        s = db.query(UserStrategy).filter(
-            UserStrategy.id == strategy_id,
-            UserStrategy.user_id == user.id,
-        ).first()
-        if not s:
-            raise HTTPException(status_code=404)
-        if s.asset_class not in ("forex", "index", "metals", "commodity"):
-            raise HTTPException(status_code=400, detail="Not a cTrader strategy")
-
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        added = set(list_added_ctrader_ctids(prefs))
         try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="Invalid JSON body")
+            assignments = body.get("assignments")
+            if assignments is None:
+                assignments = []
+            if not isinstance(assignments, list):
+                raise HTTPException(status_code=400, detail="assignments must be a list")
+
+            user = _get_user_by_uid(uid, db)
+            if not user:
+                raise HTTPException(status_code=403, detail="Invalid UID")
+            s = db.query(UserStrategy).filter(
+                UserStrategy.id == strategy_id,
+                UserStrategy.user_id == user.id,
+            ).first()
+            if not s:
+                raise HTTPException(status_code=404, detail="Strategy not found")
+            if s.asset_class not in ("forex", "index", "metals", "commodity"):
+                raise HTTPException(status_code=400, detail="Not a cTrader strategy")
+
+            prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+            added = set(list_added_ctrader_ctids(prefs))
+            ensure_strategy_account_assignments_table(db.get_bind())
             saved = upsert_strategy_assignments(
                 db, s.id, assignments, allowed_ctids=added,
             )
+            db.commit()
+            _invalidate_user_cache(uid)
+            invalidate_prefix(f"api_strats_{uid}")
+            return JSONResponse(_lf_json_safe({
+                "ok": True,
+                "strategy_id": int(s.id),
+                "assignments": saved,
+            }))
+        except HTTPException:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
         except ValueError as ve:
-            raise HTTPException(status_code=400, detail=str(ve))
-        db.commit()
-        _invalidate_user_cache(uid)
-        invalidate_prefix(f"api_strats_{uid}")
-        return JSONResponse({
-            "ok": True,
-            "strategy_id": s.id,
-            "assignments": saved,
-        })
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return JSONResponse(
+                _lf_json_safe({"ok": False, "detail": str(ve)}),
+                status_code=400,
+            )
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception(
+                "[account-assignments] save failed strategy_id=%s uid=%s: %s",
+                strategy_id, uid, exc,
+            )
+            return JSONResponse(
+                _lf_json_safe({
+                    "ok": False,
+                    "error": "save_failed",
+                    "detail": f"{type(exc).__name__}: {exc}",
+                }),
+                status_code=500,
+            )
     finally:
         db.close()
 

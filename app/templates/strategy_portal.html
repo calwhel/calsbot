@@ -12044,9 +12044,9 @@ async function lfPutStratAssignments(strategyId, assignments) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ assignments }),
   });
-  if (!r.ok) {
-    const err = await r.json().catch(() => ({}));
-    throw new Error(err.detail || `HTTP ${r.status}`);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.ok === false) {
+    throw new Error(d.detail || d.message || `Save failed (HTTP ${r.status})`);
   }
   toast('Strategy assignments saved', 'success');
   _fcDel('/api/live-forex/account?uid='+UID);

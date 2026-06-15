@@ -3,9 +3,65 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_lot_size(val) -> Optional[float]:
+    if val is None:
+        return None
+    if isinstance(val, Decimal):
+        return float(val)
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def serialize_assignment_row(ctid: str, enabled: bool, lot_size) -> Dict[str, Any]:
+    return {
+        "ctid": str(ctid),
+        "enabled": bool(enabled),
+        "lot_size": _coerce_lot_size(lot_size),
+    }
+
+
+def ensure_strategy_account_assignments_table(bind) -> None:
+    """Idempotent — creates strategy_account_assignments if missing."""
+    try:
+        from app.strategy_models import StrategyAccountAssignment
+        StrategyAccountAssignment.__table__.create(bind=bind, checkfirst=True)
+    except Exception as exc:
+        logger.warning(
+            "ensure_strategy_account_assignments_table: %s", type(exc).__name__
+        )
+        try:
+            from sqlalchemy import text
+            with bind.connect() as conn:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS strategy_account_assignments (
+                        id SERIAL PRIMARY KEY,
+                        strategy_id INTEGER NOT NULL REFERENCES user_strategies(id),
+                        ctid VARCHAR(40) NOT NULL,
+                        enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                        lot_size DOUBLE PRECISION,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        CONSTRAINT uq_strategy_account_ctid UNIQUE (strategy_id, ctid)
+                    )
+                """))
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_saa_strategy_id "
+                    "ON strategy_account_assignments(strategy_id)"
+                ))
+                conn.commit()
+        except Exception as exc2:
+            logger.error(
+                "ensure_strategy_account_assignments_table DDL failed: %s",
+                type(exc2).__name__,
+            )
+            raise
 
 
 def get_enabled_fire_targets(db, strategy, prefs) -> List[Dict[str, Any]]:
@@ -26,7 +82,7 @@ def get_enabled_fire_targets(db, strategy, prefs) -> List[Dict[str, Any]]:
         for r in rows:
             ctid = str(r.ctid or "").strip()
             if ctid:
-                out.append({"ctid": ctid, "lot_size": r.lot_size})
+                out.append({"ctid": ctid, "lot_size": _coerce_lot_size(r.lot_size)})
         if out:
             return out
 
@@ -56,11 +112,7 @@ def list_strategy_assignments(db, strategy_id: int) -> List[Dict[str, Any]]:
         .all()
     )
     return [
-        {
-            "ctid": str(r.ctid),
-            "enabled": bool(r.enabled),
-            "lot_size": r.lot_size,
-        }
+        serialize_assignment_row(r.ctid, r.enabled, r.lot_size)
         for r in rows
     ]
 
@@ -75,6 +127,8 @@ def upsert_strategy_assignments(
     """Replace assignment rows for listed ctids; omit ctids not in payload."""
     from app.services.ctrader_client import normalize_account_lot
     from app.strategy_models import StrategyAccountAssignment
+
+    ensure_strategy_account_assignments_table(db.get_bind())
 
     seen = set()
     out: List[Dict[str, Any]] = []
@@ -113,7 +167,7 @@ def upsert_strategy_assignments(
         else:
             row.enabled = enabled
             row.lot_size = lot_size
-        out.append({"ctid": ctid, "enabled": enabled, "lot_size": lot_size})
+        out.append(serialize_assignment_row(ctid, enabled, lot_size))
 
     # Disable rows for ctids in allowed set but not in payload (toggle off)
     if allowed_ctids is not None:
