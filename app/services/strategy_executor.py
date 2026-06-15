@@ -1266,16 +1266,46 @@ async def _commit_db_with_retry(
 
 
 def _daily_execution_count(strategy_id: int, db) -> int:
+    """Count distinct signals today — mirror legs share one signal_group_id."""
     from app.strategy_models import StrategyExecution
+    from sqlalchemy import func, cast, String
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    return _db_count_safe(
-        db,
-        lambda: db.query(StrategyExecution).filter(
-            StrategyExecution.strategy_id == strategy_id,
-            StrategyExecution.fired_at >= today,
-            StrategyExecution.outcome.notin_(["CANCELLED", "EXPIRED"]),
-        ).count(),
-    )
+    try:
+        distinct_key = func.coalesce(
+            StrategyExecution.signal_group_id,
+            cast(StrategyExecution.id, String),
+        )
+        return _db_count_safe(
+            db,
+            lambda: db.query(func.count(func.distinct(distinct_key))).filter(
+                StrategyExecution.strategy_id == strategy_id,
+                StrategyExecution.fired_at >= today,
+                StrategyExecution.outcome.notin_(["CANCELLED", "EXPIRED"]),
+            ).scalar() or 0,
+        )
+    except Exception:
+        return _db_count_safe(
+            db,
+            lambda: db.query(StrategyExecution).filter(
+                StrategyExecution.strategy_id == strategy_id,
+                StrategyExecution.fired_at >= today,
+                StrategyExecution.outcome.notin_(["CANCELLED", "EXPIRED"]),
+            ).count(),
+        )
+
+
+def _mirror_fire_slot_count(user, db) -> int:
+    """How many execution rows one live forex signal will open."""
+    try:
+        from app.models import UserPreference
+        from app.services.ctrader_client import get_mirror_execution_ctids
+        prefs = db.query(UserPreference).filter(
+            UserPreference.user_id == user.id
+        ).first()
+        ctids = get_mirror_execution_ctids(prefs)
+        return max(1, len(ctids))
+    except Exception:
+        return 1
 
 
 def _open_execution_count(strategy_id: int, db) -> int:
@@ -3919,7 +3949,12 @@ async def evaluate_and_fire(
     if _daily_execution_count(strategy.id, db) >= max_per_day:
         _bump("blk_daily_cap")
         return
-    if _open_execution_count(strategy.id, db) >= max_open:
+    _mirror_slots = (
+        _mirror_fire_slot_count(user, db)
+        if (not is_paper and asset_class in ("forex", "index"))
+        else 1
+    )
+    if _open_execution_count(strategy.id, db) + _mirror_slots > max_open:
         _bump("blk_max_open")
         return
 
@@ -4475,29 +4510,65 @@ async def evaluate_and_fire(
             _exec_notes_parts.append(f"orig_sl={float(sl_price):.6g}")
         _exec_notes = " | ".join(_exec_notes_parts) if _exec_notes_parts else None
 
-        execution = StrategyExecution(
-            strategy_id    = strategy.id,
-            user_id        = user.id,
-            symbol         = symbol,
-            direction      = direction,
-            entry_price    = current_price,
-            tp_price       = tp_price,
-            tp2_price      = tp2_price,
-            sl_price       = sl_price,
-            current_sl     = sl_price,
-            leverage       = leverage,
-            outcome        = "OPEN",
-            conditions_met = details,
-            fired_at       = datetime.utcnow(),
-            is_paper       = is_paper,
-            asset_class    = asset_class,
-            notes          = _exec_notes,
+        import uuid as _uuid
+        _mirror_ctids: List[str] = []
+        if not is_paper and asset_class in ("forex", "index"):
+            try:
+                from app.models import UserPreference as _UP_m
+                from app.services.ctrader_client import get_mirror_execution_ctids
+                _mp = db.query(_UP_m).filter(_UP_m.user_id == user.id).first()
+                _mirror_ctids = get_mirror_execution_ctids(_mp)
+            except Exception:
+                _mirror_ctids = []
+        _signal_group_id = (
+            str(_uuid.uuid4()) if len(_mirror_ctids) > 1 else None
         )
-        db.add(execution)
+        _exec_targets: List[Optional[str]] = (
+            list(_mirror_ctids) if len(_mirror_ctids) > 1 else [None]
+        )
+
+        executions_created: List = []
+        for _acct_tgt in _exec_targets:
+            _leg_notes = _exec_notes
+            if _acct_tgt:
+                _leg_notes = (
+                    f"{_exec_notes} | acct={_acct_tgt}".strip(" |")
+                    if _exec_notes
+                    else f"acct={_acct_tgt}"
+                )
+            _ex = StrategyExecution(
+                strategy_id    = strategy.id,
+                user_id        = user.id,
+                symbol         = symbol,
+                direction      = direction,
+                entry_price    = current_price,
+                tp_price       = tp_price,
+                tp2_price      = tp2_price,
+                sl_price       = sl_price,
+                current_sl     = sl_price,
+                leverage       = leverage,
+                outcome        = "OPEN",
+                conditions_met = details,
+                fired_at       = datetime.utcnow(),
+                is_paper       = is_paper,
+                asset_class    = asset_class,
+                notes          = _leg_notes,
+                signal_group_id = _signal_group_id,
+                ctrader_account_id = _acct_tgt,
+            )
+            db.add(_ex)
+            executions_created.append(_ex)
+
         await _commit_db_with_retry(
-            db, label=f"exec#{strategy.id}", instances=(execution,)
+            db,
+            label=f"exec#{strategy.id}",
+            instances=tuple(executions_created),
         )
-        execution = _refresh_db_row(db, execution)
+        for _i, _ex in enumerate(executions_created):
+            _ref = _refresh_db_row(db, _ex)
+            if _ref is not None:
+                executions_created[_i] = _ref
+        execution = executions_created[0]
         if execution is None or not getattr(execution, "id", None):
             logger.error(
                 f"[Strategy {strategy.id}] execution row missing after commit — "
@@ -4512,9 +4583,12 @@ async def evaluate_and_fire(
             StrategyPerformance.strategy_id == strategy.id
         ).first()
         if _perf:
-            _perf.open_trades = (_perf.open_trades or 0) + 1
+            _perf.open_trades = (_perf.open_trades or 0) + len(executions_created)
         else:
-            _perf = StrategyPerformance(strategy_id=strategy.id, open_trades=1)
+            _perf = StrategyPerformance(
+                strategy_id=strategy.id,
+                open_trades=len(executions_created),
+            )
             db.add(_perf)
         await _commit_db_with_retry(
             db, label=f"perf#{strategy.id}", instances=(_perf,)
@@ -4658,42 +4732,79 @@ async def evaluate_and_fire(
                     # In partial-runner mode the broker TP must be TP2 (final target);
                     # otherwise it stays at the strategy's TP1.
                     _live_tp_pct  = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
-                    _job = CtraderOrderJob(
-                        user_id=user.id,
-                        strategy_id=strategy.id,
-                        execution_id=execution.id,
-                        symbol=symbol,
-                        direction=direction,
-                        entry_price=current_price,
-                        tp_pct=_live_tp_pct,
-                        sl_pct=sl_pct,
-                        risk_pct=_risk_pct_per,
-                        risk_usd=_risk_usd,
-                        use_risk_pct=_use_risk_pct,
-                        sl_pips=float(ex_config.get("stop_loss_pips") or 0) or None,
-                        fixed_lots=_fixed_lots or None,
-                        asset_class=asset_class,
-                        partial_close_pct=float(_partial_close_pct) if _partial_close_pct else None,
-                        signal_mono=_signal_mono,
-                        signal_generated_at=_signal_generated_at,
-                        signal_price_source=_ps,
-                        signal_kline_source=_ks,
-                        signal_live_source=price_data.get("live_source"),
-                        latency=new_order_latency(execution.id, _signal_mono),
+                    from app.models import UserPreference as _UP_job
+                    from app.services.ctrader_client import (
+                        get_mirror_execution_ctids,
+                        resolve_ctrader_ctid,
                     )
-                    _queued = await enqueue_ctrader_order(_job)
-                    if _queued:
-                        logger.info(
-                            f"[{_log_ts()}] [Strategy {strategy.id}] cTrader order queued "
-                            f"exec#{execution.id} {symbol} {direction}"
+                    _job_prefs = db.query(_UP_job).filter(_UP_job.user_id == user.id).first()
+                    _fire_ctids = get_mirror_execution_ctids(_job_prefs)
+                    if len(_fire_ctids) <= 1:
+                        _single_ctid = resolve_ctrader_ctid(
+                            execution_account_id=executions_created[0].ctrader_account_id,
+                            prefs_default=(
+                                _job_prefs.ctrader_account_id if _job_prefs else None
+                            ),
                         )
-                        order_result = {"order_id": "queued", "queued": True}
-                    else:
+                        _fire_ctids = [_single_ctid] if _single_ctid else []
+
+                    _mirror_jobs = []
+                    for _leg_ex, _leg_ctid in zip(executions_created, _fire_ctids):
+                        if not _leg_ctid:
+                            continue
+                        _mirror_jobs.append(CtraderOrderJob(
+                            user_id=user.id,
+                            strategy_id=strategy.id,
+                            execution_id=_leg_ex.id,
+                            symbol=symbol,
+                            direction=direction,
+                            entry_price=current_price,
+                            tp_pct=_live_tp_pct,
+                            sl_pct=sl_pct,
+                            risk_pct=_risk_pct_per,
+                            risk_usd=_risk_usd,
+                            use_risk_pct=_use_risk_pct,
+                            sl_pips=float(ex_config.get("stop_loss_pips") or 0) or None,
+                            fixed_lots=_fixed_lots or None,
+                            asset_class=asset_class,
+                            partial_close_pct=float(_partial_close_pct) if _partial_close_pct else None,
+                            ctrader_account_id=_leg_ctid,
+                            signal_mono=_signal_mono,
+                            signal_generated_at=_signal_generated_at,
+                            signal_price_source=_ps,
+                            signal_kline_source=_ks,
+                            signal_live_source=price_data.get("live_source"),
+                            latency=new_order_latency(_leg_ex.id, _signal_mono),
+                        ))
+
+                    if not _mirror_jobs:
                         logger.error(
-                            f"[{_log_ts()}] [Strategy {strategy.id}] cTrader order queue "
-                            f"FULL — exec#{execution.id} {symbol} not sent to broker"
+                            f"[{_log_ts()}] [Strategy {strategy.id}] no cTrader account "
+                            f"resolved for {symbol} {direction}"
                         )
                         order_result = None
+                    else:
+                        _queue_results = await asyncio.gather(
+                            *[
+                                enqueue_ctrader_order(_job)
+                                for _job in _mirror_jobs
+                            ],
+                            return_exceptions=True,
+                        )
+                        _queued_any = any(r is True for r in _queue_results)
+                        if _queued_any:
+                            logger.info(
+                                f"[{_log_ts()}] [Strategy {strategy.id}] cTrader mirror "
+                                f"queued {sum(1 for r in _queue_results if r is True)}/"
+                                f"{len(_mirror_jobs)} execs {symbol} {direction}"
+                            )
+                            order_result = {"order_id": "queued", "queued": True}
+                        else:
+                            logger.error(
+                                f"[{_log_ts()}] [Strategy {strategy.id}] cTrader order queue "
+                                f"FULL — mirror batch not sent for {symbol}"
+                            )
+                            order_result = None
                 else:
                     from app.services.strategy_trader import place_bitunix_order_for_user
                     order_result = await place_bitunix_order_for_user(
@@ -5283,6 +5394,17 @@ async def _propagate_to_subscribers(
                             or sub_risk.get("position_size_pct")
                             or 1.0
                         )
+                        _sub_job_ctid = None
+                        try:
+                            from app.services.ctrader_client import resolve_ctrader_ctid
+                            _sub_job_ctid = resolve_ctrader_ctid(
+                                strategy_account_id=getattr(sub_strategy, "ctrader_account_id", None),
+                                prefs_default=(
+                                    _sub_prefs.ctrader_account_id if _sub_prefs else None
+                                ),
+                            )
+                        except Exception:
+                            pass
                         _job = CtraderOrderJob(
                             user_id=sub_user.id,
                             strategy_id=sub_strategy.id,
@@ -5298,6 +5420,7 @@ async def _propagate_to_subscribers(
                             sl_pips=float((sub_config.get("exit") or {}).get("stop_loss_pips") or 0) or None,
                             fixed_lots=_sub_fixed_lots or None,
                             asset_class=_sub_asset_class,
+                            ctrader_account_id=_sub_job_ctid,
                             signal_mono=_sub_signal_mono,
                             latency=new_order_latency(sub_exec.id, _sub_signal_mono),
                         )
@@ -6664,10 +6787,10 @@ def _build_forex_reconcile_worklist() -> list:
     """Pure-sync DB read of open LIVE forex execs for broker close-reconciliation.
     Returns one dict per tracked position (carrying tp/sl/entry/be flag and a
     detached User for the per-user broker reconcile fetch)."""
-    import re as _re
     from app.database import BgSessionLocal as SessionLocal
-    from app.strategy_models import StrategyExecution
+    from app.strategy_models import StrategyExecution, UserStrategy
     from app.models import User, UserPreference
+    from app.services.ctrader_client import resolve_ctrader_ctid
 
     db = SessionLocal()
     try:
@@ -6683,7 +6806,8 @@ def _build_forex_reconcile_worklist() -> list:
             .all()
         )
         user_cache: Dict[int, object] = {}
-        acct_cache: Dict[int, Optional[int]] = {}   # user_id → current cTrader account id
+        prefs_cache: Dict[int, Optional[str]] = {}
+        strategy_cache: Dict[int, Optional[str]] = {}
         work = []
         for ex in open_execs:
             notes = ex.notes or ""
@@ -6700,25 +6824,30 @@ def _build_forex_reconcile_worklist() -> list:
             if user is None:
                 continue
 
-            # Account binding: if this execution recorded the broker account it was
-            # opened on (acct=<ctid>), only reconcile when that matches the user's
-            # CURRENT cTrader account. A relink to a different account must NOT
-            # false-close a position still open on the original account. Legacy
-            # executions without an acct token fall back to current-account
-            # reconciliation (best-effort, the prior behaviour).
-            am = _re.search(r"acct=(\d+)", notes)
-            if am:
-                if uid not in acct_cache:
-                    _pf = db.query(UserPreference).filter(
-                        UserPreference.user_id == uid
-                    ).first()
-                    acct_cache[uid] = (
-                        int(_pf.ctrader_account_id)
-                        if _pf and _pf.ctrader_account_id else None
-                    )
-                cur_acct = acct_cache[uid]
-                if cur_acct is None or int(am.group(1)) != cur_acct:
-                    continue  # different/unknown account → skip (never false-close)
+            if uid not in prefs_cache:
+                _pf = db.query(UserPreference).filter(
+                    UserPreference.user_id == uid
+                ).first()
+                prefs_cache[uid] = (
+                    _pf.ctrader_account_id if _pf and _pf.ctrader_account_id else None
+                )
+
+            if ex.strategy_id not in strategy_cache:
+                _st = db.query(UserStrategy).filter(
+                    UserStrategy.id == ex.strategy_id
+                ).first()
+                strategy_cache[ex.strategy_id] = (
+                    getattr(_st, "ctrader_account_id", None) if _st else None
+                )
+
+            resolved_ctid = resolve_ctrader_ctid(
+                strategy_account_id=strategy_cache[ex.strategy_id],
+                execution_account_id=ex.ctrader_account_id,
+                notes=notes,
+                prefs_default=prefs_cache[uid],
+            )
+            if not resolved_ctid:
+                continue
 
             # Partial-runner positions park the broker TP at TP2 (the remainder
             # exits there, not at TP1), so reconcile must classify the close against
@@ -6739,6 +6868,7 @@ def _build_forex_reconcile_worklist() -> list:
                 "tp_price":    _rec_tp,
                 "sl_price":    float(ex.sl_price) if ex.sl_price else None,
                 "be_moved":    ("be_moved" in notes),
+                "ctrader_account_id": resolved_ctid,
             })
     finally:
         db.close()
@@ -6788,18 +6918,21 @@ async def _reconcile_forex_closes() -> None:
     if not work:
         return
 
-    # Group by user so we hit the broker once per account.
-    by_user: Dict[int, list] = {}
+    # Group by (user, ctid) so we poll each account that has open positions.
+    by_user_acct: Dict[tuple, list] = {}
     user_obj: Dict[int, object] = {}
     for w in work:
-        by_user.setdefault(w["user_id"], []).append(w)
+        key = (w["user_id"], w["ctrader_account_id"])
+        by_user_acct.setdefault(key, []).append(w)
         user_obj[w["user_id"]] = w["user"]
 
-    for uid, items in by_user.items():
+    for (uid, acct_id), items in by_user_acct.items():
         try:
-            open_ids = await get_open_position_ids_for_user(user_obj[uid])
+            open_ids = await get_open_position_ids_for_user(user_obj[uid], ctid=acct_id)
         except Exception as e:
-            logger.warning(f"[FX-reconcile] open-positions fetch failed user {uid}: {e}")
+            logger.warning(
+                f"[FX-reconcile] open-positions fetch failed user {uid} acct={acct_id}: {e}"
+            )
             continue
         if open_ids is None:
             # Broker unreachable / no creds — never false-close.
@@ -6817,6 +6950,7 @@ async def _reconcile_forex_closes() -> None:
                 int(w["position_id"]),
                 entry_hint=w["entry"],
                 direction=w["direction"],
+                ctid=w["ctrader_account_id"],
             )
             if broker_close and broker_close.get("exit_price"):
                 _FX_RECONCILE_MISSING.pop(ex_id, None)

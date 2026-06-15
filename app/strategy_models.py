@@ -25,6 +25,7 @@ class UserStrategy(Base):
     clone_count = Column(Integer, default=0)
     webhook_token = Column(String(64), nullable=True, unique=True, index=True)
     asset_class = Column(String(16), nullable=False, default="crypto", server_default="crypto", index=True)
+    ctrader_account_id = Column(String(40), nullable=True)  # per-strategy cTrader ctid; null → user default
     created_at  = Column(DateTime, default=datetime.utcnow)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -59,6 +60,7 @@ class StrategyExecution(Base):
     ctrader_order_id  = Column(String(80), nullable=True)  # cTrader live forex orders
     ctrader_position_id = Column(String(40), nullable=True)
     ctrader_account_id  = Column(String(40), nullable=True)
+    signal_group_id     = Column(String(40), nullable=True, index=True)  # links mirror legs of one signal
     broker_volume_units = Column(Integer, nullable=True)
     breakeven_applied   = Column(Boolean, default=False, server_default="false")
     tp1_done            = Column(Boolean, default=False, server_default="false")
@@ -283,9 +285,22 @@ def init_strategy_tables(engine):
                 "SELECT table_name, column_name "
                 "FROM information_schema.columns "
                 "WHERE table_schema = 'public' "
-                "AND table_name IN ('strategy_executions', 'strategy_marketplace', 'strategy_performance')"
+                "AND table_name IN ('strategy_executions', 'strategy_marketplace', "
+                "'strategy_performance', 'user_strategies')"
             ))
         }
+
+        for col, typ in [
+            ("ctrader_account_id",   "VARCHAR(40)"),
+        ]:
+            if ("user_strategies", col) not in existing_cols:
+                try:
+                    conn.execute(text(
+                        f"ALTER TABLE user_strategies ADD COLUMN IF NOT EXISTS {col} {typ}"
+                    ))
+                    conn.commit()
+                except Exception:
+                    pass
 
         for col, typ in [
             ("is_paper",             "BOOLEAN DEFAULT FALSE"),
@@ -294,6 +309,7 @@ def init_strategy_tables(engine):
             ("spread_pips_applied",  "FLOAT"),
             ("ctrader_position_id",  "VARCHAR(40)"),
             ("ctrader_account_id",   "VARCHAR(40)"),
+            ("signal_group_id",      "VARCHAR(40)"),
             ("broker_volume_units",  "INTEGER"),
             ("mfe_pips",             "NUMERIC"),
             ("mae_pips",             "NUMERIC"),

@@ -1130,6 +1130,7 @@ async def _apply_sl_amend(
             position_id=int(pos_id),
             new_sl=new_sl,
             keep_tp=tp,
+            ctrader_account_id=getattr(execution, "ctrader_account_id", None),
         )
     except Exception as exc:
         res = {"ok": False, "result": "failed", "error": str(exc)}

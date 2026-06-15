@@ -11835,6 +11835,107 @@ function _lfSparkline(points) {
   return `<svg class="lf-spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" points="${coords}"/></svg>`;
 }
 
+function _lfAcctChip(ctid, isLive) {
+  if (!ctid) return '';
+  const live = !!isLive;
+  const style = live
+    ? 'background:rgba(229,72,77,.15);color:#ff6b6b;border:1px solid rgba(229,72,77,.35)'
+    : 'background:rgba(59,130,246,.12);color:#60a5fa;border:1px solid rgba(59,130,246,.25)';
+  const lbl = live ? 'LIVE' : 'DEMO';
+  return `<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;${style}">${lbl} #${escHtml(String(ctid))}</span>`;
+}
+
+function _lfMirrorGroupHint(positions) {
+  const groups = {};
+  (positions || []).forEach(p => {
+    if (!p.signal_group_id) return;
+    groups[p.signal_group_id] = (groups[p.signal_group_id] || 0) + 1;
+  });
+  return groups;
+}
+
+function renderLFAccountsSection(d) {
+  const accounts = d.accounts || [];
+  if (!accounts.length) return '';
+  const health = _lfBrokerHealth || {};
+  const healthChip = health.token_valid && health.feed_alive
+    ? '<span style="color:var(--positive,#3fb68b);font-size:11px">● Broker OK</span>'
+    : (health.status_unavailable
+      ? '<span style="color:var(--muted);font-size:11px">status unavailable</span>'
+      : '<span style="color:var(--warning,#d6a35c);font-size:11px">● Check connection</span>');
+  const rows = accounts.map(a => {
+    const ctid = String(a.ctidTraderAccountId || '');
+    const isLive = !!a.isLive;
+    const login = a.traderLogin || ctid;
+    const label = isLive ? `Live #${login}` : `Demo #${login}`;
+    const bal = a.balance != null
+      ? `$${Number(a.balance).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`
+      : '—';
+    const enabled = !!a.mirror_enabled;
+    const rowAccent = isLive ? 'border-left:3px solid #e5484d' : 'border-left:3px solid #3b82f6';
+    const liveWarn = isLive ? '<div style="font-size:10px;color:#ff6b6b;font-weight:700;margin-top:2px">REAL MONEY</div>' : '';
+    return `<div class="lf-mirror-acct-row" style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;${rowAccent}">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:14px;font-weight:700">${escHtml(label)}</span>
+          ${_lfAcctChip(ctid, isLive)}
+        </div>
+        ${liveWarn}
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">Balance: <strong style="color:var(--text)">${bal}</strong></div>
+      </div>
+      <label style="display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;flex-shrink:0">
+        <span style="font-size:10px;color:var(--muted);font-weight:600">Mirror</span>
+        <input type="checkbox" ${enabled?'checked':''} onchange="lfToggleMirrorAccount('${ctid}', this.checked, ${isLive})" style="width:18px;height:18px;accent-color:${isLive?'#e5484d':'#3b82f6'}">
+      </label>
+    </div>`;
+  }).join('');
+  const nEnabled = (d.mirror_accounts || []).length;
+  const hint = nEnabled > 1
+    ? `<div style="font-size:12px;color:var(--warning,#d6a35c);margin-bottom:10px;line-height:1.45">⚡ <strong>${nEnabled} accounts enabled</strong> — each live signal fires one order per account in parallel.</div>`
+    : `<div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.45">Enable accounts to mirror every live signal across demo and live in parallel. Leave all off to trade on your selected account only.</div>`;
+  return `<div class="lf-card" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div class="lf-section-title" style="margin:0">Accounts</div>
+      ${healthChip}
+    </div>
+    ${hint}
+    ${rows}
+  </div>`;
+}
+
+async function lfToggleMirrorAccount(ctid, enabled, isLive) {
+  const doSave = async () => {
+    try {
+      const r = await _apiFetch(`/api/live-forex/mirror-account?uid=${encodeURIComponent(UID)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ctid, enabled }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${r.status}`);
+      }
+      toast(enabled ? `Account #${ctid} enabled for mirror` : `Account #${ctid} disabled`, 'success');
+      _fcDel('/api/live-forex/account?uid='+UID);
+      loadLiveForex();
+    } catch (e) {
+      toast(`Could not update account: ${e.message || e}`, 'error');
+      loadLiveForex();
+    }
+  };
+  if (enabled && isLive) {
+    showConfirm(
+      'Enable LIVE mirror account',
+      `Strategies will place REAL orders on live account #${ctid} in parallel with your other enabled accounts. Continue?`,
+      'Enable live mirror',
+      null,
+      doSave,
+    );
+    return;
+  }
+  await doSave();
+}
+
 function _lfOpenRowHtml(p) {
   const dir = p.direction === 'LONG' ? 'LONG' : 'SHORT';
   const arrow = p.direction === 'LONG' ? '▲' : '▼';
@@ -11843,12 +11944,17 @@ function _lfOpenRowHtml(p) {
   const pipsStr = upips != null ? `now ${upips >= 0 ? '+' : ''}${upips} pips` : 'now —';
   const pipsC = upips == null ? '' : upips >= 0 ? 'pos' : 'neg';
   const sl = p.display_sl != null ? Number(p.display_sl).toFixed(2) : (p.sl_price != null ? Number(p.sl_price).toFixed(2) : '—');
+  let acctHtml = '';
+  if (p.ctrader_account_id) {
+    const _la = (_lfLiveData?.accounts || []).find(a => String(a.ctidTraderAccountId) === String(p.ctrader_account_id));
+    acctHtml = ' · ' + _lfAcctChip(p.ctrader_account_id, !!(_la && _la.isLive));
+  }
   let mgmt = '';
   if (p.breakeven_applied) mgmt = ' 🔒BE';
   else if (p.sl_trailed) mgmt = ' 📈TRAIL';
   return `<div class="lf-open-row">
     <span class="lf-live-dot" aria-hidden="true"></span>
-    <span class="lf-open-txt"><span class="lf-dir ${dir.toLowerCase()}">${arrow} ${dir}</span> @ ${entry} · <span class="lf-upips ${pipsC}">${pipsStr}</span> · SL ${sl}${mgmt}</span>
+    <span class="lf-open-txt"><span class="lf-dir ${dir.toLowerCase()}">${arrow} ${dir}</span> @ ${entry} · <span class="lf-upips ${pipsC}">${pipsStr}</span> · SL ${sl}${mgmt}${acctHtml}</span>
   </div>`;
 }
 
@@ -12041,6 +12147,8 @@ function renderLiveForex(d, wrap) {
       <div id="lf-test-result" style="margin-top:8px;font-size:12px;line-height:1.5"></div>
       ${acctSwitcher}
     </div>
+
+    ${renderLFAccountsSection(d)}
 
     <!-- Session clock -->
     <div class="lf-card" style="margin-bottom:16px">
@@ -12395,6 +12503,7 @@ function renderLFPositions(positions) {
   return `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
     <thead><tr style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px">
       <th style="text-align:left;padding:6px 8px 6px 0">Symbol</th>
+      <th style="padding:6px 4px">Acct</th>
       <th style="padding:6px 4px">Dir</th>
       <th style="padding:6px 4px">Entry</th>
       <th style="padding:6px 4px">Live</th>
@@ -12410,8 +12519,13 @@ function renderLFPositions(positions) {
         : (p.pnl_pct != null ? `${pnl>=0?'+':''}${pnl.toFixed(2)}%` : '—');
       const pnlC = pnl == null ? '' : pnl >= 0 ? 'color:var(--positive,#3fb68b)' : 'color:var(--negative,#e5484d)';
       const dirC = p.direction === 'LONG' ? 'color:var(--positive,#3fb68b)' : 'color:var(--negative,#e5484d)';
+      const _pa = (_lfLiveData?.accounts || []).find(a => String(a.ctidTraderAccountId) === String(p.ctrader_account_id || ''));
+      const acctCell = p.ctrader_account_id
+        ? _lfAcctChip(p.ctrader_account_id, !!(_pa && _pa.isLive))
+        : '<span style="color:var(--muted)">—</span>';
       return `<tr style="border-top:1px solid var(--border,rgba(255,255,255,.06))">
         <td style="padding:8px 8px 8px 0;font-weight:700">${p.symbol}</td>
+        <td style="padding:8px 4px">${acctCell}</td>
         <td style="padding:8px 4px;${dirC};font-weight:600">${p.direction}</td>
         <td style="padding:8px 4px;font-family:monospace">${p.entry_price?.toFixed(5)??'—'}</td>
         <td style="padding:8px 4px;font-family:monospace;color:var(--muted)">${p.mark_price?.toFixed(5)??'—'}</td>
