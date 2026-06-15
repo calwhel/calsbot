@@ -167,10 +167,28 @@ def _lf_added_accounts(prefs) -> list:
     )
 
 
-def _lf_enrich_ctrader_accounts(accounts: list, prefs, balances: dict) -> list:
+_lf_balance_warn_at: Dict[str, float] = {}
+
+
+def _lf_log_balance_fetch_warn(uid: str, ctid: str, detail: str) -> None:
+    """Rate-limit balance fetch warnings to once per ctid per minute."""
+    import time as _time
+    key = f"{(uid or '').strip().upper()}:{ctid}"
+    now = _time.monotonic()
+    last = _lf_balance_warn_at.get(key, 0.0)
+    if now - last < 60.0:
+        return
+    _lf_balance_warn_at[key] = now
+    logger.warning(f"[live-forex] balance fetch uid={uid} ctid={ctid}: {detail}")
+
+
+def _lf_enrich_ctrader_accounts(
+    accounts: list, prefs, balances: dict, *, balance_failures: Optional[set] = None,
+) -> list:
     """Attach added flag + balance per linked account."""
     from app.services.ctrader_client import DEFAULT_ACCOUNT_LOT_MIN, DEFAULT_ACCOUNT_LOT_STEP
     added = set(_lf_added_accounts(prefs))
+    failed = balance_failures or set()
     out = []
     for a in accounts or []:
         if not isinstance(a, dict):
@@ -182,6 +200,8 @@ def _lf_enrich_ctrader_accounts(accounts: list, prefs, balances: dict) -> list:
         row["lot_step"] = DEFAULT_ACCOUNT_LOT_STEP
         if ctid and ctid in balances:
             row["balance"] = balances.get(ctid)
+        elif ctid and ctid in failed:
+            row["balance_unavailable"] = True
         elif a.get("balance") is not None:
             try:
                 row["balance"] = float(a.get("balance"))
@@ -12938,6 +12958,7 @@ async def api_live_forex_account(
     accounts = snap["accounts"]
     _acct_id_for_bal = (prefs.ctrader_account_id or "").strip() if prefs else ""
     _account_balances: Dict[str, float] = {}
+    _balance_failures: set = set()
 
     async def _fetch_one_balance(ctid: str):
         if not (prefs and prefs.ctrader_access_token and ctid):
@@ -12946,6 +12967,9 @@ async def api_live_forex_account(
         _cached = get_cache(_bal_key)
         if _cached is not None and _cached != "__miss__":
             _account_balances[ctid] = float(_cached)
+            return
+        if _cached == "__miss__":
+            _balance_failures.add(ctid)
             return
         try:
             from app.services.ctrader_client import get_account_balance_resilient
@@ -12956,7 +12980,7 @@ async def api_live_forex_account(
                     prefs=prefs,
                     user_id=user.id,
                 ),
-                timeout=8.0,
+                timeout=10.0,
             )
             if bal is not None:
                 _account_balances[ctid] = float(bal)
@@ -12972,13 +12996,16 @@ async def api_live_forex_account(
                             return
                         except (TypeError, ValueError):
                             pass
-                set_cache(_bal_key, "__miss__", ttl_seconds=15)
+                _balance_failures.add(ctid)
+                set_cache(_bal_key, "__miss__", ttl_seconds=60)
+        except asyncio.TimeoutError:
+            _lf_log_balance_fetch_warn(uid, ctid, "TimeoutError")
+            _balance_failures.add(ctid)
+            set_cache(_bal_key, "__miss__", ttl_seconds=60)
         except Exception as _be:
-            logger.warning(
-                f"[live-forex] balance fetch uid={uid} ctid={ctid}: "
-                f"{type(_be).__name__}"
-            )
-            set_cache(_bal_key, "__miss__", ttl_seconds=30)
+            _lf_log_balance_fetch_warn(uid, ctid, type(_be).__name__)
+            _balance_failures.add(ctid)
+            set_cache(_bal_key, "__miss__", ttl_seconds=60)
 
     async def _fetch_balances():
         nonlocal balance
@@ -13035,7 +13062,7 @@ async def api_live_forex_account(
     try:
         await asyncio.wait_for(
             asyncio.gather(_sync_ctrader_accounts(), _fetch_balances(), return_exceptions=True),
-            timeout=9.0,
+            timeout=11.0,
         )
     except asyncio.TimeoutError:
         if _acct_id_for_bal:
@@ -13077,7 +13104,9 @@ async def api_live_forex_account(
 
     try:
         _added = _lf_added_accounts(prefs)
-        _accounts_out = _lf_enrich_ctrader_accounts(accounts, prefs, _account_balances)
+        _accounts_out = _lf_enrich_ctrader_accounts(
+            accounts, prefs, _account_balances, balance_failures=_balance_failures,
+        )
         payload = {
             "connected": True,
             "forex_approved": snap["forex_approved"],
@@ -13086,6 +13115,7 @@ async def api_live_forex_account(
             "accounts": _accounts_out,
             "account_balances": _account_balances,
             "balance": round(balance, 2) if balance is not None else None,
+            "balance_unavailable": bool(_balance_failures) and balance is None,
             "equity": round(balance, 2) if balance is not None else None,
             "open_positions": positions,
             "live_strategies": live_strategies,

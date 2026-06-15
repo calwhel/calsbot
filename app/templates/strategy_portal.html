@@ -12112,7 +12112,7 @@ function renderLFAccountsSection(d) {
     const label = _lfAcctLabel(a);
     const bal = a.balance != null
       ? `$${Number(a.balance).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`
-      : '—';
+      : (a.balance_unavailable ? 'unavailable' : '—');
     const isAdded = added.has(ctid);
     const rowAccent = isLive ? 'border-left:3px solid #e5484d' : 'border-left:3px solid #3b82f6';
     const liveWarn = isLive ? '<div style="font-size:10px;color:#ff6b6b;font-weight:700;margin-top:2px">REAL MONEY</div>' : '';
@@ -12331,7 +12331,9 @@ function renderLiveForex(d, wrap) {
   }
 
   // Connected — show full dashboard
-  const bal = d.balance != null ? `$${d.balance.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}` : '—';
+  const bal = d.balance != null
+    ? `$${d.balance.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`
+    : (d.balance_unavailable ? 'unavailable' : '—');
   const positions = d.open_positions || [];
   // Account switcher row (if multiple accounts)
   const acctSwitcher = accounts.length > 1 ? `
