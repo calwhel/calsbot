@@ -245,6 +245,33 @@ def _lf_degraded_account_payload(*, forex_approved: bool = False, connected: boo
     }
 
 
+def _lf_json_safe(value):
+    """Recursively coerce Live Forex payloads to JSON-serializable primitives."""
+    from decimal import Decimal
+    from datetime import date, datetime, time
+
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, time):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _lf_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_lf_json_safe(v) for v in value]
+    return str(value)
+
+
+def _lf_live_forex_json_response(payload: dict, **extra) -> JSONResponse:
+    """JSONResponse for Live Forex — sanitizes Decimal/datetime before serialization."""
+    return JSONResponse(_lf_json_safe({**payload, **extra}))
+
+
 def _lf_load_sparklines(db, strat_ids: list) -> tuple:
     """7-day per-strategy sparkline + week net pips; never raises."""
     from sqlalchemy import text as _t
@@ -12491,6 +12518,24 @@ async def api_live_forex_account(
     refresh: bool = Query(False),
     positions_only: bool = Query(False),
 ):
+    """Live Forex account tab — never HTTP 500 on data/serialization problems."""
+    try:
+        return await _api_live_forex_account_impl(uid, refresh, positions_only)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"[live-forex] unhandled uid={uid}: {exc}")
+        return _lf_live_forex_json_response(
+            _lf_degraded_account_payload(),
+            error="partial_data_unavailable",
+        )
+
+
+async def _api_live_forex_account_impl(
+    uid: str,
+    refresh: bool,
+    positions_only: bool,
+):
     """
     Returns live cTrader account data (balance, equity, open positions)
     plus connection/approval state for the Live Forex tab.
@@ -12518,7 +12563,8 @@ async def api_live_forex_account(
                 asyncio.to_thread(_load_positions_only), timeout=6.0,
             )
         except asyncio.TimeoutError:
-            raise HTTPException(status_code=503, detail="Database busy — retry in a moment")
+            logger.warning(f"[live-forex] positions_only timeout uid={uid}")
+            positions = []
         except Exception as exc:
             logger.warning(
                 f"[live-forex] positions_only uid={uid}: {type(exc).__name__}: {exc}"
@@ -12533,12 +12579,12 @@ async def api_live_forex_account(
                 f"[live-forex] enrich positions uid={uid}: {type(exc).__name__}: {exc}"
             )
             enriched = positions or []
-        return JSONResponse({"open_positions": enriched})
+        return _lf_live_forex_json_response({"open_positions": enriched})
 
     if not refresh:
         _cached = get_cache(_cache_key)
         if isinstance(_cached, dict):
-            return JSONResponse({**_cached, "cached": True})
+            return _lf_live_forex_json_response(_cached, cached=True)
 
     def _load_db_snapshot():
         from app.database import SessionLocal
@@ -12582,14 +12628,17 @@ async def api_live_forex_account(
     except asyncio.TimeoutError:
         stale = get_cache(_cache_key)
         if isinstance(stale, dict):
-            return JSONResponse({**stale, "cached": True, "stale": True})
-        raise HTTPException(status_code=503, detail="Database busy — retry in a moment")
+            return _lf_live_forex_json_response(stale, cached=True, stale=True)
+        return _lf_live_forex_json_response(
+            _lf_degraded_account_payload(),
+            error="database_busy",
+        )
     except Exception as exc:
         logger.exception(f"[live-forex] db snapshot uid={uid}: {exc}")
         stale = get_cache(_cache_key)
         if isinstance(stale, dict):
-            return JSONResponse({**stale, "cached": True, "stale": True, "degraded": True})
-        return JSONResponse(_lf_degraded_account_payload())
+            return _lf_live_forex_json_response(stale, cached=True, stale=True, degraded=True)
+        return _lf_live_forex_json_response(_lf_degraded_account_payload())
     if snap is None:
         raise HTTPException(status_code=403, detail="Invalid UID")
 
@@ -12604,9 +12653,10 @@ async def api_live_forex_account(
             "equity": None,
         }
         set_cache(_cache_key, payload, ttl_seconds=15)
-        return JSONResponse(payload)
+        return _lf_live_forex_json_response(payload)
 
     balance = None
+    balance_unavailable = False
     accounts = snap["accounts"]
 
     async def _sync_ctrader_accounts():
@@ -12643,48 +12693,62 @@ async def api_live_forex_account(
             logger.warning(f"[live-forex] account sync failed uid={uid}: {type(_ae).__name__}")
 
     async def _fetch_balance():
-        nonlocal balance
+        nonlocal balance, balance_unavailable
         _acct_id = (prefs.ctrader_account_id or "").strip() if prefs else ""
         if not _acct_id:
             return
         _bal_key = f"ctrader_balance:{user.id}"
         _cached = get_cache(_bal_key)
         if _cached == "__miss__":
+            balance_unavailable = True
             return
         if _cached is not None:
-            balance = _cached
+            balance = float(_cached)
             return
         try:
             from app.services.ctrader_client import get_account_balance_resilient
-            balance = await asyncio.wait_for(
+            _raw = await asyncio.wait_for(
                 get_account_balance_resilient(
                     prefs.ctrader_access_token,
                     int(_acct_id),
                     prefs=prefs,
                     user_id=user.id,
                 ),
-                timeout=8.0,
+                timeout=5.0,
             )
-            if balance is not None:
+            if _raw is not None:
+                balance = float(_raw)
                 set_cache(_bal_key, balance, ttl_seconds=60)
             else:
+                balance_unavailable = True
                 set_cache(_bal_key, "__miss__", ttl_seconds=30)
+        except asyncio.TimeoutError:
+            logger.warning(f"[live-forex] balance fetch timeout uid={uid} ctid={_acct_id}")
+            balance = None
+            balance_unavailable = True
+            set_cache(_bal_key, "__miss__", ttl_seconds=30)
         except Exception as _be:
             logger.warning(
                 f"[live-forex] balance fetch uid={uid} ctid={_acct_id}: "
                 f"{type(_be).__name__}"
             )
+            balance = None
+            balance_unavailable = True
             set_cache(_bal_key, "__miss__", ttl_seconds=30)
 
     try:
         await asyncio.wait_for(
             asyncio.gather(_sync_ctrader_accounts(), _fetch_balance(), return_exceptions=True),
-            timeout=9.0,
+            timeout=6.0,
         )
     except asyncio.TimeoutError:
+        logger.warning(f"[live-forex] account/balance gather timeout uid={uid}")
+        balance_unavailable = True
+        balance = None
         _stale_bal = get_cache(f"ctrader_balance:{user.id}")
         if isinstance(_stale_bal, (int, float)):
-            balance = _stale_bal
+            balance = float(_stale_bal)
+            balance_unavailable = False
 
     positions = _lf_enrich_open_positions(snap.get("positions") or [])
     sparkline_by_id = snap.get("sparkline_by_id") or {}
@@ -12709,13 +12773,15 @@ async def api_live_forex_account(
         exec_ready, exec_blockers = False, ["data_unavailable"]
 
     try:
+        _bal_out = round(float(balance), 2) if balance is not None else None
         payload = {
             "connected": True,
             "forex_approved": snap["forex_approved"],
             "account_id": (prefs.ctrader_account_id or "") if prefs else "",
             "accounts": accounts,
-            "balance": round(balance, 2) if balance is not None else None,
-            "equity": round(balance, 2) if balance is not None else None,
+            "balance": _bal_out,
+            "equity": _bal_out,
+            "balance_unavailable": balance_unavailable,
             "open_positions": positions,
             "live_strategies": live_strategies,
             "week_net_pips": week_net_pips,
@@ -12724,16 +12790,27 @@ async def api_live_forex_account(
             "execution_blockers": exec_blockers,
         }
         set_cache(_cache_key, payload, ttl_seconds=12)
-        return JSONResponse(payload)
+        return _lf_live_forex_json_response(payload)
     except Exception as exc:
         logger.exception(f"[live-forex] response assembly uid={uid}: {exc}")
         stale = get_cache(_cache_key)
         if isinstance(stale, dict):
-            return JSONResponse({**stale, "cached": True, "stale": True, "degraded": True})
-        return JSONResponse(_lf_degraded_account_payload(
-            forex_approved=bool(snap.get("forex_approved")),
-            connected=True,
-        ))
+            return _lf_live_forex_json_response(
+                stale,
+                cached=True,
+                stale=True,
+                degraded=True,
+                live_strategies=live_strategies,
+                error="partial_data_unavailable",
+            )
+        return _lf_live_forex_json_response(
+            _lf_degraded_account_payload(
+                forex_approved=bool(snap.get("forex_approved")),
+                connected=True,
+            ),
+            live_strategies=live_strategies,
+            error="partial_data_unavailable",
+        )
 
 
 async def _build_executor_diagnostics(
