@@ -261,7 +261,7 @@ _LF_LIVE_ROWS_SQL_BASIC = """
 
 
 def _lf_load_assignments_by_strategy(db, strategy_ids: list) -> dict:
-    """Map strategy_id → list of {ctid, enabled, lot_size}."""
+    """Map strategy_id → list of {ctrader_account_id, enabled, lot_size}."""
     if not strategy_ids:
         return {}
     try:
@@ -274,7 +274,7 @@ def _lf_load_assignments_by_strategy(db, strategy_ids: list) -> dict:
         out: dict = {}
         for r in rows:
             out.setdefault(int(r.strategy_id), []).append({
-                "ctid": str(r.ctid),
+                "ctrader_account_id": str(r.ctrader_account_id),
                 "enabled": bool(r.enabled),
                 "lot_size": r.lot_size,
             })
@@ -12544,7 +12544,11 @@ async def api_strategy_assign_account(strategy_id: int, uid: str = Query(...), r
             raise HTTPException(status_code=400, detail="Account not in your added accounts")
         if ctid:
             saved = upsert_strategy_assignments(
-                db, s.id, [{"ctid": ctid, "enabled": True, "lot_size": lot}],
+                db, s.id, [{
+                    "ctrader_account_id": ctid,
+                    "enabled": True,
+                    "lot_size": lot,
+                }],
                 allowed_ctids=added,
             )
         else:
@@ -12558,7 +12562,7 @@ async def api_strategy_assign_account(strategy_id: int, uid: str = Query(...), r
             "ok": True,
             "strategy_id": s.id,
             "assignments": saved,
-            "ctrader_account_id": primary["ctid"] if primary else None,
+            "ctrader_account_id": primary["ctrader_account_id"] if primary else None,
             "ctrader_account_lot": primary.get("lot_size") if primary else None,
         })
     finally:

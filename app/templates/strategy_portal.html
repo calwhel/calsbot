@@ -11907,7 +11907,8 @@ function _lfDefaultLotHint(s) {
 function _lfAssignmentByCtid(s) {
   const m = {};
   (s.account_assignments || []).forEach(a => {
-    m[String(a.ctid)] = a;
+    const id = String(a.ctrader_account_id || a.ctid || '');
+    if (id) m[id] = a;
   });
   return m;
 }
@@ -11920,8 +11921,9 @@ function _lfEnabledAcctBadges(d, s) {
     return '<span style="font-size:11px;color:var(--muted)">No accounts enabled</span>';
   }
   return enabled.map(a => {
-    const acct = linked.find(x => String(x.ctidTraderAccountId) === String(a.ctid));
-    return _lfAcctChip(a.ctid, !!(acct && acct.isLive));
+    const acctId = String(a.ctrader_account_id || a.ctid || '');
+    const acct = linked.find(x => String(x.ctidTraderAccountId) === acctId);
+    return _lfAcctChip(acctId, !!(acct && acct.isLive));
   }).join(' ');
 }
 
@@ -12033,7 +12035,11 @@ function _lfCollectStratAssignments(strategyId) {
       const v = parseFloat(lotRaw);
       if (!Number.isNaN(v)) lot_size = v;
     }
-    out.push({ ctid, enabled: !!(cb && cb.checked), lot_size });
+    out.push({
+      ctrader_account_id: ctid,
+      enabled: !!(cb && cb.checked),
+      lot_size,
+    });
   });
   return out;
 }
@@ -12057,20 +12063,20 @@ async function lfSaveStratAssignments(strategyId) {
   const assignments = _lfCollectStratAssignments(strategyId);
   const enablingLive = assignments.filter(a => {
     if (!a.enabled) return false;
-    const row = document.querySelector(`[data-lf-assign-id="${strategyId}"] .lf-strat-acct-row[data-ctid="${a.ctid}"]`);
+    const row = document.querySelector(`[data-lf-assign-id="${strategyId}"] .lf-strat-acct-row[data-ctid="${a.ctrader_account_id || a.ctid}"]`);
     return row && row.getAttribute('data-live') === 'true';
   });
   if (enablingLive.length) {
     const demoOn = assignments.some(a => {
       if (!a.enabled) return false;
-      const row = document.querySelector(`[data-lf-assign-id="${strategyId}"] .lf-strat-acct-row[data-ctid="${a.ctid}"]`);
+      const row = document.querySelector(`[data-lf-assign-id="${strategyId}"] .lf-strat-acct-row[data-ctid="${a.ctrader_account_id || a.ctid}"]`);
       return row && row.getAttribute('data-live') !== 'true';
     });
     const live = enablingLive[0];
     const lotStr = live.lot_size != null ? `${live.lot_size} lot${live.lot_size === 1 ? '' : 's'}` : 'default size';
     showConfirm(
       'Enable LIVE account',
-      `This strategy will place REAL orders on live #${live.ctid} at ${lotStr}${demoOn ? ', in parallel with demo' : ''}. Continue?`,
+      `This strategy will place REAL orders on live #${live.ctrader_account_id || live.ctid} at ${lotStr}${demoOn ? ', in parallel with demo' : ''}. Continue?`,
       'Enable live',
       null,
       async () => {

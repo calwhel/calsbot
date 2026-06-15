@@ -43,12 +43,14 @@ class StrategyAccountAssignment(Base):
     """Per-strategy × per-account execution target (enable + lot size)."""
     __tablename__ = "strategy_account_assignments"
     __table_args__ = (
-        UniqueConstraint("strategy_id", "ctid", name="uq_strategy_account_ctid"),
+        UniqueConstraint(
+            "strategy_id", "ctrader_account_id", name="uq_strategy_account_acct",
+        ),
     )
 
-    id          = Column(Integer, primary_key=True, index=True)
-    strategy_id = Column(Integer, ForeignKey("user_strategies.id"), nullable=False, index=True)
-    ctid        = Column(String(40), nullable=False)
+    id                  = Column(Integer, primary_key=True, index=True)
+    strategy_id         = Column(Integer, ForeignKey("user_strategies.id"), nullable=False, index=True)
+    ctrader_account_id  = Column(String(40), nullable=False)
     enabled     = Column(Boolean, default=False, nullable=False, server_default="false")
     lot_size    = Column(Float, nullable=True)
     created_at  = Column(DateTime, default=datetime.utcnow)
