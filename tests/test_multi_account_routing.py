@@ -1,4 +1,4 @@
-"""Multi-account cTrader routing + mirror execution."""
+"""Per-strategy cTrader account routing (no mirror fan-out)."""
 import os
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("SECRET_KEY", "test-secret")
@@ -9,49 +9,51 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.ctrader_client import (
-    get_mirror_execution_ctids,
-    parse_mirror_accounts_json,
+    list_assignable_ctrader_ctids,
+    parse_added_accounts_json,
     resolve_ctrader_ctid,
 )
 from app.services.ctrader_order_queue import CtraderOrderJob, CtraderSlAmendJob
 from app.strategy_models import UserStrategy
 
 
-class TestMirrorExecutionCtid(unittest.TestCase):
-    def test_mirror_accounts_list(self):
+class TestAddedAccounts(unittest.TestCase):
+    def test_parse_added_accounts_json(self):
+        self.assertEqual(parse_added_accounts_json('["1","2"]'), ["1", "2"])
+        self.assertEqual(parse_added_accounts_json(None), [])
+
+    def test_list_assignable_includes_added_and_default(self):
         prefs = SimpleNamespace(
-            ctrader_mirror_accounts='["111","222"]',
+            ctrader_added_accounts='["222","333"]',
+            ctrader_account_id="111",
+        )
+        self.assertEqual(
+            list_assignable_ctrader_ctids(prefs),
+            ["111", "222", "333"],
+        )
+
+    def test_list_assignable_default_only_when_no_added(self):
+        prefs = SimpleNamespace(
+            ctrader_added_accounts=None,
             ctrader_account_id="999",
         )
-        self.assertEqual(get_mirror_execution_ctids(prefs), ["111", "222"])
-
-    def test_empty_mirror_falls_back_to_default(self):
-        prefs = SimpleNamespace(
-            ctrader_mirror_accounts=None,
-            ctrader_account_id="999",
-        )
-        self.assertEqual(get_mirror_execution_ctids(prefs), ["999"])
-
-    def test_parse_mirror_json(self):
-        self.assertEqual(parse_mirror_accounts_json('["1","2"]'), ["1", "2"])
-        self.assertEqual(parse_mirror_accounts_json(None), [])
+        self.assertEqual(list_assignable_ctrader_ctids(prefs), ["999"])
 
 
-class TestSignalGroupSchema(unittest.TestCase):
-    def test_execution_has_signal_group_id(self):
-        from app.strategy_models import StrategyExecution
-        col = StrategyExecution.__table__.columns.get("signal_group_id")
-        self.assertIsNotNone(col)
-        self.assertTrue(col.nullable)
-
-
-class TestMirrorFanOut(unittest.TestCase):
-    def test_fire_path_uses_gather_for_mirror_jobs(self):
+class TestPerStrategyFirePath(unittest.TestCase):
+    def test_fire_path_resolves_strategy_account_not_mirror(self):
         from app.services import strategy_executor as se
         src = inspect.getsource(se)
-        self.assertIn("asyncio.gather", src)
-        self.assertIn("get_mirror_execution_ctids", src)
-        self.assertIn("signal_group_id", src)
+        self.assertIn("strategy_account_id=getattr(strategy, \"ctrader_account_id\", None)", src)
+        self.assertNotIn("get_mirror_execution_ctids", src)
+        self.assertNotIn("signal_group_id=", src)
+
+    def test_single_ctrader_order_job_per_signal(self):
+        from app.services import strategy_executor as se
+        src = inspect.getsource(se)
+        # One CtraderOrderJob enqueue per live fire — not a list/gather of mirror legs.
+        self.assertIn("CtraderOrderJob(", src)
+        self.assertIn("ctrader_account_id=_job_ctid", src)
 
     def test_order_worker_spawns_concurrent_tasks(self):
         src = inspect.getsource(
@@ -63,11 +65,13 @@ class TestMirrorFanOut(unittest.TestCase):
         self.assertIn("asyncio.create_task(_run_order_job(job))", src)
 
 
-class TestMirrorApi(unittest.TestCase):
-    def test_mirror_endpoint_exists(self):
+class TestPerStrategyApi(unittest.TestCase):
+    def test_add_and_assign_endpoints_exist(self):
         import strategy_portal_server as sps
         routes = [getattr(r, "path", "") for r in sps.app.routes]
-        self.assertIn("/api/live-forex/mirror-account", routes)
+        self.assertIn("/api/live-forex/add-account", routes)
+        self.assertIn("/api/strategies/{strategy_id}/assign-account", routes)
+        self.assertNotIn("/api/live-forex/mirror-account", routes)
 
 
 class TestResolveCtraderCtid(unittest.TestCase):
@@ -282,7 +286,6 @@ class TestReconcileGrouping(unittest.TestCase):
                 def strat_filter(*args, **kwargs):
                     sf = MagicMock()
                     def first():
-                        # strategy_id from filter — return by call order
                         if not hasattr(first, "_n"):
                             first._n = 0
                         first._n += 1

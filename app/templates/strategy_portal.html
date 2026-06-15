@@ -3133,6 +3133,11 @@ function dismissTgBanner(){
             <button class="dir-btn short" onclick="setCfgDir('SHORT',this)">🔴 Short</button>
           </div>
         </div>
+        <div class="form-group" id="cfg-acct-grp" style="display:none;margin-bottom:12px">
+          <label>cTrader Execution Account</label>
+          <select id="cfg-ctrader-acct" style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:13px"></select>
+          <div class="hint" style="margin-top:4px">Assign this strategy to one demo or live account. Add accounts on the Live Forex tab first.</div>
+        </div>
         <div class="divider"></div>
         <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">Risk & Sizing</div>
         <div class="form-group" style="margin-bottom:12px">
@@ -4835,6 +4840,25 @@ async function openConfigure(strategyId){
   $('cfg-export-link').href=`/api/strategies/${strategyId}/export?uid=${UID}`;
   $('cfg-export-link').onclick=null;
   loadGateStats(strategyId);
+  const _fxLike = (s.asset_class === 'forex' || s.asset_class === 'index' || s.asset_class === 'metals' || s.asset_class === 'commodity');
+  if (_fxLike) await _loadCfgAcctOptions(s.ctrader_account_id || '');
+  else { const g=$('cfg-acct-grp'); if(g) g.style.display='none'; }
+}
+
+async function _loadCfgAcctOptions(selected) {
+  const grp = $('cfg-acct-grp');
+  const sel = $('cfg-ctrader-acct');
+  if (!grp || !sel) return;
+  try {
+    const r = await _apiFetch(`/api/live-forex/account?uid=${encodeURIComponent(UID)}`, { timeoutMs: 12000 });
+    if (!r.ok) { grp.style.display = 'none'; return; }
+    const d = await r.json();
+    if (!d.connected) { grp.style.display = 'none'; return; }
+    grp.style.display = '';
+    sel.innerHTML = _lfStrategyAcctOptions(d, selected);
+  } catch (e) {
+    grp.style.display = 'none';
+  }
 }
 
 async function loadGateStats(strategyId){
@@ -4961,6 +4985,15 @@ async function saveCfg(){
       sessions:cfgSessions,
       trading_days:cfgTradingDays,
     });
+  }
+
+  const acctGrp = $('cfg-acct-grp');
+  if (acctGrp && acctGrp.style.display !== 'none') {
+    const acctSel = $('cfg-ctrader-acct');
+    if (acctSel) {
+      const v = acctSel.value;
+      payload.ctrader_account_id = v ? v : null;
+    }
   }
 
   const r=await fetch(`/api/strategies/${cfgStrategyId}`,{
@@ -11845,18 +11878,35 @@ function _lfAcctChip(ctid, isLive) {
   return `<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;${style}">${lbl} #${escHtml(String(ctid))}</span>`;
 }
 
-function _lfMirrorGroupHint(positions) {
-  const groups = {};
-  (positions || []).forEach(p => {
-    if (!p.signal_group_id) return;
-    groups[p.signal_group_id] = (groups[p.signal_group_id] || 0) + 1;
+function _lfAcctLabel(a) {
+  const ctid = String(a.ctidTraderAccountId || '');
+  const live = !!a.isLive;
+  return `${live ? 'LIVE' : 'DEMO'} #${ctid}`;
+}
+
+function _lfAssignableAccounts(d) {
+  const linked = d.accounts || [];
+  const added = new Set((d.added_accounts || []).map(String));
+  const defaultId = String(d.account_id || '');
+  const out = [];
+  const seen = new Set();
+  linked.forEach(a => {
+    const ctid = String(a.ctidTraderAccountId || '');
+    if (!ctid || !added.has(ctid) || seen.has(ctid)) return;
+    out.push(a);
+    seen.add(ctid);
   });
-  return groups;
+  if (defaultId && !seen.has(defaultId)) {
+    const def = linked.find(a => String(a.ctidTraderAccountId) === defaultId);
+    if (def) out.unshift(def);
+  }
+  return out;
 }
 
 function renderLFAccountsSection(d) {
   const accounts = d.accounts || [];
   if (!accounts.length) return '';
+  const added = new Set((d.added_accounts || []).map(String));
   const health = _lfBrokerHealth || {};
   const healthChip = health.token_valid && health.feed_alive
     ? '<span style="color:var(--positive,#3fb68b);font-size:11px">● Broker OK</span>'
@@ -11866,33 +11916,32 @@ function renderLFAccountsSection(d) {
   const rows = accounts.map(a => {
     const ctid = String(a.ctidTraderAccountId || '');
     const isLive = !!a.isLive;
-    const login = a.traderLogin || ctid;
-    const label = isLive ? `Live #${login}` : `Demo #${login}`;
+    const label = _lfAcctLabel(a);
     const bal = a.balance != null
       ? `$${Number(a.balance).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`
       : '—';
-    const enabled = !!a.mirror_enabled;
+    const isAdded = added.has(ctid);
     const rowAccent = isLive ? 'border-left:3px solid #e5484d' : 'border-left:3px solid #3b82f6';
     const liveWarn = isLive ? '<div style="font-size:10px;color:#ff6b6b;font-weight:700;margin-top:2px">REAL MONEY</div>' : '';
-    return `<div class="lf-mirror-acct-row" style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;${rowAccent}">
+    const btn = isAdded
+      ? `<button class="btn ghost sm" onclick="lfAddAccount('${ctid}', false, ${isLive})">Remove</button>`
+      : `<button class="btn primary sm" onclick="lfAddAccount('${ctid}', true, ${isLive})">Add</button>`;
+    return `<div class="lf-added-acct-row" style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;${rowAccent}">
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="font-size:14px;font-weight:700">${escHtml(label)}</span>
-          ${_lfAcctChip(ctid, isLive)}
+          ${isAdded ? '<span style="font-size:10px;color:var(--positive,#3fb68b);font-weight:700">ADDED</span>' : ''}
         </div>
         ${liveWarn}
         <div style="font-size:12px;color:var(--muted);margin-top:4px">Balance: <strong style="color:var(--text)">${bal}</strong></div>
       </div>
-      <label style="display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;flex-shrink:0">
-        <span style="font-size:10px;color:var(--muted);font-weight:600">Mirror</span>
-        <input type="checkbox" ${enabled?'checked':''} onchange="lfToggleMirrorAccount('${ctid}', this.checked, ${isLive})" style="width:18px;height:18px;accent-color:${isLive?'#e5484d':'#3b82f6'}">
-      </label>
+      <div style="flex-shrink:0">${btn}</div>
     </div>`;
   }).join('');
-  const nEnabled = (d.mirror_accounts || []).length;
-  const hint = nEnabled > 1
-    ? `<div style="font-size:12px;color:var(--warning,#d6a35c);margin-bottom:10px;line-height:1.45">⚡ <strong>${nEnabled} accounts enabled</strong> — each live signal fires one order per account in parallel.</div>`
-    : `<div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.45">Enable accounts to mirror every live signal across demo and live in parallel. Leave all off to trade on your selected account only.</div>`;
+  const nAdded = (d.added_accounts || []).length;
+  const hint = nAdded
+    ? `<div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.45">${nAdded} account${nAdded===1?'':'s'} available for strategy assignment. Assign each strategy to one account below.</div>`
+    : `<div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.45">Add accounts from your cTrader login, then assign each live strategy to the account it should trade on.</div>`;
   return `<div class="lf-card" style="margin-bottom:16px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
       <div class="lf-section-title" style="margin:0">Accounts</div>
@@ -11903,10 +11952,10 @@ function renderLFAccountsSection(d) {
   </div>`;
 }
 
-async function lfToggleMirrorAccount(ctid, enabled, isLive) {
+async function lfAddAccount(ctid, enabled, isLive) {
   const doSave = async () => {
     try {
-      const r = await _apiFetch(`/api/live-forex/mirror-account?uid=${encodeURIComponent(UID)}`, {
+      const r = await _apiFetch(`/api/live-forex/add-account?uid=${encodeURIComponent(UID)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ctid, enabled }),
@@ -11915,7 +11964,7 @@ async function lfToggleMirrorAccount(ctid, enabled, isLive) {
         const err = await r.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${r.status}`);
       }
-      toast(enabled ? `Account #${ctid} enabled for mirror` : `Account #${ctid} disabled`, 'success');
+      toast(enabled ? `Account #${ctid} added` : `Account #${ctid} removed`, 'success');
       _fcDel('/api/live-forex/account?uid='+UID);
       loadLiveForex();
     } catch (e) {
@@ -11925,9 +11974,85 @@ async function lfToggleMirrorAccount(ctid, enabled, isLive) {
   };
   if (enabled && isLive) {
     showConfirm(
-      'Enable LIVE mirror account',
-      `Strategies will place REAL orders on live account #${ctid} in parallel with your other enabled accounts. Continue?`,
-      'Enable live mirror',
+      'Add LIVE account',
+      `This account will be available to assign strategies to. Strategies assigned here will place REAL orders on live account #${ctid}. Continue?`,
+      'Add live account',
+      null,
+      doSave,
+    );
+    return;
+  }
+  await doSave();
+}
+
+function _lfStrategyAcctOptions(d, selected) {
+  const assignable = _lfAssignableAccounts(d);
+  const defaultId = String(d.account_id || '');
+  let opts = `<option value="">Default (${defaultId ? 'acct #'+defaultId : 'selected'})</option>`;
+  assignable.forEach(a => {
+    const ctid = String(a.ctidTraderAccountId || '');
+    const sel = String(selected || '') === ctid ? 'selected' : '';
+    opts += `<option value="${ctid}" ${sel}>${_lfAcctLabel(a)}</option>`;
+  });
+  return opts;
+}
+
+function renderLFStrategyAssignment(d) {
+  const strats = d.live_strategies || [];
+  if (!strats.length) return '';
+  const rows = strats.map(s => {
+    const cur = s.ctrader_account_id || '';
+    const badge = cur
+      ? (() => {
+          const a = (d.accounts || []).find(x => String(x.ctidTraderAccountId) === String(cur));
+          return _lfAcctChip(cur, !!(a && a.isLive));
+        })()
+      : '<span style="font-size:11px;color:var(--muted)">Default account</span>';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:700">${escHtml(s.name)}</div>
+        <div style="margin-top:4px">${badge}</div>
+      </div>
+      <select class="lf-input" style="max-width:160px;font-size:12px" onchange="lfAssignStrategyAccount(${s.id}, this.value, this)">
+        ${_lfStrategyAcctOptions(d, cur)}
+      </select>
+    </div>`;
+  }).join('');
+  return `<div class="lf-card" style="margin-bottom:16px">
+    <div class="lf-section-title">Strategy Account Assignment</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.45">Each strategy executes on exactly one account. Pick demo or live per strategy.</div>
+    ${rows}
+  </div>`;
+}
+
+async function lfAssignStrategyAccount(strategyId, ctid, selEl) {
+  const linked = (_lfLiveData?.accounts || []);
+  const acct = linked.find(a => String(a.ctidTraderAccountId) === String(ctid));
+  const isLive = !!(acct && acct.isLive);
+  const doSave = async () => {
+    try {
+      const r = await _apiFetch(`/api/strategies/${strategyId}/assign-account?uid=${encodeURIComponent(UID)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ctrader_account_id: ctid || null }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${r.status}`);
+      }
+      toast('Strategy account updated', 'success');
+      _fcDel('/api/live-forex/account?uid='+UID);
+      loadLiveForex();
+    } catch (e) {
+      toast(`Assign failed: ${e.message || e}`, 'error');
+      if (selEl) loadLiveForex();
+    }
+  };
+  if (ctid && isLive) {
+    showConfirm(
+      'Assign to LIVE account',
+      `This strategy will place REAL orders on live account #${ctid}. Continue?`,
+      'Assign to live',
       null,
       doSave,
     );
@@ -12097,7 +12222,7 @@ function renderLiveForex(d, wrap) {
       <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px">Switch account</label>
       <select onchange="ctraderSelectAccount(this.value)" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-size:12px;width:100%">
         ${accounts.map(a=>{
-          const lbl = a.isLive ? `Live #${a.traderLogin||a.ctidTraderAccountId}` : `Demo #${a.traderLogin||a.ctidTraderAccountId}`;
+          const lbl = a.isLive ? `LIVE #${a.ctidTraderAccountId}` : `DEMO #${a.ctidTraderAccountId}`;
           const sel = String(a.ctidTraderAccountId)===String(d.account_id)?'selected':'';
           return `<option value="${a.ctidTraderAccountId}" ${sel}>${escHtml(lbl)}</option>`;
         }).join('')}
@@ -12149,6 +12274,8 @@ function renderLiveForex(d, wrap) {
     </div>
 
     ${renderLFAccountsSection(d)}
+
+    ${renderLFStrategyAssignment(d)}
 
     <!-- Session clock -->
     <div class="lf-card" style="margin-bottom:16px">
@@ -12348,12 +12475,20 @@ function renderLFLiveStrategies(strats, positions, health) {
     const brokerChip = _lfBrokerChipHtml(health);
     const lastFired = _lfRelTime(s.last_fired_at);
     const pipsLbl = s.asset_class === 'index' ? 'pts' : 'pips';
+    const stratAcct = s.ctrader_account_id || '';
+    const stratAcctBadge = stratAcct
+      ? (() => {
+          const a = (_lfLiveData?.accounts || []).find(x => String(x.ctidTraderAccountId) === String(stratAcct));
+          return _lfAcctChip(stratAcct, !!(a && a.isLive));
+        })()
+      : '';
     return `<div class="strat-card live-card ${accentCls}" data-lf-strat-id="${s.id}">
       <div class="lf-card-top">
         <div class="card-hd lf-card-hd">
           <div class="dot ${paused ? 'paused' : 'active'}"></div>
           <div class="card-name">${escHtml(s.name)}</div>
           <span class="pill ${paused ? 'paused' : 'active'}">${paused ? 'PAUSED' : 'LIVE'}</span>
+          ${stratAcctBadge ? `<span class="lf-strat-acct-badge">${stratAcctBadge}</span>` : ''}
           <span class="lf-broker-chip-slot">${brokerChip}</span>
         </div>
         <div class="lf-hero-pnl">

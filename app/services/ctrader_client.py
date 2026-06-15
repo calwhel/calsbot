@@ -96,34 +96,8 @@ def resolve_ctrader_ctid(
     return None
 
 
-def get_mirror_execution_ctids(prefs) -> list:
-    """Return ctids to fire on for mirror execution.
-
-    When ctrader_mirror_accounts is empty/null, returns a single-element list
-    with prefs.ctrader_account_id (legacy single-account behaviour).
-    """
-    import json as _json
-    ctids: list = []
-    raw = getattr(prefs, "ctrader_mirror_accounts", None) if prefs else None
-    if raw:
-        try:
-            parsed = _json.loads(raw) if isinstance(raw, str) else raw
-            if isinstance(parsed, list):
-                ctids = [
-                    str(x).strip()
-                    for x in parsed
-                    if x is not None and str(x).strip()
-                ]
-        except Exception:
-            ctids = []
-    if ctids:
-        return ctids
-    default = (getattr(prefs, "ctrader_account_id", None) or "").strip() if prefs else ""
-    return [default] if default else []
-
-
-def parse_mirror_accounts_json(raw) -> list:
-    """Parse ctrader_mirror_accounts JSON — never raises."""
+def parse_added_accounts_json(raw) -> list:
+    """Parse ctrader_added_accounts JSON — never raises."""
     if not raw:
         return []
     import json as _json
@@ -136,6 +110,25 @@ def parse_mirror_accounts_json(raw) -> list:
         ]
     except Exception:
         return []
+
+
+def list_assignable_ctrader_ctids(prefs, *, include_default: bool = True) -> list:
+    """Ctids the user can assign strategies to (added accounts + optional default)."""
+    added = parse_added_accounts_json(
+        getattr(prefs, "ctrader_added_accounts", None) if prefs else None
+    )
+    out: list = []
+    seen = set()
+    for ctid in added:
+        if ctid not in seen:
+            out.append(ctid)
+            seen.add(ctid)
+    default = (getattr(prefs, "ctrader_account_id", None) or "").strip() if prefs else ""
+    if include_default and default and default not in seen:
+        out.insert(0, default)
+    elif not out and default:
+        out = [default]
+    return out
 
 
 def _other_host(host: str) -> str:

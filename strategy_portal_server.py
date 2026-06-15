@@ -160,23 +160,23 @@ def _lf_live_forex_json_response(payload: dict, **kwargs):
     return JSONResponse(_lf_json_safe(payload), **kwargs)
 
 
-def _lf_mirror_accounts_enabled(prefs) -> list:
-    from app.services.ctrader_client import parse_mirror_accounts_json
-    return parse_mirror_accounts_json(
-        getattr(prefs, "ctrader_mirror_accounts", None) if prefs else None
+def _lf_added_accounts(prefs) -> list:
+    from app.services.ctrader_client import parse_added_accounts_json
+    return parse_added_accounts_json(
+        getattr(prefs, "ctrader_added_accounts", None) if prefs else None
     )
 
 
 def _lf_enrich_ctrader_accounts(accounts: list, prefs, balances: dict) -> list:
-    """Attach mirror_enabled + balance per linked account."""
-    enabled = set(_lf_mirror_accounts_enabled(prefs))
+    """Attach added flag + balance per linked account."""
+    added = set(_lf_added_accounts(prefs))
     out = []
     for a in accounts or []:
         if not isinstance(a, dict):
             continue
         ctid = str(a.get("ctidTraderAccountId") or a.get("ctid") or "").strip()
         row = dict(a)
-        row["mirror_enabled"] = ctid in enabled if ctid else False
+        row["added"] = ctid in added if ctid else False
         if ctid and ctid in balances:
             row["balance"] = balances.get(ctid)
         out.append(row)
@@ -206,7 +206,7 @@ def _lf_load_open_positions(db, uid: int) -> list:
 
 
 _LF_LIVE_ROWS_SQL_EXT = """
-    SELECT s.id, s.name, s.status, s.asset_class, s.config,
+    SELECT s.id, s.name, s.status, s.asset_class, s.config, s.ctrader_account_id,
            COUNT(e.id) FILTER (WHERE e.outcome='OPEN' AND e.is_paper=false) AS open_count,
            COUNT(e.id) FILTER (
                WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.is_paper=false
@@ -230,7 +230,7 @@ _LF_LIVE_ROWS_SQL_EXT = """
 """
 
 _LF_LIVE_ROWS_SQL_BASIC = """
-    SELECT s.id, s.name, s.status, s.asset_class, s.config,
+    SELECT s.id, s.name, s.status, s.asset_class, s.config, s.ctrader_account_id,
            COUNT(e.id) FILTER (WHERE e.outcome='OPEN' AND e.is_paper=false) AS open_count,
            COUNT(e.id) FILTER (
                WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.is_paper=false
@@ -442,6 +442,7 @@ def _lf_build_strategy_card(s: dict, sparkline_by_id: dict) -> dict:
         return {
             "id": s["id"], "name": s["name"], "status": s["status"],
             "asset_class": s["asset_class"],
+            "ctrader_account_id": s.get("ctrader_account_id"),
             "symbols": [str(x).upper() for x in syms][:8] or ["—"],
             "open_count": int(s.get("open_count") or 0),
             "closed_count": _closed, "win_count": _wins,
@@ -1501,8 +1502,8 @@ _CTRADER_COLUMN_MIGRATIONS = [
     ),
     (
         "user_preferences",
-        "ctrader_mirror_accounts",
-        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_mirror_accounts TEXT",
+        "ctrader_added_accounts",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_added_accounts TEXT",
     ),
     (
         "user_preferences",
@@ -9154,6 +9155,8 @@ async def api_save_strategy(request: Request):
             strategy.description = config.get("description", strategy.description or "")
             strategy.config      = config
             strategy.asset_class = _asset_class
+            if body.get("ctrader_account_id") not in (None, ""):
+                strategy.ctrader_account_id = str(body["ctrader_account_id"]).strip() or None
             if _wh_token:
                 strategy.webhook_token = _wh_token
             db.commit()
@@ -9168,6 +9171,10 @@ async def api_save_strategy(request: Request):
                 status        = initial_status,
                 webhook_token = _wh_token,
                 asset_class   = _asset_class,
+                ctrader_account_id=(
+                    str(body["ctrader_account_id"]).strip()
+                    if body.get("ctrader_account_id") else None
+                ),
             )
             db.add(strategy)
             db.commit()
@@ -11210,6 +11217,8 @@ async def api_strategy_detail(strategy_id: int, uid: str = Query(...)):
             "name":        s.name,
             "description": s.description,
             "status":      s.status,
+            "asset_class": s.asset_class,
+            "ctrader_account_id": getattr(s, "ctrader_account_id", None),
             "config":      s.config or {},
             "performance": {
                 "total_trades": perf.total_trades if perf else 0,
@@ -11402,6 +11411,21 @@ async def api_update_strategy(strategy_id: int, request: Request):
 
         # Status change — fire admin alert when going live
         prev_status = s.status
+        if "ctrader_account_id" in body:
+            _raw = body.get("ctrader_account_id")
+            if _raw in (None, "", "default"):
+                s.ctrader_account_id = None
+            else:
+                from app.models import UserPreference as _UP_asn
+                from app.services.ctrader_client import list_assignable_ctrader_ctids
+                _pasn = db.query(_UP_asn).filter(_UP_asn.user_id == user.id).first()
+                _acct = str(_raw).strip()
+                if _acct not in set(list_assignable_ctrader_ctids(_pasn)):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Account not in your added accounts",
+                    )
+                s.ctrader_account_id = _acct
         if "status" in body and body["status"] in ("draft", "active", "paused", "paper"):
             if body["status"] == "active":
                 _sub = _get_portal_sub(user.id, db)
@@ -12297,21 +12321,19 @@ async def api_ctrader_select_account(uid: str = Query(...), request: Request = N
         db.close()
 
 
-@app.post("/api/live-forex/mirror-account")
-async def api_live_forex_mirror_account(uid: str = Query(...), request: Request = None):
-    """Enable/disable a cTrader account for mirror execution."""
+@app.post("/api/live-forex/add-account")
+async def api_live_forex_add_account(uid: str = Query(...), request: Request = None):
+    """Add a cTrader account as an available execution target."""
     import json as _json
     from app.database import SessionLocal
     from app.models import UserPreference
-    from app.services.ctrader_client import parse_mirror_accounts_json
+    from app.services.ctrader_client import parse_added_accounts_json
 
     body = await request.json()
     ctid = str(body.get("ctid") or body.get("account_id") or "").strip()
     if not ctid:
         raise HTTPException(status_code=400, detail="ctid required")
-    enabled = body.get("enabled")
-    if enabled is None:
-        raise HTTPException(status_code=400, detail="enabled required")
+    enabled = body.get("enabled", True)
 
     db = SessionLocal()
     try:
@@ -12331,17 +12353,62 @@ async def api_live_forex_mirror_account(uid: str = Query(...), request: Request 
         if ctid not in valid:
             raise HTTPException(status_code=400, detail="Account not linked to your cTrader token")
 
-        current = parse_mirror_accounts_json(prefs.ctrader_mirror_accounts)
+        current = parse_added_accounts_json(prefs.ctrader_added_accounts)
         if enabled:
             if ctid not in current:
                 current.append(ctid)
         else:
             current = [c for c in current if c != ctid]
 
-        prefs.ctrader_mirror_accounts = _json.dumps(current) if current else None
+        prefs.ctrader_added_accounts = _json.dumps(current) if current else None
         db.commit()
         _invalidate_user_cache(uid)
-        return JSONResponse({"ok": True, "mirror_accounts": current})
+        return JSONResponse({"ok": True, "added_accounts": current})
+    finally:
+        db.close()
+
+
+@app.post("/api/strategies/{strategy_id}/assign-account")
+async def api_strategy_assign_account(strategy_id: int, uid: str = Query(...), request: Request = None):
+    """Assign a strategy to a specific cTrader execution account."""
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    from app.strategy_models import UserStrategy
+    from app.services.ctrader_client import list_assignable_ctrader_ctids
+
+    body = await request.json()
+    raw_acct = body.get("ctrader_account_id")
+    acct = str(raw_acct).strip() if raw_acct not in (None, "") else None
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        s = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id,
+            UserStrategy.user_id == user.id,
+        ).first()
+        if not s:
+            raise HTTPException(status_code=404)
+        if s.asset_class not in ("forex", "index", "metals", "commodity"):
+            raise HTTPException(status_code=400, detail="Not a cTrader strategy")
+
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if acct:
+            assignable = set(list_assignable_ctrader_ctids(prefs))
+            if acct not in assignable:
+                raise HTTPException(status_code=400, detail="Account not in your added accounts")
+
+        s.ctrader_account_id = acct
+        db.commit()
+        _invalidate_user_cache(uid)
+        invalidate_prefix(f"api_strats_{uid}")
+        return JSONResponse({
+            "ok": True,
+            "strategy_id": s.id,
+            "ctrader_account_id": s.ctrader_account_id,
+        })
     finally:
         db.close()
 
@@ -12360,7 +12427,7 @@ async def api_ctrader_disconnect(uid: str = Query(...)):
             prefs.ctrader_access_token  = None
             prefs.ctrader_refresh_token = None
             prefs.ctrader_account_id    = None
-            prefs.ctrader_mirror_accounts = None
+            prefs.ctrader_added_accounts = None
             db.commit()
         return JSONResponse({"ok": True})
     finally:
@@ -12749,7 +12816,7 @@ async def api_live_forex_account(
 
     async def _fetch_balances():
         nonlocal balance
-        ctids: set = set(_lf_mirror_accounts_enabled(prefs))
+        ctids: set = set(_lf_added_accounts(prefs))
         if _acct_id_for_bal:
             ctids.add(_acct_id_for_bal)
         for a in accounts or []:
@@ -12833,13 +12900,13 @@ async def api_live_forex_account(
         exec_ready, exec_blockers = False, ["data_unavailable"]
 
     try:
-        _mirror_enabled = _lf_mirror_accounts_enabled(prefs)
+        _added = _lf_added_accounts(prefs)
         _accounts_out = _lf_enrich_ctrader_accounts(accounts, prefs, _account_balances)
         payload = {
             "connected": True,
             "forex_approved": snap["forex_approved"],
             "account_id": (prefs.ctrader_account_id or "") if prefs else "",
-            "mirror_accounts": _mirror_enabled,
+            "added_accounts": _added,
             "accounts": _accounts_out,
             "account_balances": _account_balances,
             "balance": round(balance, 2) if balance is not None else None,
