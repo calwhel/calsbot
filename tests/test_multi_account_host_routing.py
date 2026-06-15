@@ -67,7 +67,9 @@ class TestOrderHostFallback(unittest.TestCase):
             side_effect=[live_cancel, demo_fill],
         ) as mock_place, patch(
             "app.services.ctrader_client._persist_account_host_metadata",
-        ) as mock_persist:
+        ) as mock_persist, patch(
+            "app.services.ctrader_client._log_order_route",
+        ):
             result = asyncio.run(
                 place_market_order_resilient(
                     user_id=1,

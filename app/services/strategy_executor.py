@@ -1344,17 +1344,30 @@ async def _ctrader_fanout_live_fire(
     from app.services.order_latency import new_order_latency
     from app.services.order_stale_guard import check_signal_stale
 
-    if len(fire_targets) < 2:
+    if len(fire_targets) < 1:
+        return False
+
+    from app.models import UserPreference as _UP_fan
+    from app.services.strategy_account_assignments import resolve_fire_target_routing
+
+    _fan_prefs = db.query(_UP_fan).filter(_UP_fan.user_id == user.id).first()
+    routed_targets: list = []
+    for target in fire_targets:
+        routing = resolve_fire_target_routing(_fan_prefs, target) if _fan_prefs else None
+        if routing:
+            routed_targets.append((target, routing))
+        else:
+            logger.error(
+                f"[Strategy {strategy.id}] fan-out skip target {target} — "
+                f"could not resolve per-account routing"
+            )
+    if not routed_targets:
         return False
 
     _signal_group_id = _uuid.uuid4().hex[:40]
     executions = []
-    for target in fire_targets:
-        ctid = str(
-            target.get("ctrader_account_id") or target.get("ctid") or ""
-        ).strip()
-        if not ctid:
-            continue
+    for target, routing in routed_targets:
+        ctid = routing["ctrader_account_id"]
         ex = StrategyExecution(
             strategy_id=strategy.id,
             user_id=user.id,
@@ -1376,22 +1389,22 @@ async def _ctrader_fanout_live_fire(
             signal_group_id=_signal_group_id,
         )
         db.add(ex)
-        executions.append((ex, target))
-    if len(executions) < 2:
+        executions.append((ex, target, routing))
+    if len(executions) < 1:
         return False
 
     await _commit_db_with_retry(
         db, label=f"fanout-exec#{strategy.id}", instances=tuple(e[0] for e in executions)
     )
     refreshed = []
-    for ex, target in executions:
+    for ex, target, routing in executions:
         row = _refresh_db_row(db, ex)
         if row is None or not getattr(row, "id", None):
             logger.error(
                 f"[Strategy {strategy.id}] fan-out execution missing after commit"
             )
             return False
-        refreshed.append((row, target))
+        refreshed.append((row, target, routing))
     executions = refreshed
 
     _perf = db.query(StrategyPerformance).filter(
@@ -1414,7 +1427,7 @@ async def _ctrader_fanout_live_fire(
         if _fresh and _max_drift > 0:
             _drift_pips = platform_pips_from_price_delta(symbol, _fresh - current_price)
             if _drift_pips > _max_drift:
-                for ex, _ in executions:
+                for ex, _, _ in executions:
                     ex.outcome = "CANCELLED"
                     ex.notes = f"Cancelled: price drift {_drift_pips:.1f} pips"
                 db.commit()
@@ -1441,7 +1454,7 @@ async def _ctrader_fanout_live_fire(
     )
     if _stale:
         _reason, _age_s, _slip, _sig_src, _now_src = _stale
-        for ex, _ in executions:
+        for ex, _, _ in executions:
             ex.outcome = "CANCELLED"
             ex.notes = (
                 f"{exec_notes or ''} | stale_guard_blocked | Live skip: {_reason}"
@@ -1470,13 +1483,14 @@ async def _ctrader_fanout_live_fire(
     _live_tp_pct = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
 
     jobs = []
-    for ex, target in executions:
-        ctid = str(
-            target.get("ctrader_account_id") or target.get("ctid")
-            or ex.ctrader_account_id or ""
-        ).strip()
+    paired = []
+    for ex, target, routing in executions:
+        ctid = routing["ctrader_account_id"]
         _fixed_lots, _use_risk_pct = _ctrader_lot_params_for_target(target, risk, ps_type)
-        jobs.append(CtraderOrderJob(
+        if routing.get("fixed_lots") is not None:
+            _fixed_lots = routing["fixed_lots"]
+            _use_risk_pct = False
+        job = CtraderOrderJob(
             user_id=user.id,
             strategy_id=strategy.id,
             execution_id=ex.id,
@@ -1493,21 +1507,33 @@ async def _ctrader_fanout_live_fire(
             asset_class=asset_class,
             partial_close_pct=float(partial_close_pct) if partial_close_pct else None,
             ctrader_account_id=ctid,
+            ctrader_hosts=tuple(routing["hosts"]),
+            account_is_live=routing.get("is_live"),
             signal_mono=_signal_mono,
             signal_generated_at=signal_generated_at,
             signal_price_source=price_source,
             signal_kline_source=kline_source,
             signal_live_source=price_data.get("live_source"),
             latency=new_order_latency(ex.id, _signal_mono),
-        ))
+        )
+        jobs.append(job)
+        paired.append((ex, target, job))
+    if not jobs:
+        return False
 
     results = await asyncio.gather(
         *(enqueue_ctrader_order(j) for j in jobs),
         return_exceptions=True,
     )
     _queued_any = False
-    for (ex, target), res in zip(executions, results):
-        ctid = str(target.get("ctrader_account_id") or target.get("ctid") or "")
+    for (ex, target, job), res in zip(paired, results):
+        ctid = str(job.ctrader_account_id or "")
+        if job.ctrader_hosts:
+            logger.info(
+                f"[Strategy {strategy.id}] fan-out route exec#{ex.id} "
+                f"ctid={job.ctrader_account_id} hosts={list(job.ctrader_hosts)} "
+                f"lots={job.fixed_lots}"
+            )
         if isinstance(res, Exception):
             logger.error(
                 f"[Strategy {strategy.id}] fan-out enqueue error exec#{ex.id}: {res}"
@@ -4779,7 +4805,7 @@ async def evaluate_and_fire(
             except Exception:
                 _fire_targets = []
 
-        if len(_fire_targets) > 1:
+        if len(_fire_targets) >= 1:
             _fanout_ok = await _ctrader_fanout_live_fire(
                 db=db,
                 user=user,
@@ -4810,12 +4836,15 @@ async def evaluate_and_fire(
             )
             if _fanout_ok:
                 break
+            logger.error(
+                f"[Strategy {strategy.id}] multi-account fire failed with "
+                f"{len(_fire_targets)} enabled assignment(s) — not falling back "
+                f"to prefs default account"
+            )
+            break
 
-        _preset_ctid = (
-            _fire_targets[0].get("ctrader_account_id") or _fire_targets[0].get("ctid")
-            if len(_fire_targets) == 1 else None
-        )
-        _preset_lot = _fire_targets[0]["lot_size"] if len(_fire_targets) == 1 else None
+        _preset_ctid = None
+        _preset_lot = None
 
         execution = StrategyExecution(
             strategy_id    = strategy.id,
