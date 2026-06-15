@@ -1350,7 +1350,9 @@ async def _ctrader_fanout_live_fire(
     _signal_group_id = _uuid.uuid4().hex[:40]
     executions = []
     for target in fire_targets:
-        ctid = str(target.get("ctid") or "").strip()
+        ctid = str(
+            target.get("ctrader_account_id") or target.get("ctid") or ""
+        ).strip()
         if not ctid:
             continue
         ex = StrategyExecution(
@@ -1469,7 +1471,10 @@ async def _ctrader_fanout_live_fire(
 
     jobs = []
     for ex, target in executions:
-        ctid = str(target.get("ctid") or ex.ctrader_account_id or "").strip()
+        ctid = str(
+            target.get("ctrader_account_id") or target.get("ctid")
+            or ex.ctrader_account_id or ""
+        ).strip()
         _fixed_lots, _use_risk_pct = _ctrader_lot_params_for_target(target, risk, ps_type)
         jobs.append(CtraderOrderJob(
             user_id=user.id,
@@ -1502,7 +1507,7 @@ async def _ctrader_fanout_live_fire(
     )
     _queued_any = False
     for (ex, target), res in zip(executions, results):
-        ctid = str(target.get("ctid") or "")
+        ctid = str(target.get("ctrader_account_id") or target.get("ctid") or "")
         if isinstance(res, Exception):
             logger.error(
                 f"[Strategy {strategy.id}] fan-out enqueue error exec#{ex.id}: {res}"
@@ -4806,7 +4811,10 @@ async def evaluate_and_fire(
             if _fanout_ok:
                 break
 
-        _preset_ctid = _fire_targets[0]["ctid"] if len(_fire_targets) == 1 else None
+        _preset_ctid = (
+            _fire_targets[0].get("ctrader_account_id") or _fire_targets[0].get("ctid")
+            if len(_fire_targets) == 1 else None
+        )
         _preset_lot = _fire_targets[0]["lot_size"] if len(_fire_targets) == 1 else None
 
         execution = StrategyExecution(

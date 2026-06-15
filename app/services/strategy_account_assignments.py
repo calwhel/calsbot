@@ -8,6 +8,18 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+_CREATE_TABLE_SQL = """
+    CREATE TABLE IF NOT EXISTS strategy_account_assignments (
+        id SERIAL PRIMARY KEY,
+        strategy_id INTEGER NOT NULL REFERENCES user_strategies(id),
+        ctrader_account_id VARCHAR(40) NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        lot_size DOUBLE PRECISION,
+        created_at TIMESTAMP DEFAULT NOW(),
+        CONSTRAINT uq_strategy_account_acct UNIQUE (strategy_id, ctrader_account_id)
+    )
+"""
+
 
 def _coerce_lot_size(val) -> Optional[float]:
     if val is None:
@@ -20,9 +32,21 @@ def _coerce_lot_size(val) -> Optional[float]:
         return None
 
 
-def serialize_assignment_row(ctid: str, enabled: bool, lot_size) -> Dict[str, Any]:
+def _assignment_account_id(item: Dict[str, Any]) -> str:
+    """Resolve account id from API payload (new or legacy key)."""
+    return str(
+        item.get("ctrader_account_id")
+        or item.get("ctid")
+        or item.get("account_id")
+        or ""
+    ).strip()
+
+
+def serialize_assignment_row(
+    ctrader_account_id: str, enabled: bool, lot_size,
+) -> Dict[str, Any]:
     return {
-        "ctid": str(ctid),
+        "ctrader_account_id": str(ctrader_account_id),
         "enabled": bool(enabled),
         "lot_size": _coerce_lot_size(lot_size),
     }
@@ -40,17 +64,7 @@ def ensure_strategy_account_assignments_table(bind) -> None:
         try:
             from sqlalchemy import text
             with bind.connect() as conn:
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS strategy_account_assignments (
-                        id SERIAL PRIMARY KEY,
-                        strategy_id INTEGER NOT NULL REFERENCES user_strategies(id),
-                        ctid VARCHAR(40) NOT NULL,
-                        enabled BOOLEAN NOT NULL DEFAULT FALSE,
-                        lot_size DOUBLE PRECISION,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        CONSTRAINT uq_strategy_account_ctid UNIQUE (strategy_id, ctid)
-                    )
-                """))
+                conn.execute(text(_CREATE_TABLE_SQL))
                 conn.execute(text(
                     "CREATE INDEX IF NOT EXISTS idx_saa_strategy_id "
                     "ON strategy_account_assignments(strategy_id)"
@@ -65,7 +79,7 @@ def ensure_strategy_account_assignments_table(bind) -> None:
 
 
 def get_enabled_fire_targets(db, strategy, prefs) -> List[Dict[str, Any]]:
-    """Return [{ctid, lot_size}, ...] for live fan-out. Never empty when prefs default exists."""
+    """Return [{ctrader_account_id, lot_size}, ...] for live fan-out."""
     from app.strategy_models import StrategyAccountAssignment
 
     rows = (
@@ -80,20 +94,23 @@ def get_enabled_fire_targets(db, strategy, prefs) -> List[Dict[str, Any]]:
     if rows:
         out = []
         for r in rows:
-            ctid = str(r.ctid or "").strip()
-            if ctid:
-                out.append({"ctid": ctid, "lot_size": _coerce_lot_size(r.lot_size)})
+            acct_id = str(r.ctrader_account_id or "").strip()
+            if acct_id:
+                out.append({
+                    "ctrader_account_id": acct_id,
+                    "lot_size": _coerce_lot_size(r.lot_size),
+                })
         if out:
             return out
 
     legacy = (getattr(strategy, "ctrader_account_id", None) or "").strip()
     legacy_lot = getattr(strategy, "ctrader_account_lot", None)
     if legacy:
-        return [{"ctid": legacy, "lot_size": legacy_lot}]
+        return [{"ctrader_account_id": legacy, "lot_size": legacy_lot}]
 
     default = (getattr(prefs, "ctrader_account_id", None) or "").strip() if prefs else ""
     if default:
-        return [{"ctid": default, "lot_size": None}]
+        return [{"ctrader_account_id": default, "lot_size": None}]
     return []
 
 
@@ -112,7 +129,7 @@ def list_strategy_assignments(db, strategy_id: int) -> List[Dict[str, Any]]:
         .all()
     )
     return [
-        serialize_assignment_row(r.ctid, r.enabled, r.lot_size)
+        serialize_assignment_row(r.ctrader_account_id, r.enabled, r.lot_size)
         for r in rows
     ]
 
@@ -124,7 +141,7 @@ def upsert_strategy_assignments(
     *,
     allowed_ctids: Optional[set] = None,
 ) -> List[Dict[str, Any]]:
-    """Replace assignment rows for listed ctids; omit ctids not in payload."""
+    """Replace assignment rows for listed accounts; omit accounts not in payload."""
     from app.services.ctrader_client import normalize_account_lot
     from app.strategy_models import StrategyAccountAssignment
 
@@ -133,12 +150,12 @@ def upsert_strategy_assignments(
     seen = set()
     out: List[Dict[str, Any]] = []
     for item in assignments or []:
-        ctid = str(item.get("ctid") or item.get("account_id") or "").strip()
-        if not ctid or ctid in seen:
+        acct_id = _assignment_account_id(item)
+        if not acct_id or acct_id in seen:
             continue
-        if allowed_ctids is not None and ctid not in allowed_ctids:
+        if allowed_ctids is not None and acct_id not in allowed_ctids:
             continue
-        seen.add(ctid)
+        seen.add(acct_id)
         enabled = bool(item.get("enabled", False))
         raw_lot = item.get("lot_size")
         if raw_lot in (None, "", "null"):
@@ -151,14 +168,14 @@ def upsert_strategy_assignments(
             db.query(StrategyAccountAssignment)
             .filter(
                 StrategyAccountAssignment.strategy_id == strategy_id,
-                StrategyAccountAssignment.ctid == ctid,
+                StrategyAccountAssignment.ctrader_account_id == acct_id,
             )
             .first()
         )
         if not row:
             row = StrategyAccountAssignment(
                 strategy_id=strategy_id,
-                ctid=ctid,
+                ctrader_account_id=acct_id,
                 enabled=enabled,
                 lot_size=lot_size,
                 created_at=datetime.utcnow(),
@@ -167,18 +184,18 @@ def upsert_strategy_assignments(
         else:
             row.enabled = enabled
             row.lot_size = lot_size
-        out.append(serialize_assignment_row(ctid, enabled, lot_size))
+        out.append(serialize_assignment_row(acct_id, enabled, lot_size))
 
-    # Disable rows for ctids in allowed set but not in payload (toggle off)
     if allowed_ctids is not None:
         existing = (
             db.query(StrategyAccountAssignment)
             .filter(StrategyAccountAssignment.strategy_id == strategy_id)
             .all()
         )
-        payload_ctids = {x["ctid"] for x in out}
+        payload_ids = {x["ctrader_account_id"] for x in out}
         for row in existing:
-            if str(row.ctid) in allowed_ctids and str(row.ctid) not in payload_ctids:
+            rid = str(row.ctrader_account_id)
+            if rid in allowed_ctids and rid not in payload_ids:
                 row.enabled = False
     return out
 
@@ -191,14 +208,15 @@ def migrate_legacy_strategy_assignments(engine) -> None:
         with engine.connect() as conn:
             conn.execute(text(
                 "INSERT INTO strategy_account_assignments "
-                "(strategy_id, ctid, enabled, lot_size, created_at) "
+                "(strategy_id, ctrader_account_id, enabled, lot_size, created_at) "
                 "SELECT s.id, s.ctrader_account_id, TRUE, s.ctrader_account_lot, NOW() "
                 "FROM user_strategies s "
                 "WHERE s.ctrader_account_id IS NOT NULL "
                 "AND TRIM(s.ctrader_account_id) <> '' "
                 "AND NOT EXISTS ("
                 "  SELECT 1 FROM strategy_account_assignments a "
-                "  WHERE a.strategy_id = s.id AND a.ctid = s.ctrader_account_id"
+                "  WHERE a.strategy_id = s.id "
+                "  AND a.ctrader_account_id = s.ctrader_account_id"
                 ")"
             ))
             conn.commit()

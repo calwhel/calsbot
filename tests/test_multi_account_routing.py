@@ -41,6 +41,10 @@ class TestAssignmentTable(unittest.TestCase):
         self.assertIsNotNone(col)
         self.assertTrue(col.nullable)
         self.assertIsNotNone(StrategyAccountAssignment.__table__.columns.get("enabled"))
+        self.assertIsNotNone(
+            StrategyAccountAssignment.__table__.columns.get("ctrader_account_id")
+        )
+        self.assertIsNone(StrategyAccountAssignment.__table__.columns.get("ctid"))
 
     def test_normalize_account_lot(self):
         self.assertEqual(normalize_account_lot(0.25), 0.25)
@@ -117,12 +121,12 @@ class TestFireTargetsHelper(unittest.TestCase):
         prefs = SimpleNamespace(ctrader_account_id="999")
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.order_by.return_value.all.return_value = [
-            SimpleNamespace(ctid="111", lot_size=0.01, enabled=True),
-            SimpleNamespace(ctid="222", lot_size=0.25, enabled=True),
+            SimpleNamespace(ctrader_account_id="111", lot_size=0.01, enabled=True),
+            SimpleNamespace(ctrader_account_id="222", lot_size=0.25, enabled=True),
         ]
         targets = get_enabled_fire_targets(mock_db, strategy, prefs)
         self.assertEqual(len(targets), 2)
-        self.assertEqual(targets[0]["ctid"], "111")
+        self.assertEqual(targets[0]["ctrader_account_id"], "111")
         self.assertEqual(targets[1]["lot_size"], 0.25)
 
 
