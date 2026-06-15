@@ -78,6 +78,33 @@ def ensure_strategy_account_assignments_table(bind) -> None:
             raise
 
 
+def resolve_fire_target_routing(prefs, target: dict) -> Optional[dict]:
+    """Per enabled assignment: ctid, lot, host(s), is_live — never prefs default."""
+    from app.services.ctrader_client import (
+        _account_is_live,
+        _routing_hosts_for_account,
+        normalize_account_lot,
+    )
+
+    ctid = str(target.get("ctrader_account_id") or target.get("ctid") or "").strip()
+    if not ctid:
+        return None
+    try:
+        ctid_int = int(ctid)
+    except (TypeError, ValueError):
+        return None
+    is_live = _account_is_live(prefs, ctid_int)
+    hosts = _routing_hosts_for_account(prefs, ctid_int)
+    raw_lot = target.get("lot_size")
+    fixed_lots = normalize_account_lot(raw_lot) if raw_lot is not None else None
+    return {
+        "ctrader_account_id": ctid,
+        "hosts": hosts,
+        "is_live": is_live,
+        "fixed_lots": fixed_lots,
+    }
+
+
 def get_enabled_fire_targets(db, strategy, prefs) -> List[Dict[str, Any]]:
     """Return [{ctrader_account_id, lot_size}, ...] for live fan-out."""
     from app.strategy_models import StrategyAccountAssignment

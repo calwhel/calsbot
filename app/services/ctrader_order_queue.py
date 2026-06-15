@@ -13,7 +13,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,8 @@ class CtraderOrderJob:
     partial_close_pct: Optional[float] = None
     broker: str = "ctrader"
     ctrader_account_id: Optional[str] = None
+    ctrader_hosts: Optional[tuple] = None
+    account_is_live: Optional[bool] = None
     signal_mono: float = field(default_factory=time.monotonic)
     signal_generated_at: float = 0.0
     signal_price_source: str = "unknown"
@@ -603,6 +605,8 @@ async def _run_order_job(job: CtraderOrderJob) -> None:
             sl_pips=job.sl_pips,
             fixed_lots=job.fixed_lots,
             ctid=job.ctrader_account_id,
+            ctrader_hosts=job.ctrader_hosts,
+            account_is_live=job.account_is_live,
             latency=job.latency,
             execution_id=job.execution_id,
         )
