@@ -1265,6 +1265,64 @@ def _persist_account_host_metadata(user_id: int, ctid: int, host: str) -> None:
         db.close()
 
 
+def _routing_hosts_for_account(prefs, ctid_trader_account_id: int) -> List[str]:
+    """Hosts to try for a ctid — single host when demo/live known, else primary+alternate."""
+    known_live = _account_is_live(prefs, ctid_trader_account_id) if prefs else None
+    if known_live is False:
+        return [CTRADER_HOST_DEMO]
+    if known_live is True:
+        return [CTRADER_HOST_LIVE]
+    primary = _host_for_account(prefs, ctid_trader_account_id) if prefs else CTRADER_HOST_LIVE
+    hosts = [primary]
+    alt = _other_host(primary)
+    if alt not in hosts:
+        hosts.append(alt)
+    return hosts
+
+
+_balance_hosts_for_account = _routing_hosts_for_account
+
+
+def _should_try_alternate_order_host(error: Optional[str], *, known_account_type: bool) -> bool:
+    """When account demo/live is unknown, retry on the other host after routing failures."""
+    if known_account_type or not error:
+        return False
+    up = str(error).upper()
+    if "ACCOUNT AUTH FAILED" in up:
+        return True
+    if "ORDER_CANCELLED" in up or "ORDER_REJECTED" in up:
+        return True
+    return False
+
+
+def _log_order_route(
+    *,
+    execution_id: Optional[int],
+    ctid: int,
+    host: str,
+    result: dict,
+    volume_units: Optional[int] = None,
+) -> None:
+    is_live = host == CTRADER_HOST_LIVE
+    vol = volume_units if volume_units is not None else result.get("volume")
+    err = result.get("error")
+    if result.get("actual_fill") and float(result.get("actual_fill") or 0) > 0:
+        outcome = "fill"
+    elif err:
+        outcome = str(err)[:120]
+    else:
+        outcome = "no_fill"
+    logger.info(
+        "[order] exec=%s ctid=%s is_live=%s host=%s vol=%s → %s",
+        execution_id if execution_id is not None else "?",
+        ctid,
+        is_live,
+        host,
+        vol if vol is not None else "?",
+        outcome,
+    )
+
+
 async def place_market_order_resilient(
     *,
     user_id: Optional[int],
@@ -1282,13 +1340,17 @@ async def place_market_order_resilient(
     tp_pct: Optional[float] = None,
     label: str = "TradeHub",
     latency=None,
+    execution_id: Optional[int] = None,
 ) -> dict:
     """
-    Place a market order with token-refresh and live/demo host fallback.
-    Mirrors the price-feed auth path so test trades don't fail when isLive
-    metadata is stale or the access token just expired.
+    Place a market order with token-refresh and per-ctid live/demo host routing.
+    When account type is unknown, tries primary host then the alternate on
+    auth/cancel failures (demo ctids are invisible on the live host).
     """
-    host = _host_for_account(prefs, ctid) if prefs else CTRADER_HOST_LIVE
+    hosts = _routing_hosts_for_account(prefs, ctid) if prefs else [CTRADER_HOST_LIVE]
+    known_account_type = (
+        _account_is_live(prefs, ctid) is not None if prefs else False
+    )
     at = access_token
 
     async def _place_on(h: str) -> dict:
@@ -1324,14 +1386,51 @@ async def place_market_order_resilient(
             latency=latency,
         )
 
-    result = await _place_on(host)
+    async def _try_hosts(token: str) -> dict:
+        last: dict = {"order_id": None, "actual_fill": None, "error": "no host succeeded"}
+        for idx, h in enumerate(hosts):
+            result = await _place_on(h)
+            _log_order_route(
+                execution_id=execution_id,
+                ctid=ctid,
+                host=h,
+                result=result,
+                volume_units=volume_units,
+            )
+            fill = result.get("actual_fill")
+            if fill is not None and float(fill) > 0:
+                if user_id:
+                    _persist_account_host_metadata(user_id, ctid, h)
+                out = dict(result)
+                out["host"] = h
+                return out
+            err = result.get("error")
+            if err == "account auth failed":
+                last = result
+                if idx < len(hosts) - 1:
+                    continue
+                return result
+            if _should_try_alternate_order_host(err, known_account_type=known_account_type):
+                last = result
+                if idx < len(hosts) - 1:
+                    logger.info(
+                        "[order] exec=%s ctid=%s retrying on alternate host after: %s",
+                        execution_id or "?",
+                        ctid,
+                        err,
+                    )
+                    continue
+            return result
+        return last
+
+    result = await _try_hosts(at)
 
     if result.get("error") == "account auth failed" and user_id:
         new_at = await refresh_user_ctrader_token(user_id)
         if new_at:
             at = new_at
             logger.info(f"[cTrader] retrying order for user {user_id} after token refresh")
-            result = await _place_on(host)
+            result = await _try_hosts(new_at)
         elif is_refresh_denied(user_id):
             _notify_ctrader_relink_needed(user_id, "account auth failed")
 
@@ -1339,17 +1438,29 @@ async def place_market_order_resilient(
         vol = volume_units
         if vol is None and volume_lots is not None:
             vol = int(round(float(volume_lots) * 100_000))
-        recovered = await reconcile_order_fill_after_miss(
-            access_token=at,
-            ctid=ctid,
-            host=host,
-            symbol_name=symbol_name,
-            direction=direction,
-            entry_hint=entry_price,
-            volume_units=vol,
-        )
-        if recovered:
-            return recovered
+        for h in hosts:
+            recovered = await reconcile_order_fill_after_miss(
+                access_token=at,
+                ctid=ctid,
+                host=h,
+                symbol_name=symbol_name,
+                direction=direction,
+                entry_hint=entry_price,
+                volume_units=vol,
+            )
+            if recovered:
+                _log_order_route(
+                    execution_id=execution_id,
+                    ctid=ctid,
+                    host=h,
+                    result=recovered,
+                    volume_units=vol,
+                )
+                if user_id:
+                    _persist_account_host_metadata(user_id, ctid, h)
+                recovered = dict(recovered)
+                recovered["host"] = h
+                return recovered
 
     return result
 
@@ -2215,18 +2326,26 @@ async def amend_position_sl_result(
         if not ctid_str:
             return {"ok": False, "result": "failed", "broker_reply": {}, "error": "no ctrader account"}
         ctid = int(ctid_str)
-        host = _host_for_account(prefs, ctid)
+        hosts = _routing_hosts_for_account(prefs, ctid)
     finally:
         db.close()
-    return await modify_position_sltp_result(
-        access_token,
-        ctid,
-        int(position_id),
-        stop_loss_price=float(new_sl),
-        take_profit_price=keep_tp,
-        host=host,
-        exec_id=exec_id,
-    )
+
+    last_res = {"ok": False, "result": "failed", "broker_reply": {}, "error": "no host succeeded"}
+    for host in hosts:
+        res = await modify_position_sltp_result(
+            access_token,
+            ctid,
+            int(position_id),
+            stop_loss_price=float(new_sl),
+            take_profit_price=keep_tp,
+            host=host,
+            exec_id=exec_id,
+        )
+        if res.get("ok"):
+            _persist_account_host_metadata(user_id, ctid, host)
+            return res
+        last_res = res
+    return last_res
 
 
 async def partial_close_position(
@@ -2393,18 +2512,8 @@ async def _get_account_balance(
 
 
 def _balance_hosts_for_account(prefs, ctid_trader_account_id: int) -> List[str]:
-    """Demo/live host only — alternate host when account type is unknown."""
-    known_live = _account_is_live(prefs, ctid_trader_account_id) if prefs else None
-    if known_live is False:
-        return [CTRADER_HOST_DEMO]
-    if known_live is True:
-        return [CTRADER_HOST_LIVE]
-    primary = _host_for_account(prefs, ctid_trader_account_id) if prefs else CTRADER_HOST_LIVE
-    hosts = [primary]
-    alt = _other_host(primary)
-    if alt not in hosts:
-        hosts.append(alt)
-    return hosts
+    """Backward-compatible alias — see _routing_hosts_for_account."""
+    return _routing_hosts_for_account(prefs, ctid_trader_account_id)
 
 
 async def get_account_balance_resilient(
@@ -2624,10 +2733,14 @@ async def get_open_position_ids_for_user(user, *, ctid: Optional[str] = None) ->
             return None
         access_token           = prefs.ctrader_access_token
         ctid_trader_account_id = int(ctid_str)
-        _host = _host_for_account(prefs, ctid_trader_account_id)
+        hosts                  = _routing_hosts_for_account(prefs, ctid_trader_account_id)
     finally:
         db.close()
-    return await _get_open_position_ids(access_token, ctid_trader_account_id, host=_host)
+    for host in hosts:
+        ids = await _get_open_position_ids(access_token, ctid_trader_account_id, host=host)
+        if ids is not None:
+            return ids
+    return None
 
 
 def _normalize_deal_price(raw: float, entry_hint: Optional[float] = None) -> float:
@@ -2765,6 +2878,7 @@ async def place_ctrader_order_for_user(
     *,
     ctid: Optional[str] = None,
     latency=None,
+    execution_id: Optional[int] = None,
 ) -> Optional[dict]:
     """
     Place a live forex or index CFD order for a user via their connected cTrader account.
@@ -2796,7 +2910,8 @@ async def place_ctrader_order_for_user(
             return None
         access_token           = prefs.ctrader_access_token
         ctid_trader_account_id = int(ctid_str)
-        primary_host           = _host_for_account(prefs, ctid_trader_account_id)
+        _route_hosts           = _routing_hosts_for_account(prefs, ctid_trader_account_id)
+        primary_host           = _route_hosts[0]
     finally:
         db.close()
 
@@ -2894,6 +3009,7 @@ async def place_ctrader_order_for_user(
         sl_pct=sl_pct,
         tp_pct=tp_pct,
         latency=latency,
+        execution_id=execution_id,
     )
 
     if result.get("error"):
@@ -2902,6 +3018,7 @@ async def place_ctrader_order_for_user(
 
     actual_fill = result.get("actual_fill")
     position_id = result.get("position_id")
+    amend_host = result.get("host") or primary_host
     if actual_fill and actual_fill > 0 and position_id:
         fill_tp, fill_sl = compute_sltp_prices(direction, actual_fill, tp_pct, sl_pct)
         if not validate_sltp_sanity(direction, actual_fill, fill_sl, fill_tp):
@@ -2914,7 +3031,7 @@ async def place_ctrader_order_for_user(
                     int(position_id),
                     stop_loss_price=fill_sl,
                     take_profit_price=fill_tp,
-                    host=primary_host,
+                    host=amend_host,
                 )
                 if amended:
                     result["tp_price"] = fill_tp

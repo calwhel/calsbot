@@ -186,6 +186,7 @@ async def _try_reconcile_ambiguous(user, job: CtraderOrderJob, order_result: dic
     from app.models import UserPreference
     from app.services.ctrader_client import (
         _host_for_account,
+        _routing_hosts_for_account,
         is_ambiguous_order_error,
         reconcile_order_fill_after_miss,
         resolve_ctrader_ctid,
@@ -206,17 +207,21 @@ async def _try_reconcile_ambiguous(user, job: CtraderOrderJob, order_result: dic
             return None
         at = prefs.ctrader_access_token
         ctid = int(ctid_str)
-        host = _host_for_account(prefs, ctid)
+        hosts = _routing_hosts_for_account(prefs, ctid)
     finally:
         db.close()
-    return await reconcile_order_fill_after_miss(
-        access_token=at,
-        ctid=ctid,
-        host=host,
-        symbol_name=job.symbol,
-        direction=job.direction,
-        entry_hint=job.entry_price,
-    )
+    for host in hosts:
+        recovered = await reconcile_order_fill_after_miss(
+            access_token=at,
+            ctid=ctid,
+            host=host,
+            symbol_name=job.symbol,
+            direction=job.direction,
+            entry_hint=job.entry_price,
+        )
+        if recovered:
+            return recovered
+    return None
 
 
 async def _abort_stale_order(job: CtraderOrderJob, reason: str, age_s: float, slip_pips: float) -> None:
@@ -599,6 +604,7 @@ async def _run_order_job(job: CtraderOrderJob) -> None:
             fixed_lots=job.fixed_lots,
             ctid=job.ctrader_account_id,
             latency=job.latency,
+            execution_id=job.execution_id,
         )
         if order_result and not order_result.get("account_id"):
             if job.ctrader_account_id:
