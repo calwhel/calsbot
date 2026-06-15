@@ -131,7 +131,7 @@ class UserPreference(Base):
     ctrader_refresh_token = Column(String, nullable=True)
     ctrader_account_id    = Column(String, nullable=True)  # ctidTraderAccountId (selected account)
     ctrader_accounts      = Column(String, nullable=True)  # JSON list of all accounts from token
-    ctrader_mirror_accounts = Column(String, nullable=True)  # JSON list of ctids enabled for mirror execution
+    ctrader_added_accounts = Column(String, nullable=True)  # JSON ctids user added as execution targets
     forex_approved        = Column(Boolean, default=False, nullable=True)  # admin-approved for live forex
     preferred_exchange = Column(String, default="Bitunix")  # Bitunix (legacy: MEXC, OKX, KuCoin)
     position_size_percent = Column(Float, default=10.0)
