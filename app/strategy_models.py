@@ -32,6 +32,28 @@ class UserStrategy(Base):
 
     executions  = relationship("StrategyExecution", back_populates="strategy", cascade="all, delete-orphan")
     performance = relationship("StrategyPerformance", back_populates="strategy", uselist=False, cascade="all, delete-orphan")
+    account_assignments = relationship(
+        "StrategyAccountAssignment",
+        back_populates="strategy",
+        cascade="all, delete-orphan",
+    )
+
+
+class StrategyAccountAssignment(Base):
+    """Per-strategy × per-account execution target (enable + lot size)."""
+    __tablename__ = "strategy_account_assignments"
+    __table_args__ = (
+        UniqueConstraint("strategy_id", "ctid", name="uq_strategy_account_ctid"),
+    )
+
+    id          = Column(Integer, primary_key=True, index=True)
+    strategy_id = Column(Integer, ForeignKey("user_strategies.id"), nullable=False, index=True)
+    ctid        = Column(String(40), nullable=False)
+    enabled     = Column(Boolean, default=False, nullable=False, server_default="false")
+    lot_size    = Column(Float, nullable=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+    strategy = relationship("UserStrategy", back_populates="account_assignments")
 
 
 class StrategyExecution(Base):
@@ -254,6 +276,7 @@ def init_strategy_tables(engine):
         pass
     Base.metadata.create_all(bind=engine, tables=[
         UserStrategy.__table__,
+        StrategyAccountAssignment.__table__,
         StrategyExecution.__table__,
         StrategyPerformance.__table__,
         StrategyMarketplace.__table__,
@@ -410,3 +433,12 @@ def init_strategy_tables(engine):
             conn.commit()
         except Exception:
             pass
+
+    try:
+        from app.services.strategy_account_assignments import migrate_legacy_strategy_assignments
+        migrate_legacy_strategy_assignments(engine)
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "init_strategy_tables: legacy assignment migrate: %s", type(exc).__name__
+        )

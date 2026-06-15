@@ -11904,16 +11904,55 @@ function _lfDefaultLotHint(s) {
   return 'default';
 }
 
-function _lfStrategyAcctOptions(d, selected) {
-  const assignable = _lfAddedAccountObjects(d);
-  const defaultId = String(d.account_id || '');
-  let opts = `<option value="">Default (${defaultId ? 'acct #'+defaultId : 'selected'})</option>`;
-  assignable.forEach(a => {
-    const ctid = String(a.ctidTraderAccountId || '');
-    const sel = String(selected || '') === ctid ? 'selected' : '';
-    opts += `<option value="${ctid}" ${sel}>${_lfAcctLabel(a)}</option>`;
+function _lfAssignmentByCtid(s) {
+  const m = {};
+  (s.account_assignments || []).forEach(a => {
+    m[String(a.ctid)] = a;
   });
-  return opts;
+  return m;
+}
+
+function _lfEnabledAcctBadges(d, s) {
+  const byCtid = _lfAssignmentByCtid(s);
+  const linked = d.accounts || [];
+  const enabled = (s.account_assignments || []).filter(a => a.enabled);
+  if (!enabled.length) {
+    return '<span style="font-size:11px;color:var(--muted)">No accounts enabled</span>';
+  }
+  return enabled.map(a => {
+    const acct = linked.find(x => String(x.ctidTraderAccountId) === String(a.ctid));
+    return _lfAcctChip(a.ctid, !!(acct && acct.isLive));
+  }).join(' ');
+}
+
+function _lfStratAcctRowsHtml(d, s) {
+  const added = _lfAddedAccountObjects(d);
+  if (!added.length) {
+    return '<div style="font-size:12px;color:var(--muted);padding:8px 0">Add accounts above first.</div>';
+  }
+  const byCtid = _lfAssignmentByCtid(s);
+  const lotPh = _lfDefaultLotHint(s);
+  return added.map(acct => {
+    const ctid = String(acct.ctidTraderAccountId);
+    const isLive = !!acct.isLive;
+    const asn = byCtid[ctid] || { enabled: false, lot_size: null };
+    const lotVal = asn.lot_size != null ? Number(asn.lot_size) : '';
+    const rowCls = isLive ? 'lf-acct-row-live' : 'lf-acct-row-demo';
+    return `<div class="lf-strat-acct-row ${rowCls}" data-ctid="${ctid}" data-live="${isLive}">
+      <label style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;margin:0">
+        <input type="checkbox" ${asn.enabled ? 'checked' : ''}
+          onchange="lfToggleStratAcct(${s.id}, '${ctid}', this.checked, ${isLive})" />
+        <span>${_lfAcctLabel(acct)}</span>
+        ${isLive ? '<span class="lf-assign-live-warn" style="margin:0">REAL MONEY</span>' : ''}
+      </label>
+      <input type="number" class="lf-input lf-strat-lot" id="lf-lot-${s.id}-${ctid}"
+        min="0.01" step="0.01" placeholder="${escHtml(lotPh)}"
+        value="${lotVal !== '' && !Number.isNaN(lotVal) ? lotVal : ''}"
+        ${asn.enabled ? '' : 'disabled'}
+        style="width:88px;font-size:12px"
+        onchange="lfSaveStratAssignments(${s.id})" />
+    </div>`;
+  }).join('');
 }
 
 function renderLFStrategyAssignment(d) {
@@ -11922,19 +11961,8 @@ function renderLFStrategyAssignment(d) {
   const nAdded = (d.added_accounts || []).length;
   const cards = strats.map(s => {
     const paused = s.status === 'paused';
-    const cur = s.ctrader_account_id || '';
-    const curLot = s.ctrader_account_lot != null ? Number(s.ctrader_account_lot) : '';
-    const lotPlaceholder = _lfDefaultLotHint(s);
-    const acctMeta = cur
-      ? (d.accounts || []).find(x => String(x.ctidTraderAccountId) === String(cur))
-      : null;
-    const isLiveAssign = !!(acctMeta && acctMeta.isLive);
-    const assignCls = cur
-      ? (isLiveAssign ? 'lf-assign-live' : 'lf-assign-demo')
-      : 'lf-pnl-flat';
-    const badge = cur
-      ? _lfAcctChip(cur, isLiveAssign)
-      : '<span style="font-size:11px;color:var(--muted)">Default account</span>';
+    const enabledN = (s.account_assignments || []).filter(a => a.enabled).length;
+    const assignCls = enabledN > 0 ? 'lf-pnl-flat' : 'lf-pnl-flat';
     const sym = (s.symbols || [])[0] || '—';
     const wr = s.win_rate != null ? s.win_rate : 0;
     const wrDisp = s.closed_count > 0 && s.win_rate != null ? `${wr}%` : '—';
@@ -11942,15 +11970,13 @@ function renderLFStrategyAssignment(d) {
     const netPips = s.total_pips_pnl;
     const hasPips = s.closed_count > 0 && netPips != null;
     const pipsLbl = s.asset_class === 'index' ? 'pts' : 'pips';
-    const lotVal = curLot !== '' && !Number.isNaN(curLot) ? curLot : '';
-    const sizeHint = lotVal ? `${lotVal} lots` : (s.size_label || lotPlaceholder);
+    const badge = _lfEnabledAcctBadges(d, s);
     return `<div class="strat-card live-card lf-assign-card ${assignCls}" data-lf-assign-id="${s.id}">
       <div class="lf-card-top">
         <div class="card-hd lf-card-hd">
           <div class="dot ${paused ? 'paused' : 'active'}"></div>
           <div class="card-name">${escHtml(s.name)}</div>
           <span class="pill ${paused ? 'paused' : 'active'}">${paused ? 'PAUSED' : 'LIVE'}</span>
-          <span class="lf-strat-acct-badge">${badge}</span>
         </div>
       </div>
       <div class="card-meta lf-card-meta">
@@ -11958,9 +11984,9 @@ function renderLFStrategyAssignment(d) {
         <span class="card-meta-sep"></span>
         <span>${escHtml(s.timeframe || '—')}</span>
         <span class="card-meta-sep"></span>
-        <span>${escHtml(sizeHint)}</span>
+        <span>${enabledN ? enabledN+' account'+(enabledN===1?'':'s') : 'default'}</span>
       </div>
-      ${isLiveAssign ? '<div class="lf-assign-live-warn">REAL MONEY</div>' : ''}
+      <div style="margin:6px 0 4px;display:flex;flex-wrap:wrap;gap:6px">${badge}</div>
       <div class="card-metrics lf-card-metrics" style="margin-bottom:0">
         <div class="cm-item">
           <div class="cm-val">${s.closed_count || 0}</div>
@@ -11976,28 +12002,15 @@ function renderLFStrategyAssignment(d) {
           <div class="cm-lbl">Net ${pipsLbl}</div>
         </div>
       </div>
-      <div class="lf-assign-controls">
-        <div>
-          <label>Execution account</label>
-          <select id="lf-acct-${s.id}" class="lf-input" style="width:100%;font-size:12px" onchange="lfSaveStrategyAssignment(${s.id})">
-            ${_lfStrategyAcctOptions(d, cur)}
-          </select>
-        </div>
-        <div class="lf-assign-lot-row">
-          <div>
-            <label>Lots on this account</label>
-            <input type="number" id="lf-lot-${s.id}" class="lf-input" min="0.01" step="0.01"
-              placeholder="${escHtml(lotPlaceholder)}" value="${lotVal !== '' ? lotVal : ''}"
-              style="width:100%;font-size:12px" onchange="lfSaveStrategyAssignment(${s.id})" />
-          </div>
-          <div style="font-size:11px;color:var(--muted);line-height:1.35;padding-top:18px">Blank = strategy default size</div>
-        </div>
+      <div class="lf-strat-acct-rows">
+        <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Accounts — enable + lot size</div>
+        ${_lfStratAcctRowsHtml(d, s)}
       </div>
     </div>`;
   }).join('');
   const hint = nAdded
-    ? `${nAdded} added account${nAdded===1?'':'s'} — any strategy can run on any of them.`
-    : 'Add accounts above, then assign each strategy to one account and optional lot size.';
+    ? `${nAdded} added account${nAdded===1?'':'s'} — enable one or more per strategy. Multiple enabled = parallel fire.`
+    : 'Add accounts above, then enable accounts and set lot size per strategy.';
   return `<div class="lf-card" style="margin-bottom:16px">
     <div class="lf-section-title">Strategy Account Assignment</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.45">${hint}</div>
@@ -12005,53 +12018,76 @@ function renderLFStrategyAssignment(d) {
   </div>`;
 }
 
-async function lfSaveStrategyAssignment(strategyId) {
-  const acctSel = document.getElementById(`lf-acct-${strategyId}`);
-  const lotInp = document.getElementById(`lf-lot-${strategyId}`);
-  if (!acctSel) return;
-  const ctid = acctSel.value || '';
-  const lotRaw = (lotInp && lotInp.value || '').trim();
-  const lot = lotRaw === '' ? null : parseFloat(lotRaw);
-  if (lotRaw !== '' && (Number.isNaN(lot) || lot < 0.01)) {
-    toast('Lot size must be at least 0.01', 'error');
-    return;
-  }
-  const linked = (_lfLiveData?.accounts || []);
-  const defaultId = String(_lfLiveData?.account_id || '');
-  const effectiveCtid = ctid || defaultId;
-  const acct = linked.find(a => String(a.ctidTraderAccountId) === String(effectiveCtid));
-  const isLive = !!(acct && acct.isLive);
-  const lotStr = lot != null ? `${lot} lot${lot === 1 ? '' : 's'}` : 'default size';
-  const doSave = async () => {
-    try {
-      const r = await _apiFetch(`/api/strategies/${strategyId}/assign-account?uid=${encodeURIComponent(UID)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ctrader_account_id: ctid || null, ctrader_account_lot: lot }),
-      });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${r.status}`);
-      }
-      toast('Strategy assignment saved', 'success');
-      _fcDel('/api/live-forex/account?uid='+UID);
-      loadLiveForex();
-    } catch (e) {
-      toast(`Assign failed: ${e.message || e}`, 'error');
-      loadLiveForex();
+function _lfCollectStratAssignments(strategyId) {
+  const card = document.querySelector(`[data-lf-assign-id="${strategyId}"]`);
+  if (!card) return [];
+  const out = [];
+  card.querySelectorAll('.lf-strat-acct-row').forEach(row => {
+    const ctid = row.getAttribute('data-ctid');
+    if (!ctid) return;
+    const cb = row.querySelector('input[type=checkbox]');
+    const lotInp = row.querySelector('.lf-strat-lot');
+    const lotRaw = (lotInp && lotInp.value || '').trim();
+    let lot_size = null;
+    if (lotRaw !== '') {
+      const v = parseFloat(lotRaw);
+      if (!Number.isNaN(v)) lot_size = v;
     }
-  };
-  if (isLive) {
+    out.push({ ctid, enabled: !!(cb && cb.checked), lot_size });
+  });
+  return out;
+}
+
+async function lfPutStratAssignments(strategyId, assignments) {
+  const r = await _apiFetch(`/api/strategies/${strategyId}/account-assignments?uid=${encodeURIComponent(UID)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ assignments }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(err.detail || `HTTP ${r.status}`);
+  }
+  toast('Strategy assignments saved', 'success');
+  _fcDel('/api/live-forex/account?uid='+UID);
+  loadLiveForex();
+}
+
+async function lfSaveStratAssignments(strategyId) {
+  const assignments = _lfCollectStratAssignments(strategyId);
+  const enablingLive = assignments.filter(a => {
+    if (!a.enabled) return false;
+    const row = document.querySelector(`[data-lf-assign-id="${strategyId}"] .lf-strat-acct-row[data-ctid="${a.ctid}"]`);
+    return row && row.getAttribute('data-live') === 'true';
+  });
+  if (enablingLive.length) {
+    const demoOn = assignments.some(a => {
+      if (!a.enabled) return false;
+      const row = document.querySelector(`[data-lf-assign-id="${strategyId}"] .lf-strat-acct-row[data-ctid="${a.ctid}"]`);
+      return row && row.getAttribute('data-live') !== 'true';
+    });
+    const live = enablingLive[0];
+    const lotStr = live.lot_size != null ? `${live.lot_size} lot${live.lot_size === 1 ? '' : 's'}` : 'default size';
     showConfirm(
-      'Assign to LIVE account',
-      `This strategy will place REAL orders on live account #${effectiveCtid} at ${lotStr}. Continue?`,
-      'Assign to live',
+      'Enable LIVE account',
+      `This strategy will place REAL orders on live #${live.ctid} at ${lotStr}${demoOn ? ', in parallel with demo' : ''}. Continue?`,
+      'Enable live',
       null,
-      doSave,
+      async () => {
+        try { await lfPutStratAssignments(strategyId, assignments); }
+        catch (e) { toast(`Save failed: ${e.message || e}`, 'error'); loadLiveForex(); }
+      },
     );
     return;
   }
-  await doSave();
+  try { await lfPutStratAssignments(strategyId, assignments); }
+  catch (e) { toast(`Save failed: ${e.message || e}`, 'error'); loadLiveForex(); }
+}
+
+async function lfToggleStratAcct(strategyId, ctid, enabled, isLive) {
+  const lotInp = document.getElementById(`lf-lot-${strategyId}-${ctid}`);
+  if (lotInp) lotInp.disabled = !enabled;
+  await lfSaveStratAssignments(strategyId);
 }
 
 function renderLFAccountsSection(d) {
@@ -12550,13 +12586,7 @@ function renderLFLiveStrategies(strats, positions, health) {
     const brokerChip = _lfBrokerChipHtml(health);
     const lastFired = _lfRelTime(s.last_fired_at);
     const pipsLbl = s.asset_class === 'index' ? 'pts' : 'pips';
-    const stratAcct = s.ctrader_account_id || '';
-    const stratAcctBadge = stratAcct
-      ? (() => {
-          const a = (_lfLiveData?.accounts || []).find(x => String(x.ctidTraderAccountId) === String(stratAcct));
-          return _lfAcctChip(stratAcct, !!(a && a.isLive));
-        })()
-      : '';
+    const stratAcctBadge = _lfEnabledAcctBadges(_lfLiveData || {}, s);
     return `<div class="strat-card live-card ${accentCls}" data-lf-strat-id="${s.id}">
       <div class="lf-card-top">
         <div class="card-hd lf-card-hd">
@@ -12846,6 +12876,12 @@ async function lfTestTrade(symbol) {
 .lf-assign-card.strat-card.live-card.lf-assign-demo::after { background:#3b82f6; }
 .lf-assign-controls { display:grid; grid-template-columns:1fr 88px; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
 .lf-assign-controls .lf-assign-lot-row { grid-column:1 / -1; display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; }
+.lf-strat-acct-rows { margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+.lf-strat-acct-row { display:flex; align-items:center; gap:10px; padding:10px 8px; margin-bottom:6px; border-radius:8px; background:var(--surface2); border:1px solid var(--border); }
+.lf-strat-acct-row.lf-acct-row-live { border-left:3px solid #e5484d; }
+.lf-strat-acct-row.lf-acct-row-demo { border-left:3px solid #3b82f6; }
+.lf-strat-acct-row label { cursor:pointer; }
+.lf-strat-acct-row .lf-strat-lot { flex-shrink:0; }
 .lf-assign-controls label { font-size:10px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; margin-bottom:4px; display:block; }
 .lf-assign-live-warn { font-size:10px; color:#ff6b6b; font-weight:700; margin-top:4px; }
 @media (max-width:480px) {
