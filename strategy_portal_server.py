@@ -99,6 +99,7 @@ _LF_OPEN_POS_SQL_EXT = """
     SELECT e.id, e.strategy_id, e.symbol, e.direction, e.entry_price,
            e.tp_price AS tp1_price, e.sl_price, e.current_sl,
            e.breakeven_applied, e.pnl_pct, e.fired_at,
+           e.ctrader_account_id, e.signal_group_id,
            s.name AS strategy_name, e.asset_class
     FROM strategy_executions e
     JOIN user_strategies s ON s.id = e.strategy_id
@@ -133,6 +134,53 @@ def _lf_safe_ctrader_accounts(raw) -> list:
     except Exception:
         logger.warning("[live-forex] invalid ctrader_accounts JSON — using []")
         return []
+
+
+def _lf_json_safe(obj):
+    """Recursively coerce Decimals and other non-JSON types for Live Forex responses."""
+    from decimal import Decimal
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {str(k): _lf_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_lf_json_safe(v) for v in obj]
+    if hasattr(obj, "isoformat"):
+        try:
+            return obj.isoformat()
+        except Exception:
+            pass
+    return str(obj)
+
+
+def _lf_live_forex_json_response(payload: dict, **kwargs):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(_lf_json_safe(payload), **kwargs)
+
+
+def _lf_mirror_accounts_enabled(prefs) -> list:
+    from app.services.ctrader_client import parse_mirror_accounts_json
+    return parse_mirror_accounts_json(
+        getattr(prefs, "ctrader_mirror_accounts", None) if prefs else None
+    )
+
+
+def _lf_enrich_ctrader_accounts(accounts: list, prefs, balances: dict) -> list:
+    """Attach mirror_enabled + balance per linked account."""
+    enabled = set(_lf_mirror_accounts_enabled(prefs))
+    out = []
+    for a in accounts or []:
+        if not isinstance(a, dict):
+            continue
+        ctid = str(a.get("ctidTraderAccountId") or a.get("ctid") or "").strip()
+        row = dict(a)
+        row["mirror_enabled"] = ctid in enabled if ctid else False
+        if ctid and ctid in balances:
+            row["balance"] = balances.get(ctid)
+        out.append(row)
+    return out
 
 
 def _lf_load_open_positions(db, uid: int) -> list:
@@ -1450,6 +1498,11 @@ _CTRADER_COLUMN_MIGRATIONS = [
         "user_preferences",
         "ctrader_accounts",
         "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_accounts TEXT",
+    ),
+    (
+        "user_preferences",
+        "ctrader_mirror_accounts",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_mirror_accounts TEXT",
     ),
     (
         "user_preferences",
@@ -12244,6 +12297,55 @@ async def api_ctrader_select_account(uid: str = Query(...), request: Request = N
         db.close()
 
 
+@app.post("/api/live-forex/mirror-account")
+async def api_live_forex_mirror_account(uid: str = Query(...), request: Request = None):
+    """Enable/disable a cTrader account for mirror execution."""
+    import json as _json
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    from app.services.ctrader_client import parse_mirror_accounts_json
+
+    body = await request.json()
+    ctid = str(body.get("ctid") or body.get("account_id") or "").strip()
+    if not ctid:
+        raise HTTPException(status_code=400, detail="ctid required")
+    enabled = body.get("enabled")
+    if enabled is None:
+        raise HTTPException(status_code=400, detail="enabled required")
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.ctrader_access_token:
+            raise HTTPException(status_code=400, detail="Not connected")
+
+        linked = _lf_safe_ctrader_accounts(prefs.ctrader_accounts)
+        valid = {
+            str(a.get("ctidTraderAccountId")).strip()
+            for a in linked
+            if a.get("ctidTraderAccountId") is not None
+        }
+        if ctid not in valid:
+            raise HTTPException(status_code=400, detail="Account not linked to your cTrader token")
+
+        current = parse_mirror_accounts_json(prefs.ctrader_mirror_accounts)
+        if enabled:
+            if ctid not in current:
+                current.append(ctid)
+        else:
+            current = [c for c in current if c != ctid]
+
+        prefs.ctrader_mirror_accounts = _json.dumps(current) if current else None
+        db.commit()
+        _invalidate_user_cache(uid)
+        return JSONResponse({"ok": True, "mirror_accounts": current})
+    finally:
+        db.close()
+
+
 @app.delete("/api/ctrader/disconnect")
 async def api_ctrader_disconnect(uid: str = Query(...)):
     from app.database import SessionLocal
@@ -12258,6 +12360,7 @@ async def api_ctrader_disconnect(uid: str = Query(...)):
             prefs.ctrader_access_token  = None
             prefs.ctrader_refresh_token = None
             prefs.ctrader_account_id    = None
+            prefs.ctrader_mirror_accounts = None
             db.commit()
         return JSONResponse({"ok": True})
     finally:
@@ -12609,6 +12712,59 @@ async def api_live_forex_account(
     balance = None
     accounts = snap["accounts"]
     _acct_id_for_bal = (prefs.ctrader_account_id or "").strip() if prefs else ""
+    _account_balances: Dict[str, float] = {}
+
+    async def _fetch_one_balance(ctid: str):
+        if not (prefs and prefs.ctrader_access_token and ctid):
+            return
+        _bal_key = f"ctrader_balance:{user.id}:{ctid}"
+        _cached = get_cache(_bal_key)
+        if _cached == "__miss__":
+            return
+        if _cached is not None:
+            _account_balances[ctid] = float(_cached)
+            return
+        try:
+            from app.services.ctrader_client import get_account_balance_resilient
+            bal = await asyncio.wait_for(
+                get_account_balance_resilient(
+                    prefs.ctrader_access_token,
+                    int(ctid),
+                    prefs=prefs,
+                    user_id=user.id,
+                ),
+                timeout=8.0,
+            )
+            if bal is not None:
+                _account_balances[ctid] = float(bal)
+                set_cache(_bal_key, bal, ttl_seconds=60)
+            else:
+                set_cache(_bal_key, "__miss__", ttl_seconds=30)
+        except Exception as _be:
+            logger.warning(
+                f"[live-forex] balance fetch uid={uid} ctid={ctid}: "
+                f"{type(_be).__name__}"
+            )
+            set_cache(_bal_key, "__miss__", ttl_seconds=30)
+
+    async def _fetch_balances():
+        nonlocal balance
+        ctids: set = set(_lf_mirror_accounts_enabled(prefs))
+        if _acct_id_for_bal:
+            ctids.add(_acct_id_for_bal)
+        for a in accounts or []:
+            if isinstance(a, dict):
+                c = str(a.get("ctidTraderAccountId") or "").strip()
+                if c:
+                    ctids.add(c)
+        if not ctids:
+            return
+        await asyncio.gather(
+            *[_fetch_one_balance(c) for c in ctids],
+            return_exceptions=True,
+        )
+        if _acct_id_for_bal and _acct_id_for_bal in _account_balances:
+            balance = _account_balances[_acct_id_for_bal]
 
     async def _sync_ctrader_accounts():
         nonlocal accounts
@@ -12643,48 +12799,16 @@ async def api_live_forex_account(
         except Exception as _ae:
             logger.warning(f"[live-forex] account sync failed uid={uid}: {type(_ae).__name__}")
 
-    async def _fetch_balance():
-        nonlocal balance
-        if not _acct_id_for_bal:
-            return
-        _bal_key = f"ctrader_balance:{user.id}:{_acct_id_for_bal}"
-        _cached = get_cache(_bal_key)
-        if _cached == "__miss__":
-            return
-        if _cached is not None:
-            balance = _cached
-            return
-        try:
-            from app.services.ctrader_client import get_account_balance_resilient
-            balance = await asyncio.wait_for(
-                get_account_balance_resilient(
-                    prefs.ctrader_access_token,
-                    int(_acct_id_for_bal),
-                    prefs=prefs,
-                    user_id=user.id,
-                ),
-                timeout=8.0,
-            )
-            if balance is not None:
-                set_cache(_bal_key, balance, ttl_seconds=60)
-            else:
-                set_cache(_bal_key, "__miss__", ttl_seconds=30)
-        except Exception as _be:
-            logger.warning(
-                f"[live-forex] balance fetch uid={uid} ctid={_acct_id_for_bal}: "
-                f"{type(_be).__name__}"
-            )
-            set_cache(_bal_key, "__miss__", ttl_seconds=30)
-
     try:
         await asyncio.wait_for(
-            asyncio.gather(_sync_ctrader_accounts(), _fetch_balance(), return_exceptions=True),
+            asyncio.gather(_sync_ctrader_accounts(), _fetch_balances(), return_exceptions=True),
             timeout=9.0,
         )
     except asyncio.TimeoutError:
-        _stale_bal = get_cache(f"ctrader_balance:{user.id}:{_acct_id_for_bal}")
-        if isinstance(_stale_bal, (int, float)):
-            balance = _stale_bal
+        if _acct_id_for_bal:
+            _stale_bal = get_cache(f"ctrader_balance:{user.id}:{_acct_id_for_bal}")
+            if isinstance(_stale_bal, (int, float)):
+                balance = _stale_bal
 
     positions = _lf_enrich_open_positions(snap.get("positions") or [])
     sparkline_by_id = snap.get("sparkline_by_id") or {}
@@ -12709,11 +12833,15 @@ async def api_live_forex_account(
         exec_ready, exec_blockers = False, ["data_unavailable"]
 
     try:
+        _mirror_enabled = _lf_mirror_accounts_enabled(prefs)
+        _accounts_out = _lf_enrich_ctrader_accounts(accounts, prefs, _account_balances)
         payload = {
             "connected": True,
             "forex_approved": snap["forex_approved"],
             "account_id": (prefs.ctrader_account_id or "") if prefs else "",
-            "accounts": accounts,
+            "mirror_accounts": _mirror_enabled,
+            "accounts": _accounts_out,
+            "account_balances": _account_balances,
             "balance": round(balance, 2) if balance is not None else None,
             "equity": round(balance, 2) if balance is not None else None,
             "open_positions": positions,
@@ -12724,13 +12852,13 @@ async def api_live_forex_account(
             "execution_blockers": exec_blockers,
         }
         set_cache(_cache_key, payload, ttl_seconds=12)
-        return JSONResponse(payload)
+        return _lf_live_forex_json_response(payload)
     except Exception as exc:
         logger.exception(f"[live-forex] response assembly uid={uid}: {exc}")
         stale = get_cache(_cache_key)
         if isinstance(stale, dict):
-            return JSONResponse({**stale, "cached": True, "stale": True, "degraded": True})
-        return JSONResponse(_lf_degraded_account_payload(
+            return _lf_live_forex_json_response({**stale, "cached": True, "stale": True, "degraded": True})
+        return _lf_live_forex_json_response(_lf_degraded_account_payload(
             forex_approved=bool(snap.get("forex_approved")),
             connected=True,
         ))

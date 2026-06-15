@@ -1,4 +1,4 @@
-"""Multi-account cTrader routing — Commit 1 (routing core)."""
+"""Multi-account cTrader routing + mirror execution."""
 import os
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("SECRET_KEY", "test-secret")
@@ -8,9 +8,66 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.ctrader_client import resolve_ctrader_ctid
+from app.services.ctrader_client import (
+    get_mirror_execution_ctids,
+    parse_mirror_accounts_json,
+    resolve_ctrader_ctid,
+)
 from app.services.ctrader_order_queue import CtraderOrderJob, CtraderSlAmendJob
 from app.strategy_models import UserStrategy
+
+
+class TestMirrorExecutionCtid(unittest.TestCase):
+    def test_mirror_accounts_list(self):
+        prefs = SimpleNamespace(
+            ctrader_mirror_accounts='["111","222"]',
+            ctrader_account_id="999",
+        )
+        self.assertEqual(get_mirror_execution_ctids(prefs), ["111", "222"])
+
+    def test_empty_mirror_falls_back_to_default(self):
+        prefs = SimpleNamespace(
+            ctrader_mirror_accounts=None,
+            ctrader_account_id="999",
+        )
+        self.assertEqual(get_mirror_execution_ctids(prefs), ["999"])
+
+    def test_parse_mirror_json(self):
+        self.assertEqual(parse_mirror_accounts_json('["1","2"]'), ["1", "2"])
+        self.assertEqual(parse_mirror_accounts_json(None), [])
+
+
+class TestSignalGroupSchema(unittest.TestCase):
+    def test_execution_has_signal_group_id(self):
+        from app.strategy_models import StrategyExecution
+        col = StrategyExecution.__table__.columns.get("signal_group_id")
+        self.assertIsNotNone(col)
+        self.assertTrue(col.nullable)
+
+
+class TestMirrorFanOut(unittest.TestCase):
+    def test_fire_path_uses_gather_for_mirror_jobs(self):
+        from app.services import strategy_executor as se
+        src = inspect.getsource(se)
+        self.assertIn("asyncio.gather", src)
+        self.assertIn("get_mirror_execution_ctids", src)
+        self.assertIn("signal_group_id", src)
+
+    def test_order_worker_spawns_concurrent_tasks(self):
+        src = inspect.getsource(
+            __import__(
+                "app.services.ctrader_order_queue",
+                fromlist=["_ctrader_order_worker"],
+            )._ctrader_order_worker
+        )
+        self.assertIn("asyncio.create_task(_run_order_job(job))", src)
+
+
+class TestMirrorApi(unittest.TestCase):
+    def test_mirror_endpoint_exists(self):
+        import strategy_portal_server as sps
+        routes = [getattr(r, "path", "") for r in sps.app.routes]
+        self.assertIn("/api/live-forex/mirror-account", routes)
 
 
 class TestResolveCtraderCtid(unittest.TestCase):

@@ -60,6 +60,7 @@ class StrategyExecution(Base):
     ctrader_order_id  = Column(String(80), nullable=True)  # cTrader live forex orders
     ctrader_position_id = Column(String(40), nullable=True)
     ctrader_account_id  = Column(String(40), nullable=True)
+    signal_group_id     = Column(String(40), nullable=True, index=True)  # links mirror legs of one signal
     broker_volume_units = Column(Integer, nullable=True)
     breakeven_applied   = Column(Boolean, default=False, server_default="false")
     tp1_done            = Column(Boolean, default=False, server_default="false")
@@ -308,6 +309,7 @@ def init_strategy_tables(engine):
             ("spread_pips_applied",  "FLOAT"),
             ("ctrader_position_id",  "VARCHAR(40)"),
             ("ctrader_account_id",   "VARCHAR(40)"),
+            ("signal_group_id",      "VARCHAR(40)"),
             ("broker_volume_units",  "INTEGER"),
             ("mfe_pips",             "NUMERIC"),
             ("mae_pips",             "NUMERIC"),

@@ -498,6 +498,143 @@ async def _process_sl_amend_job(job: CtraderSlAmendJob) -> None:
         fut.set_result(res)
 
 
+async def _run_sl_amend_job(job: CtraderSlAmendJob) -> None:
+    try:
+        await _process_sl_amend_job(job)
+    except Exception as exc:
+        fut = getattr(job, "_result_fut", None)
+        if fut and not fut.done():
+            fut.set_result({
+                "ok": False,
+                "result": "failed",
+                "error": str(exc),
+                "broker_reply": {},
+            })
+    finally:
+        _get_priority_queue().task_done()
+
+
+async def _run_order_job(job: CtraderOrderJob) -> None:
+    """Place one order — runs concurrently with other accounts' jobs."""
+    if job.latency is not None:
+        job.latency.mark_dequeue()
+    queue_wait_ms = -1
+    if job.latency and job.latency.queued_mono and job.latency.dequeue_mono:
+        queue_wait_ms = int((job.latency.dequeue_mono - job.latency.queued_mono) * 1000)
+    logger.info(
+        "[ctrader-queue] placing exec#%s acct=%s %s %s user=%s queue_wait=%sms",
+        job.execution_id,
+        job.ctrader_account_id or "?",
+        job.symbol,
+        job.direction,
+        job.user_id,
+        queue_wait_ms,
+    )
+    try:
+        from app.database import SessionLocal
+        from app.strategy_models import StrategyExecution
+        from app.services.order_stale_guard import check_signal_stale, get_stale_verdict
+
+        _db_pre = SessionLocal()
+        try:
+            _ex_pre = _db_pre.query(StrategyExecution).filter(
+                StrategyExecution.id == job.execution_id
+            ).first()
+            if _ex_pre:
+                _notes = _ex_pre.notes or ""
+                if (
+                    _ex_pre.outcome == "CANCELLED"
+                    or "stale_guard_blocked" in _notes
+                    or get_stale_verdict(job.execution_id) == "blocked"
+                ):
+                    logger.info(
+                        "[ctrader-queue] exec#%s already stale-blocked — skip placement",
+                        job.execution_id,
+                    )
+                    return
+        finally:
+            _db_pre.close()
+
+        stale = check_signal_stale(
+            symbol=job.symbol,
+            direction=job.direction,
+            signal_price=job.entry_price,
+            signal_generated_at=job.signal_generated_at or None,
+            signal_mono=job.signal_mono,
+            price_source=job.signal_price_source,
+            kline_source=job.signal_kline_source,
+            live_source=job.signal_live_source,
+            execution_id=job.execution_id,
+        )
+        if stale:
+            reason, age_s, slip_pips, _sig_src, _now_src = stale
+            await _abort_stale_order(job, reason, age_s, slip_pips)
+            return
+
+        from app.database import SessionLocal
+        from app.models import User
+        from app.services.ctrader_client import place_ctrader_order_for_user
+
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == job.user_id).first()
+        finally:
+            db.close()
+
+        if not user:
+            await _apply_order_result(job, None)
+            return
+
+        order_result = await place_ctrader_order_for_user(
+            user=user,
+            symbol=job.symbol,
+            direction=job.direction,
+            entry_price=job.entry_price,
+            tp_pct=job.tp_pct,
+            sl_pct=job.sl_pct,
+            risk_pct=job.risk_pct,
+            risk_usd=job.risk_usd,
+            use_risk_pct=job.use_risk_pct,
+            sl_pips=job.sl_pips,
+            fixed_lots=job.fixed_lots,
+            ctid=job.ctrader_account_id,
+            latency=job.latency,
+        )
+        if order_result and not order_result.get("account_id"):
+            if job.ctrader_account_id:
+                order_result["account_id"] = job.ctrader_account_id
+            else:
+                from app.models import UserPreference
+                db2 = SessionLocal()
+                try:
+                    prefs = db2.query(UserPreference).filter(
+                        UserPreference.user_id == user.id
+                    ).first()
+                    if prefs and prefs.ctrader_account_id:
+                        order_result["account_id"] = prefs.ctrader_account_id
+                finally:
+                    db2.close()
+
+        if order_result:
+            from app.models import User as _User
+            db3 = SessionLocal()
+            try:
+                user3 = db3.query(_User).filter(_User.id == job.user_id).first()
+            finally:
+                db3.close()
+            if user3:
+                recovered = await _try_reconcile_ambiguous(user3, job, order_result)
+                if recovered:
+                    order_result = recovered
+
+        await _apply_order_result(job, order_result)
+    except Exception as e:
+        logger.exception(f"[ctrader-queue] job exec #{job.execution_id} failed: {e}")
+        await _apply_order_result(job, {"error": str(e)})
+    finally:
+        _get_queue().task_done()
+
+
 async def _dequeue_next_job():
     """Priority lane (SL amends) always ahead of new order jobs."""
     try:
@@ -519,130 +656,9 @@ async def _ctrader_order_worker() -> None:
     while True:
         job = await _dequeue_next_job()
         if isinstance(job, CtraderSlAmendJob):
-            try:
-                await _process_sl_amend_job(job)
-            except Exception as exc:
-                fut = getattr(job, "_result_fut", None)
-                if fut and not fut.done():
-                    fut.set_result({
-                        "ok": False,
-                        "result": "failed",
-                        "error": str(exc),
-                        "broker_reply": {},
-                    })
-            finally:
-                _get_priority_queue().task_done()
+            asyncio.create_task(_run_sl_amend_job(job))
             continue
-
-        if job.latency is not None:
-            job.latency.mark_dequeue()
-        queue_wait_ms = -1
-        if job.latency and job.latency.queued_mono and job.latency.dequeue_mono:
-            queue_wait_ms = int((job.latency.dequeue_mono - job.latency.queued_mono) * 1000)
-        logger.info(
-            "[ctrader-queue] placing exec#%s %s %s user=%s queue_wait=%sms",
-            job.execution_id,
-            job.symbol,
-            job.direction,
-            job.user_id,
-            queue_wait_ms,
-        )
-        try:
-            from app.database import SessionLocal
-            from app.strategy_models import StrategyExecution
-            from app.services.order_stale_guard import check_signal_stale, get_stale_verdict
-
-            _db_pre = SessionLocal()
-            try:
-                _ex_pre = _db_pre.query(StrategyExecution).filter(
-                    StrategyExecution.id == job.execution_id
-                ).first()
-                if _ex_pre:
-                    _notes = _ex_pre.notes or ""
-                    if (
-                        _ex_pre.outcome == "CANCELLED"
-                        or "stale_guard_blocked" in _notes
-                        or get_stale_verdict(job.execution_id) == "blocked"
-                    ):
-                        logger.info(
-                            "[ctrader-queue] exec#%s already stale-blocked — skip placement",
-                            job.execution_id,
-                        )
-                        continue
-            finally:
-                _db_pre.close()
-
-            stale = check_signal_stale(
-                symbol=job.symbol,
-                direction=job.direction,
-                signal_price=job.entry_price,
-                signal_generated_at=job.signal_generated_at or None,
-                signal_mono=job.signal_mono,
-                price_source=job.signal_price_source,
-                kline_source=job.signal_kline_source,
-                live_source=job.signal_live_source,
-                execution_id=job.execution_id,
-            )
-            if stale:
-                reason, age_s, slip_pips, _sig_src, _now_src = stale
-                await _abort_stale_order(job, reason, age_s, slip_pips)
-                continue
-
-            from app.database import SessionLocal
-            from app.models import User
-            from app.services.ctrader_client import place_ctrader_order_for_user
-
-            db = SessionLocal()
-            try:
-                user = db.query(User).filter(User.id == job.user_id).first()
-            finally:
-                db.close()
-
-            if not user:
-                await _apply_order_result(job, None)
-                continue
-
-            order_result = await place_ctrader_order_for_user(
-                user=user,
-                symbol=job.symbol,
-                direction=job.direction,
-                entry_price=job.entry_price,
-                tp_pct=job.tp_pct,
-                sl_pct=job.sl_pct,
-                risk_pct=job.risk_pct,
-                risk_usd=job.risk_usd,
-                use_risk_pct=job.use_risk_pct,
-                sl_pips=job.sl_pips,
-                fixed_lots=job.fixed_lots,
-                ctid=job.ctrader_account_id,
-                latency=job.latency,
-            )
-            if order_result and not order_result.get("account_id"):
-                if job.ctrader_account_id:
-                    order_result["account_id"] = job.ctrader_account_id
-                else:
-                    from app.models import UserPreference
-                    db2 = SessionLocal()
-                    try:
-                        prefs = db2.query(UserPreference).filter(
-                            UserPreference.user_id == user.id
-                        ).first()
-                        if prefs and prefs.ctrader_account_id:
-                            order_result["account_id"] = prefs.ctrader_account_id
-                    finally:
-                        db2.close()
-
-            if order_result:
-                recovered = await _try_reconcile_ambiguous(user, job, order_result)
-                if recovered:
-                    order_result = recovered
-
-            await _apply_order_result(job, order_result)
-        except Exception as e:
-            logger.exception(f"[ctrader-queue] job exec #{job.execution_id} failed: {e}")
-            await _apply_order_result(job, {"error": str(e)})
-        finally:
-            _get_queue().task_done()
+        asyncio.create_task(_run_order_job(job))
 
 
 # Per-strategy gate stats from last executor cycle (in-memory, executor worker only)

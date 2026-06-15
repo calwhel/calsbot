@@ -96,6 +96,48 @@ def resolve_ctrader_ctid(
     return None
 
 
+def get_mirror_execution_ctids(prefs) -> list:
+    """Return ctids to fire on for mirror execution.
+
+    When ctrader_mirror_accounts is empty/null, returns a single-element list
+    with prefs.ctrader_account_id (legacy single-account behaviour).
+    """
+    import json as _json
+    ctids: list = []
+    raw = getattr(prefs, "ctrader_mirror_accounts", None) if prefs else None
+    if raw:
+        try:
+            parsed = _json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, list):
+                ctids = [
+                    str(x).strip()
+                    for x in parsed
+                    if x is not None and str(x).strip()
+                ]
+        except Exception:
+            ctids = []
+    if ctids:
+        return ctids
+    default = (getattr(prefs, "ctrader_account_id", None) or "").strip() if prefs else ""
+    return [default] if default else []
+
+
+def parse_mirror_accounts_json(raw) -> list:
+    """Parse ctrader_mirror_accounts JSON — never raises."""
+    if not raw:
+        return []
+    import json as _json
+    try:
+        parsed = _json.loads(raw) if isinstance(raw, str) else raw
+        return [
+            str(x).strip()
+            for x in (parsed if isinstance(parsed, list) else [])
+            if x is not None and str(x).strip()
+        ]
+    except Exception:
+        return []
+
+
 def _other_host(host: str) -> str:
     return CTRADER_HOST_DEMO if host == CTRADER_HOST_LIVE else CTRADER_HOST_LIVE
 
