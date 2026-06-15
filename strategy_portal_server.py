@@ -169,6 +169,7 @@ def _lf_added_accounts(prefs) -> list:
 
 def _lf_enrich_ctrader_accounts(accounts: list, prefs, balances: dict) -> list:
     """Attach added flag + balance per linked account."""
+    from app.services.ctrader_client import DEFAULT_ACCOUNT_LOT_MIN, DEFAULT_ACCOUNT_LOT_STEP
     added = set(_lf_added_accounts(prefs))
     out = []
     for a in accounts or []:
@@ -177,8 +178,15 @@ def _lf_enrich_ctrader_accounts(accounts: list, prefs, balances: dict) -> list:
         ctid = str(a.get("ctidTraderAccountId") or a.get("ctid") or "").strip()
         row = dict(a)
         row["added"] = ctid in added if ctid else False
+        row["lot_min"] = DEFAULT_ACCOUNT_LOT_MIN
+        row["lot_step"] = DEFAULT_ACCOUNT_LOT_STEP
         if ctid and ctid in balances:
             row["balance"] = balances.get(ctid)
+        elif a.get("balance") is not None:
+            try:
+                row["balance"] = float(a.get("balance"))
+            except (TypeError, ValueError):
+                pass
         out.append(row)
     return out
 
@@ -206,7 +214,7 @@ def _lf_load_open_positions(db, uid: int) -> list:
 
 
 _LF_LIVE_ROWS_SQL_EXT = """
-    SELECT s.id, s.name, s.status, s.asset_class, s.config, s.ctrader_account_id,
+    SELECT s.id, s.name, s.status, s.asset_class, s.config, s.ctrader_account_id, s.ctrader_account_lot,
            COUNT(e.id) FILTER (WHERE e.outcome='OPEN' AND e.is_paper=false) AS open_count,
            COUNT(e.id) FILTER (
                WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.is_paper=false
@@ -230,7 +238,7 @@ _LF_LIVE_ROWS_SQL_EXT = """
 """
 
 _LF_LIVE_ROWS_SQL_BASIC = """
-    SELECT s.id, s.name, s.status, s.asset_class, s.config, s.ctrader_account_id,
+    SELECT s.id, s.name, s.status, s.asset_class, s.config, s.ctrader_account_id, s.ctrader_account_lot,
            COUNT(e.id) FILTER (WHERE e.outcome='OPEN' AND e.is_paper=false) AS open_count,
            COUNT(e.id) FILTER (
                WHERE e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.is_paper=false
@@ -443,6 +451,7 @@ def _lf_build_strategy_card(s: dict, sparkline_by_id: dict) -> dict:
             "id": s["id"], "name": s["name"], "status": s["status"],
             "asset_class": s["asset_class"],
             "ctrader_account_id": s.get("ctrader_account_id"),
+            "ctrader_account_lot": s.get("ctrader_account_lot"),
             "symbols": [str(x).upper() for x in syms][:8] or ["—"],
             "open_count": int(s.get("open_count") or 0),
             "closed_count": _closed, "win_count": _wins,
@@ -1855,6 +1864,7 @@ def _ensure_tables():
     strategy_cols = {
         "webhook_token": "ALTER TABLE user_strategies ADD COLUMN IF NOT EXISTS webhook_token VARCHAR(64)",
         "asset_class":   "ALTER TABLE user_strategies ADD COLUMN IF NOT EXISTS asset_class VARCHAR(16) NOT NULL DEFAULT 'crypto'",
+        "ctrader_account_lot": "ALTER TABLE user_strategies ADD COLUMN IF NOT EXISTS ctrader_account_lot DOUBLE PRECISION",
     }
 
     execution_cols = {
@@ -11219,6 +11229,7 @@ async def api_strategy_detail(strategy_id: int, uid: str = Query(...)):
             "status":      s.status,
             "asset_class": s.asset_class,
             "ctrader_account_id": getattr(s, "ctrader_account_id", None),
+            "ctrader_account_lot": getattr(s, "ctrader_account_lot", None),
             "config":      s.config or {},
             "performance": {
                 "total_trades": perf.total_trades if perf else 0,
@@ -11417,15 +11428,28 @@ async def api_update_strategy(strategy_id: int, request: Request):
                 s.ctrader_account_id = None
             else:
                 from app.models import UserPreference as _UP_asn
-                from app.services.ctrader_client import list_assignable_ctrader_ctids
+                from app.services.ctrader_client import list_added_ctrader_ctids
                 _pasn = db.query(_UP_asn).filter(_UP_asn.user_id == user.id).first()
                 _acct = str(_raw).strip()
-                if _acct not in set(list_assignable_ctrader_ctids(_pasn)):
+                if _acct not in set(list_added_ctrader_ctids(_pasn)):
                     raise HTTPException(
                         status_code=400,
                         detail="Account not in your added accounts",
                     )
                 s.ctrader_account_id = _acct
+        if "ctrader_account_lot" in body:
+            from app.services.ctrader_client import normalize_account_lot
+            _raw_lot = body.get("ctrader_account_lot")
+            if _raw_lot in (None, "", "null"):
+                s.ctrader_account_lot = None
+            else:
+                _lot = normalize_account_lot(_raw_lot)
+                if _lot is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid lot size (min 0.01, step 0.01)",
+                    )
+                s.ctrader_account_lot = _lot
         if "status" in body and body["status"] in ("draft", "active", "paused", "paper"):
             if body["status"] == "active":
                 _sub = _get_portal_sub(user.id, db)
@@ -12370,11 +12394,14 @@ async def api_live_forex_add_account(uid: str = Query(...), request: Request = N
 
 @app.post("/api/strategies/{strategy_id}/assign-account")
 async def api_strategy_assign_account(strategy_id: int, uid: str = Query(...), request: Request = None):
-    """Assign a strategy to a specific cTrader execution account."""
+    """Assign a strategy to a specific cTrader execution account (+ optional lot override)."""
     from app.database import SessionLocal
     from app.models import UserPreference
     from app.strategy_models import UserStrategy
-    from app.services.ctrader_client import list_assignable_ctrader_ctids
+    from app.services.ctrader_client import (
+        list_added_ctrader_ctids,
+        normalize_account_lot,
+    )
 
     body = await request.json()
     raw_acct = body.get("ctrader_account_id")
@@ -12396,11 +12423,25 @@ async def api_strategy_assign_account(strategy_id: int, uid: str = Query(...), r
 
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         if acct:
-            assignable = set(list_assignable_ctrader_ctids(prefs))
-            if acct not in assignable:
+            added = set(list_added_ctrader_ctids(prefs))
+            if acct not in added:
                 raise HTTPException(status_code=400, detail="Account not in your added accounts")
 
         s.ctrader_account_id = acct
+
+        if "ctrader_account_lot" in body:
+            raw_lot = body.get("ctrader_account_lot")
+            if raw_lot in (None, "", "null"):
+                s.ctrader_account_lot = None
+            else:
+                lot = normalize_account_lot(raw_lot)
+                if lot is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid lot size (min 0.01, step 0.01)",
+                    )
+                s.ctrader_account_lot = lot
+
         db.commit()
         _invalidate_user_cache(uid)
         invalidate_prefix(f"api_strats_{uid}")
@@ -12408,6 +12449,7 @@ async def api_strategy_assign_account(strategy_id: int, uid: str = Query(...), r
             "ok": True,
             "strategy_id": s.id,
             "ctrader_account_id": s.ctrader_account_id,
+            "ctrader_account_lot": s.ctrader_account_lot,
         })
     finally:
         db.close()
@@ -12806,7 +12848,17 @@ async def api_live_forex_account(
                 _account_balances[ctid] = float(bal)
                 set_cache(_bal_key, bal, ttl_seconds=60)
             else:
-                set_cache(_bal_key, "__miss__", ttl_seconds=30)
+                for a in accounts or []:
+                    if not isinstance(a, dict):
+                        continue
+                    if str(a.get("ctidTraderAccountId") or "") == ctid and a.get("balance") is not None:
+                        try:
+                            _account_balances[ctid] = float(a["balance"])
+                            set_cache(_bal_key, _account_balances[ctid], ttl_seconds=60)
+                            return
+                        except (TypeError, ValueError):
+                            pass
+                set_cache(_bal_key, "__miss__", ttl_seconds=15)
         except Exception as _be:
             logger.warning(
                 f"[live-forex] balance fetch uid={uid} ctid={ctid}: "

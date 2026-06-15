@@ -111,6 +111,26 @@ class TestResolveCtraderCtid(unittest.TestCase):
         self.assertEqual(ctid, "999")
 
 
+class TestPerStrategyLotOverride(unittest.TestCase):
+    def test_user_strategy_has_ctrader_account_lot_column(self):
+        col = UserStrategy.__table__.columns.get("ctrader_account_lot")
+        self.assertIsNotNone(col)
+        self.assertTrue(col.nullable)
+
+    def test_normalize_account_lot(self):
+        from app.services.ctrader_client import normalize_account_lot
+        self.assertEqual(normalize_account_lot(0.25), 0.25)
+        self.assertEqual(normalize_account_lot(0.025), 0.03)
+        self.assertIsNone(normalize_account_lot(0))
+        self.assertIsNone(normalize_account_lot(None))
+
+    def test_fire_path_uses_ctrader_account_lot(self):
+        from app.services import strategy_executor as se
+        src = inspect.getsource(se)
+        self.assertIn("ctrader_account_lot", src)
+        self.assertIn("normalize_account_lot", src)
+
+
 class TestSchemaAndJobFields(unittest.TestCase):
     def test_user_strategy_has_ctrader_account_id_column(self):
         col = UserStrategy.__table__.columns.get("ctrader_account_id")

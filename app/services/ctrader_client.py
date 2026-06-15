@@ -61,6 +61,42 @@ def _account_is_live(prefs, ctid: int) -> Optional[bool]:
     return None
 
 
+DEFAULT_ACCOUNT_LOT_MIN = 0.01
+DEFAULT_ACCOUNT_LOT_STEP = 0.01
+
+
+def normalize_account_lot(lots) -> Optional[float]:
+    """Validate and snap a per-strategy account lot override to min/step grid."""
+    if lots is None:
+        return None
+    try:
+        v = float(lots)
+    except (TypeError, ValueError):
+        return None
+    if v <= 0:
+        return None
+    step = DEFAULT_ACCOUNT_LOT_STEP
+    min_lot = DEFAULT_ACCOUNT_LOT_MIN
+    if v < min_lot:
+        v = min_lot
+    # Align to min + k·step
+    k = round((v - min_lot) / step)
+    snapped = round(min_lot + k * step, 2)
+    if snapped < min_lot:
+        snapped = min_lot
+    return snapped
+
+
+def _parse_reconcile_balance(res) -> Optional[float]:
+    """Extract USD balance/equity from ProtoOAReconcileRes (cents → dollars)."""
+    for attr in ("balance", "equity"):
+        if hasattr(res, attr):
+            raw = getattr(res, attr, None)
+            if raw is not None:
+                return float(raw) / 100.0
+    return None
+
+
 def _host_for_account(prefs, ctid: int) -> str:
     """Pick live vs demo host for a ctid — never guess the alternate host."""
     is_live = _account_is_live(prefs, ctid)
@@ -110,6 +146,13 @@ def parse_added_accounts_json(raw) -> list:
         ]
     except Exception:
         return []
+
+
+def list_added_ctrader_ctids(prefs) -> list:
+    """Ctids the user explicitly added as execution targets."""
+    return parse_added_accounts_json(
+        getattr(prefs, "ctrader_added_accounts", None) if prefs else None
+    )
 
 
 def list_assignable_ctrader_ctids(prefs, *, include_default: bool = True) -> list:
@@ -2320,8 +2363,8 @@ async def _get_account_balance(
                     return None
                 res = ProtoOAReconcileRes()
                 res.ParseFromString(payload)
-                if hasattr(res, "balance") and res.balance:
-                    bal = res.balance / 100.0
+                bal = _parse_reconcile_balance(res)
+                if bal is not None:
                     _balance_cache[cache_key] = (bal, time.monotonic())
                     return bal
             except asyncio.CancelledError:
@@ -2349,14 +2392,26 @@ async def get_account_balance_resilient(
     at = (access_token or "").strip()
     if not at:
         return None
-    bal = await _get_account_balance(at, ctid_trader_account_id, host=host)
-    if bal is not None and bal > 0:
+    hosts = [host]
+    alt = _other_host(host)
+    if alt not in hosts:
+        hosts.append(alt)
+
+    async def _try_hosts(token: str) -> Optional[float]:
+        for h in hosts:
+            bal = await _get_account_balance(token, ctid_trader_account_id, host=h)
+            if bal is not None:
+                return bal
+        return None
+
+    bal = await _try_hosts(at)
+    if bal is not None:
         return bal
     if user_id:
         new_at = await refresh_user_ctrader_token(user_id)
         if new_at:
-            bal = await _get_account_balance(new_at, ctid_trader_account_id, host=host)
-            if bal is not None and bal > 0:
+            bal = await _try_hosts(new_at)
+            if bal is not None:
                 return bal
     return None
 

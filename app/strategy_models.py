@@ -26,6 +26,7 @@ class UserStrategy(Base):
     webhook_token = Column(String(64), nullable=True, unique=True, index=True)
     asset_class = Column(String(16), nullable=False, default="crypto", server_default="crypto", index=True)
     ctrader_account_id = Column(String(40), nullable=True)  # per-strategy cTrader ctid; null → user default
+    ctrader_account_lot = Column(Float, nullable=True)  # per-assignment lot override; null → strategy default size
     created_at  = Column(DateTime, default=datetime.utcnow)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -292,6 +293,7 @@ def init_strategy_tables(engine):
 
         for col, typ in [
             ("ctrader_account_id",   "VARCHAR(40)"),
+            ("ctrader_account_lot",  "FLOAT"),
         ]:
             if ("user_strategies", col) not in existing_cols:
                 try:

@@ -4655,6 +4655,16 @@ async def evaluate_and_fire(
                     _use_risk_pct = bool(risk.get("use_risk_pct"))
                     _risk_pct_per = float(risk.get("risk_pct_per_trade") or risk.get("position_size_pct") or 1.0)
                     _fixed_lots   = float(risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
+                    _acct_lot = getattr(strategy, "ctrader_account_lot", None)
+                    if _acct_lot is not None:
+                        try:
+                            from app.services.ctrader_client import normalize_account_lot
+                            _nl = normalize_account_lot(_acct_lot)
+                            if _nl:
+                                _fixed_lots = _nl
+                                _use_risk_pct = False
+                        except Exception:
+                            pass
                     # In partial-runner mode the broker TP must be TP2 (final target);
                     # otherwise it stays at the strategy's TP1.
                     _live_tp_pct  = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
@@ -5284,6 +5294,15 @@ async def _propagate_to_subscribers(
                     ps_type      = sub_risk.get("position_size_type", "pct")
                     _sub_risk_usd = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None
                     _sub_fixed_lots = float(sub_risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
+                    _sub_acct_lot = getattr(sub_strategy, "ctrader_account_lot", None)
+                    if _sub_acct_lot is not None:
+                        try:
+                            from app.services.ctrader_client import normalize_account_lot
+                            _snl = normalize_account_lot(_sub_acct_lot)
+                            if _snl:
+                                _sub_fixed_lots = _snl
+                        except Exception:
+                            pass
                     if _sub_broker == "ctrader":
                         from app.services.ctrader_order_queue import (
                             CtraderOrderJob, enqueue_ctrader_order, start_ctrader_order_worker,
@@ -5292,6 +5311,8 @@ async def _propagate_to_subscribers(
                         start_ctrader_order_worker()
                         _sub_signal_mono = time.monotonic()
                         _sub_use_risk_pct = bool(sub_risk.get("use_risk_pct"))
+                        if _sub_acct_lot is not None and _sub_fixed_lots > 0:
+                            _sub_use_risk_pct = False
                         _sub_risk_pct = float(
                             sub_risk.get("risk_pct_per_trade")
                             or sub_risk.get("position_size_pct")
