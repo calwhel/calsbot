@@ -20,7 +20,7 @@ import struct
 import logging
 import os
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.services.ctrader_sltp import (
     compute_sltp_prices,
@@ -462,7 +462,9 @@ _AMBIGUOUS_ORDER_ERRORS = frozenset({
     "timeout",
 })
 _balance_cache: dict = {}    # (host, ctid) → (balance, monotonic_ts)
-_BALANCE_CACHE_TTL = 25.0
+_BALANCE_CACHE_TTL = 60.0
+BALANCE_CONNECT_TIMEOUT_S = float(os.environ.get("CTRADER_BALANCE_CONNECT_TIMEOUT_S", "10"))
+BALANCE_REQ_TIMEOUT_S = float(os.environ.get("CTRADER_BALANCE_REQ_TIMEOUT_S", "10"))
 
 
 def is_ambiguous_order_error(err: Optional[str]) -> bool:
@@ -545,6 +547,8 @@ async def _account_auth(
     writer: asyncio.StreamWriter,
     access_token: str,
     ctid_trader_account_id: int,
+    *,
+    timeout: float = 10.0,
 ) -> bool:
     req = ProtoOAAccountAuthReq()
     req.ctidTraderAccountId = ctid_trader_account_id
@@ -553,6 +557,7 @@ async def _account_auth(
         reader, writer, req,
         _PAYLOAD_TYPES["account_auth_req"],
         _PAYLOAD_TYPES["account_auth_res"],
+        timeout=timeout,
     )
     return payload is not None
 
@@ -2337,6 +2342,7 @@ async def _get_account_balance(
 ) -> Optional[float]:
     """
     Fetch the current account balance (equity) from cTrader via ProtoOAReconcileReq.
+    Reuses the per-(host, ctid) persistent socket when available.
     Returns USD balance or None on failure.
     """
     if not _PROTO_OK:
@@ -2348,16 +2354,24 @@ async def _get_account_balance(
     try:
         async with _get_account_lock(host, ctid_trader_account_id):
             try:
-                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
-                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                reader, writer = await _get_persistent_connection(
+                    host,
+                    ctid_trader_account_id,
+                    connect_timeout=BALANCE_CONNECT_TIMEOUT_S,
+                )
+                if not await _account_auth(
+                    reader, writer, access_token, ctid_trader_account_id,
+                    timeout=BALANCE_REQ_TIMEOUT_S,
+                ):
                     return None
+                _touch_conn(host, ctid_trader_account_id)
                 req = ProtoOAReconcileReq()
                 req.ctidTraderAccountId = ctid_trader_account_id
                 payload = await _send_recv(
                     reader, writer, req,
                     _PAYLOAD_TYPES["reconcile_req"],
                     _PAYLOAD_TYPES["reconcile_res"],
-                    timeout=10.0,
+                    timeout=BALANCE_REQ_TIMEOUT_S,
                 )
                 if not payload:
                     return None
@@ -2366,6 +2380,7 @@ async def _get_account_balance(
                 bal = _parse_reconcile_balance(res)
                 if bal is not None:
                     _balance_cache[cache_key] = (bal, time.monotonic())
+                    _touch_conn(host, ctid_trader_account_id)
                     return bal
             except asyncio.CancelledError:
                 _invalidate_persistent_connection(host, ctid_trader_account_id)
@@ -2373,8 +2388,23 @@ async def _get_account_balance(
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        logger.debug(f"[cTrader] balance fetch error: {e}")
+        logger.debug(f"[cTrader] balance fetch error host={host} ctid={ctid_trader_account_id}: {e}")
     return None
+
+
+def _balance_hosts_for_account(prefs, ctid_trader_account_id: int) -> List[str]:
+    """Demo/live host only — alternate host when account type is unknown."""
+    known_live = _account_is_live(prefs, ctid_trader_account_id) if prefs else None
+    if known_live is False:
+        return [CTRADER_HOST_DEMO]
+    if known_live is True:
+        return [CTRADER_HOST_LIVE]
+    primary = _host_for_account(prefs, ctid_trader_account_id) if prefs else CTRADER_HOST_LIVE
+    hosts = [primary]
+    alt = _other_host(primary)
+    if alt not in hosts:
+        hosts.append(alt)
+    return hosts
 
 
 async def get_account_balance_resilient(
@@ -2388,14 +2418,10 @@ async def get_account_balance_resilient(
     Fetch account balance with correct live/demo host, token refresh, and fallback.
     UI paths should use this instead of raw _get_account_balance(host=LIVE default).
     """
-    host = _host_for_account(prefs, ctid_trader_account_id) if prefs else CTRADER_HOST_LIVE
     at = (access_token or "").strip()
     if not at:
         return None
-    hosts = [host]
-    alt = _other_host(host)
-    if alt not in hosts:
-        hosts.append(alt)
+    hosts = _balance_hosts_for_account(prefs, ctid_trader_account_id)
 
     async def _try_hosts(token: str) -> Optional[float]:
         for h in hosts:
