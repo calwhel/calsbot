@@ -1289,6 +1289,285 @@ def _open_execution_count(strategy_id: int, db) -> int:
     )
 
 
+def _ctrader_lot_params_for_target(target: dict, risk: dict, ps_type: str) -> tuple:
+    """Return (fixed_lots, use_risk_pct) for one fire target."""
+    _use_risk_pct = bool(risk.get("use_risk_pct"))
+    _fixed_lots = float(risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
+    lot = target.get("lot_size")
+    if lot is not None:
+        try:
+            from app.services.ctrader_client import normalize_account_lot
+            _nl = normalize_account_lot(lot)
+            if _nl:
+                _fixed_lots = _nl
+                _use_risk_pct = False
+        except Exception:
+            pass
+    return _fixed_lots, _use_risk_pct
+
+
+async def _ctrader_fanout_live_fire(
+    *,
+    db,
+    user,
+    strategy,
+    config: dict,
+    symbol: str,
+    direction: str,
+    current_price: float,
+    tp_price: float,
+    sl_price: float,
+    tp2_price,
+    tp_pct: float,
+    sl_pct: float,
+    tp2_pct,
+    leverage: int,
+    risk: dict,
+    ex_config: dict,
+    asset_class: str,
+    details,
+    price_data: dict,
+    exec_notes: str,
+    partial_close_pct,
+    price_source: str,
+    kline_source,
+    signal_generated_at: float,
+    fire_targets: list,
+    http_client,
+) -> bool:
+    """Create N executions + enqueue N cTrader jobs in parallel. Returns True on success path."""
+    import uuid as _uuid
+    from app.strategy_models import StrategyExecution, StrategyPerformance
+    from app.services.ctrader_order_queue import (
+        CtraderOrderJob, enqueue_ctrader_order, start_ctrader_order_worker,
+    )
+    from app.services.order_latency import new_order_latency
+    from app.services.order_stale_guard import check_signal_stale
+
+    if len(fire_targets) < 2:
+        return False
+
+    _signal_group_id = _uuid.uuid4().hex[:40]
+    executions = []
+    for target in fire_targets:
+        ctid = str(target.get("ctid") or "").strip()
+        if not ctid:
+            continue
+        ex = StrategyExecution(
+            strategy_id=strategy.id,
+            user_id=user.id,
+            symbol=symbol,
+            direction=direction,
+            entry_price=current_price,
+            tp_price=tp_price,
+            tp2_price=tp2_price,
+            sl_price=sl_price,
+            current_sl=sl_price,
+            leverage=leverage,
+            outcome="OPEN",
+            conditions_met=details,
+            fired_at=datetime.utcnow(),
+            is_paper=False,
+            asset_class=asset_class,
+            notes=exec_notes,
+            ctrader_account_id=ctid,
+            signal_group_id=_signal_group_id,
+        )
+        db.add(ex)
+        executions.append((ex, target))
+    if len(executions) < 2:
+        return False
+
+    await _commit_db_with_retry(
+        db, label=f"fanout-exec#{strategy.id}", instances=tuple(e[0] for e in executions)
+    )
+    refreshed = []
+    for ex, target in executions:
+        row = _refresh_db_row(db, ex)
+        if row is None or not getattr(row, "id", None):
+            logger.error(
+                f"[Strategy {strategy.id}] fan-out execution missing after commit"
+            )
+            return False
+        refreshed.append((row, target))
+    executions = refreshed
+
+    _perf = db.query(StrategyPerformance).filter(
+        StrategyPerformance.strategy_id == strategy.id
+    ).first()
+    if _perf:
+        _perf.open_trades = (_perf.open_trades or 0) + len(executions)
+    else:
+        _perf = StrategyPerformance(
+            strategy_id=strategy.id, open_trades=len(executions)
+        )
+        db.add(_perf)
+    await _commit_db_with_retry(db, label=f"fanout-perf#{strategy.id}", instances=(_perf,))
+
+    try:
+        from app.services.ctrader_price_feed import get_price as _feed_px
+        from app.services.pip_units import platform_pips_from_price_delta
+        _fresh = _feed_px(symbol)
+        _max_drift = float(risk.get("max_entry_drift_pips") or 15)
+        if _fresh and _max_drift > 0:
+            _drift_pips = platform_pips_from_price_delta(symbol, _fresh - current_price)
+            if _drift_pips > _max_drift:
+                for ex, _ in executions:
+                    ex.outcome = "CANCELLED"
+                    ex.notes = f"Cancelled: price drift {_drift_pips:.1f} pips"
+                db.commit()
+                logger.info(
+                    f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} fan-out drift "
+                    f"{_drift_pips:.1f}p > {_max_drift} — skipped"
+                )
+                return True
+    except Exception:
+        pass
+
+    start_ctrader_order_worker()
+    _signal_mono = time.monotonic()
+    _stale = check_signal_stale(
+        symbol=symbol,
+        direction=direction,
+        signal_price=current_price,
+        signal_generated_at=signal_generated_at,
+        signal_mono=_signal_mono,
+        price_source=price_source,
+        kline_source=kline_source,
+        live_source=price_data.get("live_source"),
+        execution_id=executions[0][0].id,
+    )
+    if _stale:
+        _reason, _age_s, _slip, _sig_src, _now_src = _stale
+        for ex, _ in executions:
+            ex.outcome = "CANCELLED"
+            ex.notes = (
+                f"{exec_notes or ''} | stale_guard_blocked | Live skip: {_reason}"
+            ).strip(" |")
+        db.commit()
+        logger.warning(
+            f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} fan-out pre-blocked: {_reason}"
+        )
+        return True
+
+    ps_type = risk.get("position_size_type", "pct")
+    _risk_usd = (
+        float(risk["position_size_usd"])
+        if ps_type == "fixed" and risk.get("position_size_usd")
+        else None
+    )
+    _risk_pct_per = float(
+        risk.get("risk_pct_per_trade") or risk.get("position_size_pct") or 1.0
+    )
+    _partial_mode = bool(
+        asset_class == "forex"
+        and tp2_price
+        and partial_close_pct
+        and float(partial_close_pct) > 0
+    )
+    _live_tp_pct = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
+
+    jobs = []
+    for ex, target in executions:
+        ctid = str(target.get("ctid") or ex.ctrader_account_id or "").strip()
+        _fixed_lots, _use_risk_pct = _ctrader_lot_params_for_target(target, risk, ps_type)
+        jobs.append(CtraderOrderJob(
+            user_id=user.id,
+            strategy_id=strategy.id,
+            execution_id=ex.id,
+            symbol=symbol,
+            direction=direction,
+            entry_price=current_price,
+            tp_pct=_live_tp_pct,
+            sl_pct=sl_pct,
+            risk_pct=_risk_pct_per,
+            risk_usd=_risk_usd,
+            use_risk_pct=_use_risk_pct,
+            sl_pips=float(ex_config.get("stop_loss_pips") or 0) or None,
+            fixed_lots=_fixed_lots or None,
+            asset_class=asset_class,
+            partial_close_pct=float(partial_close_pct) if partial_close_pct else None,
+            ctrader_account_id=ctid,
+            signal_mono=_signal_mono,
+            signal_generated_at=signal_generated_at,
+            signal_price_source=price_source,
+            signal_kline_source=kline_source,
+            signal_live_source=price_data.get("live_source"),
+            latency=new_order_latency(ex.id, _signal_mono),
+        ))
+
+    results = await asyncio.gather(
+        *(enqueue_ctrader_order(j) for j in jobs),
+        return_exceptions=True,
+    )
+    _queued_any = False
+    for (ex, target), res in zip(executions, results):
+        ctid = str(target.get("ctid") or "")
+        if isinstance(res, Exception):
+            logger.error(
+                f"[Strategy {strategy.id}] fan-out enqueue error exec#{ex.id}: {res}"
+            )
+            continue
+        if res:
+            _queued_any = True
+            ex.notes = ((ex.notes or "") + " | order_queued").strip(" |")
+            logger.info(
+                f"[{_log_ts()}] [Strategy {strategy.id}] cTrader fan-out queued "
+                f"exec#{ex.id} acct={ctid} group={_signal_group_id}"
+            )
+        else:
+            ex.is_paper = True
+            ex.notes = (
+                (ex.notes or "") + " | Live→Paper fallback (fan-out queue full)"
+            ).strip(" |")
+    await _commit_db_with_retry(
+        db,
+        label=f"fanout-queued#{strategy.id}",
+        instances=tuple(e[0] for e in executions),
+    )
+
+    if _queued_any:
+        from app.strategy_models import StrategyPortalSettings
+        tg_id_live = _telegram_int_id(user)
+        _portal_live = db.query(StrategyPortalSettings).filter(
+            StrategyPortalSettings.user_id == user.id
+        ).first()
+        if tg_id_live and _should_dm_trade_alerts(_portal_live, False):
+            asyncio.create_task(_tg_send(
+                tg_id_live,
+                _fmt_queued_open_notice(
+                    strategy.name or "Your Strategy",
+                    symbol,
+                    direction,
+                    leverage=leverage,
+                ),
+                asset_class=asset_class,
+            ))
+        try:
+            from app.services.expo_push import notify_user_bg
+            notify_user_bg(
+                user.id,
+                title=f"🎯 Live · {symbol.replace('USDT','')} {direction}",
+                body=f"{strategy.name} — {len(jobs)} accounts",
+                data={
+                    "type": "trade_open",
+                    "strategy_id": strategy.id,
+                    "kind": "live",
+                    "signal_group_id": _signal_group_id,
+                },
+                kind="live",
+            )
+        except Exception:
+            pass
+        if not config.get("_locked"):
+            asyncio.create_task(_propagate_to_subscribers(
+                source_strategy_id=strategy.id,
+                source_execution_id=executions[0][0].id,
+                http_client=http_client,
+            ))
+    return True
+
+
 def _fired_today_for_symbol(strategy_id: int, symbol: str, db) -> bool:
     from app.strategy_models import StrategyExecution
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -3916,10 +4195,20 @@ async def evaluate_and_fire(
     max_open      = int(risk.get("max_open_positions") or 1)
     cooldown_mins = int(risk.get("cooldown_minutes") or 30)
 
+    _fire_slots = 1
+    if asset_class in ("forex", "index", "metals", "commodity"):
+        try:
+            from app.models import UserPreference as _UP_slots
+            from app.services.strategy_account_assignments import fire_slot_count
+            _slot_prefs = db.query(_UP_slots).filter(_UP_slots.user_id == user.id).first()
+            _fire_slots = fire_slot_count(db, strategy, _slot_prefs)
+        except Exception:
+            _fire_slots = 1
+
     if _daily_execution_count(strategy.id, db) >= max_per_day:
         _bump("blk_daily_cap")
         return
-    if _open_execution_count(strategy.id, db) >= max_open:
+    if _open_execution_count(strategy.id, db) + _fire_slots > max_open:
         _bump("blk_max_open")
         return
 
@@ -4475,6 +4764,51 @@ async def evaluate_and_fire(
             _exec_notes_parts.append(f"orig_sl={float(sl_price):.6g}")
         _exec_notes = " | ".join(_exec_notes_parts) if _exec_notes_parts else None
 
+        _fire_targets = []
+        if not is_paper and asset_class in ("forex", "index", "metals", "commodity"):
+            try:
+                from app.models import UserPreference as _UP_ft
+                from app.services.strategy_account_assignments import get_enabled_fire_targets
+                _ft_prefs = db.query(_UP_ft).filter(_UP_ft.user_id == user.id).first()
+                _fire_targets = get_enabled_fire_targets(db, strategy, _ft_prefs)
+            except Exception:
+                _fire_targets = []
+
+        if len(_fire_targets) > 1:
+            _fanout_ok = await _ctrader_fanout_live_fire(
+                db=db,
+                user=user,
+                strategy=strategy,
+                config=config,
+                symbol=symbol,
+                direction=direction,
+                current_price=current_price,
+                tp_price=tp_price,
+                sl_price=sl_price,
+                tp2_price=tp2_price,
+                tp_pct=tp_pct,
+                sl_pct=sl_pct,
+                tp2_pct=tp2_pct,
+                leverage=leverage,
+                risk=risk,
+                ex_config=ex_config,
+                asset_class=asset_class,
+                details=details,
+                price_data=price_data,
+                exec_notes=_exec_notes,
+                partial_close_pct=_partial_close_pct,
+                price_source=_ps,
+                kline_source=_ks,
+                signal_generated_at=_signal_generated_at,
+                fire_targets=_fire_targets,
+                http_client=http_client,
+            )
+            if _fanout_ok:
+                break
+
+        _preset_ctid = _fire_targets[0]["ctid"] if len(_fire_targets) == 1 else None
+        _preset_lot = _fire_targets[0]["lot_size"] if len(_fire_targets) == 1 else None
+
         execution = StrategyExecution(
             strategy_id    = strategy.id,
             user_id        = user.id,
@@ -4492,6 +4826,7 @@ async def evaluate_and_fire(
             is_paper       = is_paper,
             asset_class    = asset_class,
             notes          = _exec_notes,
+            ctrader_account_id=_preset_ctid,
         )
         db.add(execution)
         await _commit_db_with_retry(
@@ -4655,6 +4990,24 @@ async def evaluate_and_fire(
                     _use_risk_pct = bool(risk.get("use_risk_pct"))
                     _risk_pct_per = float(risk.get("risk_pct_per_trade") or risk.get("position_size_pct") or 1.0)
                     _fixed_lots   = float(risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
+                    if _preset_lot is not None:
+                        try:
+                            from app.services.ctrader_client import normalize_account_lot
+                            _nl = normalize_account_lot(_preset_lot)
+                            if _nl:
+                                _fixed_lots = _nl
+                                _use_risk_pct = False
+                        except Exception:
+                            pass
+                    elif getattr(strategy, "ctrader_account_lot", None) is not None:
+                        try:
+                            from app.services.ctrader_client import normalize_account_lot
+                            _nl = normalize_account_lot(strategy.ctrader_account_lot)
+                            if _nl:
+                                _fixed_lots = _nl
+                                _use_risk_pct = False
+                        except Exception:
+                            pass
                     # In partial-runner mode the broker TP must be TP2 (final target);
                     # otherwise it stays at the strategy's TP1.
                     _live_tp_pct  = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
@@ -4663,7 +5016,7 @@ async def evaluate_and_fire(
                         from app.models import UserPreference as _UP_job
                         from app.services.ctrader_client import resolve_ctrader_ctid
                         _job_prefs = db.query(_UP_job).filter(_UP_job.user_id == user.id).first()
-                        _job_ctid = resolve_ctrader_ctid(
+                        _job_ctid = _preset_ctid or resolve_ctrader_ctid(
                             strategy_account_id=getattr(strategy, "ctrader_account_id", None),
                             prefs_default=(
                                 _job_prefs.ctrader_account_id if _job_prefs else None
@@ -5284,6 +5637,15 @@ async def _propagate_to_subscribers(
                     ps_type      = sub_risk.get("position_size_type", "pct")
                     _sub_risk_usd = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None
                     _sub_fixed_lots = float(sub_risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
+                    _sub_acct_lot = getattr(sub_strategy, "ctrader_account_lot", None)
+                    if _sub_acct_lot is not None:
+                        try:
+                            from app.services.ctrader_client import normalize_account_lot
+                            _snl = normalize_account_lot(_sub_acct_lot)
+                            if _snl:
+                                _sub_fixed_lots = _snl
+                        except Exception:
+                            pass
                     if _sub_broker == "ctrader":
                         from app.services.ctrader_order_queue import (
                             CtraderOrderJob, enqueue_ctrader_order, start_ctrader_order_worker,
@@ -5292,6 +5654,8 @@ async def _propagate_to_subscribers(
                         start_ctrader_order_worker()
                         _sub_signal_mono = time.monotonic()
                         _sub_use_risk_pct = bool(sub_risk.get("use_risk_pct"))
+                        if _sub_acct_lot is not None and _sub_fixed_lots > 0:
+                            _sub_use_risk_pct = False
                         _sub_risk_pct = float(
                             sub_risk.get("risk_pct_per_trade")
                             or sub_risk.get("position_size_pct")

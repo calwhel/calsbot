@@ -26,11 +26,34 @@ class UserStrategy(Base):
     webhook_token = Column(String(64), nullable=True, unique=True, index=True)
     asset_class = Column(String(16), nullable=False, default="crypto", server_default="crypto", index=True)
     ctrader_account_id = Column(String(40), nullable=True)  # per-strategy cTrader ctid; null → user default
+    ctrader_account_lot = Column(Float, nullable=True)  # per-assignment lot override; null → strategy default size
     created_at  = Column(DateTime, default=datetime.utcnow)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     executions  = relationship("StrategyExecution", back_populates="strategy", cascade="all, delete-orphan")
     performance = relationship("StrategyPerformance", back_populates="strategy", uselist=False, cascade="all, delete-orphan")
+    account_assignments = relationship(
+        "StrategyAccountAssignment",
+        back_populates="strategy",
+        cascade="all, delete-orphan",
+    )
+
+
+class StrategyAccountAssignment(Base):
+    """Per-strategy × per-account execution target (enable + lot size)."""
+    __tablename__ = "strategy_account_assignments"
+    __table_args__ = (
+        UniqueConstraint("strategy_id", "ctid", name="uq_strategy_account_ctid"),
+    )
+
+    id          = Column(Integer, primary_key=True, index=True)
+    strategy_id = Column(Integer, ForeignKey("user_strategies.id"), nullable=False, index=True)
+    ctid        = Column(String(40), nullable=False)
+    enabled     = Column(Boolean, default=False, nullable=False, server_default="false")
+    lot_size    = Column(Float, nullable=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+    strategy = relationship("UserStrategy", back_populates="account_assignments")
 
 
 class StrategyExecution(Base):
@@ -253,6 +276,7 @@ def init_strategy_tables(engine):
         pass
     Base.metadata.create_all(bind=engine, tables=[
         UserStrategy.__table__,
+        StrategyAccountAssignment.__table__,
         StrategyExecution.__table__,
         StrategyPerformance.__table__,
         StrategyMarketplace.__table__,
@@ -292,6 +316,7 @@ def init_strategy_tables(engine):
 
         for col, typ in [
             ("ctrader_account_id",   "VARCHAR(40)"),
+            ("ctrader_account_lot",  "FLOAT"),
         ]:
             if ("user_strategies", col) not in existing_cols:
                 try:
@@ -408,3 +433,12 @@ def init_strategy_tables(engine):
             conn.commit()
         except Exception:
             pass
+
+    try:
+        from app.services.strategy_account_assignments import migrate_legacy_strategy_assignments
+        migrate_legacy_strategy_assignments(engine)
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "init_strategy_tables: legacy assignment migrate: %s", type(exc).__name__
+        )
