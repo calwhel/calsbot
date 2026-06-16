@@ -8330,7 +8330,11 @@ async function loadMarketplace(){
   $('market-grid').style.display='grid';
   $('market-grid').innerHTML=data.map(m=>{
     const wr=m.live_win_rate!==null?m.live_win_rate+'%':(m.is_verified&&m.verified_win_rate?m.verified_win_rate+'%':null);
-    const pnl=m.live_pnl!==null?m.live_pnl:m.verified_pnl;
+    const _fxLike=['forex','index','metals','commodity','stock'].includes((m.asset_class||'crypto').toLowerCase());
+    const pips=m.live_pips_pnl;
+    const pnl=!_fxLike&&m.live_pnl!==null?m.live_pnl:m.verified_pnl;
+    const perfVal=_fxLike?(pips!=null?`${pips>=0?'+':''}${Math.round(pips)} pips`:null):(pnl!=null?pS(pnl):null);
+    const perfLbl=_fxLike?'Pips':'P&L';
     const curve=sparkline(m.equity_curve);
     return`<div class="mkt-card ${m.is_featured?'featured':''}" onclick="openDetail(${m.id})">
       <div class="mkt-badges">${m.is_featured?'<span class="badge featured-b">⭐ Featured</span>':''}${m.is_verified?'<span class="badge verified">✓ Verified</span>':''}${m.is_owned?'<span class="badge owned">✅ Owned</span>':''}${priceBadge(m)}${m.category&&m.category!=='general'?`<span class="badge category">${m.category}</span>`:''}</div>
@@ -8338,7 +8342,7 @@ async function loadMarketplace(){
       <div class="mkt-author">by <span onclick="event.stopPropagation();openCreator('${m.author_uid}')">${m.author_name}</span></div>
       <div class="mkt-desc">${m.summary||'No description'}</div>
       ${curve?`<div class="mkt-sparkline">${curve}</div>`:''}
-      ${wr||pnl!==null?`<div class="mkt-stats">${wr?`<div class="mkt-stat"><div class="ms-val ${pC(parseFloat(wr)-50)}">${wr}</div><div class="ms-lbl">Win Rate</div></div>`:''} ${pnl!==null?`<div class="mkt-stat"><div class="ms-val ${pC(pnl)}">${pS(pnl)}</div><div class="ms-lbl">P&L</div></div>`:''} ${m.live_trades>0?`<div class="mkt-stat"><div class="ms-val">${m.live_trades}</div><div class="ms-lbl">Trades</div></div>`:''}</div>`:''}
+      ${wr||perfVal!==null?`<div class="mkt-stats">${wr?`<div class="mkt-stat"><div class="ms-val ${pC(parseFloat(wr)-50)}">${wr}</div><div class="ms-lbl">Win Rate</div></div>`:''} ${perfVal!==null?`<div class="mkt-stat"><div class="ms-val ${pC(_fxLike?(pips||0):(pnl||0))}">${perfVal}</div><div class="ms-lbl">${perfLbl}</div></div>`:''} ${m.live_trades>0?`<div class="mkt-stat"><div class="ms-val">${m.live_trades}</div><div class="ms-lbl">Trades</div></div>`:''}</div>`:''}
       ${m.avg_rating>0?`<div class="stars-row"><span class="stars">${starsHtml(m.avg_rating)}</span><span class="stars-count">${m.avg_rating} (${m.rating_count})</span></div>`:''}
       ${m.tags.length?`<div class="tags-row">${m.tags.map(t=>`<span class="tag">${t}</span>`).join('')}</div>`:''}
       <div class="mkt-footer"><div><div class="mkt-price ${m.pricing_model==='free'?'free':'paid'}">${priceStr(m)}</div><div class="clone-count">${m.clone_count} subscribers</div></div>
