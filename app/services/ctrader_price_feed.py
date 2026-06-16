@@ -175,6 +175,9 @@ _trendbar_last_api: Dict[Tuple[str, str], float] = {}
 _TRENDBAR_MIN_INTERVAL_S = float(os.environ.get("CTRADER_TRENDBAR_MIN_INTERVAL_S", "60"))
 _tick_history: Dict[str, deque] = {}
 _TICK_HISTORY_MAX = 8000
+# Rate-limit stale-rebuild watchdog logs (safety net only — ticks update bars inline).
+_stale_rebuild_log_at: Dict[Tuple[str, str], float] = {}
+_STALE_REBUILD_LOG_INTERVAL_S = 300.0
 # Active spot-stream session — avoids DB round-trips for trendbars while LIVE.
 _stream_creds: Optional[Tuple[str, int, int, str]] = None  # token, ctid, uid, host
 _feed_task: Optional[asyncio.Task] = None
@@ -526,6 +529,64 @@ def _record_tick(sym: str, mid: float, ts_ms: Optional[int] = None) -> None:
     hist.append((ts_ms, mid))
 
 
+def _bar_open_ts_ms(ts_ms: int, timeframe: str) -> int:
+    """Bar open timestamp (ms) for the wall-clock instant ts_ms."""
+    step_ms = _TF_MINUTES.get(timeframe, 15) * 60_000
+    return (int(ts_ms) // step_ms) * step_ms
+
+
+def _apply_tick_to_bar_rows(
+    rows: List[List[float]],
+    mid: float,
+    ts_ms: int,
+    timeframe: str,
+    limit: int,
+) -> List[List[float]]:
+    """Update forming bar OHLC from one tick; roll to a new bar at timeframe boundary."""
+    if not rows or mid <= 0:
+        return rows
+    step_ms = _TF_MINUTES.get(timeframe, 15) * 60_000
+    bar_ts = _bar_open_ts_ms(ts_ms, timeframe)
+    out: List[List[float]] = [list(r) for r in rows]
+    last = out[-1]
+    last_ts = int(last[0])
+    if last_ts == bar_ts:
+        last[4] = mid
+        last[2] = max(float(last[2]), mid)
+        last[3] = min(float(last[3]), mid)
+    elif last_ts < bar_ts:
+        prev_close = float(last[4])
+        t = last_ts + step_ms
+        while t < bar_ts:
+            out.append([t, prev_close, prev_close, prev_close, prev_close, 0.0])
+            t += step_ms
+        out.append([bar_ts, mid, mid, mid, mid, 0.0])
+    return out[-limit:]
+
+
+def _update_kline_cache_on_tick(sym: str, mid: float, ts_ms: Optional[int] = None) -> None:
+    """Inline tick→bar builder: refresh every cached timeframe for this symbol."""
+    if mid <= 0:
+        return
+    sym_up = sym.upper()
+    if ts_ms is None:
+        ts_ms = int(time.time() * 1000)
+    now_mono = time.monotonic()
+    updated = False
+    for key in list(_kline_cache.keys()):
+        if key[0] != sym_up:
+            continue
+        tf, lim = key[1], key[2]
+        rows, _ = _kline_cache[key]
+        if not rows:
+            continue
+        new_rows = _apply_tick_to_bar_rows(rows, mid, ts_ms, tf, lim)
+        _kline_cache[key] = (new_rows, now_mono)
+        updated = True
+    if updated:
+        _last_kline_update[sym_up] = now_mono
+
+
 def _apply_live_tick_to_rows(
     rows: List[List[float]],
     symbol: str,
@@ -538,18 +599,30 @@ def _apply_live_tick_to_rows(
     live = get_price(symbol.upper())
     if not live or live <= 0:
         return rows
-    step_ms = _TF_MINUTES.get(timeframe, 15) * 60_000
-    now_ms = int(time.time() * 1000)
-    bar_ts = (now_ms // step_ms) * step_ms
-    out: List[List[float]] = [list(r) for r in rows]
-    last = out[-1]
-    if int(last[0]) == bar_ts:
-        last[4] = live
-        last[2] = max(float(last[2]), live)
-        last[3] = min(float(last[3]), live)
-    elif int(last[0]) < bar_ts:
-        out.append([bar_ts, live, live, live, live, 0.0])
-    return out[-limit:]
+    return _apply_tick_to_bar_rows(
+        rows, live, int(time.time() * 1000), timeframe, limit,
+    )
+
+
+def _log_stale_kline_rebuild(sym: str, detail: str, tf: str) -> None:
+    """Safety-net stale rebuild log — at most once per symbol/timeframe per 5 min."""
+    key = (sym.upper(), tf)
+    now = time.monotonic()
+    if now - _stale_rebuild_log_at.get(key, 0.0) < _STALE_REBUILD_LOG_INTERVAL_S:
+        logger.debug(
+            "[CTraderFeed] kline builder stale for %s — rebuilt (%s, tf=%s)",
+            sym,
+            detail,
+            tf,
+        )
+        return
+    _stale_rebuild_log_at[key] = now
+    logger.warning(
+        "[CTraderFeed] kline builder stale for %s — rebuilt (%s, tf=%s)",
+        sym,
+        detail,
+        tf,
+    )
 
 
 def _bars_from_trendbar_res(res: "ProtoOAGetTrendbarsRes", limit: int) -> List[List[float]]:
@@ -1094,6 +1167,7 @@ async def _feed_loop() -> None:
                             _spot_cache[canonical] = (bid, ask, _last_spot_tick_mono)
                             mid = round((bid + ask) / 2.0, 6)
                             _record_tick(canonical, mid)
+                            _update_kline_cache_on_tick(canonical, mid)
                             try:
                                 from app.services.spot_price_store import upsert_tick
                                 upsert_tick(
@@ -1263,12 +1337,7 @@ async def sweep_stale_klines(
             )
             if not stale:
                 continue
-            logger.warning(
-                "[CTraderFeed] kline builder stale for %s — rebuilt (%s, tf=%s)",
-                sym_up,
-                detail,
-                tf,
-            )
+            _log_stale_kline_rebuild(sym_up, detail, tf)
             if cache_key:
                 _kline_cache.pop(cache_key, None)
             clear_kline_cache(sym_up)
@@ -1580,12 +1649,7 @@ async def get_klines(
         if not rate_ok and _feed_live and not kline_stale:
             return _apply_live_tick_to_rows(cached[0], sym_up, timeframe, limit)
         if kline_stale:
-            logger.warning(
-                "[CTraderFeed] kline builder stale for %s — rebuilt "
-                "(%s, ticks flowing)",
-                sym_up,
-                stale_detail,
-            )
+            _log_stale_kline_rebuild(sym_up, stale_detail, timeframe)
             _kline_cache.pop(cache_key, None)
             try:
                 from app.services.tradfi_prices import clear_metal_kline_cache
