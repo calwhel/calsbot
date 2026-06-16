@@ -11986,6 +11986,18 @@ async def _fetch_and_store_ctrader_accounts(
         if accounts:
             prefs.ctrader_accounts = _json.dumps(accounts)
             live = [a for a in accounts if a.get("isLive")]
+            # Auto-add every linked account to the execution pool so live+demo
+            # both appear on strategy assignment cards without manual "Add".
+            try:
+                from app.services.ctrader_client import parse_added_accounts_json
+                pool = set(parse_added_accounts_json(prefs.ctrader_added_accounts))
+                for a in accounts:
+                    cid = str(a.get("ctidTraderAccountId") or "").strip()
+                    if cid:
+                        pool.add(cid)
+                prefs.ctrader_added_accounts = _json.dumps(sorted(pool)) if pool else None
+            except Exception:
+                pass
             # Auto-select if unambiguous (one live account, or only one account total)
             if not prefs.ctrader_account_id:
                 chosen = _ctrader_auto_pick_account(accounts)

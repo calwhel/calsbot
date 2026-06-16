@@ -46,7 +46,11 @@ CTRADER_PORT = 5035
 
 
 def _account_is_live(prefs, ctid: int) -> Optional[bool]:
-    """Return True/False when ctid is in stored account metadata, else None."""
+    """Return True/False when ctid is in stored account metadata, else None.
+
+    Missing isLive on a matched row means unknown — never assume demo (that
+    blocked live ctids from routing to live.ctraderapi.com).
+    """
     try:
         import json as _json
         raw = getattr(prefs, "ctrader_accounts", None)
@@ -55,7 +59,7 @@ def _account_is_live(prefs, ctid: int) -> Optional[bool]:
                 if int(a.get("ctidTraderAccountId", -1)) == int(ctid):
                     if "isLive" in a:
                         return bool(a.get("isLive"))
-                    return False
+                    return None
     except Exception:
         pass
     return None
