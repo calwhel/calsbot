@@ -13,6 +13,7 @@ import { Pill } from '@/components/Pill';
 import { StatCard } from '@/components/StatCard';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { colors, font, radius, spacing } from '@/constants/colors';
+import { Sparkline } from '@/components/Sparkline';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, apiPost, ApiError, getApiUrl, type MarketplaceListingDetail, type CloneResponse } from '@/lib/api';
 // Note: `user` is intentionally unread here — entitlement gating is delegated to
@@ -23,6 +24,16 @@ function fmtPnl(v: number | null | undefined): string {
   if (v == null) return '—';
   const sign = v > 0 ? '+' : '';
   return `${sign}${v.toFixed(2)}%`;
+}
+
+function isTradFi(ac?: string | null): boolean {
+  return ac === 'forex' || ac === 'index' || ac === 'metals' || ac === 'stock';
+}
+
+function fmtPips(v: number | null | undefined): string {
+  if (v == null) return '—';
+  const sign = v > 0 ? '+' : '';
+  return `${sign}${v.toFixed(1)} pips`;
 }
 
 export default function ListingDetailScreen() {
@@ -79,9 +90,15 @@ export default function ListingDetailScreen() {
       qc.invalidateQueries({ queryKey: ['strategies', uid] });
       qc.invalidateQueries({ queryKey: ['marketplace-detail', lid, uid] });
       qc.invalidateQueries({ queryKey: ['marketplace', uid] });
+      const ac = (resp as { asset_class?: string }).asset_class
+        || detailQ.data?.asset_class
+        || '';
+      const forexCopy = isTradFi(ac);
       Alert.alert(
         'Strategy added',
-        'The strategy is now in your portfolio in paper-trading mode. Activate it from the Strategies tab when you’re ready.',
+        forexCopy
+          ? 'Copied to your Strategies tab in paper mode. Connect cTrader in Settings, then tap Go Live when you’re ready — it uses the author’s live signals with your account.'
+          : 'The strategy is now in your portfolio in paper-trading mode. Activate it from the Strategies tab when you’re ready.',
         [
           { text: 'Stay here', style: 'cancel' },
           {
@@ -140,6 +157,10 @@ export default function ListingDetailScreen() {
   const m = detailQ.data;
   const isPaid = m.pricing_model !== 'free' && (m.price_usdt || 0) > 0;
   const owned = m.is_owned;
+  const tradfi = isTradFi(m.asset_class);
+  const hasLive = m.live_performance.total_trades >= 3;
+  const headlinePips = tradfi ? m.live_performance.total_pips_pnl : null;
+  const headlinePnl = tradfi ? null : m.live_performance.total_pnl;
   // We intentionally do NOT preflight a Pro-required block here — the backend
   // is the source of truth for entitlement. Cached `user.is_pro` can be stale
   // (e.g. user just upgraded on web), and the backend returns a structured
@@ -237,20 +258,43 @@ export default function ListingDetailScreen() {
           )}
           {!owned ? (
             <Text style={styles.helpText}>
-              Copied strategies start in paper-trading mode. You can review and activate
-              them from the Strategies tab.
+              {tradfi
+                ? 'Starts in paper mode. Connect cTrader, assign your live account, then Go Live from Strategies.'
+                : 'Copied strategies start in paper-trading mode. You can review and activate them from the Strategies tab.'}
             </Text>
           ) : null}
         </View>
+
+        {/* Track record chart */}
+        {m.equity_curve && m.equity_curve.length >= 2 ? (
+          <View style={{ marginTop: spacing.lg }}>
+            <Text style={styles.sectionLabel}>
+              {tradfi ? 'Pip equity curve' : 'Equity curve'}
+            </Text>
+            <View style={styles.chartBox}>
+              <Sparkline values={m.equity_curve} width={width - spacing.lg * 2 - 32} height={88} strokeWidth={2.5} />
+            </View>
+          </View>
+        ) : null}
 
         {/* Live performance */}
         <View style={{ marginTop: spacing.lg }}>
           <Text style={styles.sectionLabel}>Live performance</Text>
           <View style={styles.statRow}>
             <StatCard
-              label="Total P&L"
-              value={m.live_performance.total_trades > 0 ? fmtPnl(m.live_performance.total_pnl) : '—'}
-              tone={m.live_performance.total_pnl > 0 ? 'positive' : m.live_performance.total_pnl < 0 ? 'negative' : 'neutral'}
+              label={tradfi ? 'Total pips' : 'Total P&L'}
+              value={
+                hasLive
+                  ? (tradfi ? fmtPips(headlinePips) : fmtPnl(headlinePnl))
+                  : '—'
+              }
+              tone={
+                hasLive && ((headlinePips ?? headlinePnl ?? 0) > 0)
+                  ? 'positive'
+                  : hasLive && ((headlinePips ?? headlinePnl ?? 0) < 0)
+                    ? 'negative'
+                    : 'neutral'
+              }
             />
             <View style={{ width: spacing.md }} />
             <StatCard
@@ -261,13 +305,6 @@ export default function ListingDetailScreen() {
           </View>
           {m.is_verified ? (
             <View style={[styles.statRow, { marginTop: spacing.md }]}>
-              <StatCard
-                label="Verified P&L"
-                value={fmtPnl(m.live_performance.total_pnl)}
-                tone="positive"
-                compact
-              />
-              <View style={{ width: spacing.md }} />
               <StatCard
                 label="Verified WR"
                 value={`${m.verified_win_rate.toFixed(1)}%`}
@@ -303,12 +340,12 @@ export default function ListingDetailScreen() {
                   <Text style={[
                     styles.tradePnl,
                     {
-                      color: (t.pnl_pct ?? 0) > 0 ? colors.positive
-                        : (t.pnl_pct ?? 0) < 0 ? colors.negative
+                      color: (tradfi ? (t.pips_pnl ?? 0) : (t.pnl_pct ?? 0)) > 0 ? colors.positive
+                        : (tradfi ? (t.pips_pnl ?? 0) : (t.pnl_pct ?? 0)) < 0 ? colors.negative
                         : colors.textDim,
                     },
                   ]}>
-                    {fmtPnl(t.pnl_pct)}
+                    {tradfi ? fmtPips(t.pips_pnl) : fmtPnl(t.pnl_pct)}
                   </Text>
                 </View>
               ))}
@@ -396,6 +433,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
   },
   bannerText: { color: colors.text, fontFamily: font.semibold, fontSize: 14 },
+  chartBox: {
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    alignItems: 'center',
+  },
   tradeList: {
     backgroundColor: colors.card,
     borderRadius: radius.lg,
