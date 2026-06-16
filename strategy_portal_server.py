@@ -2494,7 +2494,10 @@ async def _resilient_task(name: str, coro_fn, restart_delay: int = 30):
             await coro_fn()
             logger.warning(f"⚠️ {name} exited cleanly — restarting in {restart_delay}s")
         except Exception as exc:
-            logger.error(f"🔴 {name} crashed ({exc!r}) — restarting in {restart_delay}s")
+            logger.critical(
+                f"🔴 {name} crashed ({exc!r}) — restarting in {restart_delay}s",
+                exc_info=True,
+            )
         await asyncio.sleep(restart_delay)
 
 
@@ -2629,7 +2632,7 @@ async def _start_executor_tasks():
             logger.info("cTrader async order queue worker started (executor worker)")
         except Exception as _oq_err:
             logger.warning(f"cTrader order queue start error (non-fatal): {_oq_err}")
-        asyncio.create_task(_resilient_task("run_forex_executor", run_forex_executor, restart_delay=20))
+        asyncio.create_task(_resilient_task("run_forex_executor", run_forex_executor, restart_delay=5))
         # Dedicated fast (~1s) loop that pushes live forex breakeven/trailing SL
         # amendments to cTrader off the real-time spot feed — so gold reaches
         # breakeven in well under a second instead of on the 5s scan cadence.
