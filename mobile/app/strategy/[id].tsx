@@ -279,7 +279,7 @@ export default function StrategyDetailScreen() {
   // Mobile wizard saves _asset_class; web portal saves asset_class — check both
   const _cfg = strategy.config as Record<string, any> | undefined;
   const strategyAssetClass = (_cfg?._asset_class || _cfg?.asset_class || (strategy as any).asset_class) as string | undefined;
-  const isForexLike = strategyAssetClass === 'forex' || strategyAssetClass === 'index';
+  const isForexLike = ['forex', 'index', 'metals', 'commodity'].includes(strategyAssetClass);
   const goLiveBroker: GoLiveBroker = isForexLike ? 'ctrader' : 'bitunix';
   const isPaper = (strategy.config as Record<string, any>)?._build_mode === 'paper';
 
@@ -623,7 +623,7 @@ export default function StrategyDetailScreen() {
                     </Text>
                     {t.outcome !== 'OPEN' && t.entry_price != null && t.exit_price != null && (
                       (() => {
-                        const isForexLike = strategyAssetClass === 'forex' || strategyAssetClass === 'index';
+                        const isForexLike = ['forex', 'index', 'metals', 'commodity'].includes(strategyAssetClass);
                         if (isForexLike) {
                           const pips = calcPips(t.symbol, t.entry_price, t.exit_price, t.direction);
                           const dollars = calcDollar(t.symbol, pips, lotSize);

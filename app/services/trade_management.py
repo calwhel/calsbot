@@ -1173,9 +1173,29 @@ _FOREX_LIKE_ASSET_CLASSES = frozenset({
     "forex", "metals", "commodity", "index", "stock",
 })
 
+# cTrader live fire + close-reconcile paths (XAUUSD etc. use metals/commodity).
+CTRADER_LIVE_ASSET_CLASSES = ("forex", "index", "metals", "commodity")
+
 
 def is_forex_like_asset(asset_class: Optional[str]) -> bool:
     return (asset_class or "").lower() in _FOREX_LIKE_ASSET_CLASSES
+
+
+def recompute_performance_for_user(user_id: int, db) -> int:
+    """Refresh StrategyPerformance from executions — heals card drift after bulk closes."""
+    from app.strategy_models import StrategyExecution
+    from app.services.strategy_executor import _update_performance
+
+    sids = [
+        int(r[0])
+        for r in db.query(StrategyExecution.strategy_id)
+        .filter(StrategyExecution.user_id == int(user_id))
+        .distinct()
+        .all()
+    ]
+    for sid in sids:
+        _update_performance(sid, db)
+    return len(sids)
 
 
 def compute_pips_from_prices(
@@ -1428,7 +1448,7 @@ async def reconcile_broker_pnl_for_recent_closes(hours: int = 48) -> dict:
             .filter(
                 StrategyExecution.is_paper == False,  # noqa: E712
                 StrategyExecution.outcome.in_(("WIN", "LOSS", "BREAKEVEN")),
-                StrategyExecution.asset_class.in_(("forex", "index")),
+                StrategyExecution.asset_class.in_(CTRADER_LIVE_ASSET_CLASSES),
                 StrategyExecution.closed_at >= cutoff,
             )
             .all()
@@ -1438,7 +1458,7 @@ async def reconcile_broker_pnl_for_recent_closes(hours: int = 48) -> dict:
             .filter(
                 StrategyExecution.is_paper == True,  # noqa: E712
                 StrategyExecution.outcome == "WIN",
-                StrategyExecution.asset_class.in_(("forex", "index")),
+                StrategyExecution.asset_class.in_(CTRADER_LIVE_ASSET_CLASSES),
                 StrategyExecution.closed_at >= cutoff,
             )
             .all()

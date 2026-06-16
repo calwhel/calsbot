@@ -48,6 +48,7 @@ def _position_id_from_execution(ex) -> Optional[int]:
 def _find_open_exec(position_id: int, user_id: Optional[int] = None) -> Optional[dict]:
     from app.database import BgSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution
+    from app.services.trade_management import CTRADER_LIVE_ASSET_CLASSES
 
     db = SessionLocal()
     try:
@@ -56,7 +57,7 @@ def _find_open_exec(position_id: int, user_id: Optional[int] = None) -> Optional
             .filter(
                 StrategyExecution.outcome == "OPEN",
                 StrategyExecution.is_paper == False,  # noqa: E712
-                StrategyExecution.asset_class.in_(("forex", "index")),
+                StrategyExecution.asset_class.in_(CTRADER_LIVE_ASSET_CLASSES),
             )
         )
         if user_id is not None:

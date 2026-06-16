@@ -12901,6 +12901,42 @@ async def api_live_forex_account(
         if isinstance(_cached, dict):
             return JSONResponse({**_cached, "cached": True})
 
+    if refresh:
+        try:
+            def _resolve_user_id():
+                from app.database import SessionLocal
+                db = SessionLocal()
+                try:
+                    u = _get_user_by_uid(uid, db)
+                    return int(u.id) if u else None
+                finally:
+                    db.close()
+
+            _reconcile_uid = await asyncio.to_thread(_resolve_user_id)
+            if _reconcile_uid:
+                from app.services.strategy_executor import _reconcile_forex_closes
+                await asyncio.wait_for(
+                    _reconcile_forex_closes(user_id=_reconcile_uid),
+                    timeout=10.0,
+                )
+
+                def _refresh_perf():
+                    from app.database import SessionLocal
+                    from app.services.trade_management import recompute_performance_for_user
+                    db = SessionLocal()
+                    try:
+                        recompute_performance_for_user(_reconcile_uid, db)
+                    finally:
+                        db.close()
+
+                await asyncio.to_thread(_refresh_perf)
+        except Exception as exc:
+            logger.warning(
+                "[live-forex] refresh reconcile uid=%s: %s",
+                uid,
+                exc,
+            )
+
     def _load_db_snapshot():
         from app.database import SessionLocal
         from app.models import UserPreference
