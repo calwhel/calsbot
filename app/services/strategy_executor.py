@@ -273,6 +273,12 @@ def _maybe_log_ta_eval(strategy, symbol, direction, passed, details) -> None:
         pass
 
 
+from app.services.strategy_account_assignments import TRADFI_BROKER_ASSET_CLASSES
+
+# Asset classes routed to the forex/tradfi executor (crypto loop excludes these).
+_EXECUTOR_TRADFI_CLASSES = frozenset(TRADFI_BROKER_ASSET_CLASSES) | {"stock"}
+
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _portal_trade_entitled(
@@ -6672,6 +6678,17 @@ def _prefetch_fallback_price_ta(
     if stale:
         return stale, "price_ta_cache"
     if asset_class == "crypto":
+        try:
+            from app.services.bitunix_market_data import peek_cached_crypto_klines
+            rows, src = peek_cached_crypto_klines(symbol, timeframe, EXECUTOR_KLINE_BARS)
+            if rows:
+                built = _price_ta_from_klines(
+                    symbol, asset_class, timeframe, rows, kline_source=src or "crypto-cache",
+                )
+                if built:
+                    return built, src or "crypto-cache"
+        except Exception:
+            pass
         return None, ""
     try:
         from app.services.tradfi_prices import peek_cached_klines
@@ -6737,7 +6754,7 @@ async def _prefetch_price_ta_for_cycle(
     stats = {"cache": 0, "fetched": 0, "failed": 0, "fallback": 0}
 
     def _cache_fresh(sym: str, ac: str, tf: str) -> bool:
-        cache_key = f"{ac}:{sym}:{tf}" if ac != "crypto" else sym
+        cache_key = _price_ta_cache_key(sym, ac, tf)
         cached = _PRICE_TA_CACHE.get(cache_key)
         if not cached:
             return False
@@ -7306,8 +7323,8 @@ async def _run_crypto_executor_shard(
                         and (s["config"] or {}).get("_source_strategy_id") in active_source_ids
                     )
                     and (s["config"] or {}).get("entry_conditions", {}).get("entry_type") != "tradingview_webhook"
-                    # Forex / index / stock handled by run_forex_executor (dedicated loop)
-                    and _snap_asset_class(s) not in ("forex", "index", "stock")
+                    # Forex / index / metals / commodity / stock → dedicated forex loop
+                    and _snap_asset_class(s) not in _EXECUTOR_TRADFI_CLASSES
                 ]
                 eval_snapshots = [
                     s for s in eval_snapshots
@@ -8467,7 +8484,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
     if shard_index > 0 and EXECUTOR_SHARD_STAGGER_SECONDS > 0:
         await asyncio.sleep(shard_index * EXECUTOR_SHARD_STAGGER_SECONDS)
 
-    _TRADFI_CLASSES = {"forex", "index", "stock"}
+    _TRADFI_CLASSES = _EXECUTOR_TRADFI_CLASSES
 
     sem = asyncio.Semaphore(FOREX_MAX_CONCURRENT)
     _fx_hb = "forex_executor" if shard_count <= 1 else f"forex_executor_s{shard_index}"
@@ -8756,7 +8773,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 _prefetch_stats = await _prefetch_price_ta_for_cycle(
                     open_snaps,
                     http_client,
-                    {"forex", "index", "stock"},
+                    set(_EXECUTOR_TRADFI_CLASSES),
                     label=_fx_lbl,
                     ctrader_user_id=_prefetch_ct_uid,
                 )
