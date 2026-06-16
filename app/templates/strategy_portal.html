@@ -4447,10 +4447,10 @@ function renderStratList(strats){
     const recent=(s.recent_trades||[]).slice(0,5);
     const wr=p.win_rate||0;
     const hasTrades=p.total_trades>0;
-    const assetClass=cfg.asset_class||'crypto';
-    const _MKT_LABEL={crypto:'₿ Crypto',forex:'💱 Forex',stock:'📈 Stocks',index:'📊 Indices'};
-    const _MKT_COLOR={crypto:'rgba(91,108,247,.15)',forex:'rgba(34,197,94,.15)',stock:'rgba(251,191,36,.15)',index:'rgba(168,85,247,.15)'};
-    const _MKT_TEXT={crypto:'var(--accent)',forex:'#22c55e',stock:'#f59e0b',index:'#a855f7'};
+    const assetClass=stratAssetClass(s);
+    const _MKT_LABEL={crypto:'₿ Crypto',forex:'💱 Forex',stock:'📈 Stocks',index:'📊 Indices',metals:'🥇 Metals',commodity:'📦 Commodity'};
+    const _MKT_COLOR={crypto:'rgba(91,108,247,.15)',forex:'rgba(34,197,94,.15)',stock:'rgba(251,191,36,.15)',index:'rgba(168,85,247,.15)',metals:'rgba(234,179,8,.15)',commodity:'rgba(234,179,8,.12)'};
+    const _MKT_TEXT={crypto:'var(--accent)',forex:'#22c55e',stock:'#f59e0b',index:'#a855f7',metals:'#eab308',commodity:'#ca8a04'};
     const mktBadgeHtml=`<span style="font-size:10px;background:${_MKT_COLOR[assetClass]||'rgba(91,108,247,.15)'};color:${_MKT_TEXT[assetClass]||'var(--accent)'};border:1px solid ${_MKT_TEXT[assetClass]||'var(--accent)'}44;border-radius:4px;padding:2px 7px;font-weight:600">${_MKT_LABEL[assetClass]||assetClass}</span>`;
     const _fb=s=>`<span style="font-size:9px;background:rgba(90,95,126,.12);color:var(--muted);border:1px solid var(--border);border-radius:3px;padding:1px 5px;font-weight:700;letter-spacing:.3px">${s}</span>`;
     const featBadges=[];
@@ -4556,6 +4556,30 @@ function isTradFiAssetClass(ac){
   return ['forex','index','metals','commodity','stock'].includes((ac||'crypto').toLowerCase());
 }
 
+function stratAssetClass(s){
+  const cfg = s.config || {};
+  const col = String(s.asset_class || '').trim().toLowerCase();
+  const cfgAc = String(cfg.asset_class || cfg._asset_class || '').trim().toLowerCase();
+  const _tradfi = ['forex','index','metals','commodity','stock'];
+  if(col === 'crypto' && cfgAc && cfgAc !== 'crypto') return cfgAc;
+  if(_tradfi.includes(col)) return col;
+  if(_tradfi.includes(cfgAc)) return cfgAc;
+  return col || cfgAc || 'crypto';
+}
+
+function _lfScrollToStrategyIfNeeded(){
+  const id = window._lfScrollToStratId;
+  if(!id) return;
+  window._lfScrollToStratId = null;
+  setTimeout(()=>{
+    const card = document.querySelector(`[data-lf-assign-id="${id}"]`);
+    if(!card) return;
+    card.scrollIntoView({behavior:'smooth',block:'center'});
+    card.style.boxShadow = '0 0 0 2px var(--green)';
+    setTimeout(()=>{ card.style.boxShadow = ''; }, 3500);
+  }, 200);
+}
+
 function configureSubscribeModeModal(assetClass){
   const ac = (assetClass || 'crypto').toLowerCase();
   window._subModeAssetClass = ac;
@@ -4590,15 +4614,14 @@ async function promoteToLive(id, assetClass){
 
     if(connected){
       showConfirm(
-        'Go Live — Real Money',
-        'This strategy will place <strong>REAL orders</strong> on your enabled live account(s) when signals fire. Continue?',
-        'Go Live',
+        'Go Live — cTrader',
+        'Open <strong>Live Forex</strong> to enable your account(s), set <strong>lot size</strong>, then tap <strong>Go Live</strong> on this strategy card.',
+        'Open Live Forex',
         'background:var(--green);color:#fff;border-color:var(--green)',
-        async () => {
-          const r = await fetch(`/api/strategies/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,status:'active'})});
-          const d = await r.json();
-          if(r.ok && d.success){ toast('Strategy is now live on cTrader ⚡','success'); _clearStratCache();loadMyStrategies(); }
-          else toast(d.detail||d.message||'Failed to go live','error');
+        () => {
+          window._lfScrollToStratId = id;
+          showPage('live-forex');
+          loadLiveForex();
         },
       );
     } else {
@@ -12589,6 +12612,7 @@ function renderLiveForex(d, wrap) {
 
   _startLfSessionsClock();
   lfCalc();
+  _lfScrollToStrategyIfNeeded();
 }
 
 let _lfSessionsTimer = null;
