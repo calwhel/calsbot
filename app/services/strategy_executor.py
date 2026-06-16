@@ -4173,7 +4173,10 @@ async def evaluate_and_fire(
     # Determine paper/live upfront.
     # Live strategies automatically downgrade to paper if the user doesn't have
     # Bitunix auto-trading set up — so every signal is always tracked.
+    # For cTrader asset classes, enabled per-account assignments are the live
+    # switch (see resolve_live_fire_intent) — not only strategy.status.
     _wants_live = (strategy.status == "active")
+    _early_fire_targets: List[dict] = []
     config   = dict(strategy.config or {})
 
     # ── Asset class (crypto | stock | forex | index) ────────────────────────
@@ -4199,9 +4202,33 @@ async def evaluate_and_fire(
         asset_class = normalize_asset_class(_col_ac or _cfg_ac)
     config["asset_class"] = asset_class
 
+    # cTrader strategies: per-account assignment enable overrides legacy status=paper.
+    if asset_class in ("forex", "index", "metals", "commodity"):
+        try:
+            from app.models import UserPreference as _UP_intent
+            from app.services.strategy_account_assignments import resolve_live_fire_intent
+            _intent_prefs = db.query(_UP_intent).filter(_UP_intent.user_id == user.id).first()
+            _wants_live, _early_fire_targets = resolve_live_fire_intent(
+                db, strategy, asset_class, _intent_prefs,
+            )
+            if _early_fire_targets and strategy.status != "active":
+                logger.info(
+                    "[live-fire] strategy=%s live via enabled assignment(s) %s "
+                    "(status=%s — account toggle is source of truth)",
+                    strategy.id,
+                    _format_fire_targets_log(_early_fire_targets),
+                    strategy.status,
+                )
+        except Exception as _intent_err:
+            logger.warning(
+                "[live-fire] strategy=%s assignment intent lookup failed: %s",
+                strategy.id,
+                _intent_err,
+            )
+
     # Per-asset broker gate. Forex → cTrader (FP Markets), crypto → Bitunix,
     # stocks/indices → paper-only (no broker integration yet).
-    if asset_class in ("forex", "index"):
+    if asset_class in ("forex", "index", "metals", "commodity"):
         if prefetched_ctrader_ok is not None:
             # Caller already resolved live-eligibility (batched once per cycle).
             _ctrader_live_ok = bool(prefetched_ctrader_ok)
@@ -4234,8 +4261,8 @@ async def evaluate_and_fire(
             )
         elif not _wants_live:
             logger.info(
-                "[live-fire] SKIPPED strategy=%s reason=strategy_status=%s "
-                "(paper mode — set status=active for live broker orders)",
+                "[live-fire] SKIPPED strategy=%s reason=no_live_intent status=%s "
+                "assignments=0 (enable an account on the strategy card or set status=active)",
                 strategy.id,
                 strategy.status,
             )
@@ -4971,23 +4998,27 @@ async def evaluate_and_fire(
 
         _fire_targets = []
         if not is_paper and asset_class in ("forex", "index", "metals", "commodity"):
-            try:
-                from app.models import UserPreference as _UP_ft
-                from app.services.strategy_account_assignments import get_enabled_fire_targets
-                _ft_prefs = db.query(_UP_ft).filter(_UP_ft.user_id == user.id).first()
-                _fire_targets = get_enabled_fire_targets(db, strategy, _ft_prefs)
+            if _early_fire_targets:
+                _fire_targets = list(_early_fire_targets)
+            else:
+                try:
+                    from app.models import UserPreference as _UP_ft
+                    from app.services.strategy_account_assignments import get_enabled_fire_targets
+                    _ft_prefs = db.query(_UP_ft).filter(_UP_ft.user_id == user.id).first()
+                    _fire_targets = get_enabled_fire_targets(db, strategy, _ft_prefs)
+                except Exception as _ft_err:
+                    logger.warning(
+                        f"[Strategy {strategy.id}] assignment lookup failed — "
+                        f"skipping fan-out ({type(_ft_err).__name__}: {_ft_err})"
+                    )
+                    _fire_targets = []
+            if _fire_targets:
                 logger.info(
                     "[live-fire] strategy=%s resolved_targets=%s count=%s",
                     strategy.id,
                     _format_fire_targets_log(_fire_targets),
                     len(_fire_targets),
                 )
-            except Exception as _ft_err:
-                logger.warning(
-                    f"[Strategy {strategy.id}] assignment lookup failed — "
-                    f"skipping fan-out ({type(_ft_err).__name__}: {_ft_err})"
-                )
-                _fire_targets = []
 
         if not is_paper and _fire_targets:
             logger.info(
