@@ -11380,7 +11380,7 @@ async def api_strategy_detail(strategy_id: int, uid: str = Query(...)):
             "name":        s.name,
             "description": s.description,
             "status":      s.status,
-            "asset_class": s.asset_class,
+            "asset_class": _strategy_asset_class(s),
             "ctrader_account_id": getattr(s, "ctrader_account_id", None),
             "ctrader_account_lot": getattr(s, "ctrader_account_lot", None),
             "config":      s.config or {},
@@ -11427,6 +11427,7 @@ async def api_update_strategy(strategy_id: int, request: Request):
             config = dict(s.config or {})
             risk = dict(config.get("risk", {}))
             for k in ("leverage", "position_size_type", "position_size_pct", "position_size_usd",
+                      "position_size_lots",
                       "max_trades_per_day", "cooldown_minutes",
                       "max_open_positions", "daily_loss_limit_pct", "no_duplicate_symbol"):
                 if k in body:
@@ -11494,6 +11495,7 @@ async def api_update_strategy(strategy_id: int, request: Request):
         # Risk block
         risk = dict(config.get("risk", {}))
         for k in ("leverage", "position_size_type", "position_size_pct", "position_size_usd",
+                  "position_size_lots",
                   "max_trades_per_day", "cooldown_minutes",
                   "max_open_positions", "daily_loss_limit_pct", "no_duplicate_symbol"):
             if k in body:

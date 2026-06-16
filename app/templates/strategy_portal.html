@@ -3140,18 +3140,20 @@ function dismissTgBanner(){
         </div>
         <div class="divider"></div>
         <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">Risk & Sizing</div>
-        <div class="form-group" style="margin-bottom:12px">
+        <div class="form-group" id="cfg-lev-grp" style="margin-bottom:12px">
           <label>Leverage <span class="lv" id="cfg-lv-val">—</span></label>
           <div class="slider-wrap"><input type="range" id="cfg-lev" min="1" max="50" value="10" step="1" oninput="sv('cfg-lv-val',this.value,'×')"></div>
         </div>
-        <div class="form-group" style="margin-bottom:12px;background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:14px">
+        <div class="form-group" style="margin-bottom:12px;background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:14px" id="cfg-pos-size-grp">
           <label style="margin-bottom:10px">Position Size <span class="lv" id="cfg-ps-val">—</span></label>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
+          <div id="cfg-ps-toggle-row" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
             <button id="cfg-pst-pct" onclick="cfgPsToggle('pct')" style="padding:8px 0;border-radius:8px;border:1px solid var(--border);background:var(--accent);color:#fff;cursor:pointer;font-weight:700;font-size:12px;font-family:inherit;transition:all .15s">% of Balance</button>
             <button id="cfg-pst-fix" onclick="cfgPsToggle('fixed')" style="padding:8px 0;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--muted);cursor:pointer;font-weight:700;font-size:12px;font-family:inherit;transition:all .15s">Fixed $ Amount</button>
+            <button id="cfg-pst-lots" onclick="cfgPsToggle('lots')" style="display:none;padding:8px 0;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--muted);cursor:pointer;font-weight:700;font-size:12px;font-family:inherit;transition:all .15s">Lots</button>
           </div>
           <div id="cfg-ps-pct-row" class="slider-wrap"><input type="range" id="cfg-size" min="1" max="50" value="5" step="1" oninput="sv('cfg-ps-val',this.value,'%')"></div>
           <div id="cfg-ps-usd-row" style="display:none"><input type="number" id="cfg-size-usd" min="5" step="1" value="50" placeholder="e.g. 50 (USDT)" oninput="document.getElementById('cfg-ps-val').textContent='$'+this.value" style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border2);background:var(--card);color:var(--text);font-size:14px;box-sizing:border-box;outline:none;font-family:inherit"></div>
+          <div id="cfg-ps-lots-row" style="display:none"><input type="number" id="cfg-size-lots" min="0.01" step="0.01" value="0.1" placeholder="e.g. 0.25" oninput="document.getElementById('cfg-ps-val').textContent=this.value+' lots'" style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border2);background:var(--card);color:var(--text);font-size:14px;box-sizing:border-box;outline:none;font-family:inherit"></div>
         </div>
         <div class="form-row" style="margin-bottom:12px">
           <div class="form-group" style="margin-bottom:0"><label>Daily Loss Limit <span class="lv" id="cfg-dll-val">—</span></label><div class="slider-wrap"><input type="range" id="cfg-dll" min="1" max="30" value="5" step="1" oninput="sv('cfg-dll-val',this.value,'%')"></div></div>
@@ -3176,8 +3178,8 @@ function dismissTgBanner(){
         <label class="toggle-row" style="display:flex;align-items:center;gap:10px;padding:10px 0;cursor:pointer;border-top:1px solid var(--border);margin-top:4px">
           <input type="checkbox" id="cfg-nodup" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer">
           <div>
-            <div style="font-size:13px;font-weight:600;color:var(--text)">No duplicate coin</div>
-            <div style="font-size:11px;color:var(--muted);margin-top:1px">Skip a coin this strategy has already called today</div>
+            <div style="font-size:13px;font-weight:600;color:var(--text)" id="cfg-nodup-label">No duplicate coin</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:1px" id="cfg-nodup-hint">Skip a coin this strategy has already called today</div>
           </div>
         </label>
         <div class="form-group cfg-unlocked-only" style="margin-bottom:0" id="cfg-coins-grp">
@@ -3924,7 +3926,7 @@ function _apiErrorHtml(msg,retryFn){
 })();
 let mktSort='top',mktCat='all',mktPrice='all',mktSearch='';
 let lbMetric='win_rate',buildDir='LONG',buildMode='live',settingsDir='LONG';
-let cfgStrategyId=null,cfgStatus='paper',cfgDir='LONG',cfgStatusChanged=false,cfgIsLocked=false,cfgSessions=[],cfgTradingDays=[];
+let cfgStrategyId=null,cfgStatus='paper',cfgDir='LONG',cfgStatusChanged=false,cfgIsLocked=false,cfgSessions=[],cfgTradingDays=[],cfgAssetClass='crypto';
 function toggleCfgSession(s){
   const idx=cfgSessions.indexOf(s);
   if(idx>-1)cfgSessions.splice(idx,1);else cfgSessions.push(s);
@@ -3971,15 +3973,54 @@ function closeModal(id){
 function sv(id,val,suf){const n=Number(val);$(id).textContent=(Number.isInteger(n)?n:n)+suf}
 
 function cfgPsToggle(type){
-  const isPct=type!=='fixed';
+  const isPct=type==='pct';
+  const isFixed=type==='fixed';
+  const isLots=type==='lots';
   $('cfg-ps-pct-row').style.display=isPct?'':'none';
-  $('cfg-ps-usd-row').style.display=isPct?'none':'';
-  $('cfg-pst-pct').style.background=isPct?'var(--accent)':'var(--surface)';
-  $('cfg-pst-pct').style.color=isPct?'#fff':'var(--muted)';
-  $('cfg-pst-fix').style.background=isPct?'var(--surface)':'var(--accent)';
-  $('cfg-pst-fix').style.color=isPct?'var(--muted)':'#fff';
-  if(isPct){const v=$('cfg-size').value;$('cfg-ps-val').textContent=v+'%';}
-  else{const v=$('cfg-size-usd').value;$('cfg-ps-val').textContent='$'+v;}
+  $('cfg-ps-usd-row').style.display=isFixed?'':'none';
+  const lotsRow=$('cfg-ps-lots-row');
+  if(lotsRow) lotsRow.style.display=isLots?'':'none';
+  const _on=(el,on)=>{ if(!el) return; el.style.background=on?'var(--accent)':'var(--surface)'; el.style.color=on?'#fff':'var(--muted)'; };
+  _on($('cfg-pst-pct'), isPct);
+  _on($('cfg-pst-fix'), isFixed);
+  _on($('cfg-pst-lots'), isLots);
+  if(isLots){ const v=$('cfg-size-lots')?.value||'0.1'; $('cfg-ps-val').textContent=v+' lots'; }
+  else if(isPct){ const v=$('cfg-size').value; $('cfg-ps-val').textContent=v+'%'; }
+  else { const v=$('cfg-size-usd').value; $('cfg-ps-val').textContent='$'+v; }
+}
+
+function _cfgPosSizeType(){
+  const lotsRow=$('cfg-ps-lots-row');
+  if(lotsRow && lotsRow.style.display!=='none') return 'lots';
+  if($('cfg-ps-usd-row').style.display!=='none') return 'fixed';
+  return 'pct';
+}
+
+function configureCfgModalForAssetClass(){
+  const tradfi=isTradFiAssetClass(cfgAssetClass);
+  const levGrp=$('cfg-lev-grp');
+  const coinsGrp=$('cfg-coins-grp');
+  const pstFix=$('cfg-pst-fix');
+  const pstLots=$('cfg-pst-lots');
+  const toggleRow=$('cfg-ps-toggle-row');
+  const lockedBanner=$('cfg-locked-banner');
+  const nodupLbl=$('cfg-nodup-label');
+  const nodupHint=$('cfg-nodup-hint');
+  if(levGrp) levGrp.style.display=tradfi?'none':'';
+  if(coinsGrp) coinsGrp.style.display=tradfi?'none':'';
+  if(pstFix) pstFix.style.display=tradfi?'none':'';
+  if(pstLots) pstLots.style.display=tradfi?'':'none';
+  if(toggleRow) toggleRow.style.gridTemplateColumns=tradfi?'1fr 1fr':'1fr 1fr';
+  if(lockedBanner && cfgIsLocked){
+    lockedBanner.innerHTML=tradfi
+      ? '🔒 <strong>Marketplace strategy</strong> — the trading logic is protected by the creator. Adjust <strong>lot size or % risk</strong>, sessions, and limits below. Enable live accounts on the <strong>Live Forex</strong> tab.'
+      : '🔒 <strong>Marketplace strategy</strong> — the trading logic is protected by the creator. You can adjust your own <strong>position size, leverage, and risk limits</strong> below.';
+  }
+  if(nodupLbl) nodupLbl.textContent=tradfi?'No duplicate symbol':'No duplicate coin';
+  if(nodupHint) nodupHint.textContent=tradfi
+    ? 'Skip a pair/symbol this strategy has already called today'
+    : 'Skip a coin this strategy has already called today';
+  updateStatusHint();
 }
 
 function wzSyncPsUI(){
@@ -4852,17 +4893,27 @@ async function openConfigure(strategyId){
   $('cfg-title').textContent=s.name;
   $('cfg-name').value=s.name||'';$('cfg-desc').value=s.description||'';
   cfgStatus=s.status||'paper';cfgStatusChanged=false;cfgDir=cfg.direction||'LONG';
+  cfgAssetClass=stratAssetClass({asset_class:s.asset_class,config:cfg});
+  configureCfgModalForAssetClass();
 
   $('cfg-status-toggle').querySelectorAll('.dir-btn').forEach((b,i)=>{b.classList.toggle('active',['draft','active','paused','paper'][i]===cfgStatus)});
   $('cfg-dir-toggle').querySelectorAll('.dir-btn').forEach((b,i)=>{b.classList.toggle('active',['LONG','BOTH','SHORT'][i]===cfgDir)});
-  updateStatusHint();
 
   const setSlider=(id,vid,val,suf)=>{$(id).value=val;$(vid).textContent=Number(val)+suf};
-  setSlider('cfg-lev','cfg-lv-val',risk.leverage||10,'×');
-  const _psType=risk.position_size_type||'pct';
+  if(!isTradFiAssetClass(cfgAssetClass)) setSlider('cfg-lev','cfg-lv-val',risk.leverage||10,'×');
+  let _psType=risk.position_size_type||'pct';
+  if(isTradFiAssetClass(cfgAssetClass) && _psType!=='lots') _psType='lots';
+  if(_psType==='lots'){
+    const lotsEl=$('cfg-size-lots');
+    if(lotsEl) lotsEl.value=risk.position_size_lots||0.1;
+    $('cfg-ps-val').textContent=(risk.position_size_lots||0.1)+' lots';
+  } else if(_psType==='fixed'){
+    const usdEl=$('cfg-size-usd');if(usdEl)usdEl.value=risk.position_size_usd||50;
+    $('cfg-ps-val').textContent='$'+(risk.position_size_usd||50);
+  } else {
+    setSlider('cfg-size','cfg-ps-val',risk.position_size_pct||5,'%');
+  }
   cfgPsToggle(_psType);
-  if(_psType==='fixed'){const usdEl=$('cfg-size-usd');if(usdEl)usdEl.value=risk.position_size_usd||50;$('cfg-ps-val').textContent='$'+(risk.position_size_usd||50);}
-  else{setSlider('cfg-size','cfg-ps-val',risk.position_size_pct||5,'%');}
   setSlider('cfg-dll','cfg-dll-val',risk.daily_loss_limit_pct||5,'%');
   setSlider('cfg-mop','cfg-mop-val',risk.max_open_positions||3,'');
   setSlider('cfg-tp1','cfg-tp1-val',exit.take_profit_pct||3,'%');
@@ -4905,7 +4956,7 @@ async function openConfigure(strategyId){
   $('cfg-export-link').href=`/api/strategies/${strategyId}/export?uid=${UID}`;
   $('cfg-export-link').onclick=null;
   loadGateStats(strategyId);
-  const _fxLike = (s.asset_class === 'forex' || s.asset_class === 'index' || s.asset_class === 'metals' || s.asset_class === 'commodity');
+  const _fxLike = isTradFiAssetClass(cfgAssetClass);
   if (_fxLike) await _loadCfgAcctOptions(s.ctrader_account_id || '');
   else { const g=$('cfg-acct-grp'); if(g) g.style.display='none'; }
 }
@@ -4948,7 +4999,13 @@ async function loadGateStats(strategyId){
 }
 
 function updateStatusHint(){
-  const hints={
+  const tradfi=isTradFiAssetClass(cfgAssetClass);
+  const hints=tradfi?{
+    draft:'Draft — not running. Use Paper to test, or go live via the Live Forex tab.',
+    paper:'🧪 Paper — tracks forex signals with live prices; no broker orders until you go live.',
+    active:'Live — real orders on your cTrader account when enabled accounts + conditions are met. Set lot size on the Live Forex tab.',
+    paused:'Paused — strategy is stopped. Resume any time.'
+  }:{
     draft:'Draft — not running. Configure and switch to Paper or Live when ready.',
     paper:'🧪 Paper — signals fire, coins tracked with 1m OHLC accuracy, no real funds used.',
     active:'Live — real trades being placed on Bitunix when conditions are met.',
@@ -4957,7 +5014,19 @@ function updateStatusHint(){
   $('cfg-status-hint').textContent=hints[cfgStatus]||'';
 }
 
-function setCfgStatus(st,el){cfgStatus=st;cfgStatusChanged=true;$('cfg-status-toggle').querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');updateStatusHint();}
+function setCfgStatus(st,el){
+  if(st==='active' && isTradFiAssetClass(cfgAssetClass)){
+    cfgStatus=st;cfgStatusChanged=true;
+    $('cfg-status-toggle').querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));
+    el.classList.add('active');
+    updateStatusHint();
+    return;
+  }
+  cfgStatus=st;cfgStatusChanged=true;
+  $('cfg-status-toggle').querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  updateStatusHint();
+}
 function setCfgDir(d,el){cfgDir=d;$('cfg-dir-toggle').querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');}
 function setCfgDir2(d,el,toggleId){
   if(toggleId==='set-dir-toggle')settingsDir=d;
@@ -5015,12 +5084,13 @@ async function saveCfg(){
   let payload={uid:UID,...(cfgStatusChanged?{status:cfgStatus}:{})};
 
   if(cfgIsLocked){
-    // Locked strategy — only send risk/sizing fields (creator's logic is protected)
+    const _pst=_cfgPosSizeType();
     Object.assign(payload,{
-      leverage:Number($('cfg-lev').value),
-      position_size_type:($('cfg-ps-usd-row').style.display==='none'?'pct':'fixed'),
+      ...(!isTradFiAssetClass(cfgAssetClass)?{leverage:Number($('cfg-lev').value)}:{}),
+      position_size_type:_pst,
       position_size_pct:Number($('cfg-size').value),
       position_size_usd:Number($('cfg-size-usd').value)||null,
+      position_size_lots:_pst==='lots'?Number($('cfg-size-lots')?.value)||0.1:null,
       daily_loss_limit_pct:Number($('cfg-dll').value),
       max_open_positions:Number($('cfg-mop').value),
       max_trades_per_day:Number($('cfg-mtd').value),
@@ -5033,13 +5103,15 @@ async function saveCfg(){
     // Own strategy — full update
     const coinsRaw=$('cfg-coins').value.trim();
     const symbols=coinsRaw?coinsRaw.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean):[];
+    const _pst=_cfgPosSizeType();
     Object.assign(payload,{
       name:$('cfg-name').value.trim(),description:$('cfg-desc').value.trim(),
       direction:cfgDir,
-      leverage:Number($('cfg-lev').value),
-      position_size_type:($('cfg-ps-usd-row').style.display==='none'?'pct':'fixed'),
+      ...(!isTradFiAssetClass(cfgAssetClass)?{leverage:Number($('cfg-lev').value)}:{}),
+      position_size_type:_pst,
       position_size_pct:Number($('cfg-size').value),
       position_size_usd:Number($('cfg-size-usd').value)||null,
+      position_size_lots:_pst==='lots'?Number($('cfg-size-lots')?.value)||0.1:null,
       daily_loss_limit_pct:Number($('cfg-dll').value),max_open_positions:Number($('cfg-mop').value),
       take_profit_pct:Number($('cfg-tp1').value),take_profit2_pct:Number($('cfg-tp2').value)||null,
       stop_loss_pct:Number($('cfg-sl').value),trailing_stop:Number($('cfg-trail').value)>0,
@@ -5066,7 +5138,13 @@ async function saveCfg(){
     body:JSON.stringify(payload),
   });
   const d=await r.json();btn.disabled=false;btn.textContent='Save Changes';
-  if(d.success){toast('✅ Saved!');closeModal('modal-cfg');_clearStratCache();loadMyStrategies();}
+  if(d.success){toast('✅ Saved!');closeModal('modal-cfg');_clearStratCache();loadMyStrategies();
+    if(cfgStatusChanged && cfgStatus==='active' && isTradFiAssetClass(cfgAssetClass)){
+      window._lfScrollToStratId=cfgStrategyId;
+      showPage('live-forex');
+      loadLiveForex();
+    }
+  }
   else if(d.error==='PRO_REQUIRED'){toast('Could not save — please try again.','error');}
   else toast(d.message||'Save failed','error');
 }
