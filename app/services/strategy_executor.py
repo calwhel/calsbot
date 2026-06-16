@@ -4173,8 +4173,8 @@ async def evaluate_and_fire(
     # Determine paper/live upfront.
     # Live strategies automatically downgrade to paper if the user doesn't have
     # Bitunix auto-trading set up — so every signal is always tracked.
-    # For cTrader asset classes, enabled per-account assignments are the live
-    # switch (see resolve_live_fire_intent) — not only strategy.status.
+    # For cTrader asset classes, live broker fire requires status=active AND
+    # enabled account assignment(s) — see resolve_live_fire_intent.
     _wants_live = (strategy.status == "active")
     _early_fire_targets: List[dict] = []
     config   = dict(strategy.config or {})
@@ -4202,23 +4202,30 @@ async def evaluate_and_fire(
         asset_class = normalize_asset_class(_col_ac or _cfg_ac)
     config["asset_class"] = asset_class
 
-    # cTrader strategies: per-account assignment enable overrides legacy status=paper.
+    # cTrader strategies: status=active AND enabled assignment(s) required for broker fire.
     if asset_class in ("forex", "index", "metals", "commodity"):
         try:
             from app.models import UserPreference as _UP_intent
-            from app.services.strategy_account_assignments import resolve_live_fire_intent
+            from app.services.strategy_account_assignments import (
+                get_enabled_fire_targets,
+                resolve_live_fire_intent,
+            )
             _intent_prefs = db.query(_UP_intent).filter(_UP_intent.user_id == user.id).first()
             _wants_live, _early_fire_targets = resolve_live_fire_intent(
                 db, strategy, asset_class, _intent_prefs,
             )
-            if _early_fire_targets and strategy.status != "active":
-                logger.info(
-                    "[live-fire] strategy=%s live via enabled assignment(s) %s "
-                    "(status=%s — account toggle is source of truth)",
-                    strategy.id,
-                    _format_fire_targets_log(_early_fire_targets),
-                    strategy.status,
-                )
+            if (strategy.status or "") == "paper":
+                try:
+                    _paper_asn = get_enabled_fire_targets(db, strategy, _intent_prefs)
+                except Exception:
+                    _paper_asn = []
+                if _paper_asn:
+                    logger.info(
+                        "[live-fire] SKIPPED strategy=%s reason=status=paper "
+                        "assignments=%s (Go Live required before broker orders)",
+                        strategy.id,
+                        _format_fire_targets_log(_paper_asn),
+                    )
         except Exception as _intent_err:
             logger.warning(
                 "[live-fire] strategy=%s assignment intent lookup failed: %s",
@@ -4260,12 +4267,18 @@ async def evaluate_and_fire(
                 "; ".join(_ctrader_blockers) or "cTrader not ready",
             )
         elif not _wants_live:
-            logger.info(
-                "[live-fire] SKIPPED strategy=%s reason=no_live_intent status=%s "
-                "assignments=0 (enable an account on the strategy card or set status=active)",
-                strategy.id,
-                strategy.status,
-            )
+            if (strategy.status or "") == "paper":
+                logger.info(
+                    "[live-fire] SKIPPED strategy=%s reason=status=paper",
+                    strategy.id,
+                )
+            else:
+                logger.info(
+                    "[live-fire] SKIPPED strategy=%s reason=no_enabled_accounts "
+                    "status=%s (Go Live + enable an account on the strategy card)",
+                    strategy.id,
+                    strategy.status,
+                )
     elif asset_class in PAPER_ONLY_CLASSES:
         # Stocks/indices: no broker yet, always paper.
         is_paper = True
