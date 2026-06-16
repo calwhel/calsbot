@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
+import { GoLiveModal } from '@/components/GoLiveModal';
 import { EmptyState } from '@/components/EmptyState';
 import { Pill } from '@/components/Pill';
 import { StatCard } from '@/components/StatCard';
@@ -52,6 +53,9 @@ export default function ListingDetailScreen() {
   });
 
   const [riskScale, setRiskScale] = useState<number>(1.0);
+  const [goLiveOpen, setGoLiveOpen] = useState(false);
+
+  const listingAssetClass = (detailQ.data as { asset_class?: string } | undefined)?.asset_class;
 
   const cloneM = useMutation({
     mutationFn: () => apiPost<CloneResponse>(
@@ -90,6 +94,26 @@ export default function ListingDetailScreen() {
       qc.invalidateQueries({ queryKey: ['strategies', uid] });
       qc.invalidateQueries({ queryKey: ['marketplace-detail', lid, uid] });
       qc.invalidateQueries({ queryKey: ['marketplace', uid] });
+      const ac = (resp.asset_class || listingAssetClass || 'crypto').toLowerCase();
+      const tradfi = isTradFi(ac);
+      if (tradfi) {
+        Alert.alert(
+          'Strategy added',
+          'The strategy is in paper-trading mode. Connect cTrader in Settings to go live on FP Markets when you are ready.',
+          [
+            { text: 'Stay here', style: 'cancel' },
+            {
+              text: 'Connect cTrader',
+              onPress: () => setGoLiveOpen(true),
+            },
+            {
+              text: 'View strategies',
+              onPress: () => router.replace('/(tabs)/strategies' as any),
+            },
+          ],
+        );
+        return;
+      }
       Alert.alert(
         'Strategy added',
         'The strategy is now in your portfolio in paper-trading mode. Activate it from the Strategies tab when you’re ready.',
@@ -362,6 +386,11 @@ export default function ListingDetailScreen() {
         ) : null}
       </ScrollView>
 
+      <GoLiveModal
+        visible={goLiveOpen}
+        onClose={() => setGoLiveOpen(false)}
+        defaultBroker="ctrader"
+      />
     </>
   );
 }
