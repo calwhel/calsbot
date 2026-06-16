@@ -53,6 +53,7 @@ class TestLiveFireLogging(unittest.TestCase):
         src = inspect.getsource(se.evaluate_and_fire)
         self.assertIn("[live-fire] SKIPPED strategy=", src)
         self.assertIn("resolved_targets=", src)
+        self.assertIn("no_live_intent", src)
 
 
 if __name__ == "__main__":

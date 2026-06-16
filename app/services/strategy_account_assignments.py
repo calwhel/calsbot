@@ -8,6 +8,9 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Asset classes routed through cTrader with per-account assignment toggles.
+TRADFI_BROKER_ASSET_CLASSES = ("forex", "index", "metals", "commodity")
+
 _CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS strategy_account_assignments (
         id SERIAL PRIMARY KEY,
@@ -85,6 +88,27 @@ def _format_assignments_log(targets: List[Dict[str, Any]]) -> str:
         lot = t.get("lot_size")
         parts.append(f"{acct}@{lot if lot is not None else 'default'}")
     return "[" + ", ".join(parts) + "]"
+
+
+def resolve_live_fire_intent(db, strategy, asset_class: str, prefs=None) -> tuple:
+    """Whether executor should place broker orders (vs paper-only tracking).
+
+    Source of truth for cTrader strategies:
+      1. Any enabled per-account assignment → live broker fire
+      2. Else legacy strategy.status == 'active' → live
+      3. Else paper-only tracking
+
+    Returns (wants_live: bool, fire_targets: list).
+    """
+    ac = (asset_class or "").strip().lower()
+    status_active = (getattr(strategy, "status", None) or "") == "active"
+    if ac not in TRADFI_BROKER_ASSET_CLASSES:
+        return status_active, []
+
+    targets = get_enabled_fire_targets(db, strategy, prefs)
+    if targets:
+        return True, targets
+    return status_active, []
 
 
 def get_enabled_fire_targets(db, strategy, prefs) -> List[Dict[str, Any]]:
