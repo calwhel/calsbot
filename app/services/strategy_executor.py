@@ -132,6 +132,9 @@ class ExecutorCycleCtx:
     execution_counts: Dict[int, Tuple[int, int]] = field(default_factory=dict)
     symbol_last_fired: Dict[int, Dict[str, datetime]] = field(default_factory=dict)
     assignment_targets: Dict[int, List[dict]] = field(default_factory=dict)
+    kline_cache_hits: int = 0
+    kline_cache_misses: int = 0
+    eval_kline_fetch_ms: float = 0.0
 
 
 _EXECUTOR_CYCLE_CTX: contextvars.ContextVar[Optional[ExecutorCycleCtx]] = (
@@ -141,6 +144,97 @@ _EXECUTOR_CYCLE_CTX: contextvars.ContextVar[Optional[ExecutorCycleCtx]] = (
 
 def _get_cycle_ctx() -> Optional[ExecutorCycleCtx]:
     return _EXECUTOR_CYCLE_CTX.get()
+
+
+def _record_kline_cache_hit() -> None:
+    ctx = _get_cycle_ctx()
+    if ctx is not None:
+        ctx.kline_cache_hits += 1
+
+
+def _record_kline_cache_miss() -> None:
+    ctx = _get_cycle_ctx()
+    if ctx is not None:
+        ctx.kline_cache_misses += 1
+
+
+def _record_kline_fetch_ms(ms: float) -> None:
+    ctx = _get_cycle_ctx()
+    if ctx is not None:
+        ctx.eval_kline_fetch_ms += ms
+
+
+def _seed_kline_cache(
+    cache: Optional[Dict],
+    symbol: str,
+    asset_class: str,
+    timeframe: str,
+    klines: List,
+) -> None:
+    """Populate shared cycle kline cache under all common limit keys."""
+    if cache is None or not klines:
+        return
+    sym = symbol.upper()
+    ac = asset_class
+    tf = timeframe
+    n = len(klines)
+    limits = {50, 100, 200, EXECUTOR_KLINE_BARS, n}
+    for lim in limits:
+        if isinstance(lim, int) and 0 < lim <= n:
+            cache[(sym, tf, lim, ac)] = klines[-lim:]
+
+
+def _strategy_eval_fingerprint(config: dict) -> str:
+    """Compact profile for slow-strategy diagnosis (symbols, TFs, condition types)."""
+    universe = config.get("universe") or {}
+    syms = [
+        str(s).upper()
+        for s in (universe.get("symbols") or [])
+        if isinstance(s, str) and s.strip()
+    ][:3]
+    conds = (config.get("entry_conditions") or {}).get("conditions") or []
+    tfs = sorted({
+        str(c.get("timeframe"))
+        for c in conds
+        if isinstance(c, dict) and c.get("timeframe")
+    })
+    if not tfs:
+        tfs = [_primary_timeframe(config)]
+    ctypes = [
+        str(c.get("type") or "?")
+        for c in conds[:6]
+        if isinstance(c, dict)
+    ]
+    htf = bool((config.get("filters") or {}).get("htf_trend"))
+    sym_s = ",".join(syms) if syms else "?"
+    return (
+        f"syms={sym_s} tfs={','.join(tfs[:4])} htf={htf} "
+        f"nconds={len(conds)} types={','.join(ctypes)}"
+    )
+
+
+def _log_eval_phase_timing(
+    strategy_id: int,
+    *,
+    db_caps_ms: float,
+    price_fetch_ms: float,
+    ta_compute_ms: float,
+    conditions_ms: float,
+    profile: str = "",
+) -> None:
+    total = db_caps_ms + price_fetch_ms + ta_compute_ms + conditions_ms
+    if total < 200:
+        return
+    logger.info(
+        "[eval] id=%s price_fetch=%.0fms ta_compute=%.0fms "
+        "db_caps=%.0fms conditions=%.0fms %s",
+        strategy_id,
+        price_fetch_ms,
+        ta_compute_ms,
+        db_caps_ms,
+        conditions_ms,
+        profile,
+    )
 
 
 def _accum_cycle_fire_ms(since_t0: float) -> None:
@@ -183,6 +277,14 @@ def _log_cycle_timing(
         if slowest:
             parts = " ".join(f"id={sid} eval={ms:.0f}ms" for sid, ms in slowest)
             logger.info("[cycle] slowest %s", parts)
+
+    ctx = _get_cycle_ctx()
+    if ctx is not None and (ctx.kline_cache_hits or ctx.kline_cache_misses):
+        logger.info(
+            "[cycle] kline_cache hits=%s misses=%s",
+            ctx.kline_cache_hits,
+            ctx.kline_cache_misses,
+        )
 
 async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size: int = 0) -> None:
     """Run evaluate tasks in chunks and log progress (visible in Railway during long scans)."""
@@ -863,6 +965,10 @@ async def _fetch_price_and_ta(
             )
             if not kl:
                 return None
+            _seed_kline_cache(
+                _get_cycle_ctx().kline_cache if _get_cycle_ctx() else None,
+                symbol, asset_class, tf, kl,
+            )
             # Drop forming bar for signal evaluation (closed-candle only).
             if len(kl) > 1:
                 kl = kl[:-1]
@@ -1222,12 +1328,19 @@ async def _check_htf_trend(
         if (now - fetched_at).total_seconds() < _HTF_CACHE_TTL:
             return is_bullish if direction == "LONG" else not is_bullish
 
-    # Fetch last 30 × 1H candles — route tradfi through yfinance.
+    # Fetch last 30 × 1H candles — route tradfi through shared cycle kline cache.
     closes: list = []
     if asset_class != "crypto":
         try:
-            from app.services.tradfi_prices import get_klines as _tradfi_klines
-            kl = await _tradfi_klines(symbol, asset_class, "1h", 60)
+            from app.services.strategy_ta import _get_klines as _ta_get_klines
+            _htf_cache: Dict = {}
+            _ctx_htf = _get_cycle_ctx()
+            if _ctx_htf and _ctx_htf.kline_cache:
+                _htf_cache.update(_ctx_htf.kline_cache)
+            _htf_cache["__asset_class__"] = asset_class
+            kl = await _ta_get_klines(symbol, "1h", 60, http_client, _htf_cache)
+            if _ctx_htf:
+                _ctx_htf.kline_cache.update(_htf_cache)
             if kl and len(kl) >= 10:
                 closes = [float(row[4]) for row in kl if row and len(row) >= 5]
         except Exception as e:
@@ -4418,6 +4531,28 @@ async def evaluate_and_fire(
 
     _strategy_gates: Dict[str, int] = {}
 
+    _eval_prof_t0 = time.monotonic()
+    _prof_price_t0: Optional[float] = None
+    _prof_price_done_t0: Optional[float] = None
+    _prof_conditions_ms = 0.0
+    _ctx_prof = _get_cycle_ctx()
+    if _ctx_prof is not None:
+        _ctx_prof.eval_kline_fetch_ms = 0.0
+
+    def _flush_eval_profile():
+        if _prof_price_t0 is None:
+            return
+        _log_eval_phase_timing(
+            strategy.id,
+            db_caps_ms=(_prof_price_t0 - _eval_prof_t0) * 1000.0,
+            price_fetch_ms=(
+                ((_prof_price_done_t0 or _prof_price_t0) - _prof_price_t0) * 1000.0
+            ),
+            ta_compute_ms=_ctx_prof.eval_kline_fetch_ms if _ctx_prof else 0.0,
+            conditions_ms=_prof_conditions_ms,
+            profile=_strategy_eval_fingerprint(config),
+        )
+
     def _bump(key: str):
         _strategy_gates[key] = _strategy_gates.get(key, 0) + 1
         if gate_stats is not None:
@@ -4888,6 +5023,7 @@ async def evaluate_and_fire(
     # shared _PRICE_TA_CACHE so subsequent calls inside evaluate_strategy_conditions
     # (which fetches its own klines) benefit from the same warm cache.
     # After cycle prefetch, cache hits avoid redundant network I/O per strategy.
+    _prof_price_t0 = time.monotonic()
     _eval_tf = _primary_timeframe(config)
     _uid = user.id if user else None
     _metal_paper = is_paper and asset_class == "forex"
@@ -4928,6 +5064,8 @@ async def evaluate_and_fire(
             sym: (res is True)
             for sym, res in zip(_htf_syms, _htf_results)
         }
+
+    _prof_price_done_t0 = time.monotonic()
 
     # ── Step 4: Sequential condition evaluation — price data already cached ───
     from app.services.feed_diagnostics import log_scan_metric
@@ -5046,13 +5184,17 @@ async def evaluate_and_fire(
             continue
 
         try:
+            _cond_t0 = time.monotonic()
             passed, details = await evaluate_strategy_conditions(
                 config, symbol, price_data, enhanced_ta, http_client,
                 strictness_level=strictness_level,
                 ctrader_user_id=_uid,
                 shared_kline_cache=_shared_klines,
             )
+            _prof_conditions_ms += (time.monotonic() - _cond_t0) * 1000.0
         except StrategyEvalCancelled:
+            _prof_conditions_ms += (time.monotonic() - _cond_t0) * 1000.0
+            _flush_eval_profile()
             logger.info(
                 f"[Strategy {strategy.id}] eval cancelled — skipping cycle"
             )
@@ -6018,6 +6160,8 @@ async def evaluate_and_fire(
         elif _conditions_failed_for_all:
             _bump("blk_ta_conditions")
 
+    _flush_eval_profile()
+
     try:
         from app.services.ctrader_order_queue import record_gate_stats
         record_gate_stats(strategy.id, _strategy_gates, persist_db=False)
@@ -6616,14 +6760,23 @@ async def _prefetch_price_ta_for_cycle(
         ac = _snap_asset_class(snap)
         if ac not in allowed_asset_classes:
             continue
-        tf = _primary_timeframe(snap.get("config") or {})
-        for sym in _symbols_for_snapshot(snap):
-            symbol_refs += 1
-            key = (sym, ac, tf)
-            if key in seen:
-                continue
-            seen.add(key)
-            jobs.append(key)
+        cfg = snap.get("config") or {}
+        conds = (cfg.get("entry_conditions") or {}).get("conditions") or []
+        tfs = {
+            str(c.get("timeframe"))
+            for c in conds
+            if isinstance(c, dict) and c.get("timeframe")
+        }
+        if not tfs:
+            tfs = {_primary_timeframe(cfg)}
+        for tf in tfs:
+            for sym in _symbols_for_snapshot(snap):
+                symbol_refs += 1
+                key = (sym, ac, tf)
+                if key in seen:
+                    continue
+                seen.add(key)
+                jobs.append(key)
     if not jobs:
         return {
             "unique_keys": 0,
@@ -6649,8 +6802,14 @@ async def _prefetch_price_ta_for_cycle(
     async def _warm(sym: str, ac: str, tf: str) -> None:
         if _cache_fresh(sym, ac, tf):
             stats["cache"] += 1
+            logger.info(
+                "[prefetch] sym=%s tf=%s provider=cache took=0ms",
+                sym, tf,
+            )
             return
         async with sem:
+            _ft0 = time.monotonic()
+            _provider = "?"
             try:
                 async with prefetch_fast_context():
                     result = await asyncio.wait_for(
@@ -6662,12 +6821,28 @@ async def _prefetch_price_ta_for_cycle(
                         ),
                         timeout=SYMBOL_BUDGET_S,
                     )
+                _ms = (time.monotonic() - _ft0) * 1000.0
                 if result:
                     stats["fetched"] += 1
+                    _provider = (
+                        result.get("kline_source")
+                        or result.get("price_source")
+                        or "ok"
+                    )
                 else:
                     stats["failed"] += 1
-            except Exception:
+                    _provider = "failed"
+                logger.info(
+                    "[prefetch] sym=%s tf=%s provider=%s took=%.0fms",
+                    sym, tf, _provider, _ms,
+                )
+            except Exception as exc:
+                _ms = (time.monotonic() - _ft0) * 1000.0
                 stats["failed"] += 1
+                logger.info(
+                    "[prefetch] sym=%s tf=%s provider=error:%s took=%.0fms",
+                    sym, tf, type(exc).__name__, _ms,
+                )
 
     await asyncio.gather(*[_warm(s, a, t) for s, a, t in jobs], return_exceptions=True)
     elapsed = time.monotonic() - t0
