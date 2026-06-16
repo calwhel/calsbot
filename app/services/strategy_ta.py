@@ -201,13 +201,53 @@ async def _get_klines(
     http_client, cache: Optional[Dict] = None
 ) -> Optional[List]:
     import time as _time
+
+    def _prof_hit():
+        try:
+            from app.services.strategy_executor import _record_kline_cache_hit
+            _record_kline_cache_hit()
+        except Exception:
+            pass
+
+    def _prof_miss():
+        try:
+            from app.services.strategy_executor import _record_kline_cache_miss
+            _record_kline_cache_miss()
+        except Exception:
+            pass
+
+    def _prof_fetch_ms(ms: float):
+        try:
+            from app.services.strategy_executor import _record_kline_fetch_ms
+            _record_kline_fetch_ms(ms)
+        except Exception:
+            pass
+
     # Route stocks/forex/indices through yfinance — cache stashes the strategy's
     # asset_class under '__asset_class__' (set by evaluate_strategy_conditions).
     _asset_class = (cache or {}).get("__asset_class__") if isinstance(cache, dict) else None
     if _asset_class and _asset_class != "crypto":
         _ckey = (symbol, interval, limit, _asset_class)
         if cache is not None and _ckey in cache:
+            _prof_hit()
             return cache[_ckey]
+        if cache is not None:
+            for ck, cv in list(cache.items()):
+                if (
+                    isinstance(ck, tuple)
+                    and len(ck) == 4
+                    and ck[0] == symbol
+                    and ck[1] == interval
+                    and ck[3] == _asset_class
+                    and isinstance(ck[2], int)
+                    and ck[2] >= limit
+                    and cv
+                ):
+                    sliced = cv[-limit:] if len(cv) > limit else cv
+                    cache[_ckey] = sliced
+                    _prof_hit()
+                    return sliced
+        _prof_miss()
         try:
             from app.services.tradfi_prices import (
                 get_klines as _tradfi_klines,
@@ -215,10 +255,12 @@ async def _get_klines(
             )
             _uid = (cache or {}).get("__ctrader_user_id__")
             _fetch_limit = max(limit, 200)
+            _ft0 = _time.monotonic()
             kl = await _tradfi_klines(
                 symbol, _asset_class, interval, _fetch_limit,
                 ctrader_user_id=_uid,
             )
+            _prof_fetch_ms((_time.monotonic() - _ft0) * 1000.0)
         except Exception as _e:
             logger.debug(f"tradfi klines fetch failed for {symbol} ({_asset_class}): {_e}")
             kl = []
@@ -227,6 +269,11 @@ async def _get_klines(
         sliced = kl[-limit:] if len(kl) > limit else kl
         if cache is not None:
             cache[_ckey] = sliced
+            # Seed sibling limit keys so other conditions with different limits hit.
+            sym_u = symbol.upper() if isinstance(symbol, str) else symbol
+            for lim in {50, 100, 200, _fetch_limit, len(kl)}:
+                if isinstance(lim, int) and 0 < lim <= len(kl):
+                    cache[(sym_u, interval, lim, _asset_class)] = kl[-lim:]
             if _metal_synth(symbol, interval, _fetch_limit):
                 cache["__synthetic_bars__"] = True
         return sliced
