@@ -77,12 +77,16 @@ const MARKET_LABEL: Record<string, string> = {
   forex:  '💱 Forex',
   stock:  '📈 Stocks',
   index:  '📊 Indices',
+  metals: '🥇 Metals',
+  commodity: '📦 Commodity',
 };
 const MARKET_COLOR: Record<string, string> = {
   crypto: '#5B6CF7',
   forex:  '#22c55e',
   stock:  '#f59e0b',
   index:  '#a855f7',
+  metals: '#eab308',
+  commodity: '#ca8a04',
 };
 
 const StrategyCard = React.memo(function StrategyCard({ s, onPress }: { s: Strategy; onPress: () => void }) {
@@ -96,7 +100,7 @@ const StrategyCard = React.memo(function StrategyCard({ s, onPress }: { s: Strat
   const symbol = (s.config?.symbol as string) || 'BTC';
   const timeframe = (s.config?.timeframe as string) || '';
   const _cfg = s.config as Record<string, any> | undefined;
-  const assetClass = (_cfg?._asset_class || _cfg?.asset_class || 'crypto') as string;
+  const assetClass = ((s as { asset_class?: string }).asset_class || _cfg?._asset_class || _cfg?.asset_class || 'crypto') as string;
   const isForexLike = ['forex', 'index', 'metals', 'commodity'].includes(assetClass);
   const marketLabel = MARKET_LABEL[assetClass] ?? assetClass.toUpperCase();
   const marketColor = MARKET_COLOR[assetClass] ?? '#5B6CF7';

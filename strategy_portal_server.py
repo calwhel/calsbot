@@ -251,7 +251,11 @@ _LF_LIVE_ROWS_SQL_EXT = """
     LEFT JOIN strategy_executions e ON e.strategy_id = s.id
     WHERE s.user_id = :uid
       AND s.status IN ('active','paused','paper')
-      AND s.asset_class IN ('forex','index','metals','commodity')
+      AND (
+        s.asset_class IN ('forex','index','metals','commodity')
+        OR COALESCE(s.config->>'asset_class', s.config->>'_asset_class', '')
+           IN ('forex','index','metals','commodity')
+      )
     GROUP BY s.id
     ORDER BY (s.status='active') DESC, s.updated_at DESC
     LIMIT 30
@@ -273,7 +277,11 @@ _LF_LIVE_ROWS_SQL_BASIC = """
     LEFT JOIN strategy_executions e ON e.strategy_id = s.id
     WHERE s.user_id = :uid
       AND s.status IN ('active','paused','paper')
-      AND s.asset_class IN ('forex','index','metals','commodity')
+      AND (
+        s.asset_class IN ('forex','index','metals','commodity')
+        OR COALESCE(s.config->>'asset_class', s.config->>'_asset_class', '')
+           IN ('forex','index','metals','commodity')
+      )
     GROUP BY s.id
     ORDER BY (s.status='active') DESC, s.updated_at DESC
     LIMIT 30
@@ -450,6 +458,17 @@ def _lf_build_strategy_card(s: dict, sparkline_by_id: dict) -> dict:
                 cfg = {}
         if not isinstance(cfg, dict):
             cfg = {}
+        _col_ac = (s.get("asset_class") or "").strip().lower()
+        _cfg_ac = (cfg.get("asset_class") or cfg.get("_asset_class") or "").strip().lower()
+        _tradfi = {"forex", "index", "metals", "commodity"}
+        if _col_ac == "crypto" and _cfg_ac in _tradfi:
+            _resolved_ac = _cfg_ac
+        elif _col_ac in _tradfi:
+            _resolved_ac = _col_ac
+        elif _cfg_ac in _tradfi:
+            _resolved_ac = _cfg_ac
+        else:
+            _resolved_ac = _col_ac or _cfg_ac or "forex"
         risk = cfg.get("risk")
         if not isinstance(risk, dict):
             risk = {}
@@ -493,7 +512,7 @@ def _lf_build_strategy_card(s: dict, sparkline_by_id: dict) -> dict:
             _spark_cum.append(_run)
         return {
             "id": s["id"], "name": s["name"], "status": s["status"],
-            "asset_class": s["asset_class"],
+            "asset_class": _resolved_ac,
             "account_assignments": s.get("account_assignments") or [],
             "symbols": [str(x).upper() for x in syms][:8] or ["—"],
             "open_count": int(s.get("open_count") or 0),
@@ -515,7 +534,7 @@ def _lf_build_strategy_card(s: dict, sparkline_by_id: dict) -> dict:
         return _lf_minimal_strategy_card(s, error=True)
 
 
-def _slim_strategy_config(cfg: dict) -> dict:
+def _slim_strategy_config(cfg: dict, asset_class: str = None) -> dict:
     """Card-view config slice — drops heavy entry_conditions/universe blobs."""
     if not cfg:
         return {}
@@ -531,8 +550,9 @@ def _slim_strategy_config(cfg: dict) -> dict:
         k: exit_[k] for k in ("take_profit_pct", "stop_loss_pct")
         if exit_.get(k) is not None
     }
+    ac = asset_class or cfg.get("asset_class") or cfg.get("_asset_class") or "crypto"
     return {
-        "asset_class": cfg.get("asset_class") or cfg.get("_asset_class") or "crypto",
+        "asset_class": ac,
         "direction": cfg.get("direction"),
         "_locked": cfg.get("_locked"),
         "risk": slim_risk,
@@ -7523,12 +7543,14 @@ async def api_strategies(uid: str = Query(...)):
                 health_score = round(min(health, 10.0), 1)
 
                 cfg = s.config or {}
+                _ac = _strategy_asset_class(s)
                 result.append({
                     "id":           s.id,
                     "name":         s.name,
                     "description":  s.description,
                     "status":       s.status,
-                    "config":       _slim_strategy_config(cfg),
+                    "asset_class":  _ac,
+                    "config":       _slim_strategy_config(cfg, asset_class=_ac),
                     "is_locked":    bool(cfg.get("_locked")),
                     "is_public":    s.is_public,
                     "created_at":   s.created_at.isoformat() if s.created_at else None,
