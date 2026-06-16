@@ -6590,6 +6590,105 @@ def _preload_strategy_users(
         db.close()
 
 
+def _stale_price_ta_lookup(
+    symbol: str,
+    asset_class: str,
+    timeframe: str,
+) -> Optional[Dict]:
+    """Return expired price+TA cache entry — used when a live fetch times out."""
+    cache_key = _price_ta_cache_key(symbol, asset_class, timeframe)
+    cached = _PRICE_TA_CACHE.get(cache_key)
+    if cached:
+        return cached[0]
+    return None
+
+
+def _price_ta_from_klines(
+    symbol: str,
+    asset_class: str,
+    timeframe: str,
+    kl: List,
+    *,
+    kline_source: str = "cache",
+) -> Optional[Dict]:
+    """Build a minimal price+TA dict from cached OHLC rows (prefetch timeout fallback)."""
+    if not kl or len(kl) < 2:
+        return None
+    work = kl[:-1] if len(kl) > 1 else kl
+    closes = [float(row[4]) for row in work if row and len(row) >= 5]
+    if len(closes) < 2:
+        return None
+    kline_close = closes[-1]
+    rsi = 50.0
+    if len(closes) >= 15:
+        gains, losses = [], []
+        for i in range(1, len(closes)):
+            d = closes[i] - closes[i - 1]
+            gains.append(max(d, 0.0))
+            losses.append(max(-d, 0.0))
+        ag = sum(gains[-14:]) / 14
+        al = sum(losses[-14:]) / 14
+        rsi = 100.0 if al == 0 else 100.0 - (100.0 / (1.0 + (ag / al)))
+    price = kline_close
+    result = {
+        "price": price,
+        "price_source": "kline_cache",
+        "live_source": None,
+        "kline_close": kline_close,
+        "kline_source": kline_source,
+        "kline_synthetic": (kline_source or "").lower() == "synthetic",
+        "candles_loaded": len(work),
+        "bid": None,
+        "ask": None,
+        "bid_price": None,
+        "ask_price": None,
+        "change_24h": (
+            (price - closes[-min(96, len(closes))]) / closes[-min(96, len(closes))] * 100
+        ) if closes[-min(96, len(closes))] else 0.0,
+        "volume_24h": 0.0,
+        "high_24h": max(closes[-min(96, len(closes)):]),
+        "low_24h": min(closes[-min(96, len(closes)):]),
+        "rsi": rsi,
+        "volume_ratio": 1.0,
+        "btc_correlation": 0.0,
+        "enhanced_ta": {},
+        "_asset_class": asset_class,
+        "_timeframe": timeframe or "15m",
+    }
+    cache_key = _price_ta_cache_key(symbol, asset_class, timeframe)
+    _PRICE_TA_CACHE[cache_key] = (result, datetime.utcnow())
+    return result
+
+
+def _prefetch_fallback_price_ta(
+    symbol: str,
+    asset_class: str,
+    timeframe: str,
+    *,
+    ctrader_user_id: Optional[int] = None,
+) -> Tuple[Optional[Dict], str]:
+    """On prefetch timeout, prefer stale price_ta then cTrader/tradfi kline caches."""
+    stale = _stale_price_ta_lookup(symbol, asset_class, timeframe)
+    if stale:
+        return stale, "price_ta_cache"
+    if asset_class == "crypto":
+        return None, ""
+    try:
+        from app.services.tradfi_prices import peek_cached_klines
+        rows, src = peek_cached_klines(
+            symbol, asset_class, timeframe, EXECUTOR_KLINE_BARS, ctrader_user_id,
+        )
+        if rows:
+            built = _price_ta_from_klines(
+                symbol, asset_class, timeframe, rows, kline_source=src or "cache",
+            )
+            if built:
+                return built, src or "kline_cache"
+    except Exception:
+        pass
+    return None, ""
+
+
 async def _prefetch_price_ta_for_cycle(
     snapshots: list,
     http_client: httpx.AsyncClient,
@@ -6635,7 +6734,7 @@ async def _prefetch_price_ta_for_cycle(
 
     sem = asyncio.Semaphore(EXECUTOR_PREFETCH_CONCURRENT)
     t0 = time.monotonic()
-    stats = {"cache": 0, "fetched": 0, "failed": 0}
+    stats = {"cache": 0, "fetched": 0, "failed": 0, "fallback": 0}
 
     def _cache_fresh(sym: str, ac: str, tf: str) -> bool:
         cache_key = f"{ac}:{sym}:{tf}" if ac != "crypto" else sym
@@ -6646,9 +6745,24 @@ async def _prefetch_price_ta_for_cycle(
         _ttl = _PRICE_TA_TTL if ac == "crypto" else _PRICE_TA_TTL_TRADFI
         return (datetime.utcnow() - fetched_at).total_seconds() < _ttl
 
+    def _log_prefetch(
+        sym: str,
+        ac: str,
+        tf: str,
+        provider: str,
+        took_ms: float,
+        result: str,
+    ) -> None:
+        logger.info(
+            "[prefetch] sym=%s ac=%s tf=%s provider=%s took=%.0fms result=%s",
+            sym, ac, tf, provider, took_ms, result,
+        )
+
     async def _warm(sym: str, ac: str, tf: str) -> None:
+        _ft0 = time.monotonic()
         if _cache_fresh(sym, ac, tf):
             stats["cache"] += 1
+            _log_prefetch(sym, ac, tf, "cache", 0.0, "ok")
             return
         async with sem:
             try:
@@ -6662,12 +6776,53 @@ async def _prefetch_price_ta_for_cycle(
                         ),
                         timeout=SYMBOL_BUDGET_S,
                     )
+                _ms = (time.monotonic() - _ft0) * 1000.0
                 if result:
                     stats["fetched"] += 1
+                    _provider = (
+                        result.get("kline_source")
+                        or result.get("live_source")
+                        or result.get("price_source")
+                        or "ok"
+                    )
+                    _log_prefetch(sym, ac, tf, str(_provider), _ms, "ok")
+                    return
+                fb, fb_src = _prefetch_fallback_price_ta(
+                    sym, ac, tf, ctrader_user_id=ctrader_user_id,
+                )
+                _ms = (time.monotonic() - _ft0) * 1000.0
+                if fb:
+                    stats["fetched"] += 1
+                    stats["fallback"] += 1
+                    _log_prefetch(sym, ac, tf, fb_src or "cache", _ms, "fallback")
                 else:
                     stats["failed"] += 1
-            except Exception:
-                stats["failed"] += 1
+                    _log_prefetch(sym, ac, tf, "empty", _ms, "failed")
+            except asyncio.TimeoutError:
+                _ms = (time.monotonic() - _ft0) * 1000.0
+                fb, fb_src = _prefetch_fallback_price_ta(
+                    sym, ac, tf, ctrader_user_id=ctrader_user_id,
+                )
+                if fb:
+                    stats["fetched"] += 1
+                    stats["fallback"] += 1
+                    logger.info("[prefetch] sym=%s TIMEOUT → using cached", sym)
+                    _log_prefetch(sym, ac, tf, fb_src or "cache", _ms, "fallback")
+                else:
+                    stats["failed"] += 1
+                    _log_prefetch(sym, ac, tf, "timeout", _ms, "timeout")
+            except Exception as exc:
+                _ms = (time.monotonic() - _ft0) * 1000.0
+                fb, fb_src = _prefetch_fallback_price_ta(
+                    sym, ac, tf, ctrader_user_id=ctrader_user_id,
+                )
+                if fb:
+                    stats["fetched"] += 1
+                    stats["fallback"] += 1
+                    _log_prefetch(sym, ac, tf, fb_src or "cache", _ms, "fallback")
+                else:
+                    stats["failed"] += 1
+                    _log_prefetch(sym, ac, tf, type(exc).__name__, _ms, "failed")
 
     await asyncio.gather(*[_warm(s, a, t) for s, a, t in jobs], return_exceptions=True)
     elapsed = time.monotonic() - t0
@@ -6675,13 +6830,14 @@ async def _prefetch_price_ta_for_cycle(
         f"[{_log_ts()}] [{label}] prefetch {len(jobs)} unique symbols "
         f"({symbol_refs} strategy-symbol refs) in {elapsed:.1f}s "
         f"({stats['cache']} from cache, {stats['fetched']} fetched, "
-        f"{stats['failed']} failed)"
+        f"{stats['fallback']} fallback, {stats['failed']} failed)"
     )
     return {
         "unique_keys": len(jobs),
         "symbol_refs": symbol_refs,
         "cache": stats["cache"],
         "fetched": stats["fetched"],
+        "fallback": stats["fallback"],
         "failed": stats["failed"],
     }
 

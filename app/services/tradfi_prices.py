@@ -350,6 +350,59 @@ def is_metal_kline_synthetic(
     return (get_metal_kline_source(symbol, timeframe, limit) or "").lower() == "synthetic"
 
 
+def peek_cached_klines(
+    symbol: str,
+    asset_class: str,
+    timeframe: str = "15m",
+    limit: int = 200,
+    ctrader_user_id: Optional[int] = None,
+) -> Tuple[List[List[float]], str]:
+    """
+    Return last-known OHLC bars without network I/O.
+    Prefers cTrader tick-updated cache over stale external-provider bars.
+  """
+    sym = symbol.upper().replace("/", "").replace("-", "")
+    cls = normalize_asset_class(asset_class)
+    best_rows: List[List[float]] = []
+    best_src = ""
+
+    # 1. cTrader inline tick→bar cache (live forex/metals — freshest on hot paths).
+    try:
+        from app.services.ctrader_price_feed import _kline_cache as _ct_cache
+        for key, (rows, _ts) in _ct_cache.items():
+            if not isinstance(key, tuple) or len(key) < 2:
+                continue
+            if str(key[0]).upper() != sym or str(key[1]) != timeframe:
+                continue
+            if rows and len(rows) > len(best_rows):
+                best_rows = rows
+                best_src = "ctrader-cache"
+    except Exception:
+        pass
+
+    # 2. tradfi _KLINE_CACHE — yahoo/coinbase/kraken/metal keys (symbol in key[0] or key[1]).
+    for key, (rows, _fetched_at) in _KLINE_CACHE.items():
+        if not rows:
+            continue
+        key_sym = ""
+        if isinstance(key, tuple) and key:
+            key_sym = str(key[0]).replace("kraken:", "").upper()
+            if key_sym in ("yahoo", "binance", "coinbase", "kraken") and len(key) > 1:
+                key_sym = str(key[1]).upper()
+        if key_sym and sym not in (key_sym, key_sym.replace("=X", "")):
+            if sym not in _METALS_BINANCE_MAP or _METALS_BINANCE_MAP.get(sym) != key_sym:
+                continue
+        if len(rows) > len(best_rows):
+            best_rows = rows
+            label = get_metal_kline_source(sym, timeframe, limit)
+            best_src = label or "tradfi-cache"
+
+    if best_rows:
+        out = best_rows[-limit:] if len(best_rows) > limit else best_rows
+        return out, best_src or "cache"
+    return [], ""
+
+
 def _metal_live_fetch_sem() -> asyncio.Semaphore:
     global _METAL_LIVE_FETCH_SEM
     if _METAL_LIVE_FETCH_SEM is None:
@@ -527,6 +580,21 @@ async def fetch_index_scan_candles(
 
     best: List[List[float]] = []
     _min_bars = _scan_min_bars(limit)
+
+    try:
+        from app.services.prefetch_fast import prefetch_fast_active
+        if prefetch_fast_active():
+            cached_rows, cached_src = peek_cached_klines(
+                sym, "index", timeframe, limit, user_id,
+            )
+            if cached_rows and len(cached_rows) >= _min_bars:
+                logger.info(
+                    f"[tradfi] prefetch-fast cache hit {sym} {timeframe} "
+                    f"src={cached_src} → {len(cached_rows)} bars"
+                )
+                return cached_rows[-limit:] if len(cached_rows) > limit else cached_rows
+    except Exception:
+        pass
 
     async def _keep(rows: List[List[float]], label: str) -> None:
         nonlocal best
@@ -973,6 +1041,22 @@ async def fetch_metal_live_candles(
 
     sym = symbol.upper()
     min_bars = _metal_kline_min_bars(limit)
+
+    try:
+        from app.services.prefetch_fast import prefetch_fast_active
+        if prefetch_fast_active():
+            cached_rows, cached_src = peek_cached_klines(
+                sym, "forex", timeframe, limit, user_id,
+            )
+            if cached_rows and len(cached_rows) >= min(min_bars, 15):
+                logger.info(
+                    f"[tradfi] prefetch-fast cache hit {sym} {timeframe} "
+                    f"src={cached_src} → {len(cached_rows)} bars"
+                )
+                return cached_rows[-limit:] if len(cached_rows) > limit else cached_rows
+    except Exception:
+        pass
+
     _kraken_timeout = provider_timeout_s(max(8.0, _KRAKEN_KLINE_TIMEOUT_S))
     _fmp_timeout = provider_timeout_s(max(8.0, _FMP_KLINE_TIMEOUT_S))
     _ct_timeout = provider_timeout_s(_CTRADER_KLINE_TIMEOUT_LIVE_S)
@@ -1264,6 +1348,22 @@ async def fetch_forex_scan_candles(
     sym = symbol.upper().replace("/", "").replace("-", "")
     yahoo_ticker = yf_ticker("forex", sym)
     best: List[List[float]] = []
+
+    try:
+        from app.services.prefetch_fast import prefetch_fast_active
+        if prefetch_fast_active():
+            cached_rows, cached_src = peek_cached_klines(
+                sym, "forex", timeframe, limit, user_id,
+            )
+            _min_early = _scan_min_bars(limit)
+            if cached_rows and len(cached_rows) >= _min_early:
+                logger.info(
+                    f"[tradfi] prefetch-fast cache hit {sym} {timeframe} "
+                    f"src={cached_src} → {len(cached_rows)} bars"
+                )
+                return cached_rows[-limit:] if len(cached_rows) > limit else cached_rows
+    except Exception:
+        pass
 
     async def _keep(rows: List[List[float]], label: str) -> None:
         nonlocal best
@@ -1662,6 +1762,17 @@ async def get_klines(
                 f"[tradfi] get_klines budget hit for {symbol.upper()} "
                 f"{timeframe} (max_wait_s={max_wait_s})"
             )
+            cached_rows, cached_src = peek_cached_klines(
+                symbol, asset_class, timeframe, limit, ctrader_user_id,
+            )
+            if cached_rows:
+                logger.warning(
+                    f"[tradfi] get_klines TIMEOUT → cached {symbol.upper()} "
+                    f"{timeframe} src={cached_src} ({len(cached_rows)} bars)"
+                )
+                if not fut.done():
+                    fut.set_result(cached_rows)
+                return cached_rows
             if not fut.done():
                 fut.set_result([])
             return []

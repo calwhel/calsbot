@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.strategy_executor import (
     ExecutorCycleCtx,
+    _PRICE_TA_CACHE,
     _log_cycle_timing,
     _prefetch_price_ta_for_cycle,
     _price_ta_cache_key,
@@ -41,6 +42,9 @@ class TestCycleTimingLog(unittest.TestCase):
 
 
 class TestPrefetchDedup(unittest.TestCase):
+    def setUp(self):
+        _PRICE_TA_CACHE.clear()
+
     def test_dedupes_symbol_timeframe_across_snapshots(self):
         snapshots = [
             {
@@ -91,6 +95,9 @@ class TestPrefetchDedup(unittest.TestCase):
 
 
 class TestPriceTaCacheLookup(unittest.TestCase):
+    def setUp(self):
+        _PRICE_TA_CACHE.clear()
+
     def test_cache_key_includes_asset_class_and_timeframe(self):
         key = _price_ta_cache_key("XAUUSD", "forex", "15m")
         self.assertEqual(key, "forex:XAUUSD:15m")
