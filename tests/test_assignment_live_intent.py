@@ -131,6 +131,27 @@ class TestGetEnabledFireTargets(unittest.TestCase):
         self.assertEqual(targets, [{"ctrader_account_id": "12345", "lot_size": 0.02}])
 
 
+class TestDualAccountFireFixes(unittest.TestCase):
+    def test_max_open_uses_one_slot_not_per_account(self):
+        from app.services import strategy_executor as se
+
+        src = inspect.getsource(se.evaluate_and_fire)
+        self.assertIn("One signal event = one max-open slot", src)
+        self.assertNotIn("fire_slot_count(db, strategy", src)
+
+    def test_fanout_returns_queued_any(self):
+        from app.services import strategy_executor as se
+
+        src = inspect.getsource(se._ctrader_fanout_live_fire_impl)
+        self.assertIn("return _queued_any", src)
+
+    def test_fanout_failure_no_single_exec_fallthrough(self):
+        from app.services import strategy_executor as se
+
+        src = inspect.getsource(se.evaluate_and_fire)
+        self.assertIn("not falling through to single-exec (multi-account)", src)
+
+
 class TestPropagateLiveGate(unittest.TestCase):
     def test_propagate_uses_resolve_live_fire_intent(self):
         from app.services import strategy_executor as se

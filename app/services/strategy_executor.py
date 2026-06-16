@@ -1768,7 +1768,7 @@ async def _ctrader_fanout_live_fire_impl(
                 source_execution_id=executions[0][0].id,
                 http_client=http_client,
             ))
-    return True
+    return _queued_any
 
 
 def _fired_today_for_symbol(strategy_id: int, symbol: str, db) -> bool:
@@ -4442,21 +4442,21 @@ async def evaluate_and_fire(
     max_open      = int(risk.get("max_open_positions") or 1)
     cooldown_mins = int(risk.get("cooldown_minutes") or 30)
 
+    # One signal event = one max-open slot regardless of parallel fan-out width.
+    # (Enabling live + demo must not require max_open_positions >= 2.)
     _fire_slots = 1
-    if asset_class in ("forex", "index", "metals", "commodity"):
-        try:
-            from app.models import UserPreference as _UP_slots
-            from app.services.strategy_account_assignments import fire_slot_count
-            _slot_prefs = db.query(_UP_slots).filter(_UP_slots.user_id == user.id).first()
-            _fire_slots = fire_slot_count(db, strategy, _slot_prefs)
-        except Exception:
-            _fire_slots = 1
 
     if _daily_execution_count(strategy.id, db) >= max_per_day:
         _bump("blk_daily_cap")
         return
     if _open_execution_count(strategy.id, db) + _fire_slots > max_open:
         _bump("blk_max_open")
+        logger.info(
+            "[live-fire] SKIPPED strategy=%s reason=blk_max_open open=%s max_open=%s",
+            strategy.id,
+            _open_execution_count(strategy.id, db),
+            max_open,
+        )
         return
 
     # ── Forex: daily pip loss cap ─────────────────────────────────────────────
@@ -5090,11 +5090,12 @@ async def evaluate_and_fire(
                 break
             if len(_fire_targets) > 1:
                 logger.critical(
-                    "[live-fire] fan-out returned False strategy=%s targets=%s — "
-                    "falling through to single-exec path",
+                    "[live-fire] fan-out failed strategy=%s targets=%s — "
+                    "not falling through to single-exec (multi-account)",
                     strategy.id,
                     _format_fire_targets_log(_fire_targets),
                 )
+                continue
 
         _preset_ctid = (
             _fire_targets[0].get("ctrader_account_id") or _fire_targets[0].get("ctid")
