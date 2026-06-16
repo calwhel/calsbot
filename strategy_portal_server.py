@@ -7955,34 +7955,47 @@ async def api_marketplace(
         } if _mkt_author_ids else {}
 
         # Bulk-load equity curves in ONE query (was N+1 — one per listing)
-        _equity_raw: dict[int, list] = {}
+        _equity_pct_raw: dict[int, list] = {}
+        _equity_pips_raw: dict[int, list] = {}
         if _strat_ids:
             from sqlalchemy import text as _eqt
             _ids_str = ",".join(str(i) for i in _strat_ids)
             _eq_rows = db.execute(_eqt(f"""
-                SELECT strategy_id, pnl_pct FROM (
-                    SELECT strategy_id, pnl_pct, fired_at,
+                SELECT strategy_id, pnl_pct, pips_pnl FROM (
+                    SELECT strategy_id, pnl_pct, pips_pnl, fired_at,
                            ROW_NUMBER() OVER (PARTITION BY strategy_id ORDER BY fired_at ASC) AS rn
                     FROM strategy_executions
                     WHERE strategy_id = ANY(ARRAY[{_ids_str}]::int[])
                       AND outcome IN ('WIN','LOSS','BREAKEVEN')
-                      AND pnl_pct IS NOT NULL
+                      AND (pnl_pct IS NOT NULL OR pips_pnl IS NOT NULL)
                 ) t WHERE rn <= 30
                 ORDER BY strategy_id, fired_at ASC
             """)).fetchall()
             for row in _eq_rows:
-                _equity_raw.setdefault(row.strategy_id, []).append(float(row.pnl_pct))
+                if row.pnl_pct is not None:
+                    _equity_pct_raw.setdefault(row.strategy_id, []).append(float(row.pnl_pct))
+                if row.pips_pnl is not None:
+                    _equity_pips_raw.setdefault(row.strategy_id, []).append(float(row.pips_pnl))
+
+        _TRADFI_AC = frozenset({"forex", "index", "metals", "stock"})
 
         result = []
         for m in listings:
             perf   = _perf_map2.get(m.strategy_id)
             author = _mkt_author_map.get(m.author_id)
-            # Build cumulative equity curve from pre-loaded data
+            _ac = _asset_map.get(m.strategy_id, "crypto")
+            _tradfi = _ac in _TRADFI_AC
+            # Cumulative equity — pips for forex/index/metals (meaningful), % for crypto
+            _series = (
+                _equity_pips_raw.get(m.strategy_id, [])
+                if _tradfi
+                else _equity_pct_raw.get(m.strategy_id, [])
+            )
             equity = []
             cum = 0.0
-            for pnl in _equity_raw.get(m.strategy_id, []):
-                cum += pnl
-                equity.append(round(cum, 2))
+            for v in _series:
+                cum += v
+                equity.append(round(cum, 1 if _tradfi else 2))
             result.append({
                 "id":               m.id,
                 "strategy_id":      m.strategy_id,
@@ -8008,9 +8021,13 @@ async def api_marketplace(
                 "verified_win_rate": round(m.verified_win_rate, 1) if m.is_verified and m.verified_win_rate else None,
                 "verified_pnl":     round(m.verified_pnl, 2) if m.is_verified and m.verified_pnl else None,
                 "live_win_rate":    round(perf.win_rate, 1) if perf and perf.total_trades >= 3 else None,
-                "live_pnl":         round(perf.total_pnl_pct, 2) if perf and perf.total_trades >= 3 else None,
+                "live_pnl":         round(perf.total_pnl_pct, 2) if perf and perf.total_trades >= 3 and not _tradfi else None,
+                "live_pips_pnl":    round(perf.total_pips_pnl, 1) if (
+                    _tradfi and perf and perf.total_pips_pnl is not None and perf.total_trades >= 3
+                ) else None,
                 "live_trades":      perf.total_trades if perf else 0,
                 "equity_curve":     equity,
+                "equity_in_pips":   _tradfi,
                 "author_name":      (author.first_name or author.username or "Anonymous") if author else "Anonymous",
                 "author_uid":       author.uid if author else None,
                 "is_owned":         m.id in my_purchases or (m.pricing_model or "free") == "free",
@@ -8069,19 +8086,26 @@ async def api_marketplace_leaderboard(
                        m.price_usdt   AS price_usdt,
                        m.is_verified  AS is_verified,
                        m.is_ai_generated AS is_ai_generated,
+                       COALESCE(us.asset_class, 'crypto') AS asset_class,
                        COALESCE(SUM(e.pnl_pct), 0) AS pnl_sum,
+                       COALESCE(SUM(e.pips_pnl), 0) AS pips_sum,
                        COUNT(e.id)              AS trades,
                        SUM(CASE WHEN e.outcome = 'WIN' THEN 1 ELSE 0 END) AS wins,
                        SUM(CASE WHEN e.outcome IN ('WIN','LOSS') THEN 1 ELSE 0 END) AS decisive
                 FROM strategy_marketplace m
+                JOIN user_strategies us ON us.id = m.strategy_id
                 JOIN strategy_executions e ON e.strategy_id = m.strategy_id
                 WHERE e.outcome IN ('WIN', 'LOSS', 'BREAKEVEN')
                   AND e.pnl_pct IS NOT NULL
                   {cutoff_clause}
                 GROUP BY m.id, m.title, m.author_id, m.pricing_model, m.price_usdt,
-                         m.is_verified, m.is_ai_generated
+                         m.is_verified, m.is_ai_generated, us.asset_class
                 HAVING COUNT(e.id) >= 1
-                ORDER BY pnl_sum DESC
+                ORDER BY CASE
+                    WHEN COALESCE(us.asset_class, 'crypto') IN ('forex','index','metals','stock')
+                    THEN COALESCE(SUM(e.pips_pnl), 0)
+                    ELSE COALESCE(SUM(e.pnl_pct), 0)
+                END DESC
                 LIMIT :limit
             """), params).fetchall()
 
@@ -8093,11 +8117,14 @@ async def api_marketplace_leaderboard(
                     names[u.id] = u.first_name or u.username or "Anonymous"
 
             entries = []
+            _TRADFI_AC = frozenset({"forex", "index", "metals", "stock"})
             for rank, r in enumerate(rows, 1):
                 trades   = int(r.trades or 0)
                 wins     = int(r.wins or 0)
                 decisive = int(getattr(r, "decisive", 0) or 0)
                 wr       = round((wins / decisive) * 100, 1) if decisive > 0 else 0.0
+                _ac = (getattr(r, "asset_class", None) or "crypto").lower()
+                _tradfi = _ac in _TRADFI_AC
                 entries.append({
                     "rank":          rank,
                     "listing_id":    r.listing_id,
@@ -8107,7 +8134,9 @@ async def api_marketplace_leaderboard(
                     "price_usdt":    float(r.price_usdt or 0),
                     "is_verified":   bool(r.is_verified),
                     "is_ai_generated": bool(r.is_ai_generated),
-                    "pnl_pct":       round(float(r.pnl_sum or 0), 2),
+                    "asset_class":   _ac,
+                    "pnl_pct":       round(float(r.pnl_sum or 0), 2) if not _tradfi else None,
+                    "pips_pnl":      round(float(getattr(r, "pips_sum", 0) or 0), 1) if _tradfi else None,
                     "trades":        trades,
                     "win_rate":      wr,
                 })
@@ -8166,6 +8195,29 @@ async def api_marketplace_detail(listing_id: int, uid: str = Query(...)):
             StrategyRating.rater_id == user.id, StrategyRating.listing_id == listing_id
         ).first()
 
+        _orig_strat = db.query(UserStrategy).filter(UserStrategy.id == m.strategy_id).first()
+        _ac = _strategy_asset_class(_orig_strat) if _orig_strat else "crypto"
+        _tradfi = _ac in ("forex", "index", "metals", "stock")
+
+        # Pip-based equity curve for tradfi listings
+        _eq_rows = (
+            db.query(StrategyExecution.pips_pnl if _tradfi else StrategyExecution.pnl_pct)
+            .filter(
+                StrategyExecution.strategy_id == m.strategy_id,
+                StrategyExecution.outcome.in_(["WIN", "LOSS", "BREAKEVEN"]),
+            )
+            .order_by(StrategyExecution.fired_at.asc())
+            .limit(30)
+            .all()
+        )
+        equity = []
+        cum = 0.0
+        for (val,) in _eq_rows:
+            if val is None:
+                continue
+            cum += float(val)
+            equity.append(round(cum, 1 if _tradfi else 2))
+
         return JSONResponse({
             "id": m.id, "title": m.title, "summary": m.summary,
             "tags": m.tags or [], "category": m.category or "general",
@@ -8175,15 +8227,22 @@ async def api_marketplace_detail(listing_id: int, uid: str = Query(...)):
             "avg_rating": round(m.avg_rating or 0, 1), "rating_count": m.rating_count or 0,
             "clone_count": m.clone_count or 0, "subscriber_count": m.subscriber_count or 0,
             "view_count": m.view_count or 0, "is_owned": is_owned,
+            "asset_class": _ac,
+            "equity_curve": equity,
+            "equity_in_pips": _tradfi,
             "author_name": (author.first_name or author.username or "Anonymous") if author else "Anonymous",
             "author_uid": author.uid if author else None,
             "live_performance": {
                 "total_trades": perf.total_trades if perf else 0,
                 "win_rate": round(perf.win_rate, 1) if perf else 0,
-                "total_pnl": round(perf.total_pnl_pct, 2) if perf else 0,
+                "total_pnl": round(perf.total_pnl_pct, 2) if perf and not _tradfi else None,
+                "total_pips_pnl": round(perf.total_pips_pnl, 1) if (
+                    perf and _tradfi and perf.total_pips_pnl is not None
+                ) else None,
             },
             "recent_trades": [{"symbol": ex.symbol, "direction": ex.direction, "outcome": ex.outcome,
-                "pnl_pct": round(ex.pnl_pct, 4) if ex.pnl_pct else None,
+                "pnl_pct": round(ex.pnl_pct, 4) if ex.pnl_pct and not _tradfi else None,
+                "pips_pnl": round(ex.pips_pnl, 1) if ex.pips_pnl is not None and _tradfi else None,
                 "entry_price": ex.entry_price, "close_price": ex.exit_price} for ex in recent_trades],
             "ratings": [{"stars": r.stars, "review": r.review, "is_verified": r.is_verified} for r in ratings],
             "my_rating": {"stars": my_rating.stars, "review": my_rating.review} if my_rating else None,
@@ -8259,6 +8318,8 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...), risk_sca
                         "exit":                original.config.get("exit", {}),
                         "filters":             original.config.get("filters", {}),
                         "universe":            original.config.get("universe", {}),
+                        "asset_class":         _strategy_asset_class(original),
+                        "_asset_class":        _strategy_asset_class(original),
                         "_locked":             True,
                         "_source_strategy_id": listing.strategy_id,
                         "_listing_id":         listing_id,
@@ -8270,6 +8331,7 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...), risk_sca
                         description=original.description,
                         config=locked_config,
                         status="paper",
+                        asset_class=_strategy_asset_class(original),
                     )
                     db.add(recovered)
                     db.commit()
@@ -8303,6 +8365,7 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...), risk_sca
             except (TypeError, ValueError):
                 pass  # leave original value if it's non-numeric
         # Build a locked stub — no entry_conditions or strategy logic exposed
+        _clone_ac = _strategy_asset_class(original)
         locked_config = {
             "name":             listing.title or original.name,
             "direction":        original.config.get("direction", "LONG"),
@@ -8310,6 +8373,8 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...), risk_sca
             "exit":             original.config.get("exit", {}),
             "filters":          original.config.get("filters", {}),
             "universe":         original.config.get("universe", {}),
+            "asset_class":      _clone_ac,
+            "_asset_class":     _clone_ac,
             "_locked":          True,
             "_source_strategy_id": listing.strategy_id,
             "_listing_id":      listing_id,
@@ -8321,6 +8386,7 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...), risk_sca
             description=original.description,
             config=locked_config,
             status="paper",
+            asset_class=_clone_ac,
         )
         db.add(new_strategy)
         db.commit()
@@ -8342,6 +8408,7 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...), risk_sca
             "success": True,
             "cloned_strategy_id": new_strategy.id,
             "name": new_strategy.name,
+            "asset_class": _clone_ac,
             "default_leverage": orig_risk.get("leverage", 10),
             "default_position_size_pct": orig_risk.get("position_size_pct", 5),
         })

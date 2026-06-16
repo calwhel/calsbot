@@ -45,15 +45,48 @@ function fmtPnl(v: number | null): string {
   return `${sign}${v.toFixed(1)}%`;
 }
 
+function isTradFi(ac?: string | null): boolean {
+  return ac === 'forex' || ac === 'index' || ac === 'metals' || ac === 'stock';
+}
+
+function fmtPips(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '—';
+  const sign = v > 0 ? '+' : '';
+  return `${sign}${v.toFixed(1)} pips`;
+}
+
+function headlinePerformance(m: MarketplaceListing, showLive: boolean) {
+  const tradfi = isTradFi(m.asset_class);
+  if (tradfi) {
+    const pips = showLive ? m.live_pips_pnl : null;
+    const num = pips ?? 0;
+    return {
+      tradfi: true,
+      label: showLive ? 'LIVE PIPS' : 'PERFORMANCE',
+      value: pips != null ? fmtPips(pips) : '—',
+      num,
+    };
+  }
+  const pnl = showLive ? m.live_pnl! : (m.verified_pnl ?? 0);
+  return {
+    tradfi: false,
+    label: showLive ? 'LIVE P&L' : 'AUTHOR P&L',
+    value: fmtPnl(pnl),
+    num: pnl,
+  };
+}
+
 function avatarPalette(_name: string): [string, string] {
   // Modern-dark: every avatar renders as the same neutral chip.
   return [colors.cardHi, colors.cardHi];
 }
 
 const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: MarketplaceListing; onPress: () => void }) {
-  const showLive = m.live_pnl !== null && m.live_trades >= 3;
-  const headlinePnl = showLive ? m.live_pnl! : (m.verified_pnl ?? 0);
-  const pnlColor = headlinePnl > 0 ? colors.positive : headlinePnl < 0 ? colors.negative : colors.text;
+  const showLive = m.live_trades >= 3 && (
+    isTradFi(m.asset_class) ? m.live_pips_pnl != null : m.live_pnl !== null
+  );
+  const perf = headlinePerformance(m, showLive);
+  const pnlColor = perf.num > 0 ? colors.positive : perf.num < 0 ? colors.negative : colors.text;
   const wr = showLive ? (m.live_win_rate ?? 0) : (m.verified_win_rate ?? 0);
   const initial = (m.author_name || '?').charAt(0).toUpperCase();
 
@@ -62,7 +95,7 @@ const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: Marketp
   const haloId = `mk-halo-${uid}`;
   const avatarId = `mk-av-${uid}`;
   const [c0, c1] = avatarPalette(m.author_name || '?');
-  const tonePrimary = headlinePnl > 0 ? colors.positive : headlinePnl < 0 ? colors.negative : colors.textDim;
+  const tonePrimary = perf.num > 0 ? colors.positive : perf.num < 0 ? colors.negative : colors.textDim;
 
   const isFree = m.pricing_model === 'free';
 
@@ -140,27 +173,32 @@ const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: Marketp
           <Text style={styles.summary} numberOfLines={2}>{m.summary}</Text>
         ) : null}
 
-        {/* Hero performance + sparkline */}
+        {/* Performance chart + pip/% headline */}
         <View style={styles.heroRow}>
-          <View style={styles.heroLeft}>
-            <Text style={styles.heroLabel}>{showLive ? 'LIVE P&L' : 'AUTHOR P&L'}</Text>
-            <Text style={[styles.heroValue, { color: pnlColor }]}>
-              {fmtPnl(headlinePnl)}
-            </Text>
-            {showLive ? (
-              <Text style={styles.heroSub}>{m.live_trades} live trades</Text>
-            ) : (
-              <Text style={styles.heroSub}>Verified backtest</Text>
-            )}
-          </View>
-          <View style={styles.heroRight}>
+          <View style={styles.heroChart}>
             {m.equity_curve && m.equity_curve.length >= 2 ? (
-              <Sparkline values={m.equity_curve} width={140} height={56} strokeWidth={2} />
+              <Sparkline
+                values={m.equity_curve}
+                width={perf.tradfi ? 280 : 200}
+                height={perf.tradfi ? 72 : 56}
+                strokeWidth={2.5}
+              />
             ) : (
-              <View style={[styles.sparkPlaceholder, { width: 140, height: 56 }]}>
-                <Text style={styles.sparkPlaceholderText}>No equity curve yet</Text>
+              <View style={[styles.sparkPlaceholder, { width: '100%', height: perf.tradfi ? 72 : 56 }]}>
+                <Text style={styles.sparkPlaceholderText}>No trade history yet</Text>
               </View>
             )}
+            <View style={styles.heroChartFoot}>
+              <Text style={styles.heroLabel}>{perf.label}</Text>
+              <Text style={[styles.heroValueCompact, { color: pnlColor }]}>
+                {perf.value}
+              </Text>
+              {showLive ? (
+                <Text style={styles.heroSub}>{m.live_trades} tracked trades</Text>
+              ) : m.is_verified ? (
+                <Text style={styles.heroSub}>Verified track record</Text>
+              ) : null}
+            </View>
           </View>
         </View>
 
@@ -199,6 +237,8 @@ const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: Marketp
 
         {/* Badges row */}
         <View style={styles.badges}>
+          {m.asset_class === 'forex' ? <Pill label="💱 Forex" tone="accent" small /> : null}
+          {m.asset_class === 'index' ? <Pill label="📈 Index" tone="accent" small /> : null}
           {m.is_ai_generated ? <Pill label="🤖 AI Original" tone="accent" small /> : null}
           <Pill label={m.category} tone="neutral" small />
           {m.is_trending ? <Pill label="🔥 Trending" tone="warning" small /> : null}
@@ -294,7 +334,12 @@ function LeaderboardRail({
 const LeaderboardCard = React.memo(function LeaderboardCard({
   entry, onTap,
 }: { entry: LeaderboardEntry; onTap: () => void }) {
-  const positive = entry.pnl_pct >= 0;
+  const tradfi = isTradFi(entry.asset_class);
+  const pnlNum = tradfi ? (entry.pips_pnl ?? 0) : (entry.pnl_pct ?? 0);
+  const positive = pnlNum >= 0;
+  const pnlLabel = tradfi
+    ? `${positive ? '+' : ''}${(entry.pips_pnl ?? 0).toFixed(1)} pips`
+    : `${positive ? '+' : ''}${(entry.pnl_pct ?? 0).toFixed(1)}%`;
   const rankColor =
     entry.rank === 1 ? colors.warning :
     entry.rank === 2 ? colors.text :
@@ -320,7 +365,7 @@ const LeaderboardCard = React.memo(function LeaderboardCard({
       <Text style={lbStyles.cardAuthor} numberOfLines={1}>{entry.author_name}</Text>
       <View style={lbStyles.cardFoot}>
         <Text style={[lbStyles.cardPnl, { color: positive ? colors.positive : colors.negative }]}>
-          {positive ? '+' : ''}{entry.pnl_pct.toFixed(1)}%
+          {pnlLabel}
         </Text>
         <Text style={lbStyles.cardSub}>
           {entry.win_rate.toFixed(0)}% · {entry.trades}t
@@ -670,14 +715,13 @@ const styles = StyleSheet.create({
   },
 
   heroRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
     marginTop: spacing.md,
     paddingTop: spacing.md,
     borderTopWidth: 1,
     borderTopColor: colors.divider,
-    gap: spacing.md,
   },
+  heroChart: { width: '100%', gap: spacing.sm },
+  heroChartFoot: { flexDirection: 'row', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' },
   heroLeft: { flex: 1 },
   heroRight: { alignItems: 'flex-end' },
   heroLabel: {
@@ -692,6 +736,12 @@ const styles = StyleSheet.create({
     letterSpacing: -1.0,
     fontVariant: ['tabular-nums'],
     marginTop: 2,
+  },
+  heroValueCompact: {
+    fontFamily: font.black,
+    fontSize: 18,
+    letterSpacing: -0.5,
+    fontVariant: ['tabular-nums'],
   },
   heroSub: {
     color: colors.textMute,
