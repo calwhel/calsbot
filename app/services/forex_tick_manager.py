@@ -92,6 +92,7 @@ def _registry_backstop_refresh() -> None:
     try:
         from app.database import BgSessionLocal as SessionLocal
         from app.strategy_models import StrategyExecution
+        from app.services.trade_management import CTRADER_LIVE_ASSET_CLASSES
 
         fresh_paper: Dict[str, List[dict]] = {}
         db = SessionLocal()
@@ -101,7 +102,7 @@ def _registry_backstop_refresh() -> None:
                 .filter(
                     StrategyExecution.outcome == "OPEN",
                     StrategyExecution.is_paper == True,  # noqa: E712
-                    StrategyExecution.asset_class.in_(("forex", "index")),
+                    StrategyExecution.asset_class.in_(CTRADER_LIVE_ASSET_CLASSES),
                 )
                 .all()
             )

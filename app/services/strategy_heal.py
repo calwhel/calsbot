@@ -255,12 +255,13 @@ def list_untracked_live_forex_opens(
   be broker-reconciled and often block max_open_positions indefinitely.
     """
     from app.strategy_models import StrategyExecution
+    from app.services.trade_management import CTRADER_LIVE_ASSET_CLASSES
 
     cutoff = datetime.utcnow() - timedelta(minutes=min_age_minutes)
     q = db.query(StrategyExecution).filter(
         StrategyExecution.outcome == "OPEN",
         StrategyExecution.is_paper == False,  # noqa: E712
-        StrategyExecution.asset_class.in_(("forex", "index")),
+        StrategyExecution.asset_class.in_(CTRADER_LIVE_ASSET_CLASSES),
         StrategyExecution.closed_at.is_(None),
         StrategyExecution.fired_at <= cutoff,
     )

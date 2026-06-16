@@ -25,6 +25,17 @@ function fmtPnl(v: number | null | undefined): string {
   return `${sign}${v.toFixed(2)}%`;
 }
 
+function fmtPips(v: number | null | undefined): string {
+  if (v == null) return '—';
+  const sign = v > 0 ? '+' : '';
+  const n = Math.abs(v);
+  return `${sign}${n >= 10 ? Math.round(n) : n.toFixed(1)} pips`;
+}
+
+function isTradFi(ac?: string | null): boolean {
+  return ['forex', 'index', 'metals', 'commodity', 'stock'].includes(ac || '');
+}
+
 export default function ListingDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const lid = Number(id);
@@ -138,6 +149,14 @@ export default function ListingDetailScreen() {
   }
 
   const m = detailQ.data;
+  const tradfi = isTradFi((m as { asset_class?: string }).asset_class);
+  const livePerf = m.live_performance as {
+    total_trades: number;
+    win_rate: number;
+    total_pnl?: number | null;
+    total_pips_pnl?: number | null;
+  };
+  const totalPnl = tradfi ? livePerf.total_pips_pnl : livePerf.total_pnl;
   const isPaid = m.pricing_model !== 'free' && (m.price_usdt || 0) > 0;
   const owned = m.is_owned;
   // We intentionally do NOT preflight a Pro-required block here — the backend
@@ -248,9 +267,9 @@ export default function ListingDetailScreen() {
           <Text style={styles.sectionLabel}>Live performance</Text>
           <View style={styles.statRow}>
             <StatCard
-              label="Total P&L"
-              value={m.live_performance.total_trades > 0 ? fmtPnl(m.live_performance.total_pnl) : '—'}
-              tone={m.live_performance.total_pnl > 0 ? 'positive' : m.live_performance.total_pnl < 0 ? 'negative' : 'neutral'}
+              label={tradfi ? 'Total pips' : 'Total P&L'}
+              value={livePerf.total_trades > 0 ? (tradfi ? fmtPips(totalPnl ?? 0) : fmtPnl(totalPnl ?? 0)) : '—'}
+              tone={(totalPnl ?? 0) > 0 ? 'positive' : (totalPnl ?? 0) < 0 ? 'negative' : 'neutral'}
             />
             <View style={{ width: spacing.md }} />
             <StatCard
@@ -303,12 +322,12 @@ export default function ListingDetailScreen() {
                   <Text style={[
                     styles.tradePnl,
                     {
-                      color: (t.pnl_pct ?? 0) > 0 ? colors.positive
-                        : (t.pnl_pct ?? 0) < 0 ? colors.negative
+                      color: ((tradfi ? t.pips_pnl : t.pnl_pct) ?? 0) > 0 ? colors.positive
+                        : ((tradfi ? t.pips_pnl : t.pnl_pct) ?? 0) < 0 ? colors.negative
                         : colors.textDim,
                     },
                   ]}>
-                    {fmtPnl(t.pnl_pct)}
+                    {tradfi ? fmtPips((t as { pips_pnl?: number }).pips_pnl) : fmtPnl(t.pnl_pct)}
                   </Text>
                 </View>
               ))}

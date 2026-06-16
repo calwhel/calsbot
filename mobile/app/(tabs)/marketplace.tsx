@@ -45,14 +45,37 @@ function fmtPnl(v: number | null): string {
   return `${sign}${v.toFixed(1)}%`;
 }
 
+function isTradFi(ac?: string | null): boolean {
+  return ['forex', 'index', 'metals', 'commodity', 'stock'].includes(ac || '');
+}
+
+function fmtPips(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '—';
+  const sign = v > 0 ? '+' : '';
+  const n = Math.abs(v);
+  return `${sign}${n >= 10 ? Math.round(n) : n.toFixed(1)} pips`;
+}
+
+function perfScore(m: MarketplaceListing): number {
+  if (isTradFi(m.asset_class)) {
+    return m.live_pips_pnl ?? -1e9;
+  }
+  return m.live_pnl ?? -1e9;
+}
+
 function avatarPalette(_name: string): [string, string] {
   // Modern-dark: every avatar renders as the same neutral chip.
   return [colors.cardHi, colors.cardHi];
 }
 
 const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: MarketplaceListing; onPress: () => void }) {
-  const showLive = m.live_pnl !== null && m.live_trades >= 3;
-  const headlinePnl = showLive ? m.live_pnl! : (m.verified_pnl ?? 0);
+  const tradfi = isTradFi(m.asset_class);
+  const showLive = m.live_trades >= 3 && (
+    tradfi ? m.live_pips_pnl != null : m.live_pnl !== null
+  );
+  const headlinePnl = tradfi
+    ? (showLive ? m.live_pips_pnl! : 0)
+    : (showLive ? m.live_pnl! : (m.verified_pnl ?? 0));
   const pnlColor = headlinePnl > 0 ? colors.positive : headlinePnl < 0 ? colors.negative : colors.text;
   const wr = showLive ? (m.live_win_rate ?? 0) : (m.verified_win_rate ?? 0);
   const initial = (m.author_name || '?').charAt(0).toUpperCase();
@@ -143,9 +166,9 @@ const ListingCard = React.memo(function ListingCard({ m, onPress }: { m: Marketp
         {/* Hero performance + sparkline */}
         <View style={styles.heroRow}>
           <View style={styles.heroLeft}>
-            <Text style={styles.heroLabel}>{showLive ? 'LIVE P&L' : 'AUTHOR P&L'}</Text>
+            <Text style={styles.heroLabel}>{showLive ? (tradfi ? 'LIVE PIPS' : 'LIVE P&L') : 'AUTHOR P&L'}</Text>
             <Text style={[styles.heroValue, { color: pnlColor }]}>
-              {fmtPnl(headlinePnl)}
+              {tradfi ? fmtPips(showLive ? m.live_pips_pnl : null) : fmtPnl(headlinePnl)}
             </Text>
             {showLive ? (
               <Text style={styles.heroSub}>{m.live_trades} live trades</Text>
@@ -294,7 +317,10 @@ function LeaderboardRail({
 const LeaderboardCard = React.memo(function LeaderboardCard({
   entry, onTap,
 }: { entry: LeaderboardEntry; onTap: () => void }) {
-  const positive = entry.pnl_pct >= 0;
+  const tradfi = isTradFi(entry.asset_class);
+  const pips = (entry as LeaderboardEntry & { pips_pnl?: number | null }).pips_pnl;
+  const num = tradfi && pips != null ? pips : entry.pnl_pct;
+  const positive = (num ?? 0) >= 0;
   const rankColor =
     entry.rank === 1 ? colors.warning :
     entry.rank === 2 ? colors.text :
@@ -320,7 +346,9 @@ const LeaderboardCard = React.memo(function LeaderboardCard({
       <Text style={lbStyles.cardAuthor} numberOfLines={1}>{entry.author_name}</Text>
       <View style={lbStyles.cardFoot}>
         <Text style={[lbStyles.cardPnl, { color: positive ? colors.positive : colors.negative }]}>
-          {positive ? '+' : ''}{entry.pnl_pct.toFixed(1)}%
+          {tradfi && pips != null
+            ? fmtPips(pips)
+            : `${(entry.pnl_pct ?? 0) >= 0 ? '+' : ''}${(entry.pnl_pct ?? 0).toFixed(1)}%`}
         </Text>
         <Text style={lbStyles.cardSub}>
           {entry.win_rate.toFixed(0)}% · {entry.trades}t
@@ -450,7 +478,16 @@ export default function MarketplaceScreen() {
     if (sort === 'price') list = list.filter((m) => m.pricing_model === 'free');
     if (sort === 'ai')    list = list.filter((m) => m.is_ai_generated);
     if (assetClass !== 'all') {
-      list = list.filter((m) => (m.asset_class || 'crypto') === assetClass);
+      list = list.filter((m) => {
+        const ac = m.asset_class || 'crypto';
+        if (assetClass === 'forex') {
+          return ['forex', 'metals', 'commodity'].includes(ac);
+        }
+        return ac === assetClass;
+      });
+    }
+    if (sort === 'top' || assetClass === 'forex' || assetClass === 'index') {
+      list = [...list].sort((a, b) => perfScore(b) - perfScore(a));
     }
     return list;
   }, [data, sort, assetClass]);
@@ -460,7 +497,11 @@ export default function MarketplaceScreen() {
     for (const m of (data || [])) {
       counts.all += 1;
       const ac = m.asset_class || 'crypto';
-      if (ac in counts) counts[ac] += 1;
+      if (ac === 'forex' || ac === 'metals' || ac === 'commodity') {
+        counts.forex += 1;
+      } else if (ac in counts) {
+        counts[ac] += 1;
+      }
     }
     return counts;
   }, [data]);

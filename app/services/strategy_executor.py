@@ -7559,12 +7559,14 @@ def _build_forex_worklist_impl() -> list:
 
     db = SessionLocal()
     try:
+        from app.services.trade_management import CTRADER_LIVE_ASSET_CLASSES
+
         open_execs = (
             db.query(StrategyExecution)
             .filter(
                 StrategyExecution.is_paper == False,          # noqa: E712
                 StrategyExecution.outcome == "OPEN",
-                StrategyExecution.asset_class.in_(("forex", "index")),
+                StrategyExecution.asset_class.in_(CTRADER_LIVE_ASSET_CLASSES),
                 StrategyExecution.ctrader_order_id.isnot(None),
                 StrategyExecution.entry_price.isnot(None),
             )
@@ -8052,7 +8054,7 @@ async def _close_live_forex_execution_and_notify(
         db.close()
 
 
-def _build_forex_reconcile_worklist() -> list:
+def _build_forex_reconcile_worklist(user_id: Optional[int] = None) -> list:
     """Pure-sync DB read of open LIVE forex execs for broker close-reconciliation.
     Returns one dict per tracked position (carrying tp/sl/entry/be flag and a
     detached User for the per-user broker reconcile fetch)."""
@@ -8060,20 +8062,23 @@ def _build_forex_reconcile_worklist() -> list:
     from app.strategy_models import StrategyExecution, UserStrategy
     from app.models import User, UserPreference
     from app.services.ctrader_client import resolve_ctrader_ctid
+    from app.services.trade_management import CTRADER_LIVE_ASSET_CLASSES
 
     db = SessionLocal()
     try:
-        open_execs = (
+        q = (
             db.query(StrategyExecution)
             .filter(
                 StrategyExecution.is_paper == False,          # noqa: E712
                 StrategyExecution.outcome == "OPEN",
-                StrategyExecution.asset_class.in_(("forex", "index")),
+                StrategyExecution.asset_class.in_(CTRADER_LIVE_ASSET_CLASSES),
                 StrategyExecution.ctrader_order_id.isnot(None),
                 StrategyExecution.entry_price.isnot(None),
             )
-            .all()
         )
+        if user_id is not None:
+            q = q.filter(StrategyExecution.user_id == int(user_id))
+        open_execs = q.all()
         user_cache: Dict[int, object] = {}
         prefs_cache: Dict[int, Optional[str]] = {}
         strategy_cache: Dict[int, Optional[str]] = {}
@@ -8144,7 +8149,7 @@ def _build_forex_reconcile_worklist() -> list:
     return work
 
 
-async def _reconcile_forex_closes() -> None:
+async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
     """Detect live forex positions closed broker-side (SL/TP fill) and close+notify.
 
     The forex live loop only AMENDS broker SL/TP; nothing else notices when the
@@ -8154,6 +8159,8 @@ async def _reconcile_forex_closes() -> None:
     positions per user; when a tracked positionId is gone for 2 consecutive
     sweeps it classifies WIN/LOSS/BREAKEVEN via price-vs-TP/SL distance and fires
     `_close_live_forex_execution_and_notify`.
+
+    Optional user_id scopes reconcile to one account (Live Forex tab refresh).
     """
     from app.db_resilience import is_transient_db_error, run_with_db_retry
     from app.services.ctrader_client import (
@@ -8164,9 +8171,10 @@ async def _reconcile_forex_closes() -> None:
     work = None
     for attempt in range(3):
         try:
+            _uid = user_id
             work = await asyncio.to_thread(
                 lambda: run_with_db_retry(
-                    _build_forex_reconcile_worklist,
+                    lambda: _build_forex_reconcile_worklist(_uid),
                     label="FX-reconcile-worklist",
                 )
             )
