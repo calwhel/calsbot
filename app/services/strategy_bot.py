@@ -556,7 +556,13 @@ async def cb_strat_share(callback: types.CallbackQuery):
         ).first()
 
         if existing:
-            await callback.answer("Already published!")
+            from app.services.strategy_builder import generate_strategy_summary
+            summary = await generate_strategy_summary(strategy.config)
+            existing.title = strategy.name
+            existing.summary = summary
+            strategy.is_public = True
+            db.commit()
+            await callback.answer("Already listed — details refreshed!")
             return
 
         from app.services.strategy_builder import generate_strategy_summary

@@ -3818,6 +3818,9 @@ function _clearStratCache(){
   _fcDel('/api/portal/bootstrap?uid='+UID);
   _fcDel('/api/live-forex/account?uid='+UID);
 }
+function _clearMktCache(){
+  for(const k of [..._FC.keys()]) if(k.includes('/api/marketplace')) _FC.delete(k);
+}
 const _FETCH_OPTS={credentials:'same-origin',headers:{'Accept':'application/json'}};
 async function _apiFetch(url,opts={}){
   const ctrl=new AbortController();
@@ -4565,7 +4568,9 @@ function renderStratList(strats){
           :s.status==='paper'
           ?`<button class="btn paper-btn sm" onclick="toggleStrat(${s.id})">Running</button><button class="btn sm" onclick="promoteToLive(${s.id},'${assetClass}')" style="color:var(--green);border-color:rgba(34,197,94,.3)">Go Live</button>`
           :`<button class="btn sm" onclick="toggleStrat(${s.id})" style="color:var(--green);border-color:rgba(34,197,94,.3)">Activate</button>`}
-        ${isLocked?'':`<button class="btn sm ghost" onclick="shareToMarket(${s.id},'${encodeURIComponent(s.name)}')">Publish</button>`}
+        ${isLocked?'':s.listing_id
+          ?`<button class="btn sm ghost" onclick="openDetail(${s.listing_id})" title="View on marketplace">✓ Listed</button>`
+          :`<button class="btn sm ghost" onclick="shareToMarket(${s.id},'${encodeURIComponent(s.name)}')">Publish</button>`}
         <button class="btn sm" onclick="openAdvisor(${s.id},'${encodeURIComponent(s.name)}')" style="color:var(--accent);border-color:rgba(59,91,219,.3)">✦ Improve with AI</button>
         <button class="btn danger sm" onclick="deleteStrat(${s.id},'${encodeURIComponent(s.name)}')">${isLocked?'Unsubscribe':'Delete'}</button>
       </div>
@@ -4865,9 +4870,17 @@ async function bulkDeleteStrats(){
 async function shareToMarket(id,name){
   toast('Publishing…','info');
   const r=await fetch(`/api/strategies/${id}/share?uid=${UID}`,{method:'POST'});
-  if(r.ok)toast(`✅ "${decodeURIComponent(name)}" is live on the marketplace!`);
-  else toast((await r.json()).detail||'Already published or error','error');
-  _clearStratCache();loadMyStrategies();
+  const d=await r.json().catch(()=>({}));
+  if(r.ok){
+    const label=decodeURIComponent(name);
+    toast(d.already_published
+      ?`✅ "${label}" is already listed — details refreshed.`
+      :`✅ "${label}" is live on the marketplace!`);
+    if(d.listing_id) setTimeout(()=>openDetail(d.listing_id), 400);
+  } else {
+    toast(d.detail||'Publish failed','error');
+  }
+  _clearStratCache();_clearMktCache();loadMyStrategies();
 }
 
 // ─── CONFIGURE ─────────────────────────────────────────────
@@ -5151,7 +5164,17 @@ async function saveCfg(){
 
 async function publishFromCfg(){
   await saveCfg();
-  setTimeout(async()=>{const r=await fetch(`/api/strategies/${cfgStrategyId}/share?uid=${UID}`,{method:'POST'});toast(r.ok?'✅ Published!':(await r.json()).detail||'Error','error');},500);
+  setTimeout(async()=>{
+    const r=await fetch(`/api/strategies/${cfgStrategyId}/share?uid=${UID}`,{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(r.ok){
+      toast(d.already_published?'✅ Already listed — details refreshed.':'✅ Published!');
+      if(d.listing_id) setTimeout(()=>openDetail(d.listing_id), 400);
+      _clearStratCache();_clearMktCache();loadMyStrategies();
+    } else {
+      toast(d.detail||'Publish failed','error');
+    }
+  },500);
 }
 
 function condHtml(c){

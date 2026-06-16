@@ -7490,6 +7490,15 @@ async def api_strategies(uid: str = Query(...)):
             )
 
             strategy_ids = [s.id for s in strategies]
+            listing_map: dict = {}
+            if strategy_ids:
+                from app.strategy_models import StrategyMarketplace as _SM_list
+                listing_map = {
+                    m.strategy_id: m.id
+                    for m in db.query(_SM_list).filter(
+                        _SM_list.strategy_id.in_(strategy_ids)
+                    ).all()
+                }
             perf_map: dict = {}
             exec_map: dict = {}
             if strategy_ids:
@@ -7553,6 +7562,7 @@ async def api_strategies(uid: str = Query(...)):
                     "config":       _slim_strategy_config(cfg, asset_class=_ac),
                     "is_locked":    bool(cfg.get("_locked")),
                     "is_public":    s.is_public,
+                    "listing_id":   listing_map.get(s.id),
                     "created_at":   s.created_at.isoformat() if s.created_at else None,
                     "health_score": health_score,
                     "performance": {
@@ -7906,6 +7916,28 @@ def _mkt_public_summary(summary: Optional[str], asset_class: Optional[str]) -> s
     return (summary or "").strip()
 
 
+_MKT_BROWSE_LIMIT = 150
+
+
+def _mkt_top_sort_key(item: dict) -> float:
+    """Composite score for default browse — perf plus modest boosts for human creators and recency."""
+    ac = (item.get("asset_class") or "crypto").lower()
+    if ac in _MKT_TRADFI_ASSET_CLASSES:
+        perf = float(item.get("live_pips_pnl") or 0)
+    else:
+        perf = float(item.get("live_pnl") or 0)
+    human_boost = 30.0 if not item.get("is_ai_generated") else 0.0
+    pub_ts = float(item.get("published_at_ts") or 0)
+    recency = max(0.0, 15.0 - max(0.0, (_time.time() - pub_ts) / 86400) * 0.5) if pub_ts else 0.0
+    return perf + human_boost + recency
+
+
+def _invalidate_pub_mkt_cache() -> None:
+    stale = [k for k in _CACHE if k.startswith("pub_mkt_")]
+    for k in stale:
+        _CACHE.pop(k, None)
+
+
 @app.get("/api/marketplace")
 async def api_marketplace(
     uid:      str = Query(...),
@@ -7928,6 +7960,7 @@ async def api_marketplace(
 
         from app.strategy_models import StrategyMarketplace, UserStrategy, StrategyPerformance
         from app.strategy_marketplace_ext import StrategyPurchase, init_marketplace_ext_tables
+        from sqlalchemy import or_
 
         q = db.query(StrategyMarketplace)
         # "ai" is a sentinel category that filters by is_ai_generated rather
@@ -7940,6 +7973,12 @@ async def api_marketplace(
             q = q.filter(StrategyMarketplace.pricing_model == "free")
         elif pricing == "paid":
             q = q.filter(StrategyMarketplace.pricing_model != "free")
+        if search:
+            s = f"%{search.strip()}%"
+            q = q.filter(or_(
+                StrategyMarketplace.title.ilike(s),
+                StrategyMarketplace.summary.ilike(s),
+            ))
         if sort == "new":
             q = q.order_by(StrategyMarketplace.published_at.desc())
         elif sort == "trending":
@@ -7963,10 +8002,7 @@ async def api_marketplace(
         else:
             q = q.order_by(StrategyMarketplace.avg_rating.desc(), StrategyMarketplace.clone_count.desc())
 
-        listings = q.limit(50).all()
-        if search:
-            s = search.lower()
-            listings = [m for m in listings if s in (m.title or "").lower() or s in (m.summary or "").lower()]
+        listings = q.limit(_MKT_BROWSE_LIMIT).all()
 
         my_purchases = {
             p.listing_id for p in db.query(StrategyPurchase)
@@ -8072,14 +8108,11 @@ async def api_marketplace(
                 "author_name":      (author.first_name or author.username or "Anonymous") if author else "Anonymous",
                 "author_uid":       author.uid if author else None,
                 "is_owned":         m.id in my_purchases or (m.pricing_model or "free") == "free",
+                "published_at":     m.published_at.isoformat() if m.published_at else None,
+                "published_at_ts":  m.published_at.timestamp() if m.published_at else 0,
             })
         if sort == "top":
-            def _mkt_perf_score(item: dict) -> float:
-                ac = (item.get("asset_class") or "crypto").lower()
-                if ac in _MKT_TRADFI_AC:
-                    return float(item.get("live_pips_pnl") or -1e9)
-                return float(item.get("live_pnl") or -1e9)
-            result.sort(key=_mkt_perf_score, reverse=True)
+            result.sort(key=_mkt_top_sort_key, reverse=True)
         set_cache(_mkt_key, result, 180)
         return JSONResponse(result)
     finally:
@@ -8813,11 +8846,22 @@ async def api_share_strategy(strategy_id: int, uid: str = Query(...)):
         existing = db.query(StrategyMarketplace).filter(
             StrategyMarketplace.strategy_id == strategy_id
         ).first()
-        if existing:
-            raise HTTPException(status_code=409, detail="Already published")
 
         from app.services.strategy_builder import generate_strategy_summary
         summary = await generate_strategy_summary(strategy.config)
+
+        if existing:
+            existing.title = strategy.name
+            existing.summary = summary
+            strategy.is_public = True
+            db.commit()
+            invalidate_prefix("api_mkt:")
+            _invalidate_pub_mkt_cache()
+            return JSONResponse({
+                "success": True,
+                "listing_id": existing.id,
+                "already_published": True,
+            })
 
         listing = StrategyMarketplace(
             strategy_id   = strategy_id,
@@ -8832,6 +8876,8 @@ async def api_share_strategy(strategy_id: int, uid: str = Query(...)):
         db.add(listing)
         strategy.is_public = True
         db.commit()
+        invalidate_prefix("api_mkt:")
+        _invalidate_pub_mkt_cache()
 
         # Emit a feed activity so followers see this publish
         try:
