@@ -128,6 +128,10 @@ class ExecutorCycleCtx:
     kline_cache: Dict[Any, Any] = field(default_factory=dict)
     fire_ms: float = 0.0
     strategy_timings_ms: List[Tuple[int, float]] = field(default_factory=list)
+    # Batch prefetches — one query each per cycle instead of per-strategy round-trips.
+    execution_counts: Dict[int, Tuple[int, int]] = field(default_factory=dict)
+    symbol_last_fired: Dict[int, Dict[str, datetime]] = field(default_factory=dict)
+    assignment_targets: Dict[int, List[dict]] = field(default_factory=dict)
 
 
 _EXECUTOR_CYCLE_CTX: contextvars.ContextVar[Optional[ExecutorCycleCtx]] = (
@@ -1372,6 +1376,11 @@ async def _commit_db_with_retry(
 
 
 def _daily_execution_count(strategy_id: int, db) -> int:
+    ctx = _get_cycle_ctx()
+    if ctx and ctx.execution_counts:
+        counts = ctx.execution_counts.get(strategy_id)
+        if counts is not None:
+            return counts[0]
     from app.strategy_models import StrategyExecution
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     return _db_count_safe(
@@ -1385,6 +1394,11 @@ def _daily_execution_count(strategy_id: int, db) -> int:
 
 
 def _open_execution_count(strategy_id: int, db) -> int:
+    ctx = _get_cycle_ctx()
+    if ctx and ctx.execution_counts:
+        counts = ctx.execution_counts.get(strategy_id)
+        if counts is not None:
+            return counts[1]
     from app.strategy_models import StrategyExecution
     return _db_count_safe(
         db,
@@ -1393,6 +1407,116 @@ def _open_execution_count(strategy_id: int, db) -> int:
             StrategyExecution.outcome == "OPEN",
         ).count(),
     )
+
+
+def _prefetch_cycle_gate_data(
+    strategy_ids: List[int],
+    session_factory,
+) -> Dict[str, Any]:
+    """Batch-load daily/open caps, symbol cooldowns, and assignments for one cycle."""
+    empty: Dict[str, Any] = {
+        "execution_counts": {},
+        "symbol_last_fired": {},
+        "assignment_targets": {},
+    }
+    if not strategy_ids:
+        return empty
+
+    from app.strategy_models import StrategyAccountAssignment, StrategyExecution
+    from sqlalchemy import case, func
+
+    db = session_factory()
+    try:
+        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        count_rows = (
+            db.query(
+                StrategyExecution.strategy_id,
+                func.sum(
+                    case(
+                        (
+                            (StrategyExecution.fired_at >= today)
+                            & (StrategyExecution.outcome.notin_(["CANCELLED", "EXPIRED"])),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("daily_cnt"),
+                func.sum(
+                    case(
+                        (StrategyExecution.outcome == "OPEN", 1),
+                        else_=0,
+                    )
+                ).label("open_cnt"),
+            )
+            .filter(StrategyExecution.strategy_id.in_(strategy_ids))
+            .group_by(StrategyExecution.strategy_id)
+            .all()
+        )
+        execution_counts: Dict[int, Tuple[int, int]] = {
+            sid: (0, 0) for sid in strategy_ids
+        }
+        for row in count_rows:
+            execution_counts[row.strategy_id] = (
+                int(row.daily_cnt or 0),
+                int(row.open_cnt or 0),
+            )
+
+        cooldown_rows = (
+            db.query(
+                StrategyExecution.strategy_id,
+                StrategyExecution.symbol,
+                func.max(StrategyExecution.fired_at).label("last_at"),
+            )
+            .filter(StrategyExecution.strategy_id.in_(strategy_ids))
+            .group_by(StrategyExecution.strategy_id, StrategyExecution.symbol)
+            .all()
+        )
+        symbol_last_fired: Dict[int, Dict[str, datetime]] = {}
+        for row in cooldown_rows:
+            if row.last_at and row.symbol:
+                symbol_last_fired.setdefault(row.strategy_id, {})[row.symbol] = (
+                    row.last_at
+                )
+
+        from app.services.strategy_account_assignments import (
+            ensure_strategy_account_assignments_table,
+            serialize_assignment_row,
+        )
+
+        assignment_targets: Dict[int, List[dict]] = {sid: [] for sid in strategy_ids}
+        try:
+            ensure_strategy_account_assignments_table(db.get_bind())
+            assign_rows = (
+                db.query(StrategyAccountAssignment)
+                .filter(
+                    StrategyAccountAssignment.strategy_id.in_(strategy_ids),
+                    StrategyAccountAssignment.enabled.is_(True),
+                )
+                .order_by(StrategyAccountAssignment.id)
+                .all()
+            )
+            for row in assign_rows:
+                acct_id = str(row.ctrader_account_id or "").strip()
+                if acct_id:
+                    assignment_targets[row.strategy_id].append(
+                        serialize_assignment_row(
+                            acct_id, row.enabled, row.lot_size,
+                        )
+                    )
+        except Exception as exc:
+            logger.debug("[cycle] assignment prefetch failed: %s", exc)
+
+        return {
+            "execution_counts": execution_counts,
+            "symbol_last_fired": symbol_last_fired,
+            "assignment_targets": assignment_targets,
+        }
+    except Exception as exc:
+        logger.warning("[cycle] gate prefetch failed — per-strategy fallback: %s", exc)
+        return empty
+    finally:
+        db.close()
 
 
 def _ctrader_lot_params_for_target(target: dict, risk: dict, ps_type: str) -> tuple:
@@ -1939,12 +2063,23 @@ def _prefetch_symbol_cooldowns(
     """
     One GROUP BY query for last-fired times across all candidate symbols.
     Replaces up to 2×N per-symbol queries in evaluate_and_fire's pre-filter.
+    When cycle-level symbol_last_fired is populated, filters in-memory.
     """
-    from app.strategy_models import StrategyExecution
-    from sqlalchemy import func
-
     if not symbols:
         return set(), {}
+
+    ctx = _get_cycle_ctx()
+    if ctx and ctx.symbol_last_fired and strategy_id in ctx.symbol_last_fired:
+        bulk_map = ctx.symbol_last_fired[strategy_id]
+        last_fired = {sym: bulk_map[sym] for sym in symbols if sym in bulk_map}
+        fired_today: set = set()
+        if need_today and last_fired:
+            today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            fired_today = {sym for sym, ts in last_fired.items() if ts >= today}
+        return fired_today, last_fired
+
+    from app.strategy_models import StrategyExecution
+    from sqlalchemy import func
 
     rows = (
         db.query(
@@ -4328,10 +4463,23 @@ async def evaluate_and_fire(
                 get_enabled_fire_targets,
                 resolve_live_fire_intent,
             )
-            _intent_prefs = db.query(_UP_intent).filter(_UP_intent.user_id == user.id).first()
-            _wants_live, _early_fire_targets = resolve_live_fire_intent(
-                db, strategy, asset_class, _intent_prefs,
-            )
+            _cycle_ctx_intent = _get_cycle_ctx()
+            _assign_prefetch = None
+            if _cycle_ctx_intent and _cycle_ctx_intent.assignment_targets:
+                if strategy.id in _cycle_ctx_intent.assignment_targets:
+                    _assign_prefetch = _cycle_ctx_intent.assignment_targets[strategy.id]
+            if _assign_prefetch is not None:
+                _wants_live, _early_fire_targets = resolve_live_fire_intent(
+                    db, strategy, asset_class, None,
+                    prefetched_targets=_assign_prefetch,
+                )
+            else:
+                _intent_prefs = db.query(_UP_intent).filter(
+                    _UP_intent.user_id == user.id,
+                ).first()
+                _wants_live, _early_fire_targets = resolve_live_fire_intent(
+                    db, strategy, asset_class, _intent_prefs,
+                )
             if (strategy.status or "") == "paper":
                 logger.info(
                     "[live-fire] SKIPPED strategy=%s reason=status=paper",
@@ -4558,12 +4706,13 @@ async def evaluate_and_fire(
     if _daily_execution_count(strategy.id, db) >= max_per_day:
         _bump("blk_daily_cap")
         return
-    if _open_execution_count(strategy.id, db) + _fire_slots > max_open:
+    _open_cnt = _open_execution_count(strategy.id, db)
+    if _open_cnt + _fire_slots > max_open:
         _bump("blk_max_open")
         logger.info(
             "[live-fire] SKIPPED strategy=%s reason=blk_max_open open=%s max_open=%s",
             strategy.id,
-            _open_execution_count(strategy.id, db),
+            _open_cnt,
             max_open,
         )
         return
@@ -5140,10 +5289,23 @@ async def evaluate_and_fire(
                 try:
                     from app.models import UserPreference as _UP_ft
                     from app.services.strategy_account_assignments import get_enabled_fire_targets
-                    _ft_prefs = db.query(_UP_ft).filter(_UP_ft.user_id == user.id).first()
-                    _fire_targets = get_enabled_fire_targets(
-                        db, strategy, _ft_prefs, for_live_fire=True,
-                    )
+                    _cycle_ctx_ft = _get_cycle_ctx()
+                    _ft_prefetch = None
+                    if _cycle_ctx_ft and _cycle_ctx_ft.assignment_targets:
+                        if strategy.id in _cycle_ctx_ft.assignment_targets:
+                            _ft_prefetch = _cycle_ctx_ft.assignment_targets[strategy.id]
+                    if _ft_prefetch is not None:
+                        _fire_targets = get_enabled_fire_targets(
+                            db, strategy, None, for_live_fire=True,
+                            prefetched_rows=_ft_prefetch,
+                        )
+                    else:
+                        _ft_prefs = db.query(_UP_ft).filter(
+                            _UP_ft.user_id == user.id,
+                        ).first()
+                        _fire_targets = get_enabled_fire_targets(
+                            db, strategy, _ft_prefs, for_live_fire=True,
+                        )
                 except Exception as _ft_err:
                     logger.warning(
                         f"[Strategy {strategy.id}] assignment lookup failed — "
@@ -6946,6 +7108,7 @@ async def _run_crypto_executor_shard(
 
     while True:
             _cycle_t0 = datetime.utcnow()
+            _cycle_ctx_token = None
             try:
                 mark_heartbeat(_hb_name)
                 strategy_snapshots = _load_strategy_snapshots_cached(
@@ -7040,6 +7203,17 @@ async def _run_crypto_executor_shard(
                     UserStrategy,
                     User,
                 )
+
+                _gate_prefetch = _prefetch_cycle_gate_data(
+                    [s["id"] for s in eval_snapshots],
+                    SessionLocal,
+                )
+                _cycle_ctx = ExecutorCycleCtx(
+                    execution_counts=_gate_prefetch["execution_counts"],
+                    symbol_last_fired=_gate_prefetch["symbol_last_fired"],
+                    assignment_targets=_gate_prefetch["assignment_targets"],
+                )
+                _cycle_ctx_token = _EXECUTOR_CYCLE_CTX.set(_cycle_ctx)
 
                 async def _run_one(snap, _tickers=shared_tickers):
                     """Each strategy evaluation runs in its own isolated DB session.
@@ -7168,6 +7342,9 @@ async def _run_crypto_executor_shard(
 
             except Exception as e:
                 logger.error(f"[{_log_ts()}] {_crypto_lbl} loop error: {e}", exc_info=True)
+            finally:
+                if _cycle_ctx_token is not None:
+                    _EXECUTOR_CYCLE_CTX.reset(_cycle_ctx_token)
 
             await asyncio.sleep(CRYPTO_SCAN_INTERVAL_SECONDS)
 
@@ -8301,7 +8478,16 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     User,
                 )
 
-                _cycle_ctx = ExecutorCycleCtx(shard_index=shard_index)
+                _gate_prefetch = _prefetch_cycle_gate_data(
+                    [s["id"] for s in open_snaps],
+                    SessionLocal,
+                )
+                _cycle_ctx = ExecutorCycleCtx(
+                    shard_index=shard_index,
+                    execution_counts=_gate_prefetch["execution_counts"],
+                    symbol_last_fired=_gate_prefetch["symbol_last_fired"],
+                    assignment_targets=_gate_prefetch["assignment_targets"],
+                )
                 _cycle_ctx_token = _EXECUTOR_CYCLE_CTX.set(_cycle_ctx)
 
                 async def _run_one_fx(snap, _http=http_client):

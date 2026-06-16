@@ -90,7 +90,14 @@ def _format_assignments_log(targets: List[Dict[str, Any]]) -> str:
     return "[" + ", ".join(parts) + "]"
 
 
-def resolve_live_fire_intent(db, strategy, asset_class: str, prefs=None) -> tuple:
+def resolve_live_fire_intent(
+    db,
+    strategy,
+    asset_class: str,
+    prefs=None,
+    *,
+    prefetched_targets: Optional[List[Dict[str, Any]]] = None,
+) -> tuple:
     """Whether executor should place broker orders (vs paper-only tracking).
 
     cTrader strategies require BOTH:
@@ -98,6 +105,8 @@ def resolve_live_fire_intent(db, strategy, asset_class: str, prefs=None) -> tupl
       2. At least one enabled per-account assignment
 
     Paper strategies always return wants_live=False even if a live account is ticked.
+
+    prefetched_targets — when provided (including []), skips the assignment table query.
 
     Returns (wants_live: bool, fire_targets: list).
     """
@@ -110,7 +119,13 @@ def resolve_live_fire_intent(db, strategy, asset_class: str, prefs=None) -> tupl
     if not status_active:
         return False, []
 
-    targets = get_enabled_fire_targets(db, strategy, prefs, for_live_fire=True)
+    targets = get_enabled_fire_targets(
+        db,
+        strategy,
+        prefs,
+        for_live_fire=True,
+        prefetched_rows=prefetched_targets,
+    )
     if not targets:
         return False, []
     return True, targets
@@ -118,41 +133,55 @@ def resolve_live_fire_intent(db, strategy, asset_class: str, prefs=None) -> tupl
 
 def get_enabled_fire_targets(
     db, strategy, prefs, *, for_live_fire: bool = True,
+    prefetched_rows: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Return [{ctrader_account_id, lot_size}, ...] for routing.
 
     When for_live_fire=True (default): explicit enabled assignment rows, or
     legacy strategy.ctrader_account_id only — never prefs.ctrader_account_id.
     When for_live_fire=False: may include prefs default (non-live UI/helpers).
+
+    prefetched_rows — cycle-level batch prefetch; None triggers a per-strategy query.
     """
     from app.strategy_models import StrategyAccountAssignment
 
-    try:
-        ensure_strategy_account_assignments_table(db.get_bind())
-    except Exception as exc:
-        logger.warning(
-            "get_enabled_fire_targets: ensure table failed strategy=%s: %s",
-            getattr(strategy, "id", "?"),
-            type(exc).__name__,
-        )
-
-    try:
-        rows = (
-            db.query(StrategyAccountAssignment)
-            .filter(
-                StrategyAccountAssignment.strategy_id == strategy.id,
-                StrategyAccountAssignment.enabled.is_(True),
+    rows = None
+    if prefetched_rows is not None:
+        if prefetched_rows:
+            logger.info(
+                "get_enabled_fire_targets strategy=%s enabled=%s (prefetched)",
+                getattr(strategy, "id", "?"),
+                _format_assignments_log(prefetched_rows),
             )
-            .order_by(StrategyAccountAssignment.id)
-            .all()
-        )
-    except Exception as exc:
-        logger.warning(
-            "get_enabled_fire_targets: query failed strategy=%s: %s",
-            getattr(strategy, "id", "?"),
-            exc,
-        )
+            return list(prefetched_rows)
         rows = []
+    else:
+        try:
+            ensure_strategy_account_assignments_table(db.get_bind())
+        except Exception as exc:
+            logger.warning(
+                "get_enabled_fire_targets: ensure table failed strategy=%s: %s",
+                getattr(strategy, "id", "?"),
+                type(exc).__name__,
+            )
+
+        try:
+            rows = (
+                db.query(StrategyAccountAssignment)
+                .filter(
+                    StrategyAccountAssignment.strategy_id == strategy.id,
+                    StrategyAccountAssignment.enabled.is_(True),
+                )
+                .order_by(StrategyAccountAssignment.id)
+                .all()
+            )
+        except Exception as exc:
+            logger.warning(
+                "get_enabled_fire_targets: query failed strategy=%s: %s",
+                getattr(strategy, "id", "?"),
+                exc,
+            )
+            rows = []
 
     if rows:
         out = []
