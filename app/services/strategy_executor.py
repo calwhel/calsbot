@@ -4216,7 +4216,9 @@ async def evaluate_and_fire(
             )
             if (strategy.status or "") == "paper":
                 try:
-                    _paper_asn = get_enabled_fire_targets(db, strategy, _intent_prefs)
+                    _paper_asn = get_enabled_fire_targets(
+                        db, strategy, _intent_prefs, for_live_fire=True,
+                    )
                 except Exception:
                     _paper_asn = []
                 if _paper_asn:
@@ -5018,7 +5020,9 @@ async def evaluate_and_fire(
                     from app.models import UserPreference as _UP_ft
                     from app.services.strategy_account_assignments import get_enabled_fire_targets
                     _ft_prefs = db.query(_UP_ft).filter(_UP_ft.user_id == user.id).first()
-                    _fire_targets = get_enabled_fire_targets(db, strategy, _ft_prefs)
+                    _fire_targets = get_enabled_fire_targets(
+                        db, strategy, _ft_prefs, for_live_fire=True,
+                    )
                 except Exception as _ft_err:
                     logger.warning(
                         f"[Strategy {strategy.id}] assignment lookup failed — "
@@ -5837,10 +5841,8 @@ async def _propagate_to_subscribers(
 
             # Use subscriber's own leverage & size but source's price/symbol/direction
             leverage   = int(sub_risk.get("leverage", 10))
-            _wants_live = sub_strategy.status == "active"
             _live_reason = "ok"
-            # P5e-2: broker-aware live gate. Forex copies route through OANDA,
-            # crypto through Bitunix. Stocks/indices stay paper.
+            _sub_fire_targets: List[dict] = []
             try:
                 from app.services.asset_classes import normalize_asset_class as _norm_ac
                 _sub_asset_class = _norm_ac(
@@ -5848,38 +5850,85 @@ async def _propagate_to_subscribers(
                 )
             except Exception:
                 _sub_asset_class = getattr(sub_strategy, "asset_class", None) or sub_config.get("asset_class") or "crypto"
-            if _wants_live:
-                if _sub_asset_class in ("forex", "index"):
+
+            from app.models import UserPreference as _UP_sub
+            _sub_prefs = _sub_db.query(_UP_sub).filter(_UP_sub.user_id == sub_user.id).first()
+
+            if _sub_asset_class in ("forex", "index", "metals", "commodity"):
+                from app.services.strategy_account_assignments import (
+                    get_enabled_fire_targets,
+                    resolve_live_fire_intent,
+                )
+                _wants_live, _sub_fire_targets = resolve_live_fire_intent(
+                    _sub_db, sub_strategy, _sub_asset_class, _sub_prefs,
+                )
+                if (sub_strategy.status or "") == "paper":
                     try:
-                        from app.models import UserPreference as _UP_sub
-                        _sub_prefs = _sub_db.query(_UP_sub).filter(_UP_sub.user_id == sub_user.id).first()
-                        _can_live = bool(
-                            _sub_prefs
-                            and _sub_prefs.ctrader_access_token
-                            and _sub_prefs.ctrader_account_id
-                            and getattr(_sub_prefs, "forex_approved", False)
+                        _paper_asn = get_enabled_fire_targets(
+                            _sub_db, sub_strategy, _sub_prefs, for_live_fire=True,
                         )
-                        _live_reason = "ok" if _can_live else "no_ctrader_credentials_or_not_approved"
-                    except Exception as _e:
-                        _can_live = False
-                        _live_reason = f"ctrader_check_error:{_e}"
-                elif _sub_asset_class == "stock":
-                    _can_live = False
-                    _live_reason = "paper_only_asset_class"
-                else:
-                    _can_live, _live_reason = await _user_can_live_trade_async(sub_user, _sub_db)
-                is_paper  = not _can_live
-                if is_paper:
+                    except Exception:
+                        _paper_asn = []
+                    if _paper_asn:
+                        logger.info(
+                            "[Propagate] SKIPPED strategy=%s reason=status=paper "
+                            "assignments=%s (Go Live required before broker orders)",
+                            sub_strategy.id,
+                            _format_fire_targets_log(_paper_asn),
+                        )
+                elif not _wants_live:
                     logger.info(
-                        f"[Propagate] Strategy {sub_strategy.id} (user {sub_user.username}) "
-                        f"downgraded to PAPER — reason={_live_reason}"
+                        "[Propagate] SKIPPED strategy=%s reason=no_enabled_accounts "
+                        "status=%s (Go Live + enable an account on the strategy card)",
+                        sub_strategy.id,
+                        sub_strategy.status,
+                    )
+                _ctrader_live_ok = bool(
+                    _sub_prefs
+                    and _sub_prefs.ctrader_access_token
+                    and _sub_prefs.ctrader_account_id
+                    and (
+                        getattr(_sub_prefs, "forex_approved", False)
+                        or getattr(sub_user, "is_admin", False)
+                    )
+                )
+                is_paper = not (_wants_live and _ctrader_live_ok)
+                if _wants_live and is_paper:
+                    _live_reason = (
+                        "; ".join(_forex_live_blockers(_sub_prefs, sub_user))
+                        or "cTrader not ready"
+                    )
+                    logger.info(
+                        "[Propagate] Strategy %s (user %s) downgraded to PAPER — reason=%s",
+                        sub_strategy.id,
+                        sub_user.username,
+                        _live_reason,
                     )
             else:
-                is_paper = True
+                _wants_live = sub_strategy.status == "active"
+                if _wants_live:
+                    if _sub_asset_class == "stock":
+                        _can_live = False
+                        _live_reason = "paper_only_asset_class"
+                    else:
+                        _can_live, _live_reason = await _user_can_live_trade_async(sub_user, _sub_db)
+                    is_paper = not _can_live
+                    if is_paper:
+                        logger.info(
+                            f"[Propagate] Strategy {sub_strategy.id} (user {sub_user.username}) "
+                            f"downgraded to PAPER — reason={_live_reason}"
+                        )
+                else:
+                    is_paper = True
 
             _open_note = None
             if is_paper and _wants_live:
                 _open_note = f"Live→Paper: {_live_reason}"
+
+            _sub_preset_ctid = (
+                _sub_fire_targets[0].get("ctrader_account_id") or _sub_fire_targets[0].get("ctid")
+                if _sub_fire_targets else None
+            )
 
             sub_exec = StrategyExecution(
                 strategy_id    = sub_strategy.id,
@@ -5897,6 +5946,7 @@ async def _propagate_to_subscribers(
                 is_paper       = is_paper,
                 notes          = _open_note,
                 asset_class    = getattr(sub_strategy, "asset_class", None) or "crypto",
+                ctrader_account_id=_sub_preset_ctid,
             )
             _sub_db.add(sub_exec)
             _sub_db.commit()
@@ -5949,13 +5999,28 @@ async def _propagate_to_subscribers(
                 actual_fill = None
                 _position_id = None
                 _acct_id    = None
-                _sub_broker = "ctrader" if _sub_asset_class in ("forex", "index") else "bitunix"
+                _sub_broker = (
+                    "ctrader"
+                    if _sub_asset_class in ("forex", "index", "metals", "commodity")
+                    else "bitunix"
+                )
                 try:
                     ps_type      = sub_risk.get("position_size_type", "pct")
                     _sub_risk_usd = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None
                     _sub_fixed_lots = float(sub_risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
                     _sub_acct_lot = getattr(sub_strategy, "ctrader_account_lot", None)
-                    if _sub_acct_lot is not None:
+                    if _sub_fire_targets:
+                        _t0 = _sub_fire_targets[0]
+                        _t_lot = _t0.get("lot_size")
+                        if _t_lot is not None:
+                            try:
+                                from app.services.ctrader_client import normalize_account_lot
+                                _snl = normalize_account_lot(_t_lot)
+                                if _snl:
+                                    _sub_fixed_lots = _snl
+                            except Exception:
+                                pass
+                    elif _sub_acct_lot is not None:
                         try:
                             from app.services.ctrader_client import normalize_account_lot
                             _snl = normalize_account_lot(_sub_acct_lot)
@@ -5979,16 +6044,25 @@ async def _propagate_to_subscribers(
                             or 1.0
                         )
                         _sub_job_ctid = None
-                        try:
-                            from app.services.ctrader_client import resolve_ctrader_ctid
-                            _sub_job_ctid = resolve_ctrader_ctid(
-                                strategy_account_id=getattr(sub_strategy, "ctrader_account_id", None),
-                                prefs_default=(
-                                    _sub_prefs.ctrader_account_id if _sub_prefs else None
-                                ),
+                        if _sub_fire_targets:
+                            _sub_job_ctid = str(
+                                _sub_fire_targets[0].get("ctrader_account_id")
+                                or _sub_fire_targets[0].get("ctid")
+                                or ""
+                            ).strip() or None
+                        if not _sub_job_ctid:
+                            logger.warning(
+                                "[Propagate] strategy=%s no explicit assignment ctid — "
+                                "skipping cTrader order",
+                                sub_strategy.id,
                             )
-                        except Exception:
-                            pass
+                            sub_exec.is_paper = True
+                            sub_exec.notes = (
+                                (sub_exec.notes or "")
+                                + " | Live→Paper: no_enabled_accounts"
+                            ).strip(" |")
+                            _sub_db.commit()
+                            continue
                         _job = CtraderOrderJob(
                             user_id=sub_user.id,
                             strategy_id=sub_strategy.id,
