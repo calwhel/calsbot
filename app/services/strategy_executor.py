@@ -1676,6 +1676,7 @@ async def _ctrader_fanout_live_fire_impl(
         return_exceptions=True,
     )
     _queued_any = False
+    _queued_n = 0
     for (ex, target), res in zip(executions, results):
         ctid = str(target.get("ctrader_account_id") or target.get("ctid") or "")
         if isinstance(res, Exception):
@@ -1699,6 +1700,7 @@ async def _ctrader_fanout_live_fire_impl(
             continue
         if res:
             _queued_any = True
+            _queued_n += 1
             ex.notes = ((ex.notes or "") + " | order_queued").strip(" |")
             _log_live_order_route(
                 execution_id=ex.id,
@@ -1723,6 +1725,16 @@ async def _ctrader_fanout_live_fire_impl(
                 fixed_lots=target.get("lot_size"),
                 outcome="queue_full_live_to_paper",
             )
+    if _queued_n and _queued_n < len(jobs):
+        logger.critical(
+            "[live-fire] fan-out partial strategy=%s symbol=%s queued=%s/%s targets=%s "
+            "(check [order] logs per ctid — live account may have wrong host or failed)",
+            strategy.id,
+            symbol,
+            _queued_n,
+            len(jobs),
+            _format_fire_targets_log(fire_targets),
+        )
     await _commit_db_with_retry(
         db,
         label=f"fanout-queued#{strategy.id}",

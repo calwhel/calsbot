@@ -875,18 +875,9 @@ async def _resolve_symbols(reader, writer, ctid: int, host: str = _HOST_LIVE) ->
 # ── DB helper ─────────────────────────────────────────────────────────────────
 
 def _is_live_for_ctid(prefs, ctid: int) -> bool:
-    import json as _json
-    try:
-        raw = getattr(prefs, "ctrader_accounts", None)
-        if raw:
-            for a in _json.loads(raw):
-                if int(a.get("ctidTraderAccountId", -1)) == int(ctid):
-                    if "isLive" in a:
-                        return bool(a.get("isLive"))
-                    return False
-    except Exception:
-        pass
-    return True
+    from app.services.ctrader_client import _account_is_live
+    val = _account_is_live(prefs, ctid)
+    return True if val is None else bool(val)
 
 
 def _prefs_rows_to_accounts(rows) -> List[Tuple[str, int, int, bool]]:

@@ -12019,7 +12019,10 @@ function renderLFStrategyAssignment(d) {
         </div>
       </div>
       <div class="lf-strat-acct-rows">
-        <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Accounts — enable + lot size</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Accounts — enable + lot size</div>
+          ${nAdded > 1 ? `<button type="button" class="btn ghost sm" style="font-size:11px;padding:2px 8px" onclick="lfEnableAllAccounts(${s.id})">Enable all accounts</button>` : ''}
+        </div>
         ${_lfStratAcctRowsHtml(d, s)}
       </div>
       ${goLiveBtn}
@@ -12156,6 +12159,18 @@ async function lfGoLive(strategyId, assetClass) {
       }
     },
   );
+}
+
+async function lfEnableAllAccounts(strategyId) {
+  const card = document.querySelector(`[data-lf-assign-id="${strategyId}"]`);
+  if (!card) return;
+  card.querySelectorAll('.lf-strat-acct-row').forEach(row => {
+    const cb = row.querySelector('input[type=checkbox]');
+    const lotInp = row.querySelector('.lf-strat-lot');
+    if (cb) cb.checked = true;
+    if (lotInp) lotInp.disabled = false;
+  });
+  await lfSaveStratAssignments(strategyId);
 }
 
 async function lfToggleStratAcct(strategyId, ctid, enabled, isLive) {

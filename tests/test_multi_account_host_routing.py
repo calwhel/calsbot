@@ -36,6 +36,17 @@ class TestRoutingHosts(unittest.TestCase):
         self.assertEqual(hosts[0], CTRADER_HOST_LIVE)
         self.assertIn(CTRADER_HOST_DEMO, hosts)
 
+    def test_missing_islive_not_treated_as_demo(self):
+        from app.services.ctrader_client import _account_is_live
+
+        prefs = SimpleNamespace(
+            ctrader_accounts='[{"ctidTraderAccountId":47465772}]'
+        )
+        self.assertIsNone(_account_is_live(prefs, 47465772))
+        hosts = _routing_hosts_for_account(prefs, 47465772)
+        self.assertIn(CTRADER_HOST_LIVE, hosts)
+        self.assertIn(CTRADER_HOST_DEMO, hosts)
+
     def test_alternate_host_on_cancel_when_type_unknown(self):
         self.assertTrue(
             _should_try_alternate_order_host("ORDER_CANCELLED", known_account_type=False)
