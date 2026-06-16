@@ -31,5 +31,14 @@ class TestMarketplaceTradfiHelpers(unittest.TestCase):
         self.assertEqual(items[0]["live_pips_pnl"], 42.0)
 
 
+
+def test_mkt_public_summary_redacts_forex():
+    from strategy_portal_server import _mkt_public_summary
+
+    assert _mkt_public_summary("Long on RSI dip in London session", "forex") == ""
+    assert _mkt_public_summary("Long on RSI dip", "metals") == ""
+    assert "RSI" in _mkt_public_summary("Long on RSI dip", "crypto")
+
+
 if __name__ == "__main__":
     unittest.main()
