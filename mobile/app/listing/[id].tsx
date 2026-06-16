@@ -197,7 +197,7 @@ export default function ListingDetailScreen() {
             )}
             {owned ? <Pill label="In your library" tone="positive" small /> : null}
           </View>
-          {m.summary ? (
+          {m.summary && !tradfi ? (
             <Text style={styles.summary}>{m.summary}</Text>
           ) : null}
         </View>

@@ -7168,7 +7168,10 @@ async def public_marketplace(limit: int = Query(6, ge=1, le=20)):
             result.append({
                 "id":            m.id,
                 "title":         m.title,
-                "summary":       m.summary,
+                "summary":       _mkt_public_summary(
+                    m.summary,
+                    strat.asset_class if strat else None,
+                ),
                 "category":      m.category,
                 "pricing_model": m.pricing_model,
                 "price_usdt":    float(m.price_usdt) if m.price_usdt else None,
@@ -7867,6 +7870,20 @@ async def api_bulk_delete_strategies(
     }
 
 
+_MKT_TRADFI_ASSET_CLASSES = frozenset({"forex", "index", "metals", "commodity", "stock"})
+
+
+def _mkt_tradfi_asset(asset_class: Optional[str]) -> bool:
+    return (asset_class or "crypto").lower() in _MKT_TRADFI_ASSET_CLASSES
+
+
+def _mkt_public_summary(summary: Optional[str], asset_class: Optional[str]) -> str:
+    """Strip tradfi listing blurbs from marketplace — logic stays in the locked copy."""
+    if _mkt_tradfi_asset(asset_class):
+        return ""
+    return (summary or "").strip()
+
+
 @app.get("/api/marketplace")
 async def api_marketplace(
     uid:      str = Query(...),
@@ -7977,7 +7994,7 @@ async def api_marketplace(
                 if row.pips_pnl is not None:
                     _equity_pips_raw.setdefault(row.strategy_id, []).append(float(row.pips_pnl))
 
-        _MKT_TRADFI_AC = frozenset({"forex", "index", "metals", "commodity", "stock"})
+        _MKT_TRADFI_AC = _MKT_TRADFI_ASSET_CLASSES
 
         result = []
         for m in listings:
@@ -7999,7 +8016,7 @@ async def api_marketplace(
                 "id":               m.id,
                 "strategy_id":      m.strategy_id,
                 "title":            m.title,
-                "summary":          m.summary,
+                "summary":          _mkt_public_summary(m.summary, _ac),
                 "tags":             m.tags or [],
                 "category":         m.category or "general",
                 "pricing_model":    m.pricing_model or "free",
@@ -8122,7 +8139,7 @@ async def api_marketplace_leaderboard(
                     names[u.id] = u.first_name or u.username or "Anonymous"
 
             entries = []
-            _MKT_TRADFI_AC = frozenset({"forex", "index", "metals", "commodity", "stock"})
+            _MKT_TRADFI_AC = _MKT_TRADFI_ASSET_CLASSES
             for rank, r in enumerate(rows, 1):
                 trades   = int(r.trades or 0)
                 wins     = int(r.wins or 0)
@@ -8204,7 +8221,8 @@ async def api_marketplace_detail(listing_id: int, uid: str = Query(...)):
         ).first()
 
         return JSONResponse({
-            "id": m.id, "title": m.title, "summary": m.summary,
+            "id": m.id, "title": m.title,
+            "summary": _mkt_public_summary(m.summary, _ac),
             "tags": m.tags or [], "category": m.category or "general",
             "pricing_model": m.pricing_model or "free", "price_usdt": m.price_usdt or 0,
             "is_verified": m.is_verified, "verified_trades": m.verified_trades or 0,
@@ -8624,7 +8642,7 @@ async def api_creator_profile(creator_uid: str, uid: str = Query(...)):
         if not creator:
             raise HTTPException(status_code=404)
 
-        from app.strategy_models import StrategyMarketplace, StrategyPerformance
+        from app.strategy_models import StrategyMarketplace, StrategyPerformance, UserStrategy
         from app.strategy_marketplace_ext import CreatorEarnings, init_marketplace_ext_tables
         from app.social_models import UserFollow, init_social_tables
 
@@ -8642,8 +8660,11 @@ async def api_creator_profile(creator_uid: str, uid: str = Query(...)):
         strat_details = []
         for m in listings:
             perf = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == m.strategy_id).first()
+            strat = db.query(UserStrategy).filter(UserStrategy.id == m.strategy_id).first()
+            _ac = (strat.asset_class if strat else None) or "crypto"
             strat_details.append({
-                "id": m.id, "title": m.title, "summary": m.summary,
+                "id": m.id, "title": m.title,
+                "summary": _mkt_public_summary(m.summary, _ac),
                 "pricing_model": m.pricing_model or "free", "price_usdt": m.price_usdt or 0,
                 "clone_count": m.clone_count or 0, "avg_rating": round(m.avg_rating or 0, 1),
                 "is_verified": m.is_verified,
