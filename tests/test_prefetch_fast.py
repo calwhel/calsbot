@@ -25,6 +25,7 @@ class TestPrefetchFast(unittest.TestCase):
 
     def test_symbol_budget_default(self):
         self.assertGreater(SYMBOL_BUDGET_S, 0)
+        self.assertLessEqual(SYMBOL_BUDGET_S, 3.0)
 
     async def _async_prefetch_flag(self):
         self.assertFalse(prefetch_fast_active())
