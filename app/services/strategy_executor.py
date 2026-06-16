@@ -6,12 +6,14 @@ and fires trades. Paper trades are tracked with 1m OHLC accuracy — candle
 high/low is used to detect TP/SL hits so scalp results are realistic.
 """
 import asyncio
+import contextvars
 import html as _html
 import logging
 import math
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -53,7 +55,7 @@ LIVE_MONITOR_INTERVAL       = int(_os_env.environ.get("EXECUTOR_LIVE_MONITOR_INT
 MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "2"))
 # Each forex eval holds bg_engine across async kline/TA fetches. Total checkout
 # slots are capped by app.database.bg_db_slot() (pool hard limit − reserve).
-FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "3"))
+FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "6"))
 # Evaluate strategies in batches so Railway logs show progress during long first cycles
 # (90 forex + 168 crypto can run 5–15 min with no other INFO lines).
 EXECUTOR_SCAN_BATCH_SIZE    = int(_os_env.environ.get("EXECUTOR_SCAN_BATCH_SIZE", "20"))
@@ -116,6 +118,67 @@ def _executor_shard_label(base: str, shard_index: int, shard_count: int) -> str:
     if shard_count <= 1:
         return base
     return f"{base} S{shard_index}/{shard_count}"
+
+
+@dataclass
+class ExecutorCycleCtx:
+    """Per-scan-cycle shared state (timing, kline cache, fire accumulator)."""
+
+    shard_index: int = 0
+    kline_cache: Dict[Any, Any] = field(default_factory=dict)
+    fire_ms: float = 0.0
+    strategy_timings_ms: List[Tuple[int, float]] = field(default_factory=list)
+
+
+_EXECUTOR_CYCLE_CTX: contextvars.ContextVar[Optional[ExecutorCycleCtx]] = (
+    contextvars.ContextVar("executor_cycle_ctx", default=None)
+)
+
+
+def _get_cycle_ctx() -> Optional[ExecutorCycleCtx]:
+    return _EXECUTOR_CYCLE_CTX.get()
+
+
+def _accum_cycle_fire_ms(since_t0: float) -> None:
+    ctx = _get_cycle_ctx()
+    if ctx is not None:
+        ctx.fire_ms += (time.monotonic() - since_t0) * 1000.0
+
+
+def _log_cycle_timing(
+    shard_index: int,
+    strategy_count: int,
+    prefetch_ms: float,
+    eval_ms: float,
+    fire_ms: float,
+    total_ms: float,
+    prefetch_stats: Optional[Dict[str, int]] = None,
+    strategy_timings_ms: Optional[List[Tuple[int, float]]] = None,
+) -> None:
+    """Emit per-phase cycle timing and the slowest strategies."""
+    stats = prefetch_stats or {}
+    dedup = ""
+    if stats.get("symbol_refs", 0) > 0:
+        dedup = (
+            f" prefetch_dedup={stats.get('unique_keys', 0)}/"
+            f"{stats.get('symbol_refs', 0)}"
+        )
+    logger.info(
+        "[cycle] shard=%s strategies=%s prefetch=%.0fms eval=%.0fms "
+        "fire=%.0fms total=%.0fms%s",
+        shard_index,
+        strategy_count,
+        prefetch_ms,
+        eval_ms,
+        fire_ms,
+        total_ms,
+        dedup,
+    )
+    if strategy_timings_ms:
+        slowest = sorted(strategy_timings_ms, key=lambda x: -x[1])[:3]
+        if slowest:
+            parts = " ".join(f"id={sid} eval={ms:.0f}ms" for sid, ms in slowest)
+            logger.info("[cycle] slowest %s", parts)
 
 async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size: int = 0) -> None:
     """Run evaluate tasks in chunks and log progress (visible in Railway during long scans)."""
@@ -710,6 +773,46 @@ def _primary_timeframe(config: dict) -> str:
     return str(config.get("timeframe") or config.get("_timeframe") or "15m")
 
 
+def _price_ta_cache_key(
+    symbol: str,
+    asset_class: str,
+    timeframe: str,
+    *,
+    metal_paper_ok: bool = False,
+) -> str:
+    tf = timeframe or "15m"
+    cache_key = (
+        f"{asset_class}:{symbol}:{tf}" if asset_class != "crypto" else symbol
+    )
+    if metal_paper_ok and asset_class != "crypto":
+        from app.services.tradfi_prices import is_metal_symbol as _metal_ck
+        if _metal_ck(symbol):
+            cache_key = f"{cache_key}:paper"
+    return cache_key
+
+
+def _price_ta_cache_lookup(
+    symbol: str,
+    asset_class: str,
+    timeframe: Optional[str] = None,
+    *,
+    metal_paper_ok: bool = False,
+) -> Optional[Dict]:
+    """Return fresh cached price+TA without network I/O."""
+    tf = timeframe or "15m"
+    cache_key = _price_ta_cache_key(
+        symbol, asset_class, tf, metal_paper_ok=metal_paper_ok,
+    )
+    cached = _PRICE_TA_CACHE.get(cache_key)
+    if not cached:
+        return None
+    data, fetched_at = cached
+    _ttl = _PRICE_TA_TTL if asset_class == "crypto" else _PRICE_TA_TTL_TRADFI
+    if (datetime.utcnow() - fetched_at).total_seconds() < _ttl:
+        return data
+    return None
+
+
 async def _fetch_price_and_ta(
     symbol: str,
     http_client: httpx.AsyncClient,
@@ -732,13 +835,9 @@ async def _fetch_price_and_ta(
     global _PRICE_TA_CACHE
     now = datetime.utcnow()
     tf = timeframe or "15m"
-    cache_key = (
-        f"{asset_class}:{symbol}:{tf}" if asset_class != "crypto" else symbol
+    cache_key = _price_ta_cache_key(
+        symbol, asset_class, tf, metal_paper_ok=metal_paper_ok,
     )
-    if metal_paper_ok and asset_class != "crypto":
-        from app.services.tradfi_prices import is_metal_symbol as _metal_ck
-        if _metal_ck(symbol):
-            cache_key = f"{cache_key}:paper"
     cached = _PRICE_TA_CACHE.get(cache_key)
     if cached:
         data, fetched_at = cached
@@ -952,6 +1051,13 @@ async def _fetch_price_and_ta(
                 "_timeframe": tf,
             }
             _PRICE_TA_CACHE[cache_key] = (result, now)
+            if not metal_paper_ok and asset_class != "crypto":
+                try:
+                    from app.services.tradfi_prices import is_metal_symbol as _metal_alias
+                    if _metal_alias(symbol):
+                        _PRICE_TA_CACHE[f"{cache_key}:paper"] = (result, now)
+                except Exception:
+                    pass
             return result
         except Exception as e:
             logger.warning(f"[tradfi] price/TA fetch failed for {symbol} ({asset_class}): {e}")
@@ -4227,19 +4333,10 @@ async def evaluate_and_fire(
                 db, strategy, asset_class, _intent_prefs,
             )
             if (strategy.status or "") == "paper":
-                try:
-                    _paper_asn = get_enabled_fire_targets(
-                        db, strategy, _intent_prefs, for_live_fire=True,
-                    )
-                except Exception:
-                    _paper_asn = []
-                if _paper_asn:
-                    logger.info(
-                        "[live-fire] SKIPPED strategy=%s reason=status=paper "
-                        "assignments=%s (Go Live required before broker orders)",
-                        strategy.id,
-                        _format_fire_targets_log(_paper_asn),
-                    )
+                logger.info(
+                    "[live-fire] SKIPPED strategy=%s reason=status=paper",
+                    strategy.id,
+                )
         except Exception as _intent_err:
             logger.warning(
                 "[live-fire] strategy=%s assignment intent lookup failed: %s",
@@ -4641,17 +4738,27 @@ async def evaluate_and_fire(
     # Turns O(n × fetch_time) → O(fetch_time).  Results are also stored in the
     # shared _PRICE_TA_CACHE so subsequent calls inside evaluate_strategy_conditions
     # (which fetches its own klines) benefit from the same warm cache.
+    # After cycle prefetch, cache hits avoid redundant network I/O per strategy.
     _eval_tf = _primary_timeframe(config)
     _uid = user.id if user else None
+    _metal_paper = is_paper and asset_class == "forex"
+    _cycle_ctx = _get_cycle_ctx()
+    _shared_klines = _cycle_ctx.kline_cache if _cycle_ctx else None
+
+    async def _price_for_symbol(sym: str) -> Optional[Dict]:
+        cached = _price_ta_cache_lookup(
+            sym, asset_class, _eval_tf, metal_paper_ok=_metal_paper,
+        )
+        if cached:
+            return cached
+        return await _fetch_price_and_ta(
+            sym, http_client, asset_class,
+            user_id=_uid, timeframe=_eval_tf,
+            metal_paper_ok=_metal_paper,
+        )
+
     _price_results = await asyncio.gather(
-        *[
-            _fetch_price_and_ta(
-                sym, http_client, asset_class,
-                user_id=_uid, timeframe=_eval_tf,
-                metal_paper_ok=is_paper and asset_class == "forex",
-            )
-            for sym in candidate_symbols
-        ],
+        *[_price_for_symbol(sym) for sym in candidate_symbols],
         return_exceptions=True,
     )
     price_map: Dict[str, Dict] = {
@@ -4794,6 +4901,7 @@ async def evaluate_and_fire(
                 config, symbol, price_data, enhanced_ta, http_client,
                 strictness_level=strictness_level,
                 ctrader_user_id=_uid,
+                shared_kline_cache=_shared_klines,
             )
         except StrategyEvalCancelled:
             logger.info(
@@ -4863,6 +4971,7 @@ async def evaluate_and_fire(
             current_price = _confirmed_px
 
         _signal_generated_at = time.time()
+        _fire_t0 = time.monotonic()
 
         mode_tag = "🧪 [PAPER]" if is_paper else "🎯"
         _ac_tag = asset_class.upper()
@@ -5099,6 +5208,7 @@ async def evaluate_and_fire(
                     exc_info=True,
                 )
             if _fanout_ok:
+                _accum_cycle_fire_ms(_fire_t0)
                 break
             if len(_fire_targets) > 1:
                 logger.critical(
@@ -5107,6 +5217,7 @@ async def evaluate_and_fire(
                     strategy.id,
                     _format_fire_targets_log(_fire_targets),
                 )
+                _accum_cycle_fire_ms(_fire_t0)
                 continue
 
         _preset_ctid = (
@@ -5144,6 +5255,7 @@ async def evaluate_and_fire(
                 f"[Strategy {strategy.id}] execution row missing after commit — "
                 f"aborting fire for {symbol}"
             )
+            _accum_cycle_fire_ms(_fire_t0)
             return
 
         # Only increment open_trades counter — do NOT recompute from scratch
@@ -5252,6 +5364,7 @@ async def evaluate_and_fire(
                                     f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} drift "
                                     f"{_drift_pips:.1f}p > {_max_drift} — skipped"
                                 )
+                                _accum_cycle_fire_ms(_fire_t0)
                                 break
                     except Exception:
                         pass
@@ -5286,6 +5399,7 @@ async def evaluate_and_fire(
                             f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} "
                             f"live order pre-blocked: {_reason}"
                         )
+                        _accum_cycle_fire_ms(_fire_t0)
                         break
                     # Risk % auto lot sizing: when use_risk_pct=True, the wizard
                     # stored risk_pct_per_trade (% of account to risk).  We pass
@@ -5443,6 +5557,7 @@ async def evaluate_and_fire(
                             )
                         except Exception:
                             pass
+                    _accum_cycle_fire_ms(_fire_t0)
                     break  # execution cancelled — stop processing matches
 
                 # All other errors: flip to paper so the signal's ROI is still tracked.
@@ -5492,6 +5607,7 @@ async def evaluate_and_fire(
                         source_execution_id=execution.id,
                         http_client=http_client,
                     ))
+                _accum_cycle_fire_ms(_fire_t0)
                 break  # paper execution is now open — stop processing matches
 
             if (
@@ -5529,6 +5645,7 @@ async def evaluate_and_fire(
                         )
                     except Exception:
                         pass
+                _accum_cycle_fire_ms(_fire_t0)
                 break
 
             if order_result and order_result.get("queued"):
@@ -5573,6 +5690,7 @@ async def evaluate_and_fire(
                         source_execution_id=execution.id,
                         http_client=http_client,
                     ))
+                _accum_cycle_fire_ms(_fire_t0)
                 break
 
             if order_id:
@@ -5728,6 +5846,7 @@ async def evaluate_and_fire(
             signal_sent=bool(_telegram_int_id(user)),
             strategy_id=strategy.id,
         )
+        _accum_cycle_fire_ms(_fire_t0)
         break  # one trade per strategy per scan cycle
     else:
         # for-loop completed without break → no fire happened.
@@ -6315,11 +6434,13 @@ async def _prefetch_price_ta_for_cycle(
     allowed_asset_classes: set,
     label: str = "Executor",
     ctrader_user_id: Optional[int] = None,
-) -> int:
+) -> Dict[str, int]:
     """
     Warm _PRICE_TA_CACHE + tradfi kline cache for every unique symbol in this
     cycle BEFORE per-strategy evaluate_and_fire. All symbols fetch concurrently
     (semaphore ~10) with a hard per-symbol budget — dead providers never block.
+
+    Returns stats: unique_keys, symbol_refs (before dedup), cache/fetched/failed.
     """
     from app.services.prefetch_fast import (
         SYMBOL_BUDGET_S,
@@ -6328,19 +6449,27 @@ async def _prefetch_price_ta_for_cycle(
 
     jobs: List[Tuple[str, str, str]] = []
     seen: set = set()
+    symbol_refs = 0
     for snap in snapshots:
         ac = _snap_asset_class(snap)
         if ac not in allowed_asset_classes:
             continue
         tf = _primary_timeframe(snap.get("config") or {})
         for sym in _symbols_for_snapshot(snap):
+            symbol_refs += 1
             key = (sym, ac, tf)
             if key in seen:
                 continue
             seen.add(key)
             jobs.append(key)
     if not jobs:
-        return 0
+        return {
+            "unique_keys": 0,
+            "symbol_refs": symbol_refs,
+            "cache": 0,
+            "fetched": 0,
+            "failed": 0,
+        }
 
     sem = asyncio.Semaphore(EXECUTOR_PREFETCH_CONCURRENT)
     t0 = time.monotonic()
@@ -6381,11 +6510,18 @@ async def _prefetch_price_ta_for_cycle(
     await asyncio.gather(*[_warm(s, a, t) for s, a, t in jobs], return_exceptions=True)
     elapsed = time.monotonic() - t0
     logger.info(
-        f"[{_log_ts()}] [{label}] prefetch {len(jobs)} symbols in {elapsed:.1f}s "
+        f"[{_log_ts()}] [{label}] prefetch {len(jobs)} unique symbols "
+        f"({symbol_refs} strategy-symbol refs) in {elapsed:.1f}s "
         f"({stats['cache']} from cache, {stats['fetched']} fetched, "
         f"{stats['failed']} failed)"
     )
-    return len(jobs)
+    return {
+        "unique_keys": len(jobs),
+        "symbol_refs": symbol_refs,
+        "cache": stats["cache"],
+        "fetched": stats["fetched"],
+        "failed": stats["failed"],
+    }
 
 
 def _snap_asset_class(snap: dict) -> str:
@@ -8011,7 +8147,12 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
             _cycle_db_skipped = []  # initialised before try so the adaptive
                                     # backoff below is safe even if the cycle
                                     # throws before its own assignment.
-            _cycle_t0 = datetime.utcnow()
+            _cycle_t0 = time.monotonic()
+            _cycle_ctx_token = None
+            _cycle_ctx = None
+            _prefetch_ms = 0.0
+            _eval_ms = 0.0
+            _prefetch_stats: Dict[str, int] = {}
             try:
                 from app.services.feed_diagnostics import begin_scan_metric_batch
                 begin_scan_metric_batch()
@@ -8082,21 +8223,6 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 ]
 
                 _forex_open = _ac_open("forex")
-
-                if _forex_open:
-                    try:
-                        from app.services.ctrader_price_feed import sweep_stale_klines
-                        from app.services.tradfi_prices import sweep_stale_metal_klines
-                        _stale_syms = {
-                            (s.get("symbol") or "").upper()
-                            for s in open_snaps
-                            if (s.get("symbol") or "").upper()
-                        }
-                        _sym_list = list(_stale_syms) if _stale_syms else None
-                        await sweep_stale_klines(symbols=_sym_list)
-                        await sweep_stale_metal_klines(symbols=_sym_list)
-                    except Exception as _ks_err:
-                        logger.debug("[FX Executor] kline staleness sweep: %s", _ks_err)
 
                 if _closed_by_class and shard_index == 0:
                     _closed_summary = " ".join(
@@ -8175,97 +8301,126 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     User,
                 )
 
+                _cycle_ctx = ExecutorCycleCtx(shard_index=shard_index)
+                _cycle_ctx_token = _EXECUTOR_CYCLE_CTX.set(_cycle_ctx)
+
                 async def _run_one_fx(snap, _http=http_client):
                     from sqlalchemy.exc import OperationalError as _SAOperationalError
                     from sqlalchemy.exc import PendingRollbackError as _SAPendingRollbackError
                     from sqlalchemy.exc import TimeoutError as _SATimeoutError
                     from app.database import bg_db_slot
                     from app.services.strategy_ta import StrategyEvalCancelled
-                    async with sem:
-                        async with bg_db_slot():
-                            row = _preloaded_fx.get(snap["id"])
-                            if not row:
-                                return
-                            _strategy_row, _user_row = row
-                            if not _user_row or _user_row.banned:
-                                return
-                            if not _portal_trade_entitled(_user_row, has_pro_by_user):
-                                cycle_gate_stats["blk_not_entitled"] = (
-                                    cycle_gate_stats.get("blk_not_entitled", 0) + 1
-                                )
-                                return
-                            for _attempt in (1, 3):
-                                db_one = SessionLocal()
-                                try:
-                                    strategy = db_one.merge(_strategy_row)
-                                    user = db_one.merge(_user_row)
-                                    await evaluate_and_fire(
-                                        strategy, user, db_one, _http,
-                                        raw_tickers=[],
-                                        gate_stats=cycle_gate_stats,
-                                        prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
+                    _strat_t0 = time.monotonic()
+                    try:
+                        async with sem:
+                            async with bg_db_slot():
+                                row = _preloaded_fx.get(snap["id"])
+                                if not row:
+                                    return
+                                _strategy_row, _user_row = row
+                                if not _user_row or _user_row.banned:
+                                    return
+                                if not _portal_trade_entitled(_user_row, has_pro_by_user):
+                                    cycle_gate_stats["blk_not_entitled"] = (
+                                        cycle_gate_stats.get("blk_not_entitled", 0) + 1
                                     )
                                     return
-                                except (
-                                    _SAOperationalError,
-                                    _SAPendingRollbackError,
-                                    _SATimeoutError,
-                                ) as _db_err:
-                                    _err_name = type(_db_err).__name__
-                                    if getattr(_db_err, "orig", None) is not None:
-                                        _err_name = type(_db_err.orig).__name__
-                                    if _attempt < 3:
+                                for _attempt in (1, 3):
+                                    db_one = SessionLocal()
+                                    try:
+                                        strategy = db_one.merge(_strategy_row)
+                                        user = db_one.merge(_user_row)
+                                        await evaluate_and_fire(
+                                            strategy, user, db_one, _http,
+                                            raw_tickers=[],
+                                            gate_stats=cycle_gate_stats,
+                                            prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
+                                        )
+                                        return
+                                    except (
+                                        _SAOperationalError,
+                                        _SAPendingRollbackError,
+                                        _SATimeoutError,
+                                    ) as _db_err:
+                                        _err_name = type(_db_err).__name__
+                                        if getattr(_db_err, "orig", None) is not None:
+                                            _err_name = type(_db_err.orig).__name__
+                                        if _attempt < 3:
+                                            logger.warning(
+                                                f"[FX Strategy {snap['id']}] Transient DB error "
+                                                f"({_err_name}) — retry {_attempt}/3"
+                                            )
+                                            _db_rollback_safe(db_one)
+                                            await asyncio.sleep(0.5 * _attempt)
+                                            continue
+                                        _cycle_db_skipped.append((snap["id"], _err_name))
                                         logger.warning(
-                                            f"[FX Strategy {snap['id']}] Transient DB error "
-                                            f"({_err_name}) — retry {_attempt}/3"
+                                            f"[FX Strategy {snap['id']}] Skipping cycle — "
+                                            f"DB error persisted ({_err_name})"
+                                        )
+                                        return
+                                    except StrategyEvalCancelled:
+                                        logger.info(
+                                            f"[FX Strategy {snap['id']}] eval cancelled — "
+                                            f"skipping cycle"
                                         )
                                         _db_rollback_safe(db_one)
-                                        await asyncio.sleep(0.5 * _attempt)
-                                        continue
-                                    _cycle_db_skipped.append((snap["id"], _err_name))
-                                    logger.warning(
-                                        f"[FX Strategy {snap['id']}] Skipping cycle — "
-                                        f"DB error persisted ({_err_name})"
-                                    )
-                                    return
-                                except StrategyEvalCancelled:
-                                    logger.info(
-                                        f"[FX Strategy {snap['id']}] eval cancelled — "
-                                        f"skipping cycle"
-                                    )
-                                    _db_rollback_safe(db_one)
-                                    return
-                                except Exception as e:
-                                    logger.error(
-                                        f"[FX Strategy {snap['id']}] Error: {e}", exc_info=True
-                                    )
-                                    _db_rollback_safe(db_one)
-                                    return
-                                finally:
-                                    try:
-                                        db_one.close()
-                                    except Exception:
-                                        pass
+                                        return
+                                    except Exception as e:
+                                        logger.error(
+                                            f"[FX Strategy {snap['id']}] Error: {e}", exc_info=True
+                                        )
+                                        _db_rollback_safe(db_one)
+                                        return
+                                    finally:
+                                        try:
+                                            db_one.close()
+                                        except Exception:
+                                            pass
+                    finally:
+                        _strat_ms = (time.monotonic() - _strat_t0) * 1000.0
+                        _cycle_ctx.strategy_timings_ms.append(
+                            (snap["id"], _strat_ms),
+                        )
 
                 _prefetch_ct_uid = next(
                     (uid for uid, ok in ctrader_ok_by_user.items() if ok),
                     None,
                 )
-                await _prefetch_price_ta_for_cycle(
+                _prefetch_t0 = time.monotonic()
+                if _forex_open:
+                    try:
+                        from app.services.ctrader_price_feed import sweep_stale_klines
+                        from app.services.tradfi_prices import sweep_stale_metal_klines
+                        _stale_syms = {
+                            (s.get("symbol") or "").upper()
+                            for s in open_snaps
+                            if (s.get("symbol") or "").upper()
+                        }
+                        _sym_list = list(_stale_syms) if _stale_syms else None
+                        await sweep_stale_klines(symbols=_sym_list)
+                        await sweep_stale_metal_klines(symbols=_sym_list)
+                    except Exception as _ks_err:
+                        logger.debug("[FX Executor] kline staleness sweep: %s", _ks_err)
+
+                _prefetch_stats = await _prefetch_price_ta_for_cycle(
                     open_snaps,
                     http_client,
                     {"forex", "index", "stock"},
                     label=_fx_lbl,
                     ctrader_user_id=_prefetch_ct_uid,
                 )
+                _prefetch_ms = (time.monotonic() - _prefetch_t0) * 1000.0
 
                 logger.info(
                     f"[{_log_ts()}] [{_fx_lbl}] evaluating {len(open_snaps)} strategies "
                     f"(batch size {EXECUTOR_SCAN_BATCH_SIZE})…"
                 )
+                _eval_t0 = time.monotonic()
                 await _gather_eval_batches(
                     _fx_lbl, open_snaps, _run_one_fx,
                 )
+                _eval_ms = (time.monotonic() - _eval_t0) * 1000.0
 
                 try:
                     from app.services.ctrader_order_queue import flush_gate_stats_to_db
@@ -8328,11 +8483,19 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 except Exception:
                     pass
 
-                _cycle_s = (datetime.utcnow() - _cycle_t0).total_seconds()
                 if open_snaps:
-                    logger.info(
-                        f"[{_log_ts()}] [{_fx_lbl}] cycle done in {_cycle_s:.1f}s "
-                        f"({len(open_snaps)} strategies)"
+                    _total_ms = (time.monotonic() - _cycle_t0) * 1000.0
+                    _log_cycle_timing(
+                        shard_index,
+                        len(open_snaps),
+                        _prefetch_ms,
+                        _eval_ms,
+                        _cycle_ctx.fire_ms if _cycle_ctx else 0.0,
+                        _total_ms,
+                        prefetch_stats=_prefetch_stats,
+                        strategy_timings_ms=(
+                            _cycle_ctx.strategy_timings_ms if _cycle_ctx else None
+                        ),
                     )
 
             except Exception as e:
@@ -8350,6 +8513,10 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 # saturation incident) also counts as DB stress, so trip the
                 # backoff below conservatively.
                 _cycle_db_skipped.append(("__cycle__", type(e).__name__))
+
+            finally:
+                if _cycle_ctx_token is not None:
+                    _EXECUTOR_CYCLE_CTX.reset(_cycle_ctx_token)
 
             # Adaptive backoff: if this cycle hit DB errors (the precursor to the
             # historical Neon-saturation cascade), space out the next scan to

@@ -3865,6 +3865,7 @@ async def evaluate_strategy_conditions(
     http_client,
     strictness_level: int = 0,
     ctrader_user_id: Optional[int] = None,
+    shared_kline_cache: Optional[Dict] = None,
 ) -> Tuple[bool, List[str]]:
     """
     Evaluate all entry_conditions in a strategy config.
@@ -3878,7 +3879,9 @@ async def evaluate_strategy_conditions(
     op      = entry.get("operator", "AND").upper()
     conds   = entry.get("conditions", [])
     price   = price_data.get("price", 0)
-    cache: Dict = {}  # shared klines cache for this evaluation pass
+    cache: Dict = {}
+    if shared_kline_cache:
+        cache.update(shared_kline_cache)
     # Asset-class hint — read by _get_klines to route non-crypto fetches
     # through the yfinance-backed tradfi provider instead of MEXC/Binance.
     _ac = strategy_config.get("asset_class") or price_data.get("_asset_class")
@@ -4075,6 +4078,8 @@ async def evaluate_strategy_conditions(
             details.append(f"{'✅' if passed else '❌'} {detail}")
 
     if not results:
+        if shared_kline_cache is not None:
+            shared_kline_cache.update(cache)
         return False, ["No conditions defined"]
 
     base_passed = all(results) if op == "AND" else any(results)
@@ -4084,6 +4089,10 @@ async def evaluate_strategy_conditions(
         pass_rate = sum(results) / len(results)
         if pass_rate < 0.90:
             details.append(f"❌ Sniper gate: only {pass_rate*100:.0f}% conditions passed (need 90%)")
+            if shared_kline_cache is not None:
+                shared_kline_cache.update(cache)
             return False, details
 
+    if shared_kline_cache is not None:
+        shared_kline_cache.update(cache)
     return base_passed, details
