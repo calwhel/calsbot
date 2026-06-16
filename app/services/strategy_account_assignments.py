@@ -110,14 +110,21 @@ def resolve_live_fire_intent(db, strategy, asset_class: str, prefs=None) -> tupl
     if not status_active:
         return False, []
 
-    targets = get_enabled_fire_targets(db, strategy, prefs)
+    targets = get_enabled_fire_targets(db, strategy, prefs, for_live_fire=True)
     if not targets:
         return False, []
     return True, targets
 
 
-def get_enabled_fire_targets(db, strategy, prefs) -> List[Dict[str, Any]]:
-    """Return [{ctrader_account_id, lot_size}, ...] for live fan-out."""
+def get_enabled_fire_targets(
+    db, strategy, prefs, *, for_live_fire: bool = True,
+) -> List[Dict[str, Any]]:
+    """Return [{ctrader_account_id, lot_size}, ...] for routing.
+
+    When for_live_fire=True (default): explicit enabled assignment rows, or
+    legacy strategy.ctrader_account_id only — never prefs.ctrader_account_id.
+    When for_live_fire=False: may include prefs default (non-live UI/helpers).
+    """
     from app.strategy_models import StrategyAccountAssignment
 
     try:
@@ -169,30 +176,34 @@ def get_enabled_fire_targets(db, strategy, prefs) -> List[Dict[str, Any]]:
     if legacy:
         out = [{"ctrader_account_id": legacy, "lot_size": legacy_lot}]
         logger.info(
-            "get_enabled_fire_targets strategy=%s legacy_strategy_binding=%s",
+            "[live-fire] using legacy account binding strategy=%s %s",
             getattr(strategy, "id", "?"),
             _format_assignments_log(out),
         )
         return out
 
-    default = (getattr(prefs, "ctrader_account_id", None) or "").strip() if prefs else ""
-    if default:
-        out = [{"ctrader_account_id": default, "lot_size": None}]
-        logger.info(
-            "get_enabled_fire_targets strategy=%s prefs_default=%s",
-            getattr(strategy, "id", "?"),
-            _format_assignments_log(out),
-        )
-        return out
+    if not for_live_fire:
+        default = (getattr(prefs, "ctrader_account_id", None) or "").strip() if prefs else ""
+        if default:
+            out = [{"ctrader_account_id": default, "lot_size": None}]
+            logger.info(
+                "get_enabled_fire_targets strategy=%s prefs_default=%s",
+                getattr(strategy, "id", "?"),
+                _format_assignments_log(out),
+            )
+            return out
+
     logger.info(
-        "get_enabled_fire_targets strategy=%s enabled=[] (no assignments or default)",
+        "get_enabled_fire_targets strategy=%s enabled=[] "
+        "(no explicit assignment%s)",
         getattr(strategy, "id", "?"),
+        "" if for_live_fire else " or default",
     )
     return []
 
 
 def fire_slot_count(db, strategy, prefs) -> int:
-    targets = get_enabled_fire_targets(db, strategy, prefs)
+    targets = get_enabled_fire_targets(db, strategy, prefs, for_live_fire=True)
     return max(1, len(targets))
 
 
