@@ -250,7 +250,7 @@ _LF_LIVE_ROWS_SQL_EXT = """
     FROM user_strategies s
     LEFT JOIN strategy_executions e ON e.strategy_id = s.id
     WHERE s.user_id = :uid
-      AND s.status IN ('active','paused')
+      AND s.status IN ('active','paused','paper')
       AND s.asset_class IN ('forex','index','metals','commodity')
     GROUP BY s.id
     ORDER BY (s.status='active') DESC, s.updated_at DESC
@@ -272,7 +272,7 @@ _LF_LIVE_ROWS_SQL_BASIC = """
     FROM user_strategies s
     LEFT JOIN strategy_executions e ON e.strategy_id = s.id
     WHERE s.user_id = :uid
-      AND s.status IN ('active','paused')
+      AND s.status IN ('active','paused','paper')
       AND s.asset_class IN ('forex','index','metals','commodity')
     GROUP BY s.id
     ORDER BY (s.status='active') DESC, s.updated_at DESC

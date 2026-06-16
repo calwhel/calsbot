@@ -93,22 +93,27 @@ def _format_assignments_log(targets: List[Dict[str, Any]]) -> str:
 def resolve_live_fire_intent(db, strategy, asset_class: str, prefs=None) -> tuple:
     """Whether executor should place broker orders (vs paper-only tracking).
 
-    Source of truth for cTrader strategies:
-      1. Any enabled per-account assignment → live broker fire
-      2. Else legacy strategy.status == 'active' → live
-      3. Else paper-only tracking
+    cTrader strategies require BOTH:
+      1. strategy.status == 'active' (explicit Go Live — never paper)
+      2. At least one enabled per-account assignment
+
+    Paper strategies always return wants_live=False even if a live account is ticked.
 
     Returns (wants_live: bool, fire_targets: list).
     """
     ac = (asset_class or "").strip().lower()
-    status_active = (getattr(strategy, "status", None) or "") == "active"
+    status = (getattr(strategy, "status", None) or "").strip().lower()
+    status_active = status == "active"
     if ac not in TRADFI_BROKER_ASSET_CLASSES:
         return status_active, []
 
+    if not status_active:
+        return False, []
+
     targets = get_enabled_fire_targets(db, strategy, prefs)
-    if targets:
-        return True, targets
-    return status_active, []
+    if not targets:
+        return False, []
+    return True, targets
 
 
 def get_enabled_fire_targets(db, strategy, prefs) -> List[Dict[str, Any]]:

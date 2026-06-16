@@ -4565,11 +4565,18 @@ async function promoteToLive(id, assetClass){
     }catch(_){}
 
     if(connected){
-      // cTrader already connected — promote directly
-      const r = await fetch(`/api/strategies/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,status:'active'})});
-      const d = await r.json();
-      if(r.ok && d.success){ toast('Strategy is now live on cTrader ⚡','success'); _clearStratCache();loadMyStrategies(); }
-      else toast(d.detail||d.message||'Failed to go live','error');
+      showConfirm(
+        'Go Live — Real Money',
+        'This strategy will place <strong>REAL orders</strong> on your enabled live account(s) when signals fire. Continue?',
+        'Go Live',
+        'background:var(--green);color:#fff;border-color:var(--green)',
+        async () => {
+          const r = await fetch(`/api/strategies/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,status:'active'})});
+          const d = await r.json();
+          if(r.ok && d.success){ toast('Strategy is now live on cTrader ⚡','success'); _clearStratCache();loadMyStrategies(); }
+          else toast(d.detail||d.message||'Failed to go live','error');
+        },
+      );
     } else {
       // Not connected — send them to settings to connect cTrader
       showConfirm(
@@ -11963,6 +11970,8 @@ function renderLFStrategyAssignment(d) {
   const nAdded = (d.added_accounts || []).length;
   const cards = strats.map(s => {
     const paused = s.status === 'paused';
+    const isPaper = s.status === 'paper';
+    const isLive = s.status === 'active';
     const enabledN = (s.account_assignments || []).filter(a => a.enabled).length;
     const assignCls = enabledN > 0 ? 'lf-pnl-flat' : 'lf-pnl-flat';
     const sym = (s.symbols || [])[0] || '—';
@@ -11973,12 +11982,17 @@ function renderLFStrategyAssignment(d) {
     const hasPips = s.closed_count > 0 && netPips != null;
     const pipsLbl = s.asset_class === 'index' ? 'pts' : 'pips';
     const badge = _lfEnabledAcctBadges(d, s);
-    return `<div class="strat-card live-card lf-assign-card ${assignCls}" data-lf-assign-id="${s.id}">
+    const statusPill = paused ? 'PAUSED' : (isPaper ? 'PAPER' : 'LIVE');
+    const statusCls = paused ? 'paused' : (isPaper ? 'paper' : 'active');
+    const goLiveBtn = isPaper
+      ? `<button class="btn sm" onclick="lfGoLive(${s.id}, '${escHtml(s.asset_class || 'forex')}')" style="color:var(--green);border-color:rgba(34,197,94,.3);margin-top:8px">Go Live</button>`
+      : '';
+    return `<div class="strat-card ${isLive ? 'live-card' : 'paper-card'} lf-assign-card ${assignCls}" data-lf-assign-id="${s.id}" data-lf-status="${escHtml(s.status || 'paper')}">
       <div class="lf-card-top">
         <div class="card-hd lf-card-hd">
-          <div class="dot ${paused ? 'paused' : 'active'}"></div>
+          <div class="dot ${statusCls}"></div>
           <div class="card-name">${escHtml(s.name)}</div>
-          <span class="pill ${paused ? 'paused' : 'active'}">${paused ? 'PAUSED' : 'LIVE'}</span>
+          <span class="pill ${statusCls}">${statusPill}</span>
         </div>
       </div>
       <div class="card-meta lf-card-meta">
@@ -12008,6 +12022,7 @@ function renderLFStrategyAssignment(d) {
         <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Accounts — enable + lot size</div>
         ${_lfStratAcctRowsHtml(d, s)}
       </div>
+      ${goLiveBtn}
     </div>`;
   }).join('');
   const hint = nAdded
@@ -12060,13 +12075,15 @@ async function lfPutStratAssignments(strategyId, assignments) {
 }
 
 async function lfSaveStratAssignments(strategyId) {
+  const card = document.querySelector(`[data-lf-assign-id="${strategyId}"]`);
+  const stratStatus = (card && card.getAttribute('data-lf-status')) || 'paper';
   const assignments = _lfCollectStratAssignments(strategyId);
   const enablingLive = assignments.filter(a => {
     if (!a.enabled) return false;
     const row = document.querySelector(`[data-lf-assign-id="${strategyId}"] .lf-strat-acct-row[data-ctid="${a.ctrader_account_id || a.ctid}"]`);
     return row && row.getAttribute('data-live') === 'true';
   });
-  if (enablingLive.length) {
+  if (enablingLive.length && stratStatus === 'active') {
     const demoOn = assignments.some(a => {
       if (!a.enabled) return false;
       const row = document.querySelector(`[data-lf-assign-id="${strategyId}"] .lf-strat-acct-row[data-ctid="${a.ctrader_account_id || a.ctid}"]`);
@@ -12086,8 +12103,59 @@ async function lfSaveStratAssignments(strategyId) {
     );
     return;
   }
+  if (enablingLive.length && stratStatus === 'paper') {
+    try { await lfPutStratAssignments(strategyId, assignments); }
+    catch (e) { toast(`Save failed: ${e.message || e}`, 'error'); loadLiveForex(); }
+    return;
+  }
   try { await lfPutStratAssignments(strategyId, assignments); }
   catch (e) { toast(`Save failed: ${e.message || e}`, 'error'); loadLiveForex(); }
+}
+
+async function lfGoLive(strategyId, assetClass) {
+  let connected = false;
+  try {
+    const r = await fetch(`/api/ctrader/status?uid=${UID}`);
+    if (r.ok) { const d = await r.json(); connected = !!d.connected; }
+  } catch (_) {}
+
+  if (!connected) {
+    showConfirm(
+      'Connect cTrader First',
+      'Forex strategies execute via <strong>FP Markets cTrader</strong>.<br><br>Go to <strong>Settings → Forex Trading</strong> and connect cTrader, then try Go Live again.',
+      'Open Settings',
+      'background:var(--accent);color:#fff;border:none',
+      () => showPage('settings'),
+    );
+    return;
+  }
+
+  showConfirm(
+    'Go Live — Real Money',
+    'This strategy will place <strong>REAL orders</strong> on your enabled live account(s) when signals fire. Paper tracking stops — broker orders begin. Continue?',
+    'Go Live',
+    'background:var(--green);color:#fff;border-color:var(--green)',
+    async () => {
+      try {
+        const r = await fetch(`/api/strategies/${strategyId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: UID, status: 'active' }),
+        });
+        const d = await r.json();
+        if (r.ok && d.success) {
+          toast('Strategy is now live on cTrader', 'success');
+          _fcDel('/api/live-forex/account?uid=' + UID);
+          loadLiveForex();
+          _clearStratCache();
+        } else {
+          toast(d.detail || d.message || 'Failed to go live', 'error');
+        }
+      } catch (e) {
+        toast(`Go live failed: ${e.message || e}`, 'error');
+      }
+    },
+  );
 }
 
 async function lfToggleStratAcct(strategyId, ctid, enabled, isLive) {
