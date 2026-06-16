@@ -8254,6 +8254,39 @@ async def api_marketplace_detail(listing_id: int, uid: str = Query(...)):
         db.close()
 
 
+def _scale_clone_risk(risk: dict, risk_scale: float) -> dict:
+    """Apply marketplace risk_scale to cloned position_size_pct (leverage unchanged)."""
+    out = dict(risk or {})
+    if risk_scale != 1.0 and "position_size_pct" in out:
+        try:
+            _scaled = float(out["position_size_pct"]) * risk_scale
+            out["position_size_pct"] = round(max(0.01, min(50.0, _scaled)), 3)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _locked_marketplace_clone_config(original, listing, listing_id: int, risk_scale: float):
+    """Build locked subscriber config and asset_class from a marketplace original."""
+    ac = _strategy_asset_class(original)
+    _orig_risk = _scale_clone_risk(dict(original.config.get("risk", {}) or {}), risk_scale)
+    locked_config = {
+        "name":                listing.title or original.name,
+        "direction":           original.config.get("direction", "LONG"),
+        "risk":                _orig_risk,
+        "exit":                original.config.get("exit", {}),
+        "filters":             original.config.get("filters", {}),
+        "universe":            original.config.get("universe", {}),
+        "asset_class":         ac,
+        "_asset_class":        ac,
+        "_locked":             True,
+        "_source_strategy_id": listing.strategy_id,
+        "_listing_id":         listing_id,
+        "_risk_scale":         risk_scale,
+    }
+    return locked_config, _orig_risk, ac
+
+
 @app.post("/api/marketplace/{listing_id}/purchase")
 async def api_purchase_strategy(listing_id: int, uid: str = Query(...), risk_scale: float = Query(1.0)):
     """Clone or purchase a marketplace listing.
@@ -8305,33 +8338,16 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...), risk_sca
             if not existing.cloned_strategy_id:
                 original = db.query(UserStrategy).filter(UserStrategy.id == listing.strategy_id).first()
                 if original:
-                    _orig_risk = dict(original.config.get("risk", {}) or {})
-                    if risk_scale != 1.0 and "position_size_pct" in _orig_risk:
-                        try:
-                            _scaled = float(_orig_risk["position_size_pct"]) * risk_scale
-                            # Cap at 50% — anything higher is unsafe execution-side
-                            # regardless of what the original strategy specified.
-                            _orig_risk["position_size_pct"] = round(max(0.01, min(50.0, _scaled)), 3)
-                        except (TypeError, ValueError):
-                            pass  # leave original value if it's non-numeric
-                    locked_config = {
-                        "name":                listing.title or original.name,
-                        "direction":           original.config.get("direction", "LONG"),
-                        "risk":                _orig_risk,
-                        "exit":                original.config.get("exit", {}),
-                        "filters":             original.config.get("filters", {}),
-                        "universe":            original.config.get("universe", {}),
-                        "_locked":             True,
-                        "_source_strategy_id": listing.strategy_id,
-                        "_listing_id":         listing_id,
-                        "_risk_scale":         risk_scale,
-                    }
+                    locked_config, _orig_risk, _ac = _locked_marketplace_clone_config(
+                        original, listing, listing_id, risk_scale,
+                    )
                     recovered = UserStrategy(
                         user_id=user.id,
                         name=listing.title or original.name,
                         description=original.description,
                         config=locked_config,
                         status="paper",
+                        asset_class=_ac,
                     )
                     db.add(recovered)
                     db.commit()
@@ -8340,7 +8356,18 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...), risk_sca
                     db.add(StrategyPerformance(strategy_id=recovered.id))
                     existing.cloned_strategy_id = recovered.id
                     db.commit()
-            return JSONResponse({"already_owned": True, "cloned_strategy_id": existing.cloned_strategy_id})
+            _owned_ac = "crypto"
+            if existing.cloned_strategy_id:
+                _owned_strat = db.query(UserStrategy).filter(
+                    UserStrategy.id == existing.cloned_strategy_id,
+                ).first()
+                if _owned_strat:
+                    _owned_ac = _strategy_asset_class(_owned_strat)
+            return JSONResponse({
+                "already_owned": True,
+                "cloned_strategy_id": existing.cloned_strategy_id,
+                "asset_class": _owned_ac,
+            })
 
         if (listing.pricing_model or "free") != "free" and (listing.price_usdt or 0) > 0:
             return JSONResponse({
@@ -8355,34 +8382,16 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...), risk_sca
         if not original:
             raise HTTPException(status_code=404)
 
-        _orig_risk = dict(original.config.get("risk", {}) or {})
-        if risk_scale != 1.0 and "position_size_pct" in _orig_risk:
-            try:
-                _scaled = float(_orig_risk["position_size_pct"]) * risk_scale
-                # Cap at 50% — anything higher is unsafe execution-side
-                # regardless of what the original strategy specified.
-                _orig_risk["position_size_pct"] = round(max(0.01, min(50.0, _scaled)), 3)
-            except (TypeError, ValueError):
-                pass  # leave original value if it's non-numeric
-        # Build a locked stub — no entry_conditions or strategy logic exposed
-        locked_config = {
-            "name":             listing.title or original.name,
-            "direction":        original.config.get("direction", "LONG"),
-            "risk":             _orig_risk,
-            "exit":             original.config.get("exit", {}),
-            "filters":          original.config.get("filters", {}),
-            "universe":         original.config.get("universe", {}),
-            "_locked":          True,
-            "_source_strategy_id": listing.strategy_id,
-            "_listing_id":      listing_id,
-            "_risk_scale":      risk_scale,
-        }
+        locked_config, _orig_risk, _ac = _locked_marketplace_clone_config(
+            original, listing, listing_id, risk_scale,
+        )
         new_strategy = UserStrategy(
             user_id=user.id,
             name=listing.title or original.name,
             description=original.description,
             config=locked_config,
             status="paper",
+            asset_class=_ac,
         )
         db.add(new_strategy)
         db.commit()
@@ -8399,13 +8408,13 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...), risk_sca
         listing.clone_count = (listing.clone_count or 0) + 1
         db.commit()
 
-        orig_risk = original.config.get("risk", {})
         return JSONResponse({
             "success": True,
             "cloned_strategy_id": new_strategy.id,
             "name": new_strategy.name,
-            "default_leverage": orig_risk.get("leverage", 10),
-            "default_position_size_pct": orig_risk.get("position_size_pct", 5),
+            "asset_class": _ac,
+            "default_leverage": _orig_risk.get("leverage", 10),
+            "default_position_size_pct": _orig_risk.get("position_size_pct", 5),
         })
     finally:
         db.close()
@@ -11767,17 +11776,25 @@ _CTRADER_BLOCKER_MESSAGES = {
 
 def _strategy_asset_class(strategy) -> str:
     from app.services.asset_classes import normalize_asset_class
+    _tradfi = frozenset({"forex", "index", "metals", "commodity", "stock"})
     cfg = dict(strategy.config or {})
-    col = getattr(strategy, "asset_class", None) or ""
-    cfg_ac = cfg.get("asset_class") or cfg.get("_asset_class") or ""
+    col = (getattr(strategy, "asset_class", None) or "").strip().lower()
+    cfg_ac = (cfg.get("asset_class") or cfg.get("_asset_class") or "").strip().lower()
     if col == "crypto" and cfg_ac and cfg_ac != "crypto":
+        if cfg_ac in _tradfi:
+            return cfg_ac
         return normalize_asset_class(cfg_ac)
+    if col in _tradfi:
+        return col
+    if cfg_ac in _tradfi:
+        return cfg_ac
     return normalize_asset_class(col or cfg_ac)
 
 
 def _forex_live_promote_gate(strategy, user, db):
-    """Block promoting forex/index strategies to live when cTrader is not ready."""
-    if _strategy_asset_class(strategy) not in ("forex", "index"):
+    """Block promoting tradfi (cTrader) strategies to live when cTrader is not ready."""
+    from app.services.strategy_account_assignments import TRADFI_BROKER_ASSET_CLASSES
+    if _strategy_asset_class(strategy) not in TRADFI_BROKER_ASSET_CLASSES:
         return None
     from app.models import UserPreference as _UP_gate
     prefs = db.query(_UP_gate).filter(_UP_gate.user_id == user.id).first()

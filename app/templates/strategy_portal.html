@@ -3638,10 +3638,10 @@ function dismissTgBanner(){
 <div class="modal-bg" id="modal-subscribe-mode">
   <div class="modal" style="max-width:420px;padding:28px 24px">
     <div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:6px">Strategy added! 🎉</div>
-    <div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:18px">Set your position size and leverage, then choose how to run it.</div>
+    <div id="sub-mode-intro" style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:18px">Set your position size and leverage, then choose how to run it.</div>
 
     <!-- Risk customisation -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px">
+    <div id="sub-risk-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px">
       <div>
         <label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Position Size</label>
         <div style="display:flex;align-items:center;background:var(--surface2);border:1.5px solid var(--border);border-radius:8px;overflow:hidden">
@@ -3650,9 +3650,9 @@ function dismissTgBanner(){
             placeholder="5">
           <span style="padding:0 10px;font-size:13px;color:var(--muted);font-weight:600">%</span>
         </div>
-        <div style="font-size:10px;color:var(--muted);margin-top:4px">% of your Futures balance</div>
+        <div id="sub-pos-hint" style="font-size:10px;color:var(--muted);margin-top:4px">% of your Futures balance</div>
       </div>
-      <div>
+      <div id="sub-leverage-col">
         <label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Leverage</label>
         <div style="display:flex;align-items:center;background:var(--surface2);border:1.5px solid var(--border);border-radius:8px;overflow:hidden">
           <input id="sub-leverage" type="number" min="1" max="100" step="1"
@@ -3680,7 +3680,7 @@ function dismissTgBanner(){
         style="display:flex;align-items:flex-start;gap:14px;background:var(--surface2);border:1.5px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;text-align:left;transition:border-color .15s">
         <span style="font-size:24px;line-height:1">⚡</span>
         <div>
-          <div style="font-size:13px;font-weight:700;color:var(--green);margin-bottom:2px">Go Live on Bitunix</div>
+          <div id="sub-mode-live-title" style="font-size:13px;font-weight:700;color:var(--green);margin-bottom:2px">Go Live on Bitunix</div>
           <div style="font-size:11px;color:var(--muted);line-height:1.55" id="sub-mode-live-hint">Real orders placed on your connected Bitunix account when conditions are met.</div>
         </div>
       </button>
@@ -4552,11 +4552,35 @@ function showConfirm(title, msg, okLabel, okClass, onOk){
 
 let _goLiveStratId = null;
 
+function isTradFiAssetClass(ac){
+  return ['forex','index','metals','commodity','stock'].includes((ac||'crypto').toLowerCase());
+}
+
+function configureSubscribeModeModal(assetClass){
+  const ac = (assetClass || 'crypto').toLowerCase();
+  window._subModeAssetClass = ac;
+  const tradfi = isTradFiAssetClass(ac);
+  const grid = $('sub-risk-grid');
+  const levCol = $('sub-leverage-col');
+  const intro = $('sub-mode-intro');
+  const posHint = $('sub-pos-hint');
+  const liveTitle = $('sub-mode-live-title');
+  if(grid) grid.style.gridTemplateColumns = tradfi ? '1fr' : '1fr 1fr';
+  if(levCol) levCol.style.display = tradfi ? 'none' : '';
+  if(intro) intro.textContent = tradfi
+    ? 'Set your position size, then choose how to run it.'
+    : 'Set your position size and leverage, then choose how to run it.';
+  if(posHint) posHint.textContent = tradfi
+    ? '% of your cTrader account balance'
+    : '% of your Futures balance';
+  if(liveTitle) liveTitle.textContent = tradfi ? 'Go Live on cTrader' : 'Go Live on Bitunix';
+}
+
 async function promoteToLive(id, assetClass){
   _goLiveStratId = id;
-  const isFxLike = assetClass === 'forex' || assetClass === 'index';
+  const isTradFi = isTradFiAssetClass(assetClass);
 
-  if(isFxLike){
+  if(isTradFi){
     // Forex/index → need cTrader connection, not Bitunix UID
     let connected = false;
     try{
@@ -4632,19 +4656,21 @@ async function submitGoLive(){
 
 async function chooseSubscribeMode(mode){
   const stratId = window._subModeStratId;
+  const ac = window._subModeAssetClass || 'crypto';
+  const tradfi = isTradFiAssetClass(ac);
   const errEl = $('sub-mode-err');
   errEl.style.display='none'; errEl.textContent='';
 
   // Read user-chosen risk settings
   const posPct  = parseFloat($('sub-pos-size').value) || 5;
-  const lev     = parseInt($('sub-leverage').value)   || 10;
+  const lev     = tradfi ? null : (parseInt($('sub-leverage').value) || 10);
 
   // Validate inputs
   if(posPct < 0.5 || posPct > 100){
     errEl.textContent='Position size must be between 0.5% and 100%.';
     errEl.style.display='block'; return;
   }
-  if(lev < 1 || lev > 125){
+  if(!tradfi && (lev < 1 || lev > 125)){
     errEl.textContent='Leverage must be between 1× and 125×.';
     errEl.style.display='block'; return;
   }
@@ -4652,9 +4678,9 @@ async function chooseSubscribeMode(mode){
   const payload = {
     uid: UID,
     status: mode === 'live' ? 'active' : 'paper',
-    leverage: lev,
     position_size_pct: posPct,
   };
+  if(!tradfi) payload.leverage = lev;
 
   if(mode === 'live'){
     const liveBtn = $('sub-mode-live');
@@ -4669,10 +4695,17 @@ async function chooseSubscribeMode(mode){
       liveBtn.disabled=false; liveBtn.style.opacity='1';
       if(r.ok && d.success){
         closeModal('modal-subscribe-mode');
-        toast(`⚡ Live on Bitunix — ${lev}× lev, ${posPct}% size!`,'success');
+        toast(tradfi
+          ? `⚡ Live on cTrader — ${posPct}% size!`
+          : `⚡ Live on Bitunix — ${lev}× lev, ${posPct}% size!`,'success');
         showPage('my-strats');
       } else {
-        errEl.textContent = d.detail||d.message||'Could not go live — try Paper Test for now.';
+        const msg = d.message || d.detail || '';
+        if(d.error === 'CTRADER_NOT_READY' && tradfi){
+          errEl.innerHTML = `⚠️ ${msg || 'Connect cTrader in'} <a onclick="closeModal('modal-subscribe-mode');showPage('settings')" style="color:var(--accent);cursor:pointer;text-decoration:underline">Settings → Forex Trading</a> first.`;
+        } else {
+          errEl.textContent = msg || 'Could not go live — try Paper Test for now.';
+        }
         errEl.style.display='block';
       }
     } catch(e){
@@ -4689,7 +4722,9 @@ async function chooseSubscribeMode(mode){
       });
     } catch(_){}
     closeModal('modal-subscribe-mode');
-    toast(`🧪 Paper test started — ${lev}× lev, ${posPct}% size`,'info');
+    toast(tradfi
+      ? `🧪 Paper test started — ${posPct}% size`
+      : `🧪 Paper test started — ${lev}× lev, ${posPct}% size`,'info');
     showPage('my-strats');
   }
 }
@@ -8384,31 +8419,52 @@ async function quickGet(id){
   if(d.requires_payment){toast(`Pay $${d.price_usdt} via Telegram bot to unlock.`,'info');closeModal('modal-detail');return;}
   if(d.success){
     closeModal('modal-detail');
-    // Use cached key state if available; otherwise fetch on demand
-    let keysSet = window._bitunixKeysSet;
-    if(keysSet === undefined || keysSet === null){
-      try{
-        const sr=await fetch(`/api/settings?uid=${UID}`);
-        if(sr.ok){const ss=await sr.json();keysSet=!!ss.bitunix_keys_set;window._bitunixKeysSet=keysSet;}
-        else keysSet=false;
-      }catch(e){keysSet=false;}
-    }
+    const assetClass = (d.asset_class || 'crypto').toLowerCase();
+    const tradfi = isTradFiAssetClass(assetClass);
+    configureSubscribeModeModal(assetClass);
     window._subModeStratId = d.cloned_strategy_id;
     // Pre-fill size/leverage from creator defaults returned by purchase API
     const posInput=$('sub-pos-size'), levInput=$('sub-leverage');
     posInput.value = d.default_position_size_pct ?? 5;
-    levInput.value = d.default_leverage ?? 10;
-    // Configure live button state based on API key presence
+    if(!tradfi) levInput.value = d.default_leverage ?? 10;
+    // Configure live button state based on broker connection
     const liveBtn=$('sub-mode-live');
     const liveHint=$('sub-mode-live-hint');
-    if(keysSet){
-      liveBtn.style.opacity='1';liveBtn.style.cursor='pointer';liveBtn.disabled=false;
-      liveBtn.style.borderColor='var(--border)';
-      liveHint.textContent='Real orders placed on your connected Bitunix account when conditions are met.';
+    let canGoLive = false;
+    if(tradfi){
+      try{
+        const cr = await fetch(`/api/ctrader/status?uid=${UID}`);
+        if(cr.ok){ const cd = await cr.json(); canGoLive = !!cd.connected; }
+      }catch(_){}
+      if(canGoLive){
+        liveBtn.style.opacity='1';liveBtn.style.cursor='pointer';liveBtn.disabled=false;
+        liveBtn.style.borderColor='var(--border)';
+        liveHint.textContent='Real orders placed on your connected cTrader account when conditions are met.';
+      } else {
+        liveBtn.style.opacity='.5';liveBtn.style.cursor='not-allowed';liveBtn.disabled=true;
+        liveBtn.style.borderColor='var(--border)';
+        liveHint.innerHTML='⚠️ Connect cTrader in <a onclick="closeModal(\'modal-subscribe-mode\');showPage(\'settings\')" style="color:var(--accent);cursor:pointer;text-decoration:underline">Settings → Forex Trading</a> first to go live.';
+      }
     } else {
-      liveBtn.style.opacity='.5';liveBtn.style.cursor='not-allowed';liveBtn.disabled=true;
-      liveBtn.style.borderColor='var(--border)';
-      liveHint.innerHTML='⚠️ Connect your Bitunix API keys in <a onclick="closeModal(\'modal-subscribe-mode\');showPage(\'settings\')" style="color:var(--accent);cursor:pointer;text-decoration:underline">Settings</a> first to go live.';
+      // Use cached key state if available; otherwise fetch on demand
+      let keysSet = window._bitunixKeysSet;
+      if(keysSet === undefined || keysSet === null){
+        try{
+          const sr=await fetch(`/api/settings?uid=${UID}`);
+          if(sr.ok){const ss=await sr.json();keysSet=!!ss.bitunix_keys_set;window._bitunixKeysSet=keysSet;}
+          else keysSet=false;
+        }catch(e){keysSet=false;}
+      }
+      canGoLive = !!keysSet;
+      if(keysSet){
+        liveBtn.style.opacity='1';liveBtn.style.cursor='pointer';liveBtn.disabled=false;
+        liveBtn.style.borderColor='var(--border)';
+        liveHint.textContent='Real orders placed on your connected Bitunix account when conditions are met.';
+      } else {
+        liveBtn.style.opacity='.5';liveBtn.style.cursor='not-allowed';liveBtn.disabled=true;
+        liveBtn.style.borderColor='var(--border)';
+        liveHint.innerHTML='⚠️ Connect your Bitunix API keys in <a onclick="closeModal(\'modal-subscribe-mode\');showPage(\'settings\')" style="color:var(--accent);cursor:pointer;text-decoration:underline">Settings</a> first to go live.';
+      }
     }
     $('sub-mode-err').style.display='none';
     $('sub-mode-err').textContent='';
