@@ -1306,6 +1306,71 @@ def _ctrader_lot_params_for_target(target: dict, risk: dict, ps_type: str) -> tu
     return _fixed_lots, _use_risk_pct
 
 
+def _forex_live_blockers(prefs, user=None) -> List[str]:
+    """Why forex/index live routing is blocked (mirrors portal _user_ctrader_live_ready)."""
+    blockers: List[str] = []
+    if not prefs or not (getattr(prefs, "ctrader_access_token", None) or "").strip():
+        blockers.append("cTrader not linked")
+    if not (prefs and (getattr(prefs, "ctrader_account_id", None) or "").strip()):
+        blockers.append("no cTrader account selected")
+    forex_approved = bool(getattr(prefs, "forex_approved", False)) if prefs else False
+    if user and getattr(user, "is_admin", False):
+        forex_approved = True
+    if not forex_approved:
+        blockers.append("forex live not approved")
+    return blockers
+
+
+def _format_fire_targets_log(targets: list) -> str:
+    parts = []
+    for t in targets or []:
+        ctid = str(t.get("ctrader_account_id") or t.get("ctid") or "?").strip()
+        lot = t.get("lot_size")
+        parts.append(f"{ctid}@{lot if lot is not None else 'default'}")
+    return "[" + ", ".join(parts) + "]"
+
+
+def _log_live_order_route(
+    *,
+    execution_id: Optional[int],
+    strategy_id: int,
+    ctid: str,
+    prefs,
+    target: Optional[dict],
+    fixed_lots,
+    outcome: str,
+) -> None:
+    """Standard [order] line for live forex fan-out and single-account fires."""
+    host = "?"
+    is_live = None
+    lots = fixed_lots
+    try:
+        from app.services.ctrader_client import (
+            _account_is_live,
+            _routing_hosts_for_account,
+        )
+
+        if target and target.get("lot_size") is not None and lots is None:
+            lots = target.get("lot_size")
+        if prefs and ctid:
+            ctid_int = int(str(ctid).strip())
+            is_live = _account_is_live(prefs, ctid_int)
+            hosts = _routing_hosts_for_account(prefs, ctid_int)
+            host = hosts[0] if hosts else "?"
+    except Exception as exc:
+        outcome = f"{outcome} (routing_err={exc})"
+    logger.info(
+        "[order] exec=%s strategy=%s ctid=%s is_live=%s host=%s lots=%s → %s",
+        execution_id if execution_id is not None else "?",
+        strategy_id,
+        ctid or "?",
+        is_live,
+        host,
+        lots if lots is not None else "?",
+        outcome,
+    )
+
+
 async def _ctrader_fanout_live_fire(
     *,
     db,
@@ -1366,8 +1431,12 @@ async def _ctrader_fanout_live_fire(
             http_client=http_client,
         )
     except Exception as exc:
-        logger.error(
-            f"[Strategy {strategy.id}] fan-out live fire error: {exc}",
+        logger.critical(
+            "[live-fire] fan-out FAILED strategy=%s symbol=%s targets=%s — %s",
+            strategy.id,
+            symbol,
+            _format_fire_targets_log(fire_targets),
+            exc,
             exc_info=True,
         )
         return False
@@ -1412,7 +1481,25 @@ async def _ctrader_fanout_live_fire_impl(
     from app.services.order_stale_guard import check_signal_stale
 
     if len(fire_targets) < 2:
+        logger.info(
+            "[live-fire] strategy=%s fan-out not used — need 2+ enabled accounts, "
+            "got %s %s",
+            strategy.id,
+            len(fire_targets),
+            _format_fire_targets_log(fire_targets),
+        )
         return False
+
+    from app.models import UserPreference as _UP_fan
+
+    _fan_prefs = db.query(_UP_fan).filter(_UP_fan.user_id == user.id).first()
+    logger.info(
+        "[live-fire] strategy=%s symbol=%s enabled_accounts=%s attempting %s live orders",
+        strategy.id,
+        symbol,
+        _format_fire_targets_log(fire_targets),
+        len(fire_targets),
+    )
 
     _signal_group_id = _uuid.uuid4().hex[:40]
     executions = []
@@ -1445,6 +1532,13 @@ async def _ctrader_fanout_live_fire_impl(
         db.add(ex)
         executions.append((ex, target))
     if len(executions) < 2:
+        logger.critical(
+            "[live-fire] fan-out FAILED strategy=%s — only %s/%s executions created "
+            "after commit (missing ctid?)",
+            strategy.id,
+            len(executions),
+            len(fire_targets),
+        )
         return False
 
     await _commit_db_with_retry(
@@ -1567,6 +1661,15 @@ async def _ctrader_fanout_live_fire_impl(
             signal_live_source=price_data.get("live_source"),
             latency=new_order_latency(ex.id, _signal_mono),
         ))
+        _log_live_order_route(
+            execution_id=ex.id,
+            strategy_id=strategy.id,
+            ctid=ctid,
+            prefs=_fan_prefs,
+            target=target,
+            fixed_lots=_fixed_lots,
+            outcome="enqueue",
+        )
 
     results = await asyncio.gather(
         *(enqueue_ctrader_order(j) for j in jobs),
@@ -1576,22 +1679,50 @@ async def _ctrader_fanout_live_fire_impl(
     for (ex, target), res in zip(executions, results):
         ctid = str(target.get("ctrader_account_id") or target.get("ctid") or "")
         if isinstance(res, Exception):
-            logger.error(
-                f"[Strategy {strategy.id}] fan-out enqueue error exec#{ex.id}: {res}"
+            logger.critical(
+                "[live-fire] fan-out enqueue error strategy=%s exec=%s ctid=%s: %s",
+                strategy.id,
+                ex.id,
+                ctid,
+                res,
+                exc_info=True,
+            )
+            _log_live_order_route(
+                execution_id=ex.id,
+                strategy_id=strategy.id,
+                ctid=ctid,
+                prefs=_fan_prefs,
+                target=target,
+                fixed_lots=target.get("lot_size"),
+                outcome=f"enqueue_error:{type(res).__name__}",
             )
             continue
         if res:
             _queued_any = True
             ex.notes = ((ex.notes or "") + " | order_queued").strip(" |")
-            logger.info(
-                f"[{_log_ts()}] [Strategy {strategy.id}] cTrader fan-out queued "
-                f"exec#{ex.id} acct={ctid} group={_signal_group_id}"
+            _log_live_order_route(
+                execution_id=ex.id,
+                strategy_id=strategy.id,
+                ctid=ctid,
+                prefs=_fan_prefs,
+                target=target,
+                fixed_lots=target.get("lot_size"),
+                outcome="queued",
             )
         else:
             ex.is_paper = True
             ex.notes = (
                 (ex.notes or "") + " | Live→Paper fallback (fan-out queue full)"
             ).strip(" |")
+            _log_live_order_route(
+                execution_id=ex.id,
+                strategy_id=strategy.id,
+                ctid=ctid,
+                prefs=_fan_prefs,
+                target=target,
+                fixed_lots=target.get("lot_size"),
+                outcome="queue_full_live_to_paper",
+            )
     await _commit_db_with_retry(
         db,
         label=f"fanout-queued#{strategy.id}",
@@ -4089,22 +4220,24 @@ async def evaluate_and_fire(
                 _ctrader_live_ok = False
         is_paper = not (_wants_live and _ctrader_live_ok)
         if _wants_live and is_paper:
-            _ctrader_blockers = []
             try:
                 from app.models import UserPreference as _UPb
                 _pb = db.query(_UPb).filter(_UPb.user_id == user.id).first()
-                if not _pb or not (_pb.ctrader_access_token or "").strip():
-                    _ctrader_blockers.append("cTrader not linked")
-                elif not (_pb.ctrader_account_id or "").strip():
-                    _ctrader_blockers.append("no cTrader account selected")
-                elif not getattr(_pb, "forex_approved", False):
-                    _ctrader_blockers.append("forex live not approved")
+                _ctrader_blockers = _forex_live_blockers(_pb, user)
             except Exception:
-                _ctrader_blockers.append("cTrader prefs unreadable")
+                _ctrader_blockers = ["cTrader prefs unreadable"]
             logger.warning(
-                f"[Strategy {strategy.id}] LIVE {asset_class} downgraded to PAPER — "
-                f"{'; '.join(_ctrader_blockers) or 'cTrader not ready'} "
-                f"(no broker order will be sent; tracked in TradeHub only)"
+                "[live-fire] SKIPPED strategy=%s reason=%s "
+                "(downgraded to PAPER — no broker order; tracked in TradeHub only)",
+                strategy.id,
+                "; ".join(_ctrader_blockers) or "cTrader not ready",
+            )
+        elif not _wants_live:
+            logger.info(
+                "[live-fire] SKIPPED strategy=%s reason=strategy_status=%s "
+                "(paper mode — set status=active for live broker orders)",
+                strategy.id,
+                strategy.status,
             )
     elif asset_class in PAPER_ONLY_CLASSES:
         # Stocks/indices: no broker yet, always paper.
@@ -4843,12 +4976,27 @@ async def evaluate_and_fire(
                 from app.services.strategy_account_assignments import get_enabled_fire_targets
                 _ft_prefs = db.query(_UP_ft).filter(_UP_ft.user_id == user.id).first()
                 _fire_targets = get_enabled_fire_targets(db, strategy, _ft_prefs)
+                logger.info(
+                    "[live-fire] strategy=%s resolved_targets=%s count=%s",
+                    strategy.id,
+                    _format_fire_targets_log(_fire_targets),
+                    len(_fire_targets),
+                )
             except Exception as _ft_err:
                 logger.warning(
                     f"[Strategy {strategy.id}] assignment lookup failed — "
                     f"skipping fan-out ({type(_ft_err).__name__}: {_ft_err})"
                 )
                 _fire_targets = []
+
+        if not is_paper and _fire_targets:
+            logger.info(
+                "[live-fire] strategy=%s symbol=%s enabled_accounts=%s attempting %s live order(s)",
+                strategy.id,
+                symbol,
+                _format_fire_targets_log(_fire_targets),
+                len(_fire_targets) if len(_fire_targets) > 1 else 1,
+            )
 
         if len(_fire_targets) > 1:
             _fanout_ok = False
@@ -4882,12 +5030,23 @@ async def evaluate_and_fire(
                     http_client=http_client,
                 )
             except Exception as _fan_err:
-                logger.error(
-                    f"[Strategy {strategy.id}] multi-account fan-out error: {_fan_err}",
+                logger.critical(
+                    "[live-fire] fan-out await FAILED strategy=%s symbol=%s targets=%s — %s",
+                    strategy.id,
+                    symbol,
+                    _format_fire_targets_log(_fire_targets),
+                    _fan_err,
                     exc_info=True,
                 )
             if _fanout_ok:
                 break
+            if len(_fire_targets) > 1:
+                logger.critical(
+                    "[live-fire] fan-out returned False strategy=%s targets=%s — "
+                    "falling through to single-exec path",
+                    strategy.id,
+                    _format_fire_targets_log(_fire_targets),
+                )
 
         _preset_ctid = (
             _fire_targets[0].get("ctrader_account_id") or _fire_targets[0].get("ctid")
@@ -5098,6 +5257,7 @@ async def evaluate_and_fire(
                     # otherwise it stays at the strategy's TP1.
                     _live_tp_pct  = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
                     _job_ctid = None
+                    _job_prefs = None
                     try:
                         from app.models import UserPreference as _UP_job
                         from app.services.ctrader_client import resolve_ctrader_ctid
@@ -5134,14 +5294,41 @@ async def evaluate_and_fire(
                         signal_live_source=price_data.get("live_source"),
                         latency=new_order_latency(execution.id, _signal_mono),
                     )
+                    _single_target = (
+                        {"ctrader_account_id": _job_ctid, "lot_size": _preset_lot}
+                        if _job_ctid else None
+                    )
+                    _log_live_order_route(
+                        execution_id=execution.id,
+                        strategy_id=strategy.id,
+                        ctid=str(_job_ctid or ""),
+                        prefs=_job_prefs,
+                        target=_single_target,
+                        fixed_lots=_fixed_lots,
+                        outcome="enqueue",
+                    )
                     _queued = await enqueue_ctrader_order(_job)
                     if _queued:
-                        logger.info(
-                            f"[{_log_ts()}] [Strategy {strategy.id}] cTrader order queued "
-                            f"exec#{execution.id} acct={_job_ctid} {symbol} {direction}"
+                        _log_live_order_route(
+                            execution_id=execution.id,
+                            strategy_id=strategy.id,
+                            ctid=str(_job_ctid or ""),
+                            prefs=_job_prefs,
+                            target=_single_target,
+                            fixed_lots=_fixed_lots,
+                            outcome="queued",
                         )
                         order_result = {"order_id": "queued", "queued": True}
                     else:
+                        _log_live_order_route(
+                            execution_id=execution.id,
+                            strategy_id=strategy.id,
+                            ctid=str(_job_ctid or ""),
+                            prefs=_job_prefs,
+                            target=_single_target,
+                            fixed_lots=_fixed_lots,
+                            outcome="queue_full",
+                        )
                         logger.error(
                             f"[{_log_ts()}] [Strategy {strategy.id}] cTrader order queue "
                             f"FULL — exec#{execution.id} {symbol} not sent to broker"

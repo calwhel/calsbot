@@ -1302,8 +1302,10 @@ def _log_order_route(
     host: str,
     result: dict,
     volume_units: Optional[int] = None,
+    lots: Optional[float] = None,
+    is_live: Optional[bool] = None,
 ) -> None:
-    is_live = host == CTRADER_HOST_LIVE
+    _is_live = is_live if is_live is not None else (host == CTRADER_HOST_LIVE)
     vol = volume_units if volume_units is not None else result.get("volume")
     err = result.get("error")
     if result.get("actual_fill") and float(result.get("actual_fill") or 0) > 0:
@@ -1312,13 +1314,14 @@ def _log_order_route(
         outcome = str(err)[:120]
     else:
         outcome = "no_fill"
+    size = lots if lots is not None else (vol if vol is not None else "?")
     logger.info(
-        "[order] exec=%s ctid=%s is_live=%s host=%s vol=%s → %s",
+        "[order] exec=%s ctid=%s is_live=%s host=%s lots=%s → %s",
         execution_id if execution_id is not None else "?",
         ctid,
-        is_live,
+        _is_live,
         host,
-        vol if vol is not None else "?",
+        size,
         outcome,
     )
 
@@ -1351,6 +1354,7 @@ async def place_market_order_resilient(
     known_account_type = (
         _account_is_live(prefs, ctid) is not None if prefs else False
     )
+    _acct_is_live = _account_is_live(prefs, ctid) if prefs else None
     at = access_token
 
     async def _place_on(h: str) -> dict:
@@ -1396,6 +1400,8 @@ async def place_market_order_resilient(
                 host=h,
                 result=result,
                 volume_units=volume_units,
+                lots=volume_lots,
+                is_live=_acct_is_live if _acct_is_live is not None else (h == CTRADER_HOST_LIVE),
             )
             fill = result.get("actual_fill")
             if fill is not None and float(fill) > 0:
@@ -1455,6 +1461,8 @@ async def place_market_order_resilient(
                     host=h,
                     result=recovered,
                     volume_units=vol,
+                    lots=volume_lots,
+                    is_live=_acct_is_live if _acct_is_live is not None else (h == CTRADER_HOST_LIVE),
                 )
                 if user_id:
                     _persist_account_host_metadata(user_id, ctid, h)
@@ -2906,8 +2914,13 @@ async def place_ctrader_order_for_user(
             prefs_default=prefs.ctrader_account_id,
         )
         if not ctid_str:
-            logger.warning(f"[cTrader] user {user.id} has no cTrader account resolved")
-            return None
+            logger.critical(
+                "[live-fire] order rejected user=%s exec=%s reason=missing per-execution ctid "
+                "(will not use prefs.ctrader_account_id fallback)",
+                user.id,
+                execution_id if execution_id is not None else "?",
+            )
+            return {"order_id": None, "actual_fill": None, "error": "missing ctrader account id"}
         access_token           = prefs.ctrader_access_token
         ctid_trader_account_id = int(ctid_str)
         _route_hosts           = _routing_hosts_for_account(prefs, ctid_trader_account_id)

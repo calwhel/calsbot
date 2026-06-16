@@ -78,6 +78,15 @@ def ensure_strategy_account_assignments_table(bind) -> None:
             raise
 
 
+def _format_assignments_log(targets: List[Dict[str, Any]]) -> str:
+    parts = []
+    for t in targets or []:
+        acct = str(t.get("ctrader_account_id") or t.get("ctid") or "?")
+        lot = t.get("lot_size")
+        parts.append(f"{acct}@{lot if lot is not None else 'default'}")
+    return "[" + ", ".join(parts) + "]"
+
+
 def get_enabled_fire_targets(db, strategy, prefs) -> List[Dict[str, Any]]:
     """Return [{ctrader_account_id, lot_size}, ...] for live fan-out."""
     from app.strategy_models import StrategyAccountAssignment
@@ -119,16 +128,37 @@ def get_enabled_fire_targets(db, strategy, prefs) -> List[Dict[str, Any]]:
                     "lot_size": _coerce_lot_size(r.lot_size),
                 })
         if out:
+            logger.info(
+                "get_enabled_fire_targets strategy=%s enabled=%s",
+                getattr(strategy, "id", "?"),
+                _format_assignments_log(out),
+            )
             return out
 
     legacy = (getattr(strategy, "ctrader_account_id", None) or "").strip()
     legacy_lot = getattr(strategy, "ctrader_account_lot", None)
     if legacy:
-        return [{"ctrader_account_id": legacy, "lot_size": legacy_lot}]
+        out = [{"ctrader_account_id": legacy, "lot_size": legacy_lot}]
+        logger.info(
+            "get_enabled_fire_targets strategy=%s legacy_strategy_binding=%s",
+            getattr(strategy, "id", "?"),
+            _format_assignments_log(out),
+        )
+        return out
 
     default = (getattr(prefs, "ctrader_account_id", None) or "").strip() if prefs else ""
     if default:
-        return [{"ctrader_account_id": default, "lot_size": None}]
+        out = [{"ctrader_account_id": default, "lot_size": None}]
+        logger.info(
+            "get_enabled_fire_targets strategy=%s prefs_default=%s",
+            getattr(strategy, "id", "?"),
+            _format_assignments_log(out),
+        )
+        return out
+    logger.info(
+        "get_enabled_fire_targets strategy=%s enabled=[] (no assignments or default)",
+        getattr(strategy, "id", "?"),
+    )
     return []
 
 
