@@ -82,15 +82,33 @@ def get_enabled_fire_targets(db, strategy, prefs) -> List[Dict[str, Any]]:
     """Return [{ctrader_account_id, lot_size}, ...] for live fan-out."""
     from app.strategy_models import StrategyAccountAssignment
 
-    rows = (
-        db.query(StrategyAccountAssignment)
-        .filter(
-            StrategyAccountAssignment.strategy_id == strategy.id,
-            StrategyAccountAssignment.enabled.is_(True),
+    try:
+        ensure_strategy_account_assignments_table(db.get_bind())
+    except Exception as exc:
+        logger.warning(
+            "get_enabled_fire_targets: ensure table failed strategy=%s: %s",
+            getattr(strategy, "id", "?"),
+            type(exc).__name__,
         )
-        .order_by(StrategyAccountAssignment.id)
-        .all()
-    )
+
+    try:
+        rows = (
+            db.query(StrategyAccountAssignment)
+            .filter(
+                StrategyAccountAssignment.strategy_id == strategy.id,
+                StrategyAccountAssignment.enabled.is_(True),
+            )
+            .order_by(StrategyAccountAssignment.id)
+            .all()
+        )
+    except Exception as exc:
+        logger.warning(
+            "get_enabled_fire_targets: query failed strategy=%s: %s",
+            getattr(strategy, "id", "?"),
+            exc,
+        )
+        rows = []
+
     if rows:
         out = []
         for r in rows:

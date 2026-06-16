@@ -1336,6 +1336,73 @@ async def _ctrader_fanout_live_fire(
     http_client,
 ) -> bool:
     """Create N executions + enqueue N cTrader jobs in parallel. Returns True on success path."""
+    try:
+        return await _ctrader_fanout_live_fire_impl(
+            db=db,
+            user=user,
+            strategy=strategy,
+            config=config,
+            symbol=symbol,
+            direction=direction,
+            current_price=current_price,
+            tp_price=tp_price,
+            sl_price=sl_price,
+            tp2_price=tp2_price,
+            tp_pct=tp_pct,
+            sl_pct=sl_pct,
+            tp2_pct=tp2_pct,
+            leverage=leverage,
+            risk=risk,
+            ex_config=ex_config,
+            asset_class=asset_class,
+            details=details,
+            price_data=price_data,
+            exec_notes=exec_notes,
+            partial_close_pct=partial_close_pct,
+            price_source=price_source,
+            kline_source=kline_source,
+            signal_generated_at=signal_generated_at,
+            fire_targets=fire_targets,
+            http_client=http_client,
+        )
+    except Exception as exc:
+        logger.error(
+            f"[Strategy {strategy.id}] fan-out live fire error: {exc}",
+            exc_info=True,
+        )
+        return False
+
+
+async def _ctrader_fanout_live_fire_impl(
+    *,
+    db,
+    user,
+    strategy,
+    config: dict,
+    symbol: str,
+    direction: str,
+    current_price: float,
+    tp_price: float,
+    sl_price: float,
+    tp2_price,
+    tp_pct: float,
+    sl_pct: float,
+    tp2_pct,
+    leverage: int,
+    risk: dict,
+    ex_config: dict,
+    asset_class: str,
+    details,
+    price_data: dict,
+    exec_notes: str,
+    partial_close_pct,
+    price_source: str,
+    kline_source,
+    signal_generated_at: float,
+    fire_targets: list,
+    http_client,
+) -> bool:
+    """Inner fan-out implementation — callers should use _ctrader_fanout_live_fire."""
     import uuid as _uuid
     from app.strategy_models import StrategyExecution, StrategyPerformance
     from app.services.ctrader_order_queue import (
@@ -4776,38 +4843,49 @@ async def evaluate_and_fire(
                 from app.services.strategy_account_assignments import get_enabled_fire_targets
                 _ft_prefs = db.query(_UP_ft).filter(_UP_ft.user_id == user.id).first()
                 _fire_targets = get_enabled_fire_targets(db, strategy, _ft_prefs)
-            except Exception:
+            except Exception as _ft_err:
+                logger.warning(
+                    f"[Strategy {strategy.id}] assignment lookup failed — "
+                    f"skipping fan-out ({type(_ft_err).__name__}: {_ft_err})"
+                )
                 _fire_targets = []
 
         if len(_fire_targets) > 1:
-            _fanout_ok = await _ctrader_fanout_live_fire(
-                db=db,
-                user=user,
-                strategy=strategy,
-                config=config,
-                symbol=symbol,
-                direction=direction,
-                current_price=current_price,
-                tp_price=tp_price,
-                sl_price=sl_price,
-                tp2_price=tp2_price,
-                tp_pct=tp_pct,
-                sl_pct=sl_pct,
-                tp2_pct=tp2_pct,
-                leverage=leverage,
-                risk=risk,
-                ex_config=ex_config,
-                asset_class=asset_class,
-                details=details,
-                price_data=price_data,
-                exec_notes=_exec_notes,
-                partial_close_pct=_partial_close_pct,
-                price_source=_ps,
-                kline_source=_ks,
-                signal_generated_at=_signal_generated_at,
-                fire_targets=_fire_targets,
-                http_client=http_client,
-            )
+            _fanout_ok = False
+            try:
+                _fanout_ok = await _ctrader_fanout_live_fire(
+                    db=db,
+                    user=user,
+                    strategy=strategy,
+                    config=config,
+                    symbol=symbol,
+                    direction=direction,
+                    current_price=current_price,
+                    tp_price=tp_price,
+                    sl_price=sl_price,
+                    tp2_price=tp2_price,
+                    tp_pct=tp_pct,
+                    sl_pct=sl_pct,
+                    tp2_pct=tp2_pct,
+                    leverage=leverage,
+                    risk=risk,
+                    ex_config=ex_config,
+                    asset_class=asset_class,
+                    details=details,
+                    price_data=price_data,
+                    exec_notes=_exec_notes,
+                    partial_close_pct=_partial_close_pct,
+                    price_source=_ps,
+                    kline_source=_ks,
+                    signal_generated_at=_signal_generated_at,
+                    fire_targets=_fire_targets,
+                    http_client=http_client,
+                )
+            except Exception as _fan_err:
+                logger.error(
+                    f"[Strategy {strategy.id}] multi-account fan-out error: {_fan_err}",
+                    exc_info=True,
+                )
             if _fanout_ok:
                 break
 
@@ -6117,22 +6195,147 @@ async def run_session_alert_loop():
 
 
 _EXECUTOR_HEARTBEATS: Dict[str, float] = {}
+_LOOP_HB_DB_CACHE: Dict[str, float] = {}
+_LOOP_HB_DB_CACHE_AT: float = 0.0
+_LOOP_HB_DB_CACHE_TTL_S = 10.0
+_AGGREGATE_LOOP_PREFIXES = ("forex_executor", "crypto_executor", "forex_live_manager")
+_FOREX_EXECUTOR_RESTART_SECS = 5
+_FOREX_HEARTBEAT_LOG_INTERVAL_S = 30
+
+
+def _aggregate_loop_name(name: str) -> Optional[str]:
+    """Map shard-specific heartbeat keys to the aggregate health-check name."""
+    for prefix in _AGGREGATE_LOOP_PREFIXES:
+        if name == prefix or name.startswith(f"{prefix}_s"):
+            return prefix
+    return None
 
 
 def mark_heartbeat(name: str) -> None:
     """Record that an executor loop just started a cycle (monotonic-free wall clock).
 
     Read by the hourly system health monitor to verify the scan loops are alive.
+    Shard loops (e.g. forex_executor_s0) also refresh the aggregate forex_executor key.
     """
     try:
-        _EXECUTOR_HEARTBEATS[name] = time.time()
+        now = time.time()
+        _EXECUTOR_HEARTBEATS[name] = now
+        agg = _aggregate_loop_name(name)
+        if agg and name != agg:
+            _EXECUTOR_HEARTBEATS[agg] = now
     except Exception:
         pass
 
 
+def _persist_loop_heartbeats_to_db() -> None:
+    """Write in-process loop timestamps so cross-process health checks see forex/crypto."""
+    import os as _os
+    from sqlalchemy import text as _sql_text
+    from app.database import BgSessionLocal as SessionLocal
+
+    loops = {
+        k: v
+        for k, v in _EXECUTOR_HEARTBEATS.items()
+        if k in _AGGREGATE_LOOP_PREFIXES
+        or any(k.startswith(f"{p}_s") for p in _AGGREGATE_LOOP_PREFIXES)
+    }
+    if not loops:
+        return
+    db = SessionLocal()
+    try:
+        db.execute(_sql_text("""
+            CREATE TABLE IF NOT EXISTS executor_loop_heartbeats (
+                loop_name VARCHAR(64) PRIMARY KEY,
+                last_seen_at TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc'),
+                host_pid INTEGER
+            )
+        """))
+        pid = _os.getpid()
+        for loop_name, ts in loops.items():
+            db.execute(
+                _sql_text("""
+                    INSERT INTO executor_loop_heartbeats
+                        (loop_name, last_seen_at, host_pid)
+                    VALUES
+                        (:name, to_timestamp(:ts), :pid)
+                    ON CONFLICT (loop_name) DO UPDATE SET
+                        last_seen_at = EXCLUDED.last_seen_at,
+                        host_pid = EXCLUDED.host_pid
+                """),
+                {"name": loop_name, "ts": float(ts), "pid": pid},
+            )
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+def _load_loop_heartbeats_from_db() -> Dict[str, float]:
+    """Read loop heartbeats written by other processes (portal vs forex-only replica)."""
+    global _LOOP_HB_DB_CACHE, _LOOP_HB_DB_CACHE_AT
+    now = time.time()
+    if _LOOP_HB_DB_CACHE and (now - _LOOP_HB_DB_CACHE_AT) < _LOOP_HB_DB_CACHE_TTL_S:
+        return dict(_LOOP_HB_DB_CACHE)
+    from sqlalchemy import text as _sql_text
+    from app.database import BgSessionLocal as SessionLocal
+
+    out: Dict[str, float] = {}
+    db = SessionLocal()
+    try:
+        rows = db.execute(_sql_text(
+            "SELECT loop_name, EXTRACT(EPOCH FROM last_seen_at) "
+            "FROM executor_loop_heartbeats"
+        )).fetchall()
+        for loop_name, epoch in rows:
+            if loop_name and epoch is not None:
+                out[str(loop_name)] = float(epoch)
+    except Exception:
+        pass
+    finally:
+        db.close()
+    _LOOP_HB_DB_CACHE = out
+    _LOOP_HB_DB_CACHE_AT = now
+    return dict(out)
+
+
 def get_heartbeats() -> Dict[str, float]:
-    """Return a copy of the last-cycle wall-clock timestamps for each loop."""
-    return dict(_EXECUTOR_HEARTBEATS)
+    """Return loop timestamps — in-process plus DB (for split portal/forex replicas)."""
+    merged = dict(_EXECUTOR_HEARTBEATS)
+    try:
+        for name, ts in _load_loop_heartbeats_from_db().items():
+            if name not in merged or ts > merged[name]:
+                merged[name] = ts
+            agg = _aggregate_loop_name(name)
+            if agg and (agg not in merged or ts > merged[agg]):
+                merged[agg] = ts
+    except Exception:
+        pass
+    return merged
+
+
+async def _forex_executor_heartbeat_loop(shard_index: int, shard_count: int) -> None:
+    """30s liveness log + DB persist so stale-vs-alive is visible cross-process."""
+    hb_name = (
+        "forex_executor"
+        if shard_count <= 1
+        else f"forex_executor_s{shard_index}"
+    )
+    while True:
+        mark_heartbeat(hb_name)
+        try:
+            _persist_loop_heartbeats_to_db()
+        except Exception:
+            pass
+        logger.info(
+            "[executor] forex_executor heartbeat shard=%s/%s",
+            shard_index,
+            shard_count,
+        )
+        await asyncio.sleep(_FOREX_HEARTBEAT_LOG_INTERVAL_S)
 
 
 async def persist_executor_process_heartbeat() -> None:
@@ -6140,6 +6343,10 @@ async def persist_executor_process_heartbeat() -> None:
     import os as _os
 
     mark_heartbeat("executor_process")
+    try:
+        _persist_loop_heartbeats_to_db()
+    except Exception:
+        pass
     from sqlalchemy import text as _sql_text
     from app.database import BgSessionLocal as SessionLocal
     try:
@@ -7386,7 +7593,7 @@ async def run_forex_live_manager_fast():
 # ─── Dedicated forex / index / stock executor loop ───────────────────────────
 
 async def run_forex_executor():
-    """Launch one or more parallel forex/index scan shards."""
+    """Launch one or more parallel forex/index scan shards (never exits silently)."""
     if forex_executor_disabled():
         logger.info(
             "📈 Forex executor SKIPPED (DISABLE_FOREX_EXECUTOR=1) — "
@@ -7394,17 +7601,35 @@ async def run_forex_executor():
         )
         return
 
-    count = EXECUTOR_SHARD_COUNT
-    if count <= 1:
-        await _run_forex_executor_shard(0, 1)
-        return
-    logger.info(
-        f"📈 Forex executor launching {count} parallel scan shards "
-        f"(~{FOREX_MAX_CONCURRENT} concurrent evals per shard)"
-    )
-    await asyncio.gather(
-        *(_run_forex_executor_shard(i, count) for i in range(count))
-    )
+    while True:
+        try:
+            logger.info("[executor] forex_executor loop started")
+            mark_heartbeat("forex_executor")
+            count = EXECUTOR_SHARD_COUNT
+            if count <= 1:
+                await _run_forex_executor_shard(0, 1)
+            else:
+                logger.info(
+                    f"📈 Forex executor launching {count} parallel scan shards "
+                    f"(~{FOREX_MAX_CONCURRENT} concurrent evals per shard)"
+                )
+                await asyncio.gather(
+                    *(_run_forex_executor_shard(i, count) for i in range(count))
+                )
+            logger.warning(
+                "[executor] forex_executor exited cleanly — restarting in %ss",
+                _FOREX_EXECUTOR_RESTART_SECS,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.critical(
+                "[executor] forex_executor crashed (%s) — restarting in %ss",
+                exc,
+                _FOREX_EXECUTOR_RESTART_SECS,
+                exc_info=True,
+            )
+        await asyncio.sleep(_FOREX_EXECUTOR_RESTART_SECS)
 
 
 async def _run_forex_executor_shard(shard_index: int, shard_count: int):
@@ -7418,11 +7643,32 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
     from app.models import User
     from app.strategy_models import UserStrategy, init_strategy_tables
 
-    init_strategy_tables(engine)
+    try:
+        init_strategy_tables(engine)
+    except Exception as _init_err:
+        logger.critical(
+            "[executor] forex_executor init_strategy_tables failed shard=%s/%s: %s",
+            shard_index,
+            shard_count,
+            _init_err,
+            exc_info=True,
+        )
+        raise
+
     _fx_lbl = _executor_shard_label("FX Executor", shard_index, shard_count)
+    logger.info(
+        "[executor] forex_executor loop started shard=%s/%s (cycle=%ss)",
+        shard_index,
+        shard_count,
+        FOREX_SCAN_INTERVAL_SECONDS,
+    )
     logger.info(
         f"📈 {_fx_lbl} started (cycle={FOREX_SCAN_INTERVAL_SECONDS}s)"
     )
+    mark_heartbeat(
+        "forex_executor" if shard_count <= 1 else f"forex_executor_s{shard_index}"
+    )
+    asyncio.create_task(_forex_executor_heartbeat_loop(shard_index, shard_count))
     if shard_index > 0 and EXECUTOR_SHARD_STAGGER_SECONDS > 0:
         await asyncio.sleep(shard_index * EXECUTOR_SHARD_STAGGER_SECONDS)
 
@@ -7772,7 +8018,10 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     )
 
             except Exception as e:
-                logger.error(f"Forex executor loop error: {e}", exc_info=True)
+                logger.critical(
+                    f"[executor] forex_executor cycle error shard={shard_index}: {e}",
+                    exc_info=True,
+                )
                 try:
                     from app.services.feed_diagnostics import flush_scan_metric_batch
                     flush_scan_metric_batch(_fx_lbl)

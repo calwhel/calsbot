@@ -243,7 +243,14 @@ def _check_executor(forex_open: bool) -> Dict[str, Any]:
 
         def fresh(name: str) -> bool:
             ts = hb.get(name)
-            return ts is not None and (now - ts) <= _HEARTBEAT_FRESH_SECS
+            if ts is not None and (now - ts) <= _HEARTBEAT_FRESH_SECS:
+                return True
+            # Sharded executors write forex_executor_s0, crypto_executor_s1, etc.
+            prefix = f"{name}_s"
+            for key, shard_ts in hb.items():
+                if key.startswith(prefix) and (now - shard_ts) <= _HEARTBEAT_FRESH_SECS:
+                    return True
+            return False
 
         # Crypto loop should always be cycling (24/7 market).
         loops = {
