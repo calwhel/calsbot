@@ -56,6 +56,14 @@ MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT",
 # Each forex eval holds bg_engine across async kline/TA fetches. Total checkout
 # slots are capped by app.database.bg_db_slot() (pool hard limit − reserve).
 FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "6"))
+# Cap tradfi universe breadth — prefetch + eval must scan the same capped set.
+EXECUTOR_MAX_SYMBOLS_PER_STRATEGY = max(
+    1, int(_os_env.environ.get("EXECUTOR_MAX_SYMBOLS_PER_STRATEGY", "20")),
+)
+# Hard per-strategy eval ceiling — runaway wide universes must not stall the shard.
+EXECUTOR_STRATEGY_EVAL_BUDGET_S = float(
+    _os_env.environ.get("EXECUTOR_STRATEGY_EVAL_BUDGET_S", "10"),
+)
 # Evaluate strategies in batches so Railway logs show progress during long first cycles
 # (90 forex + 168 crypto can run 5–15 min with no other INFO lines).
 EXECUTOR_SCAN_BATCH_SIZE    = int(_os_env.environ.get("EXECUTOR_SCAN_BATCH_SIZE", "20"))
@@ -865,6 +873,11 @@ def _normalize_snap_asset_class(col_ac: str, cfg_ac: str) -> str:
     return (_col or _cfg or "crypto").lower()
 
 
+def _normalize_universe_symbol(symbol: str) -> str:
+    """Canonical symbol form — must match prefetch keys and tradfi provider lookups."""
+    return (symbol or "").upper().replace("/", "").replace("-", "").strip()
+
+
 def _metal_cache_asset_classes(symbol: str, asset_class: str) -> List[str]:
     """Asset classes that may share the same prefetched metal price/TA cache key."""
     ac = (asset_class or "crypto").lower()
@@ -888,12 +901,13 @@ def _price_ta_cache_key(
     metal_paper_ok: bool = False,
 ) -> str:
     tf = timeframe or "15m"
+    sym = symbol if asset_class == "crypto" else _normalize_universe_symbol(symbol)
     cache_key = (
-        f"{asset_class}:{symbol}:{tf}" if asset_class != "crypto" else symbol
+        f"{asset_class}:{sym}:{tf}" if asset_class != "crypto" else sym
     )
     if metal_paper_ok and asset_class != "crypto":
         from app.services.tradfi_prices import is_metal_symbol as _metal_ck
-        if _metal_ck(symbol):
+        if _metal_ck(sym):
             cache_key = f"{cache_key}:paper"
     return cache_key
 
@@ -5044,13 +5058,17 @@ async def evaluate_and_fire(
         strictness_level = max(strictness_level, _profile_floor)
 
     if asset_class != "crypto":
-        # Stocks/forex/indices: universe.symbols is a curated list from the
-        # mobile/web wizard (validated against the catalog at save time). No
-        # Bitunix/MEXC filtering applies — just trust the configured symbols.
-        symbols = [
-            s.upper() for s in (universe.get("symbols") or [])
-            if isinstance(s, str) and s.strip()
-        ]
+        # Stocks/forex/indices: curated symbol list — same cap + normalization as prefetch.
+        _raw_uni_n = _tradfi_universe_raw_count(config)
+        symbols = _tradfi_universe_symbols(config)
+        if _raw_uni_n > len(symbols):
+            logger.warning(
+                "[eval] strategy=%s universe capped %s→%s symbols (max=%s)",
+                strategy.id,
+                _raw_uni_n,
+                len(symbols),
+                EXECUTOR_MAX_SYMBOLS_PER_STRATEGY,
+            )
     else:
         symbols = await _get_eligible_symbols(universe, http_client, raw_tickers=raw_tickers)
     if not symbols:
@@ -5079,7 +5097,7 @@ async def evaluate_and_fire(
     # ── Step 1: Fast sync pre-filter (no awaits) ─────────────────────────────
     # Exclude symbols already fired today or still in cooldown window.
     # One GROUP BY query replaces up to 2×N per-symbol round-trips.
-    _sym_slice = symbols[:50]
+    _sym_slice = symbols
     _fired_today_set, _last_fired_map = _prefetch_symbol_cooldowns(
         strategy.id, _sym_slice, db, need_today=no_duplicate_symbol,
     )
@@ -6767,22 +6785,56 @@ async def _propagate_to_subscribers(
             _sub_db.close()
 
 
-# ─── Asset-class helper (shared by both executor loops) ──────────────────────
-
-def _symbols_for_snapshot(snap: dict, max_symbols: int = 20) -> List[str]:
-    """Universe symbols for prefetch — capped so wide rosters don't explode HTTP."""
-    cfg = snap.get("config") or {}
-    raw = (cfg.get("universe") or {}).get("symbols") or []
+def _tradfi_universe_symbols(
+    config: dict,
+    max_symbols: int = EXECUTOR_MAX_SYMBOLS_PER_STRATEGY,
+) -> List[str]:
+    """Deduped tradfi universe symbols, capped and normalized for prefetch/eval parity."""
+    raw = (config.get("universe") or {}).get("symbols") or []
     out: List[str] = []
     for s in raw:
         if not isinstance(s, str) or not s.strip():
             continue
-        sym = s.upper().replace("/", "").replace("-", "")
+        sym = _normalize_universe_symbol(s)
         if sym and sym not in out:
             out.append(sym)
         if len(out) >= max_symbols:
             break
     return out
+
+
+def _tradfi_universe_raw_count(config: dict) -> int:
+    raw = (config.get("universe") or {}).get("symbols") or []
+    return sum(1 for s in raw if isinstance(s, str) and s.strip())
+
+
+async def _evaluate_with_budget(
+    strategy_id: int,
+    config: dict,
+    coro,
+) -> None:
+    """Run evaluate_and_fire with a hard per-strategy wall-clock ceiling."""
+    _uni_n = _tradfi_universe_raw_count(config)
+    _cap_n = len(_tradfi_universe_symbols(config))
+    try:
+        await asyncio.wait_for(coro, timeout=EXECUTOR_STRATEGY_EVAL_BUDGET_S)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[eval] id=%s ABORTED >budget %.0fs universe=%s capped=%s",
+            strategy_id,
+            EXECUTOR_STRATEGY_EVAL_BUDGET_S,
+            _uni_n,
+            _cap_n,
+        )
+        raise
+
+
+def _symbols_for_snapshot(
+    snap: dict,
+    max_symbols: int = EXECUTOR_MAX_SYMBOLS_PER_STRATEGY,
+) -> List[str]:
+    """Universe symbols for prefetch — capped so wide rosters don't explode HTTP."""
+    return _tradfi_universe_symbols(snap.get("config") or {}, max_symbols=max_symbols)
 
 
 def _universe_symbols_for_snapshots(snapshots: list) -> List[str]:
@@ -7705,10 +7757,14 @@ async def _run_crypto_executor_shard(
                                 async with bg_db_slot():
                                     strategy = db_one.merge(_strategy_row)
                                     user = db_one.merge(_user_row)
-                                await evaluate_and_fire(
-                                    strategy, user, db_one, http_client,
-                                    raw_tickers=_tickers,
-                                    gate_stats=cycle_gate_stats,
+                                await _evaluate_with_budget(
+                                    snap["id"],
+                                    snap.get("config") or {},
+                                    evaluate_and_fire(
+                                        strategy, user, db_one, http_client,
+                                        raw_tickers=_tickers,
+                                        gate_stats=cycle_gate_stats,
+                                    ),
                                 )
                                 return
                             except (
@@ -7731,6 +7787,9 @@ async def _run_crypto_executor_shard(
                                     f"[Strategy {snap['id']}] Skipping cycle — "
                                     f"DB error persisted ({_err_name})"
                                 )
+                                return
+                            except asyncio.TimeoutError:
+                                _db_rollback_safe(db_one)
                                 return
                             except Exception as e:
                                 logger.error(
@@ -9010,12 +9069,16 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                         _diag.db_slot_wait_ms,
                                         last_bg_db_slot_wait_ms(),
                                     )
-                                    await evaluate_and_fire(
-                                        strategy, user, db_one, _http,
-                                        raw_tickers=[],
-                                        gate_stats=cycle_gate_stats,
-                                        prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
-                                        eval_diag=_diag,
+                                    await _evaluate_with_budget(
+                                        snap["id"],
+                                        snap.get("config") or {},
+                                        evaluate_and_fire(
+                                            strategy, user, db_one, _http,
+                                            raw_tickers=[],
+                                            gate_stats=cycle_gate_stats,
+                                            prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
+                                            eval_diag=_diag,
+                                        ),
                                     )
                                     return
                                 except (
@@ -9045,6 +9108,9 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                         f"[FX Strategy {snap['id']}] eval cancelled — "
                                         f"skipping cycle"
                                     )
+                                    _db_rollback_safe(db_one)
+                                    return
+                                except asyncio.TimeoutError:
                                     _db_rollback_safe(db_one)
                                     return
                                 except Exception as e:
