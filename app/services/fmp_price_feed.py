@@ -270,6 +270,13 @@ def _kline_fresh_ttl(fmp_interval: str) -> timedelta:
 
 def _fmp_note_rate_limit() -> None:
     global _FMP_BACKOFF_UNTIL, _FMP_RATE_LIMIT_STREAK, _FMP_LAST_RATE_LIMIT_LOG
+    try:
+        from app.services.prefetch_fast import prefetch_fast_active
+        if prefetch_fast_active():
+            from app.services.prefetch_provider_limits import note_prefetch_429
+            note_prefetch_429("fmp")
+    except Exception:
+        pass
     _FMP_RATE_LIMIT_STREAK = min(_FMP_RATE_LIMIT_STREAK + 1, 5)
     wait = min(60 * (2 ** (_FMP_RATE_LIMIT_STREAK - 1)), 300)
     _FMP_BACKOFF_UNTIL = datetime.utcnow() + timedelta(seconds=wait)
@@ -500,43 +507,63 @@ async def _fmp_http_get(url: str, params: dict, timeout: float = 8.0) -> Tuple[i
 
     if fmp_in_backoff():
         return 0, None
-    if not await _fmp_rate_limit_wait():
-        return 0, None
     timeout = provider_timeout_s(timeout)
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, params=params)
-            if resp.status_code in (451, 403):
-                from app.services.geo_block import note_geo_block
-                note_geo_block(url, resp.status_code, "fmp_price_feed._fmp_http_get")
-                return resp.status_code, None
-            if resp.status_code == 429:
-                _fmp_note_rate_limit()
-                return 429, None
-            if resp.status_code != 200:
-                return resp.status_code, None
-            return 200, resp.json()
-    except Exception as e:
-        logger.debug(f"[FMPFeed] httpx GET failed {url}: {e}")
-    try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url, params=params, timeout=aiohttp.ClientTimeout(total=timeout)
-            ) as resp:
-                if resp.status in (451, 403):
-                    from app.services.geo_block import note_geo_block
-                    note_geo_block(url, resp.status, "fmp_price_feed._fmp_http_get")
-                    return resp.status, None
-                if resp.status == 429:
-                    _fmp_note_rate_limit()
-                    return 429, None
-                if resp.status != 200:
-                    return resp.status, None
-                return 200, await resp.json(content_type=None)
-    except Exception as e:
-        logger.debug(f"[FMPFeed] aiohttp GET failed {url}: {e}")
+        from app.services.prefetch_fast import prefetch_fast_active
+        _prefetch_fast = prefetch_fast_active()
+    except Exception:
+        _prefetch_fast = False
+    attempts = 3 if _prefetch_fast else 1
+
+    from app.services.prefetch_provider_limits import (
+        prefetch_429_backoff_s,
+        prefetch_provider_slot,
+    )
+
+    for attempt in range(attempts):
+        if not await _fmp_rate_limit_wait():
+            return 0, None
+        async with prefetch_provider_slot("fmp"):
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.get(url, params=params)
+                    if resp.status_code in (451, 403):
+                        from app.services.geo_block import note_geo_block
+                        note_geo_block(url, resp.status_code, "fmp_price_feed._fmp_http_get")
+                        return resp.status_code, None
+                    if resp.status_code == 429:
+                        _fmp_note_rate_limit()
+                        if attempt < attempts - 1 and _prefetch_fast:
+                            await asyncio.sleep(prefetch_429_backoff_s(attempt))
+                            continue
+                        return 429, None
+                    if resp.status_code != 200:
+                        return resp.status_code, None
+                    return 200, resp.json()
+            except Exception as e:
+                logger.debug(f"[FMPFeed] httpx GET failed {url}: {e}")
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, params=params, timeout=aiohttp.ClientTimeout(total=timeout)
+                ) as resp:
+                    if resp.status in (451, 403):
+                        from app.services.geo_block import note_geo_block
+                        note_geo_block(url, resp.status, "fmp_price_feed._fmp_http_get")
+                        return resp.status, None
+                    if resp.status == 429:
+                        _fmp_note_rate_limit()
+                        if attempt < attempts - 1 and _prefetch_fast:
+                            await asyncio.sleep(prefetch_429_backoff_s(attempt))
+                            continue
+                        return 429, None
+                    if resp.status != 200:
+                        return resp.status, None
+                    return 200, await resp.json(content_type=None)
+        except Exception as e:
+            logger.debug(f"[FMPFeed] aiohttp GET failed {url}: {e}")
     return 0, None
 
 

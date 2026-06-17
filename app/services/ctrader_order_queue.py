@@ -285,7 +285,37 @@ async def _abort_stale_order(job: CtraderOrderJob, reason: str, age_s: float, sl
         db.close()
 
 
-async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]) -> None:
+async def _execution_already_filled(execution_id: int) -> bool:
+    """Idempotency guard — do not re-place if broker fill is already recorded."""
+    from app.database import SessionLocal
+    from app.strategy_models import StrategyExecution
+
+    db = SessionLocal()
+    try:
+        ex = db.query(StrategyExecution).filter(
+            StrategyExecution.id == execution_id,
+        ).first()
+        if not ex:
+            return False
+        if ex.ctrader_position_id:
+            return True
+        oid = ex.ctrader_order_id
+        if oid and str(oid) not in ("queued", "None", ""):
+            notes = ex.notes or ""
+            if "pos=" in notes or not ex.is_paper:
+                return True
+        return False
+    finally:
+        db.close()
+
+
+async def _apply_order_result(
+    job: CtraderOrderJob,
+    order_result: Optional[dict],
+    *,
+    attempts: int = 1,
+    classified=None,
+) -> None:
     from app.database import SessionLocal
     from app.strategy_models import StrategyExecution, StrategyPerformance
 
@@ -333,39 +363,72 @@ async def _apply_order_result(job: CtraderOrderJob, order_result: Optional[dict]
             if position_id and _has_fill:
                 order_id = order_id or "reconciled"
             else:
-                execution.is_paper = True
+                from app.services.live_order_failure import (
+                    classify_live_order_failure,
+                    fanout_sibling_summary,
+                    notify_live_order_failure,
+                    record_live_fire_failure,
+                    _format_lots,
+                )
+
                 _err_txt = (order_err or "no order id")[:180]
                 if order_id and not (actual_fill and actual_fill > 0):
                     _err_txt = (_err_txt + " (no broker fill confirmation)")[:180]
-                execution.notes = f"Live→Paper fallback (queued order): {_err_txt}"
+                if classified is None:
+                    classified = classify_live_order_failure(
+                        order_err or _err_txt,
+                        broker_reply=order_result,
+                    )
+                _siblings = fanout_sibling_summary(
+                    db, execution.signal_group_id, execution.id,
+                )
+                execution.is_paper = True
+                execution.notes = (
+                    f"Live→Paper fallback (queued order): {classified.reason}"
+                )[:500]
                 db.commit()
                 try:
                     from app.services.strategy_executor import _release_tg_open_notify
                     _release_tg_open_notify(db, execution.id)
                 except Exception:
                     pass
+                record_live_fire_failure(
+                    user_id=job.user_id,
+                    strategy_id=job.strategy_id,
+                    execution_id=job.execution_id,
+                    signal_group_id=execution.signal_group_id,
+                    ctid=job.ctrader_account_id,
+                    symbol=job.symbol,
+                    direction=job.direction,
+                    lots=_format_lots(job),
+                    classified=classified,
+                    attempts=attempts,
+                    sibling_summary=_siblings,
+                )
                 logger.warning(
-                    "[ctrader-queue] exec#%s %s %s — broker order failed: %s",
+                    "[ctrader-queue] exec#%s %s %s ctid=%s — live failed after %s attempt(s): %s",
                     job.execution_id,
                     job.symbol,
                     job.direction,
-                    _err_txt,
+                    job.ctrader_account_id,
+                    attempts,
+                    classified.reason,
                 )
                 if user and strategy and (not portal_settings or portal_settings.dm_live_alerts):
-                    try:
-                        from app.services.strategy_executor import _telegram_int_id, _tg_send
-                        tg_id = _telegram_int_id(user)
-                        if tg_id:
-                            asyncio.create_task(_tg_send(
-                                tg_id,
-                                f"⚠️ <b>cTrader order failed — paper trade started</b>\n"
-                                f"Strategy: <b>{strategy.name}</b>\n"
-                                f"Signal: {job.symbol} {job.direction}\n"
-                                f"Error: <code>{(order_err or 'no order id')[:120]}</code>",
-                                asset_class=job.asset_class or "forex",
-                            ))
-                    except Exception:
-                        pass
+                    asyncio.create_task(notify_live_order_failure(
+                        user=user,
+                        strategy_name=strategy.name or "Your Strategy",
+                        ctid=job.ctrader_account_id,
+                        symbol=job.symbol,
+                        direction=job.direction,
+                        lots=_format_lots(job),
+                        reason=classified.reason,
+                        attempts=attempts,
+                        sibling_summary=_siblings,
+                        asset_class=job.asset_class or "forex",
+                        paper_fallback=True,
+                        portal_settings=portal_settings,
+                    ))
                 return
 
         execution.ctrader_order_id = str(order_id) if order_id else None
@@ -587,25 +650,74 @@ async def _run_order_job(job: CtraderOrderJob) -> None:
             db.close()
 
         if not user:
-            await _apply_order_result(job, None)
+            from app.services.live_order_failure import classify_live_order_failure
+            await _apply_order_result(
+                job, None,
+                attempts=1,
+                classified=classify_live_order_failure("user not found"),
+            )
             return
 
-        order_result = await place_ctrader_order_for_user(
-            user=user,
-            symbol=job.symbol,
-            direction=job.direction,
-            entry_price=job.entry_price,
-            tp_pct=job.tp_pct,
-            sl_pct=job.sl_pct,
-            risk_pct=job.risk_pct,
-            risk_usd=job.risk_usd,
-            use_risk_pct=job.use_risk_pct,
-            sl_pips=job.sl_pips,
-            fixed_lots=job.fixed_lots,
-            ctid=job.ctrader_account_id,
-            latency=job.latency,
-            execution_id=job.execution_id,
+        from app.services.live_order_failure import (
+            classify_live_order_failure,
+            live_order_retry_backoff_s,
+            max_live_order_attempts,
         )
+
+        order_result = None
+        classified = None
+        attempts = 0
+        for attempt in range(1, max_live_order_attempts() + 1):
+            attempts = attempt
+            if await _execution_already_filled(job.execution_id):
+                logger.info(
+                    "[ctrader-queue] exec#%s already filled — skip placement",
+                    job.execution_id,
+                )
+                return
+
+            order_result = await place_ctrader_order_for_user(
+                user=user,
+                symbol=job.symbol,
+                direction=job.direction,
+                entry_price=job.entry_price,
+                tp_pct=job.tp_pct,
+                sl_pct=job.sl_pct,
+                risk_pct=job.risk_pct,
+                risk_usd=job.risk_usd,
+                use_risk_pct=job.use_risk_pct,
+                sl_pips=job.sl_pips,
+                fixed_lots=job.fixed_lots,
+                ctid=job.ctrader_account_id,
+                latency=job.latency,
+                execution_id=job.execution_id,
+            )
+            if order_result and order_result.get("actual_fill") and float(
+                order_result.get("actual_fill") or 0
+            ) > 0:
+                break
+
+            raw_err = None
+            if order_result is None:
+                raw_err = "no cTrader access token"
+            else:
+                raw_err = order_result.get("error")
+            classified = classify_live_order_failure(
+                raw_err,
+                broker_reply=order_result,
+            )
+            if not classified.transient or attempt >= max_live_order_attempts():
+                break
+            logger.warning(
+                "[ctrader-queue] exec#%s ctid=%s transient failure (%s) — retry %s/%s",
+                job.execution_id,
+                job.ctrader_account_id,
+                classified.reason,
+                attempt,
+                max_live_order_attempts(),
+            )
+            await asyncio.sleep(live_order_retry_backoff_s(attempt - 1))
+
         if order_result and not order_result.get("account_id"):
             if job.ctrader_account_id:
                 order_result["account_id"] = job.ctrader_account_id
@@ -633,10 +745,18 @@ async def _run_order_job(job: CtraderOrderJob) -> None:
                 if recovered:
                     order_result = recovered
 
-        await _apply_order_result(job, order_result)
+        await _apply_order_result(
+            job, order_result, attempts=attempts, classified=classified,
+        )
     except Exception as e:
         logger.exception(f"[ctrader-queue] job exec #{job.execution_id} failed: {e}")
-        await _apply_order_result(job, {"error": str(e)})
+        from app.services.live_order_failure import classify_live_order_failure
+        await _apply_order_result(
+            job,
+            {"error": str(e)},
+            attempts=1,
+            classified=classify_live_order_failure(None, exception=e),
+        )
     finally:
         _get_queue().task_done()
 

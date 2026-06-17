@@ -13327,6 +13327,11 @@ async def api_live_forex_account(
             "execution_ready": exec_ready,
             "execution_blockers": exec_blockers,
         }
+        try:
+            from app.services.live_order_failure import list_recent_live_fire_failures
+            payload["recent_failures"] = list_recent_live_fire_failures(user.id, limit=10)
+        except Exception:
+            payload["recent_failures"] = []
         set_cache(_cache_key, payload, ttl_seconds=12)
         return _lf_live_forex_json_response(payload)
     except Exception as exc:

@@ -256,6 +256,27 @@ class DiscoveryScanJob(Base):
     finished_at = Column(DateTime, nullable=True)
 
 
+class LiveFireFailure(Base):
+    """Durable log of live cTrader order failures (survives Railway log rotation)."""
+    __tablename__ = "live_fire_failures"
+
+    id               = Column(Integer, primary_key=True, index=True)
+    ts               = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    user_id          = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    strategy_id      = Column(Integer, nullable=True, index=True)
+    execution_id     = Column(Integer, nullable=True, index=True)
+    signal_group_id  = Column(String(40), nullable=True, index=True)
+    ctid             = Column(String(40), nullable=True)
+    symbol           = Column(String(30), nullable=True)
+    direction        = Column(String(10), nullable=True)
+    lots             = Column(String(20), nullable=True)
+    reason           = Column(Text, nullable=False)
+    category         = Column(String(32), nullable=False)
+    attempts         = Column(Integer, default=1, nullable=False)
+    broker_reply     = Column(Text, nullable=True)
+    sibling_summary  = Column(Text, nullable=True)
+
+
 class PortalPayment(Base):
     """Tracks OxaPay invoices so the webhook can match payment → user."""
     __tablename__ = "portal_payments"
@@ -287,6 +308,7 @@ def init_strategy_tables(engine):
         PortalPayment.__table__,
         StrategyOffer.__table__,
         DiscoveryScanJob.__table__,
+        LiveFireFailure.__table__,
         ScanSchedule.__table__,
     ])
     # Add new columns only if genuinely missing — avoids table locks when multiple

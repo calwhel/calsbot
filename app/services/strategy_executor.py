@@ -69,6 +69,7 @@ EXECUTOR_PREFETCH_CONCURRENT  = int(_os_env.environ.get("EXECUTOR_PREFETCH_CONCU
 # Each shard prefetches + evaluates its slice concurrently — ~Nx throughput vs one loop.
 EXECUTOR_SHARD_COUNT          = max(1, int(_os_env.environ.get("EXECUTOR_SHARD_COUNT", "1")))
 EXECUTOR_SHARD_STAGGER_SECONDS = int(_os_env.environ.get("EXECUTOR_SHARD_STAGGER_SECONDS", "2"))
+EXECUTOR_CYCLE_DB_STAGGER_S = float(_os_env.environ.get("EXECUTOR_CYCLE_DB_STAGGER_S", "1.5"))
 PAPER_MAX_HOLD_HOURS        = 168   # auto-expire paper positions after this many hours (7 days)
 
 
@@ -277,6 +278,22 @@ from app.services.strategy_account_assignments import TRADFI_BROKER_ASSET_CLASSE
 
 # Asset classes routed to the forex/tradfi executor (crypto loop excludes these).
 _EXECUTOR_TRADFI_CLASSES = frozenset(TRADFI_BROKER_ASSET_CLASSES) | {"stock"}
+
+
+def _log_cycle_db_phase(executor_label: str, phase: str, t0: float) -> None:
+    """Log shared DB phase duration — surfaces synchronized shard stalls."""
+    ms = (time.monotonic() - t0) * 1000.0
+    if ms >= 200:
+        logger.info(
+            "[cycle-db] executor=%s phase=%s took=%.0fms",
+            executor_label, phase, ms,
+        )
+
+
+async def _cycle_db_stagger(shard_index: int, shard_count: int) -> None:
+    """Desync per-shard DB thundering herds (gate prefetch, snapshot reload)."""
+    if shard_count > 1 and EXECUTOR_CYCLE_DB_STAGGER_S > 0 and shard_index > 0:
+        await asyncio.sleep(shard_index * EXECUTOR_CYCLE_DB_STAGGER_S)
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1677,6 +1694,41 @@ async def _ctrader_fanout_live_fire(
             exc,
             exc_info=True,
         )
+        try:
+            from app.services.live_order_failure import (
+                classify_live_order_failure,
+                notify_live_order_failure,
+                record_live_fire_failure,
+            )
+            _classified = classify_live_order_failure(None, exception=exc)
+            record_live_fire_failure(
+                user_id=user.id,
+                strategy_id=strategy.id,
+                execution_id=None,
+                signal_group_id=None,
+                ctid=None,
+                symbol=symbol,
+                direction=direction,
+                lots="?",
+                classified=_classified,
+                attempts=1,
+                sibling_summary=_format_fire_targets_log(fire_targets),
+            )
+            asyncio.create_task(notify_live_order_failure(
+                user=user,
+                strategy_name=strategy.name or "Your Strategy",
+                ctid=None,
+                symbol=symbol,
+                direction=direction,
+                lots="?",
+                reason=_classified.reason,
+                attempts=1,
+                sibling_summary=_format_fire_targets_log(fire_targets),
+                asset_class=asset_class,
+                paper_fallback=False,
+            ))
+        except Exception as _notify_err:
+            logger.warning("[live-fire] fan-out failure notify failed: %s", _notify_err)
         return False
 
 
@@ -1918,6 +1970,41 @@ async def _ctrader_fanout_live_fire_impl(
     for (ex, target), res in zip(executions, results):
         ctid = str(target.get("ctrader_account_id") or target.get("ctid") or "")
         if isinstance(res, Exception):
+            _classified = None
+            try:
+                from app.services.live_order_failure import (
+                    classify_live_order_failure,
+                    notify_live_order_failure,
+                    record_live_fire_failure,
+                    _format_lots,
+                )
+                _classified = classify_live_order_failure(None, exception=res)
+                record_live_fire_failure(
+                    user_id=user.id,
+                    strategy_id=strategy.id,
+                    execution_id=ex.id,
+                    signal_group_id=_signal_group_id,
+                    ctid=ctid,
+                    symbol=symbol,
+                    direction=direction,
+                    lots=_format_lots(target),
+                    classified=_classified,
+                    attempts=1,
+                )
+                asyncio.create_task(notify_live_order_failure(
+                    user=user,
+                    strategy_name=strategy.name or "Your Strategy",
+                    ctid=ctid,
+                    symbol=symbol,
+                    direction=direction,
+                    lots=_format_lots(target),
+                    reason=_classified.reason,
+                    attempts=1,
+                    asset_class=asset_class,
+                    paper_fallback=False,
+                ))
+            except Exception as _nf_err:
+                logger.warning("[live-fire] enqueue exception notify: %s", _nf_err)
             logger.critical(
                 "[live-fire] fan-out enqueue error strategy=%s exec=%s ctid=%s: %s",
                 strategy.id,
@@ -1926,6 +2013,11 @@ async def _ctrader_fanout_live_fire_impl(
                 res,
                 exc_info=True,
             )
+            ex.is_paper = True
+            ex.notes = (
+                (ex.notes or "")
+                + f" | Live enqueue failed: {_classified.reason if _classified else type(res).__name__}"
+            ).strip(" |")
             _log_live_order_route(
                 execution_id=ex.id,
                 strategy_id=strategy.id,
@@ -1950,6 +2042,37 @@ async def _ctrader_fanout_live_fire_impl(
                 outcome="queued",
             )
         else:
+            from app.services.live_order_failure import (
+                classify_live_order_failure,
+                notify_live_order_failure,
+                record_live_fire_failure,
+                _format_lots,
+            )
+            _q_classified = classify_live_order_failure("order queue full")
+            record_live_fire_failure(
+                user_id=user.id,
+                strategy_id=strategy.id,
+                execution_id=ex.id,
+                signal_group_id=_signal_group_id,
+                ctid=ctid,
+                symbol=symbol,
+                direction=direction,
+                lots=_format_lots(target),
+                classified=_q_classified,
+                attempts=1,
+            )
+            asyncio.create_task(notify_live_order_failure(
+                user=user,
+                strategy_name=strategy.name or "Your Strategy",
+                ctid=ctid,
+                symbol=symbol,
+                direction=direction,
+                lots=_format_lots(target),
+                reason=_q_classified.reason,
+                attempts=1,
+                asset_class=asset_class,
+                paper_fallback=True,
+            ))
             ex.is_paper = True
             ex.notes = (
                 (ex.notes or "") + " | Live→Paper fallback (fan-out queue full)"
@@ -6798,8 +6921,24 @@ async def _prefetch_price_ta_for_cycle(
         else:
             network_jobs.append((sym, ac, tf))
 
+    from app.services.prefetch_provider_limits import (
+        clear_prefetch_429,
+        consume_prefetch_429,
+    )
+
     async def _warm(sym: str, ac: str, tf: str) -> None:
         _ft0 = time.monotonic()
+        clear_prefetch_429()
+
+        def _log_429_fallback(fb_src: str, took_ms: float) -> None:
+            prov429 = consume_prefetch_429()
+            if prov429:
+                logger.warning(
+                    "[prefetch] executor=%s sym=%s ac=%s provider=%s HTTP 429 "
+                    "→ stale-cache fallback (src=%s took=%.0fms)",
+                    label, sym, ac, prov429, fb_src or "cache", took_ms,
+                )
+
         async with sem:
             try:
                 async with prefetch_fast_context():
@@ -6830,6 +6969,7 @@ async def _prefetch_price_ta_for_cycle(
                 if fb:
                     stats["fetched"] += 1
                     stats["fallback"] += 1
+                    _log_429_fallback(fb_src or "cache", _ms)
                     _log_prefetch(sym, ac, tf, fb_src or "cache", _ms, "fallback")
                 else:
                     stats["failed"] += 1
@@ -6846,6 +6986,7 @@ async def _prefetch_price_ta_for_cycle(
                         "[prefetch] executor=%s sym=%s TIMEOUT → using cached",
                         label, sym,
                     )
+                    _log_429_fallback(fb_src or "cache", _ms)
                     _log_prefetch(sym, ac, tf, fb_src or "cache", _ms, "fallback")
                 else:
                     stats["failed"] += 1
@@ -6858,6 +6999,7 @@ async def _prefetch_price_ta_for_cycle(
                 if fb:
                     stats["fetched"] += 1
                     stats["fallback"] += 1
+                    _log_429_fallback(fb_src or "cache", _ms)
                     _log_prefetch(sym, ac, tf, fb_src or "cache", _ms, "fallback")
                 else:
                     stats["failed"] += 1
@@ -7310,9 +7452,12 @@ async def _run_crypto_executor_shard(
             _cycle_ctx_token = None
             try:
                 mark_heartbeat(_hb_name)
+                await _cycle_db_stagger(shard_index, shard_count)
+                _db_t0 = time.monotonic()
                 strategy_snapshots = _load_strategy_snapshots_cached(
                     SessionLocal, UserStrategy,
                 )
+                _log_cycle_db_phase(_crypto_lbl, "snapshots", _db_t0)
 
                 if not strategy_snapshots:
                     await asyncio.sleep(CRYPTO_SCAN_INTERVAL_SECONDS)
@@ -7396,17 +7541,21 @@ async def _run_crypto_executor_shard(
                 # Per-cycle gate diagnostics — counts which gate blocks each strategy.
                 # Logged at end of cycle so we can see WHY strategies aren't firing.
                 cycle_gate_stats: Dict[str, int] = {}
+                _db_t0 = time.monotonic()
                 _preloaded_users = _preload_strategy_users(
                     [s["id"] for s in eval_snapshots],
                     SessionLocal,
                     UserStrategy,
                     User,
                 )
+                _log_cycle_db_phase(_crypto_lbl, "preload_users", _db_t0)
 
+                _db_t0 = time.monotonic()
                 _gate_prefetch = _prefetch_cycle_gate_data(
                     [s["id"] for s in eval_snapshots],
                     SessionLocal,
                 )
+                _log_cycle_db_phase(_crypto_lbl, "gate_prefetch", _db_t0)
                 _cycle_ctx = ExecutorCycleCtx(
                     execution_counts=_gate_prefetch["execution_counts"],
                     symbol_last_fired=_gate_prefetch["symbol_last_fired"],
@@ -8541,9 +8690,12 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 from app.services.feed_diagnostics import begin_scan_metric_batch
                 begin_scan_metric_batch()
                 mark_heartbeat(_fx_hb)
+                await _cycle_db_stagger(shard_index, shard_count)
+                _db_t0 = time.monotonic()
                 _all_snaps = _load_strategy_snapshots_cached(
                     SessionLocal, UserStrategy,
                 )
+                _log_cycle_db_phase(_fx_lbl, "snapshots", _db_t0)
                 strategy_snapshots = [
                     s for s in _all_snaps
                     if _snap_asset_class(s) in _TRADFI_CLASSES
@@ -8678,17 +8830,21 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
 
                 # Shared counters for cycle-level DB health reporting.
                 _cycle_db_skipped: list = []   # (strategy_id, err_name) tuples
+                _db_t0 = time.monotonic()
                 _preloaded_fx = _preload_strategy_users(
                     [s["id"] for s in open_snaps],
                     SessionLocal,
                     UserStrategy,
                     User,
                 )
+                _log_cycle_db_phase(_fx_lbl, "preload_users", _db_t0)
 
+                _db_t0 = time.monotonic()
                 _gate_prefetch = _prefetch_cycle_gate_data(
                     [s["id"] for s in open_snaps],
                     SessionLocal,
                 )
+                _log_cycle_db_phase(_fx_lbl, "gate_prefetch", _db_t0)
                 _cycle_ctx = ExecutorCycleCtx(
                     shard_index=shard_index,
                     execution_counts=_gate_prefetch["execution_counts"],
