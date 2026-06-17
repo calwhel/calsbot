@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
-from app.advisory_lock_ids import APP_NAME_WEB
+from app.advisory_lock_ids import APP_NAME_EXECUTOR, APP_NAME_WEB
 from app.config import settings
 from app.db_resilience import is_transient_db_error, run_with_db_retry
 import logging
@@ -20,24 +20,48 @@ Base = declarative_base()
 _db_url = settings.get_database_url()
 
 
-def _neon_connect_args(statement_timeout_ms: int) -> dict:
+def _neon_connect_args(
+    statement_timeout_ms: int,
+    *,
+    application_name: str,
+    lock_timeout_ms: int = 0,
+    keepalives_idle_s: int = 30,
+    keepalives_interval_s: int = 10,
+    keepalives_count: int = 5,
+) -> dict:
+    opts = [
+        f"-c tcp_keepalives_idle={int(keepalives_idle_s)}",
+        f"-c statement_timeout={max(1000, int(statement_timeout_ms))}",
+    ]
+    if int(lock_timeout_ms) > 0:
+        opts.append(f"-c lock_timeout={int(lock_timeout_ms)}")
     args: dict = {
         "connect_timeout": 30,
-        "options": (
-            f"-c tcp_keepalives_idle=30 "
-            f"-c statement_timeout={statement_timeout_ms}"
-        ),
+        "options": " ".join(opts),
     }
     if "neon" in _db_url or "neondb" in _db_url:
         # Neon closes idle SSL connections after ~5 minutes.
         # TCP keepalives + pool_recycle=180 keep sockets warm under Neon's cutoff.
         args["sslmode"] = "require"
         args["keepalives"] = 1
-        args["keepalives_idle"] = 30
-        args["keepalives_interval"] = 10
-        args["keepalives_count"] = 5
-    args["application_name"] = APP_NAME_WEB
+        args["keepalives_idle"] = int(keepalives_idle_s)
+        args["keepalives_interval"] = int(keepalives_interval_s)
+        args["keepalives_count"] = int(keepalives_count)
+    args["application_name"] = application_name
     return args
+
+
+_WEB_DB_STATEMENT_TIMEOUT_MS = int(os.getenv("WEB_DB_STATEMENT_TIMEOUT_MS", "60000"))
+_WEB_DB_LOCK_TIMEOUT_MS = int(os.getenv("WEB_DB_LOCK_TIMEOUT_MS", "0"))
+_WEB_DB_KEEPALIVES_IDLE_S = int(os.getenv("WEB_DB_KEEPALIVES_IDLE_S", "30"))
+_WEB_DB_KEEPALIVES_INTERVAL_S = int(os.getenv("WEB_DB_KEEPALIVES_INTERVAL_S", "10"))
+_WEB_DB_KEEPALIVES_COUNT = int(os.getenv("WEB_DB_KEEPALIVES_COUNT", "5"))
+
+_BG_DB_STATEMENT_TIMEOUT_MS = int(os.getenv("BG_DB_STATEMENT_TIMEOUT_MS", "9000"))
+_BG_DB_LOCK_TIMEOUT_MS = int(os.getenv("BG_DB_LOCK_TIMEOUT_MS", "3000"))
+_BG_DB_KEEPALIVES_IDLE_S = int(os.getenv("BG_DB_KEEPALIVES_IDLE_S", "15"))
+_BG_DB_KEEPALIVES_INTERVAL_S = int(os.getenv("BG_DB_KEEPALIVES_INTERVAL_S", "5"))
+_BG_DB_KEEPALIVES_COUNT = int(os.getenv("BG_DB_KEEPALIVES_COUNT", "3"))
 
 
 # ─── HTTP engine ─────────────────────────────────────────────────────────────
@@ -60,7 +84,14 @@ engine = create_engine(
     pool_timeout=30,
     pool_recycle=180,
     pool_pre_ping=True,
-    connect_args=_neon_connect_args(60000),
+    connect_args=_neon_connect_args(
+        _WEB_DB_STATEMENT_TIMEOUT_MS,
+        application_name=APP_NAME_WEB,
+        lock_timeout_ms=_WEB_DB_LOCK_TIMEOUT_MS,
+        keepalives_idle_s=_WEB_DB_KEEPALIVES_IDLE_S,
+        keepalives_interval_s=_WEB_DB_KEEPALIVES_INTERVAL_S,
+        keepalives_count=_WEB_DB_KEEPALIVES_COUNT,
+    ),
 )
 
 
@@ -84,7 +115,14 @@ bg_engine = create_engine(
     pool_timeout=int(os.getenv("BG_POOL_TIMEOUT", "30")),
     pool_recycle=180,
     pool_pre_ping=True,
-    connect_args=_neon_connect_args(60000),
+    connect_args=_neon_connect_args(
+        _BG_DB_STATEMENT_TIMEOUT_MS,
+        application_name=APP_NAME_EXECUTOR,
+        lock_timeout_ms=_BG_DB_LOCK_TIMEOUT_MS,
+        keepalives_idle_s=_BG_DB_KEEPALIVES_IDLE_S,
+        keepalives_interval_s=_BG_DB_KEEPALIVES_INTERVAL_S,
+        keepalives_count=_BG_DB_KEEPALIVES_COUNT,
+    ),
 )
 
 
@@ -111,6 +149,19 @@ def _register_pool_events(_eng):
 
 for _eng in (engine, bg_engine):
     _register_pool_events(_eng)
+
+
+def bg_engine_runtime_profile() -> dict:
+    """Runtime-safe diagnostics for executor DB engine health guards."""
+    return {
+        "statement_timeout_ms": int(_BG_DB_STATEMENT_TIMEOUT_MS),
+        "lock_timeout_ms": int(_BG_DB_LOCK_TIMEOUT_MS),
+        "keepalives_idle_s": int(_BG_DB_KEEPALIVES_IDLE_S),
+        "keepalives_interval_s": int(_BG_DB_KEEPALIVES_INTERVAL_S),
+        "keepalives_count": int(_BG_DB_KEEPALIVES_COUNT),
+        "pool_pre_ping": bool(getattr(bg_engine.pool, "_pre_ping", False)),
+        "pool_recycle_s": 180,
+    }
 
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

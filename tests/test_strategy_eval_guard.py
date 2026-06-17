@@ -1,7 +1,9 @@
 """Per-strategy eval guards — universe cap, symbol normalization, eval budget."""
+import inspect
 import os
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("SECRET_KEY", "test-secret")
@@ -138,6 +140,32 @@ class TestExecutorRuntimeProfile(unittest.TestCase):
         self.assertIsInstance(profile["prefetch_provider_limits"], dict)
         self.assertIn("kraken", profile["prefetch_provider_limits"])
         self.assertIn("fmp", profile["prefetch_provider_limits"])
+
+
+class TestExecutorDbResilienceGuards(unittest.TestCase):
+    def test_forex_shard_init_is_timeout_guarded(self):
+        import app.services.strategy_executor as se
+
+        src = inspect.getsource(se._run_forex_executor_shard)
+        self.assertIn("asyncio.wait_for(", src)
+        self.assertIn("asyncio.to_thread(init_strategy_tables, engine)", src)
+        self.assertIn("EXECUTOR_INIT_DB_TIMEOUT_S", src)
+
+    def test_cycle_db_phases_use_threaded_timeout_wrapper(self):
+        import app.services.strategy_executor as se
+
+        src = inspect.getsource(se._run_forex_executor_shard)
+        self.assertIn("_run_db_phase_with_timeout(", src)
+        self.assertIn("label=f\"{_fx_lbl}:snapshots\"", src)
+        self.assertIn("label=f\"{_fx_lbl}:preload_users\"", src)
+        self.assertIn("label=f\"{_fx_lbl}:gate_prefetch\"", src)
+
+    def test_bg_engine_uses_pre_ping_keepalive_profile(self):
+        src = Path("app/database.py").read_text(encoding="utf-8")
+        self.assertIn("pool_pre_ping=True", src)
+        self.assertIn("application_name=APP_NAME_EXECUTOR", src)
+        self.assertIn("BG_DB_KEEPALIVES_IDLE_S", src)
+        self.assertIn("BG_DB_STATEMENT_TIMEOUT_MS", src)
 
 
 if __name__ == "__main__":
