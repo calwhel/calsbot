@@ -76,6 +76,12 @@ class TestLiveOrderRetryWiring(unittest.TestCase):
 
 
 class TestLiveFireFailurePersist(unittest.TestCase):
+    def test_model_avoids_reserved_postgres_ctid_column(self):
+        from app.strategy_models import LiveFireFailure
+
+        self.assertIsNone(LiveFireFailure.__table__.columns.get("ctid"))
+        self.assertIsNotNone(LiveFireFailure.__table__.columns.get("ctrader_account_id"))
+
     def test_record_live_fire_failure(self):
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
@@ -113,7 +119,7 @@ class TestLiveFireFailurePersist(unittest.TestCase):
             self.assertIsNotNone(row)
             self.assertEqual(row.reason, "insufficient margin")
             self.assertEqual(row.attempts, 3)
-            self.assertEqual(row.ctid, "47465772")
+            self.assertEqual(row.ctrader_account_id, "47465772")
         finally:
             db.close()
 

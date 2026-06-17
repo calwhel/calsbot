@@ -216,11 +216,47 @@ def max_live_order_attempts() -> int:
 
 def ensure_live_fire_failures_table(bind) -> None:
     """Create live_fire_failures if missing (idempotent)."""
+    global _LIVE_FIRE_FAILURES_TABLE_READY
+    if _LIVE_FIRE_FAILURES_TABLE_READY:
+        return
     try:
         from app.strategy_models import LiveFireFailure
         LiveFireFailure.__table__.create(bind=bind, checkfirst=True)
+        _LIVE_FIRE_FAILURES_TABLE_READY = True
+        return
     except Exception as exc:
-        logger.debug("[live-fire-fail] ensure table: %s", exc)
+        logger.debug("[live-fire-fail] ORM create: %s", exc)
+    try:
+        from sqlalchemy import text
+        with bind.connect() as conn:
+            conn.execute(text(_CREATE_LIVE_FIRE_FAILURES_SQL))
+            conn.commit()
+        _LIVE_FIRE_FAILURES_TABLE_READY = True
+    except Exception as exc:
+        logger.warning("[live-fire-fail] ensure table failed: %s", exc)
+
+
+_LIVE_FIRE_FAILURES_TABLE_READY = False
+
+_CREATE_LIVE_FIRE_FAILURES_SQL = """
+    CREATE TABLE IF NOT EXISTS live_fire_failures (
+        id SERIAL PRIMARY KEY,
+        ts TIMESTAMP NOT NULL DEFAULT NOW(),
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        strategy_id INTEGER,
+        execution_id INTEGER,
+        signal_group_id VARCHAR(40),
+        ctrader_account_id VARCHAR(40),
+        symbol VARCHAR(30),
+        direction VARCHAR(10),
+        lots VARCHAR(20),
+        reason TEXT NOT NULL,
+        category VARCHAR(32) NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 1,
+        broker_reply TEXT,
+        sibling_summary TEXT
+    )
+"""
 
 
 def record_live_fire_failure(
@@ -250,7 +286,7 @@ def record_live_fire_failure(
                 strategy_id=strategy_id,
                 execution_id=execution_id,
                 signal_group_id=signal_group_id,
-                ctid=(ctid or "")[:40] or None,
+                ctrader_account_id=(ctid or "")[:40] or None,
                 symbol=(symbol or "")[:30] or None,
                 direction=(direction or "")[:10] or None,
                 lots=(lots or "")[:20] or None,
@@ -412,7 +448,8 @@ def list_recent_live_fire_failures(user_id: int, limit: int = 20) -> List[Dict[s
                     "ts": r.ts.isoformat() if r.ts else None,
                     "strategy_id": r.strategy_id,
                     "execution_id": r.execution_id,
-                    "ctid": r.ctid,
+                    "ctrader_account_id": r.ctrader_account_id,
+                    "ctid": r.ctrader_account_id,
                     "symbol": r.symbol,
                     "direction": r.direction,
                     "lots": r.lots,
