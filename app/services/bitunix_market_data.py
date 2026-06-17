@@ -373,6 +373,8 @@ async def _fetch_klines_chain(
         provider_timeout_s = lambda d: d  # type: ignore
 
     if _fast and len(chain) > 1:
+        from app.services.prefetch_provider_limits import prefetch_provider_slot
+
         async def _attempt(fetcher, label: str):
             try:
                 rows = await asyncio.wait_for(
@@ -383,30 +385,31 @@ async def _fetch_klines_chain(
             except Exception:
                 return [], label
 
-        tasks = [asyncio.create_task(_attempt(f, lbl)) for f, lbl in chain]
-        try:
-            while tasks:
-                done, pending = await asyncio.wait(
-                    tasks,
-                    return_when=asyncio.FIRST_COMPLETED,
-                    timeout=provider_timeout_s(2.0),
-                )
-                if not done:
-                    break
-                for task in done:
-                    tasks.remove(task)
-                    try:
-                        rows, label = task.result()
-                        if rows:
-                            for pt in pending:
-                                pt.cancel()
-                            _store_crypto_kline_cache(symbol, interval, limit, rows, label)
-                            return rows
-                    except Exception:
-                        pass
-        finally:
-            for task in tasks:
-                task.cancel()
+        async with prefetch_provider_slot("crypto"):
+            tasks = [asyncio.create_task(_attempt(f, lbl)) for f, lbl in chain]
+            try:
+                while tasks:
+                    done, pending = await asyncio.wait(
+                        tasks,
+                        return_when=asyncio.FIRST_COMPLETED,
+                        timeout=provider_timeout_s(2.0),
+                    )
+                    if not done:
+                        break
+                    for task in done:
+                        tasks.remove(task)
+                        try:
+                            rows, label = task.result()
+                            if rows:
+                                for pt in pending:
+                                    pt.cancel()
+                                _store_crypto_kline_cache(symbol, interval, limit, rows, label)
+                                return rows
+                        except Exception:
+                            pass
+            finally:
+                for task in tasks:
+                    task.cancel()
 
     for fetcher, label in chain:
         rows = await fetcher(http_client, symbol, interval, limit)

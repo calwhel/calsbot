@@ -500,6 +500,8 @@ async def _fetch_yahoo_chart_klines(
     http_timeout_s: float = 20.0,
 ) -> List[List[float]]:
     """OHLC from Yahoo Finance chart API — works on Railway without yfinance."""
+    from app.services.prefetch_provider_limits import prefetch_http_get
+
     interval, range_ = _YAHOO_CHART_TF.get(timeframe, ("15m", "60d"))
     cache_key = ("yahoo", yahoo_ticker, interval, range_, limit)
     now = datetime.utcnow()
@@ -508,13 +510,17 @@ async def _fetch_yahoo_chart_klines(
         return cached[0]
     try:
         import httpx
+        _headers = {"User-Agent": "Mozilla/5.0 (compatible; TradeHub/1.0)"}
         async with httpx.AsyncClient(
             timeout=http_timeout_s,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; TradeHub/1.0)"},
+            headers=_headers,
         ) as client:
-            resp = await client.get(
+            resp = await prefetch_http_get(
+                "yahoo",
+                client,
                 f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_ticker}",
                 params={"interval": interval, "range": range_},
+                headers=_headers,
             )
         if resp.status_code != 200:
             logger.warning(
@@ -858,21 +864,33 @@ async def _fetch_coinbase_metals_klines(
     headers = {"User-Agent": "TradeHub/1.0 (metal-klines)"}
     last_exc: Optional[Exception] = None
 
+    from app.services.prefetch_provider_limits import (
+        is_rate_limit_http,
+        prefetch_http_get,
+    )
+
     for attempt in range(2):
         try:
             async with httpx.AsyncClient(
                 timeout=_coinbase_httpx_timeout(),
                 headers=headers,
             ) as client:
-                r = await client.get(
+                r = await prefetch_http_get(
+                    "coinbase",
+                    client,
                     f"{_COINBASE_EXCHANGE_BASE}/products/{product}/candles",
                     params=params,
+                    headers=headers,
                 )
             if diag is not None:
                 diag.response_bytes = len(r.content or b"")
             if r.status_code != 200:
                 if diag is not None:
                     diag.failure = f"http_{r.status_code}"
+                if is_rate_limit_http(r.status_code) and attempt == 0:
+                    from app.services.prefetch_fast import prefetch_fast_active
+                    if prefetch_fast_active():
+                        continue
                 stale = _stale_fallback(f"http_{r.status_code}")
                 return stale
             raw = r.json()
@@ -970,9 +988,13 @@ async def _fetch_kraken_metals_klines(
         return rows
 
     try:
+        from app.services.prefetch_provider_limits import prefetch_http_get
+
         import httpx
         async with httpx.AsyncClient(timeout=_KRAKEN_KLINE_TIMEOUT_S) as client:
-            r = await client.get(
+            r = await prefetch_http_get(
+                "kraken",
+                client,
                 "https://api.kraken.com/0/public/OHLC",
                 params={"pair": pair, "interval": interval},
             )
@@ -981,6 +1003,15 @@ async def _fetch_kraken_metals_klines(
         if r.status_code != 200:
             if diag is not None:
                 diag.failure = f"http_{r.status_code}"
+            stale = _KLINE_CACHE.get(key)
+            if stale and (now - stale[1]) < _metal_kline_cache_ttl(key):
+                from app.services.prefetch_provider_limits import consume_prefetch_429
+                if consume_prefetch_429():
+                    logger.warning(
+                        "[tradfi] Kraken HTTP %s for %s → stale cache (%d bars)",
+                        r.status_code, pair, len(stale[0]),
+                    )
+                    return stale[0]
             return []
         result = (r.json() or {}).get("result") or {}
         raw_bars = None

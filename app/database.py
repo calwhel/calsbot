@@ -10,6 +10,7 @@ from app.config import settings
 from app.db_resilience import is_transient_db_error, run_with_db_retry
 import logging
 import os
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,15 @@ def _get_bg_db_sem() -> asyncio.Semaphore:
 async def bg_db_slot():
     """Gate background DB usage so scans cannot starve monitors of pool slots."""
     sem = _get_bg_db_sem()
+    t0 = time.monotonic()
     await sem.acquire()
+    wait_ms = (time.monotonic() - t0) * 1000.0
+    if wait_ms > 500:
+        logger.warning(
+            "[cycle-db] bg_db_slot wait=%.0fms (pool contended, limit=%s)",
+            wait_ms,
+            bg_db_slot_limit(),
+        )
     try:
         yield
     finally:
