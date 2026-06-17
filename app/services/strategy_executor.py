@@ -69,7 +69,6 @@ EXECUTOR_PREFETCH_CONCURRENT  = int(_os_env.environ.get("EXECUTOR_PREFETCH_CONCU
 # Each shard prefetches + evaluates its slice concurrently — ~Nx throughput vs one loop.
 EXECUTOR_SHARD_COUNT          = max(1, int(_os_env.environ.get("EXECUTOR_SHARD_COUNT", "1")))
 EXECUTOR_SHARD_STAGGER_SECONDS = int(_os_env.environ.get("EXECUTOR_SHARD_STAGGER_SECONDS", "2"))
-EXECUTOR_CYCLE_DB_STAGGER_S = float(_os_env.environ.get("EXECUTOR_CYCLE_DB_STAGGER_S", "1.5"))
 PAPER_MAX_HOLD_HOURS        = 168   # auto-expire paper positions after this many hours (7 days)
 
 
@@ -153,10 +152,14 @@ def _accum_cycle_fire_ms(since_t0: float) -> None:
 def _log_cycle_timing(
     shard_index: int,
     strategy_count: int,
+    setup_ms: float,
     prefetch_ms: float,
     eval_ms: float,
+    post_ms: float,
     fire_ms: float,
     total_ms: float,
+    *,
+    db_stagger_ms: float = 0.0,
     prefetch_stats: Optional[Dict[str, int]] = None,
     strategy_timings_ms: Optional[List[Tuple[int, float]]] = None,
 ) -> None:
@@ -169,13 +172,16 @@ def _log_cycle_timing(
             f"{stats.get('symbol_refs', 0)}"
         )
     logger.info(
-        "[cycle] shard=%s strategies=%s prefetch=%.0fms eval=%.0fms "
-        "fire=%.0fms total=%.0fms%s",
+        "[cycle] shard=%s strategies=%s setup=%.0fms prefetch=%.0fms eval=%.0fms "
+        "post=%.0fms fire=%.0fms db_stagger=%.0fms total=%.0fms%s",
         shard_index,
         strategy_count,
+        setup_ms,
         prefetch_ms,
         eval_ms,
+        post_ms,
         fire_ms,
+        db_stagger_ms,
         total_ms,
         dedup,
     )
@@ -288,12 +294,6 @@ def _log_cycle_db_phase(executor_label: str, phase: str, t0: float) -> None:
             "[cycle-db] executor=%s phase=%s took=%.0fms",
             executor_label, phase, ms,
         )
-
-
-async def _cycle_db_stagger(shard_index: int, shard_count: int) -> None:
-    """Desync per-shard DB thundering herds (gate prefetch, snapshot reload)."""
-    if shard_count > 1 and EXECUTOR_CYCLE_DB_STAGGER_S > 0 and shard_index > 0:
-        await asyncio.sleep(shard_index * EXECUTOR_CYCLE_DB_STAGGER_S)
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -800,6 +800,30 @@ def _primary_timeframe(config: dict) -> str:
     return str(config.get("timeframe") or config.get("_timeframe") or "15m")
 
 
+def _normalize_snap_asset_class(col_ac: str, cfg_ac: str) -> str:
+    """Shared asset_class normalisation for prefetch + eval cache keys."""
+    _col = (col_ac or "").strip()
+    _cfg = (cfg_ac or "").strip()
+    if _col == "crypto" and _cfg and _cfg != "crypto":
+        return _cfg.lower()
+    return (_col or _cfg or "crypto").lower()
+
+
+def _metal_cache_asset_classes(symbol: str, asset_class: str) -> List[str]:
+    """Asset classes that may share the same prefetched metal price/TA cache key."""
+    ac = (asset_class or "crypto").lower()
+    try:
+        from app.services.tradfi_prices import is_metal_symbol as _metal_ck
+        if _metal_ck(symbol):
+            aliases = {ac, "forex", "metals"}
+            if ac in ("commodity", "index"):
+                aliases.add("commodity")
+            return [a for a in (ac, "forex", "metals", "commodity") if a in aliases]
+    except Exception:
+        pass
+    return [ac]
+
+
 def _price_ta_cache_key(
     symbol: str,
     asset_class: str,
@@ -818,6 +842,26 @@ def _price_ta_cache_key(
     return cache_key
 
 
+def _price_ta_cache_lookup_keys(
+    symbol: str,
+    asset_class: str,
+    timeframe: Optional[str] = None,
+    *,
+    metal_paper_ok: bool = False,
+) -> List[str]:
+    """Candidate cache keys — prefetch and eval must resolve the same entry."""
+    tf = timeframe or "15m"
+    keys: List[str] = []
+    seen: set = set()
+    for ac in _metal_cache_asset_classes(symbol, asset_class):
+        for paper in (False, True) if metal_paper_ok else (False,):
+            key = _price_ta_cache_key(symbol, ac, tf, metal_paper_ok=paper)
+            if key not in seen:
+                seen.add(key)
+                keys.append(key)
+    return keys
+
+
 def _price_ta_cache_lookup(
     symbol: str,
     asset_class: str,
@@ -827,16 +871,18 @@ def _price_ta_cache_lookup(
 ) -> Optional[Dict]:
     """Return fresh cached price+TA without network I/O."""
     tf = timeframe or "15m"
-    cache_key = _price_ta_cache_key(
+    now = datetime.utcnow()
+    for cache_key in _price_ta_cache_lookup_keys(
         symbol, asset_class, tf, metal_paper_ok=metal_paper_ok,
-    )
-    cached = _PRICE_TA_CACHE.get(cache_key)
-    if not cached:
-        return None
-    data, fetched_at = cached
-    _ttl = _PRICE_TA_TTL if asset_class == "crypto" else _PRICE_TA_TTL_TRADFI
-    if (datetime.utcnow() - fetched_at).total_seconds() < _ttl:
-        return data
+    ):
+        cached = _PRICE_TA_CACHE.get(cache_key)
+        if not cached:
+            continue
+        data, fetched_at = cached
+        key_ac = cache_key.split(":", 1)[0] if ":" in cache_key else "crypto"
+        _ttl = _PRICE_TA_TTL if key_ac == "crypto" else _PRICE_TA_TTL_TRADFI
+        if (now - fetched_at).total_seconds() < _ttl:
+            return data
     return None
 
 
@@ -5022,12 +5068,13 @@ async def evaluate_and_fire(
     _eval_tf = _primary_timeframe(config)
     _uid = user.id if user else None
     _metal_paper = is_paper and asset_class == "forex"
+    _cache_ac = _strategy_cache_asset_class(strategy)
     _cycle_ctx = _get_cycle_ctx()
     _shared_klines = _cycle_ctx.kline_cache if _cycle_ctx else None
 
     async def _price_for_symbol(sym: str) -> Optional[Dict]:
         cached = _price_ta_cache_lookup(
-            sym, asset_class, _eval_tf, metal_paper_ok=_metal_paper,
+            sym, _cache_ac, _eval_tf, metal_paper_ok=_metal_paper,
         )
         if cached:
             return cached
@@ -6892,13 +6939,7 @@ async def _prefetch_price_ta_for_cycle(
     stats = {"cache": 0, "fetched": 0, "failed": 0, "fallback": 0}
 
     def _cache_fresh(sym: str, ac: str, tf: str) -> bool:
-        cache_key = _price_ta_cache_key(sym, ac, tf)
-        cached = _PRICE_TA_CACHE.get(cache_key)
-        if not cached:
-            return False
-        _data, fetched_at = cached
-        _ttl = _PRICE_TA_TTL if ac == "crypto" else _PRICE_TA_TTL_TRADFI
-        return (datetime.utcnow() - fetched_at).total_seconds() < _ttl
+        return _price_ta_cache_lookup(sym, ac, tf) is not None
 
     def _log_prefetch(
         sym: str,
@@ -7036,10 +7077,15 @@ def _snap_asset_class(snap: dict) -> str:
     _cfg = snap.get("config") or {}
     _col_ac = (getattr(_obj, "asset_class", None) or "").strip()
     _cfg_ac = (_cfg.get("asset_class") or _cfg.get("_asset_class") or "").strip()
-    # DB column may still be the default 'crypto' before backfill — trust config.
-    if _col_ac == "crypto" and _cfg_ac and _cfg_ac != "crypto":
-        return _cfg_ac.lower()
-    return _col_ac or _cfg_ac or "crypto"
+    return _normalize_snap_asset_class(_col_ac, _cfg_ac)
+
+
+def _strategy_cache_asset_class(strategy) -> str:
+    """Cache-key asset_class — must match _snap_asset_class for prefetch hits."""
+    config = strategy.config or {}
+    _col_ac = (getattr(strategy, "asset_class", None) or "").strip()
+    _cfg_ac = (config.get("asset_class") or config.get("_asset_class") or "").strip()
+    return _normalize_snap_asset_class(_col_ac, _cfg_ac)
 
 
 # ─── Main executor loop (crypto only) ────────────────────────────────────────
@@ -7452,7 +7498,6 @@ async def _run_crypto_executor_shard(
             _cycle_ctx_token = None
             try:
                 mark_heartbeat(_hb_name)
-                await _cycle_db_stagger(shard_index, shard_count)
                 _db_t0 = time.monotonic()
                 strategy_snapshots = _load_strategy_snapshots_cached(
                     SessionLocal, UserStrategy,
@@ -7573,58 +7618,58 @@ async def _run_crypto_executor_shard(
                     from sqlalchemy.exc import TimeoutError as _SATimeoutError
                     from app.database import bg_db_slot
                     async with sem:
-                        async with bg_db_slot():
-                            row = _preloaded_users.get(snap["id"])
-                            if not row:
-                                return
-                            _strategy_row, _user_row = row
-                            if not _user_row or _user_row.banned:
-                                return
-                            if not _portal_trade_entitled(_user_row, has_pro_by_user):
-                                return
-                            for _attempt in (1, 3):
-                                db_one = SessionLocal()
-                                try:
+                        row = _preloaded_users.get(snap["id"])
+                        if not row:
+                            return
+                        _strategy_row, _user_row = row
+                        if not _user_row or _user_row.banned:
+                            return
+                        if not _portal_trade_entitled(_user_row, has_pro_by_user):
+                            return
+                        for _attempt in (1, 3):
+                            db_one = SessionLocal()
+                            try:
+                                async with bg_db_slot():
                                     strategy = db_one.merge(_strategy_row)
                                     user = db_one.merge(_user_row)
-                                    await evaluate_and_fire(
-                                        strategy, user, db_one, http_client,
-                                        raw_tickers=_tickers,
-                                        gate_stats=cycle_gate_stats,
-                                    )
-                                    return
-                                except (
-                                    _SAOperationalError,
-                                    _SAPendingRollbackError,
-                                    _SATimeoutError,
-                                ) as _db_err:
-                                    _err_name = type(_db_err).__name__
-                                    if getattr(_db_err, "orig", None) is not None:
-                                        _err_name = type(_db_err.orig).__name__
-                                    if _attempt < 3:
-                                        logger.warning(
-                                            f"[Strategy {snap['id']}] Transient DB error "
-                                            f"({_err_name}) — retry {_attempt}/3"
-                                        )
-                                        _db_rollback_safe(db_one)
-                                        await asyncio.sleep(0.5 * _attempt)
-                                        continue
+                                await evaluate_and_fire(
+                                    strategy, user, db_one, http_client,
+                                    raw_tickers=_tickers,
+                                    gate_stats=cycle_gate_stats,
+                                )
+                                return
+                            except (
+                                _SAOperationalError,
+                                _SAPendingRollbackError,
+                                _SATimeoutError,
+                            ) as _db_err:
+                                _err_name = type(_db_err).__name__
+                                if getattr(_db_err, "orig", None) is not None:
+                                    _err_name = type(_db_err.orig).__name__
+                                if _attempt < 3:
                                     logger.warning(
-                                        f"[Strategy {snap['id']}] Skipping cycle — "
-                                        f"DB error persisted ({_err_name})"
-                                    )
-                                    return
-                                except Exception as e:
-                                    logger.error(
-                                        f"[Strategy {snap['id']}] Error: {e}", exc_info=True
+                                        f"[Strategy {snap['id']}] Transient DB error "
+                                        f"({_err_name}) — retry {_attempt}/3"
                                     )
                                     _db_rollback_safe(db_one)
-                                    return
-                                finally:
-                                    try:
-                                        db_one.close()
-                                    except Exception:
-                                        pass
+                                    await asyncio.sleep(0.5 * _attempt)
+                                    continue
+                                logger.warning(
+                                    f"[Strategy {snap['id']}] Skipping cycle — "
+                                    f"DB error persisted ({_err_name})"
+                                )
+                                return
+                            except Exception as e:
+                                logger.error(
+                                    f"[Strategy {snap['id']}] Error: {e}", exc_info=True
+                                )
+                                _db_rollback_safe(db_one)
+                                return
+                            finally:
+                                try:
+                                    db_one.close()
+                                except Exception:
+                                    pass
 
                 await _prefetch_price_ta_for_cycle(
                     eval_snapshots,
@@ -8685,12 +8730,13 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
             _cycle_ctx = None
             _prefetch_ms = 0.0
             _eval_ms = 0.0
+            _setup_ms = 0.0
+            _post_ms = 0.0
             _prefetch_stats: Dict[str, int] = {}
             try:
                 from app.services.feed_diagnostics import begin_scan_metric_batch
                 begin_scan_metric_batch()
                 mark_heartbeat(_fx_hb)
-                await _cycle_db_stagger(shard_index, shard_count)
                 _db_t0 = time.monotonic()
                 _all_snaps = _load_strategy_snapshots_cached(
                     SessionLocal, UserStrategy,
@@ -8862,70 +8908,70 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     _strat_t0 = time.monotonic()
                     try:
                         async with sem:
-                            async with bg_db_slot():
-                                row = _preloaded_fx.get(snap["id"])
-                                if not row:
-                                    return
-                                _strategy_row, _user_row = row
-                                if not _user_row or _user_row.banned:
-                                    return
-                                if not _portal_trade_entitled(_user_row, has_pro_by_user):
-                                    cycle_gate_stats["blk_not_entitled"] = (
-                                        cycle_gate_stats.get("blk_not_entitled", 0) + 1
-                                    )
-                                    return
-                                for _attempt in (1, 3):
-                                    db_one = SessionLocal()
-                                    try:
+                            row = _preloaded_fx.get(snap["id"])
+                            if not row:
+                                return
+                            _strategy_row, _user_row = row
+                            if not _user_row or _user_row.banned:
+                                return
+                            if not _portal_trade_entitled(_user_row, has_pro_by_user):
+                                cycle_gate_stats["blk_not_entitled"] = (
+                                    cycle_gate_stats.get("blk_not_entitled", 0) + 1
+                                )
+                                return
+                            for _attempt in (1, 3):
+                                db_one = SessionLocal()
+                                try:
+                                    async with bg_db_slot():
                                         strategy = db_one.merge(_strategy_row)
                                         user = db_one.merge(_user_row)
-                                        await evaluate_and_fire(
-                                            strategy, user, db_one, _http,
-                                            raw_tickers=[],
-                                            gate_stats=cycle_gate_stats,
-                                            prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
-                                        )
-                                        return
-                                    except (
-                                        _SAOperationalError,
-                                        _SAPendingRollbackError,
-                                        _SATimeoutError,
-                                    ) as _db_err:
-                                        _err_name = type(_db_err).__name__
-                                        if getattr(_db_err, "orig", None) is not None:
-                                            _err_name = type(_db_err.orig).__name__
-                                        if _attempt < 3:
-                                            logger.warning(
-                                                f"[FX Strategy {snap['id']}] Transient DB error "
-                                                f"({_err_name}) — retry {_attempt}/3"
-                                            )
-                                            _db_rollback_safe(db_one)
-                                            await asyncio.sleep(0.5 * _attempt)
-                                            continue
-                                        _cycle_db_skipped.append((snap["id"], _err_name))
+                                    await evaluate_and_fire(
+                                        strategy, user, db_one, _http,
+                                        raw_tickers=[],
+                                        gate_stats=cycle_gate_stats,
+                                        prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
+                                    )
+                                    return
+                                except (
+                                    _SAOperationalError,
+                                    _SAPendingRollbackError,
+                                    _SATimeoutError,
+                                ) as _db_err:
+                                    _err_name = type(_db_err).__name__
+                                    if getattr(_db_err, "orig", None) is not None:
+                                        _err_name = type(_db_err.orig).__name__
+                                    if _attempt < 3:
                                         logger.warning(
-                                            f"[FX Strategy {snap['id']}] Skipping cycle — "
-                                            f"DB error persisted ({_err_name})"
-                                        )
-                                        return
-                                    except StrategyEvalCancelled:
-                                        logger.info(
-                                            f"[FX Strategy {snap['id']}] eval cancelled — "
-                                            f"skipping cycle"
+                                            f"[FX Strategy {snap['id']}] Transient DB error "
+                                            f"({_err_name}) — retry {_attempt}/3"
                                         )
                                         _db_rollback_safe(db_one)
-                                        return
-                                    except Exception as e:
-                                        logger.error(
-                                            f"[FX Strategy {snap['id']}] Error: {e}", exc_info=True
-                                        )
-                                        _db_rollback_safe(db_one)
-                                        return
-                                    finally:
-                                        try:
-                                            db_one.close()
-                                        except Exception:
-                                            pass
+                                        await asyncio.sleep(0.5 * _attempt)
+                                        continue
+                                    _cycle_db_skipped.append((snap["id"], _err_name))
+                                    logger.warning(
+                                        f"[FX Strategy {snap['id']}] Skipping cycle — "
+                                        f"DB error persisted ({_err_name})"
+                                    )
+                                    return
+                                except StrategyEvalCancelled:
+                                    logger.info(
+                                        f"[FX Strategy {snap['id']}] eval cancelled — "
+                                        f"skipping cycle"
+                                    )
+                                    _db_rollback_safe(db_one)
+                                    return
+                                except Exception as e:
+                                    logger.error(
+                                        f"[FX Strategy {snap['id']}] Error: {e}", exc_info=True
+                                    )
+                                    _db_rollback_safe(db_one)
+                                    return
+                                finally:
+                                    try:
+                                        db_one.close()
+                                    except Exception:
+                                        pass
                     finally:
                         _strat_ms = (time.monotonic() - _strat_t0) * 1000.0
                         _cycle_ctx.strategy_timings_ms.append(
@@ -8937,6 +8983,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     None,
                 )
                 _prefetch_t0 = time.monotonic()
+                _setup_ms = (_prefetch_t0 - _cycle_t0) * 1000.0
                 if _forex_open:
                     try:
                         from app.services.ctrader_price_feed import sweep_stale_klines
@@ -8966,6 +9013,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     _fx_lbl, open_snaps, _run_one_fx,
                 )
                 _eval_ms = (time.monotonic() - _eval_t0) * 1000.0
+                _post_t0 = time.monotonic()
 
                 try:
                     from app.services.ctrader_order_queue import flush_gate_stats_to_db
@@ -9029,12 +9077,15 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     pass
 
                 if open_snaps:
+                    _post_ms = (time.monotonic() - _post_t0) * 1000.0
                     _total_ms = (time.monotonic() - _cycle_t0) * 1000.0
                     _log_cycle_timing(
                         shard_index,
                         len(open_snaps),
+                        _setup_ms,
                         _prefetch_ms,
                         _eval_ms,
+                        _post_ms,
                         _cycle_ctx.fire_ms if _cycle_ctx else 0.0,
                         _total_ms,
                         prefetch_stats=_prefetch_stats,

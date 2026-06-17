@@ -13,6 +13,9 @@ def _klines(n: int = 80, close: float = 2650.0) -> list:
 
 
 class TestMetalPaperEval(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        se._PRICE_TA_CACHE.clear()
+
     async def test_paper_uses_kline_close_without_live_spot(self):
         with patch.object(
             se, "EXECUTOR_KLINE_BARS", 80,
