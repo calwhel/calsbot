@@ -55,7 +55,7 @@ LIVE_MONITOR_INTERVAL       = int(_os_env.environ.get("EXECUTOR_LIVE_MONITOR_INT
 MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "2"))
 # Each forex eval holds bg_engine across async kline/TA fetches. Total checkout
 # slots are capped by app.database.bg_db_slot() (pool hard limit − reserve).
-FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "6"))
+FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "10"))
 # Cap tradfi universe breadth — prefetch + eval must scan the same capped set.
 EXECUTOR_MAX_SYMBOLS_PER_STRATEGY = max(
     1, int(_os_env.environ.get("EXECUTOR_MAX_SYMBOLS_PER_STRATEGY", "20")),
@@ -100,6 +100,19 @@ def executor_runtime_profile() -> Dict[str, object]:
         "forex_disabled": forex_executor_disabled(),
         "crypto_scan_interval_s": CRYPTO_SCAN_INTERVAL_SECONDS,
         "forex_scan_interval_s": FOREX_SCAN_INTERVAL_SECONDS,
+        "forex_max_concurrent": FOREX_MAX_CONCURRENT,
+        "executor_shard_count": EXECUTOR_SHARD_COUNT,
+        "strategy_eval_budget_s": EXECUTOR_STRATEGY_EVAL_BUDGET_S,
+        "prefetch_concurrent": EXECUTOR_PREFETCH_CONCURRENT,
+        "prefetch_provider_limits": {
+            "ctrader": int(_os_env.environ.get("PREFETCH_CTRADER_CONCURRENT", "16")),
+            "kraken": int(_os_env.environ.get("PREFETCH_KRAKEN_CONCURRENT", "3")),
+            "yahoo": int(_os_env.environ.get("PREFETCH_YAHOO_CONCURRENT", "3")),
+            "fmp": int(_os_env.environ.get("PREFETCH_FMP_CONCURRENT", "3")),
+            "coinbase": int(_os_env.environ.get("PREFETCH_COINBASE_CONCURRENT", "3")),
+            "crypto": int(_os_env.environ.get("PREFETCH_CRYPTO_CONCURRENT", "8")),
+            "external": int(_os_env.environ.get("PREFETCH_EXTERNAL_CONCURRENT", "4")),
+        },
         "forex_manage_interval_s": FOREX_MANAGE_INTERVAL_SECONDS,
         "forex_worklist_ttl_s": float(
             _os_env.environ.get("EXECUTOR_FX_WORKLIST_TTL", "1")
