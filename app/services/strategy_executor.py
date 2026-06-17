@@ -4707,6 +4707,12 @@ async def evaluate_and_fire(
         asset_class = normalize_asset_class(_col_ac or _cfg_ac)
     config["asset_class"] = asset_class
 
+    # Empty specific universes must bail before per-strategy DB gates / HTTP.
+    if _has_empty_specific_universe(config, asset_class):
+        _log_eval_no_symbols(strategy.id, config, asset_class)
+        _bump("blk_empty_universe")
+        return
+
     # cTrader strategies: status=active AND enabled assignment(s) required for broker fire.
     if asset_class in ("forex", "index", "metals", "commodity"):
         try:
@@ -5073,6 +5079,10 @@ async def evaluate_and_fire(
         symbols = await _get_eligible_symbols(universe, http_client, raw_tickers=raw_tickers)
     if not symbols:
         _bump("blk_empty_universe")
+        _log_eval_no_symbols(
+            strategy.id, config, asset_class,
+            reason="no_eligible_symbols",
+        )
         # Diagnostic: dump the offending universe spec at most once per
         # strategy per minute. This makes it trivial to spot strategies whose
         # universe is misconfigured (e.g. type='specific' with no symbols, or
@@ -5114,6 +5124,12 @@ async def evaluate_and_fire(
 
     if not candidate_symbols:
         _bump("blk_all_in_cooldown")
+        logger.info(
+            "[eval] id=%s no symbols — skipped reason=all_in_cooldown "
+            "resolved=%s",
+            strategy.id,
+            len(_sym_slice),
+        )
         return
 
     # ── Session filter (forex/tradfi entry only) ─────────────────────────────
@@ -5312,12 +5328,14 @@ async def evaluate_and_fire(
             continue
 
         try:
-            passed, details = await evaluate_strategy_conditions(
-                config, symbol, price_data, enhanced_ta, http_client,
-                strictness_level=strictness_level,
-                ctrader_user_id=_uid,
-                shared_kline_cache=_shared_klines,
-            )
+            from app.services.prefetch_fast import prefetch_fast_context
+            async with prefetch_fast_context():
+                passed, details = await evaluate_strategy_conditions(
+                    config, symbol, price_data, enhanced_ta, http_client,
+                    strictness_level=strictness_level,
+                    ctrader_user_id=_uid,
+                    shared_kline_cache=_shared_klines,
+                )
         except StrategyEvalCancelled:
             logger.info(
                 f"[Strategy {strategy.id}] eval cancelled — skipping cycle"
@@ -6808,21 +6826,71 @@ def _tradfi_universe_raw_count(config: dict) -> int:
     return sum(1 for s in raw if isinstance(s, str) and s.strip())
 
 
+def _universe_type_label(config: dict, asset_class: str) -> str:
+    universe = config.get("universe") or {}
+    default = "specific" if asset_class != "crypto" else "all"
+    return str(universe.get("type") or default).lower()
+
+
+def _has_empty_specific_universe(config: dict, asset_class: str) -> bool:
+    """True when a strategy's explicit symbol list is empty (instant skip)."""
+    if _universe_type_label(config, asset_class) != "specific":
+        return False
+    if asset_class != "crypto":
+        return len(_tradfi_universe_symbols(config)) == 0
+    raw = (config.get("universe") or {}).get("symbols") or []
+    return not any(isinstance(s, str) and s.strip() for s in raw)
+
+
+def _log_eval_no_symbols(
+    strategy_id: int,
+    config: dict,
+    asset_class: str,
+    *,
+    reason: str = "empty_universe",
+) -> None:
+    universe = config.get("universe") or {}
+    logger.info(
+        "[eval] id=%s no symbols — skipped reason=%s asset_class=%s "
+        "universe_type=%s config_symbols=%s",
+        strategy_id,
+        reason,
+        asset_class,
+        _universe_type_label(config, asset_class),
+        _tradfi_universe_raw_count(config),
+    )
+
+
+def _pre_eval_skip_no_symbols(snap: dict) -> bool:
+    """Caller-side guard — never enter evaluate_and_fire for empty specific universes."""
+    config = snap.get("config") or {}
+    asset_class = _snap_asset_class(snap)
+    if not _has_empty_specific_universe(config, asset_class):
+        return False
+    _log_eval_no_symbols(snap["id"], config, asset_class)
+    return True
+
+
 async def _evaluate_with_budget(
     strategy_id: int,
     config: dict,
+    asset_class: str,
     coro,
 ) -> None:
     """Run evaluate_and_fire with a hard per-strategy wall-clock ceiling."""
     _uni_n = _tradfi_universe_raw_count(config)
     _cap_n = len(_tradfi_universe_symbols(config))
+    _uni_type = _universe_type_label(config, asset_class)
     try:
         await asyncio.wait_for(coro, timeout=EXECUTOR_STRATEGY_EVAL_BUDGET_S)
     except asyncio.TimeoutError:
         logger.warning(
-            "[eval] id=%s ABORTED >budget %.0fs universe=%s capped=%s",
+            "[eval] id=%s ABORTED >budget %.0fs asset_class=%s "
+            "universe_type=%s config_symbols=%s capped=%s",
             strategy_id,
             EXECUTOR_STRATEGY_EVAL_BUDGET_S,
+            asset_class,
+            _uni_type,
             _uni_n,
             _cap_n,
         )
@@ -7751,6 +7819,8 @@ async def _run_crypto_executor_shard(
                             return
                         if not _portal_trade_entitled(_user_row, has_pro_by_user):
                             return
+                        if _pre_eval_skip_no_symbols(snap):
+                            return
                         for _attempt in (1, 3):
                             db_one = SessionLocal()
                             try:
@@ -7760,6 +7830,7 @@ async def _run_crypto_executor_shard(
                                 await _evaluate_with_budget(
                                     snap["id"],
                                     snap.get("config") or {},
+                                    _snap_asset_class(snap),
                                     evaluate_and_fire(
                                         strategy, user, db_one, http_client,
                                         raw_tickers=_tickers,
@@ -9069,9 +9140,12 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                         _diag.db_slot_wait_ms,
                                         last_bg_db_slot_wait_ms(),
                                     )
+                                    if _pre_eval_skip_no_symbols(snap):
+                                        return
                                     await _evaluate_with_budget(
                                         snap["id"],
                                         snap.get("config") or {},
+                                        _snap_asset_class(snap),
                                         evaluate_and_fire(
                                             strategy, user, db_one, _http,
                                             raw_tickers=[],

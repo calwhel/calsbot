@@ -13,7 +13,9 @@ from app.services.strategy_executor import (
     EXECUTOR_STRATEGY_EVAL_BUDGET_S,
     _PRICE_TA_CACHE,
     _evaluate_with_budget,
+    _has_empty_specific_universe,
     _normalize_universe_symbol,
+    _pre_eval_skip_no_symbols,
     _price_ta_cache_lookup,
     _symbols_for_snapshot,
     _tradfi_universe_raw_count,
@@ -65,6 +67,26 @@ class TestCacheKeyNormalization(unittest.TestCase):
         self.assertIs(hit, prefetched)
 
 
+class TestEmptyUniverseSkip(unittest.TestCase):
+    def test_empty_specific_forex_universe(self):
+        cfg = {"universe": {"type": "specific", "symbols": []}, "asset_class": "forex"}
+        self.assertTrue(_has_empty_specific_universe(cfg, "forex"))
+
+    def test_crypto_all_is_not_empty_specific(self):
+        cfg = {"universe": {"type": "all"}}
+        self.assertFalse(_has_empty_specific_universe(cfg, "crypto"))
+
+    def test_pre_eval_skip_logs(self):
+        snap = {
+            "id": 42,
+            "config": {"universe": {"type": "specific", "symbols": []}, "asset_class": "forex"},
+            "_obj": type("O", (), {"asset_class": "forex"})(),
+        }
+        with self.assertLogs("app.services.strategy_executor", level="INFO") as cm:
+            self.assertTrue(_pre_eval_skip_no_symbols(snap))
+        self.assertTrue(any("[eval] id=42 no symbols — skipped" in line for line in cm.output))
+
+
 class TestEvalBudget(unittest.IsolatedAsyncioTestCase):
     async def test_abort_logs_when_budget_exceeded(self):
         async def _slow():
@@ -75,7 +97,7 @@ class TestEvalBudget(unittest.IsolatedAsyncioTestCase):
                 self.assertLogs("app.services.strategy_executor", level="WARNING") as cm:
             cfg = {"universe": {"symbols": ["EURUSD"] * 30}}
             with self.assertRaises(asyncio.TimeoutError):
-                await _evaluate_with_budget(86, cfg, _slow())
+                await _evaluate_with_budget(86, cfg, "forex", _slow())
         self.assertTrue(
             any("[eval] id=86 ABORTED >budget" in line for line in cm.output),
         )

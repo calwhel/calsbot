@@ -205,20 +205,48 @@ async def _get_klines(
     # asset_class under '__asset_class__' (set by evaluate_strategy_conditions).
     _asset_class = (cache or {}).get("__asset_class__") if isinstance(cache, dict) else None
     if _asset_class and _asset_class != "crypto":
+        symbol = (symbol or "").upper().replace("/", "").replace("-", "").strip()
         _ckey = (symbol, interval, limit, _asset_class)
         if cache is not None and _ckey in cache:
             return cache[_ckey]
+        if cache is not None:
+            for _ck, cv in list(cache.items()):
+                if not isinstance(_ck, tuple) or len(_ck) != 4:
+                    continue
+                cs, ci, cl, ca = _ck
+                if (
+                    cs == symbol
+                    and ci == interval
+                    and ca == _asset_class
+                    and isinstance(cl, int)
+                    and cl >= limit
+                    and cv
+                ):
+                    sliced = cv[-limit:] if len(cv) > limit else cv
+                    cache[_ckey] = sliced
+                    return sliced
         try:
             from app.services.tradfi_prices import (
                 get_klines as _tradfi_klines,
                 is_metal_kline_synthetic as _metal_synth,
             )
+            from app.services.prefetch_fast import SYMBOL_BUDGET_S, prefetch_fast_active
             _uid = (cache or {}).get("__ctrader_user_id__")
             _fetch_limit = max(limit, 200)
-            kl = await _tradfi_klines(
+            _fetch_coro = _tradfi_klines(
                 symbol, _asset_class, interval, _fetch_limit,
                 ctrader_user_id=_uid,
             )
+            if prefetch_fast_active():
+                kl = await asyncio.wait_for(_fetch_coro, timeout=SYMBOL_BUDGET_S)
+            else:
+                kl = await _fetch_coro
+        except asyncio.TimeoutError:
+            logger.debug(
+                "tradfi klines timeout for %s (%s) %s limit=%s",
+                symbol, _asset_class, interval, limit,
+            )
+            kl = []
         except Exception as _e:
             logger.debug(f"tradfi klines fetch failed for {symbol} ({_asset_class}): {_e}")
             kl = []
@@ -227,6 +255,7 @@ async def _get_klines(
         sliced = kl[-limit:] if len(kl) > limit else kl
         if cache is not None:
             cache[_ckey] = sliced
+            cache[(symbol, interval, _fetch_limit, _asset_class)] = kl
             if _metal_synth(symbol, interval, _fetch_limit):
                 cache["__synthetic_bars__"] = True
         return sliced
@@ -302,7 +331,12 @@ async def _get_klines(
     # no OHLC and never fires.
     try:
         from app.services.bitunix_market_data import fetch_klines as _bx_klines
-        _bk = await _bx_klines(http_client, symbol, interval, fetch_limit)
+        from app.services.prefetch_fast import SYMBOL_BUDGET_S, prefetch_fast_active
+        _bx_coro = _bx_klines(http_client, symbol, interval, fetch_limit)
+        if prefetch_fast_active():
+            _bk = await asyncio.wait_for(_bx_coro, timeout=SYMBOL_BUDGET_S)
+        else:
+            _bk = await _bx_coro
         if _bk:
             _KLINE_PERSIST_CACHE[_pkey] = (_bk, _now, len(_bk))
             sliced = _bk[-limit:] if len(_bk) > limit else _bk
