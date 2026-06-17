@@ -255,18 +255,23 @@ def _log_cycle_timing(
             parts = " ".join(f"id={sid} eval={ms:.0f}ms" for sid, ms in slowest)
             logger.info("[cycle] slowest %s", parts)
 
-async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size: int = 0) -> None:
-    """Run evaluate tasks in chunks and log progress (visible in Railway during long scans)."""
-    size = batch_size or EXECUTOR_SCAN_BATCH_SIZE
+# Brief grace after budget cancel — lets eval unwind without serializing the shard.
+_EVAL_CANCEL_GRACE_S = float(_os_env.environ.get("EXECUTOR_EVAL_CANCEL_GRACE_S", "0.5"))
+
+
+async def _gather_eval_parallel(label: str, snapshots: list, run_one) -> None:
+    """Launch every strategy eval at once; run_one owns sem + per-strategy budget.
+
+    Each task is an independent asyncio.Task with its own asyncio.wait_for budget.
+    Concurrency is capped inside run_one (FOREX_MAX_CONCURRENT / MAX_CONCURRENT),
+    NOT by awaiting strategies one-by-one — N budget aborts at 10s cost ~10s, not N×10s.
+    """
     total = len(snapshots)
     if not total:
         return
-    n_batches = (total + size - 1) // max(1, size)
     done = 0
     done_lock = asyncio.Lock()
-    # Log every N completions so long first cycles (78 forex × Yahoo klines)
-    # don't look stuck for 5–10 min before the first batch finishes.
-    _PROGRESS_EVERY = max(5, min(10, size // 2 or 5))
+    _PROGRESS_EVERY = max(5, min(10, total // 2 or 5))
 
     async def _one(snap):
         nonlocal done
@@ -276,13 +281,13 @@ async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size:
             if done == total or done % _PROGRESS_EVERY == 0:
                 logger.info(f"[{label}] progress {done}/{total} strategies evaluated")
 
-    for bi, i in enumerate(range(0, total, max(1, size))):
-        batch = snapshots[i : i + size]
-        logger.info(
-            f"[{label}] batch {bi + 1}/{n_batches} starting — "
-            f"{len(batch)} strategies ({done}/{total} done so far)"
-        )
-        await asyncio.gather(*[_one(s) for s in batch])
+    logger.info(f"[{label}] gather eval — {total} parallel tasks (sem-limited)")
+    await asyncio.gather(*[_one(s) for s in snapshots], return_exceptions=True)
+
+
+async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size: int = 0) -> None:
+    """Backward-compatible alias — eval always gathers all snapshots in parallel."""
+    await _gather_eval_parallel(label, snapshots, run_one)
 
 
 # ─── Shared API caches ───────────────────────────────────────────────────────
@@ -5232,11 +5237,14 @@ async def evaluate_and_fire(
         )
 
     from app.services.prefetch_fast import prefetch_fast_context
-    async with prefetch_fast_context():
-        _price_results = await asyncio.gather(
-            *[_price_for_symbol(sym) for sym in candidate_symbols],
-            return_exceptions=True,
-        )
+    try:
+        async with prefetch_fast_context():
+            _price_results = await asyncio.gather(
+                *[_price_for_symbol(sym) for sym in candidate_symbols],
+                return_exceptions=True,
+            )
+    except asyncio.CancelledError:
+        raise
     price_map: Dict[str, Dict] = {
         sym: res
         for sym, res in zip(candidate_symbols, _price_results)
@@ -5266,6 +5274,7 @@ async def evaluate_and_fire(
     _had_any_candidate = False
     _conditions_failed_for_all = True
     for symbol in candidate_symbols:
+        await asyncio.sleep(0)  # budget-cancel checkpoint between symbols
         price_data = price_map.get(symbol)
         if not price_data:
             log_scan_metric(
@@ -5385,6 +5394,8 @@ async def evaluate_and_fire(
                     ctrader_user_id=_uid,
                     shared_kline_cache=_shared_klines,
                 )
+        except asyncio.CancelledError:
+            raise
         except StrategyEvalCancelled:
             logger.info(
                 f"[Strategy {strategy.id}] eval cancelled — skipping cycle"
@@ -6926,13 +6937,19 @@ async def _evaluate_with_budget(
     asset_class: str,
     coro,
 ) -> None:
-    """Run evaluate_and_fire with a hard per-strategy wall-clock ceiling."""
+    """Run evaluate_and_fire with a hard per-strategy wall-clock ceiling.
+
+    Each call schedules an independent Task + wait_for — safe under asyncio.gather
+    with FOREX_MAX_CONCURRENT; one strategy's 10s abort must not block siblings.
+    """
     _uni_n = _tradfi_universe_raw_count(config)
     _cap_n = len(_tradfi_universe_symbols(config))
     _uni_type = _universe_type_label(config, asset_class)
+    task = asyncio.create_task(coro)
     try:
-        await asyncio.wait_for(coro, timeout=EXECUTOR_STRATEGY_EVAL_BUDGET_S)
+        await asyncio.wait_for(task, timeout=EXECUTOR_STRATEGY_EVAL_BUDGET_S)
     except asyncio.TimeoutError:
+        task.cancel()
         logger.warning(
             "[eval] id=%s ABORTED >budget %.0fs asset_class=%s "
             "universe_type=%s config_symbols=%s capped=%s",
@@ -6943,6 +6960,10 @@ async def _evaluate_with_budget(
             _uni_n,
             _cap_n,
         )
+        try:
+            await asyncio.wait_for(task, timeout=_EVAL_CANCEL_GRACE_S)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
         raise
 
 
@@ -7941,7 +7962,7 @@ async def _run_crypto_executor_shard(
                     raw_tickers=shared_tickers,
                 )
 
-                await _gather_eval_batches(
+                await _gather_eval_parallel(
                     _crypto_lbl, eval_snapshots, _run_one,
                 )
 
@@ -9304,10 +9325,10 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
 
                 logger.info(
                     f"[{_log_ts()}] [{_fx_lbl}] evaluating {len(open_snaps)} strategies "
-                    f"(batch size {EXECUTOR_SCAN_BATCH_SIZE})…"
+                    f"(parallel gather, max_concurrent={FOREX_MAX_CONCURRENT})…"
                 )
                 _eval_t0 = time.monotonic()
-                await _gather_eval_batches(
+                await _gather_eval_parallel(
                     _fx_lbl, open_snaps, _run_one_fx,
                 )
                 _eval_ms = (time.monotonic() - _eval_t0) * 1000.0
