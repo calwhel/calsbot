@@ -2,6 +2,7 @@
 Strategy Trader — Bitunix order placement wrapper for the strategy executor.
 API keys live on UserPreference, not the User model directly.
 """
+import asyncio
 import logging
 import time
 from typing import Dict, Optional
@@ -97,6 +98,36 @@ async def place_bitunix_order_for_user(
                 logger.warning(f"[strategy_trader] Could not get balance for user {user.id}")
                 return None
             position_size_usdt = balance * (risk_pct / 100)
+
+        from app.executor_leadership import executor_can_run, verify_executor_lock_live
+
+        if not executor_can_run():
+            logger.warning(
+                "[strategy_trader] lock gate blocked Bitunix send user=%s %s",
+                user.id,
+                sym,
+            )
+            return None
+        try:
+            _gate_ok = await asyncio.wait_for(
+                asyncio.to_thread(verify_executor_lock_live),
+                timeout=2.0,
+            )
+        except Exception as _gate_err:
+            logger.warning(
+                "[strategy_trader] lock gate check failed (%s) user=%s %s",
+                type(_gate_err).__name__,
+                user.id,
+                sym,
+            )
+            return None
+        if not _gate_ok:
+            logger.warning(
+                "[strategy_trader] lock gate denied Bitunix send user=%s %s",
+                user.id,
+                sym,
+            )
+            return None
 
         # ── Place the order ───────────────────────────────────────────────────
         result = await trader.place_trade(
