@@ -46,6 +46,21 @@ class TestCycleGatePrefetch(unittest.TestCase):
         finally:
             _EXECUTOR_CYCLE_CTX.reset(token)
 
+    def test_symbol_cooldowns_empty_ctx_skips_db(self):
+        """Strategies with no execution history use empty cycle map, not GROUP BY."""
+        ctx = ExecutorCycleCtx(symbol_last_fired={99: {}})
+        token = _EXECUTOR_CYCLE_CTX.set(ctx)
+        try:
+            db = MagicMock()
+            fired_today, last_map = _prefetch_symbol_cooldowns(
+                99, ["EURUSD", "GBPUSD"], db, need_today=True,
+            )
+            self.assertEqual(fired_today, set())
+            self.assertEqual(last_map, {})
+            db.query.assert_not_called()
+        finally:
+            _EXECUTOR_CYCLE_CTX.reset(token)
+
     def test_prefetch_cycle_gate_data_aggregates(self):
         """One prefetch call issues grouped queries, not per-strategy counts."""
         session_factory = MagicMock()
@@ -93,6 +108,7 @@ class TestCycleGatePrefetch(unittest.TestCase):
         self.assertEqual(result["execution_counts"][1], (2, 1))
         self.assertEqual(result["execution_counts"][2], (0, 0))
         self.assertIn("EURUSD", result["symbol_last_fired"][1])
+        self.assertEqual(result["symbol_last_fired"][2], {})
         self.assertEqual(
             result["assignment_targets"][1][0]["ctrader_account_id"],
             "12345",

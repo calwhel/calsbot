@@ -1472,7 +1472,9 @@ def _prefetch_cycle_gate_data(
             .group_by(StrategyExecution.strategy_id, StrategyExecution.symbol)
             .all()
         )
-        symbol_last_fired: Dict[int, Dict[str, datetime]] = {}
+        symbol_last_fired: Dict[int, Dict[str, datetime]] = {
+            sid: {} for sid in strategy_ids
+        }
         for row in cooldown_rows:
             if row.last_at and row.symbol:
                 symbol_last_fired.setdefault(row.strategy_id, {})[row.symbol] = (
@@ -6534,6 +6536,18 @@ def _symbols_for_snapshot(snap: dict, max_symbols: int = 20) -> List[str]:
     return out
 
 
+def _universe_symbols_for_snapshots(snapshots: list) -> List[str]:
+    """Deduped universe symbols across strategy snapshots (for kline stale sweeps)."""
+    seen: set = set()
+    out: List[str] = []
+    for snap in snapshots:
+        for sym in _symbols_for_snapshot(snap):
+            if sym not in seen:
+                seen.add(sym)
+                out.append(sym)
+    return out
+
+
 def _load_strategy_snapshots_cached(SessionLocal, UserStrategy) -> List[dict]:
     """Return active+paper strategy snapshots; DB hit at most once per TTL."""
     global _STRATEGY_SNAPSHOT_CACHE, _STRATEGY_SNAPSHOT_AT
@@ -8742,14 +8756,10 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     try:
                         from app.services.ctrader_price_feed import sweep_stale_klines
                         from app.services.tradfi_prices import sweep_stale_metal_klines
-                        _stale_syms = {
-                            (s.get("symbol") or "").upper()
-                            for s in open_snaps
-                            if (s.get("symbol") or "").upper()
-                        }
-                        _sym_list = list(_stale_syms) if _stale_syms else None
-                        await sweep_stale_klines(symbols=_sym_list)
-                        await sweep_stale_metal_klines(symbols=_sym_list)
+                        _stale_syms = _universe_symbols_for_snapshots(open_snaps)
+                        if _stale_syms:
+                            await sweep_stale_klines(symbols=_stale_syms)
+                            await sweep_stale_metal_klines(symbols=_stale_syms)
                     except Exception as _ks_err:
                         logger.debug("[FX Executor] kline staleness sweep: %s", _ks_err)
 
