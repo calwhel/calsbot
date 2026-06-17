@@ -11,8 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.strategy_executor import (
     ExecutorCycleCtx,
+    EvalDiag,
     _PRICE_TA_CACHE,
     _log_cycle_timing,
+    _log_eval_diag,
     _prefetch_price_ta_for_cycle,
     _price_ta_cache_key,
     _price_ta_cache_lookup,
@@ -140,6 +142,29 @@ class TestPriceTaCacheLookup(unittest.TestCase):
             "XAUUSD", "metals", "15m", metal_paper_ok=True,
         )
         self.assertIs(hit, prefetched)
+
+
+class TestEvalDiagLog(unittest.TestCase):
+    def test_eval_diag_log_format(self):
+        diag = EvalDiag(
+            sem_wait_ms=12,
+            db_slot_wait_ms=3,
+            pool_wait_ms=1,
+            db_ms=45,
+            price_fetch_ms=18500,
+            ta_ms=120,
+            conditions_ms=800,
+            cache_hits=0,
+            cache_misses=2,
+        )
+        with self.assertLogs("app.services.strategy_executor", level="INFO") as cm:
+            _log_eval_diag(42, diag, 19500.0)
+        joined = "\n".join(cm.output)
+        self.assertIn(
+            "[eval] id=42 db=45ms price_fetch=18500ms ta=120ms conditions=800ms "
+            "sem_wait=12ms db_slot_wait=3ms pool_wait=1ms cache_hits=0/2 total=19500ms",
+            joined,
+        )
 
 
 class TestExecutorCycleCtx(unittest.TestCase):

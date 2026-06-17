@@ -132,6 +132,62 @@ class ExecutorCycleCtx:
     execution_counts: Dict[int, Tuple[int, int]] = field(default_factory=dict)
     symbol_last_fired: Dict[int, Dict[str, datetime]] = field(default_factory=dict)
     assignment_targets: Dict[int, List[dict]] = field(default_factory=dict)
+    stale_sweep_ms: float = 0.0
+    cycle_slow: bool = False
+
+
+# Log per-strategy eval sub-phases when total eval exceeds this threshold.
+EVAL_DIAG_SLOW_MS = float(_os_env.environ.get("EXECUTOR_EVAL_DIAG_SLOW_MS", "3000"))
+# Cycle-level slow flag — triggers [eval] lines for all strategies in the cycle.
+CYCLE_EVAL_SLOW_MS = float(_os_env.environ.get("EXECUTOR_CYCLE_EVAL_SLOW_MS", "5000"))
+
+
+@dataclass
+class EvalDiag:
+    """Per-strategy eval sub-phase timing (populated by evaluate_and_fire)."""
+
+    sem_wait_ms: float = 0.0
+    db_slot_wait_ms: float = 0.0
+    pool_wait_ms: float = 0.0
+    db_ms: float = 0.0
+    price_fetch_ms: float = 0.0
+    ta_ms: float = 0.0
+    conditions_ms: float = 0.0
+    cache_hits: int = 0
+    cache_misses: int = 0
+
+
+def _log_eval_diag(strategy_id: int, diag: EvalDiag, total_ms: float) -> None:
+    """Emit sub-phase timing for slow strategy evals."""
+    ctx = _get_cycle_ctx()
+    force = ctx.cycle_slow if ctx else False
+    hot = max(
+        diag.db_ms,
+        diag.price_fetch_ms,
+        diag.ta_ms,
+        diag.conditions_ms,
+        diag.sem_wait_ms,
+        diag.db_slot_wait_ms,
+        diag.pool_wait_ms,
+    )
+    if not force and total_ms < EVAL_DIAG_SLOW_MS and hot < 1000:
+        return
+    logger.info(
+        "[eval] id=%s db=%.0fms price_fetch=%.0fms ta=%.0fms "
+        "conditions=%.0fms sem_wait=%.0fms db_slot_wait=%.0fms "
+        "pool_wait=%.0fms cache_hits=%s/%s total=%.0fms",
+        strategy_id,
+        diag.db_ms,
+        diag.price_fetch_ms,
+        diag.ta_ms,
+        diag.conditions_ms,
+        diag.sem_wait_ms,
+        diag.db_slot_wait_ms,
+        diag.pool_wait_ms,
+        diag.cache_hits,
+        diag.cache_hits + diag.cache_misses,
+        total_ms,
+    )
 
 
 _EXECUTOR_CYCLE_CTX: contextvars.ContextVar[Optional[ExecutorCycleCtx]] = (
@@ -4575,6 +4631,7 @@ async def evaluate_and_fire(
     raw_tickers: Optional[list] = None,
     gate_stats: Optional[Dict[str, int]] = None,
     prefetched_ctrader_ok: Optional[bool] = None,
+    eval_diag: Optional[EvalDiag] = None,
 ):
     """
     Evaluate one strategy. Fires a trade if conditions are met.
@@ -4592,6 +4649,10 @@ async def evaluate_and_fire(
         evaluate_strategy_conditions,
     )
     from app.strategy_models import StrategyExecution, StrategyPortalSettings
+
+    _eval_t0 = time.monotonic()
+    _diag = eval_diag if eval_diag is not None else EvalDiag()
+    _phase_t0 = _eval_t0
 
     _strategy_gates: Dict[str, int] = {}
 
@@ -5060,6 +5121,9 @@ async def evaluate_and_fire(
                 )
             return
 
+    _diag.db_ms = (time.monotonic() - _phase_t0) * 1000.0
+    _phase_t0 = time.monotonic()
+
     # ── Step 2: Parallel price + TA fetch for ALL candidates at once ──────────
     # Turns O(n × fetch_time) → O(fetch_time).  Results are also stored in the
     # shared _PRICE_TA_CACHE so subsequent calls inside evaluate_strategy_conditions
@@ -5077,7 +5141,9 @@ async def evaluate_and_fire(
             sym, _cache_ac, _eval_tf, metal_paper_ok=_metal_paper,
         )
         if cached:
+            _diag.cache_hits += 1
             return cached
+        _diag.cache_misses += 1
         return await _fetch_price_and_ta(
             sym, http_client, asset_class,
             user_id=_uid, timeframe=_eval_tf,
@@ -5093,6 +5159,8 @@ async def evaluate_and_fire(
         for sym, res in zip(candidate_symbols, _price_results)
         if isinstance(res, dict) and res
     }
+    _diag.price_fetch_ms = (time.monotonic() - _phase_t0) * 1000.0
+    _phase_t0 = time.monotonic()
 
     # ── Step 3: Parallel HTF trend checks (if filter active) ─────────────────
     htf_pass: Dict[str, bool] = {}
@@ -5106,6 +5174,8 @@ async def evaluate_and_fire(
             sym: (res is True)
             for sym, res in zip(_htf_syms, _htf_results)
         }
+    _diag.ta_ms = (time.monotonic() - _phase_t0) * 1000.0
+    _cond_t0 = time.monotonic()
 
     # ── Step 4: Sequential condition evaluation — price data already cached ───
     from app.services.feed_diagnostics import log_scan_metric
@@ -6201,6 +6271,9 @@ async def evaluate_and_fire(
         record_gate_stats(strategy.id, _strategy_gates, persist_db=False)
     except Exception:
         pass
+
+    _diag.conditions_ms = (time.monotonic() - _cond_t0) * 1000.0
+    _log_eval_diag(strategy.id, _diag, (time.monotonic() - _eval_t0) * 1000.0)
 
 
 # ─── Subscriber copy-trade propagation ───────────────────────────────────────
@@ -8903,11 +8976,14 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     from sqlalchemy.exc import OperationalError as _SAOperationalError
                     from sqlalchemy.exc import PendingRollbackError as _SAPendingRollbackError
                     from sqlalchemy.exc import TimeoutError as _SATimeoutError
-                    from app.database import bg_db_slot
+                    from app.database import bg_db_slot, last_bg_db_slot_wait_ms
                     from app.services.strategy_ta import StrategyEvalCancelled
                     _strat_t0 = time.monotonic()
+                    _diag = EvalDiag()
                     try:
+                        _sem_t0 = time.monotonic()
                         async with sem:
+                            _diag.sem_wait_ms = (time.monotonic() - _sem_t0) * 1000.0
                             row = _preloaded_fx.get(snap["id"])
                             if not row:
                                 return
@@ -8920,16 +8996,26 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                 )
                                 return
                             for _attempt in (1, 3):
+                                _pool_t0 = time.monotonic()
                                 db_one = SessionLocal()
+                                _diag.pool_wait_ms = max(
+                                    _diag.pool_wait_ms,
+                                    (time.monotonic() - _pool_t0) * 1000.0,
+                                )
                                 try:
                                     async with bg_db_slot():
                                         strategy = db_one.merge(_strategy_row)
                                         user = db_one.merge(_user_row)
+                                    _diag.db_slot_wait_ms = max(
+                                        _diag.db_slot_wait_ms,
+                                        last_bg_db_slot_wait_ms(),
+                                    )
                                     await evaluate_and_fire(
                                         strategy, user, db_one, _http,
                                         raw_tickers=[],
                                         gate_stats=cycle_gate_stats,
                                         prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
+                                        eval_diag=_diag,
                                     )
                                     return
                                 except (
@@ -8984,16 +9070,28 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 )
                 _prefetch_t0 = time.monotonic()
                 _setup_ms = (_prefetch_t0 - _cycle_t0) * 1000.0
+                _stale_sweep_ms = 0.0
                 if _forex_open:
                     try:
                         from app.services.ctrader_price_feed import sweep_stale_klines
                         from app.services.tradfi_prices import sweep_stale_metal_klines
                         _stale_syms = _universe_symbols_for_snapshots(open_snaps)
                         if _stale_syms:
+                            _sweep_t0 = time.monotonic()
                             await sweep_stale_klines(symbols=_stale_syms)
                             await sweep_stale_metal_klines(symbols=_stale_syms)
+                            _stale_sweep_ms = (time.monotonic() - _sweep_t0) * 1000.0
+                            if _stale_sweep_ms >= 500:
+                                logger.info(
+                                    "[cycle-prefetch] executor=%s stale_sweep=%.0fms syms=%s",
+                                    _fx_lbl,
+                                    _stale_sweep_ms,
+                                    len(_stale_syms),
+                                )
                     except Exception as _ks_err:
                         logger.debug("[FX Executor] kline staleness sweep: %s", _ks_err)
+                if _cycle_ctx is not None:
+                    _cycle_ctx.stale_sweep_ms = _stale_sweep_ms
 
                 _prefetch_stats = await _prefetch_price_ta_for_cycle(
                     open_snaps,
@@ -9014,6 +9112,29 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 )
                 _eval_ms = (time.monotonic() - _eval_t0) * 1000.0
                 _post_t0 = time.monotonic()
+                if _cycle_ctx is not None:
+                    _cycle_ctx.cycle_slow = _eval_ms >= CYCLE_EVAL_SLOW_MS
+
+                if _cycle_ctx and _cycle_ctx.cycle_slow:
+                    _pf = _prefetch_stats or {}
+                    _cache_n = int(_pf.get("cache", 0))
+                    _fetch_n = int(_pf.get("fetched", 0)) + int(_pf.get("fallback", 0))
+                    _fail_n = int(_pf.get("failed", 0))
+                    _uniq = int(_pf.get("unique_keys", 0))
+                    logger.warning(
+                        "[cycle-slow] shard=%s prefetch=%.0fms eval=%.0fms "
+                        "stale_sweep=%.0fms prefetch_cache=%s/%s fetched=%s failed=%s "
+                        "strategies=%s",
+                        shard_index,
+                        _prefetch_ms,
+                        _eval_ms,
+                        _cycle_ctx.stale_sweep_ms,
+                        _cache_n,
+                        _uniq,
+                        _fetch_n,
+                        _fail_n,
+                        len(open_snaps),
+                    )
 
                 try:
                     from app.services.ctrader_order_queue import flush_gate_stats_to_db
