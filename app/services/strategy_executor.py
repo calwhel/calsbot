@@ -64,7 +64,7 @@ EXECUTOR_CRYPTO_START_DELAY = int(_os_env.environ.get("EXECUTOR_CRYPTO_START_DEL
 # Klines fetched per symbol during scans — must match strategy_ta max(limit, 200).
 EXECUTOR_KLINE_BARS           = int(_os_env.environ.get("EXECUTOR_KLINE_BARS", "200"))
 # Parallel Yahoo/Bitunix prefetches at cycle start (unique symbols across all strategies).
-EXECUTOR_PREFETCH_CONCURRENT  = int(_os_env.environ.get("EXECUTOR_PREFETCH_CONCURRENT", "10"))
+EXECUTOR_PREFETCH_CONCURRENT  = int(_os_env.environ.get("EXECUTOR_PREFETCH_CONCURRENT", "32"))
 # Split strategies across N parallel scan loops in one executor process (id % N).
 # Each shard prefetches + evaluates its slice concurrently — ~Nx throughput vs one loop.
 EXECUTOR_SHARD_COUNT          = max(1, int(_os_env.environ.get("EXECUTOR_SHARD_COUNT", "1")))
@@ -271,6 +271,12 @@ def _maybe_log_ta_eval(strategy, symbol, direction, passed, details) -> None:
         )
     except Exception:
         pass
+
+
+from app.services.strategy_account_assignments import TRADFI_BROKER_ASSET_CLASSES
+
+# Asset classes routed to the forex/tradfi executor (crypto loop excludes these).
+_EXECUTOR_TRADFI_CLASSES = frozenset(TRADFI_BROKER_ASSET_CLASSES) | {"stock"}
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -6686,6 +6692,17 @@ def _prefetch_fallback_price_ta(
     if stale:
         return stale, "price_ta_cache"
     if asset_class == "crypto":
+        try:
+            from app.services.bitunix_market_data import peek_cached_crypto_klines
+            rows, src = peek_cached_crypto_klines(symbol, timeframe, EXECUTOR_KLINE_BARS)
+            if rows:
+                built = _price_ta_from_klines(
+                    symbol, asset_class, timeframe, rows, kline_source=src or "crypto-cache",
+                )
+                if built:
+                    return built, src or "crypto-cache"
+        except Exception:
+            pass
         return None, ""
     try:
         from app.services.tradfi_prices import peek_cached_klines
@@ -6746,12 +6763,13 @@ async def _prefetch_price_ta_for_cycle(
             "failed": 0,
         }
 
-    sem = asyncio.Semaphore(EXECUTOR_PREFETCH_CONCURRENT)
+    sem_limit = min(len(jobs), max(1, EXECUTOR_PREFETCH_CONCURRENT))
+    sem = asyncio.Semaphore(sem_limit)
     t0 = time.monotonic()
     stats = {"cache": 0, "fetched": 0, "failed": 0, "fallback": 0}
 
     def _cache_fresh(sym: str, ac: str, tf: str) -> bool:
-        cache_key = f"{ac}:{sym}:{tf}" if ac != "crypto" else sym
+        cache_key = _price_ta_cache_key(sym, ac, tf)
         cached = _PRICE_TA_CACHE.get(cache_key)
         if not cached:
             return False
@@ -6768,16 +6786,20 @@ async def _prefetch_price_ta_for_cycle(
         result: str,
     ) -> None:
         logger.info(
-            "[prefetch] sym=%s ac=%s tf=%s provider=%s took=%.0fms result=%s",
-            sym, ac, tf, provider, took_ms, result,
+            "[prefetch] executor=%s sym=%s ac=%s tf=%s provider=%s took=%.0fms result=%s",
+            label, sym, ac, tf, provider, took_ms, result,
         )
 
-    async def _warm(sym: str, ac: str, tf: str) -> None:
-        _ft0 = time.monotonic()
+    network_jobs: List[Tuple[str, str, str]] = []
+    for sym, ac, tf in jobs:
         if _cache_fresh(sym, ac, tf):
             stats["cache"] += 1
             _log_prefetch(sym, ac, tf, "cache", 0.0, "ok")
-            return
+        else:
+            network_jobs.append((sym, ac, tf))
+
+    async def _warm(sym: str, ac: str, tf: str) -> None:
+        _ft0 = time.monotonic()
         async with sem:
             try:
                 async with prefetch_fast_context():
@@ -6820,7 +6842,10 @@ async def _prefetch_price_ta_for_cycle(
                 if fb:
                     stats["fetched"] += 1
                     stats["fallback"] += 1
-                    logger.info("[prefetch] sym=%s TIMEOUT → using cached", sym)
+                    logger.info(
+                        "[prefetch] executor=%s sym=%s TIMEOUT → using cached",
+                        label, sym,
+                    )
                     _log_prefetch(sym, ac, tf, fb_src or "cache", _ms, "fallback")
                 else:
                     stats["failed"] += 1
@@ -6838,7 +6863,11 @@ async def _prefetch_price_ta_for_cycle(
                     stats["failed"] += 1
                     _log_prefetch(sym, ac, tf, type(exc).__name__, _ms, "failed")
 
-    await asyncio.gather(*[_warm(s, a, t) for s, a, t in jobs], return_exceptions=True)
+    if network_jobs:
+        await asyncio.gather(
+            *[_warm(s, a, t) for s, a, t in network_jobs],
+            return_exceptions=True,
+        )
     elapsed = time.monotonic() - t0
     logger.info(
         f"[{_log_ts()}] [{label}] prefetch {len(jobs)} unique symbols "
@@ -7320,8 +7349,8 @@ async def _run_crypto_executor_shard(
                         and (s["config"] or {}).get("_source_strategy_id") in active_source_ids
                     )
                     and (s["config"] or {}).get("entry_conditions", {}).get("entry_type") != "tradingview_webhook"
-                    # Forex / index / stock handled by run_forex_executor (dedicated loop)
-                    and _snap_asset_class(s) not in ("forex", "index", "stock")
+                    # Forex / index / metals / commodity / stock → dedicated forex loop
+                    and _snap_asset_class(s) not in _EXECUTOR_TRADFI_CLASSES
                 ]
                 eval_snapshots = [
                     s for s in eval_snapshots
@@ -8481,7 +8510,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
     if shard_index > 0 and EXECUTOR_SHARD_STAGGER_SECONDS > 0:
         await asyncio.sleep(shard_index * EXECUTOR_SHARD_STAGGER_SECONDS)
 
-    _TRADFI_CLASSES = {"forex", "index", "stock"}
+    _TRADFI_CLASSES = _EXECUTOR_TRADFI_CLASSES
 
     sem = asyncio.Semaphore(FOREX_MAX_CONCURRENT)
     _fx_hb = "forex_executor" if shard_count <= 1 else f"forex_executor_s{shard_index}"
@@ -8766,7 +8795,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 _prefetch_stats = await _prefetch_price_ta_for_cycle(
                     open_snaps,
                     http_client,
-                    {"forex", "index", "stock"},
+                    set(_EXECUTOR_TRADFI_CLASSES),
                     label=_fx_lbl,
                     ctrader_user_id=_prefetch_ct_uid,
                 )

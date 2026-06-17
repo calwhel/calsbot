@@ -22,7 +22,7 @@ from app.services.strategy_executor import (
 
 class TestPrefetchBudget(unittest.TestCase):
     def test_symbol_budget_is_sub_three_seconds(self):
-        self.assertLessEqual(SYMBOL_BUDGET_S, 3.0)
+        self.assertLessEqual(SYMBOL_BUDGET_S, 2.0)
 
 
 class TestPeekCachedKlines(unittest.TestCase):
@@ -108,8 +108,9 @@ class TestPrefetchConcurrent(unittest.TestCase):
 
         stats, logs = asyncio.run(_run())
         self.assertEqual(stats["fetched"], 2)
-        self.assertIn("[prefetch] sym=SLOWPAIR", logs)
-        self.assertIn("[prefetch] sym=FASTPAIR", logs)
+        self.assertIn("sym=SLOWPAIR", logs)
+        self.assertIn("sym=FASTPAIR", logs)
+        self.assertIn("executor=Test", logs)
         self.assertIn("provider=fast", logs)
         self.assertIn("provider=slow", logs)
 

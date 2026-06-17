@@ -17,7 +17,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 
@@ -132,7 +132,7 @@ async def fetch_klines(
         resp = await http_client.get(
             f"{_BASE}/kline",
             params={"symbol": symbol, "interval": iv, "limit": max(int(limit), 1)},
-            timeout=8,
+            timeout=_http_timeout_s(8.0),
         )
         if resp.status_code != 200:
             return []
@@ -166,6 +166,43 @@ async def fetch_klines(
 _mexc_missing: set = set()
 _btc_closes_cache: Optional[list] = None
 _btc_closes_at: Optional[datetime] = None
+# In-memory crypto kline cache — prefetch timeout fallback (mirrors tradfi peek).
+_CRYPTO_KLINE_CACHE: Dict[Tuple[str, str, int], Tuple[List[list], str, float]] = {}
+_CRYPTO_KLINE_CACHE_TTL_S = float(os.environ.get("CRYPTO_KLINE_CACHE_TTL_S", "120"))
+
+
+def _crypto_kline_cache_key(symbol: str, interval: str, limit: int) -> Tuple[str, str, int]:
+    return (symbol.upper(), interval, int(limit))
+
+
+def _store_crypto_kline_cache(
+    symbol: str, interval: str, limit: int, rows: List[list], source: str,
+) -> None:
+    if not rows:
+        return
+    _CRYPTO_KLINE_CACHE[_crypto_kline_cache_key(symbol, interval, limit)] = (
+        rows, source, datetime.utcnow().timestamp(),
+    )
+
+
+def peek_cached_crypto_klines(
+    symbol: str, interval: str, limit: int,
+) -> Tuple[List[list], str]:
+    """Return cached crypto OHLC rows without network I/O (stale OK on timeout)."""
+    key = _crypto_kline_cache_key(symbol, interval, limit)
+    hit = _CRYPTO_KLINE_CACHE.get(key)
+    if not hit:
+        return [], ""
+    rows, src, _ts = hit
+    return list(rows), src
+
+
+def _http_timeout_s(default: float) -> float:
+    try:
+        from app.services.prefetch_fast import provider_timeout_s
+        return provider_timeout_s(default)
+    except Exception:
+        return default
 
 
 async def _fetch_mexc_klines(
@@ -179,7 +216,7 @@ async def _fetch_mexc_klines(
         f"?symbol={symbol}&interval={mexc_interval}&limit={limit}"
     )
     try:
-        resp = await http_client.get(url, timeout=5)
+        resp = await http_client.get(url, timeout=_http_timeout_s(5.0))
         if resp.status_code == 200:
             data = resp.json()
             if data and isinstance(data, list):
@@ -199,7 +236,7 @@ async def _fetch_mexc_ticker(
     try:
         resp = await http_client.get(
             f"https://api.mexc.com/api/v3/ticker/24hr?symbol={symbol}",
-            timeout=5,
+            timeout=_http_timeout_s(5.0),
         )
         if resp.status_code == 200:
             data = resp.json()
@@ -239,7 +276,7 @@ async def _fetch_bybit_klines(
                 "interval": iv,
                 "limit": max(int(limit), 1),
             },
-            timeout=8,
+            timeout=_http_timeout_s(8.0),
         )
         if resp.status_code != 200:
             return []
@@ -321,18 +358,66 @@ async def _fetch_klines_chain(
     http_client: httpx.AsyncClient, symbol: str, interval: str, limit: int,
 ) -> List[list]:
     # Binance primary (EU region) → Bybit → MEXC → Bitunix.
-    chain = [
+    chain: List[Tuple] = [
         (_fetch_bybit_klines, "bybit"),
         (_fetch_mexc_klines, "mexc"),
     ]
     if not _binance_disabled():
         chain.insert(0, (_fetch_binance_futures_klines, "binance"))
+
+    try:
+        from app.services.prefetch_fast import prefetch_fast_active, provider_timeout_s
+        _fast = prefetch_fast_active()
+    except Exception:
+        _fast = False
+        provider_timeout_s = lambda d: d  # type: ignore
+
+    if _fast and len(chain) > 1:
+        async def _attempt(fetcher, label: str):
+            try:
+                rows = await asyncio.wait_for(
+                    fetcher(http_client, symbol, interval, limit),
+                    timeout=provider_timeout_s(2.0),
+                )
+                return rows, label
+            except Exception:
+                return [], label
+
+        tasks = [asyncio.create_task(_attempt(f, lbl)) for f, lbl in chain]
+        try:
+            while tasks:
+                done, pending = await asyncio.wait(
+                    tasks,
+                    return_when=asyncio.FIRST_COMPLETED,
+                    timeout=provider_timeout_s(2.0),
+                )
+                if not done:
+                    break
+                for task in done:
+                    tasks.remove(task)
+                    try:
+                        rows, label = task.result()
+                        if rows:
+                            for pt in pending:
+                                pt.cancel()
+                            _store_crypto_kline_cache(symbol, interval, limit, rows, label)
+                            return rows
+                    except Exception:
+                        pass
+        finally:
+            for task in tasks:
+                task.cancel()
+
     for fetcher, label in chain:
         rows = await fetcher(http_client, symbol, interval, limit)
         if rows:
             logger.debug("[crypto-md] klines %s %s via %s (%d bars)", symbol, interval, label, len(rows))
+            _store_crypto_kline_cache(symbol, interval, limit, rows, label)
             return rows
-    return await fetch_klines(http_client, symbol, interval, limit)
+    rows = await fetch_klines(http_client, symbol, interval, limit)
+    if rows:
+        _store_crypto_kline_cache(symbol, interval, limit, rows, "bitunix")
+    return rows
 
 
 async def _fetch_binance_futures_ticker(
@@ -358,7 +443,7 @@ async def _fetch_bybit_ticker(
         resp = await http_client.get(
             "https://api.bybit.com/v5/market/tickers",
             params={"category": "linear", "symbol": symbol},
-            timeout=8,
+            timeout=_http_timeout_s(8.0),
         )
         if resp.status_code != 200:
             return None
@@ -394,19 +479,62 @@ async def _fetch_bybit_ticker(
 
 async def _fetch_ticker_chain(
     http_client: httpx.AsyncClient, symbol: str,
-) -> Optional[Dict]:
+) -> Tuple[Optional[Dict], str]:
     fetchers = [
-        _fetch_bybit_ticker,
-        _fetch_mexc_ticker,
-        fetch_ticker,
+        (_fetch_bybit_ticker, "bybit"),
+        (_fetch_mexc_ticker, "mexc"),
+        (fetch_ticker, "bitunix"),
     ]
     if not _binance_disabled():
-        fetchers.insert(0, _fetch_binance_futures_ticker)
-    for fetcher in fetchers:
+        fetchers.insert(0, (_fetch_binance_futures_ticker, "binance"))
+
+    try:
+        from app.services.prefetch_fast import prefetch_fast_active, provider_timeout_s
+        _fast = prefetch_fast_active()
+    except Exception:
+        _fast = False
+        provider_timeout_s = lambda d: d  # type: ignore
+
+    if _fast and len(fetchers) > 1:
+        async def _attempt(fetcher, label: str):
+            try:
+                t = await asyncio.wait_for(
+                    fetcher(http_client, symbol),
+                    timeout=provider_timeout_s(2.0),
+                )
+                return t, label
+            except Exception:
+                return None, label
+
+        tasks = [asyncio.create_task(_attempt(f, lbl)) for f, lbl in fetchers]
+        try:
+            while tasks:
+                done, pending = await asyncio.wait(
+                    tasks,
+                    return_when=asyncio.FIRST_COMPLETED,
+                    timeout=provider_timeout_s(2.0),
+                )
+                if not done:
+                    break
+                for task in done:
+                    tasks.remove(task)
+                    try:
+                        ticker, label = task.result()
+                        if ticker:
+                            for pt in pending:
+                                pt.cancel()
+                            return ticker, label
+                    except Exception:
+                        pass
+        finally:
+            for task in tasks:
+                task.cancel()
+
+    for fetcher, label in fetchers:
         t = await fetcher(http_client, symbol)
         if t:
-            return t
-    return None
+            return t, label
+    return None, ""
 
 
 def _calc_rsi(closes: list) -> float:
@@ -499,21 +627,28 @@ async def fetch_crypto_price_and_ta(
         from app.services.prefetch_fast import SYMBOL_BUDGET_S
 
         async def _run():
-            ticker, klines_15m, klines_1h = await asyncio.gather(
-                _fetch_ticker_chain(http_client, symbol),
-                _fetch_klines_chain(http_client, symbol, "15m", 50),
-                _fetch_klines_chain(http_client, symbol, "1h", 30),
+            ticker_task = asyncio.create_task(_fetch_ticker_chain(http_client, symbol))
+            k15_task = asyncio.create_task(_fetch_klines_chain(http_client, symbol, "15m", 50))
+            k1h_task = asyncio.create_task(_fetch_klines_chain(http_client, symbol, "1h", 30))
+            (ticker, ticker_src), klines_15m, klines_1h = await asyncio.gather(
+                ticker_task, k15_task, k1h_task,
             )
-            return ticker, klines_15m, klines_1h
+            return ticker, ticker_src, klines_15m, klines_1h
 
         if prefetch:
-            ticker, klines_15m, klines_1h = await asyncio.wait_for(
+            ticker, ticker_src, klines_15m, klines_1h = await asyncio.wait_for(
                 _run(), timeout=SYMBOL_BUDGET_S,
             )
         else:
-            ticker, klines_15m, klines_1h = await _run()
+            ticker, ticker_src, klines_15m, klines_1h = await _run()
         if not ticker:
             return None
+
+        kline_src = ""
+        if klines_15m:
+            _, kline_src = peek_cached_crypto_klines(symbol, "15m", 50)
+        if not kline_src:
+            kline_src = ticker_src or "unknown"
 
         closes = [float(k[4]) for k in klines_15m] if klines_15m else []
         volumes = [float(k[5]) for k in klines_15m] if klines_15m else []
@@ -534,6 +669,9 @@ async def fetch_crypto_price_and_ta(
             "btc_correlation": btc_corr,
             "enhanced_ta": enhanced_ta,
             "candles_loaded": max(len(klines_15m or []), len(klines_1h or [])),
+            "kline_source": kline_src,
+            "price_source": ticker_src or "spot_live",
+            "live_source": ticker_src,
         }
     except Exception as exc:
         logger.debug("[crypto-md] price/TA failed %s: %s", symbol, exc)
