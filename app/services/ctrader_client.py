@@ -2601,7 +2601,7 @@ async def _get_open_position_ids(
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        logger.debug(f"[cTrader] open-positions fetch error: {e}")
+        logger.warning("[cTrader] open-positions fetch error ctid=%s host=%s: %s", ctid_trader_account_id, host, e)
     return None
 
 
@@ -2755,6 +2755,50 @@ async def get_open_position_ids_for_user(user, *, ctid: Optional[str] = None) ->
     return None
 
 
+async def get_open_position_ids_for_user_with_retry(
+    user,
+    *,
+    ctid: Optional[str] = None,
+    attempts: int = 3,
+    backoff_s: float = 0.5,
+) -> Optional[set]:
+    """Retry broker open-position poll — None only after all attempts fail."""
+    last_err: Optional[Exception] = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            ids = await get_open_position_ids_for_user(user, ctid=ctid)
+            if ids is not None:
+                if attempt > 1:
+                    logger.info(
+                        "[cTrader] open-positions poll ok user=%s acct=%s attempt=%s count=%s",
+                        getattr(user, "id", "?"),
+                        ctid,
+                        attempt,
+                        len(ids),
+                    )
+                return ids
+        except Exception as exc:
+            last_err = exc
+            logger.warning(
+                "[cTrader] open-positions poll error user=%s acct=%s attempt=%s/%s: %s",
+                getattr(user, "id", "?"),
+                ctid,
+                attempt,
+                attempts,
+                exc,
+            )
+        if attempt < attempts:
+            await asyncio.sleep(backoff_s * attempt)
+    if last_err:
+        logger.warning(
+            "[cTrader] open-positions poll exhausted retries user=%s acct=%s: %s",
+            getattr(user, "id", "?"),
+            ctid,
+            last_err,
+        )
+    return None
+
+
 def _normalize_deal_price(raw: float, entry_hint: Optional[float] = None) -> float:
     """Resolve symbol-dependent deal price scaling (see ctrader-price-scaling.md)."""
     if raw <= 0:
@@ -2862,17 +2906,21 @@ async def get_position_close_detail_for_user(
             return None
         access_token = prefs.ctrader_access_token
         ctid_val = int(ctid_str)
-        host = _host_for_account(prefs, ctid_val)
+        hosts = _routing_hosts_for_account(prefs, ctid_val)
     finally:
         db.close()
-    return await _get_position_close_detail(
-        access_token,
-        ctid_val,
-        position_id,
-        host=host,
-        entry_hint=entry_hint,
-        direction=direction,
-    )
+    for host in hosts:
+        detail = await _get_position_close_detail(
+            access_token,
+            ctid_val,
+            position_id,
+            host=host,
+            entry_hint=entry_hint,
+            direction=direction,
+        )
+        if detail is not None:
+            return detail
+    return None
 
 
 async def place_ctrader_order_for_user(

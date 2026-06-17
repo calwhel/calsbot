@@ -8350,6 +8350,47 @@ _FX_RECONCILE_MISSING: Dict[int, int] = {}   # exec_id → consecutive missing-s
 _FX_RECONCILE_INTERVAL = float(
     _os_env.environ.get("EXECUTOR_FX_RECONCILE_INTERVAL", "5")
 )
+_FX_RECONCILE_POLL_ATTEMPTS = max(
+    1, int(_os_env.environ.get("EXECUTOR_FX_RECONCILE_POLL_ATTEMPTS", "3")),
+)
+
+
+async def _classify_reconcile_fallback_exit(w: dict) -> tuple:
+    """When broker confirms position gone but deal list is empty — classify via TP/SL/spot."""
+    price = None
+    try:
+        from app.services import ctrader_price_feed as _ctf
+        price = _ctf.get_price(w["symbol"])
+    except Exception:
+        price = None
+    if not price or price <= 0:
+        try:
+            from app.services.tradfi_prices import get_price as _tg
+            price = await _tg(w["symbol"], "forex")
+        except Exception:
+            price = None
+
+    tp, sl, entry = w.get("tp_price"), w.get("sl_price"), w["entry"]
+    outcome = None
+    exit_price = None
+    if tp is not None and sl is not None and price and price > 0:
+        if abs(price - tp) <= abs(price - sl):
+            outcome, exit_price = "WIN", tp
+        else:
+            exit_price = sl
+            outcome = _classify_sl_outcome(sl, entry, w["direction"])
+    elif tp is not None and price and price > 0 and abs(price - tp) <= (tp * 0.001):
+        outcome, exit_price = "WIN", tp
+    elif sl is not None:
+        exit_price = sl
+        outcome = _classify_sl_outcome(sl, entry, w["direction"])
+    elif price and price > 0:
+        if w["direction"] == "LONG":
+            outcome = "WIN" if price >= entry else "LOSS"
+        else:
+            outcome = "WIN" if price <= entry else "LOSS"
+        exit_price = price
+    return outcome, exit_price
 
 
 async def _close_live_forex_execution_with_db_retry(
@@ -8664,7 +8705,7 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
     """
     from app.db_resilience import is_transient_db_error, run_with_db_retry
     from app.services.ctrader_client import (
-        get_open_position_ids_for_user,
+        get_open_position_ids_for_user_with_retry,
         get_position_close_detail_for_user,
     )
 
@@ -8693,7 +8734,18 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
     if work is None:
         return
     if not work:
+        logger.debug("[FX-reconcile] no open live executions to reconcile")
         return
+
+    stats = {
+        "tracked": len(work),
+        "poll_ok": 0,
+        "poll_fail": 0,
+        "broker_deal_close": 0,
+        "fallback_close": 0,
+        "miss_pending": 0,
+        "still_open": 0,
+    }
 
     # Group by (user, ctid) so we poll each account that has open positions.
     by_user_acct: Dict[tuple, list] = {}
@@ -8703,79 +8755,125 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
         by_user_acct.setdefault(key, []).append(w)
         user_obj[w["user_id"]] = w["user"]
 
+    async def _try_broker_deal_close(w: dict, uid: int) -> bool:
+        broker_close = await get_position_close_detail_for_user(
+            user_obj[uid],
+            int(w["position_id"]),
+            entry_hint=w["entry"],
+            direction=w["direction"],
+            ctid=w["ctrader_account_id"],
+        )
+        if not broker_close or not broker_close.get("exit_price"):
+            return False
+        _FX_RECONCILE_MISSING.pop(w["exec_id"], None)
+        outcome = broker_close.get("outcome") or "LOSS"
+        exit_price = float(broker_close["exit_price"])
+        logger.info(
+            "[FX-reconcile] %s exec#%s broker closed pos=%s @ %s → %s",
+            w["symbol"],
+            w["exec_id"],
+            w["position_id"],
+            exit_price,
+            outcome,
+        )
+        await _close_live_forex_execution_with_db_retry(
+            w["exec_id"], outcome, exit_price, source="ctrader-reconcile-broker",
+        )
+        stats["broker_deal_close"] += 1
+        return True
+
     for (uid, acct_id), items in by_user_acct.items():
-        try:
-            open_ids = await get_open_position_ids_for_user(user_obj[uid], ctid=acct_id)
-        except Exception as e:
-            logger.warning(
-                f"[FX-reconcile] open-positions fetch failed user {uid} acct={acct_id}: {e}"
-            )
-            continue
+        open_ids = await get_open_position_ids_for_user_with_retry(
+            user_obj[uid],
+            ctid=acct_id,
+            attempts=_FX_RECONCILE_POLL_ATTEMPTS,
+        )
         if open_ids is None:
-            # Broker unreachable / no creds — never false-close.
+            stats["poll_fail"] += 1
+            logger.warning(
+                "[FX-reconcile] open-positions poll failed user=%s acct=%s "
+                "after %s attempts — probing per-position broker deals (not assuming open)",
+                uid,
+                acct_id,
+                _FX_RECONCILE_POLL_ATTEMPTS,
+            )
+            for w in items:
+                if await _try_broker_deal_close(w, uid):
+                    continue
+                stats["miss_pending"] += 1
             continue
+
+        stats["poll_ok"] += 1
+        logger.info(
+            "[FX-reconcile] poll user=%s acct=%s open_broker_positions=%s tracked=%s",
+            uid,
+            acct_id,
+            len(open_ids),
+            len(items),
+        )
 
         for w in items:
             ex_id = w["exec_id"]
             if w["position_id"] in open_ids:
                 _FX_RECONCILE_MISSING.pop(ex_id, None)
+                stats["still_open"] += 1
                 continue
 
-            # Broker truth: deal history gives actual close price (catches downtime misses).
-            broker_close = await get_position_close_detail_for_user(
-                user_obj[uid],
-                int(w["position_id"]),
-                entry_hint=w["entry"],
-                direction=w["direction"],
-                ctid=w["ctrader_account_id"],
-            )
-            if broker_close and broker_close.get("exit_price"):
-                _FX_RECONCILE_MISSING.pop(ex_id, None)
-                outcome = broker_close.get("outcome") or "LOSS"
-                exit_price = float(broker_close["exit_price"])
-                logger.info(
-                    f"[FX-reconcile] {w['symbol']} exec#{ex_id} broker closed "
-                    f"pos={w['position_id']} @ {exit_price} → {outcome}"
-                )
-                await _close_live_forex_execution_with_db_retry(
-                    ex_id, outcome, exit_price, source="ctrader-reconcile-broker"
-                )
+            if await _try_broker_deal_close(w, uid):
                 continue
 
             miss = _FX_RECONCILE_MISSING.get(ex_id, 0) + 1
             _FX_RECONCILE_MISSING[ex_id] = miss
             if miss < 2:
                 logger.info(
-                    f"[FX-reconcile] {w['symbol']} exec#{ex_id} pos={w['position_id']} "
-                    f"absent from broker (miss {miss}/2) — awaiting broker deal"
+                    "[FX-reconcile] %s exec#%s pos=%s absent from broker "
+                    "(miss %s/2) — awaiting broker deal",
+                    w["symbol"],
+                    ex_id,
+                    w["position_id"],
+                    miss,
                 )
+                stats["miss_pending"] += 1
                 continue
 
-            # Never fabricate exit from our SL/TP or spot — mark pending reconcile.
-            from app.database import BgSessionLocal as SessionLocal
-            from app.strategy_models import StrategyExecution
-            from app.services.trade_management import mark_pending_reconcile
+            outcome, exit_price = await _classify_reconcile_fallback_exit(w)
+            if outcome is None or exit_price is None:
+                logger.warning(
+                    "[FX-reconcile] %s exec#%s pos=%s gone from broker but "
+                    "no deal/price to classify — will retry next sweep",
+                    w["symbol"],
+                    ex_id,
+                    w["position_id"],
+                )
+                stats["miss_pending"] += 1
+                continue
 
-            _pdb = SessionLocal()
-            try:
-                _pex = _pdb.query(StrategyExecution).filter(
-                    StrategyExecution.id == ex_id,
-                ).first()
-                if _pex and _pex.outcome == "OPEN":
-                    mark_pending_reconcile(
-                        _pex,
-                        _pdb,
-                        reason="broker deal unavailable",
-                    )
-                    logger.warning(
-                        "[FX-reconcile] exec#%s pos=%s pending_reconcile — "
-                        "no broker deal (will not use synthetic SL/TP)",
-                        ex_id,
-                        w["position_id"],
-                    )
-            finally:
-                _pdb.close()
             _FX_RECONCILE_MISSING.pop(ex_id, None)
+            logger.info(
+                "[FX-reconcile] %s exec#%s pos=%s fallback close after 2 misses "
+                "→ %s @ %s",
+                w["symbol"],
+                ex_id,
+                w["position_id"],
+                outcome,
+                exit_price,
+            )
+            await _close_live_forex_execution_with_db_retry(
+                ex_id, outcome, float(exit_price), source="ctrader-reconcile-fallback",
+            )
+            stats["fallback_close"] += 1
+
+    logger.info(
+        "[FX-reconcile] sweep complete tracked=%s poll_ok=%s poll_fail=%s "
+        "deal_close=%s fallback_close=%s still_open=%s miss_pending=%s",
+        stats["tracked"],
+        stats["poll_ok"],
+        stats["poll_fail"],
+        stats["broker_deal_close"],
+        stats["fallback_close"],
+        stats["still_open"],
+        stats["miss_pending"],
+    )
 
     # Bound the missing-counter dict.
     if len(_FX_RECONCILE_MISSING) > 500:
@@ -8828,15 +8926,16 @@ async def run_forex_live_manager_fast():
     work: list = []
     last_build = 0.0
     last_reconcile = 0.0
+    _cycle_n = 0
     while True:
+        _forex_open = True
         try:
             mark_heartbeat("forex_live_manager")
-            if not _is_mkt_open("forex", datetime.utcnow()):
-                work = []
-                await asyncio.sleep(5)
-                continue
             now_m = time.monotonic()
-            if not work or (now_m - last_build) >= _FX_WORKLIST_TTL:
+            _forex_open = _is_mkt_open("forex", datetime.utcnow())
+            if not _forex_open:
+                work = []
+            elif not work or (now_m - last_build) >= _FX_WORKLIST_TTL:
                 try:
                     from app.db_resilience import run_with_db_retry
                     work = await asyncio.to_thread(
@@ -8855,34 +8954,44 @@ async def run_forex_live_manager_fast():
                         logger.warning(f"[FX-fast] worklist build failed: {_be}")
                     work = []
                 last_build = now_m
-            for w in work:
-                try:
-                    await _amend_forex_position(w)
-                except Exception as _ae:
-                    logger.warning(
-                        f"[FX-fast] amend error exec#{w.get('exec_id')}: {_ae}"
-                    )
-                try:
-                    from app.services.economic_calendar import maybe_warn_open_position
-                    await maybe_warn_open_position(
-                        w.get("exec_id", 0),
-                        w.get("symbol", ""),
-                        w.get("user_id", 0) or getattr(w.get("user"), "id", 0),
-                        asset_class="forex",
-                    )
-                except Exception as _nwe:
-                    logger.debug("[FX-fast] news warn error: %s", _nwe)
-            # Periodically reconcile broker-side closes (SL/TP fills) so a live
-            # forex stop-out actually notifies the user instead of sitting OPEN.
+            if _forex_open:
+                for w in work:
+                    try:
+                        await _amend_forex_position(w)
+                    except Exception as _ae:
+                        logger.warning(
+                            f"[FX-fast] amend error exec#{w.get('exec_id')}: {_ae}"
+                        )
+                    try:
+                        from app.services.economic_calendar import maybe_warn_open_position
+                        await maybe_warn_open_position(
+                            w.get("exec_id", 0),
+                            w.get("symbol", ""),
+                            w.get("user_id", 0) or getattr(w.get("user"), "id", 0),
+                            asset_class="forex",
+                        )
+                    except Exception as _nwe:
+                        logger.debug("[FX-fast] news warn error: %s", _nwe)
+            # Reconcile broker closes even when forex market is closed — catches
+            # session-end SL/TP fills and prevents stuck OPEN cards overnight.
             if (now_m - last_reconcile) >= _FX_RECONCILE_INTERVAL:
                 last_reconcile = now_m
+                _cycle_n += 1
                 try:
+                    logger.info(
+                        "[FX-fast] reconcile sweep #%s (market_open=%s amend_work=%s)",
+                        _cycle_n,
+                        _forex_open,
+                        len(work) if _forex_open else 0,
+                    )
                     await _reconcile_forex_closes()
                 except Exception as _re:
-                    logger.warning(f"[FX-fast] reconcile error: {_re}")
+                    logger.warning(f"[FX-fast] reconcile error: {_re}", exc_info=True)
         except Exception as _ce:
-            logger.warning(f"[FX-fast] cycle error: {_ce}")
-        await asyncio.sleep(FOREX_MANAGE_INTERVAL_SECONDS)
+            logger.warning(f"[FX-fast] cycle error: {_ce}", exc_info=True)
+        await asyncio.sleep(
+            FOREX_MANAGE_INTERVAL_SECONDS if _forex_open else 5.0,
+        )
 
 
 # ─── Dedicated forex / index / stock executor loop ───────────────────────────
