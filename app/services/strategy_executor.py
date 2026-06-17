@@ -55,7 +55,7 @@ LIVE_MONITOR_INTERVAL       = int(_os_env.environ.get("EXECUTOR_LIVE_MONITOR_INT
 MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "2"))
 # Each forex eval holds bg_engine across async kline/TA fetches. Total checkout
 # slots are capped by app.database.bg_db_slot() (pool hard limit − reserve).
-FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "6"))
+FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "10"))
 # Cap tradfi universe breadth — prefetch + eval must scan the same capped set.
 EXECUTOR_MAX_SYMBOLS_PER_STRATEGY = max(
     1, int(_os_env.environ.get("EXECUTOR_MAX_SYMBOLS_PER_STRATEGY", "20")),
@@ -100,6 +100,19 @@ def executor_runtime_profile() -> Dict[str, object]:
         "forex_disabled": forex_executor_disabled(),
         "crypto_scan_interval_s": CRYPTO_SCAN_INTERVAL_SECONDS,
         "forex_scan_interval_s": FOREX_SCAN_INTERVAL_SECONDS,
+        "forex_max_concurrent": FOREX_MAX_CONCURRENT,
+        "executor_shard_count": EXECUTOR_SHARD_COUNT,
+        "strategy_eval_budget_s": EXECUTOR_STRATEGY_EVAL_BUDGET_S,
+        "prefetch_concurrent": EXECUTOR_PREFETCH_CONCURRENT,
+        "prefetch_provider_limits": {
+            "ctrader": int(_os_env.environ.get("PREFETCH_CTRADER_CONCURRENT", "16")),
+            "kraken": int(_os_env.environ.get("PREFETCH_KRAKEN_CONCURRENT", "3")),
+            "yahoo": int(_os_env.environ.get("PREFETCH_YAHOO_CONCURRENT", "3")),
+            "fmp": int(_os_env.environ.get("PREFETCH_FMP_CONCURRENT", "3")),
+            "coinbase": int(_os_env.environ.get("PREFETCH_COINBASE_CONCURRENT", "3")),
+            "crypto": int(_os_env.environ.get("PREFETCH_CRYPTO_CONCURRENT", "8")),
+            "external": int(_os_env.environ.get("PREFETCH_EXTERNAL_CONCURRENT", "4")),
+        },
         "forex_manage_interval_s": FOREX_MANAGE_INTERVAL_SECONDS,
         "forex_worklist_ttl_s": float(
             _os_env.environ.get("EXECUTOR_FX_WORKLIST_TTL", "1")
@@ -256,16 +269,15 @@ def _log_cycle_timing(
             logger.info("[cycle] slowest %s", parts)
 
 async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size: int = 0) -> None:
-    """Run evaluate tasks in chunks and log progress (visible in Railway during long scans)."""
+    """Launch all strategy eval tasks together and log rolling progress."""
     size = batch_size or EXECUTOR_SCAN_BATCH_SIZE
     total = len(snapshots)
     if not total:
         return
-    n_batches = (total + size - 1) // max(1, size)
     done = 0
     done_lock = asyncio.Lock()
     # Log every N completions so long first cycles (78 forex × Yahoo klines)
-    # don't look stuck for 5–10 min before the first batch finishes.
+    # don't look stuck for 5–10 min before the first completions finish.
     _PROGRESS_EVERY = max(5, min(10, size // 2 or 5))
 
     async def _one(snap):
@@ -276,13 +288,11 @@ async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size:
             if done == total or done % _PROGRESS_EVERY == 0:
                 logger.info(f"[{label}] progress {done}/{total} strategies evaluated")
 
-    for bi, i in enumerate(range(0, total, max(1, size))):
-        batch = snapshots[i : i + size]
-        logger.info(
-            f"[{label}] batch {bi + 1}/{n_batches} starting — "
-            f"{len(batch)} strategies ({done}/{total} done so far)"
-        )
-        await asyncio.gather(*[_one(s) for s in batch])
+    logger.info(
+        f"[{label}] launching {total} strategies concurrently "
+        f"(semaphore-limited inside run_one; cfg_batch_size={max(1, size)})"
+    )
+    await asyncio.gather(*[_one(s) for s in snapshots])
 
 
 # ─── Shared API caches ───────────────────────────────────────────────────────

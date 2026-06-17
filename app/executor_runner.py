@@ -52,7 +52,7 @@ async def _run_executor_session() -> None:
         os.environ.setdefault("DISABLE_CRYPTO_EXECUTOR", "1")
         os.environ.setdefault("DISABLE_TELEGRAM_POLL", "1")
         os.environ.setdefault("EXECUTOR_FOREX_SCAN_INTERVAL", "5")
-        os.environ.setdefault("EXECUTOR_FOREX_MAX_CONCURRENT", "6")
+        os.environ.setdefault("EXECUTOR_FOREX_MAX_CONCURRENT", "10")
         logger.info(
             "EXECUTOR_ONLY forex replica — crypto disabled, forex scan=%ss",
             os.environ.get("EXECUTOR_FOREX_SCAN_INTERVAL", "5"),

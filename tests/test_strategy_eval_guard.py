@@ -12,6 +12,8 @@ from app.services.strategy_executor import (
     EXECUTOR_MAX_SYMBOLS_PER_STRATEGY,
     EXECUTOR_STRATEGY_EVAL_BUDGET_S,
     _PRICE_TA_CACHE,
+    executor_runtime_profile,
+    _gather_eval_batches,
     _evaluate_with_budget,
     _has_empty_specific_universe,
     _normalize_universe_symbol,
@@ -105,6 +107,37 @@ class TestEvalBudget(unittest.IsolatedAsyncioTestCase):
     def test_default_budget_is_ten_seconds(self):
         self.assertEqual(EXECUTOR_STRATEGY_EVAL_BUDGET_S, 10.0)
         self.assertEqual(EXECUTOR_MAX_SYMBOLS_PER_STRATEGY, 20)
+
+
+class TestEvalBatchLaunch(unittest.IsolatedAsyncioTestCase):
+    async def test_gather_eval_batches_launches_all_tasks_together(self):
+        snapshots = list(range(8))
+        state = {"active": 0, "max_active": 0}
+        lock = asyncio.Lock()
+
+        async def _run_one(_snap):
+            async with lock:
+                state["active"] += 1
+                state["max_active"] = max(state["max_active"], state["active"])
+            await asyncio.sleep(0.02)
+            async with lock:
+                state["active"] -= 1
+
+        # Even with batch_size=1, launcher should still schedule all tasks at once.
+        await _gather_eval_batches("test", snapshots, _run_one, batch_size=1)
+        self.assertGreaterEqual(state["max_active"], 2)
+
+
+class TestExecutorRuntimeProfile(unittest.TestCase):
+    def test_profile_exposes_concurrency_and_provider_caps(self):
+        profile = executor_runtime_profile()
+        self.assertIn("forex_max_concurrent", profile)
+        self.assertIn("executor_shard_count", profile)
+        self.assertIn("strategy_eval_budget_s", profile)
+        self.assertIn("prefetch_provider_limits", profile)
+        self.assertIsInstance(profile["prefetch_provider_limits"], dict)
+        self.assertIn("kraken", profile["prefetch_provider_limits"])
+        self.assertIn("fmp", profile["prefetch_provider_limits"])
 
 
 if __name__ == "__main__":
