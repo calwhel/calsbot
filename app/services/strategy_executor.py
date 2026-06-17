@@ -1694,6 +1694,41 @@ async def _ctrader_fanout_live_fire(
             exc,
             exc_info=True,
         )
+        try:
+            from app.services.live_order_failure import (
+                classify_live_order_failure,
+                notify_live_order_failure,
+                record_live_fire_failure,
+            )
+            _classified = classify_live_order_failure(None, exception=exc)
+            record_live_fire_failure(
+                user_id=user.id,
+                strategy_id=strategy.id,
+                execution_id=None,
+                signal_group_id=None,
+                ctid=None,
+                symbol=symbol,
+                direction=direction,
+                lots="?",
+                classified=_classified,
+                attempts=1,
+                sibling_summary=_format_fire_targets_log(fire_targets),
+            )
+            asyncio.create_task(notify_live_order_failure(
+                user=user,
+                strategy_name=strategy.name or "Your Strategy",
+                ctid=None,
+                symbol=symbol,
+                direction=direction,
+                lots="?",
+                reason=_classified.reason,
+                attempts=1,
+                sibling_summary=_format_fire_targets_log(fire_targets),
+                asset_class=asset_class,
+                paper_fallback=False,
+            ))
+        except Exception as _notify_err:
+            logger.warning("[live-fire] fan-out failure notify failed: %s", _notify_err)
         return False
 
 
@@ -1935,6 +1970,41 @@ async def _ctrader_fanout_live_fire_impl(
     for (ex, target), res in zip(executions, results):
         ctid = str(target.get("ctrader_account_id") or target.get("ctid") or "")
         if isinstance(res, Exception):
+            _classified = None
+            try:
+                from app.services.live_order_failure import (
+                    classify_live_order_failure,
+                    notify_live_order_failure,
+                    record_live_fire_failure,
+                    _format_lots,
+                )
+                _classified = classify_live_order_failure(None, exception=res)
+                record_live_fire_failure(
+                    user_id=user.id,
+                    strategy_id=strategy.id,
+                    execution_id=ex.id,
+                    signal_group_id=_signal_group_id,
+                    ctid=ctid,
+                    symbol=symbol,
+                    direction=direction,
+                    lots=_format_lots(target),
+                    classified=_classified,
+                    attempts=1,
+                )
+                asyncio.create_task(notify_live_order_failure(
+                    user=user,
+                    strategy_name=strategy.name or "Your Strategy",
+                    ctid=ctid,
+                    symbol=symbol,
+                    direction=direction,
+                    lots=_format_lots(target),
+                    reason=_classified.reason,
+                    attempts=1,
+                    asset_class=asset_class,
+                    paper_fallback=False,
+                ))
+            except Exception as _nf_err:
+                logger.warning("[live-fire] enqueue exception notify: %s", _nf_err)
             logger.critical(
                 "[live-fire] fan-out enqueue error strategy=%s exec=%s ctid=%s: %s",
                 strategy.id,
@@ -1943,6 +2013,11 @@ async def _ctrader_fanout_live_fire_impl(
                 res,
                 exc_info=True,
             )
+            ex.is_paper = True
+            ex.notes = (
+                (ex.notes or "")
+                + f" | Live enqueue failed: {_classified.reason if _classified else type(res).__name__}"
+            ).strip(" |")
             _log_live_order_route(
                 execution_id=ex.id,
                 strategy_id=strategy.id,
@@ -1967,6 +2042,37 @@ async def _ctrader_fanout_live_fire_impl(
                 outcome="queued",
             )
         else:
+            from app.services.live_order_failure import (
+                classify_live_order_failure,
+                notify_live_order_failure,
+                record_live_fire_failure,
+                _format_lots,
+            )
+            _q_classified = classify_live_order_failure("order queue full")
+            record_live_fire_failure(
+                user_id=user.id,
+                strategy_id=strategy.id,
+                execution_id=ex.id,
+                signal_group_id=_signal_group_id,
+                ctid=ctid,
+                symbol=symbol,
+                direction=direction,
+                lots=_format_lots(target),
+                classified=_q_classified,
+                attempts=1,
+            )
+            asyncio.create_task(notify_live_order_failure(
+                user=user,
+                strategy_name=strategy.name or "Your Strategy",
+                ctid=ctid,
+                symbol=symbol,
+                direction=direction,
+                lots=_format_lots(target),
+                reason=_q_classified.reason,
+                attempts=1,
+                asset_class=asset_class,
+                paper_fallback=True,
+            ))
             ex.is_paper = True
             ex.notes = (
                 (ex.notes or "") + " | Live→Paper fallback (fan-out queue full)"

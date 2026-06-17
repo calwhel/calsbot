@@ -2912,7 +2912,11 @@ async def place_ctrader_order_for_user(
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         if not prefs or not prefs.ctrader_access_token:
             logger.warning(f"[cTrader] user {user.id} has no cTrader credentials")
-            return None
+            return {
+                "order_id": None,
+                "actual_fill": None,
+                "error": "no cTrader access token",
+            }
         ctid_str = resolve_ctrader_ctid(
             execution_account_id=ctid,
             prefs_default=prefs.ctrader_account_id,
