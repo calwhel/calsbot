@@ -464,6 +464,28 @@ _CONN_MAX_IDLE = 45.0
 ORDER_SUBMIT_TIMEOUT_S = float(os.environ.get("CTRADER_ORDER_SUBMIT_TIMEOUT_S", "5"))
 ORDER_FILL_WAIT_S = float(os.environ.get("CTRADER_ORDER_FILL_TIMEOUT_S", "5"))
 ORDER_CONNECT_TIMEOUT_S = float(os.environ.get("CTRADER_ORDER_CONNECT_TIMEOUT_S", "5"))
+CTRADER_ACCOUNT_AUTH_TIMEOUT_S = float(
+    os.environ.get("CTRADER_ACCOUNT_AUTH_TIMEOUT_S", "4")
+)
+CTRADER_ACCOUNT_OP_CONNECT_TIMEOUT_S = float(
+    os.environ.get("CTRADER_ACCOUNT_OP_CONNECT_TIMEOUT_S", "4")
+)
+CTRADER_OPEN_POS_CALL_TIMEOUT_S = float(
+    os.environ.get("CTRADER_OPEN_POS_CALL_TIMEOUT_S", "6")
+)
+CTRADER_OPEN_POS_RECONCILE_TIMEOUT_S = float(
+    os.environ.get("CTRADER_OPEN_POS_RECONCILE_TIMEOUT_S", "5")
+)
+CTRADER_DEAL_FETCH_CALL_TIMEOUT_S = float(
+    os.environ.get("CTRADER_DEAL_FETCH_CALL_TIMEOUT_S", "8")
+)
+CTRADER_DEAL_FETCH_REQ_TIMEOUT_S = float(
+    os.environ.get("CTRADER_DEAL_FETCH_REQ_TIMEOUT_S", "5")
+)
+CTRADER_DEAL_WINDOW_CALL_TIMEOUT_S = float(
+    os.environ.get("CTRADER_DEAL_WINDOW_CALL_TIMEOUT_S", "6")
+)
+CTRADER_DEAL_MAX_PAGES = max(1, int(os.environ.get("CTRADER_DEAL_MAX_PAGES", "3")))
 _AMBIGUOUS_ORDER_ERRORS = frozenset({
     "no execution event",
     "unexpected exit",
@@ -556,7 +578,7 @@ async def _account_auth(
     access_token: str,
     ctid_trader_account_id: int,
     *,
-    timeout: float = 10.0,
+    timeout: float = CTRADER_ACCOUNT_AUTH_TIMEOUT_S,
 ) -> bool:
     req = ProtoOAAccountAuthReq()
     req.ctidTraderAccountId = ctid_trader_account_id
@@ -709,6 +731,18 @@ _REFRESH_DENY_COOLDOWN = 300.0  # seconds
 _REFRESH_FAILURE_ROUNDS = 3
 _REFRESH_RETRY_WAIT_S = 2.0
 _REFRESH_NEAR_EXPIRY_S = int(os.environ.get("CTRADER_REFRESH_NEAR_EXPIRY_S", "600"))
+_AUTH_REFRESH_COOLDOWN_S = float(
+    os.environ.get("CTRADER_AUTH_REFRESH_COOLDOWN_S", "30")
+)
+_AUTH_REFRESH_WAIT_TIMEOUT_S = float(
+    os.environ.get("CTRADER_AUTH_REFRESH_WAIT_TIMEOUT_S", "12")
+)
+_AUTH_UNHEALTHY_COOLDOWN_S = float(
+    os.environ.get("CTRADER_AUTH_UNHEALTHY_COOLDOWN_S", "90")
+)
+_AUTH_TIMEOUT_COOLDOWN_S = float(
+    os.environ.get("CTRADER_AUTH_TIMEOUT_COOLDOWN_S", "45")
+)
 _REFRESH_TERMINAL_CODES = frozenset({
     "ACCESS_DENIED",
     "CH_ACCESS_TOKEN_INVALID",
@@ -717,6 +751,128 @@ _REFRESH_TERMINAL_CODES = frozenset({
     "invalid_grant",
     "INVALID_GRANT",
 })
+_auth_refresh_inflight: Dict[int, asyncio.Task] = {}
+_auth_refresh_next_allowed: Dict[int, float] = {}
+_auth_unhealthy_accounts: Dict[Tuple[int, str, int], Tuple[float, str]] = {}
+_auth_state_lock = asyncio.Lock()
+
+
+def _auth_account_key(user_id: int, host: str, ctid: int) -> Tuple[int, str, int]:
+    return (int(user_id), str(host), int(ctid))
+
+
+def _account_auth_cooldown_remaining(user_id: int, host: str, ctid: int) -> float:
+    key = _auth_account_key(user_id, host, ctid)
+    row = _auth_unhealthy_accounts.get(key)
+    if not row:
+        return 0.0
+    until_mono, _reason = row
+    rem = until_mono - time.monotonic()
+    if rem <= 0:
+        _auth_unhealthy_accounts.pop(key, None)
+        return 0.0
+    return rem
+
+
+def _account_auth_in_cooldown(user_id: int, host: str, ctid: int) -> bool:
+    return _account_auth_cooldown_remaining(user_id, host, ctid) > 0
+
+
+def _mark_account_auth_unhealthy(
+    user_id: int,
+    host: str,
+    ctid: int,
+    *,
+    reason: str,
+    cooldown_s: Optional[float] = None,
+) -> None:
+    dur = max(5.0, float(cooldown_s if cooldown_s is not None else _AUTH_UNHEALTHY_COOLDOWN_S))
+    now = time.monotonic()
+    key = _auth_account_key(user_id, host, ctid)
+    prev = _auth_unhealthy_accounts.get(key)
+    prev_rem = 0.0
+    if prev:
+        prev_rem = max(0.0, prev[0] - now)
+    until_mono = max(now + dur, prev[0] if prev else 0.0)
+    _auth_unhealthy_accounts[key] = (until_mono, reason)
+    new_rem = max(0.0, until_mono - now)
+    # Keep this warning concise and only emit when extending/setting a backoff.
+    if new_rem >= prev_rem + 1.0:
+        logger.warning(
+            "[cTrader] auth backoff user=%s ctid=%s host=%s %.0fs (%s)",
+            user_id,
+            ctid,
+            host,
+            new_rem,
+            reason,
+        )
+
+
+def _clear_account_auth_unhealthy(user_id: int, host: str, ctid: int) -> None:
+    _auth_unhealthy_accounts.pop(_auth_account_key(user_id, host, ctid), None)
+
+
+def _user_ctid_has_auth_backoff(user_id: int, ctid: int) -> bool:
+    uid = int(user_id)
+    acct = int(ctid)
+    now = time.monotonic()
+    hit = False
+    for key, row in list(_auth_unhealthy_accounts.items()):
+        if key[0] != uid or key[2] != acct:
+            continue
+        if row[0] <= now:
+            _auth_unhealthy_accounts.pop(key, None)
+            continue
+        hit = True
+    return hit
+
+
+async def _singleflight_forced_refresh(user_id: int) -> Tuple[Optional[str], str]:
+    """One forced token refresh per user per cooldown window."""
+    uid = int(user_id)
+    while True:
+        wait_s = 0.0
+        task: Optional[asyncio.Task] = None
+        created = False
+        async with _auth_state_lock:
+            now = time.monotonic()
+            task = _auth_refresh_inflight.get(uid)
+            if task is not None and task.done():
+                _auth_refresh_inflight.pop(uid, None)
+                task = None
+            if task is None:
+                next_allowed = _auth_refresh_next_allowed.get(uid, 0.0)
+                if now < next_allowed:
+                    wait_s = next_allowed - now
+                else:
+                    task = asyncio.create_task(refresh_user_ctrader_token(uid, force=True))
+                    _auth_refresh_inflight[uid] = task
+                    _auth_refresh_next_allowed[uid] = now + _AUTH_REFRESH_COOLDOWN_S
+                    created = True
+        if wait_s > 0:
+            return None, f"refresh_throttled_{wait_s:.1f}s"
+        if task is None:
+            await asyncio.sleep(0)
+            continue
+        try:
+            token = await asyncio.wait_for(task, timeout=_AUTH_REFRESH_WAIT_TIMEOUT_S)
+            return token, ("ok" if token else "refresh_failed")
+        except asyncio.TimeoutError:
+            if created:
+                task.cancel()
+            return None, "refresh_timeout"
+        except Exception as exc:
+            logger.warning(
+                "[cTrader] forced refresh error uid=%s: %s",
+                uid,
+                type(exc).__name__,
+            )
+            return None, "refresh_error"
+        finally:
+            if task.done():
+                async with _auth_state_lock:
+                    if _auth_refresh_inflight.get(uid) is task:
+                        _auth_refresh_inflight.pop(uid, None)
 
 
 def is_refresh_denied(user_id: int) -> bool:
@@ -1187,18 +1343,54 @@ async def _refresh_auth_token_for_retry(
     """On broker account-auth failure, single-flight refresh and retry once."""
     if not user_id:
         return None
-    new_at = await refresh_user_ctrader_token(int(user_id), force=True)
+    uid = int(user_id)
+    if _account_auth_in_cooldown(uid, host, ctid_trader_account_id):
+        rem = _account_auth_cooldown_remaining(uid, host, ctid_trader_account_id)
+        logger.info(
+            "[cTrader] %s retry suppressed user=%s ctid=%s host=%s (cooldown %.0fs)",
+            operation,
+            uid,
+            ctid_trader_account_id,
+            host,
+            rem,
+        )
+        return None
+    new_at, status = await _singleflight_forced_refresh(uid)
     if new_at:
+        _clear_account_auth_unhealthy(uid, host, ctid_trader_account_id)
         logger.info(
             "[cTrader] %s auth failed ctid=%s host=%s user=%s — refreshed token, retrying",
             operation,
             ctid_trader_account_id,
             host,
-            user_id,
+            uid,
         )
         return new_at
-    if is_refresh_denied(int(user_id)):
-        _notify_ctrader_relink_needed(int(user_id), f"{operation} auth failed")
+    if is_refresh_denied(uid):
+        _mark_account_auth_unhealthy(
+            uid,
+            host,
+            ctid_trader_account_id,
+            reason="refresh_denied",
+            cooldown_s=max(_AUTH_UNHEALTHY_COOLDOWN_S, _REFRESH_DENY_COOLDOWN),
+        )
+        _notify_ctrader_relink_needed(uid, f"{operation} auth failed")
+    elif status.startswith("refresh_throttled_"):
+        _mark_account_auth_unhealthy(
+            uid,
+            host,
+            ctid_trader_account_id,
+            reason=status,
+            cooldown_s=_AUTH_TIMEOUT_COOLDOWN_S,
+        )
+    else:
+        _mark_account_auth_unhealthy(
+            uid,
+            host,
+            ctid_trader_account_id,
+            reason=status or "refresh_failed",
+            cooldown_s=_AUTH_UNHEALTHY_COOLDOWN_S,
+        )
     return None
 
 
@@ -2623,32 +2815,73 @@ async def _get_open_position_ids(
     """
     if not _PROTO_OK:
         return None
+    uid = int(user_id) if user_id else None
+    if uid and _account_auth_in_cooldown(uid, host, ctid_trader_account_id):
+        rem = _account_auth_cooldown_remaining(uid, host, ctid_trader_account_id)
+        logger.info(
+            "[cTrader] open-positions skipped user=%s ctid=%s host=%s (auth cooldown %.0fs)",
+            uid,
+            ctid_trader_account_id,
+            host,
+            rem,
+        )
+        return None
     token = (access_token or "").strip()
     for auth_attempt in (1, 2):
         auth_failed = False
         try:
-            async with _get_account_lock(host, ctid_trader_account_id):
-                try:
-                    reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
-                    if not await _account_auth(reader, writer, token, ctid_trader_account_id):
-                        auth_failed = True
-                    else:
-                        req = ProtoOAReconcileReq()
-                        req.ctidTraderAccountId = ctid_trader_account_id
-                        payload = await _send_recv(
-                            reader, writer, req,
-                            _PAYLOAD_TYPES["reconcile_req"],
-                            _PAYLOAD_TYPES["reconcile_res"],
-                            timeout=10.0,
+            async with asyncio.timeout(CTRADER_OPEN_POS_CALL_TIMEOUT_S):
+                async with _get_account_lock(host, ctid_trader_account_id):
+                    try:
+                        reader, writer = await _get_persistent_connection(
+                            host,
+                            ctid_trader_account_id,
+                            connect_timeout=CTRADER_ACCOUNT_OP_CONNECT_TIMEOUT_S,
                         )
-                        if not payload:
-                            return None
-                        res = ProtoOAReconcileRes()
-                        res.ParseFromString(payload)
-                        return {int(p.positionId) for p in res.position}
-                except asyncio.CancelledError:
-                    _invalidate_persistent_connection(host, ctid_trader_account_id)
-                    raise
+                        if not await _account_auth(
+                            reader,
+                            writer,
+                            token,
+                            ctid_trader_account_id,
+                            timeout=CTRADER_ACCOUNT_AUTH_TIMEOUT_S,
+                        ):
+                            auth_failed = True
+                        else:
+                            req = ProtoOAReconcileReq()
+                            req.ctidTraderAccountId = ctid_trader_account_id
+                            payload = await _send_recv(
+                                reader, writer, req,
+                                _PAYLOAD_TYPES["reconcile_req"],
+                                _PAYLOAD_TYPES["reconcile_res"],
+                                timeout=CTRADER_OPEN_POS_RECONCILE_TIMEOUT_S,
+                            )
+                            if not payload:
+                                return None
+                            res = ProtoOAReconcileRes()
+                            res.ParseFromString(payload)
+                            if uid:
+                                _clear_account_auth_unhealthy(uid, host, ctid_trader_account_id)
+                            return {int(p.positionId) for p in res.position}
+                    except asyncio.CancelledError:
+                        _invalidate_persistent_connection(host, ctid_trader_account_id)
+                        raise
+        except asyncio.TimeoutError:
+            _invalidate_persistent_connection(host, ctid_trader_account_id)
+            logger.warning(
+                "[cTrader] open-positions timeout ctid=%s host=%s (%.1fs)",
+                ctid_trader_account_id,
+                host,
+                CTRADER_OPEN_POS_CALL_TIMEOUT_S,
+            )
+            if uid:
+                _mark_account_auth_unhealthy(
+                    uid,
+                    host,
+                    ctid_trader_account_id,
+                    reason="open_positions_timeout",
+                    cooldown_s=_AUTH_TIMEOUT_COOLDOWN_S,
+                )
+            return None
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -2658,6 +2891,14 @@ async def _get_open_position_ids(
                 host,
                 e,
             )
+            if uid:
+                _mark_account_auth_unhealthy(
+                    uid,
+                    host,
+                    ctid_trader_account_id,
+                    reason=f"open_positions_error:{type(e).__name__}",
+                    cooldown_s=_AUTH_TIMEOUT_COOLDOWN_S,
+                )
             return None
 
         if auth_failed:
@@ -2677,6 +2918,13 @@ async def _get_open_position_ids(
                     token = new_at
                     _invalidate_persistent_connection(host, ctid_trader_account_id)
                     continue
+            if uid:
+                _mark_account_auth_unhealthy(
+                    uid,
+                    host,
+                    ctid_trader_account_id,
+                    reason="open_positions_auth_failed",
+                )
             return None
     return None
 
@@ -2847,6 +3095,19 @@ async def get_open_position_ids_for_user_with_retry(
     backoff_s: float = 0.5,
 ) -> Optional[set]:
     """Retry broker open-position poll — None only after all attempts fail."""
+    ctid_int: Optional[int] = None
+    try:
+        if ctid is not None and str(ctid).strip():
+            ctid_int = int(str(ctid).strip())
+    except Exception:
+        ctid_int = None
+    if ctid_int is not None and _user_ctid_has_auth_backoff(int(getattr(user, "id", 0) or 0), ctid_int):
+        logger.info(
+            "[cTrader] open-positions poll skipped user=%s acct=%s (auth cooldown active)",
+            getattr(user, "id", "?"),
+            ctid,
+        )
+        return None
     last_err: Optional[Exception] = None
     for attempt in range(1, max(1, attempts) + 1):
         try:
@@ -2861,6 +3122,13 @@ async def get_open_position_ids_for_user_with_retry(
                         len(ids),
                     )
                 return ids
+            if ctid_int is not None and _user_ctid_has_auth_backoff(int(getattr(user, "id", 0) or 0), ctid_int):
+                logger.info(
+                    "[cTrader] open-positions poll stopped early user=%s acct=%s (auth cooldown active)",
+                    getattr(user, "id", "?"),
+                    ctid,
+                )
+                return None
         except Exception as exc:
             last_err = exc
             logger.warning(
@@ -2980,6 +3248,18 @@ async def _fetch_deals_by_position_id(
     """ProtoOADealListByPositionIdReq — paginated, with explicit time window (ms)."""
     if not _PROTO_OK:
         return None
+    uid = int(user_id) if user_id else None
+    if uid and _account_auth_in_cooldown(uid, host, ctid_trader_account_id):
+        rem = _account_auth_cooldown_remaining(uid, host, ctid_trader_account_id)
+        logger.info(
+            "[cTrader] deal-by-position skipped user=%s ctid=%s host=%s pos=%s (auth cooldown %.0fs)",
+            uid,
+            ctid_trader_account_id,
+            host,
+            position_id,
+            rem,
+        )
+        return None
     now_ms = int(time.time() * 1000)
     start_ms = from_ms if from_ms is not None else (now_ms - 30 * 24 * 3600 * 1000)
     end_ms = to_ms if to_ms is not None else now_ms
@@ -2989,36 +3269,67 @@ async def _fetch_deals_by_position_id(
         cursor_from = start_ms
         auth_failed = False
         try:
-            async with _get_account_lock(host, ctid_trader_account_id):
-                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
-                if not await _account_auth(reader, writer, token, ctid_trader_account_id):
-                    auth_failed = True
-                else:
-                    for _page in range(8):
-                        req = ProtoOADealListByPositionIdReq()
-                        req.ctidTraderAccountId = ctid_trader_account_id
-                        req.positionId = int(position_id)
-                        req.fromTimestamp = int(cursor_from)
-                        req.toTimestamp = int(end_ms)
-                        payload = await _send_recv(
-                            reader, writer, req,
-                            _PAYLOAD_TYPES["deal_list_by_position_id_req"],
-                            _PAYLOAD_TYPES["deal_list_by_position_id_res"],
-                            timeout=15.0,
-                        )
-                        if not payload:
-                            break
-                        res = ProtoOADealListByPositionIdRes()
-                        res.ParseFromString(payload)
-                        page = list(res.deal)
-                        all_deals.extend(page)
-                        if not getattr(res, "hasMore", False) or not page:
-                            break
-                        last_ts = max(_deal_timestamp_ms(d) for d in page)
-                        if last_ts <= cursor_from:
-                            break
-                        cursor_from = last_ts + 1
-                    return all_deals
+            async with asyncio.timeout(CTRADER_DEAL_FETCH_CALL_TIMEOUT_S):
+                async with _get_account_lock(host, ctid_trader_account_id):
+                    reader, writer = await _get_persistent_connection(
+                        host,
+                        ctid_trader_account_id,
+                        connect_timeout=CTRADER_ACCOUNT_OP_CONNECT_TIMEOUT_S,
+                    )
+                    if not await _account_auth(
+                        reader,
+                        writer,
+                        token,
+                        ctid_trader_account_id,
+                        timeout=CTRADER_ACCOUNT_AUTH_TIMEOUT_S,
+                    ):
+                        auth_failed = True
+                    else:
+                        for _page in range(CTRADER_DEAL_MAX_PAGES):
+                            req = ProtoOADealListByPositionIdReq()
+                            req.ctidTraderAccountId = ctid_trader_account_id
+                            req.positionId = int(position_id)
+                            req.fromTimestamp = int(cursor_from)
+                            req.toTimestamp = int(end_ms)
+                            payload = await _send_recv(
+                                reader, writer, req,
+                                _PAYLOAD_TYPES["deal_list_by_position_id_req"],
+                                _PAYLOAD_TYPES["deal_list_by_position_id_res"],
+                                timeout=CTRADER_DEAL_FETCH_REQ_TIMEOUT_S,
+                            )
+                            if not payload:
+                                break
+                            res = ProtoOADealListByPositionIdRes()
+                            res.ParseFromString(payload)
+                            page = list(res.deal)
+                            all_deals.extend(page)
+                            if not getattr(res, "hasMore", False) or not page:
+                                break
+                            last_ts = max(_deal_timestamp_ms(d) for d in page)
+                            if last_ts <= cursor_from:
+                                break
+                            cursor_from = last_ts + 1
+                        if uid:
+                            _clear_account_auth_unhealthy(uid, host, ctid_trader_account_id)
+                        return all_deals
+        except asyncio.TimeoutError:
+            _invalidate_persistent_connection(host, ctid_trader_account_id)
+            logger.warning(
+                "[cTrader] deal-by-position timeout ctid=%s host=%s pos=%s (%.1fs)",
+                ctid_trader_account_id,
+                host,
+                position_id,
+                CTRADER_DEAL_FETCH_CALL_TIMEOUT_S,
+            )
+            if uid:
+                _mark_account_auth_unhealthy(
+                    uid,
+                    host,
+                    ctid_trader_account_id,
+                    reason="deal_by_position_timeout",
+                    cooldown_s=_AUTH_TIMEOUT_COOLDOWN_S,
+                )
+            return None
         except asyncio.CancelledError:
             _invalidate_persistent_connection(host, ctid_trader_account_id)
             raise
@@ -3027,6 +3338,14 @@ async def _fetch_deals_by_position_id(
                 "[cTrader] deal-by-position fetch failed ctid=%s host=%s pos=%s: %s",
                 ctid_trader_account_id, host, position_id, exc,
             )
+            if uid:
+                _mark_account_auth_unhealthy(
+                    uid,
+                    host,
+                    ctid_trader_account_id,
+                    reason=f"deal_by_position_error:{type(exc).__name__}",
+                    cooldown_s=_AUTH_TIMEOUT_COOLDOWN_S,
+                )
             return None
 
         if auth_failed:
@@ -3045,6 +3364,13 @@ async def _fetch_deals_by_position_id(
                     token = new_at
                     _invalidate_persistent_connection(host, ctid_trader_account_id)
                     continue
+            if uid:
+                _mark_account_auth_unhealthy(
+                    uid,
+                    host,
+                    ctid_trader_account_id,
+                    reason="deal_by_position_auth_failed",
+                )
             return None
     return None
 
@@ -3057,39 +3383,89 @@ async def _fetch_deals_in_window(
     from_ms: Optional[int] = None,
     to_ms: Optional[int] = None,
     max_rows: int = 500,
+    user_id: Optional[int] = None,
 ) -> Optional[list]:
     """ProtoOADealListReq fallback — time-ranged deal history."""
     if not _PROTO_OK:
+        return None
+    uid = int(user_id) if user_id else None
+    if uid and _account_auth_in_cooldown(uid, host, ctid_trader_account_id):
+        rem = _account_auth_cooldown_remaining(uid, host, ctid_trader_account_id)
+        logger.info(
+            "[cTrader] deal-list window skipped user=%s ctid=%s host=%s (auth cooldown %.0fs)",
+            uid,
+            ctid_trader_account_id,
+            host,
+            rem,
+        )
         return None
     now_ms = int(time.time() * 1000)
     start_ms = from_ms if from_ms is not None else (now_ms - 7 * 24 * 3600 * 1000)
     end_ms = to_ms if to_ms is not None else now_ms
     try:
-        async with _get_account_lock(host, ctid_trader_account_id):
-            reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
-            if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
-                return None
-            req = ProtoOADealListReq()
-            req.ctidTraderAccountId = ctid_trader_account_id
-            req.fromTimestamp = int(start_ms)
-            req.toTimestamp = int(end_ms)
-            req.maxRows = int(max_rows)
-            payload = await _send_recv(
-                reader, writer, req,
-                _PAYLOAD_TYPES["deal_list_req"],
-                _PAYLOAD_TYPES["deal_list_res"],
-                timeout=15.0,
+        async with asyncio.timeout(CTRADER_DEAL_WINDOW_CALL_TIMEOUT_S):
+            async with _get_account_lock(host, ctid_trader_account_id):
+                reader, writer = await _get_persistent_connection(
+                    host,
+                    ctid_trader_account_id,
+                    connect_timeout=CTRADER_ACCOUNT_OP_CONNECT_TIMEOUT_S,
+                )
+                if not await _account_auth(
+                    reader,
+                    writer,
+                    access_token,
+                    ctid_trader_account_id,
+                    timeout=CTRADER_ACCOUNT_AUTH_TIMEOUT_S,
+                ):
+                    return None
+                req = ProtoOADealListReq()
+                req.ctidTraderAccountId = ctid_trader_account_id
+                req.fromTimestamp = int(start_ms)
+                req.toTimestamp = int(end_ms)
+                req.maxRows = int(max_rows)
+                payload = await _send_recv(
+                    reader, writer, req,
+                    _PAYLOAD_TYPES["deal_list_req"],
+                    _PAYLOAD_TYPES["deal_list_res"],
+                    timeout=CTRADER_DEAL_FETCH_REQ_TIMEOUT_S,
+                )
+                if not payload:
+                    return None
+                res = ProtoOADealListRes()
+                res.ParseFromString(payload)
+                if uid:
+                    _clear_account_auth_unhealthy(uid, host, ctid_trader_account_id)
+                return list(res.deal)
+    except asyncio.TimeoutError:
+        _invalidate_persistent_connection(host, ctid_trader_account_id)
+        logger.warning(
+            "[cTrader] deal-list window timeout ctid=%s host=%s (%.1fs)",
+            ctid_trader_account_id,
+            host,
+            CTRADER_DEAL_WINDOW_CALL_TIMEOUT_S,
+        )
+        if uid:
+            _mark_account_auth_unhealthy(
+                uid,
+                host,
+                ctid_trader_account_id,
+                reason="deal_list_window_timeout",
+                cooldown_s=_AUTH_TIMEOUT_COOLDOWN_S,
             )
-            if not payload:
-                return None
-            res = ProtoOADealListRes()
-            res.ParseFromString(payload)
-            return list(res.deal)
+        return None
     except Exception as exc:
         logger.warning(
             "[cTrader] deal-list window fetch failed ctid=%s host=%s: %s",
             ctid_trader_account_id, host, exc,
         )
+        if uid:
+            _mark_account_auth_unhealthy(
+                uid,
+                host,
+                ctid_trader_account_id,
+                reason=f"deal_list_window_error:{type(exc).__name__}",
+                cooldown_s=_AUTH_TIMEOUT_COOLDOWN_S,
+            )
     return None
 
 
@@ -3146,6 +3522,7 @@ async def _get_position_close_detail(
         host=host,
         from_ms=from_ms,
         to_ms=to_ms,
+        user_id=user_id,
     )
     if window_deals:
         parsed = _parse_close_from_deals(

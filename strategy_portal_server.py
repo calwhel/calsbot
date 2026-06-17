@@ -13046,12 +13046,12 @@ async def api_live_forex_account(
                 f"[live-forex] enrich positions uid={uid}: {type(exc).__name__}: {exc}"
             )
             enriched = positions or []
-        return JSONResponse({"open_positions": enriched})
+        return _lf_live_forex_json_response({"open_positions": enriched})
 
     if not refresh:
         _cached = get_cache(_cache_key)
         if isinstance(_cached, dict):
-            return JSONResponse({**_cached, "cached": True})
+            return _lf_live_forex_json_response({**_cached, "cached": True})
 
     if refresh:
         try:
@@ -13133,14 +13133,14 @@ async def api_live_forex_account(
     except asyncio.TimeoutError:
         stale = get_cache(_cache_key)
         if isinstance(stale, dict):
-            return JSONResponse({**stale, "cached": True, "stale": True})
+            return _lf_live_forex_json_response({**stale, "cached": True, "stale": True})
         raise HTTPException(status_code=503, detail="Database busy — retry in a moment")
     except Exception as exc:
         logger.exception(f"[live-forex] db snapshot uid={uid}: {exc}")
         stale = get_cache(_cache_key)
         if isinstance(stale, dict):
-            return JSONResponse({**stale, "cached": True, "stale": True, "degraded": True})
-        return JSONResponse(_lf_degraded_account_payload())
+            return _lf_live_forex_json_response({**stale, "cached": True, "stale": True, "degraded": True})
+        return _lf_live_forex_json_response(_lf_degraded_account_payload())
     if snap is None:
         raise HTTPException(status_code=403, detail="Invalid UID")
 
@@ -13155,7 +13155,7 @@ async def api_live_forex_account(
             "equity": None,
         }
         set_cache(_cache_key, payload, ttl_seconds=15)
-        return JSONResponse(payload)
+        return _lf_live_forex_json_response(payload)
 
     balance = None
     accounts = snap["accounts"]

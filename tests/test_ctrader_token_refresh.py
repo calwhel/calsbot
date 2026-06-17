@@ -1,5 +1,6 @@
 """cTrader OAuth single-flight refresh — deploy-survival guards."""
 import inspect
+from pathlib import Path
 import unittest
 
 
@@ -41,17 +42,33 @@ class TestCtraderTokenRefresh(unittest.TestCase):
         open_src = inspect.getsource(cc._get_open_position_ids)
         deal_src = inspect.getsource(cc._fetch_deals_by_position_id)
         helper_src = inspect.getsource(cc._refresh_auth_token_for_retry)
+        singleflight_src = inspect.getsource(cc._singleflight_forced_refresh)
 
         self.assertIn("for auth_attempt in (1, 2)", open_src)
         self.assertIn("_refresh_auth_token_for_retry", open_src)
         self.assertIn("open-positions auth failed", open_src)
+        self.assertIn("asyncio.timeout(", open_src)
+        self.assertIn("_account_auth_in_cooldown", open_src)
+        self.assertIn("_mark_account_auth_unhealthy", open_src)
 
         self.assertIn("for auth_attempt in (1, 2)", deal_src)
         self.assertIn("_refresh_auth_token_for_retry", deal_src)
         self.assertIn("deal-by-position auth failed", deal_src)
+        self.assertIn("asyncio.timeout(", deal_src)
+        self.assertIn("_mark_account_auth_unhealthy", deal_src)
 
         self.assertIn("refresh_user_ctrader_token", helper_src)
-        self.assertIn("force=True", helper_src)
+        self.assertIn("_singleflight_forced_refresh", helper_src)
+        self.assertIn("_mark_account_auth_unhealthy", helper_src)
+        self.assertIn("_AUTH_REFRESH_COOLDOWN_S", singleflight_src)
+
+    def test_live_forex_account_response_is_decimal_safe(self):
+        src = Path("strategy_portal_server.py").read_text(encoding="utf-8")
+        route_start = src.find('@app.get("/api/live-forex/account")')
+        self.assertNotEqual(route_start, -1)
+        route_block = src[route_start: route_start + 5000]
+        self.assertIn("return _lf_live_forex_json_response({\"open_positions\": enriched})", route_block)
+        self.assertIn("return _lf_live_forex_json_response({**_cached, \"cached\": True})", route_block)
 
 
 if __name__ == "__main__":
