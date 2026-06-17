@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager, contextmanager
 from typing import Optional
+import contextvars
 from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -116,6 +117,14 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 BgSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=bg_engine)
 
 _bg_db_sem: Optional[asyncio.Semaphore] = None
+_bg_slot_wait_ms: contextvars.ContextVar[float] = contextvars.ContextVar(
+    "bg_slot_wait_ms", default=0.0,
+)
+
+
+def last_bg_db_slot_wait_ms() -> float:
+    """Wait time (ms) for the most recent bg_db_slot acquire in this task."""
+    return float(_bg_slot_wait_ms.get())
 
 
 def bg_pool_hard_limit() -> int:
@@ -144,6 +153,7 @@ async def bg_db_slot():
     t0 = time.monotonic()
     await sem.acquire()
     wait_ms = (time.monotonic() - t0) * 1000.0
+    _bg_slot_wait_ms.set(wait_ms)
     if wait_ms > 500:
         logger.warning(
             "[cycle-db] bg_db_slot wait=%.0fms (pool contended, limit=%s)",
