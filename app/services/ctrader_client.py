@@ -221,6 +221,8 @@ try:
         ProtoOAReconcileRes,
         ProtoOADealListByPositionIdReq,
         ProtoOADealListByPositionIdRes,
+        ProtoOADealListReq,
+        ProtoOADealListRes,
     )
     from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
         ProtoOATradeSide,
@@ -257,6 +259,8 @@ _PAYLOAD_TYPES = {
     "reconcile_res":         2125,
     "deal_list_by_position_id_req": 2179,
     "deal_list_by_position_id_res": 2180,
+    "deal_list_req": 2133,
+    "deal_list_res": 2134,
 }
 
 # Platform pip sizes: app.services.pip_units.platform_pip_size (forex_engine).
@@ -2601,7 +2605,7 @@ async def _get_open_position_ids(
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        logger.debug(f"[cTrader] open-positions fetch error: {e}")
+        logger.warning("[cTrader] open-positions fetch error ctid=%s host=%s: %s", ctid_trader_account_id, host, e)
     return None
 
 
@@ -2755,6 +2759,50 @@ async def get_open_position_ids_for_user(user, *, ctid: Optional[str] = None) ->
     return None
 
 
+async def get_open_position_ids_for_user_with_retry(
+    user,
+    *,
+    ctid: Optional[str] = None,
+    attempts: int = 3,
+    backoff_s: float = 0.5,
+) -> Optional[set]:
+    """Retry broker open-position poll — None only after all attempts fail."""
+    last_err: Optional[Exception] = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            ids = await get_open_position_ids_for_user(user, ctid=ctid)
+            if ids is not None:
+                if attempt > 1:
+                    logger.info(
+                        "[cTrader] open-positions poll ok user=%s acct=%s attempt=%s count=%s",
+                        getattr(user, "id", "?"),
+                        ctid,
+                        attempt,
+                        len(ids),
+                    )
+                return ids
+        except Exception as exc:
+            last_err = exc
+            logger.warning(
+                "[cTrader] open-positions poll error user=%s acct=%s attempt=%s/%s: %s",
+                getattr(user, "id", "?"),
+                ctid,
+                attempt,
+                attempts,
+                exc,
+            )
+        if attempt < attempts:
+            await asyncio.sleep(backoff_s * attempt)
+    if last_err:
+        logger.warning(
+            "[cTrader] open-positions poll exhausted retries user=%s acct=%s: %s",
+            getattr(user, "id", "?"),
+            ctid,
+            last_err,
+        )
+    return None
+
+
 def _normalize_deal_price(raw: float, entry_hint: Optional[float] = None) -> float:
     """Resolve symbol-dependent deal price scaling (see ctrader-price-scaling.md)."""
     if raw <= 0:
@@ -2769,6 +2817,179 @@ def _normalize_deal_price(raw: float, entry_hint: Optional[float] = None) -> flo
     return raw / 100_000.0
 
 
+def _deal_timestamp_ms(deal) -> int:
+    for attr in ("executionTimestamp", "utcLastUpdateTimestamp", "createTimestamp"):
+        if deal.HasField(attr):
+            return int(getattr(deal, attr))
+    return 0
+
+
+def _outcome_from_close_detail(
+    *,
+    exit_price: float,
+    gross: int,
+    entry_hint: Optional[float],
+    direction: Optional[str],
+) -> str:
+    if gross > 0:
+        return "WIN"
+    if gross < 0:
+        return "LOSS"
+    if entry_hint and direction:
+        if direction == "LONG":
+            return "WIN" if exit_price >= entry_hint else "LOSS"
+        return "WIN" if exit_price <= entry_hint else "LOSS"
+    return "LOSS"
+
+
+def _parse_close_from_deals(
+    deals: list,
+    position_id: int,
+    *,
+    entry_hint: Optional[float] = None,
+    direction: Optional[str] = None,
+) -> Optional[dict]:
+    """Pick the closing deal for a position from a deal list."""
+    pid = int(position_id)
+    matching = [d for d in deals if int(getattr(d, "positionId", 0) or 0) == pid]
+    if not matching:
+        return None
+
+    closing = [d for d in matching if d.HasField("closePositionDetail")]
+    candidates = closing if closing else matching
+    deal = max(candidates, key=_deal_timestamp_ms)
+    close_ts = _deal_timestamp_ms(deal)
+
+    if deal.HasField("closePositionDetail"):
+        detail = deal.closePositionDetail
+        exit_price = _normalize_deal_price(float(detail.entryPrice), entry_hint)
+        gross = int(detail.grossProfit) if detail.HasField("grossProfit") else 0
+    elif deal.HasField("executionPrice") and float(deal.executionPrice or 0) > 0:
+        exit_price = _normalize_deal_price(float(deal.executionPrice), entry_hint)
+        gross = 0
+    else:
+        return None
+
+    if exit_price <= 0:
+        return None
+
+    return {
+        "exit_price": exit_price,
+        "outcome": _outcome_from_close_detail(
+            exit_price=exit_price,
+            gross=gross,
+            entry_hint=entry_hint,
+            direction=direction,
+        ),
+        "closed_at_ms": close_ts or None,
+        "gross_profit": gross,
+        "deal_id": int(deal.dealId) if deal.HasField("dealId") else None,
+    }
+
+
+async def _fetch_deals_by_position_id(
+    access_token: str,
+    ctid_trader_account_id: int,
+    position_id: int,
+    *,
+    host: str = CTRADER_HOST,
+    from_ms: Optional[int] = None,
+    to_ms: Optional[int] = None,
+) -> Optional[list]:
+    """ProtoOADealListByPositionIdReq — paginated, with explicit time window (ms)."""
+    if not _PROTO_OK:
+        return None
+    now_ms = int(time.time() * 1000)
+    start_ms = from_ms if from_ms is not None else (now_ms - 30 * 24 * 3600 * 1000)
+    end_ms = to_ms if to_ms is not None else now_ms
+    all_deals: list = []
+    cursor_from = start_ms
+    try:
+        async with _get_account_lock(host, ctid_trader_account_id):
+            reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
+            if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                logger.warning(
+                    "[cTrader] deal-by-position auth failed ctid=%s host=%s pos=%s",
+                    ctid_trader_account_id, host, position_id,
+                )
+                return None
+            for _page in range(8):
+                req = ProtoOADealListByPositionIdReq()
+                req.ctidTraderAccountId = ctid_trader_account_id
+                req.positionId = int(position_id)
+                req.fromTimestamp = int(cursor_from)
+                req.toTimestamp = int(end_ms)
+                payload = await _send_recv(
+                    reader, writer, req,
+                    _PAYLOAD_TYPES["deal_list_by_position_id_req"],
+                    _PAYLOAD_TYPES["deal_list_by_position_id_res"],
+                    timeout=15.0,
+                )
+                if not payload:
+                    break
+                res = ProtoOADealListByPositionIdRes()
+                res.ParseFromString(payload)
+                page = list(res.deal)
+                all_deals.extend(page)
+                if not getattr(res, "hasMore", False) or not page:
+                    break
+                last_ts = max(_deal_timestamp_ms(d) for d in page)
+                if last_ts <= cursor_from:
+                    break
+                cursor_from = last_ts + 1
+        return all_deals
+    except Exception as exc:
+        logger.warning(
+            "[cTrader] deal-by-position fetch failed ctid=%s host=%s pos=%s: %s",
+            ctid_trader_account_id, host, position_id, exc,
+        )
+    return None
+
+
+async def _fetch_deals_in_window(
+    access_token: str,
+    ctid_trader_account_id: int,
+    *,
+    host: str = CTRADER_HOST,
+    from_ms: Optional[int] = None,
+    to_ms: Optional[int] = None,
+    max_rows: int = 500,
+) -> Optional[list]:
+    """ProtoOADealListReq fallback — time-ranged deal history."""
+    if not _PROTO_OK:
+        return None
+    now_ms = int(time.time() * 1000)
+    start_ms = from_ms if from_ms is not None else (now_ms - 7 * 24 * 3600 * 1000)
+    end_ms = to_ms if to_ms is not None else now_ms
+    try:
+        async with _get_account_lock(host, ctid_trader_account_id):
+            reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
+            if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                return None
+            req = ProtoOADealListReq()
+            req.ctidTraderAccountId = ctid_trader_account_id
+            req.fromTimestamp = int(start_ms)
+            req.toTimestamp = int(end_ms)
+            req.maxRows = int(max_rows)
+            payload = await _send_recv(
+                reader, writer, req,
+                _PAYLOAD_TYPES["deal_list_req"],
+                _PAYLOAD_TYPES["deal_list_res"],
+                timeout=15.0,
+            )
+            if not payload:
+                return None
+            res = ProtoOADealListRes()
+            res.ParseFromString(payload)
+            return list(res.deal)
+    except Exception as exc:
+        logger.warning(
+            "[cTrader] deal-list window fetch failed ctid=%s host=%s: %s",
+            ctid_trader_account_id, host, exc,
+        )
+    return None
+
+
 async def _get_position_close_detail(
     access_token: str,
     ctid_trader_account_id: int,
@@ -2777,63 +2998,52 @@ async def _get_position_close_detail(
     host: str = CTRADER_HOST,
     entry_hint: Optional[float] = None,
     direction: Optional[str] = None,
+    from_ms: Optional[int] = None,
+    to_ms: Optional[int] = None,
 ) -> Optional[dict]:
-    """Broker close truth for a position via ProtoOADealListByPositionIdReq."""
-    if not _PROTO_OK:
+    """Broker close truth via ProtoOADealListByPositionIdReq (+ DealList fallback)."""
+    deals = await _fetch_deals_by_position_id(
+        access_token,
+        ctid_trader_account_id,
+        position_id,
+        host=host,
+        from_ms=from_ms,
+        to_ms=to_ms,
+    )
+    if deals is None:
         return None
-    try:
-        async with _get_account_lock(host, ctid_trader_account_id):
-            reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
-            if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
-                return None
-            req = ProtoOADealListByPositionIdReq()
-            req.ctidTraderAccountId = ctid_trader_account_id
-            req.positionId = int(position_id)
-            payload = await _send_recv(
-                reader, writer, req,
-                _PAYLOAD_TYPES["deal_list_by_position_id_req"],
-                _PAYLOAD_TYPES["deal_list_by_position_id_res"],
-                timeout=15.0,
-            )
-            if not payload:
-                return None
-            res = ProtoOADealListByPositionIdRes()
-            res.ParseFromString(payload)
-            close_deal = None
-            close_ts = None
-            for deal in res.deal:
-                if deal.HasField("closePositionDetail"):
-                    close_deal = deal
-                    if deal.HasField("createTimestamp"):
-                        close_ts = int(deal.createTimestamp)
-                    elif deal.HasField("utcLastUpdateTimestamp"):
-                        close_ts = int(deal.utcLastUpdateTimestamp)
-            if close_deal is None:
-                return None
-            detail = close_deal.closePositionDetail
-            exit_price = _normalize_deal_price(float(detail.entryPrice), entry_hint)
-            gross = int(detail.grossProfit) if detail.HasField("grossProfit") else 0
-            outcome = None
-            if gross > 0:
-                outcome = "WIN"
-            elif gross < 0:
-                outcome = "LOSS"
-            elif entry_hint and direction:
-                if direction == "LONG":
-                    outcome = "WIN" if exit_price >= entry_hint else "LOSS"
-                else:
-                    outcome = "WIN" if exit_price <= entry_hint else "LOSS"
-            return {
-                "exit_price": exit_price,
-                "outcome": outcome or "LOSS",
-                "closed_at_ms": close_ts,
-                "gross_profit": gross,
-            }
-    except Exception as exc:
-        logger.debug(
-            "[cTrader] position close detail pos=%s failed: %s",
-            position_id,
-            exc,
+    parsed = _parse_close_from_deals(
+        deals, position_id, entry_hint=entry_hint, direction=direction,
+    )
+    if parsed:
+        parsed["source"] = "deal_by_position_id"
+        return parsed
+
+    if deals:
+        logger.info(
+            "[cTrader] deal-by-position ctid=%s host=%s pos=%s returned %s deals "
+            "but no close detail yet",
+            ctid_trader_account_id, host, position_id, len(deals),
+        )
+
+    window_deals = await _fetch_deals_in_window(
+        access_token,
+        ctid_trader_account_id,
+        host=host,
+        from_ms=from_ms,
+        to_ms=to_ms,
+    )
+    if window_deals:
+        parsed = _parse_close_from_deals(
+            window_deals, position_id, entry_hint=entry_hint, direction=direction,
+        )
+        if parsed:
+            parsed["source"] = "deal_list_window"
+            return parsed
+        logger.info(
+            "[cTrader] deal-list window ctid=%s host=%s pos=%s scanned %s deals "
+            "— no close match",
+            ctid_trader_account_id, host, position_id, len(window_deals),
         )
     return None
 
@@ -2845,8 +3055,11 @@ async def get_position_close_detail_for_user(
     entry_hint: Optional[float] = None,
     direction: Optional[str] = None,
     ctid: Optional[str] = None,
+    notes: Optional[str] = None,
+    fired_at=None,
 ) -> Optional[dict]:
     """High-level wrapper: broker close price/outcome for a user's position."""
+    from datetime import timedelta
     from app.database import SessionLocal
     from app.models import UserPreference
     db = SessionLocal()
@@ -2856,23 +3069,61 @@ async def get_position_close_detail_for_user(
             return None
         ctid_str = resolve_ctrader_ctid(
             execution_account_id=ctid,
+            notes=notes,
             prefs_default=prefs.ctrader_account_id,
         )
         if not ctid_str:
+            logger.warning(
+                "[cTrader] close-detail missing ctid user=%s pos=%s notes=%s",
+                user.id, position_id, (notes or "")[:80],
+            )
             return None
         access_token = prefs.ctrader_access_token
         ctid_val = int(ctid_str)
-        host = _host_for_account(prefs, ctid_val)
+        hosts = _routing_hosts_for_account(prefs, ctid_val)
     finally:
         db.close()
-    return await _get_position_close_detail(
-        access_token,
+
+    now_ms = int(time.time() * 1000)
+    if fired_at is not None:
+        try:
+            from_ms = int(fired_at.timestamp() * 1000) - 3600_000
+        except Exception:
+            from_ms = now_ms - int(timedelta(days=7).total_seconds() * 1000)
+    else:
+        from_ms = now_ms - int(timedelta(days=7).total_seconds() * 1000)
+
+    for host in hosts:
+        detail = await _get_position_close_detail(
+            access_token,
+            ctid_val,
+            position_id,
+            host=host,
+            entry_hint=entry_hint,
+            direction=direction,
+            from_ms=from_ms,
+            to_ms=now_ms,
+        )
+        if detail is not None:
+            logger.info(
+                "[cTrader] close-detail user=%s ctid=%s host=%s pos=%s "
+                "exit=%s src=%s",
+                user.id,
+                ctid_val,
+                host,
+                position_id,
+                detail.get("exit_price"),
+                detail.get("source"),
+            )
+            return detail
+    logger.warning(
+        "[cTrader] close-detail empty user=%s ctid=%s pos=%s hosts=%s",
+        user.id,
         ctid_val,
         position_id,
-        host=host,
-        entry_hint=entry_hint,
-        direction=direction,
+        hosts,
     )
+    return None
 
 
 async def place_ctrader_order_for_user(
