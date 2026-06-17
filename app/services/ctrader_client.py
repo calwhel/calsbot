@@ -1161,6 +1161,47 @@ async def refresh_user_ctrader_token(
         return None
 
 
+def _latest_ctrader_access_token(user_id: int) -> Optional[str]:
+    """Read the latest persisted OAuth access token for a user."""
+    from app.database import SessionLocal
+    from app.models import UserPreference
+
+    db = SessionLocal()
+    try:
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == int(user_id)).first()
+        token = (prefs.ctrader_access_token or "").strip() if prefs else ""
+        return token or None
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
+async def _refresh_auth_token_for_retry(
+    *,
+    user_id: Optional[int],
+    ctid_trader_account_id: int,
+    host: str,
+    operation: str,
+) -> Optional[str]:
+    """On broker account-auth failure, single-flight refresh and retry once."""
+    if not user_id:
+        return None
+    new_at = await refresh_user_ctrader_token(int(user_id), force=True)
+    if new_at:
+        logger.info(
+            "[cTrader] %s auth failed ctid=%s host=%s user=%s — refreshed token, retrying",
+            operation,
+            ctid_trader_account_id,
+            host,
+            user_id,
+        )
+        return new_at
+    if is_refresh_denied(int(user_id)):
+        _notify_ctrader_relink_needed(int(user_id), f"{operation} auth failed")
+    return None
+
+
 async def _get_accounts_on_host(access_token: str, host: str) -> list:
     """Fetch linked accounts from one cTrader host (live or demo)."""
     if not _PROTO_OK:
@@ -2571,6 +2612,8 @@ async def _get_open_position_ids(
     access_token: str,
     ctid_trader_account_id: int,
     host: str = CTRADER_HOST,
+    *,
+    user_id: Optional[int] = None,
 ) -> Optional[set]:
     """Fetch the set of currently-open broker positionIds via ProtoOAReconcileReq.
 
@@ -2580,32 +2623,61 @@ async def _get_open_position_ids(
     """
     if not _PROTO_OK:
         return None
-    try:
-        async with _get_account_lock(host, ctid_trader_account_id):
-            try:
-                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
-                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
-                    return None
-                req = ProtoOAReconcileReq()
-                req.ctidTraderAccountId = ctid_trader_account_id
-                payload = await _send_recv(
-                    reader, writer, req,
-                    _PAYLOAD_TYPES["reconcile_req"],
-                    _PAYLOAD_TYPES["reconcile_res"],
-                    timeout=10.0,
+    token = (access_token or "").strip()
+    for auth_attempt in (1, 2):
+        auth_failed = False
+        try:
+            async with _get_account_lock(host, ctid_trader_account_id):
+                try:
+                    reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
+                    if not await _account_auth(reader, writer, token, ctid_trader_account_id):
+                        auth_failed = True
+                    else:
+                        req = ProtoOAReconcileReq()
+                        req.ctidTraderAccountId = ctid_trader_account_id
+                        payload = await _send_recv(
+                            reader, writer, req,
+                            _PAYLOAD_TYPES["reconcile_req"],
+                            _PAYLOAD_TYPES["reconcile_res"],
+                            timeout=10.0,
+                        )
+                        if not payload:
+                            return None
+                        res = ProtoOAReconcileRes()
+                        res.ParseFromString(payload)
+                        return {int(p.positionId) for p in res.position}
+                except asyncio.CancelledError:
+                    _invalidate_persistent_connection(host, ctid_trader_account_id)
+                    raise
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(
+                "[cTrader] open-positions fetch error ctid=%s host=%s: %s",
+                ctid_trader_account_id,
+                host,
+                e,
+            )
+            return None
+
+        if auth_failed:
+            logger.warning(
+                "[cTrader] open-positions auth failed ctid=%s host=%s",
+                ctid_trader_account_id,
+                host,
+            )
+            if auth_attempt == 1:
+                new_at = await _refresh_auth_token_for_retry(
+                    user_id=user_id,
+                    ctid_trader_account_id=ctid_trader_account_id,
+                    host=host,
+                    operation="open-positions fetch",
                 )
-                if not payload:
-                    return None
-                res = ProtoOAReconcileRes()
-                res.ParseFromString(payload)
-                return {int(p.positionId) for p in res.position}
-            except asyncio.CancelledError:
-                _invalidate_persistent_connection(host, ctid_trader_account_id)
-                raise
-    except asyncio.CancelledError:
-        raise
-    except Exception as e:
-        logger.warning("[cTrader] open-positions fetch error ctid=%s host=%s: %s", ctid_trader_account_id, host, e)
+                if new_at:
+                    token = new_at
+                    _invalidate_persistent_connection(host, ctid_trader_account_id)
+                    continue
+            return None
     return None
 
 
@@ -2753,7 +2825,15 @@ async def get_open_position_ids_for_user(user, *, ctid: Optional[str] = None) ->
     finally:
         db.close()
     for host in hosts:
-        ids = await _get_open_position_ids(access_token, ctid_trader_account_id, host=host)
+        latest = _latest_ctrader_access_token(int(user.id))
+        if latest:
+            access_token = latest
+        ids = await _get_open_position_ids(
+            access_token,
+            ctid_trader_account_id,
+            host=host,
+            user_id=int(user.id),
+        )
         if ids is not None:
             return ids
     return None
@@ -2895,6 +2975,7 @@ async def _fetch_deals_by_position_id(
     host: str = CTRADER_HOST,
     from_ms: Optional[int] = None,
     to_ms: Optional[int] = None,
+    user_id: Optional[int] = None,
 ) -> Optional[list]:
     """ProtoOADealListByPositionIdReq — paginated, with explicit time window (ms)."""
     if not _PROTO_OK:
@@ -2902,47 +2983,69 @@ async def _fetch_deals_by_position_id(
     now_ms = int(time.time() * 1000)
     start_ms = from_ms if from_ms is not None else (now_ms - 30 * 24 * 3600 * 1000)
     end_ms = to_ms if to_ms is not None else now_ms
-    all_deals: list = []
-    cursor_from = start_ms
-    try:
-        async with _get_account_lock(host, ctid_trader_account_id):
-            reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
-            if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
-                logger.warning(
-                    "[cTrader] deal-by-position auth failed ctid=%s host=%s pos=%s",
-                    ctid_trader_account_id, host, position_id,
+    token = (access_token or "").strip()
+    for auth_attempt in (1, 2):
+        all_deals: list = []
+        cursor_from = start_ms
+        auth_failed = False
+        try:
+            async with _get_account_lock(host, ctid_trader_account_id):
+                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
+                if not await _account_auth(reader, writer, token, ctid_trader_account_id):
+                    auth_failed = True
+                else:
+                    for _page in range(8):
+                        req = ProtoOADealListByPositionIdReq()
+                        req.ctidTraderAccountId = ctid_trader_account_id
+                        req.positionId = int(position_id)
+                        req.fromTimestamp = int(cursor_from)
+                        req.toTimestamp = int(end_ms)
+                        payload = await _send_recv(
+                            reader, writer, req,
+                            _PAYLOAD_TYPES["deal_list_by_position_id_req"],
+                            _PAYLOAD_TYPES["deal_list_by_position_id_res"],
+                            timeout=15.0,
+                        )
+                        if not payload:
+                            break
+                        res = ProtoOADealListByPositionIdRes()
+                        res.ParseFromString(payload)
+                        page = list(res.deal)
+                        all_deals.extend(page)
+                        if not getattr(res, "hasMore", False) or not page:
+                            break
+                        last_ts = max(_deal_timestamp_ms(d) for d in page)
+                        if last_ts <= cursor_from:
+                            break
+                        cursor_from = last_ts + 1
+                    return all_deals
+        except asyncio.CancelledError:
+            _invalidate_persistent_connection(host, ctid_trader_account_id)
+            raise
+        except Exception as exc:
+            logger.warning(
+                "[cTrader] deal-by-position fetch failed ctid=%s host=%s pos=%s: %s",
+                ctid_trader_account_id, host, position_id, exc,
+            )
+            return None
+
+        if auth_failed:
+            logger.warning(
+                "[cTrader] deal-by-position auth failed ctid=%s host=%s pos=%s",
+                ctid_trader_account_id, host, position_id,
+            )
+            if auth_attempt == 1:
+                new_at = await _refresh_auth_token_for_retry(
+                    user_id=user_id,
+                    ctid_trader_account_id=ctid_trader_account_id,
+                    host=host,
+                    operation="deal-by-position fetch",
                 )
-                return None
-            for _page in range(8):
-                req = ProtoOADealListByPositionIdReq()
-                req.ctidTraderAccountId = ctid_trader_account_id
-                req.positionId = int(position_id)
-                req.fromTimestamp = int(cursor_from)
-                req.toTimestamp = int(end_ms)
-                payload = await _send_recv(
-                    reader, writer, req,
-                    _PAYLOAD_TYPES["deal_list_by_position_id_req"],
-                    _PAYLOAD_TYPES["deal_list_by_position_id_res"],
-                    timeout=15.0,
-                )
-                if not payload:
-                    break
-                res = ProtoOADealListByPositionIdRes()
-                res.ParseFromString(payload)
-                page = list(res.deal)
-                all_deals.extend(page)
-                if not getattr(res, "hasMore", False) or not page:
-                    break
-                last_ts = max(_deal_timestamp_ms(d) for d in page)
-                if last_ts <= cursor_from:
-                    break
-                cursor_from = last_ts + 1
-        return all_deals
-    except Exception as exc:
-        logger.warning(
-            "[cTrader] deal-by-position fetch failed ctid=%s host=%s pos=%s: %s",
-            ctid_trader_account_id, host, position_id, exc,
-        )
+                if new_at:
+                    token = new_at
+                    _invalidate_persistent_connection(host, ctid_trader_account_id)
+                    continue
+            return None
     return None
 
 
@@ -3000,15 +3103,22 @@ async def _get_position_close_detail(
     direction: Optional[str] = None,
     from_ms: Optional[int] = None,
     to_ms: Optional[int] = None,
+    user_id: Optional[int] = None,
 ) -> Optional[dict]:
     """Broker close truth via ProtoOADealListByPositionIdReq (+ DealList fallback)."""
+    token = (access_token or "").strip()
+    if user_id:
+        latest = _latest_ctrader_access_token(int(user_id))
+        if latest:
+            token = latest
     deals = await _fetch_deals_by_position_id(
-        access_token,
+        token,
         ctid_trader_account_id,
         position_id,
         host=host,
         from_ms=from_ms,
         to_ms=to_ms,
+        user_id=user_id,
     )
     if deals is None:
         return None
@@ -3026,8 +3136,12 @@ async def _get_position_close_detail(
             ctid_trader_account_id, host, position_id, len(deals),
         )
 
+    if user_id:
+        latest = _latest_ctrader_access_token(int(user_id))
+        if latest:
+            token = latest
     window_deals = await _fetch_deals_in_window(
-        access_token,
+        token,
         ctid_trader_account_id,
         host=host,
         from_ms=from_ms,
@@ -3094,6 +3208,9 @@ async def get_position_close_detail_for_user(
         from_ms = now_ms - int(timedelta(days=7).total_seconds() * 1000)
 
     for host in hosts:
+        latest = _latest_ctrader_access_token(int(user.id))
+        if latest:
+            access_token = latest
         detail = await _get_position_close_detail(
             access_token,
             ctid_val,
@@ -3103,6 +3220,7 @@ async def get_position_close_detail_for_user(
             direction=direction,
             from_ms=from_ms,
             to_ms=now_ms,
+            user_id=int(user.id),
         )
         if detail is not None:
             logger.info(

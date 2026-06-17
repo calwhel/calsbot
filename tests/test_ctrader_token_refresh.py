@@ -35,6 +35,24 @@ class TestCtraderTokenRefresh(unittest.TestCase):
         self.assertIn("_feed_launch_lock", src)
         self.assertIn("skip duplicate", src)
 
+    def test_position_fetches_refresh_and_retry_on_auth_failure(self):
+        import app.services.ctrader_client as cc
+
+        open_src = inspect.getsource(cc._get_open_position_ids)
+        deal_src = inspect.getsource(cc._fetch_deals_by_position_id)
+        helper_src = inspect.getsource(cc._refresh_auth_token_for_retry)
+
+        self.assertIn("for auth_attempt in (1, 2)", open_src)
+        self.assertIn("_refresh_auth_token_for_retry", open_src)
+        self.assertIn("open-positions auth failed", open_src)
+
+        self.assertIn("for auth_attempt in (1, 2)", deal_src)
+        self.assertIn("_refresh_auth_token_for_retry", deal_src)
+        self.assertIn("deal-by-position auth failed", deal_src)
+
+        self.assertIn("refresh_user_ctrader_token", helper_src)
+        self.assertIn("force=True", helper_src)
+
 
 if __name__ == "__main__":
     unittest.main()
