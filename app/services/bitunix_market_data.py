@@ -627,7 +627,7 @@ async def fetch_crypto_price_and_ta(
     """
     try:
         from app.services.enhanced_ta import analyze_klines
-        from app.services.prefetch_fast import SYMBOL_BUDGET_S
+        from app.services.prefetch_fast import SYMBOL_BUDGET_S, prefetch_fast_active
 
         async def _run():
             ticker_task = asyncio.create_task(_fetch_ticker_chain(http_client, symbol))
@@ -638,7 +638,7 @@ async def fetch_crypto_price_and_ta(
             )
             return ticker, ticker_src, klines_15m, klines_1h
 
-        if prefetch:
+        if prefetch or prefetch_fast_active():
             ticker, ticker_src, klines_15m, klines_1h = await asyncio.wait_for(
                 _run(), timeout=SYMBOL_BUDGET_S,
             )

@@ -13,6 +13,7 @@ from app.services.prefetch_fast import PROVIDER_TIMEOUT_S, SYMBOL_BUDGET_S
 from app.services.strategy_account_assignments import TRADFI_BROKER_ASSET_CLASSES
 from app.services.strategy_executor import (
     _EXECUTOR_TRADFI_CLASSES,
+    _PRICE_TA_CACHE,
     _prefetch_fallback_price_ta,
     _prefetch_price_ta_for_cycle,
     _snap_asset_class,
@@ -20,6 +21,8 @@ from app.services.strategy_executor import (
 
 
 class TestPrefetchIsolation(unittest.TestCase):
+    def setUp(self):
+        _PRICE_TA_CACHE.clear()
     def test_tradfi_classes_include_metals_not_crypto(self):
         self.assertIn("metals", _EXECUTOR_TRADFI_CLASSES)
         self.assertIn("forex", _EXECUTOR_TRADFI_CLASSES)

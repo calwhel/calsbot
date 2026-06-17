@@ -734,10 +734,43 @@ async def _get_raw_tickers(http_client: httpx.AsyncClient) -> Optional[list]:
     return _RAW_TICKERS_CACHE  # sticky: last good cache or None if never warmed
 
 
+def _cap_crypto_symbols_by_volume(
+    symbols: List[str],
+    tickers: Optional[list],
+    universe: Dict,
+    *,
+    strategy_id: Optional[int] = None,
+    max_symbols: int = EXECUTOR_MAX_SYMBOLS_PER_STRATEGY,
+) -> List[str]:
+    """Cap dynamic crypto universes to top-N by 24h quote volume."""
+    if len(symbols) <= max_symbols:
+        return symbols
+    vol_map: Dict[str, float] = {}
+    if tickers:
+        for t in tickers:
+            sym = t.get("symbol", "")
+            if sym:
+                vol_map[sym] = float(t.get("quoteVolume", 0) or 0)
+    ranked = sorted(symbols, key=lambda s: vol_map.get(s, 0.0), reverse=True)
+    capped = ranked[:max_symbols]
+    uni_type = str(universe.get("type") or "all").lower()
+    logger.info(
+        "[eval] strategy=%s universe %s capped %s→%s (top by 24h volume)",
+        strategy_id if strategy_id is not None else "?",
+        uni_type,
+        len(symbols),
+        len(capped),
+    )
+    return capped
+
+
 async def _get_eligible_symbols(
     universe: Dict,
     http_client: httpx.AsyncClient,
     raw_tickers: Optional[list] = None,
+    *,
+    strategy_id: Optional[int] = None,
+    max_symbols: int = EXECUTOR_MAX_SYMBOLS_PER_STRATEGY,
 ) -> List[str]:
     from app.services.social_signals import SLOW_HIGHCAP_BLOCKED
 
@@ -799,13 +832,15 @@ async def _get_eligible_symbols(
                 logger.debug(f"[eligible-symbols] Skipping pinned {sym} — not on Bitunix futures")
                 continue
             pinned_found.append(sym)
-        return pinned_found
+        return _cap_crypto_symbols_by_volume(
+            pinned_found, tickers, universe,
+            strategy_id=strategy_id, max_symbols=max_symbols,
+        )
 
     # ── top_gainers: return top-N Bitunix coins ranked by 24h % gain ─────────
     # This is a dynamic ranking — always the highest movers of the day,
     # regardless of whether any cross a fixed percentage threshold.
     if sym_type == "top_gainers":
-        top_n = int(universe.get("top_n", 30))
         ranked = []
         for t in tickers:
             sym = t.get("symbol", "")
@@ -826,7 +861,12 @@ async def _get_eligible_symbols(
             chg = float(t.get("priceChangePercent", 0))
             ranked.append((sym, chg))
         ranked.sort(key=lambda x: x[1], reverse=True)
-        return [sym for sym, _ in ranked[:top_n]]
+        top_n = min(int(universe.get("top_n", 30)), max_symbols)
+        gainers = [sym for sym, _ in ranked[:top_n]]
+        return _cap_crypto_symbols_by_volume(
+            gainers, tickers, universe,
+            strategy_id=strategy_id, max_symbols=max_symbols,
+        )
 
     symbols = []
     for t in tickers:
@@ -854,7 +894,10 @@ async def _get_eligible_symbols(
         if max_chg is not None and chg > float(max_chg):
             continue
         symbols.append(sym)
-    return symbols
+    return _cap_crypto_symbols_by_volume(
+        symbols, tickers, universe,
+        strategy_id=strategy_id, max_symbols=max_symbols,
+    )
 
 
 def _primary_timeframe(config: dict) -> str:
@@ -5076,7 +5119,10 @@ async def evaluate_and_fire(
                 EXECUTOR_MAX_SYMBOLS_PER_STRATEGY,
             )
     else:
-        symbols = await _get_eligible_symbols(universe, http_client, raw_tickers=raw_tickers)
+        symbols = await _get_eligible_symbols(
+            universe, http_client, raw_tickers=raw_tickers,
+            strategy_id=strategy.id,
+        )
     if not symbols:
         _bump("blk_empty_universe")
         _log_eval_no_symbols(
@@ -5182,12 +5228,15 @@ async def evaluate_and_fire(
             sym, http_client, asset_class,
             user_id=_uid, timeframe=_eval_tf,
             metal_paper_ok=_metal_paper,
+            prefetch=True,
         )
 
-    _price_results = await asyncio.gather(
-        *[_price_for_symbol(sym) for sym in candidate_symbols],
-        return_exceptions=True,
-    )
+    from app.services.prefetch_fast import prefetch_fast_context
+    async with prefetch_fast_context():
+        _price_results = await asyncio.gather(
+            *[_price_for_symbol(sym) for sym in candidate_symbols],
+            return_exceptions=True,
+        )
     price_map: Dict[str, Dict] = {
         sym: res
         for sym, res in zip(candidate_symbols, _price_results)
@@ -7089,6 +7138,7 @@ async def _prefetch_price_ta_for_cycle(
     allowed_asset_classes: set,
     label: str = "Executor",
     ctrader_user_id: Optional[int] = None,
+    raw_tickers: Optional[list] = None,
 ) -> Dict[str, int]:
     """
     Warm _PRICE_TA_CACHE + tradfi kline cache for every unique symbol in this
@@ -7110,7 +7160,16 @@ async def _prefetch_price_ta_for_cycle(
         if ac not in allowed_asset_classes:
             continue
         tf = _primary_timeframe(snap.get("config") or {})
-        for sym in _symbols_for_snapshot(snap):
+        if ac == "crypto":
+            _cfg = snap.get("config") or {}
+            _uni = (_cfg.get("universe") or {})
+            syms = await _get_eligible_symbols(
+                _uni, http_client, raw_tickers=raw_tickers,
+                strategy_id=snap.get("id"),
+            )
+        else:
+            syms = _symbols_for_snapshot(snap)
+        for sym in syms:
             symbol_refs += 1
             key = (sym, ac, tf)
             if key in seen:
@@ -7879,6 +7938,7 @@ async def _run_crypto_executor_shard(
                     http_client,
                     {"crypto"},
                     label=_crypto_lbl,
+                    raw_tickers=shared_tickers,
                 )
 
                 await _gather_eval_batches(
