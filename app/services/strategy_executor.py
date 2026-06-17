@@ -161,6 +161,15 @@ class ExecutorCycleCtx:
 EVAL_DIAG_SLOW_MS = float(_os_env.environ.get("EXECUTOR_EVAL_DIAG_SLOW_MS", "3000"))
 # Cycle-level slow flag — triggers [eval] lines for all strategies in the cycle.
 CYCLE_EVAL_SLOW_MS = float(_os_env.environ.get("EXECUTOR_CYCLE_EVAL_SLOW_MS", "5000"))
+EXECUTOR_DB_PHASE_TIMEOUT_S = float(
+    _os_env.environ.get("EXECUTOR_DB_PHASE_TIMEOUT_S", "8"),
+)
+EXECUTOR_REF_PRELOAD_TIMEOUT_S = float(
+    _os_env.environ.get("EXECUTOR_REF_PRELOAD_TIMEOUT_S", "8"),
+)
+EXECUTOR_INIT_DB_TIMEOUT_S = float(
+    _os_env.environ.get("EXECUTOR_INIT_DB_TIMEOUT_S", "25"),
+)
 
 
 @dataclass
@@ -1479,6 +1488,49 @@ def _db_rollback_safe(db) -> None:
         db.rollback()
     except Exception:
         pass
+
+
+async def _run_db_phase_with_timeout(
+    *,
+    label: str,
+    fn,
+    timeout_s: float,
+    fallback,
+):
+    """
+    Run sync DB work in a worker thread with retry + hard timeout.
+
+    Prevents blocking SQLAlchemy calls from stalling the event loop when Neon
+    drops an SSL connection mid-cycle.
+    """
+    from app.db_resilience import is_transient_db_error, run_with_db_retry
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                lambda: run_with_db_retry(
+                    fn,
+                    max_attempts=2,
+                    retry_delay=0.35,
+                    label=label,
+                )
+            ),
+            timeout=max(1.0, float(timeout_s)),
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[cycle-db] %s timed out after %.1fs — using fallback",
+            label,
+            timeout_s,
+        )
+    except Exception as exc:
+        lvl = logger.warning if is_transient_db_error(exc) else logger.error
+        lvl(
+            "[cycle-db] %s failed (%s) — using fallback",
+            label,
+            type(exc).__name__,
+        )
+    return fallback
 
 
 def _rebind_session(db, *instances) -> None:
@@ -9076,12 +9128,28 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
     Strategies are partitioned by ``strategy_id % shard_count`` so multiple
     shards evaluate disjoint subsets in parallel without double-firing.
     """
-    from app.database import BgSessionLocal as SessionLocal, bg_engine as engine
+    from app.database import (
+        BgSessionLocal as SessionLocal,
+        bg_engine as engine,
+        bg_engine_runtime_profile,
+    )
     from app.models import User
     from app.strategy_models import UserStrategy, init_strategy_tables
 
     try:
-        init_strategy_tables(engine)
+        await asyncio.wait_for(
+            asyncio.to_thread(init_strategy_tables, engine),
+            timeout=EXECUTOR_INIT_DB_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError as _init_to:
+        logger.critical(
+            "[executor] forex_executor init_strategy_tables timed out shard=%s/%s after %.1fs",
+            shard_index,
+            shard_count,
+            EXECUTOR_INIT_DB_TIMEOUT_S,
+            exc_info=True,
+        )
+        raise RuntimeError("init_strategy_tables timeout") from _init_to
     except Exception as _init_err:
         logger.critical(
             "[executor] forex_executor init_strategy_tables failed shard=%s/%s: %s",
@@ -9102,6 +9170,22 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
     logger.info(
         f"📈 {_fx_lbl} started (cycle={FOREX_SCAN_INTERVAL_SECONDS}s)"
     )
+    try:
+        _db_prof = bg_engine_runtime_profile()
+        logger.info(
+            "[executor-db] shard=%s/%s pre_ping=%s stmt_timeout_ms=%s "
+            "lock_timeout_ms=%s keepalive=%s/%s/%s",
+            shard_index,
+            shard_count,
+            _db_prof.get("pool_pre_ping"),
+            _db_prof.get("statement_timeout_ms"),
+            _db_prof.get("lock_timeout_ms"),
+            _db_prof.get("keepalives_idle_s"),
+            _db_prof.get("keepalives_interval_s"),
+            _db_prof.get("keepalives_count"),
+        )
+    except Exception:
+        pass
     mark_heartbeat(
         "forex_executor" if shard_count <= 1 else f"forex_executor_s{shard_index}"
     )
@@ -9143,8 +9227,11 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 begin_scan_metric_batch()
                 mark_heartbeat(_fx_hb)
                 _db_t0 = time.monotonic()
-                _all_snaps = _load_strategy_snapshots_cached(
-                    SessionLocal, UserStrategy,
+                _all_snaps = await _run_db_phase_with_timeout(
+                    label=f"{_fx_lbl}:snapshots",
+                    fn=lambda: _load_strategy_snapshots_cached(SessionLocal, UserStrategy),
+                    timeout_s=EXECUTOR_DB_PHASE_TIMEOUT_S,
+                    fallback=[],
                 )
                 _log_cycle_db_phase(_fx_lbl, "snapshots", _db_t0)
                 strategy_snapshots = [
@@ -9257,24 +9344,33 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 has_pro_by_user: Dict[int, bool] = {}
                 ctrader_ok_by_user: Dict[int, bool] = {}
                 if _uids:
-                    _ref_db = SessionLocal()
-                    try:
-                        for _ps in _ref_db.query(_PSub).filter(_PSub.user_id.in_(_uids)).all():
-                            has_pro_by_user[_ps.user_id] = bool(
-                                _ps.tier == "pro"
-                                and _ps.subscription_end
-                                and _ps.subscription_end > _now_cycle
-                            )
-                        for _pf in _ref_db.query(_UPref).filter(_UPref.user_id.in_(_uids)).all():
-                            ctrader_ok_by_user[_pf.user_id] = bool(
-                                _pf.ctrader_access_token
-                                and _pf.ctrader_account_id
-                                and getattr(_pf, "forex_approved", False)
-                            )
-                    except Exception as _ref_err:
-                        logger.debug(f"[FX Executor] ref preload failed: {_ref_err}")
-                    finally:
-                        _ref_db.close()
+                    def _load_ref_maps_sync():
+                        _ref_db = SessionLocal()
+                        try:
+                            _has_pro: Dict[int, bool] = {}
+                            _ctr_ok: Dict[int, bool] = {}
+                            for _ps in _ref_db.query(_PSub).filter(_PSub.user_id.in_(_uids)).all():
+                                _has_pro[_ps.user_id] = bool(
+                                    _ps.tier == "pro"
+                                    and _ps.subscription_end
+                                    and _ps.subscription_end > _now_cycle
+                                )
+                            for _pf in _ref_db.query(_UPref).filter(_UPref.user_id.in_(_uids)).all():
+                                _ctr_ok[_pf.user_id] = bool(
+                                    _pf.ctrader_access_token
+                                    and _pf.ctrader_account_id
+                                    and getattr(_pf, "forex_approved", False)
+                                )
+                            return _has_pro, _ctr_ok
+                        finally:
+                            _ref_db.close()
+
+                    has_pro_by_user, ctrader_ok_by_user = await _run_db_phase_with_timeout(
+                        label=f"{_fx_lbl}:ref_preload",
+                        fn=_load_ref_maps_sync,
+                        timeout_s=EXECUTOR_REF_PRELOAD_TIMEOUT_S,
+                        fallback=({}, {}),
+                    )
 
                 # No MEXC ticker prefetch — forex uses yfinance; pass empty list.
                 cycle_gate_stats: Dict[str, int] = {}
@@ -9282,18 +9378,32 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 # Shared counters for cycle-level DB health reporting.
                 _cycle_db_skipped: list = []   # (strategy_id, err_name) tuples
                 _db_t0 = time.monotonic()
-                _preloaded_fx = _preload_strategy_users(
-                    [s["id"] for s in open_snaps],
-                    SessionLocal,
-                    UserStrategy,
-                    User,
+                _preloaded_fx = await _run_db_phase_with_timeout(
+                    label=f"{_fx_lbl}:preload_users",
+                    fn=lambda: _preload_strategy_users(
+                        [s["id"] for s in open_snaps],
+                        SessionLocal,
+                        UserStrategy,
+                        User,
+                    ),
+                    timeout_s=EXECUTOR_DB_PHASE_TIMEOUT_S,
+                    fallback={},
                 )
                 _log_cycle_db_phase(_fx_lbl, "preload_users", _db_t0)
 
                 _db_t0 = time.monotonic()
-                _gate_prefetch = _prefetch_cycle_gate_data(
-                    [s["id"] for s in open_snaps],
-                    SessionLocal,
+                _gate_prefetch = await _run_db_phase_with_timeout(
+                    label=f"{_fx_lbl}:gate_prefetch",
+                    fn=lambda: _prefetch_cycle_gate_data(
+                        [s["id"] for s in open_snaps],
+                        SessionLocal,
+                    ),
+                    timeout_s=EXECUTOR_DB_PHASE_TIMEOUT_S,
+                    fallback={
+                        "execution_counts": {},
+                        "symbol_last_fired": {},
+                        "assignment_targets": {},
+                    },
                 )
                 _log_cycle_db_phase(_fx_lbl, "gate_prefetch", _db_t0)
                 _cycle_ctx = ExecutorCycleCtx(

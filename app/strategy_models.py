@@ -293,27 +293,40 @@ class PortalPayment(Base):
 
 def init_strategy_tables(engine):
     """Create strategy tables if they don't exist. Safe to call on every startup."""
+    import os
+    from sqlalchemy import text
+
+    _ddl_stmt_ms = max(
+        3000, int(os.environ.get("STRATEGY_INIT_DDL_STATEMENT_TIMEOUT_MS", "15000")),
+    )
+    _ddl_lock_ms = max(
+        1000, int(os.environ.get("STRATEGY_INIT_DDL_LOCK_TIMEOUT_MS", "3000")),
+    )
+
     try:
         import app.models  # noqa — registers User and other tables on the shared Base
     except Exception:
         pass
-    Base.metadata.create_all(bind=engine, tables=[
-        UserStrategy.__table__,
-        StrategyAccountAssignment.__table__,
-        StrategyExecution.__table__,
-        StrategyPerformance.__table__,
-        StrategyMarketplace.__table__,
-        StrategyPortalSettings.__table__,
-        PortalSubscription.__table__,
-        PortalPayment.__table__,
-        StrategyOffer.__table__,
-        DiscoveryScanJob.__table__,
-        LiveFireFailure.__table__,
-        ScanSchedule.__table__,
-    ])
+    with engine.begin() as conn:
+        # Ensure create_all() cannot hang indefinitely behind Neon lock stalls.
+        conn.execute(text(f"SET LOCAL lock_timeout = '{_ddl_lock_ms}ms'"))
+        conn.execute(text(f"SET LOCAL statement_timeout = '{_ddl_stmt_ms}ms'"))
+        Base.metadata.create_all(bind=conn, tables=[
+            UserStrategy.__table__,
+            StrategyAccountAssignment.__table__,
+            StrategyExecution.__table__,
+            StrategyPerformance.__table__,
+            StrategyMarketplace.__table__,
+            StrategyPortalSettings.__table__,
+            PortalSubscription.__table__,
+            PortalPayment.__table__,
+            StrategyOffer.__table__,
+            DiscoveryScanJob.__table__,
+            LiveFireFailure.__table__,
+            ScanSchedule.__table__,
+        ])
     # Add new columns only if genuinely missing — avoids table locks when multiple
     # portal instances (dev + production) share the same Neon database.
-    from sqlalchemy import text
     with engine.connect() as conn:
         # Bound statement time and — critically — cap how long any DDL will WAIT
         # for a lock. Without lock_timeout a blocked ALTER/CREATE INDEX queues
@@ -321,8 +334,8 @@ def init_strategy_tables(engine):
         # that table (lock-queue starvation), which hangs all portal API calls.
         # Session-level SET (not LOCAL) so it applies to every DDL below.
         try:
-            conn.execute(text("SET lock_timeout = '2s'"))
-            conn.execute(text("SET statement_timeout = '30000'"))
+            conn.execute(text(f"SET lock_timeout = '{_ddl_lock_ms}ms'"))
+            conn.execute(text(f"SET statement_timeout = '{_ddl_stmt_ms}ms'"))
             conn.commit()
         except Exception:
             pass
