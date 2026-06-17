@@ -2180,6 +2180,11 @@ from app.executor_lock import (
     FOREX_EXECUTOR_LOCK_ID,
     get_executor_lock_id,
 )
+from app.executor_leadership import (
+    mark_executor_lock_acquired,
+    mark_executor_lock_lost,
+    mark_executor_lock_uncertain,
+)
 # Keepalive cadence for the lock-holding connection. Pinged from a DEDICATED
 # DAEMON THREAD (not the asyncio loop, which the executor's scan cycles block for
 # tens of seconds), so it must stay comfortably BELOW _EXECUTOR_LOCK_STALE_IDLE_SECS.
@@ -2213,6 +2218,12 @@ def _try_acquire_executor_lock():
 
         conn = build_lock_connection(get_executor_application_name())
         if try_acquire_lock(conn, get_executor_lock_id()):
+            mark_executor_lock_acquired(
+                conn,
+                lock_id=get_executor_lock_id(),
+                application_name=get_executor_application_name(),
+                reason="claim-loop-acquire",
+            )
             logger.info(
                 "[executor_lock] advisory lock session open "
                 "(build_lock_connection, keepalive ping=%ss)",
@@ -2302,12 +2313,25 @@ def _advisory_lock_keepalive_thread(
     )
     if migrated:
         conn_holder["conn"] = migrated
+        mark_executor_lock_acquired(
+            migrated,
+            lock_id=lock_id,
+            application_name=application_name,
+            reason=f"{lock_path}:seed-migrate",
+        )
     elif seed is None or getattr(seed, "closed", 0):
         fresh = build_lock_connection(application_name)
         if try_acquire_lock(fresh, lock_id):
             conn_holder["conn"] = fresh
+            mark_executor_lock_acquired(
+                fresh,
+                lock_id=lock_id,
+                application_name=application_name,
+                reason=f"{lock_path}:seed-fresh-acquire",
+            )
         else:
             close_lock_connection(fresh)
+            mark_executor_lock_lost(f"{lock_path}:seed-acquire-failed")
             lost_event.set()
             return
 
@@ -2323,6 +2347,9 @@ def _advisory_lock_keepalive_thread(
             cur.execute("SELECT 1")
             cur.close()
         except Exception as e:
+            mark_executor_lock_uncertain(
+                f"{lock_path}:keepalive-ping-failed:{type(e).__name__}",
+            )
             # One fast reconnect on the same tick — avoids a full re-claim loop
             # for a single transient Neon SSL close.
             new_conn = _portal_lock_reconnect(
@@ -2334,6 +2361,12 @@ def _advisory_lock_keepalive_thread(
             )
             if new_conn:
                 conn_holder["conn"] = new_conn
+                mark_executor_lock_acquired(
+                    new_conn,
+                    lock_id=lock_id,
+                    application_name=application_name,
+                    reason=f"{lock_path}:silent-reconnect",
+                )
                 logger.debug(
                     "Advisory lock keepalive: silent reconnect succeeded"
                 )
@@ -2348,6 +2381,12 @@ def _advisory_lock_keepalive_thread(
             )
             if new_conn:
                 conn_holder["conn"] = new_conn
+                mark_executor_lock_acquired(
+                    new_conn,
+                    lock_id=lock_id,
+                    application_name=application_name,
+                    reason=f"{lock_path}:reclaim",
+                )
                 logger.info(
                     "Advisory lock re-claimed on fresh session — executor continues"
                 )
@@ -2356,6 +2395,7 @@ def _advisory_lock_keepalive_thread(
                 "Advisory lock re-claim exhausted (another holder or DB down) "
                 "— will re-enter claim loop"
             )
+            mark_executor_lock_lost(f"{lock_path}:reclaim-exhausted")
             lost_event.set()
             return
 
@@ -2882,6 +2922,7 @@ async def _keepalive_then_reclaim(conn):
     global _executor_running_in_this_worker
     await _maintain_advisory_lock(conn)      # blocks until in-thread re-claim exhausted
     _executor_running_in_this_worker = False
+    mark_executor_lock_lost("keepalive-returned")
     # Gunicorn siblings: stop feeds so the new lock-holder doesn't open duplicate
     # broker sessions. Standalone executor keeps feeds running during re-claim.
     if _lock_loss_should_stop_feeds():

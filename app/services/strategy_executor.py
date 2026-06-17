@@ -123,6 +123,62 @@ def executor_runtime_profile() -> Dict[str, object]:
     }
 
 
+EXECUTOR_LOCK_PAUSE_SECONDS = float(
+    _os_env.environ.get("EXECUTOR_LOCK_PAUSE_SECONDS", "1.0"),
+)
+EXECUTOR_FIRE_GATE_TIMEOUT_S = float(
+    _os_env.environ.get("EXECUTOR_FIRE_GATE_TIMEOUT_S", "2.0"),
+)
+
+
+def _executor_owner_confirmed() -> bool:
+    """Fail-closed ownership gate for eval loops."""
+    try:
+        from app.executor_leadership import executor_can_run
+        return bool(executor_can_run())
+    except Exception:
+        return False
+
+
+async def _verify_executor_fire_gate(context: str) -> bool:
+    """Live ownership check immediately before any broker send path."""
+    from app.executor_leadership import executor_can_run, verify_executor_lock_live
+
+    if not executor_can_run():
+        logger.warning(
+            "[lock-gate] fire blocked (ownership unconfirmed) %s",
+            context,
+        )
+        return False
+    try:
+        timeout_s = max(0.5, float(EXECUTOR_FIRE_GATE_TIMEOUT_S))
+        ok = await asyncio.wait_for(
+            asyncio.to_thread(verify_executor_lock_live),
+            timeout=timeout_s,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[lock-gate] fire blocked (live check timeout %.1fs) %s",
+            EXECUTOR_FIRE_GATE_TIMEOUT_S,
+            context,
+        )
+        return False
+    except Exception as exc:
+        logger.warning(
+            "[lock-gate] fire blocked (live check error %s) %s",
+            type(exc).__name__,
+            context,
+        )
+        return False
+    if not ok:
+        logger.warning(
+            "[lock-gate] fire blocked (lock not held on live check) %s",
+            context,
+        )
+        return False
+    return True
+
+
 def strategy_shard_index(strategy_id: int, shard_count: int = EXECUTOR_SHARD_COUNT) -> int:
     return int(strategy_id) % max(1, shard_count)
 
@@ -4780,6 +4836,10 @@ async def evaluate_and_fire(
         if gate_stats is not None:
             gate_stats[key] = gate_stats.get(key, 0) + 1
 
+    if not _executor_owner_confirmed():
+        _bump("blk_lock_unowned")
+        return
+
     # Determine paper/live upfront.
     # Live strategies automatically downgrade to paper if the user doesn't have
     # Bitunix auto-trading set up — so every signal is always tracked.
@@ -5714,6 +5774,12 @@ async def evaluate_and_fire(
                     _format_fire_targets_log(_fire_targets),
                     len(_fire_targets),
                 )
+
+        if not await _verify_executor_fire_gate(
+            f"strategy={strategy.id} symbol={symbol} live={not is_paper}",
+        ):
+            _bump("blk_lock_unowned")
+            continue
 
         if not is_paper and _fire_targets:
             logger.info(
@@ -7808,6 +7874,9 @@ async def _run_crypto_executor_shard(
     _hb_name = "crypto_executor" if shard_count <= 1 else f"crypto_executor_s{shard_index}"
 
     while True:
+            if not _executor_owner_confirmed():
+                await asyncio.sleep(max(0.5, EXECUTOR_LOCK_PAUSE_SECONDS))
+                continue
             _cycle_t0 = datetime.utcnow()
             _cycle_ctx_token = None
             try:
@@ -7931,6 +8000,11 @@ async def _run_crypto_executor_shard(
                     from sqlalchemy.exc import PendingRollbackError as _SAPendingRollbackError
                     from sqlalchemy.exc import TimeoutError as _SATimeoutError
                     from app.database import bg_db_slot
+                    if not _executor_owner_confirmed():
+                        cycle_gate_stats["blk_lock_unowned"] = (
+                            cycle_gate_stats.get("blk_lock_unowned", 0) + 1
+                        )
+                        return
                     async with sem:
                         row = _preloaded_users.get(snap["id"])
                         if not row:
@@ -9013,6 +9087,9 @@ async def run_forex_live_manager_fast():
     last_reconcile = 0.0
     _cycle_n = 0
     while True:
+        if not _executor_owner_confirmed():
+            await asyncio.sleep(max(0.5, EXECUTOR_LOCK_PAUSE_SECONDS))
+            continue
         _forex_open = True
         try:
             mark_heartbeat("forex_live_manager")
@@ -9211,6 +9288,9 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
         _fx_empty_cycles = 0
         _fx_scan_cycle = 0
         while True:
+            if not _executor_owner_confirmed():
+                await asyncio.sleep(max(0.5, EXECUTOR_LOCK_PAUSE_SECONDS))
+                continue
             _cycle_db_skipped = []  # initialised before try so the adaptive
                                     # backoff below is safe even if the cycle
                                     # throws before its own assignment.
@@ -9422,6 +9502,11 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     from app.services.strategy_ta import StrategyEvalCancelled
                     _strat_t0 = time.monotonic()
                     _diag = EvalDiag()
+                    if not _executor_owner_confirmed():
+                        cycle_gate_stats["blk_lock_unowned"] = (
+                            cycle_gate_stats.get("blk_lock_unowned", 0) + 1
+                        )
+                        return
                     try:
                         _sem_t0 = time.monotonic()
                         async with sem:

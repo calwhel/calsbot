@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ _worker_started = False
 _order_loop: Optional[asyncio.AbstractEventLoop] = None
 _order_thread: Optional[threading.Thread] = None
 _order_loop_ready = threading.Event()
+_LOCK_GATE_TIMEOUT_S = float(os.environ.get("EXECUTOR_FIRE_GATE_TIMEOUT_S", "2.0"))
 
 
 @dataclass
@@ -582,6 +584,43 @@ async def _run_sl_amend_job(job: CtraderSlAmendJob) -> None:
         _get_priority_queue().task_done()
 
 
+async def _lock_gate_allows_broker_send(job: CtraderOrderJob) -> bool:
+    from app.executor_leadership import executor_can_run, verify_executor_lock_live
+
+    if not executor_can_run():
+        logger.warning(
+            "[ctrader-queue] exec#%s blocked — lock ownership unconfirmed",
+            job.execution_id,
+        )
+        return False
+    try:
+        timeout_s = max(0.5, float(_LOCK_GATE_TIMEOUT_S))
+        ok = await asyncio.wait_for(
+            asyncio.to_thread(verify_executor_lock_live),
+            timeout=timeout_s,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[ctrader-queue] exec#%s blocked — lock live-check timeout %.1fs",
+            job.execution_id,
+            _LOCK_GATE_TIMEOUT_S,
+        )
+        return False
+    except Exception as exc:
+        logger.warning(
+            "[ctrader-queue] exec#%s blocked — lock live-check error %s",
+            job.execution_id,
+            type(exc).__name__,
+        )
+        return False
+    if not ok:
+        logger.warning(
+            "[ctrader-queue] exec#%s blocked — lock live-check failed",
+            job.execution_id,
+        )
+    return bool(ok)
+
+
 async def _run_order_job(job: CtraderOrderJob) -> None:
     """Place one order — runs concurrently with other accounts' jobs."""
     if job.latency is not None:
@@ -669,6 +708,15 @@ async def _run_order_job(job: CtraderOrderJob) -> None:
         attempts = 0
         for attempt in range(1, max_live_order_attempts() + 1):
             attempts = attempt
+            if not await _lock_gate_allows_broker_send(job):
+                classified = classify_live_order_failure("executor lock unconfirmed")
+                await _apply_order_result(
+                    job,
+                    {"error": "executor lock unconfirmed"},
+                    attempts=attempts,
+                    classified=classified,
+                )
+                return
             if await _execution_already_filled(job.execution_id):
                 logger.info(
                     "[ctrader-queue] exec#%s already filled — skip placement",
