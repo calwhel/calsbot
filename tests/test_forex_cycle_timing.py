@@ -16,6 +16,7 @@ from app.services.strategy_executor import (
     _prefetch_price_ta_for_cycle,
     _price_ta_cache_key,
     _price_ta_cache_lookup,
+    _strategy_cache_asset_class,
 )
 
 
@@ -25,17 +26,19 @@ class TestCycleTimingLog(unittest.TestCase):
             _log_cycle_timing(
                 shard_index=0,
                 strategy_count=57,
+                setup_ms=800.0,
                 prefetch_ms=1200.4,
                 eval_ms=45000.2,
+                post_ms=200.0,
                 fire_ms=120.0,
-                total_ms=46320.6,
+                total_ms=47320.6,
                 prefetch_stats={"unique_keys": 5, "symbol_refs": 30},
                 strategy_timings_ms=[(1, 5000), (2, 3000), (3, 1000)],
             )
         joined = "\n".join(cm.output)
         self.assertIn(
-            "[cycle] shard=0 strategies=57 prefetch=1200ms eval=45000ms "
-            "fire=120ms total=46321ms prefetch_dedup=5/30",
+            "[cycle] shard=0 strategies=57 setup=800ms prefetch=1200ms eval=45000ms "
+            "post=200ms fire=120ms db_stagger=0ms total=47321ms prefetch_dedup=5/30",
             joined,
         )
         self.assertIn("[cycle] slowest id=1 eval=5000ms id=2 eval=3000ms id=3 eval=1000ms", joined)
@@ -106,6 +109,37 @@ class TestPriceTaCacheLookup(unittest.TestCase):
         self.assertIsNone(
             _price_ta_cache_lookup("EURUSD", "forex", "15m"),
         )
+
+    def test_metals_prefetch_hit_from_forex_eval_key(self):
+        from datetime import datetime
+
+        prefetched = {"price": 2650.0, "rsi": 50.0}
+        _PRICE_TA_CACHE["metals:XAUUSD:15m"] = (
+            prefetched,
+            datetime.utcnow(),
+        )
+        strategy = type("S", (), {
+            "asset_class": "forex",
+            "config": {"asset_class": "forex", "universe": {"symbols": ["XAUUSD"]}},
+        })()
+        cache_ac = _strategy_cache_asset_class(strategy)
+        hit = _price_ta_cache_lookup(
+            "XAUUSD", cache_ac, "15m", metal_paper_ok=True,
+        )
+        self.assertIs(hit, prefetched)
+
+    def test_metals_prefetch_hit_without_paper_suffix(self):
+        from datetime import datetime
+
+        prefetched = {"price": 2650.0}
+        _PRICE_TA_CACHE["forex:XAUUSD:15m"] = (
+            prefetched,
+            datetime.utcnow(),
+        )
+        hit = _price_ta_cache_lookup(
+            "XAUUSD", "metals", "15m", metal_paper_ok=True,
+        )
+        self.assertIs(hit, prefetched)
 
 
 class TestExecutorCycleCtx(unittest.TestCase):
