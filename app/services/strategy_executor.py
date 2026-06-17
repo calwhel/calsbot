@@ -256,16 +256,15 @@ def _log_cycle_timing(
             logger.info("[cycle] slowest %s", parts)
 
 async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size: int = 0) -> None:
-    """Run evaluate tasks in chunks and log progress (visible in Railway during long scans)."""
+    """Launch all strategy eval tasks together and log rolling progress."""
     size = batch_size or EXECUTOR_SCAN_BATCH_SIZE
     total = len(snapshots)
     if not total:
         return
-    n_batches = (total + size - 1) // max(1, size)
     done = 0
     done_lock = asyncio.Lock()
     # Log every N completions so long first cycles (78 forex × Yahoo klines)
-    # don't look stuck for 5–10 min before the first batch finishes.
+    # don't look stuck for 5–10 min before the first completions finish.
     _PROGRESS_EVERY = max(5, min(10, size // 2 or 5))
 
     async def _one(snap):
@@ -276,13 +275,11 @@ async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size:
             if done == total or done % _PROGRESS_EVERY == 0:
                 logger.info(f"[{label}] progress {done}/{total} strategies evaluated")
 
-    for bi, i in enumerate(range(0, total, max(1, size))):
-        batch = snapshots[i : i + size]
-        logger.info(
-            f"[{label}] batch {bi + 1}/{n_batches} starting — "
-            f"{len(batch)} strategies ({done}/{total} done so far)"
-        )
-        await asyncio.gather(*[_one(s) for s in batch])
+    logger.info(
+        f"[{label}] launching {total} strategies concurrently "
+        f"(semaphore-limited inside run_one; cfg_batch_size={max(1, size)})"
+    )
+    await asyncio.gather(*[_one(s) for s in snapshots])
 
 
 # ─── Shared API caches ───────────────────────────────────────────────────────
