@@ -8346,6 +8346,7 @@ async def _amend_forex_position_tick(
 
 
 _FX_RECONCILE_MISSING: Dict[int, int] = {}   # exec_id → consecutive missing-sweep count
+_FX_RECONCILE_MISSING_SINCE: Dict[int, float] = {}  # exec_id → monotonic when first absent
 # Broker open-position poll — detects SL/TP fills and fires close alerts.
 _FX_RECONCILE_INTERVAL = float(
     _os_env.environ.get("EXECUTOR_FX_RECONCILE_INTERVAL", "5")
@@ -8353,44 +8354,40 @@ _FX_RECONCILE_INTERVAL = float(
 _FX_RECONCILE_POLL_ATTEMPTS = max(
     1, int(_os_env.environ.get("EXECUTOR_FX_RECONCILE_POLL_ATTEMPTS", "3")),
 )
+_FX_RECONCILE_ESTIMATE_AFTER_S = float(
+    _os_env.environ.get("EXECUTOR_FX_RECONCILE_ESTIMATE_AFTER_S", "180"),
+)
 
 
-async def _classify_reconcile_fallback_exit(w: dict) -> tuple:
-    """When broker confirms position gone but deal list is empty — classify via TP/SL/spot."""
+async def _estimate_reconcile_exit(w: dict) -> tuple:
+    """Last-known market price when broker deal is unavailable after retries."""
+    sym = w["symbol"]
+    entry = float(w["entry"])
+    direction = (w.get("direction") or "LONG").upper()
     price = None
     try:
         from app.services import ctrader_price_feed as _ctf
-        price = _ctf.get_price(w["symbol"])
+        price = _ctf.get_price(sym)
     except Exception:
         price = None
     if not price or price <= 0:
         try:
             from app.services.tradfi_prices import get_price as _tg
-            price = await _tg(w["symbol"], "forex")
+            price = await _tg(sym, "forex")
         except Exception:
             price = None
+    if not price or price <= 0:
+        return None, None
+    if direction == "LONG":
+        outcome = "WIN" if price >= entry else "LOSS"
+    else:
+        outcome = "WIN" if price <= entry else "LOSS"
+    return outcome, float(price)
 
-    tp, sl, entry = w.get("tp_price"), w.get("sl_price"), w["entry"]
-    outcome = None
-    exit_price = None
-    if tp is not None and sl is not None and price and price > 0:
-        if abs(price - tp) <= abs(price - sl):
-            outcome, exit_price = "WIN", tp
-        else:
-            exit_price = sl
-            outcome = _classify_sl_outcome(sl, entry, w["direction"])
-    elif tp is not None and price and price > 0 and abs(price - tp) <= (tp * 0.001):
-        outcome, exit_price = "WIN", tp
-    elif sl is not None:
-        exit_price = sl
-        outcome = _classify_sl_outcome(sl, entry, w["direction"])
-    elif price and price > 0:
-        if w["direction"] == "LONG":
-            outcome = "WIN" if price >= entry else "LOSS"
-        else:
-            outcome = "WIN" if price <= entry else "LOSS"
-        exit_price = price
-    return outcome, exit_price
+
+def _clear_reconcile_missing(exec_id: int) -> None:
+    _FX_RECONCILE_MISSING.pop(exec_id, None)
+    _FX_RECONCILE_MISSING_SINCE.pop(exec_id, None)
 
 
 async def _close_live_forex_execution_with_db_retry(
@@ -8398,6 +8395,7 @@ async def _close_live_forex_execution_with_db_retry(
     outcome: str,
     exit_price: float,
     source: str = "ctrader-reconcile",
+    note_suffix: Optional[str] = None,
 ) -> bool:
     """Close+notify with fresh-session retry on Neon SSL blips."""
     from app.db_resilience import is_transient_db_error
@@ -8405,7 +8403,7 @@ async def _close_live_forex_execution_with_db_retry(
     for attempt in range(3):
         try:
             return await _close_live_forex_execution_and_notify(
-                ex_id, outcome, exit_price, source=source,
+                ex_id, outcome, exit_price, source=source, note_suffix=note_suffix,
             )
         except Exception as exc:
             if is_transient_db_error(exc) and attempt < 2:
@@ -8423,7 +8421,8 @@ async def _close_live_forex_execution_with_db_retry(
 
 
 async def _close_live_forex_execution_and_notify(
-    ex_id: int, outcome: str, exit_price: float, source: str = "ctrader-reconcile"
+    ex_id: int, outcome: str, exit_price: float, source: str = "ctrader-reconcile",
+    note_suffix: Optional[str] = None,
 ) -> bool:
     """Atomically close a LIVE forex execution whose broker position was detected
     closed by reconciliation, then fire the Telegram DM + mobile push.
@@ -8521,6 +8520,8 @@ async def _close_live_forex_execution_and_notify(
             ex, float(exit_price), proposed_outcome=outcome,
         )
         cn = f"{label} · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
+        if note_suffix:
+            cn = f"{cn} | {note_suffix}"
         unregister_position(ex.id, ex.symbol or "")
         existing = (ex.notes or "").strip()
         if existing and not existing.startswith("open ·"):
@@ -8684,6 +8685,8 @@ def _build_forex_reconcile_worklist(user_id: Optional[int] = None) -> list:
                 "sl_price":    float(ex.sl_price) if ex.sl_price else None,
                 "be_moved":    ("be_moved" in notes),
                 "ctrader_account_id": resolved_ctid,
+                "notes":       notes,
+                "fired_at":    ex.fired_at,
             })
     finally:
         db.close()
@@ -8693,15 +8696,10 @@ def _build_forex_reconcile_worklist(user_id: Optional[int] = None) -> list:
 async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
     """Detect live forex positions closed broker-side (SL/TP fill) and close+notify.
 
-    The forex live loop only AMENDS broker SL/TP; nothing else notices when the
-    broker actually fills an SL/TP and removes the position. Without this, a live
-    forex SL hit produced NO push/Telegram alert and the execution sat OPEN until
-    the 48h stale-expiry swept it (silently, pnl=0). This polls cTrader open
-    positions per user; when a tracked positionId is gone for 2 consecutive
-    sweeps it classifies WIN/LOSS/BREAKEVEN via price-vs-TP/SL distance and fires
-    `_close_live_forex_execution_and_notify`.
-
-    Optional user_id scopes reconcile to one account (Live Forex tab refresh).
+    Polls cTrader open positions per account; when absent for 2 sweeps, retries
+    broker deal fetch (time-windowed ProtoOADealListByPositionIdReq). After
+    EXECUTOR_FX_RECONCILE_ESTIMATE_AFTER_S (default 180s), closes with last
+    market price marked "exit estimated — broker deal unavailable".
     """
     from app.db_resilience import is_transient_db_error, run_with_db_retry
     from app.services.ctrader_client import (
@@ -8742,7 +8740,7 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
         "poll_ok": 0,
         "poll_fail": 0,
         "broker_deal_close": 0,
-        "fallback_close": 0,
+        "estimated_close": 0,
         "miss_pending": 0,
         "still_open": 0,
     }
@@ -8762,10 +8760,12 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
             entry_hint=w["entry"],
             direction=w["direction"],
             ctid=w["ctrader_account_id"],
+            notes=w.get("notes"),
+            fired_at=w.get("fired_at"),
         )
         if not broker_close or not broker_close.get("exit_price"):
             return False
-        _FX_RECONCILE_MISSING.pop(w["exec_id"], None)
+        _clear_reconcile_missing(w["exec_id"])
         outcome = broker_close.get("outcome") or "LOSS"
         exit_price = float(broker_close["exit_price"])
         logger.info(
@@ -8815,7 +8815,7 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
         for w in items:
             ex_id = w["exec_id"]
             if w["position_id"] in open_ids:
-                _FX_RECONCILE_MISSING.pop(ex_id, None)
+                _clear_reconcile_missing(ex_id)
                 stats["still_open"] += 1
                 continue
 
@@ -8824,6 +8824,8 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
 
             miss = _FX_RECONCILE_MISSING.get(ex_id, 0) + 1
             _FX_RECONCILE_MISSING[ex_id] = miss
+            if ex_id not in _FX_RECONCILE_MISSING_SINCE:
+                _FX_RECONCILE_MISSING_SINCE[ex_id] = time.monotonic()
             if miss < 2:
                 logger.info(
                     "[FX-reconcile] %s exec#%s pos=%s absent from broker "
@@ -8836,48 +8838,69 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
                 stats["miss_pending"] += 1
                 continue
 
-            outcome, exit_price = await _classify_reconcile_fallback_exit(w)
-            if outcome is None or exit_price is None:
-                logger.warning(
-                    "[FX-reconcile] %s exec#%s pos=%s gone from broker but "
-                    "no deal/price to classify — will retry next sweep",
+            elapsed = time.monotonic() - _FX_RECONCILE_MISSING_SINCE.get(ex_id, time.monotonic())
+            if elapsed < _FX_RECONCILE_ESTIMATE_AFTER_S:
+                logger.info(
+                    "[FX-reconcile] %s exec#%s pos=%s confirmed absent — "
+                    "retrying broker deal (%.0fs / %.0fs)",
                     w["symbol"],
                     ex_id,
                     w["position_id"],
+                    elapsed,
+                    _FX_RECONCILE_ESTIMATE_AFTER_S,
                 )
                 stats["miss_pending"] += 1
                 continue
 
-            _FX_RECONCILE_MISSING.pop(ex_id, None)
-            logger.info(
-                "[FX-reconcile] %s exec#%s pos=%s fallback close after 2 misses "
-                "→ %s @ %s",
+            outcome, exit_price = await _estimate_reconcile_exit(w)
+            if outcome is None or exit_price is None:
+                logger.warning(
+                    "[FX-reconcile] %s exec#%s pos=%s absent %.0fs — "
+                    "no market price for estimated close",
+                    w["symbol"],
+                    ex_id,
+                    w["position_id"],
+                    elapsed,
+                )
+                stats["miss_pending"] += 1
+                continue
+
+            _clear_reconcile_missing(ex_id)
+            logger.warning(
+                "[FX-reconcile] %s exec#%s pos=%s estimated close after %.0fs "
+                "→ %s @ %s (broker deal unavailable)",
                 w["symbol"],
                 ex_id,
                 w["position_id"],
+                elapsed,
                 outcome,
                 exit_price,
             )
             await _close_live_forex_execution_with_db_retry(
-                ex_id, outcome, float(exit_price), source="ctrader-reconcile-fallback",
+                ex_id,
+                outcome,
+                float(exit_price),
+                source="ctrader-reconcile-estimated",
+                note_suffix="exit estimated — broker deal unavailable",
             )
-            stats["fallback_close"] += 1
+            stats["estimated_close"] += 1
 
     logger.info(
         "[FX-reconcile] sweep complete tracked=%s poll_ok=%s poll_fail=%s "
-        "deal_close=%s fallback_close=%s still_open=%s miss_pending=%s",
+        "deal_close=%s estimated_close=%s still_open=%s miss_pending=%s",
         stats["tracked"],
         stats["poll_ok"],
         stats["poll_fail"],
         stats["broker_deal_close"],
-        stats["fallback_close"],
+        stats["estimated_close"],
         stats["still_open"],
         stats["miss_pending"],
     )
 
-    # Bound the missing-counter dict.
+    # Bound the missing-counter dicts.
     if len(_FX_RECONCILE_MISSING) > 500:
         _FX_RECONCILE_MISSING.clear()
+        _FX_RECONCILE_MISSING_SINCE.clear()
 
     # Audit recent closes vs broker deal P/L (corrects mis-recorded exits like #45288097).
     try:
