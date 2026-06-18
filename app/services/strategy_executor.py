@@ -72,6 +72,12 @@ EXECUTOR_PRICE_FETCH_BUDGET_S = float(
         _os_env.environ.get("EXECUTOR_PREFETCH_SYMBOL_BUDGET_S", "2.0"),
     ),
 )
+# Shared wall-clock ceiling for one symbol's full conditions phase
+# (all conditions together, not per-condition). Keeps cold-cache SMC stacks
+# from consuming the entire 10s strategy budget.
+EXECUTOR_CONDITIONS_BUDGET_S = float(
+    _os_env.environ.get("EXECUTOR_CONDITIONS_BUDGET_S", "3.0"),
+)
 # Evaluate strategies in batches so Railway logs show progress during long first cycles
 # (90 forex + 168 crypto can run 5–15 min with no other INFO lines).
 EXECUTOR_SCAN_BATCH_SIZE    = int(_os_env.environ.get("EXECUTOR_SCAN_BATCH_SIZE", "20"))
@@ -112,6 +118,7 @@ def executor_runtime_profile() -> Dict[str, object]:
         "executor_shard_count": EXECUTOR_SHARD_COUNT,
         "strategy_eval_budget_s": EXECUTOR_STRATEGY_EVAL_BUDGET_S,
         "price_fetch_budget_s": EXECUTOR_PRICE_FETCH_BUDGET_S,
+        "conditions_budget_s": EXECUTOR_CONDITIONS_BUDGET_S,
         "prefetch_concurrent": EXECUTOR_PREFETCH_CONCURRENT,
         "prefetch_provider_limits": {
             "ctrader": int(_os_env.environ.get("PREFETCH_CTRADER_CONCURRENT", "16")),
@@ -5619,12 +5626,23 @@ async def evaluate_and_fire(
         try:
             from app.services.prefetch_fast import prefetch_fast_context
             async with prefetch_fast_context():
-                passed, details = await evaluate_strategy_conditions(
-                    config, symbol, price_data, enhanced_ta, http_client,
-                    strictness_level=strictness_level,
-                    ctrader_user_id=_uid,
-                    shared_kline_cache=_shared_klines,
+                passed, details = await asyncio.wait_for(
+                    evaluate_strategy_conditions(
+                        config, symbol, price_data, enhanced_ta, http_client,
+                        strictness_level=strictness_level,
+                        ctrader_user_id=_uid,
+                        shared_kline_cache=_shared_klines,
+                    ),
+                    timeout=max(0.25, float(EXECUTOR_CONDITIONS_BUDGET_S)),
                 )
+        except asyncio.TimeoutError as exc:
+            logger.warning(
+                "[Strategy %s] %s conditions timeout %.2fs — aborting eval cycle",
+                strategy.id,
+                symbol,
+                max(0.25, float(EXECUTOR_CONDITIONS_BUDGET_S)),
+            )
+            raise StrategyEvalCancelled(symbol, reason="conditions_timeout") from exc
         except StrategyEvalCancelled:
             logger.info(
                 f"[Strategy {strategy.id}] eval cancelled — propagating budget abort"
@@ -7192,19 +7210,21 @@ async def _evaluate_with_budget(
             _cap_n,
         )
         raise
-    except StrategyEvalCancelled:
+    except StrategyEvalCancelled as exc:
         # A cancelled condition branch can be translated to StrategyEvalCancelled
         # inside evaluate_strategy_conditions. Treat it as a hard budget abort so
         # timeout accounting/logging stays accurate.
+        _cause = str(getattr(exc, "reason", "") or "cancelled_eval")
         logger.warning(
             "[eval] id=%s ABORTED >budget %.0fs asset_class=%s "
-            "universe_type=%s config_symbols=%s capped=%s cause=cancelled_eval",
+            "universe_type=%s config_symbols=%s capped=%s cause=%s",
             strategy_id,
             EXECUTOR_STRATEGY_EVAL_BUDGET_S,
             asset_class,
             _uni_type,
             _uni_n,
             _cap_n,
+            _cause,
         )
         raise asyncio.TimeoutError from None
 

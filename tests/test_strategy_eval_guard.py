@@ -11,6 +11,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 import asyncio
 
 from app.services.strategy_executor import (
+    EXECUTOR_CONDITIONS_BUDGET_S,
     EXECUTOR_MAX_SYMBOLS_PER_STRATEGY,
     EXECUTOR_STRATEGY_EVAL_BUDGET_S,
     _PRICE_TA_CACHE,
@@ -131,6 +132,21 @@ class TestEvalBudget(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_conditions_timeout_cause_is_preserved(self):
+        async def _conditions_timeout():
+            raise StrategyEvalCancelled("XAUUSD", reason="conditions_timeout")
+
+        cfg = {"universe": {"symbols": ["XAUUSD"]}}
+        with self.assertLogs("app.services.strategy_executor", level="WARNING") as cm:
+            with self.assertRaises(asyncio.TimeoutError):
+                await _evaluate_with_budget(214, cfg, "forex", _conditions_timeout())
+        self.assertTrue(
+            any(
+                "[eval] id=214 ABORTED >budget" in line and "cause=conditions_timeout" in line
+                for line in cm.output
+            )
+        )
+
     async def test_forex_single_symbol_smc_path_logs_cancelled_eval_abort(self):
         """Mirror id=209 shape: forex specific single symbol via order_block path."""
         async def _slow_klines(*_args, **_kwargs):
@@ -211,6 +227,13 @@ class TestCancellationPropagationWiring(unittest.TestCase):
         self.assertIn("propagating budget abort", src)
         self.assertIn("raise", src)
 
+    def test_evaluate_and_fire_wraps_conditions_with_shared_timeout(self):
+        import app.services.strategy_executor as se
+
+        src = inspect.getsource(se.evaluate_and_fire)
+        self.assertIn("timeout=max(0.25, float(EXECUTOR_CONDITIONS_BUDGET_S))", src)
+        self.assertIn("reason=\"conditions_timeout\"", src)
+
 
 class TestExecutorRuntimeProfile(unittest.TestCase):
     def test_profile_exposes_concurrency_and_provider_caps(self):
@@ -218,10 +241,12 @@ class TestExecutorRuntimeProfile(unittest.TestCase):
         self.assertIn("forex_max_concurrent", profile)
         self.assertIn("executor_shard_count", profile)
         self.assertIn("strategy_eval_budget_s", profile)
+        self.assertIn("conditions_budget_s", profile)
         self.assertIn("prefetch_provider_limits", profile)
         self.assertIsInstance(profile["prefetch_provider_limits"], dict)
         self.assertIn("kraken", profile["prefetch_provider_limits"])
         self.assertIn("fmp", profile["prefetch_provider_limits"])
+        self.assertGreater(EXECUTOR_CONDITIONS_BUDGET_S, 0.0)
 
 
 class TestExecutorDbResilienceGuards(unittest.TestCase):
