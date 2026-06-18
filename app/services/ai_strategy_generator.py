@@ -10,10 +10,9 @@ Every cycle (default: hourly), this service:
      creates a UserStrategy + StrategyPerformance + StrategyMarketplace
      row owned by the system "AI Curator" account, tagged is_ai_generated.
 
-All thresholds + cadence are env-tunable. Runs only in production by
-default (REPL_DEPLOYMENT=1) or when ENABLE_AI_GENERATOR=1, mirroring
-the strategy executor pattern so dev never duplicates against the
-shared Neon DB.
+All thresholds + cadence are env-tunable. The background loop starts only
+when ENABLE_AI_GENERATOR=1 (opt-in). DISABLE_AI_GENERATOR=1 always wins.
+Portal AI (chat builder, wizard, compiler, Scan Best) is separate.
 """
 
 import asyncio
