@@ -64,6 +64,14 @@ EXECUTOR_MAX_SYMBOLS_PER_STRATEGY = max(
 EXECUTOR_STRATEGY_EVAL_BUDGET_S = float(
     _os_env.environ.get("EXECUTOR_STRATEGY_EVAL_BUDGET_S", "10"),
 )
+# Hard ceiling for the standalone price_fetch phase inside one strategy eval.
+# Keep separate from conditions klines budget so ops can tune independently.
+EXECUTOR_PRICE_FETCH_BUDGET_S = float(
+    _os_env.environ.get(
+        "EXECUTOR_PRICE_FETCH_BUDGET_S",
+        _os_env.environ.get("EXECUTOR_PREFETCH_SYMBOL_BUDGET_S", "2.0"),
+    ),
+)
 # Evaluate strategies in batches so Railway logs show progress during long first cycles
 # (90 forex + 168 crypto can run 5–15 min with no other INFO lines).
 EXECUTOR_SCAN_BATCH_SIZE    = int(_os_env.environ.get("EXECUTOR_SCAN_BATCH_SIZE", "20"))
@@ -103,6 +111,7 @@ def executor_runtime_profile() -> Dict[str, object]:
         "forex_max_concurrent": FOREX_MAX_CONCURRENT,
         "executor_shard_count": EXECUTOR_SHARD_COUNT,
         "strategy_eval_budget_s": EXECUTOR_STRATEGY_EVAL_BUDGET_S,
+        "price_fetch_budget_s": EXECUTOR_PRICE_FETCH_BUDGET_S,
         "prefetch_concurrent": EXECUTOR_PREFETCH_CONCURRENT,
         "prefetch_provider_limits": {
             "ctrader": int(_os_env.environ.get("PREFETCH_CTRADER_CONCURRENT", "16")),
@@ -371,6 +380,7 @@ _RAW_TICKERS_TTL    = 60  # seconds
 # When multiple strategies scan the same symbol in the same cycle they all
 # hit the cache instead of each making an independent candle + indicator call.
 _PRICE_TA_CACHE: Dict[str, tuple] = {}  # symbol -> (data_dict, fetched_at)
+_PRICE_TA_INFLIGHT: Dict[str, "asyncio.Future"] = {}
 _METAL_WARM_LOCK: Optional[asyncio.Lock] = None  # one metal warm at a time / process
 _METAL_WARM_GLOBAL_AT: float = 0.0  # skip repeat warm across FX shards
 _METAL_DRIFT_SKIP_STREAK: Dict[str, int] = {}
@@ -1334,6 +1344,113 @@ async def _fetch_price_and_ta(
         return result
     except Exception as e:
         logger.debug(f"Price/TA fetch failed for {symbol}: {e}")
+        return None
+
+
+async def _fetch_price_ta_singleflight(
+    symbol: str,
+    http_client: httpx.AsyncClient,
+    asset_class: str = "crypto",
+    *,
+    user_id: Optional[int] = None,
+    timeframe: Optional[str] = None,
+    metal_paper_ok: bool = False,
+    prefetch: bool = False,
+    budget_s: Optional[float] = None,
+) -> Optional[Dict]:
+    """
+    Collapse concurrent same-key price_fetch calls into one underlying fetch.
+
+    This prevents N strategies on the same symbol/timeframe from launching N
+    duplicate provider chains when cache is cold.
+    """
+    now = datetime.utcnow()
+    tf = timeframe or "15m"
+    cache_key = _price_ta_cache_key(
+        symbol, asset_class, tf, metal_paper_ok=metal_paper_ok,
+    )
+    cached = _PRICE_TA_CACHE.get(cache_key)
+    if cached:
+        data, fetched_at = cached
+        ttl = _PRICE_TA_TTL if asset_class == "crypto" else _PRICE_TA_TTL_TRADFI
+        if (now - fetched_at).total_seconds() < ttl:
+            return data
+
+    wait_budget_s = None
+    if budget_s is not None:
+        wait_budget_s = max(0.05, float(budget_s))
+
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+
+    if running is not None:
+        inflight = _PRICE_TA_INFLIGHT.get(cache_key)
+        if (
+            inflight is not None
+            and not inflight.done()
+            and inflight.get_loop() is running
+        ):
+            try:
+                waiter = asyncio.shield(inflight)
+                if wait_budget_s is not None:
+                    return await asyncio.wait_for(waiter, timeout=wait_budget_s)
+                return await waiter
+            except asyncio.TimeoutError:
+                return None
+            except Exception:
+                return None
+
+        fut = running.create_future()
+        _PRICE_TA_INFLIGHT[cache_key] = fut
+        try:
+            fetch_coro = _fetch_price_and_ta(
+                symbol,
+                http_client,
+                asset_class,
+                user_id=user_id,
+                timeframe=tf,
+                metal_paper_ok=metal_paper_ok,
+                prefetch=prefetch,
+            )
+            if wait_budget_s is not None:
+                result = await asyncio.wait_for(fetch_coro, timeout=wait_budget_s)
+            else:
+                result = await fetch_coro
+            if not fut.done():
+                fut.set_result(result)
+            return result
+        except asyncio.CancelledError:
+            if not fut.done():
+                fut.cancel()
+            raise
+        except asyncio.TimeoutError:
+            if not fut.done():
+                fut.set_result(None)
+            return None
+        except Exception:
+            if not fut.done():
+                fut.set_result(None)
+            return None
+        finally:
+            if _PRICE_TA_INFLIGHT.get(cache_key) is fut:
+                _PRICE_TA_INFLIGHT.pop(cache_key, None)
+
+    fetch_coro = _fetch_price_and_ta(
+        symbol,
+        http_client,
+        asset_class,
+        user_id=user_id,
+        timeframe=tf,
+        metal_paper_ok=metal_paper_ok,
+        prefetch=prefetch,
+    )
+    try:
+        if wait_budget_s is not None:
+            return await asyncio.wait_for(fetch_coro, timeout=wait_budget_s)
+        return await fetch_coro
+    except asyncio.TimeoutError:
         return None
 
 
@@ -5346,11 +5463,12 @@ async def evaluate_and_fire(
             _diag.cache_hits += 1
             return cached
         _diag.cache_misses += 1
-        return await _fetch_price_and_ta(
+        return await _fetch_price_ta_singleflight(
             sym, http_client, asset_class,
             user_id=_uid, timeframe=_eval_tf,
             metal_paper_ok=_metal_paper,
             prefetch=True,
+            budget_s=EXECUTOR_PRICE_FETCH_BUDGET_S,
         )
 
     from app.services.prefetch_fast import prefetch_fast_context
@@ -7363,14 +7481,14 @@ async def _prefetch_price_ta_for_cycle(
         async with sem:
             try:
                 async with prefetch_fast_context():
-                    result = await asyncio.wait_for(
-                        _fetch_price_and_ta(
-                            sym, http_client, ac,
-                            user_id=ctrader_user_id,
-                            timeframe=tf,
-                            prefetch=True,
-                        ),
-                        timeout=SYMBOL_BUDGET_S,
+                    result = await _fetch_price_ta_singleflight(
+                        sym,
+                        http_client,
+                        ac,
+                        user_id=ctrader_user_id,
+                        timeframe=tf,
+                        prefetch=True,
+                        budget_s=SYMBOL_BUDGET_S,
                     )
                 _ms = (time.monotonic() - _ft0) * 1000.0
                 if result:

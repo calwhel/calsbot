@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -356,6 +357,8 @@ async def _fetch_coingecko_ticker(
 
 async def _fetch_klines_chain(
     http_client: httpx.AsyncClient, symbol: str, interval: str, limit: int,
+    *,
+    deadline_mono: Optional[float] = None,
 ) -> List[list]:
     # Binance primary (EU region) → Bybit → MEXC → Bitunix.
     chain: List[Tuple] = [
@@ -373,7 +376,20 @@ async def _fetch_klines_chain(
         provider_timeout_s = lambda d: d  # type: ignore
 
     if _fast and len(chain) > 1:
-        from app.services.prefetch_provider_limits import prefetch_provider_slot
+        from app.services.prefetch_provider_limits import (
+            PrefetchSlotUnavailable,
+            prefetch_provider_slot,
+        )
+
+        def _slot_wait_budget_s() -> Optional[float]:
+            if deadline_mono is None:
+                return None
+            remaining = deadline_mono - time.monotonic()
+            if remaining <= 0.0:
+                return 0.0
+            # Leave a small tail so slot timeouts surface as clean skips before
+            # the outer symbol budget hard-cancels the whole fetch.
+            return max(0.0, remaining - 0.02)
 
         async def _attempt(fetcher, label: str):
             try:
@@ -385,31 +401,42 @@ async def _fetch_klines_chain(
             except Exception:
                 return [], label
 
-        async with prefetch_provider_slot("crypto"):
-            tasks = [asyncio.create_task(_attempt(f, lbl)) for f, lbl in chain]
-            try:
-                while tasks:
-                    done, pending = await asyncio.wait(
-                        tasks,
-                        return_when=asyncio.FIRST_COMPLETED,
-                        timeout=provider_timeout_s(2.0),
-                    )
-                    if not done:
-                        break
-                    for task in done:
-                        tasks.remove(task)
-                        try:
-                            rows, label = task.result()
-                            if rows:
-                                for pt in pending:
-                                    pt.cancel()
-                                _store_crypto_kline_cache(symbol, interval, limit, rows, label)
-                                return rows
-                        except Exception:
-                            pass
-            finally:
-                for task in tasks:
-                    task.cancel()
+        try:
+            async with prefetch_provider_slot(
+                "crypto",
+                max_wait_s=_slot_wait_budget_s(),
+            ):
+                tasks = [asyncio.create_task(_attempt(f, lbl)) for f, lbl in chain]
+                try:
+                    while tasks:
+                        done, pending = await asyncio.wait(
+                            tasks,
+                            return_when=asyncio.FIRST_COMPLETED,
+                            timeout=provider_timeout_s(2.0),
+                        )
+                        if not done:
+                            break
+                        for task in done:
+                            tasks.remove(task)
+                            try:
+                                rows, label = task.result()
+                                if rows:
+                                    for pt in pending:
+                                        pt.cancel()
+                                    _store_crypto_kline_cache(symbol, interval, limit, rows, label)
+                                    return rows
+                            except Exception:
+                                pass
+                finally:
+                    for task in tasks:
+                        task.cancel()
+        except PrefetchSlotUnavailable:
+            logger.info(
+                "[crypto-md] %s %s skipped: no fetch slot available in time",
+                symbol,
+                interval,
+            )
+            return []
 
     for fetcher, label in chain:
         rows = await fetcher(http_client, symbol, interval, limit)
@@ -629,22 +656,46 @@ async def fetch_crypto_price_and_ta(
         from app.services.enhanced_ta import analyze_klines
         from app.services.prefetch_fast import SYMBOL_BUDGET_S, prefetch_fast_active
 
-        async def _run():
+        async def _run(deadline_mono: Optional[float] = None):
             ticker_task = asyncio.create_task(_fetch_ticker_chain(http_client, symbol))
-            k15_task = asyncio.create_task(_fetch_klines_chain(http_client, symbol, "15m", 50))
-            k1h_task = asyncio.create_task(_fetch_klines_chain(http_client, symbol, "1h", 30))
+            k15_task = asyncio.create_task(
+                _fetch_klines_chain(
+                    http_client,
+                    symbol,
+                    "15m",
+                    50,
+                    deadline_mono=deadline_mono,
+                )
+            )
+            k1h_task = asyncio.create_task(
+                _fetch_klines_chain(
+                    http_client,
+                    symbol,
+                    "1h",
+                    30,
+                    deadline_mono=deadline_mono,
+                )
+            )
             (ticker, ticker_src), klines_15m, klines_1h = await asyncio.gather(
                 ticker_task, k15_task, k1h_task,
             )
             return ticker, ticker_src, klines_15m, klines_1h
 
         if prefetch or prefetch_fast_active():
+            deadline_mono = time.monotonic() + float(SYMBOL_BUDGET_S)
             ticker, ticker_src, klines_15m, klines_1h = await asyncio.wait_for(
-                _run(), timeout=SYMBOL_BUDGET_S,
+                _run(deadline_mono=deadline_mono),
+                timeout=SYMBOL_BUDGET_S,
             )
         else:
             ticker, ticker_src, klines_15m, klines_1h = await _run()
         if not ticker:
+            return None
+        if not klines_15m:
+            logger.info(
+                "[crypto-md] %s skipped: no 15m klines available within budget",
+                symbol,
+            )
             return None
 
         kline_src = ""
@@ -676,6 +727,12 @@ async def fetch_crypto_price_and_ta(
             "price_source": ticker_src or "spot_live",
             "live_source": ticker_src,
         }
+    except asyncio.TimeoutError:
+        logger.info(
+            "[crypto-md] %s skipped: price/TA fetch budget exceeded",
+            symbol,
+        )
+        return None
     except Exception as exc:
         logger.debug("[crypto-md] price/TA failed %s: %s", symbol, exc)
         return None

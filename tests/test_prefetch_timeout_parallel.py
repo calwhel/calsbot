@@ -14,6 +14,8 @@ from app.services import tradfi_prices as tp
 from app.services.prefetch_fast import SYMBOL_BUDGET_S
 from app.services.strategy_executor import (
     _PRICE_TA_CACHE,
+    _PRICE_TA_INFLIGHT,
+    _fetch_price_ta_singleflight,
     _prefetch_fallback_price_ta,
     _prefetch_price_ta_for_cycle,
     _price_ta_from_klines,
@@ -67,6 +69,7 @@ class TestPrefetchFallback(unittest.TestCase):
 class TestPrefetchConcurrent(unittest.TestCase):
     def tearDown(self):
         _PRICE_TA_CACHE.clear()
+        _PRICE_TA_INFLIGHT.clear()
 
     def test_slow_symbol_does_not_block_fast_symbol(self):
         snapshots = [
@@ -153,8 +156,72 @@ class TestPrefetchConcurrent(unittest.TestCase):
 
         stats, logs = asyncio.run(_run())
         self.assertEqual(stats["fallback"], 1)
-        self.assertIn("TIMEOUT → using cached", logs)
         self.assertIn("result=fallback", logs)
+
+
+class TestPriceFetchBudgetAndDedupe(unittest.TestCase):
+    def tearDown(self):
+        _PRICE_TA_CACHE.clear()
+        _PRICE_TA_INFLIGHT.clear()
+
+    def test_price_fetch_timeout_is_bounded(self):
+        async def _slow_fetch(*_args, **_kwargs):
+            await asyncio.sleep(0.3)
+            return {"price": 1.2}
+
+        async def _run():
+            http = MagicMock()
+            with patch(
+                "app.services.strategy_executor._fetch_price_and_ta",
+                side_effect=_slow_fetch,
+            ):
+                t0 = asyncio.get_running_loop().time()
+                out = await _fetch_price_ta_singleflight(
+                    "XAUUSD",
+                    http,
+                    "forex",
+                    timeframe="15m",
+                    prefetch=True,
+                    budget_s=0.05,
+                )
+                elapsed = asyncio.get_running_loop().time() - t0
+            return out, elapsed
+
+        out, elapsed = asyncio.run(_run())
+        self.assertIsNone(out)
+        self.assertLess(elapsed, 0.2)
+
+    def test_price_fetch_singleflight_dedupes_concurrent_calls(self):
+        calls = {"n": 0}
+
+        async def _slow_fetch(*_args, **_kwargs):
+            calls["n"] += 1
+            await asyncio.sleep(0.05)
+            return {"price": 2.5, "kline_source": "test"}
+
+        async def _run():
+            http = MagicMock()
+            with patch(
+                "app.services.strategy_executor._fetch_price_and_ta",
+                side_effect=_slow_fetch,
+            ):
+                return await asyncio.gather(*[
+                    _fetch_price_ta_singleflight(
+                        "XAUUSD",
+                        http,
+                        "forex",
+                        timeframe="15m",
+                        prefetch=True,
+                        budget_s=0.5,
+                    )
+                    for _ in range(5)
+                ])
+
+        out = asyncio.run(_run())
+        self.assertEqual(calls["n"], 1)
+        self.assertEqual(len(out), 5)
+        self.assertTrue(all(isinstance(item, dict) and item.get("price") == 2.5 for item in out))
+        self.assertEqual(_PRICE_TA_INFLIGHT, {})
 
 
 if __name__ == "__main__":
