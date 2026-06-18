@@ -8977,9 +8977,11 @@ async def api_build_strategy(request: Request):
     )
     import asyncio
 
-    config = await compile_strategy_from_conversation([], f"Strategy name: {name}\n\n{desc}")
-    if not config:
+    compiled = await compile_strategy_from_conversation([], f"Strategy name: {name}\n\n{desc}")
+    if not compiled or not isinstance(compiled.get("config"), dict):
         return JSONResponse({"error": "Could not parse strategy. Try being more specific — e.g. 'SuperTrend bullish flip on 1m, LONG only, 10× leverage, 2% TP, 1% SL'."}, status_code=422)
+    config = compiled["config"]
+    rationale = str(compiled.get("rationale") or "").strip()
 
     config["name"]        = name
     config["description"] = desc
@@ -9000,6 +9002,7 @@ async def api_build_strategy(request: Request):
 
     return JSONResponse({
         "config":      config,
+        "rationale":   rationale,
         "warnings":    validation.get("warnings", []),
         "suggestions": validation.get("suggestions", []),
         "risk_rating": validation.get("risk_rating", "MEDIUM"),
