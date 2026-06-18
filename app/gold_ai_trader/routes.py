@@ -27,9 +27,18 @@ router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
 
+def _normalize_uid(uid: str) -> str:
+    """Match Strategy Portal UID format (TH-XXXXXXXX)."""
+    uid = (uid or "").strip().upper()
+    if uid and not uid.startswith("TH-"):
+        uid = f"TH-{uid}"
+    return uid
+
+
 def _resolve_user(uid: str, db):
     from app.models import User
 
+    uid = _normalize_uid(uid)
     u = db.query(User).filter(User.uid == uid).first()
     if not u:
         raise HTTPException(status_code=403, detail="Invalid UID")
