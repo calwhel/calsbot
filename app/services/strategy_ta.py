@@ -188,7 +188,12 @@ def _swing_lows(highs: List[float], lows: List[float], left=2, right=2) -> List[
 
 
 class StrategyEvalCancelled(Exception):
-    """A parallel condition task was cancelled — skip this strategy cycle."""
+    """A condition task was cancelled/timed out — skip this strategy cycle."""
+
+    def __init__(self, symbol: str, reason: str = "cancelled_eval"):
+        super().__init__(symbol)
+        self.symbol = symbol
+        self.reason = reason
 
 
 # ─── Klines cache ──────────────────────────────────────────────────────────────
@@ -3891,6 +3896,44 @@ async def eval_wyckoff(
         return False, f"Wyckoff: unknown phase '{phase}'"
 
 
+def _smc_prefetch_timeframes(conds: List[Dict]) -> List[str]:
+    """
+    Unique SMC timeframes that should share one cold-cache kline fetch.
+
+    order_block / market_structure / fvg typically ask for the same symbol+tf
+    bars. Pre-warming once per timeframe avoids concurrent cache-miss races.
+    """
+    out: List[str] = []
+    seen: set = set()
+    for cond in conds or []:
+        ctype = str(cond.get("type", "")).lower()
+        if ctype not in {"order_block", "market_structure", "fvg", "ifvg"}:
+            continue
+        tf = str(cond.get("timeframe", "15m") or "15m")
+        if tf in seen:
+            continue
+        seen.add(tf)
+        out.append(tf)
+    return out
+
+
+async def _prefetch_smc_klines(
+    conds: List[Dict],
+    symbol: str,
+    http_client,
+    cache: Dict,
+) -> None:
+    timeframes = _smc_prefetch_timeframes(conds)
+    if not timeframes:
+        return
+    # 200 matches _get_klines(...)->tradfi max(limit, 200), so one warm fetch
+    # is reusable by OB(120), MS(120), and typical FVG lookbacks.
+    await asyncio.gather(
+        *[_get_klines(symbol, tf, 200, http_client, cache) for tf in timeframes],
+        return_exceptions=True,
+    )
+
+
 async def evaluate_strategy_conditions(
     strategy_config: Dict,
     symbol: str,
@@ -4090,6 +4133,7 @@ async def evaluate_strategy_conditions(
             raise StrategyEvalCancelled(symbol)
 
     try:
+        await _prefetch_smc_klines(conds, symbol, http_client, cache)
         raw_results = await asyncio.gather(
             *[_safe_eval_one(c) for c in conds], return_exceptions=True,
         )

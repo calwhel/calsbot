@@ -8,7 +8,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 
 import asyncio
 
-from app.services.strategy_ta import _get_klines
+from app.services.strategy_ta import _get_klines, evaluate_strategy_conditions
 
 
 class TestTradfiKlineCache(unittest.IsolatedAsyncioTestCase):
@@ -52,6 +52,62 @@ class TestTradfiKlineCache(unittest.IsolatedAsyncioTestCase):
             out = await _get_klines("EURUSD", "15m", 200, MagicMock(), cache)
 
         self.assertIsNone(out)
+
+
+class TestSmcColdCacheSharedFetch(unittest.IsolatedAsyncioTestCase):
+    async def test_id214_shape_prefetches_once_for_smc_stack(self):
+        cfg = {
+            "asset_class": "forex",
+            "entry_conditions": {
+                "operator": "AND",
+                "conditions": [
+                    {"type": "order_block", "timeframe": "15m", "ob_type": "bullish"},
+                    {"type": "fvg", "timeframe": "15m", "condition": "price_in_gap"},
+                    {"type": "market_structure", "timeframe": "15m", "condition": "bos_bullish"},
+                ],
+            },
+        }
+        price_data = {"price": 2300.0, "_asset_class": "forex"}
+        fetch_state = {"count": 0}
+
+        def _bars(n: int = 240):
+            out = []
+            base = 2300.0
+            for i in range(n):
+                o = base + (i * 0.05)
+                c = o + 0.02
+                h = c + 0.03
+                l = o - 0.03
+                out.append([i * 60_000, o, h, l, c, 100.0 + i])
+            return out
+
+        async def _cold_cache_fetch(symbol, interval, limit, http_client, cache):
+            key = (symbol, interval, "__smc")
+            if cache is not None and key in cache:
+                rows = cache[key]
+                return rows[-limit:] if len(rows) > limit else rows
+            fetch_state["count"] += 1
+            await asyncio.sleep(2.5)
+            rows = _bars()
+            if cache is not None:
+                cache[key] = rows
+            return rows[-limit:] if len(rows) > limit else rows
+
+        with patch("app.services.strategy_ta._get_klines", side_effect=_cold_cache_fetch):
+            t0 = asyncio.get_running_loop().time()
+            passed, details = await evaluate_strategy_conditions(
+                cfg,
+                "XAUUSD",
+                price_data,
+                {},
+                MagicMock(),
+            )
+            elapsed = asyncio.get_running_loop().time() - t0
+
+        self.assertFalse(passed)
+        self.assertEqual(fetch_state["count"], 1)
+        self.assertLess(elapsed, 3.4)
+        self.assertEqual(len(details), 3)
 
 
 if __name__ == "__main__":
