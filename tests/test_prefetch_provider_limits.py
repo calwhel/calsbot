@@ -16,6 +16,8 @@ from app.services.prefetch_provider_limits import (
     consume_prefetch_429,
     is_rate_limit_http,
     note_prefetch_429,
+    prefetch_cycle_stats_scope,
+    prefetch_cycle_stats_snapshot,
     prefetch_http_get,
     prefetch_provider_bucket,
     prefetch_provider_slot,
@@ -123,6 +125,35 @@ class TestPrefetchProviderLimits(unittest.TestCase):
             # second request should be short-circuited by cooldown.
             self.assertEqual(client.calls, 1)
             self.assertLess(elapsed, 0.05)
+
+        asyncio.run(_run())
+
+    def test_prefetch_http_get_tracks_cooldown_hits_in_cycle_stats(self):
+        class _Resp:
+            def __init__(self, code):
+                self.status_code = code
+                self.content = b""
+
+            def json(self):
+                return {}
+
+        class _Client:
+            def __init__(self):
+                self.calls = 0
+
+            async def get(self, url, **kwargs):
+                self.calls += 1
+                return _Resp(429)
+
+        async def _run():
+            client = _Client()
+            async with prefetch_fast_context():
+                with prefetch_cycle_stats_scope():
+                    await prefetch_http_get("kraken", client, "https://example.com")
+                    await prefetch_http_get("kraken", client, "https://example.com")
+                    stats = prefetch_cycle_stats_snapshot()
+            self.assertEqual(client.calls, 1)
+            self.assertEqual(stats["provider_cooldown_hits"], 1)
 
         asyncio.run(_run())
 

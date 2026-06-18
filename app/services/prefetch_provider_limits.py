@@ -6,7 +6,7 @@ import contextvars
 import logging
 import os
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,9 @@ _PROVIDER_LIMITS: Dict[str, int] = {
 _sems: Dict[str, asyncio.Semaphore] = {}
 _prefetch_429_provider: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "prefetch_429_provider", default=None,
+)
+_prefetch_cycle_stats: contextvars.ContextVar[Optional[Dict[str, int]]] = (
+    contextvars.ContextVar("prefetch_cycle_stats", default=None)
 )
 _PROVIDER_429_COOLDOWN_S = float(
     os.environ.get("PREFETCH_PROVIDER_429_COOLDOWN_S", "30"),
@@ -104,6 +107,31 @@ def clear_prefetch_429() -> None:
     _prefetch_429_provider.set(None)
 
 
+@contextmanager
+def prefetch_cycle_stats_scope():
+    """Per-cycle counters (inherits through spawned prefetch tasks)."""
+    stats: Dict[str, int] = {"provider_cooldown_hits": 0}
+    token = _prefetch_cycle_stats.set(stats)
+    try:
+        yield stats
+    finally:
+        _prefetch_cycle_stats.reset(token)
+
+
+def prefetch_cycle_stats_snapshot() -> Dict[str, int]:
+    stats = _prefetch_cycle_stats.get() or {}
+    return {
+        "provider_cooldown_hits": int(stats.get("provider_cooldown_hits", 0)),
+    }
+
+
+def _note_prefetch_cycle_stat(key: str, delta: int = 1) -> None:
+    stats = _prefetch_cycle_stats.get()
+    if stats is None:
+        return
+    stats[key] = int(stats.get(key, 0)) + int(delta)
+
+
 async def prefetch_http_get(
     provider: str,
     client,
@@ -126,6 +154,7 @@ async def prefetch_http_get(
         cooldown_remaining = _provider_cooldown_remaining(provider)
         if cooldown_remaining > 0:
             note_prefetch_429(provider)
+            _note_prefetch_cycle_stat("provider_cooldown_hits")
             logger.info(
                 "[prefetch-limit] provider=%s 429 cooldown active %.0fms — cache fallback",
                 provider,
