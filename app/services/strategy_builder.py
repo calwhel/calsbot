@@ -9,9 +9,50 @@ import json
 import logging
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Ground-truth condition types reachable from strategy_ta.evaluate_strategy_conditions.
+# Kept local (instead of importing strategy_ta) to avoid heavy runtime side effects.
+ENGINE_EXECUTABLE_CONDITION_TYPES = frozenset({
+    "indicator", "rsi",
+    "price_momentum", "volume_spike", "support_resistance",
+    "fvg", "ifvg", "candlestick", "consecutive_candles",
+    "market_structure", "order_block", "fibonacci", "divergence",
+    "funding_rate", "open_interest", "session", "price_relative",
+    "sentiment", "liquidation",
+    "sma", "sma_cross", "sma_ribbon", "supertrend",
+    "trend_reversal", "sustained_trend",
+    "forex_session", "forex_session_break", "forex_prev_level",
+    "forex_news_avoidance", "forex_currency_strength", "forex_liquidity_pa",
+    "forex_cot",
+    "fx_killzone", "fx_ote", "fx_displacement", "fx_equal_hl", "fx_cisd",
+    "fx_sdp", "fx_breaker", "fx_pd_array", "fx_judas_swing", "fx_silver_bullet",
+    "opening_range_break", "vwap_cross", "atr_filter", "rvol", "vwap_bands",
+    "vwap_bias", "volume_profile", "stochastic", "fx_po3", "wyckoff",
+    "stock_earnings_avoidance", "pivot_points", "session_level",
+    # _BT_KLINE_TYPES
+    "supply_demand", "premium_discount", "equilibrium",
+    "pin_bar", "engulfing", "inside_bar", "hh_hl", "lh_ll",
+    "fib_retracement", "vwap_bounce", "mitigation_block",
+    "breaker_block", "mss", "choch", "liquidity_sweep",
+})
+
+CRYPTO_ONLY_CONDITION_TYPES = frozenset({"funding_rate", "open_interest", "liquidation"})
+
+# These are FX-pair semantics and should not be emitted for index strategies.
+FOREX_PAIR_ONLY_CONDITION_TYPES = frozenset({
+    "forex_session", "forex_session_break", "forex_prev_level",
+    "forex_news_avoidance", "forex_currency_strength", "forex_liquidity_pa", "forex_cot",
+})
+
+# fx_equal_hl currently has a dispatcher/payload key-collision in strategy_ta
+# (top-level "type" key is consumed by dispatch itself), so treat as unavailable
+# for AI output until engine-side shape is fixed.
+BUILDER_BLOCKED_CONDITION_TYPES = frozenset({"fx_equal_hl"})
+
+_DESIGN_ROTATION_STATE: Dict[str, int] = {}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Full condition type schema — passed verbatim to the compiler AI
@@ -368,15 +409,15 @@ NOTE: in_session covers the ENTIRE window. Do NOT use fx_killzone or forex_sessi
 
 ── FOREX — SESSION BREAK (range breakout) ────────────────────────────────────
 {"type":"forex_session_break","condition":"high_break","session":"asian","range_minutes":60,"timeframe":"15m"}
-condition: high_break | low_break | either_break
+condition: high_break | low_break | orb_high | orb_low
 session: asian | sydney | london | new_york
 → "London breakout" | "Asian range break" | "session high/low break" (a BREAKOUT signal, not a time gate)
 
 ── FOREX — PREVIOUS LEVEL ────────────────────────────────────────────────────
 {"type":"forex_prev_level","condition":"sweep_pdh","timeframe":"15m"}
-conditions: sweep_pdh | sweep_pdl | break_pdh | break_pdl | at_pdh | at_pdl
-(pdh=previous-day-high, pdl=previous-day-low)
-→ "sweep previous day high" | "break above PDH" | "previous day low liquidity"
+conditions: sweep_pdh | sweep_pdl | above_pdh | below_pdl | above_pwh | below_pwl
+(pdh=previous-day-high, pdl=previous-day-low, pwh=previous-week-high, pwl=previous-week-low)
+→ "sweep previous day high" | "break above PDH" | "previous week low break"
 
 ── FOREX — CURRENCY STRENGTH ─────────────────────────────────────────────────
 {"type":"forex_currency_strength","window":"4h","min_diff":0.6,"direction":"either"}
@@ -395,7 +436,7 @@ min_impact: low | medium | high
 
 ── FOREX — COT SENTIMENT ─────────────────────────────────────────────────────
 {"type":"forex_cot","condition":"specs_extreme_long","extreme_pct":75,"lookback_weeks":52}
-conditions: specs_extreme_long | specs_extreme_short | commercials_extreme_long | commercials_extreme_short
+conditions: specs_extreme_long | specs_extreme_short | specs_flipped_long | specs_flipped_short | comm_extreme_long | comm_extreme_short
 → "COT report" | "commitment of traders" | "speculator positioning" | "institutional sentiment"
 
 ── ICT KILLZONE ───────────────────────────────────────────────────────────────
@@ -416,8 +457,8 @@ min_body_ratio: body must be ≥ N × average body size (default 3 = institution
 → "displacement" | "impulse candle" | "institutional candle" | "large body candle" | "displacement move"
 
 ── ICT EQUAL HIGHS / EQUAL LOWS ──────────────────────────────────────────────
-{"type":"fx_equal_hl","type":"eqh","lookback":30,"tolerance_pips":3,"timeframe":"15m"}
-type: eqh (equal highs) | eql (equal lows)
+{"type":"forex_liquidity_pa","pattern":"equal_highs","lookback":30,"tolerance_pips":3,"timeframe":"15m"}
+pattern: equal_highs | equal_lows
 → "equal highs" | "equal lows" | "EQH" | "EQL" | "double top liquidity" | "double bottom liquidity" | "BSL/SSL"
 
 ── ICT CISD — CHANGE IN STATE OF DELIVERY ────────────────────────────────────
@@ -542,16 +583,36 @@ STRATEGY_SCHEMA = """
 }
 """
 
-COMPILER_SYSTEM_PROMPT = f"""You are an expert multi-market trading strategy compiler supporting crypto, forex, stocks, and indices.
-Your ONLY job: translate a trader's natural-language description into a precise JSON config.
+COMPILER_SYSTEM_PROMPT = f"""You are a senior multi-market strategy DESIGNER supporting crypto, forex, stocks, and indices.
+You are not just a compiler: when the user is vague or high-level, design a coherent, professional setup with confluence.
+Your output must stay engine-executable and validation-safe.
 
-OUTPUT: Return ONLY valid JSON. No markdown fences, no explanation, no comments in JSON.
+OUTPUT: Return ONLY valid JSON in this shape:
+{{
+  "config": <valid strategy config matching STRATEGY_SCHEMA>,
+  "rationale": "<short plain-English explanation of setup, condition logic, and risk profile>"
+}}
+No markdown fences, no comments, no text outside JSON.
 
 {STRATEGY_SCHEMA}
 
 {CONDITION_SCHEMA}
 
 === COMPILATION RULES ===
+
+DESIGNER MODE (critical)
+  • Define SOLID SETUP as:
+      1) confluence: bias filter + precise event trigger + timing/quality gate (3–4 non-redundant conditions),
+      2) selective: conditions should rarely align together (avoid always-on stacks),
+      3) event-based trigger: cross/sweep/break/just-formed gap/displacement moment, not only persistent state,
+      4) coherent risk: SL/TP matched to instrument + timeframe, R:R >= 1:1.5, intraday session bounds, breakeven + trailing.
+  • If request is vague/open-ended ("build a solid NY gold strategy"), DESIGN instead of literal translation.
+  • Internal design process (silent):
+      1) brainstorm 3 distinct candidate setups for that request,
+      2) evaluate each vs SOLID criteria,
+      3) pick the strongest candidate for output (or multiple only if user explicitly asks for options).
+  • Vary open-ended outputs: for repeated broad prompts, rotate among viable solid candidates so users can compare approaches.
+  • Always use only engine-executable condition types for selected asset class.
 
 ASSET CLASS (set "asset_class" field — CRITICAL)
   • Description mentions crypto / coins / BTC / ETH / altcoins / perpetuals → asset_class = "crypto"
@@ -595,11 +656,13 @@ FOREX-SPECIFIC RULES (apply when asset_class = "forex")
   • "COT" / "commitment of traders" → forex_cot
   • Instrument: "Gold" / "XAU" → XAUUSD, "Silver" / "XAG" → XAGUSD
   • If no specific pairs mentioned, default to ["EURUSD","GBPUSD"] for major-pair strategies
+  • FX majors are session-driven: default to London/New York sessions for intraday volatility.
+  • Gold (XAUUSD): prioritize London + New York windows; killzones, sweeps, displacement, FVG, OTE are high-signal confluence tools.
   ICT / Day-trading signal mappings (forex):
   • "killzone" / "London KZ" / "NY KZ" / "Asian open window" → fx_killzone
   • "OTE" / "optimal trade entry" / "golden zone" / "61.8–78.6 fib" → fx_ote
   • "displacement" / "impulse candle" / "institutional candle" → fx_displacement
-  • "equal highs" / "EQH" / "equal lows" / "EQL" / "BSL" / "SSL" → fx_equal_hl
+  • "equal highs" / "EQH" / "equal lows" / "EQL" / "BSL" / "SSL" → forex_liquidity_pa (equal_highs/equal_lows or sweep_eqh/sweep_eql)
   • "breaker block" / "breaker" / "failed order block" → fx_breaker
   • "CISD" / "change in state of delivery" / "delivery flip" / "change of delivery" / "state of delivery shift" → fx_cisd
   • "SDP" / "sweep displacement pullback" / "sweep, displacement, pullback" / "sweep then displacement then retrace" / "sweep + FVG + pullback" → fx_sdp
@@ -612,6 +675,27 @@ FOREX-SPECIFIC RULES (apply when asset_class = "forex")
   • "stochastic" / "stoch cross" / "%K %D" / "stoch oversold/overbought" → stochastic
   • "Power of 3" / "PO3" / "ICT PO3" / "AMD cycle" / "accumulation manipulation distribution" → fx_po3
   • "Wyckoff" / "spring" / "shakeout" / "upthrust" / "markup phase" / "Wyckoff distribution" → wyckoff
+INDEX/FOREX DAY-TRADER DESIGN HEURISTICS (use when intent is vague)
+  • Indices (NAS100/US30/SPX): default NY session (13:30 UTC open), intraday timeframe 5m/15m.
+    Preferred confluence: ORB, VWAP bias/reversion, prior-day levels, displacement, RVOL, ATR filter.
+  • Gold (XAUUSD): London + NY, liquidity sweep + displacement/FVG/OTE, killzone timing.
+    NY-specific (13:30 UTC open): sweeps of PDH/PDL and Asia/London highs-lows, then displacement + FVG retrace are high quality.
+  • FX majors: session + trend/bias + trigger + quality gate. Avoid single-indicator setups.
+  • Intraday defaults: no overnight (session/time bounded), breakeven + trailing stop enabled,
+    ATR-aware or sensible pip-based SL/TP, minimum 1:1 R:R.
+
+FOREX/INDEX DAY-TRADER TEMPLATES (compose from existing condition types)
+  • "NAS opening range" → opening_range_break (session_start=ny, orb_minutes=30, direction=up, timeframe=5m)
+    + rvol (condition=high, threshold~1.3) + vwap_bias (condition=above) + atr_filter (condition=expanding)
+  • "Index VWAP reversion" → vwap_bands (above_upper/below_lower, num_std~2.0) + vwap_bias (condition=above|below) + indicator RSI
+  • "Gold liquidity sweep day trade" → forex_prev_level (sweep_pdh/sweep_pdl) + fx_displacement + fvg + fx_killzone
+  • "Trend pullback day trade" → HTF EMA/market_structure bias + fvg/fx_ote entry + session gate
+  • "Prior-day-level break" → forex_prev_level (above_pdh/below_pdl) + rvol + fx_displacement
+  • Extra index-specific templates:
+    - "NY VWAP trend continuation" → vwap_bias + vwap_cross + rvol + atr_filter
+    - "Index momentum open drive" → opening_range_break + market_structure + rvol + atr_filter
+    - "Index pullback to VWAP" → vwap_bands + vwap_bias + stochastic + NY session filter
+    - "Index prior-day sweep reversal" → pivot_points + liquidity_sweep + vwap_bias + indicator RSI
   ICT-style forex templates — when the user describes these strategies, compose them:
   • "ICT day trade" / "killzone + OTE" → fx_killzone (primary) + fx_ote + fx_pd_array confirmations
   • "London ICT" → fx_killzone (london_kz) + fx_displacement + fvg confirmations
@@ -638,9 +722,9 @@ STOCK/INDEX-SPECIFIC RULES (apply when asset_class = "stock" or "index")
   • Leverage: stocks 1–5, indices 1–10
   • btc_regime must be null
   • Universe type="specific" with standard tickers for stocks (e.g. AAPL, TSLA, NVDA)
-    For indices use: SPX, NDX, DJI, FTSE, DAX, NKY
+    For indices prefer broker symbols: NAS100, US30, SPX500 (aliases like SPX/NDX/DJI are acceptable)
   • If no specific symbols mentioned for stocks, default to ["AAPL","MSFT","NVDA","TSLA"]
-  • If no specific symbols mentioned for indices, default to ["SPX","NDX"]
+  • If no specific symbols mentioned for indices, default to ["NAS100","US30","SPX500"]
 
 CONDITION SELECTION
   "RSI oversold" → indicator rsi lt 30
@@ -696,8 +780,9 @@ CONDITION SELECTION
   "COT" / "commitment of traders" → forex_cot
 
 RISK/REWARD
-  • Never set stop_loss_pct > take_profit_pct (minimum 1:1 R:R)
-  • For forex: never set stop_loss_pips > take_profit_pips (minimum 1:1 R:R)
+  • Prefer R:R >= 1:1.5 for designed setups; never go below 1:1.
+  • Never set stop_loss_pct > take_profit_pct
+  • For forex: never set stop_loss_pips > take_profit_pips
   • Never set leverage > 25 for crypto unless user explicitly requests higher
   • Never set leverage > 30 for forex
   • For scalps with ≤3% TP, keep SL ≤ 2%
@@ -775,9 +860,9 @@ COMPLEX / MULTI-CONDITION REQUESTS (decompose carefully — do NOT drop parts)
 SELF-CHECK BEFORE EMITTING JSON (do this silently, then output only the JSON)
   1. Did I represent EVERY concept the user named (re-read their text, tick each off)?
   2. Is asset_class correct, and are TP/SL in the right unit (pips for forex, % otherwise)?
-  3. Is R:R ≥ 1:1 and leverage within caps?
+  3. Is R:R at least 1:1.5 for designed setups (and never below 1:1), with leverage within caps?
   4. Is there ≥1 entry condition and a plain-English description that matches what I built?
-  5. Is the JSON strictly valid (no trailing commas, no comments, no markdown fences)?
+  5. Is the JSON strictly valid and shaped exactly as {{"config": ..., "rationale": "..."}}?
 
 ALWAYS INCLUDE
   • Reasonable defaults for any missing fields
@@ -979,19 +1064,636 @@ def _normalize_compiled_config(config: Optional[Dict]) -> Optional[Dict]:
     return config
 
 
+def _schema_condition_types() -> Set[str]:
+    return set(re.findall(r'"type"\s*:\s*"([a-z0-9_]+)"', CONDITION_SCHEMA))
+
+
+def engine_parity_report() -> Dict[str, List[str]]:
+    """Schema-vs-engine parity report used by upgrade verification."""
+    schema_types = _schema_condition_types()
+    missing_in_engine = sorted(schema_types - ENGINE_EXECUTABLE_CONDITION_TYPES)
+    blocked_for_builder = sorted(schema_types & BUILDER_BLOCKED_CONDITION_TYPES)
+    return {
+        "schema_types": sorted(schema_types),
+        "engine_types": sorted(ENGINE_EXECUTABLE_CONDITION_TYPES),
+        "schema_not_in_engine": missing_in_engine,
+        "builder_blocked_types": blocked_for_builder,
+    }
+
+
+def _coerce_compiler_payload(raw: Optional[Dict]) -> Tuple[Optional[Dict], str]:
+    """Accept old config-only payloads and new {"config","rationale"} shape."""
+    if not isinstance(raw, dict):
+        return None, ""
+    if isinstance(raw.get("config"), dict):
+        cfg = dict(raw.get("config") or {})
+        rationale = str(raw.get("rationale") or "").strip()
+        return cfg, rationale
+    cfg = dict(raw)
+    rationale = str(cfg.pop("rationale", "") or "").strip()
+    return cfg, rationale
+
+
+def _allowed_condition_types_for_asset(asset_class: str) -> Set[str]:
+    asset = (asset_class or "crypto").lower()
+    base = set(ENGINE_EXECUTABLE_CONDITION_TYPES) - set(BUILDER_BLOCKED_CONDITION_TYPES)
+    if asset == "forex":
+        return base - set(CRYPTO_ONLY_CONDITION_TYPES) - {"stock_earnings_avoidance"}
+    if asset == "index":
+        return (
+            base
+            - set(CRYPTO_ONLY_CONDITION_TYPES)
+            - set(FOREX_PAIR_ONLY_CONDITION_TYPES)
+            - {"stock_earnings_avoidance"}
+        )
+    if asset == "stock":
+        return (
+            base
+            - set(CRYPTO_ONLY_CONDITION_TYPES)
+            - set(FOREX_PAIR_ONLY_CONDITION_TYPES)
+        )
+    # crypto/default
+    return base - {"stock_earnings_avoidance"} - set(FOREX_PAIR_ONLY_CONDITION_TYPES)
+
+
+def _normalize_condition_aliases(cond: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(cond)
+    ctype = str(out.get("type") or "").lower()
+
+    if ctype == "forex_prev_level":
+        alias = {
+            "break_pdh": "above_pdh",
+            "break_pdl": "below_pdl",
+            "at_pdh": "above_pdh",
+            "at_pdl": "below_pdl",
+            "above_wh": "above_pwh",
+            "below_wl": "below_pwl",
+        }
+        sub = str(out.get("condition") or "").lower()
+        if sub in alias:
+            out["condition"] = alias[sub]
+
+    if ctype == "forex_cot":
+        alias = {
+            "commercials_extreme_long": "comm_extreme_long",
+            "commercials_extreme_short": "comm_extreme_short",
+        }
+        sub = str(out.get("condition") or "").lower()
+        if sub in alias:
+            out["condition"] = alias[sub]
+
+    if ctype == "forex_session_break":
+        # engine supports high/low break (and orb aliases), not "either_break"
+        if str(out.get("condition") or "").lower() == "either_break":
+            out["condition"] = "high_break"
+
+    # Backward-compat rescue for schema/editor attempts to configure fx_equal_hl.
+    # Convert to executable forex_liquidity_pa equivalent.
+    if ctype == "fx_equal_hl":
+        eq = str(out.get("equal_type") or out.get("kind") or out.get("mode") or "eqh").lower()
+        pattern = "equal_highs" if eq == "eqh" else "equal_lows"
+        out = {
+            "type": "forex_liquidity_pa",
+            "pattern": pattern,
+            "timeframe": out.get("timeframe", "15m"),
+            "lookback": out.get("lookback", 30),
+            "tolerance_pips": out.get("tolerance_pips", 3),
+        }
+    return out
+
+
+def _infer_asset_class_from_text(text: str) -> str:
+    t = (text or "").lower()
+    if re.search(r"\b(btc|eth|crypto|coin|altcoin|perp|perpetual)\b", t):
+        return "crypto"
+    if re.search(r"\b(forex|fx|eurusd|gbpusd|usdjpy|xauusd|xagusd|pips?)\b", t):
+        return "forex"
+    if re.search(r"\b(nas100|us30|spx500|spx|ndx|dow|index|indices)\b", t):
+        return "index"
+    if re.search(r"\b(stock|stocks|equity|equities|aapl|tsla|nvda|msft)\b", t):
+        return "stock"
+    return "crypto"
+
+
+def _description_is_vague(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return True
+    explicit_signal_words = (
+        "rsi", "macd", "ema", "fvg", "ifvg", "ote", "killzone", "orb",
+        "vwap", "breakout", "sweep", "bos", "choch", "atr", "rvol",
+        "stochastic", "session_break", "take profit", "stop loss", "tp", "sl",
+    )
+    has_explicit_signal = any(w in t for w in explicit_signal_words)
+    has_explicit_numbers = bool(re.search(r"\b\d+(\.\d+)?\s*(%|pips?|m|h|minutes?)\b", t))
+    if has_explicit_signal or has_explicit_numbers:
+        return False
+    vague_phrases = (
+        "good", "solid", "something", "day trade", "day-trade", "scalp",
+        "trend strategy", "for london session", "for ny session",
+    )
+    return len(t) <= 120 or any(p in t for p in vague_phrases)
+
+
+def _is_event_trigger_condition(cond: Dict[str, Any]) -> bool:
+    ctype = str(cond.get("type") or "").lower()
+    if ctype in {
+        "opening_range_break", "vwap_cross", "forex_session_break", "forex_prev_level",
+        "fx_displacement", "fx_sdp", "liquidity_sweep", "market_structure", "candlestick",
+        "consecutive_candles", "fx_judas_swing", "fx_breaker", "fx_cisd", "fx_po3",
+    }:
+        return True
+    if ctype in {"fvg", "ifvg"}:
+        return str(cond.get("condition") or "").lower() in {"just_formed", "tap_and_reject", "approaching", "gap_filled"}
+    if ctype == "indicator":
+        state = str(cond.get("condition") or "").lower()
+        return "cross" in state or "flip" in state
+    return False
+
+
+def _is_bias_condition(cond: Dict[str, Any]) -> bool:
+    ctype = str(cond.get("type") or "").lower()
+    if ctype in {"vwap_bias", "fx_pd_array", "market_structure"}:
+        return True
+    if ctype == "indicator":
+        name = str(cond.get("name") or "").lower()
+        state = str(cond.get("condition") or "").lower()
+        if name in {"ema", "sma", "supertrend", "ichimoku", "macd"}:
+            return any(tok in state for tok in ("bull", "bear", "above", "below", "aligned", "golden", "death"))
+    return False
+
+
+def _is_quality_gate_condition(cond: Dict[str, Any]) -> bool:
+    ctype = str(cond.get("type") or "").lower()
+    if ctype in {"rvol", "atr_filter", "fx_killzone", "session", "forex_session"}:
+        return True
+    if ctype == "indicator":
+        name = str(cond.get("name") or "").lower()
+        op = str(cond.get("operator") or "").lower()
+        return name == "rsi" and op in {"lt", "lte", "gt", "gte"}
+    return False
+
+
+def _risk_reward_ratio(asset_class: str, exit_cfg: Dict[str, Any]) -> float:
+    if asset_class == "forex":
+        tp = float(exit_cfg.get("take_profit_pips") or 0)
+        sl = float(exit_cfg.get("stop_loss_pips") or 0)
+    else:
+        tp = float(exit_cfg.get("take_profit_pct") or 0)
+        sl = float(exit_cfg.get("stop_loss_pct") or 0)
+    if sl <= 0:
+        return 0.0
+    return tp / sl
+
+
+def _score_designer_candidate(candidate: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
+    conds = [c for c in candidate.get("conditions", []) if isinstance(c, dict)]
+    n = len(conds)
+    has_bias = any(_is_bias_condition(c) for c in conds)
+    has_event = any(_is_event_trigger_condition(c) for c in conds)
+    has_quality = any(_is_quality_gate_condition(c) for c in conds) or bool(candidate.get("session_ids"))
+    rr = _risk_reward_ratio(str(candidate.get("asset_class") or ""), candidate.get("exit") or {})
+    max_trades = int((candidate.get("risk") or {}).get("max_trades_per_day", 3))
+
+    score = 0.0
+    score += 2.0 if 3 <= n <= 4 else -2.0
+    score += 3.0 if has_bias else -3.0
+    score += 4.0 if has_event else -4.0
+    score += 2.5 if has_quality else -2.0
+    if rr >= 1.8:
+        score += 2.0
+    elif rr >= 1.5:
+        score += 1.0
+    elif rr >= 1.0:
+        score += 0.2
+    else:
+        score -= 4.0
+    score += 1.0 if max_trades <= 4 else -1.0
+
+    meta = {
+        "has_bias": has_bias,
+        "has_event": has_event,
+        "has_quality": has_quality,
+        "rr": rr,
+        "cond_count": n,
+        "max_trades": max_trades,
+    }
+    return score, meta
+
+
+def _meets_solid_criteria(meta: Dict[str, Any]) -> bool:
+    return (
+        3 <= int(meta.get("cond_count") or 0) <= 4
+        and bool(meta.get("has_bias"))
+        and bool(meta.get("has_event"))
+        and bool(meta.get("has_quality"))
+        and float(meta.get("rr") or 0.0) >= 1.5
+    )
+
+
+def _design_rotation_key(asset_class: str, text: str) -> str:
+    t = (text or "").lower()
+    if asset_class == "forex" and ("gold" in t or "xau" in t):
+        if "ny" in t or "new york" in t:
+            return "forex:gold:ny"
+        return "forex:gold"
+    if asset_class == "index":
+        return "index:ny" if ("ny" in t or "new york" in t) else "index:general"
+    if asset_class == "forex":
+        return "forex:london" if ("london" in t and "new york" not in t and "ny" not in t) else "forex:general"
+    return f"{asset_class}:general"
+
+
+def _designer_candidates(asset_class: str, text: str) -> List[Dict[str, Any]]:
+    t = (text or "").lower()
+    ny_focus = "ny" in t or "new york" in t
+    london_only = "london" in t and "new york" not in t and "ny" not in t
+    if asset_class == "forex" and ("xau" in t or "gold" in t):
+        session_ids = ["new_york"] if ny_focus else ["london", "new_york"]
+        return [
+            {
+                "asset_class": "forex",
+                "name": "NY open gold ORB momentum",
+                "direction": "LONG",
+                "symbols": ["XAUUSD"],
+                "session_ids": session_ids,
+                "conditions": [
+                    {"type": "vwap_bias", "condition": "above", "timeframe": "5m"},
+                    {"type": "opening_range_break", "session_start": "ny", "orb_minutes": 30, "direction": "up", "timeframe": "5m"},
+                    {"type": "rvol", "condition": "high", "threshold": 1.35, "period": 20, "timeframe": "5m"},
+                    {"type": "atr_filter", "condition": "expanding", "period": 14, "lookback": 5, "timeframe": "5m"},
+                ],
+                "exit": {"take_profit_pips": 60, "stop_loss_pips": 35, "trailing_stop": True, "breakeven_at_pct": 70},
+                "risk": {"max_trades_per_day": 3},
+                "pitch": "Momentum continuation from NY open using ORB event + VWAP trend + volatility/volume confirmation.",
+                "why": [
+                    "VWAP bias sets directional context.",
+                    "ORB break is event-based entry (not always-on).",
+                    "RVOL + ATR expansion avoid low-energy breakouts.",
+                ],
+            },
+            {
+                "asset_class": "forex",
+                "name": "NY gold sweep-displacement-FVG reversal",
+                "direction": "SHORT",
+                "symbols": ["XAUUSD"],
+                "session_ids": session_ids,
+                "conditions": [
+                    {"type": "vwap_bias", "condition": "below", "timeframe": "5m"},
+                    {"type": "forex_prev_level", "condition": "sweep_pdh", "timeframe": "15m"},
+                    {"type": "fx_displacement", "direction": "bearish", "min_body_ratio": 2.5, "timeframe": "5m"},
+                    {"type": "fvg", "direction": "bearish", "condition": "tap_and_reject", "timeframe": "5m", "min_confidence": "medium"},
+                ],
+                "exit": {"take_profit_pips": 55, "stop_loss_pips": 32, "trailing_stop": True, "breakeven_at_pct": 70},
+                "risk": {"max_trades_per_day": 2},
+                "pitch": "Reversal design: PDH liquidity sweep then bearish displacement and FVG tap/reject entry.",
+                "why": [
+                    "VWAP bias filters fade direction after the sweep.",
+                    "Sweep + displacement is the event sequence confirming intent.",
+                    "FVG tap-and-reject gives precise trigger timing.",
+                ],
+            },
+            {
+                "asset_class": "forex",
+                "name": "NY killzone gold OTE continuation",
+                "direction": "LONG",
+                "symbols": ["XAUUSD"],
+                "session_ids": session_ids,
+                "conditions": [
+                    {"type": "indicator", "name": "ema", "condition": "bullish", "fast": 50, "slow": 200, "timeframe": "1h"},
+                    {"type": "fx_killzone", "killzone": "ny_kz"},
+                    {"type": "fx_ote", "direction": "bullish", "swing_lookback": 20, "fib_low": 61.8, "fib_high": 78.6, "timeframe": "5m"},
+                    {"type": "vwap_cross", "direction": "cross_above", "timeframe": "5m"},
+                ],
+                "exit": {"take_profit_pips": 50, "stop_loss_pips": 30, "trailing_stop": True, "breakeven_at_pct": 70},
+                "risk": {"max_trades_per_day": 2},
+                "pitch": "Trend-continuation design: HTF bias + NY killzone timing + OTE pullback + VWAP recapture trigger.",
+                "why": [
+                    "HTF EMA gives directional bias.",
+                    "VWAP cross is event-triggered execution confirmation.",
+                    "Killzone + OTE narrows entries to high-liquidity pullback windows.",
+                ],
+            },
+        ]
+
+    if asset_class == "index":
+        return [
+            {
+                "asset_class": "index",
+                "name": "Index NY ORB continuation",
+                "direction": "LONG",
+                "symbols": ["NAS100", "US30", "SPX500"],
+                "session_ids": ["new_york"],
+                "conditions": [
+                    {"type": "vwap_bias", "condition": "above", "timeframe": "5m"},
+                    {"type": "opening_range_break", "session_start": "ny", "orb_minutes": 30, "direction": "up", "timeframe": "5m"},
+                    {"type": "rvol", "condition": "high", "threshold": 1.3, "period": 20, "timeframe": "5m"},
+                    {"type": "atr_filter", "condition": "expanding", "period": 14, "lookback": 5, "timeframe": "5m"},
+                ],
+                "exit": {"take_profit_pct": 1.2, "stop_loss_pct": 0.7, "trailing_stop": True, "breakeven_at_pct": 70},
+                "risk": {"max_trades_per_day": 3},
+                "pitch": "NY open continuation with ORB event and trend/volatility confluence.",
+                "why": [
+                    "VWAP bias avoids counter-trend ORB breaks.",
+                    "ORB break is a discrete event trigger.",
+                    "RVOL + ATR filter out low-conviction moves.",
+                ],
+            },
+            {
+                "asset_class": "index",
+                "name": "Index VWAP band reversion",
+                "direction": "BOTH",
+                "symbols": ["NAS100", "US30", "SPX500"],
+                "session_ids": ["new_york"],
+                "conditions": [
+                    {"type": "indicator", "name": "ema", "condition": "bullish", "fast": 50, "slow": 200, "timeframe": "1h"},
+                    {"type": "vwap_bands", "condition": "below_lower", "num_std": 2.0, "timeframe": "5m"},
+                    {"type": "vwap_cross", "direction": "cross_above", "timeframe": "5m"},
+                    {"type": "indicator", "name": "rsi", "operator": "lt", "value": 35, "timeframe": "5m"},
+                ],
+                "exit": {"take_profit_pct": 0.9, "stop_loss_pct": 0.55, "trailing_stop": True, "breakeven_at_pct": 70},
+                "risk": {"max_trades_per_day": 2},
+                "pitch": "Selective NY reversion: extension to lower VWAP band then event-based recapture trigger.",
+                "why": [
+                    "HTF EMA keeps trades aligned with broad trend context.",
+                    "VWAP cross gives moment-of-entry confirmation.",
+                    "RSI extreme gate reduces random mean-reversion attempts.",
+                ],
+            },
+            {
+                "asset_class": "index",
+                "name": "Index prior-level break momentum",
+                "direction": "LONG",
+                "symbols": ["NAS100", "US30", "SPX500"],
+                "session_ids": ["new_york"],
+                "conditions": [
+                    {"type": "vwap_bias", "condition": "above", "timeframe": "5m"},
+                    {"type": "market_structure", "condition": "bos_bullish", "timeframe": "5m"},
+                    {"type": "fx_displacement", "direction": "bullish", "min_body_ratio": 2.0, "timeframe": "5m"},
+                    {"type": "rvol", "condition": "high", "threshold": 1.25, "period": 20, "timeframe": "5m"},
+                ],
+                "exit": {"take_profit_pct": 1.1, "stop_loss_pct": 0.7, "trailing_stop": True, "breakeven_at_pct": 70},
+                "risk": {"max_trades_per_day": 3},
+                "pitch": "NY momentum stack: structure break plus displacement with volume confirmation.",
+                "why": [
+                    "VWAP bias keeps breakouts in dominant direction.",
+                    "BOS + displacement are event-based and selective.",
+                    "RVOL confirms participation before entry.",
+                ],
+            },
+        ]
+
+    session_ids = ["london"] if london_only else ["london", "new_york"]
+    return [
+        {
+            "asset_class": "forex",
+            "name": "FX trend pullback",
+            "direction": "LONG",
+            "symbols": ["EURUSD", "GBPUSD"],
+            "session_ids": session_ids,
+            "conditions": [
+                {"type": "indicator", "name": "ema", "condition": "bullish", "fast": 50, "slow": 200, "timeframe": "1h"},
+                {"type": "fvg", "direction": "bullish", "condition": "tap_and_reject", "timeframe": "15m", "min_confidence": "medium"},
+                {"type": "rvol", "condition": "high", "threshold": 1.2, "period": 20, "timeframe": "15m"},
+                {"type": "atr_filter", "condition": "volatile", "min_atr_pct": 0.2, "period": 14, "timeframe": "15m"},
+            ],
+            "exit": {"take_profit_pips": 36, "stop_loss_pips": 22, "trailing_stop": True, "breakeven_at_pct": 70},
+            "risk": {"max_trades_per_day": 3},
+            "pitch": "HTF trend pullback with event-based FVG rejection trigger and volatility gates.",
+            "why": [
+                "EMA bias keeps entries aligned with trend.",
+                "FVG tap-and-reject is a discrete execution moment.",
+                "RVOL/ATR gates avoid dead sessions and low-volatility chop.",
+            ],
+        },
+        {
+            "asset_class": "forex",
+            "name": "FX London range break",
+            "direction": "BOTH",
+            "symbols": ["EURUSD", "GBPUSD"],
+            "session_ids": session_ids,
+            "conditions": [
+                {"type": "vwap_bias", "condition": "above", "timeframe": "5m"},
+                {"type": "forex_session_break", "condition": "high_break", "session": "london", "range_minutes": 60, "timeframe": "5m"},
+                {"type": "rvol", "condition": "high", "threshold": 1.25, "period": 20, "timeframe": "5m"},
+                {"type": "atr_filter", "condition": "expanding", "period": 14, "lookback": 5, "timeframe": "5m"},
+            ],
+            "exit": {"take_profit_pips": 32, "stop_loss_pips": 20, "trailing_stop": True, "breakeven_at_pct": 70},
+            "risk": {"max_trades_per_day": 2},
+            "pitch": "Session breakout event in London with trend and volatility filters to avoid false breaks.",
+            "why": [
+                "VWAP bias prevents fading strong directional breaks.",
+                "Session-break condition is event-based and infrequent.",
+                "RVOL + ATR expansion screen out weak break attempts.",
+            ],
+        },
+        {
+            "asset_class": "forex",
+            "name": "FX prior-day break continuation",
+            "direction": "LONG",
+            "symbols": ["EURUSD", "GBPUSD"],
+            "session_ids": session_ids,
+            "conditions": [
+                {"type": "vwap_bias", "condition": "above", "timeframe": "15m"},
+                {"type": "forex_prev_level", "condition": "above_pdh", "timeframe": "15m"},
+                {"type": "fx_displacement", "direction": "bullish", "min_body_ratio": 2.0, "timeframe": "15m"},
+                {"type": "rvol", "condition": "high", "threshold": 1.2, "period": 20, "timeframe": "15m"},
+            ],
+            "exit": {"take_profit_pips": 42, "stop_loss_pips": 26, "trailing_stop": True, "breakeven_at_pct": 70},
+            "risk": {"max_trades_per_day": 2},
+            "pitch": "Prior-day-level break continuation with displacement + participation confirmation.",
+            "why": [
+                "VWAP bias gives directional context before breakouts.",
+                "PDH break + displacement are event-driven continuation signals.",
+                "RVOL confirms the move is not a thin-liquidity fake.",
+            ],
+        },
+    ]
+
+
+def _select_designer_candidate(asset_class: str, text: str, candidates: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], Dict[str, Any], List[str]]:
+    scored: List[Tuple[Dict[str, Any], float, Dict[str, Any]]] = []
+    for cand in candidates:
+        score, meta = _score_designer_candidate(cand)
+        scored.append((cand, score, meta))
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    viable = [(c, s, m) for (c, s, m) in scored if _meets_solid_criteria(m)]
+    pool = viable or scored[:1]
+    top_score = pool[0][1]
+    # Keep only candidates close to strongest score, then rotate for open-ended prompts.
+    shortlist = [item for item in pool if (top_score - item[1]) <= 2.0]
+    if not shortlist:
+        shortlist = [pool[0]]
+
+    if len(shortlist) == 1 or not _description_is_vague(text):
+        chosen = shortlist[0]
+    else:
+        key = _design_rotation_key(asset_class, text)
+        idx = _DESIGN_ROTATION_STATE.get(key, 0)
+        chosen = shortlist[idx % len(shortlist)]
+        _DESIGN_ROTATION_STATE[key] = idx + 1
+
+    considered = [f"{c['name']} (score={s:.1f})" for (c, s, _m) in scored]
+    return chosen[0], chosen[2], considered
+
+
+def _apply_designer_layer(config: Dict[str, Any], user_description: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    asset_class = (config.get("asset_class") or "").lower()
+    if asset_class not in {"forex", "index"}:
+        return config, None
+
+    entry = config.get("entry_conditions")
+    conditions = []
+    if isinstance(entry, dict) and isinstance(entry.get("conditions"), list):
+        conditions = [c for c in entry["conditions"] if isinstance(c, dict)]
+
+    if not (_description_is_vague(user_description) or len(conditions) < 2):
+        return config, None
+
+    candidates = _designer_candidates(asset_class, user_description)
+    if not candidates:
+        return config, None
+    tpl, meta, considered = _select_designer_candidate(asset_class, user_description, candidates)
+
+    config.setdefault("entry_conditions", {})
+    config["entry_conditions"]["operator"] = "AND"
+    config["entry_conditions"]["conditions"] = tpl["conditions"]
+    config["direction"] = tpl.get("direction", config.get("direction", "BOTH"))
+
+    universe = config.get("universe")
+    if not isinstance(universe, dict):
+        universe = {}
+    universe["type"] = "specific"
+    if not universe.get("symbols"):
+        universe["symbols"] = tpl.get("symbols", [])
+    config["universe"] = universe
+
+    filters = config.get("filters")
+    if not isinstance(filters, dict):
+        filters = {}
+    if tpl.get("session_ids"):
+        filters["session"] = {"type": "session", "sessions": tpl["session_ids"]}
+    config["filters"] = filters
+
+    exit_cfg = config.get("exit")
+    if not isinstance(exit_cfg, dict):
+        exit_cfg = {}
+    for k, v in (tpl.get("exit") or {}).items():
+        if exit_cfg.get(k) is None:
+            exit_cfg[k] = v
+    config["exit"] = exit_cfg
+
+    risk = config.get("risk")
+    if not isinstance(risk, dict):
+        risk = {}
+    tpl_risk = tpl.get("risk") if isinstance(tpl.get("risk"), dict) else {}
+    for k, v in tpl_risk.items():
+        if risk.get(k) is None:
+            risk[k] = v
+    risk.setdefault("leverage", 10 if asset_class == "forex" else 5)
+    risk.setdefault("position_size_pct", 2.0)
+    risk.setdefault("max_trades_per_day", 3)
+    risk.setdefault("max_open_positions", 1)
+    risk.setdefault("cooldown_minutes", 45)
+    risk.setdefault("daily_loss_limit_pct", 3.0)
+    config["risk"] = risk
+
+    why = tpl.get("why") if isinstance(tpl.get("why"), list) else []
+    why_text = " ".join([f"- {w}" for w in why if isinstance(w, str) and w.strip()])
+    rr = float(meta.get("rr") or 0.0)
+    rationale = (
+        f"{tpl.get('pitch', 'Solid confluence setup selected.')}"
+        f" Built after evaluating 3 candidates on solid criteria: bias+event+quality confluence,"
+        f" selectivity, and risk coherence (RR={rr:.2f}, session-bounded, breakeven+trailing)."
+    )
+    if why_text:
+        rationale = f"{rationale} {why_text}"
+    rationale = f"{rationale} Candidates considered: {', '.join(considered)}."
+    return config, rationale
+
+
+def _enforce_engine_executable_conditions(config: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    """Normalize aliases and drop conditions unsupported for the selected asset class."""
+    asset_class = (config.get("asset_class") or "").lower()
+    allowed = _allowed_condition_types_for_asset(asset_class)
+    entry = config.get("entry_conditions")
+    dropped: List[str] = []
+    if not isinstance(entry, dict) or not isinstance(entry.get("conditions"), list):
+        return config, dropped
+
+    cleaned = []
+    for raw in entry["conditions"]:
+        if not isinstance(raw, dict):
+            continue
+        cond = _normalize_condition_aliases(raw)
+        ctype = str(cond.get("type") or "").lower()
+        if ctype in allowed:
+            cleaned.append(cond)
+        else:
+            dropped.append(ctype or "<unknown>")
+
+    if not cleaned:
+        # Safety fallback: ensure we always emit at least one executable condition.
+        fallback = (
+            {"type": "indicator", "name": "ema", "condition": "bullish", "fast": 20, "slow": 50, "timeframe": "15m"}
+            if asset_class == "forex"
+            else {"type": "vwap_bias", "condition": "above", "timeframe": "5m"}
+        )
+        cleaned = [fallback]
+        dropped.append("<all_dropped_fallback_applied>")
+
+    entry["operator"] = (entry.get("operator") or "AND").upper()
+    entry["conditions"] = cleaned
+    config["entry_conditions"] = entry
+    return config, dropped
+
+
+def _normalize_compiler_payload(payload: Optional[Dict], user_description: str) -> Optional[Dict[str, Any]]:
+    config, rationale = _coerce_compiler_payload(payload)
+    if not isinstance(config, dict):
+        return None
+
+    if not config.get("asset_class"):
+        config["asset_class"] = _infer_asset_class_from_text(user_description)
+
+    config = _normalize_compiled_config(config) or config
+    config, designer_rationale = _apply_designer_layer(config, user_description)
+    config, dropped = _enforce_engine_executable_conditions(config)
+
+    # Day-trader defaults for forex/index where user didn't explicitly set exit controls.
+    if config.get("asset_class") == "index":
+        exit_cfg = config.get("exit") if isinstance(config.get("exit"), dict) else {}
+        exit_cfg.setdefault("trailing_stop", True)
+        exit_cfg.setdefault("breakeven_at_pct", 70)
+        config["exit"] = exit_cfg
+    elif config.get("asset_class") == "forex":
+        exit_cfg = config.get("exit") if isinstance(config.get("exit"), dict) else {}
+        exit_cfg.setdefault("trailing_stop", True)
+        exit_cfg.setdefault("breakeven_at_pct", 70)
+        config["exit"] = exit_cfg
+
+    if not rationale:
+        rationale = designer_rationale or "Confluence design with bias + trigger + quality gate, risk-capped for intraday execution."
+    if dropped:
+        rationale = f"{rationale} (Filtered non-executable conditions: {', '.join(sorted(set(dropped)))})"
+
+    return {"config": config, "rationale": rationale}
+
+
 async def compile_strategy_from_conversation(
     conversation: List[Dict[str, str]],
     user_description: str,
-) -> Optional[Dict]:
+) -> Optional[Dict[str, Any]]:
     """
-    Takes user description, returns compiled strategy config dict or None on failure.
+    Takes user description, returns {"config": ..., "rationale": ...} or None on failure.
     Tries Claude first, falls back to Gemini if Anthropic credits are exhausted.
     """
     result = await _compile_with_anthropic(user_description)
     if result is None:
         logger.info("Anthropic unavailable — trying Gemini fallback compiler")
         result = await _compile_with_gemini(user_description)
-    return _normalize_compiled_config(result)
+    return _normalize_compiler_payload(result, user_description)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

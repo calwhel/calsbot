@@ -204,13 +204,15 @@ async def msg_strategy_description(message: types.Message, state: FSMContext):
         format_config_for_display,
     )
 
-    config = await compile_strategy_from_conversation([], f"Strategy name: {name}\n\n{description}")
-    if not config:
+    compiled = await compile_strategy_from_conversation([], f"Strategy name: {name}\n\n{description}")
+    if not compiled or not isinstance(compiled.get("config"), dict):
         await message.answer(
             "❌ Couldn't parse your strategy. Try being more specific about entry conditions and TP/SL.",
         )
         await state.clear()
         return
+    config = compiled["config"]
+    rationale = str(compiled.get("rationale") or "").strip()
 
     # Ensure name from user
     config["name"]        = name
@@ -218,7 +220,7 @@ async def msg_strategy_description(message: types.Message, state: FSMContext):
 
     # Validate
     validation = await validate_strategy(config)
-    await state.update_data(compiled_config=config, validation=validation)
+    await state.update_data(compiled_config=config, validation=validation, rationale=rationale)
     await state.set_state(StrategyBuild.waiting_for_confirm)
 
     # Show compiled strategy
@@ -235,8 +237,9 @@ async def msg_strategy_description(message: types.Message, state: FSMContext):
         ]
     ])
 
+    rationale_text = f"\n\n🧠 <b>Rationale:</b>\n{rationale}" if rationale else ""
     await message.answer(
-        f"<b>Here's what I built:</b>\n\n{display}{warn_text}\n\n"
+        f"<b>Here's what I built:</b>\n\n{display}{warn_text}{rationale_text}\n\n"
         f"<i>Risk rating: {validation.get('risk_rating','MEDIUM')}</i>\n\n"
         f"Does this look right? Save it or start over.",
         reply_markup=keyboard,
