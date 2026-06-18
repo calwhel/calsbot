@@ -131,6 +131,57 @@ class TestEvalBudget(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_forex_single_symbol_smc_path_logs_cancelled_eval_abort(self):
+        """Mirror id=209 shape: forex specific single symbol via order_block path."""
+        async def _slow_klines(*_args, **_kwargs):
+            await asyncio.sleep(0.2)
+            # Unused on timeout, but keep realistic klines shape.
+            return [[i * 60_000, 1.0, 1.1, 0.9, 1.0, 100.0] for i in range(210)]
+
+        async def _smc_eval():
+            from app.services.strategy_ta import evaluate_strategy_conditions
+            cfg = {
+                "asset_class": "forex",
+                "universe": {"type": "specific", "symbols": ["XAUUSD"]},
+                "entry_conditions": {
+                    "operator": "AND",
+                    "conditions": [
+                        {"type": "order_block", "timeframe": "15m", "ob_type": "bullish"},
+                    ],
+                },
+            }
+            price_data = {
+                "price": 2300.0,
+                "enhanced_ta": {},
+                "_asset_class": "forex",
+            }
+            await evaluate_strategy_conditions(
+                cfg,
+                "XAUUSD",
+                price_data,
+                {},
+                MagicMock(),
+            )
+
+        import app.services.strategy_executor as se
+        with patch("app.services.strategy_ta._get_klines", side_effect=_slow_klines), \
+                patch.object(se, "EXECUTOR_STRATEGY_EVAL_BUDGET_S", 0.05), \
+                self.assertLogs("app.services.strategy_executor", level="WARNING") as cm:
+            cfg = {
+                "universe": {"type": "specific", "symbols": ["XAUUSD"]},
+                "entry_conditions": {
+                    "conditions": [{"type": "order_block", "timeframe": "15m"}],
+                },
+            }
+            with self.assertRaises(asyncio.TimeoutError):
+                await _evaluate_with_budget(209, cfg, "forex", _smc_eval())
+        self.assertTrue(
+            any(
+                "[eval] id=209 ABORTED >budget" in line and "cause=cancelled_eval" in line
+                for line in cm.output
+            ),
+        )
+
 
 class TestEvalBatchLaunch(unittest.IsolatedAsyncioTestCase):
     async def test_gather_eval_batches_launches_all_tasks_together(self):
@@ -149,6 +200,16 @@ class TestEvalBatchLaunch(unittest.IsolatedAsyncioTestCase):
         # Even with batch_size=1, launcher should still schedule all tasks at once.
         await _gather_eval_batches("test", snapshots, _run_one, batch_size=1)
         self.assertGreaterEqual(state["max_active"], 2)
+
+
+class TestCancellationPropagationWiring(unittest.TestCase):
+    def test_evaluate_and_fire_does_not_swallow_strategy_eval_cancel(self):
+        import app.services.strategy_executor as se
+
+        src = inspect.getsource(se.evaluate_and_fire)
+        self.assertIn("except StrategyEvalCancelled:", src)
+        self.assertIn("propagating budget abort", src)
+        self.assertIn("raise", src)
 
 
 class TestExecutorRuntimeProfile(unittest.TestCase):

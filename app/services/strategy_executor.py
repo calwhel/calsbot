@@ -5627,9 +5627,9 @@ async def evaluate_and_fire(
                 )
         except StrategyEvalCancelled:
             logger.info(
-                f"[Strategy {strategy.id}] eval cancelled — skipping cycle"
+                f"[Strategy {strategy.id}] eval cancelled — propagating budget abort"
             )
-            return
+            raise
         _maybe_log_ta_eval(strategy, symbol, direction_pref, passed, details)
         if not passed:
             log_scan_metric(
