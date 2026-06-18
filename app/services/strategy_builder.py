@@ -52,6 +52,8 @@ FOREX_PAIR_ONLY_CONDITION_TYPES = frozenset({
 # for AI output until engine-side shape is fixed.
 BUILDER_BLOCKED_CONDITION_TYPES = frozenset({"fx_equal_hl"})
 
+_DESIGN_ROTATION_STATE: Dict[str, int] = {}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Full condition type schema — passed verbatim to the compiler AI
 # ─────────────────────────────────────────────────────────────────────────────
@@ -599,14 +601,18 @@ No markdown fences, no comments, no text outside JSON.
 === COMPILATION RULES ===
 
 DESIGNER MODE (critical)
-  • If the request is vague ("good NAS day trade", "gold scalp", "something for London session"),
-    DESIGN (don't under-specify) using 2–4 non-redundant entry conditions:
-      1) directional/bias filter (VWAP bias, HTF trend, PD-array, structure),
-      2) entry trigger (FVG / ORB / sweep / structure break),
-      3) timing or quality gate (session, RVOL, ATR filter, killzone).
-  • Avoid thin single-signal builds for forex/index day trading unless user explicitly requests one.
-  • Keep the setup coherent by instrument and session behavior.
-  • Use only condition types that the executor actually supports for the selected asset class.
+  • Define SOLID SETUP as:
+      1) confluence: bias filter + precise event trigger + timing/quality gate (3–4 non-redundant conditions),
+      2) selective: conditions should rarely align together (avoid always-on stacks),
+      3) event-based trigger: cross/sweep/break/just-formed gap/displacement moment, not only persistent state,
+      4) coherent risk: SL/TP matched to instrument + timeframe, R:R >= 1:1.5, intraday session bounds, breakeven + trailing.
+  • If request is vague/open-ended ("build a solid NY gold strategy"), DESIGN instead of literal translation.
+  • Internal design process (silent):
+      1) brainstorm 3 distinct candidate setups for that request,
+      2) evaluate each vs SOLID criteria,
+      3) pick the strongest candidate for output (or multiple only if user explicitly asks for options).
+  • Vary open-ended outputs: for repeated broad prompts, rotate among viable solid candidates so users can compare approaches.
+  • Always use only engine-executable condition types for selected asset class.
 
 ASSET CLASS (set "asset_class" field — CRITICAL)
   • Description mentions crypto / coins / BTC / ETH / altcoins / perpetuals → asset_class = "crypto"
@@ -673,6 +679,7 @@ INDEX/FOREX DAY-TRADER DESIGN HEURISTICS (use when intent is vague)
   • Indices (NAS100/US30/SPX): default NY session (13:30 UTC open), intraday timeframe 5m/15m.
     Preferred confluence: ORB, VWAP bias/reversion, prior-day levels, displacement, RVOL, ATR filter.
   • Gold (XAUUSD): London + NY, liquidity sweep + displacement/FVG/OTE, killzone timing.
+    NY-specific (13:30 UTC open): sweeps of PDH/PDL and Asia/London highs-lows, then displacement + FVG retrace are high quality.
   • FX majors: session + trend/bias + trigger + quality gate. Avoid single-indicator setups.
   • Intraday defaults: no overnight (session/time bounded), breakeven + trailing stop enabled,
     ATR-aware or sensible pip-based SL/TP, minimum 1:1 R:R.
@@ -773,8 +780,9 @@ CONDITION SELECTION
   "COT" / "commitment of traders" → forex_cot
 
 RISK/REWARD
-  • Never set stop_loss_pct > take_profit_pct (minimum 1:1 R:R)
-  • For forex: never set stop_loss_pips > take_profit_pips (minimum 1:1 R:R)
+  • Prefer R:R >= 1:1.5 for designed setups; never go below 1:1.
+  • Never set stop_loss_pct > take_profit_pct
+  • For forex: never set stop_loss_pips > take_profit_pips
   • Never set leverage > 25 for crypto unless user explicitly requests higher
   • Never set leverage > 30 for forex
   • For scalps with ≤3% TP, keep SL ≤ 2%
@@ -852,7 +860,7 @@ COMPLEX / MULTI-CONDITION REQUESTS (decompose carefully — do NOT drop parts)
 SELF-CHECK BEFORE EMITTING JSON (do this silently, then output only the JSON)
   1. Did I represent EVERY concept the user named (re-read their text, tick each off)?
   2. Is asset_class correct, and are TP/SL in the right unit (pips for forex, % otherwise)?
-  3. Is R:R ≥ 1:1 and leverage within caps?
+  3. Is R:R at least 1:1.5 for designed setups (and never below 1:1), with leverage within caps?
   4. Is there ≥1 entry condition and a plain-English description that matches what I built?
   5. Is the JSON strictly valid and shaped exactly as {{"config": ..., "rationale": "..."}}?
 
@@ -1187,69 +1195,347 @@ def _description_is_vague(text: str) -> bool:
     return len(t) <= 120 or any(p in t for p in vague_phrases)
 
 
-def _designer_template(asset_class: str, text: str) -> Dict[str, Any]:
+def _is_event_trigger_condition(cond: Dict[str, Any]) -> bool:
+    ctype = str(cond.get("type") or "").lower()
+    if ctype in {
+        "opening_range_break", "vwap_cross", "forex_session_break", "forex_prev_level",
+        "fx_displacement", "fx_sdp", "liquidity_sweep", "market_structure", "candlestick",
+        "consecutive_candles", "fx_judas_swing", "fx_breaker", "fx_cisd", "fx_po3",
+    }:
+        return True
+    if ctype in {"fvg", "ifvg"}:
+        return str(cond.get("condition") or "").lower() in {"just_formed", "tap_and_reject", "approaching", "gap_filled"}
+    if ctype == "indicator":
+        state = str(cond.get("condition") or "").lower()
+        return "cross" in state or "flip" in state
+    return False
+
+
+def _is_bias_condition(cond: Dict[str, Any]) -> bool:
+    ctype = str(cond.get("type") or "").lower()
+    if ctype in {"vwap_bias", "fx_pd_array", "market_structure"}:
+        return True
+    if ctype == "indicator":
+        name = str(cond.get("name") or "").lower()
+        state = str(cond.get("condition") or "").lower()
+        if name in {"ema", "sma", "supertrend", "ichimoku", "macd"}:
+            return any(tok in state for tok in ("bull", "bear", "above", "below", "aligned", "golden", "death"))
+    return False
+
+
+def _is_quality_gate_condition(cond: Dict[str, Any]) -> bool:
+    ctype = str(cond.get("type") or "").lower()
+    if ctype in {"rvol", "atr_filter", "fx_killzone", "session", "forex_session"}:
+        return True
+    if ctype == "indicator":
+        name = str(cond.get("name") or "").lower()
+        op = str(cond.get("operator") or "").lower()
+        return name == "rsi" and op in {"lt", "lte", "gt", "gte"}
+    return False
+
+
+def _risk_reward_ratio(asset_class: str, exit_cfg: Dict[str, Any]) -> float:
+    if asset_class == "forex":
+        tp = float(exit_cfg.get("take_profit_pips") or 0)
+        sl = float(exit_cfg.get("stop_loss_pips") or 0)
+    else:
+        tp = float(exit_cfg.get("take_profit_pct") or 0)
+        sl = float(exit_cfg.get("stop_loss_pct") or 0)
+    if sl <= 0:
+        return 0.0
+    return tp / sl
+
+
+def _score_designer_candidate(candidate: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
+    conds = [c for c in candidate.get("conditions", []) if isinstance(c, dict)]
+    n = len(conds)
+    has_bias = any(_is_bias_condition(c) for c in conds)
+    has_event = any(_is_event_trigger_condition(c) for c in conds)
+    has_quality = any(_is_quality_gate_condition(c) for c in conds) or bool(candidate.get("session_ids"))
+    rr = _risk_reward_ratio(str(candidate.get("asset_class") or ""), candidate.get("exit") or {})
+    max_trades = int((candidate.get("risk") or {}).get("max_trades_per_day", 3))
+
+    score = 0.0
+    score += 2.0 if 3 <= n <= 4 else -2.0
+    score += 3.0 if has_bias else -3.0
+    score += 4.0 if has_event else -4.0
+    score += 2.5 if has_quality else -2.0
+    if rr >= 1.8:
+        score += 2.0
+    elif rr >= 1.5:
+        score += 1.0
+    elif rr >= 1.0:
+        score += 0.2
+    else:
+        score -= 4.0
+    score += 1.0 if max_trades <= 4 else -1.0
+
+    meta = {
+        "has_bias": has_bias,
+        "has_event": has_event,
+        "has_quality": has_quality,
+        "rr": rr,
+        "cond_count": n,
+        "max_trades": max_trades,
+    }
+    return score, meta
+
+
+def _meets_solid_criteria(meta: Dict[str, Any]) -> bool:
+    return (
+        3 <= int(meta.get("cond_count") or 0) <= 4
+        and bool(meta.get("has_bias"))
+        and bool(meta.get("has_event"))
+        and bool(meta.get("has_quality"))
+        and float(meta.get("rr") or 0.0) >= 1.5
+    )
+
+
+def _design_rotation_key(asset_class: str, text: str) -> str:
     t = (text or "").lower()
+    if asset_class == "forex" and ("gold" in t or "xau" in t):
+        if "ny" in t or "new york" in t:
+            return "forex:gold:ny"
+        return "forex:gold"
     if asset_class == "index":
-        if "reversion" in t or "mean" in t:
-            return {
-                "name": "Index VWAP reversion",
+        return "index:ny" if ("ny" in t or "new york" in t) else "index:general"
+    if asset_class == "forex":
+        return "forex:london" if ("london" in t and "new york" not in t and "ny" not in t) else "forex:general"
+    return f"{asset_class}:general"
+
+
+def _designer_candidates(asset_class: str, text: str) -> List[Dict[str, Any]]:
+    t = (text or "").lower()
+    ny_focus = "ny" in t or "new york" in t
+    london_only = "london" in t and "new york" not in t and "ny" not in t
+    if asset_class == "forex" and ("xau" in t or "gold" in t):
+        session_ids = ["new_york"] if ny_focus else ["london", "new_york"]
+        return [
+            {
+                "asset_class": "forex",
+                "name": "NY open gold ORB momentum",
+                "direction": "LONG",
+                "symbols": ["XAUUSD"],
+                "session_ids": session_ids,
+                "conditions": [
+                    {"type": "vwap_bias", "condition": "above", "timeframe": "5m"},
+                    {"type": "opening_range_break", "session_start": "ny", "orb_minutes": 30, "direction": "up", "timeframe": "5m"},
+                    {"type": "rvol", "condition": "high", "threshold": 1.35, "period": 20, "timeframe": "5m"},
+                    {"type": "atr_filter", "condition": "expanding", "period": 14, "lookback": 5, "timeframe": "5m"},
+                ],
+                "exit": {"take_profit_pips": 60, "stop_loss_pips": 35, "trailing_stop": True, "breakeven_at_pct": 70},
+                "risk": {"max_trades_per_day": 3},
+                "pitch": "Momentum continuation from NY open using ORB event + VWAP trend + volatility/volume confirmation.",
+                "why": [
+                    "VWAP bias sets directional context.",
+                    "ORB break is event-based entry (not always-on).",
+                    "RVOL + ATR expansion avoid low-energy breakouts.",
+                ],
+            },
+            {
+                "asset_class": "forex",
+                "name": "NY gold sweep-displacement-FVG reversal",
+                "direction": "SHORT",
+                "symbols": ["XAUUSD"],
+                "session_ids": session_ids,
+                "conditions": [
+                    {"type": "vwap_bias", "condition": "below", "timeframe": "5m"},
+                    {"type": "forex_prev_level", "condition": "sweep_pdh", "timeframe": "15m"},
+                    {"type": "fx_displacement", "direction": "bearish", "min_body_ratio": 2.5, "timeframe": "5m"},
+                    {"type": "fvg", "direction": "bearish", "condition": "tap_and_reject", "timeframe": "5m", "min_confidence": "medium"},
+                ],
+                "exit": {"take_profit_pips": 55, "stop_loss_pips": 32, "trailing_stop": True, "breakeven_at_pct": 70},
+                "risk": {"max_trades_per_day": 2},
+                "pitch": "Reversal design: PDH liquidity sweep then bearish displacement and FVG tap/reject entry.",
+                "why": [
+                    "VWAP bias filters fade direction after the sweep.",
+                    "Sweep + displacement is the event sequence confirming intent.",
+                    "FVG tap-and-reject gives precise trigger timing.",
+                ],
+            },
+            {
+                "asset_class": "forex",
+                "name": "NY killzone gold OTE continuation",
+                "direction": "LONG",
+                "symbols": ["XAUUSD"],
+                "session_ids": session_ids,
+                "conditions": [
+                    {"type": "indicator", "name": "ema", "condition": "bullish", "fast": 50, "slow": 200, "timeframe": "1h"},
+                    {"type": "fx_killzone", "killzone": "ny_kz"},
+                    {"type": "fx_ote", "direction": "bullish", "swing_lookback": 20, "fib_low": 61.8, "fib_high": 78.6, "timeframe": "5m"},
+                    {"type": "vwap_cross", "direction": "cross_above", "timeframe": "5m"},
+                ],
+                "exit": {"take_profit_pips": 50, "stop_loss_pips": 30, "trailing_stop": True, "breakeven_at_pct": 70},
+                "risk": {"max_trades_per_day": 2},
+                "pitch": "Trend-continuation design: HTF bias + NY killzone timing + OTE pullback + VWAP recapture trigger.",
+                "why": [
+                    "HTF EMA gives directional bias.",
+                    "VWAP cross is event-triggered execution confirmation.",
+                    "Killzone + OTE narrows entries to high-liquidity pullback windows.",
+                ],
+            },
+        ]
+
+    if asset_class == "index":
+        return [
+            {
+                "asset_class": "index",
+                "name": "Index NY ORB continuation",
+                "direction": "LONG",
+                "symbols": ["NAS100", "US30", "SPX500"],
+                "session_ids": ["new_york"],
+                "conditions": [
+                    {"type": "vwap_bias", "condition": "above", "timeframe": "5m"},
+                    {"type": "opening_range_break", "session_start": "ny", "orb_minutes": 30, "direction": "up", "timeframe": "5m"},
+                    {"type": "rvol", "condition": "high", "threshold": 1.3, "period": 20, "timeframe": "5m"},
+                    {"type": "atr_filter", "condition": "expanding", "period": 14, "lookback": 5, "timeframe": "5m"},
+                ],
+                "exit": {"take_profit_pct": 1.2, "stop_loss_pct": 0.7, "trailing_stop": True, "breakeven_at_pct": 70},
+                "risk": {"max_trades_per_day": 3},
+                "pitch": "NY open continuation with ORB event and trend/volatility confluence.",
+                "why": [
+                    "VWAP bias avoids counter-trend ORB breaks.",
+                    "ORB break is a discrete event trigger.",
+                    "RVOL + ATR filter out low-conviction moves.",
+                ],
+            },
+            {
+                "asset_class": "index",
+                "name": "Index VWAP band reversion",
                 "direction": "BOTH",
                 "symbols": ["NAS100", "US30", "SPX500"],
                 "session_ids": ["new_york"],
                 "conditions": [
+                    {"type": "indicator", "name": "ema", "condition": "bullish", "fast": 50, "slow": 200, "timeframe": "1h"},
                     {"type": "vwap_bands", "condition": "below_lower", "num_std": 2.0, "timeframe": "5m"},
-                    {"type": "vwap_bias", "condition": "above", "timeframe": "5m"},
+                    {"type": "vwap_cross", "direction": "cross_above", "timeframe": "5m"},
                     {"type": "indicator", "name": "rsi", "operator": "lt", "value": 35, "timeframe": "5m"},
                 ],
-                "exit": {"take_profit_pct": 1.0, "stop_loss_pct": 0.5, "trailing_stop": True, "breakeven_at_pct": 70},
-                "rationale": "NY-session mean-reversion around VWAP bands with bias + RSI quality gate.",
-            }
-        return {
-            "name": "NAS opening range day trade",
+                "exit": {"take_profit_pct": 0.9, "stop_loss_pct": 0.55, "trailing_stop": True, "breakeven_at_pct": 70},
+                "risk": {"max_trades_per_day": 2},
+                "pitch": "Selective NY reversion: extension to lower VWAP band then event-based recapture trigger.",
+                "why": [
+                    "HTF EMA keeps trades aligned with broad trend context.",
+                    "VWAP cross gives moment-of-entry confirmation.",
+                    "RSI extreme gate reduces random mean-reversion attempts.",
+                ],
+            },
+            {
+                "asset_class": "index",
+                "name": "Index prior-level break momentum",
+                "direction": "LONG",
+                "symbols": ["NAS100", "US30", "SPX500"],
+                "session_ids": ["new_york"],
+                "conditions": [
+                    {"type": "vwap_bias", "condition": "above", "timeframe": "5m"},
+                    {"type": "market_structure", "condition": "bos_bullish", "timeframe": "5m"},
+                    {"type": "fx_displacement", "direction": "bullish", "min_body_ratio": 2.0, "timeframe": "5m"},
+                    {"type": "rvol", "condition": "high", "threshold": 1.25, "period": 20, "timeframe": "5m"},
+                ],
+                "exit": {"take_profit_pct": 1.1, "stop_loss_pct": 0.7, "trailing_stop": True, "breakeven_at_pct": 70},
+                "risk": {"max_trades_per_day": 3},
+                "pitch": "NY momentum stack: structure break plus displacement with volume confirmation.",
+                "why": [
+                    "VWAP bias keeps breakouts in dominant direction.",
+                    "BOS + displacement are event-based and selective.",
+                    "RVOL confirms participation before entry.",
+                ],
+            },
+        ]
+
+    session_ids = ["london"] if london_only else ["london", "new_york"]
+    return [
+        {
+            "asset_class": "forex",
+            "name": "FX trend pullback",
             "direction": "LONG",
-            "symbols": ["NAS100", "US30", "SPX500"],
-            "session_ids": ["new_york"],
+            "symbols": ["EURUSD", "GBPUSD"],
+            "session_ids": session_ids,
             "conditions": [
-                {"type": "opening_range_break", "session_start": "ny", "orb_minutes": 30, "direction": "up", "timeframe": "5m"},
+                {"type": "indicator", "name": "ema", "condition": "bullish", "fast": 50, "slow": 200, "timeframe": "1h"},
+                {"type": "fvg", "direction": "bullish", "condition": "tap_and_reject", "timeframe": "15m", "min_confidence": "medium"},
+                {"type": "rvol", "condition": "high", "threshold": 1.2, "period": 20, "timeframe": "15m"},
+                {"type": "atr_filter", "condition": "volatile", "min_atr_pct": 0.2, "period": 14, "timeframe": "15m"},
+            ],
+            "exit": {"take_profit_pips": 36, "stop_loss_pips": 22, "trailing_stop": True, "breakeven_at_pct": 70},
+            "risk": {"max_trades_per_day": 3},
+            "pitch": "HTF trend pullback with event-based FVG rejection trigger and volatility gates.",
+            "why": [
+                "EMA bias keeps entries aligned with trend.",
+                "FVG tap-and-reject is a discrete execution moment.",
+                "RVOL/ATR gates avoid dead sessions and low-volatility chop.",
+            ],
+        },
+        {
+            "asset_class": "forex",
+            "name": "FX London range break",
+            "direction": "BOTH",
+            "symbols": ["EURUSD", "GBPUSD"],
+            "session_ids": session_ids,
+            "conditions": [
                 {"type": "vwap_bias", "condition": "above", "timeframe": "5m"},
-                {"type": "rvol", "condition": "high", "threshold": 1.3, "period": 20, "timeframe": "5m"},
+                {"type": "forex_session_break", "condition": "high_break", "session": "london", "range_minutes": 60, "timeframe": "5m"},
+                {"type": "rvol", "condition": "high", "threshold": 1.25, "period": 20, "timeframe": "5m"},
                 {"type": "atr_filter", "condition": "expanding", "period": 14, "lookback": 5, "timeframe": "5m"},
             ],
-            "exit": {"take_profit_pct": 1.2, "stop_loss_pct": 0.6, "trailing_stop": True, "breakeven_at_pct": 70},
-            "rationale": "NY open-drive template: ORB trigger plus VWAP trend bias and volatility/volume quality filters.",
-        }
-
-    if asset_class == "forex" and ("xau" in t or "gold" in t):
-        return {
-            "name": "Gold liquidity sweep day trade",
-            "direction": "BOTH",
-            "symbols": ["XAUUSD"],
-            "session_ids": ["london", "new_york"],
-            "conditions": [
-                {"type": "fx_killzone", "killzone": "london_kz"},
-                {"type": "forex_prev_level", "condition": "sweep_pdh", "timeframe": "15m"},
-                {"type": "fx_displacement", "direction": "any", "min_body_ratio": 2.5, "timeframe": "5m"},
-                {"type": "fvg", "direction": "any", "condition": "price_in_gap", "timeframe": "5m", "min_confidence": "medium"},
+            "exit": {"take_profit_pips": 32, "stop_loss_pips": 20, "trailing_stop": True, "breakeven_at_pct": 70},
+            "risk": {"max_trades_per_day": 2},
+            "pitch": "Session breakout event in London with trend and volatility filters to avoid false breaks.",
+            "why": [
+                "VWAP bias prevents fading strong directional breaks.",
+                "Session-break condition is event-based and infrequent.",
+                "RVOL + ATR expansion screen out weak break attempts.",
             ],
-            "exit": {"take_profit_pips": 45, "stop_loss_pips": 22, "trailing_stop": True, "breakeven_at_pct": 70},
-            "rationale": "Gold intraday sweep model: liquidity event + displacement + FVG entry in London/NY high-liquidity windows.",
-        }
+        },
+        {
+            "asset_class": "forex",
+            "name": "FX prior-day break continuation",
+            "direction": "LONG",
+            "symbols": ["EURUSD", "GBPUSD"],
+            "session_ids": session_ids,
+            "conditions": [
+                {"type": "vwap_bias", "condition": "above", "timeframe": "15m"},
+                {"type": "forex_prev_level", "condition": "above_pdh", "timeframe": "15m"},
+                {"type": "fx_displacement", "direction": "bullish", "min_body_ratio": 2.0, "timeframe": "15m"},
+                {"type": "rvol", "condition": "high", "threshold": 1.2, "period": 20, "timeframe": "15m"},
+            ],
+            "exit": {"take_profit_pips": 42, "stop_loss_pips": 26, "trailing_stop": True, "breakeven_at_pct": 70},
+            "risk": {"max_trades_per_day": 2},
+            "pitch": "Prior-day-level break continuation with displacement + participation confirmation.",
+            "why": [
+                "VWAP bias gives directional context before breakouts.",
+                "PDH break + displacement are event-driven continuation signals.",
+                "RVOL confirms the move is not a thin-liquidity fake.",
+            ],
+        },
+    ]
 
-    london_only = "london" in t and "new york" not in t and "ny" not in t
-    return {
-        "name": "FX trend pullback day trade",
-        "direction": "LONG",
-        "symbols": ["EURUSD", "GBPUSD"],
-        "session_ids": ["london"] if london_only else ["london", "new_york"],
-        "conditions": [
-            {"type": "indicator", "name": "ema", "condition": "bullish", "fast": 50, "slow": 200, "timeframe": "1h"},
-            {"type": "fvg", "direction": "bullish", "condition": "price_in_gap", "timeframe": "15m", "min_confidence": "medium"},
-            {"type": "rvol", "condition": "high", "threshold": 1.2, "period": 20, "timeframe": "15m"},
-            {"type": "atr_filter", "condition": "volatile", "min_atr_pct": 0.2, "period": 14, "timeframe": "15m"},
-        ],
-        "exit": {"take_profit_pips": 35, "stop_loss_pips": 18, "trailing_stop": True, "breakeven_at_pct": 70},
-        "rationale": "Trend-pullback confluence: HTF EMA bias + FVG trigger + RVOL/ATR quality gates in active FX sessions.",
-    }
+
+def _select_designer_candidate(asset_class: str, text: str, candidates: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], Dict[str, Any], List[str]]:
+    scored: List[Tuple[Dict[str, Any], float, Dict[str, Any]]] = []
+    for cand in candidates:
+        score, meta = _score_designer_candidate(cand)
+        scored.append((cand, score, meta))
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    viable = [(c, s, m) for (c, s, m) in scored if _meets_solid_criteria(m)]
+    pool = viable or scored[:1]
+    top_score = pool[0][1]
+    # Keep only candidates close to strongest score, then rotate for open-ended prompts.
+    shortlist = [item for item in pool if (top_score - item[1]) <= 2.0]
+    if not shortlist:
+        shortlist = [pool[0]]
+
+    if len(shortlist) == 1 or not _description_is_vague(text):
+        chosen = shortlist[0]
+    else:
+        key = _design_rotation_key(asset_class, text)
+        idx = _DESIGN_ROTATION_STATE.get(key, 0)
+        chosen = shortlist[idx % len(shortlist)]
+        _DESIGN_ROTATION_STATE[key] = idx + 1
+
+    considered = [f"{c['name']} (score={s:.1f})" for (c, s, _m) in scored]
+    return chosen[0], chosen[2], considered
 
 
 def _apply_designer_layer(config: Dict[str, Any], user_description: str) -> Tuple[Dict[str, Any], Optional[str]]:
@@ -1265,7 +1551,11 @@ def _apply_designer_layer(config: Dict[str, Any], user_description: str) -> Tupl
     if not (_description_is_vague(user_description) or len(conditions) < 2):
         return config, None
 
-    tpl = _designer_template(asset_class, user_description)
+    candidates = _designer_candidates(asset_class, user_description)
+    if not candidates:
+        return config, None
+    tpl, meta, considered = _select_designer_candidate(asset_class, user_description, candidates)
+
     config.setdefault("entry_conditions", {})
     config["entry_conditions"]["operator"] = "AND"
     config["entry_conditions"]["conditions"] = tpl["conditions"]
@@ -1297,6 +1587,10 @@ def _apply_designer_layer(config: Dict[str, Any], user_description: str) -> Tupl
     risk = config.get("risk")
     if not isinstance(risk, dict):
         risk = {}
+    tpl_risk = tpl.get("risk") if isinstance(tpl.get("risk"), dict) else {}
+    for k, v in tpl_risk.items():
+        if risk.get(k) is None:
+            risk[k] = v
     risk.setdefault("leverage", 10 if asset_class == "forex" else 5)
     risk.setdefault("position_size_pct", 2.0)
     risk.setdefault("max_trades_per_day", 3)
@@ -1305,7 +1599,18 @@ def _apply_designer_layer(config: Dict[str, Any], user_description: str) -> Tupl
     risk.setdefault("daily_loss_limit_pct", 3.0)
     config["risk"] = risk
 
-    return config, str(tpl.get("rationale") or "").strip()
+    why = tpl.get("why") if isinstance(tpl.get("why"), list) else []
+    why_text = " ".join([f"- {w}" for w in why if isinstance(w, str) and w.strip()])
+    rr = float(meta.get("rr") or 0.0)
+    rationale = (
+        f"{tpl.get('pitch', 'Solid confluence setup selected.')}"
+        f" Built after evaluating 3 candidates on solid criteria: bias+event+quality confluence,"
+        f" selectivity, and risk coherence (RR={rr:.2f}, session-bounded, breakeven+trailing)."
+    )
+    if why_text:
+        rationale = f"{rationale} {why_text}"
+    rationale = f"{rationale} Candidates considered: {', '.join(considered)}."
+    return config, rationale
 
 
 def _enforce_engine_executable_conditions(config: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
