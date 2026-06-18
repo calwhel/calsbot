@@ -711,6 +711,171 @@
 
     .page-loading .hero-title,
     .page-loading .stat-value { visibility: hidden; }
+
+    /* Live mirror (real money) */
+    .live-mirror {
+      margin-bottom: 14px;
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      background: linear-gradient(180deg, rgba(69, 10, 10, 0.55) 0%, var(--surface) 100%);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      box-shadow: var(--shadow);
+    }
+    .live-mirror-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .live-mirror-title {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #fca5a5;
+    }
+    .live-mirror-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+      line-height: 1.45;
+    }
+    .live-badge {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(239, 68, 68, 0.2);
+      color: #fecaca;
+      border: 1px solid rgba(239, 68, 68, 0.45);
+      white-space: nowrap;
+    }
+    .live-mirror-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 12px 0;
+    }
+    .live-stat {
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+    .live-stat-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #fca5a5;
+    }
+    .live-stat-value {
+      font-size: 18px;
+      font-weight: 800;
+      font-family: var(--mono);
+      margin-top: 4px;
+    }
+    .live-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-top: 12px;
+    }
+    .live-controls select,
+    .live-controls input[type="number"] {
+      padding: 9px 10px;
+      border-radius: var(--radius-sm);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      background: var(--bg2);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+    .btn-live-enable {
+      padding: 10px 14px;
+      border-radius: var(--radius-sm);
+      border: 1px solid rgba(239, 68, 68, 0.55);
+      background: rgba(239, 68, 68, 0.18);
+      color: #fecaca;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .btn-live-enable:hover:not(:disabled) { background: rgba(239, 68, 68, 0.28); }
+    .btn-live-enable:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-live-disconnect {
+      padding: 10px 14px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface3);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .pill.mirror-filled { background: rgba(34, 197, 94, 0.14); color: #86efac; border-color: rgba(34, 197, 94, 0.3); }
+    .pill.mirror-failed { background: var(--red-dim); color: #fecaca; border-color: rgba(239, 68, 68, 0.35); }
+    .pill.mirror-pending { background: rgba(251, 191, 36, 0.12); color: #fcd34d; border-color: rgba(251, 191, 36, 0.35); }
+    .pill.mirror-live { background: rgba(239, 68, 68, 0.14); color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); }
+
+    .confirm-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.72);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      padding: 20px;
+    }
+    .confirm-overlay.show { display: flex; }
+    .confirm-box {
+      max-width: 400px;
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid rgba(239, 68, 68, 0.45);
+      border-radius: var(--radius);
+      padding: 22px;
+      box-shadow: var(--shadow);
+    }
+    .confirm-box h3 {
+      font-size: 16px;
+      font-weight: 800;
+      color: #fecaca;
+      margin-bottom: 10px;
+    }
+    .confirm-box p {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 16px;
+    }
+    .confirm-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+    .confirm-actions button {
+      padding: 10px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--surface3);
+      color: var(--text);
+    }
+    .confirm-actions .danger {
+      background: var(--red);
+      border-color: var(--red);
+      color: #fff;
+    }
   </style>
 </head>
 <body class="page-loading">
@@ -772,9 +937,9 @@
         <div class="stat-cap" id="trades-cap">—</div>
       </div>
       <div class="card stat-tile">
-        <div class="stat-head"><span class="stat-icon">💰</span> P&amp;L</div>
+        <div class="stat-head"><span class="stat-icon">💰</span> Demo P&amp;L</div>
         <div class="stat-value positive" id="pnl-stat">+$0.00</div>
-        <div class="stat-cap">Demo account</div>
+        <div class="stat-cap">Source of truth</div>
       </div>
       <div class="card stat-tile">
         <div class="stat-head"><span class="stat-icon">⚡</span> API cost</div>
@@ -782,6 +947,41 @@
         <div class="stat-cap">Today (USD)</div>
       </div>
     </div>
+
+    <!-- Live mirror (optional, real money) -->
+    <section class="live-mirror" id="live-mirror-section">
+      <div class="live-mirror-head">
+        <div>
+          <div class="live-mirror-title">Live mirror · real money</div>
+          <div class="live-mirror-sub">Optional. Mirrors demo Claude TAKE decisions to a connected live cTrader account. Demo stats remain the primary dashboard.</div>
+        </div>
+        <span class="live-badge" id="live-mirror-badge">OFF</span>
+      </div>
+      <div class="live-mirror-stats">
+        <div class="live-stat">
+          <div class="live-stat-label">Live P&amp;L today</div>
+          <div class="live-stat-value" id="live-pnl-stat">$0.00</div>
+        </div>
+        <div class="live-stat">
+          <div class="live-stat-label">Live trades today</div>
+          <div class="live-stat-value" id="live-trades-stat">0</div>
+        </div>
+      </div>
+      <div class="live-controls">
+        <select id="live-ctid-select" aria-label="Live account">
+          <option value="">Select live account…</option>
+        </select>
+        <label class="muted" style="font-size:12px">Lots
+          <input id="live-lot-size" type="number" min="0.01" max="50" step="0.01" value="0.01" style="width:72px;margin-left:6px"/>
+        </label>
+        <label class="muted" style="font-size:12px">Max/day
+          <input id="max-live-trades" type="number" min="1" max="20" value="3" style="width:52px;margin-left:6px"/>
+        </label>
+        <button type="button" class="btn-live-enable" id="btn-live-enable">Enable live mirror</button>
+        <button type="button" class="btn-live-disconnect" id="btn-live-disconnect" style="display:none">Disconnect live</button>
+      </div>
+      <div class="live-mirror-sub" id="live-mirror-status-line" style="margin-top:10px">Live mirror is off.</div>
+    </section>
 
     <!-- Decision feed -->
     <section class="card feed-section">
@@ -850,6 +1050,17 @@
   </div>
 
   <div class="toast" id="toast" role="status"></div>
+
+  <div class="confirm-overlay" id="confirm-live" role="dialog" aria-modal="true">
+    <div class="confirm-box">
+      <h3>Enable live mirror?</h3>
+      <p id="confirm-live-text">This will trade REAL money on the selected account autonomously whenever Claude takes a demo trade. Demo tracking remains separate.</p>
+      <div class="confirm-actions">
+        <button type="button" id="confirm-live-cancel">Cancel</button>
+        <button type="button" class="danger" id="confirm-live-ok">I understand — enable</button>
+      </div>
+    </div>
+  </div>
 
 <script>
 const UID = {{ uid | tojson }};
@@ -972,8 +1183,63 @@ function renderStats(j) {
   document.getElementById('trades-stat').textContent = `${trades}/${maxTrades}`;
   document.getElementById('trades-cap').textContent = trades >= maxTrades ? 'Daily cap reached' : `${maxTrades - trades} remaining`;
 
-  document.getElementById('pnl-stat').textContent = '+$0.00';
+  document.getElementById('pnl-stat').textContent = fmtMoney(st.demo_pnl_usd ?? 0);
   document.getElementById('cost-stat').textContent = `$${cost.toFixed(2)}`;
+}
+
+function fmtMoney(n) {
+  const v = Number(n) || 0;
+  const sign = v >= 0 ? '+' : '';
+  return `${sign}$${Math.abs(v).toFixed(2)}`;
+}
+
+function renderLiveMirror(j) {
+  const c = j.config || {};
+  const st = j.stats_today || {};
+  const accounts = j.live_accounts || [];
+  const enabled = !!c.live_mirror_enabled;
+  const badge = document.getElementById('live-mirror-badge');
+  badge.textContent = enabled ? 'LIVE ON' : 'OFF';
+  badge.style.background = enabled ? 'rgba(239,68,68,0.35)' : 'rgba(239,68,68,0.2)';
+
+  const pnl = st.live_pnl_usd ?? 0;
+  const livePnlEl = document.getElementById('live-pnl-stat');
+  livePnlEl.textContent = fmtMoney(pnl).replace('+', '');
+  livePnlEl.style.color = pnl >= 0 ? '#86efac' : '#fca5a5';
+
+  document.getElementById('live-trades-stat').textContent = String(st.live_trades ?? 0);
+
+  const sel = document.getElementById('live-ctid-select');
+  const prev = sel.value || c.live_ctrader_account_id || '';
+  sel.innerHTML = '<option value="">Select live account…</option>' +
+    accounts.map(a => `<option value="${a.ctid}">#${a.ctid}${a.trader_login ? ' · login '+a.trader_login : ''}</option>`).join('');
+  if (prev) sel.value = prev;
+
+  document.getElementById('live-lot-size').value = c.live_lot_size ?? 0.01;
+  document.getElementById('max-live-trades').value = c.max_live_trades_day ?? 3;
+
+  document.getElementById('btn-live-enable').style.display = enabled ? 'none' : 'inline-flex';
+  document.getElementById('btn-live-disconnect').style.display = enabled ? 'inline-flex' : 'none';
+  sel.disabled = enabled;
+  document.getElementById('live-lot-size').disabled = enabled;
+  document.getElementById('max-live-trades').disabled = enabled;
+
+  const statusLine = document.getElementById('live-mirror-status-line');
+  if (enabled) {
+    statusLine.textContent = `Mirroring to live account #${c.live_ctrader_account_id || '?'} · ${c.live_lot_size || 0.01} lots · max ${c.max_live_trades_day || 3}/day`;
+  } else if (!accounts.length) {
+    statusLine.textContent = 'No live cTrader accounts linked — connect one in Live Forex first.';
+  } else {
+    statusLine.textContent = 'Live mirror is off. Demo continues independently.';
+  }
+}
+
+function mirrorPill(d) {
+  if (!d.live_mirror_status && !d.live_mirror_execution_id) return '';
+  const st = (d.live_mirror_status || 'pending').toLowerCase();
+  const cls = st === 'filled' ? 'mirror-filled' : st === 'failed' ? 'mirror-failed' : st === 'pending' ? 'mirror-pending' : 'mirror-live';
+  const label = st === 'filled' ? 'LIVE FILLED' : st === 'failed' ? 'LIVE FAILED' : st === 'pending' ? 'LIVE PENDING' : 'LIVE ' + st.toUpperCase();
+  return `<span class="pill ${cls}">${label}</span>`;
 }
 
 function renderFeed(j) {
@@ -1011,13 +1277,15 @@ function renderFeed(j) {
           <span class="pill ${action}">${action.toUpperCase()}</span>
           ${d.session ? `<span class="pill session">${fmtSession(d.session)}</span>` : ''}
           ${outcome}
+          ${mirrorPill(d)}
         </div>
         <div class="conf-row">
           <div class="conf-bar"><div class="conf-fill" style="width:${conf}%"></div></div>
           <span class="conf-pct">${conf}%</span>
         </div>
         <p class="feed-rationale">${escapeHtml(rationale)}</p>
-        <div class="feed-foot">Cost $${(d.cost_usd || 0).toFixed(4)}${d.executed ? ' · Demo order placed' : ''}</div>
+        ${d.live_mirror_error ? `<div class="feed-foot" style="color:#fca5a5">Live mirror: ${escapeHtml(d.live_mirror_error)}</div>` : ''}
+        <div class="feed-foot">Cost $${(d.cost_usd || 0).toFixed(4)}${d.executed ? ' · Demo order placed' : ''}${d.live_mirror_execution_id ? ' · Live exec #' + d.live_mirror_execution_id : ''}</div>
       </article>`;
   }).join('');
 }
@@ -1070,6 +1338,7 @@ async function refresh() {
     document.body.classList.remove('page-loading');
     renderHero(j);
     renderStats(j);
+    renderLiveMirror(j);
     renderFeed(j);
     renderLessons(j);
     renderConfig(j);
@@ -1140,6 +1409,54 @@ document.getElementById('btn-save').onclick = async () => {
     btn.textContent = 'Save settings';
     btn.disabled = false;
   }, 1800);
+};
+
+let _pendingLiveEnable = null;
+document.getElementById('btn-live-enable').onclick = () => {
+  const ctid = document.getElementById('live-ctid-select').value;
+  if (!ctid) {
+    showToast('Select a live account first');
+    return;
+  }
+  document.getElementById('confirm-live-text').textContent =
+    `This will trade REAL money on cTrader account #${ctid} autonomously whenever Claude takes a demo trade. Demo P&L remains the source of truth.`;
+  document.getElementById('confirm-live').classList.add('show');
+  _pendingLiveEnable = {
+    live_ctrader_account_id: ctid,
+    live_lot_size: +document.getElementById('live-lot-size').value || 0.01,
+    max_live_trades_day: +document.getElementById('max-live-trades').value || 3,
+  };
+};
+document.getElementById('confirm-live-cancel').onclick = () => {
+  document.getElementById('confirm-live').classList.remove('show');
+  _pendingLiveEnable = null;
+};
+document.getElementById('confirm-live-ok').onclick = async () => {
+  if (!_pendingLiveEnable) return;
+  document.getElementById('confirm-live').classList.remove('show');
+  const body = {
+    ..._pendingLiveEnable,
+    live_mirror_enabled: true,
+    confirm_real_money: true,
+  };
+  _pendingLiveEnable = null;
+  const r = await fetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    showToast(err.detail || 'Failed to enable live mirror');
+    return;
+  }
+  showToast('Live mirror enabled');
+  refresh();
+};
+document.getElementById('btn-live-disconnect').onclick = async () => {
+  await fetch(`/api/gold-ai-trader/disconnect-live?uid=${encodeURIComponent(UID)}`, { method: 'POST' });
+  showToast('Live mirror disconnected — demo continues');
+  refresh();
 };
 
 refresh();

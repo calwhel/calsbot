@@ -1,12 +1,13 @@
 """FastAPI routes + page for Gold AI Trader."""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from app.database import SessionLocal
@@ -15,7 +16,11 @@ from app.gold_ai_trader.guardrails import (
     calls_today,
     trades_today,
     cost_today_usd,
+    demo_pnl_today_usd,
+    live_pnl_today_usd,
+    live_trades_today,
     merge_config,
+    resolve_live_mirror_status,
 )
 from app.gold_ai_trader.models import GoldAiConfig, GoldAiDecision, GoldAiLesson
 from app.gold_ai_trader.schema import ensure_gold_ai_trader_schema, seed_config_if_missing
@@ -48,6 +53,48 @@ def _resolve_user(uid: str, db):
     return u
 
 
+def _live_accounts_for_user(db, user_id: Optional[int]) -> List[Dict[str, Any]]:
+    if not user_id:
+        return []
+    from app.models import UserPreference
+
+    prefs = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
+    if not prefs or not prefs.ctrader_accounts:
+        return []
+    try:
+        accounts = json.loads(prefs.ctrader_accounts)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    out = []
+    for acct in accounts:
+        if not acct.get("isLive"):
+            continue
+        ctid = acct.get("ctidTraderAccountId")
+        if ctid is None:
+            continue
+        out.append(
+            {
+                "ctid": str(ctid),
+                "trader_login": acct.get("traderLogin"),
+                "balance": acct.get("balance"),
+            }
+        )
+    return out
+
+
+def _sync_live_mirror_fields(db, decision: GoldAiDecision) -> None:
+    if not decision.live_mirror_execution_id:
+        return
+    from app.strategy_models import StrategyExecution
+
+    ex = db.query(StrategyExecution).filter_by(id=decision.live_mirror_execution_id).first()
+    status, err = resolve_live_mirror_status(ex)
+    if status != decision.live_mirror_status or err != decision.live_mirror_error:
+        decision.live_mirror_status = status
+        decision.live_mirror_error = err
+        db.commit()
+
+
 @router.get("/gold-ai-trader", response_class=HTMLResponse)
 async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
     db = SessionLocal()
@@ -57,7 +104,7 @@ async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
         db.close()
     return templates.TemplateResponse(
         "gold_ai_trader.html",
-        {"request": request, "uid": uid},
+        {"request": request, "uid": _normalize_uid(uid)},
     )
 
 
@@ -83,6 +130,7 @@ async def api_status(uid: str = Query(...)):
         )
         feed = []
         for d in decisions:
+            _sync_live_mirror_fields(db, d)
             feed.append(
                 {
                     "id": d.id,
@@ -93,11 +141,15 @@ async def api_status(uid: str = Query(...)):
                     "confidence": d.confidence,
                     "executed": d.executed,
                     "execution_id": d.execution_id,
+                    "live_mirror_execution_id": d.live_mirror_execution_id,
+                    "live_mirror_status": d.live_mirror_status,
+                    "live_mirror_error": d.live_mirror_error,
                     "cost_usd": d.cost_usd,
                     "rationale": (d.decision or {}).get("rationale", ""),
                     "reasoning_preview": (d.reasoning or "")[:300],
                 }
             )
+        user_id = cfg.demo_user_id or 0
         return {
             "ok": True,
             "demo_label": "DEMO ACCOUNT ONLY",
@@ -114,11 +166,24 @@ async def api_status(uid: str = Query(...)):
                 "no_overnight": cfg.no_overnight,
                 "model": cfg.model,
                 "demo_ctrader_account_id": cfg.demo_ctrader_account_id,
+                "live_mirror_enabled": cfg.live_mirror_enabled,
+                "live_ctrader_account_id": cfg.live_ctrader_account_id,
+                "live_lot_size": cfg.live_lot_size,
+                "max_live_trades_day": cfg.max_live_trades_day,
+                "live_mirror_confirmed_at": (
+                    cfg_row.live_mirror_confirmed_at.isoformat()
+                    if getattr(cfg_row, "live_mirror_confirmed_at", None)
+                    else None
+                ),
             },
+            "live_accounts": _live_accounts_for_user(db, cfg.demo_user_id),
             "stats_today": {
                 "calls": calls_today(db),
                 "trades": trades_today(db),
                 "cost_usd": round(cost_today_usd(db), 4),
+                "demo_pnl_usd": demo_pnl_today_usd(db, user_id),
+                "live_pnl_usd": live_pnl_today_usd(db, user_id),
+                "live_trades": live_trades_today(db),
             },
             "lessons": [
                 {"session": x.session, "ts": x.ts.isoformat(), "digest": x.digest}
@@ -137,6 +202,23 @@ async def api_update_config(request: Request, uid: str = Query(...)):
         _resolve_user(uid, db)
         body = await request.json()
         row = seed_config_if_missing(db)
+
+        enabling_live = (
+            body.get("live_mirror_enabled") is True
+            and not bool(getattr(row, "live_mirror_enabled", False))
+        )
+        if enabling_live:
+            if not body.get("confirm_real_money"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="confirm_real_money required to enable live mirror",
+                )
+            if not body.get("live_ctrader_account_id") and not row.live_ctrader_account_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="live_ctrader_account_id required to enable live mirror",
+                )
+
         for field in (
             "enabled",
             "kill_switch",
@@ -149,12 +231,38 @@ async def api_update_config(request: Request, uid: str = Query(...)):
             "no_overnight",
             "model",
             "demo_ctrader_account_id",
+            "live_mirror_enabled",
+            "live_ctrader_account_id",
+            "live_lot_size",
+            "max_live_trades_day",
         ):
             if field in body:
                 setattr(row, field, body[field])
+
+        if enabling_live:
+            row.live_mirror_confirmed_at = datetime.utcnow()
+        if body.get("live_mirror_enabled") is False:
+            row.live_mirror_confirmed_at = None
+
         row.updated_at = datetime.utcnow()
         db.commit()
         return {"ok": True}
+    finally:
+        db.close()
+
+
+@router.post("/api/gold-ai-trader/disconnect-live")
+async def api_disconnect_live(uid: str = Query(...)):
+    """Disable live mirror only — demo trader keeps running."""
+    db = SessionLocal()
+    try:
+        _resolve_user(uid, db)
+        row = seed_config_if_missing(db)
+        row.live_mirror_enabled = False
+        row.live_mirror_confirmed_at = None
+        row.updated_at = datetime.utcnow()
+        db.commit()
+        return {"ok": True, "live_mirror_enabled": False}
     finally:
         db.close()
 

@@ -15,11 +15,12 @@ from app.gold_ai_trader.guardrails import (
     merge_config,
     check_can_call_claude,
     check_can_execute,
+    check_can_execute_live_mirror,
 )
 from app.gold_ai_trader.scanner import active_session, scan_candidates, pick_best
 from app.gold_ai_trader.context import build_context_snapshot
 from app.gold_ai_trader.claude import decide
-from app.gold_ai_trader.executor import execute_take, flatten_open_demo_positions
+from app.gold_ai_trader.executor import execute_take, execute_live_mirror_take, flatten_open_demo_positions
 from app.gold_ai_trader.learning import maybe_run_learning_review, record_outcome_from_execution
 from app.gold_ai_trader.models import GoldAiConfig, GoldAiDecision
 from app.gold_ai_trader import state as runtime_state
@@ -149,6 +150,30 @@ async def run_gold_ai_trader_loop() -> None:
                     row.executed = True
                     row.execution_id = exec_id
                     db.commit()
+
+                    ok_live, live_reason = check_can_execute_live_mirror(
+                        db, cfg, cfg.demo_user_id or 0
+                    )
+                    if ok_live:
+                        live_exec_id = await execute_live_mirror_take(
+                            db=db,
+                            cfg=cfg,
+                            decision=decision,
+                            decision_id=row.id,
+                            demo_execution_id=exec_id,
+                        )
+                        if live_exec_id:
+                            row.live_mirror_execution_id = live_exec_id
+                            row.live_mirror_status = "pending"
+                            db.commit()
+                        else:
+                            row.live_mirror_status = "failed"
+                            row.live_mirror_error = "live mirror enqueue rejected"
+                            db.commit()
+                    elif cfg.live_mirror_enabled:
+                        row.live_mirror_status = "skipped"
+                        row.live_mirror_error = live_reason
+                        db.commit()
             else:
                 logger.info("[gold-ai-trader] execute blocked: %s", exec_reason)
 

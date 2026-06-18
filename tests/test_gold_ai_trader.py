@@ -6,7 +6,14 @@ from app.gold_ai_trader.config import env_defaults, gold_ai_trader_enabled
 from app.gold_ai_trader.scanner import active_session, Candidate
 from app.gold_ai_trader.claude import decide, SYSTEM_PROMPT
 from app.gold_ai_trader.context import build_context_snapshot
-from app.gold_ai_trader.guardrails import assert_demo_account, DemoAccountRequired
+from app.gold_ai_trader.guardrails import (
+    assert_demo_account,
+    assert_live_account,
+    DemoAccountRequired,
+    LiveAccountRequired,
+    check_can_execute_live_mirror,
+)
+from app.gold_ai_trader.executor import _pct_from_prices
 from app.gold_ai_trader.routes import _normalize_uid
 
 
@@ -35,7 +42,7 @@ def test_session_gate_london():
 
 def test_demo_account_lock_rejects_live():
     cfg = env_defaults()
-    cfg.demo_ctrader_account_id = "99999"
+    cfg.demo_ctrader_account_id = "12345"
 
     class LivePrefs:
         ctrader_accounts = '[{"ctidTraderAccountId": 12345, "isLive": true}]'
@@ -45,6 +52,61 @@ def test_demo_account_lock_rejects_live():
         assert False, "expected DemoAccountRequired"
     except DemoAccountRequired:
         pass
+
+
+def test_live_account_lock_rejects_demo():
+    cfg = env_defaults()
+    cfg.live_ctrader_account_id = "12345"
+    cfg.live_mirror_enabled = True
+
+    class DemoPrefs:
+        ctrader_accounts = '[{"ctidTraderAccountId": 12345, "isLive": false}]'
+
+    try:
+        assert_live_account(DemoPrefs(), 12345, cfg)
+        assert False, "expected LiveAccountRequired"
+    except LiveAccountRequired:
+        pass
+
+
+def test_live_account_lock_requires_live_flag():
+    cfg = env_defaults()
+    cfg.live_ctrader_account_id = "99999"
+
+    class LivePrefs:
+        ctrader_accounts = '[{"ctidTraderAccountId": 99999, "isLive": true}]'
+
+    assert_live_account(LivePrefs(), 99999, cfg)  # no raise
+
+
+def test_pct_from_prices_long():
+    sl, tp = _pct_from_prices("LONG", 2650.0, 2645.0, 2660.0)
+    assert sl > 0 and tp > 0
+
+
+class _CfgLive:
+    kill_switch = False
+    live_mirror_enabled = True
+    live_ctrader_account_id = "111"
+    max_live_trades_day = 3
+
+
+class _DbLiveBlocked:
+    def query(self, *a, **k):
+        return self
+
+    def filter(self, *a, **k):
+        return self
+
+    def scalar(self):
+        return 99  # over cap
+
+
+def test_kill_switch_blocks_live_mirror():
+    cfg = _CfgLive()
+    cfg.kill_switch = True
+    ok, reason = check_can_execute_live_mirror(_DbLiveBlocked(), cfg, 1)
+    assert not ok and reason == "kill_switch"
 
 
 def test_claude_dry_run_skip():
