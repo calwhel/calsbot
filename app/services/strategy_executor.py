@@ -4944,6 +4944,7 @@ async def evaluate_and_fire(
     skip a per-strategy UserPreference query. None → resolve it here as before.
     """
     from app.services.strategy_ta import (
+        conditions_budget_scope,
         StrategyEvalCancelled,
         evaluate_strategy_conditions,
     )
@@ -5625,28 +5626,41 @@ async def evaluate_and_fire(
 
         try:
             from app.services.prefetch_fast import prefetch_fast_context
+            _cond_budget_s = max(0.25, float(EXECUTOR_CONDITIONS_BUDGET_S))
             async with prefetch_fast_context():
-                passed, details = await asyncio.wait_for(
-                    evaluate_strategy_conditions(
-                        config, symbol, price_data, enhanced_ta, http_client,
-                        strictness_level=strictness_level,
-                        ctrader_user_id=_uid,
-                        shared_kline_cache=_shared_klines,
-                    ),
-                    timeout=max(0.25, float(EXECUTOR_CONDITIONS_BUDGET_S)),
-                )
+                with conditions_budget_scope(_cond_budget_s):
+                    passed, details = await asyncio.wait_for(
+                        evaluate_strategy_conditions(
+                            config, symbol, price_data, enhanced_ta, http_client,
+                            strictness_level=strictness_level,
+                            ctrader_user_id=_uid,
+                            shared_kline_cache=_shared_klines,
+                        ),
+                        timeout=_cond_budget_s,
+                    )
         except asyncio.TimeoutError as exc:
             logger.warning(
                 "[Strategy %s] %s conditions timeout %.2fs — aborting eval cycle",
                 strategy.id,
                 symbol,
-                max(0.25, float(EXECUTOR_CONDITIONS_BUDGET_S)),
+                _cond_budget_s,
             )
             raise StrategyEvalCancelled(symbol, reason="conditions_timeout") from exc
-        except StrategyEvalCancelled:
-            logger.info(
-                f"[Strategy {strategy.id}] eval cancelled — propagating budget abort"
-            )
+        except StrategyEvalCancelled as exc:
+            _reason = str(getattr(exc, "reason", "") or "cancelled_eval")
+            if _reason == "conditions_timeout":
+                logger.warning(
+                    "[Strategy %s] %s conditions timeout %.2fs — aborting eval cycle",
+                    strategy.id,
+                    symbol,
+                    _cond_budget_s,
+                )
+            else:
+                logger.info(
+                    "[Strategy %s] eval cancelled — propagating budget abort cause=%s",
+                    strategy.id,
+                    _reason,
+                )
             raise
         _maybe_log_ta_eval(strategy, symbol, direction_pref, passed, details)
         if not passed:

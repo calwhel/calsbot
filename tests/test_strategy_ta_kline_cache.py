@@ -8,7 +8,12 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 
 import asyncio
 
-from app.services.strategy_ta import _get_klines, evaluate_strategy_conditions
+from app.services.strategy_ta import (
+    StrategyEvalCancelled,
+    _get_klines,
+    conditions_budget_scope,
+    evaluate_strategy_conditions,
+)
 
 
 class TestTradfiKlineCache(unittest.IsolatedAsyncioTestCase):
@@ -108,6 +113,47 @@ class TestSmcColdCacheSharedFetch(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fetch_state["count"], 1)
         self.assertLess(elapsed, 3.4)
         self.assertEqual(len(details), 3)
+
+    async def test_xauusd_metals_chain_cancels_under_conditions_budget(self):
+        cfg = {
+            "asset_class": "forex",
+            "entry_conditions": {
+                "operator": "AND",
+                "conditions": [
+                    {"type": "order_block", "timeframe": "15m", "ob_type": "bullish"},
+                ],
+            },
+        }
+        price_data = {"price": 2300.0, "_asset_class": "forex"}
+        cancellation_seen = asyncio.Event()
+
+        async def _slow_metal_chain(*_args, **_kwargs):
+            try:
+                await asyncio.sleep(10.0)
+                return []
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+                raise
+
+        with patch(
+            "app.services.tradfi_prices.fetch_metal_live_candles",
+            side_effect=_slow_metal_chain,
+        ):
+            with self.assertRaises(StrategyEvalCancelled) as ctx:
+                with conditions_budget_scope(0.05):
+                    await asyncio.wait_for(
+                        evaluate_strategy_conditions(
+                            cfg,
+                            "XAUUSD",
+                            price_data,
+                            {},
+                            MagicMock(),
+                        ),
+                        timeout=0.05,
+                    )
+
+        self.assertEqual(ctx.exception.reason, "conditions_timeout")
+        self.assertTrue(cancellation_seen.is_set())
 
 
 if __name__ == "__main__":

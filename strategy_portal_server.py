@@ -2656,12 +2656,15 @@ async def _start_executor_tasks():
     _prof = executor_runtime_profile()
     logger.info(
         "[executor] runtime profile: executor_only=%s crypto_disabled=%s "
-        "forex_disabled=%s crypto_cycle=%ss forex_cycle=%ss",
+        "forex_disabled=%s crypto_cycle=%ss forex_cycle=%ss "
+        "price_fetch_budget=%ss conditions_budget=%ss",
         _prof["executor_only"],
         _prof["crypto_disabled"],
         _prof["forex_disabled"],
         _prof["crypto_scan_interval_s"],
         _prof["forex_scan_interval_s"],
+        _prof.get("price_fetch_budget_s"),
+        _prof.get("conditions_budget_s"),
     )
     # Stale-position cleanup before scan loops — fire-and-forget so HTTP workers
     # are not blocked if Neon is slow on the first connection after deploy.
