@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.services import tradfi_prices as tp
+from app.services.prefetch_fast import prefetch_fast_context
 
 
 def _bars(n: int, close: float = 2650.0) -> list:
@@ -13,6 +14,29 @@ def _bars(n: int, close: float = 2650.0) -> list:
 
 
 class TestMetalLiveKlines(unittest.IsolatedAsyncioTestCase):
+    async def test_prefetch_fast_uses_ctrader_cache_before_externals(self):
+        rows = _bars(3, 2642.0)
+        with patch(
+            "app.services.ctrader_price_feed._kline_cache",
+            {("XAUUSD", "15m", 200): (rows, 1.0)},
+        ), patch.object(
+            tp, "_fetch_coinbase_metals_klines",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("external chain should not run"),
+        ), patch.object(
+            tp, "_fetch_kraken_metals_klines",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("external chain should not run"),
+        ), patch.object(
+            tp, "_fetch_fmp_metals_klines",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("external chain should not run"),
+        ):
+            async with prefetch_fast_context():
+                out = await tp.fetch_metal_live_candles("XAUUSD", "15m", 80)
+        self.assertEqual(len(out), 3)
+        self.assertAlmostEqual(out[-1][4], 2642.0)
+
     async def test_picks_coinbase_before_fmp(self):
         with patch.object(
             tp, "_fetch_fmp_metals_klines",

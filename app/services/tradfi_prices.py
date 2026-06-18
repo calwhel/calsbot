@@ -500,7 +500,10 @@ async def _fetch_yahoo_chart_klines(
     http_timeout_s: float = 20.0,
 ) -> List[List[float]]:
     """OHLC from Yahoo Finance chart API — works on Railway without yfinance."""
-    from app.services.prefetch_provider_limits import prefetch_http_get
+    from app.services.prefetch_provider_limits import (
+        is_rate_limit_http,
+        prefetch_http_get,
+    )
 
     interval, range_ = _YAHOO_CHART_TF.get(timeframe, ("15m", "60d"))
     cache_key = ("yahoo", yahoo_ticker, interval, range_, limit)
@@ -523,6 +526,14 @@ async def _fetch_yahoo_chart_klines(
                 headers=_headers,
             )
         if resp.status_code != 200:
+            if is_rate_limit_http(resp.status_code) and cached and cached[0]:
+                logger.warning(
+                    "[tradfi] Yahoo chart 429 → cache %s %s (%d bars)",
+                    yahoo_ticker,
+                    timeframe,
+                    len(cached[0]),
+                )
+                return cached[0][-limit:] if len(cached[0]) > limit else cached[0]
             logger.warning(
                 f"[tradfi] Yahoo chart {yahoo_ticker} {timeframe} HTTP {resp.status_code}"
             )
@@ -593,7 +604,12 @@ async def fetch_index_scan_candles(
             cached_rows, cached_src = peek_cached_klines(
                 sym, "index", timeframe, limit, user_id,
             )
-            if cached_rows and len(cached_rows) >= _min_bars:
+            _src = str(cached_src or "").lower()
+            _accept_cached = (
+                len(cached_rows) >= _min_bars
+                or (_src.startswith("ctrader") and len(cached_rows) >= 3)
+            )
+            if cached_rows and _accept_cached:
                 logger.info(
                     f"[tradfi] prefetch-fast cache hit {sym} {timeframe} "
                     f"src={cached_src} → {len(cached_rows)} bars"
@@ -869,7 +885,14 @@ async def _fetch_coinbase_metals_klines(
         prefetch_http_get,
     )
 
-    for attempt in range(2):
+    try:
+        from app.services.prefetch_fast import prefetch_fast_active as _pfa_coinbase
+        _fast_coinbase = bool(_pfa_coinbase())
+    except Exception:
+        _fast_coinbase = False
+    _attempts = 1 if _fast_coinbase else 2
+
+    for attempt in range(_attempts):
         try:
             async with httpx.AsyncClient(
                 timeout=_coinbase_httpx_timeout(),
@@ -887,10 +910,16 @@ async def _fetch_coinbase_metals_klines(
             if r.status_code != 200:
                 if diag is not None:
                     diag.failure = f"http_{r.status_code}"
-                if is_rate_limit_http(r.status_code) and attempt == 0:
-                    from app.services.prefetch_fast import prefetch_fast_active
-                    if prefetch_fast_active():
-                        continue
+                if is_rate_limit_http(r.status_code):
+                    stale = _stale_fallback(f"http_{r.status_code}")
+                    if stale:
+                        logger.info(
+                            "[tradfi] Coinbase 429 → cache %s %s (%d bars)",
+                            product,
+                            timeframe,
+                            len(stale),
+                        )
+                    return stale
                 stale = _stale_fallback(f"http_{r.status_code}")
                 return stale
             raw = r.json()
@@ -1079,7 +1108,12 @@ async def fetch_metal_live_candles(
             cached_rows, cached_src = peek_cached_klines(
                 sym, "forex", timeframe, limit, user_id,
             )
-            if cached_rows and len(cached_rows) >= min(min_bars, 15):
+            _src = str(cached_src or "").lower()
+            _accept_cached = (
+                len(cached_rows) >= min(min_bars, 15)
+                or (_src.startswith("ctrader") and len(cached_rows) >= 3)
+            )
+            if cached_rows and _accept_cached:
                 logger.info(
                     f"[tradfi] prefetch-fast cache hit {sym} {timeframe} "
                     f"src={cached_src} → {len(cached_rows)} bars"
@@ -1387,7 +1421,12 @@ async def fetch_forex_scan_candles(
                 sym, "forex", timeframe, limit, user_id,
             )
             _min_early = _scan_min_bars(limit)
-            if cached_rows and len(cached_rows) >= _min_early:
+            _src = str(cached_src or "").lower()
+            _accept_cached = (
+                len(cached_rows) >= _min_early
+                or (_src.startswith("ctrader") and len(cached_rows) >= 3)
+            )
+            if cached_rows and _accept_cached:
                 logger.info(
                     f"[tradfi] prefetch-fast cache hit {sym} {timeframe} "
                     f"src={cached_src} → {len(cached_rows)} bars"

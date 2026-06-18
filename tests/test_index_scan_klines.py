@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.services import tradfi_prices as tp
+from app.services.prefetch_fast import prefetch_fast_context
 
 
 def _bars(n: int) -> list:
@@ -10,6 +11,20 @@ def _bars(n: int) -> list:
 
 
 class TestIndexScanKlines(unittest.IsolatedAsyncioTestCase):
+    async def test_prefetch_fast_index_uses_ctrader_cache_before_yahoo(self):
+        rows = _bars(3)
+        with patch(
+            "app.services.ctrader_price_feed._kline_cache",
+            {("NAS100", "15m", 200): (rows, 1.0)},
+        ), patch.object(
+            tp, "_fetch_yahoo_chart_klines",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("yahoo should not run"),
+        ):
+            async with prefetch_fast_context():
+                out = await tp.fetch_index_scan_candles("NAS100", "15m", 80)
+        self.assertEqual(len(out), 3)
+
     async def test_fetch_index_scan_returns_yahoo_at_executor_limit(self):
         yahoo_rows = _bars(80)
         with patch(

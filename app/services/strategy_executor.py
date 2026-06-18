@@ -55,7 +55,7 @@ LIVE_MONITOR_INTERVAL       = int(_os_env.environ.get("EXECUTOR_LIVE_MONITOR_INT
 MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "2"))
 # Each forex eval holds bg_engine across async kline/TA fetches. Total checkout
 # slots are capped by app.database.bg_db_slot() (pool hard limit − reserve).
-FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "10"))
+FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "6"))
 # Cap tradfi universe breadth — prefetch + eval must scan the same capped set.
 EXECUTOR_MAX_SYMBOLS_PER_STRATEGY = max(
     1, int(_os_env.environ.get("EXECUTOR_MAX_SYMBOLS_PER_STRATEGY", "20")),
