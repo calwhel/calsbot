@@ -27,12 +27,20 @@ Supported condition types:
   liquidation         — Price near liquidation cluster
 """
 import asyncio
+import contextvars
 import logging
 import math
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+_CONDITIONS_BUDGET_DEADLINE = contextvars.ContextVar(
+    "conditions_budget_deadline",
+    default=None,
+)
 
 # ─── Math helpers ──────────────────────────────────────────────────────────────
 
@@ -194,6 +202,27 @@ class StrategyEvalCancelled(Exception):
         super().__init__(symbol)
         self.symbol = symbol
         self.reason = reason
+
+
+@contextmanager
+def conditions_budget_scope(timeout_s: float):
+    """Mark the active conditions-phase budget deadline in this task context."""
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    token = _CONDITIONS_BUDGET_DEADLINE.set(deadline)
+    try:
+        yield
+    finally:
+        _CONDITIONS_BUDGET_DEADLINE.reset(token)
+
+
+def _cancel_reason_for_conditions() -> str:
+    deadline = _CONDITIONS_BUDGET_DEADLINE.get()
+    if deadline is None:
+        return "cancelled_eval"
+    # Tiny epsilon avoids clock jitter misclassifying a timeout edge.
+    if time.monotonic() >= (float(deadline) - 0.01):
+        return "conditions_timeout"
+    return "cancelled_eval"
 
 
 # ─── Klines cache ──────────────────────────────────────────────────────────────
@@ -4130,7 +4159,7 @@ async def evaluate_strategy_conditions(
         try:
             return await _eval_one(cond)
         except asyncio.CancelledError:
-            raise StrategyEvalCancelled(symbol)
+            raise StrategyEvalCancelled(symbol, reason=_cancel_reason_for_conditions())
 
     try:
         await _prefetch_smc_klines(conds, symbol, http_client, cache)
@@ -4138,15 +4167,16 @@ async def evaluate_strategy_conditions(
             *[_safe_eval_one(c) for c in conds], return_exceptions=True,
         )
     except asyncio.CancelledError:
+        _reason = _cancel_reason_for_conditions()
         logger.info(
-            f"Strategy condition eval cancelled for {symbol} — skipping cycle"
+            f"Strategy condition eval cancelled for {symbol} — skipping cycle cause={_reason}"
         )
-        raise StrategyEvalCancelled(symbol)
+        raise StrategyEvalCancelled(symbol, reason=_reason)
 
     for r in raw_results:
         if isinstance(r, StrategyEvalCancelled):
             logger.info(
-                f"Strategy condition eval cancelled for {symbol} — skipping cycle"
+                f"Strategy condition eval cancelled for {symbol} — skipping cycle cause={r.reason}"
             )
             raise r
         if isinstance(r, Exception):

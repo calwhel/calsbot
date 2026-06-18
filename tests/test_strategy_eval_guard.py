@@ -223,7 +223,7 @@ class TestCancellationPropagationWiring(unittest.TestCase):
         import app.services.strategy_executor as se
 
         src = inspect.getsource(se.evaluate_and_fire)
-        self.assertIn("except StrategyEvalCancelled:", src)
+        self.assertIn("except StrategyEvalCancelled as exc:", src)
         self.assertIn("propagating budget abort", src)
         self.assertIn("raise", src)
 
@@ -231,8 +231,10 @@ class TestCancellationPropagationWiring(unittest.TestCase):
         import app.services.strategy_executor as se
 
         src = inspect.getsource(se.evaluate_and_fire)
-        self.assertIn("timeout=max(0.25, float(EXECUTOR_CONDITIONS_BUDGET_S))", src)
+        self.assertIn("_cond_budget_s = max(0.25, float(EXECUTOR_CONDITIONS_BUDGET_S))", src)
+        self.assertIn("timeout=_cond_budget_s", src)
         self.assertIn("reason=\"conditions_timeout\"", src)
+        self.assertIn("with conditions_budget_scope(_cond_budget_s):", src)
 
 
 class TestExecutorRuntimeProfile(unittest.TestCase):
