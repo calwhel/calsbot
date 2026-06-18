@@ -25,6 +25,7 @@ from app.services.strategy_executor import (
     _tradfi_universe_raw_count,
     _tradfi_universe_symbols,
 )
+from app.services.strategy_ta import StrategyEvalCancelled
 
 
 class TestUniverseNormalization(unittest.TestCase):
@@ -109,6 +110,26 @@ class TestEvalBudget(unittest.IsolatedAsyncioTestCase):
     def test_default_budget_is_ten_seconds(self):
         self.assertEqual(EXECUTOR_STRATEGY_EVAL_BUDGET_S, 10.0)
         self.assertEqual(EXECUTOR_MAX_SYMBOLS_PER_STRATEGY, 20)
+
+    async def test_cancelled_eval_is_counted_as_budget_abort(self):
+        async def _swallow_cancel():
+            try:
+                await asyncio.sleep(0.2)
+            except asyncio.CancelledError as exc:
+                raise StrategyEvalCancelled("EURUSD") from exc
+
+        import app.services.strategy_executor as se
+        with patch.object(se, "EXECUTOR_STRATEGY_EVAL_BUDGET_S", 0.05), \
+                self.assertLogs("app.services.strategy_executor", level="WARNING") as cm:
+            cfg = {"universe": {"symbols": ["EURUSD"]}}
+            with self.assertRaises(asyncio.TimeoutError):
+                await _evaluate_with_budget(87, cfg, "forex", _swallow_cancel())
+        self.assertTrue(
+            any(
+                "[eval] id=87 ABORTED >budget" in line and "cause=cancelled_eval" in line
+                for line in cm.output
+            ),
+        )
 
 
 class TestEvalBatchLaunch(unittest.IsolatedAsyncioTestCase):
