@@ -25,10 +25,27 @@ _sems: Dict[str, asyncio.Semaphore] = {}
 _prefetch_429_provider: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "prefetch_429_provider", default=None,
 )
+_PROVIDER_429_COOLDOWN_S = float(
+    os.environ.get("PREFETCH_PROVIDER_429_COOLDOWN_S", "30"),
+)
+_provider_429_until: Dict[str, float] = {}
 
 
 class PrefetchSlotUnavailable(RuntimeError):
     """Provider slot was not available within caller's remaining budget."""
+
+
+class _SyntheticRateLimitedResponse:
+    """Lightweight response object for cooldown short-circuit."""
+
+    def __init__(self, retry_after_s: float):
+        self.status_code = 429
+        self.headers = {"Retry-After": str(max(1, int(retry_after_s)))}
+        self.content = b""
+        self.text = ""
+
+    def json(self):
+        return {}
 
 
 def is_rate_limit_http(status_code: int) -> bool:
@@ -67,6 +84,16 @@ def prefetch_provider_bucket(symbol: str, asset_class: str) -> str:
 
 def note_prefetch_429(provider: str) -> None:
     _prefetch_429_provider.set(provider)
+    key = provider if provider in _PROVIDER_LIMITS else "external"
+    cooldown_s = max(0.0, _PROVIDER_429_COOLDOWN_S)
+    if cooldown_s > 0:
+        _provider_429_until[key] = time.monotonic() + cooldown_s
+
+
+def _provider_cooldown_remaining(provider: str) -> float:
+    key = provider if provider in _PROVIDER_LIMITS else "external"
+    until = _provider_429_until.get(key, 0.0)
+    return max(0.0, until - time.monotonic())
 
 
 def consume_prefetch_429() -> Optional[str]:
@@ -87,16 +114,24 @@ async def prefetch_http_get(
     max_attempts: int = 3,
     max_slot_wait_s: Optional[float] = None,
 ):
-    """GET with per-provider slot and brief 429 backoff during prefetch."""
+    """GET with per-provider slot and immediate 429 cooldown short-circuit."""
     try:
         from app.services.prefetch_fast import prefetch_fast_active
         fast = prefetch_fast_active()
     except Exception:
         fast = False
 
-    last_resp = None
-    attempts = max_attempts if fast else 1
+    attempts = max_attempts if not fast else 1
     for attempt in range(attempts):
+        cooldown_remaining = _provider_cooldown_remaining(provider)
+        if cooldown_remaining > 0:
+            note_prefetch_429(provider)
+            logger.info(
+                "[prefetch-limit] provider=%s 429 cooldown active %.0fms — cache fallback",
+                provider,
+                cooldown_remaining * 1000.0,
+            )
+            return _SyntheticRateLimitedResponse(cooldown_remaining)
         async with prefetch_provider_slot(
             provider,
             max_wait_s=max_slot_wait_s,
@@ -106,13 +141,17 @@ async def prefetch_http_get(
                 kwargs["params"] = params
             if headers is not None:
                 kwargs["headers"] = headers
-            last_resp = await client.get(url, **kwargs)
-            if not is_rate_limit_http(last_resp.status_code):
-                return last_resp
-            note_prefetch_429(provider)
-            if attempt < attempts - 1:
-                await asyncio.sleep(prefetch_429_backoff_s(attempt))
-    return last_resp
+            resp = await client.get(url, **kwargs)
+        if not is_rate_limit_http(resp.status_code):
+            return resp
+        note_prefetch_429(provider)
+        logger.info(
+            "[prefetch-limit] provider=%s 429 detected — cache fallback",
+            provider,
+        )
+        # Never backoff/sleep in prefetch hot path — let callers fall back.
+        return resp
+    return _SyntheticRateLimitedResponse(1.0)
 
 
 @asynccontextmanager

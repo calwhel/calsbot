@@ -513,10 +513,10 @@ async def _fmp_http_get(url: str, params: dict, timeout: float = 8.0) -> Tuple[i
         _prefetch_fast = prefetch_fast_active()
     except Exception:
         _prefetch_fast = False
-    attempts = 3 if _prefetch_fast else 1
+    # Prefetch hot path must fail fast on 429s (cache fallback), not sleep/retry.
+    attempts = 1 if _prefetch_fast else 1
 
     from app.services.prefetch_provider_limits import (
-        prefetch_429_backoff_s,
         prefetch_provider_slot,
     )
 
@@ -534,9 +534,6 @@ async def _fmp_http_get(url: str, params: dict, timeout: float = 8.0) -> Tuple[i
                         return resp.status_code, None
                     if resp.status_code == 429:
                         _fmp_note_rate_limit()
-                        if attempt < attempts - 1 and _prefetch_fast:
-                            await asyncio.sleep(prefetch_429_backoff_s(attempt))
-                            continue
                         return 429, None
                     if resp.status_code != 200:
                         return resp.status_code, None
@@ -555,9 +552,6 @@ async def _fmp_http_get(url: str, params: dict, timeout: float = 8.0) -> Tuple[i
                         return resp.status, None
                     if resp.status == 429:
                         _fmp_note_rate_limit()
-                        if attempt < attempts - 1 and _prefetch_fast:
-                            await asyncio.sleep(prefetch_429_backoff_s(attempt))
-                            continue
                         return 429, None
                     if resp.status != 200:
                         return resp.status, None

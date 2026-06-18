@@ -23,6 +23,11 @@ from app.services.prefetch_provider_limits import (
 
 
 class TestPrefetchProviderLimits(unittest.TestCase):
+    def setUp(self):
+        ppl._sems.clear()
+        ppl._provider_429_until.clear()
+        clear_prefetch_429()
+
     def test_rate_limit_codes(self):
         self.assertTrue(is_rate_limit_http(429))
         self.assertTrue(is_rate_limit_http(418))
@@ -62,10 +67,14 @@ class TestPrefetchProviderLimits(unittest.TestCase):
         asyncio.run(_run())
 
 
-    def test_prefetch_http_get_retries_429(self):
+    def test_prefetch_http_get_429_fails_fast(self):
         class _Resp:
             def __init__(self, code):
                 self.status_code = code
+                self.content = b""
+
+            def json(self):
+                return {}
 
         class _Client:
             def __init__(self):
@@ -73,19 +82,47 @@ class TestPrefetchProviderLimits(unittest.TestCase):
 
             async def get(self, url, **kwargs):
                 self.calls += 1
-                if self.calls == 1:
-                    return _Resp(429)
-                return _Resp(200)
+                return _Resp(429)
 
         async def _run():
             clear_prefetch_429()
             client = _Client()
             async with prefetch_fast_context():
-                ppl._sems.clear()
                 resp = await prefetch_http_get("yahoo", client, "https://example.com")
-            self.assertEqual(resp.status_code, 200)
-            self.assertEqual(client.calls, 2)
+            self.assertEqual(resp.status_code, 429)
+            self.assertEqual(client.calls, 1)
             self.assertEqual(consume_prefetch_429(), "yahoo")
+
+        asyncio.run(_run())
+
+    def test_prefetch_http_get_429_cooldown_short_circuits_network(self):
+        class _Resp:
+            def __init__(self, code):
+                self.status_code = code
+                self.content = b""
+
+            def json(self):
+                return {}
+
+        class _Client:
+            def __init__(self):
+                self.calls = 0
+
+            async def get(self, url, **kwargs):
+                self.calls += 1
+                return _Resp(429)
+
+        async def _run():
+            client = _Client()
+            async with prefetch_fast_context():
+                await prefetch_http_get("kraken", client, "https://example.com")
+                t0 = time.monotonic()
+                resp2 = await prefetch_http_get("kraken", client, "https://example.com")
+                elapsed = time.monotonic() - t0
+            self.assertEqual(resp2.status_code, 429)
+            # second request should be short-circuited by cooldown.
+            self.assertEqual(client.calls, 1)
+            self.assertLess(elapsed, 0.05)
 
         asyncio.run(_run())
 
