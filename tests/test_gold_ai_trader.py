@@ -7,6 +7,7 @@ from app.gold_ai_trader.scanner import active_session, Candidate
 from app.gold_ai_trader.claude import decide, SYSTEM_PROMPT
 from app.gold_ai_trader.context import build_context_snapshot
 from app.gold_ai_trader.guardrails import assert_demo_account, DemoAccountRequired
+from app.gold_ai_trader.routes import _normalize_uid
 
 
 class _FakePrefs:
@@ -15,6 +16,11 @@ class _FakePrefs:
 
 def test_feature_flag_default_off():
     assert gold_ai_trader_enabled() is False or env_defaults().enabled is True
+
+
+def test_normalize_uid_adds_th_prefix():
+    assert _normalize_uid("yp0bada8") == "TH-YP0BADA8"
+    assert _normalize_uid("TH-YP0BADA8") == "TH-YP0BADA8"
 
 
 def test_session_gate_london():
