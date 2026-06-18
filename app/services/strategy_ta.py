@@ -4076,6 +4076,8 @@ async def evaluate_strategy_conditions(
                 return await eval_bt_klines_cond(cond, symbol, http_client, cache)
             else:
                 return False, f"Unknown condition type: {ctype}"
+        except StrategyEvalCancelled:
+            raise
         except Exception as e:
             logger.warning(f"Condition eval error {symbol} {ctype}: {e}")
             return False, f"[ERROR] {ctype}: {e}"

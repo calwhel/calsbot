@@ -5627,9 +5627,9 @@ async def evaluate_and_fire(
                 )
         except StrategyEvalCancelled:
             logger.info(
-                f"[Strategy {strategy.id}] eval cancelled — skipping cycle"
+                f"[Strategy {strategy.id}] eval cancelled — propagating budget abort"
             )
-            return
+            raise
         _maybe_log_ta_eval(strategy, symbol, direction_pref, passed, details)
         if not passed:
             log_scan_metric(
@@ -7173,6 +7173,8 @@ async def _evaluate_with_budget(
     coro,
 ) -> None:
     """Run evaluate_and_fire with a hard per-strategy wall-clock ceiling."""
+    from app.services.strategy_ta import StrategyEvalCancelled
+
     _uni_n = _tradfi_universe_raw_count(config)
     _cap_n = len(_tradfi_universe_symbols(config))
     _uni_type = _universe_type_label(config, asset_class)
@@ -7190,6 +7192,21 @@ async def _evaluate_with_budget(
             _cap_n,
         )
         raise
+    except StrategyEvalCancelled:
+        # A cancelled condition branch can be translated to StrategyEvalCancelled
+        # inside evaluate_strategy_conditions. Treat it as a hard budget abort so
+        # timeout accounting/logging stays accurate.
+        logger.warning(
+            "[eval] id=%s ABORTED >budget %.0fs asset_class=%s "
+            "universe_type=%s config_symbols=%s capped=%s cause=cancelled_eval",
+            strategy_id,
+            EXECUTOR_STRATEGY_EVAL_BUDGET_S,
+            asset_class,
+            _uni_type,
+            _uni_n,
+            _cap_n,
+        )
+        raise asyncio.TimeoutError from None
 
 
 def _symbols_for_snapshot(
