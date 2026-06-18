@@ -3146,9 +3146,15 @@ async def health_deep():
         "locks": {},
     }
     try:
-        from app.services.strategy_executor import executor_runtime_profile
+        from app.services.strategy_executor import (
+            executor_runtime_profile,
+            get_active_forex_strategy_count,
+            get_forex_last_cycle_metrics,
+        )
 
         _exec_status["runtime_profile"] = executor_runtime_profile()
+        _exec_status["active_forex_strategy_count"] = get_active_forex_strategy_count()
+        _exec_status["forex_last_cycle_metrics"] = get_forex_last_cycle_metrics()
         _exec_status["enabled"] = (
             is_production_deploy()
             and os.getenv("DISABLE_EXECUTOR", "").lower() not in ("1", "true", "yes")

@@ -28,6 +28,11 @@ class TestCycleTimingLog(unittest.TestCase):
             _log_cycle_timing(
                 shard_index=0,
                 strategy_count=57,
+                active_forex_scanned=141,
+                abort_count=18,
+                db_slot_wait_p50_ms=24.0,
+                db_slot_wait_p95_ms=810.0,
+                provider_cooldown_hits=7,
                 setup_ms=800.0,
                 prefetch_ms=1200.4,
                 eval_ms=45000.2,
@@ -39,8 +44,10 @@ class TestCycleTimingLog(unittest.TestCase):
             )
         joined = "\n".join(cm.output)
         self.assertIn(
-            "[cycle] shard=0 strategies=57 setup=800ms prefetch=1200ms eval=45000ms "
-            "post=200ms fire=120ms db_stagger=0ms total=47321ms prefetch_dedup=5/30",
+            "[cycle] shard=0 strategies=57 active_forex_scanned=141 abort_count=18 "
+            "db_slot_wait_p50=24ms db_slot_wait_p95=810ms provider_cooldown_hits=7 "
+            "setup=800ms prefetch=1200ms eval=45000ms post=200ms fire=120ms "
+            "db_stagger=0ms total=47321ms prefetch_dedup=5/30",
             joined,
         )
         self.assertIn("[cycle] slowest id=1 eval=5000ms id=2 eval=3000ms id=3 eval=1000ms", joined)

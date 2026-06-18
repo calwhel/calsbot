@@ -161,6 +161,11 @@ def bg_engine_runtime_profile() -> dict:
         "keepalives_count": int(_BG_DB_KEEPALIVES_COUNT),
         "pool_pre_ping": bool(getattr(bg_engine.pool, "_pre_ping", False)),
         "pool_recycle_s": 180,
+        "pool_size": int(_bg_pool_size),
+        "pool_max_overflow": int(_bg_pool_overflow),
+        "pool_hard_limit": int(bg_pool_hard_limit()),
+        "bg_db_reserve": int(BG_DB_RESERVE),
+        "bg_db_slot_limit": int(bg_db_slot_limit()),
     }
 
 

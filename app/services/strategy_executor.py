@@ -307,9 +307,24 @@ def _accum_cycle_fire_ms(since_t0: float) -> None:
         ctx.fire_ms += (time.monotonic() - since_t0) * 1000.0
 
 
+def _percentile_ms(samples: List[float], percentile: float) -> float:
+    """Nearest-rank percentile for cycle diagnostics."""
+    if not samples:
+        return 0.0
+    vals = sorted(max(0.0, float(v)) for v in samples)
+    rank = max(1, int(math.ceil((float(percentile) / 100.0) * len(vals))))
+    idx = min(len(vals) - 1, rank - 1)
+    return float(vals[idx])
+
+
 def _log_cycle_timing(
     shard_index: int,
     strategy_count: int,
+    active_forex_scanned: int,
+    abort_count: int,
+    db_slot_wait_p50_ms: float,
+    db_slot_wait_p95_ms: float,
+    provider_cooldown_hits: int,
     setup_ms: float,
     prefetch_ms: float,
     eval_ms: float,
@@ -330,10 +345,17 @@ def _log_cycle_timing(
             f"{stats.get('symbol_refs', 0)}"
         )
     logger.info(
-        "[cycle] shard=%s strategies=%s setup=%.0fms prefetch=%.0fms eval=%.0fms "
-        "post=%.0fms fire=%.0fms db_stagger=%.0fms total=%.0fms%s",
+        "[cycle] shard=%s strategies=%s active_forex_scanned=%s abort_count=%s "
+        "db_slot_wait_p50=%.0fms db_slot_wait_p95=%.0fms provider_cooldown_hits=%s "
+        "setup=%.0fms prefetch=%.0fms eval=%.0fms post=%.0fms fire=%.0fms "
+        "db_stagger=%.0fms total=%.0fms%s",
         shard_index,
         strategy_count,
+        active_forex_scanned,
+        abort_count,
+        db_slot_wait_p50_ms,
+        db_slot_wait_p95_ms,
+        provider_cooldown_hits,
         setup_ms,
         prefetch_ms,
         eval_ms,
@@ -7480,6 +7502,8 @@ async def _prefetch_price_ta_for_cycle(
             "cache": 0,
             "fetched": 0,
             "failed": 0,
+            "fallback": 0,
+            "provider_cooldown_hits": 0,
         }
 
     sem_limit = min(len(jobs), max(1, EXECUTOR_PREFETCH_CONCURRENT))
@@ -7514,6 +7538,8 @@ async def _prefetch_price_ta_for_cycle(
     from app.services.prefetch_provider_limits import (
         clear_prefetch_429,
         consume_prefetch_429,
+        prefetch_cycle_stats_scope,
+        prefetch_cycle_stats_snapshot,
     )
 
     async def _warm(sym: str, ac: str, tf: str) -> None:
@@ -7595,17 +7621,21 @@ async def _prefetch_price_ta_for_cycle(
                     stats["failed"] += 1
                     _log_prefetch(sym, ac, tf, type(exc).__name__, _ms, "failed")
 
-    if network_jobs:
-        await asyncio.gather(
-            *[_warm(s, a, t) for s, a, t in network_jobs],
-            return_exceptions=True,
-        )
+    with prefetch_cycle_stats_scope():
+        if network_jobs:
+            await asyncio.gather(
+                *[_warm(s, a, t) for s, a, t in network_jobs],
+                return_exceptions=True,
+            )
+        _cycle_prefetch_stats = prefetch_cycle_stats_snapshot()
+    _cooldown_hits = int(_cycle_prefetch_stats.get("provider_cooldown_hits", 0))
     elapsed = time.monotonic() - t0
     logger.info(
         f"[{_log_ts()}] [{label}] prefetch {len(jobs)} unique symbols "
         f"({symbol_refs} strategy-symbol refs) in {elapsed:.1f}s "
         f"({stats['cache']} from cache, {stats['fetched']} fetched, "
-        f"{stats['fallback']} fallback, {stats['failed']} failed)"
+        f"{stats['fallback']} fallback, {stats['failed']} failed, "
+        f"cooldown_hits={_cooldown_hits})"
     )
     return {
         "unique_keys": len(jobs),
@@ -7614,6 +7644,7 @@ async def _prefetch_price_ta_for_cycle(
         "fetched": stats["fetched"],
         "fallback": stats["fallback"],
         "failed": stats["failed"],
+        "provider_cooldown_hits": _cooldown_hits,
     }
 
 
@@ -7753,6 +7784,7 @@ _LOOP_HB_DB_CACHE_TTL_S = 10.0
 _AGGREGATE_LOOP_PREFIXES = ("forex_executor", "crypto_executor", "forex_live_manager")
 _FOREX_EXECUTOR_RESTART_SECS = 5
 _FOREX_HEARTBEAT_LOG_INTERVAL_S = 30
+_FOREX_LAST_CYCLE_METRICS: Dict[int, Dict[str, float]] = {}
 
 
 def _aggregate_loop_name(name: str) -> Optional[str]:
@@ -7777,6 +7809,38 @@ def mark_heartbeat(name: str) -> None:
             _EXECUTOR_HEARTBEATS[agg] = now
     except Exception:
         pass
+
+
+def get_active_forex_strategy_count() -> int:
+    """Best-effort active+paper forex strategy count for diagnostics."""
+    from app.database import BgSessionLocal as SessionLocal
+    from app.strategy_models import UserStrategy
+
+    snaps = _load_strategy_snapshots_cached(SessionLocal, UserStrategy)
+    return sum(1 for snap in snaps if _snap_asset_class(snap) == "forex")
+
+
+def get_forex_last_cycle_metrics() -> Dict[str, object]:
+    """Most recent per-shard forex cycle counters emitted in [cycle] logs."""
+    shards: Dict[str, Dict[str, object]] = {}
+    for shard, metrics in sorted(_FOREX_LAST_CYCLE_METRICS.items()):
+        shards[str(shard)] = {
+            "active_forex_scanned": int(metrics.get("active_forex_scanned", 0.0)),
+            "strategy_count": int(metrics.get("strategy_count", 0.0)),
+            "abort_count": int(metrics.get("abort_count", 0.0)),
+            "db_slot_wait_p50_ms": round(float(metrics.get("db_slot_wait_p50_ms", 0.0)), 1),
+            "db_slot_wait_p95_ms": round(float(metrics.get("db_slot_wait_p95_ms", 0.0)), 1),
+            "provider_cooldown_hits": int(metrics.get("provider_cooldown_hits", 0.0)),
+            "total_ms": round(float(metrics.get("total_ms", 0.0)), 1),
+        }
+    active_scanned = max(
+        (int(m.get("active_forex_scanned", 0)) for m in shards.values()),
+        default=0,
+    )
+    return {
+        "active_forex_scanned": active_scanned,
+        "shards": shards,
+    }
 
 
 def _persist_loop_heartbeats_to_db() -> None:
@@ -9420,7 +9484,8 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
         _db_prof = bg_engine_runtime_profile()
         logger.info(
             "[executor-db] shard=%s/%s pre_ping=%s stmt_timeout_ms=%s "
-            "lock_timeout_ms=%s keepalive=%s/%s/%s",
+            "lock_timeout_ms=%s keepalive=%s/%s/%s pool=%s+%s "
+            "slot_limit=%s reserve=%s",
             shard_index,
             shard_count,
             _db_prof.get("pool_pre_ping"),
@@ -9429,6 +9494,10 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
             _db_prof.get("keepalives_idle_s"),
             _db_prof.get("keepalives_interval_s"),
             _db_prof.get("keepalives_count"),
+            _db_prof.get("pool_size"),
+            _db_prof.get("pool_max_overflow"),
+            _db_prof.get("bg_db_slot_limit"),
+            _db_prof.get("bg_db_reserve"),
         )
     except Exception:
         pass
@@ -9471,6 +9540,9 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
             _setup_ms = 0.0
             _post_ms = 0.0
             _prefetch_stats: Dict[str, int] = {}
+            _active_forex_scanned = 0
+            _cycle_abort_count = 0
+            _cycle_db_slot_wait_samples: List[float] = []
             try:
                 from app.services.feed_diagnostics import begin_scan_metric_batch
                 begin_scan_metric_batch()
@@ -9531,17 +9603,18 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                         _mkt_open_cache[_ac] = v
                     return v
 
-                open_snaps = []
+                _open_snaps_all = []
                 _closed_by_class: Dict[str, int] = {}
                 for s in eval_snapshots:
                     _ac = _snap_asset_class(s)
                     if _ac_open(_ac):
-                        open_snaps.append(s)
+                        _open_snaps_all.append(s)
                     else:
                         _closed_by_class[_ac] = _closed_by_class.get(_ac, 0) + 1
 
+                _active_forex_scanned = len(_open_snaps_all)
                 open_snaps = [
-                    s for s in open_snaps
+                    s for s in _open_snaps_all
                     if strategy_on_shard(s["id"], shard_index, shard_count)
                 ]
 
@@ -9664,6 +9737,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 _cycle_ctx_token = _EXECUTOR_CYCLE_CTX.set(_cycle_ctx)
 
                 async def _run_one_fx(snap, _http=http_client):
+                    nonlocal _cycle_abort_count
                     from sqlalchemy.exc import OperationalError as _SAOperationalError
                     from sqlalchemy.exc import PendingRollbackError as _SAPendingRollbackError
                     from sqlalchemy.exc import TimeoutError as _SATimeoutError
@@ -9744,6 +9818,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                     )
                                     return
                                 except StrategyEvalCancelled:
+                                    _cycle_abort_count += 1
                                     logger.info(
                                         f"[FX Strategy {snap['id']}] eval cancelled — "
                                         f"skipping cycle"
@@ -9751,6 +9826,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                     _db_rollback_safe(db_one)
                                     return
                                 except asyncio.TimeoutError:
+                                    _cycle_abort_count += 1
                                     _db_rollback_safe(db_one)
                                     return
                                 except Exception as e:
@@ -9765,6 +9841,9 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                     except Exception:
                                         pass
                     finally:
+                        _cycle_db_slot_wait_samples.append(
+                            max(0.0, float(_diag.db_slot_wait_ms)),
+                        )
                         _strat_ms = (time.monotonic() - _strat_t0) * 1000.0
                         _cycle_ctx.strategy_timings_ms.append(
                             (snap["id"], _strat_ms),
@@ -9906,9 +9985,28 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 if open_snaps:
                     _post_ms = (time.monotonic() - _post_t0) * 1000.0
                     _total_ms = (time.monotonic() - _cycle_t0) * 1000.0
+                    _db_slot_wait_p50 = _percentile_ms(_cycle_db_slot_wait_samples, 50.0)
+                    _db_slot_wait_p95 = _percentile_ms(_cycle_db_slot_wait_samples, 95.0)
+                    _provider_cooldown_hits = int(
+                        (_prefetch_stats or {}).get("provider_cooldown_hits", 0),
+                    )
+                    _FOREX_LAST_CYCLE_METRICS[shard_index] = {
+                        "active_forex_scanned": float(_active_forex_scanned),
+                        "strategy_count": float(len(open_snaps)),
+                        "abort_count": float(_cycle_abort_count),
+                        "db_slot_wait_p50_ms": float(_db_slot_wait_p50),
+                        "db_slot_wait_p95_ms": float(_db_slot_wait_p95),
+                        "provider_cooldown_hits": float(_provider_cooldown_hits),
+                        "total_ms": float(_total_ms),
+                    }
                     _log_cycle_timing(
                         shard_index,
                         len(open_snaps),
+                        _active_forex_scanned,
+                        _cycle_abort_count,
+                        _db_slot_wait_p50,
+                        _db_slot_wait_p95,
+                        _provider_cooldown_hits,
                         _setup_ms,
                         _prefetch_ms,
                         _eval_ms,
