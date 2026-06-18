@@ -5,11 +5,13 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
 import asyncio
+import time
 import unittest
 
 import app.services.prefetch_provider_limits as ppl
 from app.services.prefetch_fast import prefetch_fast_context
 from app.services.prefetch_provider_limits import (
+    PrefetchSlotUnavailable,
     clear_prefetch_429,
     consume_prefetch_429,
     is_rate_limit_http,
@@ -84,6 +86,28 @@ class TestPrefetchProviderLimits(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(client.calls, 2)
             self.assertEqual(consume_prefetch_429(), "yahoo")
+
+        asyncio.run(_run())
+
+    def test_provider_slot_budget_timeout_skips_wait(self):
+        async def _run():
+            async with prefetch_fast_context():
+                ppl._sems.clear()
+                ppl._PROVIDER_LIMITS["crypto"] = 1
+                sem = ppl._provider_sem("crypto")
+                await sem.acquire()
+                try:
+                    t0 = time.monotonic()
+                    with self.assertRaises(PrefetchSlotUnavailable):
+                        async with prefetch_provider_slot(
+                            "crypto",
+                            max_wait_s=0.05,
+                        ):
+                            pass
+                    elapsed = time.monotonic() - t0
+                    self.assertLess(elapsed, 0.2)
+                finally:
+                    sem.release()
 
         asyncio.run(_run())
 

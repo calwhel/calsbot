@@ -27,6 +27,10 @@ _prefetch_429_provider: contextvars.ContextVar[Optional[str]] = contextvars.Cont
 )
 
 
+class PrefetchSlotUnavailable(RuntimeError):
+    """Provider slot was not available within caller's remaining budget."""
+
+
 def is_rate_limit_http(status_code: int) -> bool:
     return status_code in (429, 418)
 
@@ -81,6 +85,7 @@ async def prefetch_http_get(
     params: Optional[dict] = None,
     headers: Optional[dict] = None,
     max_attempts: int = 3,
+    max_slot_wait_s: Optional[float] = None,
 ):
     """GET with per-provider slot and brief 429 backoff during prefetch."""
     try:
@@ -92,7 +97,10 @@ async def prefetch_http_get(
     last_resp = None
     attempts = max_attempts if fast else 1
     for attempt in range(attempts):
-        async with prefetch_provider_slot(provider):
+        async with prefetch_provider_slot(
+            provider,
+            max_wait_s=max_slot_wait_s,
+        ):
             kwargs: dict = {}
             if params is not None:
                 kwargs["params"] = params
@@ -108,7 +116,7 @@ async def prefetch_http_get(
 
 
 @asynccontextmanager
-async def prefetch_provider_slot(provider: str):
+async def prefetch_provider_slot(provider: str, *, max_wait_s: Optional[float] = None):
     """Limit concurrent outbound calls per external provider during prefetch."""
     try:
         from app.services.prefetch_fast import prefetch_fast_active
@@ -121,7 +129,25 @@ async def prefetch_provider_slot(provider: str):
 
     sem = _provider_sem(provider)
     t0 = time.monotonic()
-    await sem.acquire()
+    try:
+        if max_wait_s is not None:
+            wait_s = max(0.0, float(max_wait_s))
+            if wait_s <= 0.0:
+                raise asyncio.TimeoutError()
+            await asyncio.wait_for(sem.acquire(), timeout=wait_s)
+        else:
+            await sem.acquire()
+    except asyncio.TimeoutError as exc:
+        wait_ms = (time.monotonic() - t0) * 1000.0
+        logger.info(
+            "[prefetch-limit] provider=%s slot_wait_timeout=%.0fms budget=%.0fms",
+            provider,
+            wait_ms,
+            max(0.0, float(max_wait_s or 0.0)) * 1000.0,
+        )
+        raise PrefetchSlotUnavailable(
+            f"{provider} slot unavailable within budget"
+        ) from exc
     wait_ms = (time.monotonic() - t0) * 1000.0
     if wait_ms > 250:
         logger.info(
