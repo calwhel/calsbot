@@ -19398,6 +19398,15 @@ async def api_affiliates_apply(request: Request):
         db.close()
 
 
+# ── Gold AI Trader (additive isolated module) ─────────────────────────────────
+try:
+    from app.gold_ai_trader.portal_mount import mount_gold_ai_trader_portal
+
+    mount_gold_ai_trader_portal(app)
+except Exception as _gold_ai_mount_err:
+    logger.warning("Gold AI Trader mount skipped: %s", _gold_ai_mount_err)
+
+
 if __name__ == "__main__":
     import uvicorn, time, logging
     _log = logging.getLogger("startup")

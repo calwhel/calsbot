@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Gold AI Trader — DEMO</title>
+  <style>
+    :root { --bg:#0b0f17; --card:#141b2d; --text:#e8ecf4; --muted:#8b95a8; --accent:#caa12c; --danger:#ef4444; --ok:#22c55e; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--text); }
+    .wrap { max-width:1100px; margin:0 auto; padding:20px; }
+    .banner { background:linear-gradient(90deg,#7f1d1d,#b45309); padding:12px 16px; border-radius:8px; font-weight:700; text-align:center; margin-bottom:16px; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    @media(max-width:800px){ .grid { grid-template-columns:1fr; } }
+    .card { background:var(--card); border:1px solid #243049; border-radius:12px; padding:16px; }
+    h1 { margin:0 0 8px; font-size:22px; }
+    h2 { margin:0 0 10px; font-size:15px; color:var(--accent); }
+    .muted { color:var(--muted); font-size:13px; }
+    .btn { border:1px solid #3b4a6b; background:#1e293b; color:var(--text); padding:8px 14px; border-radius:8px; cursor:pointer; font-weight:600; }
+    .btn.danger { background:#450a0a; border-color:var(--danger); color:#fecaca; }
+    .btn.primary { background:#422006; border-color:var(--accent); }
+    .stat { font-size:24px; font-weight:800; }
+    .feed { max-height:520px; overflow:auto; }
+    .feed-item { border-bottom:1px solid #243049; padding:10px 0; font-size:13px; }
+    .tag { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; }
+    .tag.take { background:#14532d; color:#bbf7d0; }
+    .tag.skip { background:#374151; color:#e5e7eb; }
+    input[type=number] { width:64px; background:#0f172a; border:1px solid #334155; color:var(--text); border-radius:6px; padding:4px 6px; }
+    label { font-size:12px; color:var(--muted); margin-right:8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="banner">⚠️ DEMO ACCOUNT ONLY — Autonomous Claude gold trader. Not live money.</div>
+    <h1>🏆 Gold AI Trader</h1>
+    <p class="muted">Claude Opus evaluates ICT-style candidates during London + NY sessions only.</p>
+
+    <div class="grid" style="margin-top:16px">
+      <div class="card">
+        <h2>Status</h2>
+        <div id="status-line" class="stat">—</div>
+        <p id="session-line" class="muted"></p>
+        <p id="last-candidate" class="muted"></p>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn primary" id="btn-enable">Toggle ON</button>
+          <button class="btn danger" id="btn-kill">KILL SWITCH</button>
+          <button class="btn" onclick="refresh()">↻ Refresh</button>
+          <a class="btn" href="/app?uid={{ uid }}" style="text-decoration:none">← Portal</a>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Today</h2>
+        <div class="muted">Claude calls / cap</div>
+        <div id="calls-stat" class="stat">—</div>
+        <div class="muted" style="margin-top:8px">Trades / cap · API cost</div>
+        <div id="trades-stat" class="stat" style="font-size:18px">—</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>Session windows (UTC)</h2>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+        <label>London <input id="lon-s" type="number" min="0" max="23"/> – <input id="lon-e" type="number" min="0" max="23"/></label>
+        <label>NY <input id="ny-s" type="number" min="0" max="23"/> – <input id="ny-e" type="number" min="0" max="23"/></label>
+        <label>Max calls/day <input id="max-calls" type="number" min="1" max="200"/></label>
+        <label>Max trades/day <input id="max-trades" type="number" min="1" max="50"/></label>
+        <label><input id="no-overnight" type="checkbox"/> No overnight</label>
+        <button class="btn" id="btn-save">Save config</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>Lessons digest</h2>
+      <div id="lessons" class="muted">—</div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>Live decision feed</h2>
+      <div id="feed" class="feed muted">Loading…</div>
+    </div>
+  </div>
+
+<script>
+const UID = {{ uid | tojson }};
+async function refresh(){
+  const r = await fetch(`/api/gold-ai-trader/status?uid=${encodeURIComponent(UID)}`);
+  const j = await r.json();
+  if(!j.ok) return;
+  const rt = j.runtime || {};
+  document.getElementById('status-line').textContent = (rt.status || 'unknown').toUpperCase();
+  document.getElementById('session-line').textContent = rt.active_session ? `Active session: ${rt.active_session}` : 'Outside session windows';
+  document.getElementById('last-candidate').textContent = rt.last_candidate ? `Last candidate: ${rt.last_candidate.type} (${rt.last_candidate.direction})` : '';
+  const c = j.config || {};
+  document.getElementById('lon-s').value = c.london_start_hour;
+  document.getElementById('lon-e').value = c.london_end_hour;
+  document.getElementById('ny-s').value = c.ny_start_hour;
+  document.getElementById('ny-e').value = c.ny_end_hour;
+  document.getElementById('max-calls').value = c.max_calls_day;
+  document.getElementById('max-trades').value = c.max_trades_day;
+  document.getElementById('no-overnight').checked = !!c.no_overnight;
+  const st = j.stats_today || {};
+  document.getElementById('calls-stat').textContent = `${st.calls}/${c.max_calls_day}`;
+  document.getElementById('trades-stat').textContent = `${st.trades}/${c.max_trades_day} · $${(st.cost_usd||0).toFixed(4)}`;
+  document.getElementById('lessons').innerHTML = (j.lessons||[]).map(l=>`<div style="margin-bottom:8px"><b>${l.session||'all'}</b> ${l.ts}<br>${l.digest}</div>`).join('') || 'No lessons yet.';
+  document.getElementById('feed').innerHTML = (j.decision_feed||[]).map(d=>`
+    <div class="feed-item">
+      <span class="tag ${d.action}">${(d.action||'').toUpperCase()}</span>
+      <b>${d.candidate_type||'?'}</b> · ${d.session||''} · conf ${d.confidence||0}
+      ${d.executed?' · ✅ EXEC':'')}
+      <div class="muted">${d.rationale||''}</div>
+      <div class="muted" style="font-size:11px">${d.ts} · $${(d.cost_usd||0).toFixed(4)}</div>
+    </div>`).join('') || 'No decisions yet.';
+}
+document.getElementById('btn-kill').onclick = async ()=>{
+  await fetch(`/api/gold-ai-trader/kill-switch?uid=${encodeURIComponent(UID)}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({on:true})});
+  refresh();
+};
+document.getElementById('btn-enable').onclick = async ()=>{
+  const r = await fetch(`/api/gold-ai-trader/status?uid=${encodeURIComponent(UID)}`);
+  const j = await r.json();
+  const en = !(j.config&&j.config.enabled);
+  await fetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:en})});
+  refresh();
+};
+document.getElementById('btn-save').onclick = async ()=>{
+  const body = {
+    london_start_hour: +document.getElementById('lon-s').value,
+    london_end_hour: +document.getElementById('lon-e').value,
+    ny_start_hour: +document.getElementById('ny-s').value,
+    ny_end_hour: +document.getElementById('ny-e').value,
+    max_calls_day: +document.getElementById('max-calls').value,
+    max_trades_day: +document.getElementById('max-trades').value,
+    no_overnight: document.getElementById('no-overnight').checked,
+  };
+  await fetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  refresh();
+};
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
