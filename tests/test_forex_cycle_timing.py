@@ -18,6 +18,7 @@ from app.services.strategy_executor import (
     _prefetch_price_ta_for_cycle,
     _price_ta_cache_key,
     _price_ta_cache_lookup,
+    _run_stale_kline_sweeps,
     _strategy_cache_asset_class,
 )
 
@@ -33,6 +34,7 @@ class TestCycleTimingLog(unittest.TestCase):
                 db_slot_wait_p50_ms=24.0,
                 db_slot_wait_p95_ms=810.0,
                 provider_cooldown_hits=7,
+                wrap_ms=140121.0,
                 setup_ms=800.0,
                 prefetch_ms=1200.4,
                 eval_ms=45000.2,
@@ -46,11 +48,37 @@ class TestCycleTimingLog(unittest.TestCase):
         self.assertIn(
             "[cycle] shard=0 strategies=57 active_forex_scanned=141 abort_count=18 "
             "db_slot_wait_p50=24ms db_slot_wait_p95=810ms provider_cooldown_hits=7 "
-            "setup=800ms prefetch=1200ms eval=45000ms post=200ms fire=120ms "
-            "db_stagger=0ms total=47321ms prefetch_dedup=5/30",
+            "setup=800ms prefetch=1200ms eval=45000ms post=200ms "
+            "wrap=140121ms fire=120ms db_stagger=0ms total=47321ms prefetch_dedup=5/30",
             joined,
         )
         self.assertIn("[cycle] slowest id=1 eval=5000ms id=2 eval=3000ms id=3 eval=1000ms", joined)
+
+    def test_stale_sweep_timeout_is_bounded(self):
+        async def _slow(**kwargs):
+            await asyncio.sleep(0.2)
+            return 1
+
+        async def _run():
+            with patch(
+                "app.services.ctrader_price_feed.sweep_stale_klines",
+                new=_slow,
+            ), patch(
+                "app.services.tradfi_prices.sweep_stale_metal_klines",
+                new=_slow,
+            ):
+                t0 = asyncio.get_running_loop().time()
+                ms = await _run_stale_kline_sweeps(
+                    symbols=["XAUUSD"],
+                    executor_label="TestFX",
+                    timeout_s=0.05,
+                )
+                elapsed = asyncio.get_running_loop().time() - t0
+                return ms, elapsed
+
+        ms, elapsed = asyncio.run(_run())
+        self.assertLess(elapsed, 0.3)
+        self.assertLess(ms, 300.0)
 
 
 class TestPrefetchDedup(unittest.TestCase):

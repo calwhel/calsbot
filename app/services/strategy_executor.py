@@ -120,6 +120,7 @@ def executor_runtime_profile() -> Dict[str, object]:
         "price_fetch_budget_s": EXECUTOR_PRICE_FETCH_BUDGET_S,
         "conditions_budget_s": EXECUTOR_CONDITIONS_BUDGET_S,
         "prefetch_concurrent": EXECUTOR_PREFETCH_CONCURRENT,
+        "stale_sweep_timeout_s": EXECUTOR_STALE_SWEEP_TIMEOUT_S,
         "prefetch_provider_limits": {
             "ctrader": int(_os_env.environ.get("PREFETCH_CTRADER_CONCURRENT", "16")),
             "kraken": int(_os_env.environ.get("PREFETCH_KRAKEN_CONCURRENT", "3")),
@@ -242,6 +243,10 @@ EXECUTOR_REF_PRELOAD_TIMEOUT_S = float(
 EXECUTOR_INIT_DB_TIMEOUT_S = float(
     _os_env.environ.get("EXECUTOR_INIT_DB_TIMEOUT_S", "25"),
 )
+# Guard stale-kline rebuild sweep calls inside the prefetch phase.
+EXECUTOR_STALE_SWEEP_TIMEOUT_S = float(
+    _os_env.environ.get("EXECUTOR_STALE_SWEEP_TIMEOUT_S", "6"),
+)
 
 
 @dataclass
@@ -325,6 +330,7 @@ def _log_cycle_timing(
     db_slot_wait_p50_ms: float,
     db_slot_wait_p95_ms: float,
     provider_cooldown_hits: int,
+    wrap_ms: float,
     setup_ms: float,
     prefetch_ms: float,
     eval_ms: float,
@@ -347,7 +353,7 @@ def _log_cycle_timing(
     logger.info(
         "[cycle] shard=%s strategies=%s active_forex_scanned=%s abort_count=%s "
         "db_slot_wait_p50=%.0fms db_slot_wait_p95=%.0fms provider_cooldown_hits=%s "
-        "setup=%.0fms prefetch=%.0fms eval=%.0fms post=%.0fms fire=%.0fms "
+        "setup=%.0fms prefetch=%.0fms eval=%.0fms post=%.0fms wrap=%.0fms fire=%.0fms "
         "db_stagger=%.0fms total=%.0fms%s",
         shard_index,
         strategy_count,
@@ -360,6 +366,7 @@ def _log_cycle_timing(
         prefetch_ms,
         eval_ms,
         post_ms,
+        wrap_ms,
         fire_ms,
         db_stagger_ms,
         total_ms,
@@ -396,6 +403,47 @@ async def _gather_eval_batches(label: str, snapshots: list, run_one, batch_size:
         f"(semaphore-limited inside run_one; cfg_batch_size={max(1, size)})"
     )
     await asyncio.gather(*[_one(s) for s in snapshots])
+
+
+async def _run_stale_kline_sweeps(
+    *,
+    symbols: List[str],
+    executor_label: str,
+    timeout_s: float = EXECUTOR_STALE_SWEEP_TIMEOUT_S,
+) -> float:
+    """Bound stale-kline rebuild sweeps so one stuck provider cannot stall a cycle."""
+    if not symbols:
+        return 0.0
+    from app.services.ctrader_price_feed import sweep_stale_klines
+    from app.services.tradfi_prices import sweep_stale_metal_klines
+
+    t0 = time.monotonic()
+    _timeout_s = max(0.5, float(timeout_s))
+    try:
+        res = await asyncio.wait_for(
+            asyncio.gather(
+                sweep_stale_klines(symbols=symbols),
+                sweep_stale_metal_klines(symbols=symbols),
+                return_exceptions=True,
+            ),
+            timeout=_timeout_s,
+        )
+        for idx, err in enumerate(res):
+            if isinstance(err, Exception):
+                stage = "ctrader" if idx == 0 else "metal"
+                logger.debug(
+                    "[cycle-prefetch] executor=%s stale_sweep %s error: %s",
+                    executor_label,
+                    stage,
+                    err,
+                )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[cycle-prefetch] executor=%s stale_sweep timeout %.1fs — skipping rebuilds",
+            executor_label,
+            _timeout_s,
+        )
+    return (time.monotonic() - t0) * 1000.0
 
 
 # ─── Shared API caches ───────────────────────────────────────────────────────
@@ -7831,6 +7879,7 @@ def get_forex_last_cycle_metrics() -> Dict[str, object]:
             "db_slot_wait_p50_ms": round(float(metrics.get("db_slot_wait_p50_ms", 0.0)), 1),
             "db_slot_wait_p95_ms": round(float(metrics.get("db_slot_wait_p95_ms", 0.0)), 1),
             "provider_cooldown_hits": int(metrics.get("provider_cooldown_hits", 0.0)),
+            "wrap_ms": round(float(metrics.get("wrap_ms", 0.0)), 1),
             "total_ms": round(float(metrics.get("total_ms", 0.0)), 1),
         }
     active_scanned = max(
@@ -9858,14 +9907,12 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 _stale_sweep_ms = 0.0
                 if _forex_open:
                     try:
-                        from app.services.ctrader_price_feed import sweep_stale_klines
-                        from app.services.tradfi_prices import sweep_stale_metal_klines
                         _stale_syms = _universe_symbols_for_snapshots(open_snaps)
                         if _stale_syms:
-                            _sweep_t0 = time.monotonic()
-                            await sweep_stale_klines(symbols=_stale_syms)
-                            await sweep_stale_metal_klines(symbols=_stale_syms)
-                            _stale_sweep_ms = (time.monotonic() - _sweep_t0) * 1000.0
+                            _stale_sweep_ms = await _run_stale_kline_sweeps(
+                                symbols=_stale_syms,
+                                executor_label=_fx_lbl,
+                            )
                             if _stale_sweep_ms >= 500:
                                 logger.info(
                                     "[cycle-prefetch] executor=%s stale_sweep=%.0fms syms=%s",
@@ -9985,6 +10032,10 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 if open_snaps:
                     _post_ms = (time.monotonic() - _post_t0) * 1000.0
                     _total_ms = (time.monotonic() - _cycle_t0) * 1000.0
+                    _wrap_ms = max(
+                        0.0,
+                        _total_ms - (_setup_ms + _prefetch_ms + _eval_ms + _post_ms),
+                    )
                     _db_slot_wait_p50 = _percentile_ms(_cycle_db_slot_wait_samples, 50.0)
                     _db_slot_wait_p95 = _percentile_ms(_cycle_db_slot_wait_samples, 95.0)
                     _provider_cooldown_hits = int(
@@ -9997,6 +10048,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                         "db_slot_wait_p50_ms": float(_db_slot_wait_p50),
                         "db_slot_wait_p95_ms": float(_db_slot_wait_p95),
                         "provider_cooldown_hits": float(_provider_cooldown_hits),
+                        "wrap_ms": float(_wrap_ms),
                         "total_ms": float(_total_ms),
                     }
                     _log_cycle_timing(
@@ -10007,6 +10059,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                         _db_slot_wait_p50,
                         _db_slot_wait_p95,
                         _provider_cooldown_hits,
+                        _wrap_ms,
                         _setup_ms,
                         _prefetch_ms,
                         _eval_ms,
