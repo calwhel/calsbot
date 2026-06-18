@@ -148,6 +148,21 @@ try:
 except (TypeError, ValueError):
     _AI_TICK_FLOOR_S = 90
 
+
+def auto_trader_ai_enabled() -> bool:
+    """Legacy chart-AI loop (Claude trade reads). Off unless explicitly enabled.
+
+    Portal AI (chat builder, wizard, compiler, Scan Best) is unaffected.
+    Set ENABLE_AUTO_TRADER_AI=1 to re-enable background AI-mode strategies.
+    DISABLE_AUTO_TRADER_AI=1 is also honoured for explicit kills.
+    """
+    if os.environ.get("DISABLE_AUTO_TRADER_AI", "").lower() in ("1", "true", "yes"):
+        return False
+    return os.environ.get("ENABLE_AUTO_TRADER_AI", "").lower() in ("1", "true", "yes")
+
+
+_auto_trader_ai_skip_logged = False
+
 # Wall confluence — entry must be within this % of nearest matching wall
 _WALL_PROX_PCT = 0.6
 
@@ -1562,6 +1577,16 @@ async def _open_paper_trade(strategy, *, side: str, entry: float, stop: float,
 
 async def _maybe_open_ai(strategy, db) -> bool:
     """AI mode: throttled by cadence_min, fires when ODDS clears threshold."""
+    global _auto_trader_ai_skip_logged
+    if not auto_trader_ai_enabled():
+        if not _auto_trader_ai_skip_logged:
+            logger.info(
+                "auto_trader AI mode disabled — skipping Claude trade reads "
+                "(set ENABLE_AUTO_TRADER_AI=1 to re-enable)"
+            )
+            _auto_trader_ai_skip_logged = True
+        return False
+
     now = datetime.utcnow()
     last = strategy.last_evaluated_at
     if last and (now - last).total_seconds() < max(_AI_TICK_FLOOR_S, strategy.cadence_min * 60):

@@ -3057,19 +3057,19 @@ async def _startup_background():
     else:
         logger.info("Strategy executor DISABLED (not a production deploy)")
 
-    # AI Strategy Generator — autonomous content engine for the marketplace.
-    # Runs only in production (or with ENABLE_AI_GENERATOR=1) so dev never
-    # double-runs against the shared Neon DB. Uses its own advisory lock so
-    # only ONE gunicorn worker runs the loop (LLM spend + dedupe sanity).
-    _aigen_enabled = (
-        _is_production
-        or _os.environ.get("ENABLE_AI_GENERATOR", "").lower() in ("1", "true", "yes")
-    )
+    # AI Strategy Generator — autonomous marketplace content loop (hourly LLM).
+    # Off by default; portal AI (chat builder / wizard / compiler / Scan Best)
+    # is unaffected. Opt in with ENABLE_AI_GENERATOR=1. DISABLE_AI_GENERATOR=1
+    # is always honoured.
     _aigen_disabled = _os.environ.get("DISABLE_AI_GENERATOR", "").lower() in ("1", "true", "yes")
+    _aigen_enabled = _os.environ.get("ENABLE_AI_GENERATOR", "").lower() in ("1", "true", "yes")
     if _aigen_enabled and not _aigen_disabled:
         asyncio.create_task(_aigen_claim_loop(first_attempt_delay=15))
     else:
-        logger.info("AI Strategy Generator DISABLED (dev environment)")
+        logger.info(
+            "AI Strategy Generator DISABLED "
+            "(set ENABLE_AI_GENERATOR=1 to opt in; DISABLE_AI_GENERATOR=1 to force off)"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
