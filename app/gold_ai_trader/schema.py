@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 from app.database import engine, Base
 from app.gold_ai_trader.models import (
@@ -14,6 +14,29 @@ from app.gold_ai_trader.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+_GOLD_AI_CONFIG_ALTERS = (
+    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_mirror_enabled BOOLEAN DEFAULT FALSE NOT NULL",
+    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_ctrader_account_id VARCHAR(40)",
+    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_lot_size FLOAT DEFAULT 0.01 NOT NULL",
+    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS max_live_trades_day INTEGER DEFAULT 3 NOT NULL",
+    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_mirror_confirmed_at TIMESTAMP",
+)
+
+_GOLD_AI_DECISION_ALTERS = (
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS live_mirror_execution_id INTEGER",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS live_mirror_status VARCHAR(24)",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS live_mirror_error TEXT",
+)
+
+
+def _apply_alters() -> None:
+    with engine.begin() as conn:
+        for sql in _GOLD_AI_CONFIG_ALTERS + _GOLD_AI_DECISION_ALTERS:
+            try:
+                conn.execute(text(sql))
+            except Exception as exc:
+                logger.debug("[gold-ai-trader] alter skipped/failed: %s (%s)", sql[:60], exc)
 
 
 def ensure_gold_ai_trader_schema() -> None:
@@ -26,6 +49,7 @@ def ensure_gold_ai_trader_schema() -> None:
             GoldAiLesson.__table__,
         ],
     )
+    _apply_alters()
     insp = inspect(engine)
     if insp.has_table("gold_ai_config"):
         logger.info("[gold-ai-trader] schema ready")

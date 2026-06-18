@@ -19,6 +19,7 @@ async def maybe_run_learning_review(db, session: str, cfg) -> Optional[str]:
         db.query(StrategyExecution)
         .filter(
             StrategyExecution.notes.like("%gold_ai_trader%"),
+            ~StrategyExecution.notes.like("%live_mirror%"),
             StrategyExecution.closed_at.isnot(None),
             StrategyExecution.closed_at >= since,
         )

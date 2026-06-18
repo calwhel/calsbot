@@ -24,6 +24,11 @@ class GoldAiConfig(Base):
     model = Column(String(64), default="claude-opus-4-8", nullable=False)
     demo_ctrader_account_id = Column(String(40), nullable=True)
     demo_user_id = Column(Integer, nullable=True)
+    live_mirror_enabled = Column(Boolean, default=False, nullable=False)
+    live_ctrader_account_id = Column(String(40), nullable=True)
+    live_lot_size = Column(Float, default=0.01, nullable=False)
+    max_live_trades_day = Column(Integer, default=3, nullable=False)
+    live_mirror_confirmed_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -41,6 +46,9 @@ class GoldAiDecision(Base):
     confidence = Column(Integer, nullable=True)
     executed = Column(Boolean, default=False, nullable=False)
     execution_id = Column(Integer, nullable=True, index=True)
+    live_mirror_execution_id = Column(Integer, nullable=True, index=True)
+    live_mirror_status = Column(String(24), nullable=True)  # pending | filled | failed | skipped
+    live_mirror_error = Column(Text, nullable=True)
     tokens_in = Column(Integer, default=0)
     tokens_out = Column(Integer, default=0)
     cache_read_tokens = Column(Integer, default=0)
