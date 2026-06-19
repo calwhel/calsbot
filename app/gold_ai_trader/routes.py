@@ -63,6 +63,13 @@ def _trader_user_id(cfg, admin_user) -> Optional[int]:
     return cfg.demo_user_id or getattr(admin_user, "id", None)
 
 
+def _persist_demo_user_from_admin(row, admin) -> None:
+    """Bind background loop to logged-in admin — no GOLD_AI_TRADER_USER_ID env required."""
+    uid = getattr(admin, "id", None)
+    if uid is not None:
+        row.demo_user_id = int(uid)
+
+
 def _live_accounts_for_user(db, user_id: Optional[int]) -> List[Dict[str, Any]]:
     if not user_id:
         return []
@@ -280,6 +287,13 @@ async def api_update_config(request: Request, uid: str = Query(...)):
             row.live_mirror_confirmed_at = datetime.utcnow()
         if body.get("live_mirror_enabled") is False:
             row.live_mirror_confirmed_at = None
+
+        if (
+            body.get("enabled") is True
+            or "demo_ctrader_account_id" in body
+            or not row.demo_user_id
+        ):
+            _persist_demo_user_from_admin(row, admin)
 
         row.updated_at = datetime.utcnow()
         db.commit()
