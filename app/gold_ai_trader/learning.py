@@ -84,16 +84,17 @@ async def maybe_run_learning_review(db, session: str, cfg) -> Optional[str]:
         return None
 
 
-def record_outcome_from_execution(db, decision_id: int, execution) -> None:
+def record_outcome_from_execution(db, decision_id: int, execution) -> bool:
+    """Persist outcome from a closed execution. Returns True if newly recorded."""
     if not execution or execution.outcome == "OPEN":
-        return
+        return False
     existing = (
         db.query(GoldAiOutcome)
         .filter(GoldAiOutcome.decision_id == decision_id)
         .first()
     )
     if existing:
-        return
+        return False
     result = "breakeven"
     if execution.outcome == "WIN":
         result = "win"
@@ -109,3 +110,4 @@ def record_outcome_from_execution(db, decision_id: int, execution) -> None:
     )
     db.add(row)
     db.commit()
+    return True
