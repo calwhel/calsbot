@@ -46,9 +46,10 @@ def merge_config(db_row: GoldAiConfig, env: GoldAiRuntimeConfig) -> GoldAiRuntim
         live_mirror_enabled=bool(getattr(db_row, "live_mirror_enabled", False)),
         live_ctrader_account_id=getattr(db_row, "live_ctrader_account_id", None) or env.live_ctrader_account_id,
         live_lot_size=float(getattr(db_row, "live_lot_size", None) or env.live_lot_size or 0.01),
+        demo_lot_size=float(getattr(db_row, "demo_lot_size", None) or env.demo_lot_size or 0.01),
         max_live_trades_day=int(getattr(db_row, "max_live_trades_day", None) or env.max_live_trades_day or 3),
         learning_every_n_closes=env.learning_every_n_closes,
-        min_lot=env.min_lot,
+        min_lot=float(getattr(db_row, "demo_lot_size", None) or env.demo_lot_size or env.min_lot or 0.01),
         use_limit_entry=bool(getattr(db_row, "use_limit_entry", env.use_limit_entry)),
         pending_entry_timeout_min=int(
             getattr(db_row, "pending_entry_timeout_min", None) or env.pending_entry_timeout_min

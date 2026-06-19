@@ -27,6 +27,7 @@ class GoldAiConfig(Base):
     live_mirror_enabled = Column(Boolean, default=False, nullable=False)
     live_ctrader_account_id = Column(String(40), nullable=True)
     live_lot_size = Column(Float, default=0.01, nullable=False)
+    demo_lot_size = Column(Float, default=0.01, nullable=False)
     max_live_trades_day = Column(Integer, default=3, nullable=False)
     live_mirror_confirmed_at = Column(DateTime, nullable=True)
     use_limit_entry = Column(Boolean, default=True, nullable=False)

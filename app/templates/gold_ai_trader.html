@@ -3,59 +3,67 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
-  <meta name="theme-color" content="#07090f"/>
+  <meta name="theme-color" content="#0B0D12"/>
   <title>Gold AI Trader — TradeHub</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet"/>
   <style>
     :root {
-      --bg: #07090f;
-      --bg2: #0c1019;
-      --surface: #111827;
-      --surface2: #161f30;
-      --surface3: #1a2438;
-      --border: rgba(148, 163, 184, 0.12);
-      --border2: rgba(202, 161, 44, 0.22);
-      --text: #f1f5f9;
-      --muted: #94a3b8;
-      --muted2: #64748b;
-      --gold: #d4af37;
-      --gold-dim: rgba(212, 175, 55, 0.14);
-      --gold-glow: rgba(212, 175, 55, 0.35);
-      --green: #22c55e;
-      --green-dim: rgba(34, 197, 94, 0.14);
-      --red: #ef4444;
-      --red-dim: rgba(239, 68, 68, 0.14);
-      --grey: #64748b;
-      --grey-dim: rgba(100, 116, 139, 0.18);
-      --blue: #38bdf8;
-      --radius: 14px;
-      --radius-sm: 10px;
-      --shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
-      --font: "DM Sans", system-ui, sans-serif;
-      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --surface: #0B0D12;
+      --surface-raised: #12151C;
+      --surface-inset: #0E1016;
+      --text: #E8EAED;
+      --text-dim: #8B929E;
+      --text-muted: #5C6370;
+      --border-hairline: rgba(255, 255, 255, 0.07);
+      --border-hairline-strong: rgba(255, 255, 255, 0.12);
+      --accent-gold: #C8A24C;
+      --accent-gold-dim: rgba(200, 162, 76, 0.14);
+      --accent-gold-glow: rgba(200, 162, 76, 0.28);
+      --danger: #C94A4A;
+      --danger-dim: rgba(201, 74, 74, 0.12);
+      --danger-border: rgba(201, 74, 74, 0.35);
+      --profit: #3DAA6E;
+      --profit-dim: rgba(61, 170, 110, 0.12);
+      --neutral-chip: rgba(139, 146, 158, 0.12);
+      --neutral-chip-text: #A8AEB8;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --font-display: "Syne", system-ui, sans-serif;
+      --font-body: "DM Sans", system-ui, sans-serif;
+      --font-mono: "IBM Plex Mono", ui-monospace, monospace;
       --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --hero-size: clamp(1.75rem, 6vw, 2.25rem);
+      --label-size: 0.625rem;
+      --body-size: 0.8125rem;
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
     html { scroll-behavior: smooth; }
     body {
-      font-family: var(--font);
-      background: var(--bg);
+      font-family: var(--font-body);
+      font-size: var(--body-size);
+      background: var(--surface);
       color: var(--text);
       min-height: 100vh;
       line-height: 1.5;
       -webkit-font-smoothing: antialiased;
-      background-image:
-        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(212, 175, 55, 0.08), transparent),
-        radial-gradient(ellipse 60% 40% at 100% 0%, rgba(56, 189, 248, 0.04), transparent);
     }
 
     .shell {
-      max-width: 720px;
+      max-width: 28rem;
       margin: 0 auto;
-      padding: 12px 16px calc(24px + var(--safe-bottom));
+      padding: 0.75rem 1rem calc(1.5rem + var(--safe-bottom));
     }
 
     /* ── Top bar ── */
@@ -63,186 +71,277 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      padding: 8px 0 16px;
+      gap: 0.75rem;
+      padding: 0.5rem 0 1rem;
     }
     .brand {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 0.625rem;
       text-decoration: none;
       color: inherit;
     }
     .brand-mark {
-      width: 34px;
-      height: 34px;
-      border-radius: 9px;
-      background: linear-gradient(135deg, #caa12c, #8b6914);
+      width: 2rem;
+      height: 2rem;
+      border-radius: 6px;
+      background: var(--accent-gold);
+      color: var(--surface);
       display: grid;
       place-items: center;
-      font-size: 15px;
-      box-shadow: 0 0 20px var(--gold-glow);
+      font-family: var(--font-display);
+      font-size: 0.8125rem;
+      font-weight: 800;
     }
     .brand-text strong {
       display: block;
-      font-size: 15px;
-      font-weight: 800;
-      letter-spacing: -0.3px;
+      font-size: 0.875rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
     }
     .brand-text span {
-      font-size: 10px;
+      font-size: var(--label-size);
       font-weight: 600;
-      color: var(--gold);
-      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      letter-spacing: 0.08em;
       text-transform: uppercase;
     }
     .topbar-link {
-      font-size: 12px;
+      font-size: 0.75rem;
       font-weight: 600;
-      color: var(--muted);
+      color: var(--text-dim);
       text-decoration: none;
-      padding: 8px 12px;
+      padding: 0.5rem 0.75rem;
       border-radius: 999px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      transition: color 0.15s, border-color 0.15s;
+      border: 1px solid var(--border-hairline);
+      background: var(--surface-raised);
     }
-    .topbar-link:hover { color: var(--text); border-color: var(--border2); }
+    .topbar-link:focus-visible {
+      outline: 2px solid var(--accent-gold);
+      outline-offset: 2px;
+    }
 
-    /* ── Demo pill ── */
-    .demo-pill {
+    /* ── Demo safety chip (neutral — not danger) ── */
+    .demo-chip {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      padding: 6px 14px;
+      gap: 0.5rem;
+      padding: 0.375rem 0.75rem;
       border-radius: 999px;
-      font-size: 11px;
-      font-weight: 700;
+      font-size: var(--label-size);
+      font-weight: 600;
       letter-spacing: 0.04em;
       text-transform: uppercase;
-      color: #fecaca;
-      background: rgba(127, 29, 29, 0.35);
-      border: 1px solid rgba(239, 68, 68, 0.35);
-      margin-bottom: 16px;
+      color: var(--neutral-chip-text);
+      background: var(--neutral-chip);
+      border: 1px solid var(--border-hairline);
+      margin-bottom: 0.875rem;
     }
-    .demo-pill-dot {
-      width: 6px;
-      height: 6px;
+    .demo-chip-dot {
+      width: 5px;
+      height: 5px;
       border-radius: 50%;
-      background: var(--red);
-      box-shadow: 0 0 8px var(--red);
-      animation: pulse-dot 2s ease-in-out infinite;
+      background: var(--text-dim);
     }
-    @keyframes pulse-dot {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.45; }
+
+    .account-strip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.625rem 0.875rem;
+      margin-bottom: 0.875rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-hairline);
+      background: var(--surface-raised);
+    }
+    .account-strip.missing { border-color: var(--border-hairline-strong); }
+    .account-strip-label {
+      font-size: var(--label-size);
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .account-strip-value {
+      font-family: var(--font-mono);
+      font-size: 0.8125rem;
+      font-weight: 500;
+      margin-top: 0.125rem;
+    }
+    .account-strip-warn {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      text-align: right;
     }
 
     /* ── Cards ── */
     .card {
-      background: linear-gradient(180deg, var(--surface2) 0%, var(--surface) 100%);
-      border: 1px solid var(--border);
+      background: var(--surface-raised);
+      border: 1px solid var(--border-hairline);
       border-radius: var(--radius);
-      box-shadow: var(--shadow);
     }
 
-    /* ── Status hero ── */
+    /* ── Status hero readout ── */
     .hero {
-      padding: 20px;
-      margin-bottom: 14px;
-      position: relative;
-      overflow: hidden;
+      padding: 1.125rem 1rem 1rem;
+      margin-bottom: 0.75rem;
     }
-    .hero::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: radial-gradient(circle at 20% 0%, var(--gold-dim), transparent 55%);
-      pointer-events: none;
+    @media (prefers-reduced-motion: no-preference) {
+      body:not(.page-loading) .hero { animation: hero-in 0.45s ease-out; }
     }
-    .hero-inner { position: relative; }
-    .hero-label {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 10px;
+    @keyframes hero-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: none; }
     }
-    .hero-status {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-    }
-    .status-dot {
-      width: 14px;
-      height: 14px;
-      border-radius: 50%;
-      margin-top: 6px;
-      flex-shrink: 0;
-      box-shadow: 0 0 12px currentColor;
-    }
-    .status-dot.dormant { background: var(--grey); color: var(--grey); }
-    .status-dot.active { background: var(--gold); color: var(--gold); animation: pulse-dot 1.8s ease-in-out infinite; }
-    .status-dot.scan { background: var(--blue); color: var(--blue); animation: pulse-dot 1.2s ease-in-out infinite; }
-    .status-dot.eval { background: #a78bfa; color: #a78bfa; animation: pulse-dot 0.9s ease-in-out infinite; }
-    .status-dot.trade { background: var(--green); color: var(--green); animation: pulse-dot 1.5s ease-in-out infinite; }
-    .status-dot.danger { background: var(--red); color: var(--red); }
-    .status-dot.off { background: var(--muted2); color: var(--muted2); }
 
+    .hero-eyebrow {
+      font-size: var(--label-size);
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 0.625rem;
+    }
+    .hero-readout {
+      display: flex;
+      gap: 0.75rem;
+      align-items: flex-start;
+    }
+    .status-lamp {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-top: 0.55rem;
+      flex-shrink: 0;
+      background: var(--text-muted);
+    }
+    .status-lamp.active {
+      background: var(--accent-gold);
+      box-shadow: 0 0 0 3px var(--accent-gold-dim);
+    }
+    .status-lamp.danger {
+      background: var(--danger);
+      box-shadow: 0 0 0 3px var(--danger-dim);
+    }
     .hero-title {
-      font-size: clamp(22px, 5.5vw, 28px);
+      font-family: var(--font-display);
+      font-size: var(--hero-size);
       font-weight: 800;
-      letter-spacing: -0.5px;
-      line-height: 1.15;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
     }
     .hero-sub {
-      font-size: 13px;
-      color: var(--muted);
-      margin-top: 6px;
-      max-width: 36ch;
+      font-size: 0.8125rem;
+      color: var(--text-dim);
+      margin-top: 0.375rem;
+      max-width: 32ch;
     }
     .hero-meta {
-      font-size: 12px;
-      color: var(--muted2);
-      margin-top: 8px;
-      font-family: var(--mono);
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      color: var(--text-muted);
+      margin-top: 0.375rem;
     }
 
+    /* Session timeline */
+    .session-timeline {
+      margin-top: 1rem;
+      padding-top: 0.875rem;
+      border-top: 1px solid var(--border-hairline);
+    }
+    .session-timeline-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.625rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 0.375rem;
+    }
+    .session-track {
+      position: relative;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--surface-inset);
+      border: 1px solid var(--border-hairline);
+      overflow: visible;
+    }
+    .session-block {
+      position: absolute;
+      top: 0;
+      height: 100%;
+      border-radius: 999px;
+      background: var(--accent-gold-dim);
+      border: 1px solid rgba(200, 162, 76, 0.25);
+    }
+    .session-block.active {
+      background: rgba(200, 162, 76, 0.35);
+      border-color: rgba(200, 162, 76, 0.5);
+    }
+    .session-now {
+      position: absolute;
+      top: -3px;
+      width: 2px;
+      height: 12px;
+      background: var(--text);
+      border-radius: 1px;
+      transform: translateX(-50%);
+      z-index: 2;
+    }
+    .session-now::after {
+      content: "";
+      position: absolute;
+      top: -3px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text);
+    }
+    .session-hours {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--font-mono);
+      font-size: 0.625rem;
+      color: var(--text-muted);
+      margin-top: 0.375rem;
+    }
+
+    /* Hero controls */
     .hero-controls {
+      margin-top: 1rem;
+      padding-top: 0.875rem;
+      border-top: 1px solid var(--border-hairline);
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .hero-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      margin-top: 18px;
-      padding-top: 16px;
-      border-top: 1px solid var(--border);
+      gap: 0.75rem;
       flex-wrap: wrap;
     }
-    .control-group {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-    }
-
-    /* Toggle switch */
     .switch-wrap {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 0.625rem;
     }
     .switch-label {
-      font-size: 12px;
+      font-size: var(--label-size);
       font-weight: 700;
-      color: var(--muted);
-      letter-spacing: 0.04em;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
+      color: var(--text-dim);
     }
     .switch {
       position: relative;
-      width: 52px;
-      height: 30px;
-      flex-shrink: 0;
+      width: 48px;
+      height: 28px;
     }
     .switch input {
       opacity: 0;
@@ -253,8 +352,8 @@
     .switch-track {
       position: absolute;
       inset: 0;
-      background: var(--surface3);
-      border: 1px solid var(--border);
+      background: var(--surface-inset);
+      border: 1px solid var(--border-hairline);
       border-radius: 999px;
       cursor: pointer;
       transition: background 0.2s, border-color 0.2s;
@@ -262,128 +361,203 @@
     .switch-track::after {
       content: "";
       position: absolute;
-      width: 22px;
-      height: 22px;
+      width: 20px;
+      height: 20px;
       left: 3px;
       top: 50%;
       transform: translateY(-50%);
-      background: var(--muted);
+      background: var(--text-muted);
       border-radius: 50%;
       transition: transform 0.2s, background 0.2s;
     }
     .switch input:checked + .switch-track {
-      background: var(--gold-dim);
-      border-color: var(--border2);
+      background: var(--accent-gold-dim);
+      border-color: rgba(200, 162, 76, 0.4);
     }
     .switch input:checked + .switch-track::after {
-      transform: translate(22px, -50%);
-      background: var(--gold);
+      transform: translate(20px, -50%);
+      background: var(--accent-gold);
     }
-    .switch input:disabled + .switch-track { opacity: 0.5; cursor: not-allowed; }
+    .switch input:focus-visible + .switch-track {
+      outline: 2px solid var(--accent-gold);
+      outline-offset: 2px;
+    }
+    .switch input:disabled + .switch-track { opacity: 0.45; cursor: not-allowed; }
 
-    .btn-icon {
-      width: 38px;
-      height: 38px;
+    .demo-size-row {
+      display: flex;
+      align-items: center;
+      gap: 0.625rem;
+      flex-wrap: wrap;
+    }
+    .field-inline {
+      display: flex;
+      align-items: center;
+      gap: 0.375rem;
+    }
+    .field-inline label {
+      font-size: var(--label-size);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .field-inline input[type="number"] {
+      width: 4.25rem;
+      padding: 0.375rem 0.5rem;
       border-radius: var(--radius-sm);
-      border: 1px solid var(--border);
-      background: var(--surface3);
-      color: var(--muted);
+      border: 1px solid var(--border-hairline);
+      background: var(--surface-inset);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 0.8125rem;
+    }
+    .field-inline input:focus-visible {
+      outline: none;
+      border-color: rgba(200, 162, 76, 0.5);
+      box-shadow: 0 0 0 2px var(--accent-gold-dim);
+    }
+    .demo-size-display {
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      color: var(--text-dim);
+    }
+    .btn-ghost {
+      padding: 0.375rem 0.625rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-hairline);
+      background: transparent;
+      color: var(--text-dim);
+      font-family: inherit;
+      font-size: 0.6875rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .btn-ghost:focus-visible {
+      outline: 2px solid var(--accent-gold);
+      outline-offset: 2px;
+    }
+    .btn-icon {
+      width: 2.25rem;
+      height: 2.25rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-hairline);
+      background: var(--surface-inset);
+      color: var(--text-dim);
       cursor: pointer;
       display: grid;
       place-items: center;
-      font-size: 16px;
-      transition: color 0.15s, border-color 0.15s, background 0.15s;
+      font-size: 1rem;
     }
-    .btn-icon:hover:not(:disabled) { color: var(--text); border-color: var(--border2); }
-    .btn-icon:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-icon:focus-visible {
+      outline: 2px solid var(--accent-gold);
+      outline-offset: 2px;
+    }
+    .btn-icon:disabled { opacity: 0.4; cursor: not-allowed; }
     .btn-icon.spinning { animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
     .btn-kill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 9px 14px;
+      padding: 0.5rem 0.875rem;
       border-radius: var(--radius-sm);
-      border: 1px solid rgba(239, 68, 68, 0.45);
-      background: var(--red-dim);
-      color: #fecaca;
-      font-size: 11px;
+      border: 1px solid var(--danger-border);
+      background: var(--danger-dim);
+      color: var(--danger);
+      font-size: var(--label-size);
       font-weight: 800;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
       cursor: pointer;
-      transition: background 0.15s, transform 0.1s;
     }
-    .btn-kill:hover:not(:disabled) { background: rgba(239, 68, 68, 0.28); }
-    .btn-kill:active:not(:disabled) { transform: scale(0.98); }
-    .btn-kill:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-kill:focus-visible {
+      outline: 2px solid var(--danger);
+      outline-offset: 2px;
+    }
     .btn-kill.active {
-      background: var(--red);
-      color: #fff;
-      border-color: var(--red);
+      background: var(--danger);
+      color: var(--surface);
+      border-color: var(--danger);
     }
 
-    /* ── Stats tiles ── */
-    .stats-grid {
+    /* ── P&L hero + secondary metrics ── */
+    .pnl-hero {
+      padding: 1rem;
+      margin-bottom: 0.625rem;
+    }
+    .pnl-hero-label {
+      font-size: var(--label-size);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 0.375rem;
+    }
+    .pnl-hero-value {
+      font-family: var(--font-mono);
+      font-size: clamp(1.75rem, 7vw, 2.125rem);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+    }
+    .pnl-hero-value.positive { color: var(--profit); }
+    .pnl-hero-value.negative { color: var(--text-dim); }
+    .pnl-hero-cap {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.25rem;
+    }
+
+    .metrics-row {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 10px;
-      margin-bottom: 14px;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
     }
-    @media (min-width: 520px) {
-      .stats-grid { grid-template-columns: repeat(4, 1fr); }
-    }
-    .stat-tile {
-      padding: 14px 12px;
+    .metric-mini {
+      padding: 0.625rem 0.5rem;
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      min-height: 88px;
+      gap: 0.25rem;
     }
-    .stat-head {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 10px;
+    .metric-mini-label {
+      font-size: 0.5625rem;
       font-weight: 700;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      color: var(--muted);
+      color: var(--text-muted);
     }
-    .stat-icon { font-size: 13px; opacity: 0.85; }
-    .stat-value {
-      font-size: clamp(17px, 4vw, 20px);
-      font-weight: 800;
-      letter-spacing: -0.3px;
-      font-family: var(--mono);
-      line-height: 1.2;
-    }
-    .stat-value.positive { color: var(--green); }
-    .stat-value.gold { color: var(--gold); }
-    .stat-cap {
-      font-size: 11px;
-      color: var(--muted2);
+    .metric-mini-value {
+      font-family: var(--font-mono);
+      font-size: 0.875rem;
       font-weight: 500;
+      color: var(--text-dim);
+    }
+    .metric-mini-cap {
+      font-size: 0.625rem;
+      color: var(--text-muted);
     }
     .btn-reset-credits {
-      margin-top: 8px;
-      padding: 4px 8px;
-      font-size: 11px;
+      margin-top: 0.375rem;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.625rem;
       font-weight: 600;
-      color: var(--gold);
-      background: rgba(212, 175, 55, 0.12);
-      border: 1px solid rgba(212, 175, 55, 0.35);
-      border-radius: 6px;
+      color: var(--accent-gold);
+      background: var(--accent-gold-dim);
+      border: 1px solid rgba(200, 162, 76, 0.3);
+      border-radius: 4px;
       cursor: pointer;
     }
-    .btn-reset-credits:hover:not(:disabled) { background: rgba(212, 175, 55, 0.22); }
-    .btn-reset-credits:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-reset-credits:focus-visible {
+      outline: 2px solid var(--accent-gold);
+      outline-offset: 2px;
+    }
     .stat-skeleton {
-      height: 22px;
-      width: 70%;
-      border-radius: 6px;
-      background: linear-gradient(90deg, var(--surface3) 25%, var(--surface2) 50%, var(--surface3) 75%);
+      height: 1rem;
+      width: 65%;
+      border-radius: 4px;
+      background: linear-gradient(90deg, var(--surface-inset) 25%, var(--surface-raised) 50%, var(--surface-inset) 75%);
       background-size: 200% 100%;
       animation: shimmer 1.2s infinite;
     }
@@ -392,177 +566,332 @@
       100% { background-position: -200% 0; }
     }
 
+    /* ── Live mirror (collapsed / expanded) ── */
+    .live-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.75rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--border-hairline);
+      background: var(--surface-raised);
+      cursor: pointer;
+    }
+    .live-row:focus-visible {
+      outline: 2px solid var(--accent-gold);
+      outline-offset: 2px;
+    }
+    .live-row-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-dim);
+    }
+    .live-row-sub {
+      font-size: 0.6875rem;
+      color: var(--text-muted);
+      margin-top: 0.125rem;
+    }
+    .live-row-state {
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .live-row-state.on { color: var(--danger); }
+
+    .live-panel {
+      display: none;
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--danger-border);
+      background: var(--danger-dim);
+    }
+    .live-panel.open { display: block; }
+    .live-panel-title {
+      font-size: var(--label-size);
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--danger);
+      margin-bottom: 0.375rem;
+    }
+    .live-panel-sub {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      line-height: 1.45;
+      margin-bottom: 0.875rem;
+    }
+    .live-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+      margin-bottom: 0.875rem;
+    }
+    .live-stat {
+      padding: 0.625rem;
+      border-radius: var(--radius-sm);
+      background: var(--surface-raised);
+      border: 1px solid var(--border-hairline);
+    }
+    .live-stat-label {
+      font-size: 0.625rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .live-stat-value {
+      font-family: var(--font-mono);
+      font-size: 0.9375rem;
+      margin-top: 0.25rem;
+    }
+    .live-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    .live-controls select,
+    .live-controls input[type="number"] {
+      padding: 0.5rem 0.625rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-hairline);
+      background: var(--surface);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 0.8125rem;
+    }
+    .live-controls select { flex: 1; min-width: 10rem; }
+    .live-controls input[type="number"] { width: 4.5rem; }
+    .live-controls label {
+      font-size: 0.6875rem;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      gap: 0.375rem;
+    }
+    .btn-danger-action {
+      padding: 0.5rem 0.875rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--danger-border);
+      background: var(--danger);
+      color: var(--surface);
+      font-family: inherit;
+      font-size: 0.6875rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .btn-danger-action:focus-visible {
+      outline: 2px solid var(--text);
+      outline-offset: 2px;
+    }
+    .btn-danger-outline {
+      padding: 0.5rem 0.875rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--danger-border);
+      background: transparent;
+      color: var(--danger);
+      font-family: inherit;
+      font-size: 0.6875rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .live-status-line {
+      font-size: 0.6875rem;
+      color: var(--text-muted);
+      margin-top: 0.625rem;
+    }
+
     /* ── Decision feed ── */
     .feed-section {
-      padding: 18px 16px 8px;
-      margin-bottom: 14px;
+      padding: 1rem 0.875rem 0.5rem;
+      margin-bottom: 0.75rem;
     }
     .section-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
-      margin-bottom: 14px;
+      margin-bottom: 0.75rem;
     }
     .section-title {
-      font-size: 13px;
+      font-size: var(--label-size);
       font-weight: 800;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
-      color: var(--gold);
+      color: var(--text-muted);
     }
     .section-count {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--muted);
-      padding: 3px 10px;
-      border-radius: 999px;
-      background: var(--surface3);
-      border: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      color: var(--text-muted);
     }
-    .feed-list {
-      display: flex;
-      flex-direction: column;
-      gap: 0;
-      max-height: none;
-    }
+    .feed-list { display: flex; flex-direction: column; }
     .feed-item {
       position: relative;
-      padding: 14px 0 14px 20px;
-      border-bottom: 1px solid var(--border);
+      padding: 0.875rem 0 0.875rem 1rem;
+      border-bottom: 1px solid var(--border-hairline);
     }
     .feed-item:last-child { border-bottom: none; }
     .feed-item::before {
       content: "";
       position: absolute;
-      left: 4px;
-      top: 20px;
-      bottom: -4px;
-      width: 2px;
-      background: var(--border);
+      left: 0;
+      top: 1.125rem;
+      bottom: 0;
+      width: 1px;
+      background: var(--border-hairline);
     }
-    .feed-item:last-child::before { bottom: auto; height: 8px; }
     .feed-item::after {
       content: "";
       position: absolute;
-      left: 0;
-      top: 17px;
-      width: 10px;
-      height: 10px;
+      left: -3px;
+      top: 1rem;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
-      background: var(--surface3);
-      border: 2px solid var(--border2);
+      background: var(--surface-raised);
+      border: 1px solid var(--border-hairline-strong);
     }
-    .feed-item.take::after { border-color: var(--green); background: var(--green-dim); }
-    .feed-item.skip::after { border-color: var(--grey); }
-
+    .feed-item.take::after {
+      border-color: var(--accent-gold);
+      background: var(--accent-gold-dim);
+    }
     .feed-row1 {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 6px;
+      gap: 0.375rem;
+      margin-bottom: 0.375rem;
     }
     .feed-setup {
-      font-size: 14px;
-      font-weight: 700;
-      letter-spacing: -0.2px;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
     }
     .feed-time {
-      font-size: 11px;
-      color: var(--muted2);
-      font-family: var(--mono);
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      color: var(--text-muted);
+      margin-left: auto;
     }
     .pill {
       display: inline-flex;
-      align-items: center;
-      padding: 3px 9px;
-      border-radius: 999px;
-      font-size: 10px;
-      font-weight: 800;
+      padding: 0.125rem 0.4375rem;
+      border-radius: 4px;
+      font-size: 0.5625rem;
+      font-weight: 700;
       letter-spacing: 0.05em;
       text-transform: uppercase;
     }
-    .pill.take { background: var(--green-dim); color: #86efac; border: 1px solid rgba(34, 197, 94, 0.3); }
-    .pill.skip { background: var(--grey-dim); color: #cbd5e1; border: 1px solid rgba(100, 116, 139, 0.35); }
-    .pill.session { background: var(--gold-dim); color: var(--gold); border: 1px solid var(--border2); }
-    .pill.exec { background: rgba(56, 189, 248, 0.12); color: var(--blue); border: 1px solid rgba(56, 189, 248, 0.25); }
-    .pill.open { background: var(--gold-dim); color: var(--gold); border: 1px solid var(--border2); }
-
+    .pill.take {
+      background: var(--accent-gold-dim);
+      color: var(--accent-gold);
+      border: 1px solid rgba(200, 162, 76, 0.35);
+    }
+    .pill.skip {
+      background: var(--neutral-chip);
+      color: var(--neutral-chip-text);
+      border: 1px solid var(--border-hairline);
+    }
+    .pill.session {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border-hairline);
+    }
+    .pill.open {
+      background: var(--accent-gold-dim);
+      color: var(--accent-gold);
+      border: 1px solid rgba(200, 162, 76, 0.25);
+    }
+    .pill.mirror-live, .pill.mirror-pending {
+      background: var(--danger-dim);
+      color: var(--danger);
+      border: 1px solid var(--danger-border);
+    }
+    .pill.mirror-filled {
+      background: var(--neutral-chip);
+      color: var(--text-dim);
+      border: 1px solid var(--border-hairline);
+    }
+    .pill.mirror-failed {
+      background: var(--danger-dim);
+      color: var(--danger);
+      border: 1px solid var(--danger-border);
+    }
     .conf-row {
       display: flex;
       align-items: center;
-      gap: 10px;
-      margin: 8px 0;
+      gap: 0.5rem;
+      margin: 0.375rem 0;
     }
     .conf-bar {
       flex: 1;
-      height: 4px;
+      height: 3px;
       border-radius: 999px;
-      background: var(--surface3);
+      background: var(--surface-inset);
       overflow: hidden;
     }
     .conf-fill {
       height: 100%;
+      background: var(--accent-gold);
       border-radius: 999px;
-      background: linear-gradient(90deg, var(--gold), #f5d76e);
-      transition: width 0.4s ease;
+      transition: width 0.35s ease;
     }
     .conf-pct {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--muted);
-      font-family: var(--mono);
-      min-width: 32px;
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      color: var(--text-muted);
+      min-width: 2rem;
       text-align: right;
     }
     .feed-rationale {
-      font-size: 13px;
-      color: var(--muted);
+      font-size: 0.8125rem;
+      color: var(--text-dim);
       line-height: 1.45;
-      margin-top: 4px;
     }
     .feed-foot {
-      font-size: 10px;
-      color: var(--muted2);
-      margin-top: 8px;
-      font-family: var(--mono);
+      font-family: var(--font-mono);
+      font-size: 0.625rem;
+      color: var(--text-muted);
+      margin-top: 0.375rem;
     }
+    .feed-foot.error { color: var(--danger); }
 
     .empty-state {
       text-align: center;
-      padding: 36px 20px 28px;
-    }
-    .empty-icon {
-      font-size: 32px;
-      margin-bottom: 12px;
-      opacity: 0.7;
+      padding: 2rem 1rem 1.5rem;
     }
     .empty-title {
-      font-size: 15px;
-      font-weight: 700;
-      margin-bottom: 6px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      margin-bottom: 0.375rem;
     }
     .empty-sub {
-      font-size: 13px;
-      color: var(--muted);
-      max-width: 28ch;
+      font-size: 0.8125rem;
+      color: var(--text-dim);
+      max-width: 26ch;
       margin: 0 auto;
       line-height: 1.5;
     }
 
-    /* ── Settings collapsible ── */
-    .settings-wrap {
-      margin-bottom: 14px;
-      overflow: hidden;
-    }
+    /* ── Settings ── */
+    .settings-wrap { margin-bottom: 0.75rem; overflow: hidden; }
     .settings-toggle {
       width: 100%;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      padding: 16px 18px;
+      gap: 0.75rem;
+      padding: 0.875rem 1rem;
       background: transparent;
       border: none;
       color: var(--text);
@@ -570,495 +899,360 @@
       font-family: inherit;
       text-align: left;
     }
+    .settings-toggle:focus-visible {
+      outline: 2px solid var(--accent-gold);
+      outline-offset: -2px;
+    }
     .settings-toggle-title {
-      font-size: 13px;
-      font-weight: 700;
-      color: var(--muted);
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--text-dim);
     }
     .settings-toggle-sub {
-      font-size: 11px;
-      color: var(--muted2);
-      margin-top: 2px;
+      font-size: 0.6875rem;
+      color: var(--text-muted);
+      margin-top: 0.125rem;
     }
     .settings-chevron {
-      font-size: 12px;
-      color: var(--muted);
+      font-size: 0.6875rem;
+      color: var(--text-muted);
       transition: transform 0.2s;
     }
     .settings-wrap.open .settings-chevron { transform: rotate(180deg); }
     .settings-body {
       display: none;
-      padding: 0 18px 18px;
-      border-top: 1px solid var(--border);
+      padding: 0 1rem 1rem;
+      border-top: 1px solid var(--border-hairline);
     }
     .settings-wrap.open .settings-body { display: block; }
 
     .form-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 14px;
-      margin-top: 16px;
+      gap: 0.875rem;
+      margin-top: 0.875rem;
     }
-    @media (max-width: 400px) {
-      .form-grid { grid-template-columns: 1fr; }
-    }
+    @media (max-width: 360px) { .form-grid { grid-template-columns: 1fr; } }
     .field label {
       display: block;
-      font-size: 10px;
+      font-size: var(--label-size);
       font-weight: 700;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 6px;
+      color: var(--text-muted);
+      margin-bottom: 0.375rem;
     }
-    .field-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
+    .field-row { display: flex; align-items: center; gap: 0.5rem; }
     .field input[type="number"] {
       width: 100%;
-      max-width: 72px;
-      padding: 10px 10px;
+      max-width: 4.5rem;
+      padding: 0.5rem;
       border-radius: var(--radius-sm);
-      border: 1px solid var(--border);
-      background: var(--bg2);
+      border: 1px solid var(--border-hairline);
+      background: var(--surface-inset);
       color: var(--text);
-      font-family: var(--mono);
-      font-size: 14px;
-      font-weight: 500;
+      font-family: var(--font-mono);
+      font-size: 0.8125rem;
     }
-    .field input[type="number"]:focus {
+    .field input:focus-visible {
       outline: none;
-      border-color: var(--border2);
-      box-shadow: 0 0 0 3px var(--gold-dim);
+      border-color: rgba(200, 162, 76, 0.5);
+      box-shadow: 0 0 0 2px var(--accent-gold-dim);
     }
-    .field-sep { color: var(--muted2); font-size: 12px; }
+    .field-sep { color: var(--text-muted); font-size: 0.75rem; }
     .check-field {
       grid-column: 1 / -1;
       display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 12px 14px;
+      gap: 0.625rem;
+      padding: 0.625rem 0.75rem;
       border-radius: var(--radius-sm);
-      background: var(--bg2);
-      border: 1px solid var(--border);
+      background: var(--surface-inset);
+      border: 1px solid var(--border-hairline);
       cursor: pointer;
     }
-    .check-field input { width: 16px; height: 16px; accent-color: var(--gold); }
-    .check-field span { font-size: 13px; font-weight: 500; }
+    .check-field input { accent-color: var(--accent-gold); }
+    .check-field span { font-size: 0.8125rem; }
 
-    .lessons-block {
-      margin-top: 18px;
-      padding-top: 16px;
-      border-top: 1px solid var(--border);
-    }
-    .lessons-block h4 {
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 10px;
-    }
-    .lesson-item {
-      padding: 10px 12px;
-      border-radius: var(--radius-sm);
-      background: var(--bg2);
-      border: 1px solid var(--border);
-      margin-bottom: 8px;
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.45;
-    }
-    .lesson-item b { color: var(--gold); font-weight: 700; }
-
-    .btn-save {
-      margin-top: 16px;
-      width: 100%;
-      padding: 13px 18px;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border2);
-      background: linear-gradient(135deg, rgba(212, 175, 55, 0.22), rgba(212, 175, 55, 0.08));
-      color: var(--gold);
-      font-family: inherit;
-      font-size: 13px;
-      font-weight: 800;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      cursor: pointer;
-      transition: background 0.15s, transform 0.1s;
-    }
-    .btn-save:hover:not(:disabled) { background: linear-gradient(135deg, rgba(212, 175, 55, 0.32), rgba(212, 175, 55, 0.12)); }
-    .btn-save:active:not(:disabled) { transform: scale(0.99); }
-    .btn-save:disabled { opacity: 0.55; cursor: not-allowed; }
-    .btn-save.saved {
-      background: var(--green-dim);
-      border-color: rgba(34, 197, 94, 0.35);
-      color: var(--green);
-    }
-
-    /* Toast */
-    .toast {
-      position: fixed;
-      bottom: calc(16px + var(--safe-bottom));
-      left: 50%;
-      transform: translateX(-50%) translateY(80px);
-      padding: 10px 18px;
-      border-radius: 999px;
-      background: var(--surface2);
-      border: 1px solid var(--border2);
-      color: var(--text);
-      font-size: 13px;
-      font-weight: 600;
-      box-shadow: var(--shadow);
-      opacity: 0;
-      transition: transform 0.25s, opacity 0.25s;
-      z-index: 100;
-      pointer-events: none;
-    }
-    .toast.show {
-      transform: translateX(-50%) translateY(0);
-      opacity: 1;
-    }
-
-    .page-loading .hero-title,
-    .page-loading .stat-value { visibility: hidden; }
-
-    /* Live mirror (real money) */
-    .live-mirror {
-      margin-bottom: 14px;
-      border: 1px solid rgba(239, 68, 68, 0.35);
-      background: linear-gradient(180deg, rgba(69, 10, 10, 0.55) 0%, var(--surface) 100%);
-      border-radius: var(--radius);
-      padding: 16px 18px;
-      box-shadow: var(--shadow);
-    }
-    .live-mirror-head {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 12px;
-    }
-    .live-mirror-title {
-      font-size: 12px;
-      font-weight: 800;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: #fca5a5;
-    }
-    .live-mirror-sub {
-      font-size: 12px;
-      color: var(--muted);
-      margin-top: 4px;
-      line-height: 1.45;
-    }
-    .live-badge {
-      font-size: 10px;
-      font-weight: 800;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      padding: 4px 10px;
-      border-radius: 999px;
-      background: rgba(239, 68, 68, 0.2);
-      color: #fecaca;
-      border: 1px solid rgba(239, 68, 68, 0.45);
-      white-space: nowrap;
-    }
-    .live-mirror-stats {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-      margin: 12px 0;
-    }
-    .live-stat {
-      padding: 10px 12px;
-      border-radius: var(--radius-sm);
-      background: rgba(0, 0, 0, 0.25);
-      border: 1px solid rgba(239, 68, 68, 0.2);
-    }
-    .live-stat-label {
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: #fca5a5;
-    }
-    .live-stat-value {
-      font-size: 18px;
-      font-weight: 800;
-      font-family: var(--mono);
-      margin-top: 4px;
-    }
-    .live-controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      align-items: center;
-      margin-top: 12px;
-    }
-    .live-controls select,
-    .live-controls input[type="number"] {
-      padding: 9px 10px;
-      border-radius: var(--radius-sm);
-      border: 1px solid rgba(239, 68, 68, 0.35);
-      background: var(--bg2);
-      color: var(--text);
-      font-family: var(--mono);
-      font-size: 13px;
-    }
-    .btn-live-enable {
-      padding: 10px 14px;
-      border-radius: var(--radius-sm);
-      border: 1px solid rgba(239, 68, 68, 0.55);
-      background: rgba(239, 68, 68, 0.18);
-      color: #fecaca;
-      font-size: 11px;
-      font-weight: 800;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-      cursor: pointer;
-    }
-    .btn-live-enable:hover:not(:disabled) { background: rgba(239, 68, 68, 0.28); }
-    .btn-live-enable:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-live-disconnect {
-      padding: 10px 14px;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border);
-      background: var(--surface3);
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    .pill.mirror-filled { background: rgba(34, 197, 94, 0.14); color: #86efac; border-color: rgba(34, 197, 94, 0.3); }
-    .pill.mirror-failed { background: var(--red-dim); color: #fecaca; border-color: rgba(239, 68, 68, 0.35); }
-    .pill.mirror-pending { background: rgba(251, 191, 36, 0.12); color: #fcd34d; border-color: rgba(251, 191, 36, 0.35); }
-    .pill.mirror-live { background: rgba(239, 68, 68, 0.14); color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); }
-
-    .confirm-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.72);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      z-index: 200;
-      padding: 20px;
-    }
-    .confirm-overlay.show { display: flex; }
-    .confirm-box {
-      max-width: 400px;
-      width: 100%;
-      background: var(--surface2);
-      border: 1px solid rgba(239, 68, 68, 0.45);
-      border-radius: var(--radius);
-      padding: 22px;
-      box-shadow: var(--shadow);
-    }
-    .confirm-box h3 {
-      font-size: 16px;
-      font-weight: 800;
-      color: #fecaca;
-      margin-bottom: 10px;
-    }
-    .confirm-box p {
-      font-size: 13px;
-      color: var(--muted);
-      line-height: 1.5;
-      margin-bottom: 16px;
-    }
-    .confirm-actions {
-      display: flex;
-      gap: 10px;
-      justify-content: flex-end;
-    }
-    .confirm-actions button {
-      padding: 10px 16px;
-      border-radius: var(--radius-sm);
-      font-size: 12px;
-      font-weight: 700;
-      cursor: pointer;
-      border: 1px solid var(--border);
-      background: var(--surface3);
-      color: var(--text);
-    }
-    .confirm-actions .danger {
-      background: var(--red);
-      border-color: var(--red);
-      color: #fff;
-    }
-
-    /* Demo account picker */
-    .demo-account-bar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
-      padding: 10px 14px;
-      margin-bottom: 14px;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border2);
-      background: var(--gold-dim);
-    }
-    .demo-account-bar.missing {
-      border-color: rgba(251, 191, 36, 0.45);
-      background: rgba(251, 191, 36, 0.08);
-    }
-    .demo-account-bar-label {
-      font-size: 10px;
-      font-weight: 800;
-      letter-spacing: 0.07em;
-      text-transform: uppercase;
-      color: var(--gold);
-    }
-    .demo-account-bar-value {
-      font-size: 13px;
-      font-weight: 700;
-      font-family: var(--mono);
-      margin-top: 2px;
-    }
-    .demo-account-bar-warn {
-      font-size: 12px;
-      color: #fcd34d;
-      font-weight: 600;
-    }
     .demo-select-row {
       grid-column: 1 / -1;
-      padding: 12px 14px;
+      padding: 0.75rem;
       border-radius: var(--radius-sm);
-      background: var(--bg2);
-      border: 1px solid var(--border2);
+      background: var(--surface-inset);
+      border: 1px solid var(--border-hairline);
+      margin-top: 0.875rem;
     }
     .demo-select-row label {
       display: block;
-      margin-bottom: 8px;
+      font-size: var(--label-size);
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 0.375rem;
+    }
+    .demo-select-row .hint {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+      line-height: 1.45;
     }
     .demo-select-row select {
       width: 100%;
-      padding: 10px 12px;
+      padding: 0.5rem 0.625rem;
       border-radius: var(--radius-sm);
-      border: 1px solid var(--border2);
+      border: 1px solid var(--border-hairline);
       background: var(--surface);
       color: var(--text);
-      font-family: var(--mono);
-      font-size: 13px;
-      margin-bottom: 10px;
+      font-family: var(--font-mono);
+      font-size: 0.8125rem;
+      margin-bottom: 0.5rem;
     }
-    .btn-demo-save {
+    .btn-save, .btn-demo-save {
       width: 100%;
-      padding: 11px 14px;
+      padding: 0.625rem;
       border-radius: var(--radius-sm);
-      border: 1px solid var(--border2);
-      background: linear-gradient(135deg, rgba(212, 175, 55, 0.22), rgba(212, 175, 55, 0.08));
-      color: var(--gold);
+      border: 1px solid var(--border-hairline-strong);
+      background: var(--surface-inset);
+      color: var(--text-dim);
       font-family: inherit;
-      font-size: 12px;
-      font-weight: 800;
-      letter-spacing: 0.04em;
+      font-size: 0.6875rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
       cursor: pointer;
     }
-    .btn-demo-save:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-save:focus-visible, .btn-demo-save:focus-visible {
+      outline: 2px solid var(--accent-gold);
+      outline-offset: 2px;
+    }
+    .btn-save.saved { color: var(--accent-gold); }
+
+    .lessons-block {
+      margin-top: 1rem;
+      padding-top: 0.875rem;
+      border-top: 1px solid var(--border-hairline);
+    }
+    .lessons-block h4 {
+      font-size: var(--label-size);
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+    }
+    .lesson-item {
+      padding: 0.625rem 0.75rem;
+      border-radius: var(--radius-sm);
+      background: var(--surface-inset);
+      border: 1px solid var(--border-hairline);
+      margin-bottom: 0.5rem;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      line-height: 1.45;
+    }
+    .lesson-item b { color: var(--text); font-weight: 600; }
+
+    /* Toast + confirm */
+    .toast {
+      position: fixed;
+      bottom: calc(1rem + var(--safe-bottom));
+      left: 50%;
+      transform: translateX(-50%) translateY(120%);
+      padding: 0.625rem 1rem;
+      border-radius: var(--radius-sm);
+      background: var(--surface-raised);
+      border: 1px solid var(--border-hairline-strong);
+      font-size: 0.8125rem;
+      z-index: 100;
+      transition: transform 0.25s ease;
+      max-width: 90vw;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+
+    .confirm-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(11, 13, 18, 0.85);
+      z-index: 200;
+      place-items: center;
+      padding: 1rem;
+    }
+    .confirm-overlay.show { display: grid; }
+    .confirm-box {
+      width: 100%;
+      max-width: 22rem;
+      padding: 1.25rem;
+      border-radius: var(--radius);
+      background: var(--surface-raised);
+      border: 1px solid var(--danger-border);
+    }
+    .confirm-box h3 {
+      font-family: var(--font-display);
+      font-size: 1.125rem;
+      color: var(--danger);
+      margin-bottom: 0.625rem;
+    }
+    .confirm-box p {
+      font-size: 0.8125rem;
+      color: var(--text-dim);
+      line-height: 1.5;
+      margin-bottom: 1rem;
+    }
+    .confirm-actions {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: flex-end;
+    }
+    .confirm-actions button {
+      padding: 0.5rem 0.875rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-hairline);
+      background: var(--surface-inset);
+      color: var(--text-dim);
+      font-family: inherit;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .confirm-actions button.danger {
+      background: var(--danger);
+      border-color: var(--danger);
+      color: var(--surface);
+    }
+    .confirm-actions button:focus-visible {
+      outline: 2px solid var(--accent-gold);
+      outline-offset: 2px;
+    }
   </style>
 </head>
 <body class="page-loading">
   <div class="shell">
     <header class="topbar">
       <div class="brand">
-        <div class="brand-mark">Au</div>
+        <div class="brand-mark" aria-hidden="true">Au</div>
         <div class="brand-text">
           <strong>TradeHub</strong>
           <span>Gold AI Trader</span>
         </div>
       </div>
-      <a class="topbar-link" href="/app?uid={{ uid }}">← Portal</a>
+      <a class="topbar-link" href="/app?uid={{ uid }}">Portal</a>
     </header>
 
-    <div class="demo-pill">
-      <span class="demo-pill-dot"></span>
-      Demo account only — not live money
+    <div class="demo-chip" role="status">
+      <span class="demo-chip-dot" aria-hidden="true"></span>
+      Demo account — no real money at risk
     </div>
 
-    <div class="demo-account-bar missing" id="demo-account-bar">
+    <div class="account-strip missing" id="demo-account-bar">
       <div>
-        <div class="demo-account-bar-label">Trading demo account</div>
-        <div class="demo-account-bar-value" id="demo-account-display">Loading…</div>
+        <div class="account-strip-label">Demo cTrader account</div>
+        <div class="account-strip-value" id="demo-account-display">Loading…</div>
       </div>
-      <div class="demo-account-bar-warn" id="demo-account-warn"></div>
+      <div class="account-strip-warn" id="demo-account-warn"></div>
     </div>
 
-    <!-- Status hero -->
+    <!-- Status hero readout -->
     <section class="card hero" aria-live="polite">
-      <div class="hero-inner">
-        <div class="hero-label">Live status</div>
-        <div class="hero-status">
-          <div class="status-dot dormant" id="status-dot" aria-hidden="true"></div>
-          <div>
-            <div class="hero-title" id="status-line">Loading…</div>
-            <div class="hero-sub" id="session-line">Connecting to trader…</div>
-            <div class="hero-meta" id="last-candidate"></div>
+      <div class="hero-eyebrow">Trader status</div>
+      <div class="hero-readout">
+        <div class="status-lamp dormant" id="status-lamp" aria-hidden="true"></div>
+        <div style="flex:1;min-width:0">
+          <h1 class="hero-title" id="status-line">Loading…</h1>
+          <p class="hero-sub" id="session-line">Connecting…</p>
+          <p class="hero-meta" id="last-candidate"></p>
+        </div>
+      </div>
+
+      <div class="session-timeline" id="session-timeline" aria-label="London and New York session windows (UTC)">
+        <div class="session-timeline-labels">
+          <span>London</span>
+          <span>New York</span>
+        </div>
+        <div class="session-track" id="session-track">
+          <div class="session-block" id="block-london"></div>
+          <div class="session-block" id="block-ny"></div>
+          <div class="session-now" id="session-now"></div>
+        </div>
+        <div class="session-hours" id="session-hours-label"></div>
+      </div>
+
+      <div class="hero-controls">
+        <div class="hero-row">
+          <div class="switch-wrap">
+            <span class="switch-label">Trader</span>
+            <label class="switch" title="Enable / disable Gold AI Trader">
+              <input type="checkbox" id="toggle-enabled" disabled aria-label="Enable trader"/>
+              <span class="switch-track"></span>
+            </label>
+          </div>
+          <div style="display:flex;gap:0.375rem">
+            <button type="button" class="btn-icon" id="btn-refresh" title="Refresh" aria-label="Refresh">↻</button>
+            <button type="button" class="btn-kill" id="btn-kill" disabled>Kill switch</button>
           </div>
         </div>
-        <div class="hero-controls">
-          <div class="control-group">
-            <div class="switch-wrap">
-              <span class="switch-label">Trader</span>
-              <label class="switch" title="Enable / disable Gold AI Trader">
-                <input type="checkbox" id="toggle-enabled" disabled/>
-                <span class="switch-track"></span>
-              </label>
+        <div class="hero-row">
+          <div class="demo-size-row">
+            <div class="field-inline">
+              <label for="demo-lot-size">Demo lots</label>
+              <input id="demo-lot-size" type="number" min="0.01" max="50" step="0.01" value="0.01" aria-label="Demo lot size"/>
             </div>
-            <button class="btn-icon" id="btn-refresh" title="Refresh" aria-label="Refresh">↻</button>
+            <div class="field-inline">
+              <label for="demo-max-trades">Max/day</label>
+              <input id="demo-max-trades" type="number" min="1" max="50" value="6" aria-label="Max demo trades per day"/>
+            </div>
+            <button type="button" class="btn-ghost" id="btn-save-demo-size">Apply</button>
           </div>
-          <button class="btn-kill" id="btn-kill" disabled>Kill switch</button>
+          <span class="demo-size-display" id="demo-size-display">—</span>
         </div>
       </div>
     </section>
 
-    <!-- Today stats -->
-    <div class="stats-grid" id="stats-grid">
-      <div class="card stat-tile">
-        <div class="stat-head"><span class="stat-icon">🤖</span> Claude calls</div>
-        <div class="stat-value" id="calls-stat"><span class="stat-skeleton"></span></div>
-        <div class="stat-cap" id="calls-cap">—</div>
-        <button type="button" class="btn-reset-credits" id="btn-reset-credits" style="display:none">Reset today&apos;s count</button>
+    <!-- P&L source of truth -->
+    <section class="card pnl-hero">
+      <div class="pnl-hero-label">Demo P&amp;L today</div>
+      <div class="pnl-hero-value positive" id="pnl-stat">+$0.00</div>
+      <div class="pnl-hero-cap">Source of truth — demo account only</div>
+    </section>
+
+    <div class="metrics-row">
+      <div class="card metric-mini">
+        <div class="metric-mini-label">Claude calls</div>
+        <div class="metric-mini-value" id="calls-stat"><span class="stat-skeleton"></span></div>
+        <div class="metric-mini-cap" id="calls-cap">—</div>
+        <button type="button" class="btn-reset-credits" id="btn-reset-credits" style="display:none">Reset count</button>
       </div>
-      <div class="card stat-tile">
-        <div class="stat-head"><span class="stat-icon">📈</span> Trades</div>
-        <div class="stat-value" id="trades-stat"><span class="stat-skeleton"></span></div>
-        <div class="stat-cap" id="trades-cap">—</div>
+      <div class="card metric-mini">
+        <div class="metric-mini-label">Trades</div>
+        <div class="metric-mini-value" id="trades-stat"><span class="stat-skeleton"></span></div>
+        <div class="metric-mini-cap" id="trades-cap">—</div>
       </div>
-      <div class="card stat-tile">
-        <div class="stat-head"><span class="stat-icon">💰</span> Demo P&amp;L</div>
-        <div class="stat-value positive" id="pnl-stat">+$0.00</div>
-        <div class="stat-cap">Source of truth</div>
-      </div>
-      <div class="card stat-tile">
-        <div class="stat-head"><span class="stat-icon">⚡</span> API cost</div>
-        <div class="stat-value gold" id="cost-stat"><span class="stat-skeleton"></span></div>
-        <div class="stat-cap">Today (USD)</div>
+      <div class="card metric-mini">
+        <div class="metric-mini-label">API cost</div>
+        <div class="metric-mini-value" id="cost-stat"><span class="stat-skeleton"></span></div>
+        <div class="metric-mini-cap">USD today</div>
       </div>
     </div>
 
-    <!-- Live mirror (optional, real money) -->
-    <section class="live-mirror" id="live-mirror-section">
-      <div class="live-mirror-head">
-        <div>
-          <div class="live-mirror-title">Live mirror · real money</div>
-          <div class="live-mirror-sub">Optional. Mirrors demo Claude TAKE decisions to a connected live cTrader account. Demo stats remain the primary dashboard.</div>
-        </div>
-        <span class="live-badge" id="live-mirror-badge">OFF</span>
+    <!-- Live mirror — collapsed when off -->
+    <div class="live-row" id="live-mirror-row" role="button" tabindex="0" aria-expanded="false" aria-controls="live-mirror-panel">
+      <div>
+        <div class="live-row-label">Live mirror · real money</div>
+        <div class="live-row-sub" id="live-row-sub">Optional copy of demo TAKE decisions</div>
       </div>
-      <div class="live-mirror-stats">
+      <span class="live-row-state" id="live-mirror-badge">Off</span>
+    </div>
+    <section class="live-panel" id="live-mirror-panel" aria-hidden="true">
+      <div class="live-panel-title">Real money — proceed with caution</div>
+      <p class="live-panel-sub">Mirrors demo Claude TAKE decisions to a live cTrader account. Demo P&amp;L remains the primary readout. You must confirm before enabling.</p>
+      <div class="live-stats">
         <div class="live-stat">
           <div class="live-stat-label">Live P&amp;L today</div>
           <div class="live-stat-value" id="live-pnl-stat">$0.00</div>
         </div>
         <div class="live-stat">
-          <div class="live-stat-label">Live trades today</div>
+          <div class="live-stat-label">Live trades</div>
           <div class="live-stat-value" id="live-trades-stat">0</div>
         </div>
       </div>
@@ -1066,29 +1260,28 @@
         <select id="live-ctid-select" aria-label="Live account">
           <option value="">Select live account…</option>
         </select>
-        <label class="muted" style="font-size:12px">Lots
-          <input id="live-lot-size" type="number" min="0.01" max="50" step="0.01" value="0.01" style="width:72px;margin-left:6px"/>
+        <label>Lots
+          <input id="live-lot-size" type="number" min="0.01" max="50" step="0.01" value="0.01"/>
         </label>
-        <label class="muted" style="font-size:12px">Max/day
-          <input id="max-live-trades" type="number" min="1" max="20" value="3" style="width:52px;margin-left:6px"/>
+        <label>Max/day
+          <input id="max-live-trades" type="number" min="1" max="20" value="3"/>
         </label>
-        <button type="button" class="btn-live-enable" id="btn-live-enable">Enable live mirror</button>
-        <button type="button" class="btn-live-disconnect" id="btn-live-disconnect" style="display:none">Disconnect live</button>
+        <button type="button" class="btn-danger-action" id="btn-live-enable">Enable live mirror</button>
+        <button type="button" class="btn-danger-outline" id="btn-live-disconnect" style="display:none">Disconnect</button>
       </div>
-      <div class="live-mirror-sub" id="live-mirror-status-line" style="margin-top:10px">Live mirror is off.</div>
+      <p class="live-status-line" id="live-mirror-status-line">Live mirror is off.</p>
     </section>
 
     <!-- Decision feed -->
     <section class="card feed-section">
       <div class="section-head">
-        <h2 class="section-title">Decision feed</h2>
+        <h2 class="section-title">Decision timeline</h2>
         <span class="section-count" id="feed-count">—</span>
       </div>
       <div id="feed" class="feed-list">
         <div class="empty-state">
-          <div class="empty-icon">⏳</div>
           <div class="empty-title">Loading decisions…</div>
-          <div class="empty-sub">Fetching the latest Claude evaluations.</div>
+          <div class="empty-sub">Fetching Claude evaluations.</div>
         </div>
       </div>
     </section>
@@ -1097,15 +1290,15 @@
     <div class="card settings-wrap" id="settings-wrap">
       <button type="button" class="settings-toggle" id="settings-toggle" aria-expanded="false">
         <div>
-          <div class="settings-toggle-title">Settings</div>
-          <div class="settings-toggle-sub">Session windows, daily caps &amp; lessons</div>
+          <div class="settings-toggle-title">Advanced settings</div>
+          <div class="settings-toggle-sub">Session windows, Claude caps, lessons</div>
         </div>
-        <span class="settings-chevron">▼</span>
+        <span class="settings-chevron" aria-hidden="true">▼</span>
       </button>
       <div class="settings-body">
         <div class="demo-select-row">
-          <label>Demo account</label>
-          <div class="muted" style="font-size:12px;margin-bottom:8px;line-height:1.45">Connected cTrader demo accounts only (isLive=false). Saved to config — overrides env default.</div>
+          <label for="demo-ctid-select">Demo account</label>
+          <p class="hint">cTrader demo accounts only (isLive=false). Required before enabling the trader.</p>
           <select id="demo-ctid-select" aria-label="Demo cTrader account">
             <option value="">Select demo account…</option>
           </select>
@@ -1129,23 +1322,19 @@
             </div>
           </div>
           <div class="field">
-            <label>Max calls / day</label>
+            <label>Max Claude calls / day</label>
             <input id="max-calls" type="number" min="1" max="200"/>
-          </div>
-          <div class="field">
-            <label>Max trades / day</label>
-            <input id="max-trades" type="number" min="1" max="50"/>
           </div>
           <label class="check-field">
             <input id="no-overnight" type="checkbox"/>
-            <span>Close positions before overnight (no overnight holds)</span>
+            <span>Close positions before overnight</span>
           </label>
         </div>
-        <button type="button" class="btn-save" id="btn-save" disabled>Save settings</button>
+        <button type="button" class="btn-save" id="btn-save" disabled style="margin-top:0.875rem">Save settings</button>
         <div class="lessons-block">
           <h4>Lessons digest</h4>
           <div id="lessons">
-            <div class="lesson-item">No lessons yet — the trader learns after each session.</div>
+            <div class="lesson-item">No lessons yet — the trader learns after each session closes.</div>
           </div>
         </div>
       </div>
@@ -1154,10 +1343,10 @@
 
   <div class="toast" id="toast" role="status"></div>
 
-  <div class="confirm-overlay" id="confirm-live" role="dialog" aria-modal="true">
+  <div class="confirm-overlay" id="confirm-live" role="dialog" aria-modal="true" aria-labelledby="confirm-live-title">
     <div class="confirm-box">
-      <h3>Enable live mirror?</h3>
-      <p id="confirm-live-text">This will trade REAL money on the selected account autonomously whenever Claude takes a demo trade. Demo tracking remains separate.</p>
+      <h3 id="confirm-live-title">Enable live mirror?</h3>
+      <p id="confirm-live-text">This will place REAL trades on your live cTrader account whenever Claude takes a demo trade. Losses are real and irreversible. Demo tracking continues separately.</p>
       <div class="confirm-actions">
         <button type="button" id="confirm-live-cancel">Cancel</button>
         <button type="button" class="danger" id="confirm-live-ok">I understand — enable</button>
@@ -1169,6 +1358,8 @@
 const UID = {{ uid | tojson }};
 let _lastConfig = null;
 let _refreshing = false;
+let _liveLotsOverridden = false;
+let _livePanelOpen = false;
 
 function fmtSession(s) {
   if (!s) return '';
@@ -1205,22 +1396,21 @@ function deriveHero(j) {
   const feed = j.decision_feed || [];
 
   if (cfg.kill_switch) {
-    return { title: 'KILL SWITCH ACTIVE', sub: 'Trading halted — toggle off in settings when ready', dot: 'danger', tone: 'danger' };
+    return { title: 'HALTED', sub: 'Kill switch active — disable it when you are ready to resume', lamp: 'danger' };
   }
   if (!j.demo_account_ready) {
-    return { title: 'NO DEMO ACCOUNT', sub: 'Select a demo cTrader account in Settings to start', dot: 'off', tone: 'off' };
+    return { title: 'SETUP REQUIRED', sub: 'Select a demo cTrader account below to arm the trader', lamp: 'dormant' };
   }
   if (!cfg.enabled) {
-    return { title: 'OFF', sub: 'Turn on the trader switch to begin scanning', dot: 'off', tone: 'off' };
+    return { title: 'STANDBY', sub: 'Trader is off — enable the switch when London or NY opens', lamp: 'dormant' };
   }
 
   const openTrade = feed.find(d => d.executed && (d.action || '').toLowerCase() === 'take');
   if (openTrade) {
     return {
       title: 'IN TRADE',
-      sub: `${fmtSetup(openTrade.candidate_type)} · ${fmtSession(openTrade.session)} session`,
-      dot: 'trade',
-      tone: 'trade',
+      sub: `${fmtSetup(openTrade.candidate_type)} · ${fmtSession(openTrade.session)}`,
+      lamp: 'active',
     };
   }
 
@@ -1229,8 +1419,7 @@ function deriveHero(j) {
     return {
       title: 'EVALUATING',
       sub: `Claude reviewing ${fmtSetup(c.type)} (${c.direction || '—'})`,
-      dot: 'eval',
-      tone: 'eval',
+      lamp: 'active',
     };
   }
 
@@ -1238,42 +1427,78 @@ function deriveHero(j) {
     const sess = fmtSession(rt.active_session);
     const sub = rt.last_candidate
       ? `Candidate: ${fmtSetup(rt.last_candidate.type)} · scanning XAUUSD`
-      : 'Scanning XAUUSD for ICT-style setups';
-    return { title: `SCANNING — ${sess}`, sub, dot: 'scan', tone: 'scan' };
+      : 'Scanning XAUUSD for session setups';
+    return { title: `ACTIVE · ${sess}`, sub, lamp: 'active' };
   }
 
-  const dormantReason = rt.status === 'dormant' || !rt.active_session;
   return {
     title: 'DORMANT',
-    sub: dormantReason ? 'Outside London / NY session windows' : (rt.status || 'Standing by'),
-    dot: 'dormant',
-    tone: 'dormant',
+    sub: 'Outside London and New York session windows — this is normal',
+    lamp: 'dormant',
   };
+}
+
+function renderSessionTimeline(cfg, rt) {
+  const lonS = cfg.london_start_hour ?? 7;
+  const lonE = cfg.london_end_hour ?? 10;
+  const nyS = cfg.ny_start_hour ?? 13;
+  const nyE = cfg.ny_end_hour ?? 16;
+  const nowH = new Date().getUTCHours() + new Date().getUTCMinutes() / 60;
+
+  const pct = (h) => Math.min(100, Math.max(0, (h / 24) * 100));
+  const blockW = (start, end) => Math.max(0.5, pct(end) - pct(start));
+
+  const bl = document.getElementById('block-london');
+  const bn = document.getElementById('block-ny');
+  bl.style.left = pct(lonS) + '%';
+  bl.style.width = blockW(lonS, lonE) + '%';
+  bn.style.left = pct(nyS) + '%';
+  bn.style.width = blockW(nyS, nyE) + '%';
+
+  const inLondon = nowH >= lonS && nowH < lonE;
+  const inNy = nowH >= nyS && nowH < nyE;
+  bl.classList.toggle('active', inLondon && !!rt.active_session);
+  bn.classList.toggle('active', inNy && !!rt.active_session);
+
+  document.getElementById('session-now').style.left = pct(nowH) + '%';
+  document.getElementById('session-hours-label').textContent =
+    `LDN ${lonS}–${lonE} · NY ${nyS}–${nyE} UTC · now ${String(Math.floor(nowH)).padStart(2,'0')}:${String(Math.floor((nowH % 1) * 60)).padStart(2,'0')}`;
 }
 
 function renderHero(j) {
   const h = deriveHero(j);
   const rt = j.runtime || {};
+  const cfg = j.config || {};
+
   document.getElementById('status-line').textContent = h.title;
   document.getElementById('session-line').textContent = h.sub;
   const cand = rt.last_candidate;
   document.getElementById('last-candidate').textContent = cand
-    ? `Last scan · ${fmtSetup(cand.type)} ${cand.direction || ''} @ ${cand.price != null ? cand.price : '—'}`
+    ? `Last scan · ${fmtSetup(cand.type)} ${cand.direction || ''}${cand.price != null ? ' @ ' + cand.price : ''}`
     : (rt.last_scan_at ? `Last scan · ${fmtTime(rt.last_scan_at)}` : '');
 
-  const dot = document.getElementById('status-dot');
-  dot.className = 'status-dot ' + h.dot;
+  const lamp = document.getElementById('status-lamp');
+  lamp.className = 'status-lamp ' + (h.lamp === 'active' ? 'active' : h.lamp === 'danger' ? 'danger' : 'dormant');
 
-  const cfg = j.config || {};
+  renderSessionTimeline(cfg, rt);
+
   const toggle = document.getElementById('toggle-enabled');
   const demoReady = !!j.demo_account_ready;
   toggle.disabled = !demoReady;
   toggle.checked = !!cfg.enabled;
   toggle.title = demoReady ? 'Enable / disable Gold AI Trader' : 'Select a demo account first';
+
   const killBtn = document.getElementById('btn-kill');
   killBtn.disabled = false;
   killBtn.classList.toggle('active', !!cfg.kill_switch);
   killBtn.textContent = cfg.kill_switch ? 'Kill switch ON' : 'Kill switch';
+
+  const demoLots = cfg.demo_lot_size ?? 0.01;
+  const maxTrades = cfg.max_trades_day ?? 6;
+  document.getElementById('demo-lot-size').value = demoLots;
+  document.getElementById('demo-max-trades').value = maxTrades;
+  document.getElementById('demo-size-display').textContent =
+    `${demoLots} lot${demoLots === 1 ? '' : 's'} · max ${maxTrades} trades/day`;
 }
 
 function renderStats(j) {
@@ -1282,18 +1507,21 @@ function renderStats(j) {
   const calls = st.calls ?? 0;
   const trades = st.trades ?? 0;
   const cost = st.cost_usd ?? 0;
-  const maxCalls = c.max_calls_day ?? 50;
+  const maxCalls = c.max_calls_day ?? 22;
   const maxTrades = c.max_trades_day ?? 6;
 
   document.getElementById('calls-stat').textContent = `${calls}/${maxCalls}`;
-  document.getElementById('calls-cap').textContent = calls >= maxCalls ? 'Daily cap reached' : `${maxCalls - calls} remaining`;
-  const resetBtn = document.getElementById('btn-reset-credits');
-  resetBtn.style.display = calls > 0 ? 'inline-block' : 'none';
+  document.getElementById('calls-cap').textContent = calls >= maxCalls ? 'Cap reached' : `${maxCalls - calls} left`;
+  document.getElementById('btn-reset-credits').style.display = calls > 0 ? 'inline-block' : 'none';
 
   document.getElementById('trades-stat').textContent = `${trades}/${maxTrades}`;
-  document.getElementById('trades-cap').textContent = trades >= maxTrades ? 'Daily cap reached' : `${maxTrades - trades} remaining`;
+  document.getElementById('trades-cap').textContent = trades >= maxTrades ? 'Cap reached' : `${maxTrades - trades} left`;
 
-  document.getElementById('pnl-stat').textContent = fmtMoney(st.demo_pnl_usd ?? 0);
+  const pnl = st.demo_pnl_usd ?? 0;
+  const pnlEl = document.getElementById('pnl-stat');
+  pnlEl.textContent = fmtMoney(pnl);
+  pnlEl.className = 'pnl-hero-value ' + (pnl >= 0 ? 'positive' : 'negative');
+
   document.getElementById('cost-stat').textContent = `$${cost.toFixed(2)}`;
 }
 
@@ -1318,10 +1546,10 @@ function renderDemoAccountPicker(j) {
     warn.textContent = '';
   } else if (accounts.length) {
     display.textContent = 'None selected';
-    warn.textContent = 'Pick a demo account to start';
+    warn.textContent = 'Pick account';
   } else {
-    display.textContent = 'No demo accounts linked';
-    warn.textContent = 'Connect a demo account in Live Forex first';
+    display.textContent = 'None linked';
+    warn.textContent = 'Connect demo in Live Forex';
   }
 
   const sel = document.getElementById('demo-ctid-select');
@@ -1332,44 +1560,67 @@ function renderDemoAccountPicker(j) {
   document.getElementById('btn-save-demo').disabled = accounts.length === 0;
 }
 
+function setLivePanelOpen(open) {
+  _livePanelOpen = open;
+  const panel = document.getElementById('live-mirror-panel');
+  const row = document.getElementById('live-mirror-row');
+  panel.classList.toggle('open', open);
+  panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+  row.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
 function renderLiveMirror(j) {
   const c = j.config || {};
   const st = j.stats_today || {};
   const accounts = j.live_accounts || [];
   const enabled = !!c.live_mirror_enabled;
+  const demoLots = c.demo_lot_size ?? 0.01;
+
   const badge = document.getElementById('live-mirror-badge');
-  badge.textContent = enabled ? 'LIVE ON' : 'OFF';
-  badge.style.background = enabled ? 'rgba(239,68,68,0.35)' : 'rgba(239,68,68,0.2)';
+  badge.textContent = enabled ? 'Live ON' : 'Off';
+  badge.classList.toggle('on', enabled);
+
+  const rowSub = document.getElementById('live-row-sub');
+  rowSub.textContent = enabled
+    ? `Mirroring to #${c.live_ctrader_account_id || '?'}`
+    : 'Optional copy of demo TAKE decisions';
+
+  if (enabled) setLivePanelOpen(true);
 
   const pnl = st.live_pnl_usd ?? 0;
   const livePnlEl = document.getElementById('live-pnl-stat');
   livePnlEl.textContent = fmtMoney(pnl).replace('+', '');
-  livePnlEl.style.color = pnl >= 0 ? '#86efac' : '#fca5a5';
+  livePnlEl.style.color = pnl >= 0 ? 'var(--profit)' : 'var(--text-dim)';
 
   document.getElementById('live-trades-stat').textContent = String(st.live_trades ?? 0);
 
   const sel = document.getElementById('live-ctid-select');
   const prev = sel.value || c.live_ctrader_account_id || '';
   sel.innerHTML = '<option value="">Select live account…</option>' +
-    accounts.map(a => `<option value="${a.ctid}">#${a.ctid}${a.trader_login ? ' · login '+a.trader_login : ''}</option>`).join('');
+    accounts.map(a => `<option value="${a.ctid}">#${a.ctid}${a.trader_login ? ' · ' + a.trader_login : ''}</option>`).join('');
   if (prev) sel.value = prev;
 
-  document.getElementById('live-lot-size').value = c.live_lot_size ?? 0.01;
+  const liveLotsEl = document.getElementById('live-lot-size');
+  if (!enabled && !_liveLotsOverridden) {
+    liveLotsEl.value = c.live_lot_size ?? demoLots;
+  } else if (enabled) {
+    liveLotsEl.value = c.live_lot_size ?? demoLots;
+  }
   document.getElementById('max-live-trades').value = c.max_live_trades_day ?? 3;
 
   document.getElementById('btn-live-enable').style.display = enabled ? 'none' : 'inline-flex';
   document.getElementById('btn-live-disconnect').style.display = enabled ? 'inline-flex' : 'none';
   sel.disabled = enabled;
-  document.getElementById('live-lot-size').disabled = enabled;
+  liveLotsEl.disabled = enabled;
   document.getElementById('max-live-trades').disabled = enabled;
 
   const statusLine = document.getElementById('live-mirror-status-line');
   if (enabled) {
-    statusLine.textContent = `Mirroring to live account #${c.live_ctrader_account_id || '?'} · ${c.live_lot_size || 0.01} lots · max ${c.max_live_trades_day || 3}/day`;
+    statusLine.textContent = `Live mirror active · #${c.live_ctrader_account_id || '?'} · ${c.live_lot_size || demoLots} lots · max ${c.max_live_trades_day || 3}/day`;
   } else if (!accounts.length) {
-    statusLine.textContent = 'No live cTrader accounts linked — connect one in Live Forex first.';
+    statusLine.textContent = 'No live accounts linked — connect one in Live Forex first.';
   } else {
-    statusLine.textContent = 'Live mirror is off. Demo continues independently.';
+    statusLine.textContent = 'Configure lots to match demo for a faithful preview, then enable when ready.';
   }
 }
 
@@ -1377,7 +1628,7 @@ function mirrorPill(d) {
   if (!d.live_mirror_status && !d.live_mirror_execution_id) return '';
   const st = (d.live_mirror_status || 'pending').toLowerCase();
   const cls = st === 'filled' ? 'mirror-filled' : st === 'failed' ? 'mirror-failed' : st === 'pending' ? 'mirror-pending' : 'mirror-live';
-  const label = st === 'filled' ? 'LIVE FILLED' : st === 'failed' ? 'LIVE FAILED' : st === 'pending' ? 'LIVE PENDING' : 'LIVE ' + st.toUpperCase();
+  const label = st === 'filled' ? 'LIVE OK' : st === 'failed' ? 'LIVE FAIL' : st === 'pending' ? 'LIVE PEND' : 'LIVE ' + st.toUpperCase();
   return `<span class="pill ${cls}">${label}</span>`;
 }
 
@@ -1389,9 +1640,8 @@ function renderFeed(j) {
   if (!feed.length) {
     el.innerHTML = `
       <div class="empty-state">
-        <div class="empty-icon">🌙</div>
-        <div class="empty-title">No decisions yet</div>
-        <div class="empty-sub">Waiting for the next London / NY session. Claude will evaluate setups here in real time.</div>
+        <div class="empty-title">No decisions yet today</div>
+        <div class="empty-sub">The trader evaluates setups during London and New York sessions. Decisions appear here in real time.</div>
       </div>`;
     return;
   }
@@ -1403,8 +1653,6 @@ function renderFeed(j) {
     let outcome = '';
     if (d.executed && action === 'take') {
       outcome = '<span class="pill open">OPEN</span>';
-    } else if (d.executed) {
-      outcome = '<span class="pill exec">EXECUTED</span>';
     }
     return `
       <article class="feed-item ${action}">
@@ -1423,8 +1671,8 @@ function renderFeed(j) {
           <span class="conf-pct">${conf}%</span>
         </div>
         <p class="feed-rationale">${escapeHtml(rationale)}</p>
-        ${d.live_mirror_error ? `<div class="feed-foot" style="color:#fca5a5">Live mirror: ${escapeHtml(d.live_mirror_error)}</div>` : ''}
-        <div class="feed-foot">Cost $${(d.cost_usd || 0).toFixed(4)}${d.executed ? ' · Demo order placed' : ''}${d.live_mirror_execution_id ? ' · Live exec #' + d.live_mirror_execution_id : ''}</div>
+        ${d.live_mirror_error ? `<div class="feed-foot error">Live: ${escapeHtml(d.live_mirror_error)}</div>` : ''}
+        <div class="feed-foot">$${(d.cost_usd || 0).toFixed(4)}${d.executed ? ' · demo order' : ''}${d.live_mirror_execution_id ? ' · live #' + d.live_mirror_execution_id : ''}</div>
       </article>`;
   }).join('');
 }
@@ -1441,7 +1689,7 @@ function renderLessons(j) {
   const lessons = j.lessons || [];
   const el = document.getElementById('lessons');
   if (!lessons.length) {
-    el.innerHTML = '<div class="lesson-item">No lessons yet — the trader learns after each session.</div>';
+    el.innerHTML = '<div class="lesson-item">No lessons yet — digest appears after each session closes.</div>';
     return;
   }
   el.innerHTML = lessons.map(l => `
@@ -1457,8 +1705,7 @@ function renderConfig(j) {
   document.getElementById('lon-e').value = c.london_end_hour ?? 10;
   document.getElementById('ny-s').value = c.ny_start_hour ?? 13;
   document.getElementById('ny-e').value = c.ny_end_hour ?? 16;
-  document.getElementById('max-calls').value = c.max_calls_day ?? 50;
-  document.getElementById('max-trades').value = c.max_trades_day ?? 6;
+  document.getElementById('max-calls').value = c.max_calls_day ?? 22;
   document.getElementById('no-overnight').checked = !!c.no_overnight;
   document.getElementById('btn-save').disabled = false;
   _lastConfig = c;
@@ -1489,6 +1736,21 @@ async function refresh() {
   }
 }
 
+document.getElementById('live-mirror-row').addEventListener('click', () => {
+  if (document.getElementById('live-mirror-badge').classList.contains('on')) return;
+  setLivePanelOpen(!_livePanelOpen);
+});
+document.getElementById('live-mirror-row').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    document.getElementById('live-mirror-row').click();
+  }
+});
+
+document.getElementById('live-lot-size').addEventListener('input', () => {
+  _liveLotsOverridden = true;
+});
+
 document.getElementById('settings-toggle').onclick = () => {
   const wrap = document.getElementById('settings-wrap');
   const open = wrap.classList.toggle('open');
@@ -1499,14 +1761,12 @@ document.getElementById('btn-refresh').onclick = refresh;
 
 document.getElementById('btn-reset-credits').onclick = async () => {
   const btn = document.getElementById('btn-reset-credits');
-  if (!confirm('Reset today\'s Claude call count to 0? Decision history is kept.')) return;
+  if (!confirm('Reset today\'s Claude call count to 0? History is kept.')) return;
   btn.disabled = true;
   try {
-    const r = await fetch(`/api/gold-ai-trader/reset-daily-credits?uid=${encodeURIComponent(UID)}`, {
-      method: 'POST',
-    });
+    const r = await fetch(`/api/gold-ai-trader/reset-daily-credits?uid=${encodeURIComponent(UID)}`, { method: 'POST' });
     if (!r.ok) throw new Error('Reset failed');
-    showToast('Daily Claude credits reset');
+    showToast('Daily credits reset');
     await refresh();
   } catch (e) {
     showToast('Could not reset credits');
@@ -1545,6 +1805,27 @@ document.getElementById('toggle-enabled').onchange = async (e) => {
   refresh();
 };
 
+document.getElementById('btn-save-demo-size').onclick = async () => {
+  const btn = document.getElementById('btn-save-demo-size');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  const demoLots = +document.getElementById('demo-lot-size').value || 0.01;
+  const maxTrades = +document.getElementById('demo-max-trades').value || 6;
+  const body = { demo_lot_size: demoLots, max_trades_day: maxTrades };
+  if (!_liveLotsOverridden && !(_lastConfig && _lastConfig.live_mirror_enabled)) {
+    body.live_lot_size = demoLots;
+  }
+  await fetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  showToast('Demo size updated');
+  btn.textContent = 'Apply';
+  btn.disabled = false;
+  refresh();
+};
+
 document.getElementById('btn-save').onclick = async () => {
   const btn = document.getElementById('btn-save');
   btn.disabled = true;
@@ -1555,7 +1836,6 @@ document.getElementById('btn-save').onclick = async () => {
     ny_start_hour: +document.getElementById('ny-s').value,
     ny_end_hour: +document.getElementById('ny-e').value,
     max_calls_day: +document.getElementById('max-calls').value,
-    max_trades_day: +document.getElementById('max-trades').value,
     no_overnight: document.getElementById('no-overnight').checked,
   };
   await fetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
@@ -1564,7 +1844,7 @@ document.getElementById('btn-save').onclick = async () => {
     body: JSON.stringify(body),
   });
   btn.classList.add('saved');
-  btn.textContent = 'Saved ✓';
+  btn.textContent = 'Saved';
   showToast('Settings saved');
   await refresh();
   setTimeout(() => {
@@ -1596,7 +1876,7 @@ document.getElementById('btn-save-demo').onclick = async () => {
     return;
   }
   showToast('Demo account saved');
-  btn.textContent = 'Saved ✓';
+  btn.textContent = 'Saved';
   await refresh();
   setTimeout(() => {
     btn.textContent = 'Save demo account';
@@ -1612,7 +1892,7 @@ document.getElementById('btn-live-enable').onclick = () => {
     return;
   }
   document.getElementById('confirm-live-text').textContent =
-    `This will trade REAL money on cTrader account #${ctid} autonomously whenever Claude takes a demo trade. Demo P&L remains the source of truth.`;
+    `This will place REAL trades on cTrader account #${ctid} whenever Claude takes a demo trade. You can lose money. Demo P&L remains the primary readout.`;
   document.getElementById('confirm-live').classList.add('show');
   _pendingLiveEnable = {
     live_ctrader_account_id: ctid,
@@ -1648,7 +1928,7 @@ document.getElementById('confirm-live-ok').onclick = async () => {
 };
 document.getElementById('btn-live-disconnect').onclick = async () => {
   await fetch(`/api/gold-ai-trader/disconnect-live?uid=${encodeURIComponent(UID)}`, { method: 'POST' });
-  showToast('Live mirror disconnected — demo continues');
+  showToast('Live mirror disconnected');
   refresh();
 };
 

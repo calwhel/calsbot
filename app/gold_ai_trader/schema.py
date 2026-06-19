@@ -20,6 +20,7 @@ _GOLD_AI_CONFIG_ALTERS = (
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_mirror_enabled BOOLEAN DEFAULT FALSE NOT NULL",
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_ctrader_account_id VARCHAR(40)",
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_lot_size FLOAT DEFAULT 0.01 NOT NULL",
+    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS demo_lot_size FLOAT DEFAULT 0.01 NOT NULL",
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS max_live_trades_day INTEGER DEFAULT 3 NOT NULL",
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_mirror_confirmed_at TIMESTAMP",
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS use_limit_entry BOOLEAN DEFAULT TRUE NOT NULL",

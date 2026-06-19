@@ -49,6 +49,7 @@ class GoldAiRuntimeConfig:
     live_mirror_enabled: bool
     live_ctrader_account_id: Optional[str]
     live_lot_size: float
+    demo_lot_size: float
     max_live_trades_day: int
     learning_every_n_closes: int
     min_lot: float
@@ -74,6 +75,7 @@ DEFAULTS = GoldAiRuntimeConfig(
     live_mirror_enabled=False,
     live_ctrader_account_id=None,
     live_lot_size=0.01,
+    demo_lot_size=0.01,
     max_live_trades_day=3,
     learning_every_n_closes=3,
     min_lot=0.01,
@@ -103,6 +105,7 @@ def env_defaults() -> GoldAiRuntimeConfig:
         live_mirror_enabled=False,
         live_ctrader_account_id=os.environ.get("GOLD_AI_TRADER_LIVE_ACCOUNT_ID", "").strip() or None,
         live_lot_size=_env_float("GOLD_AI_TRADER_LIVE_LOT", 0.01),
+        demo_lot_size=_env_float("GOLD_AI_TRADER_DEMO_LOT", 0.01),
         max_live_trades_day=_env_int("GOLD_AI_TRADER_MAX_LIVE_TRADES_DAY", 3),
         learning_every_n_closes=_env_int("GOLD_AI_TRADER_LEARN_EVERY_N", 3),
         min_lot=_env_float("GOLD_AI_TRADER_MIN_LOT", 0.01),
