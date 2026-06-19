@@ -1,5 +1,6 @@
 """Gold AI Trader unit tests (no live API / broker)."""
 import asyncio
+import json
 from datetime import datetime
 
 from app.gold_ai_trader.config import env_defaults, gold_ai_trader_enabled
@@ -12,7 +13,10 @@ from app.gold_ai_trader.guardrails import (
     DemoAccountRequired,
     LiveAccountRequired,
     check_can_execute_live_mirror,
+    check_can_call_claude,
+    demo_account_configured,
 )
+from app.gold_ai_trader.accounts import demo_accounts_from_prefs, validate_demo_ctid_allowed
 from app.gold_ai_trader.executor import _pct_from_prices
 from app.gold_ai_trader.routes import _normalize_uid
 
@@ -107,6 +111,47 @@ def test_kill_switch_blocks_live_mirror():
     cfg.kill_switch = True
     ok, reason = check_can_execute_live_mirror(_DbLiveBlocked(), cfg, 1)
     assert not ok and reason == "kill_switch"
+
+
+class _PrefsMixed:
+    ctrader_accounts = json.dumps([
+        {"ctidTraderAccountId": 111, "isLive": False, "traderLogin": 1001},
+        {"ctidTraderAccountId": 222, "isLive": True, "traderLogin": 2002},
+        {"ctidTraderAccountId": 333, "isLive": False, "traderLogin": 1003},
+    ])
+
+
+def test_demo_accounts_filters_live_only():
+    demos = demo_accounts_from_prefs(_PrefsMixed())
+    assert len(demos) == 2
+    assert all(d["ctid"] in ("111", "333") for d in demos)
+    assert all("Demo" in d["label"] for d in demos)
+
+
+def test_validate_demo_ctid_rejects_live():
+    demos = demo_accounts_from_prefs(_PrefsMixed())
+    validate_demo_ctid_allowed(demos, "111")
+    try:
+        validate_demo_ctid_allowed(demos, "222")
+        assert False, "expected ValueError for live ctid"
+    except ValueError:
+        pass
+
+
+def test_no_demo_account_blocks_claude():
+    cfg = env_defaults()
+    cfg.enabled = True
+    cfg.demo_ctrader_account_id = None
+    ok, reason = check_can_call_claude(_DbLiveBlocked(), cfg)
+    assert not ok and reason == "no_demo_account"
+
+
+def test_demo_account_configured():
+    cfg = env_defaults()
+    cfg.demo_ctrader_account_id = "12345"
+    assert demo_account_configured(cfg)
+    cfg.demo_ctrader_account_id = ""
+    assert not demo_account_configured(cfg)
 
 
 def test_claude_dry_run_skip():

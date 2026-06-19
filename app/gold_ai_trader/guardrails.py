@@ -52,6 +52,10 @@ def merge_config(db_row: GoldAiConfig, env: GoldAiRuntimeConfig) -> GoldAiRuntim
     )
 
 
+def demo_account_configured(cfg: GoldAiRuntimeConfig) -> bool:
+    return bool(cfg.demo_ctrader_account_id and str(cfg.demo_ctrader_account_id).strip())
+
+
 def assert_demo_account(prefs, ctid: int, cfg: GoldAiRuntimeConfig) -> None:
     from app.services.ctrader_client import _account_is_live
 
@@ -225,6 +229,8 @@ def check_can_call_claude(db, cfg: GoldAiRuntimeConfig) -> Tuple[bool, str]:
         return False, "kill_switch"
     if not cfg.enabled:
         return False, "disabled"
+    if not demo_account_configured(cfg):
+        return False, "no_demo_account"
     if calls_today(db) >= cfg.max_calls_day:
         return False, "max_calls_day"
     return True, "ok"
@@ -233,6 +239,8 @@ def check_can_call_claude(db, cfg: GoldAiRuntimeConfig) -> Tuple[bool, str]:
 def check_can_execute(db, cfg: GoldAiRuntimeConfig, user_id: int) -> Tuple[bool, str]:
     if cfg.kill_switch:
         return False, "kill_switch"
+    if not demo_account_configured(cfg):
+        return False, "no_demo_account"
     if trades_today(db) >= cfg.max_trades_day:
         return False, "max_trades_day"
     if open_position_count(db, user_id) >= 1:

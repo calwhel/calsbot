@@ -876,6 +876,79 @@
       border-color: var(--red);
       color: #fff;
     }
+
+    /* Demo account picker */
+    .demo-account-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 10px 14px;
+      margin-bottom: 14px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border2);
+      background: var(--gold-dim);
+    }
+    .demo-account-bar.missing {
+      border-color: rgba(251, 191, 36, 0.45);
+      background: rgba(251, 191, 36, 0.08);
+    }
+    .demo-account-bar-label {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+    .demo-account-bar-value {
+      font-size: 13px;
+      font-weight: 700;
+      font-family: var(--mono);
+      margin-top: 2px;
+    }
+    .demo-account-bar-warn {
+      font-size: 12px;
+      color: #fcd34d;
+      font-weight: 600;
+    }
+    .demo-select-row {
+      grid-column: 1 / -1;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: var(--bg2);
+      border: 1px solid var(--border2);
+    }
+    .demo-select-row label {
+      display: block;
+      margin-bottom: 8px;
+    }
+    .demo-select-row select {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border2);
+      background: var(--surface);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+    .btn-demo-save {
+      width: 100%;
+      padding: 11px 14px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border2);
+      background: linear-gradient(135deg, rgba(212, 175, 55, 0.22), rgba(212, 175, 55, 0.08));
+      color: var(--gold);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .btn-demo-save:disabled { opacity: 0.5; cursor: not-allowed; }
   </style>
 </head>
 <body class="page-loading">
@@ -894,6 +967,14 @@
     <div class="demo-pill">
       <span class="demo-pill-dot"></span>
       Demo account only — not live money
+    </div>
+
+    <div class="demo-account-bar missing" id="demo-account-bar">
+      <div>
+        <div class="demo-account-bar-label">Trading demo account</div>
+        <div class="demo-account-bar-value" id="demo-account-display">Loading…</div>
+      </div>
+      <div class="demo-account-bar-warn" id="demo-account-warn"></div>
     </div>
 
     <!-- Status hero -->
@@ -1008,6 +1089,14 @@
         <span class="settings-chevron">▼</span>
       </button>
       <div class="settings-body">
+        <div class="demo-select-row">
+          <label>Demo account</label>
+          <div class="muted" style="font-size:12px;margin-bottom:8px;line-height:1.45">Connected cTrader demo accounts only (isLive=false). Saved to config — overrides env default.</div>
+          <select id="demo-ctid-select" aria-label="Demo cTrader account">
+            <option value="">Select demo account…</option>
+          </select>
+          <button type="button" class="btn-demo-save" id="btn-save-demo" disabled>Save demo account</button>
+        </div>
         <div class="form-grid">
           <div class="field">
             <label>London (UTC)</label>
@@ -1104,6 +1193,9 @@ function deriveHero(j) {
   if (cfg.kill_switch) {
     return { title: 'KILL SWITCH ACTIVE', sub: 'Trading halted — toggle off in settings when ready', dot: 'danger', tone: 'danger' };
   }
+  if (!j.demo_account_ready) {
+    return { title: 'NO DEMO ACCOUNT', sub: 'Select a demo cTrader account in Settings to start', dot: 'off', tone: 'off' };
+  }
   if (!cfg.enabled) {
     return { title: 'OFF', sub: 'Turn on the trader switch to begin scanning', dot: 'off', tone: 'off' };
   }
@@ -1160,8 +1252,10 @@ function renderHero(j) {
 
   const cfg = j.config || {};
   const toggle = document.getElementById('toggle-enabled');
-  toggle.disabled = false;
+  const demoReady = !!j.demo_account_ready;
+  toggle.disabled = !demoReady;
   toggle.checked = !!cfg.enabled;
+  toggle.title = demoReady ? 'Enable / disable Gold AI Trader' : 'Select a demo account first';
   const killBtn = document.getElementById('btn-kill');
   killBtn.disabled = false;
   killBtn.classList.toggle('active', !!cfg.kill_switch);
@@ -1191,6 +1285,35 @@ function fmtMoney(n) {
   const v = Number(n) || 0;
   const sign = v >= 0 ? '+' : '';
   return `${sign}$${Math.abs(v).toFixed(2)}`;
+}
+
+function renderDemoAccountPicker(j) {
+  const c = j.config || {};
+  const accounts = j.demo_accounts || [];
+  const selected = j.demo_account_selected;
+  const ready = !!j.demo_account_ready;
+  const bar = document.getElementById('demo-account-bar');
+  const display = document.getElementById('demo-account-display');
+  const warn = document.getElementById('demo-account-warn');
+
+  bar.classList.toggle('missing', !ready);
+  if (ready && selected) {
+    display.textContent = selected.label || ('#' + selected.ctid);
+    warn.textContent = '';
+  } else if (accounts.length) {
+    display.textContent = 'None selected';
+    warn.textContent = 'Pick a demo account to start';
+  } else {
+    display.textContent = 'No demo accounts linked';
+    warn.textContent = 'Connect a demo account in Live Forex first';
+  }
+
+  const sel = document.getElementById('demo-ctid-select');
+  const prev = sel.value || c.demo_ctrader_account_id || '';
+  sel.innerHTML = '<option value="">Select demo account…</option>' +
+    accounts.map(a => `<option value="${a.ctid}">${escapeHtml(a.label || ('#' + a.ctid))}</option>`).join('');
+  if (prev) sel.value = prev;
+  document.getElementById('btn-save-demo').disabled = accounts.length === 0;
 }
 
 function renderLiveMirror(j) {
@@ -1337,6 +1460,7 @@ async function refresh() {
     if (!j.ok) return;
     document.body.classList.remove('page-loading');
     renderHero(j);
+    renderDemoAccountPicker(j);
     renderStats(j);
     renderLiveMirror(j);
     renderFeed(j);
@@ -1371,6 +1495,11 @@ document.getElementById('btn-kill').onclick = async () => {
 
 document.getElementById('toggle-enabled').onchange = async (e) => {
   const en = e.target.checked;
+  if (en && document.getElementById('demo-account-bar').classList.contains('missing')) {
+    e.target.checked = false;
+    showToast('Select a demo account first');
+    return;
+  }
   e.target.disabled = true;
   await fetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
     method: 'POST',
@@ -1409,6 +1538,36 @@ document.getElementById('btn-save').onclick = async () => {
     btn.textContent = 'Save settings';
     btn.disabled = false;
   }, 1800);
+};
+
+document.getElementById('btn-save-demo').onclick = async () => {
+  const ctid = document.getElementById('demo-ctid-select').value;
+  if (!ctid) {
+    showToast('Select a demo account');
+    return;
+  }
+  const btn = document.getElementById('btn-save-demo');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  const r = await fetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ demo_ctrader_account_id: ctid }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    showToast(err.detail || 'Failed to save demo account');
+    btn.disabled = false;
+    btn.textContent = 'Save demo account';
+    return;
+  }
+  showToast('Demo account saved');
+  btn.textContent = 'Saved ✓';
+  await refresh();
+  setTimeout(() => {
+    btn.textContent = 'Save demo account';
+    btn.disabled = false;
+  }, 1500);
 };
 
 let _pendingLiveEnable = null;

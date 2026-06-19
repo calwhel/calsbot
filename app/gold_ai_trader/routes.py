@@ -11,11 +11,17 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from app.database import SessionLocal
+from app.gold_ai_trader.accounts import (
+    demo_accounts_for_user_id,
+    find_demo_account,
+    validate_demo_ctid_allowed,
+)
 from app.gold_ai_trader.config import env_defaults
 from app.gold_ai_trader.guardrails import (
     calls_today,
     trades_today,
     cost_today_usd,
+    demo_account_configured,
     demo_pnl_today_usd,
     live_pnl_today_usd,
     live_trades_today,
@@ -51,6 +57,10 @@ def _resolve_user(uid: str, db):
     if not is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     return u
+
+
+def _trader_user_id(cfg, admin_user) -> Optional[int]:
+    return cfg.demo_user_id or getattr(admin_user, "id", None)
 
 
 def _live_accounts_for_user(db, user_id: Optional[int]) -> List[Dict[str, Any]]:
@@ -113,9 +123,12 @@ async def api_status(uid: str = Query(...)):
     ensure_gold_ai_trader_schema()
     db = SessionLocal()
     try:
-        _resolve_user(uid, db)
+        admin = _resolve_user(uid, db)
         cfg_row = seed_config_if_missing(db)
         cfg = merge_config(cfg_row, env_defaults())
+        trader_uid = _trader_user_id(cfg, admin)
+        demo_accounts = demo_accounts_for_user_id(db, trader_uid)
+        selected = find_demo_account(demo_accounts, cfg.demo_ctrader_account_id)
         lessons = (
             db.query(GoldAiLesson)
             .order_by(GoldAiLesson.ts.desc())
@@ -176,7 +189,10 @@ async def api_status(uid: str = Query(...)):
                     else None
                 ),
             },
-            "live_accounts": _live_accounts_for_user(db, cfg.demo_user_id),
+            "demo_accounts": demo_accounts,
+            "demo_account_selected": selected,
+            "demo_account_ready": demo_account_configured(cfg),
+            "live_accounts": _live_accounts_for_user(db, trader_uid),
             "stats_today": {
                 "calls": calls_today(db),
                 "trades": trades_today(db),
@@ -199,9 +215,11 @@ async def api_status(uid: str = Query(...)):
 async def api_update_config(request: Request, uid: str = Query(...)):
     db = SessionLocal()
     try:
-        _resolve_user(uid, db)
+        admin = _resolve_user(uid, db)
         body = await request.json()
         row = seed_config_if_missing(db)
+        env = env_defaults()
+        trader_uid = _trader_user_id(merge_config(row, env), admin)
 
         enabling_live = (
             body.get("live_mirror_enabled") is True
@@ -219,6 +237,19 @@ async def api_update_config(request: Request, uid: str = Query(...)):
                     detail="live_ctrader_account_id required to enable live mirror",
                 )
 
+        if "demo_ctrader_account_id" in body:
+            raw = body.get("demo_ctrader_account_id")
+            ctid = str(raw).strip() if raw not in (None, "") else ""
+            if ctid:
+                demo_list = demo_accounts_for_user_id(db, trader_uid)
+                try:
+                    validate_demo_ctid_allowed(demo_list, ctid)
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e)) from e
+                row.demo_ctrader_account_id = ctid
+            else:
+                row.demo_ctrader_account_id = None
+
         for field in (
             "enabled",
             "kill_switch",
@@ -230,7 +261,6 @@ async def api_update_config(request: Request, uid: str = Query(...)):
             "max_trades_day",
             "no_overnight",
             "model",
-            "demo_ctrader_account_id",
             "live_mirror_enabled",
             "live_ctrader_account_id",
             "live_lot_size",
@@ -238,6 +268,13 @@ async def api_update_config(request: Request, uid: str = Query(...)):
         ):
             if field in body:
                 setattr(row, field, body[field])
+
+        cfg_after = merge_config(row, env)
+        if body.get("enabled") is True and not demo_account_configured(cfg_after):
+            raise HTTPException(
+                status_code=400,
+                detail="Select a demo cTrader account before enabling the trader",
+            )
 
         if enabling_live:
             row.live_mirror_confirmed_at = datetime.utcnow()
