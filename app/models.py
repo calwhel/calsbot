@@ -126,9 +126,9 @@ class UserPreference(Base):
     bitunix_uid = Column(String, nullable=True)  # Bitunix User ID for copy trading
     # cTrader / FP Markets forex broker. OAuth2 tokens from Spotware Open API.
     # access_token is short-lived (~1h); refresh_token is long-lived.
-    # ctrader_account_id = ctidTraderAccountId (integer, stored as string).
     ctrader_access_token  = Column(String, nullable=True)
     ctrader_refresh_token = Column(String, nullable=True)
+    ctrader_access_token_expires_at = Column(DateTime, nullable=True)
     ctrader_account_id    = Column(String, nullable=True)  # ctidTraderAccountId (selected account)
     ctrader_accounts      = Column(String, nullable=True)  # JSON list of all accounts from token
     ctrader_added_accounts = Column(String, nullable=True)  # JSON ctids user added as execution targets

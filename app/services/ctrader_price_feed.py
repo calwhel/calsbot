@@ -59,11 +59,7 @@ _PT_HEARTBEAT     = 51    # ProtoHeartbeatEvent — client MUST send ~every 10s 
                          # cTrader drops the socket (the "stream read timeout" churn)
 _PT_ERROR_RES     = 2142  # ProtoOAErrorRes — account auth / request failures
 
-# Proactive OAuth refresh — access tokens expire ~1h; refresh before they brick the feed.
-_PROACTIVE_REFRESH_INTERVAL_S = float(
-    os.environ.get("CTRADER_PROACTIVE_REFRESH_INTERVAL_S", str(45 * 60))
-)
-_last_proactive_refresh: Dict[int, float] = {}  # user_id → monotonic
+# OAuth refresh is owned by ctrader_token_scheduler — feed is a read-only consumer.
 _last_auth_error: Optional[str] = None
 _auth_backoff_until: float = 0.0  # monotonic — pause reconnect after dead OAuth
 _auth_terminal_alert_sent: bool = False  # one Telegram alert per terminal OAuth episode
@@ -795,40 +791,22 @@ async def _maybe_refresh_access_token(
     *,
     force: bool = False,
 ) -> str:
-    """Refresh OAuth access token — always re-reads refresh_token from DB."""
-    now = time.monotonic()
-    last = _last_proactive_refresh.get(user_id, 0.0)
-    if not force and (now - last) < _PROACTIVE_REFRESH_INTERVAL_S:
-        try:
-            from app.database import SessionLocal
-            from app.services.ctrader_client import _read_fresh_ctrader_prefs
-            db = SessionLocal()
-            try:
-                prefs = _read_fresh_ctrader_prefs(db, user_id)
-                if prefs and prefs.ctrader_access_token:
-                    return prefs.ctrader_access_token.strip()
-            finally:
-                db.close()
-        except Exception:
-            pass
+    """Read persisted OAuth access token — refresh only via token scheduler owner."""
+    from app.services.ctrader_client import (
+        _latest_ctrader_access_token,
+        request_ctrader_token_refresh,
+    )
+
+    if force:
+        new_at = await request_ctrader_token_refresh(user_id, force=True, wait_s=15.0)
+        if new_at:
+            invalidate_stream_creds(user_id)
+            return new_at.strip()
         return (access_token or "").strip()
-    try:
-        from app.services.ctrader_client import (
-            is_refresh_denied,
-            refresh_user_ctrader_token,
-        )
-        if is_refresh_denied(user_id):
-            return (access_token or "").strip()
-        new_at = await refresh_user_ctrader_token(user_id, force=force)
-    except Exception as exc:
-        logger.warning(
-            f"[CTraderFeed] token refresh failed uid={user_id}: {type(exc).__name__}"
-        )
-        return (access_token or "").strip()
-    if new_at:
-        _last_proactive_refresh[user_id] = now
-        invalidate_stream_creds(user_id)
-        return new_at.strip()
+
+    fresh = _latest_ctrader_access_token(user_id)
+    if fresh:
+        return fresh.strip()
     return (access_token or "").strip()
 
 
@@ -1661,22 +1639,11 @@ async def get_klines(
             sym_up, timeframe, limit, access_token, ctid, primary_host,
         )
         if not rows:
-            new_at = None
-            # Only the spot feed loop should refresh tokens while streaming — a
-            # trendbar miss must not race the rotating refresh token (bricks OAuth).
-            _may_refresh = not _feed_live and not _is_terminal_auth_error(_last_auth_error)
-            if _may_refresh:
-                try:
-                    from app.services.ctrader_client import (
-                        is_refresh_denied,
-                        refresh_user_ctrader_token,
-                    )
-                    if not is_refresh_denied(uid):
-                        new_at = await refresh_user_ctrader_token(uid)
-                except Exception:
-                    new_at = None
-            if new_at:
-                access_token = new_at
+            from app.services.ctrader_client import _latest_ctrader_access_token
+
+            fresh_at = _latest_ctrader_access_token(uid)
+            if fresh_at and fresh_at != access_token:
+                access_token = fresh_at
                 if _stream_creds and _stream_creds[2] == uid:
                     _stream_creds = (access_token, ctid, uid, primary_host)
                 rows = await _fetch_trendbars(

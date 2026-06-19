@@ -1564,6 +1564,11 @@ _CTRADER_COLUMN_MIGRATIONS = [
     ),
     (
         "user_preferences",
+        "ctrader_access_token_expires_at",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_access_token_expires_at TIMESTAMP",
+    ),
+    (
+        "user_preferences",
         "ctrader_account_id",
         "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS ctrader_account_id VARCHAR",
     ),
@@ -2463,6 +2468,12 @@ def _launch_executor_price_feeds():
         logger.info("Metals spot feed (XAUUSD/XAGUSD) scheduled (executor worker)")
     except Exception as _met_err:
         logger.warning(f"Metals spot feed start error (non-fatal): {_met_err}")
+    try:
+        from app.services.ctrader_token_scheduler import start_ctrader_token_scheduler
+        start_ctrader_token_scheduler()
+        logger.info("cTrader OAuth token refresh scheduler scheduled (executor worker)")
+    except Exception as _tok_err:
+        logger.warning(f"cTrader token scheduler start error (non-fatal): {_tok_err}")
     try:
         from app.services.economic_calendar import start as _econ_cal_start
         _econ_cal_start()
@@ -12369,22 +12380,28 @@ async def _complete_ctrader_oauth_in_background(code: str, state: str, redirect_
             _set_ctrader_oauth_progress(uid, "error", "no_token")
         return
 
+    from app.services.ctrader_client import _oauth_expires_at_from_response
+
+    token_expires_at = _oauth_expires_at_from_response(token_data)
+
     def _save_tokens():
         db = SessionLocal()
         try:
             db.execute(
                 _sql_text("""
                     INSERT INTO user_preferences
-                        (user_id, ctrader_access_token, ctrader_refresh_token, forex_approved)
-                    VALUES (:uid, :tok, :ref, :fa)
+                        (user_id, ctrader_access_token, ctrader_refresh_token,
+                         ctrader_access_token_expires_at, forex_approved)
+                    VALUES (:uid, :tok, :ref, :exp, :fa)
                     ON CONFLICT (user_id) DO UPDATE SET
                         ctrader_access_token  = EXCLUDED.ctrader_access_token,
                         ctrader_refresh_token = EXCLUDED.ctrader_refresh_token,
+                        ctrader_access_token_expires_at = EXCLUDED.ctrader_access_token_expires_at,
                         forex_approved        = CASE WHEN :fa THEN TRUE
                                                     ELSE user_preferences.forex_approved END
                 """),
                 {"uid": user_row["id"], "tok": access_token,
-                 "ref": refresh_token, "fa": user_row["is_admin"]},
+                 "ref": refresh_token, "exp": token_expires_at, "fa": user_row["is_admin"]},
             )
             db.commit()
             row = db.execute(

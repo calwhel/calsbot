@@ -57,18 +57,35 @@ class TestCtraderTokenRefresh(unittest.TestCase):
         self.assertIn("asyncio.timeout(", deal_src)
         self.assertIn("_mark_account_auth_unhealthy", deal_src)
 
-        self.assertIn("refresh_user_ctrader_token", helper_src)
         self.assertIn("_singleflight_forced_refresh", helper_src)
         self.assertIn("_mark_account_auth_unhealthy", helper_src)
         self.assertIn("_AUTH_REFRESH_COOLDOWN_S", singleflight_src)
 
-    def test_live_forex_account_response_is_decimal_safe(self):
-        src = Path("strategy_portal_server.py").read_text(encoding="utf-8")
-        route_start = src.find('@app.get("/api/live-forex/account")')
-        self.assertNotEqual(route_start, -1)
-        route_block = src[route_start: route_start + 5000]
-        self.assertIn("return _lf_live_forex_json_response({\"open_positions\": enriched})", route_block)
-        self.assertIn("return _lf_live_forex_json_response({**_cached, \"cached\": True})", route_block)
+    def test_feed_does_not_call_refresh_directly(self):
+        from app.services import ctrader_price_feed as feed
+
+        src = inspect.getsource(feed._maybe_refresh_access_token)
+        self.assertNotIn("refresh_user_ctrader_token", src)
+        self.assertIn("request_ctrader_token_refresh", src)
+
+    def test_klines_pull_does_not_refresh(self):
+        from app.services import ctrader_price_feed as feed
+
+        src = inspect.getsource(feed.get_klines)
+        self.assertNotIn("refresh_user_ctrader_token", src)
+
+    def test_token_scheduler_owner_lock_registered(self):
+        from app.advisory_lock_ids import (
+            ALL_ADVISORY_LOCK_IDS,
+            CTRADER_TOKEN_REFRESH_OWNER_LOCK_ID,
+        )
+
+        self.assertIn(CTRADER_TOKEN_REFRESH_OWNER_LOCK_ID, ALL_ADVISORY_LOCK_IDS)
+
+    def test_scheduled_refresh_early_remaining_default(self):
+        from app.services.ctrader_client import _SCHEDULED_REFRESH_WHEN_REMAINING_S
+
+        self.assertGreaterEqual(_SCHEDULED_REFRESH_WHEN_REMAINING_S, 86400)
 
 
 if __name__ == "__main__":

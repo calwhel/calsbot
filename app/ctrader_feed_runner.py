@@ -117,6 +117,12 @@ async def _run_feed_holder(conn) -> None:
 
     feed_start()
     logger.info("cTrader feed lock acquired — streaming spot ticks to Postgres")
+    try:
+        from app.services.ctrader_token_scheduler import start_ctrader_token_scheduler
+
+        start_ctrader_token_scheduler()
+    except Exception as exc:
+        logger.warning("cTrader token scheduler start error (non-fatal): %s", exc)
 
     async def _heartbeat_loop() -> None:
         """Upsert a sentinel tick so consumers know the feed process is alive."""
