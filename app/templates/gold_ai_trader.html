@@ -366,6 +366,19 @@
       color: var(--muted2);
       font-weight: 500;
     }
+    .btn-reset-credits {
+      margin-top: 8px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--gold);
+      background: rgba(212, 175, 55, 0.12);
+      border: 1px solid rgba(212, 175, 55, 0.35);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .btn-reset-credits:hover:not(:disabled) { background: rgba(212, 175, 55, 0.22); }
+    .btn-reset-credits:disabled { opacity: 0.5; cursor: not-allowed; }
     .stat-skeleton {
       height: 22px;
       width: 70%;
@@ -1011,6 +1024,7 @@
         <div class="stat-head"><span class="stat-icon">🤖</span> Claude calls</div>
         <div class="stat-value" id="calls-stat"><span class="stat-skeleton"></span></div>
         <div class="stat-cap" id="calls-cap">—</div>
+        <button type="button" class="btn-reset-credits" id="btn-reset-credits" style="display:none">Reset today&apos;s count</button>
       </div>
       <div class="card stat-tile">
         <div class="stat-head"><span class="stat-icon">📈</span> Trades</div>
@@ -1273,6 +1287,8 @@ function renderStats(j) {
 
   document.getElementById('calls-stat').textContent = `${calls}/${maxCalls}`;
   document.getElementById('calls-cap').textContent = calls >= maxCalls ? 'Daily cap reached' : `${maxCalls - calls} remaining`;
+  const resetBtn = document.getElementById('btn-reset-credits');
+  resetBtn.style.display = calls > 0 ? 'inline-block' : 'none';
 
   document.getElementById('trades-stat').textContent = `${trades}/${maxTrades}`;
   document.getElementById('trades-cap').textContent = trades >= maxTrades ? 'Daily cap reached' : `${maxTrades - trades} remaining`;
@@ -1480,6 +1496,24 @@ document.getElementById('settings-toggle').onclick = () => {
 };
 
 document.getElementById('btn-refresh').onclick = refresh;
+
+document.getElementById('btn-reset-credits').onclick = async () => {
+  const btn = document.getElementById('btn-reset-credits');
+  if (!confirm('Reset today\'s Claude call count to 0? Decision history is kept.')) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/gold-ai-trader/reset-daily-credits?uid=${encodeURIComponent(UID)}`, {
+      method: 'POST',
+    });
+    if (!r.ok) throw new Error('Reset failed');
+    showToast('Daily Claude credits reset');
+    await refresh();
+  } catch (e) {
+    showToast('Could not reset credits');
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 document.getElementById('btn-kill').onclick = async () => {
   const btn = document.getElementById('btn-kill');

@@ -76,6 +76,12 @@ def ensure_gold_ai_trader_schema() -> None:
     insp = inspect(engine)
     if insp.has_table("gold_ai_config"):
         logger.info("[gold-ai-trader] schema ready")
+        try:
+            from app.gold_ai_trader.guardrails import maybe_reset_daily_claude_credits
+
+            maybe_reset_daily_claude_credits()
+        except Exception as exc:
+            logger.warning("[gold-ai-trader] credits reset on schema ensure failed: %s", exc)
 
 
 def seed_config_if_missing(db) -> GoldAiConfig:

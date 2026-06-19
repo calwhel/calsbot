@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 
 from sqlalchemy import func
 
-from app.gold_ai_trader.config import GoldAiRuntimeConfig
+from app.gold_ai_trader.config import GoldAiRuntimeConfig, env_defaults
 from app.gold_ai_trader.models import GoldAiConfig, GoldAiDecision
 
 logger = logging.getLogger(__name__)
@@ -142,6 +142,64 @@ def reset_daily_claude_credits(db) -> datetime:
         pass
     logger.info("[gold-ai-trader] daily Claude credits reset at %s", now.isoformat())
     return now
+
+
+def _raw_calls_since_midnight(db) -> int:
+    return (
+        db.query(func.count(GoldAiDecision.id))
+        .filter(GoldAiDecision.ts >= _today_start())
+        .scalar()
+        or 0
+    )
+
+
+def maybe_reset_daily_claude_credits(db=None) -> bool:
+    """Reset today's Claude counters when blocked or on first deploy after the cost fix."""
+    import os
+
+    owns_session = db is None
+    if owns_session:
+        from app.database import SessionLocal
+
+        db = SessionLocal()
+    try:
+        force = os.environ.get("GOLD_AI_TRADER_RESET_DAILY_CREDITS", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        row = db.query(GoldAiConfig).filter(GoldAiConfig.id == 1).first()
+        if not row:
+            return False
+
+        if force:
+            reset_daily_claude_credits(db)
+            logger.info("[gold-ai-trader] forced daily Claude credits reset (env)")
+            return True
+
+        if getattr(row, "calls_reset_at", None) is not None:
+            return False
+
+        raw = _raw_calls_since_midnight(db)
+        if raw <= 0:
+            return False
+
+        cfg = merge_config(row, env_defaults())
+        pre_fix_burst = raw >= 22
+        blocked = raw >= cfg.max_calls_day
+        if blocked or pre_fix_burst:
+            reset_daily_claude_credits(db)
+            logger.info(
+                "[gold-ai-trader] auto daily Claude credits reset (%s calls today, cap %s)",
+                raw,
+                cfg.max_calls_day,
+            )
+            return True
+        return False
+    finally:
+        if owns_session:
+            db.close()
 
 
 def calls_today(db) -> int:

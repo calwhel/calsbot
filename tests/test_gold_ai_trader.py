@@ -21,6 +21,7 @@ from app.gold_ai_trader.guardrails import (
     calls_today,
     cost_today_usd,
     reset_daily_claude_credits,
+    maybe_reset_daily_claude_credits,
 )
 from app.gold_ai_trader.accounts import demo_accounts_from_prefs, validate_demo_ctid_allowed
 from app.gold_ai_trader.executor import _pct_from_prices
@@ -330,4 +331,50 @@ def test_reset_daily_claude_credits_zeros_counters():
 
     reset_at = reset_daily_claude_credits(db)
     assert reset_at is not None
+    assert row.calls_reset_at is not None
+
+
+def test_maybe_reset_daily_claude_credits_when_blocked():
+    row = type(
+        "Row",
+        (),
+        {
+            "calls_reset_at": None,
+            "updated_at": None,
+            "enabled": False,
+            "kill_switch": False,
+            "london_start_hour": 7,
+            "london_end_hour": 10,
+            "ny_start_hour": 13,
+            "ny_end_hour": 16,
+            "max_calls_day": 22,
+            "max_trades_day": 6,
+            "no_overnight": True,
+            "model": "claude-opus-4-8",
+            "demo_user_id": None,
+            "demo_ctrader_account_id": None,
+        },
+    )()
+
+    class _Query:
+        def filter(self, *a, **k):
+            return self
+
+        def first(self):
+            return row
+
+        def scalar(self):
+            return 28
+
+    class _Db:
+        def query(self, *a, **k):
+            return _Query()
+
+        def commit(self):
+            pass
+
+        def refresh(self, r):
+            pass
+
+    assert maybe_reset_daily_claude_credits(_Db()) is True
     assert row.calls_reset_at is not None
