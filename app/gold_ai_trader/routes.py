@@ -29,6 +29,7 @@ from app.gold_ai_trader.guardrails import (
     resolve_live_mirror_status,
 )
 from app.gold_ai_trader.learning import get_setup_stats
+from app.gold_ai_trader.call_gates import call_stats_today
 from app.gold_ai_trader.models import GoldAiConfig, GoldAiDecision, GoldAiLesson
 from app.gold_ai_trader.schema import ensure_gold_ai_trader_schema, seed_config_if_missing
 from app.gold_ai_trader import state as runtime_state
@@ -217,6 +218,7 @@ async def api_status(uid: str = Query(...)):
                 for x in lessons
             ],
             "setup_stats": get_setup_stats(db),
+            "call_stats_today": call_stats_today(db),
             "decision_feed": feed,
         }
     finally:

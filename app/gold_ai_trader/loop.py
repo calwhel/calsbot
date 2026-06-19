@@ -17,7 +17,20 @@ from app.gold_ai_trader.guardrails import (
     check_can_execute,
     check_can_execute_live_mirror,
 )
-from app.gold_ai_trader.scanner import active_session, scan_candidates, pick_best
+from app.gold_ai_trader.scanner import (
+    active_session,
+    scan_candidates,
+    pick_best,
+    record_claude_invocation,
+    _setup_cooldown_s,
+)
+from app.gold_ai_trader.call_gates import (
+    atr_from_klines,
+    should_invoke_claude,
+    call_stats_today,
+)
+from app.services.tradfi_prices import get_klines
+from app.gold_ai_trader.config import SYMBOL, ASSET_CLASS
 from app.gold_ai_trader.context import build_context_snapshot
 from app.gold_ai_trader.claude import decide
 from app.gold_ai_trader.executor import execute_take, execute_live_mirror_take, flatten_open_demo_positions
@@ -27,6 +40,7 @@ from app.gold_ai_trader.telegram_notify import (
     maybe_send_daily_summary,
     notify_take_decision,
     sync_closed_trade_notifications,
+    maybe_notify_call_cap_reached,
 )
 from app.gold_ai_trader.models import GoldAiConfig, GoldAiDecision
 from app.gold_ai_trader import state as runtime_state
@@ -85,10 +99,12 @@ async def run_gold_ai_trader_loop() -> None:
         ok_call, reason = check_can_call_claude(db, cfg)
         if not ok_call:
             runtime_state.note_dormant(reason)
+            if reason == "max_calls_day":
+                await maybe_notify_call_cap_reached(db, cfg)
             return
 
         async with httpx.AsyncClient(timeout=15) as http:
-            price, candidates = await scan_candidates(http)
+            price, candidates = await scan_candidates(http, session=session, cfg=cfg)
         if not candidates or price is None:
             return
 
@@ -96,6 +112,16 @@ async def run_gold_ai_trader_loop() -> None:
 
         candidate = pick_best(candidates)
         if not candidate:
+            return
+
+        k5 = await get_klines(SYMBOL, ASSET_CLASS, "5m", 60) or []
+        atr = atr_from_klines(k5)
+        ok_dedupe, dedupe_reason = should_invoke_claude(
+            db, candidate, float(price), atr, setup_cooldown_s=_setup_cooldown_s()
+        )
+        if not ok_dedupe:
+            logger.debug("[gold-ai-trader] claude dedupe skip: %s", dedupe_reason)
+            runtime_state.note_dormant(dedupe_reason)
             return
 
         runtime_state.note_candidate(
@@ -117,6 +143,7 @@ async def run_gold_ai_trader_loop() -> None:
         )
 
         decision, reasoning, usage = await decide(context, model=cfg.model)
+        record_claude_invocation(candidate)
         action = (decision.get("action") or "skip").lower()
         conf = int(decision.get("confidence") or 0)
 

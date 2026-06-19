@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 _PREFIX = "[DEMO] Gold AI Trader"
 _last_daily_summary_date: Optional[date] = None
+_last_call_cap_notify_date: Optional[date] = None
 
 
 def _env_bool(name: str, default: bool = True) -> bool:
@@ -310,4 +311,28 @@ async def maybe_send_daily_summary(db, cfg: GoldAiRuntimeConfig) -> bool:
     ok = await _send(text, msg_type="gold_ai_daily")
     if ok:
         _last_daily_summary_date = today
+    return ok
+
+
+async def maybe_notify_call_cap_reached(db, cfg: GoldAiRuntimeConfig) -> bool:
+    """One Telegram alert per UTC day when daily Claude cap is hit."""
+    global _last_call_cap_notify_date
+    if not telegram_notifications_enabled():
+        return False
+    from app.gold_ai_trader.guardrails import calls_today, cost_today_usd
+
+    if calls_today(db) < cfg.max_calls_day:
+        return False
+    today = datetime.utcnow().date()
+    if _last_call_cap_notify_date == today:
+        return False
+    text = (
+        f"<b>[DEMO] Gold AI Trader — daily Claude cap reached</b>\n"
+        f"Calls: {calls_today(db)}/{cfg.max_calls_day}\n"
+        f"API cost today: ${cost_today_usd(db):.2f}\n"
+        "Further scans continue but Claude is paused until UTC midnight."
+    )
+    ok = await _send(text, msg_type="gold_ai_call_cap")
+    if ok:
+        _last_call_cap_notify_date = today
     return ok

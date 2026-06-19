@@ -18,7 +18,7 @@ class GoldAiConfig(Base):
     london_end_hour = Column(Integer, default=10, nullable=False)
     ny_start_hour = Column(Integer, default=13, nullable=False)
     ny_end_hour = Column(Integer, default=16, nullable=False)
-    max_calls_day = Column(Integer, default=50, nullable=False)
+    max_calls_day = Column(Integer, default=22, nullable=False)
     max_trades_day = Column(Integer, default=6, nullable=False)
     no_overnight = Column(Boolean, default=True, nullable=False)
     model = Column(String(64), default="claude-opus-4-8", nullable=False)
