@@ -1,7 +1,10 @@
 """Gold AI Trader unit tests (no live API / broker)."""
 import asyncio
 import json
+import os
 from datetime import datetime
+
+os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 from app.gold_ai_trader.config import env_defaults, gold_ai_trader_enabled
 from app.gold_ai_trader.scanner import active_session, Candidate
@@ -19,6 +22,13 @@ from app.gold_ai_trader.guardrails import (
 from app.gold_ai_trader.accounts import demo_accounts_from_prefs, validate_demo_ctid_allowed
 from app.gold_ai_trader.executor import _pct_from_prices
 from app.gold_ai_trader.routes import _normalize_uid
+from app.gold_ai_trader.telegram_notify import (
+    daily_summary_enabled,
+    format_close_message,
+    format_daily_summary,
+    format_take_message,
+    telegram_notifications_enabled,
+)
 
 
 class _FakePrefs:
@@ -210,3 +220,65 @@ def test_context_builder_shape():
     assert "TRIGGER" in text
     assert "XAUUSD" in text
     assert "sweep_pdh" in text
+
+
+def test_telegram_take_message_demo_label():
+    text = format_take_message(
+        candidate_type="sweep_pdh",
+        session="london",
+        decision={
+            "direction": "short",
+            "entry": 2650.5,
+            "stop_loss": 2655.0,
+            "take_profit": 2640.0,
+            "rationale": "Clean sweep + displacement back inside range.",
+        },
+        confidence=82,
+        executed=True,
+        execution_id=99,
+    )
+    assert "[DEMO] Gold AI Trader" in text
+    assert "TAKE" in text
+    assert "sweep_pdh" in text
+    assert "SHORT" in text
+    assert "2650.50" in text
+    assert "82%" in text
+    assert "exec #99" in text.lower()
+
+
+def test_telegram_close_message_demo_label():
+    text = format_close_message(
+        candidate_type="orb_break",
+        session="new_york",
+        direction="long",
+        outcome="WIN",
+        pnl_pct=1.25,
+        pnl_usd=42.50,
+        decision_id=7,
+        execution_id=88,
+    )
+    assert "[DEMO] Gold AI Trader" in text
+    assert "CLOSED WIN" in text
+    assert "+1.25%" in text
+    assert "$+42.50" in text
+
+
+def test_telegram_daily_summary_format():
+    text = format_daily_summary(
+        calls=12,
+        max_calls=50,
+        trades=2,
+        max_trades=6,
+        cost_usd=0.45,
+        demo_pnl_usd=18.20,
+        open_positions=1,
+    )
+    assert "[DEMO] Gold AI Trader" in text
+    assert "Daily summary" in text
+    assert "12/50" in text
+    assert "$+18.20" in text
+
+
+def test_telegram_env_toggles_default_on():
+    assert telegram_notifications_enabled() is True
+    assert daily_summary_enabled() is True

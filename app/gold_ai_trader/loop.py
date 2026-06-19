@@ -22,6 +22,11 @@ from app.gold_ai_trader.context import build_context_snapshot
 from app.gold_ai_trader.claude import decide
 from app.gold_ai_trader.executor import execute_take, execute_live_mirror_take, flatten_open_demo_positions
 from app.gold_ai_trader.learning import maybe_run_learning_review, record_outcome_from_execution
+from app.gold_ai_trader.telegram_notify import (
+    maybe_send_daily_summary,
+    notify_take_decision,
+    sync_closed_trade_notifications,
+)
 from app.gold_ai_trader.models import GoldAiConfig, GoldAiDecision
 from app.gold_ai_trader import state as runtime_state
 
@@ -140,50 +145,73 @@ async def run_gold_ai_trader_loop() -> None:
             }
         )
 
-        if action == "take" and conf >= 70:
-            ok_exec, exec_reason = check_can_execute(db, cfg, cfg.demo_user_id or 0)
-            if ok_exec:
-                exec_id = await execute_take(
-                    db=db, cfg=cfg, decision=decision, decision_id=row.id
-                )
-                if exec_id:
-                    row.executed = True
-                    row.execution_id = exec_id
-                    db.commit()
-
-                    ok_live, live_reason = check_can_execute_live_mirror(
-                        db, cfg, cfg.demo_user_id or 0
+        if action == "take":
+            executed = False
+            execution_id = None
+            block_reason = None
+            if conf >= 70:
+                ok_exec, exec_reason = check_can_execute(db, cfg, cfg.demo_user_id or 0)
+                if ok_exec:
+                    exec_id = await execute_take(
+                        db=db, cfg=cfg, decision=decision, decision_id=row.id
                     )
-                    if ok_live:
-                        live_exec_id = await execute_live_mirror_take(
-                            db=db,
-                            cfg=cfg,
-                            decision=decision,
-                            decision_id=row.id,
-                            demo_execution_id=exec_id,
-                        )
-                        if live_exec_id:
-                            row.live_mirror_execution_id = live_exec_id
-                            row.live_mirror_status = "pending"
-                            db.commit()
-                        else:
-                            row.live_mirror_status = "failed"
-                            row.live_mirror_error = "live mirror enqueue rejected"
-                            db.commit()
-                    elif cfg.live_mirror_enabled:
-                        row.live_mirror_status = "skipped"
-                        row.live_mirror_error = live_reason
+                    if exec_id:
+                        executed = True
+                        execution_id = exec_id
+                        row.executed = True
+                        row.execution_id = exec_id
                         db.commit()
-            else:
-                logger.info("[gold-ai-trader] execute blocked: %s", exec_reason)
 
-        # Sync outcomes for closed trades
+                        ok_live, live_reason = check_can_execute_live_mirror(
+                            db, cfg, cfg.demo_user_id or 0
+                        )
+                        if ok_live:
+                            live_exec_id = await execute_live_mirror_take(
+                                db=db,
+                                cfg=cfg,
+                                decision=decision,
+                                decision_id=row.id,
+                                demo_execution_id=exec_id,
+                            )
+                            if live_exec_id:
+                                row.live_mirror_execution_id = live_exec_id
+                                row.live_mirror_status = "pending"
+                                db.commit()
+                            else:
+                                row.live_mirror_status = "failed"
+                                row.live_mirror_error = "live mirror enqueue rejected"
+                                db.commit()
+                        elif cfg.live_mirror_enabled:
+                            row.live_mirror_status = "skipped"
+                            row.live_mirror_error = live_reason
+                            db.commit()
+                    else:
+                        block_reason = "demo order rejected"
+                else:
+                    block_reason = exec_reason
+                    logger.info("[gold-ai-trader] execute blocked: %s", exec_reason)
+            else:
+                block_reason = f"confidence {conf}% below 70% threshold"
+
+            await notify_take_decision(
+                candidate_type=candidate.type,
+                session=session,
+                decision=decision,
+                confidence=conf,
+                executed=executed,
+                execution_id=execution_id,
+                block_reason=block_reason,
+            )
+
+        # Sync outcomes for closed trades + Telegram close alerts
         if row.execution_id:
             from app.strategy_models import StrategyExecution
 
             ex = db.query(StrategyExecution).filter_by(id=row.execution_id).first()
             record_outcome_from_execution(db, row.id, ex)
 
+        await sync_closed_trade_notifications(db, cfg)
+        await maybe_send_daily_summary(db, cfg)
         await maybe_run_learning_review(db, session, cfg)
     except Exception as e:
         logger.error("[gold-ai-trader] loop error: %s", e, exc_info=True)
