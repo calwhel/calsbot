@@ -112,10 +112,42 @@ def _today_start() -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def _calls_cutoff(db) -> datetime:
+    """Count Claude calls from midnight UTC or last manual reset, whichever is later."""
+    today = _today_start()
+    row = db.query(GoldAiConfig).filter(GoldAiConfig.id == 1).first()
+    reset_at = getattr(row, "calls_reset_at", None) if row else None
+    if reset_at is not None:
+        return max(today, reset_at)
+    return today
+
+
+def reset_daily_claude_credits(db) -> datetime:
+    """Zero today's Claude call/cost counters without deleting decision history."""
+    row = db.query(GoldAiConfig).filter(GoldAiConfig.id == 1).first()
+    if not row:
+        from app.gold_ai_trader.schema import seed_config_if_missing
+
+        row = seed_config_if_missing(db)
+    now = datetime.utcnow()
+    row.calls_reset_at = now
+    row.updated_at = now
+    db.commit()
+    db.refresh(row)
+    try:
+        from app.gold_ai_trader.telegram_notify import clear_call_cap_notify_state
+
+        clear_call_cap_notify_state()
+    except Exception:
+        pass
+    logger.info("[gold-ai-trader] daily Claude credits reset at %s", now.isoformat())
+    return now
+
+
 def calls_today(db) -> int:
     return (
         db.query(func.count(GoldAiDecision.id))
-        .filter(GoldAiDecision.ts >= _today_start())
+        .filter(GoldAiDecision.ts >= _calls_cutoff(db))
         .scalar()
         or 0
     )
@@ -136,7 +168,7 @@ def trades_today(db) -> int:
 def cost_today_usd(db) -> float:
     val = (
         db.query(func.coalesce(func.sum(GoldAiDecision.cost_usd), 0.0))
-        .filter(GoldAiDecision.ts >= _today_start())
+        .filter(GoldAiDecision.ts >= _calls_cutoff(db))
         .scalar()
     )
     return float(val or 0.0)

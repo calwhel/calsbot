@@ -25,6 +25,7 @@ _GOLD_AI_CONFIG_ALTERS = (
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS use_limit_entry BOOLEAN DEFAULT TRUE NOT NULL",
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS pending_entry_timeout_min INTEGER DEFAULT 30 NOT NULL",
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS learning_daily_at_ny_end BOOLEAN DEFAULT TRUE NOT NULL",
+    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS calls_reset_at TIMESTAMP",
 )
 
 _GOLD_AI_OUTCOME_ALTERS = (

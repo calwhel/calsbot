@@ -17,6 +17,12 @@ _last_daily_summary_date: Optional[date] = None
 _last_call_cap_notify_date: Optional[date] = None
 
 
+def clear_call_cap_notify_state() -> None:
+    """Allow cap Telegram alert to fire again after a manual credits reset."""
+    global _last_call_cap_notify_date
+    _last_call_cap_notify_date = None
+
+
 def _env_bool(name: str, default: bool = True) -> bool:
     raw = os.environ.get(name)
     if raw is None:

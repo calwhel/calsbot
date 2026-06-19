@@ -26,6 +26,7 @@ from app.gold_ai_trader.guardrails import (
     live_pnl_today_usd,
     live_trades_today,
     merge_config,
+    reset_daily_claude_credits,
     resolve_live_mirror_status,
 )
 from app.gold_ai_trader.learning import get_setup_stats
@@ -195,6 +196,11 @@ async def api_status(uid: str = Query(...)):
                 "use_limit_entry": cfg.use_limit_entry,
                 "pending_entry_timeout_min": cfg.pending_entry_timeout_min,
                 "learning_daily_at_ny_end": cfg.learning_daily_at_ny_end,
+                "calls_reset_at": (
+                    cfg_row.calls_reset_at.isoformat()
+                    if getattr(cfg_row, "calls_reset_at", None)
+                    else None
+                ),
                 "live_mirror_confirmed_at": (
                     cfg_row.live_mirror_confirmed_at.isoformat()
                     if getattr(cfg_row, "live_mirror_confirmed_at", None)
@@ -351,5 +357,25 @@ async def api_kill_switch(request: Request, uid: str = Query(...)):
         db.commit()
         runtime_state.set_status(status="killed" if on else "dormant")
         return {"ok": True, "kill_switch": on}
+    finally:
+        db.close()
+
+
+@router.post("/api/gold-ai-trader/reset-daily-credits")
+async def api_reset_daily_credits(uid: str = Query(...)):
+    """Reset today's Claude call/cost counters (decision history is kept)."""
+    ensure_gold_ai_trader_schema()
+    db = SessionLocal()
+    try:
+        _resolve_user(uid, db)
+        reset_at = reset_daily_claude_credits(db)
+        return {
+            "ok": True,
+            "calls_reset_at": reset_at.isoformat(),
+            "stats_today": {
+                "calls": calls_today(db),
+                "cost_usd": round(cost_today_usd(db), 4),
+            },
+        }
     finally:
         db.close()

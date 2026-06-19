@@ -208,12 +208,12 @@ def should_invoke_claude(
 
 def call_stats_today(db) -> dict:
     """Breakdown of today's Claude invocations by setup type (for diagnostics)."""
-    from app.gold_ai_trader.guardrails import _today_start
+    from app.gold_ai_trader.guardrails import _calls_cutoff
     from sqlalchemy import func
 
     rows = (
         db.query(GoldAiDecision.candidate_type, func.count(GoldAiDecision.id))
-        .filter(GoldAiDecision.ts >= _today_start())
+        .filter(GoldAiDecision.ts >= _calls_cutoff(db))
         .group_by(GoldAiDecision.candidate_type)
         .all()
     )

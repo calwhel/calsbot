@@ -32,6 +32,7 @@ class GoldAiConfig(Base):
     use_limit_entry = Column(Boolean, default=True, nullable=False)
     pending_entry_timeout_min = Column(Integer, default=30, nullable=False)
     learning_daily_at_ny_end = Column(Boolean, default=True, nullable=False)
+    calls_reset_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

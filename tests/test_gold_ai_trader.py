@@ -18,6 +18,9 @@ from app.gold_ai_trader.guardrails import (
     check_can_execute_live_mirror,
     check_can_call_claude,
     demo_account_configured,
+    calls_today,
+    cost_today_usd,
+    reset_daily_claude_credits,
 )
 from app.gold_ai_trader.accounts import demo_accounts_from_prefs, validate_demo_ctid_allowed
 from app.gold_ai_trader.executor import _pct_from_prices
@@ -294,3 +297,37 @@ def test_telegram_daily_summary_format():
 def test_telegram_env_toggles_default_on():
     assert telegram_notifications_enabled() is True
     assert daily_summary_enabled() is True
+
+
+def test_reset_daily_claude_credits_zeros_counters():
+    from app.gold_ai_trader.guardrails import _calls_cutoff
+
+    row = type("Row", (), {"calls_reset_at": None, "updated_at": None})()
+
+    class _Query:
+        def __init__(self, model):
+            self.model = model
+
+        def filter(self, *a, **k):
+            return self
+
+        def first(self):
+            return row
+
+    class _Db:
+        def query(self, model):
+            return _Query(model)
+
+        def commit(self):
+            pass
+
+        def refresh(self, r):
+            pass
+
+    db = _Db()
+    cutoff_before = _calls_cutoff(db)
+    assert cutoff_before.replace(microsecond=0) <= datetime.utcnow().replace(microsecond=0)
+
+    reset_at = reset_daily_claude_credits(db)
+    assert reset_at is not None
+    assert row.calls_reset_at is not None
