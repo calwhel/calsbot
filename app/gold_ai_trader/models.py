@@ -29,6 +29,9 @@ class GoldAiConfig(Base):
     live_lot_size = Column(Float, default=0.01, nullable=False)
     max_live_trades_day = Column(Integer, default=3, nullable=False)
     live_mirror_confirmed_at = Column(DateTime, nullable=True)
+    use_limit_entry = Column(Boolean, default=True, nullable=False)
+    pending_entry_timeout_min = Column(Integer, default=30, nullable=False)
+    learning_daily_at_ny_end = Column(Boolean, default=True, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -47,7 +50,7 @@ class GoldAiDecision(Base):
     executed = Column(Boolean, default=False, nullable=False)
     execution_id = Column(Integer, nullable=True, index=True)
     live_mirror_execution_id = Column(Integer, nullable=True, index=True)
-    live_mirror_status = Column(String(24), nullable=True)  # pending | filled | failed | skipped
+    live_mirror_status = Column(String(24), nullable=True)
     live_mirror_error = Column(Text, nullable=True)
     tokens_in = Column(Integer, default=0)
     tokens_out = Column(Integer, default=0)
@@ -61,8 +64,11 @@ class GoldAiOutcome(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     decision_id = Column(Integer, index=True, nullable=False)
+    setup_type = Column(String(64), nullable=True, index=True)
+    session = Column(String(16), nullable=True, index=True)
     result = Column(String(16), nullable=True)  # win | loss | breakeven
     pnl = Column(Float, nullable=True)
+    r_multiple = Column(Float, nullable=True)
     mfe = Column(Float, nullable=True)
     mae = Column(Float, nullable=True)
     closed_ts = Column(DateTime, nullable=True)
@@ -75,3 +81,25 @@ class GoldAiLesson(Base):
     ts = Column(DateTime, default=datetime.utcnow, index=True)
     session = Column(String(16), nullable=True)
     digest = Column(Text, nullable=False)
+    tokens_in = Column(Integer, default=0)
+    tokens_out = Column(Integer, default=0)
+    cost_usd = Column(Float, default=0.0)
+
+
+class GoldAiPendingOrder(Base):
+    __tablename__ = "gold_ai_pending_orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    decision_id = Column(Integer, index=True, nullable=False)
+    session = Column(String(16), nullable=True)
+    direction = Column(String(8), nullable=False)
+    entry_price = Column(Float, nullable=False)
+    stop_loss = Column(Float, nullable=False)
+    take_profit = Column(Float, nullable=False)
+    status = Column(String(16), default="pending", nullable=False, index=True)
+    method = Column(String(24), nullable=True)  # broker_limit | entry_watch | market
+    broker_order_id = Column(String(64), nullable=True)
+    fill_execution_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)
+    notes = Column(Text, nullable=True)

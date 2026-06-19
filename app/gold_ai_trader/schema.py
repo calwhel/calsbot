@@ -11,6 +11,7 @@ from app.gold_ai_trader.models import (
     GoldAiDecision,
     GoldAiLesson,
     GoldAiOutcome,
+    GoldAiPendingOrder,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,21 @@ _GOLD_AI_CONFIG_ALTERS = (
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_lot_size FLOAT DEFAULT 0.01 NOT NULL",
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS max_live_trades_day INTEGER DEFAULT 3 NOT NULL",
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_mirror_confirmed_at TIMESTAMP",
+    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS use_limit_entry BOOLEAN DEFAULT TRUE NOT NULL",
+    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS pending_entry_timeout_min INTEGER DEFAULT 30 NOT NULL",
+    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS learning_daily_at_ny_end BOOLEAN DEFAULT TRUE NOT NULL",
+)
+
+_GOLD_AI_OUTCOME_ALTERS = (
+    "ALTER TABLE gold_ai_outcomes ADD COLUMN IF NOT EXISTS setup_type VARCHAR(64)",
+    "ALTER TABLE gold_ai_outcomes ADD COLUMN IF NOT EXISTS session VARCHAR(16)",
+    "ALTER TABLE gold_ai_outcomes ADD COLUMN IF NOT EXISTS r_multiple FLOAT",
+)
+
+_GOLD_AI_LESSON_ALTERS = (
+    "ALTER TABLE gold_ai_lessons ADD COLUMN IF NOT EXISTS tokens_in INTEGER DEFAULT 0",
+    "ALTER TABLE gold_ai_lessons ADD COLUMN IF NOT EXISTS tokens_out INTEGER DEFAULT 0",
+    "ALTER TABLE gold_ai_lessons ADD COLUMN IF NOT EXISTS cost_usd FLOAT DEFAULT 0",
 )
 
 _GOLD_AI_DECISION_ALTERS = (
@@ -32,7 +48,12 @@ _GOLD_AI_DECISION_ALTERS = (
 
 def _apply_alters() -> None:
     with engine.begin() as conn:
-        for sql in _GOLD_AI_CONFIG_ALTERS + _GOLD_AI_DECISION_ALTERS:
+        for sql in (
+            _GOLD_AI_CONFIG_ALTERS
+            + _GOLD_AI_DECISION_ALTERS
+            + _GOLD_AI_OUTCOME_ALTERS
+            + _GOLD_AI_LESSON_ALTERS
+        ):
             try:
                 conn.execute(text(sql))
             except Exception as exc:
@@ -47,6 +68,7 @@ def ensure_gold_ai_trader_schema() -> None:
             GoldAiDecision.__table__,
             GoldAiOutcome.__table__,
             GoldAiLesson.__table__,
+            GoldAiPendingOrder.__table__,
         ],
     )
     _apply_alters()

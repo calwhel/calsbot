@@ -93,41 +93,136 @@ async def execute_take(
     cfg: GoldAiRuntimeConfig,
     decision: Dict[str, Any],
     decision_id: int,
+    session: str = "",
+) -> Optional[int]:
+    """Route TAKE to limit/entry-watch pending or immediate market."""
+    use_limit = bool(getattr(cfg, "use_limit_entry", True))
+    if not use_limit:
+        return await execute_take_market(
+            db=db, cfg=cfg, decision=decision, decision_id=decision_id,
+            entry_note="use_limit_entry=false; market entry",
+        )
+
+    user, prefs, ctid = _resolve_demo_trader(db, cfg)
+    if not user or not prefs or not ctid:
+        return None
+
+    from app.gold_ai_trader.pending_entry import (
+        broker_limit_supported,
+        create_entry_watch_pending,
+        try_place_broker_limit,
+    )
+
+    if broker_limit_supported():
+        result, err = await try_place_broker_limit(
+            user=user,
+            prefs=prefs,
+            ctid=ctid,
+            cfg=cfg,
+            decision=decision,
+            decision_id=decision_id,
+        )
+        if result and result.get("order_id"):
+            from app.gold_ai_trader.models import GoldAiPendingOrder
+            from app.gold_ai_trader.pending_entry import compute_pending_expiry
+
+            parsed = _parse_prices(decision)
+            if not parsed:
+                return None
+            direction, entry, sl, tp = parsed
+            now = datetime.utcnow()
+            row = GoldAiPendingOrder(
+                decision_id=decision_id,
+                session=session,
+                direction=direction,
+                entry_price=entry,
+                stop_loss=sl,
+                take_profit=tp,
+                status="pending",
+                method="broker_limit",
+                broker_order_id=str(result.get("order_id")),
+                created_at=now,
+                expires_at=compute_pending_expiry(
+                    now, session, cfg, getattr(cfg, "pending_entry_timeout_min", 30)
+                ),
+                notes="broker LIMIT placed",
+            )
+            db.add(row)
+            db.commit()
+            logger.info(
+                "[gold-ai-trader] broker LIMIT pending id=%s order=%s entry=%s",
+                row.id,
+                result.get("order_id"),
+                entry,
+            )
+            return -row.id  # negative signals pending (not filled exec yet)
+
+    pending_id = await create_entry_watch_pending(
+        db,
+        cfg=cfg,
+        decision=decision,
+        decision_id=decision_id,
+        session=session,
+    )
+    return -pending_id if pending_id else await execute_take_market(
+        db=db,
+        cfg=cfg,
+        decision=decision,
+        decision_id=decision_id,
+        entry_note="pending unsupported, used market",
+    )
+
+
+def _resolve_demo_trader(db, cfg: GoldAiRuntimeConfig):
+    from app.models import User, UserPreference
+    from app.services.ctrader_client import resolve_ctrader_ctid
+
+    if not cfg.demo_user_id:
+        return None, None, None
+    user = db.query(User).filter(User.id == cfg.demo_user_id).first()
+    if not user:
+        return None, None, None
+    prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+    if not prefs or not prefs.ctrader_access_token:
+        return None, None, None
+    ctid_str = resolve_ctrader_ctid(
+        execution_account_id=cfg.demo_ctrader_account_id,
+        prefs_default=prefs.ctrader_account_id,
+    )
+    if not ctid_str:
+        return None, None, None
+    try:
+        assert_demo_account(prefs, int(ctid_str), cfg)
+    except DemoAccountRequired:
+        return None, None, None
+    return user, prefs, int(ctid_str)
+
+
+async def execute_take_market(
+    *,
+    db,
+    cfg: GoldAiRuntimeConfig,
+    decision: Dict[str, Any],
+    decision_id: int,
+    entry_note: str = "",
 ) -> Optional[int]:
     """Place demo market order; return StrategyExecution.id."""
     if not cfg.demo_user_id:
         logger.warning("[gold-ai-trader] GOLD_AI_TRADER_USER_ID not set")
         return None
 
-    from app.models import User, UserPreference
+    user, prefs, ctid = _resolve_demo_trader(db, cfg)
+    if not user or not prefs or not ctid:
+        if not user:
+            logger.warning("[gold-ai-trader] demo user missing")
+        elif not prefs or not prefs.ctrader_access_token:
+            logger.warning("[gold-ai-trader] demo user missing cTrader token")
+        else:
+            logger.warning("[gold-ai-trader] no demo ctid configured")
+        return None
+
     from app.strategy_models import StrategyExecution
-    from app.services.ctrader_client import (
-        place_market_order_resilient,
-        refresh_user_ctrader_token,
-        resolve_ctrader_ctid,
-    )
-
-    user = db.query(User).filter(User.id == cfg.demo_user_id).first()
-    if not user:
-        return None
-    prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-    if not prefs or not prefs.ctrader_access_token:
-        logger.warning("[gold-ai-trader] demo user missing cTrader token")
-        return None
-
-    ctid_str = resolve_ctrader_ctid(
-        execution_account_id=cfg.demo_ctrader_account_id,
-        prefs_default=prefs.ctrader_account_id,
-    )
-    if not ctid_str:
-        logger.warning("[gold-ai-trader] no demo ctid configured")
-        return None
-    ctid = int(ctid_str)
-    try:
-        assert_demo_account(prefs, ctid, cfg)
-    except DemoAccountRequired as e:
-        logger.error("[gold-ai-trader] DEMO LOCK: %s", e)
-        return None
+    from app.services.ctrader_client import place_market_order_resilient
 
     direction = _parse_direction(decision)
     if not direction:
@@ -160,6 +255,9 @@ async def execute_take(
 
     fill = float(result["actual_fill"])
     strategy_id = ensure_system_strategy(db, user.id)
+    note = f"gold_ai_trader decision_id={decision_id}"
+    if entry_note:
+        note += f" | {entry_note}"
     ex = StrategyExecution(
         strategy_id=strategy_id,
         user_id=user.id,
@@ -176,7 +274,7 @@ async def execute_take(
         ctrader_account_id=str(ctid),
         ctrader_order_id=str(result.get("order_id") or ""),
         ctrader_position_id=str(result.get("position_id") or ""),
-        notes=f"gold_ai_trader decision_id={decision_id}",
+        notes=note,
         conditions_met={"gold_ai_decision_id": decision_id},
     )
     db.add(ex)

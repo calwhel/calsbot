@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 from app.gold_ai_trader.config import SYMBOL, ASSET_CLASS
+from app.gold_ai_trader.context_levels import build_key_levels_block
+from app.gold_ai_trader.context_regime import build_regime_block
 from app.gold_ai_trader.scanner import Candidate
 
 
-def _atr(closes: List[float], period: int = 14) -> float:
+def _atr(closes, period: int = 14) -> float:
     if len(closes) < period + 1:
         return 0.0
     trs = []
@@ -20,7 +22,7 @@ def _atr(closes: List[float], period: int = 14) -> float:
     return sum(trs[-period:]) / period
 
 
-def _summarize_candles(rows: List[list], n: int = 12) -> str:
+def _summarize_candles(rows, n: int = 12) -> str:
     if not rows:
         return "No recent candles."
     tail = rows[-n:]
@@ -48,6 +50,9 @@ async def build_context_snapshot(
 
     k5 = await get_klines(SYMBOL, ASSET_CLASS, "5m", 60) or []
     k15 = await get_klines(SYMBOL, ASSET_CLASS, "15m", 40) or []
+    k1h = await get_klines(SYMBOL, ASSET_CLASS, "1h", 50) or []
+    k_daily = await get_klines(SYMBOL, ASSET_CLASS, "1d", 5) or []
+
     closes = [float(r[4]) for r in k5 if r and len(r) >= 5]
     atr = _atr(closes)
     atr_pct = (atr / price * 100) if price and atr else 0.0
@@ -57,18 +62,6 @@ async def build_context_snapshot(
     if len(vols) >= 20:
         avg = sum(vols[-21:-1]) / 20
         rvol = (vols[-1] / avg) if avg else 1.0
-
-    pdh = pdl = session_hi = session_lo = vwap_note = "unknown"
-    try:
-        from app.services.strategy_ta import _get_klines
-        import httpx
-
-        async with httpx.AsyncClient(timeout=10) as http:
-            cache = {"__asset_class__": ASSET_CLASS}
-            # PDH/PDL via prev level eval detail is embedded in candidate when applicable
-            pdh = pdl = "see trigger detail"
-    except Exception:
-        pass
 
     open_pos = open_position_count(db, user_id) if user_id else 0
     pnl_today = 0.0
@@ -103,6 +96,18 @@ async def build_context_snapshot(
     elif session == "new_york":
         mins_in_session = max(0, (now.hour - cfg.ny_start_hour) * 60 + now.minute)
 
+    key_levels = build_key_levels_block(
+        spot=price,
+        atr=atr,
+        session=session,
+        cfg=cfg,
+        now=now,
+        k_daily=k_daily,
+        k_1h=k1h,
+        k_5m=k5,
+    )
+    regime = build_regime_block(k1h, k5)
+
     lines = [
         "=== GOLD AI TRADER CONTEXT (XAUUSD) ===",
         f"Timestamp UTC: {now.isoformat()}Z",
@@ -112,15 +117,15 @@ async def build_context_snapshot(
         f"Spot: {price:.2f}",
         f"ATR(14) 5m: {atr:.2f} ({atr_pct:.3f}% of price) | RVOL(5m): {rvol:.2f}x",
         "",
+        *regime,
+        "",
+        *key_levels,
+        "",
         "=== RECENT PATH (5m, oldest→newest) ===",
         _summarize_candles(k5, 10),
         "",
         "=== STRUCTURE / BIAS (engine) ===",
         f"15m trend: {'bullish' if len(k15) >= 2 and float(k15[-1][4]) > float(k15[-2][4]) else 'bearish/mixed'}",
-        "",
-        "=== KEY LEVELS (approx) ===",
-        f"PDH/PDL: {pdh} / {pdl} (engine sweep checks active)",
-        f"Session range: high/low tracking via ICT prev-level + liquidity modules",
         "",
         "=== TRIGGER (why Claude was called) ===",
         f"Type: {candidate.type} | Direction bias: {candidate.direction}",

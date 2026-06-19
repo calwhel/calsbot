@@ -28,6 +28,7 @@ from app.gold_ai_trader.guardrails import (
     merge_config,
     resolve_live_mirror_status,
 )
+from app.gold_ai_trader.learning import get_setup_stats
 from app.gold_ai_trader.models import GoldAiConfig, GoldAiDecision, GoldAiLesson
 from app.gold_ai_trader.schema import ensure_gold_ai_trader_schema, seed_config_if_missing
 from app.gold_ai_trader import state as runtime_state
@@ -190,6 +191,9 @@ async def api_status(uid: str = Query(...)):
                 "live_ctrader_account_id": cfg.live_ctrader_account_id,
                 "live_lot_size": cfg.live_lot_size,
                 "max_live_trades_day": cfg.max_live_trades_day,
+                "use_limit_entry": cfg.use_limit_entry,
+                "pending_entry_timeout_min": cfg.pending_entry_timeout_min,
+                "learning_daily_at_ny_end": cfg.learning_daily_at_ny_end,
                 "live_mirror_confirmed_at": (
                     cfg_row.live_mirror_confirmed_at.isoformat()
                     if getattr(cfg_row, "live_mirror_confirmed_at", None)
@@ -212,8 +216,20 @@ async def api_status(uid: str = Query(...)):
                 {"session": x.session, "ts": x.ts.isoformat(), "digest": x.digest}
                 for x in lessons
             ],
+            "setup_stats": get_setup_stats(db),
             "decision_feed": feed,
         }
+    finally:
+        db.close()
+
+
+@router.get("/api/gold-ai-trader/setup-stats")
+async def api_setup_stats(uid: str = Query(...), days: int = Query(14)):
+    ensure_gold_ai_trader_schema()
+    db = SessionLocal()
+    try:
+        _resolve_user(uid, db)
+        return {"ok": True, "days": days, "stats": get_setup_stats(db, days=days)}
     finally:
         db.close()
 
@@ -272,6 +288,9 @@ async def api_update_config(request: Request, uid: str = Query(...)):
             "live_ctrader_account_id",
             "live_lot_size",
             "max_live_trades_day",
+            "use_limit_entry",
+            "pending_entry_timeout_min",
+            "learning_daily_at_ny_end",
         ):
             if field in body:
                 setattr(row, field, body[field])

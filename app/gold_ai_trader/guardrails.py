@@ -49,6 +49,13 @@ def merge_config(db_row: GoldAiConfig, env: GoldAiRuntimeConfig) -> GoldAiRuntim
         max_live_trades_day=int(getattr(db_row, "max_live_trades_day", None) or env.max_live_trades_day or 3),
         learning_every_n_closes=env.learning_every_n_closes,
         min_lot=env.min_lot,
+        use_limit_entry=bool(getattr(db_row, "use_limit_entry", env.use_limit_entry)),
+        pending_entry_timeout_min=int(
+            getattr(db_row, "pending_entry_timeout_min", None) or env.pending_entry_timeout_min
+        ),
+        learning_daily_at_ny_end=bool(
+            getattr(db_row, "learning_daily_at_ny_end", env.learning_daily_at_ny_end)
+        ),
     )
 
 
@@ -137,13 +144,15 @@ def cost_today_usd(db) -> float:
 
 def open_position_count(db, user_id: int) -> int:
     from app.strategy_models import StrategyExecution
+    from app.gold_ai_trader.pending_entry import pending_entry_count
 
     q = db.query(func.count(StrategyExecution.id)).filter(
         StrategyExecution.user_id == user_id,
         StrategyExecution.symbol == "XAUUSD",
         StrategyExecution.outcome == "OPEN",
     )
-    return _demo_execution_filter(q).scalar() or 0
+    open_exec = _demo_execution_filter(q).scalar() or 0
+    return int(open_exec) + pending_entry_count(db, user_id)
 
 
 def live_trades_today(db) -> int:

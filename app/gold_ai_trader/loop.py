@@ -21,7 +21,8 @@ from app.gold_ai_trader.scanner import active_session, scan_candidates, pick_bes
 from app.gold_ai_trader.context import build_context_snapshot
 from app.gold_ai_trader.claude import decide
 from app.gold_ai_trader.executor import execute_take, execute_live_mirror_take, flatten_open_demo_positions
-from app.gold_ai_trader.learning import maybe_run_learning_review, record_outcome_from_execution
+from app.gold_ai_trader.learning import maybe_run_learning_review, record_outcome_from_execution, get_setup_stats
+from app.gold_ai_trader.pending_entry import sync_pending_entries
 from app.gold_ai_trader.telegram_notify import (
     maybe_send_daily_summary,
     notify_take_decision,
@@ -91,6 +92,8 @@ async def run_gold_ai_trader_loop() -> None:
         if not candidates or price is None:
             return
 
+        await sync_pending_entries(db, cfg, float(price))
+
         candidate = pick_best(candidates)
         if not candidate:
             return
@@ -153,9 +156,9 @@ async def run_gold_ai_trader_loop() -> None:
                 ok_exec, exec_reason = check_can_execute(db, cfg, cfg.demo_user_id or 0)
                 if ok_exec:
                     exec_id = await execute_take(
-                        db=db, cfg=cfg, decision=decision, decision_id=row.id
+                        db=db, cfg=cfg, decision=decision, decision_id=row.id, session=session
                     )
-                    if exec_id:
+                    if exec_id and exec_id > 0:
                         executed = True
                         execution_id = exec_id
                         row.executed = True
@@ -185,6 +188,8 @@ async def run_gold_ai_trader_loop() -> None:
                             row.live_mirror_status = "skipped"
                             row.live_mirror_error = live_reason
                             db.commit()
+                    elif exec_id and exec_id < 0:
+                        block_reason = f"entry pending #{-exec_id} (limit/entry-watch)"
                     else:
                         block_reason = "demo order rejected"
                 else:

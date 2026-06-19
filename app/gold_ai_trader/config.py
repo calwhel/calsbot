@@ -52,6 +52,9 @@ class GoldAiRuntimeConfig:
     max_live_trades_day: int
     learning_every_n_closes: int
     min_lot: float
+    use_limit_entry: bool
+    pending_entry_timeout_min: int
+    learning_daily_at_ny_end: bool
 
 
 DEFAULTS = GoldAiRuntimeConfig(
@@ -74,6 +77,9 @@ DEFAULTS = GoldAiRuntimeConfig(
     max_live_trades_day=3,
     learning_every_n_closes=3,
     min_lot=0.01,
+    use_limit_entry=True,
+    pending_entry_timeout_min=30,
+    learning_daily_at_ny_end=True,
 )
 
 
@@ -100,6 +106,9 @@ def env_defaults() -> GoldAiRuntimeConfig:
         max_live_trades_day=_env_int("GOLD_AI_TRADER_MAX_LIVE_TRADES_DAY", 3),
         learning_every_n_closes=_env_int("GOLD_AI_TRADER_LEARN_EVERY_N", 3),
         min_lot=_env_float("GOLD_AI_TRADER_MIN_LOT", 0.01),
+        use_limit_entry=_env_bool("GOLD_AI_TRADER_USE_LIMIT_ENTRY", True),
+        pending_entry_timeout_min=_env_int("GOLD_AI_TRADER_PENDING_TIMEOUT_MIN", 30),
+        learning_daily_at_ny_end=_env_bool("GOLD_AI_TRADER_LEARNING_DAILY", True),
     )
 
 
