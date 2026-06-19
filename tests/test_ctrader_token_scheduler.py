@@ -18,6 +18,13 @@ class TestCtraderTokenScheduler(unittest.TestCase):
         self.assertIn("refresh_user_ctrader_token", src)
         self.assertNotIn("refresh_access_token", src)
 
+    def test_refresh_cycle_gated_on_owner(self):
+        from app.services import ctrader_token_scheduler as sched
+
+        src = inspect.getsource(sched.run_token_refresh_cycle)
+        self.assertIn("is_token_refresh_owner", src)
+        self.assertIn("not_owner", src)
+
 
 if __name__ == "__main__":
     unittest.main()

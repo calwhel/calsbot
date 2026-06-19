@@ -86,6 +86,18 @@ def _try_acquire_owner_lock() -> bool:
 
 async def run_token_refresh_cycle(*, reason: str = "scheduled") -> dict:
     """Refresh tokens for linked users when expiry is within the early window."""
+    stats = {
+        "linked_users": 0,
+        "refreshed": 0,
+        "failed": 0,
+        "denied": 0,
+        "reason": reason,
+    }
+    if not is_token_refresh_owner():
+        stats["skipped"] = "not_owner"
+        logger.debug("[ctrader-token] refresh cycle skipped (%s): not owner", reason)
+        return stats
+
     from app.database import SessionLocal
     from app.models import UserPreference
     from app.services.ctrader_client import (
@@ -98,7 +110,6 @@ async def run_token_refresh_cycle(*, reason: str = "scheduled") -> dict:
         refresh_user_ctrader_token,
     )
 
-    stats = {"linked_users": 0, "refreshed": 0, "failed": 0, "denied": 0, "reason": reason}
     db = SessionLocal()
     try:
         rows = (
@@ -137,7 +148,7 @@ async def run_token_refresh_cycle(*, reason: str = "scheduled") -> dict:
             elif at:
                 _log_ctrader_token_startup(uid, at)
 
-            new_at = await refresh_user_ctrader_token(uid, force=False)
+            new_at = await refresh_user_ctrader_token(uid)
             if new_at:
                 stats["refreshed"] += 1
                 try:

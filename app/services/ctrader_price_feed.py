@@ -785,24 +785,9 @@ def invalidate_stream_creds(user_id: Optional[int] = None) -> None:
         _stream_creds = None
 
 
-async def _maybe_refresh_access_token(
-    user_id: int,
-    access_token: str,
-    *,
-    force: bool = False,
-) -> str:
-    """Read persisted OAuth access token — refresh only via token scheduler owner."""
-    from app.services.ctrader_client import (
-        _latest_ctrader_access_token,
-        request_ctrader_token_refresh,
-    )
-
-    if force:
-        new_at = await request_ctrader_token_refresh(user_id, force=True, wait_s=15.0)
-        if new_at:
-            invalidate_stream_creds(user_id)
-            return new_at.strip()
-        return (access_token or "").strip()
+async def _load_persisted_access_token(user_id: int, access_token: str) -> str:
+    """Read the latest persisted OAuth access token — never initiates refresh."""
+    from app.services.ctrader_client import _latest_ctrader_access_token
 
     fresh = _latest_ctrader_access_token(user_id)
     if fresh:
@@ -950,7 +935,7 @@ async def _authenticate_stream(
     Open a streaming connection with app+account auth.
     Returns (reader, writer, access_token, host) or None.
     """
-    at = await _maybe_refresh_access_token(user_id, access_token, force=False)
+    at = await _load_persisted_access_token(user_id, access_token)
     host = _HOST_LIVE if is_live else _HOST_DEMO
     reader = writer = None
     try:
@@ -959,9 +944,11 @@ async def _authenticate_stream(
             raise ConnectionError("app auth failed")
         authed = await _account_auth(reader, writer, at, ctid)
         if not authed:
-            at = await _maybe_refresh_access_token(user_id, at, force=True)
-            invalidate_stream_creds(user_id)
-            authed = await _account_auth(reader, writer, at, ctid)
+            fresh = await _load_persisted_access_token(user_id, at)
+            if fresh != at:
+                invalidate_stream_creds(user_id)
+                at = fresh
+                authed = await _account_auth(reader, writer, at, ctid)
         if authed:
             return reader, writer, at, host
         logger.warning(

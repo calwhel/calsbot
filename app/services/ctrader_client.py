@@ -738,12 +738,6 @@ _SCHEDULED_REFRESH_WHEN_REMAINING_S = int(
 _WARN_WHEN_REMAINING_S = int(
     os.environ.get("CTRADER_REFRESH_WARN_REMAINING_S", str(2 * 86400))
 )
-_AUTH_REFRESH_COOLDOWN_S = float(
-    os.environ.get("CTRADER_AUTH_REFRESH_COOLDOWN_S", "30")
-)
-_AUTH_REFRESH_WAIT_TIMEOUT_S = float(
-    os.environ.get("CTRADER_AUTH_REFRESH_WAIT_TIMEOUT_S", "12")
-)
 _AUTH_UNHEALTHY_COOLDOWN_S = float(
     os.environ.get("CTRADER_AUTH_UNHEALTHY_COOLDOWN_S", "90")
 )
@@ -758,10 +752,7 @@ _REFRESH_TERMINAL_CODES = frozenset({
     "invalid_grant",
     "INVALID_GRANT",
 })
-_auth_refresh_inflight: Dict[int, asyncio.Task] = {}
-_auth_refresh_next_allowed: Dict[int, float] = {}
 _auth_unhealthy_accounts: Dict[Tuple[int, str, int], Tuple[float, str]] = {}
-_auth_state_lock = asyncio.Lock()
 
 
 def _auth_account_key(user_id: int, host: str, ctid: int) -> Tuple[int, str, int]:
@@ -832,54 +823,6 @@ def _user_ctid_has_auth_backoff(user_id: int, ctid: int) -> bool:
             continue
         hit = True
     return hit
-
-
-async def _singleflight_forced_refresh(user_id: int) -> Tuple[Optional[str], str]:
-    """One forced token refresh per user per cooldown window."""
-    uid = int(user_id)
-    while True:
-        wait_s = 0.0
-        task: Optional[asyncio.Task] = None
-        created = False
-        async with _auth_state_lock:
-            now = time.monotonic()
-            task = _auth_refresh_inflight.get(uid)
-            if task is not None and task.done():
-                _auth_refresh_inflight.pop(uid, None)
-                task = None
-            if task is None:
-                next_allowed = _auth_refresh_next_allowed.get(uid, 0.0)
-                if now < next_allowed:
-                    wait_s = next_allowed - now
-                else:
-                    task = asyncio.create_task(refresh_user_ctrader_token(uid, force=True))
-                    _auth_refresh_inflight[uid] = task
-                    _auth_refresh_next_allowed[uid] = now + _AUTH_REFRESH_COOLDOWN_S
-                    created = True
-        if wait_s > 0:
-            return None, f"refresh_throttled_{wait_s:.1f}s"
-        if task is None:
-            await asyncio.sleep(0)
-            continue
-        try:
-            token = await asyncio.wait_for(task, timeout=_AUTH_REFRESH_WAIT_TIMEOUT_S)
-            return token, ("ok" if token else "refresh_failed")
-        except asyncio.TimeoutError:
-            if created:
-                task.cancel()
-            return None, "refresh_timeout"
-        except Exception as exc:
-            logger.warning(
-                "[cTrader] forced refresh error uid=%s: %s",
-                uid,
-                type(exc).__name__,
-            )
-            return None, "refresh_error"
-        finally:
-            if task.done():
-                async with _auth_state_lock:
-                    if _auth_refresh_inflight.get(uid) is task:
-                        _auth_refresh_inflight.pop(uid, None)
 
 
 def is_refresh_denied(user_id: int) -> bool:
@@ -1016,13 +959,26 @@ def audit_ctrader_credentials(user_id: int, prefs=None) -> dict:
 
 async def proactive_refresh_linked_users() -> dict:
     """
-    Refresh OAuth tokens for all linked users — delegated to the token refresh owner.
-    Returns counts: linked_users, refreshed, failed, denied.
+    Refresh OAuth tokens for all linked users — only the refresh owner runs cycles.
+    Non-owners wake the scheduler and return a delegated stub.
     """
     try:
-        from app.services.ctrader_token_scheduler import run_token_refresh_cycle
+        from app.services.ctrader_token_scheduler import (
+            is_token_refresh_owner,
+            run_token_refresh_cycle,
+            wake_token_scheduler,
+        )
 
-        return await run_token_refresh_cycle(reason="startup_probe")
+        if is_token_refresh_owner():
+            return await run_token_refresh_cycle(reason="startup_probe")
+        wake_token_scheduler()
+        return {
+            "linked_users": 0,
+            "refreshed": 0,
+            "failed": 0,
+            "denied": 0,
+            "reason": "startup_probe_delegated",
+        }
     except Exception as exc:
         logger.warning(
             "[cTrader] proactive refresh batch failed: %s", type(exc).__name__
@@ -1118,14 +1074,10 @@ def persist_ctrader_oauth_tokens(db, prefs, res: dict) -> tuple[str, Optional[st
 async def request_ctrader_token_refresh(
     user_id: int,
     *,
-    force: bool = False,
     wait_s: float = 12.0,
 ) -> Optional[str]:
-    """Consumer entry — forced refresh uses live-trading single-flight; otherwise wait for owner."""
+    """Consumer entry — wake scheduler owner and wait for persisted token update."""
     uid = int(user_id)
-    if force:
-        new_at, _status = await _singleflight_forced_refresh(uid)
-        return new_at
     try:
         from app.services.ctrader_token_scheduler import (
             is_token_refresh_owner,
@@ -1200,18 +1152,14 @@ async def _wait_peer_refresh_and_read(db, user_id: int) -> Optional[str]:
     return at or None
 
 
-async def refresh_user_ctrader_token(
-    user_id: int,
-    *,
-    force: bool = False,
-) -> Optional[str]:
+async def refresh_user_ctrader_token(user_id: int) -> Optional[str]:
     """Refresh and persist a user's cTrader OAuth token (single-flight).
 
     cTrader ROTATES the refresh token on every refresh — the new refresh token
-    MUST be persisted or the next refresh fails. All callers wait on the same
-    pg advisory xact lock, re-read refresh_token from DB before OAuth, and on
-    invalid_grant / ACCESS_DENIED wait 2s + re-read (up to 3 rounds) before
-    marking the link dead.
+    MUST be persisted or the next refresh fails. Only the scheduled refresh owner
+    should call this. All callers wait on the same pg advisory xact lock, re-read
+    refresh_token from DB before OAuth, and on invalid_grant / ACCESS_DENIED wait
+    2s + re-read (up to 3 rounds) before marking the link dead.
 
     Returns the access token, or None if there is no refresh token / the
     refresh was denied after retries (user must re-link their cTrader account).
@@ -1246,7 +1194,7 @@ async def refresh_user_ctrader_token(
                     return None
                 refresh_token = (prefs.ctrader_refresh_token or "").strip()
                 existing_at = (prefs.ctrader_access_token or "").strip()
-                if not force and existing_at:
+                if existing_at:
                     remaining = _token_seconds_remaining_from_prefs(prefs)
                     threshold = _SCHEDULED_REFRESH_WHEN_REMAINING_S
                     if remaining is not None and remaining > threshold:
@@ -1390,14 +1338,15 @@ def _latest_ctrader_access_token(user_id: int) -> Optional[str]:
         db.close()
 
 
-async def _refresh_auth_token_for_retry(
+async def _reread_token_for_auth_retry(
     *,
     user_id: Optional[int],
     ctid_trader_account_id: int,
     host: str,
     operation: str,
+    current_token: str,
 ) -> Optional[str]:
-    """On broker account-auth failure, single-flight refresh and retry once."""
+    """On broker account-auth failure, re-read persisted token — never refresh."""
     if not user_id:
         return None
     uid = int(user_id)
@@ -1412,42 +1361,26 @@ async def _refresh_auth_token_for_retry(
             rem,
         )
         return None
-    new_at, status = await _singleflight_forced_refresh(uid)
-    if new_at:
+    fresh = _latest_ctrader_access_token(uid)
+    cur = (current_token or "").strip()
+    if fresh and fresh != cur:
         _clear_account_auth_unhealthy(uid, host, ctid_trader_account_id)
         logger.info(
-            "[cTrader] %s auth failed ctid=%s host=%s user=%s — refreshed token, retrying",
+            "[cTrader] %s auth failed ctid=%s host=%s user=%s — "
+            "re-read newer token from DB, retrying",
             operation,
             ctid_trader_account_id,
             host,
             uid,
         )
-        return new_at
-    if is_refresh_denied(uid):
-        _mark_account_auth_unhealthy(
-            uid,
-            host,
-            ctid_trader_account_id,
-            reason="refresh_denied",
-            cooldown_s=max(_AUTH_UNHEALTHY_COOLDOWN_S, _REFRESH_DENY_COOLDOWN),
-        )
-        _notify_ctrader_relink_needed(uid, f"{operation} auth failed")
-    elif status.startswith("refresh_throttled_"):
-        _mark_account_auth_unhealthy(
-            uid,
-            host,
-            ctid_trader_account_id,
-            reason=status,
-            cooldown_s=_AUTH_TIMEOUT_COOLDOWN_S,
-        )
-    else:
-        _mark_account_auth_unhealthy(
-            uid,
-            host,
-            ctid_trader_account_id,
-            reason=status or "refresh_failed",
-            cooldown_s=_AUTH_UNHEALTHY_COOLDOWN_S,
-        )
+        return fresh
+    _mark_account_auth_unhealthy(
+        uid,
+        host,
+        ctid_trader_account_id,
+        reason="auth_failed_no_new_token",
+        cooldown_s=_AUTH_UNHEALTHY_COOLDOWN_S,
+    )
     return None
 
 
@@ -1730,13 +1663,14 @@ async def place_market_order_resilient(
     result = await _try_hosts(at)
 
     if result.get("error") == "account auth failed" and user_id:
-        new_at, _status = await _singleflight_forced_refresh(int(user_id))
-        if new_at:
-            at = new_at
-            logger.info(f"[cTrader] retrying order for user {user_id} after token refresh")
-            result = await _try_hosts(new_at)
-        elif is_refresh_denied(user_id):
-            _notify_ctrader_relink_needed(user_id, "account auth failed")
+        fresh = _latest_ctrader_access_token(int(user_id))
+        if fresh and fresh != at:
+            at = fresh
+            logger.info(
+                "[cTrader] retrying order for user %s with re-read token",
+                user_id,
+            )
+            result = await _try_hosts(fresh)
 
     if is_ambiguous_order_error(result.get("error")):
         vol = volume_units
@@ -2849,9 +2783,9 @@ async def get_account_balance_resilient(
     if bal is not None:
         return bal
     if user_id:
-        new_at = await request_ctrader_token_refresh(user_id, force=False, wait_s=10.0)
-        if new_at and new_at != at:
-            bal = await _try_hosts(new_at)
+        fresh = _latest_ctrader_access_token(user_id)
+        if fresh and fresh != at:
+            bal = await _try_hosts(fresh)
             if bal is not None:
                 return bal
     return None
@@ -2965,11 +2899,12 @@ async def _get_open_position_ids(
                 host,
             )
             if auth_attempt == 1:
-                new_at = await _refresh_auth_token_for_retry(
+                new_at = await _reread_token_for_auth_retry(
                     user_id=user_id,
                     ctid_trader_account_id=ctid_trader_account_id,
                     host=host,
                     operation="open-positions fetch",
+                    current_token=token,
                 )
                 if new_at:
                     token = new_at
@@ -3411,11 +3346,12 @@ async def _fetch_deals_by_position_id(
                 ctid_trader_account_id, host, position_id,
             )
             if auth_attempt == 1:
-                new_at = await _refresh_auth_token_for_retry(
+                new_at = await _reread_token_for_auth_retry(
                     user_id=user_id,
                     ctid_trader_account_id=ctid_trader_account_id,
                     host=host,
                     operation="deal-by-position fetch",
+                    current_token=token,
                 )
                 if new_at:
                     token = new_at
