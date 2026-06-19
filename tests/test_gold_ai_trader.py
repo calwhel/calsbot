@@ -21,7 +21,7 @@ from app.gold_ai_trader.guardrails import (
 )
 from app.gold_ai_trader.accounts import demo_accounts_from_prefs, validate_demo_ctid_allowed
 from app.gold_ai_trader.executor import _pct_from_prices
-from app.gold_ai_trader.routes import _normalize_uid
+from app.gold_ai_trader.routes import _normalize_uid, _persist_demo_user_from_admin
 from app.gold_ai_trader.telegram_notify import (
     daily_summary_enabled,
     format_close_message,
@@ -42,6 +42,18 @@ def test_feature_flag_default_off():
 def test_normalize_uid_adds_th_prefix():
     assert _normalize_uid("yp0bada8") == "TH-YP0BADA8"
     assert _normalize_uid("TH-YP0BADA8") == "TH-YP0BADA8"
+
+
+def test_persist_demo_user_from_admin():
+    class _Row:
+        demo_user_id = None
+
+    class _Admin:
+        id = 42
+
+    row = _Row()
+    _persist_demo_user_from_admin(row, _Admin())
+    assert row.demo_user_id == 42
 
 
 def test_session_gate_london():
