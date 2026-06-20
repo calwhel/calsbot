@@ -145,3 +145,31 @@ async def build_context_snapshot(
         "Default SKIP unless high conviction. Require clear invalidation and ≥2:1 R:R.",
     ]
     return "\n".join(lines)
+
+
+async def build_screen_context(
+    *,
+    candidate: Candidate,
+    price: float,
+    session: str,
+    atr: float,
+    rvol: float,
+) -> str:
+    """Compact context for Haiku screen — cheaper than full Opus snapshot."""
+    from app.gold_ai_trader.call_gates import MIN_RVOL
+
+    now = datetime.utcnow()
+    lines = [
+        "=== HAIKU SCREEN (XAUUSD) ===",
+        f"Session: {session.upper()} | UTC: {now.isoformat()}Z",
+        f"Spot: {price:.2f} | ATR(14) 5m: {atr:.2f} | RVOL: {rvol:.2f}x (floor {MIN_RVOL:.2f}x)",
+        "",
+        "=== TRIGGER ===",
+        f"Type: {candidate.type} | Direction: {candidate.direction}",
+        f"Detail: {candidate.detail}",
+        f"Quality vs ATR: {candidate.quality_atr:.2f}x",
+        "",
+        "SKIP only if: dead tape (RVOL below floor), price obviously extended past zone, or no trigger.",
+        "When unsure → PASS.",
+    ]
+    return "\n".join(lines)

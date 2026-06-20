@@ -34,6 +34,8 @@ class GoldAiConfig(Base):
     pending_entry_timeout_min = Column(Integer, default=30, nullable=False)
     learning_daily_at_ny_end = Column(Boolean, default=True, nullable=False)
     calls_reset_at = Column(DateTime, nullable=True)
+    funnel_mode = Column(String(16), default="shadow", nullable=False)
+    screen_model = Column(String(64), default="claude-haiku-4-5", nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -59,6 +61,31 @@ class GoldAiDecision(Base):
     cache_read_tokens = Column(Integer, default=0)
     cache_write_tokens = Column(Integer, default=0)
     cost_usd = Column(Float, default=0.0)
+    screen_action = Column(String(8), nullable=True)
+    screen_reason = Column(String(128), nullable=True)
+    screen_model = Column(String(64), nullable=True)
+    screen_tokens_in = Column(Integer, default=0)
+    screen_tokens_out = Column(Integer, default=0)
+    screen_cache_read_tokens = Column(Integer, default=0)
+    screen_cache_write_tokens = Column(Integer, default=0)
+    screen_cost_usd = Column(Float, default=0.0)
+    funnel_mode = Column(String(16), nullable=True)
+    opus_called = Column(Boolean, default=True, nullable=False)
+    total_cost_usd = Column(Float, default=0.0)
+
+
+class GoldAiFunnelFalseReject(Base):
+    __tablename__ = "gold_ai_funnel_false_rejects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ts = Column(DateTime, default=datetime.utcnow, index=True)
+    decision_id = Column(Integer, index=True, nullable=False)
+    session = Column(String(16), nullable=True)
+    candidate_type = Column(String(64), nullable=True)
+    screen_reason = Column(String(128), nullable=True)
+    opus_action = Column(String(16), nullable=True)
+    opus_confidence = Column(Integer, nullable=True)
+    opus_rationale = Column(Text, nullable=True)
 
 
 class GoldAiOutcome(Base):

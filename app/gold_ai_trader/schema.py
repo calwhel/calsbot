@@ -9,6 +9,7 @@ from app.database import engine, Base
 from app.gold_ai_trader.models import (
     GoldAiConfig,
     GoldAiDecision,
+    GoldAiFunnelFalseReject,
     GoldAiLesson,
     GoldAiOutcome,
     GoldAiPendingOrder,
@@ -27,6 +28,8 @@ _GOLD_AI_CONFIG_ALTERS = (
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS pending_entry_timeout_min INTEGER DEFAULT 30 NOT NULL",
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS learning_daily_at_ny_end BOOLEAN DEFAULT TRUE NOT NULL",
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS calls_reset_at TIMESTAMP",
+    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS funnel_mode VARCHAR(16) DEFAULT 'shadow' NOT NULL",
+    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS screen_model VARCHAR(64) DEFAULT 'claude-haiku-4-5' NOT NULL",
 )
 
 _GOLD_AI_OUTCOME_ALTERS = (
@@ -45,6 +48,17 @@ _GOLD_AI_DECISION_ALTERS = (
     "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS live_mirror_execution_id INTEGER",
     "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS live_mirror_status VARCHAR(24)",
     "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS live_mirror_error TEXT",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS screen_action VARCHAR(8)",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS screen_reason VARCHAR(128)",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS screen_model VARCHAR(64)",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS screen_tokens_in INTEGER DEFAULT 0",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS screen_tokens_out INTEGER DEFAULT 0",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS screen_cache_read_tokens INTEGER DEFAULT 0",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS screen_cache_write_tokens INTEGER DEFAULT 0",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS screen_cost_usd FLOAT DEFAULT 0",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS funnel_mode VARCHAR(16)",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS opus_called BOOLEAN DEFAULT TRUE NOT NULL",
+    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS total_cost_usd FLOAT DEFAULT 0",
 )
 
 
@@ -68,6 +82,7 @@ def ensure_gold_ai_trader_schema() -> None:
         tables=[
             GoldAiConfig.__table__,
             GoldAiDecision.__table__,
+            GoldAiFunnelFalseReject.__table__,
             GoldAiOutcome.__table__,
             GoldAiLesson.__table__,
             GoldAiPendingOrder.__table__,

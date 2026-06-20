@@ -57,6 +57,8 @@ def merge_config(db_row: GoldAiConfig, env: GoldAiRuntimeConfig) -> GoldAiRuntim
         learning_daily_at_ny_end=bool(
             getattr(db_row, "learning_daily_at_ny_end", env.learning_daily_at_ny_end)
         ),
+        funnel_mode=str(getattr(db_row, "funnel_mode", None) or env.funnel_mode or "shadow"),
+        screen_model=str(getattr(db_row, "screen_model", None) or env.screen_model or "claude-haiku-4-5"),
     )
 
 
@@ -204,9 +206,15 @@ def maybe_reset_daily_claude_credits(db=None) -> bool:
 
 
 def calls_today(db) -> int:
+    """Count Opus confirm calls only (Haiku screen skips in live mode excluded)."""
+    from sqlalchemy import or_
+
     return (
         db.query(func.count(GoldAiDecision.id))
-        .filter(GoldAiDecision.ts >= _calls_cutoff(db))
+        .filter(
+            GoldAiDecision.ts >= _calls_cutoff(db),
+            or_(GoldAiDecision.opus_called.is_(True), GoldAiDecision.opus_called.is_(None)),
+        )
         .scalar()
         or 0
     )
@@ -226,7 +234,14 @@ def trades_today(db) -> int:
 
 def cost_today_usd(db) -> float:
     val = (
-        db.query(func.coalesce(func.sum(GoldAiDecision.cost_usd), 0.0))
+        db.query(
+            func.coalesce(
+                func.sum(
+                    func.coalesce(GoldAiDecision.total_cost_usd, GoldAiDecision.cost_usd)
+                ),
+                0.0,
+            )
+        )
         .filter(GoldAiDecision.ts >= _calls_cutoff(db))
         .scalar()
     )
