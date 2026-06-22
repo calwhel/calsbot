@@ -150,13 +150,17 @@ except (TypeError, ValueError):
 
 
 def auto_trader_ai_enabled() -> bool:
-    """Legacy chart-AI loop (Claude trade reads). Off unless explicitly enabled.
+    """Crypto chart-AI loop (Claude trade reads). Off unless crypto Anthropic is enabled.
 
-    Portal AI (chat builder, wizard, compiler, Scan Best) is unaffected.
-    Set ENABLE_AUTO_TRADER_AI=1 to re-enable background AI-mode strategies.
-    DISABLE_AUTO_TRADER_AI=1 is also honoured for explicit kills.
+    Forex/gold discovery and Gold AI Trader are unaffected (separate modules).
+    Legacy: ENABLE_AUTO_TRADER_AI=1 still required in addition to ENABLE_CRYPTO_ANTHROPIC=1.
+    DISABLE_AUTO_TRADER_AI=1 or DISABLE_CRYPTO_ANTHROPIC=1 always wins.
     """
+    from app.services.anthropic_policy import crypto_anthropic_enabled
+
     if os.environ.get("DISABLE_AUTO_TRADER_AI", "").lower() in ("1", "true", "yes"):
+        return False
+    if not crypto_anthropic_enabled():
         return False
     return os.environ.get("ENABLE_AUTO_TRADER_AI", "").lower() in ("1", "true", "yes")
 
