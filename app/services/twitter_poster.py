@@ -606,6 +606,12 @@ async def _ai_review_tweet(tweet_text: str, post_type: str, context: dict = None
     Uses Claude Haiku for speed. Times out after 6s and returns original on failure.
     Never blocks a post — always falls back to original on any error.
     """
+    from app.services.anthropic_policy import crypto_anthropic_enabled, log_crypto_anthropic_blocked
+
+    if not crypto_anthropic_enabled():
+        log_crypto_anthropic_blocked("twitter_poster._ai_review_tweet")
+        return tweet_text
+
     try:
         import anthropic as _anthropic
         ctx_lines = "\n".join(f"- {k}: {v}" for k, v in (context or {}).items())
@@ -715,6 +721,12 @@ async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "",
     """
     Generate tweets using Claude. Primary AI for all Twitter content.
     """
+    from app.services.anthropic_policy import crypto_anthropic_enabled, log_crypto_anthropic_blocked
+
+    if not crypto_anthropic_enabled():
+        log_crypto_anthropic_blocked("twitter_poster._call_grok_tweet")
+        return None
+
     try:
         import anthropic as _anthropic
         _base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
@@ -3673,6 +3685,14 @@ async def auto_post_loop():
     logger.info("🐦 AUTO-POST LOOP INITIALIZING...")
     logger.info("=" * 50)
 
+    from app.services.anthropic_policy import crypto_anthropic_enabled
+
+    if not crypto_anthropic_enabled():
+        logger.info(
+            "🐦 AUTO-POST: Crypto Anthropic disabled — posts use templates/fallbacks only "
+            "(ENABLE_CRYPTO_ANTHROPIC=1 to re-enable AI tweet generation)"
+        )
+
     # Restore today's posted slots — DB is authoritative, /tmp/ is fast cache
     _restored_slots, _restored_offsets = _load_posted_slots_from_disk()
     POSTED_SLOTS.update(_restored_slots)
@@ -5584,22 +5604,27 @@ Analytical angle for this tweet: {angle['instruction']}"""
 
         tweet_text = None
 
+        from app.services.anthropic_policy import crypto_anthropic_enabled, log_crypto_anthropic_blocked
+
         # Try Anthropic (Sonnet — best for natural voice)
-        try:
-            import anthropic as _ac
-            _api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-            _base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
-            _aclient = _ac.Anthropic(base_url=_base_url, api_key=_api_key) if _base_url else _ac.Anthropic(api_key=_api_key)
-            resp = await asyncio.to_thread(
-                _aclient.messages.create,
-                model="claude-sonnet-4-5",
-                max_tokens=150,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-            tweet_text = resp.content[0].text.strip().strip('"').strip("'")
-        except Exception as ae:
-            logger.warning(f"[TopGainerTA] Anthropic failed: {ae}")
+        if crypto_anthropic_enabled():
+            try:
+                import anthropic as _ac
+                _api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+                _base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
+                _aclient = _ac.Anthropic(base_url=_base_url, api_key=_api_key) if _base_url else _ac.Anthropic(api_key=_api_key)
+                resp = await asyncio.to_thread(
+                    _aclient.messages.create,
+                    model="claude-sonnet-4-5",
+                    max_tokens=150,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                )
+                tweet_text = resp.content[0].text.strip().strip('"').strip("'")
+            except Exception as ae:
+                logger.warning(f"[TopGainerTA] Anthropic failed: {ae}")
+        else:
+            log_crypto_anthropic_blocked("twitter_poster.post_top_gainer_ta")
 
         # Gemini fallback
         if not tweet_text:

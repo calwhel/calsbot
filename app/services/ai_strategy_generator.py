@@ -198,6 +198,12 @@ Return ONLY the JSON object."""
 
 
 async def _call_anthropic_json(system: str, prompt: str, max_tokens: int = None) -> Optional[Dict]:
+    from app.services.anthropic_policy import crypto_anthropic_enabled, log_crypto_anthropic_blocked
+
+    if not crypto_anthropic_enabled():
+        log_crypto_anthropic_blocked("ai_strategy_generator._call_anthropic_json")
+        return None
+
     if max_tokens is None:
         max_tokens = LLM_MAX_TOKENS
     try:

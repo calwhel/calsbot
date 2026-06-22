@@ -3068,18 +3068,20 @@ async def _startup_background():
     else:
         logger.info("Strategy executor DISABLED (not a production deploy)")
 
-    # AI Strategy Generator — autonomous marketplace content loop (hourly LLM).
-    # Off by default; portal AI (chat builder / wizard / compiler / Scan Best)
-    # is unaffected. Opt in with ENABLE_AI_GENERATOR=1. DISABLE_AI_GENERATOR=1
-    # is always honoured.
+    # AI Strategy Generator — crypto marketplace content loop (hourly LLM).
+    # Requires ENABLE_AI_GENERATOR=1 AND ENABLE_CRYPTO_ANTHROPIC=1.
+    # Forex/gold discovery scanners are separate and unaffected.
+    from app.services.anthropic_policy import crypto_anthropic_enabled
+
     _aigen_disabled = _os.environ.get("DISABLE_AI_GENERATOR", "").lower() in ("1", "true", "yes")
     _aigen_enabled = _os.environ.get("ENABLE_AI_GENERATOR", "").lower() in ("1", "true", "yes")
-    if _aigen_enabled and not _aigen_disabled:
+    if _aigen_enabled and not _aigen_disabled and crypto_anthropic_enabled():
         asyncio.create_task(_aigen_claim_loop(first_attempt_delay=15))
     else:
         logger.info(
             "AI Strategy Generator DISABLED "
-            "(set ENABLE_AI_GENERATOR=1 to opt in; DISABLE_AI_GENERATOR=1 to force off)"
+            "(needs ENABLE_AI_GENERATOR=1 + ENABLE_CRYPTO_ANTHROPIC=1; "
+            "DISABLE_AI_GENERATOR=1 or DISABLE_CRYPTO_ANTHROPIC=1 to force off)"
         )
 
 
@@ -5049,6 +5051,21 @@ async def trade_ai_read(symbol: str, request: Request):
         logger.debug(f"ai_read funding fetch failed for {sym}: {e}")
 
     try:
+        from app.services.anthropic_policy import portal_chart_ai_read_allowed
+
+        if not portal_chart_ai_read_allowed(sym):
+            from app.services.anthropic_policy import log_crypto_anthropic_blocked
+            log_crypto_anthropic_blocked("portal.trade_ai_read")
+            return JSONResponse(
+                {
+                    "error": "crypto_ai_disabled",
+                    "message": "Crypto chart AI is disabled. Forex/gold scanners are unaffected.",
+                    "fallback": True,
+                    "summary": "",
+                },
+                status_code=503,
+            )
+
         from app.services.ai_trade_read import generate_ai_trade_read
         result = await generate_ai_trade_read(
             symbol=sym, tf=tf, candles=candles,

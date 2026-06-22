@@ -541,11 +541,11 @@ async def analyze_signal_with_ai(
 ) -> Dict:
     """
     Use Claude to analyze a trading signal and decide if it should be broadcast.
-    
+
     Args:
         signal_data: The signal candidate with all technical data
         market_context: Optional BTC/market data for correlation analysis
-    
+
     Returns:
         {
             'approved': True/False,
@@ -555,6 +555,20 @@ async def analyze_signal_with_ai(
             'recommendation': 'STRONG BUY / BUY / HOLD / AVOID'
         }
     """
+    from app.services.anthropic_policy import crypto_anthropic_enabled, log_crypto_anthropic_blocked
+
+    if not crypto_anthropic_enabled():
+        log_crypto_anthropic_blocked("ai_signal_filter.analyze_signal_with_ai")
+        return {
+            "approved": False,
+            "confidence": 1,
+            "recommendation": "AVOID",
+            "reasoning": "Crypto Anthropic disabled (set ENABLE_CRYPTO_ANTHROPIC=1 to opt in).",
+            "why_this_trade": "",
+            "risks": ["Crypto AI signal filter off"],
+            "entry_quality": "POOR",
+        }
+
     try:
         client = get_anthropic_client()
         if not client:

@@ -178,6 +178,20 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
     Use Gemini for fast scan + Claude for final approval of social signals.
     Returns dict with 'approved', 'reasoning', 'ai_confidence', 'recommendation'.
     """
+    from app.services.anthropic_policy import crypto_anthropic_enabled, log_crypto_anthropic_blocked
+
+    if not crypto_anthropic_enabled():
+        log_crypto_anthropic_blocked("social_signals.ai_analyze_social_signal")
+        return {
+            'approved': False,
+            'reasoning': 'Crypto Anthropic disabled',
+            'ai_confidence': 0,
+            'recommendation': 'DISABLED',
+            'entry_quality': 'N/A',
+            'trade_explainer': '',
+            'key_risk': 'Crypto AI scanning off',
+        }
+
     if not SOCIAL_AI_ENABLED:
         logger.info(f"[SocialAI] Disabled — blocking signal for {signal_data.get('symbol','?')}")
         return {
