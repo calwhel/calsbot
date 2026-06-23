@@ -30,12 +30,17 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-MIN_BODY_ATR = _env_float("GOLD_AI_TRADER_MIN_BODY_ATR", 0.8)
-NEAR_LEVEL_ATR = _env_float("GOLD_AI_TRADER_NEAR_LEVEL_ATR", 1.25)
+MIN_BODY_ATR = _env_float("GOLD_AI_TRADER_MIN_BODY_ATR", 0.6)
+NEAR_LEVEL_ATR = _env_float("GOLD_AI_TRADER_NEAR_LEVEL_ATR", 1.5)
 MIN_RVOL = _env_float("GOLD_AI_TRADER_MIN_RVOL", 1.15)
 KILLZONE_MINUTES = _env_int("GOLD_AI_TRADER_KILLZONE_MINUTES", 90)
 MIN_CLAUDE_GAP_S = _env_int("GOLD_AI_TRADER_MIN_CLAUDE_GAP_S", 120)
 DEDUPE_PRICE_ATR = _env_float("GOLD_AI_TRADER_DEDUPE_PRICE_ATR", 0.35)
+
+
+def killzone_only_enabled() -> bool:
+    raw = os.environ.get("GOLD_AI_KILLZONE_ONLY", "true")
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 # Setups that define their own level/zone — skip redundant PDH proximity gate.
 _NEAR_LEVEL_EXEMPT_PREFIXES = (
@@ -164,7 +169,13 @@ def passes_quality_gates(
     body_atr = last_closed_body_atr(k5, atr)
     detail_q = _parse_quality_from_detail(candidate.detail)
     disp_ok = body_atr >= MIN_BODY_ATR or (detail_q is not None and detail_q >= MIN_BODY_ATR)
-    if candidate.type.startswith(("disp_", "sweep_", "liq_sweep", "fvg_", "fvg_retrace_", "ifvg_", "sdp_", "breaker_", "eqh_sweep", "eql_sweep", "ob_")):
+    if candidate.type.startswith(
+        (
+            "disp_", "sweep_", "liq_sweep", "fvg_", "fvg_retrace_", "ifvg_",
+            "sdp_", "breaker_", "eqh_sweep", "eql_sweep", "ob_",
+            "judas_", "asian_sweep_",
+        )
+    ):
         if not disp_ok and candidate.quality_atr < MIN_BODY_ATR:
             return False, f"displacement_body={body_atr:.2f}atr<{MIN_BODY_ATR}"
 

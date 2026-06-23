@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict
+from typing import Dict, Optional
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -84,7 +84,30 @@ def cisd_modifier_enabled() -> bool:
 
 def smt_modifier_enabled() -> bool:
     """SMT divergence is a confidence modifier only — never a standalone fire."""
-    return _env_bool("GOLD_AI_SMT_MODIFIER", False)
+    return _env_bool("GOLD_AI_SMT_MODIFIER", True)
+
+
+def htf_is_directional(bias: dict) -> bool:
+    """True when 1h+4h consolidated bias is bullish or bearish (not mixed/chop)."""
+    return (bias.get("htf_bias") or "mixed").lower() in ("bullish", "bearish")
+
+
+def setup_scannable(setup_key: str, bias: Optional[dict] = None) -> bool:
+    """
+    Whether to evaluate a setup this scan.
+
+    breaker_/eqh_/eql_: auto-enabled when HTF is directional unless env explicitly false.
+    All others: follow setup_enabled() env toggles.
+    """
+    bias = bias or {}
+    if setup_key.startswith(("breaker_", "eqh_sweep_", "eql_sweep_")):
+        if not htf_is_directional(bias):
+            return False
+        env_key = _ENV_KEYS.get(setup_key)
+        if env_key and os.environ.get(env_key) is not None:
+            return setup_enabled(setup_key)
+        return True
+    return setup_enabled(setup_key)
 
 
 def max_candidates_per_scan() -> int:

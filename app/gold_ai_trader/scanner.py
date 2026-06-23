@@ -17,9 +17,10 @@ from app.gold_ai_trader.call_gates import (
 from app.gold_ai_trader.config import GoldAiRuntimeConfig, SYMBOL, ASSET_CLASS
 from app.gold_ai_trader.funnel import record as funnel_record
 from app.gold_ai_trader.htf_bias import direction_aligns_with_htf, htf_bias_summary
+from app.gold_ai_trader.judas_detail import enrich_judas_detail
 from app.gold_ai_trader.setup_toggles import (
     cisd_modifier_enabled,
-    setup_enabled,
+    setup_scannable,
     smt_modifier_enabled,
 )
 from app.gold_ai_trader.smt_modifier import assess_smt_divergence
@@ -61,10 +62,6 @@ def active_session(now: datetime, cfg: GoldAiRuntimeConfig) -> Optional[str]:
     return None
 
 
-def in_killzone(session: str) -> bool:
-    return session in ("london", "new_york")
-
-
 def setup_cooldown_elapsed(key: str) -> bool:
     now = time.monotonic()
     last = _last_claude_fired.get(key, 0)
@@ -76,35 +73,36 @@ def record_claude_invocation(candidate: Candidate) -> None:
 
 
 def _requires_htf_alignment(setup_key: str) -> bool:
-    return setup_key.startswith(("breaker_", "eqh_sweep_", "eql_sweep_"))
+    return setup_key.startswith(("breaker_", "eqh_sweep_", "eql_sweep_", "judas_"))
 
 
 def _priority_map() -> Dict[str, int]:
+    """Higher = preferred for Claude. Zone setups rank above sweeps; Judas is early-warning tier."""
     return {
+        "ob_bull": 6,
+        "ob_bear": 6,
+        "fvg_retrace_bull": 6,
+        "fvg_retrace_bear": 6,
+        "ifvg_bull": 6,
+        "ifvg_bear": 6,
         "sweep_pdh": 5,
         "sweep_pdl": 5,
         "liq_sweep_bull": 5,
         "liq_sweep_bear": 5,
         "eqh_sweep_bear": 5,
         "eql_sweep_bull": 5,
-        "sdp_bull": 4,
-        "sdp_bear": 4,
-        "ob_bull": 4,
-        "ob_bear": 4,
         "breaker_bull": 4,
         "breaker_bear": 4,
-        "ifvg_bull": 3,
-        "ifvg_bear": 3,
+        "sdp_bull": 4,
+        "sdp_bear": 4,
         "disp_bull": 3,
         "disp_bear": 3,
-        "fvg_retrace_bull": 3,
-        "fvg_retrace_bear": 3,
         "fvg_bull": 2,
         "fvg_bear": 2,
-        "judas_bull": 5,
-        "judas_bear": 5,
-        "asian_sweep_bull": 5,
-        "asian_sweep_bear": 5,
+        "asian_sweep_bull": 3,
+        "asian_sweep_bear": 3,
+        "judas_bull": 2,
+        "judas_bear": 2,
     }
 
 
@@ -262,7 +260,7 @@ async def scan_candidates(
     ]
 
     for ctype, kind, cond, direction in checks:
-        if not setup_enabled(ctype):
+        if not setup_scannable(ctype, bias):
             continue
         key = f"{ctype}:{direction}"
         if not setup_cooldown_elapsed(key):
@@ -312,6 +310,13 @@ async def scan_candidates(
                 continue
             if direction == "SHORT" and "bearish" not in msg_l:
                 continue
+            msg = enrich_judas_detail(
+                str(msg),
+                direction=direction,
+                price=price,
+                k5=k5,
+                atr=atr,
+            )
 
         ta_hits += 1
         funnel_record("ta_detected", setup=ctype, db=db, session=session)

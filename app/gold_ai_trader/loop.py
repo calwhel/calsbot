@@ -32,6 +32,8 @@ from app.gold_ai_trader.scanner import (
 from app.gold_ai_trader.call_gates import (
     atr_from_klines,
     collect_key_levels,
+    in_killzone,
+    killzone_only_enabled,
     should_invoke_claude,
     call_stats_today,
 )
@@ -151,6 +153,11 @@ async def run_gold_ai_trader_loop() -> None:
 
     _prev_session = session
     runtime_state.note_scan(session)
+
+    if killzone_only_enabled() and not in_killzone(now, session, cfg):
+        runtime_state.note_dormant("outside_killzone")
+        await asyncio.sleep(max(cfg.scan_interval_s, 15))
+        return
 
     db = SessionLocal()
     try:

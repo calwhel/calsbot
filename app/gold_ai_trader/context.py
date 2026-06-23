@@ -94,10 +94,21 @@ def build_smt_block(smt: Optional[Dict[str, Any]]) -> list:
             smt.get("detail", "SMT: unavailable"),
         ]
     sign = "+" if mod > 0 else ""
+    confirms = "confirms" in str(smt.get("detail", "")).lower()
+    header = (
+        "=== SMT CONFIRMATION (XAG aligns with gold — confidence modifier) ==="
+        if confirms
+        else "=== SMT DIVERGENCE (confidence modifier — NOT standalone trigger) ==="
+    )
+    hint = (
+        f"Suggested confidence adjustment: {sign}{mod} (XAG confirms trade direction — lean +8 when aligned)"
+        if confirms and mod >= 8
+        else f"Suggested confidence adjustment: {sign}{mod} "
+        f"(supports {'this' if mod > 0 else 'opposing' if mod < 0 else 'neutral'} direction)"
+    )
     lines = [
-        "=== SMT DIVERGENCE (confidence modifier — NOT standalone trigger) ===",
-        f"Suggested confidence adjustment: {sign}{mod} "
-        f"(supports {'this' if mod > 0 else 'opposing' if mod < 0 else 'neutral'} direction)",
+        header,
+        hint,
         smt.get("detail", ""),
     ]
     if smt.get("dxy_note"):
