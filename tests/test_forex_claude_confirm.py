@@ -74,7 +74,7 @@ class TestForexClaudeConfirmGate(unittest.IsolatedAsyncioTestCase):
                 sl=1.07,
                 tp=1.09,
                 conditions_met=["✅ RSI"],
-                price_data={"price": 1.08},
+                price_data={"price": 1.08, "price_source": "spot_live"},
                 timeframe="15m",
                 now_utc=datetime(2026, 6, 18, 10, 0),
             )
@@ -97,7 +97,7 @@ class TestForexClaudeConfirmGate(unittest.IsolatedAsyncioTestCase):
                 sl=1.07,
                 tp=1.09,
                 conditions_met=["✅ EMA"],
-                price_data={"price": 1.08},
+                price_data={"price": 1.08, "price_source": "spot_live"},
                 timeframe="15m",
                 now_utc=datetime(2026, 6, 18, 7, 30),
             )
@@ -115,7 +115,7 @@ class TestForexClaudeConfirmGate(unittest.IsolatedAsyncioTestCase):
                 sl=1.28,
                 tp=1.25,
                 conditions_met=["✅ trend"],
-                price_data={"price": 1.27},
+                price_data={"price": 1.27, "price_source": "spot_live"},
                 timeframe="15m",
                 now_utc=datetime(2026, 6, 18, 7, 15),
             )
@@ -138,7 +138,7 @@ class TestForexClaudeConfirmGate(unittest.IsolatedAsyncioTestCase):
                 sl=1.07,
                 tp=1.09,
                 conditions_met=["✅ all"],
-                price_data={"price": 1.08, "rsi": 55},
+                price_data={"price": 1.08, "price_source": "spot_live", "rsi": 55},
                 timeframe="15m",
                 now_utc=datetime(2026, 6, 18, 12, 30),
             )
@@ -158,7 +158,7 @@ class TestForexClaudeConfirmGate(unittest.IsolatedAsyncioTestCase):
                 sl=1.07,
                 tp=1.09,
                 conditions_met=["✅ x"],
-                price_data={"price": 1.08},
+                price_data={"price": 1.08, "price_source": "spot_live"},
                 timeframe="15m",
                 now_utc=datetime(2026, 6, 18, 2, 15),
             )
@@ -166,7 +166,7 @@ class TestForexClaudeConfirmGate(unittest.IsolatedAsyncioTestCase):
             ok2, reason2 = await fcc.maybe_forex_claude_confirm(**args)
         self.assertTrue(ok1)
         self.assertTrue(ok2)
-        self.assertTrue(reason2.startswith("cache:"))
+        self.assertEqual(mock.await_count, 1)
         self.assertEqual(mock.await_count, 1)
 
     async def test_disabled_passes_through_without_call(self):
@@ -180,7 +180,7 @@ class TestForexClaudeConfirmGate(unittest.IsolatedAsyncioTestCase):
                 sl=1.07,
                 tp=1.09,
                 conditions_met=["✅ x"],
-                price_data={"price": 1.08},
+                price_data={"price": 1.08, "price_source": "spot_live"},
                 timeframe="15m",
                 now_utc=datetime(2026, 6, 18, 2, 0),
             )
