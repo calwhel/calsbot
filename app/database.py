@@ -6,7 +6,11 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
-from app.advisory_lock_ids import APP_NAME_EXECUTOR, APP_NAME_WEB
+from app.advisory_lock_ids import (
+    APP_NAME_EXECUTOR,
+    APP_NAME_FOREX_EXECUTOR,
+    APP_NAME_WEB,
+)
 from app.config import settings
 from app.db_resilience import is_transient_db_error, run_with_db_retry
 import logging
@@ -106,9 +110,9 @@ _bg_pool_overflow = int(os.getenv("BG_POOL_OVERFLOW", "10"))
 BG_DB_RESERVE = int(os.getenv("BG_DB_RESERVE", "5"))
 bg_engine = create_engine(
     _db_url,
-    # Isolated from HTTP pool. Peak load ≈ FOREX_MAX_CONCURRENT + MAX_CONCURRENT
-    # (eval tasks hold a session across async kline/TA fetches) + live/paper
-    # monitors + gate-stats flush. Defaults 8+10=18; tune via BG_POOL_* env.
+    # Isolated from HTTP pool. Peak load ≈ MAX_CONCURRENT crypto evals + live/paper
+    # monitors + gate-stats flush + gold-AI. Forex/tradfi uses forex_engine below.
+    # Defaults 8+10=18; tune via BG_POOL_* env.
     poolclass=QueuePool,
     pool_size=_bg_pool_size,
     max_overflow=_bg_pool_overflow,
@@ -118,6 +122,31 @@ bg_engine = create_engine(
     connect_args=_neon_connect_args(
         _BG_DB_STATEMENT_TIMEOUT_MS,
         application_name=APP_NAME_EXECUTOR,
+        lock_timeout_ms=_BG_DB_LOCK_TIMEOUT_MS,
+        keepalives_idle_s=_BG_DB_KEEPALIVES_IDLE_S,
+        keepalives_interval_s=_BG_DB_KEEPALIVES_INTERVAL_S,
+        keepalives_count=_BG_DB_KEEPALIVES_COUNT,
+    ),
+)
+
+
+# ─── Forex / tradfi executor engine ──────────────────────────────────────────
+# Ring-fenced from bg_engine so crypto prefetch/eval + monitors cannot exhaust
+# connections needed by the live forex scan + SL-management loops.
+_forex_pool_size = int(os.getenv("FOREX_POOL_SIZE", "4"))
+_forex_pool_overflow = int(os.getenv("FOREX_POOL_OVERFLOW", "4"))
+FOREX_DB_RESERVE = int(os.getenv("FOREX_DB_RESERVE", "2"))
+forex_engine = create_engine(
+    _db_url,
+    poolclass=QueuePool,
+    pool_size=_forex_pool_size,
+    max_overflow=_forex_pool_overflow,
+    pool_timeout=int(os.getenv("FOREX_POOL_TIMEOUT", "15")),
+    pool_recycle=180,
+    pool_pre_ping=True,
+    connect_args=_neon_connect_args(
+        _BG_DB_STATEMENT_TIMEOUT_MS,
+        application_name=APP_NAME_FOREX_EXECUTOR,
         lock_timeout_ms=_BG_DB_LOCK_TIMEOUT_MS,
         keepalives_idle_s=_BG_DB_KEEPALIVES_IDLE_S,
         keepalives_interval_s=_BG_DB_KEEPALIVES_INTERVAL_S,
@@ -147,7 +176,7 @@ def _register_pool_events(_eng):
             exception_context.is_disconnect = True
 
 
-for _eng in (engine, bg_engine):
+for _eng in (engine, bg_engine, forex_engine):
     _register_pool_events(_eng)
 
 
@@ -171,6 +200,7 @@ def bg_engine_runtime_profile() -> dict:
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 BgSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=bg_engine)
+ForexSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=forex_engine)
 
 _bg_db_sem: Optional[asyncio.Semaphore] = None
 _bg_slot_wait_ms: contextvars.ContextVar[float] = contextvars.ContextVar(
@@ -215,6 +245,74 @@ async def bg_db_slot():
             "[cycle-db] bg_db_slot wait=%.0fms (pool contended, limit=%s)",
             wait_ms,
             bg_db_slot_limit(),
+        )
+    try:
+        yield
+    finally:
+        sem.release()
+
+
+def forex_engine_runtime_profile() -> dict:
+    """Runtime-safe diagnostics for forex executor DB engine health guards."""
+    return {
+        "statement_timeout_ms": int(_BG_DB_STATEMENT_TIMEOUT_MS),
+        "lock_timeout_ms": int(_BG_DB_LOCK_TIMEOUT_MS),
+        "keepalives_idle_s": int(_BG_DB_KEEPALIVES_IDLE_S),
+        "keepalives_interval_s": int(_BG_DB_KEEPALIVES_INTERVAL_S),
+        "keepalives_count": int(_BG_DB_KEEPALIVES_COUNT),
+        "pool_pre_ping": bool(getattr(forex_engine.pool, "_pre_ping", False)),
+        "pool_recycle_s": 180,
+        "pool_size": int(_forex_pool_size),
+        "pool_max_overflow": int(_forex_pool_overflow),
+        "pool_hard_limit": int(forex_pool_hard_limit()),
+        "forex_db_reserve": int(FOREX_DB_RESERVE),
+        "forex_db_slot_limit": int(forex_db_slot_limit()),
+    }
+
+
+def forex_pool_hard_limit() -> int:
+    return _forex_pool_size + _forex_pool_overflow
+
+
+def forex_db_slot_limit() -> int:
+    """Max concurrent forex_engine checkouts across forex scan + SL manager."""
+    explicit = os.getenv("FOREX_DB_MAX_CONCURRENT", "").strip()
+    if explicit:
+        return max(2, int(explicit))
+    return max(2, forex_pool_hard_limit() - FOREX_DB_RESERVE)
+
+
+_forex_db_sem: Optional[asyncio.Semaphore] = None
+_forex_slot_wait_ms: contextvars.ContextVar[float] = contextvars.ContextVar(
+    "forex_slot_wait_ms", default=0.0,
+)
+
+
+def last_forex_db_slot_wait_ms() -> float:
+    """Wait time (ms) for the most recent forex_db_slot acquire in this task."""
+    return float(_forex_slot_wait_ms.get())
+
+
+def _get_forex_db_sem() -> asyncio.Semaphore:
+    global _forex_db_sem
+    if _forex_db_sem is None:
+        _forex_db_sem = asyncio.Semaphore(forex_db_slot_limit())
+    return _forex_db_sem
+
+
+@asynccontextmanager
+async def forex_db_slot():
+    """Gate forex_engine usage so concurrent evals cannot starve SL management."""
+    sem = _get_forex_db_sem()
+    t0 = time.monotonic()
+    await sem.acquire()
+    wait_ms = (time.monotonic() - t0) * 1000.0
+    _forex_slot_wait_ms.set(wait_ms)
+    if wait_ms > 500:
+        logger.warning(
+            "[cycle-db] forex_db_slot wait=%.0fms (pool contended, limit=%s)",
+            wait_ms,
+            forex_db_slot_limit(),
         )
     try:
         yield

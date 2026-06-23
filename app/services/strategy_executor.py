@@ -53,8 +53,8 @@ FOREX_MANAGE_INTERVAL_SECONDS = float(_os_env.environ.get("EXECUTOR_FOREX_MANAGE
 PAPER_MONITOR_INTERVAL      = int(_os_env.environ.get("EXECUTOR_MONITOR_INTERVAL", "10"))
 LIVE_MONITOR_INTERVAL       = int(_os_env.environ.get("EXECUTOR_LIVE_MONITOR_INTERVAL", "8"))
 MAX_CONCURRENT              = int(_os_env.environ.get("EXECUTOR_MAX_CONCURRENT", "2"))
-# Each forex eval holds bg_engine across async kline/TA fetches. Total checkout
-# slots are capped by app.database.bg_db_slot() (pool hard limit − reserve).
+# Each forex eval holds forex_engine across async kline/TA fetches (Stage B will
+# fix). Total checkout slots are capped by app.database.forex_db_slot().
 FOREX_MAX_CONCURRENT        = int(_os_env.environ.get("EXECUTOR_FOREX_MAX_CONCURRENT", "6"))
 # Cap tradfi universe breadth — prefetch + eval must scan the same capped set.
 EXECUTOR_MAX_SYMBOLS_PER_STRATEGY = max(
@@ -8644,8 +8644,8 @@ def _build_forex_worklist() -> list:
             "[FX-fast] trade_mgmt columns missing (%s) — running schema migration",
             exc,
         )
-        from app.database import bg_engine as _bg_eng
-        if ensure_trade_mgmt_columns(_bg_eng, wait_seconds=15.0):
+        from app.database import forex_engine as _fx_eng
+        if ensure_trade_mgmt_columns(_fx_eng, wait_seconds=15.0):
             return _build_forex_worklist_impl()
         logger.error(
             "[FX-fast] trade_mgmt migration failed — worklist empty this cycle"
@@ -8656,7 +8656,7 @@ def _build_forex_worklist() -> list:
 def _build_forex_worklist_impl() -> list:
     """Inner worklist query — requires trade_mgmt columns on strategy_executions."""
     import re as _re
-    from app.database import BgSessionLocal as SessionLocal
+    from app.database import ForexSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution, UserStrategy
     from app.models import User
 
@@ -8780,7 +8780,7 @@ async def _do_forex_partial_close(w: dict, price: float) -> None:
     from app.services.ctrader_client import (
         close_partial_position_for_user, modify_position_sltp_for_user,
     )
-    from app.database import BgSessionLocal as SessionLocal
+    from app.database import ForexSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution
 
     entry     = w["entry_price"]
@@ -8902,7 +8902,7 @@ async def _amend_forex_position_tick(
     import time as _time
 
     from app.services.tradfi_prices import get_price as _tradfi_get_price
-    from app.database import BgSessionLocal as SessionLocal
+    from app.database import ForexSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution, UserStrategy
     from app.services.trade_management import manage_open_position
 
@@ -9035,7 +9035,7 @@ async def _close_live_forex_execution_and_notify(
     The atomic UPDATE ... WHERE outcome='OPEN' guarantees exactly one notification
     even if loops/workers race to close the same execution.
     """
-    from app.database import BgSessionLocal as SessionLocal
+    from app.database import ForexSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution, UserStrategy
     from app.models import User
     from sqlalchemy import text as _text
@@ -9203,7 +9203,7 @@ def _build_forex_reconcile_worklist(user_id: Optional[int] = None) -> list:
     """Pure-sync DB read of open LIVE forex execs for broker close-reconciliation.
     Returns one dict per tracked position (carrying tp/sl/entry/be flag and a
     detached User for the per-user broker reconcile fetch)."""
-    from app.database import BgSessionLocal as SessionLocal
+    from app.database import ForexSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution, UserStrategy
     from app.models import User, UserPreference
     from app.services.ctrader_client import resolve_ctrader_ctid
@@ -9673,9 +9673,9 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
     shards evaluate disjoint subsets in parallel without double-firing.
     """
     from app.database import (
-        BgSessionLocal as SessionLocal,
-        bg_engine as engine,
-        bg_engine_runtime_profile,
+        ForexSessionLocal as SessionLocal,
+        forex_engine as engine,
+        forex_engine_runtime_profile,
     )
     from app.models import User
     from app.strategy_models import UserStrategy, init_strategy_tables
@@ -9715,9 +9715,9 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
         f"📈 {_fx_lbl} started (cycle={FOREX_SCAN_INTERVAL_SECONDS}s)"
     )
     try:
-        _db_prof = bg_engine_runtime_profile()
+        _db_prof = forex_engine_runtime_profile()
         logger.info(
-            "[executor-db] shard=%s/%s pre_ping=%s stmt_timeout_ms=%s "
+            "[executor-db] shard=%s/%s engine=forex pre_ping=%s stmt_timeout_ms=%s "
             "lock_timeout_ms=%s keepalive=%s/%s/%s pool=%s+%s "
             "slot_limit=%s reserve=%s",
             shard_index,
@@ -9975,7 +9975,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     from sqlalchemy.exc import OperationalError as _SAOperationalError
                     from sqlalchemy.exc import PendingRollbackError as _SAPendingRollbackError
                     from sqlalchemy.exc import TimeoutError as _SATimeoutError
-                    from app.database import bg_db_slot, last_bg_db_slot_wait_ms
+                    from app.database import forex_db_slot, last_forex_db_slot_wait_ms
                     from app.services.strategy_ta import StrategyEvalCancelled
                     _strat_t0 = time.monotonic()
                     _diag = EvalDiag()
@@ -10007,12 +10007,12 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                     (time.monotonic() - _pool_t0) * 1000.0,
                                 )
                                 try:
-                                    async with bg_db_slot():
+                                    async with forex_db_slot():
                                         strategy = db_one.merge(_strategy_row)
                                         user = db_one.merge(_user_row)
                                     _diag.db_slot_wait_ms = max(
                                         _diag.db_slot_wait_ms,
-                                        last_bg_db_slot_wait_ms(),
+                                        last_forex_db_slot_wait_ms(),
                                     )
                                     if _pre_eval_skip_no_symbols(snap):
                                         return
