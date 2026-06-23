@@ -12161,6 +12161,17 @@ function _lfStratAcctRowsHtml(d, s) {
   }).join('');
 }
 
+function _lfDynamicTpSlHtml(s) {
+  const on = !!s.dynamic_tp_sl;
+  return `<div class="lf-dynamic-tpsl" style="margin:10px 0 12px;padding:10px 12px;background:var(--surface2,rgba(255,255,255,.03));border:1px solid var(--border,rgba(255,255,255,.06));border-radius:8px">
+    <div class="toggle-row" onclick="lfToggleDynamicTpSlSwitch(${s.id})" style="margin-bottom:0;padding:0;background:transparent;border:none;cursor:pointer">
+      <div><div class="toggle-lbl">Dynamic TP/SL (Claude)</div></div>
+      <div class="switch ${on ? 'on' : ''}" id="lf-dynamic-tpsl-sw-${s.id}" data-lf-dynamic="${on ? '1' : '0'}"></div>
+    </div>
+    <div class="hint" style="margin-top:6px;font-size:11px;line-height:1.4">When on, Claude sets SL (20–60 pips) and TP (min 2× SL) per trade. When off, your fixed SL/TP is used.</div>
+  </div>`;
+}
+
 function renderLFStrategyAssignment(d) {
   const strats = d.live_strategies || [];
   if (!strats.length) return '';
@@ -12215,6 +12226,7 @@ function renderLFStrategyAssignment(d) {
           <div class="cm-lbl">Net ${pipsLbl}</div>
         </div>
       </div>
+      ${_lfDynamicTpSlHtml(s)}
       <div class="lf-strat-acct-rows">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
           <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Accounts — enable + lot size</div>
@@ -12900,6 +12912,7 @@ function renderLFLiveStrategies(strats, positions, health) {
         <span>${escHtml(s.timeframe || '—')}</span>
       </div>
       ${featHtml ? `<div class="lf-feat-badges">${featHtml}</div>` : ''}
+      ${_lfDynamicTpSlHtml(s)}
       <div class="lf-open-rows" style="${opens.length ? '' : 'display:none'}">${opens.map(_lfOpenRowHtml).join('')}</div>
       <div class="card-metrics lf-card-metrics">
         <div class="cm-item">
@@ -12928,7 +12941,6 @@ function renderLFLiveStrategies(strats, positions, health) {
         <button class="btn primary sm" onclick="openStrategyDetail(${s.id})">View trades</button>
         <button class="btn ${paused ? 'success' : 'ghost'} sm" onclick="lfToggleStrat(${s.id},'${s.status}')">${paused ? '▶ Resume' : '⏸ Pause'}</button>
         <button class="btn sm" onclick="lfEditSize(${s.id})">Edit size</button>
-        <button class="btn ${s.dynamic_tp_sl ? 'primary' : 'ghost'} sm" onclick="lfToggleDynamicTpSl(${s.id},${s.dynamic_tp_sl ? 'true' : 'false'})">${s.dynamic_tp_sl ? '✓ Dynamic TP/SL' : 'Dynamic TP/SL'}</button>
       </div>
       <div id="lf-size-edit-${s.id}" class="lf-size-edit" style="display:none"
            data-stype="${s.size_type}" data-sval="${s.size_value}"></div>
@@ -13018,18 +13030,42 @@ async function lfSaveSize(id){
   }catch(e){ toast('Network error','error'); }
 }
 
-async function lfToggleDynamicTpSl(id, currentlyOn){
-  try{
-    const r = await fetch(`/api/strategies/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({uid:UID, dynamic_tp_sl:!currentlyOn})});
-    const j = await r.json().catch(()=>({}));
-    if(r.ok && j.success){
-      toast(!currentlyOn ? 'Dynamic TP/SL enabled' : 'Dynamic TP/SL disabled — using fixed SL/TP');
-      loadLiveForex();
-    } else {
-      toast(j.detail||j.message||'Could not update Dynamic TP/SL','error');
+async function lfToggleDynamicTpSlSwitch(id) {
+  const sw = document.getElementById('lf-dynamic-tpsl-sw-' + id);
+  const wasOn = sw ? sw.classList.contains('on') : false;
+  const newOn = !wasOn;
+  if (sw) {
+    sw.classList.toggle('on', newOn);
+    sw.setAttribute('data-lf-dynamic', newOn ? '1' : '0');
+  }
+  try {
+    const r = await fetch(`/api/strategies/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uid: UID, dynamic_tp_sl: newOn }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.success) {
+      if (sw) {
+        sw.classList.toggle('on', wasOn);
+        sw.setAttribute('data-lf-dynamic', wasOn ? '1' : '0');
+      }
+      toast(j.detail || j.message || 'Could not update Dynamic TP/SL', 'error');
+      return;
     }
-  }catch(e){ toast('Network error','error'); }
+    if (_lfLiveData && _lfLiveData.live_strategies) {
+      _lfLiveData.live_strategies.forEach(st => {
+        if (st.id === id) st.dynamic_tp_sl = newOn;
+      });
+    }
+    toast(newOn ? 'Dynamic TP/SL enabled' : 'Dynamic TP/SL disabled — using fixed SL/TP');
+  } catch (e) {
+    if (sw) {
+      sw.classList.toggle('on', wasOn);
+      sw.setAttribute('data-lf-dynamic', wasOn ? '1' : '0');
+    }
+    toast('Network error', 'error');
+  }
 }
 
 async function lfToggleStrat(id, status){
