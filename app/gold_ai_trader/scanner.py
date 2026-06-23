@@ -17,7 +17,11 @@ from app.gold_ai_trader.call_gates import (
 from app.gold_ai_trader.config import GoldAiRuntimeConfig, SYMBOL, ASSET_CLASS
 from app.gold_ai_trader.funnel import record as funnel_record
 from app.gold_ai_trader.htf_bias import direction_aligns_with_htf, htf_bias_summary
-from app.gold_ai_trader.setup_toggles import setup_enabled, smt_modifier_enabled
+from app.gold_ai_trader.setup_toggles import (
+    cisd_modifier_enabled,
+    setup_enabled,
+    smt_modifier_enabled,
+)
 from app.gold_ai_trader.smt_modifier import assess_smt_divergence
 from app.gold_ai_trader.structure_score import compute_structure_score
 
@@ -97,6 +101,10 @@ def _priority_map() -> Dict[str, int]:
         "fvg_retrace_bear": 3,
         "fvg_bull": 2,
         "fvg_bear": 2,
+        "judas_bull": 5,
+        "judas_bear": 5,
+        "asian_sweep_bull": 5,
+        "asian_sweep_bear": 5,
     }
 
 
@@ -125,6 +133,7 @@ async def scan_candidates(
     cfg: GoldAiRuntimeConfig,
     price: Optional[float] = None,
     user_id: Optional[int] = None,
+    db=None,
 ) -> Tuple[Optional[float], List[Candidate]]:
     """Return (price, gated candidates). Zone setups use 15m; timing uses 5m."""
     if price is None or price <= 0:
@@ -246,6 +255,10 @@ async def scan_candidates(
             {"equal_type": "eql", "direction": "bullish", "timeframe": TF_TIMING},
             "LONG",
         ),
+        ("judas_bull", "fx_judas_swing", {"timeframe": TF_ZONE}, "LONG"),
+        ("judas_bear", "fx_judas_swing", {"timeframe": TF_ZONE}, "SHORT"),
+        ("asian_sweep_bull", "asian_sweep", {"direction": "bullish", "timeframe": TF_TIMING}, "LONG"),
+        ("asian_sweep_bear", "asian_sweep", {"direction": "bearish", "timeframe": TF_TIMING}, "SHORT"),
     ]
 
     for ctype, kind, cond, direction in checks:
@@ -254,25 +267,36 @@ async def scan_candidates(
         key = f"{ctype}:{direction}"
         if not setup_cooldown_elapsed(key):
             continue
+        cond_eval = {**cond}
+        if kind == "fx_judas_swing":
+            cond_eval["session"] = session
         try:
             if kind in ("fvg", "ifvg"):
-                ok, msg = await eval_fvg(cond, SYMBOL, price, http, cache)
+                ok, msg = await eval_fvg(cond_eval, SYMBOL, price, http, cache)
             elif kind == "fx_displacement":
-                ok, msg = await eval_fx_displacement(cond, SYMBOL, price, http, cache)
+                ok, msg = await eval_fx_displacement(cond_eval, SYMBOL, price, http, cache)
             elif kind == "forex_prev_level":
-                ok, msg = await eval_forex_prev_level(cond, SYMBOL, price, http, cache)
+                ok, msg = await eval_forex_prev_level(cond_eval, SYMBOL, price, http, cache)
             elif kind == "liquidity_sweep":
                 ok, msg = await eval_liquidity_sweep(
-                    {**cond, "type": "liquidity_sweep"}, SYMBOL, price, http, cache,
+                    {**cond_eval, "type": "liquidity_sweep"}, SYMBOL, price, http, cache,
                 )
             elif kind == "fx_sdp":
-                ok, msg = await eval_fx_sdp(cond, SYMBOL, price, http, cache)
+                ok, msg = await eval_fx_sdp(cond_eval, SYMBOL, price, http, cache)
             elif kind == "fx_breaker":
-                ok, msg = await eval_fx_breaker(cond, SYMBOL, price, http, cache)
+                ok, msg = await eval_fx_breaker(cond_eval, SYMBOL, price, http, cache)
             elif kind == "equal_hl_sweep":
-                ok, msg = await eval_equal_hl_sweep(cond, SYMBOL, price, http, cache)
+                ok, msg = await eval_equal_hl_sweep(cond_eval, SYMBOL, price, http, cache)
             elif kind == "order_block":
-                ok, msg = await eval_order_block(cond, SYMBOL, price, http, cache)
+                ok, msg = await eval_order_block(cond_eval, SYMBOL, price, http, cache)
+            elif kind == "fx_judas_swing":
+                from app.services.strategy_ta import eval_fx_judas_swing
+
+                ok, msg = await eval_fx_judas_swing(cond_eval, SYMBOL, price, http, cache)
+            elif kind == "asian_sweep":
+                from app.gold_ai_trader.asian_sweep import eval_asian_range_sweep
+
+                ok, msg = await eval_asian_range_sweep(cond_eval, SYMBOL, price, http, cache)
             else:
                 continue
         except Exception as exc:
@@ -282,13 +306,20 @@ async def scan_candidates(
         if not ok:
             continue
 
+        if kind == "fx_judas_swing":
+            msg_l = str(msg).lower()
+            if direction == "LONG" and "bullish" not in msg_l:
+                continue
+            if direction == "SHORT" and "bearish" not in msg_l:
+                continue
+
         ta_hits += 1
-        funnel_record("ta_detected", setup=ctype)
+        funnel_record("ta_detected", setup=ctype, db=db, session=session)
 
         if _requires_htf_alignment(ctype):
             aligned, align_reason = direction_aligns_with_htf(direction, bias)
             if not aligned:
-                funnel_record("htf_skipped", setup=ctype, reason=align_reason)
+                funnel_record("htf_skipped", setup=ctype, reason=align_reason, db=db, session=session)
                 logger.debug("[gold-ai-trader] HTF skip %s: %s", ctype, align_reason)
                 continue
 
@@ -306,6 +337,15 @@ async def scan_candidates(
                 http_client=http,
                 cache=cache,
                 user_id=user_id,
+            )
+
+        if cisd_modifier_enabled():
+            from app.gold_ai_trader.cisd_modifier import assess_cisd_modifier
+
+            raw["cisd"] = await assess_cisd_modifier(
+                direction=direction,
+                http_client=http,
+                cache=cache,
             )
 
         body_q = atr and abs(float(k5[-2][4]) - float(k5[-2][1])) / atr if len(k5) >= 2 else 0
@@ -341,14 +381,14 @@ async def scan_candidates(
             k_1h=k1h,
         )
         if not ok_gate:
-            funnel_record("gate_skipped", setup=ctype, reason=reason)
+            funnel_record("gate_skipped", setup=ctype, reason=reason, db=db, session=session)
             logger.debug("[gold-ai-trader] gate skip %s: %s", ctype, reason)
             continue
 
-        funnel_record("candidate_passed", setup=ctype)
+        funnel_record("candidate_passed", setup=ctype, db=db, session=session)
         found.append(cand)
 
     if ta_hits == 0:
-        funnel_record("no_ta_match")
+        funnel_record("no_ta_match", db=db, session=session)
 
     return price, found

@@ -22,6 +22,8 @@ class FunnelCounters:
     claude_skip: int = 0
     executed: int = 0
     pending_entry: int = 0
+    validator_rejected: int = 0
+    news_blocked: int = 0
     last_gate_reason: str = ""
     last_dedupe_reason: str = ""
     last_data_block: str = ""
@@ -53,6 +55,8 @@ def _maybe_roll_day() -> None:
         _COUNTERS.claude_skip = 0
         _COUNTERS.executed = 0
         _COUNTERS.pending_entry = 0
+        _COUNTERS.validator_rejected = 0
+        _COUNTERS.news_blocked = 0
         _COUNTERS.last_gate_reason = ""
         _COUNTERS.last_dedupe_reason = ""
         _COUNTERS.last_data_block = ""
@@ -60,7 +64,12 @@ def _maybe_roll_day() -> None:
         _COUNTERS.gate_reasons = {}
 
 
-def record(event: str, *, setup: Optional[str] = None, reason: Optional[str] = None) -> None:
+def _record_counters(
+    event: str,
+    *,
+    setup: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> None:
     _maybe_roll_day()
     c = _COUNTERS
     if event == "scan":
@@ -99,6 +108,34 @@ def record(event: str, *, setup: Optional[str] = None, reason: Optional[str] = N
         c.executed += 1
     elif event == "pending_entry":
         c.pending_entry += 1
+    elif event == "validator_rejected":
+        c.validator_rejected += 1
+    elif event == "news_blocked":
+        c.news_blocked += 1
+
+
+def record(
+    event: str,
+    *,
+    setup: Optional[str] = None,
+    reason: Optional[str] = None,
+    db=None,
+    session: Optional[str] = None,
+    decision_id: Optional[int] = None,
+) -> None:
+    _record_counters(event, setup=setup, reason=reason)
+    if db is None:
+        return
+    from app.gold_ai_trader.funnel_persist import persist_funnel_event
+
+    persist_funnel_event(
+        db,
+        session=session,
+        event=event,
+        setup=setup,
+        reason=reason,
+        decision_id=decision_id,
+    )
 
 
 def snapshot() -> Dict[str, Any]:
@@ -119,6 +156,8 @@ def snapshot() -> Dict[str, Any]:
         "claude_skip": c.claude_skip,
         "executed": c.executed,
         "pending_entry": c.pending_entry,
+        "validator_rejected": c.validator_rejected,
+        "news_blocked": c.news_blocked,
         "last_gate_reason": c.last_gate_reason,
         "last_dedupe_reason": c.last_dedupe_reason,
         "last_data_block": c.last_data_block,

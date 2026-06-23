@@ -9,6 +9,7 @@ from app.database import engine, Base
 from app.gold_ai_trader.models import (
     GoldAiConfig,
     GoldAiDecision,
+    GoldAiFunnelEvent,
     GoldAiLesson,
     GoldAiOutcome,
     GoldAiPendingOrder,
@@ -71,6 +72,7 @@ def ensure_gold_ai_trader_schema() -> None:
             GoldAiOutcome.__table__,
             GoldAiLesson.__table__,
             GoldAiPendingOrder.__table__,
+            GoldAiFunnelEvent.__table__,
         ],
     )
     _apply_alters()

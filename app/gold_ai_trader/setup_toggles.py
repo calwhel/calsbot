@@ -34,6 +34,10 @@ _DEFAULTS: Dict[str, bool] = {
     "breaker_bear": False,
     "eqh_sweep_bear": False,
     "eql_sweep_bull": False,
+    "judas_bull": False,
+    "judas_bear": False,
+    "asian_sweep_bull": False,
+    "asian_sweep_bear": False,
 }
 
 _ENV_KEYS: Dict[str, str] = {
@@ -57,6 +61,10 @@ _ENV_KEYS: Dict[str, str] = {
     "breaker_bear": "GOLD_AI_SETUP_BREAKER_BEAR",
     "eqh_sweep_bear": "GOLD_AI_SETUP_EQH_SWEEP",
     "eql_sweep_bull": "GOLD_AI_SETUP_EQL_SWEEP",
+    "judas_bull": "GOLD_AI_SETUP_JUDAS_BULL",
+    "judas_bear": "GOLD_AI_SETUP_JUDAS_BEAR",
+    "asian_sweep_bull": "GOLD_AI_SETUP_ASIAN_SWEEP_BULL",
+    "asian_sweep_bear": "GOLD_AI_SETUP_ASIAN_SWEEP_BEAR",
 }
 
 
@@ -67,6 +75,11 @@ def setup_enabled(setup_key: str) -> bool:
     if not env_key:
         return default
     return _env_bool(env_key, default)
+
+
+def cisd_modifier_enabled() -> bool:
+    """CISD alignment is a confidence modifier only — never a standalone fire."""
+    return _env_bool("GOLD_AI_CISD_MODIFIER", False)
 
 
 def smt_modifier_enabled() -> bool:
