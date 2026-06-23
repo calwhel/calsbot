@@ -97,8 +97,8 @@ def cache():
 
 class TestSetupToggles:
     def test_existing_setups_default_on(self):
-        os.environ.pop("GOLD_AI_SETUP_FVG_BULL", None)
-        assert setup_enabled("fvg_bull") is True
+        os.environ.pop("GOLD_AI_SETUP_FVG_RETRACE_BULL", None)
+        assert setup_enabled("fvg_retrace_bull") is True
 
     def test_new_breaker_default_off(self):
         os.environ.pop("GOLD_AI_SETUP_BREAKER_BULL", None)

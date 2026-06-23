@@ -12,8 +12,11 @@ import httpx
 
 from app.gold_ai_trader.call_gates import (
     atr_from_klines,
+    collect_key_levels,
     passes_quality_gates,
 )
+from app.gold_ai_trader.setup_readiness import compute_setup_readiness
+from app.gold_ai_trader.session_playbook import session_allows_setup
 from app.gold_ai_trader.config import GoldAiRuntimeConfig, SYMBOL, ASSET_CLASS
 from app.gold_ai_trader.funnel import record as funnel_record
 from app.gold_ai_trader.htf_bias import direction_aligns_with_htf, htf_bias_summary
@@ -72,10 +75,6 @@ def record_claude_invocation(candidate: Candidate) -> None:
     _last_claude_fired[candidate.sig_key] = time.monotonic()
 
 
-def _requires_htf_alignment(setup_key: str) -> bool:
-    return setup_key.startswith(("breaker_", "eqh_sweep_", "eql_sweep_", "judas_"))
-
-
 def _priority_map() -> Dict[str, int]:
     """Higher = preferred for Claude. Zone setups rank above sweeps; Judas is early-warning tier."""
     return {
@@ -110,7 +109,12 @@ def _sort_candidates(candidates: List[Candidate]) -> List[Candidate]:
     pri = _priority_map()
     return sorted(
         candidates,
-        key=lambda c: (pri.get(c.type, 1), c.raw.get("structure_score", 0), c.quality_atr),
+        key=lambda c: (
+            pri.get(c.type, 1),
+            c.raw.get("readiness_score", 0),
+            c.raw.get("structure_score", 0),
+            c.quality_atr,
+        ),
         reverse=True,
     )
 
@@ -170,8 +174,6 @@ async def scan_candidates(
         ("sweep_pdl", "forex_prev_level", {"condition": "sweep_pdl", "timeframe": TF_TIMING}, "LONG"),
         ("disp_bull", "fx_displacement", {"direction": "bullish", "timeframe": TF_TIMING}, "LONG"),
         ("disp_bear", "fx_displacement", {"direction": "bearish", "timeframe": TF_TIMING}, "SHORT"),
-        ("fvg_bull", "fvg", {"type": "fvg", "direction": "bullish", "timeframe": TF_TIMING, "condition": "just_formed"}, "LONG"),
-        ("fvg_bear", "fvg", {"type": "fvg", "direction": "bearish", "timeframe": TF_TIMING, "condition": "just_formed"}, "SHORT"),
         ("liq_sweep_bull", "liquidity_sweep", {"direction": "bullish", "timeframe": TF_TIMING}, "LONG"),
         ("liq_sweep_bear", "liquidity_sweep", {"direction": "bearish", "timeframe": TF_TIMING}, "SHORT"),
         ("sdp_bull", "fx_sdp", {"direction": "bullish", "timeframe": TF_TIMING}, "LONG"),
@@ -321,14 +323,22 @@ async def scan_candidates(
         ta_hits += 1
         funnel_record("ta_detected", setup=ctype, db=db, session=session)
 
-        if _requires_htf_alignment(ctype):
-            aligned, align_reason = direction_aligns_with_htf(direction, bias)
-            if not aligned:
-                funnel_record("htf_skipped", setup=ctype, reason=align_reason, db=db, session=session)
-                logger.debug("[gold-ai-trader] HTF skip %s: %s", ctype, align_reason)
-                continue
+        aligned, align_reason = direction_aligns_with_htf(direction, bias)
+        if not aligned:
+            funnel_record("htf_skipped", setup=ctype, reason=align_reason, db=db, session=session)
+            logger.debug("[gold-ai-trader] HTF skip %s: %s", ctype, align_reason)
+            continue
 
-        align_ok, align_reason = direction_aligns_with_htf(direction, bias)
+        ok_session, session_reason = session_allows_setup(
+            ctype, session, htf_align_reason=align_reason,
+        )
+        if not ok_session:
+            funnel_record(
+                "session_skipped", setup=ctype, reason=session_reason, db=db, session=session,
+            )
+            logger.debug("[gold-ai-trader] session skip %s: %s", ctype, session_reason)
+            continue
+
         raw: Dict[str, Any] = {
             "msg": msg,
             "price": price,
@@ -388,6 +398,47 @@ async def scan_candidates(
         if not ok_gate:
             funnel_record("gate_skipped", setup=ctype, reason=reason, db=db, session=session)
             logger.debug("[gold-ai-trader] gate skip %s: %s", ctype, reason)
+            continue
+
+        level_values = collect_key_levels(
+            price, session, cfg, now, k_daily, k1h, k5,
+        )
+        readiness = compute_setup_readiness(
+            setup_type=ctype,
+            direction=direction,
+            detail=str(msg),
+            price=price,
+            atr=atr,
+            k5=k5,
+            k1h=k1h,
+            bias=bias,
+            htf_align_reason=align_reason,
+            key_levels=level_values,
+            in_zone_hint=in_zone,
+            smt=raw.get("smt"),
+            now=now,
+            session=session,
+            cfg=cfg,
+        )
+        raw["readiness_score"] = readiness.score
+        raw["readiness_breakdown"] = readiness.breakdown
+        raw["readiness_checklist"] = readiness.checklist
+        raw["readiness_line"] = (
+            f"Readiness {readiness.score}/100 ({readiness.breakdown})"
+        )
+
+        if not readiness.passed:
+            funnel_record(
+                "readiness_skipped",
+                setup=ctype,
+                reason=readiness.hard_fail or f"score={readiness.score}",
+                db=db,
+                session=session,
+            )
+            logger.debug(
+                "[gold-ai-trader] readiness skip %s: %s (%s)",
+                ctype, readiness.hard_fail, readiness.breakdown,
+            )
             continue
 
         funnel_record("candidate_passed", setup=ctype, db=db, session=session)

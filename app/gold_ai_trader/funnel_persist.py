@@ -9,6 +9,9 @@ logger = logging.getLogger(__name__)
 _PERSIST_EVENTS = frozenset({
     "data_blocked",
     "gate_skipped",
+    "readiness_skipped",
+    "session_skipped",
+    "htf_skipped",
     "dedupe_skipped",
     "validator_rejected",
     "news_blocked",

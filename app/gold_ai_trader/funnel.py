@@ -14,7 +14,9 @@ class FunnelCounters:
     no_ta_match: int = 0
     ta_detected: int = 0
     htf_skipped: int = 0
+    session_skipped: int = 0
     gate_skipped: int = 0
+    readiness_skipped: int = 0
     candidates_passed: int = 0
     dedupe_skipped: int = 0
     claude_called: int = 0
@@ -47,7 +49,9 @@ def _maybe_roll_day() -> None:
         _COUNTERS.no_ta_match = 0
         _COUNTERS.ta_detected = 0
         _COUNTERS.htf_skipped = 0
+        _COUNTERS.session_skipped = 0
         _COUNTERS.gate_skipped = 0
+        _COUNTERS.readiness_skipped = 0
         _COUNTERS.candidates_passed = 0
         _COUNTERS.dedupe_skipped = 0
         _COUNTERS.claude_called = 0
@@ -84,6 +88,8 @@ def _record_counters(
             c.ta_by_setup[setup] = c.ta_by_setup.get(setup, 0) + 1
     elif event == "htf_skipped":
         c.htf_skipped += 1
+    elif event == "session_skipped":
+        c.session_skipped += 1
     elif event == "gate_skipped":
         c.gate_skipped += 1
         if reason:
@@ -92,6 +98,11 @@ def _record_counters(
             c.gate_reasons[key] = c.gate_reasons.get(key, 0) + 1
     elif event == "candidate_passed":
         c.candidates_passed += 1
+    elif event == "readiness_skipped":
+        c.readiness_skipped += 1
+        if reason:
+            key = reason.split("(")[0].strip()[:40]
+            c.gate_reasons[key] = c.gate_reasons.get(key, 0) + 1
     elif event == "no_ta_match":
         c.no_ta_match += 1
     elif event == "dedupe_skipped":
@@ -148,7 +159,9 @@ def snapshot() -> Dict[str, Any]:
         "no_ta_match": c.no_ta_match,
         "ta_detected": c.ta_detected,
         "htf_skipped": c.htf_skipped,
+        "session_skipped": c.session_skipped,
         "gate_skipped": c.gate_skipped,
+        "readiness_skipped": c.readiness_skipped,
         "candidates_passed": c.candidates_passed,
         "dedupe_skipped": c.dedupe_skipped,
         "claude_called": c.claude_called,
