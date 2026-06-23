@@ -30,6 +30,7 @@ import asyncio
 import contextvars
 import logging
 import math
+import os
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -150,6 +151,97 @@ def _atr_values(klines: List, period: int = 14) -> List[float]:
 def _atr(klines: List, period: int = 14) -> Optional[float]:
     v = _atr_values(klines, period)
     return v[-1] if v else None
+
+
+def entry_max_dist_from_zone_atr() -> float:
+    """Max chase distance beyond an entry zone, in ×ATR(14). Env-tunable."""
+    try:
+        return max(0.0, float(os.environ.get("ENTRY_MAX_DIST_FROM_ZONE_ATR", "0.35")))
+    except (TypeError, ValueError):
+        return 0.35
+
+
+def entry_zone_allows_price(
+    current_price: float,
+    zone_bottom: float,
+    zone_top: float,
+    direction: str,
+    atr: Optional[float],
+    *,
+    require_in_zone: bool = True,
+) -> Tuple[bool, str]:
+    """Entry timing guard: fire only in-zone; block chase beyond max ATR distance."""
+    if zone_bottom > zone_top:
+        zone_bottom, zone_top = zone_top, zone_bottom
+    if zone_bottom <= current_price <= zone_top:
+        return True, "in_zone"
+
+    max_dist = (entry_max_dist_from_zone_atr() * atr) if atr and atr > 0 else 0.0
+    max_label = entry_max_dist_from_zone_atr()
+    direction = (direction or "any").lower()
+    zone_lbl = f"{zone_bottom:.6g}–{zone_top:.6g}"
+
+    if direction in ("bullish", "long"):
+        if current_price > zone_top:
+            over = current_price - zone_top
+            if max_dist > 0 and over > max_dist:
+                mult = over / atr if atr else 0.0
+                return False, (
+                    f"chasing above zone ({mult:.2f}×ATR > {max_label:.2f}×ATR)"
+                )
+            return False, f"above zone — need retrace into {zone_lbl}"
+        under = zone_bottom - current_price
+        if max_dist > 0 and under > max_dist:
+            mult = under / atr if atr else 0.0
+            return False, (
+                f"too far below zone ({mult:.2f}×ATR > {max_label:.2f}×ATR)"
+            )
+        if require_in_zone:
+            return False, f"below zone — need retrace into {zone_lbl}"
+
+    elif direction in ("bearish", "short"):
+        if current_price < zone_bottom:
+            under = zone_bottom - current_price
+            if max_dist > 0 and under > max_dist:
+                mult = under / atr if atr else 0.0
+                return False, (
+                    f"chasing below zone ({mult:.2f}×ATR > {max_label:.2f}×ATR)"
+                )
+            return False, f"below zone — need retrace up into {zone_lbl}"
+        over = current_price - zone_top
+        if max_dist > 0 and over > max_dist:
+            mult = over / atr if atr else 0.0
+            return False, (
+                f"extended above zone ({mult:.2f}×ATR > {max_label:.2f}×ATR)"
+            )
+        if require_in_zone:
+            return False, f"above zone — need retrace down into {zone_lbl}"
+
+    return False, "not_in_zone"
+
+
+def _fvg_from_displacement_bar(
+    klines: List,
+    disp_i: int,
+    direction: str,
+) -> Optional[Tuple[float, float]]:
+    """Return (bottom, top) of the FVG left by displacement bar at disp_i."""
+    if disp_i - 1 < 0 or disp_i + 1 >= len(klines):
+        return None
+    try:
+        h_prev = float(klines[disp_i - 1][2])
+        l_prev = float(klines[disp_i - 1][3])
+        h_next = float(klines[disp_i + 1][2])
+        l_next = float(klines[disp_i + 1][3])
+    except (IndexError, TypeError, ValueError):
+        return None
+    if direction == "bullish":
+        bottom, top = h_prev, l_next
+    else:
+        bottom, top = h_next, l_prev
+    if bottom < top:
+        return bottom, top
+    return None
 
 def _rsi_values(closes: List[float], period: int = 14) -> List[float]:
     """Return RSI series for full closes list."""
@@ -1151,8 +1243,8 @@ async def eval_fvg(
 
     Sub-conditions (`condition` field):
         gap_exists      → any qualifying FVG present (default)
-        just_formed     → FVG completed in the last 1-2 bars (creation signal —
-                          fires on the strong-displacement bar that left the gap)
+        just_formed     → FVG formed recently AND price has retraced INTO the gap
+                          (entry-at-zone — no chase after displacement)
         price_in_gap    → current price is inside the gap zone (mitigation/retest)
         tap_and_reject  → last bar wicked into the gap and closed outside in
                           the FVG's bias direction (bull FVG = closed above top,
@@ -1250,14 +1342,30 @@ async def eval_fvg(
 
     if sub == "gap_exists":
         return True, label
+    atr_val = _atr(klines)
     if sub == "just_formed":
-        # FVG completed on the most recent 3-candle pattern. The middle bar
-        # (formation) is the second-to-last bar at minimum, so age 0-1.
-        ok = gap["age"] <= 1
-        return ok, (f"✓ Fresh {label}" if ok else f"✗ Stale FVG ({gap['age']}b old)")
+        # Entry model: displacement leaves the gap, then price retraces into it.
+        # Do NOT fire on the displacement close while price is extended away.
+        try:
+            max_retrace = int(cond.get("max_retrace_bars", cond.get("max_age_bars", 15)) or 15)
+        except (TypeError, ValueError):
+            max_retrace = 15
+        max_retrace = max(1, max_retrace)
+        ok_age = gap["age"] <= max_retrace
+        if not ok_age:
+            return False, f"✗ FVG too old for retrace entry ({gap['age']}b > {max_retrace}b)"
+        ok_zone, zone_msg = entry_zone_allows_price(
+            current_price, gap["bottom"], gap["top"], gap["type"], atr_val,
+        )
+        ok = ok_zone
+        if ok:
+            return True, f"✓ Retrace into {label}"
+        return False, f"✗ {zone_msg} ({label})"
     if sub == "price_in_gap":
-        ok = gap["bottom"] <= current_price <= gap["top"]
-        return ok, f"Price {'inside' if ok else 'not in'} {label}"
+        ok_zone, zone_msg = entry_zone_allows_price(
+            current_price, gap["bottom"], gap["top"], gap["type"], atr_val,
+        )
+        return ok_zone, f"Price {zone_msg} {label}"
     if sub == "tap_and_reject":
         # Last bar wicked into the gap zone but closed outside in the FVG's
         # directional bias. Bull FVG below price = bullish reclaim → long;
@@ -1515,7 +1623,13 @@ async def eval_order_block(
             if unmit and any(lows[j] <= ob_high * (1 + tol) for j in range(i+1, n-1)):
                 continue
             in_ob = ob_low * (1 - tol) <= current_price <= ob_high * (1 + tol)
-            return in_ob, f"Bullish {_tag} {ob_low:.6g}–{ob_high:.6g} {'HIT' if in_ob else 'miss'}"
+            if not in_ob:
+                atr_ob = _atr(klines)
+                _ok, zone_msg = entry_zone_allows_price(
+                    current_price, ob_low, ob_high, "bullish", atr_ob,
+                )
+                return False, f"Bullish {_tag} {ob_low:.6g}–{ob_high:.6g} {zone_msg}"
+            return True, f"Bullish {_tag} {ob_low:.6g}–{ob_high:.6g} HIT"
         return False, f"No qualifying bullish OB ({strength})"
     else:
         # Last bullish candle before 2+ bearish candles (impulse move down)
@@ -1536,7 +1650,13 @@ async def eval_order_block(
             if unmit and any(highs[j] >= ob_low * (1 - tol) for j in range(i+1, n-1)):
                 continue
             in_ob = ob_low * (1 - tol) <= current_price <= ob_high * (1 + tol)
-            return in_ob, f"Bearish {_tag} {ob_low:.6g}–{ob_high:.6g} {'HIT' if in_ob else 'miss'}"
+            if not in_ob:
+                atr_ob = _atr(klines)
+                _ok, zone_msg = entry_zone_allows_price(
+                    current_price, ob_low, ob_high, "bearish", atr_ob,
+                )
+                return False, f"Bearish {_tag} {ob_low:.6g}–{ob_high:.6g} {zone_msg}"
+            return True, f"Bearish {_tag} {ob_low:.6g}–{ob_high:.6g} HIT"
         return False, f"No qualifying bearish OB ({strength})"
 
 
@@ -2247,7 +2367,7 @@ _BT_KLINE_TYPES = frozenset({
     "supply_demand", "premium_discount", "equilibrium",
     "pin_bar", "engulfing", "inside_bar", "hh_hl", "lh_ll",
     "fib_retracement", "vwap_bounce", "mitigation_block",
-    "ifvg", "breaker_block", "mss", "choch", "liquidity_sweep",
+    "ifvg", "breaker_block", "mss", "choch",
 })
 
 
@@ -2702,51 +2822,164 @@ async def eval_fx_ote(
     )
 
 
-async def eval_fx_displacement(
-    cond: Dict, symbol: str, http_client, cache: Dict
+async def eval_liquidity_sweep(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict,
 ) -> Tuple[bool, str]:
-    """`fx_displacement` — institutional momentum candle.
+    """Liquidity sweep with retrace-to-reclaim entry (no mid-move chase).
 
-    A displacement candle has a body significantly larger than the recent
-    average — signalling institutional order flow entering the market.
-
-    cfg.direction:     'bullish' | 'bearish' | 'any' (default 'any')
-    cfg.min_body_ratio: body must be >= N × 14-period average body (default 3)
-    cfg.timeframe:      kline TF (default '15m')
+    Detects a recent sweep (wick beyond swing, close back through level), then
+    fires only when current price is AT the swept reclaim level — not after
+    price has already lifted/extended away from the precise reclaim point.
     """
-    direction  = (cond.get("direction") or "any").lower()
-    min_ratio  = float(cond.get("min_body_ratio") or 3.0)
-    tf         = cond.get("timeframe", "15m")
+    direction = (cond.get("direction") or "bullish").lower()
+    tf = cond.get("timeframe", "5m")
+    try:
+        swing_lookback = max(5, min(int(cond.get("swing_lookback", cond.get("lookback", 12)) or 12), 80))
+    except (TypeError, ValueError):
+        swing_lookback = 12
+    try:
+        max_scan = max(1, min(int(cond.get("max_age", 8) or 8), 30))
+    except (TypeError, ValueError):
+        max_scan = 8
 
-    klines = await _get_klines(symbol, tf, 30, http_client, cache)
+    klines = await _get_klines(symbol, tf, swing_lookback + max_scan + 5, http_client, cache)
+    if not klines or len(klines) < swing_lookback + 3:
+        return False, "LQ sweep: insufficient data"
+
+    closed = klines[:-1]
+    n = len(closed)
+    if n < swing_lookback + 2:
+        return False, "LQ sweep: insufficient closed candles"
+
+    h = _highs(closed)
+    l = _lows(closed)
+    o = _opens(closed)
+    c = _closes(closed)
+    atr_val = _atr(closed)
+
+    start = max(swing_lookback, n - max_scan)
+    for i in range(n - 1, start - 1, -1):
+        ref_lo = l[max(0, i - swing_lookback):i]
+        ref_hi = h[max(0, i - swing_lookback):i]
+        if not ref_lo or not ref_hi:
+            continue
+
+        sweep_level = None
+        if direction == "bullish":
+            recent_low = min(ref_lo)
+            if l[i] < recent_low and c[i] > recent_low and c[i] > o[i]:
+                sweep_level = recent_low
+        else:
+            recent_high = max(ref_hi)
+            if h[i] > recent_high and c[i] < recent_high and c[i] < o[i]:
+                sweep_level = recent_high
+        if sweep_level is None:
+            continue
+
+        tol = (entry_max_dist_from_zone_atr() * atr_val) if atr_val and atr_val > 0 else (
+            sweep_level * 0.0005
+        )
+        zone_bot = sweep_level - tol
+        zone_top = sweep_level + tol
+        ok_zone, zone_msg = entry_zone_allows_price(
+            current_price, zone_bot, zone_top, direction, atr_val,
+        )
+        if ok_zone:
+            return True, (
+                f"LQ sweep {direction}: reclaim @ {sweep_level:.6g} "
+                f"(bar -{n - 1 - i}) price={current_price:.6g} → FIRED"
+            )
+        return False, (
+            f"LQ sweep {direction}: sweep @ {sweep_level:.6g} but {zone_msg} "
+            f"(price={current_price:.6g})"
+        )
+
+    return False, f"LQ sweep {direction}: no recent sweep with retrace entry"
+
+
+async def eval_fx_displacement(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict,
+) -> Tuple[bool, str]:
+    """`fx_displacement` — displacement with retrace-into-zone entry.
+
+    cfg.direction: 'bullish' | 'bearish' | 'any' (default 'any')
+    cfg.min_body_ratio: body >= N × avg body (default 3)
+    cfg.max_age: scan recent displacement bars (default 8)
+    cfg.timeframe: kline TF (default '15m')
+    """
+    direction = (cond.get("direction") or "any").lower()
+    min_ratio = float(cond.get("min_body_ratio") or 3.0)
+    tf = cond.get("timeframe", "15m")
+    try:
+        max_age = max(1, min(int(cond.get("max_age") or 8), 30))
+    except (TypeError, ValueError):
+        max_age = 8
+
+    klines = await _get_klines(symbol, tf, max(30, max_age + 20), http_client, cache)
     if not klines or len(klines) < 5:
         return False, "DISPLACE: insufficient data"
 
-    closes = _closes(klines)
-    opens  = _opens(klines)
+    closed = klines[:-1]
+    n = len(closed)
+    if n < 5:
+        return False, "DISPLACE: insufficient closed candles"
 
-    # Average body size over the lookback (exclude last candle)
-    bodies = [abs(closes[i] - opens[i]) for i in range(len(klines) - 1)]
-    avg_body = sum(bodies) / len(bodies) if bodies else 0
+    closes = _closes(closed)
+    opens = _opens(closed)
+    highs = _highs(closed)
+    lows = _lows(closed)
+
+    bodies = [abs(closes[i] - opens[i]) for i in range(n)]
+    avg_body = sum(bodies[:-1]) / max(1, len(bodies) - 1) if bodies else 0
     if avg_body == 0:
         return False, "DISPLACE: zero avg body"
 
-    # Last closed candle (index -2 = last complete; -1 may be forming)
-    last_body    = abs(closes[-2] - opens[-2])
-    is_bullish_c = closes[-2] > opens[-2]
-    is_bearish_c = closes[-2] < opens[-2]
+    atr_val = _atr(closed)
+    price = current_price if current_price and current_price > 0 else closes[-1]
 
-    dir_ok = (
-        direction == "any" or
-        (direction == "bullish" and is_bullish_c) or
-        (direction == "bearish" and is_bearish_c)
-    )
-    ratio = last_body / avg_body
-    fired = dir_ok and ratio >= min_ratio
-    dir_lbl = "bullish" if is_bullish_c else "bearish"
-    return fired, (
-        f"Displacement ({dir_lbl}): body={last_body:.6g} ratio={ratio:.2f}× avg "
-        f"(need ≥{min_ratio}×) → {'FIRED' if fired else 'miss'}"
+    start = max(1, n - max_age)
+    for disp_i in range(n - 2, start - 1, -1):
+        last_body = bodies[disp_i]
+        is_bullish_c = closes[disp_i] > opens[disp_i]
+        is_bearish_c = closes[disp_i] < opens[disp_i]
+        dir_lbl = "bullish" if is_bullish_c else "bearish"
+        disp_dir = dir_lbl if direction == "any" else direction
+
+        dir_ok = (
+            direction == "any"
+            or (direction == "bullish" and is_bullish_c)
+            or (direction == "bearish" and is_bearish_c)
+        )
+        ratio = last_body / avg_body
+        if not (dir_ok and ratio >= min_ratio):
+            continue
+
+        if disp_i >= n - 1:
+            continue
+
+        fvg = _fvg_from_displacement_bar(closed, disp_i, disp_dir)
+        if fvg:
+            zone_bot, zone_top = fvg
+        else:
+            zone_bot = min(opens[disp_i], closes[disp_i], lows[disp_i])
+            zone_top = max(opens[disp_i], closes[disp_i], highs[disp_i])
+
+        ok_zone, zone_msg = entry_zone_allows_price(
+            price, zone_bot, zone_top, disp_dir, atr_val,
+        )
+        if ok_zone:
+            return True, (
+                f"Displacement retrace ({dir_lbl}): body={last_body:.6g} "
+                f"ratio={ratio:.2f}× avg zone={zone_bot:.6g}–{zone_top:.6g} "
+                f"price={price:.6g} → FIRED"
+            )
+        return False, (
+            f"Displacement ({dir_lbl}): ratio={ratio:.2f}× avg but {zone_msg} "
+            f"(zone={zone_bot:.6g}–{zone_top:.6g} price={price:.6g})"
+        )
+
+    return False, (
+        f"Displacement: no recent {direction} impulse with retrace into zone"
     )
 
 
@@ -2932,12 +3165,20 @@ async def eval_fx_sdp(
             continue
 
         # Pullback: current price has retraced back into the displacement FVG.
-        if gap_bottom <= price <= gap_top:
+        atr_val = _atr(closed)
+        ok_zone, zone_msg = entry_zone_allows_price(
+            price, gap_bottom, gap_top, direction, atr_val,
+        )
+        if ok_zone:
             return True, (
                 f"SDP {direction}: sweep@{sweep_lvl:.6g} → displacement "
                 f"{bodies[d]/avg_body:.1f}×avg (bar -{n - 1 - d}) → pullback into FVG "
                 f"[{gap_bottom:.6g}…{gap_top:.6g}] price={price:.6g} → FIRED"
             )
+        return False, (
+            f"SDP {direction}: sweep→displacement ok but {zone_msg} "
+            f"(FVG [{gap_bottom:.6g}…{gap_top:.6g}] price={price:.6g})"
+        )
 
     return False, (
         f"SDP {direction}: no sweep→displacement→pullback with price inside the FVG"
@@ -4098,7 +4339,7 @@ async def evaluate_strategy_conditions(
             elif ctype == "fx_ote":
                 return await eval_fx_ote(cond, symbol, price, http_client, cache)
             elif ctype == "fx_displacement":
-                return await eval_fx_displacement(cond, symbol, http_client, cache)
+                return await eval_fx_displacement(cond, symbol, price, http_client, cache)
             elif ctype == "fx_equal_hl":
                 return await eval_fx_equal_hl(cond, symbol, price, http_client, cache)
             elif ctype == "fx_cisd":
@@ -4141,6 +4382,8 @@ async def evaluate_strategy_conditions(
                 return await eval_pivot_points(cond, symbol, price, http_client, cache)
             elif ctype == "session_level":
                 return await eval_session_level(cond, symbol, price, http_client, cache)
+            elif ctype == "liquidity_sweep":
+                return await eval_liquidity_sweep(cond, symbol, price, http_client, cache)
             elif ctype in _BT_KLINE_TYPES:
                 return await eval_bt_klines_cond(cond, symbol, http_client, cache)
             else:
