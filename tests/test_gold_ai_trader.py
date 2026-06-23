@@ -66,9 +66,10 @@ def test_confidence_threshold_env_override():
 
 def test_system_prompt_uses_configurable_threshold():
     prompt = system_prompt(50)
-    assert "Only 50+ may be a \"take\"" in prompt
     assert "If confidence is below 50, action MUST be skip." in prompt
-    assert "Default action is SKIP" in SYSTEM_PROMPT
+    assert "positive expectancy" in prompt.lower()
+    assert "50–59" in prompt or "50-59" in prompt
+    assert "institutional" in SYSTEM_PROMPT.lower()
 
 
 def test_gold_data_ok_requires_ctrader_sources():
@@ -299,7 +300,7 @@ def test_claude_dry_run_skip():
 
 
 def test_system_prompt_cached_block_present():
-    assert "Default action is SKIP" in SYSTEM_PROMPT
+    assert "positive expectancy" in SYSTEM_PROMPT.lower()
 
 
 def test_context_builder_shape():

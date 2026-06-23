@@ -360,6 +360,7 @@ def format_readiness_block(result: ReadinessResult, setup_type: str) -> List[str
     if result.hard_fail:
         lines.append(f"Hard gate note: {result.hard_fail}")
     lines.append(
-        "Score confidence ≥50 only if ≥6/8 checklist items pass AND spot is at entry with HTF aligned."
+        "Engine readiness passed — score confidence using institutional bands; "
+        "50–60 is tradable when entry/stop/2:1 R:R are valid (not auto-skip)."
     )
     return lines
