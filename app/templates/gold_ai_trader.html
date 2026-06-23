@@ -1267,6 +1267,7 @@
           <input id="max-live-trades" type="number" min="1" max="20" value="3"/>
         </label>
         <button type="button" class="btn-danger-action" id="btn-live-enable">Enable live mirror</button>
+        <button type="button" class="btn-secondary" id="btn-save-live-size" style="display:none">Save live lots</button>
         <button type="button" class="btn-danger-outline" id="btn-live-disconnect" style="display:none">Disconnect</button>
       </div>
       <p class="live-status-line" id="live-mirror-status-line">Live mirror is off.</p>
@@ -1648,9 +1649,10 @@ function renderLiveMirror(j) {
   document.getElementById('max-live-trades').value = c.max_live_trades_day ?? 3;
 
   document.getElementById('btn-live-enable').style.display = enabled ? 'none' : 'inline-flex';
+  document.getElementById('btn-save-live-size').style.display = enabled ? 'inline-flex' : 'none';
   document.getElementById('btn-live-disconnect').style.display = enabled ? 'inline-flex' : 'none';
   sel.disabled = enabled;
-  liveLotsEl.disabled = enabled;
+  liveLotsEl.disabled = false;
   document.getElementById('max-live-trades').disabled = enabled;
 
   const statusLine = document.getElementById('live-mirror-status-line');
@@ -1893,6 +1895,23 @@ document.getElementById('btn-save-demo-size').onclick = async () => {
   });
   showToast('Demo size updated');
   btn.textContent = 'Apply';
+  btn.disabled = false;
+  refresh();
+};
+
+document.getElementById('btn-save-live-size').onclick = async () => {
+  const btn = document.getElementById('btn-save-live-size');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  const liveLots = +document.getElementById('live-lot-size').value || 0.01;
+  const maxLive = +document.getElementById('max-live-trades').value || 3;
+  await _apiFetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST',
+    body: JSON.stringify({ live_lot_size: liveLots, max_live_trades_day: maxLive }),
+  });
+  _liveLotsOverridden = true;
+  showToast(`Live size updated to ${liveLots} lots`);
+  btn.textContent = 'Save live lots';
   btn.disabled = false;
   refresh();
 };

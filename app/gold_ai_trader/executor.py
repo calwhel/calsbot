@@ -242,7 +242,7 @@ async def execute_take_market(
         prefs=prefs,
         symbol_name=SYMBOL,
         direction=direction,
-        volume_lots=cfg.min_lot,
+        volume_lots=max(0.01, float(cfg.demo_lot_size or cfg.min_lot or 0.01)),
         stop_loss_price=sl,
         take_profit_price=tp,
         entry_price=entry,

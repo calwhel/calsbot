@@ -70,7 +70,7 @@ async def try_place_broker_limit(
             prefs=prefs,
             symbol_name=SYMBOL,
             direction=direction,
-            volume_lots=cfg.min_lot,
+            volume_lots=max(0.01, float(cfg.demo_lot_size or cfg.min_lot or 0.01)),
             limit_price=entry,
             entry_price=entry,
             stop_loss_price=sl,
