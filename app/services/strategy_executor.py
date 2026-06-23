@@ -2130,20 +2130,124 @@ def _prefetch_cycle_gate_data(
         db.close()
 
 
-def _ctrader_lot_params_for_target(target: dict, risk: dict, ps_type: str) -> tuple:
-    """Return (fixed_lots, use_risk_pct) for one fire target."""
+def _ctrader_lot_params_for_target(
+    target: dict,
+    risk: dict,
+    ps_type: str,
+    *,
+    ctid: str = "",
+    strategy=None,
+    db=None,
+    prefs=None,
+) -> tuple:
+    """Return (fixed_lots, use_risk_pct) for one fire target / account."""
+    fixed, use_risk = _resolve_ctrader_fixed_lots(
+        ctid=ctid or str(
+            (target or {}).get("ctrader_account_id")
+            or (target or {}).get("ctid")
+            or ""
+        ).strip(),
+        target=target,
+        strategy=strategy,
+        risk=risk,
+        ps_type=ps_type,
+        db=db,
+        prefs=prefs,
+    )
+    return fixed, use_risk
+
+
+def _resolve_ctrader_fixed_lots(
+    *,
+    ctid: str,
+    target: Optional[dict],
+    strategy,
+    risk: dict,
+    ps_type: str,
+    db=None,
+    prefs=None,
+) -> tuple:
+    """Per-account lot sizing — never apply another account's lot or legacy binding."""
+    ctid = str(ctid or "").strip()
     _use_risk_pct = bool(risk.get("use_risk_pct"))
     _fixed_lots = float(risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
-    lot = target.get("lot_size")
-    if lot is not None:
+    _fallback_reason = "strategy_risk_lots" if _fixed_lots > 0 else "risk_pct"
+
+    def _apply_lot(raw_lot, reason: str) -> Optional[tuple]:
+        if raw_lot is None:
+            return None
         try:
             from app.services.ctrader_client import normalize_account_lot
-            _nl = normalize_account_lot(lot)
-            if _nl:
-                _fixed_lots = _nl
-                _use_risk_pct = False
+
+            normalized = normalize_account_lot(raw_lot)
+            if normalized:
+                return normalized, False, reason
         except Exception:
             pass
+        return None
+
+    target = dict(target or {})
+    if ctid:
+        t_ctid = str(
+            target.get("ctrader_account_id") or target.get("ctid") or ""
+        ).strip()
+        if t_ctid and t_ctid != ctid:
+            target = {}
+
+    applied = _apply_lot(target.get("lot_size"), "assignment_target")
+    if applied:
+        return applied[0], applied[1]
+
+    if db and ctid and strategy is not None and getattr(strategy, "id", None):
+        try:
+            from app.strategy_models import StrategyAccountAssignment
+
+            row = (
+                db.query(StrategyAccountAssignment)
+                .filter(
+                    StrategyAccountAssignment.strategy_id == strategy.id,
+                    StrategyAccountAssignment.ctrader_account_id == ctid,
+                    StrategyAccountAssignment.enabled.is_(True),
+                )
+                .first()
+            )
+            if row:
+                applied = _apply_lot(row.lot_size, "assignment_row")
+                if applied:
+                    return applied[0], applied[1]
+                if row.lot_size is None:
+                    _fallback_reason = "assignment_lot_missing"
+        except Exception:
+            pass
+
+    legacy_ctid = (getattr(strategy, "ctrader_account_id", None) or "").strip()
+    if legacy_ctid and ctid and legacy_ctid == ctid:
+        applied = _apply_lot(getattr(strategy, "ctrader_account_lot", None), "legacy_strategy_lot")
+        if applied:
+            return applied[0], applied[1]
+
+    pref_lot = getattr(prefs, "lot_size", None) if prefs else None
+    applied = _apply_lot(pref_lot, "prefs_default_lot")
+    if applied:
+        if _fallback_reason == "assignment_lot_missing":
+            logger.warning(
+                "[live-fire] strategy=%s ctid=%s using prefs lot=%s "
+                "(enabled assignment has no lot_size — set per-account lots in Live Forex)",
+                getattr(strategy, "id", "?"),
+                ctid,
+                applied[0],
+            )
+        return applied[0], applied[1]
+
+    if _fixed_lots > 0:
+        logger.warning(
+            "[live-fire] strategy=%s ctid=%s using strategy risk lots=%s "
+            "(no per-account lot — set lot size on each enabled account in Live Forex)",
+            getattr(strategy, "id", "?"),
+            ctid,
+            _fixed_lots,
+        )
+        return _fixed_lots, False
     return _fixed_lots, _use_risk_pct
 
 
@@ -2624,7 +2728,15 @@ async def _ctrader_fanout_live_fire_impl(
             target.get("ctrader_account_id") or target.get("ctid")
             or ex.ctrader_account_id or ""
         ).strip()
-        _fixed_lots, _use_risk_pct = _ctrader_lot_params_for_target(target, risk, ps_type)
+        _fixed_lots, _use_risk_pct = _ctrader_lot_params_for_target(
+            target,
+            risk,
+            ps_type,
+            ctid=ctid,
+            strategy=strategy,
+            db=db,
+            prefs=_fan_prefs,
+        )
         _job_sl_pips = (
             float(_dyn_sl_pips)
             if asset_class == "forex" and _dyn_sl_pips
@@ -6421,6 +6533,7 @@ async def evaluate_and_fire(
                 if len(_fire_targets) == 1 else None
             )
             _preset_lot = _fire_targets[0]["lot_size"] if len(_fire_targets) == 1 else None
+            _preset_target = _fire_targets[0] if len(_fire_targets) == 1 else None
 
             execution = StrategyExecution(
                 strategy_id    = strategy.id,
@@ -6603,27 +6716,37 @@ async def evaluate_and_fire(
                         # and computes lots = risk% × balance / (sl_pips × pip_value).
                         # When the user picked an explicit lot size (position_size_type
                         # == 'lots'), fixed_lots takes priority over every other mode.
-                        _use_risk_pct = bool(risk.get("use_risk_pct"))
                         _risk_pct_per = float(risk.get("risk_pct_per_trade") or risk.get("position_size_pct") or 1.0)
-                        _fixed_lots   = float(risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
-                        if _preset_lot is not None:
-                            try:
-                                from app.services.ctrader_client import normalize_account_lot
-                                _nl = normalize_account_lot(_preset_lot)
-                                if _nl:
-                                    _fixed_lots = _nl
-                                    _use_risk_pct = False
-                            except Exception:
-                                pass
-                        elif getattr(strategy, "ctrader_account_lot", None) is not None:
-                            try:
-                                from app.services.ctrader_client import normalize_account_lot
-                                _nl = normalize_account_lot(strategy.ctrader_account_lot)
-                                if _nl:
-                                    _fixed_lots = _nl
-                                    _use_risk_pct = False
-                            except Exception:
-                                pass
+                        _job_ctid = None
+                        _job_prefs = None
+                        _single_target = _preset_target
+                        try:
+                            from app.models import UserPreference as _UP_job
+                            from app.services.ctrader_client import resolve_ctrader_ctid
+                            _job_prefs = db.query(_UP_job).filter(_UP_job.user_id == user.id).first()
+                            _job_ctid = _preset_ctid or resolve_ctrader_ctid(
+                                strategy_account_id=getattr(strategy, "ctrader_account_id", None),
+                                execution_account_id=getattr(execution, "ctrader_account_id", None),
+                                prefs_default=(
+                                    _job_prefs.ctrader_account_id if _job_prefs else None
+                                ),
+                            )
+                        except Exception:
+                            pass
+                        if _job_ctid and not _single_target:
+                            _single_target = {
+                                "ctrader_account_id": _job_ctid,
+                                "lot_size": _preset_lot,
+                            }
+                        _fixed_lots, _use_risk_pct = _resolve_ctrader_fixed_lots(
+                            ctid=str(_job_ctid or ""),
+                            target=_single_target,
+                            strategy=strategy,
+                            risk=risk,
+                            ps_type=ps_type,
+                            db=db,
+                            prefs=_job_prefs,
+                        )
                         # In partial-runner mode the broker TP must be TP2 (final target);
                         # otherwise it stays at the strategy's TP1.
                         _live_tp_pct  = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
@@ -6694,20 +6817,6 @@ async def evaluate_and_fire(
                             if _dyn_sl_pips
                             else float(ex_config.get("stop_loss_pips") or 0) or None
                         )
-                        _job_ctid = None
-                        _job_prefs = None
-                        try:
-                            from app.models import UserPreference as _UP_job
-                            from app.services.ctrader_client import resolve_ctrader_ctid
-                            _job_prefs = db.query(_UP_job).filter(_UP_job.user_id == user.id).first()
-                            _job_ctid = _preset_ctid or resolve_ctrader_ctid(
-                                strategy_account_id=getattr(strategy, "ctrader_account_id", None),
-                                prefs_default=(
-                                    _job_prefs.ctrader_account_id if _job_prefs else None
-                                ),
-                            )
-                        except Exception:
-                            pass
                         _job = CtraderOrderJob(
                             user_id=user.id,
                             strategy_id=strategy.id,
@@ -6733,7 +6842,10 @@ async def evaluate_and_fire(
                             latency=new_order_latency(execution.id, _signal_mono),
                         )
                         _single_target = (
-                            {"ctrader_account_id": _job_ctid, "lot_size": _preset_lot}
+                            {
+                                "ctrader_account_id": _job_ctid,
+                                "lot_size": _fixed_lots or _preset_lot,
+                            }
                             if _job_ctid else None
                         )
                         _log_live_order_route(
@@ -7462,27 +7574,29 @@ async def _propagate_to_subscribers(
                 try:
                     ps_type      = sub_risk.get("position_size_type", "pct")
                     _sub_risk_usd = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None
-                    _sub_fixed_lots = float(sub_risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
-                    _sub_acct_lot = getattr(sub_strategy, "ctrader_account_lot", None)
-                    if _sub_fire_targets:
-                        _t0 = _sub_fire_targets[0]
-                        _t_lot = _t0.get("lot_size")
-                        if _t_lot is not None:
-                            try:
-                                from app.services.ctrader_client import normalize_account_lot
-                                _snl = normalize_account_lot(_t_lot)
-                                if _snl:
-                                    _sub_fixed_lots = _snl
-                            except Exception:
-                                pass
-                    elif _sub_acct_lot is not None:
-                        try:
-                            from app.services.ctrader_client import normalize_account_lot
-                            _snl = normalize_account_lot(_sub_acct_lot)
-                            if _snl:
-                                _sub_fixed_lots = _snl
-                        except Exception:
-                            pass
+                    _sub_job_ctid = None
+                    _sub_target = _sub_fire_targets[0] if _sub_fire_targets else None
+                    if _sub_target:
+                        _sub_job_ctid = str(
+                            _sub_target.get("ctrader_account_id")
+                            or _sub_target.get("ctid")
+                            or ""
+                        ).strip() or None
+                    _sub_prefs = None
+                    try:
+                        from app.models import UserPreference as _UP_sub
+                        _sub_prefs = db.query(_UP_sub).filter(_UP_sub.user_id == user.id).first()
+                    except Exception:
+                        pass
+                    _sub_fixed_lots, _sub_use_risk_pct = _resolve_ctrader_fixed_lots(
+                        ctid=str(_sub_job_ctid or ""),
+                        target=_sub_target,
+                        strategy=sub_strategy,
+                        risk=sub_risk,
+                        ps_type=ps_type,
+                        db=db,
+                        prefs=_sub_prefs,
+                    )
                     if _sub_broker == "ctrader":
                         from app.services.ctrader_order_queue import (
                             CtraderOrderJob, enqueue_ctrader_order, start_ctrader_order_worker,
@@ -7490,21 +7604,11 @@ async def _propagate_to_subscribers(
                         from app.services.order_latency import new_order_latency
                         start_ctrader_order_worker()
                         _sub_signal_mono = time.monotonic()
-                        _sub_use_risk_pct = bool(sub_risk.get("use_risk_pct"))
-                        if _sub_acct_lot is not None and _sub_fixed_lots > 0:
-                            _sub_use_risk_pct = False
                         _sub_risk_pct = float(
                             sub_risk.get("risk_pct_per_trade")
                             or sub_risk.get("position_size_pct")
                             or 1.0
                         )
-                        _sub_job_ctid = None
-                        if _sub_fire_targets:
-                            _sub_job_ctid = str(
-                                _sub_fire_targets[0].get("ctrader_account_id")
-                                or _sub_fire_targets[0].get("ctid")
-                                or ""
-                            ).strip() or None
                         if not _sub_job_ctid:
                             logger.warning(
                                 "[Propagate] strategy=%s no explicit assignment ctid — "

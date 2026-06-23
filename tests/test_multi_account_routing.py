@@ -130,5 +130,64 @@ class TestFireTargetsHelper(unittest.TestCase):
         self.assertEqual(targets[1]["lot_size"], 0.25)
 
 
+class TestResolveCtraderFixedLots(unittest.TestCase):
+    def test_per_account_lot_not_legacy_other_account(self):
+        from app.services.strategy_executor import _resolve_ctrader_fixed_lots
+
+        strategy = SimpleNamespace(
+            id=1,
+            ctrader_account_id="999",
+            ctrader_account_lot=0.25,
+        )
+        risk = {"position_size_type": "lots", "position_size_lots": 0.25}
+        lots, use_risk = _resolve_ctrader_fixed_lots(
+            ctid="111",
+            target={"ctrader_account_id": "111", "lot_size": 0.03},
+            strategy=strategy,
+            risk=risk,
+            ps_type="lots",
+        )
+        self.assertEqual(lots, 0.03)
+        self.assertFalse(use_risk)
+
+    def test_legacy_lot_only_when_ctid_matches(self):
+        from app.services.strategy_executor import _resolve_ctrader_fixed_lots
+
+        strategy = SimpleNamespace(
+            id=1,
+            ctrader_account_id="111",
+            ctrader_account_lot=0.03,
+        )
+        risk = {"position_size_type": "lots", "position_size_lots": 0.25}
+        lots, _ = _resolve_ctrader_fixed_lots(
+            ctid="111",
+            target={"ctrader_account_id": "111", "lot_size": None},
+            strategy=strategy,
+            risk=risk,
+            ps_type="lots",
+        )
+        self.assertEqual(lots, 0.03)
+
+    def test_wrong_account_does_not_use_legacy_lot(self):
+        from app.services.strategy_executor import _resolve_ctrader_fixed_lots
+
+        strategy = SimpleNamespace(
+            id=1,
+            ctrader_account_id="999",
+            ctrader_account_lot=0.25,
+        )
+        prefs = SimpleNamespace(lot_size=0.05)
+        risk = {"position_size_type": "lots", "position_size_lots": 0.25}
+        lots, _ = _resolve_ctrader_fixed_lots(
+            ctid="111",
+            target={"ctrader_account_id": "111", "lot_size": None},
+            strategy=strategy,
+            risk=risk,
+            ps_type="lots",
+            prefs=prefs,
+        )
+        self.assertEqual(lots, 0.05)
+
+
 if __name__ == "__main__":
     unittest.main()
