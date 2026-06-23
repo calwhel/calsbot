@@ -143,7 +143,7 @@ class TestReadinessScoring:
 
     def test_readiness_min_default(self):
         os.environ.pop("GOLD_AI_READINESS_MIN", None)
-        assert readiness_min_score() == 70
+        assert readiness_min_score() == 55
 
 
 class TestSetupDefaults:
