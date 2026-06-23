@@ -1672,20 +1672,17 @@ async def eval_open_interest(
 # ─── 14. SESSION FILTER ───────────────────────────────────────────────────────
 
 def eval_session(cond: Dict) -> Tuple[bool, str]:
+    from app.services.forex_sessions import is_named_session_active
+
     sessions = [s.lower() for s in cond.get("sessions", ["london", "new_york"])]
-    hour = datetime.now(timezone.utc).hour
-    SESSION_HOURS = {
-        "asian":    (0, 8),   "tokyo":    (0, 8),
-        "london":   (7, 16),  "europe":   (7, 16),
-        "new_york": (13, 22), "ny":       (13, 22),
-        "overlap":  (13, 16),
-    }
-    active = []
-    for name, (start, end) in SESSION_HOURS.items():
-        if start <= hour < end:
-            active.append(name)
-    r = any(s in active for s in sessions)
-    return r, f"Session: hour={hour}UTC active={active}"
+    now = datetime.now(timezone.utc)
+    check_ids = (
+        "asian", "asia", "tokyo", "london", "europe",
+        "new_york", "ny", "newyork", "overlap",
+    )
+    active = [name for name in check_ids if is_named_session_active(name, now)]
+    r = any(is_named_session_active(s, now) for s in sessions)
+    return r, f"Session: hour={now.hour}UTC active={active}"
 
 
 # ─── 15. PRICE RELATIVE ───────────────────────────────────────────────────────

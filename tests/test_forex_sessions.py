@@ -8,24 +8,29 @@ from unittest.mock import AsyncMock, patch
 
 from app.services import forex_claude_confirm as fcc
 from app.services import forex_sessions as fs
+from app.services.forex_engine import in_session
 from app.services.session_filter import is_in_allowed_session
-from app.services.strategy_ta import eval_fx_killzone
+from app.services.strategy_ta import eval_forex_session, eval_fx_killzone
 
 
 class TestLiveForexSessionWindows(unittest.TestCase):
     OUTSIDE = [
-        datetime(2026, 6, 18, 16, 0),
-        datetime(2026, 6, 18, 10, 0),
-        datetime(2026, 6, 18, 11, 0),
-        datetime(2026, 6, 18, 9, 0),   # London ends 09:00 exclusive
         datetime(2026, 6, 18, 5, 0),
+        datetime(2026, 6, 18, 21, 0),
+        datetime(2026, 6, 18, 22, 0),
+        datetime(2026, 6, 18, 0, 30),   # before Asia 01:00
     ]
-    INSIDE = [
-        (datetime(2026, 6, 18, 7, 0), "london"),
-        (datetime(2026, 6, 18, 8, 0), "london"),  # 08:00 UTC is inside London 06–09
-        (datetime(2026, 6, 18, 13, 0), "new_york"),
-        (datetime(2026, 6, 18, 2, 0), "asia"),
+    INSIDE_LONDON = [
+        datetime(2026, 6, 18, 10, 0),
+        datetime(2026, 6, 18, 13, 0),
+        datetime(2026, 6, 18, 15, 0),
     ]
+
+    def test_canonical_windows(self):
+        self.assertEqual(fs.LIVE_FOREX_SESSIONS["london"], (7, 0, 16, 0))
+        self.assertEqual(fs.LIVE_FOREX_SESSIONS["new_york"], (12, 0, 21, 0))
+        self.assertEqual(fs.LIVE_FOREX_SESSIONS["asia"], (1, 0, 4, 0))
+        self.assertEqual(fs.overlap_window(), (12, 0, 16, 0))
 
     def test_outside_windows_not_in_live_session(self):
         for dt in self.OUTSIDE:
@@ -34,16 +39,22 @@ class TestLiveForexSessionWindows(unittest.TestCase):
                 msg=f"expected outside at {dt}",
             )
 
-    def test_inside_windows_active_session(self):
-        for dt, expected in self.INSIDE:
+    def test_inside_london_windows(self):
+        for dt in self.INSIDE_LONDON:
             self.assertTrue(fs.in_live_forex_session(dt), msg=str(dt))
-            self.assertEqual(fs.active_live_forex_session(dt), expected)
+            self.assertEqual(fs.active_live_forex_session(dt), "london")
+
+    def test_asia_window(self):
+        self.assertTrue(fs.in_live_forex_session(datetime(2026, 6, 18, 2, 0)))
+        self.assertEqual(
+            fs.active_live_forex_session(datetime(2026, 6, 18, 2, 0)), "asia"
+        )
 
     def test_session_filter_matches_confirm_gate(self):
         for dt in self.OUTSIDE:
             self.assertFalse(fcc.in_forex_claude_confirm_session(dt))
             self.assertFalse(fs.in_live_forex_session(dt))
-        for dt, _ in self.INSIDE:
+        for dt in self.INSIDE_LONDON:
             self.assertEqual(
                 fcc.in_forex_claude_confirm_session(dt),
                 fs.in_live_forex_session(dt),
@@ -54,15 +65,58 @@ class TestLiveForexSessionWindows(unittest.TestCase):
         ok, _ = is_in_allowed_session(cfg, datetime(2026, 6, 18, 7, 30))
         self.assertTrue(ok)
         ok, reason = is_in_allowed_session(cfg, datetime(2026, 6, 18, 10, 0))
+        self.assertTrue(ok)
+        ok, reason = is_in_allowed_session(cfg, datetime(2026, 6, 18, 17, 0))
         self.assertFalse(ok)
         self.assertEqual(reason, "session_filter")
 
     def test_live_forex_session_allowed_requires_canonical_window(self):
-        ok, reason = fs.live_forex_session_allowed({}, datetime(2026, 6, 18, 11, 0))
+        ok, reason = fs.live_forex_session_allowed({}, datetime(2026, 6, 18, 5, 0))
         self.assertFalse(ok)
         self.assertEqual(reason, "outside_live_forex_session")
-        ok, _ = fs.live_forex_session_allowed({}, datetime(2026, 6, 18, 7, 0))
-        self.assertTrue(ok)
+        for dt in self.INSIDE_LONDON:
+            ok, _ = fs.live_forex_session_allowed({}, dt)
+            self.assertTrue(ok, msg=str(dt))
+
+
+class TestCrossSurfaceAlignment(unittest.TestCase):
+    """UI / wizard / forex_engine / fire-gate must agree for the same timestamp."""
+
+    LONDON_CFG = {"sessions_enabled": True, "allowed_sessions": ["london"]}
+
+    def _surfaces_london(self, dt: datetime) -> dict:
+        ok_filter, _ = is_in_allowed_session(self.LONDON_CFG, dt)
+        ok_gate, _ = fs.live_forex_session_allowed(self.LONDON_CFG, dt)
+        with patch("app.services.forex_engine.datetime") as mock_dt:
+            mock_dt.utcnow.return_value = dt
+            ok_eval, _ = eval_forex_session(
+                {"sessions": ["london"], "condition": "in_session"}
+            )
+        return {
+            "unified": fs.session_active_unified("london", dt),
+            "forex_engine": in_session("london", dt),
+            "session_filter": ok_filter,
+            "fire_gate": ok_gate,
+            "eval_forex_session": ok_eval,
+        }
+
+    def test_10_13_15_utc_in_london_everywhere(self):
+        for dt in (
+            datetime(2026, 6, 18, 10, 0),
+            datetime(2026, 6, 18, 13, 0),
+            datetime(2026, 6, 18, 15, 0),
+        ):
+            surfaces = self._surfaces_london(dt)
+            self.assertTrue(all(surfaces.values()), msg=f"{dt} -> {surfaces}")
+
+    def test_05_17_22_utc_blocked_everywhere(self):
+        for dt in (
+            datetime(2026, 6, 18, 5, 0),
+            datetime(2026, 6, 18, 17, 0),
+            datetime(2026, 6, 18, 22, 0),
+        ):
+            surfaces = self._surfaces_london(dt)
+            self.assertFalse(any(surfaces.values()), msg=f"{dt} -> {surfaces}")
 
 
 class TestAsianKzUnchanged(unittest.TestCase):
@@ -77,37 +131,6 @@ class TestAsianKzUnchanged(unittest.TestCase):
             mock_dt.utcnow.return_value = datetime(2026, 6, 18, 2, 0)
             inside, _ = eval_fx_killzone({"killzone": "asian_kz"})
         self.assertFalse(inside)
-
-
-class TestLiveForexScanGate(unittest.TestCase):
-    def test_outside_hours_block_scan_gate(self):
-        for dt in (
-            datetime(2026, 6, 18, 16, 0),
-            datetime(2026, 6, 18, 10, 0),
-            datetime(2026, 6, 18, 11, 0),
-            datetime(2026, 6, 18, 9, 0),
-        ):
-            ok, reason = fs.live_forex_session_allowed({}, dt)
-            self.assertFalse(ok, msg=str(dt))
-            self.assertEqual(reason, "outside_live_forex_session")
-
-    def test_inside_hours_allow_scan_gate(self):
-        for dt in (
-            datetime(2026, 6, 18, 7, 0),
-            datetime(2026, 6, 18, 13, 0),
-            datetime(2026, 6, 18, 2, 0),
-        ):
-            ok, _ = fs.live_forex_session_allowed({}, dt)
-            self.assertTrue(ok, msg=str(dt))
-
-    def test_inside_window_must_match_for_claude_confirm(self):
-        """Option A: confirm gate and scan gate share forex_sessions."""
-        dt = datetime(2026, 6, 18, 7, 30)
-        self.assertTrue(fs.in_live_forex_session(dt))
-        self.assertTrue(fcc.in_forex_claude_confirm_session(dt))
-        dt_out = datetime(2026, 6, 18, 10, 0)
-        self.assertFalse(fs.in_live_forex_session(dt_out))
-        self.assertFalse(fcc.in_forex_claude_confirm_session(dt_out))
 
 
 class TestForexClaudeConfirmUsesSharedSessions(unittest.IsolatedAsyncioTestCase):
@@ -133,7 +156,7 @@ class TestForexClaudeConfirmUsesSharedSessions(unittest.IsolatedAsyncioTestCase)
                 conditions_met=["✅ x"],
                 price_data={"price": 1.08},
                 timeframe="15m",
-                now_utc=datetime(2026, 6, 18, 10, 0),
+                now_utc=datetime(2026, 6, 18, 5, 0),
             )
         self.assertFalse(ok)
         self.assertEqual(reason, "outside_confirm_session")

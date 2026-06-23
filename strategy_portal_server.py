@@ -4083,6 +4083,12 @@ def _load_portal_data(uid: str):
 async def _render_portal(request: Request, uid: str):
     """Serves the portal HTML shell INSTANTLY — zero DB calls.
     All personalised data (name, plan, stats) loads client-side via /api/me + /api/portfolio."""
+    from app.services.forex_sessions import (
+        live_forex_timeline_specs,
+        portal_session_ui_specs,
+        wizard_entry_filter_options,
+    )
+
     _default_user = {"first_name": "", "username": "", "uid": uid}
     _default_portfolio = {
         "total_strategies": 0, "active_count": 0, "paper_count": 0,
@@ -4100,6 +4106,9 @@ async def _render_portal(request: Request, uid: str):
         "is_pro":        _free,
         "features_free": _free,
         "payments_enabled": payments_enabled(),
+        "portal_cfg_session_chips": portal_session_ui_specs(),
+        "wizard_session_options": wizard_entry_filter_options(),
+        "live_forex_timeline": live_forex_timeline_specs(),
     })
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"

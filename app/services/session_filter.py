@@ -10,6 +10,7 @@ from app.services.forex_sessions import (
     LIVE_FOREX_SESSION_ALIASES,
     OTHER_SESSION_WINDOWS,
     in_window,
+    overlap_window,
     resolve_live_forex_session_key,
 )
 
@@ -25,6 +26,7 @@ def _build_sessions_dict() -> Dict[str, Tuple[int, int, int, int]]:
             sessions[alias] = LIVE_FOREX_SESSIONS[key]
     sessions.update(ICT_KILLZONE_WINDOWS)
     sessions.update(OTHER_SESSION_WINDOWS)
+    sessions["overlap"] = overlap_window()
     return sessions
 
 

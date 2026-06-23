@@ -15,6 +15,8 @@ class TestSessionFilter(unittest.TestCase):
         ok, _ = is_in_allowed_session(cfg, datetime(2026, 6, 10, 7, 30))
         self.assertTrue(ok)
         ok, reason = is_in_allowed_session(cfg, datetime(2026, 6, 10, 10, 0))
+        self.assertTrue(ok)
+        ok, reason = is_in_allowed_session(cfg, datetime(2026, 6, 10, 17, 0))
         self.assertFalse(ok)
         self.assertEqual(reason, "session_filter")
 

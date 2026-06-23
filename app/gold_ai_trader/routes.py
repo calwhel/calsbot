@@ -17,6 +17,7 @@ from app.gold_ai_trader.accounts import (
     validate_demo_ctid_allowed,
 )
 from app.gold_ai_trader.config import env_defaults
+from app.services.forex_sessions import gold_ai_session_hours
 from app.gold_ai_trader.guardrails import (
     calls_today,
     trades_today,
@@ -177,6 +178,7 @@ async def api_status(uid: str = Query(...)):
             "ok": True,
             "demo_label": "DEMO ACCOUNT ONLY",
             "runtime": runtime_state.get_status(),
+            "shared_session_hours": gold_ai_session_hours(),
             "config": {
                 "enabled": cfg.enabled,
                 "kill_switch": cfg.kill_switch,

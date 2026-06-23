@@ -1674,7 +1674,7 @@ async def _fetch_price_ta_singleflight(
 
 # ─── Guard helpers ───────────────────────────────────────────────────────────
 
-from app.services.forex_sessions import build_executor_session_hours
+from app.services.forex_sessions import build_executor_session_hours, build_session_alert_windows
 
 _SESSION_HOURS = build_executor_session_hours()
 _KZ_SESSION_IDS = frozenset({"london_kz", "ny_kz", "asian_kz", "any_kz"})
@@ -1685,17 +1685,7 @@ _KZ_SESSION_IDS = frozenset({"london_kz", "ny_kz", "asian_kz", "any_kz"})
 _SESSION_ALERT_SENT: set = set()
 
 # (session_id_as_stored_in_config, display_label, open_hour_utc, open_min_utc)
-_SESSION_ALERT_WINDOWS = [
-    ("london_kz",  "London Killzone",  7,  0),
-    ("ny_kz",      "NY Killzone",     12,  0),
-    ("asian_kz",   "Asian Killzone",  20,  0),
-    ("london",     "London Session",   8,  0),
-    ("europe",     "Europe Session",   8,  0),
-    ("new_york",   "NY Session",      13, 30),
-    ("ny",         "NY Session",      13, 30),
-    ("asian",      "Asian Session",    0,  0),
-    ("tokyo",      "Tokyo Session",    0,  0),
-]
+_SESSION_ALERT_WINDOWS = build_session_alert_windows()
 
 
 def _check_trading_days(filters: Dict) -> bool:

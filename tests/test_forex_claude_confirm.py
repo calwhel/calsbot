@@ -33,7 +33,7 @@ class TestForexClaudeConfirmSessions(unittest.TestCase):
             "london",
         )
         self.assertEqual(
-            fcc.active_confirm_session(datetime(2026, 6, 18, 13, 0)),
+            fcc.active_confirm_session(datetime(2026, 6, 18, 18, 0)),
             "new_york",
         )
 
@@ -76,7 +76,7 @@ class TestForexClaudeConfirmGate(unittest.IsolatedAsyncioTestCase):
                 conditions_met=["✅ RSI"],
                 price_data={"price": 1.08, "price_source": "spot_live"},
                 timeframe="15m",
-                now_utc=datetime(2026, 6, 18, 10, 0),
+                now_utc=datetime(2026, 6, 18, 5, 0),
             )
         self.assertFalse(ok)
         self.assertEqual(reason, "outside_confirm_session")

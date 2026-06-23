@@ -28,14 +28,17 @@ class GuardrailBlocked(Exception):
 
 
 def merge_config(db_row: GoldAiConfig, env: GoldAiRuntimeConfig) -> GoldAiRuntimeConfig:
-    """DB row overrides env defaults when present."""
+    """DB row overrides env defaults when present (session hours always from shared windows)."""
+    from app.services.forex_sessions import gold_ai_session_hours
+
+    shared = gold_ai_session_hours()
     return GoldAiRuntimeConfig(
         enabled=bool(db_row.enabled) and env.enabled,
         kill_switch=bool(db_row.kill_switch) or env.kill_switch,
-        london_start_hour=int(db_row.london_start_hour),
-        london_end_hour=int(db_row.london_end_hour),
-        ny_start_hour=int(db_row.ny_start_hour),
-        ny_end_hour=int(db_row.ny_end_hour),
+        london_start_hour=shared["london"]["start_hour"],
+        london_end_hour=shared["london"]["end_hour"],
+        ny_start_hour=shared["new_york"]["start_hour"],
+        ny_end_hour=shared["new_york"]["end_hour"],
         max_calls_day=int(db_row.max_calls_day),
         max_trades_day=int(db_row.max_trades_day),
         no_overnight=bool(db_row.no_overnight),

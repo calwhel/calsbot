@@ -36,18 +36,16 @@ class SessionWindow:
     close_m: int
 
 
-SESSIONS: Dict[str, SessionWindow] = {
-    # Sydney 22:00–07:00 UTC (wraps midnight)
-    "sydney":  SessionWindow("sydney",  "Sydney",   22, 0,  7, 0),
-    # Asian (Tokyo) 00:00–09:00 UTC
-    "asian":   SessionWindow("asian",   "Asian",     0, 0,  9, 0),
-    # London 07:00–16:00 UTC
-    "london":  SessionWindow("london",  "London",    7, 0, 16, 0),
-    # New York 12:00–21:00 UTC
-    "ny":      SessionWindow("ny",      "New York", 12, 0, 21, 0),
-    # London/NY Overlap 12:00–16:00 UTC — deepest liquidity
-    "overlap": SessionWindow("overlap", "London/NY Overlap", 12, 0, 16, 0),
-}
+def _build_sessions() -> Dict[str, SessionWindow]:
+    from app.services.forex_sessions import build_forex_engine_session_specs
+
+    return {
+        sid: SessionWindow(sid, label, oh, om, ch, cm)
+        for sid, (sid, label, oh, om, ch, cm) in build_forex_engine_session_specs().items()
+    }
+
+
+SESSIONS: Dict[str, SessionWindow] = _build_sessions()
 
 # Session IDs exposed to the wizard. "overlap" is derived, not picked.
 PICKABLE_SESSIONS = ("london", "ny", "asian", "sydney", "overlap")

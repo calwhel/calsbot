@@ -58,13 +58,17 @@ class GoldAiRuntimeConfig:
     learning_daily_at_ny_end: bool
 
 
+from app.services.forex_sessions import gold_ai_session_hours
+
+_SHARED_SESSION_HOURS = gold_ai_session_hours()
+
 DEFAULTS = GoldAiRuntimeConfig(
     enabled=False,
     kill_switch=False,
-    london_start_hour=7,
-    london_end_hour=10,
-    ny_start_hour=13,
-    ny_end_hour=16,
+    london_start_hour=_SHARED_SESSION_HOURS["london"]["start_hour"],
+    london_end_hour=_SHARED_SESSION_HOURS["london"]["end_hour"],
+    ny_start_hour=_SHARED_SESSION_HOURS["new_york"]["start_hour"],
+    ny_end_hour=_SHARED_SESSION_HOURS["new_york"]["end_hour"],
     max_calls_day=22,
     max_trades_day=6,
     no_overnight=True,
@@ -91,10 +95,18 @@ def env_defaults() -> GoldAiRuntimeConfig:
     return GoldAiRuntimeConfig(
         enabled=gold_ai_trader_enabled(),
         kill_switch=_env_bool("GOLD_AI_TRADER_KILL_SWITCH", False),
-        london_start_hour=_env_int("GOLD_AI_TRADER_LONDON_START", 7),
-        london_end_hour=_env_int("GOLD_AI_TRADER_LONDON_END", 10),
-        ny_start_hour=_env_int("GOLD_AI_TRADER_NY_START", 13),
-        ny_end_hour=_env_int("GOLD_AI_TRADER_NY_END", 16),
+        london_start_hour=_env_int(
+            "GOLD_AI_TRADER_LONDON_START", _SHARED_SESSION_HOURS["london"]["start_hour"]
+        ),
+        london_end_hour=_env_int(
+            "GOLD_AI_TRADER_LONDON_END", _SHARED_SESSION_HOURS["london"]["end_hour"]
+        ),
+        ny_start_hour=_env_int(
+            "GOLD_AI_TRADER_NY_START", _SHARED_SESSION_HOURS["new_york"]["start_hour"]
+        ),
+        ny_end_hour=_env_int(
+            "GOLD_AI_TRADER_NY_END", _SHARED_SESSION_HOURS["new_york"]["end_hour"]
+        ),
         max_calls_day=_env_int("GOLD_AI_TRADER_MAX_CALLS_DAY", 22),
         max_trades_day=_env_int("GOLD_AI_TRADER_MAX_TRADES_DAY", 6),
         no_overnight=_env_bool("GOLD_AI_TRADER_NO_OVERNIGHT", True),

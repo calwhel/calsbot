@@ -41,10 +41,11 @@ class Candidate:
 
 
 def active_session(now: datetime, cfg: GoldAiRuntimeConfig) -> Optional[str]:
-    h = now.hour + now.minute / 60.0
-    if cfg.london_start_hour <= h < cfg.london_end_hour:
+    from app.services.forex_sessions import is_named_session_active
+
+    if is_named_session_active("london", now):
         return "london"
-    if cfg.ny_start_hour <= h < cfg.ny_end_hour:
+    if is_named_session_active("new_york", now):
         return "new_york"
     return None
 

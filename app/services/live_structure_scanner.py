@@ -84,8 +84,12 @@ _MS_LABELS = {
 }
 _BIAS_DIR = {"bullish": "LONG", "bearish": "SHORT"}
 
+from app.services.forex_sessions import build_hour_buckets
+
 _SESSION_HOURS = {
-    "asian": (0, 8), "london": (7, 16), "new_york": (13, 22), "overlap": (13, 16),
+    sid: win
+    for sid, win in build_hour_buckets().items()
+    if sid in ("asian", "london", "new_york", "overlap")
 }
 _SESSION_LABELS = {
     "asian": "Asian", "london": "London", "new_york": "New York", "overlap": "London-NY overlap",

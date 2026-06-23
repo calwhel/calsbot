@@ -1439,10 +1439,11 @@ function deriveHero(j) {
 }
 
 function renderSessionTimeline(cfg, rt) {
-  const lonS = cfg.london_start_hour ?? 7;
-  const lonE = cfg.london_end_hour ?? 10;
-  const nyS = cfg.ny_start_hour ?? 13;
-  const nyE = cfg.ny_end_hour ?? 16;
+  const shared = j.shared_session_hours || {};
+  const lonS = cfg.london_start_hour ?? shared.london?.start_hour ?? 7;
+  const lonE = cfg.london_end_hour ?? shared.london?.end_hour ?? 16;
+  const nyS = cfg.ny_start_hour ?? shared.new_york?.start_hour ?? 12;
+  const nyE = cfg.ny_end_hour ?? shared.new_york?.end_hour ?? 21;
   const nowH = new Date().getUTCHours() + new Date().getUTCMinutes() / 60;
 
   const pct = (h) => Math.min(100, Math.max(0, (h / 24) * 100));
@@ -1701,10 +1702,11 @@ function renderLessons(j) {
 
 function renderConfig(j) {
   const c = j.config || {};
-  document.getElementById('lon-s').value = c.london_start_hour ?? 7;
-  document.getElementById('lon-e').value = c.london_end_hour ?? 10;
-  document.getElementById('ny-s').value = c.ny_start_hour ?? 13;
-  document.getElementById('ny-e').value = c.ny_end_hour ?? 16;
+  const shared = j.shared_session_hours || {};
+  document.getElementById('lon-s').value = c.london_start_hour ?? shared.london?.start_hour ?? 7;
+  document.getElementById('lon-e').value = c.london_end_hour ?? shared.london?.end_hour ?? 16;
+  document.getElementById('ny-s').value = c.ny_start_hour ?? shared.new_york?.start_hour ?? 12;
+  document.getElementById('ny-e').value = c.ny_end_hour ?? shared.new_york?.end_hour ?? 21;
   document.getElementById('max-calls').value = c.max_calls_day ?? 22;
   document.getElementById('no-overnight').checked = !!c.no_overnight;
   document.getElementById('btn-save').disabled = false;

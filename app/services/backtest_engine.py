@@ -1013,17 +1013,13 @@ def _session_reference(klines: List, reference: str = "session_low") -> Optional
     return None
 
 # ── Condition evaluator (no HTTP, uses pre-fetched klines) ─────────────────────
-# ── Trading-session windows (UTC) — mirror strategy_executor._SESSION_HOURS ──────
+from app.services.forex_sessions import build_hour_buckets
+
 # Used for replay-faithful session gating (the live evaluators use wall-clock
 # time, which is wrong for a backtest; here we derive the hour from the candle
 # timestamp instead). Sessions overlap by design (e.g. 14:00 UTC is in london,
 # new_york AND overlap).
-_BT_SESSION_HOURS = {
-    "asian":    (0, 8),  "tokyo": (0, 8),  "asia": (0, 8),
-    "london":   (7, 16), "europe": (7, 16),
-    "new_york": (13, 22), "ny": (13, 22),
-    "overlap":  (13, 16),
-}
+_BT_SESSION_HOURS = build_hour_buckets()
 
 def _bt_session_active(ts_ms: int, sessions: List[str]) -> bool:
     """True if the candle timestamp's UTC hour falls in any requested session."""

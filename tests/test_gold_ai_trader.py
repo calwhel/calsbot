@@ -62,12 +62,12 @@ def test_persist_demo_user_from_admin():
 
 def test_session_gate_london():
     cfg = env_defaults()
-    cfg.london_start_hour = 7
-    cfg.london_end_hour = 10
-    cfg.ny_start_hour = 13
-    cfg.ny_end_hour = 16
     assert active_session(datetime(2026, 6, 18, 8, 30), cfg) == "london"
-    assert active_session(datetime(2026, 6, 18, 12, 0), cfg) is None
+    assert active_session(datetime(2026, 6, 18, 12, 30), cfg) == "new_york"
+    assert active_session(datetime(2026, 6, 18, 5, 0), cfg) is None
+    assert cfg.london_end_hour == 16
+    assert cfg.ny_start_hour == 12
+    assert cfg.ny_end_hour == 21
 
 
 def test_demo_account_lock_rejects_live():

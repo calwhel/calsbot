@@ -1825,6 +1825,11 @@ tr:hover td { background: var(--surface) !important; }
 </style>
 </head>
 <body>
+<script>
+const PORTAL_WIZARD_SESSION_OPTIONS = {{ wizard_session_options | tojson }};
+const PORTAL_CFG_SESSION_CHIPS = {{ portal_cfg_session_chips | tojson }};
+const LF_SESSIONS = {{ live_forex_timeline | tojson }};
+</script>
 <div id="pg-bar"></div>
 
 <!-- Topbar -->
@@ -3189,12 +3194,12 @@ function dismissTgBanner(){
         <div class="form-group" style="margin-bottom:0">
           <label>Trading Sessions <span style="font-size:11px;color:var(--muted);font-weight:400">· all times UTC · leave blank to trade 24/7</span></label>
           <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px" id="cfg-sessions-chips">
-            <div class="opt-chip" id="cfgSes-asian"    onclick="toggleCfgSession('asian')">🌏 Asian <span style="font-size:10px;color:var(--muted);margin-left:2px">0–8 UTC</span></div>
-            <div class="opt-chip" id="cfgSes-london"   onclick="toggleCfgSession('london')">🇬🇧 London <span style="font-size:10px;color:var(--muted);margin-left:2px">7–16 UTC</span></div>
-            <div class="opt-chip" id="cfgSes-new_york" onclick="toggleCfgSession('new_york')">🇺🇸 US / New York <span style="font-size:10px;color:var(--muted);margin-left:2px">13–22 UTC</span></div>
-            <div class="opt-chip" id="cfgSes-overlap"  onclick="toggleCfgSession('overlap')">⚡ London/US Overlap <span style="font-size:10px;color:var(--muted);margin-left:2px">13–16 UTC</span></div>
+            {% set _sess_emojis = {'asian': '🌏', 'london': '🇬🇧', 'new_york': '🇺🇸', 'overlap': '⚡'} %}
+            {% for s in portal_cfg_session_chips %}
+            <div class="opt-chip" id="cfgSes-{{ s.cfg_id }}" onclick="toggleCfgSession('{{ s.cfg_id }}')">{{ _sess_emojis.get(s.cfg_id, '') }} {{ s.label }} <span style="font-size:10px;color:var(--muted);margin-left:2px">{{ s.chip }}</span></div>
+            {% endfor %}
           </div>
-          <div class="hint" style="margin-top:6px">Select one or more sessions to restrict when trades fire. Multiple = OR (fires if current time is in <em>any</em> selected session). Hours are UTC — London 7–16 UTC means 7 AM–4 PM London time (GMT) or 8 AM–5 PM (BST, summer). <strong>Each strategy must be configured separately.</strong></div>
+          <div class="hint" style="margin-top:6px">Select one or more sessions to restrict when trades fire. Multiple = OR (fires if current time is in <em>any</em> selected session). Hours are UTC — windows match the live forex fire gate. <strong>Each strategy must be configured separately.</strong></div>
         </div>
         <div class="form-group" style="margin-bottom:0;margin-top:14px">
           <label>Trading Days <span style="font-size:11px;color:var(--muted);font-weight:400">· leave blank to trade every day</span></label>
@@ -6735,7 +6740,7 @@ function renderStep5(){
     </div>
     <div id="row-ef-sess" style="${WZ.sessionsEnabled?'':'display:none'};padding:8px 0">
       <div class="hint" style="margin-bottom:8px">Check sessions to allow (UTC). Custom window overrides when set.</div>
-      ${[{id:'sydney',label:'Sydney',time:'21:00–06:00'},{id:'tokyo',label:'Tokyo',time:'00:00–09:00'},{id:'london',label:'London',time:'07:00–16:00'},{id:'newyork',label:'New York',time:'12:00–21:00'},{id:'london_kz',label:'London KZ',time:'07:00–10:00'},{id:'ny_kz',label:'NY KZ',time:'12:00–15:00'}].map(s=>`<label style="display:block;margin:4px 0;font-size:12px"><input type="checkbox" ${(WZ.allowedSessions||[]).includes(s.id)?'checked':''} onchange="wzToggleAllowedSession('${s.id}',this.checked)"> ${s.label} <span style="color:var(--muted)">${s.time} UTC</span></label>`).join('')}
+      ${PORTAL_WIZARD_SESSION_OPTIONS.map(s=>`<label style="display:block;margin:4px 0;font-size:12px"><input type="checkbox" ${(WZ.allowedSessions||[]).includes(s.id)?'checked':''} onchange="wzToggleAllowedSession('${s.id}',this.checked)"> ${s.label} <span style="color:var(--muted)">${s.time} UTC</span></label>`).join('')}
       <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
         <label style="font-size:12px">Custom <input type="time" value="${WZ.sessCustomStart||'07:00'}" onchange="WZ.sessCustomStart=this.value" style="margin-left:4px"> – <input type="time" value="${WZ.sessCustomEnd||'16:00'}" onchange="WZ.sessCustomEnd=this.value"></label>
       </div>
@@ -6827,7 +6832,10 @@ function wzToggleExit(which){
 }
 
 function renderStep6(){
-  const sessions=[{id:'asian',label:'🌏 Asian',time:'0–8 UTC'},{id:'london',label:'🇬🇧 London',time:'7–16 UTC'},{id:'new_york',label:'🇺🇸 New York',time:'13–22 UTC'}];
+  const _chipEmojis={asian:'🌏',london:'🇬🇧',new_york:'🇺🇸',overlap:'⚡'};
+  const sessions=(PORTAL_CFG_SESSION_CHIPS||[]).filter(s=>s.cfg_id!=='overlap').map(s=>({
+    id:s.cfg_id,label:`${_chipEmojis[s.cfg_id]||''} ${s.label}`,time:s.chip
+  }));
   const _rpDesc={
     low:'🟢 Low — only fire on top-quality setups (every condition aligned, ~90% pass rate). Fewer trades, higher avg win-rate.',
     medium:'🟡 Medium — every entry condition must pass. Balanced frequency vs. quality (default).',
@@ -11917,12 +11925,7 @@ function _drTrades(trades) {
 // ─── LIVE FOREX ────────────────────────────────────────────
 const LF_FP_LINK = 'https://www.fpmarkets.com/?rfrr=IB-Portal&cxd=37182_638734';
 
-const LF_SESSIONS = [
-  { name:'Sydney',  open:22, close:7,  tz:'UTC', color:'#6366f1' },
-  { name:'Tokyo',   open:0,  close:9,  tz:'UTC', color:'#f59e0b' },
-  { name:'London',  open:8,  close:17, tz:'UTC', color:'#3fb68b' },
-  { name:'New York',open:13, close:22, tz:'UTC', color:'#e5484d' },
-];
+// LF_SESSIONS injected from forex_sessions.py (see <body> script tag)
 
 const LF_PAIRS = [
   { symbol:'EURUSD', name:'Euro / US Dollar',        pip:0.0001, desc:'Most traded pair worldwide' },

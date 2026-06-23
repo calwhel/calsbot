@@ -36,13 +36,14 @@ logger = logging.getLogger(__name__)
 SYMBOL = "XAUUSD"
 ASSET_CLASS = "forex"
 
-# Sessions we bucket/scan. Hours mirror strategy_executor._SESSION_HOURS (UTC).
+from app.services.forex_sessions import build_hour_buckets
+
+# Sessions we bucket/scan — hours from forex_sessions (single source).
 SESSIONS = ["all", "asian", "london", "new_york", "overlap"]
 _SESSION_HOURS = {
-    "asian":    (0, 8),
-    "london":   (7, 16),
-    "new_york": (13, 22),
-    "overlap":  (13, 16),
+    sid: win
+    for sid, win in build_hour_buckets().items()
+    if sid in ("asian", "london", "new_york", "overlap")
 }
 SESSION_LABELS = {
     "all":      "All sessions (24h)",
