@@ -288,7 +288,8 @@ async def build_context_snapshot(
         lessons,
         "",
         "=== DECISION RULE REMINDER ===",
-        "Default SKIP unless high conviction. Require clear invalidation and ≥2:1 R:R.",
-        "Weight data quality and HTF bias — downgrade confidence on stale/non-live feeds or counter-HTF setups.",
+        "Target positive expectancy — good (not perfect) setups at 50%+ with valid 2:1 R:R are tradable.",
+        "Minor missing confluence lowers confidence; borderline edge belongs in 50–60, not auto-skip.",
+        "Weight data quality and HTF bias — downgrade confidence on stale feeds or clear counter-structure.",
     ]
     return "\n".join(line for line in lines if line is not None)
