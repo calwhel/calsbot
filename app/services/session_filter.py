@@ -4,27 +4,31 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Dict, Tuple
 
-SESSIONS: Dict[str, Tuple[int, int, int, int]] = {
-    "sydney": (21, 0, 6, 0),
-    "tokyo": (0, 0, 9, 0),
-    # Asia live-forex confirm window — fixed UTC (01:00–04:00 = 02:00–05:00 UK BST).
-    "asia": (1, 0, 4, 0),
-    "asian": (1, 0, 4, 0),
-    "asia_kz": (1, 0, 4, 0),
-    "london": (7, 0, 16, 0),
-    "newyork": (12, 0, 21, 0),
-    "london_kz": (7, 0, 10, 0),
-    "ny_kz": (12, 0, 15, 0),
-}
+from app.services.forex_sessions import (
+    ICT_KILLZONE_WINDOWS,
+    LIVE_FOREX_SESSIONS,
+    LIVE_FOREX_SESSION_ALIASES,
+    OTHER_SESSION_WINDOWS,
+    in_window,
+    resolve_live_forex_session_key,
+)
+
+# Re-export for callers that imported _in_window from here.
+_in_window = in_window
 
 
-def _in_window(now: datetime, start_h: int, start_m: int, end_h: int, end_m: int) -> bool:
-    t = now.hour * 60 + now.minute
-    start = start_h * 60 + start_m
-    end = end_h * 60 + end_m
-    if start > end:
-        return t >= start or t < end
-    return start <= t < end
+def _build_sessions_dict() -> Dict[str, Tuple[int, int, int, int]]:
+    sessions: Dict[str, Tuple[int, int, int, int]] = {}
+    sessions.update(LIVE_FOREX_SESSIONS)
+    for alias, key in LIVE_FOREX_SESSION_ALIASES.items():
+        if alias not in sessions and key in LIVE_FOREX_SESSIONS:
+            sessions[alias] = LIVE_FOREX_SESSIONS[key]
+    sessions.update(ICT_KILLZONE_WINDOWS)
+    sessions.update(OTHER_SESSION_WINDOWS)
+    return sessions
+
+
+SESSIONS: Dict[str, Tuple[int, int, int, int]] = _build_sessions_dict()
 
 
 def is_in_allowed_session(cfg: dict, now_utc: datetime) -> Tuple[bool, str]:
@@ -42,7 +46,14 @@ def is_in_allowed_session(cfg: dict, now_utc: datetime) -> Tuple[bool, str]:
         except Exception:
             pass
     for sid in allowed:
-        win = SESSIONS.get(sid.replace("new_york", "newyork").replace("-", "_"))
+        norm = sid.replace("new_york", "newyork").replace("-", "_")
+        key = resolve_live_forex_session_key(norm)
+        if key:
+            win = LIVE_FOREX_SESSIONS[key]
+            if _in_window(now_utc, win[0], win[1], win[2], win[3]):
+                return True, ""
+            continue
+        win = SESSIONS.get(norm)
         if not win:
             continue
         if _in_window(now_utc, win[0], win[1], win[2], win[3]):

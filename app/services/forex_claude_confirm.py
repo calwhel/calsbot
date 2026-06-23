@@ -21,7 +21,10 @@ from app.services.anthropic_budget_guard import (
     record_call,
     spent_today_usd,
 )
-from app.services.session_filter import _in_window
+from app.services.forex_sessions import (
+    active_live_forex_session,
+    in_live_forex_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +32,6 @@ CALLER = "forex_claude_confirm"
 HAIKU_MODEL = "claude-haiku-4-5"
 SONNET_MODEL = "claude-sonnet-4-5"
 API_TIMEOUT_S = 5.0
-
-# Fixed UTC confirm windows — London 06–09, NY 12–15, Asia 01–04 (02–05 UK BST).
-FOREX_CLAUDE_CONFIRM_SESSIONS: Dict[str, Tuple[int, int, int, int]] = {
-    "london": (6, 0, 9, 0),
-    "new_york": (12, 0, 15, 0),
-    "asia": (1, 0, 4, 0),
-}
 
 HAIKU_INPUT_USD_PER_M = 0.25
 HAIKU_OUTPUT_USD_PER_M = 1.25
@@ -61,14 +57,11 @@ def sonnet_escalation_enabled() -> bool:
 
 
 def active_confirm_session(now_utc: datetime) -> Optional[str]:
-    for sid, win in FOREX_CLAUDE_CONFIRM_SESSIONS.items():
-        if _in_window(now_utc, win[0], win[1], win[2], win[3]):
-            return sid
-    return None
+    return active_live_forex_session(now_utc)
 
 
 def in_forex_claude_confirm_session(now_utc: Optional[datetime] = None) -> bool:
-    return active_confirm_session(now_utc or datetime.utcnow()) is not None
+    return in_live_forex_session(now_utc)
 
 
 def _bar_ts(now_utc: datetime, timeframe: str) -> int:

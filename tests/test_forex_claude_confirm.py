@@ -37,6 +37,16 @@ class TestForexClaudeConfirmSessions(unittest.TestCase):
             "new_york",
         )
 
+    def test_confirm_matches_forex_sessions_module(self):
+        from app.services import forex_sessions as fs
+
+        for hour in (7, 13, 2):
+            dt = datetime(2026, 6, 18, hour, 0)
+            self.assertEqual(
+                fcc.in_forex_claude_confirm_session(dt),
+                fs.in_live_forex_session(dt),
+            )
+
 
 class TestForexClaudeConfirmGate(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -189,6 +199,15 @@ class TestSessionFilterAsia(unittest.TestCase):
         ok, reason = is_in_allowed_session(cfg, datetime(2026, 6, 18, 5, 0))
         self.assertFalse(ok)
         self.assertEqual(reason, "session_filter")
+
+    def test_asia_matches_live_forex_canonical_window(self):
+        from app.services import forex_sessions as fs
+        from app.services.session_filter import is_in_allowed_session
+
+        cfg = {"sessions_enabled": True, "allowed_sessions": ["asia"]}
+        dt = datetime(2026, 6, 18, 2, 30)
+        ok_filter, _ = is_in_allowed_session(cfg, dt)
+        self.assertEqual(ok_filter, fs.in_live_forex_session(dt))
 
 
 if __name__ == "__main__":

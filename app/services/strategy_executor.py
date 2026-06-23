@@ -1533,17 +1533,9 @@ async def _fetch_price_ta_singleflight(
 
 # ─── Guard helpers ───────────────────────────────────────────────────────────
 
-_SESSION_HOURS = {
-    "asian":    (0, 8),   "tokyo":    (0, 8),   "asia":    (0, 8),
-    "sydney":   (22, 7),  # Sydney wraps midnight UTC — handled specially below
-    "london":   (7, 16),  "europe":   (7, 16),
-    "new_york": (13, 22), "ny":       (13, 22),
-    "overlap":  (13, 16),
-    # ICT killzones — mirror strategy_ta.eval_fx_killzone / backtest_engine
-    "london_kz": (7, 9),
-    "ny_kz":     (12, 14),
-    "asian_kz":  (20, 23),
-}
+from app.services.forex_sessions import build_executor_session_hours
+
+_SESSION_HOURS = build_executor_session_hours()
 _KZ_SESSION_IDS = frozenset({"london_kz", "ny_kz", "asian_kz", "any_kz"})
 
 # ── Session alert dedup + windows ─────────────────────────────────────────────
@@ -1592,17 +1584,14 @@ def _check_trading_days(filters: Dict) -> bool:
 
 
 def _check_time_filter(filters: Dict) -> bool:
-    hour = datetime.utcnow().hour
-
     # 1. Explicit hour-range filter
     tf = filters.get("time_filter")
     if tf:
+        hour = datetime.utcnow().hour
         if not (tf.get("start_hour", 0) <= hour < tf.get("end_hour", 24)):
             return False
 
     # 2. Named session filter  {"type":"session","sessions":["new_york"]}
-    # Defensive: tolerate a bare list of ids or a raw string instead of the
-    # canonical dict — a malformed shape would otherwise raise and block firing.
     sf = filters.get("session")
     if sf:
         if isinstance(sf, dict):
@@ -1615,20 +1604,14 @@ def _check_time_filter(filters: Dict) -> bool:
             raw_sessions = []
         wanted = [str(s).lower() for s in raw_sessions]
         if wanted:
-            active = []
-            for name, (s, e) in _SESSION_HOURS.items():
-                # Sessions that wrap midnight UTC (start > end) are active
-                # when hour >= start OR hour < end.
-                if s > e:
-                    if hour >= s or hour < e:
-                        active.append(name)
-                elif s <= hour < e:
-                    active.append(name)
+            from app.services.forex_sessions import is_named_session_active
+
+            now = datetime.utcnow()
             if "any_kz" in wanted:
                 wanted = [w for w in wanted if w != "any_kz"] + [
                     k for k in _KZ_SESSION_IDS if k != "any_kz"
                 ]
-            if not any(s in active for s in wanted):
+            if not any(is_named_session_active(s, now) for s in wanted):
                 return False
 
     return True
@@ -5200,6 +5183,22 @@ async def evaluate_and_fire(
         else:
             is_paper = True
 
+    # ── Live forex scan gate (fixed UTC windows — before price/TA fetch) ─────
+    if asset_class == "forex" and not is_paper:
+        from app.services.forex_sessions import live_forex_session_allowed
+
+        _lf_ok, _lf_reason = live_forex_session_allowed(
+            config, datetime.utcnow(),
+        )
+        if not _lf_ok:
+            _bump("blk_live_forex_session")
+            logger.debug(
+                "[Strategy %s] live forex scan skipped — %s",
+                strategy.id,
+                _lf_reason,
+            )
+            return
+
     if asset_class in PAPER_ONLY_CLASSES:
         if not is_market_open(asset_class):
             _bump(f"blk_market_closed_{asset_class}")
@@ -5523,8 +5522,10 @@ async def evaluate_and_fire(
         )
         return
 
-    # ── Session filter (forex/tradfi entry only) ─────────────────────────────
-    if asset_class in ("forex", "index", "stock"):
+    # ── Session filter (paper tradfi / index / stock — live forex gated above) ─
+    if asset_class in ("forex", "index", "stock") and not (
+        asset_class == "forex" and not is_paper
+    ):
         from app.services.session_filter import is_in_allowed_session
 
         _sess_ok, _ = is_in_allowed_session(config, datetime.utcnow())
