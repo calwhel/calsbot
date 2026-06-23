@@ -2391,6 +2391,34 @@ async def _ctrader_fanout_live_fire_impl(
     )
     _live_tp_pct = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
 
+    if asset_class == "forex":
+        from app.services.forex_claude_confirm import maybe_forex_claude_confirm
+        _fan_tf = _primary_timeframe(config)
+        _claude_ok, _claude_reason = await maybe_forex_claude_confirm(
+            strategy_id=strategy.id,
+            symbol=symbol,
+            direction=direction,
+            entry=current_price,
+            sl=sl_price,
+            tp=tp_price,
+            tp2=tp2_price,
+            conditions_met=details,
+            price_data=price_data,
+            timeframe=_fan_tf,
+        )
+        if not _claude_ok:
+            for ex, _ in executions:
+                ex.outcome = "CANCELLED"
+                ex.notes = (
+                    f"{exec_notes or ''} | claude_confirm_blocked: {_claude_reason}"
+                ).strip(" |")
+            db.commit()
+            logger.info(
+                f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} fan-out "
+                f"blocked by Claude confirm: {_claude_reason}"
+            )
+            return True
+
     jobs = []
     for ex, target in executions:
         ctid = str(
@@ -6274,6 +6302,33 @@ async def evaluate_and_fire(
                     # In partial-runner mode the broker TP must be TP2 (final target);
                     # otherwise it stays at the strategy's TP1.
                     _live_tp_pct  = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
+                    if asset_class == "forex":
+                        from app.services.forex_claude_confirm import maybe_forex_claude_confirm
+                        _claude_ok, _claude_reason = await maybe_forex_claude_confirm(
+                            strategy_id=strategy.id,
+                            symbol=symbol,
+                            direction=direction,
+                            entry=current_price,
+                            sl=sl_price,
+                            tp=tp_price,
+                            tp2=tp2_price,
+                            conditions_met=details,
+                            price_data=price_data,
+                            timeframe=_eval_tf,
+                        )
+                        if not _claude_ok:
+                            _bump("blk_claude_confirm")
+                            execution.outcome = "CANCELLED"
+                            execution.notes = (
+                                f"{_exec_notes or ''} | claude_confirm_blocked: {_claude_reason}"
+                            ).strip(" |")
+                            db.commit()
+                            logger.info(
+                                f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} "
+                                f"live fire blocked by Claude confirm: {_claude_reason}"
+                            )
+                            _accum_cycle_fire_ms(_fire_t0)
+                            break
                     _job_ctid = None
                     _job_prefs = None
                     try:

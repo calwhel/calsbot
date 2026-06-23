@@ -7,6 +7,10 @@ from typing import Dict, Tuple
 SESSIONS: Dict[str, Tuple[int, int, int, int]] = {
     "sydney": (21, 0, 6, 0),
     "tokyo": (0, 0, 9, 0),
+    # Asia live-forex confirm window — fixed UTC (01:00–04:00 = 02:00–05:00 UK BST).
+    "asia": (1, 0, 4, 0),
+    "asian": (1, 0, 4, 0),
+    "asia_kz": (1, 0, 4, 0),
     "london": (7, 0, 16, 0),
     "newyork": (12, 0, 21, 0),
     "london_kz": (7, 0, 10, 0),
