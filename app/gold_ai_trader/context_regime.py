@@ -99,7 +99,7 @@ def compute_volatility_label(k_5m: List[list]) -> Tuple[str, Optional[float]]:
     return "normal", ratio
 
 
-def build_regime_block(k_1h: List[list], k_5m: List[list]) -> List[str]:
+def build_regime_block(k_1h: List[list], k_5m: List[list], k_4h: Optional[List[list]] = None) -> List[str]:
     if not k_1h or len(k_1h) < 10:
         return ["=== REGIME ===", "Regime: unavailable (insufficient 1h data)"]
 
@@ -120,8 +120,32 @@ def build_regime_block(k_1h: List[list], k_5m: List[list]) -> List[str]:
     elif vol_label == "high":
         note = "elevated vol — widen invalidation awareness; require cleaner triggers."
 
-    return [
+    lines = [
         "=== REGIME ===",
         f"1h trend: {trend} | Volatility: {vol_txt} | Structure: {structure}",
         f"Note: {note}",
+    ]
+    if k_4h and len(k_4h) >= 10:
+        from app.gold_ai_trader.htf_bias import compute_4h_trend
+
+        trend_4h = compute_4h_trend(k_4h)
+        struct_4h = _structure_label(k_4h)
+        lines.append(f"4h trend: {trend_4h} | 4h structure: {struct_4h}")
+    return lines
+
+
+def build_htf_bias_block(bias: dict) -> List[str]:
+    """Structured HTF bias section for Claude."""
+    if not bias:
+        return ["=== HTF BIAS ===", "HTF bias: unavailable"]
+    d_hi = bias.get("daily_high")
+    d_lo = bias.get("daily_low")
+    d_range = ""
+    if d_hi is not None and d_lo is not None:
+        d_range = f" | Daily range: {d_lo:.2f} – {d_hi:.2f}"
+    return [
+        "=== HTF BIAS (structured) ===",
+        f"HTF bias: {bias.get('htf_bias', 'mixed')} "
+        f"(1h={bias.get('trend_1h')} | 4h={bias.get('trend_4h')})",
+        f"Structure: 1h={bias.get('structure_1h')} | 4h={bias.get('structure_4h')}{d_range}",
     ]

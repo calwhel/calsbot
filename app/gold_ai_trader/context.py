@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from app.gold_ai_trader.config import SYMBOL, ASSET_CLASS
-from app.gold_ai_trader.context_levels import build_key_levels_block
-from app.gold_ai_trader.context_regime import build_regime_block
+from app.gold_ai_trader.context_levels import build_key_levels_block, build_premium_discount_block
+from app.gold_ai_trader.context_regime import build_regime_block, build_htf_bias_block
+from app.gold_ai_trader.context_history import build_recent_decisions_block, parse_zone_from_detail
+from app.gold_ai_trader.htf_bias import htf_bias_summary
 from app.gold_ai_trader.scanner import Candidate
 
 
@@ -35,6 +37,66 @@ def _summarize_candles(rows, n: int = 12) -> str:
     return " → ".join(parts)
 
 
+def build_data_quality_block(market_data: Optional[Dict[str, Any]]) -> list:
+    """Structured data-quality flag so Claude weights confidence honestly."""
+    if not market_data:
+        return [
+            "=== DATA QUALITY ===",
+            "Status: unknown (no market_data passed)",
+        ]
+    from app.gold_ai_trader.data_quality import format_data_source, gold_data_ok_for_claude
+
+    ok, reason = gold_data_ok_for_claude(market_data)
+    tag = format_data_source(market_data)
+    live = market_data.get("live_source") or market_data.get("price_source") or "unknown"
+    ks = market_data.get("kline_source") or "none"
+    bars = market_data.get("kline_bars", 0)
+    stale = "yes" if market_data.get("klines_stale") else "no"
+    bid = market_data.get("bid")
+    ask = market_data.get("ask")
+    spread = ""
+    if bid and ask:
+        spread = f" | bid/ask: {float(bid):.2f}/{float(ask):.2f}"
+
+    price_mode = "ctrader-live"
+    if live != "ctrader":
+        price_mode = f"{live} (non-live)"
+    elif market_data.get("price_source") == "ctrader" and not market_data.get("bid"):
+        price_mode = "ctrader-live or 5m-close-fallback"
+
+    return [
+        "=== DATA QUALITY (structured) ===",
+        f"Gate: {'PASS' if ok else 'BLOCKED'} ({reason})",
+        f"Price source: {price_mode} | Kline source: {ks} | Bars: {bars} | Stale: {stale}{spread}",
+        f"Tag: {tag}",
+    ]
+
+
+def build_smt_block(smt: Optional[Dict[str, Any]]) -> list:
+    if not smt:
+        return []
+    mod = smt.get("modifier", 0)
+    if mod == 0 and not smt.get("data_available"):
+        return [
+            "=== SMT DIVERGENCE (modifier only — not a trigger) ===",
+            smt.get("detail", "SMT: unavailable"),
+        ]
+    sign = "+" if mod > 0 else ""
+    lines = [
+        "=== SMT DIVERGENCE (confidence modifier — NOT standalone trigger) ===",
+        f"Suggested confidence adjustment: {sign}{mod} "
+        f"(supports {'this' if mod > 0 else 'opposing' if mod < 0 else 'neutral'} direction)",
+        smt.get("detail", ""),
+    ]
+    if smt.get("dxy_note"):
+        lines.append(f"Reference note: {smt['dxy_note']}")
+    ref = smt.get("reference_symbol")
+    src = smt.get("reference_source")
+    if ref:
+        lines.append(f"Reference series: {ref} (source: {src or 'unknown'})")
+    return lines
+
+
 async def build_context_snapshot(
     *,
     candidate: Candidate,
@@ -43,6 +105,8 @@ async def build_context_snapshot(
     db,
     cfg,
     user_id: Optional[int],
+    market_data: Optional[Dict[str, Any]] = None,
+    smt: Optional[Dict[str, Any]] = None,
 ) -> str:
     from app.services.tradfi_prices import get_klines
     from app.gold_ai_trader.guardrails import calls_today, trades_today, cost_today_usd, open_position_count
@@ -51,6 +115,7 @@ async def build_context_snapshot(
     k5 = await get_klines(SYMBOL, ASSET_CLASS, "5m", 60) or []
     k15 = await get_klines(SYMBOL, ASSET_CLASS, "15m", 40) or []
     k1h = await get_klines(SYMBOL, ASSET_CLASS, "1h", 50) or []
+    k4h = await get_klines(SYMBOL, ASSET_CLASS, "4h", 30) or []
     k_daily = await get_klines(SYMBOL, ASSET_CLASS, "1d", 5) or []
 
     closes = [float(r[4]) for r in k5 if r and len(r) >= 5]
@@ -96,6 +161,8 @@ async def build_context_snapshot(
     elif session == "new_york":
         mins_in_session = max(0, (now.hour - cfg.ny_start_hour) * 60 + now.minute)
 
+    setup_zone = parse_zone_from_detail(candidate.detail)
+    bias = htf_bias_summary(k1h, k4h, k_daily)
     key_levels = build_key_levels_block(
         spot=price,
         atr=atr,
@@ -105,32 +172,58 @@ async def build_context_snapshot(
         k_daily=k_daily,
         k_1h=k1h,
         k_5m=k5,
+        setup_zone=setup_zone,
     )
-    regime = build_regime_block(k1h, k5)
+    regime = build_regime_block(k1h, k5, k4h)
+    htf_block = build_htf_bias_block(bias)
+    data_quality = build_data_quality_block(market_data)
+    recent_decisions = build_recent_decisions_block(db, session=session)
+    smt_block = build_smt_block(smt or candidate.raw.get("smt"))
+    premium_discount = build_premium_discount_block(
+        spot=price, k5=k5, k1h=k1h, now=now, session=session, cfg=cfg,
+    )
+    struct_line = candidate.raw.get("structure_score_line") or ""
+    zone_tf = candidate.raw.get("zone_tf", "5m")
+
+    htf_align = candidate.raw.get("htf_align", "unknown")
 
     lines = [
         "=== GOLD AI TRADER CONTEXT (XAUUSD) ===",
         f"Timestamp UTC: {now.isoformat()}Z",
         f"Session: {session.upper()} | Killzone: yes | Minutes into session: {mins_in_session}",
         "",
+        *data_quality,
+        "",
         "=== PRICE ===",
         f"Spot: {price:.2f}",
         f"ATR(14) 5m: {atr:.2f} ({atr_pct:.3f}% of price) | RVOL(5m): {rvol:.2f}x",
         "",
+        *htf_block,
+        "",
         *regime,
         "",
         *key_levels,
+        "",
+        *premium_discount,
         "",
         "=== RECENT PATH (5m, oldest→newest) ===",
         _summarize_candles(k5, 10),
         "",
         "=== STRUCTURE / BIAS (engine) ===",
         f"15m trend: {'bullish' if len(k15) >= 2 and float(k15[-1][4]) > float(k15[-2][4]) else 'bearish/mixed'}",
+        f"HTF alignment (setup): {htf_align}",
         "",
         "=== TRIGGER (why Claude was called) ===",
-        f"Type: {candidate.type} | Direction bias: {candidate.direction}",
+        f"Type: {candidate.type} | Direction bias: {candidate.direction} | Zone TF: {zone_tf}",
         f"Detail: {candidate.detail}",
         f"Quality vs ATR: {candidate.quality_atr:.2f}× (engine estimate)",
+        struct_line or "Structure score: unavailable",
+        f"Take threshold: {cfg.confidence_threshold}% (unchanged — score honestly vs this bar)",
+        f"Suggested invalidation max: {atr:.2f} (1.0× 5m ATR — wider SL → lower confidence)",
+        "",
+        *smt_block,
+        "" if not smt_block else "",
+        *recent_decisions,
         "",
         "=== ACCOUNT (DEMO) ===",
         f"Open gold_ai positions: {open_pos}/1 max",
@@ -143,5 +236,6 @@ async def build_context_snapshot(
         "",
         "=== DECISION RULE REMINDER ===",
         "Default SKIP unless high conviction. Require clear invalidation and ≥2:1 R:R.",
+        "Weight data quality and HTF bias — downgrade confidence on stale/non-live feeds or counter-HTF setups.",
     ]
-    return "\n".join(lines)
+    return "\n".join(line for line in lines if line is not None)

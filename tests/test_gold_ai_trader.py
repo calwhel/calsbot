@@ -173,7 +173,7 @@ def test_persist_demo_user_from_admin():
 def test_session_gate_london():
     cfg = env_defaults()
     assert active_session(datetime(2026, 6, 18, 8, 30), cfg) == "london"
-    assert active_session(datetime(2026, 6, 18, 12, 30), cfg) == "new_york"
+    assert active_session(datetime(2026, 6, 18, 14, 30), cfg) == "new_york"
     assert active_session(datetime(2026, 6, 18, 5, 0), cfg) is None
     assert cfg.london_end_hour == 16
     assert cfg.ny_start_hour == 12
@@ -305,9 +305,12 @@ def test_system_prompt_cached_block_present():
 def test_context_builder_shape():
     class _Cfg:
         london_start_hour = 7
+        london_end_hour = 16
         ny_start_hour = 13
+        ny_end_hour = 21
         max_calls_day = 50
         max_trades_day = 6
+        confidence_threshold = 50
 
     class _Db:
         def query(self, *a, **k):
@@ -317,6 +320,9 @@ def test_context_builder_shape():
             return self
 
         def order_by(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
             return self
 
         def first(self):
@@ -346,6 +352,8 @@ def test_context_builder_shape():
     assert "TRIGGER" in text
     assert "XAUUSD" in text
     assert "sweep_pdh" in text
+    assert "PREMIUM / DISCOUNT" in text
+    assert "Structure score" in text or "structure" in text.lower()
 
 
 def test_telegram_take_message_demo_label():

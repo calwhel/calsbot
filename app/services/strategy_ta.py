@@ -3185,6 +3185,17 @@ async def eval_fx_sdp(
     )
 
 
+def _price_tolerance(symbol: str, tol_pips: float) -> float:
+    """Convert pip tolerance to price units (metals-aware)."""
+    try:
+        from app.services.forex_engine import pip_size
+
+        return max(tol_pips, 0.5) * pip_size(symbol)
+    except Exception:
+        pip = 0.01 if "JPY" in (symbol or "").upper() else 0.0001
+        return tol_pips * pip
+
+
 async def eval_fx_equal_hl(
     cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
 ) -> Tuple[bool, str]:
@@ -3194,12 +3205,17 @@ async def eval_fx_equal_hl(
     within `tolerance_pips` of each other.  Fires when the cluster exists AND
     current price is near it — price is approaching or has just swept the pool.
 
-    cfg.type:           'eqh' | 'eql' (default 'eqh')
+    cfg.equal_type:     'eqh' | 'eql' (default 'eqh'; legacy key `type` if not fx_equal_hl)
     cfg.lookback:       bars to scan (default 30)
     cfg.tolerance_pips: max pip gap between equal levels (default 3)
     cfg.timeframe:      kline TF (default '15m')
     """
-    eq_type = (cond.get("type") or "eqh").lower()
+    eq_type = (
+        cond.get("equal_type")
+        or cond.get("eq_kind")
+        or ("eqh" if cond.get("type") not in ("fx_equal_hl", "equal_hl_sweep") else None)
+        or "eqh"
+    ).lower()
     tf      = cond.get("timeframe", "15m")
     try:
         lookback = max(5, min(int(cond.get("lookback") or 30), 200))
@@ -3210,8 +3226,7 @@ async def eval_fx_equal_hl(
     except (TypeError, ValueError):
         tol_pips = 3.0
 
-    pip  = 0.01 if "JPY" in symbol.upper() else 0.0001
-    tol  = tol_pips * pip
+    tol = _price_tolerance(symbol, tol_pips)
 
     klines = await _get_klines(symbol, tf, lookback + 5, http_client, cache)
     if not klines or len(klines) < 5:
@@ -3241,6 +3256,127 @@ async def eval_fx_equal_hl(
     )
 
 
+def _find_equal_hl_cluster(
+    levels: List[float],
+    tol: float,
+) -> Optional[float]:
+    """Return mean level of first cluster with ≥2 touches within tolerance."""
+    for i in range(len(levels)):
+        matches = [levels[j] for j in range(len(levels)) if abs(levels[j] - levels[i]) <= tol]
+        if len(matches) >= 2:
+            return sum(matches) / len(matches)
+    return None
+
+
+async def eval_equal_hl_sweep(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict,
+) -> Tuple[bool, str]:
+    """Equal highs/lows liquidity — sweep + displacement + reclaim entry.
+
+    Sequence (ICT):
+      1. Cluster of equal highs (EQH) or equal lows (EQL)
+      2. Wick sweep through the cluster level, close back through it
+      3. Displacement candle in trade direction within `disp_window` bars
+      4. Entry on retrace/reclaim at the cluster level (ENTRY_MAX_DIST guard)
+
+    cfg.equal_type:     'eqh' (short bias) | 'eql' (long bias)
+    cfg.lookback:       bars for cluster detection (default 30)
+    cfg.tolerance_pips: cluster touch tolerance (default 3)
+    cfg.disp_window:    max bars sweep→displacement (default 5)
+    cfg.min_body_ratio: displacement body vs avg body (default 2.0)
+    cfg.timeframe:      kline TF (default '5m')
+    """
+    eq_type = (cond.get("equal_type") or cond.get("eq_kind") or "eqh").lower()
+    direction = (cond.get("direction") or ("bearish" if eq_type == "eqh" else "bullish")).lower()
+    tf = cond.get("timeframe", "5m")
+    try:
+        lookback = max(10, min(int(cond.get("lookback") or 30), 120))
+    except (TypeError, ValueError):
+        lookback = 30
+    try:
+        tol_pips = max(0.5, float(cond.get("tolerance_pips") or 3))
+    except (TypeError, ValueError):
+        tol_pips = 3.0
+    try:
+        disp_window = max(1, min(int(cond.get("disp_window") or 5), 15))
+    except (TypeError, ValueError):
+        disp_window = 5
+    try:
+        min_body_ratio = max(1.0, float(cond.get("min_body_ratio") or 2.0))
+    except (TypeError, ValueError):
+        min_body_ratio = 2.0
+
+    tol = _price_tolerance(symbol, tol_pips)
+    need = lookback + disp_window + 15
+    klines = await _get_klines(symbol, tf, need, http_client, cache)
+    if not klines or len(klines) < lookback + 5:
+        return False, f"EQ{eq_type.upper()} sweep: insufficient data"
+
+    closed = klines[:-1]
+    n = len(closed)
+    h = _highs(closed)
+    l = _lows(closed)
+    o = _opens(closed)
+    c = _closes(closed)
+    bodies = [abs(c[i] - o[i]) for i in range(n)]
+    avg_body = sum(bodies[:-1]) / max(1, len(bodies) - 1) if bodies else 0.0
+    if avg_body <= 0:
+        return False, f"EQ{eq_type.upper()} sweep: zero avg body"
+
+    atr_val = _atr(closed)
+    price = current_price if current_price and current_price > 0 else c[-1]
+
+    # Cluster from older portion of window (exclude last disp_window+3 bars)
+    cluster_end = max(5, n - disp_window - 5)
+    cluster_slice = h[:cluster_end] if eq_type == "eqh" else l[:cluster_end]
+    cluster_level = _find_equal_hl_cluster(cluster_slice[-lookback:], tol)
+    if cluster_level is None:
+        return False, f"EQ{eq_type.upper()} sweep: no cluster (tol={tol_pips}pips)"
+
+    start = max(1, cluster_end - disp_window - 3)
+    for sweep_i in range(n - 2, start - 1, -1):
+        swept = False
+        if eq_type == "eqh" and direction == "bearish":
+            swept = h[sweep_i] > cluster_level and c[sweep_i] < cluster_level
+        elif eq_type == "eql" and direction == "bullish":
+            swept = l[sweep_i] < cluster_level and c[sweep_i] > cluster_level
+        if not swept:
+            continue
+
+        disp_ok = False
+        for d in range(sweep_i + 1, min(sweep_i + 1 + disp_window, n)):
+            ratio = bodies[d] / avg_body if avg_body else 0.0
+            if ratio < min_body_ratio:
+                continue
+            if direction == "bearish" and c[d] < o[d]:
+                disp_ok = True
+                break
+            if direction == "bullish" and c[d] > o[d]:
+                disp_ok = True
+                break
+        if not disp_ok:
+            continue
+
+        zone_tol = (entry_max_dist_from_zone_atr() * atr_val) if atr_val and atr_val > 0 else tol
+        zone_bot = cluster_level - zone_tol
+        zone_top = cluster_level + zone_tol
+        ok_zone, zone_msg = entry_zone_allows_price(
+            price, zone_bot, zone_top, direction, atr_val,
+        )
+        if ok_zone:
+            return True, (
+                f"EQ{eq_type.upper()} sweep→disp→reclaim @ {cluster_level:.6g} "
+                f"zone={zone_bot:.6g}–{zone_top:.6g} "
+                f"(sweep bar -{n - 1 - sweep_i}) price={price:.6g} → FIRED"
+            )
+        return False, (
+            f"EQ{eq_type.upper()} sweep→disp ok but {zone_msg} "
+            f"(reclaim @ {cluster_level:.6g} price={price:.6g})"
+        )
+
+    return False, f"EQ{eq_type.upper()} sweep: no sweep→displacement→reclaim sequence"
+
+
 async def eval_fx_breaker(
     cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
 ) -> Tuple[bool, str]:
@@ -3261,19 +3397,21 @@ async def eval_fx_breaker(
     cfg.timeframe:     kline TF (default '15m')
     """
     direction   = (cond.get("direction") or "bullish").lower()
-    tf          = cond.get("timeframe", "15m")
+    tf          = cond.get("timeframe", "5m")
     lookback    = max(20, min(int(cond.get("lookback") or 50), 200))
-    tol         = float(cond.get("tolerance_pct") or 0.5) / 100
 
     klines = await _get_klines(symbol, tf, lookback + 10, http_client, cache)
     if not klines or len(klines) < 15:
         return False, "BREAKER: insufficient data"
 
-    closes = _closes(klines)
-    opens  = _opens(klines)
-    highs  = _highs(klines)
-    lows   = _lows(klines)
-    n = len(klines)
+    closed = klines[:-1]
+    closes = _closes(closed)
+    opens  = _opens(closed)
+    highs  = _highs(closed)
+    lows   = _lows(closed)
+    n = len(closed)
+    atr_val = _atr(closed)
+    price = current_price if current_price and current_price > 0 else closes[-1]
 
     # Walk backward to find a former OB that price has since broken through
     # Bullish breaker: look for a former bearish OB (supply) that bulls broke above
@@ -3287,15 +3425,20 @@ async def eval_fx_breaker(
                 continue
             ob_high = highs[i]; ob_low = lows[i]
             # Price must have since broken ABOVE ob_high (bullish break through supply)
-            broken = any(closes[j] > ob_high for j in range(i + 1, n - 1))
+            broken = any(closes[j] > ob_high for j in range(i + 1, n))
             if not broken:
                 continue
-            # Price has returned to the zone (now acting as support)
-            in_zone = ob_low * (1 - tol) <= current_price <= ob_high * (1 + tol)
-            return in_zone, (
-                f"Bullish breaker {ob_low:.6g}–{ob_high:.6g} "
-                f"(broke above, returned) price={current_price:.6g} → "
-                f"{'IN ZONE' if in_zone else 'away'}"
+            ok_zone, zone_msg = entry_zone_allows_price(
+                price, ob_low, ob_high, "bullish", atr_val,
+            )
+            if ok_zone:
+                return True, (
+                    f"Bullish breaker {ob_low:.6g}–{ob_high:.6g} "
+                    f"(broke above, retrace) price={price:.6g} → FIRED"
+                )
+            return False, (
+                f"Bullish breaker {ob_low:.6g}–{ob_high:.6g} but {zone_msg} "
+                f"(price={price:.6g})"
             )
         else:
             # Former demand OB: bullish candle before impulse up
@@ -3304,15 +3447,20 @@ async def eval_fx_breaker(
                 continue
             ob_high = highs[i]; ob_low = lows[i]
             # Price must have since broken BELOW ob_low (bearish break through demand)
-            broken = any(closes[j] < ob_low for j in range(i + 1, n - 1))
+            broken = any(closes[j] < ob_low for j in range(i + 1, n))
             if not broken:
                 continue
-            # Price has returned to the zone (now acting as resistance)
-            in_zone = ob_low * (1 - tol) <= current_price <= ob_high * (1 + tol)
-            return in_zone, (
-                f"Bearish breaker {ob_low:.6g}–{ob_high:.6g} "
-                f"(broke below, returned) price={current_price:.6g} → "
-                f"{'IN ZONE' if in_zone else 'away'}"
+            ok_zone, zone_msg = entry_zone_allows_price(
+                price, ob_low, ob_high, "bearish", atr_val,
+            )
+            if ok_zone:
+                return True, (
+                    f"Bearish breaker {ob_low:.6g}–{ob_high:.6g} "
+                    f"(broke below, retrace) price={price:.6g} → FIRED"
+                )
+            return False, (
+                f"Bearish breaker {ob_low:.6g}–{ob_high:.6g} but {zone_msg} "
+                f"(price={price:.6g})"
             )
 
     return False, f"BREAKER ({direction}): no qualifying breaker block found in {lookback} bars"
@@ -4342,6 +4490,10 @@ async def evaluate_strategy_conditions(
                 return await eval_fx_displacement(cond, symbol, price, http_client, cache)
             elif ctype == "fx_equal_hl":
                 return await eval_fx_equal_hl(cond, symbol, price, http_client, cache)
+            elif ctype == "equal_hl_sweep":
+                return await eval_equal_hl_sweep(cond, symbol, price, http_client, cache)
+            elif ctype == "breaker_block":
+                return await eval_fx_breaker(cond, symbol, price, http_client, cache)
             elif ctype == "fx_cisd":
                 return await eval_fx_cisd(cond, symbol, http_client, cache)
             elif ctype == "fx_sdp":
