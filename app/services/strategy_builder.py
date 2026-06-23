@@ -29,6 +29,7 @@ ENGINE_EXECUTABLE_CONDITION_TYPES = frozenset({
     "forex_cot",
     "fx_killzone", "fx_ote", "fx_displacement", "fx_equal_hl", "fx_cisd",
     "fx_sdp", "fx_breaker", "fx_pd_array", "fx_judas_swing", "fx_silver_bullet",
+    "equal_hl_sweep",
     "opening_range_break", "vwap_cross", "atr_filter", "rvol", "vwap_bands",
     "vwap_bias", "volume_profile", "stochastic", "fx_po3", "wyckoff",
     "stock_earnings_avoidance", "pivot_points", "session_level",

@@ -15,6 +15,9 @@ from app.gold_ai_trader.call_gates import (
     passes_quality_gates,
 )
 from app.gold_ai_trader.config import GoldAiRuntimeConfig, SYMBOL, ASSET_CLASS
+from app.gold_ai_trader.htf_bias import direction_aligns_with_htf, htf_bias_summary
+from app.gold_ai_trader.setup_toggles import setup_enabled, smt_modifier_enabled
+from app.gold_ai_trader.smt_modifier import assess_smt_divergence
 
 logger = logging.getLogger(__name__)
 
@@ -66,14 +69,8 @@ def record_claude_invocation(candidate: Candidate) -> None:
     _last_claude_fired[candidate.sig_key] = time.monotonic()
 
 
-async def _price() -> Optional[float]:
-    try:
-        from app.services.tradfi_prices import get_price
-
-        return await get_price(SYMBOL, ASSET_CLASS)
-    except Exception as e:
-        logger.debug("[gold-ai-trader] price fetch: %s", e)
-        return None
+def _requires_htf_alignment(setup_key: str) -> bool:
+    return setup_key.startswith(("breaker_", "eqh_sweep_", "eql_sweep_"))
 
 
 async def scan_candidates(
@@ -81,10 +78,11 @@ async def scan_candidates(
     *,
     session: str,
     cfg: GoldAiRuntimeConfig,
+    price: Optional[float] = None,
+    user_id: Optional[int] = None,
 ) -> Tuple[Optional[float], List[Candidate]]:
     """Return (price, gated candidates). BOS/VWAP/CHoCH excluded — too marginal."""
-    price = await _price()
-    if not price:
+    if price is None or price <= 0:
         return None, []
 
     from app.services.tradfi_prices import get_klines
@@ -93,19 +91,24 @@ async def scan_candidates(
         eval_fx_displacement,
         eval_forex_prev_level,
         eval_fx_sdp,
-        eval_bt_klines_cond,
+        eval_liquidity_sweep,
+        eval_fx_breaker,
+        eval_equal_hl_sweep,
     )
 
     k5 = await get_klines(SYMBOL, ASSET_CLASS, "5m", 60) or []
     k1h = await get_klines(SYMBOL, ASSET_CLASS, "1h", 50) or []
+    k4h = await get_klines(SYMBOL, ASSET_CLASS, "4h", 30) or []
     k_daily = await get_klines(SYMBOL, ASSET_CLASS, "1d", 5) or []
     now = datetime.utcnow()
 
-    cache = {"__asset_class__": ASSET_CLASS}
+    cache: Dict[str, Any] = {"__asset_class__": ASSET_CLASS}
+    if user_id:
+        cache["__ctrader_user_id__"] = user_id
     tf = "5m"
     found: List[Candidate] = []
+    bias = htf_bias_summary(k1h, k4h, k_daily)
 
-    # High-quality setup types only (no raw BOS/CHoCH/VWAP wake-ups).
     checks = [
         ("sweep_pdh", "forex_prev_level", {"condition": "sweep_pdh", "timeframe": tf}, "SHORT"),
         ("sweep_pdl", "forex_prev_level", {"condition": "sweep_pdl", "timeframe": tf}, "LONG"),
@@ -113,15 +116,31 @@ async def scan_candidates(
         ("disp_bear", "fx_displacement", {"direction": "bearish", "timeframe": tf}, "SHORT"),
         ("fvg_bull", "fvg", {"direction": "bullish", "timeframe": tf, "condition": "just_formed"}, "LONG"),
         ("fvg_bear", "fvg", {"direction": "bearish", "timeframe": tf, "condition": "just_formed"}, "SHORT"),
-        ("liq_sweep_bull", "liquidity_sweep", {"type": "liquidity_sweep", "direction": "bullish", "timeframe": tf}, "LONG"),
-        ("liq_sweep_bear", "liquidity_sweep", {"type": "liquidity_sweep", "direction": "bearish", "timeframe": tf}, "SHORT"),
+        ("liq_sweep_bull", "liquidity_sweep", {"direction": "bullish", "timeframe": tf}, "LONG"),
+        ("liq_sweep_bear", "liquidity_sweep", {"direction": "bearish", "timeframe": tf}, "SHORT"),
         ("sdp_bull", "fx_sdp", {"direction": "bullish", "timeframe": tf}, "LONG"),
         ("sdp_bear", "fx_sdp", {"direction": "bearish", "timeframe": tf}, "SHORT"),
+        ("breaker_bull", "fx_breaker", {"direction": "bullish", "timeframe": tf}, "LONG"),
+        ("breaker_bear", "fx_breaker", {"direction": "bearish", "timeframe": tf}, "SHORT"),
+        (
+            "eqh_sweep_bear",
+            "equal_hl_sweep",
+            {"equal_type": "eqh", "direction": "bearish", "timeframe": tf},
+            "SHORT",
+        ),
+        (
+            "eql_sweep_bull",
+            "equal_hl_sweep",
+            {"equal_type": "eql", "direction": "bullish", "timeframe": tf},
+            "LONG",
+        ),
     ]
 
     atr = atr_from_klines(k5)
 
     for ctype, kind, cond, direction in checks:
+        if not setup_enabled(ctype):
+            continue
         key = f"{ctype}:{direction}"
         if not setup_cooldown_elapsed(key):
             continue
@@ -133,9 +152,15 @@ async def scan_candidates(
             elif kind == "forex_prev_level":
                 ok, msg = await eval_forex_prev_level(cond, SYMBOL, price, http, cache)
             elif kind == "liquidity_sweep":
-                ok, msg = await eval_bt_klines_cond(cond, SYMBOL, http, cache)
+                ok, msg = await eval_liquidity_sweep(
+                    {**cond, "type": "liquidity_sweep"}, SYMBOL, price, http, cache,
+                )
             elif kind == "fx_sdp":
                 ok, msg = await eval_fx_sdp(cond, SYMBOL, price, http, cache)
+            elif kind == "fx_breaker":
+                ok, msg = await eval_fx_breaker(cond, SYMBOL, price, http, cache)
+            elif kind == "equal_hl_sweep":
+                ok, msg = await eval_equal_hl_sweep(cond, SYMBOL, price, http, cache)
             else:
                 continue
         except Exception as exc:
@@ -145,13 +170,34 @@ async def scan_candidates(
         if not ok:
             continue
 
+        if _requires_htf_alignment(ctype):
+            aligned, align_reason = direction_aligns_with_htf(direction, bias)
+            if not aligned:
+                logger.debug("[gold-ai-trader] HTF skip %s: %s", ctype, align_reason)
+                continue
+
+        raw: Dict[str, Any] = {
+            "msg": msg,
+            "price": price,
+            "htf_align": direction_aligns_with_htf(direction, bias)[1],
+        }
+
+        if smt_modifier_enabled():
+            smt = await assess_smt_divergence(
+                direction=direction,
+                http_client=http,
+                cache=cache,
+                user_id=user_id,
+            )
+            raw["smt"] = smt
+
         cand = Candidate(
             type=ctype,
             direction=direction,
             detail=str(msg)[:400],
             quality_atr=1.0,
             sig_key=key,
-            raw={"msg": msg, "price": price},
+            raw=raw,
         )
         ok_gate, reason = passes_quality_gates(
             cand,
@@ -167,7 +213,6 @@ async def scan_candidates(
             logger.debug("[gold-ai-trader] gate skip %s: %s", ctype, reason)
             continue
 
-        # Attach computed quality for pick_best / logging.
         body_q = atr and abs(float(k5[-2][4]) - float(k5[-2][1])) / atr if len(k5) >= 2 else 0
         cand = replace(cand, quality_atr=max(body_q, cand.quality_atr))
         found.append(cand)
@@ -183,8 +228,12 @@ def pick_best(candidates: List[Candidate]) -> Optional[Candidate]:
         "sweep_pdl": 5,
         "liq_sweep_bull": 5,
         "liq_sweep_bear": 5,
+        "eqh_sweep_bear": 5,
+        "eql_sweep_bull": 5,
         "sdp_bull": 4,
         "sdp_bear": 4,
+        "breaker_bull": 4,
+        "breaker_bear": 4,
         "disp_bull": 3,
         "disp_bear": 3,
         "fvg_bull": 2,

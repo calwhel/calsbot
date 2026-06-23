@@ -128,7 +128,13 @@ async def run_gold_ai_trader_loop() -> None:
             return
 
         async with httpx.AsyncClient(timeout=15) as http:
-            price, candidates = await scan_candidates(http, session=session, cfg=cfg)
+            price, candidates = await scan_candidates(
+                http,
+                session=session,
+                cfg=cfg,
+                price=float(market_data["price"]),
+                user_id=cfg.demo_user_id,
+            )
         if not candidates or price is None:
             return
 
@@ -164,6 +170,8 @@ async def run_gold_ai_trader_loop() -> None:
             db=db,
             cfg=cfg,
             user_id=cfg.demo_user_id,
+            market_data=market_data,
+            smt=candidate.raw.get("smt"),
         )
 
         decision, reasoning, usage = await decide(
@@ -174,15 +182,6 @@ async def run_gold_ai_trader_loop() -> None:
         record_claude_invocation(candidate)
         action = (decision.get("action") or "skip").lower()
         conf = int(decision.get("confidence") or 0)
-
-        logger.info(
-            "[gold-ai] confidence=%s%% source=%s decision=%s setup=%s session=%s",
-            conf,
-            source_tag,
-            action,
-            candidate.type,
-            session,
-        )
 
         row = GoldAiDecision(
             session=session,
@@ -203,6 +202,15 @@ async def run_gold_ai_trader_loop() -> None:
         db.commit()
         db.refresh(row)
 
+        logger.info(
+            "[gold-ai] decision_id=%s confidence=%s%% setup=%s source=%s action=%s",
+            row.id,
+            conf,
+            candidate.type,
+            source_tag,
+            action,
+        )
+
         runtime_state.note_decision(
             {
                 "id": row.id,
@@ -212,9 +220,9 @@ async def run_gold_ai_trader_loop() -> None:
             }
         )
 
+        execution_id = None
         if action == "take":
             executed = False
-            execution_id = None
             block_reason = None
             if conf >= cfg.confidence_threshold:
                 ok_exec, exec_reason = check_can_execute(db, cfg, cfg.demo_user_id or 0)
@@ -273,6 +281,18 @@ async def run_gold_ai_trader_loop() -> None:
                 execution_id=execution_id,
                 block_reason=block_reason,
             )
+
+        logger.info(
+            "[gold-ai] calibration decision_id=%s confidence=%s%% setup=%s source=%s "
+            "action=%s exec_id=%s session=%s",
+            row.id,
+            conf,
+            candidate.type,
+            source_tag,
+            action,
+            row.execution_id or execution_id or "none",
+            session,
+        )
 
         # Sync outcomes for closed trades + Telegram close alerts
         if row.execution_id:

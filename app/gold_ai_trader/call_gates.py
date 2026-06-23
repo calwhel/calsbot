@@ -146,7 +146,7 @@ def passes_quality_gates(
     body_atr = last_closed_body_atr(k5, atr)
     detail_q = _parse_quality_from_detail(candidate.detail)
     disp_ok = body_atr >= MIN_BODY_ATR or (detail_q is not None and detail_q >= MIN_BODY_ATR)
-    if candidate.type.startswith(("disp_", "sweep_", "liq_sweep", "fvg_", "sdp_")):
+    if candidate.type.startswith(("disp_", "sweep_", "liq_sweep", "fvg_", "sdp_", "breaker_", "eqh_sweep", "eql_sweep")):
         if not disp_ok and candidate.quality_atr < MIN_BODY_ATR:
             return False, f"displacement_body={body_atr:.2f}atr<{MIN_BODY_ATR}"
 
