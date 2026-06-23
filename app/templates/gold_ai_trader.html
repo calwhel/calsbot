@@ -1476,8 +1476,8 @@ function deriveHero(j) {
   };
 }
 
-function renderSessionTimeline(cfg, rt) {
-  const shared = j.shared_session_hours || {};
+function renderSessionTimeline(cfg, rt, sharedHours) {
+  const shared = sharedHours || {};
   const lonS = cfg.london_start_hour ?? shared.london?.start_hour ?? 7;
   const lonE = cfg.london_end_hour ?? shared.london?.end_hour ?? 16;
   const nyS = cfg.ny_start_hour ?? shared.new_york?.start_hour ?? 12;
@@ -1519,7 +1519,7 @@ function renderHero(j) {
   const lamp = document.getElementById('status-lamp');
   lamp.className = 'status-lamp ' + (h.lamp === 'active' ? 'active' : h.lamp === 'danger' ? 'danger' : 'dormant');
 
-  renderSessionTimeline(cfg, rt);
+  renderSessionTimeline(cfg, rt, j.shared_session_hours);
 
   const toggle = document.getElementById('toggle-enabled');
   const demoReady = !!j.demo_account_ready;

@@ -145,14 +145,26 @@ async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
     finally:
         db.close()
     norm_uid = _normalize_uid(uid)
-    return templates.TemplateResponse(
+    session_token = _session_token_for_page(request, norm_uid)
+    if not session_token:
+        import strategy_portal_server as portal
+
+        session_token = portal._make_token(norm_uid)
+    resp = templates.TemplateResponse(
         "gold_ai_trader.html",
         {
             "request": request,
             "uid": norm_uid,
-            "session_token": _session_token_for_page(request, norm_uid),
+            "session_token": session_token,
         },
     )
+    try:
+        import strategy_portal_server as portal
+
+        portal._set_session(resp, norm_uid, request)
+    except Exception:
+        pass
+    return resp
 
 
 @router.get("/api/gold-ai-trader/status")
