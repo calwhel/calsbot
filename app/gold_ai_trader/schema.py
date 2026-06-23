@@ -17,6 +17,8 @@ from app.gold_ai_trader.models import (
 
 logger = logging.getLogger(__name__)
 
+_schema_ready = False
+
 _GOLD_AI_CONFIG_ALTERS = (
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_mirror_enabled BOOLEAN DEFAULT FALSE NOT NULL",
     "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_ctrader_account_id VARCHAR(40)",
@@ -63,7 +65,10 @@ def _apply_alters() -> None:
                 logger.debug("[gold-ai-trader] alter skipped/failed: %s (%s)", sql[:60], exc)
 
 
-def ensure_gold_ai_trader_schema() -> None:
+def ensure_gold_ai_trader_schema(*, force: bool = False) -> None:
+    global _schema_ready
+    if _schema_ready and not force:
+        return
     Base.metadata.create_all(
         bind=engine,
         tables=[
@@ -78,13 +83,15 @@ def ensure_gold_ai_trader_schema() -> None:
     _apply_alters()
     insp = inspect(engine)
     if insp.has_table("gold_ai_config"):
-        logger.info("[gold-ai-trader] schema ready")
+        if not _schema_ready:
+            logger.info("[gold-ai-trader] schema ready")
         try:
             from app.gold_ai_trader.guardrails import maybe_reset_daily_claude_credits
 
             maybe_reset_daily_claude_credits()
         except Exception as exc:
             logger.warning("[gold-ai-trader] credits reset on schema ensure failed: %s", exc)
+    _schema_ready = True
 
 
 def seed_config_if_missing(db) -> GoldAiConfig:

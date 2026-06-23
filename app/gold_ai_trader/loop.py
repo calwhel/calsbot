@@ -15,7 +15,7 @@ from app.gold_ai_trader.data_quality import (
     format_data_source,
     gold_data_ok_for_claude,
 )
-from app.gold_ai_trader.schema import ensure_gold_ai_trader_schema, seed_config_if_missing
+from app.gold_ai_trader.schema import seed_config_if_missing
 from app.gold_ai_trader.guardrails import (
     merge_config,
     check_can_call_claude,
@@ -32,12 +32,15 @@ from app.gold_ai_trader.scanner import (
 from app.gold_ai_trader.call_gates import (
     atr_from_klines,
     collect_key_levels,
+    in_killzone,
+    killzone_only_enabled,
     should_invoke_claude,
     call_stats_today,
 )
 from app.gold_ai_trader.decision_validator import validate_take_decision
 from app.gold_ai_trader.funnel import record as funnel_record, snapshot as funnel_snapshot
 from app.gold_ai_trader.setup_toggles import max_candidates_per_scan
+from app.gold_ai_trader.klines import get_gold_ai_klines
 from app.services.tradfi_prices import get_klines
 from app.gold_ai_trader.config import SYMBOL, ASSET_CLASS
 from app.gold_ai_trader.context import build_context_snapshot
@@ -57,14 +60,66 @@ from app.gold_ai_trader import state as runtime_state
 logger = logging.getLogger(__name__)
 
 _LOCK_ID = 42_424_250
+_LOCK_APP_NAME = "gold-ai-trader"
 _loop_task: asyncio.Task | None = None
 _prev_session: str | None = None
+_lock_conn = None
+
+
+def _ping_lock_connection(conn) -> bool:
+    try:
+        if conn is None or getattr(conn, "closed", 0):
+            return False
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+        return True
+    except Exception:
+        return False
+
+
+def _acquire_gold_ai_lock():
+    from app.executor_lock import build_lock_connection, try_acquire_lock
+
+    conn = build_lock_connection(_LOCK_APP_NAME)
+    if try_acquire_lock(conn, _LOCK_ID):
+        return conn
+    try:
+        conn.close()
+    except Exception:
+        pass
+    return None
+
+
+def _reconnect_gold_ai_lock(old_conn):
+    from app.executor_lock import close_lock_connection, reconnect_lock_connection
+
+    return reconnect_lock_connection(
+        old_conn,
+        lock_id=_LOCK_ID,
+        application_name=_LOCK_APP_NAME,
+        max_attempts=5,
+        retry_delay=2.0,
+        silent=False,
+    )
+
+
+def _release_gold_ai_lock(conn) -> None:
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(%s)", (_LOCK_ID,))
+    except Exception:
+        pass
+    try:
+        conn.close()
+    except Exception:
+        pass
 
 
 async def run_gold_ai_trader_loop() -> None:
     """Main scan → candidate → Claude → optional execute cycle."""
     global _prev_session
-    ensure_gold_ai_trader_schema()
     env = env_defaults()
     if not env.enabled:
         runtime_state.note_dormant("disabled")
@@ -99,6 +154,11 @@ async def run_gold_ai_trader_loop() -> None:
     _prev_session = session
     runtime_state.note_scan(session)
 
+    if killzone_only_enabled() and not in_killzone(now, session, cfg):
+        runtime_state.note_dormant("outside_killzone")
+        await asyncio.sleep(max(cfg.scan_interval_s, 15))
+        return
+
     db = SessionLocal()
     try:
         funnel_record("scan", db=db, session=session)
@@ -112,13 +172,6 @@ async def run_gold_ai_trader_loop() -> None:
             if reason == "max_calls_day":
                 await maybe_notify_call_cap_reached(db, cfg)
             return
-
-        try:
-            from app.services.tradfi_prices import sweep_stale_metal_klines
-
-            await sweep_stale_metal_klines([SYMBOL])
-        except Exception:
-            pass
 
         market_data = await assess_gold_market_data(user_id=cfg.demo_user_id)
         data_ok, data_block = gold_data_ok_for_claude(market_data)
@@ -275,8 +328,8 @@ async def run_gold_ai_trader_loop() -> None:
             executed = False
             block_reason = None
             validator_block = None
-            k1h = await get_klines(SYMBOL, ASSET_CLASS, "1h", 50) or []
-            k_daily = await get_klines(SYMBOL, ASSET_CLASS, "1d", 5) or []
+            k1h = await get_gold_ai_klines("1h", 50, user_id=cfg.demo_user_id) or []
+            k_daily = await get_gold_ai_klines("1d", 5, user_id=cfg.demo_user_id) or []
             key_levels = collect_key_levels(
                 float(price), session, cfg, now, k_daily, k1h, k5,
             )
@@ -417,35 +470,38 @@ async def run_gold_ai_trader_loop() -> None:
 
 
 async def _locked_loop_forever() -> None:
-    """Advisory lock so only one worker runs the trader."""
-    from app.database import bg_engine
-    from sqlalchemy import text
+    """Advisory lock with Neon keepalive — hold lock across scan cycles."""
+    from app.executor_lock import log_executor_lock_keepalive_config
 
+    global _lock_conn
     delay = max(15.0, float(os.environ.get("GOLD_AI_TRADER_SCAN_INTERVAL_S", "20")))
+    log_executor_lock_keepalive_config("gold-ai-trader:loop")
     logger.info("[gold-ai-trader] background loop starting (interval=%ss)", delay)
+
     while True:
-        conn = None
-        try:
-            conn = bg_engine.raw_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT pg_try_advisory_lock(%s)", (_LOCK_ID,))
-            got = cur.fetchone()[0]
-            cur.close()
-            if not got:
+        if _lock_conn is None:
+            _lock_conn = await asyncio.to_thread(_acquire_gold_ai_lock)
+            if _lock_conn is None:
                 await asyncio.sleep(delay)
                 continue
-            try:
-                await run_gold_ai_trader_loop()
-            finally:
-                cur = conn.cursor()
-                cur.execute("SELECT pg_advisory_unlock(%s)", (_LOCK_ID,))
-                cur.close()
-                conn.commit()
+            logger.info("[gold-ai-trader] advisory lock acquired")
+
+        if not await asyncio.to_thread(_ping_lock_connection, _lock_conn):
+            logger.warning("[gold-ai-trader] advisory lock connection lost — reconnecting")
+            _lock_conn = await asyncio.to_thread(_reconnect_gold_ai_lock, _lock_conn)
+            if _lock_conn is None:
+                logger.error(
+                    "[gold-ai-trader] advisory lock re-claim failed — retry in %ss",
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+        try:
+            await run_gold_ai_trader_loop()
         except Exception as e:
             logger.error("[gold-ai-trader] lock loop: %s", e)
-        finally:
-            if conn:
-                conn.close()
+
         await asyncio.sleep(delay)
 
 

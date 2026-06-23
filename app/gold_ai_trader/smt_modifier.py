@@ -139,6 +139,7 @@ async def assess_smt_divergence(
 
     # High-side divergence: gold HH, reference fails HH (LH)
     gold_hh = g_hi2 > g_hi1
+    ref_hh = r_hi2 > r_hi1
     ref_fails_hh = r_hi2 <= r_hi1
     if gold_hh and ref_fails_hh:
         detail_parts.append(f"gold HH ({g_hi1:.2f}→{g_hi2:.2f}) vs {meta['label']} LH")
@@ -146,9 +147,16 @@ async def assess_smt_divergence(
             modifier += 10
         elif d == "LONG":
             modifier -= 10
+    elif gold_hh and ref_hh and d == "LONG":
+        detail_parts.append(
+            f"XAG confirms gold HH ({g_hi1:.2f}→{g_hi2:.2f}; "
+            f"{meta['label']} {r_hi1:.2f}→{r_hi2:.2f})"
+        )
+        modifier += 8
 
     # Low-side divergence: gold LL, reference fails LL (HL)
     gold_ll = g_lo2 < g_lo1
+    ref_ll = r_lo2 < r_lo1
     ref_fails_ll = r_lo2 >= r_lo1
     if gold_ll and ref_fails_ll:
         detail_parts.append(f"gold LL ({g_lo1:.2f}→{g_lo2:.2f}) vs {meta['label']} HL")
@@ -156,9 +164,17 @@ async def assess_smt_divergence(
             modifier += 10
         elif d == "SHORT":
             modifier -= 10
+    elif gold_ll and ref_ll and d == "SHORT":
+        detail_parts.append(
+            f"XAG confirms gold LL ({g_lo1:.2f}→{g_lo2:.2f}; "
+            f"{meta['label']} {r_lo1:.2f}→{r_lo2:.2f})"
+        )
+        modifier += 8
 
     if not detail_parts:
         detail = f"SMT: no divergence vs {meta['label']} ({timeframe})"
+    elif any("confirms" in p for p in detail_parts):
+        detail = "SMT confirmation: " + "; ".join(detail_parts)
     else:
         detail = "SMT divergence: " + "; ".join(detail_parts)
 

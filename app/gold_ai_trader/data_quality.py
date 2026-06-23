@@ -81,6 +81,10 @@ async def assess_gold_market_data(
     user_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Resolve live price + kline provenance for Gold AI Claude gating."""
+    from app.gold_ai_trader.data_refresh import refresh_gold_scoring_klines
+
+    await refresh_gold_scoring_klines(user_id=user_id)
+
     sym = SYMBOL.upper()
     live_px, live_source, bid, ask = await _resolve_ctrader_spot(sym, user_id=user_id)
     price_source = live_source or "unknown"

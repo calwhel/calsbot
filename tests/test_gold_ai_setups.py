@@ -11,12 +11,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.gold_ai_trader.htf_bias import direction_aligns_with_htf, htf_bias_summary
-from app.gold_ai_trader.setup_toggles import setup_enabled, smt_modifier_enabled, max_candidates_per_scan
+from app.gold_ai_trader.setup_toggles import (
+    setup_enabled,
+    setup_scannable,
+    htf_is_directional,
+    smt_modifier_enabled,
+    max_candidates_per_scan,
+)
 from app.gold_ai_trader.smt_modifier import assess_smt_divergence, CTRADER_SMT_REFERENCES
 from app.gold_ai_trader.funnel import record as funnel_record, snapshot as funnel_snapshot
 from app.gold_ai_trader.structure_score import compute_structure_score
 from app.gold_ai_trader.scanner import Candidate, pick_best, pick_top_candidates
 from app.gold_ai_trader.context_history import parse_zone_from_detail, build_recent_decisions_block
+from app.gold_ai_trader.judas_detail import enrich_judas_detail
+from app.gold_ai_trader.call_gates import in_killzone, killzone_only_enabled, MIN_BODY_ATR, NEAR_LEVEL_ATR
 from app.gold_ai_trader.context import build_data_quality_block
 from app.services.strategy_ta import (
     entry_zone_allows_price,
@@ -115,9 +123,26 @@ class TestSetupToggles:
         finally:
             os.environ.pop("GOLD_AI_SETUP_BREAKER_BULL", None)
 
-    def test_smt_modifier_default_off(self):
+    def test_smt_modifier_default_on(self):
         os.environ.pop("GOLD_AI_SMT_MODIFIER", None)
-        assert smt_modifier_enabled() is False
+        assert smt_modifier_enabled() is True
+
+    def test_breaker_scannable_when_htf_directional(self):
+        os.environ.pop("GOLD_AI_SETUP_BREAKER_BULL", None)
+        bias = {"htf_bias": "bullish"}
+        assert setup_scannable("breaker_bull", bias) is True
+        assert setup_scannable("breaker_bull", {"htf_bias": "mixed"}) is False
+
+    def test_breaker_scannable_respects_explicit_off(self):
+        os.environ["GOLD_AI_SETUP_BREAKER_BULL"] = "false"
+        try:
+            assert setup_scannable("breaker_bull", {"htf_bias": "bullish"}) is False
+        finally:
+            os.environ.pop("GOLD_AI_SETUP_BREAKER_BULL", None)
+
+    def test_htf_is_directional(self):
+        assert htf_is_directional({"htf_bias": "bullish"}) is True
+        assert htf_is_directional({"htf_bias": "mixed"}) is False
 
 
 class TestBreakerBlockEntryGuard:
@@ -243,6 +268,53 @@ class TestSmtModifier:
         assert -15 <= result["modifier"] <= 15
 
 
+class TestKillzoneAndGates:
+    def test_in_killzone_first_90_minutes(self):
+        cfg = type("C", (), {"london_start_hour": 7, "ny_start_hour": 12})()
+        assert in_killzone(datetime(2026, 6, 18, 7, 30), "london", cfg) is True
+        assert in_killzone(datetime(2026, 6, 18, 9, 0), "london", cfg) is False
+        assert in_killzone(datetime(2026, 6, 18, 12, 45), "new_york", cfg) is True
+
+    def test_killzone_only_default_on(self):
+        os.environ.pop("GOLD_AI_KILLZONE_ONLY", None)
+        assert killzone_only_enabled() is True
+
+    def test_gate_defaults_looser(self):
+        assert MIN_BODY_ATR == 0.6
+        assert NEAR_LEVEL_ATR == 1.5
+
+
+class TestJudasDetail:
+    def test_enrich_judas_adds_zone_and_disp(self):
+        msg = "Judas bullish swing prior range 2650.0–2652.0 reclaimed"
+        k5 = _make_klines(2650, 20)
+        enriched = enrich_judas_detail(
+            msg, direction="LONG", price=2650.5, k5=k5, atr=4.0,
+        )
+        assert "zone" in enriched.lower()
+        assert "reclaim @" in enriched
+        assert "disp=" in enriched
+
+
+class TestStructureScorePriors:
+    def test_judas_prior(self):
+        score, _ = compute_structure_score(
+            candidate_type="judas_bull",
+            direction="LONG",
+            detail="Judas zone",
+            quality_atr=1.0,
+            htf_align="htf_aligned_bull",
+        )
+        score_sweep, _ = compute_structure_score(
+            candidate_type="sweep_pdl",
+            direction="LONG",
+            detail="Sweep",
+            quality_atr=1.0,
+            htf_align="htf_aligned_bull",
+        )
+        assert score >= score_sweep - 5  # judas has type+7 like sweep type+8
+
+
 class TestContextEnrichment:
     def test_data_quality_block_shows_source(self):
         block = build_data_quality_block(
@@ -265,13 +337,21 @@ class TestContextEnrichment:
         z = parse_zone_from_detail("Bullish breaker 2653.0–2654.5 (broke above, retrace)")
         assert z == (2653.0, 2654.5)
 
-    def test_pick_best_prioritizes_ob_over_fvg_retrace(self):
+    def test_pick_best_prioritizes_zone_over_fvg(self):
+        cands = [
+            Candidate("fvg_bull", "LONG", "fvg", 1.0, "k1", {"structure_score": 70}),
+            Candidate("ob_bull", "LONG", "ob", 1.0, "k2", {"structure_score": 55}),
+        ]
+        best = pick_best(cands)
+        assert best.type == "ob_bull"
+
+    def test_pick_best_zone_tiebreaks_on_structure_score(self):
         cands = [
             Candidate("fvg_retrace_bull", "LONG", "fvg", 1.0, "k1", {"structure_score": 60}),
             Candidate("ob_bull", "LONG", "ob", 1.0, "k2", {"structure_score": 55}),
         ]
         best = pick_best(cands)
-        assert best.type == "ob_bull"
+        assert best.type == "fvg_retrace_bull"
 
     def test_pick_top_returns_multiple(self):
         cands = [

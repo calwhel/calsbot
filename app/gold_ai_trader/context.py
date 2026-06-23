@@ -4,7 +4,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.gold_ai_trader.config import SYMBOL, ASSET_CLASS
+from app.gold_ai_trader.config import SYMBOL
+from app.gold_ai_trader.klines import get_gold_ai_klines
+from app.gold_ai_trader.guardrails import (
+    calls_today,
+    cost_today_usd,
+    open_position_count,
+    trades_today,
+)
+from app.gold_ai_trader.models import GoldAiLesson
 from app.gold_ai_trader.context_levels import build_key_levels_block, build_premium_discount_block
 from app.gold_ai_trader.context_regime import build_regime_block, build_htf_bias_block
 from app.gold_ai_trader.context_history import build_recent_decisions_block, parse_zone_from_detail
@@ -86,10 +94,21 @@ def build_smt_block(smt: Optional[Dict[str, Any]]) -> list:
             smt.get("detail", "SMT: unavailable"),
         ]
     sign = "+" if mod > 0 else ""
+    confirms = "confirms" in str(smt.get("detail", "")).lower()
+    header = (
+        "=== SMT CONFIRMATION (XAG aligns with gold — confidence modifier) ==="
+        if confirms
+        else "=== SMT DIVERGENCE (confidence modifier — NOT standalone trigger) ==="
+    )
+    hint = (
+        f"Suggested confidence adjustment: {sign}{mod} (XAG confirms trade direction — lean +8 when aligned)"
+        if confirms and mod >= 8
+        else f"Suggested confidence adjustment: {sign}{mod} "
+        f"(supports {'this' if mod > 0 else 'opposing' if mod < 0 else 'neutral'} direction)"
+    )
     lines = [
-        "=== SMT DIVERGENCE (confidence modifier — NOT standalone trigger) ===",
-        f"Suggested confidence adjustment: {sign}{mod} "
-        f"(supports {'this' if mod > 0 else 'opposing' if mod < 0 else 'neutral'} direction)",
+        header,
+        hint,
         smt.get("detail", ""),
     ]
     if smt.get("dxy_note"):
@@ -113,15 +132,11 @@ async def build_context_snapshot(
     smt: Optional[Dict[str, Any]] = None,
     cisd: Optional[Dict[str, Any]] = None,
 ) -> str:
-    from app.services.tradfi_prices import get_klines
-    from app.gold_ai_trader.guardrails import calls_today, trades_today, cost_today_usd, open_position_count
-    from app.gold_ai_trader.models import GoldAiLesson
-
-    k5 = await get_klines(SYMBOL, ASSET_CLASS, "5m", 60) or []
-    k15 = await get_klines(SYMBOL, ASSET_CLASS, "15m", 40) or []
-    k1h = await get_klines(SYMBOL, ASSET_CLASS, "1h", 50) or []
-    k4h = await get_klines(SYMBOL, ASSET_CLASS, "4h", 30) or []
-    k_daily = await get_klines(SYMBOL, ASSET_CLASS, "1d", 5) or []
+    k5 = await get_gold_ai_klines("5m", 60, user_id=user_id) or []
+    k15 = await get_gold_ai_klines("15m", 40, user_id=user_id) or []
+    k1h = await get_gold_ai_klines("1h", 50, user_id=user_id) or []
+    k4h = await get_gold_ai_klines("4h", 30, user_id=user_id) or []
+    k_daily = await get_gold_ai_klines("1d", 5, user_id=user_id) or []
 
     closes = [float(r[4]) for r in k5 if r and len(r) >= 5]
     atr = _atr(closes)
