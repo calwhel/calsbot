@@ -1,0 +1,156 @@
+"""Post-Claude structure validator — SL/TP/R:R/zone checks before broker."""
+from __future__ import annotations
+
+import os
+from typing import Any, Dict, List, Optional, Tuple
+
+from app.gold_ai_trader.context_history import parse_zone_from_detail
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+MIN_RR = _env_float("GOLD_AI_MIN_RR", 2.0)
+MAX_SL_ATR_MULT = _env_float("GOLD_AI_MAX_SL_ATR", 1.0)
+SL_BUFFER_ATR = _env_float("GOLD_AI_SL_BUFFER_ATR", 0.08)
+
+
+def _dir_norm(d: str) -> Optional[str]:
+    raw = (d or "").strip().lower()
+    if raw in ("long", "buy"):
+        return "LONG"
+    if raw in ("short", "sell"):
+        return "SHORT"
+    up = raw.upper()
+    if up in ("LONG", "SHORT"):
+        return up
+    return None
+
+
+def _risk_reward(entry: float, sl: float, tp: float, direction: str) -> Optional[float]:
+    if entry <= 0 or sl <= 0 or tp <= 0:
+        return None
+    if direction == "LONG":
+        risk = entry - sl
+        reward = tp - entry
+    else:
+        risk = sl - entry
+        reward = entry - tp
+    if risk <= 0 or reward <= 0:
+        return None
+    return reward / risk
+
+
+def _suggested_sl_from_zone(
+    zone: Optional[Tuple[float, float]],
+    direction: str,
+    atr: float,
+) -> Optional[float]:
+    if not zone or atr <= 0:
+        return None
+    z_bot, z_top = zone
+    buf = SL_BUFFER_ATR * atr
+    if direction == "LONG":
+        return z_bot - buf
+    return z_top + buf
+
+
+def _nearest_tp_candidate(
+    entry: float,
+    direction: str,
+    levels: List[float],
+    min_rr: float,
+    risk: float,
+) -> Optional[float]:
+    """First key level in trade direction meeting min R:R."""
+    if risk <= 0:
+        return None
+    min_dist = risk * min_rr
+    cands = []
+    for lv in levels:
+        if direction == "LONG" and lv > entry + min_dist:
+            cands.append(lv)
+        elif direction == "SHORT" and lv < entry - min_dist:
+            cands.append(lv)
+    if not cands:
+        return None
+    if direction == "LONG":
+        return min(cands)
+    return max(cands)
+
+
+def validate_take_decision(
+    decision: Dict[str, Any],
+    *,
+    candidate_direction: str,
+    spot: float,
+    atr: float,
+    setup_detail: str,
+    key_levels: Optional[List[float]] = None,
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """
+    Validate Claude TAKE prices. Returns (ok, reason, decision_copy).
+    On soft TP fix only, may adjust take_profit in returned copy.
+    """
+    d = decision.copy()
+    direction = _dir_norm(d.get("direction") or candidate_direction)
+    if not direction:
+        return False, "validator:no_direction", d
+
+    try:
+        entry = float(d.get("entry") or spot or 0)
+        sl = float(d.get("stop_loss") or 0)
+        tp = float(d.get("take_profit") or 0)
+    except (TypeError, ValueError):
+        return False, "validator:bad_prices", d
+
+    if entry <= 0 or sl <= 0 or tp <= 0:
+        return False, "validator:missing_prices", d
+
+    if direction == "LONG":
+        if not (sl < entry < tp):
+            return False, "validator:long_price_order", d
+    else:
+        if not (tp < entry < sl):
+            return False, "validator:short_price_order", d
+
+    risk_dist = abs(entry - sl)
+    if atr > 0 and risk_dist > MAX_SL_ATR_MULT * atr:
+        return False, f"validator:sl_too_wide({risk_dist:.2f}>{MAX_SL_ATR_MULT}×ATR)", d
+
+    zone = parse_zone_from_detail(setup_detail)
+    if zone and atr > 0:
+        z_bot, z_top = zone
+        from app.services.strategy_ta import entry_zone_allows_price, entry_max_dist_from_zone_atr
+
+        ok_z, zmsg = entry_zone_allows_price(entry, z_bot, z_top, direction.lower(), atr)
+        if not ok_z and "chasing" in zmsg:
+            return False, f"validator:entry_chasing({zmsg})", d
+
+        struct_sl = _suggested_sl_from_zone(zone, direction, atr)
+        if struct_sl is not None:
+            if direction == "LONG" and sl < struct_sl - 0.05 * atr:
+                return False, "validator:sl_below_structure", d
+            if direction == "SHORT" and sl > struct_sl + 0.05 * atr:
+                return False, "validator:sl_above_structure", d
+
+    rr = _risk_reward(entry, sl, tp, direction)
+    if rr is None:
+        return False, "validator:invalid_rr_geometry", d
+    if rr < MIN_RR:
+        levels = key_levels or []
+        alt_tp = _nearest_tp_candidate(entry, direction, levels, MIN_RR, risk_dist)
+        if alt_tp is not None:
+            d["take_profit"] = round(alt_tp, 2)
+            rr2 = _risk_reward(entry, sl, float(d["take_profit"]), direction)
+            if rr2 is not None and rr2 >= MIN_RR:
+                d["validator_note"] = f"tp_adjusted_to_key_level_rr={rr2:.2f}"
+                return True, "validator:ok_tp_adjusted", d
+        return False, f"validator:rr_below_min({rr:.2f}<{MIN_RR})", d
+
+    d["validator_note"] = f"rr={rr:.2f}"
+    return True, "validator:ok", d

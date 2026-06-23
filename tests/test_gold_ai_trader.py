@@ -173,7 +173,7 @@ def test_persist_demo_user_from_admin():
 def test_session_gate_london():
     cfg = env_defaults()
     assert active_session(datetime(2026, 6, 18, 8, 30), cfg) == "london"
-    assert active_session(datetime(2026, 6, 18, 14, 30), cfg) == "new_york"
+    assert active_session(datetime(2026, 6, 18, 17, 0), cfg) == "new_york"
     assert active_session(datetime(2026, 6, 18, 5, 0), cfg) is None
     assert cfg.london_end_hour == 16
     assert cfg.ny_start_hour == 12
@@ -331,6 +331,9 @@ def test_context_builder_shape():
         def all(self):
             return []
 
+        def scalar(self):
+            return 0
+
     cand = Candidate(
         type="sweep_pdh",
         direction="SHORT",
@@ -353,6 +356,8 @@ def test_context_builder_shape():
     assert "XAUUSD" in text
     assert "sweep_pdh" in text
     assert "PREMIUM / DISCOUNT" in text
+    assert "TRADE BANDS" in text
+    assert "SETUP STATS" in text
     assert "Structure score" in text or "structure" in text.lower()
 
 

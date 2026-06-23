@@ -93,6 +93,33 @@ def get_setup_stats(db, *, days: int = 14) -> List[Dict[str, Any]]:
     return out
 
 
+def format_setup_stats_block(
+    db,
+    *,
+    session: Optional[str] = None,
+    days: int = 14,
+) -> List[str]:
+    """Per-setup win rate / R-multiple block for Claude context."""
+    stats = get_setup_stats(db, days=days)
+    if session:
+        scoped = [s for s in stats if s["session"] == session]
+        if scoped:
+            stats = scoped
+    lines = [f"=== SETUP STATS ({days}d closed demo trades) ==="]
+    if not stats:
+        lines.append("No closed trades in window — weight structure over history.")
+        return lines
+    for s in stats[:10]:
+        avg_r = s["avg_r_multiple"]
+        avg_r_str = f"{avg_r:.2f}" if avg_r is not None else "n/a"
+        lines.append(
+            f"- {s['setup_type']} ({s['session']}): {s['trades']} trades, "
+            f"WR {s['win_rate']*100:.0f}%, avg R {avg_r_str}, "
+            f"total pnl {s['total_pnl_pct']:+.2f}%"
+        )
+    return lines
+
+
 def _learning_due(db, session: str, cfg) -> bool:
     from app.strategy_models import StrategyExecution
 

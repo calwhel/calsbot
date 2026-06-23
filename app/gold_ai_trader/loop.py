@@ -31,9 +31,11 @@ from app.gold_ai_trader.scanner import (
 )
 from app.gold_ai_trader.call_gates import (
     atr_from_klines,
+    collect_key_levels,
     should_invoke_claude,
     call_stats_today,
 )
+from app.gold_ai_trader.decision_validator import validate_take_decision
 from app.gold_ai_trader.funnel import record as funnel_record, snapshot as funnel_snapshot
 from app.gold_ai_trader.setup_toggles import max_candidates_per_scan
 from app.services.tradfi_prices import get_klines
@@ -96,10 +98,10 @@ async def run_gold_ai_trader_loop() -> None:
 
     _prev_session = session
     runtime_state.note_scan(session)
-    funnel_record("scan")
 
     db = SessionLocal()
     try:
+        funnel_record("scan", db=db, session=session)
         cfg_row = db.query(GoldAiConfig).filter_by(id=1).first()
         if cfg_row:
             cfg = merge_config(cfg_row, env)
@@ -127,9 +129,33 @@ async def run_gold_ai_trader_loop() -> None:
                 source_tag,
                 data_block,
             )
-            funnel_record("data_blocked", reason=data_block)
+            funnel_record(
+                "data_blocked", reason=data_block, db=db, session=session,
+            )
             runtime_state.note_dormant(f"data_quality:{data_block}")
             return
+
+        news_gate = os.environ.get("GOLD_AI_NEWS_GATE", "true").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        if news_gate:
+            from app.services.strategy_ta import eval_forex_news_avoidance
+
+            news_ok, news_reason = await eval_forex_news_avoidance(
+                {"minutes_before": 30, "minutes_after": 30, "min_impact": "high"},
+                SYMBOL,
+            )
+            if not news_ok:
+                logger.info(
+                    "[gold-ai] confidence=N/A source=%s decision=skip reason=%s",
+                    source_tag,
+                    news_reason,
+                )
+                funnel_record(
+                    "news_blocked", reason=news_reason, db=db, session=session,
+                )
+                runtime_state.note_dormant(f"news:{news_reason[:80]}")
+                return
 
         async with httpx.AsyncClient(timeout=15) as http:
             price, candidates = await scan_candidates(
@@ -138,6 +164,7 @@ async def run_gold_ai_trader_loop() -> None:
                 cfg=cfg,
                 price=float(market_data["price"]),
                 user_id=cfg.demo_user_id,
+                db=db,
             )
         if not candidates or price is None:
             runtime_state.set_funnel(funnel_snapshot())
@@ -157,7 +184,13 @@ async def run_gold_ai_trader_loop() -> None:
             if ok_dedupe:
                 candidate = cand
                 break
-            funnel_record("dedupe_skipped", setup=cand.type, reason=dedupe_reason)
+            funnel_record(
+                "dedupe_skipped",
+                setup=cand.type,
+                reason=dedupe_reason,
+                db=db,
+                session=session,
+            )
             logger.debug("[gold-ai-trader] claude dedupe skip %s: %s", cand.type, dedupe_reason)
 
         if not candidate:
@@ -183,6 +216,7 @@ async def run_gold_ai_trader_loop() -> None:
             user_id=cfg.demo_user_id,
             market_data=market_data,
             smt=candidate.raw.get("smt"),
+            cisd=candidate.raw.get("cisd"),
         )
 
         decision, reasoning, usage = await decide(
@@ -191,13 +225,13 @@ async def run_gold_ai_trader_loop() -> None:
             confidence_threshold=cfg.confidence_threshold,
         )
         record_claude_invocation(candidate)
-        funnel_record("claude_called", setup=candidate.type)
+        funnel_record("claude_called", setup=candidate.type, db=db, session=session)
         action = (decision.get("action") or "skip").lower()
         conf = int(decision.get("confidence") or 0)
         if action == "take":
-            funnel_record("claude_take", setup=candidate.type)
+            funnel_record("claude_take", setup=candidate.type, db=db, session=session)
         else:
-            funnel_record("claude_skip", setup=candidate.type)
+            funnel_record("claude_skip", setup=candidate.type, db=db, session=session)
 
         row = GoldAiDecision(
             session=session,
@@ -240,11 +274,51 @@ async def run_gold_ai_trader_loop() -> None:
         if action == "take":
             executed = False
             block_reason = None
-            if conf >= cfg.confidence_threshold:
+            validator_block = None
+            k1h = await get_klines(SYMBOL, ASSET_CLASS, "1h", 50) or []
+            k_daily = await get_klines(SYMBOL, ASSET_CLASS, "1d", 5) or []
+            key_levels = collect_key_levels(
+                float(price), session, cfg, now, k_daily, k1h, k5,
+            )
+            val_ok, val_reason, decision = validate_take_decision(
+                decision,
+                candidate_direction=candidate.direction,
+                spot=float(price),
+                atr=atr,
+                setup_detail=candidate.detail,
+                key_levels=key_levels,
+            )
+            row.decision = decision
+            db.commit()
+            if not val_ok:
+                validator_block = val_reason
+                funnel_record(
+                    "validator_rejected",
+                    setup=candidate.type,
+                    reason=val_reason,
+                    db=db,
+                    session=session,
+                    decision_id=row.id,
+                )
+                logger.info(
+                    "[gold-ai] validator rejected decision_id=%s setup=%s reason=%s",
+                    row.id,
+                    candidate.type,
+                    val_reason,
+                )
+
+            if validator_block:
+                block_reason = validator_block
+            elif conf >= cfg.confidence_threshold:
                 ok_exec, exec_reason = check_can_execute(db, cfg, cfg.demo_user_id or 0)
                 if ok_exec:
                     exec_id = await execute_take(
-                        db=db, cfg=cfg, decision=decision, decision_id=row.id, session=session
+                        db=db,
+                        cfg=cfg,
+                        decision=decision,
+                        decision_id=row.id,
+                        session=session,
+                        setup_type=candidate.type,
                     )
                     if exec_id and exec_id > 0:
                         executed = True
@@ -252,7 +326,13 @@ async def run_gold_ai_trader_loop() -> None:
                         row.executed = True
                         row.execution_id = exec_id
                         db.commit()
-                        funnel_record("executed", setup=candidate.type)
+                        funnel_record(
+                            "executed",
+                            setup=candidate.type,
+                            db=db,
+                            session=session,
+                            decision_id=row.id,
+                        )
 
                         ok_live, live_reason = check_can_execute_live_mirror(
                             db, cfg, cfg.demo_user_id or 0
@@ -279,7 +359,13 @@ async def run_gold_ai_trader_loop() -> None:
                             db.commit()
                     elif exec_id and exec_id < 0:
                         block_reason = f"entry pending #{-exec_id} (limit/entry-watch)"
-                        funnel_record("pending_entry", setup=candidate.type)
+                        funnel_record(
+                            "pending_entry",
+                            setup=candidate.type,
+                            db=db,
+                            session=session,
+                            decision_id=row.id,
+                        )
                     else:
                         block_reason = "demo order rejected"
                 else:

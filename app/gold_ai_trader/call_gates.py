@@ -41,11 +41,13 @@ DEDUPE_PRICE_ATR = _env_float("GOLD_AI_TRADER_DEDUPE_PRICE_ATR", 0.35)
 _NEAR_LEVEL_EXEMPT_PREFIXES = (
     "sweep_", "liq_sweep", "sdp_", "eqh_sweep", "eql_sweep",
     "ob_", "breaker_", "fvg_retrace_", "ifvg_",
+    "asian_sweep_", "judas_",
 )
 
 # Displacement-heavy setups carry their own momentum — skip post-killzone RVOL gate.
 _RVOL_EXEMPT_PREFIXES = (
     "sweep_", "liq_sweep", "sdp_", "disp_", "eqh_sweep", "eql_sweep",
+    "asian_sweep_", "judas_",
 )
 
 

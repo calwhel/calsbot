@@ -94,9 +94,12 @@ async def execute_take(
     decision: Dict[str, Any],
     decision_id: int,
     session: str = "",
+    setup_type: str = "",
 ) -> Optional[int]:
     """Route TAKE to limit/entry-watch pending or immediate market."""
-    use_limit = bool(getattr(cfg, "use_limit_entry", True))
+    from app.gold_ai_trader.entry_routing import use_limit_entry_for_setup
+
+    use_limit = use_limit_entry_for_setup(setup_type, cfg)
     if not use_limit:
         return await execute_take_market(
             db=db, cfg=cfg, decision=decision, decision_id=decision_id,

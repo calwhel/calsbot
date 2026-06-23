@@ -32,6 +32,7 @@ from app.gold_ai_trader.guardrails import (
 )
 from app.gold_ai_trader.learning import get_setup_stats
 from app.gold_ai_trader.call_gates import call_stats_today
+from app.gold_ai_trader.funnel_persist import recent_funnel_events
 from app.gold_ai_trader.models import GoldAiConfig, GoldAiDecision, GoldAiLesson
 from app.gold_ai_trader.schema import ensure_gold_ai_trader_schema, seed_config_if_missing
 from app.gold_ai_trader import state as runtime_state
@@ -266,6 +267,7 @@ async def api_status(uid: str = Query(...)):
             ],
             "setup_stats": get_setup_stats(db),
             "call_stats_today": call_stats_today(db),
+            "recent_funnel_events": recent_funnel_events(db, limit=40),
             "decision_feed": feed,
         }
     finally:
@@ -279,6 +281,43 @@ async def api_setup_stats(uid: str = Query(...), days: int = Query(14)):
     try:
         _resolve_user(uid, db)
         return {"ok": True, "days": days, "stats": get_setup_stats(db, days=days)}
+    finally:
+        db.close()
+
+
+@router.get("/api/gold-ai-trader/funnel-events")
+async def api_funnel_events(uid: str = Query(...), limit: int = Query(50)):
+    ensure_gold_ai_trader_schema()
+    db = SessionLocal()
+    try:
+        _resolve_user(uid, db)
+        from app.gold_ai_trader.funnel import snapshot as funnel_snapshot
+
+        return {
+            "ok": True,
+            "funnel": funnel_snapshot(),
+            "events": recent_funnel_events(db, limit=min(limit, 200)),
+        }
+    finally:
+        db.close()
+
+
+@router.get("/api/gold-ai-trader/calibration")
+async def api_calibration(uid: str = Query(...), days: int = Query(14)):
+    """Funnel + setup stats for pipeline tuning."""
+    ensure_gold_ai_trader_schema()
+    db = SessionLocal()
+    try:
+        _resolve_user(uid, db)
+        from app.gold_ai_trader.funnel import snapshot as funnel_snapshot
+
+        return {
+            "ok": True,
+            "funnel": funnel_snapshot(),
+            "setup_stats": get_setup_stats(db, days=days),
+            "call_stats_today": call_stats_today(db),
+            "recent_funnel_events": recent_funnel_events(db, limit=60),
+        }
     finally:
         db.close()
 

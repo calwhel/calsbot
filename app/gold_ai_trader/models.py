@@ -105,3 +105,16 @@ class GoldAiPendingOrder(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)
     notes = Column(Text, nullable=True)
+
+
+class GoldAiFunnelEvent(Base):
+    """Persistent pipeline telemetry (gate skips, data blocks, validator, etc.)."""
+    __tablename__ = "gold_ai_funnel_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ts = Column(DateTime, default=datetime.utcnow, index=True)
+    session = Column(String(16), nullable=True, index=True)
+    event = Column(String(32), nullable=False, index=True)
+    setup_type = Column(String(64), nullable=True)
+    reason = Column(String(256), nullable=True)
+    decision_id = Column(Integer, nullable=True, index=True)
