@@ -264,6 +264,147 @@ class EvalDiag:
     cache_misses: int = 0
 
 
+@dataclass
+class _TradfiEvalCarry:
+    """Gate-phase output for tradfi split-eval (Stage B — HTTP/fire resume)."""
+
+    strategy_row: object
+    user_row: object
+    strategy_id: int
+    strategy_name: str
+    strategy_status: str
+    config: dict
+    asset_class: str
+    is_paper: bool
+    early_fire_targets: List[dict]
+    candidate_symbols: List[str]
+    direction_pref: str
+    risk: dict
+    filters: dict
+    strictness_level: int
+    eval_tf: str
+    uid: Optional[int]
+    metal_paper: bool
+    cache_ac: str
+    strategy_gates: Dict[str, int]
+    gate_stats: Optional[Dict[str, int]]
+    diag: EvalDiag
+    prefetched_ctrader_ok: Optional[bool]
+
+
+# Set True while tradfi split-eval runs price/conditions HTTP with no DB session.
+_TRADFI_EVAL_HTTP_PHASE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "tradfi_eval_http_phase", default=False,
+)
+
+
+def tradfi_eval_http_phase_active() -> bool:
+    return bool(_TRADFI_EVAL_HTTP_PHASE.get())
+
+
+def _tradfi_release_db_session(db) -> None:
+    if db is None:
+        return
+    try:
+        db.close()
+    except Exception:
+        pass
+
+
+async def _tradfi_open_fire_session(strategy_row, user_row):
+    from app.database import ForexSessionLocal, forex_db_slot
+
+    db = ForexSessionLocal()
+    async with forex_db_slot():
+        strategy = db.merge(strategy_row)
+        user = db.merge(user_row)
+    return db, strategy, user
+
+
+class _TradfiFireDbContext:
+    def __init__(self, strategy_row, user_row):
+        self._strategy_row = strategy_row
+        self._user_row = user_row
+        self._db = None
+
+    async def __aenter__(self):
+        self._db, strategy, user = await _tradfi_open_fire_session(
+            self._strategy_row, self._user_row,
+        )
+        return self._db, strategy, user
+
+    async def __aexit__(self, exc_type, exc, tb):
+        _tradfi_release_db_session(self._db)
+        self._db = None
+        return False
+
+
+def _tradfi_view_from_carry(carry: _TradfiEvalCarry):
+    """Lightweight strategy/user stand-ins for the HTTP-only eval phase."""
+
+    class _S:
+        id = carry.strategy_id
+        name = carry.strategy_name
+        status = carry.strategy_status
+        config = carry.config
+        asset_class = carry.asset_class
+
+    class _U:
+        id = carry.uid
+
+    return _S(), _U()
+
+
+def _tradfi_build_carry(
+    *,
+    strategy_row,
+    user_row,
+    strategy,
+    user,
+    config,
+    asset_class,
+    is_paper,
+    early_fire_targets,
+    candidate_symbols,
+    direction_pref,
+    risk,
+    filters,
+    strictness_level,
+    eval_tf,
+    uid,
+    metal_paper,
+    cache_ac,
+    strategy_gates,
+    gate_stats,
+    diag,
+    prefetched_ctrader_ok,
+) -> _TradfiEvalCarry:
+    return _TradfiEvalCarry(
+        strategy_row=strategy_row,
+        user_row=user_row,
+        strategy_id=int(strategy.id),
+        strategy_name=str(strategy.name or ""),
+        strategy_status=str(strategy.status or ""),
+        config=dict(config),
+        asset_class=asset_class,
+        is_paper=bool(is_paper),
+        early_fire_targets=list(early_fire_targets or []),
+        candidate_symbols=list(candidate_symbols),
+        direction_pref=direction_pref,
+        risk=dict(risk or {}),
+        filters=dict(filters or {}),
+        strictness_level=int(strictness_level),
+        eval_tf=eval_tf,
+        uid=uid,
+        metal_paper=bool(metal_paper),
+        cache_ac=cache_ac,
+        strategy_gates=dict(strategy_gates),
+        gate_stats=gate_stats,
+        diag=diag,
+        prefetched_ctrader_ok=prefetched_ctrader_ok,
+    )
+
+
 def _log_eval_diag(strategy_id: int, diag: EvalDiag, total_ms: float) -> None:
     """Emit sub-phase timing for slow strategy evals."""
     ctx = _get_cycle_ctx()
@@ -5101,6 +5242,12 @@ async def evaluate_and_fire(
     gate_stats: Optional[Dict[str, int]] = None,
     prefetched_ctrader_ok: Optional[bool] = None,
     eval_diag: Optional[EvalDiag] = None,
+    *,
+    tradfi_db_split: bool = False,
+    strategy_row=None,
+    user_row=None,
+    gate_only: bool = False,
+    carry: Optional[_TradfiEvalCarry] = None,
 ):
     """
     Evaluate one strategy. Fires a trade if conditions are met.
@@ -5112,6 +5259,10 @@ async def evaluate_and_fire(
     prefetched_ctrader_ok — for forex/index, the caller may pass the cTrader
     live-eligibility boolean it already resolved (batched once per cycle) so we
     skip a per-strategy UserPreference query. None → resolve it here as before.
+    tradfi_db_split / gate_only / carry — forex executor Stage B split-eval:
+    gate_only collects gate state and returns _TradfiEvalCarry; a follow-up call
+    with carry resumes HTTP/conditions without a DB session and opens a short
+    fire session only at commit time.
     """
     from app.services.strategy_ta import (
         conditions_budget_scope,
@@ -5120,524 +5271,609 @@ async def evaluate_and_fire(
     )
     from app.strategy_models import StrategyExecution, StrategyPortalSettings
 
-    _eval_t0 = time.monotonic()
-    _diag = eval_diag if eval_diag is not None else EvalDiag()
-    _phase_t0 = _eval_t0
+    _resume = carry is not None
+    _tradfi_http_phase_token = None
+    _tradfi_db_split = False
+    _tradfi_strategy_row = strategy_row
+    _tradfi_user_row = user_row
 
-    _strategy_gates: Dict[str, int] = {}
+    if _resume:
+        carry = carry  # type: ignore[assignment]
+        _tradfi_db_split = True
+        _tradfi_strategy_row = carry.strategy_row
+        _tradfi_user_row = carry.user_row
+        strategy, user = _tradfi_view_from_carry(carry)
+        config = carry.config
+        asset_class = carry.asset_class
+        is_paper = carry.is_paper
+        _early_fire_targets = carry.early_fire_targets
+        candidate_symbols = list(carry.candidate_symbols)
+        direction_pref = carry.direction_pref
+        risk = carry.risk
+        filters = carry.filters
+        strictness_level = carry.strictness_level
+        _eval_tf = carry.eval_tf
+        _uid = carry.uid
+        _metal_paper = carry.metal_paper
+        _cache_ac = carry.cache_ac
+        _strategy_gates = dict(carry.strategy_gates)
+        _diag = carry.diag
+        prefetched_ctrader_ok = carry.prefetched_ctrader_ok
+        db = None
+        _tradfi_http_phase_token = _TRADFI_EVAL_HTTP_PHASE.set(True)
+        _eval_t0 = time.monotonic()
+        _phase_t0 = _eval_t0
+        _cond_t0 = time.monotonic()
 
-    def _bump(key: str):
-        _strategy_gates[key] = _strategy_gates.get(key, 0) + 1
-        if gate_stats is not None:
-            gate_stats[key] = gate_stats.get(key, 0) + 1
+        def _bump(key: str):
+            _strategy_gates[key] = _strategy_gates.get(key, 0) + 1
+            if gate_stats is not None:
+                gate_stats[key] = gate_stats.get(key, 0) + 1
 
-    if not _executor_owner_confirmed():
-        _bump("blk_lock_unowned")
-        return
-
-    # Determine paper/live upfront.
-    # Live strategies automatically downgrade to paper if the user doesn't have
-    # Bitunix auto-trading set up — so every signal is always tracked.
-    # For cTrader asset classes, live broker fire requires status=active AND
-    # enabled account assignment(s) — see resolve_live_fire_intent.
-    _wants_live = (strategy.status == "active")
-    _early_fire_targets: List[dict] = []
-    config   = dict(strategy.config or {})
-
-    # ── Asset class (crypto | stock | forex | index) ────────────────────────
-    # Determine broker BEFORE gating live so we don't run the Bitunix affiliate
-    # check on a forex strategy (which routes through OANDA).
-    from app.services.asset_classes import (
-        normalize_asset_class, is_market_open, PAPER_ONLY_CLASSES,
-    )
-    _col_ac  = getattr(strategy, "asset_class", None) or ""
-    # Mobile wizard saves asset_class as "_asset_class"; web portal uses "asset_class".
-    # Check both so mobile-built forex/index strategies aren't silently treated as crypto.
-    _cfg_ac  = config.get("asset_class") or config.get("_asset_class") or ""
-    # If the DB column says 'crypto' but the config explicitly says something
-    # else (e.g. 'forex'), trust the config — the column may have been set by
-    # the DEFAULT before the backfill migration ran.
-    if _col_ac == "crypto" and _cfg_ac and _cfg_ac != "crypto":
-        asset_class = normalize_asset_class(_cfg_ac)
-        logger.info(
-            f"[Strategy {strategy.id}] asset_class mismatch: column='crypto' config='{_cfg_ac}' "
-            f"→ using '{asset_class}' (run migration to fix)"
-        )
+        goto_post_gates = True
     else:
-        asset_class = normalize_asset_class(_col_ac or _cfg_ac)
-    config["asset_class"] = asset_class
+        goto_post_gates = False
 
-    # Empty specific universes must bail before per-strategy DB gates / HTTP.
-    if _has_empty_specific_universe(config, asset_class):
-        _log_eval_no_symbols(strategy.id, config, asset_class)
-        _bump("blk_empty_universe")
-        return
+    if not goto_post_gates:
 
-    # cTrader strategies: status=active AND enabled assignment(s) required for broker fire.
-    if asset_class in ("forex", "index", "metals", "commodity"):
-        try:
-            from app.models import UserPreference as _UP_intent
-            from app.services.strategy_account_assignments import (
-                get_enabled_fire_targets,
-                resolve_live_fire_intent,
-            )
-            _cycle_ctx_intent = _get_cycle_ctx()
-            _assign_prefetch = None
-            if _cycle_ctx_intent and _cycle_ctx_intent.assignment_targets:
-                if strategy.id in _cycle_ctx_intent.assignment_targets:
-                    _assign_prefetch = _cycle_ctx_intent.assignment_targets[strategy.id]
-            if _assign_prefetch is not None:
-                _wants_live, _early_fire_targets = resolve_live_fire_intent(
-                    db, strategy, asset_class, None,
-                    prefetched_targets=_assign_prefetch,
-                )
-            else:
-                _intent_prefs = db.query(_UP_intent).filter(
-                    _UP_intent.user_id == user.id,
-                ).first()
-                _wants_live, _early_fire_targets = resolve_live_fire_intent(
-                    db, strategy, asset_class, _intent_prefs,
-                )
-            if (strategy.status or "") == "paper":
-                logger.info(
-                    "[live-fire] SKIPPED strategy=%s reason=status=paper",
-                    strategy.id,
-                )
-        except Exception as _intent_err:
-            logger.warning(
-                "[live-fire] strategy=%s assignment intent lookup failed: %s",
-                strategy.id,
-                _intent_err,
-            )
+        _eval_t0 = time.monotonic()
+        _diag = eval_diag if eval_diag is not None else EvalDiag()
+        _phase_t0 = _eval_t0
+        _tradfi_db_split = False
 
-    # Per-asset broker gate. Forex → cTrader (FP Markets), crypto → Bitunix,
-    # stocks/indices → paper-only (no broker integration yet).
-    if asset_class in ("forex", "index", "metals", "commodity"):
-        if prefetched_ctrader_ok is not None:
-            # Caller already resolved live-eligibility (batched once per cycle).
-            _ctrader_live_ok = bool(prefetched_ctrader_ok)
-        else:
-            _ctrader_live_ok = False
-            try:
-                from app.models import UserPreference as _UP
-                _prefs = db.query(_UP).filter(_UP.user_id == user.id).first()
-                _ctrader_live_ok = bool(
-                    _prefs
-                    and _prefs.ctrader_access_token
-                    and _prefs.ctrader_account_id
-                    and getattr(_prefs, "forex_approved", False)
-                )
-            except Exception:
-                _ctrader_live_ok = False
-        is_paper = not (_wants_live and _ctrader_live_ok)
-        if _wants_live and is_paper:
-            try:
-                from app.models import UserPreference as _UPb
-                _pb = db.query(_UPb).filter(_UPb.user_id == user.id).first()
-                _ctrader_blockers = _forex_live_blockers(_pb, user)
-            except Exception:
-                _ctrader_blockers = ["cTrader prefs unreadable"]
-            logger.warning(
-                "[live-fire] SKIPPED strategy=%s reason=%s "
-                "(downgraded to PAPER — no broker order; tracked in TradeHub only)",
-                strategy.id,
-                "; ".join(_ctrader_blockers) or "cTrader not ready",
-            )
-        elif not _wants_live:
-            if (strategy.status or "") == "paper":
-                logger.info(
-                    "[live-fire] SKIPPED strategy=%s reason=status=paper",
-                    strategy.id,
-                )
-            else:
-                logger.info(
-                    "[live-fire] SKIPPED strategy=%s reason=no_enabled_accounts "
-                    "status=%s (Go Live + enable an account on the strategy card)",
-                    strategy.id,
-                    strategy.status,
-                )
-    elif asset_class in PAPER_ONLY_CLASSES:
-        # Stocks/indices: no broker yet, always paper.
-        is_paper = True
-    else:
-        # Crypto: Bitunix gate (auto-trading + keys + affiliate roster).
-        if _wants_live:
-            _live_ok, _live_reason = await _user_can_live_trade_async(user, db)
-            is_paper = not _live_ok
-            if is_paper:
-                logger.debug(
-                    f"[Strategy {strategy.id}] Live strategy downgraded to paper "
-                    f"(reason={_live_reason}) — signal will still be tracked."
-                )
-        else:
-            is_paper = True
+        _strategy_gates: Dict[str, int] = {}
 
-    # ── Live forex scan gate (fixed UTC windows — before price/TA fetch) ─────
-    if asset_class == "forex" and not is_paper:
-        from app.services.forex_sessions import live_forex_session_allowed
+        def _bump(key: str):
+            _strategy_gates[key] = _strategy_gates.get(key, 0) + 1
+            if gate_stats is not None:
+                gate_stats[key] = gate_stats.get(key, 0) + 1
 
-        _lf_ok, _lf_reason = live_forex_session_allowed(
-            config, datetime.utcnow(),
-        )
-        if not _lf_ok:
-            _bump("blk_live_forex_session")
-            logger.debug(
-                "[Strategy %s] live forex scan skipped — %s",
-                strategy.id,
-                _lf_reason,
-            )
+        if not _executor_owner_confirmed():
+            _bump("blk_lock_unowned")
             return
 
-    if asset_class in PAPER_ONLY_CLASSES:
-        if not is_market_open(asset_class):
-            _bump(f"blk_market_closed_{asset_class}")
+        # Determine paper/live upfront.
+        # Live strategies automatically downgrade to paper if the user doesn't have
+        # Bitunix auto-trading set up — so every signal is always tracked.
+        # For cTrader asset classes, live broker fire requires status=active AND
+        # enabled account assignment(s) — see resolve_live_fire_intent.
+        _wants_live = (strategy.status == "active")
+        _early_fire_targets: List[dict] = []
+        config   = dict(strategy.config or {})
+
+        # ── Asset class (crypto | stock | forex | index) ────────────────────────
+        # Determine broker BEFORE gating live so we don't run the Bitunix affiliate
+        # check on a forex strategy (which routes through OANDA).
+        from app.services.asset_classes import (
+            normalize_asset_class, is_market_open, PAPER_ONLY_CLASSES,
+        )
+        _col_ac  = getattr(strategy, "asset_class", None) or ""
+        # Mobile wizard saves asset_class as "_asset_class"; web portal uses "asset_class".
+        # Check both so mobile-built forex/index strategies aren't silently treated as crypto.
+        _cfg_ac  = config.get("asset_class") or config.get("_asset_class") or ""
+        # If the DB column says 'crypto' but the config explicitly says something
+        # else (e.g. 'forex'), trust the config — the column may have been set by
+        # the DEFAULT before the backfill migration ran.
+        if _col_ac == "crypto" and _cfg_ac and _cfg_ac != "crypto":
+            asset_class = normalize_asset_class(_cfg_ac)
+            logger.info(
+                f"[Strategy {strategy.id}] asset_class mismatch: column='crypto' config='{_cfg_ac}' "
+                f"→ using '{asset_class}' (run migration to fix)"
+            )
+        else:
+            asset_class = normalize_asset_class(_col_ac or _cfg_ac)
+        config["asset_class"] = asset_class
+        _tradfi_db_split = bool(
+            tradfi_db_split and asset_class in _EXECUTOR_TRADFI_CLASSES
+        )
+
+        # Empty specific universes must bail before per-strategy DB gates / HTTP.
+        if _has_empty_specific_universe(config, asset_class):
+            _log_eval_no_symbols(strategy.id, config, asset_class)
+            _bump("blk_empty_universe")
             return
 
-    # ── EOD / close_before entry guard ─────────────────────────────────────
-    # If the strategy has an intraday close-before time set, stop opening new
-    # positions once that UTC time has passed today (Mon-Fri only).  Open trades
-    # are handled independently by the trade_tracker EOD force-close loop.
-    _close_before_cfg = config.get("exit", {}).get("close_before")
-    if _close_before_cfg:
-        try:
-            from datetime import datetime as _dtnow
-            _now_utc = _dtnow.utcnow()
-            _h_eod, _m_eod = map(int, str(_close_before_cfg).split(":"))
-            _eod_cut = _now_utc.replace(hour=_h_eod, minute=_m_eod, second=0, microsecond=0)
-            if _now_utc >= _eod_cut and _now_utc.weekday() < 5:
-                _bump("blk_eod_cutoff")
-                return
-        except Exception:
-            pass
-
-    # ── Forex day-trading guards (entry only) ────────────────────────────────
-    if asset_class == "forex":
-        _risk_cfg = config.get("risk") or {}
-        _now_dt = datetime.utcnow()
-        _wd = _now_dt.weekday()   # Mon=0 … Sun=6
-        _h  = _now_dt.hour
-        _m  = _now_dt.minute
-
-        # 1. Friday close protection: no new trades Thu 21:00+ or Fri/Sat (weekend gap risk)
-        if _risk_cfg.get("friday_close_protection"):
-            if (_wd == 3 and (_h > 21 or (_h == 21 and _m >= 0))) or _wd >= 4:
-                _bump("blk_friday_close")
-                return
-
-        # 2. No overnight positions: no new entries after 21:45 UTC Mon-Thu
-        #    (positions must be closeable before NY close at 22:00)
-        if _risk_cfg.get("no_overnight_positions"):
-            if _wd < 4 and _h == 21 and _m >= 45:
-                _bump("blk_no_overnight")
-                return
-            if _wd < 4 and _h >= 22:
-                _bump("blk_no_overnight")
-                return
-
-        # 3. Daily pip target: sum today's WIN pip gains; block if hit
-        _pip_target = _risk_cfg.get("daily_pip_target")
-        if _pip_target:
+        # cTrader strategies: status=active AND enabled assignment(s) required for broker fire.
+        if asset_class in ("forex", "index", "metals", "commodity"):
             try:
-                from app.services.forex_engine import pip_size as _psz
-                _today_start = _now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-                _today_wins = db.query(StrategyExecution).filter(
-                    StrategyExecution.strategy_id == strategy.id,
-                    StrategyExecution.outcome == "WIN",
-                    StrategyExecution.fired_at >= _today_start,
-                ).all()
-                _total_pip_gain = 0.0
-                for _wx in _today_wins:
-                    if _wx.entry_price and _wx.close_price and _wx.symbol:
-                        _ps = _psz(_wx.symbol)
-                        if _ps > 0:
-                            _entry = float(_wx.entry_price)
-                            _close = float(_wx.close_price)
-                            if _wx.direction == "LONG" and _close > _entry:
-                                _total_pip_gain += (_close - _entry) / _ps
-                            elif _wx.direction == "SHORT" and _close < _entry:
-                                _total_pip_gain += (_entry - _close) / _ps
-                if _total_pip_gain >= float(_pip_target):
-                    _bump("blk_daily_pip_target")
-                    logger.info(
-                        f"[Strategy {strategy.id}] Daily pip target reached: "
-                        f"{_total_pip_gain:.1f} pips >= target {_pip_target} — pausing for the day"
-                    )
-                    return
-            except Exception as _pte:
-                logger.debug(f"[Strategy {strategy.id}] daily pip target check error: {_pte}")
-
-        # 4. Max trades per session: count fires that happened inside the same session window
-        _max_per_sess = _risk_cfg.get("max_trades_per_session")
-        if _max_per_sess:
-            try:
-                from app.services.forex_engine import current_sessions as _cur_sess
-                _active_sessions = _cur_sess(_now_dt)
-                if _active_sessions:
-                    # Determine window start for the current active session(s)
-                    from app.services.forex_engine import SESSIONS as _FX_SESSIONS
-                    _sess_start = None
-                    for _sid in _active_sessions:
-                        _sw = _FX_SESSIONS.get(_sid)
-                        if _sw:
-                            _candidate = _now_dt.replace(
-                                hour=_sw.open_h, minute=_sw.open_m, second=0, microsecond=0
-                            )
-                            # Handle sessions that started yesterday (e.g. Sydney)
-                            if _candidate > _now_dt:
-                                _candidate -= timedelta(days=1)
-                            if _sess_start is None or _candidate > _sess_start:
-                                _sess_start = _candidate
-                    if _sess_start:
-                        _sess_count = db.query(StrategyExecution).filter(
-                            StrategyExecution.strategy_id == strategy.id,
-                            StrategyExecution.fired_at >= _sess_start,
-                        ).count()
-                        if _sess_count >= int(_max_per_sess):
-                            _bump("blk_session_cap")
-                            logger.debug(
-                                f"[Strategy {strategy.id}] Session cap: "
-                                f"{_sess_count}/{_max_per_sess} trades this session"
-                            )
-                            return
-            except Exception as _mps:
-                logger.debug(f"[Strategy {strategy.id}] max_per_session check error: {_mps}")
-
-    # Locked strategy — fetch live entry_conditions from the original source strategy
-    if config.get("_locked") and config.get("_source_strategy_id"):
-        try:
-            from app.strategy_models import UserStrategy as _US
-            _src = db.query(_US).filter(_US.id == config["_source_strategy_id"]).first()
-            if _src and _src.config:
-                config["entry_conditions"] = _src.config.get("entry_conditions", {})
-        except Exception as _e:
-            logger.warning(f"Locked strategy {strategy.id}: could not fetch source conditions: {_e}")
-            _db_rollback_safe(db)
-            _rebind_session(db, strategy, user)
-
-    risk     = config.get("risk") or {}
-    filters  = config.get("filters") or {}
-    universe = config.get("universe") or {}
-    direction_pref = config.get("direction") or "LONG"
-
-    if not _check_trading_days(filters):
-        _bump("blk_trading_days")
-        return
-    if not _check_time_filter(filters):
-        _bump("blk_time_filter")
-        return
-    if not _check_btc_regime(filters):
-        _bump("blk_btc_regime")
-        return
-
-    max_per_day   = int(risk.get("max_trades_per_day") or 3)
-    max_open      = int(risk.get("max_open_positions") or 1)
-    cooldown_mins = int(risk.get("cooldown_minutes") or 30)
-
-    # One signal event = one max-open slot regardless of parallel fan-out width.
-    # (Enabling live + demo must not require max_open_positions >= 2.)
-    _fire_slots = 1
-
-    if _daily_execution_count(strategy.id, db) >= max_per_day:
-        _bump("blk_daily_cap")
-        return
-    _open_cnt = _open_execution_count(strategy.id, db)
-    if _open_cnt + _fire_slots > max_open:
-        _bump("blk_max_open")
-        logger.info(
-            "[live-fire] SKIPPED strategy=%s reason=blk_max_open open=%s max_open=%s",
-            strategy.id,
-            _open_cnt,
-            max_open,
-        )
-        return
-
-    # ── Forex: daily pip loss cap ─────────────────────────────────────────────
-    # If daily_loss_limit_pips is set, check the sum of pip losses today.
-    # We convert to % using the current price so we can reuse the existing
-    # closed-execution query.  Block the whole strategy if exceeded.
-    if asset_class == "forex":
-        _max_pip_loss = risk.get("daily_loss_limit_pips")
-        if _max_pip_loss:
-            try:
-                from app.services.forex_engine import pip_size as _pip_size
-                # Representative price from any symbol in universe to convert pips→%
-                _rep_sym = (universe.get("symbols") or ["EURUSD"])[0]
-                _rep_price = 1.08  # sensible default; will be overwritten below
-                # Sum today's closed pip-losses from StrategyExecution
-                _today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-                _today_losses = db.query(StrategyExecution).filter(
-                    StrategyExecution.strategy_id == strategy.id,
-                    StrategyExecution.outcome.in_(["LOSS", "BREAKEVEN"]),
-                    StrategyExecution.fired_at >= _today_start,
-                ).all()
-                _total_pip_loss = 0.0
-                for _ex in _today_losses:
-                    if _ex.entry_price and _ex.close_price and _ex.symbol:
-                        _ps = _pip_size(_ex.symbol)
-                        if _ps > 0:
-                            _entry = float(_ex.entry_price)
-                            _close = float(_ex.close_price)
-                            _loss_price = abs(_entry - _close)
-                            if _ex.direction == "LONG" and _close < _entry:
-                                _total_pip_loss += _loss_price / _ps
-                            elif _ex.direction == "SHORT" and _close > _entry:
-                                _total_pip_loss += _loss_price / _ps
-                if _total_pip_loss >= float(_max_pip_loss):
-                    _bump("blk_daily_pip_loss")
-                    logger.info(
-                        f"[Strategy {strategy.id}] Daily pip loss cap hit: "
-                        f"{_total_pip_loss:.1f} pips >= limit {_max_pip_loss} pips"
-                    )
-                    return
-            except Exception as _dle:
-                logger.debug(f"[Strategy {strategy.id}] daily pip loss check error: {_dle}")
-
-    # ── Forex: weekend gap buffer ─────────────────────────────────────────────
-    # Block signal evaluation in the first 90 minutes after the Sunday-night
-    # market reopen (22:00–23:30 UTC) and the first 60 minutes of Monday
-    # (00:00–00:59 UTC).  Gaps can be large and mislead breakout/momentum
-    # signals, so we simply suppress new entries during this window.
-    if asset_class == "forex":
-        try:
-            from app.services.forex_engine import is_weekend_gap_window as _is_gap
-            if _is_gap():
-                _bump("blk_weekend_gap")
-                logger.info(
-                    f"[Strategy {strategy.id}] Weekend gap buffer active "
-                    f"(Sunday reopen window) — skipping signal evaluation"
+                from app.models import UserPreference as _UP_intent
+                from app.services.strategy_account_assignments import (
+                    get_enabled_fire_targets,
+                    resolve_live_fire_intent,
                 )
-                return
-        except Exception:
-            pass
-
-    # Cooldown is now per-symbol only (handled in the candidate-symbol loop
-    # below). The old global cooldown blocked ALL symbols whenever ANY symbol
-    # fired — this prevented multi-pair strategies (e.g. EURUSD + GBPUSD)
-    # from firing on a second pair while the first was in cooldown.
-
-    # Strictness level based on max trades/day
-    # 1-2/day = sniper (all conditions must pass + 80% pass-rate gate)
-    # 3-5/day = selective (all conditions must pass)
-    # 6+/day  = standard (configured AND/OR logic)
-    if max_per_day <= 2:
-        strictness_level = 2
-    elif max_per_day <= 5:
-        strictness_level = 1
-    else:
-        strictness_level = 0
-
-    # User-set risk profile (Low / Medium / High) lifts the strictness floor.
-    # The wizard surfaces this on Step 6 — Low = "only fire when every
-    # confirmation aligns AND the bulk of conditions pass" (sniper), Medium =
-    # "all conditions must pass" (selective), High = legacy behaviour. Always
-    # max() so the existing max_per_day-derived strictness is never lowered.
-    _profile_floor = {
-        "low":    2,
-        "medium": 1,
-        "high":   0,
-    }.get(str(risk.get("risk_profile") or "").lower().strip(), None)
-    if _profile_floor is not None:
-        strictness_level = max(strictness_level, _profile_floor)
-
-    if asset_class != "crypto":
-        # Stocks/forex/indices: curated symbol list — same cap + normalization as prefetch.
-        _raw_uni_n = _tradfi_universe_raw_count(config)
-        symbols = _tradfi_universe_symbols(config)
-        if _raw_uni_n > len(symbols):
-            logger.warning(
-                "[eval] strategy=%s universe capped %s→%s symbols (max=%s)",
-                strategy.id,
-                _raw_uni_n,
-                len(symbols),
-                EXECUTOR_MAX_SYMBOLS_PER_STRATEGY,
-            )
-    else:
-        symbols = await _get_eligible_symbols(
-            universe, http_client, raw_tickers=raw_tickers,
-            strategy_id=strategy.id,
-        )
-    if not symbols:
-        _bump("blk_empty_universe")
-        _log_eval_no_symbols(
-            strategy.id, config, asset_class,
-            reason="no_eligible_symbols",
-        )
-        # Diagnostic: dump the offending universe spec at most once per
-        # strategy per minute. This makes it trivial to spot strategies whose
-        # universe is misconfigured (e.g. type='specific' with no symbols, or
-        # over-restrictive min_24h_change/min_volume_usd) without log spam.
-        try:
-            _now_min = int(datetime.utcnow().timestamp() // 60)
-            _key = (strategy.id, _now_min)
-            if _key not in _EMPTY_UNI_LOGGED:
-                _EMPTY_UNI_LOGGED.add(_key)
+                _cycle_ctx_intent = _get_cycle_ctx()
+                _assign_prefetch = None
+                if _cycle_ctx_intent and _cycle_ctx_intent.assignment_targets:
+                    if strategy.id in _cycle_ctx_intent.assignment_targets:
+                        _assign_prefetch = _cycle_ctx_intent.assignment_targets[strategy.id]
+                if _assign_prefetch is not None:
+                    _wants_live, _early_fire_targets = resolve_live_fire_intent(
+                        db, strategy, asset_class, None,
+                        prefetched_targets=_assign_prefetch,
+                    )
+                else:
+                    _intent_prefs = db.query(_UP_intent).filter(
+                        _UP_intent.user_id == user.id,
+                    ).first()
+                    _wants_live, _early_fire_targets = resolve_live_fire_intent(
+                        db, strategy, asset_class, _intent_prefs,
+                    )
+                if (strategy.status or "") == "paper":
+                    logger.info(
+                        "[live-fire] SKIPPED strategy=%s reason=status=paper",
+                        strategy.id,
+                    )
+            except Exception as _intent_err:
                 logger.warning(
-                    f"[Strategy {strategy.id}] '{strategy.name}' empty_universe — "
-                    f"no eligible symbols matched. universe={universe!r}"
+                    "[live-fire] strategy=%s assignment intent lookup failed: %s",
+                    strategy.id,
+                    _intent_err,
                 )
-                if len(_EMPTY_UNI_LOGGED) > 1000:
-                    _EMPTY_UNI_LOGGED.clear()
-        except Exception:
-            pass
-        return
 
-    no_duplicate_symbol = bool(risk.get("no_duplicate_symbol", False))
-
-    # ── Step 1: Fast sync pre-filter (no awaits) ─────────────────────────────
-    # Exclude symbols already fired today or still in cooldown window.
-    # One GROUP BY query replaces up to 2×N per-symbol round-trips.
-    _sym_slice = symbols
-    _fired_today_set, _last_fired_map = _prefetch_symbol_cooldowns(
-        strategy.id, _sym_slice, db, need_today=no_duplicate_symbol,
-    )
-    candidate_symbols: List[str] = []
-    for symbol in _sym_slice:
-        if no_duplicate_symbol and symbol in _fired_today_set:
-            continue
-        last_fired = _last_fired_map.get(symbol)
-        if last_fired:
-            elapsed_mins = (datetime.utcnow() - last_fired).total_seconds() / 60
-            if elapsed_mins < cooldown_mins:
-                continue
-        candidate_symbols.append(symbol)
-
-    if not candidate_symbols:
-        _bump("blk_all_in_cooldown")
-        logger.info(
-            "[eval] id=%s no symbols — skipped reason=all_in_cooldown "
-            "resolved=%s",
-            strategy.id,
-            len(_sym_slice),
-        )
-        return
-
-    # ── Session filter (paper tradfi / index / stock — live forex gated above) ─
-    if asset_class in ("forex", "index", "stock") and not (
-        asset_class == "forex" and not is_paper
-    ):
-        from app.services.session_filter import is_in_allowed_session
-
-        _sess_ok, _ = is_in_allowed_session(config, datetime.utcnow())
-        if not _sess_ok:
-            _bump("blk_session_filter")
-            from app.services.feed_diagnostics import log_scan_metric as _lsm_sess
-            _eval_tf_sess = _primary_timeframe(config)
-            for _sym_blk in candidate_symbols:
-                _lsm_sess(
-                    symbol=_sym_blk,
-                    timeframe=_eval_tf_sess,
-                    candles_loaded=0,
-                    strategy_evaluated=True,
-                    setup_detected=False,
-                    signal_generated=False,
-                    signal_sent=False,
-                    strategy_id=strategy.id,
-                    block_reason="session_filter",
+        # Per-asset broker gate. Forex → cTrader (FP Markets), crypto → Bitunix,
+        # stocks/indices → paper-only (no broker integration yet).
+        if asset_class in ("forex", "index", "metals", "commodity"):
+            if prefetched_ctrader_ok is not None:
+                # Caller already resolved live-eligibility (batched once per cycle).
+                _ctrader_live_ok = bool(prefetched_ctrader_ok)
+            else:
+                _ctrader_live_ok = False
+                try:
+                    from app.models import UserPreference as _UP
+                    _prefs = db.query(_UP).filter(_UP.user_id == user.id).first()
+                    _ctrader_live_ok = bool(
+                        _prefs
+                        and _prefs.ctrader_access_token
+                        and _prefs.ctrader_account_id
+                        and getattr(_prefs, "forex_approved", False)
+                    )
+                except Exception:
+                    _ctrader_live_ok = False
+            is_paper = not (_wants_live and _ctrader_live_ok)
+            if _wants_live and is_paper:
+                try:
+                    from app.models import UserPreference as _UPb
+                    _pb = db.query(_UPb).filter(_UPb.user_id == user.id).first()
+                    _ctrader_blockers = _forex_live_blockers(_pb, user)
+                except Exception:
+                    _ctrader_blockers = ["cTrader prefs unreadable"]
+                logger.warning(
+                    "[live-fire] SKIPPED strategy=%s reason=%s "
+                    "(downgraded to PAPER — no broker order; tracked in TradeHub only)",
+                    strategy.id,
+                    "; ".join(_ctrader_blockers) or "cTrader not ready",
                 )
+            elif not _wants_live:
+                if (strategy.status or "") == "paper":
+                    logger.info(
+                        "[live-fire] SKIPPED strategy=%s reason=status=paper",
+                        strategy.id,
+                    )
+                else:
+                    logger.info(
+                        "[live-fire] SKIPPED strategy=%s reason=no_enabled_accounts "
+                        "status=%s (Go Live + enable an account on the strategy card)",
+                        strategy.id,
+                        strategy.status,
+                    )
+        elif asset_class in PAPER_ONLY_CLASSES:
+            # Stocks/indices: no broker yet, always paper.
+            is_paper = True
+        else:
+            # Crypto: Bitunix gate (auto-trading + keys + affiliate roster).
+            if _wants_live:
+                _live_ok, _live_reason = await _user_can_live_trade_async(user, db)
+                is_paper = not _live_ok
+                if is_paper:
+                    logger.debug(
+                        f"[Strategy {strategy.id}] Live strategy downgraded to paper "
+                        f"(reason={_live_reason}) — signal will still be tracked."
+                    )
+            else:
+                is_paper = True
+
+        # ── Live forex scan gate (fixed UTC windows — before price/TA fetch) ─────
+        if asset_class == "forex" and not is_paper:
+            from app.services.forex_sessions import live_forex_session_allowed
+
+            _lf_ok, _lf_reason = live_forex_session_allowed(
+                config, datetime.utcnow(),
+            )
+            if not _lf_ok:
+                _bump("blk_live_forex_session")
+                logger.debug(
+                    "[Strategy %s] live forex scan skipped — %s",
+                    strategy.id,
+                    _lf_reason,
+                )
+                return
+
+        if asset_class in PAPER_ONLY_CLASSES:
+            if not is_market_open(asset_class):
+                _bump(f"blk_market_closed_{asset_class}")
+                return
+
+        # ── EOD / close_before entry guard ─────────────────────────────────────
+        # If the strategy has an intraday close-before time set, stop opening new
+        # positions once that UTC time has passed today (Mon-Fri only).  Open trades
+        # are handled independently by the trade_tracker EOD force-close loop.
+        _close_before_cfg = config.get("exit", {}).get("close_before")
+        if _close_before_cfg:
+            try:
+                from datetime import datetime as _dtnow
+                _now_utc = _dtnow.utcnow()
+                _h_eod, _m_eod = map(int, str(_close_before_cfg).split(":"))
+                _eod_cut = _now_utc.replace(hour=_h_eod, minute=_m_eod, second=0, microsecond=0)
+                if _now_utc >= _eod_cut and _now_utc.weekday() < 5:
+                    _bump("blk_eod_cutoff")
+                    return
+            except Exception:
+                pass
+
+        # ── Forex day-trading guards (entry only) ────────────────────────────────
+        if asset_class == "forex":
+            _risk_cfg = config.get("risk") or {}
+            _now_dt = datetime.utcnow()
+            _wd = _now_dt.weekday()   # Mon=0 … Sun=6
+            _h  = _now_dt.hour
+            _m  = _now_dt.minute
+
+            # 1. Friday close protection: no new trades Thu 21:00+ or Fri/Sat (weekend gap risk)
+            if _risk_cfg.get("friday_close_protection"):
+                if (_wd == 3 and (_h > 21 or (_h == 21 and _m >= 0))) or _wd >= 4:
+                    _bump("blk_friday_close")
+                    return
+
+            # 2. No overnight positions: no new entries after 21:45 UTC Mon-Thu
+            #    (positions must be closeable before NY close at 22:00)
+            if _risk_cfg.get("no_overnight_positions"):
+                if _wd < 4 and _h == 21 and _m >= 45:
+                    _bump("blk_no_overnight")
+                    return
+                if _wd < 4 and _h >= 22:
+                    _bump("blk_no_overnight")
+                    return
+
+            # 3. Daily pip target: sum today's WIN pip gains; block if hit
+            _pip_target = _risk_cfg.get("daily_pip_target")
+            if _pip_target:
+                try:
+                    from app.services.forex_engine import pip_size as _psz
+                    _today_start = _now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                    _today_wins = db.query(StrategyExecution).filter(
+                        StrategyExecution.strategy_id == strategy.id,
+                        StrategyExecution.outcome == "WIN",
+                        StrategyExecution.fired_at >= _today_start,
+                    ).all()
+                    _total_pip_gain = 0.0
+                    for _wx in _today_wins:
+                        if _wx.entry_price and _wx.close_price and _wx.symbol:
+                            _ps = _psz(_wx.symbol)
+                            if _ps > 0:
+                                _entry = float(_wx.entry_price)
+                                _close = float(_wx.close_price)
+                                if _wx.direction == "LONG" and _close > _entry:
+                                    _total_pip_gain += (_close - _entry) / _ps
+                                elif _wx.direction == "SHORT" and _close < _entry:
+                                    _total_pip_gain += (_entry - _close) / _ps
+                    if _total_pip_gain >= float(_pip_target):
+                        _bump("blk_daily_pip_target")
+                        logger.info(
+                            f"[Strategy {strategy.id}] Daily pip target reached: "
+                            f"{_total_pip_gain:.1f} pips >= target {_pip_target} — pausing for the day"
+                        )
+                        return
+                except Exception as _pte:
+                    logger.debug(f"[Strategy {strategy.id}] daily pip target check error: {_pte}")
+
+            # 4. Max trades per session: count fires that happened inside the same session window
+            _max_per_sess = _risk_cfg.get("max_trades_per_session")
+            if _max_per_sess:
+                try:
+                    from app.services.forex_engine import current_sessions as _cur_sess
+                    _active_sessions = _cur_sess(_now_dt)
+                    if _active_sessions:
+                        # Determine window start for the current active session(s)
+                        from app.services.forex_engine import SESSIONS as _FX_SESSIONS
+                        _sess_start = None
+                        for _sid in _active_sessions:
+                            _sw = _FX_SESSIONS.get(_sid)
+                            if _sw:
+                                _candidate = _now_dt.replace(
+                                    hour=_sw.open_h, minute=_sw.open_m, second=0, microsecond=0
+                                )
+                                # Handle sessions that started yesterday (e.g. Sydney)
+                                if _candidate > _now_dt:
+                                    _candidate -= timedelta(days=1)
+                                if _sess_start is None or _candidate > _sess_start:
+                                    _sess_start = _candidate
+                        if _sess_start:
+                            _sess_count = db.query(StrategyExecution).filter(
+                                StrategyExecution.strategy_id == strategy.id,
+                                StrategyExecution.fired_at >= _sess_start,
+                            ).count()
+                            if _sess_count >= int(_max_per_sess):
+                                _bump("blk_session_cap")
+                                logger.debug(
+                                    f"[Strategy {strategy.id}] Session cap: "
+                                    f"{_sess_count}/{_max_per_sess} trades this session"
+                                )
+                                return
+                except Exception as _mps:
+                    logger.debug(f"[Strategy {strategy.id}] max_per_session check error: {_mps}")
+
+        # Locked strategy — fetch live entry_conditions from the original source strategy
+        if config.get("_locked") and config.get("_source_strategy_id"):
+            try:
+                from app.strategy_models import UserStrategy as _US
+                _src = db.query(_US).filter(_US.id == config["_source_strategy_id"]).first()
+                if _src and _src.config:
+                    config["entry_conditions"] = _src.config.get("entry_conditions", {})
+            except Exception as _e:
+                logger.warning(f"Locked strategy {strategy.id}: could not fetch source conditions: {_e}")
+                _db_rollback_safe(db)
+                _rebind_session(db, strategy, user)
+
+        risk     = config.get("risk") or {}
+        filters  = config.get("filters") or {}
+        universe = config.get("universe") or {}
+        direction_pref = config.get("direction") or "LONG"
+
+        if not _check_trading_days(filters):
+            _bump("blk_trading_days")
+            return
+        if not _check_time_filter(filters):
+            _bump("blk_time_filter")
+            return
+        if not _check_btc_regime(filters):
+            _bump("blk_btc_regime")
             return
 
-    _diag.db_ms = (time.monotonic() - _phase_t0) * 1000.0
-    _phase_t0 = time.monotonic()
+        max_per_day   = int(risk.get("max_trades_per_day") or 3)
+        max_open      = int(risk.get("max_open_positions") or 1)
+        cooldown_mins = int(risk.get("cooldown_minutes") or 30)
+
+        # One signal event = one max-open slot regardless of parallel fan-out width.
+        # (Enabling live + demo must not require max_open_positions >= 2.)
+        _fire_slots = 1
+
+        if _daily_execution_count(strategy.id, db) >= max_per_day:
+            _bump("blk_daily_cap")
+            return
+        _open_cnt = _open_execution_count(strategy.id, db)
+        if _open_cnt + _fire_slots > max_open:
+            _bump("blk_max_open")
+            logger.info(
+                "[live-fire] SKIPPED strategy=%s reason=blk_max_open open=%s max_open=%s",
+                strategy.id,
+                _open_cnt,
+                max_open,
+            )
+            return
+
+        # ── Forex: daily pip loss cap ─────────────────────────────────────────────
+        # If daily_loss_limit_pips is set, check the sum of pip losses today.
+        # We convert to % using the current price so we can reuse the existing
+        # closed-execution query.  Block the whole strategy if exceeded.
+        if asset_class == "forex":
+            _max_pip_loss = risk.get("daily_loss_limit_pips")
+            if _max_pip_loss:
+                try:
+                    from app.services.forex_engine import pip_size as _pip_size
+                    # Representative price from any symbol in universe to convert pips→%
+                    _rep_sym = (universe.get("symbols") or ["EURUSD"])[0]
+                    _rep_price = 1.08  # sensible default; will be overwritten below
+                    # Sum today's closed pip-losses from StrategyExecution
+                    _today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                    _today_losses = db.query(StrategyExecution).filter(
+                        StrategyExecution.strategy_id == strategy.id,
+                        StrategyExecution.outcome.in_(["LOSS", "BREAKEVEN"]),
+                        StrategyExecution.fired_at >= _today_start,
+                    ).all()
+                    _total_pip_loss = 0.0
+                    for _ex in _today_losses:
+                        if _ex.entry_price and _ex.close_price and _ex.symbol:
+                            _ps = _pip_size(_ex.symbol)
+                            if _ps > 0:
+                                _entry = float(_ex.entry_price)
+                                _close = float(_ex.close_price)
+                                _loss_price = abs(_entry - _close)
+                                if _ex.direction == "LONG" and _close < _entry:
+                                    _total_pip_loss += _loss_price / _ps
+                                elif _ex.direction == "SHORT" and _close > _entry:
+                                    _total_pip_loss += _loss_price / _ps
+                    if _total_pip_loss >= float(_max_pip_loss):
+                        _bump("blk_daily_pip_loss")
+                        logger.info(
+                            f"[Strategy {strategy.id}] Daily pip loss cap hit: "
+                            f"{_total_pip_loss:.1f} pips >= limit {_max_pip_loss} pips"
+                        )
+                        return
+                except Exception as _dle:
+                    logger.debug(f"[Strategy {strategy.id}] daily pip loss check error: {_dle}")
+
+        # ── Forex: weekend gap buffer ─────────────────────────────────────────────
+        # Block signal evaluation in the first 90 minutes after the Sunday-night
+        # market reopen (22:00–23:30 UTC) and the first 60 minutes of Monday
+        # (00:00–00:59 UTC).  Gaps can be large and mislead breakout/momentum
+        # signals, so we simply suppress new entries during this window.
+        if asset_class == "forex":
+            try:
+                from app.services.forex_engine import is_weekend_gap_window as _is_gap
+                if _is_gap():
+                    _bump("blk_weekend_gap")
+                    logger.info(
+                        f"[Strategy {strategy.id}] Weekend gap buffer active "
+                        f"(Sunday reopen window) — skipping signal evaluation"
+                    )
+                    return
+            except Exception:
+                pass
+
+        # Cooldown is now per-symbol only (handled in the candidate-symbol loop
+        # below). The old global cooldown blocked ALL symbols whenever ANY symbol
+        # fired — this prevented multi-pair strategies (e.g. EURUSD + GBPUSD)
+        # from firing on a second pair while the first was in cooldown.
+
+        # Strictness level based on max trades/day
+        # 1-2/day = sniper (all conditions must pass + 80% pass-rate gate)
+        # 3-5/day = selective (all conditions must pass)
+        # 6+/day  = standard (configured AND/OR logic)
+        if max_per_day <= 2:
+            strictness_level = 2
+        elif max_per_day <= 5:
+            strictness_level = 1
+        else:
+            strictness_level = 0
+
+        # User-set risk profile (Low / Medium / High) lifts the strictness floor.
+        # The wizard surfaces this on Step 6 — Low = "only fire when every
+        # confirmation aligns AND the bulk of conditions pass" (sniper), Medium =
+        # "all conditions must pass" (selective), High = legacy behaviour. Always
+        # max() so the existing max_per_day-derived strictness is never lowered.
+        _profile_floor = {
+            "low":    2,
+            "medium": 1,
+            "high":   0,
+        }.get(str(risk.get("risk_profile") or "").lower().strip(), None)
+        if _profile_floor is not None:
+            strictness_level = max(strictness_level, _profile_floor)
+
+        if asset_class != "crypto":
+            # Stocks/forex/indices: curated symbol list — same cap + normalization as prefetch.
+            _raw_uni_n = _tradfi_universe_raw_count(config)
+            symbols = _tradfi_universe_symbols(config)
+            if _raw_uni_n > len(symbols):
+                logger.warning(
+                    "[eval] strategy=%s universe capped %s→%s symbols (max=%s)",
+                    strategy.id,
+                    _raw_uni_n,
+                    len(symbols),
+                    EXECUTOR_MAX_SYMBOLS_PER_STRATEGY,
+                )
+        else:
+            symbols = await _get_eligible_symbols(
+                universe, http_client, raw_tickers=raw_tickers,
+                strategy_id=strategy.id,
+            )
+        if not symbols:
+            _bump("blk_empty_universe")
+            _log_eval_no_symbols(
+                strategy.id, config, asset_class,
+                reason="no_eligible_symbols",
+            )
+            # Diagnostic: dump the offending universe spec at most once per
+            # strategy per minute. This makes it trivial to spot strategies whose
+            # universe is misconfigured (e.g. type='specific' with no symbols, or
+            # over-restrictive min_24h_change/min_volume_usd) without log spam.
+            try:
+                _now_min = int(datetime.utcnow().timestamp() // 60)
+                _key = (strategy.id, _now_min)
+                if _key not in _EMPTY_UNI_LOGGED:
+                    _EMPTY_UNI_LOGGED.add(_key)
+                    logger.warning(
+                        f"[Strategy {strategy.id}] '{strategy.name}' empty_universe — "
+                        f"no eligible symbols matched. universe={universe!r}"
+                    )
+                    if len(_EMPTY_UNI_LOGGED) > 1000:
+                        _EMPTY_UNI_LOGGED.clear()
+            except Exception:
+                pass
+            return
+
+        no_duplicate_symbol = bool(risk.get("no_duplicate_symbol", False))
+
+        # ── Step 1: Fast sync pre-filter (no awaits) ─────────────────────────────
+        # Exclude symbols already fired today or still in cooldown window.
+        # One GROUP BY query replaces up to 2×N per-symbol round-trips.
+        _sym_slice = symbols
+        _fired_today_set, _last_fired_map = _prefetch_symbol_cooldowns(
+            strategy.id, _sym_slice, db, need_today=no_duplicate_symbol,
+        )
+        candidate_symbols: List[str] = []
+        for symbol in _sym_slice:
+            if no_duplicate_symbol and symbol in _fired_today_set:
+                continue
+            last_fired = _last_fired_map.get(symbol)
+            if last_fired:
+                elapsed_mins = (datetime.utcnow() - last_fired).total_seconds() / 60
+                if elapsed_mins < cooldown_mins:
+                    continue
+            candidate_symbols.append(symbol)
+
+        if not candidate_symbols:
+            _bump("blk_all_in_cooldown")
+            logger.info(
+                "[eval] id=%s no symbols — skipped reason=all_in_cooldown "
+                "resolved=%s",
+                strategy.id,
+                len(_sym_slice),
+            )
+            return
+
+        # ── Session filter (paper tradfi / index / stock — live forex gated above) ─
+        if asset_class in ("forex", "index", "stock") and not (
+            asset_class == "forex" and not is_paper
+        ):
+            from app.services.session_filter import is_in_allowed_session
+
+            _sess_ok, _ = is_in_allowed_session(config, datetime.utcnow())
+            if not _sess_ok:
+                _bump("blk_session_filter")
+                from app.services.feed_diagnostics import log_scan_metric as _lsm_sess
+                _eval_tf_sess = _primary_timeframe(config)
+                for _sym_blk in candidate_symbols:
+                    _lsm_sess(
+                        symbol=_sym_blk,
+                        timeframe=_eval_tf_sess,
+                        candles_loaded=0,
+                        strategy_evaluated=True,
+                        setup_detected=False,
+                        signal_generated=False,
+                        signal_sent=False,
+                        strategy_id=strategy.id,
+                        block_reason="session_filter",
+                    )
+                return
+
+        _diag.db_ms = (time.monotonic() - _phase_t0) * 1000.0
+        _phase_t0 = time.monotonic()
+
+        _diag.db_ms = (time.monotonic() - _phase_t0) * 1000.0
+        if gate_only:
+            _split_ok = bool(
+                tradfi_db_split and asset_class in _EXECUTOR_TRADFI_CLASSES
+            )
+            if (
+                not _split_ok
+                or _tradfi_strategy_row is None
+                or _tradfi_user_row is None
+            ):
+                return None
+            return _tradfi_build_carry(
+                strategy_row=_tradfi_strategy_row,
+                user_row=_tradfi_user_row,
+                strategy=strategy,
+                user=user,
+                config=config,
+                asset_class=asset_class,
+                is_paper=is_paper,
+                early_fire_targets=_early_fire_targets,
+                candidate_symbols=candidate_symbols,
+                direction_pref=direction_pref,
+                risk=risk,
+                filters=filters,
+                strictness_level=strictness_level,
+                eval_tf=_primary_timeframe(config),
+                uid=user.id if user else None,
+                metal_paper=is_paper and asset_class == "forex",
+                cache_ac=_strategy_cache_asset_class(strategy),
+                strategy_gates=_strategy_gates,
+                gate_stats=gate_stats,
+                diag=_diag,
+                prefetched_ctrader_ok=prefetched_ctrader_ok,
+            )
+        _phase_t0 = time.monotonic()
 
     # ── Step 2: Parallel price + TA fetch for ALL candidates at once ──────────
     # Turns O(n × fetch_time) → O(fetch_time).  Results are also stored in the
@@ -5912,885 +6148,351 @@ async def evaluate_and_fire(
                 )
             current_price = _confirmed_px
 
-        _signal_generated_at = time.time()
-        _fire_t0 = time.monotonic()
-
-        mode_tag = "🧪 [PAPER]" if is_paper else "🎯"
-        _ac_tag = asset_class.upper()
-        logger.info(
-            f"[{_log_ts()}] {mode_tag} [{_ac_tag}] [Strategy {strategy.id}] "
-            f"{strategy.name} — {symbol} @ {current_price:.4f} "
-            f"conditions met! {direction_pref}"
-        )
-
-        ex_config = config.get("exit") or {}
-        tp_pct    = float(ex_config.get("take_profit_pct")  or 3.0)
-        tp2_pct   = ex_config.get("take_profit2_pct") or None
-        sl_pct    = float(ex_config.get("stop_loss_pct")   or 1.5)
-        leverage  = int(risk.get("leverage") or 10)
-
-        # Defense-in-depth: stocks have no realistic leverage in paper testing —
-        # clamp to 1× so P&L isn't artificially inflated. Forex and indices
-        # DO use leverage in real trading (100:1 is standard on XAUUSD/EUR pairs),
-        # so their configured leverage is honoured even in paper mode so that
-        # paper performance reflects what a live trade would actually make.
-        if asset_class == "stock":
-            leverage = 1
-
-        # ── Forex pip→% conversion ────────────────────────────────────────
-        # Forex strategies set TP/SL in pips (which is how traders actually
-        # think). We convert to the % move the existing exit engine
-        # understands using the live price + the pair's pip size. This means
-        # a "20 pip SL on EURUSD at 1.0850" produces the same TP/SL price
-        # whether the user typed it as pips or as a %.
-        if asset_class in ("forex", "index"):
-            from app.services.forex_engine import pips_to_pct as _p2p
-            tp_pips = ex_config.get("take_profit_pips")
-            sl_pips = ex_config.get("stop_loss_pips")
-            tp2_pips = ex_config.get("take_profit2_pips")
-            if tp_pips:
-                tp_pct = _p2p(symbol, current_price, float(tp_pips))
-            if sl_pips:
-                sl_pct = _p2p(symbol, current_price, float(sl_pips))
-            if tp2_pips:
-                tp2_pct = _p2p(symbol, current_price, float(tp2_pips))
-            # Pip-based trailing stop → convert to % so paper monitor + cTrader
-            # trailing logic both use the same % field.
-            _trail_pips = ex_config.get("trailing_stop_pips")
-            if _trail_pips and float(_trail_pips) > 0:
-                ex_config = dict(ex_config)  # don't mutate config in-place
-                ex_config["trailing_stop"] = True
-                ex_config["trailing_stop_pct"] = _p2p(symbol, current_price, float(_trail_pips))
-            # breakeven_at_pips is consumed by manage_open_position via
-            # effective_trade_mgmt_cfg — do not mirror to breakeven_at_pct
-            # (that fed the removed PaperMonitor ROI AUTO-BREAKEVEN path).
-
-        direction = direction_pref
-        if direction == "BOTH":
-            # Infer the trade side from the directional signal itself — FVG/iFVG,
-            # order block, divergence/COD — and only fall back to RSI when the
-            # strategy carries no directional signal at all.
-            #
-            #   FVG : bullish gap → LONG,  bearish gap → SHORT.
-            #   iFVG: an inverted gap flips the bias — a violated bullish gap
-            #         becomes resistance → SHORT, a violated bearish gap becomes
-            #         support → LONG.
-            #
-            # When the condition's direction is "any" the gap side isn't pinned in
-            # config, so we read the side actually detected on THIS fire from the
-            # matching evaluation detail (eval_fvg labels them "Bullish/Bearish FVG").
-            #
-            # `details` is index-aligned with entry_conditions.conditions and each
-            # line is prefixed "✅"/"❌". We only ever infer direction from a
-            # condition that PASSED — critical for OR strategies, where a failed
-            # FVG line must never drive the trade side.
-            _entry_conds = config.get("entry_conditions", {}).get("conditions", [])
-
-            def _passed_at(_i):
-                return _i < len(details) and str(details[_i]).lstrip().startswith("✅")
-
-            def _gap_bias_at(_i):
-                if _i >= len(details):
-                    return None
-                _dl = str(details[_i]).lower()
-                if "bullish fvg" in _dl:
-                    return "bullish"
-                if "bearish fvg" in _dl:
-                    return "bearish"
-                return None
-
-            def _norm(_v):
-                return _v.strip().lower() if isinstance(_v, str) else _v
-
-            inferred_dir = None
-            for _i, _cond in enumerate(_entry_conds):
-                if not _passed_at(_i):
-                    continue
-                _ct = _cond.get("type", "")
-                if _ct in ("fvg", "ifvg"):
-                    _bias = _norm(_cond.get("direction") or _cond.get("fvg_dir"))
-                    if not _bias or _bias in ("any", "both"):
-                        _bias = _gap_bias_at(_i)
-                    if _bias in ("bullish", "bearish"):
-                        if _ct == "ifvg":
-                            inferred_dir = "SHORT" if _bias == "bullish" else "LONG"
-                        else:
-                            inferred_dir = "LONG" if _bias == "bullish" else "SHORT"
-                        break
-                elif _ct in ("order_block", "ob"):
-                    _d = _norm(_cond.get("ob_type") or _cond.get("direction"))
-                    if _d and _d not in ("any", "both"):
-                        inferred_dir = "LONG" if _d == "bullish" else "SHORT"
-                        break
-                elif _ct in ("divergence", "cod", "change_of_direction"):
-                    _d = _norm(_cond.get("direction"))
-                    if _d and _d not in ("any", "both"):
-                        inferred_dir = "LONG" if _d == "bullish" else "SHORT"
-                        break
-            if inferred_dir:
-                direction = inferred_dir
-            else:
-                rsi = price_data.get("rsi", 50)
-                direction = "LONG" if rsi > 50 else "SHORT"
-
-        if direction == "LONG":
-            tp_price  = current_price * (1 + tp_pct  / 100)
-            sl_price  = current_price * (1 - sl_pct  / 100)
-            tp2_price = current_price * (1 + float(tp2_pct) / 100) if tp2_pct else None
-        else:
-            tp_price  = current_price * (1 - tp_pct  / 100)
-            sl_price  = current_price * (1 + sl_pct  / 100)
-            tp2_price = current_price * (1 - float(tp2_pct) / 100) if tp2_pct else None
-
-        # Stash partial_close_pct in notes so the paper monitor + live manager can
-        # act on it. When a FOREX strategy defines a second target (TP2) but the
-        # user never set an explicit partial size, DEFAULT to closing half at TP1
-        # → move the stop to breakeven → run the remainder to TP2 (the standard
-        # "TP1 + runner"). Scoped to forex because the live partial-close + BE flow
-        # is only wired for cTrader forex; crypto keeps full-close-at-TP1 so paper
-        # == live there.
-        _partial_close_pct = ex_config.get("partial_close_pct")
-        if (
-            (not _partial_close_pct or float(_partial_close_pct) <= 0)
-            and tp2_price
-            and asset_class == "forex"
-        ):
-            _partial_close_pct = 50.0
-        _exec_notes_parts: List[str] = []
-        if _partial_close_pct and float(_partial_close_pct) > 0:
-            _exec_notes_parts.append(f"partial_close_pct={float(_partial_close_pct):.0f}")
-        _ps = price_data.get("price_source") or "unknown"
-        _exec_notes_parts.append(f"entry_src={_ps}")
-        _kc = price_data.get("kline_close")
-        if _kc is not None:
-            try:
-                _exec_notes_parts.append(f"kline_close={float(_kc):.4f}")
-            except (TypeError, ValueError):
-                pass
-        _ks = price_data.get("kline_source")
-        if _ks:
-            _exec_notes_parts.append(f"kline_src={_ks}")
-        if sl_price is not None:
-            _exec_notes_parts.append(f"orig_sl={float(sl_price):.6g}")
-        _exec_notes = " | ".join(_exec_notes_parts) if _exec_notes_parts else None
-
-        _fire_targets = []
-        if not is_paper and asset_class in ("forex", "index", "metals", "commodity"):
-            if _early_fire_targets:
-                _fire_targets = list(_early_fire_targets)
-            else:
-                try:
-                    from app.models import UserPreference as _UP_ft
-                    from app.services.strategy_account_assignments import get_enabled_fire_targets
-                    _cycle_ctx_ft = _get_cycle_ctx()
-                    _ft_prefetch = None
-                    if _cycle_ctx_ft and _cycle_ctx_ft.assignment_targets:
-                        if strategy.id in _cycle_ctx_ft.assignment_targets:
-                            _ft_prefetch = _cycle_ctx_ft.assignment_targets[strategy.id]
-                    if _ft_prefetch is not None:
-                        _fire_targets = get_enabled_fire_targets(
-                            db, strategy, None, for_live_fire=True,
-                            prefetched_rows=_ft_prefetch,
-                        )
-                    else:
-                        _ft_prefs = db.query(_UP_ft).filter(
-                            _UP_ft.user_id == user.id,
-                        ).first()
-                        _fire_targets = get_enabled_fire_targets(
-                            db, strategy, _ft_prefs, for_live_fire=True,
-                        )
-                except Exception as _ft_err:
-                    logger.warning(
-                        f"[Strategy {strategy.id}] assignment lookup failed — "
-                        f"skipping fan-out ({type(_ft_err).__name__}: {_ft_err})"
-                    )
-                    _fire_targets = []
-            if _fire_targets:
-                logger.info(
-                    "[live-fire] strategy=%s resolved_targets=%s count=%s",
-                    strategy.id,
-                    _format_fire_targets_log(_fire_targets),
-                    len(_fire_targets),
+        async with asyncio.AsyncExitStack() as _fire_stack:
+            if _tradfi_db_split:
+                if _tradfi_http_phase_token is not None:
+                    _TRADFI_EVAL_HTTP_PHASE.reset(_tradfi_http_phase_token)
+                    _tradfi_http_phase_token = None
+                db, strategy, user = await _fire_stack.enter_async_context(
+                    _TradfiFireDbContext(_tradfi_strategy_row, _tradfi_user_row),
                 )
+            _signal_generated_at = time.time()
+            _fire_t0 = time.monotonic()
 
-        if not await _verify_executor_fire_gate(
-            f"strategy={strategy.id} symbol={symbol} live={not is_paper}",
-        ):
-            _bump("blk_lock_unowned")
-            continue
-
-        if not is_paper and _fire_targets:
+            mode_tag = "🧪 [PAPER]" if is_paper else "🎯"
+            _ac_tag = asset_class.upper()
             logger.info(
-                "[live-fire] strategy=%s symbol=%s enabled_accounts=%s attempting %s live order(s)",
-                strategy.id,
-                symbol,
-                _format_fire_targets_log(_fire_targets),
-                len(_fire_targets) if len(_fire_targets) > 1 else 1,
+                f"[{_log_ts()}] {mode_tag} [{_ac_tag}] [Strategy {strategy.id}] "
+                f"{strategy.name} — {symbol} @ {current_price:.4f} "
+                f"conditions met! {direction_pref}"
             )
 
-        if len(_fire_targets) > 1:
-            _fanout_ok = False
-            try:
-                _fanout_ok = await _ctrader_fanout_live_fire(
-                    db=db,
-                    user=user,
-                    strategy=strategy,
-                    config=config,
-                    symbol=symbol,
-                    direction=direction,
-                    current_price=current_price,
-                    tp_price=tp_price,
-                    sl_price=sl_price,
-                    tp2_price=tp2_price,
-                    tp_pct=tp_pct,
-                    sl_pct=sl_pct,
-                    tp2_pct=tp2_pct,
-                    leverage=leverage,
-                    risk=risk,
-                    ex_config=ex_config,
-                    asset_class=asset_class,
-                    details=details,
-                    price_data=price_data,
-                    exec_notes=_exec_notes,
-                    partial_close_pct=_partial_close_pct,
-                    price_source=_ps,
-                    kline_source=_ks,
-                    signal_generated_at=_signal_generated_at,
-                    fire_targets=_fire_targets,
-                    http_client=http_client,
-                )
-            except Exception as _fan_err:
-                logger.critical(
-                    "[live-fire] fan-out await FAILED strategy=%s symbol=%s targets=%s — %s",
+            ex_config = config.get("exit") or {}
+            tp_pct    = float(ex_config.get("take_profit_pct")  or 3.0)
+            tp2_pct   = ex_config.get("take_profit2_pct") or None
+            sl_pct    = float(ex_config.get("stop_loss_pct")   or 1.5)
+            leverage  = int(risk.get("leverage") or 10)
+
+            # Defense-in-depth: stocks have no realistic leverage in paper testing —
+            # clamp to 1× so P&L isn't artificially inflated. Forex and indices
+            # DO use leverage in real trading (100:1 is standard on XAUUSD/EUR pairs),
+            # so their configured leverage is honoured even in paper mode so that
+            # paper performance reflects what a live trade would actually make.
+            if asset_class == "stock":
+                leverage = 1
+
+            # ── Forex pip→% conversion ────────────────────────────────────────
+            # Forex strategies set TP/SL in pips (which is how traders actually
+            # think). We convert to the % move the existing exit engine
+            # understands using the live price + the pair's pip size. This means
+            # a "20 pip SL on EURUSD at 1.0850" produces the same TP/SL price
+            # whether the user typed it as pips or as a %.
+            if asset_class in ("forex", "index"):
+                from app.services.forex_engine import pips_to_pct as _p2p
+                tp_pips = ex_config.get("take_profit_pips")
+                sl_pips = ex_config.get("stop_loss_pips")
+                tp2_pips = ex_config.get("take_profit2_pips")
+                if tp_pips:
+                    tp_pct = _p2p(symbol, current_price, float(tp_pips))
+                if sl_pips:
+                    sl_pct = _p2p(symbol, current_price, float(sl_pips))
+                if tp2_pips:
+                    tp2_pct = _p2p(symbol, current_price, float(tp2_pips))
+                # Pip-based trailing stop → convert to % so paper monitor + cTrader
+                # trailing logic both use the same % field.
+                _trail_pips = ex_config.get("trailing_stop_pips")
+                if _trail_pips and float(_trail_pips) > 0:
+                    ex_config = dict(ex_config)  # don't mutate config in-place
+                    ex_config["trailing_stop"] = True
+                    ex_config["trailing_stop_pct"] = _p2p(symbol, current_price, float(_trail_pips))
+                # breakeven_at_pips is consumed by manage_open_position via
+                # effective_trade_mgmt_cfg — do not mirror to breakeven_at_pct
+                # (that fed the removed PaperMonitor ROI AUTO-BREAKEVEN path).
+
+            direction = direction_pref
+            if direction == "BOTH":
+                # Infer the trade side from the directional signal itself — FVG/iFVG,
+                # order block, divergence/COD — and only fall back to RSI when the
+                # strategy carries no directional signal at all.
+                #
+                #   FVG : bullish gap → LONG,  bearish gap → SHORT.
+                #   iFVG: an inverted gap flips the bias — a violated bullish gap
+                #         becomes resistance → SHORT, a violated bearish gap becomes
+                #         support → LONG.
+                #
+                # When the condition's direction is "any" the gap side isn't pinned in
+                # config, so we read the side actually detected on THIS fire from the
+                # matching evaluation detail (eval_fvg labels them "Bullish/Bearish FVG").
+                #
+                # `details` is index-aligned with entry_conditions.conditions and each
+                # line is prefixed "✅"/"❌". We only ever infer direction from a
+                # condition that PASSED — critical for OR strategies, where a failed
+                # FVG line must never drive the trade side.
+                _entry_conds = config.get("entry_conditions", {}).get("conditions", [])
+
+                def _passed_at(_i):
+                    return _i < len(details) and str(details[_i]).lstrip().startswith("✅")
+
+                def _gap_bias_at(_i):
+                    if _i >= len(details):
+                        return None
+                    _dl = str(details[_i]).lower()
+                    if "bullish fvg" in _dl:
+                        return "bullish"
+                    if "bearish fvg" in _dl:
+                        return "bearish"
+                    return None
+
+                def _norm(_v):
+                    return _v.strip().lower() if isinstance(_v, str) else _v
+
+                inferred_dir = None
+                for _i, _cond in enumerate(_entry_conds):
+                    if not _passed_at(_i):
+                        continue
+                    _ct = _cond.get("type", "")
+                    if _ct in ("fvg", "ifvg"):
+                        _bias = _norm(_cond.get("direction") or _cond.get("fvg_dir"))
+                        if not _bias or _bias in ("any", "both"):
+                            _bias = _gap_bias_at(_i)
+                        if _bias in ("bullish", "bearish"):
+                            if _ct == "ifvg":
+                                inferred_dir = "SHORT" if _bias == "bullish" else "LONG"
+                            else:
+                                inferred_dir = "LONG" if _bias == "bullish" else "SHORT"
+                            break
+                    elif _ct in ("order_block", "ob"):
+                        _d = _norm(_cond.get("ob_type") or _cond.get("direction"))
+                        if _d and _d not in ("any", "both"):
+                            inferred_dir = "LONG" if _d == "bullish" else "SHORT"
+                            break
+                    elif _ct in ("divergence", "cod", "change_of_direction"):
+                        _d = _norm(_cond.get("direction"))
+                        if _d and _d not in ("any", "both"):
+                            inferred_dir = "LONG" if _d == "bullish" else "SHORT"
+                            break
+                if inferred_dir:
+                    direction = inferred_dir
+                else:
+                    rsi = price_data.get("rsi", 50)
+                    direction = "LONG" if rsi > 50 else "SHORT"
+
+            if direction == "LONG":
+                tp_price  = current_price * (1 + tp_pct  / 100)
+                sl_price  = current_price * (1 - sl_pct  / 100)
+                tp2_price = current_price * (1 + float(tp2_pct) / 100) if tp2_pct else None
+            else:
+                tp_price  = current_price * (1 - tp_pct  / 100)
+                sl_price  = current_price * (1 + sl_pct  / 100)
+                tp2_price = current_price * (1 - float(tp2_pct) / 100) if tp2_pct else None
+
+            # Stash partial_close_pct in notes so the paper monitor + live manager can
+            # act on it. When a FOREX strategy defines a second target (TP2) but the
+            # user never set an explicit partial size, DEFAULT to closing half at TP1
+            # → move the stop to breakeven → run the remainder to TP2 (the standard
+            # "TP1 + runner"). Scoped to forex because the live partial-close + BE flow
+            # is only wired for cTrader forex; crypto keeps full-close-at-TP1 so paper
+            # == live there.
+            _partial_close_pct = ex_config.get("partial_close_pct")
+            if (
+                (not _partial_close_pct or float(_partial_close_pct) <= 0)
+                and tp2_price
+                and asset_class == "forex"
+            ):
+                _partial_close_pct = 50.0
+            _exec_notes_parts: List[str] = []
+            if _partial_close_pct and float(_partial_close_pct) > 0:
+                _exec_notes_parts.append(f"partial_close_pct={float(_partial_close_pct):.0f}")
+            _ps = price_data.get("price_source") or "unknown"
+            _exec_notes_parts.append(f"entry_src={_ps}")
+            _kc = price_data.get("kline_close")
+            if _kc is not None:
+                try:
+                    _exec_notes_parts.append(f"kline_close={float(_kc):.4f}")
+                except (TypeError, ValueError):
+                    pass
+            _ks = price_data.get("kline_source")
+            if _ks:
+                _exec_notes_parts.append(f"kline_src={_ks}")
+            if sl_price is not None:
+                _exec_notes_parts.append(f"orig_sl={float(sl_price):.6g}")
+            _exec_notes = " | ".join(_exec_notes_parts) if _exec_notes_parts else None
+
+            _fire_targets = []
+            if not is_paper and asset_class in ("forex", "index", "metals", "commodity"):
+                if _early_fire_targets:
+                    _fire_targets = list(_early_fire_targets)
+                else:
+                    try:
+                        from app.models import UserPreference as _UP_ft
+                        from app.services.strategy_account_assignments import get_enabled_fire_targets
+                        _cycle_ctx_ft = _get_cycle_ctx()
+                        _ft_prefetch = None
+                        if _cycle_ctx_ft and _cycle_ctx_ft.assignment_targets:
+                            if strategy.id in _cycle_ctx_ft.assignment_targets:
+                                _ft_prefetch = _cycle_ctx_ft.assignment_targets[strategy.id]
+                        if _ft_prefetch is not None:
+                            _fire_targets = get_enabled_fire_targets(
+                                db, strategy, None, for_live_fire=True,
+                                prefetched_rows=_ft_prefetch,
+                            )
+                        else:
+                            _ft_prefs = db.query(_UP_ft).filter(
+                                _UP_ft.user_id == user.id,
+                            ).first()
+                            _fire_targets = get_enabled_fire_targets(
+                                db, strategy, _ft_prefs, for_live_fire=True,
+                            )
+                    except Exception as _ft_err:
+                        logger.warning(
+                            f"[Strategy {strategy.id}] assignment lookup failed — "
+                            f"skipping fan-out ({type(_ft_err).__name__}: {_ft_err})"
+                        )
+                        _fire_targets = []
+                if _fire_targets:
+                    logger.info(
+                        "[live-fire] strategy=%s resolved_targets=%s count=%s",
+                        strategy.id,
+                        _format_fire_targets_log(_fire_targets),
+                        len(_fire_targets),
+                    )
+
+            if not await _verify_executor_fire_gate(
+                f"strategy={strategy.id} symbol={symbol} live={not is_paper}",
+            ):
+                _bump("blk_lock_unowned")
+                continue
+
+            if not is_paper and _fire_targets:
+                logger.info(
+                    "[live-fire] strategy=%s symbol=%s enabled_accounts=%s attempting %s live order(s)",
                     strategy.id,
                     symbol,
                     _format_fire_targets_log(_fire_targets),
-                    _fan_err,
-                    exc_info=True,
+                    len(_fire_targets) if len(_fire_targets) > 1 else 1,
                 )
-            if _fanout_ok:
-                _accum_cycle_fire_ms(_fire_t0)
-                break
+
             if len(_fire_targets) > 1:
-                logger.critical(
-                    "[live-fire] fan-out failed strategy=%s targets=%s — "
-                    "not falling through to single-exec (multi-account)",
-                    strategy.id,
-                    _format_fire_targets_log(_fire_targets),
-                )
-                _accum_cycle_fire_ms(_fire_t0)
-                continue
-
-        _preset_ctid = (
-            _fire_targets[0].get("ctrader_account_id") or _fire_targets[0].get("ctid")
-            if len(_fire_targets) == 1 else None
-        )
-        _preset_lot = _fire_targets[0]["lot_size"] if len(_fire_targets) == 1 else None
-
-        execution = StrategyExecution(
-            strategy_id    = strategy.id,
-            user_id        = user.id,
-            symbol         = symbol,
-            direction      = direction,
-            entry_price    = current_price,
-            tp_price       = tp_price,
-            tp2_price      = tp2_price,
-            sl_price       = sl_price,
-            current_sl     = sl_price,
-            leverage       = leverage,
-            outcome        = "OPEN",
-            conditions_met = details,
-            fired_at       = datetime.utcnow(),
-            is_paper       = is_paper,
-            asset_class    = asset_class,
-            notes          = _exec_notes,
-            ctrader_account_id=_preset_ctid,
-        )
-        db.add(execution)
-        await _commit_db_with_retry(
-            db, label=f"exec#{strategy.id}", instances=(execution,)
-        )
-        execution = _refresh_db_row(db, execution)
-        if execution is None or not getattr(execution, "id", None):
-            logger.error(
-                f"[Strategy {strategy.id}] execution row missing after commit — "
-                f"aborting fire for {symbol}"
-            )
-            _accum_cycle_fire_ms(_fire_t0)
-            return
-
-        # Only increment open_trades counter — do NOT recompute from scratch
-        # (full recompute wipes historical performance data if no closed trades exist yet)
-        from app.strategy_models import StrategyPerformance
-        _perf = db.query(StrategyPerformance).filter(
-            StrategyPerformance.strategy_id == strategy.id
-        ).first()
-        if _perf:
-            _perf.open_trades = (_perf.open_trades or 0) + 1
-        else:
-            _perf = StrategyPerformance(strategy_id=strategy.id, open_trades=1)
-            db.add(_perf)
-        await _commit_db_with_retry(
-            db, label=f"perf#{strategy.id}", instances=(_perf,)
-        )
-
-        if is_paper:
-            # Paper trade: notify user and skip Bitunix
-            try:
-                portal_settings = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
-                tg_id = _telegram_int_id(user)
-                if tg_id and _should_dm_trade_alerts(portal_settings, True) \
-                        and _claim_tg_open_notify(db, execution.id):
-                    _schedule_tg_open_notify(
-                        execution.id,
-                        tg_id,
-                        _fmt_open_card(
-                            strategy_name = strategy.name or "Your Strategy",
-                            symbol        = symbol,
-                            direction     = direction,
-                            entry         = current_price,
-                            tp_price      = tp_price,
-                            tp_pct        = tp_pct,
-                            tp2_price     = tp2_price,
-                            tp2_pct       = float(tp2_pct) if tp2_pct else None,
-                            sl_price      = sl_price,
-                            sl_pct        = sl_pct,
-                            leverage      = leverage,
-                            conditions    = details,
-                            is_paper      = True,
-                            asset_class   = asset_class,
-                        ),
-                        asset_class=asset_class,
-                        symbol=symbol,
-                    )
-                elif not tg_id:
-                    logger.info(
-                        "[%s] [Strategy %s] Paper fire %s — no Telegram "
-                        "(link Telegram in Settings)",
-                        _log_ts(),
-                        strategy.id,
-                        symbol,
-                    )
-                # Mobile push (fire-and-forget; never raises)
-                from app.services.expo_push import notify_user_bg
-                _coin = symbol.replace("USDT", "")
-                notify_user_bg(
-                    user.id,
-                    title=f"📝 Paper · {_coin} {direction} {leverage}×",
-                    body=f"{strategy.name} @ ${current_price:,.4f}",
-                    data={"type": "trade_open", "strategy_id": strategy.id, "kind": "paper"},
-                    kind="paper",
-                    position_usd=float(risk.get("position_size_usd") or 0) or None,
-                )
-            except Exception as e:
-                logger.warning(f"Paper DM failed: {e}")
-        else:
-            # Live trade: route by asset class. Forex + indices → cTrader (FP Markets),
-            # crypto → Bitunix. Stocks can't reach this branch (paper-lock above).
-            order_id    = None
-            actual_fill = None
-            _position_id = None
-            _acct_id    = None
-            _order_err  = None
-            _broker     = "ctrader" if asset_class in ("forex", "index") else "bitunix"
-            # Partial-runner mode (forex only): the broker holds the position to TP2
-            # (final target) and the live manager closes half at TP1 + moves the
-            # stop to breakeven. Placing the broker TP at TP1 would fully close the
-            # position there and kill the runner, so we send TP2 as the broker TP.
-            _partial_mode = bool(
-                asset_class == "forex"
-                and tp2_price
-                and _partial_close_pct and float(_partial_close_pct) > 0
-            )
-            try:
-                ps_type      = risk.get("position_size_type", "pct")
-                _risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None
-                if _broker == "ctrader":
-                    # Pre-fire drift guard — skip stale scan/signal prices.
-                    try:
-                        from app.services.ctrader_price_feed import get_price as _feed_px
-                        from app.services.pip_units import platform_pips_from_price_delta
-                        _fresh = _feed_px(symbol)
-                        _max_drift = float(risk.get("max_entry_drift_pips") or 15)
-                        if _fresh and _max_drift > 0:
-                            _drift_pips = platform_pips_from_price_delta(
-                                symbol, _fresh - current_price,
-                            )
-                            if _drift_pips > _max_drift:
-                                _bump("blk_entry_drift")
-                                execution.outcome = "CANCELLED"
-                                execution.notes = f"Cancelled: price drift {_drift_pips:.1f} pips"
-                                db.commit()
-                                logger.info(
-                                    f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} drift "
-                                    f"{_drift_pips:.1f}p > {_max_drift} — skipped"
-                                )
-                                _accum_cycle_fire_ms(_fire_t0)
-                                break
-                    except Exception:
-                        pass
-
-                    from app.services.ctrader_order_queue import (
-                        CtraderOrderJob, enqueue_ctrader_order, start_ctrader_order_worker,
-                    )
-                    from app.services.order_latency import new_order_latency
-                    from app.services.order_stale_guard import check_signal_stale
-                    start_ctrader_order_worker()
-                    _signal_mono = time.monotonic()
-                    _stale = check_signal_stale(
+                _fanout_ok = False
+                try:
+                    _fanout_ok = await _ctrader_fanout_live_fire(
+                        db=db,
+                        user=user,
+                        strategy=strategy,
+                        config=config,
                         symbol=symbol,
                         direction=direction,
-                        signal_price=current_price,
-                        signal_generated_at=_signal_generated_at,
-                        signal_mono=_signal_mono,
+                        current_price=current_price,
+                        tp_price=tp_price,
+                        sl_price=sl_price,
+                        tp2_price=tp2_price,
+                        tp_pct=tp_pct,
+                        sl_pct=sl_pct,
+                        tp2_pct=tp2_pct,
+                        leverage=leverage,
+                        risk=risk,
+                        ex_config=ex_config,
+                        asset_class=asset_class,
+                        details=details,
+                        price_data=price_data,
+                        exec_notes=_exec_notes,
+                        partial_close_pct=_partial_close_pct,
                         price_source=_ps,
                         kline_source=_ks,
-                        live_source=price_data.get("live_source"),
-                        execution_id=execution.id,
-                    )
-                    if _stale:
-                        _reason, _age_s, _slip, _sig_src, _now_src = _stale
-                        execution.outcome = "CANCELLED"
-                        execution.notes = (
-                            f"{_exec_notes or ''} | stale_guard_blocked | "
-                            f"Live skip: {_reason}"
-                        ).strip(" |")
-                        db.commit()
-                        logger.warning(
-                            f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} "
-                            f"live order pre-blocked: {_reason}"
-                        )
-                        _accum_cycle_fire_ms(_fire_t0)
-                        break
-                    # Risk % auto lot sizing: when use_risk_pct=True, the wizard
-                    # stored risk_pct_per_trade (% of account to risk).  We pass
-                    # it to the cTrader helper which fetches the account balance
-                    # and computes lots = risk% × balance / (sl_pips × pip_value).
-                    # When the user picked an explicit lot size (position_size_type
-                    # == 'lots'), fixed_lots takes priority over every other mode.
-                    _use_risk_pct = bool(risk.get("use_risk_pct"))
-                    _risk_pct_per = float(risk.get("risk_pct_per_trade") or risk.get("position_size_pct") or 1.0)
-                    _fixed_lots   = float(risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
-                    if _preset_lot is not None:
-                        try:
-                            from app.services.ctrader_client import normalize_account_lot
-                            _nl = normalize_account_lot(_preset_lot)
-                            if _nl:
-                                _fixed_lots = _nl
-                                _use_risk_pct = False
-                        except Exception:
-                            pass
-                    elif getattr(strategy, "ctrader_account_lot", None) is not None:
-                        try:
-                            from app.services.ctrader_client import normalize_account_lot
-                            _nl = normalize_account_lot(strategy.ctrader_account_lot)
-                            if _nl:
-                                _fixed_lots = _nl
-                                _use_risk_pct = False
-                        except Exception:
-                            pass
-                    # In partial-runner mode the broker TP must be TP2 (final target);
-                    # otherwise it stays at the strategy's TP1.
-                    _live_tp_pct  = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
-                    _dyn_sl_pips = None
-                    if asset_class == "forex":
-                        (
-                            _claude_ok,
-                            _claude_reason,
-                            sl_price,
-                            tp_price,
-                            sl_pct,
-                            tp_pct,
-                            _dyn_sl_pips,
-                            _used_dynamic,
-                        ) = await _resolve_live_forex_claude_fire(
-                            strategy_id=strategy.id,
-                            config=config,
-                            symbol=symbol,
-                            direction=direction,
-                            entry=current_price,
-                            sl_price=sl_price,
-                            tp_price=tp_price,
-                            tp2_price=tp2_price,
-                            sl_pct=sl_pct,
-                            tp_pct=tp_pct,
-                            details=details,
-                            price_data=price_data,
-                            timeframe=_eval_tf,
-                        )
-                        if not _claude_ok:
-                            _bump("blk_claude_confirm")
-                            execution.outcome = "CANCELLED"
-                            execution.notes = (
-                                f"{_exec_notes or ''} | claude_confirm_blocked: {_claude_reason}"
-                            ).strip(" |")
-                            db.commit()
-                            logger.info(
-                                f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} "
-                                f"live fire blocked by Claude confirm: {_claude_reason}"
-                            )
-                            _accum_cycle_fire_ms(_fire_t0)
-                            break
-                        if _used_dynamic:
-                            execution.sl_price = sl_price
-                            execution.tp_price = tp_price
-                            execution.current_sl = sl_price
-                            execution.notes = (
-                                f"{_exec_notes or ''} | dynamic_tp_sl sl_pips={_dyn_sl_pips}"
-                            ).strip(" |")
-                            db.commit()
-                        _live_tp_pct = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
-                    from app.services.forex_claude_confirm import assert_valid_sl_price
-                    if not assert_valid_sl_price(sl_price):
-                        _bump("blk_missing_sl")
-                        execution.outcome = "CANCELLED"
-                        execution.notes = (
-                            f"{_exec_notes or ''} | blocked: missing_valid_sl"
-                        ).strip(" |")
-                        db.commit()
-                        logger.error(
-                            f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} "
-                            f"blocked — no valid SL before enqueue"
-                        )
-                        _accum_cycle_fire_ms(_fire_t0)
-                        break
-                    _job_sl_pips = (
-                        float(_dyn_sl_pips)
-                        if _dyn_sl_pips
-                        else float(ex_config.get("stop_loss_pips") or 0) or None
-                    )
-                    _job_ctid = None
-                    _job_prefs = None
-                    try:
-                        from app.models import UserPreference as _UP_job
-                        from app.services.ctrader_client import resolve_ctrader_ctid
-                        _job_prefs = db.query(_UP_job).filter(_UP_job.user_id == user.id).first()
-                        _job_ctid = _preset_ctid or resolve_ctrader_ctid(
-                            strategy_account_id=getattr(strategy, "ctrader_account_id", None),
-                            prefs_default=(
-                                _job_prefs.ctrader_account_id if _job_prefs else None
-                            ),
-                        )
-                    except Exception:
-                        pass
-                    _job = CtraderOrderJob(
-                        user_id=user.id,
-                        strategy_id=strategy.id,
-                        execution_id=execution.id,
-                        symbol=symbol,
-                        direction=direction,
-                        entry_price=current_price,
-                        tp_pct=_live_tp_pct,
-                        sl_pct=sl_pct,
-                        risk_pct=_risk_pct_per,
-                        risk_usd=_risk_usd,
-                        use_risk_pct=_use_risk_pct,
-                        sl_pips=_job_sl_pips,
-                        fixed_lots=_fixed_lots or None,
-                        asset_class=asset_class,
-                        partial_close_pct=float(_partial_close_pct) if _partial_close_pct else None,
-                        ctrader_account_id=_job_ctid,
-                        signal_mono=_signal_mono,
                         signal_generated_at=_signal_generated_at,
-                        signal_price_source=_ps,
-                        signal_kline_source=_ks,
-                        signal_live_source=price_data.get("live_source"),
-                        latency=new_order_latency(execution.id, _signal_mono),
+                        fire_targets=_fire_targets,
+                        http_client=http_client,
                     )
-                    _single_target = (
-                        {"ctrader_account_id": _job_ctid, "lot_size": _preset_lot}
-                        if _job_ctid else None
+                except Exception as _fan_err:
+                    logger.critical(
+                        "[live-fire] fan-out await FAILED strategy=%s symbol=%s targets=%s — %s",
+                        strategy.id,
+                        symbol,
+                        _format_fire_targets_log(_fire_targets),
+                        _fan_err,
+                        exc_info=True,
                     )
-                    _log_live_order_route(
-                        execution_id=execution.id,
-                        strategy_id=strategy.id,
-                        ctid=str(_job_ctid or ""),
-                        prefs=_job_prefs,
-                        target=_single_target,
-                        fixed_lots=_fixed_lots,
-                        outcome="enqueue",
-                    )
-                    _queued = await enqueue_ctrader_order(_job)
-                    if _queued:
-                        _log_live_order_route(
-                            execution_id=execution.id,
-                            strategy_id=strategy.id,
-                            ctid=str(_job_ctid or ""),
-                            prefs=_job_prefs,
-                            target=_single_target,
-                            fixed_lots=_fixed_lots,
-                            outcome="queued",
-                        )
-                        order_result = {"order_id": "queued", "queued": True}
-                    else:
-                        _log_live_order_route(
-                            execution_id=execution.id,
-                            strategy_id=strategy.id,
-                            ctid=str(_job_ctid or ""),
-                            prefs=_job_prefs,
-                            target=_single_target,
-                            fixed_lots=_fixed_lots,
-                            outcome="queue_full",
-                        )
-                        logger.error(
-                            f"[{_log_ts()}] [Strategy {strategy.id}] cTrader order queue "
-                            f"FULL — exec#{execution.id} {symbol} not sent to broker"
-                        )
-                        order_result = None
-                else:
-                    from app.services.strategy_trader import place_bitunix_order_for_user
-                    order_result = await place_bitunix_order_for_user(
-                        user        = user,
-                        symbol      = symbol,
-                        direction   = direction,
-                        leverage    = leverage,
-                        entry_price = current_price,
-                        tp_pct      = tp_pct,
-                        sl_pct      = sl_pct,
-                        risk_pct    = float(risk.get("position_size_pct") or 5),
-                        risk_usd    = _risk_usd,
-                    )
-                if order_result:
-                    order_id    = order_result.get("order_id")
-                    actual_fill = order_result.get("actual_fill")
-                    _position_id = order_result.get("position_id")
-                    _acct_id    = order_result.get("account_id")
-                    _order_err  = order_result.get("error")
-            except Exception as e:
-                logger.error(f"[Strategy {strategy.id}] Order error: {e}")
-
-                # Price-past-TP: market moved through TP before order placed.
-                # Cancel entirely — no paper fallback, opportunity is gone.
-                if "PRICE_PAST_TP" in str(e):
-                    execution.outcome = "CANCELLED"
-                    execution.notes   = f"Cancelled: {str(e)[:200]}"
-                    db.commit()
-                    logger.warning(
-                        f"[Strategy {strategy.id}] {symbol} signal cancelled — "
-                        f"live price already past TP before order placed."
-                    )
-                    tg_id_ex = _telegram_int_id(user)
-                    if tg_id_ex:
-                        try:
-                            coin = symbol.replace("USDT", "")
-                            await _tg_send(
-                                tg_id_ex,
-                                f"🚫 <b>Signal cancelled — price already at TP</b>\n"
-                                f"Strategy: <b>{strategy.name}</b>\n"
-                                f"Signal: {coin} {direction} {leverage}×\n"
-                                f"TP: <code>${tp_price:,.4f}</code>\n\n"
-                                f"<i>By the time the order reached Bitunix, the market had "
-                                f"already moved to/past your take-profit. The trade was "
-                                f"cancelled — no position opened.</i>"
-                            )
-                        except Exception:
-                            pass
+                if _fanout_ok:
                     _accum_cycle_fire_ms(_fire_t0)
-                    break  # execution cancelled — stop processing matches
+                    break
+                if len(_fire_targets) > 1:
+                    logger.critical(
+                        "[live-fire] fan-out failed strategy=%s targets=%s — "
+                        "not falling through to single-exec (multi-account)",
+                        strategy.id,
+                        _format_fire_targets_log(_fire_targets),
+                    )
+                    _accum_cycle_fire_ms(_fire_t0)
+                    continue
 
-                # All other errors: flip to paper so the signal's ROI is still tracked.
-                execution.is_paper = True
-                execution.notes    = f"Live→Paper fallback (order exception): {str(e)[:200]}"
-                db.commit()
-                logger.warning(
-                    f"[Strategy {strategy.id}] Live order threw an exception for {symbol} — "
-                    f"converting execution #{execution.id} to paper trade for ROI tracking."
+            _preset_ctid = (
+                _fire_targets[0].get("ctrader_account_id") or _fire_targets[0].get("ctid")
+                if len(_fire_targets) == 1 else None
+            )
+            _preset_lot = _fire_targets[0]["lot_size"] if len(_fire_targets) == 1 else None
+
+            execution = StrategyExecution(
+                strategy_id    = strategy.id,
+                user_id        = user.id,
+                symbol         = symbol,
+                direction      = direction,
+                entry_price    = current_price,
+                tp_price       = tp_price,
+                tp2_price      = tp2_price,
+                sl_price       = sl_price,
+                current_sl     = sl_price,
+                leverage       = leverage,
+                outcome        = "OPEN",
+                conditions_met = details,
+                fired_at       = datetime.utcnow(),
+                is_paper       = is_paper,
+                asset_class    = asset_class,
+                notes          = _exec_notes,
+                ctrader_account_id=_preset_ctid,
+            )
+            db.add(execution)
+            await _commit_db_with_retry(
+                db, label=f"exec#{strategy.id}", instances=(execution,)
+            )
+            execution = _refresh_db_row(db, execution)
+            if execution is None or not getattr(execution, "id", None):
+                logger.error(
+                    f"[Strategy {strategy.id}] execution row missing after commit — "
+                    f"aborting fire for {symbol}"
                 )
-                tg_id_ex = _telegram_int_id(user)
-                if tg_id_ex:
-                    try:
-                        await _tg_send(
-                            tg_id_ex,
-                            f"⚠️ <b>{_broker.title()} error — paper trade started</b>\n"
-                            f"Strategy: <b>{strategy.name}</b>\n"
-                            f"Signal: {symbol.replace('USDT','')} {direction} {leverage}×\n"
-                            f"Entry: <code>${current_price:,.4f}</code>  "
-                            f"TP: <code>${tp_price:,.4f}</code>  SL: <code>${sl_price:,.4f}</code>\n\n"
-                            f"<i>The live order could not be placed (see error below). "
-                            f"This trade is being tracked as a 🧪 paper position so your "
-                            f"strategy's performance is still recorded.</i>\n"
-                            f"Error: <code>{str(e)[:120]}</code>"
-                        )
-                    except Exception:
-                        pass
-                # Mobile push (fire-and-forget)
+                _accum_cycle_fire_ms(_fire_t0)
+                return
+
+            # Only increment open_trades counter — do NOT recompute from scratch
+            # (full recompute wipes historical performance data if no closed trades exist yet)
+            from app.strategy_models import StrategyPerformance
+            _perf = db.query(StrategyPerformance).filter(
+                StrategyPerformance.strategy_id == strategy.id
+            ).first()
+            if _perf:
+                _perf.open_trades = (_perf.open_trades or 0) + 1
+            else:
+                _perf = StrategyPerformance(strategy_id=strategy.id, open_trades=1)
+                db.add(_perf)
+            await _commit_db_with_retry(
+                db, label=f"perf#{strategy.id}", instances=(_perf,)
+            )
+
+            if is_paper:
+                # Paper trade: notify user and skip Bitunix
                 try:
-                    from app.services.expo_push import notify_user_bg
-                    _coin = symbol.replace("USDT", "")
-                    notify_user_bg(
-                        user.id,
-                        title=f"⚠️ Live failed → Paper · {_coin} {direction}",
-                        body=f"{strategy.name} · {leverage}×",
-                        data={"type": "trade_open", "strategy_id": strategy.id, "kind": "paper_fallback"},
-                        kind="paper",
-                        position_usd=float(risk.get("position_size_usd") or 0) or None,
-                    )
-                except Exception:
-                    pass
-                # Still propagate to subscriber copies even when the owner's
-                # live order failed — subscribers should receive a paper signal.
-                if not config.get("_locked"):
-                    asyncio.create_task(_propagate_to_subscribers(
-                        source_strategy_id=strategy.id,
-                        source_execution_id=execution.id,
-                        http_client=http_client,
-                    ))
-                _accum_cycle_fire_ms(_fire_t0)
-                break  # paper execution is now open — stop processing matches
-
-            if (
-                not is_paper
-                and _broker == "ctrader"
-                and not order_result
-            ):
-                execution.is_paper = True
-                execution.notes = (
-                    (execution.notes or "")
-                    + " | Live→Paper fallback (cTrader order not queued)"
-                ).strip(" |")
-                await _commit_db_with_retry(
-                    db,
-                    label=f"ctrader-queue-fail#{execution.id}",
-                    instances=(execution,),
-                )
-                execution = _refresh_db_row(db, execution)
-                logger.warning(
-                    f"[Strategy {strategy.id}] {symbol} live exec#{execution.id} — "
-                    f"cTrader order never queued; tracking as paper"
-                )
-                tg_id_ex = _telegram_int_id(user)
-                if tg_id_ex:
-                    try:
-                        await _tg_send(
-                            tg_id_ex,
-                            f"⚠️ <b>cTrader order not placed — paper trade started</b>\n"
-                            f"Strategy: <b>{strategy.name}</b>\n"
-                            f"Signal: {symbol} {direction}\n\n"
-                            f"<i>The live order could not be queued for cTrader "
-                            f"(broker busy or queue full). This position is tracked "
-                            f"as 🧪 paper only — nothing was sent to your broker.</i>",
-                            asset_class=asset_class,
-                        )
-                    except Exception:
-                        pass
-                _accum_cycle_fire_ms(_fire_t0)
-                break
-
-            if order_result and order_result.get("queued"):
-                execution.notes = ((execution.notes or "") + " | order_queued").strip(" |")
-                await _commit_db_with_retry(
-                    db,
-                    label=f"ctrader-queued#{execution.id}",
-                    instances=(execution,),
-                )
-                execution = _refresh_db_row(db, execution)
-                tg_id_live = _telegram_int_id(user)
-                _portal_live = db.query(StrategyPortalSettings).filter(
-                    StrategyPortalSettings.user_id == user.id
-                ).first()
-                # Attempt only — full LIVE card is sent after broker fill confirmation
-                # in ctrader_order_queue (never claim tg_open_sent here).
-                if tg_id_live and _should_dm_trade_alerts(_portal_live, False):
-                    asyncio.create_task(_tg_send(
-                        tg_id_live,
-                        _fmt_queued_open_notice(
-                            strategy.name or "Your Strategy",
-                            symbol,
-                            direction,
-                            leverage=leverage,
-                        ),
-                        asset_class=asset_class,
-                    ))
-                try:
-                    from app.services.expo_push import notify_user_bg
-                    notify_user_bg(
-                        user.id,
-                        title=f"🎯 Live · {symbol.replace('USDT','')} {direction}",
-                        body=f"{strategy.name} — placing on cTrader",
-                        data={"type": "trade_open", "strategy_id": strategy.id, "kind": "live"},
-                        kind="live",
-                    )
-                except Exception:
-                    pass
-                if not config.get("_locked"):
-                    asyncio.create_task(_propagate_to_subscribers(
-                        source_strategy_id=strategy.id,
-                        source_execution_id=execution.id,
-                        http_client=http_client,
-                    ))
-                _accum_cycle_fire_ms(_fire_t0)
-                break
-
-            if order_id:
-                if _broker == "ctrader":
-                    execution.ctrader_order_id = str(order_id)
-                    # Persist the broker positionId so the live forex manager can
-                    # later amend SL/TP (auto-breakeven + trailing). No dedicated
-                    # column exists → stash it as a "pos=<id>" token in notes.
-                    if _position_id:
-                        execution.ctrader_position_id = str(_position_id)
-                        if _acct_id:
-                            execution.ctrader_account_id = str(_acct_id)
-                        try:
-                            _v = int(order_result.get("volume") or 0)
-                            if _v > 0:
-                                execution.broker_volume_units = _v
-                        except Exception:
-                            pass
-                        _n = (execution.notes or "").strip()
-                        _acct_tok = f" | acct={_acct_id}" if _acct_id else ""
-                        _vol_tok = ""
-                        try:
-                            _v = int(order_result.get("volume") or 0)
-                            if _v > 0:
-                                _vol_tok = f" | vol={_v}"
-                        except Exception:
-                            _vol_tok = ""
-                        execution.notes = (f"{_n} | pos={_position_id}{_acct_tok}{_vol_tok}".strip(" |"))
-                else:
-                    execution.bitunix_order_id = str(order_id)
-                if (
-                    actual_fill
-                    and actual_fill > 0
-                    and execution.entry_price
-                    and abs(actual_fill - execution.entry_price) > execution.entry_price * 1e-7
-                ):
-                    # The broker filled at actual_fill (not our pre-fill signal
-                    # price), and it enforces SL/TP as RELATIVE offsets applied to
-                    # that real fill. Shift entry AND SL/TP/TP2 by the same delta
-                    # so the card the user sees + our paper-style monitoring match
-                    # what the broker is actually holding (otherwise the card shows
-                    # the signal price and SL/TP that are ~slippage pips off).
-                    _delta = actual_fill - execution.entry_price
-                    logger.info(
-                        f"[{_log_ts()}] [Strategy {strategy.id}] entry/SL/TP shifted to fill: "
-                        f"signal={execution.entry_price:.6g} → fill={actual_fill:.6g} "
-                        f"(Δ={_delta:+.6g})"
-                    )
-                    execution.entry_price = actual_fill
-                    if execution.sl_price:
-                        execution.sl_price += _delta
-                        sl_price = execution.sl_price
-                    if execution.tp_price:
-                        execution.tp_price += _delta
-                        tp_price = execution.tp_price
-                    if execution.tp2_price:
-                        execution.tp2_price += _delta
-                        tp2_price = execution.tp2_price
-                db.commit()
-                display_entry = actual_fill if actual_fill else current_price
-                tg_id_live = _telegram_int_id(user)
-                if tg_id_live and _claim_tg_open_notify(db, execution.id):
-                    try:
-                        # Fire-and-forget so a slow/retrying Telegram send never
-                        # delays the firing cycle (a latency source).
-                        asyncio.create_task(_tg_send(
-                            tg_id_live,
+                    portal_settings = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
+                    tg_id = _telegram_int_id(user)
+                    if tg_id and _should_dm_trade_alerts(portal_settings, True) \
+                            and _claim_tg_open_notify(db, execution.id):
+                        _schedule_tg_open_notify(
+                            execution.id,
+                            tg_id,
                             _fmt_open_card(
                                 strategy_name = strategy.name or "Your Strategy",
                                 symbol        = symbol,
                                 direction     = direction,
-                                entry         = display_entry,
+                                entry         = current_price,
                                 tp_price      = tp_price,
                                 tp_pct        = tp_pct,
                                 tp2_price     = tp2_price,
@@ -6799,83 +6501,625 @@ async def evaluate_and_fire(
                                 sl_pct        = sl_pct,
                                 leverage      = leverage,
                                 conditions    = details,
-                                is_paper      = False,
-                                order_id      = str(order_id),
+                                is_paper      = True,
                                 asset_class   = asset_class,
                             ),
-                        ))
-                        # Mobile push (fire-and-forget) — fires for live trades.
+                            asset_class=asset_class,
+                            symbol=symbol,
+                        )
+                    elif not tg_id:
+                        logger.info(
+                            "[%s] [Strategy %s] Paper fire %s — no Telegram "
+                            "(link Telegram in Settings)",
+                            _log_ts(),
+                            strategy.id,
+                            symbol,
+                        )
+                    # Mobile push (fire-and-forget; never raises)
+                    from app.services.expo_push import notify_user_bg
+                    _coin = symbol.replace("USDT", "")
+                    notify_user_bg(
+                        user.id,
+                        title=f"📝 Paper · {_coin} {direction} {leverage}×",
+                        body=f"{strategy.name} @ ${current_price:,.4f}",
+                        data={"type": "trade_open", "strategy_id": strategy.id, "kind": "paper"},
+                        kind="paper",
+                        position_usd=float(risk.get("position_size_usd") or 0) or None,
+                    )
+                except Exception as e:
+                    logger.warning(f"Paper DM failed: {e}")
+            else:
+                # Live trade: route by asset class. Forex + indices → cTrader (FP Markets),
+                # crypto → Bitunix. Stocks can't reach this branch (paper-lock above).
+                order_id    = None
+                actual_fill = None
+                _position_id = None
+                _acct_id    = None
+                _order_err  = None
+                _broker     = "ctrader" if asset_class in ("forex", "index") else "bitunix"
+                # Partial-runner mode (forex only): the broker holds the position to TP2
+                # (final target) and the live manager closes half at TP1 + moves the
+                # stop to breakeven. Placing the broker TP at TP1 would fully close the
+                # position there and kill the runner, so we send TP2 as the broker TP.
+                _partial_mode = bool(
+                    asset_class == "forex"
+                    and tp2_price
+                    and _partial_close_pct and float(_partial_close_pct) > 0
+                )
+                try:
+                    ps_type      = risk.get("position_size_type", "pct")
+                    _risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None
+                    if _broker == "ctrader":
+                        # Pre-fire drift guard — skip stale scan/signal prices.
+                        try:
+                            from app.services.ctrader_price_feed import get_price as _feed_px
+                            from app.services.pip_units import platform_pips_from_price_delta
+                            _fresh = _feed_px(symbol)
+                            _max_drift = float(risk.get("max_entry_drift_pips") or 15)
+                            if _fresh and _max_drift > 0:
+                                _drift_pips = platform_pips_from_price_delta(
+                                    symbol, _fresh - current_price,
+                                )
+                                if _drift_pips > _max_drift:
+                                    _bump("blk_entry_drift")
+                                    execution.outcome = "CANCELLED"
+                                    execution.notes = f"Cancelled: price drift {_drift_pips:.1f} pips"
+                                    db.commit()
+                                    logger.info(
+                                        f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} drift "
+                                        f"{_drift_pips:.1f}p > {_max_drift} — skipped"
+                                    )
+                                    _accum_cycle_fire_ms(_fire_t0)
+                                    break
+                        except Exception:
+                            pass
+
+                        from app.services.ctrader_order_queue import (
+                            CtraderOrderJob, enqueue_ctrader_order, start_ctrader_order_worker,
+                        )
+                        from app.services.order_latency import new_order_latency
+                        from app.services.order_stale_guard import check_signal_stale
+                        start_ctrader_order_worker()
+                        _signal_mono = time.monotonic()
+                        _stale = check_signal_stale(
+                            symbol=symbol,
+                            direction=direction,
+                            signal_price=current_price,
+                            signal_generated_at=_signal_generated_at,
+                            signal_mono=_signal_mono,
+                            price_source=_ps,
+                            kline_source=_ks,
+                            live_source=price_data.get("live_source"),
+                            execution_id=execution.id,
+                        )
+                        if _stale:
+                            _reason, _age_s, _slip, _sig_src, _now_src = _stale
+                            execution.outcome = "CANCELLED"
+                            execution.notes = (
+                                f"{_exec_notes or ''} | stale_guard_blocked | "
+                                f"Live skip: {_reason}"
+                            ).strip(" |")
+                            db.commit()
+                            logger.warning(
+                                f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} "
+                                f"live order pre-blocked: {_reason}"
+                            )
+                            _accum_cycle_fire_ms(_fire_t0)
+                            break
+                        # Risk % auto lot sizing: when use_risk_pct=True, the wizard
+                        # stored risk_pct_per_trade (% of account to risk).  We pass
+                        # it to the cTrader helper which fetches the account balance
+                        # and computes lots = risk% × balance / (sl_pips × pip_value).
+                        # When the user picked an explicit lot size (position_size_type
+                        # == 'lots'), fixed_lots takes priority over every other mode.
+                        _use_risk_pct = bool(risk.get("use_risk_pct"))
+                        _risk_pct_per = float(risk.get("risk_pct_per_trade") or risk.get("position_size_pct") or 1.0)
+                        _fixed_lots   = float(risk.get("position_size_lots") or 0) if ps_type == "lots" else 0.0
+                        if _preset_lot is not None:
+                            try:
+                                from app.services.ctrader_client import normalize_account_lot
+                                _nl = normalize_account_lot(_preset_lot)
+                                if _nl:
+                                    _fixed_lots = _nl
+                                    _use_risk_pct = False
+                            except Exception:
+                                pass
+                        elif getattr(strategy, "ctrader_account_lot", None) is not None:
+                            try:
+                                from app.services.ctrader_client import normalize_account_lot
+                                _nl = normalize_account_lot(strategy.ctrader_account_lot)
+                                if _nl:
+                                    _fixed_lots = _nl
+                                    _use_risk_pct = False
+                            except Exception:
+                                pass
+                        # In partial-runner mode the broker TP must be TP2 (final target);
+                        # otherwise it stays at the strategy's TP1.
+                        _live_tp_pct  = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
+                        _dyn_sl_pips = None
+                        if asset_class == "forex":
+                            (
+                                _claude_ok,
+                                _claude_reason,
+                                sl_price,
+                                tp_price,
+                                sl_pct,
+                                tp_pct,
+                                _dyn_sl_pips,
+                                _used_dynamic,
+                            ) = await _resolve_live_forex_claude_fire(
+                                strategy_id=strategy.id,
+                                config=config,
+                                symbol=symbol,
+                                direction=direction,
+                                entry=current_price,
+                                sl_price=sl_price,
+                                tp_price=tp_price,
+                                tp2_price=tp2_price,
+                                sl_pct=sl_pct,
+                                tp_pct=tp_pct,
+                                details=details,
+                                price_data=price_data,
+                                timeframe=_eval_tf,
+                            )
+                            if not _claude_ok:
+                                _bump("blk_claude_confirm")
+                                execution.outcome = "CANCELLED"
+                                execution.notes = (
+                                    f"{_exec_notes or ''} | claude_confirm_blocked: {_claude_reason}"
+                                ).strip(" |")
+                                db.commit()
+                                logger.info(
+                                    f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} "
+                                    f"live fire blocked by Claude confirm: {_claude_reason}"
+                                )
+                                _accum_cycle_fire_ms(_fire_t0)
+                                break
+                            if _used_dynamic:
+                                execution.sl_price = sl_price
+                                execution.tp_price = tp_price
+                                execution.current_sl = sl_price
+                                execution.notes = (
+                                    f"{_exec_notes or ''} | dynamic_tp_sl sl_pips={_dyn_sl_pips}"
+                                ).strip(" |")
+                                db.commit()
+                            _live_tp_pct = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
+                        from app.services.forex_claude_confirm import assert_valid_sl_price
+                        if not assert_valid_sl_price(sl_price):
+                            _bump("blk_missing_sl")
+                            execution.outcome = "CANCELLED"
+                            execution.notes = (
+                                f"{_exec_notes or ''} | blocked: missing_valid_sl"
+                            ).strip(" |")
+                            db.commit()
+                            logger.error(
+                                f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} "
+                                f"blocked — no valid SL before enqueue"
+                            )
+                            _accum_cycle_fire_ms(_fire_t0)
+                            break
+                        _job_sl_pips = (
+                            float(_dyn_sl_pips)
+                            if _dyn_sl_pips
+                            else float(ex_config.get("stop_loss_pips") or 0) or None
+                        )
+                        _job_ctid = None
+                        _job_prefs = None
+                        try:
+                            from app.models import UserPreference as _UP_job
+                            from app.services.ctrader_client import resolve_ctrader_ctid
+                            _job_prefs = db.query(_UP_job).filter(_UP_job.user_id == user.id).first()
+                            _job_ctid = _preset_ctid or resolve_ctrader_ctid(
+                                strategy_account_id=getattr(strategy, "ctrader_account_id", None),
+                                prefs_default=(
+                                    _job_prefs.ctrader_account_id if _job_prefs else None
+                                ),
+                            )
+                        except Exception:
+                            pass
+                        _job = CtraderOrderJob(
+                            user_id=user.id,
+                            strategy_id=strategy.id,
+                            execution_id=execution.id,
+                            symbol=symbol,
+                            direction=direction,
+                            entry_price=current_price,
+                            tp_pct=_live_tp_pct,
+                            sl_pct=sl_pct,
+                            risk_pct=_risk_pct_per,
+                            risk_usd=_risk_usd,
+                            use_risk_pct=_use_risk_pct,
+                            sl_pips=_job_sl_pips,
+                            fixed_lots=_fixed_lots or None,
+                            asset_class=asset_class,
+                            partial_close_pct=float(_partial_close_pct) if _partial_close_pct else None,
+                            ctrader_account_id=_job_ctid,
+                            signal_mono=_signal_mono,
+                            signal_generated_at=_signal_generated_at,
+                            signal_price_source=_ps,
+                            signal_kline_source=_ks,
+                            signal_live_source=price_data.get("live_source"),
+                            latency=new_order_latency(execution.id, _signal_mono),
+                        )
+                        _single_target = (
+                            {"ctrader_account_id": _job_ctid, "lot_size": _preset_lot}
+                            if _job_ctid else None
+                        )
+                        _log_live_order_route(
+                            execution_id=execution.id,
+                            strategy_id=strategy.id,
+                            ctid=str(_job_ctid or ""),
+                            prefs=_job_prefs,
+                            target=_single_target,
+                            fixed_lots=_fixed_lots,
+                            outcome="enqueue",
+                        )
+                        _queued = await enqueue_ctrader_order(_job)
+                        if _queued:
+                            _log_live_order_route(
+                                execution_id=execution.id,
+                                strategy_id=strategy.id,
+                                ctid=str(_job_ctid or ""),
+                                prefs=_job_prefs,
+                                target=_single_target,
+                                fixed_lots=_fixed_lots,
+                                outcome="queued",
+                            )
+                            order_result = {"order_id": "queued", "queued": True}
+                        else:
+                            _log_live_order_route(
+                                execution_id=execution.id,
+                                strategy_id=strategy.id,
+                                ctid=str(_job_ctid or ""),
+                                prefs=_job_prefs,
+                                target=_single_target,
+                                fixed_lots=_fixed_lots,
+                                outcome="queue_full",
+                            )
+                            logger.error(
+                                f"[{_log_ts()}] [Strategy {strategy.id}] cTrader order queue "
+                                f"FULL — exec#{execution.id} {symbol} not sent to broker"
+                            )
+                            order_result = None
+                    else:
+                        from app.services.strategy_trader import place_bitunix_order_for_user
+                        order_result = await place_bitunix_order_for_user(
+                            user        = user,
+                            symbol      = symbol,
+                            direction   = direction,
+                            leverage    = leverage,
+                            entry_price = current_price,
+                            tp_pct      = tp_pct,
+                            sl_pct      = sl_pct,
+                            risk_pct    = float(risk.get("position_size_pct") or 5),
+                            risk_usd    = _risk_usd,
+                        )
+                    if order_result:
+                        order_id    = order_result.get("order_id")
+                        actual_fill = order_result.get("actual_fill")
+                        _position_id = order_result.get("position_id")
+                        _acct_id    = order_result.get("account_id")
+                        _order_err  = order_result.get("error")
+                except Exception as e:
+                    logger.error(f"[Strategy {strategy.id}] Order error: {e}")
+
+                    # Price-past-TP: market moved through TP before order placed.
+                    # Cancel entirely — no paper fallback, opportunity is gone.
+                    if "PRICE_PAST_TP" in str(e):
+                        execution.outcome = "CANCELLED"
+                        execution.notes   = f"Cancelled: {str(e)[:200]}"
+                        db.commit()
+                        logger.warning(
+                            f"[Strategy {strategy.id}] {symbol} signal cancelled — "
+                            f"live price already past TP before order placed."
+                        )
+                        tg_id_ex = _telegram_int_id(user)
+                        if tg_id_ex:
+                            try:
+                                coin = symbol.replace("USDT", "")
+                                await _tg_send(
+                                    tg_id_ex,
+                                    f"🚫 <b>Signal cancelled — price already at TP</b>\n"
+                                    f"Strategy: <b>{strategy.name}</b>\n"
+                                    f"Signal: {coin} {direction} {leverage}×\n"
+                                    f"TP: <code>${tp_price:,.4f}</code>\n\n"
+                                    f"<i>By the time the order reached Bitunix, the market had "
+                                    f"already moved to/past your take-profit. The trade was "
+                                    f"cancelled — no position opened.</i>"
+                                )
+                            except Exception:
+                                pass
+                        _accum_cycle_fire_ms(_fire_t0)
+                        break  # execution cancelled — stop processing matches
+
+                    # All other errors: flip to paper so the signal's ROI is still tracked.
+                    execution.is_paper = True
+                    execution.notes    = f"Live→Paper fallback (order exception): {str(e)[:200]}"
+                    db.commit()
+                    logger.warning(
+                        f"[Strategy {strategy.id}] Live order threw an exception for {symbol} — "
+                        f"converting execution #{execution.id} to paper trade for ROI tracking."
+                    )
+                    tg_id_ex = _telegram_int_id(user)
+                    if tg_id_ex:
+                        try:
+                            await _tg_send(
+                                tg_id_ex,
+                                f"⚠️ <b>{_broker.title()} error — paper trade started</b>\n"
+                                f"Strategy: <b>{strategy.name}</b>\n"
+                                f"Signal: {symbol.replace('USDT','')} {direction} {leverage}×\n"
+                                f"Entry: <code>${current_price:,.4f}</code>  "
+                                f"TP: <code>${tp_price:,.4f}</code>  SL: <code>${sl_price:,.4f}</code>\n\n"
+                                f"<i>The live order could not be placed (see error below). "
+                                f"This trade is being tracked as a 🧪 paper position so your "
+                                f"strategy's performance is still recorded.</i>\n"
+                                f"Error: <code>{str(e)[:120]}</code>"
+                            )
+                        except Exception:
+                            pass
+                    # Mobile push (fire-and-forget)
+                    try:
                         from app.services.expo_push import notify_user_bg
                         _coin = symbol.replace("USDT", "")
                         notify_user_bg(
                             user.id,
-                            title=f"🚀 Live · {_coin} {direction} {leverage}×",
-                            body=f"{strategy.name} @ ${display_entry:,.4f}",
-                            data={"type": "trade_open", "strategy_id": strategy.id, "kind": "live"},
-                            kind="live",
+                            title=f"⚠️ Live failed → Paper · {_coin} {direction}",
+                            body=f"{strategy.name} · {leverage}×",
+                            data={"type": "trade_open", "strategy_id": strategy.id, "kind": "paper_fallback"},
+                            kind="paper",
                             position_usd=float(risk.get("position_size_usd") or 0) or None,
-                        )
-                    except Exception as e:
-                        logger.warning(f"Live DM failed: {e}")
-            else:
-                # Fallback: order_id was None (shouldn't normally reach here post-refactor)
-                execution.is_paper = True
-                _reason_note = f" ({_order_err})" if _order_err else ""
-                execution.notes    = f"Live→Paper fallback: {_broker} returned no order_id{_reason_note}"
-                db.commit()
-                logger.warning(
-                    f"[{_log_ts()}] [Strategy {strategy.id}] Live order for {symbol} "
-                    f"returned no order_id ({_order_err or 'no reason'}) — "
-                    f"converting execution #{execution.id} to paper trade for ROI tracking."
-                )
-                tg_id_live = _telegram_int_id(user)
-                if tg_id_live:
-                    # Surface the broker's actual rejection reason when we have it,
-                    # so the user can fix it (bad symbol, trading disabled, etc.)
-                    # instead of guessing about API permissions.
-                    _reason_line = (
-                        f"<i>Reason: {_order_err}</i>\n\n"
-                        if _order_err else ""
-                    )
-                    try:
-                        await _tg_send(
-                            tg_id_live,
-                            f"⚠️ <b>{_broker.title()} order not confirmed — paper trade started</b>\n"
-                            f"Strategy: <b>{strategy.name}</b>\n"
-                            f"Signal: {symbol.replace('USDT','')} {direction} {leverage}× lev\n"
-                            f"Entry: <code>${current_price:,.4f}</code>\n"
-                            f"TP: <code>${tp_price:,.4f}</code> (+{tp_pct}%)  "
-                            f"SL: <code>${sl_price:,.4f}</code> (-{sl_pct}%)\n\n"
-                            f"{_reason_line}"
-                            f"<i>The signal is being tracked as a 🧪 paper position. "
-                            f"If this keeps happening, check the symbol is tradable on your "
-                            f"account and that API trading is enabled.</i>"
                         )
                     except Exception:
                         pass
+                    # Still propagate to subscriber copies even when the owner's
+                    # live order failed — subscribers should receive a paper signal.
+                    if not config.get("_locked"):
+                        asyncio.create_task(_propagate_to_subscribers(
+                            source_strategy_id=strategy.id,
+                            source_execution_id=execution.id,
+                            http_client=http_client,
+                        ))
+                    _accum_cycle_fire_ms(_fire_t0)
+                    break  # paper execution is now open — stop processing matches
 
-        # Propagate this trade to all active subscriber copies so they enter at
-        # the exact same price simultaneously, instead of evaluating independently
-        # (which can cause early fills and divergent SL hits).
-        if not config.get("_locked"):
-            asyncio.create_task(_propagate_to_subscribers(
-                source_strategy_id=strategy.id,
-                source_execution_id=execution.id,
-                http_client=http_client,
-            ))
+                if (
+                    not is_paper
+                    and _broker == "ctrader"
+                    and not order_result
+                ):
+                    execution.is_paper = True
+                    execution.notes = (
+                        (execution.notes or "")
+                        + " | Live→Paper fallback (cTrader order not queued)"
+                    ).strip(" |")
+                    await _commit_db_with_retry(
+                        db,
+                        label=f"ctrader-queue-fail#{execution.id}",
+                        instances=(execution,),
+                    )
+                    execution = _refresh_db_row(db, execution)
+                    logger.warning(
+                        f"[Strategy {strategy.id}] {symbol} live exec#{execution.id} — "
+                        f"cTrader order never queued; tracking as paper"
+                    )
+                    tg_id_ex = _telegram_int_id(user)
+                    if tg_id_ex:
+                        try:
+                            await _tg_send(
+                                tg_id_ex,
+                                f"⚠️ <b>cTrader order not placed — paper trade started</b>\n"
+                                f"Strategy: <b>{strategy.name}</b>\n"
+                                f"Signal: {symbol} {direction}\n\n"
+                                f"<i>The live order could not be queued for cTrader "
+                                f"(broker busy or queue full). This position is tracked "
+                                f"as 🧪 paper only — nothing was sent to your broker.</i>",
+                                asset_class=asset_class,
+                            )
+                        except Exception:
+                            pass
+                    _accum_cycle_fire_ms(_fire_t0)
+                    break
 
-        log_scan_metric(
-            symbol=symbol,
-            timeframe=_eval_tf,
-            candles_loaded=_candles_n,
-            strategy_evaluated=True,
-            setup_detected=True,
-            signal_generated=True,
-            signal_sent=bool(_telegram_int_id(user)),
-            strategy_id=strategy.id,
-        )
-        _accum_cycle_fire_ms(_fire_t0)
-        break  # one trade per strategy per scan cycle
+                if order_result and order_result.get("queued"):
+                    execution.notes = ((execution.notes or "") + " | order_queued").strip(" |")
+                    await _commit_db_with_retry(
+                        db,
+                        label=f"ctrader-queued#{execution.id}",
+                        instances=(execution,),
+                    )
+                    execution = _refresh_db_row(db, execution)
+                    tg_id_live = _telegram_int_id(user)
+                    _portal_live = db.query(StrategyPortalSettings).filter(
+                        StrategyPortalSettings.user_id == user.id
+                    ).first()
+                    # Attempt only — full LIVE card is sent after broker fill confirmation
+                    # in ctrader_order_queue (never claim tg_open_sent here).
+                    if tg_id_live and _should_dm_trade_alerts(_portal_live, False):
+                        asyncio.create_task(_tg_send(
+                            tg_id_live,
+                            _fmt_queued_open_notice(
+                                strategy.name or "Your Strategy",
+                                symbol,
+                                direction,
+                                leverage=leverage,
+                            ),
+                            asset_class=asset_class,
+                        ))
+                    try:
+                        from app.services.expo_push import notify_user_bg
+                        notify_user_bg(
+                            user.id,
+                            title=f"🎯 Live · {symbol.replace('USDT','')} {direction}",
+                            body=f"{strategy.name} — placing on cTrader",
+                            data={"type": "trade_open", "strategy_id": strategy.id, "kind": "live"},
+                            kind="live",
+                        )
+                    except Exception:
+                        pass
+                    if not config.get("_locked"):
+                        asyncio.create_task(_propagate_to_subscribers(
+                            source_strategy_id=strategy.id,
+                            source_execution_id=execution.id,
+                            http_client=http_client,
+                        ))
+                    _accum_cycle_fire_ms(_fire_t0)
+                    break
+
+                if order_id:
+                    if _broker == "ctrader":
+                        execution.ctrader_order_id = str(order_id)
+                        # Persist the broker positionId so the live forex manager can
+                        # later amend SL/TP (auto-breakeven + trailing). No dedicated
+                        # column exists → stash it as a "pos=<id>" token in notes.
+                        if _position_id:
+                            execution.ctrader_position_id = str(_position_id)
+                            if _acct_id:
+                                execution.ctrader_account_id = str(_acct_id)
+                            try:
+                                _v = int(order_result.get("volume") or 0)
+                                if _v > 0:
+                                    execution.broker_volume_units = _v
+                            except Exception:
+                                pass
+                            _n = (execution.notes or "").strip()
+                            _acct_tok = f" | acct={_acct_id}" if _acct_id else ""
+                            _vol_tok = ""
+                            try:
+                                _v = int(order_result.get("volume") or 0)
+                                if _v > 0:
+                                    _vol_tok = f" | vol={_v}"
+                            except Exception:
+                                _vol_tok = ""
+                            execution.notes = (f"{_n} | pos={_position_id}{_acct_tok}{_vol_tok}".strip(" |"))
+                    else:
+                        execution.bitunix_order_id = str(order_id)
+                    if (
+                        actual_fill
+                        and actual_fill > 0
+                        and execution.entry_price
+                        and abs(actual_fill - execution.entry_price) > execution.entry_price * 1e-7
+                    ):
+                        # The broker filled at actual_fill (not our pre-fill signal
+                        # price), and it enforces SL/TP as RELATIVE offsets applied to
+                        # that real fill. Shift entry AND SL/TP/TP2 by the same delta
+                        # so the card the user sees + our paper-style monitoring match
+                        # what the broker is actually holding (otherwise the card shows
+                        # the signal price and SL/TP that are ~slippage pips off).
+                        _delta = actual_fill - execution.entry_price
+                        logger.info(
+                            f"[{_log_ts()}] [Strategy {strategy.id}] entry/SL/TP shifted to fill: "
+                            f"signal={execution.entry_price:.6g} → fill={actual_fill:.6g} "
+                            f"(Δ={_delta:+.6g})"
+                        )
+                        execution.entry_price = actual_fill
+                        if execution.sl_price:
+                            execution.sl_price += _delta
+                            sl_price = execution.sl_price
+                        if execution.tp_price:
+                            execution.tp_price += _delta
+                            tp_price = execution.tp_price
+                        if execution.tp2_price:
+                            execution.tp2_price += _delta
+                            tp2_price = execution.tp2_price
+                    db.commit()
+                    display_entry = actual_fill if actual_fill else current_price
+                    tg_id_live = _telegram_int_id(user)
+                    if tg_id_live and _claim_tg_open_notify(db, execution.id):
+                        try:
+                            # Fire-and-forget so a slow/retrying Telegram send never
+                            # delays the firing cycle (a latency source).
+                            asyncio.create_task(_tg_send(
+                                tg_id_live,
+                                _fmt_open_card(
+                                    strategy_name = strategy.name or "Your Strategy",
+                                    symbol        = symbol,
+                                    direction     = direction,
+                                    entry         = display_entry,
+                                    tp_price      = tp_price,
+                                    tp_pct        = tp_pct,
+                                    tp2_price     = tp2_price,
+                                    tp2_pct       = float(tp2_pct) if tp2_pct else None,
+                                    sl_price      = sl_price,
+                                    sl_pct        = sl_pct,
+                                    leverage      = leverage,
+                                    conditions    = details,
+                                    is_paper      = False,
+                                    order_id      = str(order_id),
+                                    asset_class   = asset_class,
+                                ),
+                            ))
+                            # Mobile push (fire-and-forget) — fires for live trades.
+                            from app.services.expo_push import notify_user_bg
+                            _coin = symbol.replace("USDT", "")
+                            notify_user_bg(
+                                user.id,
+                                title=f"🚀 Live · {_coin} {direction} {leverage}×",
+                                body=f"{strategy.name} @ ${display_entry:,.4f}",
+                                data={"type": "trade_open", "strategy_id": strategy.id, "kind": "live"},
+                                kind="live",
+                                position_usd=float(risk.get("position_size_usd") or 0) or None,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Live DM failed: {e}")
+                else:
+                    # Fallback: order_id was None (shouldn't normally reach here post-refactor)
+                    execution.is_paper = True
+                    _reason_note = f" ({_order_err})" if _order_err else ""
+                    execution.notes    = f"Live→Paper fallback: {_broker} returned no order_id{_reason_note}"
+                    db.commit()
+                    logger.warning(
+                        f"[{_log_ts()}] [Strategy {strategy.id}] Live order for {symbol} "
+                        f"returned no order_id ({_order_err or 'no reason'}) — "
+                        f"converting execution #{execution.id} to paper trade for ROI tracking."
+                    )
+                    tg_id_live = _telegram_int_id(user)
+                    if tg_id_live:
+                        # Surface the broker's actual rejection reason when we have it,
+                        # so the user can fix it (bad symbol, trading disabled, etc.)
+                        # instead of guessing about API permissions.
+                        _reason_line = (
+                            f"<i>Reason: {_order_err}</i>\n\n"
+                            if _order_err else ""
+                        )
+                        try:
+                            await _tg_send(
+                                tg_id_live,
+                                f"⚠️ <b>{_broker.title()} order not confirmed — paper trade started</b>\n"
+                                f"Strategy: <b>{strategy.name}</b>\n"
+                                f"Signal: {symbol.replace('USDT','')} {direction} {leverage}× lev\n"
+                                f"Entry: <code>${current_price:,.4f}</code>\n"
+                                f"TP: <code>${tp_price:,.4f}</code> (+{tp_pct}%)  "
+                                f"SL: <code>${sl_price:,.4f}</code> (-{sl_pct}%)\n\n"
+                                f"{_reason_line}"
+                                f"<i>The signal is being tracked as a 🧪 paper position. "
+                                f"If this keeps happening, check the symbol is tradable on your "
+                                f"account and that API trading is enabled.</i>"
+                            )
+                        except Exception:
+                            pass
+
+            # Propagate this trade to all active subscriber copies so they enter at
+            # the exact same price simultaneously, instead of evaluating independently
+            # (which can cause early fills and divergent SL hits).
+            if not config.get("_locked"):
+                asyncio.create_task(_propagate_to_subscribers(
+                    source_strategy_id=strategy.id,
+                    source_execution_id=execution.id,
+                    http_client=http_client,
+                ))
+
+            log_scan_metric(
+                symbol=symbol,
+                timeframe=_eval_tf,
+                candles_loaded=_candles_n,
+                strategy_evaluated=True,
+                setup_detected=True,
+                signal_generated=True,
+                signal_sent=bool(_telegram_int_id(user)),
+                strategy_id=strategy.id,
+            )
+            _accum_cycle_fire_ms(_fire_t0)
+            break  # one trade per strategy per scan cycle
     else:
         # for-loop completed without break → no fire happened.
         # Bump a gate so we know WHY the strategy didn't fire.
@@ -6891,7 +7135,64 @@ async def evaluate_and_fire(
         pass
 
     _diag.conditions_ms = (time.monotonic() - _cond_t0) * 1000.0
+    if _tradfi_http_phase_token is not None:
+        _TRADFI_EVAL_HTTP_PHASE.reset(_tradfi_http_phase_token)
     _log_eval_diag(strategy.id, _diag, (time.monotonic() - _eval_t0) * 1000.0)
+
+
+async def _evaluate_tradfi_split(
+    snap: dict,
+    strategy_row,
+    user_row,
+    http_client: httpx.AsyncClient,
+    *,
+    gate_stats: Optional[Dict[str, int]],
+    prefetched_ctrader_ok: Optional[bool],
+    eval_diag: EvalDiag,
+) -> None:
+    """Stage B tradfi eval — gate phase (short DB), then HTTP/fire without held session."""
+    from app.database import ForexSessionLocal as SessionLocal, forex_db_slot
+
+    db_one = SessionLocal()
+    carry = None
+    try:
+        async with forex_db_slot():
+            strategy = db_one.merge(strategy_row)
+            user = db_one.merge(user_row)
+        carry = await evaluate_and_fire(
+            strategy,
+            user,
+            db_one,
+            http_client,
+            raw_tickers=[],
+            gate_stats=gate_stats,
+            prefetched_ctrader_ok=prefetched_ctrader_ok,
+            eval_diag=eval_diag,
+            tradfi_db_split=True,
+            strategy_row=strategy_row,
+            user_row=user_row,
+            gate_only=True,
+        )
+    finally:
+        _tradfi_release_db_session(db_one)
+    if carry is None:
+        return
+    await _evaluate_with_budget(
+        snap["id"],
+        snap.get("config") or {},
+        _snap_asset_class(snap),
+        evaluate_and_fire(
+            strategy_row,
+            user_row,
+            None,
+            http_client,
+            raw_tickers=[],
+            gate_stats=gate_stats,
+            prefetched_ctrader_ok=prefetched_ctrader_ok,
+            eval_diag=eval_diag,
+            carry=carry,
+        ),
+    )
 
 
 # ─── Subscriber copy-trade propagation ───────────────────────────────────────
@@ -8437,18 +8738,32 @@ async def _run_crypto_executor_shard(
                 # Logged at end of cycle so we can see WHY strategies aren't firing.
                 cycle_gate_stats: Dict[str, int] = {}
                 _db_t0 = time.monotonic()
-                _preloaded_users = _preload_strategy_users(
-                    [s["id"] for s in eval_snapshots],
-                    SessionLocal,
-                    UserStrategy,
-                    User,
+                _preloaded_users = await _run_db_phase_with_timeout(
+                    label=f"{_crypto_lbl}:preload_users",
+                    fn=lambda: _preload_strategy_users(
+                        [s["id"] for s in eval_snapshots],
+                        SessionLocal,
+                        UserStrategy,
+                        User,
+                    ),
+                    timeout_s=EXECUTOR_DB_PHASE_TIMEOUT_S,
+                    fallback={},
                 )
                 _log_cycle_db_phase(_crypto_lbl, "preload_users", _db_t0)
 
                 _db_t0 = time.monotonic()
-                _gate_prefetch = _prefetch_cycle_gate_data(
-                    [s["id"] for s in eval_snapshots],
-                    SessionLocal,
+                _gate_prefetch = await _run_db_phase_with_timeout(
+                    label=f"{_crypto_lbl}:gate_prefetch",
+                    fn=lambda: _prefetch_cycle_gate_data(
+                        [s["id"] for s in eval_snapshots],
+                        SessionLocal,
+                    ),
+                    timeout_s=EXECUTOR_DB_PHASE_TIMEOUT_S,
+                    fallback={
+                        "execution_counts": {},
+                        "symbol_last_fired": {},
+                        "assignment_targets": {},
+                    },
                 )
                 _log_cycle_db_phase(_crypto_lbl, "gate_prefetch", _db_t0)
                 _cycle_ctx = ExecutorCycleCtx(
@@ -10000,33 +10315,19 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                 )
                                 return
                             for _attempt in (1, 3):
-                                _pool_t0 = time.monotonic()
-                                db_one = SessionLocal()
-                                _diag.pool_wait_ms = max(
-                                    _diag.pool_wait_ms,
-                                    (time.monotonic() - _pool_t0) * 1000.0,
-                                )
                                 try:
-                                    async with forex_db_slot():
-                                        strategy = db_one.merge(_strategy_row)
-                                        user = db_one.merge(_user_row)
-                                    _diag.db_slot_wait_ms = max(
-                                        _diag.db_slot_wait_ms,
-                                        last_forex_db_slot_wait_ms(),
-                                    )
                                     if _pre_eval_skip_no_symbols(snap):
                                         return
-                                    await _evaluate_with_budget(
-                                        snap["id"],
-                                        snap.get("config") or {},
-                                        _snap_asset_class(snap),
-                                        evaluate_and_fire(
-                                            strategy, user, db_one, _http,
-                                            raw_tickers=[],
-                                            gate_stats=cycle_gate_stats,
-                                            prefetched_ctrader_ok=ctrader_ok_by_user.get(user.id, False),
-                                            eval_diag=_diag,
+                                    await _evaluate_tradfi_split(
+                                        snap,
+                                        _strategy_row,
+                                        _user_row,
+                                        _http,
+                                        gate_stats=cycle_gate_stats,
+                                        prefetched_ctrader_ok=ctrader_ok_by_user.get(
+                                            _user_row.id, False,
                                         ),
+                                        eval_diag=_diag,
                                     )
                                     return
                                 except (
@@ -10042,7 +10343,6 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                             f"[FX Strategy {snap['id']}] Transient DB error "
                                             f"({_err_name}) — retry {_attempt}/3"
                                         )
-                                        _db_rollback_safe(db_one)
                                         await asyncio.sleep(0.5 * _attempt)
                                         continue
                                     _cycle_db_skipped.append((snap["id"], _err_name))
@@ -10057,23 +10357,15 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                         f"[FX Strategy {snap['id']}] eval cancelled — "
                                         f"skipping cycle"
                                     )
-                                    _db_rollback_safe(db_one)
                                     return
                                 except asyncio.TimeoutError:
                                     _cycle_abort_count += 1
-                                    _db_rollback_safe(db_one)
                                     return
                                 except Exception as e:
                                     logger.error(
                                         f"[FX Strategy {snap['id']}] Error: {e}", exc_info=True
                                     )
-                                    _db_rollback_safe(db_one)
                                     return
-                                finally:
-                                    try:
-                                        db_one.close()
-                                    except Exception:
-                                        pass
                     finally:
                         _cycle_db_slot_wait_samples.append(
                             max(0.0, float(_diag.db_slot_wait_ms)),
