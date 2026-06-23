@@ -6,6 +6,7 @@ and fires trades. Paper trades are tracked with 1m OHLC accuracy — candle
 high/low is used to detect TP/SL hits so scalp results are realistic.
 """
 import asyncio
+import contextlib
 import contextvars
 import html as _html
 import logging
@@ -6138,7 +6139,7 @@ async def evaluate_and_fire(
                 )
             current_price = _confirmed_px
 
-        async with asyncio.AsyncExitStack() as _fire_stack:
+        async with contextlib.AsyncExitStack() as _fire_stack:
             if _tradfi_db_split:
                 if _tradfi_http_phase_token is not None:
                     _TRADFI_EVAL_HTTP_PHASE.reset(_tradfi_http_phase_token)
