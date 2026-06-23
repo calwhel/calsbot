@@ -87,24 +87,99 @@ def in_forex_claude_confirm_session(now_utc: Optional[datetime] = None) -> bool:
     return in_live_forex_session(now_utc)
 
 
-def price_data_ok_for_claude(price_data: Dict[str, Any]) -> bool:
+def price_data_block_reason(
+    price_data: Dict[str, Any],
+    *,
+    symbol: str = "",
+) -> Optional[str]:
+    """Return a block reason, or None when price data is OK for Claude."""
     if not price_data:
-        return False
+        return "no_price_data"
     try:
         price = float(price_data.get("price") or 0)
     except (TypeError, ValueError):
-        return False
+        return "invalid_price"
     if price <= 0 or not math.isfinite(price):
-        return False
+        return "invalid_price"
     if price_data.get("kline_synthetic"):
-        return False
+        return "kline_synthetic"
     ps = (price_data.get("price_source") or "").lower()
     if ps in ("unknown", "stale", ""):
-        return False
+        return f"bad_price_source:{ps or 'empty'}"
     ks = (price_data.get("kline_source") or "").lower()
     if ks == "synthetic":
-        return False
-    return True
+        return "synthetic_klines"
+    sym = (symbol or price_data.get("symbol") or "").upper()
+    try:
+        from app.services.tradfi_prices import is_metal_symbol
+
+        if sym and is_metal_symbol(sym):
+            live_src = (price_data.get("live_source") or "").lower()
+            if live_src != "ctrader":
+                return f"non_ctrader_price:{live_src or ps or 'missing'}"
+    except Exception:
+        pass
+    return None
+
+
+def price_data_ok_for_claude(
+    price_data: Dict[str, Any],
+    *,
+    symbol: str = "",
+) -> bool:
+    return price_data_block_reason(price_data, symbol=symbol) is None
+
+
+def _log_gate_outcome(
+    *,
+    strategy_id: int,
+    symbol: str,
+    result: ForexClaudeFireResult,
+    wants_confirm: bool,
+    wants_dynamic: bool,
+    price_data: Optional[Dict[str, Any]] = None,
+) -> None:
+    if not wants_confirm and not wants_dynamic:
+        return
+    live_src = (price_data or {}).get("live_source") or ""
+    price_src = (price_data or {}).get("price_source") or ""
+    if result.allowed_to_fire and result.static_fallback:
+        logger.warning(
+            "[forex-claude] gate FALLBACK strategy=%s symbol=%s reason=%s "
+            "fired=true dynamic=%s confirm=%s claude_called=%s price_src=%s live_src=%s",
+            strategy_id,
+            symbol,
+            result.reason,
+            wants_dynamic,
+            wants_confirm,
+            result.claude_called,
+            price_src,
+            live_src,
+        )
+    elif result.allowed_to_fire and not result.claude_called:
+        logger.warning(
+            "[forex-claude] gate SKIPPED strategy=%s symbol=%s reason=%s "
+            "fired=true dynamic=%s confirm=%s price_src=%s live_src=%s",
+            strategy_id,
+            symbol,
+            result.reason,
+            wants_dynamic,
+            wants_confirm,
+            price_src,
+            live_src,
+        )
+    elif not result.allowed_to_fire:
+        logger.warning(
+            "[forex-claude] gate BLOCKED strategy=%s symbol=%s reason=%s "
+            "fired=false dynamic=%s confirm=%s price_src=%s live_src=%s",
+            strategy_id,
+            symbol,
+            result.reason,
+            wants_dynamic,
+            wants_confirm,
+            price_src,
+            live_src,
+        )
 
 
 def assert_valid_sl_price(sl_price: Any) -> bool:
@@ -418,6 +493,17 @@ async def resolve_forex_claude_fire(
     if not wants_confirm and not wants_dynamic:
         return base
 
+    def _ret(result: ForexClaudeFireResult) -> ForexClaudeFireResult:
+        _log_gate_outcome(
+            strategy_id=strategy_id,
+            symbol=symbol,
+            result=result,
+            wants_confirm=wants_confirm,
+            wants_dynamic=wants_dynamic,
+            price_data=pd,
+        )
+        return result
+
     ts = now_utc or datetime.utcnow()
     session = active_confirm_session(ts)
     if not session:
@@ -428,61 +514,64 @@ async def resolve_forex_claude_fire(
                 "[forex-claude-confirm] outside confirm session windows — skip/no dynamic call"
             )
         if wants_confirm:
-            return _static_result(
+            return _ret(_static_result(
                 static_sl=static_sl,
                 static_tp=static_tp,
                 static_sl_pct=static_sl_pct,
                 static_tp_pct=static_tp_pct,
                 reason="outside_confirm_session",
                 allowed=False,
-            )
-        return _static_result(
+            ))
+        return _ret(_static_result(
             static_sl=static_sl,
             static_tp=static_tp,
             static_sl_pct=static_sl_pct,
             static_tp_pct=static_tp_pct,
             reason="outside_session_static",
             static_fallback=True,
-        )
+        ))
 
     ok_budget, budget_reason = check_budget_or_block(CALLER, now=ts)
     if not ok_budget:
         if wants_confirm:
-            return _static_result(
+            return _ret(_static_result(
                 static_sl=static_sl,
                 static_tp=static_tp,
                 static_sl_pct=static_sl_pct,
                 static_tp_pct=static_tp_pct,
                 reason=budget_reason,
                 allowed=False,
-            )
-        return _static_result(
+            ))
+        return _ret(_static_result(
             static_sl=static_sl,
             static_tp=static_tp,
             static_sl_pct=static_sl_pct,
             static_tp_pct=static_tp_pct,
             reason=f"budget_static_fallback:{budget_reason}",
             static_fallback=True,
-        )
+        ))
 
-    if not price_data_ok_for_claude(pd):
+    price_block = price_data_block_reason(pd, symbol=symbol)
+    if price_block:
+        block_reason = f"price_gate:{price_block}"
         if wants_confirm:
-            return _static_result(
+            return _ret(_static_result(
                 static_sl=static_sl,
                 static_tp=static_tp,
                 static_sl_pct=static_sl_pct,
                 static_tp_pct=static_tp_pct,
-                reason="stale_price_no_claude",
+                reason=f"stale_price_no_claude:{price_block}",
                 allowed=False,
-            )
-        return _static_result(
+            ))
+        # Dynamic TP/SL enabled: do not fire on bad/non-broker price — skip, not static.
+        return _ret(_static_result(
             static_sl=static_sl,
             static_tp=static_tp,
             static_sl_pct=static_sl_pct,
             static_tp_pct=static_tp_pct,
-            reason="stale_price_static_fallback",
-            static_fallback=True,
-        )
+            reason=block_reason,
+            allowed=False,
+        ))
 
     bar_ts = _bar_ts(ts, timeframe)
     cache_key = (int(strategy_id), str(symbol).upper(), int(bar_ts))
@@ -521,7 +610,7 @@ async def resolve_forex_claude_fire(
             result.claude_called = True
             _fire_cache[cache_key] = result
             record_call(CALLER, cost, now=ts)
-            return result
+            return _ret(result)
         result = _static_result(
             static_sl=static_sl,
             static_tp=static_tp,
@@ -533,7 +622,7 @@ async def resolve_forex_claude_fire(
         result.claude_called = True
         _fire_cache[cache_key] = result
         record_call(CALLER, cost, now=ts)
-        return result
+        return _ret(result)
 
     confirm = bool(parsed.get("confirm")) if wants_confirm else True
     reason = str(parsed.get("reason") or "").strip()
@@ -559,7 +648,7 @@ async def resolve_forex_claude_fire(
             result.claude_called = True
             _fire_cache[cache_key] = result
             record_call(CALLER, cost, now=ts)
-            return result
+            return _ret(result)
         parsed = parsed2
         confirm = bool(parsed.get("confirm"))
         reason = str(parsed.get("reason") or reason)
@@ -590,7 +679,7 @@ async def resolve_forex_claude_fire(
         )
         result.claude_called = True
         _fire_cache[cache_key] = result
-        return result
+        return _ret(result)
 
     if wants_dynamic:
         result = _apply_dynamic_from_parsed(
@@ -610,7 +699,7 @@ async def resolve_forex_claude_fire(
         result.claude_called = True
         result.allowed_to_fire = True
         _fire_cache[cache_key] = result
-        return result
+        return _ret(result)
 
     result = _static_result(
         static_sl=static_sl,
@@ -621,7 +710,7 @@ async def resolve_forex_claude_fire(
     )
     result.claude_called = True
     _fire_cache[cache_key] = result
-    return result
+    return _ret(result)
 
 
 async def maybe_forex_claude_confirm(

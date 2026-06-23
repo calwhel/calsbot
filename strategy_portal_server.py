@@ -11590,6 +11590,9 @@ async def api_update_strategy(strategy_id: int, request: Request):
                 else:
                     filters.pop("trading_days", None)
                 config["filters"] = filters
+            # User preference — not creator IP (same as sessions/trading_days).
+            if "dynamic_tp_sl" in body:
+                config["dynamic_tp_sl"] = bool(body["dynamic_tp_sl"])
             prev_status = s.status
             if "status" in body and body["status"] in ("draft", "active", "paused", "paper"):
                 if body["status"] == "active":

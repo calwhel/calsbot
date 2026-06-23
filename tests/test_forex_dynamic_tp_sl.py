@@ -139,14 +139,42 @@ class TestDynamicTpSlFire(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(res.claude_called)
         self.assertEqual(res.sl_price, 1.0780)
 
-    async def test_stale_price_static_fallback_no_call(self):
+    async def test_stale_price_blocks_dynamic_fire(self):
         kw = self._base_kwargs()
         kw["price_data"] = {"price": 1.08, "price_source": "unknown"}
         with patch.object(fcc, "_call_claude", new_callable=AsyncMock) as mock_claude:
             res = await fcc.resolve_forex_claude_fire(**kw)
         mock_claude.assert_not_called()
-        self.assertTrue(res.static_fallback)
+        self.assertFalse(res.allowed_to_fire)
+        self.assertIn("price_gate", res.reason)
+
+    async def test_non_ctrader_metal_price_blocks_dynamic(self):
+        kw = self._base_kwargs()
+        kw["symbol"] = "XAUUSD"
+        kw["price_data"] = {
+            "price": 2650.0,
+            "price_source": "spot_live",
+            "live_source": "coinbase",
+        }
+        with patch.object(fcc, "_call_claude", new_callable=AsyncMock) as mock_claude:
+            res = await fcc.resolve_forex_claude_fire(**kw)
+        mock_claude.assert_not_called()
+        self.assertFalse(res.allowed_to_fire)
+        self.assertIn("non_ctrader_price", res.reason)
+
+    async def test_gate_skipped_logged_on_static_fallback(self):
+        kw = self._base_kwargs()
+        with patch.object(
+            fcc,
+            "_call_claude",
+            new_callable=AsyncMock,
+            return_value=(None, 0.0, "timeout"),
+        ), patch.object(fcc.logger, "warning") as mock_log:
+            res = await fcc.resolve_forex_claude_fire(**kw)
         self.assertTrue(res.allowed_to_fire)
+        self.assertTrue(res.static_fallback)
+        logged = " ".join(str(c) for c in mock_log.call_args_list)
+        self.assertIn("[forex-claude] gate FALLBACK", logged)
 
     async def test_combined_confirm_false_skips(self):
         os.environ["ENABLE_FOREX_CLAUDE_CONFIRM"] = "1"
