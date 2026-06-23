@@ -225,3 +225,56 @@ def build_key_levels_block(
         lines.append("Nearest liquidity pools: none detected in 30×5m window")
 
     return lines
+
+
+def compute_premium_discount(
+    spot: float,
+    range_lo: Optional[float],
+    range_hi: Optional[float],
+) -> Tuple[Optional[str], Optional[float], Optional[float]]:
+    """Return (label discount|premium|equilibrium, pct_from_mid, midpoint)."""
+    if range_lo is None or range_hi is None or range_hi <= range_lo:
+        return None, None, None
+    mid = (range_lo + range_hi) / 2.0
+    half = (range_hi - range_lo) / 2.0
+    if half <= 0:
+        return None, None, mid
+    pct = (spot - mid) / half * 100.0  # -100 discount edge .. +100 premium edge
+    if pct > 5:
+        label = "premium"
+    elif pct < -5:
+        label = "discount"
+    else:
+        label = "equilibrium"
+    return label, pct, mid
+
+
+def build_premium_discount_block(
+    *,
+    spot: float,
+    k5: List[list],
+    k1h: List[list],
+    now: datetime,
+    session: str,
+    cfg,
+) -> List[str]:
+    """Dealing range = Asian range, fallback session range."""
+    lines = ["=== PREMIUM / DISCOUNT ==="]
+    asian_hi, asian_lo = compute_asian_range(now, k5, k1h)
+    label, pct, mid = compute_premium_discount(spot, asian_lo, asian_hi)
+    src = "Asian range (00–07 UTC)"
+    r_lo, r_hi = asian_lo, asian_hi
+    if label is None:
+        sess_hi, sess_lo = compute_session_range(now, session, cfg, k5, k1h)
+        label, pct, mid = compute_premium_discount(spot, sess_lo, sess_hi)
+        src = f"{session.upper()} session range"
+        r_lo, r_hi = sess_lo, sess_hi
+    if label is None or mid is None or pct is None or r_lo is None or r_hi is None:
+        lines.append("Premium/discount: unavailable (no dealing range)")
+        return lines
+    lines.append(f"Dealing range ({src}): {r_lo:.2f} – {r_hi:.2f} | Mid: {mid:.2f}")
+    lines.append(
+        f"Spot in {label} ({pct:+.0f}% from mid) — "
+        f"{'longs favored' if label == 'discount' else 'shorts favored' if label == 'premium' else 'mid-range caution'}"
+    )
+    return lines

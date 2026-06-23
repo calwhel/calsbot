@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from app.gold_ai_trader.config import SYMBOL, ASSET_CLASS
-from app.gold_ai_trader.context_levels import build_key_levels_block
+from app.gold_ai_trader.context_levels import build_key_levels_block, build_premium_discount_block
 from app.gold_ai_trader.context_regime import build_regime_block, build_htf_bias_block
 from app.gold_ai_trader.context_history import build_recent_decisions_block, parse_zone_from_detail
 from app.gold_ai_trader.htf_bias import htf_bias_summary
@@ -179,6 +179,11 @@ async def build_context_snapshot(
     data_quality = build_data_quality_block(market_data)
     recent_decisions = build_recent_decisions_block(db, session=session)
     smt_block = build_smt_block(smt or candidate.raw.get("smt"))
+    premium_discount = build_premium_discount_block(
+        spot=price, k5=k5, k1h=k1h, now=now, session=session, cfg=cfg,
+    )
+    struct_line = candidate.raw.get("structure_score_line") or ""
+    zone_tf = candidate.raw.get("zone_tf", "5m")
 
     htf_align = candidate.raw.get("htf_align", "unknown")
 
@@ -199,6 +204,8 @@ async def build_context_snapshot(
         "",
         *key_levels,
         "",
+        *premium_discount,
+        "",
         "=== RECENT PATH (5m, oldest→newest) ===",
         _summarize_candles(k5, 10),
         "",
@@ -207,10 +214,12 @@ async def build_context_snapshot(
         f"HTF alignment (setup): {htf_align}",
         "",
         "=== TRIGGER (why Claude was called) ===",
-        f"Type: {candidate.type} | Direction bias: {candidate.direction}",
+        f"Type: {candidate.type} | Direction bias: {candidate.direction} | Zone TF: {zone_tf}",
         f"Detail: {candidate.detail}",
         f"Quality vs ATR: {candidate.quality_atr:.2f}× (engine estimate)",
+        struct_line or "Structure score: unavailable",
         f"Take threshold: {cfg.confidence_threshold}% (unchanged — score honestly vs this bar)",
+        f"Suggested invalidation max: {atr:.2f} (1.0× 5m ATR — wider SL → lower confidence)",
         "",
         *smt_block,
         "" if not smt_block else "",

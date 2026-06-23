@@ -12,7 +12,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-# Existing setups default ON (preserve current behaviour).
+# Existing setups default ON. Tier-1 additions default ON (user requested more flow).
 _DEFAULTS: Dict[str, bool] = {
     "sweep_pdh": True,
     "sweep_pdl": True,
@@ -20,11 +20,16 @@ _DEFAULTS: Dict[str, bool] = {
     "disp_bear": True,
     "fvg_bull": True,
     "fvg_bear": True,
+    "fvg_retrace_bull": True,
+    "fvg_retrace_bear": True,
+    "ifvg_bull": True,
+    "ifvg_bear": True,
+    "ob_bull": True,
+    "ob_bear": True,
     "liq_sweep_bull": True,
     "liq_sweep_bear": True,
     "sdp_bull": True,
     "sdp_bear": True,
-    # New structure setups default OFF for safe demo rollout.
     "breaker_bull": False,
     "breaker_bear": False,
     "eqh_sweep_bear": False,
@@ -38,6 +43,12 @@ _ENV_KEYS: Dict[str, str] = {
     "disp_bear": "GOLD_AI_SETUP_DISP_BEAR",
     "fvg_bull": "GOLD_AI_SETUP_FVG_BULL",
     "fvg_bear": "GOLD_AI_SETUP_FVG_BEAR",
+    "fvg_retrace_bull": "GOLD_AI_SETUP_FVG_RETRACE_BULL",
+    "fvg_retrace_bear": "GOLD_AI_SETUP_FVG_RETRACE_BEAR",
+    "ifvg_bull": "GOLD_AI_SETUP_IFVG_BULL",
+    "ifvg_bear": "GOLD_AI_SETUP_IFVG_BEAR",
+    "ob_bull": "GOLD_AI_SETUP_OB_BULL",
+    "ob_bear": "GOLD_AI_SETUP_OB_BEAR",
     "liq_sweep_bull": "GOLD_AI_SETUP_LIQ_SWEEP_BULL",
     "liq_sweep_bear": "GOLD_AI_SETUP_LIQ_SWEEP_BEAR",
     "sdp_bull": "GOLD_AI_SETUP_SDP_BULL",
@@ -61,3 +72,10 @@ def setup_enabled(setup_key: str) -> bool:
 def smt_modifier_enabled() -> bool:
     """SMT divergence is a confidence modifier only — never a standalone fire."""
     return _env_bool("GOLD_AI_SMT_MODIFIER", False)
+
+
+def max_candidates_per_scan() -> int:
+    try:
+        return max(1, min(int(os.environ.get("GOLD_AI_TRADER_MAX_CANDIDATES_PER_SCAN", "3")), 5))
+    except (TypeError, ValueError):
+        return 3

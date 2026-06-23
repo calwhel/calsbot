@@ -25,7 +25,7 @@ from app.gold_ai_trader.guardrails import (
 from app.gold_ai_trader.scanner import (
     active_session,
     scan_candidates,
-    pick_best,
+    pick_top_candidates,
     record_claude_invocation,
     _setup_cooldown_s,
 )
@@ -34,6 +34,8 @@ from app.gold_ai_trader.call_gates import (
     should_invoke_claude,
     call_stats_today,
 )
+from app.gold_ai_trader.funnel import record as funnel_record, snapshot as funnel_snapshot
+from app.gold_ai_trader.setup_toggles import max_candidates_per_scan
 from app.services.tradfi_prices import get_klines
 from app.gold_ai_trader.config import SYMBOL, ASSET_CLASS
 from app.gold_ai_trader.context import build_context_snapshot
@@ -94,6 +96,7 @@ async def run_gold_ai_trader_loop() -> None:
 
     _prev_session = session
     runtime_state.note_scan(session)
+    funnel_record("scan")
 
     db = SessionLocal()
     try:
@@ -124,6 +127,7 @@ async def run_gold_ai_trader_loop() -> None:
                 source_tag,
                 data_block,
             )
+            funnel_record("data_blocked", reason=data_block)
             runtime_state.note_dormant(f"data_quality:{data_block}")
             return
 
@@ -136,22 +140,29 @@ async def run_gold_ai_trader_loop() -> None:
                 user_id=cfg.demo_user_id,
             )
         if not candidates or price is None:
+            runtime_state.set_funnel(funnel_snapshot())
             return
 
         await sync_pending_entries(db, cfg, float(price))
 
-        candidate = pick_best(candidates)
-        if not candidate:
-            return
-
         k5 = await get_klines(SYMBOL, ASSET_CLASS, "5m", 60) or []
         atr = atr_from_klines(k5)
-        ok_dedupe, dedupe_reason = should_invoke_claude(
-            db, candidate, float(price), atr, setup_cooldown_s=_setup_cooldown_s()
-        )
-        if not ok_dedupe:
-            logger.debug("[gold-ai-trader] claude dedupe skip: %s", dedupe_reason)
-            runtime_state.note_dormant(dedupe_reason)
+
+        candidate = None
+        dedupe_reason = ""
+        for cand in pick_top_candidates(candidates, max_candidates_per_scan()):
+            ok_dedupe, dedupe_reason = should_invoke_claude(
+                db, cand, float(price), atr, setup_cooldown_s=_setup_cooldown_s()
+            )
+            if ok_dedupe:
+                candidate = cand
+                break
+            funnel_record("dedupe_skipped", setup=cand.type, reason=dedupe_reason)
+            logger.debug("[gold-ai-trader] claude dedupe skip %s: %s", cand.type, dedupe_reason)
+
+        if not candidate:
+            runtime_state.note_dormant(dedupe_reason or "all_candidates_deduped")
+            runtime_state.set_funnel(funnel_snapshot())
             return
 
         runtime_state.note_candidate(
@@ -180,8 +191,13 @@ async def run_gold_ai_trader_loop() -> None:
             confidence_threshold=cfg.confidence_threshold,
         )
         record_claude_invocation(candidate)
+        funnel_record("claude_called", setup=candidate.type)
         action = (decision.get("action") or "skip").lower()
         conf = int(decision.get("confidence") or 0)
+        if action == "take":
+            funnel_record("claude_take", setup=candidate.type)
+        else:
+            funnel_record("claude_skip", setup=candidate.type)
 
         row = GoldAiDecision(
             session=session,
@@ -236,6 +252,7 @@ async def run_gold_ai_trader_loop() -> None:
                         row.executed = True
                         row.execution_id = exec_id
                         db.commit()
+                        funnel_record("executed", setup=candidate.type)
 
                         ok_live, live_reason = check_can_execute_live_mirror(
                             db, cfg, cfg.demo_user_id or 0
@@ -262,6 +279,7 @@ async def run_gold_ai_trader_loop() -> None:
                             db.commit()
                     elif exec_id and exec_id < 0:
                         block_reason = f"entry pending #{-exec_id} (limit/entry-watch)"
+                        funnel_record("pending_entry", setup=candidate.type)
                     else:
                         block_reason = "demo order rejected"
                 else:
@@ -304,6 +322,7 @@ async def run_gold_ai_trader_loop() -> None:
         await sync_closed_trade_notifications(db, cfg)
         await maybe_send_daily_summary(db, cfg)
         await maybe_run_learning_review(db, session, cfg)
+        runtime_state.set_funnel(funnel_snapshot())
     except Exception as e:
         logger.error("[gold-ai-trader] loop error: %s", e, exc_info=True)
         runtime_state.note_error(str(e))

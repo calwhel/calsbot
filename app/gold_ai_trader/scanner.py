@@ -15,21 +15,25 @@ from app.gold_ai_trader.call_gates import (
     passes_quality_gates,
 )
 from app.gold_ai_trader.config import GoldAiRuntimeConfig, SYMBOL, ASSET_CLASS
+from app.gold_ai_trader.funnel import record as funnel_record
 from app.gold_ai_trader.htf_bias import direction_aligns_with_htf, htf_bias_summary
 from app.gold_ai_trader.setup_toggles import setup_enabled, smt_modifier_enabled
 from app.gold_ai_trader.smt_modifier import assess_smt_divergence
+from app.gold_ai_trader.structure_score import compute_structure_score
 
 logger = logging.getLogger(__name__)
+
+TF_ZONE = "15m"   # zone definition timeframe (HTF structure)
+TF_TIMING = "5m"  # timing / displacement timeframe
 
 
 def _setup_cooldown_s() -> int:
     try:
-        return max(300, int(os.environ.get("GOLD_AI_TRADER_SETUP_COOLDOWN_S", "900")))
+        return max(300, int(os.environ.get("GOLD_AI_TRADER_SETUP_COOLDOWN_S", "600")))
     except (TypeError, ValueError):
-        return 900
+        return 600
 
 
-# Per setup-key last time Claude was invoked (not merely TA-detected).
 _last_claude_fired: Dict[str, float] = {}
 
 
@@ -58,19 +62,60 @@ def in_killzone(session: str) -> bool:
 
 
 def setup_cooldown_elapsed(key: str) -> bool:
-    """True if this setup type is off cooldown since last Claude call."""
     now = time.monotonic()
     last = _last_claude_fired.get(key, 0)
     return (now - last) >= _setup_cooldown_s()
 
 
 def record_claude_invocation(candidate: Candidate) -> None:
-    """Call after Claude runs — enforces per-setup cooldown."""
     _last_claude_fired[candidate.sig_key] = time.monotonic()
 
 
 def _requires_htf_alignment(setup_key: str) -> bool:
     return setup_key.startswith(("breaker_", "eqh_sweep_", "eql_sweep_"))
+
+
+def _priority_map() -> Dict[str, int]:
+    return {
+        "sweep_pdh": 5,
+        "sweep_pdl": 5,
+        "liq_sweep_bull": 5,
+        "liq_sweep_bear": 5,
+        "eqh_sweep_bear": 5,
+        "eql_sweep_bull": 5,
+        "sdp_bull": 4,
+        "sdp_bear": 4,
+        "ob_bull": 4,
+        "ob_bear": 4,
+        "breaker_bull": 4,
+        "breaker_bear": 4,
+        "ifvg_bull": 3,
+        "ifvg_bear": 3,
+        "disp_bull": 3,
+        "disp_bear": 3,
+        "fvg_retrace_bull": 3,
+        "fvg_retrace_bear": 3,
+        "fvg_bull": 2,
+        "fvg_bear": 2,
+    }
+
+
+def _sort_candidates(candidates: List[Candidate]) -> List[Candidate]:
+    pri = _priority_map()
+    return sorted(
+        candidates,
+        key=lambda c: (pri.get(c.type, 1), c.raw.get("structure_score", 0), c.quality_atr),
+        reverse=True,
+    )
+
+
+def pick_best(candidates: List[Candidate]) -> Optional[Candidate]:
+    ranked = _sort_candidates(candidates)
+    return ranked[0] if ranked else None
+
+
+def pick_top_candidates(candidates: List[Candidate], n: int = 3) -> List[Candidate]:
+    return _sort_candidates(candidates)[: max(1, n)]
 
 
 async def scan_candidates(
@@ -81,7 +126,7 @@ async def scan_candidates(
     price: Optional[float] = None,
     user_id: Optional[int] = None,
 ) -> Tuple[Optional[float], List[Candidate]]:
-    """Return (price, gated candidates). BOS/VWAP/CHoCH excluded — too marginal."""
+    """Return (price, gated candidates). Zone setups use 15m; timing uses 5m."""
     if price is None or price <= 0:
         return None, []
 
@@ -94,6 +139,7 @@ async def scan_candidates(
         eval_liquidity_sweep,
         eval_fx_breaker,
         eval_equal_hl_sweep,
+        eval_order_block,
     )
 
     k5 = await get_klines(SYMBOL, ASSET_CLASS, "5m", 60) or []
@@ -105,38 +151,102 @@ async def scan_candidates(
     cache: Dict[str, Any] = {"__asset_class__": ASSET_CLASS}
     if user_id:
         cache["__ctrader_user_id__"] = user_id
-    tf = "5m"
+
     found: List[Candidate] = []
     bias = htf_bias_summary(k1h, k4h, k_daily)
+    atr = atr_from_klines(k5)
+    ta_hits = 0
 
     checks = [
-        ("sweep_pdh", "forex_prev_level", {"condition": "sweep_pdh", "timeframe": tf}, "SHORT"),
-        ("sweep_pdl", "forex_prev_level", {"condition": "sweep_pdl", "timeframe": tf}, "LONG"),
-        ("disp_bull", "fx_displacement", {"direction": "bullish", "timeframe": tf}, "LONG"),
-        ("disp_bear", "fx_displacement", {"direction": "bearish", "timeframe": tf}, "SHORT"),
-        ("fvg_bull", "fvg", {"direction": "bullish", "timeframe": tf, "condition": "just_formed"}, "LONG"),
-        ("fvg_bear", "fvg", {"direction": "bearish", "timeframe": tf, "condition": "just_formed"}, "SHORT"),
-        ("liq_sweep_bull", "liquidity_sweep", {"direction": "bullish", "timeframe": tf}, "LONG"),
-        ("liq_sweep_bear", "liquidity_sweep", {"direction": "bearish", "timeframe": tf}, "SHORT"),
-        ("sdp_bull", "fx_sdp", {"direction": "bullish", "timeframe": tf}, "LONG"),
-        ("sdp_bear", "fx_sdp", {"direction": "bearish", "timeframe": tf}, "SHORT"),
-        ("breaker_bull", "fx_breaker", {"direction": "bullish", "timeframe": tf}, "LONG"),
-        ("breaker_bear", "fx_breaker", {"direction": "bearish", "timeframe": tf}, "SHORT"),
+        # Timing (5m)
+        ("sweep_pdh", "forex_prev_level", {"condition": "sweep_pdh", "timeframe": TF_TIMING}, "SHORT"),
+        ("sweep_pdl", "forex_prev_level", {"condition": "sweep_pdl", "timeframe": TF_TIMING}, "LONG"),
+        ("disp_bull", "fx_displacement", {"direction": "bullish", "timeframe": TF_TIMING}, "LONG"),
+        ("disp_bear", "fx_displacement", {"direction": "bearish", "timeframe": TF_TIMING}, "SHORT"),
+        ("fvg_bull", "fvg", {"type": "fvg", "direction": "bullish", "timeframe": TF_TIMING, "condition": "just_formed"}, "LONG"),
+        ("fvg_bear", "fvg", {"type": "fvg", "direction": "bearish", "timeframe": TF_TIMING, "condition": "just_formed"}, "SHORT"),
+        ("liq_sweep_bull", "liquidity_sweep", {"direction": "bullish", "timeframe": TF_TIMING}, "LONG"),
+        ("liq_sweep_bear", "liquidity_sweep", {"direction": "bearish", "timeframe": TF_TIMING}, "SHORT"),
+        ("sdp_bull", "fx_sdp", {"direction": "bullish", "timeframe": TF_TIMING}, "LONG"),
+        ("sdp_bear", "fx_sdp", {"direction": "bearish", "timeframe": TF_TIMING}, "SHORT"),
+        # Zone (15m) — retrace into established structure
+        (
+            "fvg_retrace_bull",
+            "fvg",
+            {
+                "type": "fvg",
+                "direction": "bullish",
+                "timeframe": TF_ZONE,
+                "condition": "price_in_gap",
+                "max_age_bars": 40,
+                "only_unfilled": True,
+            },
+            "LONG",
+        ),
+        (
+            "fvg_retrace_bear",
+            "fvg",
+            {
+                "type": "fvg",
+                "direction": "bearish",
+                "timeframe": TF_ZONE,
+                "condition": "price_in_gap",
+                "max_age_bars": 40,
+                "only_unfilled": True,
+            },
+            "SHORT",
+        ),
+        (
+            "ifvg_bull",
+            "ifvg",
+            {
+                "type": "ifvg",
+                "direction": "bullish",
+                "timeframe": TF_ZONE,
+                "condition": "price_in_gap",
+                "max_age_bars": 40,
+            },
+            "LONG",
+        ),
+        (
+            "ifvg_bear",
+            "ifvg",
+            {
+                "type": "ifvg",
+                "direction": "bearish",
+                "timeframe": TF_ZONE,
+                "condition": "price_in_gap",
+                "max_age_bars": 40,
+            },
+            "SHORT",
+        ),
+        (
+            "ob_bull",
+            "order_block",
+            {"ob_type": "bullish", "timeframe": TF_ZONE, "strength": "any"},
+            "LONG",
+        ),
+        (
+            "ob_bear",
+            "order_block",
+            {"ob_type": "bearish", "timeframe": TF_ZONE, "strength": "any"},
+            "SHORT",
+        ),
+        ("breaker_bull", "fx_breaker", {"direction": "bullish", "timeframe": TF_ZONE}, "LONG"),
+        ("breaker_bear", "fx_breaker", {"direction": "bearish", "timeframe": TF_ZONE}, "SHORT"),
         (
             "eqh_sweep_bear",
             "equal_hl_sweep",
-            {"equal_type": "eqh", "direction": "bearish", "timeframe": tf},
+            {"equal_type": "eqh", "direction": "bearish", "timeframe": TF_TIMING},
             "SHORT",
         ),
         (
             "eql_sweep_bull",
             "equal_hl_sweep",
-            {"equal_type": "eql", "direction": "bullish", "timeframe": tf},
+            {"equal_type": "eql", "direction": "bullish", "timeframe": TF_TIMING},
             "LONG",
         ),
     ]
-
-    atr = atr_from_klines(k5)
 
     for ctype, kind, cond, direction in checks:
         if not setup_enabled(ctype):
@@ -145,7 +255,7 @@ async def scan_candidates(
         if not setup_cooldown_elapsed(key):
             continue
         try:
-            if kind == "fvg":
+            if kind in ("fvg", "ifvg"):
                 ok, msg = await eval_fvg(cond, SYMBOL, price, http, cache)
             elif kind == "fx_displacement":
                 ok, msg = await eval_fx_displacement(cond, SYMBOL, price, http, cache)
@@ -161,6 +271,8 @@ async def scan_candidates(
                 ok, msg = await eval_fx_breaker(cond, SYMBOL, price, http, cache)
             elif kind == "equal_hl_sweep":
                 ok, msg = await eval_equal_hl_sweep(cond, SYMBOL, price, http, cache)
+            elif kind == "order_block":
+                ok, msg = await eval_order_block(cond, SYMBOL, price, http, cache)
             else:
                 continue
         except Exception as exc:
@@ -170,32 +282,51 @@ async def scan_candidates(
         if not ok:
             continue
 
+        ta_hits += 1
+        funnel_record("ta_detected", setup=ctype)
+
         if _requires_htf_alignment(ctype):
             aligned, align_reason = direction_aligns_with_htf(direction, bias)
             if not aligned:
+                funnel_record("htf_skipped", setup=ctype, reason=align_reason)
                 logger.debug("[gold-ai-trader] HTF skip %s: %s", ctype, align_reason)
                 continue
 
+        align_ok, align_reason = direction_aligns_with_htf(direction, bias)
         raw: Dict[str, Any] = {
             "msg": msg,
             "price": price,
-            "htf_align": direction_aligns_with_htf(direction, bias)[1],
+            "htf_align": align_reason,
+            "zone_tf": cond.get("timeframe", TF_TIMING),
         }
 
         if smt_modifier_enabled():
-            smt = await assess_smt_divergence(
+            raw["smt"] = await assess_smt_divergence(
                 direction=direction,
                 http_client=http,
                 cache=cache,
                 user_id=user_id,
             )
-            raw["smt"] = smt
+
+        body_q = atr and abs(float(k5[-2][4]) - float(k5[-2][1])) / atr if len(k5) >= 2 else 0
+        in_zone = "in_zone" in str(msg).lower() or "fired" in str(msg).lower() or "hit" in str(msg).lower()
+        struct_score, struct_line = compute_structure_score(
+            candidate_type=ctype,
+            direction=direction,
+            detail=str(msg),
+            quality_atr=max(body_q, 1.0),
+            htf_align=align_reason,
+            raw=raw,
+            in_zone=in_zone,
+        )
+        raw["structure_score"] = struct_score
+        raw["structure_score_line"] = struct_line
 
         cand = Candidate(
             type=ctype,
             direction=direction,
             detail=str(msg)[:400],
-            quality_atr=1.0,
+            quality_atr=max(body_q, 1.0),
             sig_key=key,
             raw=raw,
         )
@@ -210,37 +341,14 @@ async def scan_candidates(
             k_1h=k1h,
         )
         if not ok_gate:
+            funnel_record("gate_skipped", setup=ctype, reason=reason)
             logger.debug("[gold-ai-trader] gate skip %s: %s", ctype, reason)
             continue
 
-        body_q = atr and abs(float(k5[-2][4]) - float(k5[-2][1])) / atr if len(k5) >= 2 else 0
-        cand = replace(cand, quality_atr=max(body_q, cand.quality_atr))
+        funnel_record("candidate_passed", setup=ctype)
         found.append(cand)
 
+    if ta_hits == 0:
+        funnel_record("no_ta_match")
+
     return price, found
-
-
-def pick_best(candidates: List[Candidate]) -> Optional[Candidate]:
-    if not candidates:
-        return None
-    priority = {
-        "sweep_pdh": 5,
-        "sweep_pdl": 5,
-        "liq_sweep_bull": 5,
-        "liq_sweep_bear": 5,
-        "eqh_sweep_bear": 5,
-        "eql_sweep_bull": 5,
-        "sdp_bull": 4,
-        "sdp_bear": 4,
-        "breaker_bull": 4,
-        "breaker_bear": 4,
-        "disp_bull": 3,
-        "disp_bear": 3,
-        "fvg_bull": 2,
-        "fvg_bear": 2,
-    }
-    return sorted(
-        candidates,
-        key=lambda c: (priority.get(c.type, 1), c.quality_atr),
-        reverse=True,
-    )[0]

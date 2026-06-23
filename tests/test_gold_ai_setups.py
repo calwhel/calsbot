@@ -11,11 +11,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.gold_ai_trader.htf_bias import direction_aligns_with_htf, htf_bias_summary
-from app.gold_ai_trader.setup_toggles import setup_enabled, smt_modifier_enabled
+from app.gold_ai_trader.setup_toggles import setup_enabled, smt_modifier_enabled, max_candidates_per_scan
 from app.gold_ai_trader.smt_modifier import assess_smt_divergence, CTRADER_SMT_REFERENCES
+from app.gold_ai_trader.funnel import record as funnel_record, snapshot as funnel_snapshot
+from app.gold_ai_trader.structure_score import compute_structure_score
+from app.gold_ai_trader.scanner import Candidate, pick_best, pick_top_candidates
 from app.gold_ai_trader.context_history import parse_zone_from_detail, build_recent_decisions_block
 from app.gold_ai_trader.context import build_data_quality_block
-from app.gold_ai_trader.scanner import Candidate, pick_best
 from app.services.strategy_ta import (
     entry_zone_allows_price,
     eval_fx_breaker,
@@ -93,6 +95,18 @@ class TestSetupToggles:
     def test_new_breaker_default_off(self):
         os.environ.pop("GOLD_AI_SETUP_BREAKER_BULL", None)
         assert setup_enabled("breaker_bull") is False
+
+    def test_tier1_ob_ifvg_default_on(self):
+        os.environ.pop("GOLD_AI_SETUP_OB_BULL", None)
+        os.environ.pop("GOLD_AI_SETUP_IFVG_BULL", None)
+        os.environ.pop("GOLD_AI_SETUP_FVG_RETRACE_BULL", None)
+        assert setup_enabled("ob_bull") is True
+        assert setup_enabled("ifvg_bull") is True
+        assert setup_enabled("fvg_retrace_bull") is True
+
+    def test_max_candidates_per_scan_default(self):
+        os.environ.pop("GOLD_AI_TRADER_MAX_CANDIDATES_PER_SCAN", None)
+        assert max_candidates_per_scan() == 3
 
     def test_breaker_env_override(self):
         os.environ["GOLD_AI_SETUP_BREAKER_BULL"] = "true"
@@ -251,13 +265,43 @@ class TestContextEnrichment:
         z = parse_zone_from_detail("Bullish breaker 2653.0–2654.5 (broke above, retrace)")
         assert z == (2653.0, 2654.5)
 
-    def test_pick_best_prioritizes_breaker_over_fvg(self):
+    def test_pick_best_prioritizes_ob_over_fvg_retrace(self):
         cands = [
-            Candidate("fvg_bull", "LONG", "fvg", 1.0, "k1", {}),
-            Candidate("breaker_bull", "LONG", "breaker", 1.0, "k2", {}),
+            Candidate("fvg_retrace_bull", "LONG", "fvg", 1.0, "k1", {"structure_score": 60}),
+            Candidate("ob_bull", "LONG", "ob", 1.0, "k2", {"structure_score": 55}),
         ]
         best = pick_best(cands)
-        assert best.type == "breaker_bull"
+        assert best.type == "ob_bull"
+
+    def test_pick_top_returns_multiple(self):
+        cands = [
+            Candidate("fvg_bull", "LONG", "a", 1.0, "k1", {"structure_score": 40}),
+            Candidate("ob_bull", "LONG", "b", 1.0, "k2", {"structure_score": 70}),
+            Candidate("sdp_bull", "LONG", "c", 1.0, "k3", {"structure_score": 65}),
+        ]
+        top = pick_top_candidates(cands, 2)
+        assert len(top) == 2
+        assert top[0].type == "ob_bull"
+
+    def test_structure_score_htf_aligned(self):
+        score, line = compute_structure_score(
+            candidate_type="ob_bull",
+            direction="LONG",
+            detail="Bullish OB 2650–2652 HIT",
+            quality_atr=1.2,
+            htf_align="htf_aligned_bull",
+            in_zone=True,
+        )
+        assert score >= 60
+        assert "Structure score" in line
+
+    def test_funnel_snapshot_after_events(self):
+        funnel_record("scan")
+        funnel_record("ta_detected", setup="ob_bull")
+        funnel_record("gate_skipped", setup="ob_bull", reason="not_near_level")
+        snap = funnel_snapshot()
+        assert snap["scans"] >= 1
+        assert snap["ta_by_setup"].get("ob_bull", 0) >= 1
 
 
 class TestRecentDecisionsBlock:
