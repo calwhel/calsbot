@@ -1356,10 +1356,48 @@
 
 <script>
 const UID = {{ uid | tojson }};
+const SESSION_TOKEN = {{ session_token | tojson }};
 let _lastConfig = null;
 let _refreshing = false;
 let _liveLotsOverridden = false;
 let _livePanelOpen = false;
+
+if (SESSION_TOKEN) {
+  try { sessionStorage.setItem('th_session_token', SESSION_TOKEN); } catch (_) {}
+}
+
+function _authToken() {
+  return SESSION_TOKEN || (function () {
+    try { return sessionStorage.getItem('th_session_token') || ''; } catch (_) { return ''; }
+  })();
+}
+
+function _apiHeaders(jsonBody) {
+  const h = { Accept: 'application/json' };
+  if (jsonBody) h['Content-Type'] = 'application/json';
+  const tok = _authToken();
+  if (tok) {
+    h['X-TradeHub-Session'] = tok;
+    h['Authorization'] = 'Bearer ' + tok;
+  }
+  return h;
+}
+
+async function _apiFetch(url, opts = {}) {
+  const ctrl = new AbortController();
+  const ms = opts.timeoutMs || 30000;
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, {
+      credentials: 'same-origin',
+      ...opts,
+      headers: { ..._apiHeaders(opts.body), ...(opts.headers || {}) },
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(t);
+  }
+}
 
 function fmtSession(s) {
   if (!s) return '';
@@ -1686,6 +1724,24 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
+function showLoadError(title, sub) {
+  document.body.classList.remove('page-loading');
+  document.getElementById('status-line').textContent = title;
+  document.getElementById('session-line').textContent = sub;
+  document.getElementById('last-candidate').textContent = '';
+  document.getElementById('status-lamp').className = 'status-lamp dormant';
+  document.getElementById('demo-account-display').textContent = '—';
+  document.getElementById('calls-stat').textContent = '—';
+  document.getElementById('trades-stat').textContent = '—';
+  document.getElementById('cost-stat').textContent = '—';
+  document.getElementById('feed-count').textContent = '—';
+  document.getElementById('feed').innerHTML = `
+    <div class="empty-state">
+      <div class="empty-title">${escapeHtml(title)}</div>
+      <div class="empty-sub">${escapeHtml(sub)}</div>
+    </div>`;
+}
+
 function renderLessons(j) {
   const lessons = j.lessons || [];
   const el = document.getElementById('lessons');
@@ -1720,9 +1776,20 @@ async function refresh() {
   btn.disabled = true;
   btn.classList.add('spinning');
   try {
-    const r = await fetch(`/api/gold-ai-trader/status?uid=${encodeURIComponent(UID)}`);
-    const j = await r.json();
-    if (!j.ok) return;
+    const r = await _apiFetch(`/api/gold-ai-trader/status?uid=${encodeURIComponent(UID)}`);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) {
+      const detail = j.detail || j.error || `HTTP ${r.status}`;
+      if (r.status === 401 || r.status === 403) {
+        showLoadError(
+          'Sign in required',
+          'Open the Strategy Portal, log in with your account, then return here — or tap Portal in the header.'
+        );
+      } else {
+        showLoadError('Could not load trader data', String(detail));
+      }
+      return;
+    }
     document.body.classList.remove('page-loading');
     renderHero(j);
     renderDemoAccountPicker(j);
@@ -1731,6 +1798,11 @@ async function refresh() {
     renderFeed(j);
     renderLessons(j);
     renderConfig(j);
+  } catch (e) {
+    const msg = (e && e.name === 'AbortError')
+      ? 'Request timed out — tap refresh or check your connection.'
+      : 'Network error — tap refresh to try again.';
+    showLoadError('Connection failed', msg);
   } finally {
     _refreshing = false;
     btn.disabled = false;
@@ -1766,7 +1838,7 @@ document.getElementById('btn-reset-credits').onclick = async () => {
   if (!confirm('Reset today\'s Claude call count to 0? History is kept.')) return;
   btn.disabled = true;
   try {
-    const r = await fetch(`/api/gold-ai-trader/reset-daily-credits?uid=${encodeURIComponent(UID)}`, { method: 'POST' });
+    const r = await _apiFetch(`/api/gold-ai-trader/reset-daily-credits?uid=${encodeURIComponent(UID)}`, { method: 'POST' });
     if (!r.ok) throw new Error('Reset failed');
     showToast('Daily credits reset');
     await refresh();
@@ -1780,9 +1852,8 @@ document.getElementById('btn-reset-credits').onclick = async () => {
 document.getElementById('btn-kill').onclick = async () => {
   const btn = document.getElementById('btn-kill');
   btn.disabled = true;
-  await fetch(`/api/gold-ai-trader/kill-switch?uid=${encodeURIComponent(UID)}`, {
+  await _apiFetch(`/api/gold-ai-trader/kill-switch?uid=${encodeURIComponent(UID)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ on: true }),
   });
   showToast('Kill switch activated');
@@ -1797,9 +1868,8 @@ document.getElementById('toggle-enabled').onchange = async (e) => {
     return;
   }
   e.target.disabled = true;
-  await fetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
+  await _apiFetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled: en }),
   });
   showToast(en ? 'Trader enabled' : 'Trader disabled');
@@ -1817,9 +1887,8 @@ document.getElementById('btn-save-demo-size').onclick = async () => {
   if (!_liveLotsOverridden && !(_lastConfig && _lastConfig.live_mirror_enabled)) {
     body.live_lot_size = demoLots;
   }
-  await fetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
+  await _apiFetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   showToast('Demo size updated');
@@ -1840,9 +1909,8 @@ document.getElementById('btn-save').onclick = async () => {
     max_calls_day: +document.getElementById('max-calls').value,
     no_overnight: document.getElementById('no-overnight').checked,
   };
-  await fetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
+  await _apiFetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   btn.classList.add('saved');
@@ -1865,9 +1933,8 @@ document.getElementById('btn-save-demo').onclick = async () => {
   const btn = document.getElementById('btn-save-demo');
   btn.disabled = true;
   btn.textContent = 'Saving…';
-  const r = await fetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
+  const r = await _apiFetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ demo_ctrader_account_id: ctid }),
   });
   if (!r.ok) {
@@ -1915,9 +1982,8 @@ document.getElementById('confirm-live-ok').onclick = async () => {
     confirm_real_money: true,
   };
   _pendingLiveEnable = null;
-  const r = await fetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
+  const r = await _apiFetch(`/api/gold-ai-trader/config?uid=${encodeURIComponent(UID)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   if (!r.ok) {
@@ -1929,7 +1995,7 @@ document.getElementById('confirm-live-ok').onclick = async () => {
   refresh();
 };
 document.getElementById('btn-live-disconnect').onclick = async () => {
-  await fetch(`/api/gold-ai-trader/disconnect-live?uid=${encodeURIComponent(UID)}`, { method: 'POST' });
+  await _apiFetch(`/api/gold-ai-trader/disconnect-live?uid=${encodeURIComponent(UID)}`, { method: 'POST' });
   showToast('Live mirror disconnected');
   refresh();
 };

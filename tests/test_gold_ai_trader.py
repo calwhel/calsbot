@@ -48,6 +48,25 @@ def test_normalize_uid_adds_th_prefix():
     assert _normalize_uid("TH-YP0BADA8") == "TH-YP0BADA8"
 
 
+def test_gold_ai_trader_page_sends_session_auth():
+    """Gold AI UI must attach session token like the main portal (fixes infinite loading)."""
+    html = open(
+        __import__("pathlib").Path(__file__).resolve().parents[1]
+        / "app/templates/gold_ai_trader.html",
+        encoding="utf-8",
+    ).read()
+    routes = open(
+        __import__("pathlib").Path(__file__).resolve().parents[1]
+        / "app/gold_ai_trader/routes.py",
+        encoding="utf-8",
+    ).read()
+    assert "X-TradeHub-Session" in html
+    assert "_apiFetch" in html
+    assert "showLoadError" in html
+    assert "session_token" in routes
+    assert "_session_token_for_page" in routes
+
+
 def test_persist_demo_user_from_admin():
     class _Row:
         demo_user_id = None

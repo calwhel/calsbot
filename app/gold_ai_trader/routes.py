@@ -116,6 +116,27 @@ def _sync_live_mirror_fields(db, decision: GoldAiDecision) -> None:
         db.commit()
 
 
+def _session_token_for_page(request: Request, uid: str) -> Optional[str]:
+    """Session token for same-origin / WebView API calls (must match requested UID)."""
+    uid = _normalize_uid(uid)
+    try:
+        import strategy_portal_server as portal
+
+        session_uid = portal._get_session_uid(request)
+        if session_uid == uid:
+            return request.cookies.get(portal._COOKIE_NAME)
+        token_uid = portal._get_request_token_uid(request)
+        if token_uid == uid:
+            auth = request.headers.get("Authorization", "")
+            if auth.lower().startswith("bearer "):
+                return auth[7:].strip()
+            hdr = request.headers.get("X-TradeHub-Session", "").strip()
+            return hdr or None
+    except Exception:
+        pass
+    return None
+
+
 @router.get("/gold-ai-trader", response_class=HTMLResponse)
 async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
     db = SessionLocal()
@@ -123,9 +144,14 @@ async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
         _resolve_user(uid, db)
     finally:
         db.close()
+    norm_uid = _normalize_uid(uid)
     return templates.TemplateResponse(
         "gold_ai_trader.html",
-        {"request": request, "uid": _normalize_uid(uid)},
+        {
+            "request": request,
+            "uid": norm_uid,
+            "session_token": _session_token_for_page(request, norm_uid),
+        },
     )
 
 
