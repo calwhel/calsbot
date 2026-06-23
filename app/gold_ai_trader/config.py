@@ -56,6 +56,8 @@ class GoldAiRuntimeConfig:
     use_limit_entry: bool
     pending_entry_timeout_min: int
     learning_daily_at_ny_end: bool
+    funnel_mode: str
+    screen_model: str
 
 
 DEFAULTS = GoldAiRuntimeConfig(
@@ -82,6 +84,8 @@ DEFAULTS = GoldAiRuntimeConfig(
     use_limit_entry=True,
     pending_entry_timeout_min=30,
     learning_daily_at_ny_end=True,
+    funnel_mode="shadow",
+    screen_model="claude-haiku-4-5",
 )
 
 
@@ -112,6 +116,12 @@ def env_defaults() -> GoldAiRuntimeConfig:
         use_limit_entry=_env_bool("GOLD_AI_TRADER_USE_LIMIT_ENTRY", True),
         pending_entry_timeout_min=_env_int("GOLD_AI_TRADER_PENDING_TIMEOUT_MIN", 30),
         learning_daily_at_ny_end=_env_bool("GOLD_AI_TRADER_LEARNING_DAILY", True),
+        funnel_mode=(
+            os.environ.get("GOLD_FUNNEL_MODE", "shadow").strip().lower()
+            if os.environ.get("GOLD_FUNNEL_MODE", "shadow").strip().lower() in ("shadow", "live")
+            else "shadow"
+        ),
+        screen_model=os.environ.get("GOLD_AI_TRADER_SCREEN_MODEL", "claude-haiku-4-5"),
     )
 
 
@@ -120,6 +130,14 @@ OPUS_INPUT_USD_PER_M = 15.0
 OPUS_OUTPUT_USD_PER_M = 75.0
 OPUS_CACHE_READ_USD_PER_M = 1.50
 OPUS_CACHE_WRITE_USD_PER_M = 18.75
+
+# Haiku 4.5 list pricing (USD per million tokens) — screen stage.
+HAIKU_INPUT_USD_PER_M = 1.0
+HAIKU_OUTPUT_USD_PER_M = 5.0
+HAIKU_CACHE_READ_USD_PER_M = 0.10
+HAIKU_CACHE_WRITE_USD_PER_M = 1.25
+
+SCREEN_MODEL = "claude-haiku-4-5"
 
 SYMBOL = "XAUUSD"
 ASSET_CLASS = "forex"

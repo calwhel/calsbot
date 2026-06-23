@@ -31,7 +31,8 @@ from app.gold_ai_trader.guardrails import (
 )
 from app.gold_ai_trader.learning import get_setup_stats
 from app.gold_ai_trader.call_gates import call_stats_today
-from app.gold_ai_trader.models import GoldAiConfig, GoldAiDecision, GoldAiLesson
+from app.gold_ai_trader.funnel import funnel_stats_today
+from app.gold_ai_trader.models import GoldAiConfig, GoldAiDecision, GoldAiFunnelFalseReject, GoldAiLesson
 from app.gold_ai_trader.schema import ensure_gold_ai_trader_schema, seed_config_if_missing
 from app.gold_ai_trader import state as runtime_state
 
@@ -168,6 +169,12 @@ async def api_status(uid: str = Query(...)):
                     "live_mirror_status": d.live_mirror_status,
                     "live_mirror_error": d.live_mirror_error,
                     "cost_usd": d.cost_usd,
+                    "total_cost_usd": getattr(d, "total_cost_usd", d.cost_usd),
+                    "screen_action": getattr(d, "screen_action", None),
+                    "screen_reason": getattr(d, "screen_reason", None),
+                    "screen_cost_usd": getattr(d, "screen_cost_usd", 0),
+                    "opus_called": getattr(d, "opus_called", True),
+                    "funnel_mode": getattr(d, "funnel_mode", None),
                     "rationale": (d.decision or {}).get("rationale", ""),
                     "reasoning_preview": (d.reasoning or "")[:300],
                 }
@@ -197,6 +204,8 @@ async def api_status(uid: str = Query(...)):
                 "use_limit_entry": cfg.use_limit_entry,
                 "pending_entry_timeout_min": cfg.pending_entry_timeout_min,
                 "learning_daily_at_ny_end": cfg.learning_daily_at_ny_end,
+                "funnel_mode": getattr(cfg, "funnel_mode", "shadow"),
+                "screen_model": getattr(cfg, "screen_model", "claude-haiku-4-5"),
                 "calls_reset_at": (
                     cfg_row.calls_reset_at.isoformat()
                     if getattr(cfg_row, "calls_reset_at", None)
@@ -219,6 +228,7 @@ async def api_status(uid: str = Query(...)):
                 "demo_pnl_usd": demo_pnl_today_usd(db, user_id),
                 "live_pnl_usd": live_pnl_today_usd(db, user_id),
                 "live_trades": live_trades_today(db),
+                "funnel": funnel_stats_today(db),
             },
             "lessons": [
                 {"session": x.session, "ts": x.ts.isoformat(), "digest": x.digest}
@@ -227,6 +237,41 @@ async def api_status(uid: str = Query(...)):
             "setup_stats": get_setup_stats(db),
             "call_stats_today": call_stats_today(db),
             "decision_feed": feed,
+        }
+    finally:
+        db.close()
+
+
+@router.get("/api/gold-ai-trader/funnel-false-rejects")
+async def api_funnel_false_rejects(uid: str = Query(...), limit: int = Query(50, ge=1, le=200)):
+    """Review Haiku-SKIP vs Opus-TAKE false rejects (shadow mode instrumentation)."""
+    ensure_gold_ai_trader_schema()
+    db = SessionLocal()
+    try:
+        _resolve_user(uid, db)
+        rows = (
+            db.query(GoldAiFunnelFalseReject)
+            .order_by(GoldAiFunnelFalseReject.ts.desc())
+            .limit(limit)
+            .all()
+        )
+        return {
+            "ok": True,
+            "count": len(rows),
+            "items": [
+                {
+                    "id": r.id,
+                    "ts": r.ts.isoformat() if r.ts else None,
+                    "decision_id": r.decision_id,
+                    "session": r.session,
+                    "candidate_type": r.candidate_type,
+                    "screen_reason": r.screen_reason,
+                    "opus_action": r.opus_action,
+                    "opus_confidence": r.opus_confidence,
+                    "opus_rationale": r.opus_rationale,
+                }
+                for r in rows
+            ],
         }
     finally:
         db.close()

@@ -32,7 +32,11 @@ from app.gold_ai_trader.call_gates import (
 from app.services.tradfi_prices import get_klines
 from app.gold_ai_trader.config import SYMBOL, ASSET_CLASS
 from app.gold_ai_trader.context import build_context_snapshot
-from app.gold_ai_trader.claude import decide
+from app.gold_ai_trader.funnel import (
+    funnel_stats_today,
+    persist_false_reject,
+    run_funnel_pipeline,
+)
 from app.gold_ai_trader.executor import execute_take, execute_live_mirror_take, flatten_open_demo_positions
 from app.gold_ai_trader.learning import maybe_run_learning_review, record_outcome_from_execution, get_setup_stats
 from app.gold_ai_trader.pending_entry import sync_pending_entries
@@ -116,6 +120,11 @@ async def run_gold_ai_trader_loop() -> None:
 
         k5 = await get_klines(SYMBOL, ASSET_CLASS, "5m", 60) or []
         atr = atr_from_klines(k5)
+        rvol = 1.0
+        vols = [float(r[5]) for r in k5 if r and len(r) >= 6]
+        if len(vols) >= 20:
+            avg = sum(vols[-21:-1]) / 20
+            rvol = (vols[-1] / avg) if avg else 1.0
         ok_dedupe, dedupe_reason = should_invoke_claude(
             db, candidate, float(price), atr, setup_cooldown_s=_setup_cooldown_s()
         )
@@ -142,10 +151,26 @@ async def run_gold_ai_trader_loop() -> None:
             user_id=cfg.demo_user_id,
         )
 
-        decision, reasoning, usage = await decide(context, model=cfg.model)
+        funnel = await run_funnel_pipeline(
+            candidate=candidate,
+            price=float(price),
+            atr=float(atr),
+            rvol=float(rvol),
+            session=session,
+            full_context=context,
+            cfg=cfg,
+            db=db,
+        )
+        decision = funnel.decision
+        reasoning = funnel.reasoning
+        usage = funnel.opus_usage
         record_claude_invocation(candidate)
         action = (decision.get("action") or "skip").lower()
         conf = int(decision.get("confidence") or 0)
+
+        screen_cost = float(funnel.screen_usage.get("cost_usd", 0) or 0)
+        opus_cost = float(usage.get("cost_usd", 0) or 0)
+        total_cost = round(screen_cost + opus_cost, 6)
 
         row = GoldAiDecision(
             session=session,
@@ -160,11 +185,36 @@ async def run_gold_ai_trader_loop() -> None:
             tokens_out=int(usage.get("tokens_out", 0)),
             cache_read_tokens=int(usage.get("cache_read_tokens", 0)),
             cache_write_tokens=int(usage.get("cache_write_tokens", 0)),
-            cost_usd=float(usage.get("cost_usd", 0)),
+            cost_usd=opus_cost,
+            screen_action=funnel.screen_action,
+            screen_reason=funnel.screen_reason,
+            screen_model=getattr(cfg, "screen_model", "claude-haiku-4-5"),
+            screen_tokens_in=int(funnel.screen_usage.get("tokens_in", 0)),
+            screen_tokens_out=int(funnel.screen_usage.get("tokens_out", 0)),
+            screen_cache_read_tokens=int(funnel.screen_usage.get("cache_read_tokens", 0)),
+            screen_cache_write_tokens=int(funnel.screen_usage.get("cache_write_tokens", 0)),
+            screen_cost_usd=screen_cost,
+            funnel_mode=funnel.funnel_mode,
+            opus_called=bool(funnel.opus_called),
+            total_cost_usd=total_cost,
         )
         db.add(row)
         db.commit()
         db.refresh(row)
+
+        if funnel.false_reject:
+            persist_false_reject(
+                db,
+                decision_id=row.id,
+                session=session,
+                candidate_type=candidate.type,
+                screen_reason=funnel.screen_reason,
+                opus_action=action,
+                opus_confidence=conf,
+                opus_rationale=str(decision.get("rationale", "") or ""),
+            )
+
+        funnel_stats_today(db)
 
         runtime_state.note_decision(
             {
