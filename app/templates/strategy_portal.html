@@ -5208,6 +5208,7 @@ const WZ={
   partialTp:false,tp1Pips:20,tp1Pct:50,tp1MoveBe:true,tmBreakeven:false,beTrigPips:20,beOffPips:1,
   tmTrail:false,trailDistPips:15,trailStepPips:5,
   sessionsEnabled:false,allowedSessions:[],sessCustomStart:'07:00',sessCustomEnd:'16:00',
+  dynamicTpSl:false,
   newsFilter:false,newsBeforeMin:30,newsAfterMin:30,newsImpact:'high',
   leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,posSizeLots:0.10,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,noDuplicateSymbol:false,
   sessions:[],tradingDays:[],coins:'all',specificCoins:'',singleCoin:'',
@@ -6743,6 +6744,10 @@ function renderStep5(){
       <div><div class="toggle-lbl">News filter</div><div class="toggle-sub">Block entries around high-impact calendar events</div></div>
       <div class="switch ${WZ.newsFilter?'on':''}" id="sw-ef-news"></div>
     </div>
+    <div class="toggle-row" onclick="wzToggleDynamicTpSl()" style="margin-top:8px;margin-bottom:0">
+      <div><div class="toggle-lbl">Dynamic TP/SL (Claude)</div><div class="toggle-sub">Live only — Claude sets SL/TP from chart context (20–60 pip SL, min 2× R:R). Falls back to your fixed levels on error.</div></div>
+      <div class="switch ${WZ.dynamicTpSl?'on':''}" id="sw-dynamic-tpsl"></div>
+    </div>
     <div id="row-ef-news" style="${WZ.newsFilter?'':'display:none'};padding:8px 0">
       <label style="display:block;font-size:12px">Buffer before (min) <input type="number" min="0" value="${WZ.newsBeforeMin||30}" style="width:64px;margin-left:8px" onchange="WZ.newsBeforeMin=Number(this.value)"></label>
       <label style="display:block;margin-top:6px;font-size:12px">Buffer after (min) <input type="number" min="0" value="${WZ.newsAfterMin||30}" style="width:64px;margin-left:8px" onchange="WZ.newsAfterMin=Number(this.value)"></label>
@@ -6788,6 +6793,11 @@ function wzToggleEntryFilter(which){
   const on=sw.classList.toggle('on'); row.style.display=on?'block':'none';
   if(which==='sess')WZ.sessionsEnabled=on;
   if(which==='news')WZ.newsFilter=on;
+}
+function wzToggleDynamicTpSl(){
+  const sw=document.getElementById('sw-dynamic-tpsl');
+  if(!sw)return;
+  WZ.dynamicTpSl=sw.classList.toggle('on');
 }
 
 function wzToggleAllowedSession(id,checked){
@@ -7729,6 +7739,7 @@ async function buildStrategy(){
         news_buffer_before_min:Number(WZ.newsBeforeMin||30),
         news_buffer_after_min:Number(WZ.newsAfterMin||30),
         news_impact:WZ.newsImpact||'high',
+        dynamic_tp_sl:!!WZ.dynamicTpSl,
       });
     }
     // Forex pip TP/SL — executor converts pips→% at fire time using the live
@@ -12917,6 +12928,7 @@ function renderLFLiveStrategies(strats, positions, health) {
         <button class="btn primary sm" onclick="openStrategyDetail(${s.id})">View trades</button>
         <button class="btn ${paused ? 'success' : 'ghost'} sm" onclick="lfToggleStrat(${s.id},'${s.status}')">${paused ? '▶ Resume' : '⏸ Pause'}</button>
         <button class="btn sm" onclick="lfEditSize(${s.id})">Edit size</button>
+        <button class="btn ${s.dynamic_tp_sl ? 'primary' : 'ghost'} sm" onclick="lfToggleDynamicTpSl(${s.id},${s.dynamic_tp_sl ? 'true' : 'false'})">${s.dynamic_tp_sl ? '✓ Dynamic TP/SL' : 'Dynamic TP/SL'}</button>
       </div>
       <div id="lf-size-edit-${s.id}" class="lf-size-edit" style="display:none"
            data-stype="${s.size_type}" data-sval="${s.size_value}"></div>
@@ -13003,6 +13015,20 @@ async function lfSaveSize(id){
     const j = await r.json().catch(()=>({}));
     if(r.ok && j.success){ toast(`Size updated → ${j.size_label}`); loadLiveForex(); }
     else { toast(j.detail||j.message||'Could not update size','error'); }
+  }catch(e){ toast('Network error','error'); }
+}
+
+async function lfToggleDynamicTpSl(id, currentlyOn){
+  try{
+    const r = await fetch(`/api/strategies/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({uid:UID, dynamic_tp_sl:!currentlyOn})});
+    const j = await r.json().catch(()=>({}));
+    if(r.ok && j.success){
+      toast(!currentlyOn ? 'Dynamic TP/SL enabled' : 'Dynamic TP/SL disabled — using fixed SL/TP');
+      loadLiveForex();
+    } else {
+      toast(j.detail||j.message||'Could not update Dynamic TP/SL','error');
+    }
   }catch(e){ toast('Network error','error'); }
 }
 

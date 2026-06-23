@@ -12,9 +12,9 @@ class TestSessionFilter(unittest.TestCase):
 
     def test_london_window(self):
         cfg = {"sessions_enabled": True, "allowed_sessions": ["london"]}
-        ok, _ = is_in_allowed_session(cfg, datetime(2026, 6, 10, 10, 0))
+        ok, _ = is_in_allowed_session(cfg, datetime(2026, 6, 10, 7, 30))
         self.assertTrue(ok)
-        ok, reason = is_in_allowed_session(cfg, datetime(2026, 6, 10, 20, 0))
+        ok, reason = is_in_allowed_session(cfg, datetime(2026, 6, 10, 10, 0))
         self.assertFalse(ok)
         self.assertEqual(reason, "session_filter")
 
@@ -43,6 +43,7 @@ class TestSessionFilter(unittest.TestCase):
     def test_sessions_dict_has_expected_keys(self):
         self.assertIn("london", SESSIONS)
         self.assertIn("newyork", SESSIONS)
+        self.assertIn("asia", SESSIONS)
 
 
 if __name__ == "__main__":

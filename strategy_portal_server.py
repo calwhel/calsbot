@@ -91,6 +91,7 @@ def _lf_trade_mgmt_flags(cfg: dict) -> dict:
         "partial_tp_enabled": bool(cfg.get("partial_tp_enabled")),
         "sessions_enabled": bool(cfg.get("sessions_enabled")),
         "news_filter_enabled": bool(cfg.get("news_filter_enabled")),
+        "dynamic_tp_sl": bool(cfg.get("dynamic_tp_sl")),
         "allowed_sessions": [str(x) for x in sessions][:3],
     }
 
@@ -522,6 +523,7 @@ def _lf_build_strategy_card(s: dict, sparkline_by_id: dict) -> dict:
             "total_pips_pnl": _total_pips,
             "last_fired_at": _last_fired,
             "trade_mgmt": _lf_trade_mgmt_flags(cfg),
+            "dynamic_tp_sl": bool(cfg.get("dynamic_tp_sl")),
             "sparkline_7d": _spark_cum if _closed >= 2 and len(_spark_cum) >= 2 else [],
             "size_type": pst, "size_value": round(size_value, 4),
             "size_label": size_label, "timeframe": _tf or "—",
@@ -11663,11 +11665,13 @@ async def api_update_strategy(strategy_id: int, request: Request):
         _ef_keys = (
             "sessions_enabled", "allowed_sessions", "session_custom",
             "news_filter_enabled", "news_buffer_before_min", "news_buffer_after_min",
-            "news_impact",
+            "news_impact", "dynamic_tp_sl",
         )
         for k in _ef_keys:
             if k in body:
                 config[k] = body[k]
+        if "dynamic_tp_sl" in config:
+            config["dynamic_tp_sl"] = bool(config.get("dynamic_tp_sl"))
         if config.get("news_impact") not in (None, "high", "high_medium"):
             config["news_impact"] = "high"
         for _nb in ("news_buffer_before_min", "news_buffer_after_min"):

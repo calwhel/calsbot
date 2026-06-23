@@ -1533,17 +1533,9 @@ async def _fetch_price_ta_singleflight(
 
 # ─── Guard helpers ───────────────────────────────────────────────────────────
 
-_SESSION_HOURS = {
-    "asian":    (0, 8),   "tokyo":    (0, 8),   "asia":    (0, 8),
-    "sydney":   (22, 7),  # Sydney wraps midnight UTC — handled specially below
-    "london":   (7, 16),  "europe":   (7, 16),
-    "new_york": (13, 22), "ny":       (13, 22),
-    "overlap":  (13, 16),
-    # ICT killzones — mirror strategy_ta.eval_fx_killzone / backtest_engine
-    "london_kz": (7, 9),
-    "ny_kz":     (12, 14),
-    "asian_kz":  (20, 23),
-}
+from app.services.forex_sessions import build_executor_session_hours
+
+_SESSION_HOURS = build_executor_session_hours()
 _KZ_SESSION_IDS = frozenset({"london_kz", "ny_kz", "asian_kz", "any_kz"})
 
 # ── Session alert dedup + windows ─────────────────────────────────────────────
@@ -1592,17 +1584,14 @@ def _check_trading_days(filters: Dict) -> bool:
 
 
 def _check_time_filter(filters: Dict) -> bool:
-    hour = datetime.utcnow().hour
-
     # 1. Explicit hour-range filter
     tf = filters.get("time_filter")
     if tf:
+        hour = datetime.utcnow().hour
         if not (tf.get("start_hour", 0) <= hour < tf.get("end_hour", 24)):
             return False
 
     # 2. Named session filter  {"type":"session","sessions":["new_york"]}
-    # Defensive: tolerate a bare list of ids or a raw string instead of the
-    # canonical dict — a malformed shape would otherwise raise and block firing.
     sf = filters.get("session")
     if sf:
         if isinstance(sf, dict):
@@ -1615,20 +1604,14 @@ def _check_time_filter(filters: Dict) -> bool:
             raw_sessions = []
         wanted = [str(s).lower() for s in raw_sessions]
         if wanted:
-            active = []
-            for name, (s, e) in _SESSION_HOURS.items():
-                # Sessions that wrap midnight UTC (start > end) are active
-                # when hour >= start OR hour < end.
-                if s > e:
-                    if hour >= s or hour < e:
-                        active.append(name)
-                elif s <= hour < e:
-                    active.append(name)
+            from app.services.forex_sessions import is_named_session_active
+
+            now = datetime.utcnow()
             if "any_kz" in wanted:
                 wanted = [w for w in wanted if w != "any_kz"] + [
                     k for k in _KZ_SESSION_IDS if k != "any_kz"
                 ]
-            if not any(s in active for s in wanted):
+            if not any(is_named_session_active(s, now) for s in wanted):
                 return False
 
     return True
@@ -2032,6 +2015,68 @@ def _ctrader_lot_params_for_target(target: dict, risk: dict, ps_type: str) -> tu
     return _fixed_lots, _use_risk_pct
 
 
+async def _resolve_live_forex_claude_fire(
+    *,
+    strategy_id: int,
+    config: dict,
+    symbol: str,
+    direction: str,
+    entry: float,
+    sl_price: float,
+    tp_price: float,
+    tp2_price,
+    sl_pct: float,
+    tp_pct: float,
+    details,
+    price_data: dict,
+    timeframe: str,
+):
+    """Claude confirm and/or dynamic TP/SL — last gate before enqueue."""
+    from app.services.forex_claude_confirm import (
+        assert_valid_sl_price,
+        forex_claude_confirm_enabled,
+        resolve_forex_claude_fire,
+        strategy_dynamic_tp_sl_enabled,
+    )
+
+    if not assert_valid_sl_price(sl_price):
+        return False, "missing_static_sl", sl_price, tp_price, sl_pct, tp_pct, None, False
+
+    if not (forex_claude_confirm_enabled() or strategy_dynamic_tp_sl_enabled(config)):
+        return True, "static", sl_price, tp_price, sl_pct, tp_pct, None, False
+
+    fire = await resolve_forex_claude_fire(
+        strategy_id=strategy_id,
+        symbol=symbol,
+        direction=direction,
+        entry=entry,
+        static_sl=sl_price,
+        static_tp=tp_price,
+        static_sl_pct=sl_pct,
+        static_tp_pct=tp_pct,
+        static_tp2=tp2_price,
+        config=config,
+        conditions_met=details,
+        price_data=price_data,
+        timeframe=timeframe,
+    )
+    if not fire.allowed_to_fire:
+        return False, fire.reason, sl_price, tp_price, sl_pct, tp_pct, None, fire.claude_called
+
+    out_sl = fire.sl_price
+    out_tp = fire.tp_price
+    out_sl_pct = fire.sl_pct if fire.used_dynamic else sl_pct
+    out_tp_pct = fire.tp_pct if fire.used_dynamic else tp_pct
+    out_sl_pips = fire.sl_pips
+
+    if not assert_valid_sl_price(out_sl):
+        if assert_valid_sl_price(sl_price):
+            return True, "static_fallback_invalid_dynamic_sl", sl_price, tp_price, sl_pct, tp_pct, None, fire.claude_called
+        return False, "missing_sl", out_sl, out_tp, out_sl_pct, out_tp_pct, out_sl_pips, fire.claude_called
+
+    return True, fire.reason, out_sl, out_tp, out_sl_pct, out_tp_pct, out_sl_pips, fire.used_dynamic
+
+
 def _forex_live_blockers(prefs, user=None) -> List[str]:
     """Why forex/index live routing is blocked (mirrors portal _user_ctrader_live_ready)."""
     blockers: List[str] = []
@@ -2390,6 +2435,56 @@ async def _ctrader_fanout_live_fire_impl(
         and float(partial_close_pct) > 0
     )
     _live_tp_pct = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
+    _dyn_sl_pips = None
+
+    if asset_class == "forex":
+        _fan_tf = _primary_timeframe(config)
+        (
+            _claude_ok,
+            _claude_reason,
+            sl_price,
+            tp_price,
+            sl_pct,
+            tp_pct,
+            _dyn_sl_pips,
+            _used_dynamic,
+        ) = await _resolve_live_forex_claude_fire(
+            strategy_id=strategy.id,
+            config=config,
+            symbol=symbol,
+            direction=direction,
+            entry=current_price,
+            sl_price=sl_price,
+            tp_price=tp_price,
+            tp2_price=tp2_price,
+            sl_pct=sl_pct,
+            tp_pct=tp_pct,
+            details=details,
+            price_data=price_data,
+            timeframe=_fan_tf,
+        )
+        if not _claude_ok:
+            for ex, _ in executions:
+                ex.outcome = "CANCELLED"
+                ex.notes = (
+                    f"{exec_notes or ''} | claude_confirm_blocked: {_claude_reason}"
+                ).strip(" |")
+            db.commit()
+            logger.info(
+                f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} fan-out "
+                f"blocked by Claude confirm: {_claude_reason}"
+            )
+            return True
+        if _used_dynamic:
+            for ex, _ in executions:
+                ex.sl_price = sl_price
+                ex.tp_price = tp_price
+                ex.current_sl = sl_price
+                ex.notes = (
+                    f"{exec_notes or ''} | dynamic_tp_sl sl_pips={_dyn_sl_pips}"
+                ).strip(" |")
+            db.commit()
+        _live_tp_pct = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
 
     jobs = []
     for ex, target in executions:
@@ -2398,6 +2493,11 @@ async def _ctrader_fanout_live_fire_impl(
             or ex.ctrader_account_id or ""
         ).strip()
         _fixed_lots, _use_risk_pct = _ctrader_lot_params_for_target(target, risk, ps_type)
+        _job_sl_pips = (
+            float(_dyn_sl_pips)
+            if asset_class == "forex" and _dyn_sl_pips
+            else float(ex_config.get("stop_loss_pips") or 0) or None
+        )
         jobs.append(CtraderOrderJob(
             user_id=user.id,
             strategy_id=strategy.id,
@@ -2410,7 +2510,7 @@ async def _ctrader_fanout_live_fire_impl(
             risk_pct=_risk_pct_per,
             risk_usd=_risk_usd,
             use_risk_pct=_use_risk_pct,
-            sl_pips=float(ex_config.get("stop_loss_pips") or 0) or None,
+            sl_pips=_job_sl_pips,
             fixed_lots=_fixed_lots or None,
             asset_class=asset_class,
             partial_close_pct=float(partial_close_pct) if partial_close_pct else None,
@@ -5172,6 +5272,22 @@ async def evaluate_and_fire(
         else:
             is_paper = True
 
+    # ── Live forex scan gate (fixed UTC windows — before price/TA fetch) ─────
+    if asset_class == "forex" and not is_paper:
+        from app.services.forex_sessions import live_forex_session_allowed
+
+        _lf_ok, _lf_reason = live_forex_session_allowed(
+            config, datetime.utcnow(),
+        )
+        if not _lf_ok:
+            _bump("blk_live_forex_session")
+            logger.debug(
+                "[Strategy %s] live forex scan skipped — %s",
+                strategy.id,
+                _lf_reason,
+            )
+            return
+
     if asset_class in PAPER_ONLY_CLASSES:
         if not is_market_open(asset_class):
             _bump(f"blk_market_closed_{asset_class}")
@@ -5495,8 +5611,10 @@ async def evaluate_and_fire(
         )
         return
 
-    # ── Session filter (forex/tradfi entry only) ─────────────────────────────
-    if asset_class in ("forex", "index", "stock"):
+    # ── Session filter (paper tradfi / index / stock — live forex gated above) ─
+    if asset_class in ("forex", "index", "stock") and not (
+        asset_class == "forex" and not is_paper
+    ):
         from app.services.session_filter import is_in_allowed_session
 
         _sess_ok, _ = is_in_allowed_session(config, datetime.utcnow())
@@ -6274,6 +6392,73 @@ async def evaluate_and_fire(
                     # In partial-runner mode the broker TP must be TP2 (final target);
                     # otherwise it stays at the strategy's TP1.
                     _live_tp_pct  = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
+                    _dyn_sl_pips = None
+                    if asset_class == "forex":
+                        (
+                            _claude_ok,
+                            _claude_reason,
+                            sl_price,
+                            tp_price,
+                            sl_pct,
+                            tp_pct,
+                            _dyn_sl_pips,
+                            _used_dynamic,
+                        ) = await _resolve_live_forex_claude_fire(
+                            strategy_id=strategy.id,
+                            config=config,
+                            symbol=symbol,
+                            direction=direction,
+                            entry=current_price,
+                            sl_price=sl_price,
+                            tp_price=tp_price,
+                            tp2_price=tp2_price,
+                            sl_pct=sl_pct,
+                            tp_pct=tp_pct,
+                            details=details,
+                            price_data=price_data,
+                            timeframe=_eval_tf,
+                        )
+                        if not _claude_ok:
+                            _bump("blk_claude_confirm")
+                            execution.outcome = "CANCELLED"
+                            execution.notes = (
+                                f"{_exec_notes or ''} | claude_confirm_blocked: {_claude_reason}"
+                            ).strip(" |")
+                            db.commit()
+                            logger.info(
+                                f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} "
+                                f"live fire blocked by Claude confirm: {_claude_reason}"
+                            )
+                            _accum_cycle_fire_ms(_fire_t0)
+                            break
+                        if _used_dynamic:
+                            execution.sl_price = sl_price
+                            execution.tp_price = tp_price
+                            execution.current_sl = sl_price
+                            execution.notes = (
+                                f"{_exec_notes or ''} | dynamic_tp_sl sl_pips={_dyn_sl_pips}"
+                            ).strip(" |")
+                            db.commit()
+                        _live_tp_pct = float(tp2_pct) if (_partial_mode and tp2_pct) else tp_pct
+                    from app.services.forex_claude_confirm import assert_valid_sl_price
+                    if not assert_valid_sl_price(sl_price):
+                        _bump("blk_missing_sl")
+                        execution.outcome = "CANCELLED"
+                        execution.notes = (
+                            f"{_exec_notes or ''} | blocked: missing_valid_sl"
+                        ).strip(" |")
+                        db.commit()
+                        logger.error(
+                            f"[{_log_ts()}] [Strategy {strategy.id}] {symbol} "
+                            f"blocked — no valid SL before enqueue"
+                        )
+                        _accum_cycle_fire_ms(_fire_t0)
+                        break
+                    _job_sl_pips = (
+                        float(_dyn_sl_pips)
+                        if _dyn_sl_pips
+                        else float(ex_config.get("stop_loss_pips") or 0) or None
+                    )
                     _job_ctid = None
                     _job_prefs = None
                     try:
@@ -6300,7 +6485,7 @@ async def evaluate_and_fire(
                         risk_pct=_risk_pct_per,
                         risk_usd=_risk_usd,
                         use_risk_pct=_use_risk_pct,
-                        sl_pips=float(ex_config.get("stop_loss_pips") or 0) or None,
+                        sl_pips=_job_sl_pips,
                         fixed_lots=_fixed_lots or None,
                         asset_class=asset_class,
                         partial_close_pct=float(_partial_close_pct) if _partial_close_pct else None,
