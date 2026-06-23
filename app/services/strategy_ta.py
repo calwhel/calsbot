@@ -3925,18 +3925,40 @@ async def eval_wyckoff(
         return False, f"Wyckoff: unknown phase '{phase}'"
 
 
-def _smc_prefetch_timeframes(conds: List[Dict]) -> List[str]:
-    """
-    Unique SMC timeframes that should share one cold-cache kline fetch.
+# Condition types that fetch OHLC via _get_klines during evaluate_strategy_conditions.
+_CONDITION_KLINE_TYPES = frozenset({
+    "order_block", "market_structure", "fvg", "ifvg",
+    "candlestick", "consecutive_candles", "price_momentum",
+    "fibonacci", "divergence", "liquidation",
+    "indicator", "rsi", "sma", "sma_cross", "sma_ribbon", "supertrend",
+    "fx_ote", "fx_displacement", "fx_cisd", "fx_sdp", "fx_equal_hl",
+    "fx_breaker", "fx_pd_array", "fx_judas_swing", "fx_po3",
+    "forex_session_break", "forex_prev_level", "forex_liquidity_pa",
+    "opening_range_break", "vwap_cross", "vwap_bands", "vwap_bias",
+    "atr_filter", "rvol", "volume_profile", "stochastic",
+    "wyckoff", "pivot_points", "session_level",
+    "trend_reversal", "sustained_trend", "price_relative",
+})
+_SMC_KLINE_TYPES = frozenset({"order_block", "market_structure", "fvg", "ifvg"})
 
-    order_block / market_structure / fvg typically ask for the same symbol+tf
-    bars. Pre-warming once per timeframe avoids concurrent cache-miss races.
+
+def collect_condition_kline_timeframes(
+    conds: List[Dict],
+    *,
+    types: Optional[frozenset] = None,
+) -> List[str]:
     """
+    Unique timeframes that need a shared kline warm fetch for the given conditions.
+
+    Used by per-cycle prefetch (all kline-consuming types) and per-strategy SMC
+    prefetch (OB/MS/FVG/iFVG only).
+    """
+    allowed = types or _CONDITION_KLINE_TYPES
     out: List[str] = []
     seen: set = set()
     for cond in conds or []:
         ctype = str(cond.get("type", "")).lower()
-        if ctype not in {"order_block", "market_structure", "fvg", "ifvg"}:
+        if ctype not in allowed:
             continue
         tf = str(cond.get("timeframe", "15m") or "15m")
         if tf in seen:
@@ -3944,6 +3966,16 @@ def _smc_prefetch_timeframes(conds: List[Dict]) -> List[str]:
         seen.add(tf)
         out.append(tf)
     return out
+
+
+def _smc_prefetch_timeframes(conds: List[Dict]) -> List[str]:
+    """
+    Unique SMC timeframes that should share one cold-cache kline fetch.
+
+    order_block / market_structure / fvg typically ask for the same symbol+tf
+    bars. Pre-warming once per timeframe avoids concurrent cache-miss races.
+    """
+    return collect_condition_kline_timeframes(conds, types=_SMC_KLINE_TYPES)
 
 
 async def _prefetch_smc_klines(
