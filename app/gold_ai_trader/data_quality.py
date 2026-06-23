@@ -23,48 +23,67 @@ _CTRADER_PRICE_SOURCES = frozenset({"ctrader"})
 _CTRADER_KLINE_SOURCES = frozenset({"ctrader", "ctrader-user", "ctrader-cache"})
 
 
+async def _resolve_ctrader_spot(
+    sym: str,
+    *,
+    user_id: Optional[int] = None,
+) -> Tuple[Optional[float], Optional[str], Optional[float], Optional[float]]:
+    """
+    Broker-only XAUUSD spot: in-memory/Postgres cTrader tick, then on-demand
+    cTrader trendbar close. Never Coinbase/Kraken fallbacks.
+    """
+    from app.services.realtime_spot import (
+        _effective_max_age,
+        _fetch_ctrader_on_demand,
+        _read_ctrader,
+    )
+
+    age_limit = _effective_max_age(sym, ASSET_CLASS)
+    bid = ask = None
+
+    hit = _read_ctrader(sym, age_limit)
+    if hit and hit[0] > 0:
+        try:
+            from app.services.ctrader_price_feed import get_bid_ask
+
+            tick = get_bid_ask(sym)
+            if tick:
+                bid, ask = tick
+        except Exception:
+            pass
+        return float(hit[0]), "ctrader", bid, ask
+
+    try:
+        from app.services.ctrader_price_feed import get_bid_ask, get_price
+
+        tick = get_bid_ask(sym)
+        if tick:
+            bid, ask = tick
+            mid = round((tick[0] + tick[1]) / 2.0, 6)
+            return mid, "ctrader", bid, ask
+        px = get_price(sym)
+        if px and px > 0:
+            return float(px), "ctrader", bid, ask
+    except Exception as exc:
+        logger.debug("[gold-ai] cTrader spot cache probe: %s", exc)
+
+    hit = await _fetch_ctrader_on_demand(
+        sym, ASSET_CLASS, age_limit, user_id=user_id,
+    )
+    if hit and hit[0] > 0 and (hit[1] or "").lower() == "ctrader":
+        return float(hit[0]), "ctrader", bid, ask
+
+    return None, None, bid, ask
+
+
 async def assess_gold_market_data(
     *,
     user_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Resolve live price + kline provenance for Gold AI Claude gating."""
     sym = SYMBOL.upper()
-    live_px: Optional[float] = None
-    live_source: Optional[str] = None
-    bid = ask = None
-
-    try:
-        from app.services.ctrader_price_feed import (
-            ctrader_spot_ready,
-            get_bid_ask,
-            get_price as ct_get_price,
-        )
-
-        if ctrader_spot_ready(sym):
-            tick = get_bid_ask(sym)
-            if tick:
-                bid, ask = tick
-                live_px = round((bid + ask) / 2.0, 6)
-                live_source = "ctrader"
-            else:
-                px = ct_get_price(sym)
-                if px and px > 0:
-                    live_px = float(px)
-                    live_source = "ctrader"
-    except Exception as exc:
-        logger.debug("[gold-ai] cTrader spot probe: %s", exc)
-
+    live_px, live_source, bid, ask = await _resolve_ctrader_spot(sym, user_id=user_id)
     price_source = live_source or "unknown"
-    if not live_px:
-        try:
-            from app.services.realtime_spot import read_fresh_cached
-
-            hit = read_fresh_cached(sym, ASSET_CLASS)
-            if hit and hit[0] > 0:
-                live_px = float(hit[0])
-                price_source = str(hit[1] or "unknown").lower()
-        except Exception:
-            pass
 
     k5 = await get_klines(
         SYMBOL, ASSET_CLASS, SCORING_TIMEFRAME, SCORING_KLINE_LIMIT
@@ -73,6 +92,20 @@ async def assess_gold_market_data(
     kline_synthetic = is_metal_kline_synthetic(
         sym, SCORING_TIMEFRAME, SCORING_KLINE_LIMIT
     )
+
+    # Last resort: cTrader kline close when tick socket is cold but trendbars flow.
+    if not live_px and k5 and (kline_source or "").lower() in _CTRADER_KLINE_SOURCES:
+        try:
+            live_px = float(k5[-1][4])
+            live_source = "ctrader"
+            price_source = "ctrader"
+            logger.info(
+                "[gold-ai] spot from cTrader %s close (tick cold) price=%.4f",
+                SCORING_TIMEFRAME,
+                live_px,
+            )
+        except (IndexError, TypeError, ValueError):
+            pass
 
     klines_stale = False
     stale_reason = ""

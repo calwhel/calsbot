@@ -86,6 +86,24 @@ def _store(symbol: str, mid: float, source: str) -> None:
     sym = symbol.upper()
     now = datetime.utcnow()
     _PRICE_CACHE[sym] = (mid, now)
+    src = (source or "").lower()
+    if src != "ctrader":
+        # Never clobber a fresh broker tick in the shared Postgres store.
+        try:
+            from app.services.spot_price_store import get_tick
+
+            row = get_tick(sym, max_age_s=max(_FRESH_CTRADER_S * 4, 12.0))
+            if row and (row.get("source") or "").lower() == "ctrader":
+                return
+        except Exception:
+            pass
+        try:
+            from app.services import ctrader_price_feed as ctf
+
+            if ctf.get_price(sym) is not None:
+                return
+        except Exception:
+            pass
     try:
         from app.services.spot_price_store import upsert_tick
         upsert_tick(sym, mid=mid, source=source[:20])
@@ -170,6 +188,13 @@ async def fetch_now(symbol: str) -> Optional[float]:
 
 async def _poll_symbol(symbol: str) -> bool:
     sym = symbol.upper()
+    try:
+        from app.services.realtime_spot import _read_ctrader
+
+        if _read_ctrader(sym, _FRESH_CTRADER_S):
+            return True
+    except Exception:
+        pass
     if _has_fresh_tick(sym):
         return True
 

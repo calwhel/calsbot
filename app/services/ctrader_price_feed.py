@@ -1773,8 +1773,6 @@ def ctrader_spot_ready(symbol: str = "XAUUSD") -> bool:
         return True
     if get_bid_ask(sym) is not None:
         return True
-    if is_live():
-        return True
     try:
         from app.services.spot_price_store import get_tick
         row = get_tick(sym, max_age_s=_SPOT_TTL * 2)
