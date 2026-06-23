@@ -56,6 +56,7 @@ class GoldAiRuntimeConfig:
     use_limit_entry: bool
     pending_entry_timeout_min: int
     learning_daily_at_ny_end: bool
+    confidence_threshold: int
 
 
 from app.services.forex_sessions import gold_ai_session_hours
@@ -86,7 +87,14 @@ DEFAULTS = GoldAiRuntimeConfig(
     use_limit_entry=True,
     pending_entry_timeout_min=30,
     learning_daily_at_ny_end=True,
+    confidence_threshold=50,
 )
+
+
+def confidence_threshold() -> int:
+    """Min confidence (0–100) required to fire a demo/live take."""
+    raw = _env_int("GOLD_AI_CONFIDENCE_THRESHOLD", 50)
+    return max(0, min(100, raw))
 
 
 def env_defaults() -> GoldAiRuntimeConfig:
@@ -124,6 +132,7 @@ def env_defaults() -> GoldAiRuntimeConfig:
         use_limit_entry=_env_bool("GOLD_AI_TRADER_USE_LIMIT_ENTRY", True),
         pending_entry_timeout_min=_env_int("GOLD_AI_TRADER_PENDING_TIMEOUT_MIN", 30),
         learning_daily_at_ny_end=_env_bool("GOLD_AI_TRADER_LEARNING_DAILY", True),
+        confidence_threshold=confidence_threshold(),
     )
 
 

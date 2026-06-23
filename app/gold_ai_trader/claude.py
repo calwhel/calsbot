@@ -16,14 +16,22 @@ from app.gold_ai_trader.config import (
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are an expert XAUUSD (gold) day-trader operating a DEMO account only.
+_DEFAULT_CONFIDENCE_THRESHOLD = 50
+
+
+def system_prompt(confidence_threshold: int = _DEFAULT_CONFIDENCE_THRESHOLD) -> str:
+    """Build Claude system prompt with the configured take threshold."""
+    t = max(0, min(100, int(confidence_threshold)))
+    mid_lo = max(0, t - 10)
+    mid_hi = max(mid_lo, t - 1)
+    return f"""You are an expert XAUUSD (gold) day-trader operating a DEMO account only.
 
 JUDGMENT FRAMEWORK
 - Default action is SKIP. A professional day trader passes on most setups.
 - Take only when: (1) session context aligns, (2) trigger is clean vs noise, (3) R:R ≥ 2:1 to first target, (4) invalidation is obvious and tight.
 - ENTRY PRECISION: Only take if price is currently AT a precise entry (the FVG/order block/OTE zone, or the sweep reclaim point) with tight invalidation. If the move has already extended away from the entry zone, SKIP — never chase.
 - STOP SANITY: If the required stop to a valid invalidation exceeds 1.0× the 5m ATR(14) from context, the setup is too loose — SKIP.
-- CONFIDENCE CALIBRATION: Confidence 70+ = you'd take this with real money (clean, all criteria met); 50–69 = valid idea, not clean enough; <50 = marginal. Only 70+ may be a "take".
+- CONFIDENCE CALIBRATION: Confidence {t}+ = you'd take this with real money (clean, all criteria met); {mid_lo}–{mid_hi} = valid idea, not clean enough; <{mid_lo} = marginal. Only {t}+ may be a "take".
 - BORDERLINE = SKIP: If ANY take-criterion is unclear or borderline, SKIP. Borderline is a skip.
 - USE LESSONS: Weigh the recent-lessons digest below when judging — adapt to what's recently worked/failed this session.
 - London (07–10 UTC): favor liquidity sweeps + displacement reversals; fade false breaks at Asia range edges.
@@ -34,7 +42,7 @@ JUDGMENT FRAMEWORK
 
 OUTPUT
 After brief reasoning (bias → setup quality → invalidation → decision), respond with ONLY valid JSON:
-{
+{{
   "action": "take" | "skip",
   "direction": "long" | "short" | null,
   "entry": number | null,
@@ -42,11 +50,14 @@ After brief reasoning (bias → setup quality → invalidation → decision), re
   "take_profit": number | null,
   "confidence": 0-100,
   "rationale": "one concise paragraph"
-}
+}}
 
 If action is skip, direction/entry/stop_loss/take_profit may be null.
-If confidence is below 70, action MUST be skip.
+If confidence is below {t}, action MUST be skip.
 Never invent prices far from spot. SL must be on correct side of entry for direction."""
+
+
+SYSTEM_PROMPT = system_prompt(_DEFAULT_CONFIDENCE_THRESHOLD)
 
 
 def _parse_json(text: str) -> Optional[Dict[str, Any]]:
@@ -87,6 +98,7 @@ async def decide(
     *,
     model: str = "claude-opus-4-8",
     dry_run: bool = False,
+    confidence_threshold: int = _DEFAULT_CONFIDENCE_THRESHOLD,
 ) -> Tuple[Dict[str, Any], str, Dict[str, Any]]:
     """
     Returns (decision_dict, reasoning_text, usage_meta).
@@ -117,13 +129,14 @@ async def decide(
         import anthropic
 
         client = anthropic.AsyncAnthropic(api_key=api_key)
+        threshold = max(0, min(100, int(confidence_threshold)))
         msg = await client.messages.create(
             model=model,
             max_tokens=700,
             system=[
                 {
                     "type": "text",
-                    "text": SYSTEM_PROMPT,
+                    "text": system_prompt(threshold),
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
@@ -159,6 +172,13 @@ async def decide(
         parsed.setdefault("rationale", "")
         if parsed["action"] not in ("take", "skip"):
             parsed["action"] = "skip"
+        conf = int(parsed.get("confidence") or 0)
+        if parsed["action"] == "take" and conf < threshold:
+            parsed["action"] = "skip"
+            parsed.setdefault(
+                "rationale",
+                f"Confidence {conf}% below {threshold}% take threshold.",
+            )
         return parsed, text[:1200], meta
     except Exception as e:
         logger.error("[gold-ai-trader] Claude call failed: %s", e)

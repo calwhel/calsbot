@@ -10,6 +10,11 @@ import httpx
 
 from app.database import SessionLocal
 from app.gold_ai_trader.config import env_defaults, gold_ai_trader_enabled
+from app.gold_ai_trader.data_quality import (
+    assess_gold_market_data,
+    format_data_source,
+    gold_data_ok_for_claude,
+)
 from app.gold_ai_trader.schema import ensure_gold_ai_trader_schema, seed_config_if_missing
 from app.gold_ai_trader.guardrails import (
     merge_config,
@@ -103,6 +108,25 @@ async def run_gold_ai_trader_loop() -> None:
                 await maybe_notify_call_cap_reached(db, cfg)
             return
 
+        try:
+            from app.services.tradfi_prices import sweep_stale_metal_klines
+
+            await sweep_stale_metal_klines([SYMBOL])
+        except Exception:
+            pass
+
+        market_data = await assess_gold_market_data(user_id=cfg.demo_user_id)
+        data_ok, data_block = gold_data_ok_for_claude(market_data)
+        source_tag = format_data_source(market_data)
+        if not data_ok:
+            logger.info(
+                "[gold-ai] confidence=N/A source=%s decision=skip reason=%s",
+                source_tag,
+                data_block,
+            )
+            runtime_state.note_dormant(f"data_quality:{data_block}")
+            return
+
         async with httpx.AsyncClient(timeout=15) as http:
             price, candidates = await scan_candidates(http, session=session, cfg=cfg)
         if not candidates or price is None:
@@ -142,10 +166,23 @@ async def run_gold_ai_trader_loop() -> None:
             user_id=cfg.demo_user_id,
         )
 
-        decision, reasoning, usage = await decide(context, model=cfg.model)
+        decision, reasoning, usage = await decide(
+            context,
+            model=cfg.model,
+            confidence_threshold=cfg.confidence_threshold,
+        )
         record_claude_invocation(candidate)
         action = (decision.get("action") or "skip").lower()
         conf = int(decision.get("confidence") or 0)
+
+        logger.info(
+            "[gold-ai] confidence=%s%% source=%s decision=%s setup=%s session=%s",
+            conf,
+            source_tag,
+            action,
+            candidate.type,
+            session,
+        )
 
         row = GoldAiDecision(
             session=session,
@@ -179,7 +216,7 @@ async def run_gold_ai_trader_loop() -> None:
             executed = False
             execution_id = None
             block_reason = None
-            if conf >= 70:
+            if conf >= cfg.confidence_threshold:
                 ok_exec, exec_reason = check_can_execute(db, cfg, cfg.demo_user_id or 0)
                 if ok_exec:
                     exec_id = await execute_take(
@@ -223,7 +260,9 @@ async def run_gold_ai_trader_loop() -> None:
                     block_reason = exec_reason
                     logger.info("[gold-ai-trader] execute blocked: %s", exec_reason)
             else:
-                block_reason = f"confidence {conf}% below 70% threshold"
+                block_reason = (
+                    f"confidence {conf}% below {cfg.confidence_threshold}% threshold"
+                )
 
             await notify_take_decision(
                 candidate_type=candidate.type,

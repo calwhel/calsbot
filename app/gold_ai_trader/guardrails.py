@@ -60,6 +60,7 @@ def merge_config(db_row: GoldAiConfig, env: GoldAiRuntimeConfig) -> GoldAiRuntim
         learning_daily_at_ny_end=bool(
             getattr(db_row, "learning_daily_at_ny_end", env.learning_daily_at_ny_end)
         ),
+        confidence_threshold=env.confidence_threshold,
     )
 
 

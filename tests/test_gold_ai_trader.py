@@ -6,9 +6,10 @@ from datetime import datetime
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
-from app.gold_ai_trader.config import env_defaults, gold_ai_trader_enabled
+from app.gold_ai_trader.config import confidence_threshold, env_defaults, gold_ai_trader_enabled
 from app.gold_ai_trader.scanner import active_session, Candidate
-from app.gold_ai_trader.claude import decide, SYSTEM_PROMPT
+from app.gold_ai_trader.claude import decide, system_prompt, SYSTEM_PROMPT
+from app.gold_ai_trader.data_quality import gold_data_ok_for_claude, format_data_source
 from app.gold_ai_trader.context import build_context_snapshot
 from app.gold_ai_trader.guardrails import (
     assert_demo_account,
@@ -46,6 +47,94 @@ def test_feature_flag_default_off():
 def test_normalize_uid_adds_th_prefix():
     assert _normalize_uid("yp0bada8") == "TH-YP0BADA8"
     assert _normalize_uid("TH-YP0BADA8") == "TH-YP0BADA8"
+
+
+def test_confidence_threshold_default_50():
+    os.environ.pop("GOLD_AI_CONFIDENCE_THRESHOLD", None)
+    assert confidence_threshold() == 50
+    assert env_defaults().confidence_threshold == 50
+
+
+def test_confidence_threshold_env_override():
+    os.environ["GOLD_AI_CONFIDENCE_THRESHOLD"] = "55"
+    try:
+        assert confidence_threshold() == 55
+        assert env_defaults().confidence_threshold == 55
+    finally:
+        os.environ.pop("GOLD_AI_CONFIDENCE_THRESHOLD", None)
+
+
+def test_system_prompt_uses_configurable_threshold():
+    prompt = system_prompt(50)
+    assert "Only 50+ may be a \"take\"" in prompt
+    assert "If confidence is below 50, action MUST be skip." in prompt
+    assert "Default action is SKIP" in SYSTEM_PROMPT
+
+
+def test_gold_data_ok_requires_ctrader_sources():
+    ok, reason = gold_data_ok_for_claude(
+        {
+            "price": 2650.0,
+            "live_source": "ctrader",
+            "price_source": "ctrader",
+            "kline_source": "ctrader",
+            "kline_synthetic": False,
+            "klines_stale": False,
+            "kline_bars": 40,
+        }
+    )
+    assert ok is True
+    assert reason == "ok"
+
+    ok_fb, reason_fb = gold_data_ok_for_claude(
+        {
+            "price": 2650.0,
+            "live_source": None,
+            "price_source": "coinbase",
+            "kline_source": "coinbase",
+            "kline_synthetic": False,
+            "klines_stale": False,
+            "kline_bars": 40,
+        }
+    )
+    assert ok_fb is False
+    assert "fallback_klines" in reason_fb or "non_ctrader_price" in reason_fb
+
+    ok_stale, reason_stale = gold_data_ok_for_claude(
+        {
+            "price": 2650.0,
+            "live_source": "ctrader",
+            "price_source": "ctrader",
+            "kline_source": "ctrader",
+            "kline_synthetic": False,
+            "klines_stale": True,
+            "stale_reason": "drift=1.2%",
+            "kline_bars": 40,
+        }
+    )
+    assert ok_stale is False
+    assert reason_stale.startswith("stale_klines:")
+
+    ok_syn, reason_syn = gold_data_ok_for_claude(
+        {
+            "price": 2650.0,
+            "live_source": "ctrader",
+            "price_source": "ctrader",
+            "kline_source": "synthetic",
+            "kline_synthetic": True,
+            "klines_stale": False,
+            "kline_bars": 40,
+        }
+    )
+    assert ok_syn is False
+    assert reason_syn == "synthetic_klines"
+
+
+def test_format_data_source_tag():
+    tag = format_data_source(
+        {"live_source": "ctrader", "kline_source": "ctrader-user"}
+    )
+    assert tag == "price:ctrader/kline:ctrader-user"
 
 
 def test_gold_ai_trader_page_sends_session_auth():
