@@ -36,14 +36,19 @@ class TestDecisionValidator:
         assert reason.startswith("validator:ok")
         assert out.get("validator_note")
 
-    def test_rejects_sl_too_wide(self):
+    def test_rejects_sl_too_wide_when_cap_enabled(self, monkeypatch):
+        monkeypatch.setenv("GOLD_AI_MAX_SL_ATR", "1.0")
+        import importlib
+        import app.gold_ai_trader.decision_validator as dv
+
+        importlib.reload(dv)
         decision = {
             "direction": "LONG",
             "entry": 2650.0,
             "stop_loss": 2645.0,
             "take_profit": 2660.0,
         }
-        ok, reason, _ = validate_take_decision(
+        ok, reason, _ = dv.validate_take_decision(
             decision,
             candidate_direction="LONG",
             spot=2650.0,
@@ -53,6 +58,28 @@ class TestDecisionValidator:
         )
         assert ok is False
         assert "sl_too_wide" in reason
+        monkeypatch.delenv("GOLD_AI_MAX_SL_ATR", raising=False)
+        importlib.reload(dv)
+
+    def test_allows_wide_sl_for_swing_by_default(self):
+        """Regression: IFVG-style zone invalidation beyond 1×ATR must execute."""
+        decision = {
+            "direction": "LONG",
+            "entry": 4082.40,
+            "stop_loss": 4079.93,
+            "take_profit": 4090.75,
+        }
+        ok, reason, out = validate_take_decision(
+            decision,
+            candidate_direction="LONG",
+            spot=4082.40,
+            atr=1.0,
+            setup_detail="IFVG zone 4080.0–4083.0",
+            key_levels=[4090.75, 4076.0],
+        )
+        assert ok is True
+        assert reason.startswith("validator:ok")
+        assert out.get("validator_sl_atr") == 2.47
 
     def test_tp_adjusted_to_key_level(self):
         decision = {

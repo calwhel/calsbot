@@ -10,6 +10,7 @@ from app.gold_ai_trader.decision_validator import (
     SL_BUFFER_ATR,
     _nearest_tp_candidate,
     _suggested_sl_from_zone,
+    sl_width_cap_enabled,
 )
 
 
@@ -30,8 +31,17 @@ def build_trade_bands_block(
         lines.append("ATR unavailable — size SL/TP from zone and levels carefully.")
         return lines
 
-    max_sl_dist = MAX_SL_ATR_MULT * atr
-    lines.append(f"Max SL distance: {max_sl_dist:.2f} ({MAX_SL_ATR_MULT}× 5m ATR)")
+    if sl_width_cap_enabled():
+        max_sl_dist = MAX_SL_ATR_MULT * atr
+        lines.append(
+            f"Scalp SL cap (env): {max_sl_dist:.2f} ({MAX_SL_ATR_MULT}× 5m ATR)"
+        )
+    else:
+        max_sl_dist = 3.0 * atr
+        lines.append(
+            "SL width: no hard execution cap — place stop at logical structure invalidation "
+            f"(swing/zone trades OK; typical planning risk ~{max_sl_dist:.2f} = 3×ATR)."
+        )
     lines.append(f"Min R:R required: {MIN_RR}:1")
 
     if zone:

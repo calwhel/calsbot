@@ -9,7 +9,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.gold_ai_trader.call_gates import last_closed_body_atr
 from app.gold_ai_trader.context_history import parse_zone_from_detail
 from app.gold_ai_trader.context_levels import compute_asian_range, compute_premium_discount
-from app.gold_ai_trader.decision_validator import MIN_RR, MAX_SL_ATR_MULT, _nearest_tp_candidate
+from app.gold_ai_trader.decision_validator import (
+    MIN_RR,
+    READINESS_RR_RISK_ATR,
+    _nearest_tp_candidate,
+    _suggested_sl_from_zone,
+)
 from app.gold_ai_trader.htf_bias import direction_aligns_with_htf
 
 
@@ -158,13 +163,13 @@ def rr_feasible(
     entry = price
     if zone:
         entry = (zone[0] + zone[1]) / 2.0
-    max_risk = MAX_SL_ATR_MULT * atr
-    if d == "LONG":
-        sl = entry - max_risk
-        risk = entry - sl
+        struct_sl = _suggested_sl_from_zone(zone, d, atr)
+        if struct_sl is not None:
+            risk = abs(entry - struct_sl)
+        else:
+            risk = READINESS_RR_RISK_ATR * atr
     else:
-        sl = entry + max_risk
-        risk = sl - entry
+        risk = READINESS_RR_RISK_ATR * atr
     if risk <= 0:
         return False, None
     tp = _nearest_tp_candidate(entry, d, key_levels, MIN_RR, risk)

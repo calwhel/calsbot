@@ -15,8 +15,15 @@ def _env_float(name: str, default: float) -> float:
 
 
 MIN_RR = _env_float("GOLD_AI_MIN_RR", 2.0)
-MAX_SL_ATR_MULT = _env_float("GOLD_AI_MAX_SL_ATR", 1.0)
+# 0 = no execution cap (swing/zone invalidation allowed); set e.g. 1.0 to re-enable hard scalp cap
+MAX_SL_ATR_MULT = _env_float("GOLD_AI_MAX_SL_ATR", 0.0)
+# Planning horizon for readiness R:R feasibility only (not an execution limit)
+READINESS_RR_RISK_ATR = _env_float("GOLD_AI_READINESS_RR_ATR", 3.0)
 SL_BUFFER_ATR = _env_float("GOLD_AI_SL_BUFFER_ATR", 0.08)
+
+
+def sl_width_cap_enabled() -> bool:
+    return MAX_SL_ATR_MULT > 0
 
 
 def _dir_norm(d: str) -> Optional[str]:
@@ -119,8 +126,11 @@ def validate_take_decision(
             return False, "validator:short_price_order", d
 
     risk_dist = abs(entry - sl)
-    if atr > 0 and risk_dist > MAX_SL_ATR_MULT * atr:
+    if sl_width_cap_enabled() and atr > 0 and risk_dist > MAX_SL_ATR_MULT * atr:
         return False, f"validator:sl_too_wide({risk_dist:.2f}>{MAX_SL_ATR_MULT}×ATR)", d
+    if atr > 0 and risk_dist > 0:
+        sl_atr = risk_dist / atr
+        d["validator_sl_atr"] = round(sl_atr, 2)
 
     zone = parse_zone_from_detail(setup_detail)
     if zone and atr > 0:
