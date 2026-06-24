@@ -5,7 +5,10 @@ startCommand = "bash start.sh"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
 healthcheckPath = "/ping"
-healthcheckTimeout = 30
+# Schema bootstrap + migrations can take ~30s on warm DB; SCHEMA_RESET_ONCE
+# (DROP SCHEMA + 48 ORM + 13 lazy tables) runs in start.sh before gunicorn
+# and needs several minutes. 30s caused Healthcheck Error on deploy.
+healthcheckTimeout = 300
 # One replica only — multiple containers each run a [tg-bot] poller → ConflictError.
 numReplicas = 1
 multiRegionConfig = { "europe-west4-drams3a" = { numReplicas = 1 } }
