@@ -20,12 +20,20 @@ def _maybe_reset_daily_credits_on_startup() -> None:
 def mount_gold_ai_trader_portal(app) -> None:
     """Register routes + isolated background task. Safe to call multiple times."""
     from app.gold_ai_trader.routes import router
-    from app.gold_ai_trader.schema import ensure_gold_ai_trader_schema
 
-    ensure_gold_ai_trader_schema()
-    _maybe_reset_daily_credits_on_startup()
     app.include_router(router)
     logger.info("[gold-ai-trader] routes mounted at /gold-ai-trader")
+
+    try:
+        from app.gold_ai_trader.schema import ensure_gold_ai_trader_schema
+
+        ensure_gold_ai_trader_schema()
+        _maybe_reset_daily_credits_on_startup()
+    except Exception as exc:
+        logger.warning(
+            "[gold-ai-trader] schema/credits startup skipped (routes still live): %s",
+            exc,
+        )
 
     @app.on_event("startup")
     async def _gold_ai_trader_startup():
