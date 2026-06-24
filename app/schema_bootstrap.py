@@ -396,7 +396,9 @@ def reset_public_schema(bind: Engine) -> None:
         conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
         conn.execute(text("CREATE SCHEMA public"))
         conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
-        conn.execute(text("GRANT ALL ON SCHEMA public TO CURRENT_USER"))
+        role = conn.execute(text("SELECT current_user")).scalar()
+        if role and str(role).lower() != "public":
+            conn.execute(text('GRANT ALL ON SCHEMA public TO "' + str(role).replace('"', '""') + '"'))
 
 
 def wait_for_schema(
