@@ -144,6 +144,20 @@
       background: var(--text-dim);
     }
 
+    .db-warning {
+      display: none;
+      align-items: flex-start;
+      gap: 0.5rem;
+      padding: 0.625rem 0.875rem;
+      margin-bottom: 0.875rem;
+      border-radius: var(--radius-sm);
+      font-size: var(--body-sm);
+      color: #f5d08a;
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+    }
+    .db-warning.visible { display: flex; }
+
     .account-strip {
       display: flex;
       align-items: center;
@@ -1145,6 +1159,11 @@
       Demo account — no real money at risk
     </div>
 
+    <div class="db-warning" id="db-warning" role="status">
+      <span aria-hidden="true">⚠</span>
+      <span id="db-warning-text">Database waking up — tap refresh in a moment.</span>
+    </div>
+
     <div class="account-strip missing" id="demo-account-bar">
       <div>
         <div class="account-strip-label">Demo cTrader account</div>
@@ -1727,6 +1746,7 @@ function escapeHtml(s) {
 }
 
 function showLoadError(title, sub) {
+  document.getElementById('db-warning').classList.remove('visible');
   document.body.classList.remove('page-loading');
   document.getElementById('status-line').textContent = title;
   document.getElementById('session-line').textContent = sub;
@@ -1771,6 +1791,17 @@ function renderConfig(j) {
   _lastConfig = c;
 }
 
+function renderDbWarning(j) {
+  const el = document.getElementById('db-warning');
+  const txt = document.getElementById('db-warning-text');
+  if (j.db_unavailable) {
+    txt.textContent = j.db_message || 'Database waking up — tap refresh in a moment.';
+    el.classList.add('visible');
+  } else {
+    el.classList.remove('visible');
+  }
+}
+
 async function refresh() {
   if (_refreshing) return;
   _refreshing = true;
@@ -1793,6 +1824,7 @@ async function refresh() {
       return;
     }
     document.body.classList.remove('page-loading');
+    renderDbWarning(j);
     renderHero(j);
     renderDemoAccountPicker(j);
     renderStats(j);

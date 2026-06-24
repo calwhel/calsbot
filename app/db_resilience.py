@@ -20,6 +20,15 @@ _TRANSIENT_DB_MARKERS = (
     "broken pipe",
 )
 
+_CONNECTION_ERROR_MARKERS = _TRANSIENT_DB_MARKERS + (
+    "endpoint has been disabled",
+    "connection to server",
+    "could not connect",
+    "connection refused",
+    "database_waking",
+    "password authentication failed",
+)
+
 T = TypeVar("T")
 
 
@@ -36,6 +45,21 @@ def is_transient_db_error(exc: BaseException | None) -> bool:
         pass
     msg = str(exc).lower()
     return any(marker in msg for marker in _TRANSIENT_DB_MARKERS)
+
+
+def is_db_connection_error(exc: BaseException | None) -> bool:
+    """True when the database is unreachable (pool/endpoint down), not a logic error."""
+    if exc is None:
+        return False
+    try:
+        from sqlalchemy.exc import InterfaceError, OperationalError, TimeoutError
+
+        if isinstance(exc, (OperationalError, InterfaceError, TimeoutError)):
+            return True
+    except Exception:
+        pass
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _CONNECTION_ERROR_MARKERS)
 
 
 def run_with_db_retry(

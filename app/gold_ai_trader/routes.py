@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -11,6 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from app.database import SessionLocal
+from app.db_resilience import is_db_connection_error
 from app.gold_ai_trader.accounts import (
     demo_accounts_for_user_id,
     find_demo_account,
@@ -51,17 +53,56 @@ def _normalize_uid(uid: str) -> str:
     return uid
 
 
-def _resolve_user(uid: str, db):
+def _gold_ai_admin_uids() -> frozenset[str]:
+    uids = {"TH-YP0BADA8"}
+    raw = os.environ.get("GOLD_AI_ADMIN_UIDS", "").strip()
+    for part in raw.split(","):
+        part = part.strip().upper()
+        if not part:
+            continue
+        if not part.startswith("TH-"):
+            part = f"TH-{part}"
+        uids.add(part)
+    return frozenset(uids)
+
+
+def _offline_admin(uid: str):
+    return type("_OfflineAdmin", (), {"id": None, "uid": uid, "is_admin": True})()
+
+
+def _session_admin_fallback(request: Request, uid: str):
+    """When Neon is down, trust HMAC session token for allowlisted admin UIDs."""
+    from app.portal_session import session_uid_from_request
+
+    uid = _normalize_uid(uid)
+    if session_uid_from_request(request) != uid:
+        return None
+    if uid not in _gold_ai_admin_uids():
+        return None
+    logger.warning("[gold-ai-trader] DB unavailable — session auth fallback uid=%s", uid)
+    return _offline_admin(uid)
+
+
+def _resolve_user(uid: str, db, *, request: Optional[Request] = None):
     from app.models import User
 
     uid = _normalize_uid(uid)
-    u = db.query(User).filter(User.uid == uid).first()
-    if not u:
-        raise HTTPException(status_code=403, detail="Invalid UID")
-    is_admin = bool(getattr(u, "is_admin", False)) or u.uid == "TH-YP0BADA8"
-    if not is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return u
+    try:
+        u = db.query(User).filter(User.uid == uid).first()
+        if not u:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        is_admin = bool(getattr(u, "is_admin", False)) or u.uid == "TH-YP0BADA8"
+        if not is_admin:
+            raise HTTPException(status_code=403, detail="Admin access required")
+        return u
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if request is not None and is_db_connection_error(exc):
+            admin = _session_admin_fallback(request, uid)
+            if admin is not None:
+                return admin
+        raise
 
 
 def _trader_user_id(cfg, admin_user) -> Optional[int]:
@@ -230,6 +271,52 @@ def _config_payload(cfg, cfg_row) -> Dict[str, Any]:
     }
 
 
+def _empty_stats_today() -> Dict[str, Any]:
+    return {
+        "calls": 0,
+        "trades": 0,
+        "cost_usd": 0.0,
+        "demo_pnl_usd": 0.0,
+        "live_pnl_usd": 0.0,
+        "live_trades": 0,
+    }
+
+
+def _offline_status_payload(
+    admin,
+    *,
+    degraded: Optional[List[str]] = None,
+    db_message: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Minimal dashboard payload when Neon is waking or unreachable."""
+    env = env_defaults()
+    env.demo_user_id = env.demo_user_id or getattr(admin, "id", None)
+    parts = list(degraded or [])
+    if "database" not in parts:
+        parts.insert(0, "database")
+    payload: Dict[str, Any] = {
+        "ok": True,
+        "db_unavailable": True,
+        "db_message": db_message or "Database waking up — tap refresh in a moment.",
+        "degraded": parts,
+        "demo_label": "DEMO ACCOUNT ONLY",
+        "runtime": runtime_state.get_status(),
+        "shared_session_hours": gold_ai_session_hours(),
+        "config": _config_payload(env, None),
+        "demo_accounts": [],
+        "demo_account_selected": None,
+        "demo_account_ready": demo_account_configured(env),
+        "live_accounts": [],
+        "stats_today": _empty_stats_today(),
+        "lessons": [],
+        "setup_stats": [],
+        "call_stats_today": {},
+        "recent_funnel_events": [],
+        "decision_feed": [],
+    }
+    return payload
+
+
 def _build_decision_feed(db, decisions: list) -> list:
     feed = []
     for d in decisions:
@@ -314,7 +401,8 @@ async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
 
 
 @router.get("/api/gold-ai-trader/status")
-async def api_status(uid: str = Query(...)):
+async def api_status(request: Request, uid: str = Query(...)):
+    norm_uid = _normalize_uid(uid)
     try:
         ensure_gold_ai_trader_schema(force=True)
     except Exception as exc:
@@ -323,7 +411,25 @@ async def api_status(uid: str = Query(...)):
     db = SessionLocal()
     degraded: List[str] = []
     try:
-        admin = _resolve_user(uid, db)
+        try:
+            admin = _resolve_user(norm_uid, db, request=request)
+        except Exception as exc:
+            if is_db_connection_error(exc):
+                admin = _session_admin_fallback(request, norm_uid)
+                if admin is None:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Database temporarily unavailable — retry shortly",
+                    ) from exc
+                degraded.append("database")
+                logger.warning(
+                    "[gold-ai-trader] status using offline admin uid=%s: %s",
+                    norm_uid,
+                    exc,
+                )
+            else:
+                raise
+
         cfg_row, cfg, trader_uid = _load_config_for_status(db, admin)
         if cfg_row is None:
             degraded.append("config")
@@ -336,6 +442,8 @@ async def api_status(uid: str = Query(...)):
         except Exception as exc:
             logger.warning("[gold-ai-trader] demo accounts load failed: %s", exc)
             degraded.append("demo_accounts")
+            if is_db_connection_error(exc):
+                degraded.append("database")
             try:
                 db.rollback()
             except Exception:
@@ -346,14 +454,7 @@ async def api_status(uid: str = Query(...)):
         feed = _build_decision_feed(db, decisions)
         user_id = cfg.demo_user_id or getattr(admin, "id", None) or 0
 
-        stats_today: Dict[str, Any] = {
-            "calls": 0,
-            "trades": 0,
-            "cost_usd": 0.0,
-            "demo_pnl_usd": 0.0,
-            "live_pnl_usd": 0.0,
-            "live_trades": 0,
-        }
+        stats_today = _empty_stats_today()
         try:
             stats_today = {
                 "calls": calls_today(db),
@@ -366,18 +467,24 @@ async def api_status(uid: str = Query(...)):
         except Exception as exc:
             logger.warning("[gold-ai-trader] stats_today failed: %s", exc)
             degraded.append("stats")
+            if is_db_connection_error(exc):
+                degraded.append("database")
 
         setup_stats: List[Dict[str, Any]] = []
         try:
             setup_stats = get_setup_stats(db)
         except Exception as exc:
             logger.warning("[gold-ai-trader] setup_stats failed: %s", exc)
+            if is_db_connection_error(exc):
+                degraded.append("database")
 
         call_stats: Dict[str, int] = {}
         try:
             call_stats = call_stats_today(db)
         except Exception as exc:
             logger.warning("[gold-ai-trader] call_stats_today failed: %s", exc)
+            if is_db_connection_error(exc):
+                degraded.append("database")
 
         live_accounts: List[Dict[str, Any]] = []
         try:
@@ -385,7 +492,10 @@ async def api_status(uid: str = Query(...)):
         except Exception as exc:
             logger.warning("[gold-ai-trader] live accounts load failed: %s", exc)
             degraded.append("live_accounts")
+            if is_db_connection_error(exc):
+                degraded.append("database")
 
+        db_down = "database" in degraded
         payload: Dict[str, Any] = {
             "ok": True,
             "demo_label": "DEMO ACCOUNT ONLY",
@@ -410,14 +520,26 @@ async def api_status(uid: str = Query(...)):
             "recent_funnel_events": _safe_funnel_events(db, limit=40),
             "decision_feed": feed,
         }
+        if db_down:
+            payload["db_unavailable"] = True
+            payload["db_message"] = "Database waking up — live data will appear when Neon reconnects."
         if degraded:
-            payload["degraded"] = degraded
-            logger.warning("[gold-ai-trader] status degraded uid=%s parts=%s", uid, degraded)
+            payload["degraded"] = sorted(set(degraded))
+            logger.warning("[gold-ai-trader] status degraded uid=%s parts=%s", norm_uid, payload["degraded"])
         return payload
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("[gold-ai-trader] status API failed uid=%s", uid)
+        if is_db_connection_error(exc):
+            admin = _session_admin_fallback(request, norm_uid)
+            if admin is not None:
+                logger.warning(
+                    "[gold-ai-trader] status offline fallback uid=%s: %s",
+                    norm_uid,
+                    exc,
+                )
+                return _offline_status_payload(admin, db_message=str(exc)[:160])
+        logger.exception("[gold-ai-trader] status API failed uid=%s", norm_uid)
         raise HTTPException(status_code=503, detail="Trader status temporarily unavailable") from exc
     finally:
         db.close()
