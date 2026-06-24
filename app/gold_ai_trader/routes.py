@@ -125,6 +125,140 @@ def _safe_funnel_events(db, *, limit: int = 50) -> list:
         return []
 
 
+def _safe_lessons(db, *, limit: int = 3) -> list:
+    try:
+        return (
+            db.query(GoldAiLesson)
+            .order_by(GoldAiLesson.ts.desc())
+            .limit(limit)
+            .all()
+        )
+    except Exception as exc:
+        logger.warning("[gold-ai-trader] lessons load failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return []
+
+
+def _safe_decisions(db, *, limit: int = 40) -> list:
+    try:
+        return (
+            db.query(GoldAiDecision)
+            .order_by(GoldAiDecision.ts.desc())
+            .limit(limit)
+            .all()
+        )
+    except Exception as exc:
+        logger.warning("[gold-ai-trader] decisions load failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return []
+
+
+def _load_config_for_status(db, admin) -> tuple[Any, Any, Optional[Any]]:
+    """Return (cfg_row, merged_cfg, trader_user_id). Falls back to env defaults."""
+    env = env_defaults()
+    try:
+        row = seed_config_if_missing(db)
+        if not row.demo_user_id:
+            _persist_demo_user_from_admin(row, admin)
+            db.commit()
+            db.refresh(row)
+        cfg = merge_config(row, env)
+        return row, cfg, _trader_user_id(cfg, admin)
+    except Exception as exc:
+        logger.warning("[gold-ai-trader] config load failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            ensure_gold_ai_trader_schema(force=True)
+            row = seed_config_if_missing(db)
+            if not row.demo_user_id:
+                _persist_demo_user_from_admin(row, admin)
+                db.commit()
+                db.refresh(row)
+            cfg = merge_config(row, env)
+            return row, cfg, _trader_user_id(cfg, admin)
+        except Exception as retry_exc:
+            logger.warning("[gold-ai-trader] config retry failed: %s", retry_exc)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            cfg = env
+            cfg.demo_user_id = cfg.demo_user_id or getattr(admin, "id", None)
+            return None, cfg, cfg.demo_user_id or getattr(admin, "id", None)
+
+
+def _config_payload(cfg, cfg_row) -> Dict[str, Any]:
+    return {
+        "enabled": cfg.enabled,
+        "kill_switch": cfg.kill_switch,
+        "london_start_hour": cfg.london_start_hour,
+        "london_end_hour": cfg.london_end_hour,
+        "ny_start_hour": cfg.ny_start_hour,
+        "ny_end_hour": cfg.ny_end_hour,
+        "max_calls_day": cfg.max_calls_day,
+        "max_trades_day": cfg.max_trades_day,
+        "no_overnight": cfg.no_overnight,
+        "model": cfg.model,
+        "demo_ctrader_account_id": cfg.demo_ctrader_account_id,
+        "live_mirror_enabled": cfg.live_mirror_enabled,
+        "live_ctrader_account_id": cfg.live_ctrader_account_id,
+        "live_lot_size": cfg.live_lot_size,
+        "demo_lot_size": cfg.demo_lot_size,
+        "max_live_trades_day": cfg.max_live_trades_day,
+        "use_limit_entry": cfg.use_limit_entry,
+        "pending_entry_timeout_min": cfg.pending_entry_timeout_min,
+        "learning_daily_at_ny_end": cfg.learning_daily_at_ny_end,
+        "calls_reset_at": (
+            cfg_row.calls_reset_at.isoformat()
+            if cfg_row and getattr(cfg_row, "calls_reset_at", None)
+            else None
+        ),
+        "live_mirror_confirmed_at": (
+            cfg_row.live_mirror_confirmed_at.isoformat()
+            if cfg_row and getattr(cfg_row, "live_mirror_confirmed_at", None)
+            else None
+        ),
+    }
+
+
+def _build_decision_feed(db, decisions: list) -> list:
+    feed = []
+    for d in decisions:
+        try:
+            _sync_live_mirror_fields(db, d)
+        except Exception as exc:
+            logger.debug("[gold-ai-trader] live mirror sync skip id=%s: %s", d.id, exc)
+        dec = _coerce_decision_dict(d.decision)
+        feed.append(
+            {
+                "id": d.id,
+                "ts": d.ts.isoformat() if d.ts else None,
+                "session": d.session,
+                "candidate_type": d.candidate_type,
+                "action": d.action,
+                "confidence": d.confidence,
+                "executed": d.executed,
+                "execution_id": d.execution_id,
+                "live_mirror_execution_id": getattr(d, "live_mirror_execution_id", None),
+                "live_mirror_status": getattr(d, "live_mirror_status", None),
+                "live_mirror_error": getattr(d, "live_mirror_error", None),
+                "cost_usd": d.cost_usd,
+                "rationale": dec.get("rationale", ""),
+                "reasoning_preview": (d.reasoning or "")[:300],
+            }
+        )
+    return feed
+
+
 def _sync_live_mirror_fields(db, decision: GoldAiDecision) -> None:
     if not decision.live_mirror_execution_id:
         return
@@ -182,55 +316,34 @@ async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
 @router.get("/api/gold-ai-trader/status")
 async def api_status(uid: str = Query(...)):
     try:
-        ensure_gold_ai_trader_schema()
+        ensure_gold_ai_trader_schema(force=True)
     except Exception as exc:
         logger.warning("[gold-ai-trader] schema ensure on status: %s", exc)
 
     db = SessionLocal()
+    degraded: List[str] = []
     try:
         admin = _resolve_user(uid, db)
-        cfg_row = seed_config_if_missing(db)
-        cfg = merge_config(cfg_row, env_defaults())
-        trader_uid = _trader_user_id(cfg, admin)
-        demo_accounts = demo_accounts_for_user_id(db, trader_uid)
-        selected = find_demo_account(demo_accounts, cfg.demo_ctrader_account_id)
-        lessons = (
-            db.query(GoldAiLesson)
-            .order_by(GoldAiLesson.ts.desc())
-            .limit(3)
-            .all()
-        )
-        decisions = (
-            db.query(GoldAiDecision)
-            .order_by(GoldAiDecision.ts.desc())
-            .limit(40)
-            .all()
-        )
-        feed = []
-        for d in decisions:
+        cfg_row, cfg, trader_uid = _load_config_for_status(db, admin)
+        if cfg_row is None:
+            degraded.append("config")
+
+        demo_accounts: List[Dict[str, Any]] = []
+        selected = None
+        try:
+            demo_accounts = demo_accounts_for_user_id(db, trader_uid)
+            selected = find_demo_account(demo_accounts, cfg.demo_ctrader_account_id)
+        except Exception as exc:
+            logger.warning("[gold-ai-trader] demo accounts load failed: %s", exc)
+            degraded.append("demo_accounts")
             try:
-                _sync_live_mirror_fields(db, d)
-            except Exception as exc:
-                logger.debug("[gold-ai-trader] live mirror sync skip id=%s: %s", d.id, exc)
-            dec = _coerce_decision_dict(d.decision)
-            feed.append(
-                {
-                    "id": d.id,
-                    "ts": d.ts.isoformat() if d.ts else None,
-                    "session": d.session,
-                    "candidate_type": d.candidate_type,
-                    "action": d.action,
-                    "confidence": d.confidence,
-                    "executed": d.executed,
-                    "execution_id": d.execution_id,
-                    "live_mirror_execution_id": d.live_mirror_execution_id,
-                    "live_mirror_status": d.live_mirror_status,
-                    "live_mirror_error": d.live_mirror_error,
-                    "cost_usd": d.cost_usd,
-                    "rationale": dec.get("rationale", ""),
-                    "reasoning_preview": (d.reasoning or "")[:300],
-                }
-            )
+                db.rollback()
+            except Exception:
+                pass
+
+        lessons = _safe_lessons(db, limit=3)
+        decisions = _safe_decisions(db, limit=40)
+        feed = _build_decision_feed(db, decisions)
         user_id = cfg.demo_user_id or getattr(admin, "id", None) or 0
 
         stats_today: Dict[str, Any] = {
@@ -252,6 +365,7 @@ async def api_status(uid: str = Query(...)):
             }
         except Exception as exc:
             logger.warning("[gold-ai-trader] stats_today failed: %s", exc)
+            degraded.append("stats")
 
         setup_stats: List[Dict[str, Any]] = []
         try:
@@ -265,49 +379,30 @@ async def api_status(uid: str = Query(...)):
         except Exception as exc:
             logger.warning("[gold-ai-trader] call_stats_today failed: %s", exc)
 
-        return {
+        live_accounts: List[Dict[str, Any]] = []
+        try:
+            live_accounts = _live_accounts_for_user(db, trader_uid)
+        except Exception as exc:
+            logger.warning("[gold-ai-trader] live accounts load failed: %s", exc)
+            degraded.append("live_accounts")
+
+        payload: Dict[str, Any] = {
             "ok": True,
             "demo_label": "DEMO ACCOUNT ONLY",
             "runtime": runtime_state.get_status(),
             "shared_session_hours": gold_ai_session_hours(),
-            "config": {
-                "enabled": cfg.enabled,
-                "kill_switch": cfg.kill_switch,
-                "london_start_hour": cfg.london_start_hour,
-                "london_end_hour": cfg.london_end_hour,
-                "ny_start_hour": cfg.ny_start_hour,
-                "ny_end_hour": cfg.ny_end_hour,
-                "max_calls_day": cfg.max_calls_day,
-                "max_trades_day": cfg.max_trades_day,
-                "no_overnight": cfg.no_overnight,
-                "model": cfg.model,
-                "demo_ctrader_account_id": cfg.demo_ctrader_account_id,
-                "live_mirror_enabled": cfg.live_mirror_enabled,
-                "live_ctrader_account_id": cfg.live_ctrader_account_id,
-                "live_lot_size": cfg.live_lot_size,
-                "demo_lot_size": cfg.demo_lot_size,
-                "max_live_trades_day": cfg.max_live_trades_day,
-                "use_limit_entry": cfg.use_limit_entry,
-                "pending_entry_timeout_min": cfg.pending_entry_timeout_min,
-                "learning_daily_at_ny_end": cfg.learning_daily_at_ny_end,
-                "calls_reset_at": (
-                    cfg_row.calls_reset_at.isoformat()
-                    if getattr(cfg_row, "calls_reset_at", None)
-                    else None
-                ),
-                "live_mirror_confirmed_at": (
-                    cfg_row.live_mirror_confirmed_at.isoformat()
-                    if getattr(cfg_row, "live_mirror_confirmed_at", None)
-                    else None
-                ),
-            },
+            "config": _config_payload(cfg, cfg_row),
             "demo_accounts": demo_accounts,
             "demo_account_selected": selected,
             "demo_account_ready": demo_account_configured(cfg),
-            "live_accounts": _live_accounts_for_user(db, trader_uid),
+            "live_accounts": live_accounts,
             "stats_today": stats_today,
             "lessons": [
-                {"session": x.session, "ts": x.ts.isoformat(), "digest": x.digest}
+                {
+                    "session": x.session,
+                    "ts": x.ts.isoformat() if x.ts else None,
+                    "digest": x.digest,
+                }
                 for x in lessons
             ],
             "setup_stats": setup_stats,
@@ -315,6 +410,10 @@ async def api_status(uid: str = Query(...)):
             "recent_funnel_events": _safe_funnel_events(db, limit=40),
             "decision_feed": feed,
         }
+        if degraded:
+            payload["degraded"] = degraded
+            logger.warning("[gold-ai-trader] status degraded uid=%s parts=%s", uid, degraded)
+        return payload
     except HTTPException:
         raise
     except Exception as exc:
