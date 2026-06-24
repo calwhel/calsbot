@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, List, Optional, Sequence, Set
@@ -39,6 +40,18 @@ LAZY_DDL_TABLES: frozenset[str] = frozenset(
         "wall_watches",
         "weekly_coach_reports",
     }
+)
+
+
+SCHEMA_RESET_ONCE_ENV = "SCHEMA_RESET_ONCE"
+
+CRITICAL_TABLES: tuple[str, ...] = (
+    "users",
+    "strategy_executions",
+    "user_strategies",
+    "gold_ai_config",
+    "gold_ai_decisions",
+    "gold_ai_outcomes",
 )
 
 
@@ -497,17 +510,112 @@ def bootstrap_schema(
 
 
 def _print_verify(bind: Engine) -> int:
+    return log_verify_summary(bind, label="schema-bootstrap")
+
+
+def schema_reset_once_enabled() -> bool:
+    """True when ``SCHEMA_RESET_ONCE`` env is set (one-shot destructive rebuild)."""
+    value = os.environ.get(SCHEMA_RESET_ONCE_ENV, "").strip().lower()
+    return value in ("1", "true", "yes", "on")
+
+
+def verify_summary(bind: Engine) -> tuple[int, dict]:
     orm_missing, lazy_missing = verify_all_tables(bind)
     expected = orm_table_names()
     present = _present_tables(bind, expected)
     lazy_present = _present_tables(bind, LAZY_DDL_TABLES)
-    print(f"ORM tables: {len(present)}/{len(expected)} present")
-    if orm_missing:
-        print("ORM missing:", ", ".join(orm_missing))
-    print(f"Lazy DDL tables: {len(lazy_present)}/{len(LAZY_DDL_TABLES)} present")
-    if lazy_missing:
-        print("Lazy missing:", ", ".join(lazy_missing))
-    return 0 if not orm_missing and not lazy_missing else 1
+    insp = inspect(bind)
+    missing_critical = [t for t in CRITICAL_TABLES if not insp.has_table(t)]
+    ok = not orm_missing and not lazy_missing and not missing_critical
+    return (0 if ok else 1), {
+        "orm_expected": len(expected),
+        "orm_present": len(present),
+        "orm_missing": orm_missing,
+        "lazy_expected": len(LAZY_DDL_TABLES),
+        "lazy_present": len(lazy_present),
+        "lazy_missing": lazy_missing,
+        "missing_critical": missing_critical,
+        "critical_present": [t for t in CRITICAL_TABLES if t not in missing_critical],
+    }
+
+
+def log_verify_summary(bind: Engine, *, label: str = "schema-bootstrap") -> int:
+    """Log and print ORM/lazy/critical table verification (for deploy logs)."""
+    code, summary = verify_summary(bind)
+    lines = [
+        f"[{label}] ════════════════════════════════════════════════════════",
+        f"[{label}] ORM tables: {summary['orm_present']}/{summary['orm_expected']} present",
+        f"[{label}] Lazy DDL tables: {summary['lazy_present']}/{summary['lazy_expected']} present",
+        f"[{label}] Critical tables present: {', '.join(summary['critical_present'])}",
+    ]
+    if summary["orm_missing"]:
+        lines.append(f"[{label}] ORM missing: {', '.join(summary['orm_missing'])}")
+    if summary["lazy_missing"]:
+        lines.append(f"[{label}] Lazy missing: {', '.join(summary['lazy_missing'])}")
+    if summary["missing_critical"]:
+        lines.append(
+            f"[{label}] CRITICAL missing: {', '.join(summary['missing_critical'])}"
+        )
+    status = "SUCCESS" if code == 0 else "FAILED"
+    lines.append(f"[{label}] Verify: {status}")
+    lines.append(f"[{label}] ════════════════════════════════════════════════════════")
+    for line in lines:
+        logger.info(line)
+        print(line, flush=True)
+    return code
+
+
+def run_schema_reset_once_if_env(bind: Optional[Engine] = None) -> bool:
+    """Run destructive reset + bootstrap when ``SCHEMA_RESET_ONCE`` is set.
+
+    Intended to run once from ``start.sh`` before gunicorn workers fork.
+    Uses the schema migration advisory lock so only one process resets when
+    several Railway replicas start simultaneously.
+    """
+    if not schema_reset_once_enabled():
+        return False
+
+    bind = bind or engine
+    tag = "SCHEMA_RESET_ONCE"
+    logger.warning("[%s] env flag set — DROP SCHEMA public CASCADE + full bootstrap", tag)
+    print(f"[{tag}] env flag set — starting destructive schema rebuild", flush=True)
+
+    conn = bind.connect()
+    lock_held = False
+    try:
+        lock_held = _try_advisory_lock(conn)
+        if not lock_held:
+            logger.info("[%s] another replica holds lock — waiting for schema", tag)
+            print(f"[{tag}] waiting for another replica to finish reset…", flush=True)
+            if wait_for_schema(bind, timeout_seconds=300.0):
+                code = log_verify_summary(bind, label=tag)
+                if code != 0:
+                    raise SystemExit(code)
+                print(
+                    f"[{tag}] schema ready (built by another replica) — "
+                    f"remove {SCHEMA_RESET_ONCE_ENV} from Railway vars",
+                    flush=True,
+                )
+                return True
+            raise SystemExit(
+                f"{tag}: lock held by another process but schema still incomplete after 300s"
+            )
+
+        reset_public_schema(bind)
+        bootstrap_schema(bind, force=True, skip_lock=True)
+        code = log_verify_summary(bind, label=tag)
+        if code != 0:
+            raise SystemExit(code)
+        print(
+            f"[{tag}] SUCCESS — remove {SCHEMA_RESET_ONCE_ENV} from Railway vars "
+            f"after confirming these log lines",
+            flush=True,
+        )
+        return True
+    finally:
+        if lock_held:
+            _advisory_unlock(conn)
+        conn.close()
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -541,28 +649,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _print_verify(engine)
 
     result = bootstrap_schema(engine, force=args.force, skip_lock=args.skip_lock)
-    code = _print_verify(engine)
     if not result.ran and not args.skip_lock:
         print("Bootstrap skipped (another worker holds the lock). Re-run with --skip-lock in shell.")
     elif result.ran:
         print(f"Bootstrap ran: ok={result.ok}")
-
-    # Confirm critical tables explicitly.
-    critical = (
-        "users",
-        "strategy_executions",
-        "user_strategies",
-        "gold_ai_config",
-        "gold_ai_decisions",
-        "gold_ai_outcomes",
-    )
-    insp = inspect(engine)
-    missing_critical = [t for t in critical if not insp.has_table(t)]
-    if missing_critical:
-        print("CRITICAL tables missing:", ", ".join(missing_critical))
-        return 1
-    print("Critical tables present:", ", ".join(critical))
-    return code
+    return log_verify_summary(engine, label="schema-bootstrap")
 
 
 if __name__ == "__main__":

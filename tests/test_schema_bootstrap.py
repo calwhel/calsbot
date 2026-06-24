@@ -100,6 +100,18 @@ class TestSchemaBootstrap(unittest.TestCase):
         self.assertLess(names.index("users"), names.index("user_strategies"))
         self.assertLess(names.index("users"), names.index("strategy_executions"))
 
+    def test_schema_reset_once_env_flag(self):
+        import os
+
+        from app.schema_bootstrap import schema_reset_once_enabled
+
+        os.environ.pop("SCHEMA_RESET_ONCE", None)
+        self.assertFalse(schema_reset_once_enabled())
+        for val in ("1", "true", "yes", "on", "TRUE"):
+            os.environ["SCHEMA_RESET_ONCE"] = val
+            self.assertTrue(schema_reset_once_enabled(), msg=val)
+        os.environ.pop("SCHEMA_RESET_ONCE", None)
+
     def test_benign_skip_raises_when_table_still_missing(self):
         from unittest.mock import patch
 
