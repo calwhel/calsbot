@@ -308,7 +308,7 @@ def compute_setup_readiness(
         parts.append("RR-10")
 
     if now is not None and cfg is not None:
-        asian_hi, asian_lo = compute_asian_range(now, k5, k1h=k1h or [])
+        asian_hi, asian_lo = compute_asian_range(now, k5, k1h or [])
         label, _, _ = compute_premium_discount(price, asian_lo, asian_hi)
         d = (direction or "").upper()
         pd_ok = (

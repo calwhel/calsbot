@@ -145,6 +145,29 @@ class TestReadinessScoring:
         os.environ.pop("GOLD_AI_READINESS_MIN", None)
         assert readiness_min_score() == 55
 
+    def test_readiness_premium_discount_path_no_crash(self):
+        """Regression: compute_asian_range must accept k1h as 3rd positional arg."""
+        bias = {"htf_bias": "bullish"}
+        k5 = _make_k5()
+        now = datetime(2026, 6, 23, 8, 0, 0)
+        result = compute_setup_readiness(
+            setup_type="liq_sweep_bull",
+            direction="LONG",
+            detail="LQ sweep bullish: reclaim @ 2650.0 FIRED",
+            price=2650.5,
+            atr=4.0,
+            k5=k5,
+            k1h=k5,
+            bias=bias,
+            htf_align_reason="htf_aligned_bull",
+            key_levels=[2670.0, 2640.0],
+            in_zone_hint=True,
+            now=now,
+            session="london",
+            cfg=_Cfg(),
+        )
+        assert isinstance(result.score, int)
+
 
 class TestSetupDefaults:
     def test_fvg_just_formed_default_off(self):
