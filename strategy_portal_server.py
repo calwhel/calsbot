@@ -1593,24 +1593,30 @@ def _ensure_tables():
     import sqlalchemy as sa
     import time as _time
     from app.database import Base
-    from app.schema_bootstrap import bootstrap_schema
+    from app.schema_bootstrap import bootstrap_schema, wait_for_schema
 
     boot = bootstrap_schema(engine)
     if not boot.ran:
-        logger.info(
-            "_ensure_tables: schema bootstrap skipped — lock held by another worker "
-            "(ok=%s orm_missing=%s lazy_missing=%s)",
-            boot.ok,
-            boot.orm_missing,
-            boot.lazy_missing,
-        )
-    elif not boot.ok:
-        logger.error(
-            "_ensure_tables: bootstrap incomplete — orm_missing=%s lazy_missing=%s errors=%s",
-            boot.orm_missing,
-            boot.lazy_missing,
-            boot.errors,
-        )
+        if not boot.ok:
+            logger.info(
+                "_ensure_tables: bootstrap lock held elsewhere — waiting for schema "
+                "(orm_missing=%s lazy_missing=%s)",
+                boot.orm_missing,
+                boot.lazy_missing,
+            )
+            if not wait_for_schema(engine, timeout_seconds=120.0):
+                orm_missing, lazy_missing = boot.orm_missing, boot.lazy_missing
+                from app.schema_bootstrap import verify_all_tables
+                orm_missing, lazy_missing = verify_all_tables(engine)
+                raise RuntimeError(
+                    f"_ensure_tables: schema still incomplete after wait — "
+                    f"orm_missing={orm_missing} lazy_missing={lazy_missing}"
+                )
+        else:
+            logger.info(
+                "_ensure_tables: schema bootstrap skipped — lock held by another worker "
+                "(schema complete)"
+            )
 
     # Make sure new model classes are imported BEFORE follow-on migrations.
     from app.models import (  # noqa: F401
@@ -3018,7 +3024,8 @@ async def _startup_background():
         await loop.run_in_executor(None, _ensure_tables)
         logger.info("Schema migrations complete")
     except Exception as e:
-        logger.warning(f"Background _ensure_tables error: {e}")
+        logger.error(f"Background _ensure_tables error: {e}", exc_info=True)
+        raise
 
     # Expire any positions stuck OPEN > 48h — these silently block the
     # max_open gate and prevent strategies from ever firing again.

@@ -95,15 +95,27 @@ def create_orm_tables(bind: Engine) -> None:
     """``CREATE TABLE`` every ORM model in FK order (``checkfirst=True`` per table)."""
     register_all_models()
     tables = list(Base.metadata.sorted_tables)
+    insp = inspect(bind)
     logger.info("[schema-bootstrap] creating %s ORM tables (sorted_tables order)", len(tables))
     for table in tables:
         try:
             table.create(bind=bind, checkfirst=True)
         except (OperationalError, ProgrammingError, DBAPIError) as exc:
             if _is_benign_ddl_error(exc):
-                logger.info("[schema-bootstrap] skip existing/raced table %s", table.name)
-                continue
+                if insp.has_table(table.name):
+                    logger.info("[schema-bootstrap] skip existing/raced table %s", table.name)
+                    continue
+                msg = (
+                    f"CREATE TABLE {table.name} hit benign-classified error but table "
+                    f"is still missing (likely orphaned pg_type): {exc}"
+                )
+                logger.error("[schema-bootstrap] %s", msg)
+                raise RuntimeError(msg) from exc
             raise
+        if not insp.has_table(table.name):
+            raise RuntimeError(
+                f"CREATE TABLE {table.name} returned without error but table is still missing"
+            )
 
 
 def _run_step(label: str, fn: Callable[[], None], errors: List[str]) -> None:
@@ -357,6 +369,40 @@ def verify_all_tables(bind: Engine) -> tuple[List[str], List[str]]:
     return verify_orm_tables(bind), verify_lazy_tables(bind)
 
 
+def schema_is_complete(bind: Engine) -> bool:
+    orm_missing, lazy_missing = verify_all_tables(bind)
+    return not orm_missing and not lazy_missing
+
+
+def reset_public_schema(bind: Engine) -> None:
+    """Destructive: drop and recreate ``public`` schema (PostgreSQL only)."""
+    if bind.dialect.name != "postgresql":
+        raise RuntimeError("reset_public_schema requires PostgreSQL")
+    logger.warning("[schema-bootstrap] DROP SCHEMA public CASCADE — all data will be lost")
+    with bind.begin() as conn:
+        conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+        conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
+        conn.execute(text("GRANT ALL ON SCHEMA public TO CURRENT_USER"))
+
+
+def wait_for_schema(
+    bind: Engine,
+    *,
+    timeout_seconds: float = 120.0,
+    poll_seconds: float = 2.0,
+) -> bool:
+    """Poll until all expected tables exist (another worker may be bootstrapping)."""
+    import time
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if schema_is_complete(bind):
+            return True
+        time.sleep(poll_seconds)
+    return schema_is_complete(bind)
+
+
 def _try_advisory_lock(conn) -> bool:
     if conn.dialect.name != "postgresql":
         return True
@@ -437,12 +483,12 @@ def bootstrap_schema(
                 len(LAZY_DDL_TABLES) - len(lazy_missing),
             )
         else:
-            logger.error(
-                "[schema-bootstrap] incomplete — orm_missing=%s lazy_missing=%s errors=%s",
-                orm_missing,
-                lazy_missing,
-                errors,
+            msg = (
+                f"Schema bootstrap incomplete — orm_missing={orm_missing} "
+                f"lazy_missing={lazy_missing} errors={errors}"
             )
+            logger.error("[schema-bootstrap] %s", msg)
+            raise RuntimeError(msg)
         return result
     finally:
         if lock_held and not skip_lock:
@@ -481,7 +527,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         action="store_true",
         help="Skip advisory lock (use for one-shot Railway shell runs)",
     )
+    parser.add_argument(
+        "--reset-schema",
+        action="store_true",
+        help="DROP SCHEMA public CASCADE then CREATE SCHEMA public (PostgreSQL, destructive)",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    if args.reset_schema:
+        reset_public_schema(engine)
 
     if args.verify_only:
         return _print_verify(engine)
@@ -492,6 +546,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("Bootstrap skipped (another worker holds the lock). Re-run with --skip-lock in shell.")
     elif result.ran:
         print(f"Bootstrap ran: ok={result.ok}")
+
+    # Confirm critical tables explicitly.
+    critical = (
+        "users",
+        "strategy_executions",
+        "user_strategies",
+        "gold_ai_config",
+        "gold_ai_decisions",
+        "gold_ai_outcomes",
+    )
+    insp = inspect(engine)
+    missing_critical = [t for t in critical if not insp.has_table(t)]
+    if missing_critical:
+        print("CRITICAL tables missing:", ", ".join(missing_critical))
+        return 1
+    print("Critical tables present:", ", ".join(critical))
     return code
 
 

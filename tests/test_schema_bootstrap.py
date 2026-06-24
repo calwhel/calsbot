@@ -100,6 +100,39 @@ class TestSchemaBootstrap(unittest.TestCase):
         self.assertLess(names.index("users"), names.index("user_strategies"))
         self.assertLess(names.index("users"), names.index("strategy_executions"))
 
+    def test_benign_skip_raises_when_table_still_missing(self):
+        from unittest.mock import patch
+
+        from sqlalchemy import inspect as sa_inspect
+        from sqlalchemy.exc import DBAPIError
+
+        from app.schema_bootstrap import create_orm_tables, register_all_models
+        from app.database import Base
+
+        register_all_models()
+        real_insp = sa_inspect(self.engine)
+        table = Base.metadata.tables["users"]
+        dup_exc = DBAPIError(
+            "CREATE TABLE users",
+            {},
+            Exception(
+                "duplicate key value violates unique constraint pg_type_typname_nsp_index"
+            ),
+        )
+
+        def _has_table(name: str) -> bool:
+            if name == "users":
+                return False
+            return real_insp.has_table(name)
+
+        with patch("app.schema_bootstrap.inspect") as mock_inspect:
+            mock_inspect.return_value.has_table.side_effect = _has_table
+            with patch.object(table, "create", side_effect=dup_exc):
+                with self.assertRaises(RuntimeError) as ctx:
+                    create_orm_tables(self.engine)
+                self.assertIn("users", str(ctx.exception))
+                self.assertIn("orphaned pg_type", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
