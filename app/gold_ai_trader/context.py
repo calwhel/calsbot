@@ -306,7 +306,7 @@ async def build_context_snapshot(
         lessons,
         "",
         "=== DECISION RULE REMINDER ===",
-        "Target positive expectancy — good (not perfect) setups at 50%+ with valid 2:1 R:R are tradable.",
+        "Target positive expectancy — good (not perfect) setups at 50%+ with logical SL/TP are tradable.",
         "Minor missing confluence lowers confidence; borderline edge belongs in 50–60, not auto-skip.",
         "Weight data quality and HTF bias — downgrade confidence on stale feeds or clear counter-structure.",
     ]

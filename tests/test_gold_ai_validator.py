@@ -81,14 +81,39 @@ class TestDecisionValidator:
         assert reason.startswith("validator:ok")
         assert out.get("validator_sl_atr") == 2.47
 
-    def test_tp_adjusted_to_key_level(self):
+    def test_allows_low_rr_by_default(self):
+        """Claude may target session edge with <2R — validator must not block."""
+        decision = {
+            "direction": "LONG",
+            "entry": 2650.0,
+            "stop_loss": 2648.0,
+            "take_profit": 2651.0,
+        }
+        ok, reason, out = validate_take_decision(
+            decision,
+            candidate_direction="LONG",
+            spot=2650.0,
+            atr=2.0,
+            setup_detail="",
+            key_levels=[],
+        )
+        assert ok is True
+        assert reason.startswith("validator:ok")
+        assert out.get("validator_note") == "rr=0.50"
+
+    def test_tp_adjusted_when_min_rr_enabled(self, monkeypatch):
+        monkeypatch.setenv("GOLD_AI_MIN_RR", "2.0")
+        import importlib
+        import app.gold_ai_trader.decision_validator as dv
+
+        importlib.reload(dv)
         decision = {
             "direction": "LONG",
             "entry": 2650.0,
             "stop_loss": 2649.0,
             "take_profit": 2651.0,
         }
-        ok, reason, out = validate_take_decision(
+        ok, reason, out = dv.validate_take_decision(
             decision,
             candidate_direction="LONG",
             spot=2650.0,
@@ -99,6 +124,8 @@ class TestDecisionValidator:
         assert ok is True
         assert reason == "validator:ok_tp_adjusted"
         assert float(out["take_profit"]) == 2660.0
+        monkeypatch.delenv("GOLD_AI_MIN_RR", raising=False)
+        importlib.reload(dv)
 
     def test_rejects_bad_price_order(self):
         decision = {
@@ -147,7 +174,6 @@ class TestTradeBands:
         )
         text = "\n".join(lines)
         assert "TRADE BANDS" in text
-        assert "Min R:R" in text
         assert "2651.0" in text or "2649.0" in text
 
 
