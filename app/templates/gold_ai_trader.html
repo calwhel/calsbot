@@ -1184,12 +1184,14 @@
         </div>
       </div>
 
-      <div class="session-timeline" id="session-timeline" aria-label="London and New York session windows (UTC)">
+      <div class="session-timeline" id="session-timeline" aria-label="Asia, London and New York session windows (UTC)">
         <div class="session-timeline-labels">
+          <span>Asia</span>
           <span>London</span>
           <span>New York</span>
         </div>
         <div class="session-track" id="session-track">
+          <div class="session-block" id="block-asia"></div>
           <div class="session-block" id="block-london"></div>
           <div class="session-block" id="block-ny"></div>
           <div class="session-now" id="session-now"></div>
@@ -1421,7 +1423,7 @@ async function _apiFetch(url, opts = {}) {
 
 function fmtSession(s) {
   if (!s) return '';
-  const map = { london: 'London', new_york: 'New York', ny: 'New York' };
+  const map = { asia: 'Asia', london: 'London', new_york: 'New York', ny: 'New York' };
   return map[s.toLowerCase()] || s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
@@ -1460,7 +1462,7 @@ function deriveHero(j) {
     return { title: 'SETUP REQUIRED', sub: 'Select a demo cTrader account below to arm the trader', lamp: 'dormant' };
   }
   if (!cfg.enabled) {
-    return { title: 'STANDBY', sub: 'Trader is off — enable the switch when London or NY opens', lamp: 'dormant' };
+    return { title: 'STANDBY', sub: 'Trader is off — enable the switch when Asia, London, or NY opens', lamp: 'dormant' };
   }
 
   const openTrade = feed.find(d => d.executed && (d.action || '').toLowerCase() === 'take');
@@ -1491,13 +1493,15 @@ function deriveHero(j) {
 
   return {
     title: 'DORMANT',
-    sub: 'Outside London and New York session windows — this is normal',
+    sub: 'Outside Asia, London, and New York session windows — this is normal',
     lamp: 'dormant',
   };
 }
 
 function renderSessionTimeline(cfg, rt, sharedHours) {
   const shared = sharedHours || {};
+  const asiaS = shared.asia?.start_hour ?? 1;
+  const asiaE = shared.asia?.end_hour ?? 4;
   const lonS = cfg.london_start_hour ?? shared.london?.start_hour ?? 7;
   const lonE = cfg.london_end_hour ?? shared.london?.end_hour ?? 16;
   const nyS = cfg.ny_start_hour ?? shared.new_york?.start_hour ?? 12;
@@ -1507,21 +1511,26 @@ function renderSessionTimeline(cfg, rt, sharedHours) {
   const pct = (h) => Math.min(100, Math.max(0, (h / 24) * 100));
   const blockW = (start, end) => Math.max(0.5, pct(end) - pct(start));
 
+  const ba = document.getElementById('block-asia');
   const bl = document.getElementById('block-london');
   const bn = document.getElementById('block-ny');
+  ba.style.left = pct(asiaS) + '%';
+  ba.style.width = blockW(asiaS, asiaE) + '%';
   bl.style.left = pct(lonS) + '%';
   bl.style.width = blockW(lonS, lonE) + '%';
   bn.style.left = pct(nyS) + '%';
   bn.style.width = blockW(nyS, nyE) + '%';
 
+  const inAsia = nowH >= asiaS && nowH < asiaE;
   const inLondon = nowH >= lonS && nowH < lonE;
   const inNy = nowH >= nyS && nowH < nyE;
+  ba.classList.toggle('active', inAsia && !!rt.active_session);
   bl.classList.toggle('active', inLondon && !!rt.active_session);
   bn.classList.toggle('active', inNy && !!rt.active_session);
 
   document.getElementById('session-now').style.left = pct(nowH) + '%';
   document.getElementById('session-hours-label').textContent =
-    `LDN ${lonS}–${lonE} · NY ${nyS}–${nyE} UTC · now ${String(Math.floor(nowH)).padStart(2,'0')}:${String(Math.floor((nowH % 1) * 60)).padStart(2,'0')}`;
+    `ASIA ${asiaS}–${asiaE} · LDN ${lonS}–${lonE} · NY ${nyS}–${nyE} UTC · now ${String(Math.floor(nowH)).padStart(2,'0')}:${String(Math.floor((nowH % 1) * 60)).padStart(2,'0')}`;
 }
 
 function renderHero(j) {
@@ -1701,7 +1710,7 @@ function renderFeed(j) {
     el.innerHTML = `
       <div class="empty-state">
         <div class="empty-title">No decisions yet today</div>
-        <div class="empty-sub">The trader evaluates setups during London and New York sessions. Decisions appear here in real time.</div>
+        <div class="empty-sub">The trader evaluates setups during Asia, London, and New York sessions. Decisions appear here in real time.</div>
       </div>`;
     return;
   }

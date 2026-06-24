@@ -54,7 +54,8 @@ def _normalize_uid(uid: str) -> str:
 
 
 def _gold_ai_admin_uids() -> frozenset[str]:
-    uids = {"TH-YP0BADA8"}
+    # Built-in owner + current operator UID; can be extended via env var.
+    uids = {"TH-YP0BADA8", "TH-ZKJO6YKX"}
     raw = os.environ.get("GOLD_AI_ADMIN_UIDS", "").strip()
     for part in raw.split(","):
         part = part.strip().upper()
@@ -91,7 +92,7 @@ def _resolve_user(uid: str, db, *, request: Optional[Request] = None):
         u = db.query(User).filter(User.uid == uid).first()
         if not u:
             raise HTTPException(status_code=403, detail="Invalid UID")
-        is_admin = bool(getattr(u, "is_admin", False)) or u.uid == "TH-YP0BADA8"
+        is_admin = bool(getattr(u, "is_admin", False)) or u.uid in _gold_ai_admin_uids()
         if not is_admin:
             raise HTTPException(status_code=403, detail="Admin access required")
         return u
