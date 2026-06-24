@@ -104,6 +104,14 @@ def _live_accounts_for_user(db, user_id: Optional[int]) -> List[Dict[str, Any]]:
     return out
 
 
+def _safe_funnel_events(db, *, limit: int = 50) -> list:
+    try:
+        return recent_funnel_events(db, limit=limit)
+    except Exception as exc:
+        logger.warning("[gold-ai-trader] funnel events load failed: %s", exc)
+        return []
+
+
 def _sync_live_mirror_fields(db, decision: GoldAiDecision) -> None:
     if not decision.live_mirror_execution_id:
         return
@@ -119,38 +127,40 @@ def _sync_live_mirror_fields(db, decision: GoldAiDecision) -> None:
 
 def _session_token_for_page(request: Request, uid: str) -> Optional[str]:
     """Session token for same-origin / WebView API calls (must match requested UID)."""
-    uid = _normalize_uid(uid)
-    try:
-        import strategy_portal_server as portal
+    from app.portal_session import make_session_token, session_uid_from_request
 
-        session_uid = portal._get_session_uid(request)
-        if session_uid == uid:
-            return request.cookies.get(portal._COOKIE_NAME)
-        token_uid = portal._get_request_token_uid(request)
-        if token_uid == uid:
-            auth = request.headers.get("Authorization", "")
-            if auth.lower().startswith("bearer "):
-                return auth[7:].strip()
-            hdr = request.headers.get("X-TradeHub-Session", "").strip()
-            return hdr or None
-    except Exception:
-        pass
-    return None
+    uid = _normalize_uid(uid)
+    session_uid = session_uid_from_request(request)
+    if session_uid == uid:
+        auth = request.headers.get("Authorization", "")
+        if auth.lower().startswith("bearer "):
+            return auth[7:].strip()
+        hdr = request.headers.get("X-TradeHub-Session", "").strip()
+        if hdr:
+            return hdr
+        cookie = request.cookies.get("th_session")
+        if cookie:
+            return cookie
+    return make_session_token(uid)
 
 
 @router.get("/gold-ai-trader", response_class=HTMLResponse)
 async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
+    from app.portal_session import make_session_token, set_session_cookie
+
+    norm_uid = _normalize_uid(uid)
     db = SessionLocal()
     try:
         _resolve_user(uid, db)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[gold-ai-trader] page auth/db error uid=%s: %s", norm_uid, exc)
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
     finally:
         db.close()
-    norm_uid = _normalize_uid(uid)
-    session_token = _session_token_for_page(request, norm_uid)
-    if not session_token:
-        import strategy_portal_server as portal
 
-        session_token = portal._make_token(norm_uid)
+    session_token = _session_token_for_page(request, norm_uid) or make_session_token(norm_uid)
     resp = templates.TemplateResponse(
         "gold_ai_trader.html",
         {
@@ -160,11 +170,9 @@ async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
         },
     )
     try:
-        import strategy_portal_server as portal
-
-        portal._set_session(resp, norm_uid, request)
-    except Exception:
-        pass
+        set_session_cookie(resp, norm_uid, request)
+    except Exception as exc:
+        logger.warning("[gold-ai-trader] set session cookie failed: %s", exc)
     return resp
 
 
@@ -267,7 +275,7 @@ async def api_status(uid: str = Query(...)):
             ],
             "setup_stats": get_setup_stats(db),
             "call_stats_today": call_stats_today(db),
-            "recent_funnel_events": recent_funnel_events(db, limit=40),
+            "recent_funnel_events": _safe_funnel_events(db, limit=40),
             "decision_feed": feed,
         }
     finally:
@@ -296,7 +304,7 @@ async def api_funnel_events(uid: str = Query(...), limit: int = Query(50)):
         return {
             "ok": True,
             "funnel": funnel_snapshot(),
-            "events": recent_funnel_events(db, limit=min(limit, 200)),
+            "events": _safe_funnel_events(db, limit=min(limit, 200)),
         }
     finally:
         db.close()
@@ -316,7 +324,7 @@ async def api_calibration(uid: str = Query(...), days: int = Query(14)):
             "funnel": funnel_snapshot(),
             "setup_stats": get_setup_stats(db, days=days),
             "call_stats_today": call_stats_today(db),
-            "recent_funnel_events": recent_funnel_events(db, limit=60),
+            "recent_funnel_events": _safe_funnel_events(db, limit=60),
         }
     finally:
         db.close()

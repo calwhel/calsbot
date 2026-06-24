@@ -157,7 +157,8 @@ def test_gold_ai_trader_page_sends_session_auth():
     assert "showLoadError" in html
     assert "session_token" in routes
     assert "_session_token_for_page" in routes
-    assert "_make_token" in routes
+    assert "portal_session" in routes
+    assert "make_session_token" in routes
     assert "renderSessionTimeline(cfg, rt, j.shared_session_hours)" in html
 
 
