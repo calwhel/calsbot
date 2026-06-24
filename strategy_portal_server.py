@@ -1593,15 +1593,32 @@ def _ensure_tables():
     import sqlalchemy as sa
     import time as _time
     from app.database import Base
-    # Make sure new model classes are imported BEFORE create_all so their
-    # tables are registered with the metadata.
+    from app.schema_bootstrap import bootstrap_schema
+
+    boot = bootstrap_schema(engine)
+    if not boot.ran:
+        logger.info(
+            "_ensure_tables: schema bootstrap skipped — lock held by another worker "
+            "(ok=%s orm_missing=%s lazy_missing=%s)",
+            boot.ok,
+            boot.orm_missing,
+            boot.lazy_missing,
+        )
+    elif not boot.ok:
+        logger.error(
+            "_ensure_tables: bootstrap incomplete — orm_missing=%s lazy_missing=%s errors=%s",
+            boot.orm_missing,
+            boot.lazy_missing,
+            boot.errors,
+        )
+
+    # Make sure new model classes are imported BEFORE follow-on migrations.
     from app.models import (  # noqa: F401
         IndicatorAlert, TradeIndicatorSetup,
         AutoTradeStrategy, AutoTradePaperTrade, TradeDrawing,
     )
 
-    # Each legacy initializer runs in its own try/except so an error in one
-    # cannot prevent the create_all calls below from running.
+    # Column/index migrations on strategy tables (create_all already ran in bootstrap).
     for label, fn in (
         ("init_strategy_tables", init_strategy_tables),
         ("init_marketplace_ext_tables", init_marketplace_ext_tables),
@@ -1611,32 +1628,6 @@ def _ensure_tables():
             fn(engine)
         except Exception as e:
             logger.error(f"_ensure_tables({label}): {e}", exc_info=True)
-
-    def _create_with_retry(label: str, tables: list, attempts: int = 3) -> bool:
-        """Idempotent CREATE TABLE IF NOT EXISTS with retry for transient errors
-        (Neon connection drops, multi-worker startup races, etc.)."""
-        last_err = None
-        for i in range(1, attempts + 1):
-            try:
-                Base.metadata.create_all(bind=engine, tables=tables)
-                return True
-            except Exception as e:
-                last_err = e
-                logger.warning(
-                    f"_ensure_tables({label}) attempt {i}/{attempts}: {type(e).__name__}: {e}"
-                )
-                if i < attempts:
-                    _time.sleep(0.7 * i)
-        logger.error(f"_ensure_tables({label}) FAILED after {attempts} attempts: {last_err}")
-        return False
-
-    _create_with_retry("IndicatorAlert", [IndicatorAlert.__table__])
-    _create_with_retry("TradeIndicatorSetup", [TradeIndicatorSetup.__table__])
-    _create_with_retry("AutoTrade*", [
-        AutoTradeStrategy.__table__,
-        AutoTradePaperTrade.__table__,
-    ])
-    _create_with_retry("TradeDrawing", [TradeDrawing.__table__])
 
     # ── Hot-path indexes ──────────────────────────────────────────────────────
     # SQLAlchemy `index=True` on a Column only creates the index when the
@@ -1694,17 +1685,17 @@ def _ensure_tables():
             ).scalar()
             if not _got_lock:
                 logger.info("_ensure_tables(indexes): another worker holds the lock — skipping")
-                return
-            for label, ddl in _index_ddl:
-                try:
-                    ac_conn.execute(sa.text(ddl))
-                    logger.info(f"_ensure_tables(indexes): {label} ready")
-                except Exception as ie:
-                    iemsg = str(ie)
-                    if "already exists" in iemsg or "duplicate key" in iemsg:
-                        logger.info(f"_ensure_tables(indexes): {label} already exists")
-                    else:
-                        logger.warning(f"_ensure_tables(indexes) {label}: {ie}")
+            else:
+                for label, ddl in _index_ddl:
+                    try:
+                        ac_conn.execute(sa.text(ddl))
+                        logger.info(f"_ensure_tables(indexes): {label} ready")
+                    except Exception as ie:
+                        iemsg = str(ie)
+                        if "already exists" in iemsg or "duplicate key" in iemsg:
+                            logger.info(f"_ensure_tables(indexes): {label} already exists")
+                        else:
+                            logger.warning(f"_ensure_tables(indexes) {label}: {ie}")
         finally:
             try:
                 ac_conn.execute(sa.text("SELECT pg_advisory_unlock(708110001)"))
@@ -1820,27 +1811,26 @@ def _ensure_tables():
     # Verification — query pg_tables for the names we expect and shout loudly
     # if any are still missing so we never silently end up with broken save APIs.
     try:
-        expected = {
-            "indicator_alerts", "trade_indicator_setups",
-            "auto_trade_strategies", "auto_trade_paper_trades",
-            "trade_drawings", "strategy_account_assignments",
-        }
-        with engine.connect() as conn:
-            present = {
-                row[0] for row in conn.execute(sa.text(
-                    "SELECT tablename FROM pg_tables WHERE schemaname='public' "
-                    "AND tablename = ANY(:names)"
-                ), {"names": list(expected)})
-            }
-        missing = expected - present
-        if missing:
+        from app.schema_bootstrap import (
+            LAZY_DDL_TABLES,
+            orm_table_names,
+            verify_all_tables,
+        )
+
+        orm_missing, lazy_missing = verify_all_tables(engine)
+        if orm_missing or lazy_missing:
             logger.error(
-                f"_ensure_tables VERIFICATION FAILED — tables still missing after "
-                f"create_all: {sorted(missing)}. Save endpoints WILL 500 until this "
-                f"is resolved."
+                "_ensure_tables VERIFICATION FAILED — missing after bootstrap: "
+                "orm=%s lazy=%s. Save endpoints WILL 500 until resolved.",
+                orm_missing,
+                lazy_missing,
             )
         else:
-            logger.info(f"_ensure_tables: all expected tables present ({len(expected)})")
+            logger.info(
+                "_ensure_tables: all expected tables present (%s ORM + %s lazy)",
+                len(orm_table_names()),
+                len(LAZY_DDL_TABLES),
+            )
     except Exception as e:
         logger.error(f"_ensure_tables verification step error: {e}")
     # Only ALTER if column is genuinely missing — avoids table locks when both
