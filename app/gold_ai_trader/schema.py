@@ -19,50 +19,92 @@ logger = logging.getLogger(__name__)
 
 _schema_ready = False
 
-_GOLD_AI_CONFIG_ALTERS = (
-    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_mirror_enabled BOOLEAN DEFAULT FALSE NOT NULL",
-    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_ctrader_account_id VARCHAR(40)",
-    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_lot_size FLOAT DEFAULT 0.01 NOT NULL",
-    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS demo_lot_size FLOAT DEFAULT 0.01 NOT NULL",
-    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS max_live_trades_day INTEGER DEFAULT 3 NOT NULL",
-    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS live_mirror_confirmed_at TIMESTAMP",
-    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS use_limit_entry BOOLEAN DEFAULT TRUE NOT NULL",
-    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS pending_entry_timeout_min INTEGER DEFAULT 30 NOT NULL",
-    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS learning_daily_at_ny_end BOOLEAN DEFAULT TRUE NOT NULL",
-    "ALTER TABLE gold_ai_config ADD COLUMN IF NOT EXISTS calls_reset_at TIMESTAMP",
+# (table, column, type/default fragment after column name)
+_GOLD_AI_COLUMN_ALTERS: tuple[tuple[str, str, str], ...] = (
+    ("gold_ai_config", "live_mirror_enabled", "BOOLEAN DEFAULT FALSE NOT NULL"),
+    ("gold_ai_config", "live_ctrader_account_id", "VARCHAR(40)"),
+    ("gold_ai_config", "live_lot_size", "FLOAT DEFAULT 0.01 NOT NULL"),
+    ("gold_ai_config", "demo_lot_size", "FLOAT DEFAULT 0.01 NOT NULL"),
+    ("gold_ai_config", "max_live_trades_day", "INTEGER DEFAULT 3 NOT NULL"),
+    ("gold_ai_config", "live_mirror_confirmed_at", "TIMESTAMP"),
+    ("gold_ai_config", "use_limit_entry", "BOOLEAN DEFAULT TRUE NOT NULL"),
+    ("gold_ai_config", "pending_entry_timeout_min", "INTEGER DEFAULT 30 NOT NULL"),
+    ("gold_ai_config", "learning_daily_at_ny_end", "BOOLEAN DEFAULT TRUE NOT NULL"),
+    ("gold_ai_config", "calls_reset_at", "TIMESTAMP"),
+    ("gold_ai_decisions", "live_mirror_execution_id", "INTEGER"),
+    ("gold_ai_decisions", "live_mirror_status", "VARCHAR(24)"),
+    ("gold_ai_decisions", "live_mirror_error", "TEXT"),
+    ("gold_ai_outcomes", "setup_type", "VARCHAR(64)"),
+    ("gold_ai_outcomes", "session", "VARCHAR(16)"),
+    ("gold_ai_outcomes", "r_multiple", "FLOAT"),
+    ("gold_ai_lessons", "tokens_in", "INTEGER DEFAULT 0"),
+    ("gold_ai_lessons", "tokens_out", "INTEGER DEFAULT 0"),
+    ("gold_ai_lessons", "cost_usd", "FLOAT DEFAULT 0"),
 )
 
-_GOLD_AI_OUTCOME_ALTERS = (
-    "ALTER TABLE gold_ai_outcomes ADD COLUMN IF NOT EXISTS setup_type VARCHAR(64)",
-    "ALTER TABLE gold_ai_outcomes ADD COLUMN IF NOT EXISTS session VARCHAR(16)",
-    "ALTER TABLE gold_ai_outcomes ADD COLUMN IF NOT EXISTS r_multiple FLOAT",
-)
+_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
+    "gold_ai_config": (
+        "live_mirror_enabled",
+        "live_ctrader_account_id",
+        "live_lot_size",
+        "demo_lot_size",
+        "max_live_trades_day",
+        "live_mirror_confirmed_at",
+        "use_limit_entry",
+        "pending_entry_timeout_min",
+        "learning_daily_at_ny_end",
+        "calls_reset_at",
+    ),
+    "gold_ai_decisions": (
+        "live_mirror_execution_id",
+        "live_mirror_status",
+        "live_mirror_error",
+    ),
+    "gold_ai_outcomes": ("setup_type", "session", "r_multiple"),
+    "gold_ai_lessons": ("tokens_in", "tokens_out", "cost_usd"),
+}
 
-_GOLD_AI_LESSON_ALTERS = (
-    "ALTER TABLE gold_ai_lessons ADD COLUMN IF NOT EXISTS tokens_in INTEGER DEFAULT 0",
-    "ALTER TABLE gold_ai_lessons ADD COLUMN IF NOT EXISTS tokens_out INTEGER DEFAULT 0",
-    "ALTER TABLE gold_ai_lessons ADD COLUMN IF NOT EXISTS cost_usd FLOAT DEFAULT 0",
-)
 
-_GOLD_AI_DECISION_ALTERS = (
-    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS live_mirror_execution_id INTEGER",
-    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS live_mirror_status VARCHAR(24)",
-    "ALTER TABLE gold_ai_decisions ADD COLUMN IF NOT EXISTS live_mirror_error TEXT",
-)
+def _missing_columns() -> dict[str, list[str]]:
+    """Return table -> missing column names (empty when schema matches ORM)."""
+    insp = inspect(engine)
+    missing: dict[str, list[str]] = {}
+    for table, cols in _REQUIRED_COLUMNS.items():
+        if not insp.has_table(table):
+            continue
+        existing = {c["name"] for c in insp.get_columns(table)}
+        gap = [c for c in cols if c not in existing]
+        if gap:
+            missing[table] = gap
+    return missing
+
+
+def _alter_sql(dialect: str, table: str, column: str, col_def: str) -> str:
+    if dialect == "sqlite":
+        return f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"
+    return f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_def}"
 
 
 def _apply_alters() -> None:
-    with engine.begin() as conn:
-        for sql in (
-            _GOLD_AI_CONFIG_ALTERS
-            + _GOLD_AI_DECISION_ALTERS
-            + _GOLD_AI_OUTCOME_ALTERS
-            + _GOLD_AI_LESSON_ALTERS
-        ):
-            try:
+    """Run each ALTER in its own transaction — PG aborts the whole txn on one failure."""
+    dialect = engine.dialect.name
+    for table, column, col_def in _GOLD_AI_COLUMN_ALTERS:
+        try:
+            with engine.begin() as conn:
+                if not inspect(conn).has_table(table):
+                    continue
+                existing = {c["name"] for c in inspect(conn).get_columns(table)}
+                if column in existing:
+                    continue
+                sql = _alter_sql(dialect, table, column, col_def)
                 conn.execute(text(sql))
-            except Exception as exc:
-                logger.debug("[gold-ai-trader] alter skipped/failed: %s (%s)", sql[:60], exc)
+        except Exception as exc:
+            logger.warning(
+                "[gold-ai-trader] alter skipped/failed: %s.%s (%s)",
+                table,
+                column,
+                exc,
+            )
 
 
 def ensure_gold_ai_trader_schema(*, force: bool = False) -> None:
@@ -81,9 +123,20 @@ def ensure_gold_ai_trader_schema(*, force: bool = False) -> None:
         ],
     )
     _apply_alters()
+    missing = _missing_columns()
+    if missing:
+        logger.warning(
+            "[gold-ai-trader] schema still missing columns after alters: %s",
+            missing,
+        )
+        _apply_alters()
+        missing = _missing_columns()
+    if missing:
+        _schema_ready = False
+        raise RuntimeError(f"Gold AI schema repair incomplete: {missing}")
     insp = inspect(engine)
     if insp.has_table("gold_ai_config"):
-        if not _schema_ready:
+        if not _schema_ready or force:
             logger.info("[gold-ai-trader] schema ready")
         try:
             from app.gold_ai_trader.guardrails import maybe_reset_daily_claude_credits
