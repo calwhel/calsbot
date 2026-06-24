@@ -1085,6 +1085,17 @@ def _get_user_by_uid(uid: str, db: Session):
     return _get_user_by_uid_safe(uid, db)
 
 
+def _get_user_row_by_uid(uid: str, db: Session):
+    """Write-safe UID lookup that always returns a live ORM row.
+
+    `_get_user_by_uid` may return a detached cache snapshot for read paths.
+    Call this helper before mutating user fields so `db.commit()` persists.
+    """
+    uid = (uid or "").strip().upper()
+    from app.models import User
+    return db.query(User).filter(User.uid == uid).first()
+
+
 def _get_user_by_uid_safe(uid: str, db: Session):
     """Resilient user lookup that survives transient `QueryCanceled` /
     `OperationalError` failures from Postgres' statement_timeout.
@@ -3576,7 +3587,7 @@ async def login_uid_set_password(request: Request):
     def _set_pw():
         db = SessionLocal()
         try:
-            u = _get_user_by_uid(uid, db)
+            u = _get_user_row_by_uid(uid, db)
             if not u:
                 return "not_found"
             if u.banned:
@@ -3585,6 +3596,7 @@ async def login_uid_set_password(request: Request):
                 return "already_set"
             u.password_hash = _hash_password(password)
             db.commit()
+            _invalidate_user_cache(uid)
             return "ok"
         finally:
             db.close()
@@ -4584,7 +4596,7 @@ async def api_mobile_delete_account(request: Request):
     def _do_delete():
         db = SessionLocal()
         try:
-            user = _get_user_by_uid(uid, db)
+            user = _get_user_row_by_uid(uid, db)
             if not user:
                 raise HTTPException(status_code=403, detail="invalid UID")
 
@@ -4607,6 +4619,7 @@ async def api_mobile_delete_account(request: Request):
             user.banned = True
 
             db.commit()
+            _invalidate_user_cache(uid)
             return {"ok": True, "message": "Account deleted successfully"}
         finally:
             db.close()
@@ -14276,7 +14289,7 @@ async def api_set_password(request: Request, uid: str = Query(...)):
     def _do():
         db = SessionLocal()
         try:
-            u = _get_user_by_uid(uid, db)
+            u = _get_user_row_by_uid(uid, db)
             if not u:
                 return "not_found"
             if u.password_hash:
@@ -14286,6 +14299,7 @@ async def api_set_password(request: Request, uid: str = Query(...)):
                     return "wrong_current"
             u.password_hash = _hash_password(new_password)
             db.commit()
+            _invalidate_user_cache(uid)
             return "ok"
         finally:
             db.close()
