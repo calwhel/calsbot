@@ -397,7 +397,13 @@ async function doRegister(){
 
 // Focus name field on load (register is default tab)
 window.addEventListener('load', function(){
-  if(!_refCode) document.getElementById('reg-name').focus();
+  const msg = new URLSearchParams(location.search).get('msg');
+  if (msg === 'session_stale') {
+    switchTab('signin');
+    showErr('si-err', 'Your previous session is no longer valid. Sign in again to continue.');
+  } else if(!_refCode) {
+    document.getElementById('reg-name').focus();
+  }
 });
 </script>
 </body>

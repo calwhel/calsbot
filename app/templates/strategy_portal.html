@@ -12553,8 +12553,8 @@ async function loadLiveForex(retry=0) {
   try {
     await _ensurePortalReady(retry > 0);
     const r = await _apiFetchRetry(`/api/live-forex/account?uid=${encodeURIComponent(UID)}`, { timeoutMs: 18000 });
-    if (r.status === 401) {
-      wrap.innerHTML = _apiErrorHtml('Your session expired — log in again to use Live Forex.');
+    if (r.status === 401 || r.status === 403) {
+      wrap.innerHTML = `<div class="empty"><div class="icon" style="font-size:28px;opacity:.4">⚠️</div><p>Your session is out of date after the database reset. Log out, sign in again, then reopen <strong>Live Forex</strong> to connect cTrader.</p><a href="/logout" class="btn primary" style="margin-top:12px;display:inline-block">Log out &amp; sign in</a></div>`;
       return;
     }
     if (r.status === 502 || r.status === 503) {

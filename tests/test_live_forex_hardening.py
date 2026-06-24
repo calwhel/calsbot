@@ -137,6 +137,15 @@ class TestLiveForexHardening(unittest.TestCase):
     self.assertTrue(body.get("status_unavailable"))
     self.assertEqual(body.get("error"), "status unavailable")
 
+  def test_unknown_uid_live_forex_returns_401(self):
+    with patch.dict("os.environ", {"ALLOW_LEGACY_UID_API_AUTH": "1"}, clear=False), \
+         patch("strategy_portal_server._get_user_by_uid", return_value=None), \
+         patch("app.database.SessionLocal") as mock_sl:
+      mock_db = MagicMock()
+      mock_sl.return_value = mock_db
+      r = self.client.get("/api/live-forex/account?uid=UNKNOWN&refresh=true")
+    self.assertEqual(r.status_code, 401)
+
 
 if __name__ == "__main__":
   unittest.main()
