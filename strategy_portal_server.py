@@ -870,6 +870,31 @@ def _get_session_uid(request: Request) -> Optional[str]:
     return _verify_token(token) if token else None
 
 
+def _resolve_portal_session_uid(request: Request) -> Optional[str]:
+    """Return session UID only when that user row still exists (post-DB-rebuild safe)."""
+    uid = _get_session_uid(request)
+    if not uid:
+        return None
+    uid = uid.strip().upper()
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            _invalidate_user_cache(uid)
+            return None
+        return uid
+    finally:
+        db.close()
+
+
+def _redirect_stale_session_login() -> RedirectResponse:
+    resp = RedirectResponse(url="/login?msg=session_stale", status_code=302)
+    resp.delete_cookie(_COOKIE_NAME)
+    return resp
+
+
 def _get_request_token_uid(request: Request) -> Optional[str]:
     """Return the UID bound to a mobile/API token, if one was supplied."""
     auth = request.headers.get("Authorization", "")
@@ -3239,7 +3264,7 @@ async def landing_page(request: Request):
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    uid = _get_session_uid(request)
+    uid = _resolve_portal_session_uid(request)
     if uid:
         # Honour ?next=/some/path so links from /trade etc. round-trip the user
         # back to the page they came from.
@@ -4113,9 +4138,9 @@ async def _render_portal(request: Request, uid: str):
 @app.get("/app", response_class=HTMLResponse)
 async def app_page(request: Request):
     """Cookie-session authenticated app entry point."""
-    uid = _get_session_uid(request)
+    uid = _resolve_portal_session_uid(request)
     if not uid:
-        return RedirectResponse(url="/login", status_code=302)
+        return _redirect_stale_session_login()
     return await _render_portal(request, uid)
 
 
@@ -4127,9 +4152,9 @@ async def trades_page(request: Request):
     auth gate as /app — the template reads ?p=trades on init and switches
     pages without a round-trip.
     """
-    uid = _get_session_uid(request)
+    uid = _resolve_portal_session_uid(request)
     if not uid:
-        return RedirectResponse(url="/login?next=/trades", status_code=302)
+        return _redirect_stale_session_login()
     return RedirectResponse(url="/app?p=trades", status_code=302)
 
 
@@ -13135,7 +13160,11 @@ async def api_live_forex_account(
             )
             positions = []
         if positions is None:
-            raise HTTPException(status_code=403, detail="Invalid UID")
+            _invalidate_user_cache(_uid_key)
+            raise HTTPException(
+                status_code=401,
+                detail="Session expired — please log out and sign in again.",
+            )
         try:
             enriched = _lf_enrich_open_positions(positions or [])
         except Exception as exc:
@@ -13239,7 +13268,11 @@ async def api_live_forex_account(
             return _lf_live_forex_json_response({**stale, "cached": True, "stale": True, "degraded": True})
         return _lf_live_forex_json_response(_lf_degraded_account_payload())
     if snap is None:
-        raise HTTPException(status_code=403, detail="Invalid UID")
+        _invalidate_user_cache(_uid_key)
+        raise HTTPException(
+            status_code=401,
+            detail="Session expired — please log out and sign in again.",
+        )
 
     user = snap["user"]
     prefs = snap["prefs"]
