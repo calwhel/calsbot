@@ -146,20 +146,10 @@ def _session_token_for_page(request: Request, uid: str) -> Optional[str]:
 
 @router.get("/gold-ai-trader", response_class=HTMLResponse)
 async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
+    """Serve dashboard shell — admin auth enforced on /api/gold-ai-trader/* only."""
     from app.portal_session import make_session_token, set_session_cookie
 
     norm_uid = _normalize_uid(uid)
-    db = SessionLocal()
-    try:
-        _resolve_user(uid, db)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("[gold-ai-trader] page auth/db error uid=%s: %s", norm_uid, exc)
-        raise HTTPException(status_code=503, detail="Database temporarily unavailable") from exc
-    finally:
-        db.close()
-
     session_token = _session_token_for_page(request, norm_uid) or make_session_token(norm_uid)
     resp = templates.TemplateResponse(
         "gold_ai_trader.html",
