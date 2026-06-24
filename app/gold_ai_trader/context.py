@@ -278,7 +278,7 @@ async def build_context_snapshot(
         f"Quality vs ATR: {candidate.quality_atr:.2f}× (engine estimate)",
         struct_line or "Structure score: unavailable",
         f"Take threshold: {cfg.confidence_threshold}% (unchanged — score honestly vs this bar)",
-        f"Suggested invalidation max: {atr:.2f} (1.0× 5m ATR — wider SL → lower confidence)",
+        f"Invalidation guide: use structure (zone edge / sweep) — wider SL OK for swings; no hard ATR execution cap",
         "",
         *readiness_block,
         "" if not readiness_block else "",

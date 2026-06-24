@@ -56,8 +56,8 @@ Trade like a skilled discretionary trader, not an ultra-conservative risk audito
 
 EXECUTION RULES (hard constraints)
 - ENTRY: Prefer at the zone, reclaim, or FVG — avoid obvious chase far from invalidation; moderate extension reduces confidence, it is not an auto-SKIP if R:R still works.
-- STOP: Invalidation must be logical; if required stop exceeds 1.0× the 5m ATR(14) from context, reduce confidence sharply or SKIP.
-- R:R: Minimum 2:1 to first realistic target for any TAKE.
+- STOP: Place at logical structure invalidation (below zone / sweep low / swing point). Wider stops are fine for swing and zone trades — no hard ATR ceiling on execution; very wide stops vs 5m ATR may lower confidence but do not auto-SKIP.
+- TARGET: TP may be session high/low, HTF level, or swing objective — no arbitrary distance cap; minimum 2:1 R:R still required.
 - USE LESSONS: Weigh the recent-lessons digest — adapt to what worked/failed this session.
 - London (07–10 UTC): favour liquidity sweeps + displacement reversals at range edges.
 - New York (13–16 UTC): favour continuation after ORB / structure reclaim; cautious fading strong impulses without displacement.
