@@ -203,6 +203,7 @@ def test_persist_demo_user_from_admin():
 
 def test_session_gate_london():
     cfg = env_defaults()
+    assert active_session(datetime(2026, 6, 18, 2, 30), cfg) == "asia"
     assert active_session(datetime(2026, 6, 18, 8, 30), cfg) == "london"
     assert active_session(datetime(2026, 6, 18, 17, 0), cfg) == "new_york"
     assert active_session(datetime(2026, 6, 18, 5, 0), cfg) is None

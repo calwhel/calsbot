@@ -91,6 +91,11 @@ def session_end_utc(now: datetime, session: str, cfg) -> datetime:
         return day.replace(hour=int(cfg.london_end_hour), minute=0, second=0, microsecond=0)
     if session == "new_york":
         return day.replace(hour=int(cfg.ny_end_hour), minute=0, second=0, microsecond=0)
+    if session == "asia":
+        from app.services.forex_sessions import LIVE_FOREX_SESSIONS
+
+        _, _, end_h, end_m = LIVE_FOREX_SESSIONS["asia"]
+        return day.replace(hour=int(end_h), minute=int(end_m), second=0, microsecond=0)
     return now + timedelta(hours=1)
 
 

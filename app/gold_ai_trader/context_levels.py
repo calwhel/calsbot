@@ -111,14 +111,28 @@ def compute_session_range(
     k_1h: List[list],
 ) -> Tuple[Optional[float], Optional[float]]:
     if session == "london":
-        start_h, end_h = cfg.london_start_hour, cfg.london_end_hour
+        start_h, start_m, end_h, end_m = (
+            cfg.london_start_hour,
+            0,
+            cfg.london_end_hour,
+            0,
+        )
     elif session == "new_york":
-        start_h, end_h = cfg.ny_start_hour, cfg.ny_end_hour
+        start_h, start_m, end_h, end_m = (
+            cfg.ny_start_hour,
+            0,
+            cfg.ny_end_hour,
+            0,
+        )
+    elif session == "asia":
+        from app.services.forex_sessions import LIVE_FOREX_SESSIONS
+
+        start_h, start_m, end_h, end_m = LIVE_FOREX_SESSIONS["asia"]
     else:
         return None, None
     day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    start = day.replace(hour=start_h, minute=0, second=0, microsecond=0)
-    end = min(now, day.replace(hour=end_h, minute=0, second=0, microsecond=0))
+    start = day.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+    end = min(now, day.replace(hour=end_h, minute=end_m, second=0, microsecond=0))
     if end <= start:
         return None, None
     agg = _aggregate_hl(k_5m, start, end + timedelta(minutes=5))

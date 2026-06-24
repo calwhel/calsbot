@@ -58,6 +58,8 @@ class Candidate:
 def active_session(now: datetime, cfg: GoldAiRuntimeConfig) -> Optional[str]:
     from app.services.forex_sessions import is_named_session_active
 
+    if is_named_session_active("asia", now):
+        return "asia"
     if is_named_session_active("london", now):
         return "london"
     if is_named_session_active("new_york", now):

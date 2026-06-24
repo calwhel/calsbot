@@ -44,6 +44,16 @@ def _make_k5(base: float = 2650.0, n: int = 25, bullish_tail: bool = True) -> li
 
 
 class TestSessionPlaybook:
+    def test_asia_allows_asian_sweep(self):
+        ok, reason = session_allows_setup("asian_sweep_bull", "asia", htf_align_reason="htf_aligned_bull")
+        assert ok is True
+        assert reason == "asia_primary"
+
+    def test_asia_blocks_ob(self):
+        ok, reason = session_allows_setup("ob_bull", "asia", htf_align_reason="htf_aligned_bull")
+        assert ok is False
+        assert reason == "asia_not_in_playbook"
+
     def test_london_allows_sweep(self):
         ok, reason = session_allows_setup("liq_sweep_bull", "london", htf_align_reason="htf_aligned_bull")
         assert ok is True

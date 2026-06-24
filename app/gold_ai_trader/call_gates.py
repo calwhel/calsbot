@@ -96,6 +96,11 @@ def minutes_into_session(now: datetime, session: str, cfg: GoldAiRuntimeConfig) 
         return max(0, (now.hour - cfg.london_start_hour) * 60 + now.minute)
     if session == "new_york":
         return max(0, (now.hour - cfg.ny_start_hour) * 60 + now.minute)
+    if session == "asia":
+        from app.services.forex_sessions import LIVE_FOREX_SESSIONS
+
+        asia_start_h = int(LIVE_FOREX_SESSIONS["asia"][0])
+        return max(0, (now.hour - asia_start_h) * 60 + now.minute)
     return 0
 
 

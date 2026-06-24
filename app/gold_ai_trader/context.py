@@ -185,6 +185,11 @@ async def build_context_snapshot(
         mins_in_session = max(0, (now.hour - cfg.london_start_hour) * 60 + now.minute)
     elif session == "new_york":
         mins_in_session = max(0, (now.hour - cfg.ny_start_hour) * 60 + now.minute)
+    elif session == "asia":
+        from app.services.forex_sessions import LIVE_FOREX_SESSIONS
+
+        asia_start_h = int(LIVE_FOREX_SESSIONS["asia"][0])
+        mins_in_session = max(0, (now.hour - asia_start_h) * 60 + now.minute)
 
     setup_zone = parse_zone_from_detail(candidate.detail)
     bias = htf_bias_summary(k1h, k4h, k_daily)

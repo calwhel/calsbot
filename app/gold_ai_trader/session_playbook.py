@@ -1,4 +1,4 @@
-"""Session-specific setup allowlists — London vs NY playbook."""
+"""Session-specific setup allowlists — Asia/London/NY playbook."""
 from __future__ import annotations
 
 from typing import FrozenSet, Optional
@@ -24,6 +24,14 @@ _NY_PRIMARY: FrozenSet[str] = frozenset({
     "disp_bull", "disp_bear",
     "liq_sweep_bull", "liq_sweep_bear",
     "sweep_pdh", "sweep_pdl",
+    "eqh_sweep_bear", "eql_sweep_bull",
+    "sdp_bull", "sdp_bear",
+})
+
+_ASIA_PRIMARY: FrozenSet[str] = frozenset({
+    "asian_sweep_bull", "asian_sweep_bear",
+    "sweep_pdh", "sweep_pdl",
+    "liq_sweep_bull", "liq_sweep_bear",
     "eqh_sweep_bear", "eql_sweep_bull",
     "sdp_bull", "sdp_bear",
 })
@@ -68,5 +76,10 @@ def session_allows_setup(
         if key in _NY_PRIMARY:
             return True, "ny_primary"
         return False, "ny_not_in_playbook"
+
+    if s == "asia":
+        if key in _ASIA_PRIMARY:
+            return True, "asia_primary"
+        return False, "asia_not_in_playbook"
 
     return True, "unknown_session"
