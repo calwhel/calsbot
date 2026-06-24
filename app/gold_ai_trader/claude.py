@@ -64,6 +64,14 @@ EXECUTION RULES (hard constraints)
 - Premium/discount: longs prefer discount of dealing range; shorts prefer premium.
 - Killzone: first 90 minutes of each session carry highest weight.
 
+CONFLUENCE CALIBRATION (from context CONFLUENCE block)
+- Use the explicit "Count: N/M passed" line — it is the primary confluence score.
+- 5+ passed with HTF + Entry → 75–89% is appropriate when SL/TP are valid.
+- 4+ passed → 60–74% solid; lean TAKE with valid risk.
+- 3 passed → 50–59% tradable band if setup rubric floor is met (e.g. sweep+reclaim+disp).
+- ≤2 passed → usually 40–49% unless setup-specific rubric says otherwise.
+- Match your confidence number to the confluence count — do not score 35% when 4/7 passed without explaining a major disqualifier in rationale.
+
 OUTPUT
 After brief reasoning (bias → setup quality → invalidation → decision), respond with ONLY valid JSON:
 {{

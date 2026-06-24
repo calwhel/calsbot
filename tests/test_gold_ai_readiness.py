@@ -9,12 +9,15 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 from app.gold_ai_trader.session_playbook import session_allows_setup
 from app.gold_ai_trader.setup_readiness import (
     compute_setup_readiness,
+    confluence_summary,
+    format_confluence_block,
     parse_reclaim_level,
     reclaim_held,
     readiness_min_score,
     momentum_6bar_aligned,
     spot_in_entry_zone,
 )
+from app.gold_ai_trader.setup_rubrics import setup_rubric_block
 from app.gold_ai_trader.setup_toggles import setup_enabled
 
 
@@ -173,3 +176,46 @@ class TestSetupDefaults:
     def test_fvg_just_formed_default_off(self):
         os.environ.pop("GOLD_AI_SETUP_FVG_BULL", None)
         assert setup_enabled("fvg_bull") is False
+
+
+class TestConfluenceBlock:
+    def test_confluence_summary_counts_in_label_order(self):
+        checklist = {
+            "htf_aligned": True,
+            "at_entry": False,
+            "displacement_ok": True,
+            "reclaim_held": True,
+            "rr_feasible": True,
+        }
+        passed, total, detail = confluence_summary(checklist)
+        assert passed == 4
+        assert total == 5
+        assert detail.startswith("HTF ✓")
+        assert "Entry ✗" in detail
+        assert "Disp ✓" in detail
+
+    def test_format_confluence_block_includes_count_and_calibration(self):
+        checklist = {
+            "htf_aligned": True,
+            "at_entry": True,
+            "displacement_ok": True,
+            "reclaim_held": True,
+            "rr_feasible": False,
+        }
+        block = format_confluence_block(
+            checklist,
+            setup_type="liq_sweep_bull",
+            confidence_threshold=45,
+        )
+        text = "\n".join(block)
+        assert "=== CONFLUENCE" in text
+        assert "Count: 4/5 passed" in text
+        assert "60–74%" in text
+        assert "Sweep core" in text
+
+    def test_setup_rubric_sweep_vs_zone(self):
+        sweep = "\n".join(setup_rubric_block("liq_sweep_bull"))
+        zone = "\n".join(setup_rubric_block("ob_bull"))
+        assert "Liquidity sweep" in sweep
+        assert "Zone retrace" in zone
+        assert "=== SETUP RUBRIC" in sweep
