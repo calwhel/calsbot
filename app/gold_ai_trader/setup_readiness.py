@@ -172,10 +172,14 @@ def rr_feasible(
         risk = READINESS_RR_RISK_ATR * atr
     if risk <= 0:
         return False, None
-    tp = _nearest_tp_candidate(entry, d, key_levels, MIN_RR, risk)
+    tp = _nearest_tp_candidate(entry, d, key_levels, MIN_RR if MIN_RR > 0 else 0.0, risk)
     if tp is None:
+        if MIN_RR <= 0:
+            return True, None
         return False, None
     rr = abs(tp - entry) / risk if d == "LONG" else abs(entry - tp) / risk
+    if MIN_RR <= 0:
+        return rr > 0, rr
     return rr >= MIN_RR, rr
 
 
@@ -411,7 +415,7 @@ def format_confluence_block(
         )
     elif passed >= 4:
         lines.append(
-            f"- {passed}/{total} passed → 60–74% solid range; TAKE if R:R ≥2:1 and stop ≤1×ATR."
+            f"- {passed}/{total} passed → 60–74% solid range; TAKE if SL/TP sit at logical structure."
         )
     elif passed >= 3:
         lines.append(

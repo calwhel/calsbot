@@ -10,6 +10,7 @@ from app.gold_ai_trader.decision_validator import (
     SL_BUFFER_ATR,
     _nearest_tp_candidate,
     _suggested_sl_from_zone,
+    min_rr_enabled,
     sl_width_cap_enabled,
 )
 
@@ -42,7 +43,15 @@ def build_trade_bands_block(
             "SL width: no hard execution cap — place stop at logical structure invalidation "
             f"(swing/zone trades OK; typical planning risk ~{max_sl_dist:.2f} = 3×ATR)."
         )
-    lines.append(f"Min R:R required: {MIN_RR}:1")
+    if min_rr_enabled():
+        lines.append(f"Min R:R (env override): {MIN_RR}:1")
+    else:
+        lines.append(
+            "R:R: no hard minimum — size TP to the nearest logical level; "
+            "short scalp or wide swing both OK."
+        )
+
+    hint_rr = MIN_RR if min_rr_enabled() else 1.0
 
     if zone:
         z_bot, z_top = zone
@@ -64,10 +73,11 @@ def build_trade_bands_block(
 
     risk = abs(entry_hint - struct_sl) if struct_sl else max_sl_dist
     if risk > 0 and key_levels:
-        tp_c = _nearest_tp_candidate(entry_hint, d, key_levels, MIN_RR, risk)
+        tp_c = _nearest_tp_candidate(entry_hint, d, key_levels, hint_rr if min_rr_enabled() else 0.0, risk)
         if tp_c:
-            lines.append(f"TP1 candidate (nearest level ≥{MIN_RR}R): {tp_c:.2f}")
-        else:
+            label = f"≥{hint_rr}R" if min_rr_enabled() else "in direction"
+            lines.append(f"TP candidate (nearest level {label}): {tp_c:.2f}")
+        elif min_rr_enabled():
             min_tp = entry_hint + MIN_RR * risk if d == "LONG" else entry_hint - MIN_RR * risk
             lines.append(f"Min TP for {MIN_RR}R at anchor: {min_tp:.2f}")
         lvl_str = ", ".join(f"{x:.2f}" for x in sorted(set(key_levels))[:8])

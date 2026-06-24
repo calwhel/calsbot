@@ -14,7 +14,7 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-MIN_RR = _env_float("GOLD_AI_MIN_RR", 2.0)
+MIN_RR = _env_float("GOLD_AI_MIN_RR", 0.0)
 # 0 = no execution cap (swing/zone invalidation allowed); set e.g. 1.0 to re-enable hard scalp cap
 MAX_SL_ATR_MULT = _env_float("GOLD_AI_MAX_SL_ATR", 0.0)
 # Planning horizon for readiness R:R feasibility only (not an execution limit)
@@ -24,6 +24,11 @@ SL_BUFFER_ATR = _env_float("GOLD_AI_SL_BUFFER_ATR", 0.08)
 
 def sl_width_cap_enabled() -> bool:
     return MAX_SL_ATR_MULT > 0
+
+
+def min_rr_enabled() -> bool:
+    """True when GOLD_AI_MIN_RR > 0 (otherwise Claude sizes TP/SL freely)."""
+    return MIN_RR > 0
 
 
 def _dir_norm(d: str) -> Optional[str]:
@@ -73,10 +78,10 @@ def _nearest_tp_candidate(
     min_rr: float,
     risk: float,
 ) -> Optional[float]:
-    """First key level in trade direction meeting min R:R."""
+    """First key level in trade direction meeting min R:R (min_rr=0 → any level beyond entry)."""
     if risk <= 0:
         return None
-    min_dist = risk * min_rr
+    min_dist = risk * min_rr if min_rr > 0 else 0.0
     cands = []
     for lv in levels:
         if direction == "LONG" and lv > entry + min_dist:
@@ -142,7 +147,7 @@ def validate_take_decision(
             return False, f"validator:entry_chasing({zmsg})", d
 
         struct_sl = _suggested_sl_from_zone(zone, direction, atr)
-        if struct_sl is not None:
+        if struct_sl is not None and sl_width_cap_enabled():
             if direction == "LONG" and sl < struct_sl - 0.05 * atr:
                 return False, "validator:sl_below_structure", d
             if direction == "SHORT" and sl > struct_sl + 0.05 * atr:
@@ -151,7 +156,7 @@ def validate_take_decision(
     rr = _risk_reward(entry, sl, tp, direction)
     if rr is None:
         return False, "validator:invalid_rr_geometry", d
-    if rr < MIN_RR:
+    if min_rr_enabled() and rr < MIN_RR:
         levels = key_levels or []
         alt_tp = _nearest_tp_candidate(entry, direction, levels, MIN_RR, risk_dist)
         if alt_tp is not None:
