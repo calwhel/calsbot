@@ -87,6 +87,57 @@ def test_status_api_returns_ok_when_config_orm_fails():
     assert body.get("degraded") and "config" in body["degraded"]
 
 
+def test_status_api_offline_when_db_down_with_valid_session():
+    """When Neon is unreachable, signed session still loads dashboard shell."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.gold_ai_trader.routes import router
+    from app.portal_session import make_session_token
+    from sqlalchemy.exc import OperationalError
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    token = make_session_token("TH-YP0BADA8")
+
+    mock_db = MagicMock()
+    mock_db.rollback = MagicMock()
+    mock_db.close = MagicMock()
+    mock_db.query.side_effect = OperationalError(
+        "connect",
+        {},
+        Exception('endpoint has been disabled'),
+    )
+
+    with patch("app.gold_ai_trader.routes.ensure_gold_ai_trader_schema"), patch(
+        "app.gold_ai_trader.routes.SessionLocal", return_value=mock_db
+    ), patch("app.gold_ai_trader.routes._safe_lessons", return_value=[]), patch(
+        "app.gold_ai_trader.routes._safe_decisions", return_value=[]
+    ), patch("app.gold_ai_trader.routes._safe_funnel_events", return_value=[]):
+        r = client.get(
+            "/api/gold-ai-trader/status?uid=TH-YP0BADA8",
+            headers={"X-TradeHub-Session": token},
+        )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body.get("db_unavailable") is True
+    assert "database" in body.get("degraded", [])
+
+
+def test_is_db_connection_error_detects_neon_disabled():
+    from sqlalchemy.exc import OperationalError
+    from app.db_resilience import is_db_connection_error
+
+    exc = OperationalError(
+        "statement",
+        {},
+        Exception("The endpoint has been disabled. Enable it using the API and retry."),
+    )
+    assert is_db_connection_error(exc) is True
+
+
 def test_schema_repair_detects_missing_columns():
     from sqlalchemy import create_engine, text
 
