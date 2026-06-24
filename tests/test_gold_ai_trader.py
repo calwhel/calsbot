@@ -70,6 +70,8 @@ def test_system_prompt_uses_configurable_threshold():
     assert "positive expectancy" in prompt.lower()
     assert "50–59" in prompt or "50-59" in prompt
     assert "institutional" in SYSTEM_PROMPT.lower()
+    assert "CONFLUENCE CALIBRATION" in SYSTEM_PROMPT
+    assert "Count: N/M passed" in SYSTEM_PROMPT
 
 
 def test_gold_data_ok_requires_ctrader_sources():
@@ -360,6 +362,39 @@ def test_context_builder_shape():
     assert "TRADE BANDS" in text
     assert "SETUP STATS" in text
     assert "Structure score" in text or "structure" in text.lower()
+
+    cand_with_readiness = Candidate(
+        type="liq_sweep_bull",
+        direction="LONG",
+        detail="LQ sweep bullish: reclaim @ 2650.0 FIRED",
+        quality_atr=1.1,
+        sig_key="liq_sweep_bull:LONG",
+        raw={
+            "readiness_score": 62,
+            "readiness_breakdown": "htf+entry+disp",
+            "readiness_checklist": {
+                "htf_aligned": True,
+                "at_entry": True,
+                "displacement_ok": True,
+                "reclaim_held": True,
+                "rr_feasible": True,
+            },
+        },
+    )
+    rich = asyncio.run(
+        build_context_snapshot(
+            candidate=cand_with_readiness,
+            price=2650.5,
+            session="london",
+            db=_Db(),
+            cfg=_Cfg(),
+            user_id=None,
+        )
+    )
+    assert "=== CONFLUENCE" in rich
+    assert "Count: 5/5 passed" in rich
+    assert "=== SETUP RUBRIC" in rich
+    assert "Liquidity sweep" in rich
 
 
 def test_telegram_take_message_demo_label():

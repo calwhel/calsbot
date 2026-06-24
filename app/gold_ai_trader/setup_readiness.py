@@ -347,20 +347,100 @@ def compute_setup_readiness(
     )
 
 
+# Display order for confluence checklist in Claude context.
+CONFLUENCE_LABELS: Dict[str, str] = {
+    "htf_aligned": "HTF",
+    "at_entry": "Entry",
+    "displacement_ok": "Disp",
+    "reclaim_held": "Reclaim",
+    "momentum_ok": "Momentum",
+    "rr_feasible": "R:R",
+    "premium_discount_ok": "P/D",
+    "smt_confirms": "SMT",
+}
+
+
+def confluence_summary(checklist: Dict[str, bool]) -> Tuple[int, int, str]:
+    """
+    Return (passed, total, formatted line) for Claude context.
+
+    Uses fixed label order so confluence count is comparable across setups.
+    """
+    items: List[str] = []
+    passed = 0
+    total = 0
+    for key, label in CONFLUENCE_LABELS.items():
+        if key not in checklist:
+            continue
+        total += 1
+        ok = bool(checklist[key])
+        if ok:
+            passed += 1
+        items.append(f"{label} {'✓' if ok else '✗'}")
+    line = " | ".join(items) if items else "n/a"
+    return passed, total, line
+
+
+def format_confluence_block(
+    checklist: Dict[str, bool],
+    *,
+    setup_type: str,
+    confidence_threshold: int = 45,
+) -> List[str]:
+    """Explicit confluence count + calibration guidance for Claude."""
+    passed, total, detail = confluence_summary(checklist or {})
+    lines = [
+        "=== CONFLUENCE (engine checklist — use for confidence calibration) ===",
+        f"Count: {passed}/{total} passed — {detail}",
+    ]
+    if total == 0:
+        lines.append("No checklist items recorded — score from full context.")
+        return lines
+
+    lines.append(
+        "Calibration guide (align confidence with confluence count):"
+    )
+    if passed >= 5 and checklist.get("htf_aligned") and checklist.get("at_entry"):
+        lines.append(
+            f"- {passed}/{total} + HTF + entry → 75–89% range reasonable if SL/TP valid."
+        )
+    elif passed >= 4:
+        lines.append(
+            f"- {passed}/{total} passed → 60–74% solid range; TAKE if R:R ≥2:1 and stop ≤1×ATR."
+        )
+    elif passed >= 3:
+        lines.append(
+            f"- {passed}/{total} passed → 50–59% tradable band if entry/stop/R:R are clean "
+            f"(≥{confidence_threshold}% to execute)."
+        )
+    else:
+        lines.append(
+            f"- {passed}/{total} passed → usually 40–49% unless setup rubric floor applies "
+            "(e.g. sweep + reclaim + disp)."
+        )
+
+    if setup_type.startswith(("liq_sweep_", "sweep_")):
+        core = sum(
+            1 for k in ("reclaim_held", "displacement_ok", "rr_feasible")
+            if checklist.get(k)
+        )
+        if core >= 2:
+            lines.append(
+                f"- Sweep core {core}/3 (reclaim+disp+R:R) supports floor 50%+ even if total confluence is {passed}/{total}."
+            )
+
+    return lines
+
+
 def format_readiness_block(result: ReadinessResult, setup_type: str) -> List[str]:
     """Context block for Claude — engine checklist before discretionary score."""
-    passed_n = sum(1 for v in result.checklist.values() if v)
-    total_n = max(len(result.checklist), 1)
+    passed_n, total_n, _ = confluence_summary(result.checklist)
     tier = "HIGH" if result.score >= 85 else "MODERATE" if result.score >= readiness_min_score() else "LOW"
     lines = [
-        "=== SETUP READINESS (engine — must align with your confidence) ===",
-        f"Readiness: {result.score}/100 ({tier}) | min for Claude: {readiness_min_score()}",
-        f"Checklist: {passed_n}/{total_n} passed — {result.breakdown}",
+        "=== SETUP READINESS (engine gate — already passed) ===",
+        f"Readiness score: {result.score}/100 ({tier}) | engine min: {readiness_min_score()}",
+        f"Checklist summary: {passed_n}/{total_n} — {result.breakdown}",
     ]
     if result.hard_fail:
         lines.append(f"Hard gate note: {result.hard_fail}")
-    lines.append(
-        "Engine readiness passed — score confidence using institutional bands; "
-        "50–60 is tradable when entry/stop/2:1 R:R are valid (not auto-skip)."
-    )
     return lines

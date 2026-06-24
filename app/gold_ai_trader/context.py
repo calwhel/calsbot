@@ -21,7 +21,12 @@ from app.gold_ai_trader.call_gates import collect_key_levels
 from app.gold_ai_trader.learning import format_setup_stats_block
 from app.gold_ai_trader.cisd_modifier import build_cisd_block
 from app.gold_ai_trader.htf_bias import htf_bias_summary
-from app.gold_ai_trader.setup_readiness import ReadinessResult, format_readiness_block
+from app.gold_ai_trader.setup_readiness import (
+    ReadinessResult,
+    format_confluence_block,
+    format_readiness_block,
+)
+from app.gold_ai_trader.setup_rubrics import setup_rubric_block
 
 
 def _atr(closes, period: int = 14) -> float:
@@ -207,6 +212,7 @@ async def build_context_snapshot(
         spot=price, k5=k5, k1h=k1h, now=now, session=session, cfg=cfg,
     )
     struct_line = candidate.raw.get("structure_score_line") or ""
+    checklist = candidate.raw.get("readiness_checklist") or {}
     readiness_raw = candidate.raw.get("readiness_score")
     if readiness_raw is not None:
         readiness_block = format_readiness_block(
@@ -214,12 +220,20 @@ async def build_context_snapshot(
                 score=int(readiness_raw),
                 passed=True,
                 breakdown=candidate.raw.get("readiness_breakdown") or "",
-                checklist=candidate.raw.get("readiness_checklist") or {},
+                checklist=checklist,
             ),
             candidate.type,
         )
+        confluence_block = format_confluence_block(
+            checklist,
+            setup_type=candidate.type,
+            confidence_threshold=cfg.confidence_threshold,
+        )
+        rubric_block = setup_rubric_block(candidate.type)
     else:
         readiness_block = []
+        confluence_block = []
+        rubric_block = []
     zone_tf = candidate.raw.get("zone_tf", "5m")
     trade_bands = build_trade_bands_block(
         spot=price,
@@ -268,6 +282,10 @@ async def build_context_snapshot(
         "",
         *readiness_block,
         "" if not readiness_block else "",
+        *confluence_block,
+        "" if not confluence_block else "",
+        *rubric_block,
+        "" if not rubric_block else "",
         *trade_bands,
         "",
         *setup_stats,
