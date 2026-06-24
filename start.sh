@@ -7,7 +7,15 @@ echo "[railway] deploy commit=${_DEPLOY_COMMIT}"
 # One-shot destructive schema rebuild (portal service only).
 # Set SCHEMA_RESET_ONCE=1 in Railway Variables, deploy, confirm logs show
 # [SCHEMA_RESET_ONCE] ORM tables: 48/48 … Verify: SUCCESS, then DELETE the var.
-python3 -c "from app.schema_bootstrap import run_schema_reset_once_if_env; run_schema_reset_once_if_env()"
+_schema_reset_once="${SCHEMA_RESET_ONCE:-}"
+if [ "${_schema_reset_once}" = "1" ] || [ "${_schema_reset_once}" = "true" ] || [ "${_schema_reset_once}" = "yes" ] || [ "${_schema_reset_once}" = "on" ] || [ "${_schema_reset_once}" = "ON" ]; then
+  if [ "${CTRADER_FEED_ONLY}" = "1" ] || [ "${EXECUTOR_ONLY}" = "1" ]; then
+    echo "[railway] SCHEMA_RESET_ONCE ignored on feed/executor replica — set only on portal service"
+  else
+    echo "[railway] SCHEMA_RESET_ONCE enabled — running destructive schema rebuild"
+    python3 -m app.schema_reset_once_entry
+  fi
+fi
 
 # ── Dedicated cTrader feed service (separate Railway replica) ────────────────
 # Set CTRADER_FEED_ONLY=1 on a lightweight service that only streams broker
