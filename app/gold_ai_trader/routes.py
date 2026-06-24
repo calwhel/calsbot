@@ -104,6 +104,19 @@ def _live_accounts_for_user(db, user_id: Optional[int]) -> List[Dict[str, Any]]:
     return out
 
 
+def _coerce_decision_dict(raw: Any) -> Dict[str, Any]:
+    """GoldAiDecision.decision may be dict or legacy JSON string."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
 def _safe_funnel_events(db, *, limit: int = 50) -> list:
     try:
         return recent_funnel_events(db, limit=limit)
@@ -168,7 +181,11 @@ async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
 
 @router.get("/api/gold-ai-trader/status")
 async def api_status(uid: str = Query(...)):
-    ensure_gold_ai_trader_schema()
+    try:
+        ensure_gold_ai_trader_schema()
+    except Exception as exc:
+        logger.warning("[gold-ai-trader] schema ensure on status: %s", exc)
+
     db = SessionLocal()
     try:
         admin = _resolve_user(uid, db)
@@ -191,7 +208,11 @@ async def api_status(uid: str = Query(...)):
         )
         feed = []
         for d in decisions:
-            _sync_live_mirror_fields(db, d)
+            try:
+                _sync_live_mirror_fields(db, d)
+            except Exception as exc:
+                logger.debug("[gold-ai-trader] live mirror sync skip id=%s: %s", d.id, exc)
+            dec = _coerce_decision_dict(d.decision)
             feed.append(
                 {
                     "id": d.id,
@@ -206,11 +227,44 @@ async def api_status(uid: str = Query(...)):
                     "live_mirror_status": d.live_mirror_status,
                     "live_mirror_error": d.live_mirror_error,
                     "cost_usd": d.cost_usd,
-                    "rationale": (d.decision or {}).get("rationale", ""),
+                    "rationale": dec.get("rationale", ""),
                     "reasoning_preview": (d.reasoning or "")[:300],
                 }
             )
-        user_id = cfg.demo_user_id or 0
+        user_id = cfg.demo_user_id or getattr(admin, "id", None) or 0
+
+        stats_today: Dict[str, Any] = {
+            "calls": 0,
+            "trades": 0,
+            "cost_usd": 0.0,
+            "demo_pnl_usd": 0.0,
+            "live_pnl_usd": 0.0,
+            "live_trades": 0,
+        }
+        try:
+            stats_today = {
+                "calls": calls_today(db),
+                "trades": trades_today(db),
+                "cost_usd": round(cost_today_usd(db), 4),
+                "demo_pnl_usd": demo_pnl_today_usd(db, int(user_id)),
+                "live_pnl_usd": live_pnl_today_usd(db, int(user_id)),
+                "live_trades": live_trades_today(db),
+            }
+        except Exception as exc:
+            logger.warning("[gold-ai-trader] stats_today failed: %s", exc)
+
+        setup_stats: List[Dict[str, Any]] = []
+        try:
+            setup_stats = get_setup_stats(db)
+        except Exception as exc:
+            logger.warning("[gold-ai-trader] setup_stats failed: %s", exc)
+
+        call_stats: Dict[str, int] = {}
+        try:
+            call_stats = call_stats_today(db)
+        except Exception as exc:
+            logger.warning("[gold-ai-trader] call_stats_today failed: %s", exc)
+
         return {
             "ok": True,
             "demo_label": "DEMO ACCOUNT ONLY",
@@ -251,23 +305,21 @@ async def api_status(uid: str = Query(...)):
             "demo_account_selected": selected,
             "demo_account_ready": demo_account_configured(cfg),
             "live_accounts": _live_accounts_for_user(db, trader_uid),
-            "stats_today": {
-                "calls": calls_today(db),
-                "trades": trades_today(db),
-                "cost_usd": round(cost_today_usd(db), 4),
-                "demo_pnl_usd": demo_pnl_today_usd(db, user_id),
-                "live_pnl_usd": live_pnl_today_usd(db, user_id),
-                "live_trades": live_trades_today(db),
-            },
+            "stats_today": stats_today,
             "lessons": [
                 {"session": x.session, "ts": x.ts.isoformat(), "digest": x.digest}
                 for x in lessons
             ],
-            "setup_stats": get_setup_stats(db),
-            "call_stats_today": call_stats_today(db),
+            "setup_stats": setup_stats,
+            "call_stats_today": call_stats,
             "recent_funnel_events": _safe_funnel_events(db, limit=40),
             "decision_feed": feed,
         }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[gold-ai-trader] status API failed uid=%s", uid)
+        raise HTTPException(status_code=503, detail="Trader status temporarily unavailable") from exc
     finally:
         db.close()
 

@@ -180,6 +180,15 @@ def test_gold_ai_page_renders_without_db():
     assert "TH-YP0BADA8" in r.text
 
 
+def test_coerce_decision_dict_string_json():
+    from app.gold_ai_trader.routes import _coerce_decision_dict
+
+    raw = '{"action": "take", "rationale": "sweep setup"}'
+    dec = _coerce_decision_dict(raw)
+    assert dec.get("action") == "take"
+    assert dec.get("rationale") == "sweep setup"
+
+
 def test_persist_demo_user_from_admin():
     class _Row:
         demo_user_id = None
