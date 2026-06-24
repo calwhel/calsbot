@@ -13,21 +13,27 @@ from app.deployment import request_is_https
 
 _COOKIE_NAME = "th_session"
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 30
+_cached_secret: Optional[str] = None
 
 
 def cookie_secret() -> str:
-    value = (os.getenv("SECRET_KEY") or os.getenv("SESSION_SECRET") or "").strip()
-    if value:
-        return value
-    db_seed = (
-        os.getenv("NEON_DATABASE_URL")
-        or os.getenv("DATABASE_URL")
-        or os.getenv("RAILWAY_DATABASE_URL")
-        or ""
-    ).strip()
-    if db_seed:
-        return hashlib.sha256(f"tradehub-session:{db_seed}".encode()).hexdigest()
-    return secrets.token_urlsafe(32)
+    global _cached_secret
+    if _cached_secret is None:
+        value = (os.getenv("SECRET_KEY") or os.getenv("SESSION_SECRET") or "").strip()
+        if value:
+            _cached_secret = value
+        else:
+            db_seed = (
+                os.getenv("NEON_DATABASE_URL")
+                or os.getenv("DATABASE_URL")
+                or os.getenv("RAILWAY_DATABASE_URL")
+                or ""
+            ).strip()
+            if db_seed:
+                _cached_secret = hashlib.sha256(f"tradehub-session:{db_seed}".encode()).hexdigest()
+            else:
+                _cached_secret = secrets.token_urlsafe(32)
+    return _cached_secret
 
 
 def make_session_token(uid: str) -> str:

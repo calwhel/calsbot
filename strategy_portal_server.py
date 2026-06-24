@@ -854,18 +854,15 @@ _COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 
 
 def _make_token(uid: str) -> str:
-    sig = hmac.new(_COOKIE_SECRET.encode(), uid.encode(), hashlib.sha256).hexdigest()[:20]
-    return f"{uid}:{sig}"
+    from app.portal_session import make_session_token
+
+    return make_session_token(uid)
 
 
 def _verify_token(token: str) -> Optional[str]:
-    if not token or ":" not in token:
-        return None
-    uid, sig = token.rsplit(":", 1)
-    expected = hmac.new(_COOKIE_SECRET.encode(), uid.encode(), hashlib.sha256).hexdigest()[:20]
-    if hmac.compare_digest(sig, expected):
-        return (uid or "").strip().upper() or None
-    return None
+    from app.portal_session import verify_session_token
+
+    return verify_session_token(token)
 
 
 def _get_session_uid(request: Request) -> Optional[str]:
