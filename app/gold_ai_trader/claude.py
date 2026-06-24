@@ -1,4 +1,4 @@
-"""Claude Opus 4.8 autonomous decision with prompt caching."""
+"""Gold AI Claude decisioning with model-aware cost estimation."""
 from __future__ import annotations
 
 import json
@@ -8,6 +8,10 @@ import re
 from typing import Any, Dict, Optional, Tuple
 
 from app.gold_ai_trader.config import (
+    HAIKU_CACHE_READ_USD_PER_M,
+    HAIKU_CACHE_WRITE_USD_PER_M,
+    HAIKU_INPUT_USD_PER_M,
+    HAIKU_OUTPUT_USD_PER_M,
     OPUS_CACHE_READ_USD_PER_M,
     OPUS_CACHE_WRITE_USD_PER_M,
     OPUS_INPUT_USD_PER_M,
@@ -111,17 +115,39 @@ def _parse_json(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _estimate_cost(usage) -> Tuple[int, int, int, int, float]:
+def _pricing_for_model(model: str) -> Tuple[float, float, float, float]:
+    m = (model or "").strip().lower()
+    if "haiku" in m:
+        return (
+            HAIKU_INPUT_USD_PER_M,
+            HAIKU_OUTPUT_USD_PER_M,
+            HAIKU_CACHE_READ_USD_PER_M,
+            HAIKU_CACHE_WRITE_USD_PER_M,
+        )
+    return (
+        OPUS_INPUT_USD_PER_M,
+        OPUS_OUTPUT_USD_PER_M,
+        OPUS_CACHE_READ_USD_PER_M,
+        OPUS_CACHE_WRITE_USD_PER_M,
+    )
+
+
+def _estimate_cost(
+    usage,
+    *,
+    model: str = "claude-haiku-4-5",
+) -> Tuple[int, int, int, int, float]:
     tin = int(getattr(usage, "input_tokens", 0) or 0)
     tout = int(getattr(usage, "output_tokens", 0) or 0)
     cr = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
     cw = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    in_rate, out_rate, read_rate, write_rate = _pricing_for_model(model)
     billable_in = max(0, tin - cr)
     cost = (
-        billable_in / 1_000_000 * OPUS_INPUT_USD_PER_M
-        + tout / 1_000_000 * OPUS_OUTPUT_USD_PER_M
-        + cr / 1_000_000 * OPUS_CACHE_READ_USD_PER_M
-        + cw / 1_000_000 * OPUS_CACHE_WRITE_USD_PER_M
+        billable_in / 1_000_000 * in_rate
+        + tout / 1_000_000 * out_rate
+        + cr / 1_000_000 * read_rate
+        + cw / 1_000_000 * write_rate
     )
     return tin, tout, cr, cw, round(cost, 6)
 
@@ -129,7 +155,7 @@ def _estimate_cost(usage) -> Tuple[int, int, int, int, float]:
 async def decide(
     context_text: str,
     *,
-    model: str = "claude-opus-4-8",
+    model: str = "claude-haiku-4-5",
     dry_run: bool = False,
     confidence_threshold: int = _DEFAULT_CONFIDENCE_THRESHOLD,
 ) -> Tuple[Dict[str, Any], str, Dict[str, Any]]:
@@ -187,7 +213,7 @@ async def decide(
         if msg.content:
             text = (msg.content[0].text or "").strip()
         usage = msg.usage
-        tin, tout, cr, cw, cost = _estimate_cost(usage)
+        tin, tout, cr, cw, cost = _estimate_cost(usage, model=model)
         meta = {
             "tokens_in": tin,
             "tokens_out": tout,

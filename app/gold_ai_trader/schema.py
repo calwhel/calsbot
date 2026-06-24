@@ -150,6 +150,17 @@ def ensure_gold_ai_trader_schema(*, force: bool = False) -> None:
 def seed_config_if_missing(db) -> GoldAiConfig:
     row = db.query(GoldAiConfig).filter(GoldAiConfig.id == 1).first()
     if row:
+        updated = False
+        # Upgrade legacy defaults in-place while preserving user custom values.
+        if int(getattr(row, "max_calls_day", 0) or 0) == 22:
+            row.max_calls_day = 70
+            updated = True
+        if (getattr(row, "model", "") or "").strip() == "claude-opus-4-8":
+            row.model = "claude-haiku-4-5"
+            updated = True
+        if updated:
+            db.commit()
+            db.refresh(row)
         return row
     from app.gold_ai_trader.config import env_defaults
 

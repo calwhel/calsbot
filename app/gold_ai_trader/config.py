@@ -70,11 +70,11 @@ DEFAULTS = GoldAiRuntimeConfig(
     london_end_hour=_SHARED_SESSION_HOURS["london"]["end_hour"],
     ny_start_hour=_SHARED_SESSION_HOURS["new_york"]["start_hour"],
     ny_end_hour=_SHARED_SESSION_HOURS["new_york"]["end_hour"],
-    max_calls_day=22,
+    max_calls_day=70,
     max_trades_day=6,
     no_overnight=True,
     scan_interval_s=20.0,
-    model="claude-opus-4-8",
+    model="claude-haiku-4-5",
     demo_user_id=None,
     demo_ctrader_account_id=None,
     live_mirror_enabled=False,
@@ -115,11 +115,11 @@ def env_defaults() -> GoldAiRuntimeConfig:
         ny_end_hour=_env_int(
             "GOLD_AI_TRADER_NY_END", _SHARED_SESSION_HOURS["new_york"]["end_hour"]
         ),
-        max_calls_day=_env_int("GOLD_AI_TRADER_MAX_CALLS_DAY", 22),
+        max_calls_day=_env_int("GOLD_AI_TRADER_MAX_CALLS_DAY", 70),
         max_trades_day=_env_int("GOLD_AI_TRADER_MAX_TRADES_DAY", 6),
         no_overnight=_env_bool("GOLD_AI_TRADER_NO_OVERNIGHT", True),
         scan_interval_s=_env_float("GOLD_AI_TRADER_SCAN_INTERVAL_S", 20.0),
-        model=os.environ.get("GOLD_AI_TRADER_MODEL", "claude-opus-4-8"),
+        model=os.environ.get("GOLD_AI_TRADER_MODEL", "claude-haiku-4-5"),
         demo_user_id=int(uid) if uid.isdigit() else None,
         demo_ctrader_account_id=demo_ctid,
         live_mirror_enabled=False,
@@ -136,7 +136,13 @@ def env_defaults() -> GoldAiRuntimeConfig:
     )
 
 
-# Opus 4.8 list pricing (USD per million tokens) — for cost estimates only.
+# Claude list pricing (USD per million tokens) — for cost estimates only.
+# Haiku 4.5 is the Gold AI default to keep per-call costs low.
+HAIKU_INPUT_USD_PER_M = 0.25
+HAIKU_OUTPUT_USD_PER_M = 1.25
+HAIKU_CACHE_READ_USD_PER_M = 0.025
+HAIKU_CACHE_WRITE_USD_PER_M = 0.3125
+
 OPUS_INPUT_USD_PER_M = 15.0
 OPUS_OUTPUT_USD_PER_M = 75.0
 OPUS_CACHE_READ_USD_PER_M = 1.50
