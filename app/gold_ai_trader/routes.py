@@ -403,11 +403,6 @@ async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
 @router.get("/api/gold-ai-trader/status")
 async def api_status(request: Request, uid: str = Query(...)):
     norm_uid = _normalize_uid(uid)
-    try:
-        ensure_gold_ai_trader_schema(force=True)
-    except Exception as exc:
-        logger.warning("[gold-ai-trader] schema ensure on status: %s", exc)
-
     db = SessionLocal()
     degraded: List[str] = []
     try:
@@ -429,6 +424,14 @@ async def api_status(request: Request, uid: str = Query(...)):
                 )
             else:
                 raise
+
+        # Fast path: avoid force-running DDL on every status poll (mobile/web
+        # refresh every few seconds). Forced schema repair is only needed on
+        # genuine schema errors and is already handled by retry paths below.
+        try:
+            ensure_gold_ai_trader_schema()
+        except Exception as exc:
+            logger.warning("[gold-ai-trader] schema ensure on status: %s", exc)
 
         cfg_row, cfg, trader_uid = _load_config_for_status(db, admin)
         if cfg_row is None:
