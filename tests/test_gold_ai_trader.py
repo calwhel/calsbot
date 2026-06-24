@@ -162,6 +162,24 @@ def test_gold_ai_trader_page_sends_session_auth():
     assert "renderSessionTimeline(cfg, rt, j.shared_session_hours)" in html
 
 
+def test_gold_ai_page_renders_without_db():
+    """Dashboard HTML must load without hitting User table (auth on API only)."""
+    from unittest.mock import patch
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.gold_ai_trader.routes import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    with patch("app.gold_ai_trader.routes.SessionLocal") as mock_sl:
+        mock_sl.side_effect = AssertionError("page load must not open DB session")
+        r = client.get("/gold-ai-trader?uid=TH-YP0BADA8")
+    assert r.status_code == 200
+    assert "Gold AI Trader" in r.text
+    assert "TH-YP0BADA8" in r.text
+
+
 def test_persist_demo_user_from_admin():
     class _Row:
         demo_user_id = None
