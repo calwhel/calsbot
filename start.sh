@@ -4,6 +4,11 @@ set -e
 _DEPLOY_COMMIT="${RAILWAY_GIT_COMMIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 echo "[railway] deploy commit=${_DEPLOY_COMMIT}"
 
+# One-shot destructive schema rebuild (portal service only).
+# Set SCHEMA_RESET_ONCE=1 in Railway Variables, deploy, confirm logs show
+# [SCHEMA_RESET_ONCE] ORM tables: 48/48 … Verify: SUCCESS, then DELETE the var.
+python3 -c "from app.schema_bootstrap import run_schema_reset_once_if_env; run_schema_reset_once_if_env()"
+
 # ── Dedicated cTrader feed service (separate Railway replica) ────────────────
 # Set CTRADER_FEED_ONLY=1 on a lightweight service that only streams broker
 # ticks into Postgres (market_spot_ticks). Main portal sets CTRADER_REMOTE_FEED=1
