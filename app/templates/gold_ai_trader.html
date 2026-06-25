@@ -826,6 +826,21 @@
       color: var(--accent-gold);
       border: 1px solid rgba(200, 162, 76, 0.25);
     }
+    .pill.closed-win {
+      background: var(--profit-dim);
+      color: var(--profit);
+      border: 1px solid rgba(61, 170, 110, 0.35);
+    }
+    .pill.closed-loss {
+      background: var(--danger-dim);
+      color: var(--danger);
+      border: 1px solid var(--danger-border);
+    }
+    .pill.closed-breakeven {
+      background: var(--neutral-chip);
+      color: var(--text-dim);
+      border: 1px solid var(--border-hairline);
+    }
     .pill.mirror-live, .pill.mirror-pending {
       background: var(--danger-dim);
       color: var(--danger);
@@ -1719,9 +1734,20 @@ function renderFeed(j) {
     const action = (d.action || 'skip').toLowerCase();
     const conf = Math.min(100, Math.max(0, Number(d.confidence) || 0));
     const rationale = d.rationale || d.reasoning_preview || 'No rationale recorded.';
+    const execOutcome = String(d.execution_outcome || '').toUpperCase();
     let outcome = '';
     if (d.executed && action === 'take') {
-      outcome = '<span class="pill open">OPEN</span>';
+      if (!execOutcome || execOutcome === 'OPEN') {
+        outcome = '<span class="pill open">OPEN</span>';
+      } else if (execOutcome === 'WIN') {
+        outcome = '<span class="pill closed-win">WIN</span>';
+      } else if (execOutcome === 'LOSS') {
+        outcome = '<span class="pill closed-loss">LOSS</span>';
+      } else if (execOutcome === 'BREAKEVEN') {
+        outcome = '<span class="pill closed-breakeven">BE</span>';
+      } else {
+        outcome = `<span class="pill closed-breakeven">${escapeHtml(execOutcome)}</span>`;
+      }
     }
     return `
       <article class="feed-item ${action}">
@@ -1741,7 +1767,7 @@ function renderFeed(j) {
         </div>
         <p class="feed-rationale">${escapeHtml(rationale)}</p>
         ${d.live_mirror_error ? `<div class="feed-foot error">Live: ${escapeHtml(d.live_mirror_error)}</div>` : ''}
-        <div class="feed-foot">$${(d.cost_usd || 0).toFixed(4)}${d.executed ? ' · demo order' : ''}${d.live_mirror_execution_id ? ' · live #' + d.live_mirror_execution_id : ''}</div>
+        <div class="feed-foot">$${(d.cost_usd || 0).toFixed(4)}${d.executed ? ' · demo ' + (execOutcome ? execOutcome.toLowerCase() : 'order') : ''}${d.live_mirror_execution_id ? ' · live #' + d.live_mirror_execution_id : ''}</div>
       </article>`;
   }).join('');
 }

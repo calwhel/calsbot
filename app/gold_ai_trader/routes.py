@@ -319,6 +319,29 @@ def _offline_status_payload(
 
 
 def _build_decision_feed(db, decisions: list) -> list:
+    execution_map: Dict[int, Dict[str, Optional[str]]] = {}
+    execution_ids = [int(d.execution_id) for d in decisions if getattr(d, "execution_id", None)]
+    if execution_ids:
+        try:
+            from app.strategy_models import StrategyExecution
+
+            rows = (
+                db.query(
+                    StrategyExecution.id,
+                    StrategyExecution.outcome,
+                    StrategyExecution.closed_at,
+                )
+                .filter(StrategyExecution.id.in_(execution_ids))
+                .all()
+            )
+            for r in rows:
+                execution_map[int(r.id)] = {
+                    "outcome": ((r.outcome or "").strip().upper() or None),
+                    "closed_ts": r.closed_at.isoformat() if r.closed_at else None,
+                }
+        except Exception as exc:
+            logger.debug("[gold-ai-trader] execution map load failed: %s", exc)
+
     feed = []
     for d in decisions:
         try:
@@ -326,6 +349,7 @@ def _build_decision_feed(db, decisions: list) -> list:
         except Exception as exc:
             logger.debug("[gold-ai-trader] live mirror sync skip id=%s: %s", d.id, exc)
         dec = _coerce_decision_dict(d.decision)
+        execution_meta = execution_map.get(int(d.execution_id)) if d.execution_id else None
         feed.append(
             {
                 "id": d.id,
@@ -336,6 +360,8 @@ def _build_decision_feed(db, decisions: list) -> list:
                 "confidence": d.confidence,
                 "executed": d.executed,
                 "execution_id": d.execution_id,
+                "execution_outcome": (execution_meta or {}).get("outcome"),
+                "execution_closed_ts": (execution_meta or {}).get("closed_ts"),
                 "live_mirror_execution_id": getattr(d, "live_mirror_execution_id", None),
                 "live_mirror_status": getattr(d, "live_mirror_status", None),
                 "live_mirror_error": getattr(d, "live_mirror_error", None),
