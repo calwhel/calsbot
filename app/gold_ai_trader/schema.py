@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from sqlalchemy import inspect, text
 
 from app.database import engine, Base
+from app.db_resilience import run_with_db_retry
 from app.gold_ai_trader.models import (
     GoldAiConfig,
     GoldAiDecision,
@@ -18,6 +20,12 @@ from app.gold_ai_trader.models import (
 logger = logging.getLogger(__name__)
 
 _schema_ready = False
+_DDL_RETRY_ATTEMPTS = max(
+    1, int(os.environ.get("GOLD_AI_SCHEMA_DDL_RETRY_ATTEMPTS", "4"))
+)
+_DDL_RETRY_DELAY_S = max(
+    0.1, float(os.environ.get("GOLD_AI_SCHEMA_DDL_RETRY_DELAY_S", "0.75"))
+)
 
 # (table, column, type/default fragment after column name)
 _GOLD_AI_COLUMN_ALTERS: tuple[tuple[str, str, str], ...] = (
@@ -67,16 +75,24 @@ _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
 
 def _missing_columns() -> dict[str, list[str]]:
     """Return table -> missing column names (empty when schema matches ORM)."""
-    insp = inspect(engine)
-    missing: dict[str, list[str]] = {}
-    for table, cols in _REQUIRED_COLUMNS.items():
-        if not insp.has_table(table):
-            continue
-        existing = {c["name"] for c in insp.get_columns(table)}
-        gap = [c for c in cols if c not in existing]
-        if gap:
-            missing[table] = gap
-    return missing
+    def _scan() -> dict[str, list[str]]:
+        insp = inspect(engine)
+        missing: dict[str, list[str]] = {}
+        for table, cols in _REQUIRED_COLUMNS.items():
+            if not insp.has_table(table):
+                continue
+            existing = {c["name"] for c in insp.get_columns(table)}
+            gap = [c for c in cols if c not in existing]
+            if gap:
+                missing[table] = gap
+        return missing
+
+    return run_with_db_retry(
+        _scan,
+        max_attempts=_DDL_RETRY_ATTEMPTS,
+        retry_delay=_DDL_RETRY_DELAY_S,
+        label="gold-ai-schema-missing-columns",
+    )
 
 
 def _alter_sql(dialect: str, table: str, column: str, col_def: str) -> str:
@@ -90,14 +106,22 @@ def _apply_alters() -> None:
     dialect = engine.dialect.name
     for table, column, col_def in _GOLD_AI_COLUMN_ALTERS:
         try:
-            with engine.begin() as conn:
-                if not inspect(conn).has_table(table):
-                    continue
-                existing = {c["name"] for c in inspect(conn).get_columns(table)}
-                if column in existing:
-                    continue
-                sql = _alter_sql(dialect, table, column, col_def)
-                conn.execute(text(sql))
+            def _run_one_alter() -> None:
+                with engine.begin() as conn:
+                    if not inspect(conn).has_table(table):
+                        return
+                    existing = {c["name"] for c in inspect(conn).get_columns(table)}
+                    if column in existing:
+                        return
+                    sql = _alter_sql(dialect, table, column, col_def)
+                    conn.execute(text(sql))
+
+            run_with_db_retry(
+                _run_one_alter,
+                max_attempts=_DDL_RETRY_ATTEMPTS,
+                retry_delay=_DDL_RETRY_DELAY_S,
+                label=f"gold-ai-schema-alter:{table}.{column}",
+            )
         except Exception as exc:
             logger.warning(
                 "[gold-ai-trader] alter skipped/failed: %s.%s (%s)",
@@ -111,16 +135,21 @@ def ensure_gold_ai_trader_schema(*, force: bool = False) -> None:
     global _schema_ready
     if _schema_ready and not force:
         return
-    Base.metadata.create_all(
-        bind=engine,
-        tables=[
-            GoldAiConfig.__table__,
-            GoldAiDecision.__table__,
-            GoldAiOutcome.__table__,
-            GoldAiLesson.__table__,
-            GoldAiPendingOrder.__table__,
-            GoldAiFunnelEvent.__table__,
-        ],
+    run_with_db_retry(
+        lambda: Base.metadata.create_all(
+            bind=engine,
+            tables=[
+                GoldAiConfig.__table__,
+                GoldAiDecision.__table__,
+                GoldAiOutcome.__table__,
+                GoldAiLesson.__table__,
+                GoldAiPendingOrder.__table__,
+                GoldAiFunnelEvent.__table__,
+            ],
+        ),
+        max_attempts=_DDL_RETRY_ATTEMPTS,
+        retry_delay=_DDL_RETRY_DELAY_S,
+        label="gold-ai-schema-create-all",
     )
     _apply_alters()
     missing = _missing_columns()

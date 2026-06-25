@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,15 @@ def mount_gold_ai_trader_portal(app) -> None:
         ensure_gold_ai_trader_schema()
         _maybe_reset_daily_credits_on_startup()
     except Exception as exc:
+        hard_fail = os.environ.get(
+            "GOLD_AI_SCHEMA_STARTUP_HARD_FAIL", ""
+        ).strip().lower() in ("1", "true", "yes", "on")
+        if hard_fail:
+            logger.error(
+                "[gold-ai-trader] schema startup hard-fail enabled; refusing startup: %s",
+                exc,
+            )
+            raise
         logger.warning(
             "[gold-ai-trader] schema/credits startup skipped (routes still live): %s",
             exc,
