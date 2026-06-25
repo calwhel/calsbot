@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 _PERSIST_EVENTS = frozenset({
+    "scan",
     "data_blocked",
     "gate_skipped",
     "readiness_skipped",
@@ -20,6 +23,11 @@ _PERSIST_EVENTS = frozenset({
     "pending_entry",
     "no_ta_match",
 })
+_SCAN_PERSIST_INTERVAL_S = max(
+    5.0,
+    float(os.environ.get("GOLD_AI_SCAN_HEARTBEAT_PERSIST_S", "20")),
+)
+_last_scan_persist_mono = 0.0
 
 
 def persist_funnel_event(
@@ -31,8 +39,14 @@ def persist_funnel_event(
     reason: Optional[str] = None,
     decision_id: Optional[int] = None,
 ) -> None:
+    global _last_scan_persist_mono
     if event not in _PERSIST_EVENTS:
         return
+    if event == "scan":
+        now_m = time.monotonic()
+        if (now_m - _last_scan_persist_mono) < _SCAN_PERSIST_INTERVAL_S:
+            return
+        _last_scan_persist_mono = now_m
     try:
         from app.gold_ai_trader.models import GoldAiFunnelEvent
 

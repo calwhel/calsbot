@@ -1504,11 +1504,16 @@ function formatRuntimeStatus(statusRaw) {
 function deriveScanHealth(rt, cfg, sessionNow) {
   if (!sessionNow) return { text: '', tone: '' };
   const status = String(rt.status || '').toLowerCase();
-  const last = parseUtcIso(rt.last_scan_at);
+  const events = Array.isArray(rt._recent_events) ? rt._recent_events : [];
+  let last = parseUtcIso(rt.last_scan_at);
+  for (const ev of events) {
+    const t = parseUtcIso(ev && ev.ts);
+    if (t && (!last || t > last)) last = t;
+  }
   const ageS = last ? Math.max(0, (Date.now() - last.getTime()) / 1000) : null;
   const intervalS = Math.max(15, Number(cfg.scan_interval_s) || 20);
   const staleAfterS = Math.max(intervalS * 3, 90);
-  const ageLabel = ageS == null ? 'no heartbeat yet' : `${Math.round(ageS)}s ago`;
+  const ageLabel = ageS == null ? 'no shared heartbeat yet' : `${Math.round(ageS)}s ago`;
   if (status === 'scanning') {
     if (ageS != null && ageS <= staleAfterS) {
       return { text: `Scanner live · heartbeat ${ageLabel}`, tone: 'ok' };
@@ -1645,6 +1650,7 @@ function renderHero(j) {
   const h = deriveHero(j);
   const rt = j.runtime || {};
   const cfg = j.config || {};
+  rt._recent_events = (j.recent_funnel_events || []).slice(0, 10);
   const sessionNow = sessionNowUtc(cfg, j.shared_session_hours);
   const scanHealth = deriveScanHealth(rt, cfg, sessionNow);
 
