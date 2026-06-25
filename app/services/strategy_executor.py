@@ -9497,7 +9497,18 @@ async def _close_live_forex_execution_and_notify(
         closed_at = datetime.utcnow()
 
         # Pips P&L — from original entry vs broker exit fill (not SL/TP levels).
-        from app.services.trade_management import compute_execution_pips_pnl
+        # Use one final classifier outcome before persisting so DB state, notes,
+        # Telegram, and dashboard all report the same result.
+        from app.services.trade_management import (
+            close_classifier,
+            compute_execution_pips_pnl,
+        )
+
+        outcome, label = close_classifier(
+            ex, float(exit_price), proposed_outcome=(outcome or "LOSS"),
+        )
+        if "estimated" in (source or "").lower():
+            label = "market close (estimated)"
 
         pips_pnl = compute_execution_pips_pnl(ex, float(_pnl_exit))
 
@@ -9524,14 +9535,10 @@ async def _close_live_forex_execution_and_notify(
         if not claim_close_notification(db, ex.id):
             return True
 
-        from app.services.trade_management import close_classifier
         from app.services.forex_tick_manager import unregister_position
 
         # Append an auditable close note (preserve prior open-time context).
         pnl_sign = "+" if pnl_pct >= 0 else ""
-        outcome, label = close_classifier(
-            ex, float(exit_price), proposed_outcome=outcome,
-        )
         cn = f"{label} · {pnl_sign}{pnl_pct}% · exit {exit_price:.6g}"
         if note_suffix:
             cn = f"{cn} | {note_suffix}"
@@ -9552,10 +9559,14 @@ async def _close_live_forex_execution_and_notify(
 
         _update_performance(ex.strategy_id, db)
 
+        close_kind = (
+            "EST"
+            if "estimated" in (source or "").lower()
+            else ("TP" if outcome == "WIN" else "BE" if outcome == "BREAKEVEN" else "SL")
+        )
         logger.info(
-            f"[FX-reconcile] {('TP' if outcome=='WIN' else 'BE' if outcome=='BREAKEVEN' else 'SL')} "
-            f"CLOSE ({source}): {ex.symbol} {ex.direction} entry={entry} "
-            f"exit={exit_price} pnl={pnl_pct:+.1f}%"
+            f"[FX-reconcile] {close_kind} CLOSE ({source}): {ex.symbol} {ex.direction} "
+            f"entry={entry} exit={exit_price} pnl={pnl_pct:+.1f}%"
         )
 
         try:
