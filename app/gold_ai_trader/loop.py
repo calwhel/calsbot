@@ -103,6 +103,20 @@ def _reconnect_gold_ai_lock(old_conn):
     )
 
 
+def _reclaim_stale_gold_ai_locks(*, min_idle_seconds: float) -> int:
+    from app.executor_lock import terminate_lock_holders
+
+    return int(
+        terminate_lock_holders(
+            _LOCK_ID,
+            min_idle_seconds=max(0.0, float(min_idle_seconds)),
+            owner_app=_LOCK_APP_NAME,
+            log_prefix="[gold-ai-trader-lock]",
+        )
+        or 0
+    )
+
+
 def _release_gold_ai_lock(conn) -> None:
     if not conn:
         return
@@ -515,6 +529,15 @@ async def _locked_loop_forever() -> None:
 
     global _lock_conn
     delay = max(15.0, float(os.environ.get("GOLD_AI_TRADER_SCAN_INTERVAL_S", "20")))
+    reclaim_after_misses = max(
+        3,
+        int(os.environ.get("GOLD_AI_LOCK_RECLAIM_AFTER_MISSES", "6")),
+    )
+    reclaim_min_idle_s = max(
+        30.0,
+        float(os.environ.get("GOLD_AI_LOCK_RECLAIM_MIN_IDLE_S", "120")),
+    )
+    miss_streak = 0
     log_executor_lock_keepalive_config("gold-ai-trader:loop")
     logger.info("[gold-ai-trader] background loop starting (interval=%ss)", delay)
 
@@ -522,8 +545,24 @@ async def _locked_loop_forever() -> None:
         if _lock_conn is None:
             _lock_conn = await asyncio.to_thread(_acquire_gold_ai_lock)
             if _lock_conn is None:
+                miss_streak += 1
+                if miss_streak % reclaim_after_misses == 0:
+                    try:
+                        reclaimed = await asyncio.to_thread(
+                            _reclaim_stale_gold_ai_locks,
+                            min_idle_seconds=reclaim_min_idle_s,
+                        )
+                        if reclaimed:
+                            logger.warning(
+                                "[gold-ai-trader] reclaimed %s stale lock holder(s) after %s misses",
+                                reclaimed,
+                                miss_streak,
+                            )
+                    except Exception as exc:
+                        logger.warning("[gold-ai-trader] stale lock reclaim failed: %s", exc)
                 await asyncio.sleep(delay)
                 continue
+            miss_streak = 0
             logger.info("[gold-ai-trader] advisory lock acquired")
 
         if not await asyncio.to_thread(_ping_lock_connection, _lock_conn):

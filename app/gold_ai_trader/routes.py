@@ -486,6 +486,14 @@ async def api_status(request: Request, uid: str = Query(...)):
         except Exception as exc:
             logger.warning("[gold-ai-trader] schema ensure on status: %s", exc)
 
+        # Self-heal: ensure this worker schedules the background loop on demand.
+        try:
+            from app.gold_ai_trader.loop import maybe_start_background_loop
+
+            await maybe_start_background_loop()
+        except Exception as exc:
+            logger.warning("[gold-ai-trader] status loop kick failed: %s", exc)
+
         cfg_row, cfg, trader_uid = _load_config_for_status(db, admin)
         if cfg_row is None:
             degraded.append("config")

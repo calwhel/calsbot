@@ -7,6 +7,7 @@ TEMPLATE = (ROOT / "app" / "templates" / "gold_ai_trader.html").read_text()
 ROUTES = (ROOT / "app" / "gold_ai_trader" / "routes.py").read_text()
 STATE = (ROOT / "app" / "gold_ai_trader" / "state.py").read_text()
 FUNNEL_PERSIST = (ROOT / "app" / "gold_ai_trader" / "funnel_persist.py").read_text()
+LOOP = (ROOT / "app" / "gold_ai_trader" / "loop.py").read_text()
 
 
 class GoldAiScanHealthSourceTests(unittest.TestCase):
@@ -29,6 +30,16 @@ class GoldAiScanHealthSourceTests(unittest.TestCase):
         self.assertIn('"scan",', FUNNEL_PERSIST)
         self.assertIn("GOLD_AI_SCAN_HEARTBEAT_PERSIST_S", FUNNEL_PERSIST)
         self.assertIn("_last_scan_persist_mono", FUNNEL_PERSIST)
+
+    def test_status_endpoint_kicks_background_loop(self):
+        self.assertIn("from app.gold_ai_trader.loop import maybe_start_background_loop", ROUTES)
+        self.assertIn("await maybe_start_background_loop()", ROUTES)
+
+    def test_loop_reclaims_stale_lock_after_repeated_misses(self):
+        self.assertIn("def _reclaim_stale_gold_ai_locks(*, min_idle_seconds: float) -> int:", LOOP)
+        self.assertIn("terminate_lock_holders(", LOOP)
+        self.assertIn("GOLD_AI_LOCK_RECLAIM_AFTER_MISSES", LOOP)
+        self.assertIn("GOLD_AI_LOCK_RECLAIM_MIN_IDLE_S", LOOP)
 
 
 if __name__ == "__main__":
