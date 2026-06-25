@@ -1457,6 +1457,21 @@ function fmtSetup(type) {
   return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
+function sessionNowUtc(cfg, sharedHours) {
+  const shared = sharedHours || {};
+  const nowH = new Date().getUTCHours() + new Date().getUTCMinutes() / 60;
+  const asiaS = shared.asia?.start_hour ?? 1;
+  const asiaE = shared.asia?.end_hour ?? 4;
+  const lonS = cfg.london_start_hour ?? shared.london?.start_hour ?? 7;
+  const lonE = cfg.london_end_hour ?? shared.london?.end_hour ?? 16;
+  const nyS = cfg.ny_start_hour ?? shared.new_york?.start_hour ?? 12;
+  const nyE = cfg.ny_end_hour ?? shared.new_york?.end_hour ?? 21;
+  if (nowH >= asiaS && nowH < asiaE) return 'asia';
+  if (nowH >= lonS && nowH < lonE) return 'london';
+  if (nowH >= nyS && nowH < nyE) return 'new_york';
+  return '';
+}
+
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -1469,6 +1484,8 @@ function deriveHero(j) {
   const rt = j.runtime || {};
   const cfg = j.config || {};
   const feed = j.decision_feed || [];
+  const status = String(rt.status || '').toLowerCase();
+  const sessionNow = sessionNowUtc(cfg, j.shared_session_hours);
 
   if (cfg.kill_switch) {
     return { title: 'HALTED', sub: 'Kill switch active — disable it when you are ready to resume', lamp: 'danger' };
@@ -1493,6 +1510,19 @@ function deriveHero(j) {
     };
   }
 
+  if (status === 'max_calls_day') {
+    return { title: 'CLAUDE CAP', sub: 'Daily call limit reached — resets at UTC midnight', lamp: 'dormant' };
+  }
+  if (status === 'outside_killzone') {
+    return { title: 'WAITING KILLZONE', sub: 'Session is open — waiting for killzone window', lamp: 'dormant' };
+  }
+  if (status.startsWith('news:')) {
+    return { title: 'NEWS BLOCK', sub: 'High-impact news guard active — scans resume after buffer', lamp: 'dormant' };
+  }
+  if (status.startsWith('data_quality:')) {
+    return { title: 'WAITING DATA', sub: 'Market data quality gate is holding scans this cycle', lamp: 'dormant' };
+  }
+
   if (rt.status === 'scanning' && rt.last_candidate && !rt.last_decision) {
     const c = rt.last_candidate;
     return {
@@ -1508,6 +1538,14 @@ function deriveHero(j) {
       ? `Candidate: ${fmtSetup(rt.last_candidate.type)} · scanning XAUUSD`
       : 'Scanning XAUUSD for session setups';
     return { title: `ACTIVE · ${sess}`, sub, lamp: 'active' };
+  }
+
+  if (sessionNow) {
+    return {
+      title: `ACTIVE · ${fmtSession(sessionNow)}`,
+      sub: 'Session is open — waiting for next scan cycle',
+      lamp: 'active',
+    };
   }
 
   return {
