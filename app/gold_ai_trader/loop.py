@@ -404,6 +404,18 @@ async def _watchdog_loop_forever() -> None:
             if not enabled or kill_switch or not session:
                 await asyncio.sleep(interval_s)
                 continue
+            has_local_lock = False
+            if _lock_conn is not None:
+                try:
+                    has_local_lock = await asyncio.to_thread(_ping_lock_connection, _lock_conn)
+                except Exception:
+                    has_local_lock = False
+            # Prevent multi-worker watchdog herding: only the worker currently
+            # holding the advisory lock is allowed to force stale-heartbeat
+            # restarts/reclaims. Non-owners keep trying normal lock acquire.
+            if not has_local_lock:
+                await asyncio.sleep(interval_s)
+                continue
             loop_age_s = max(0.0, time.monotonic() - _loop_task_started_mono)
             if loop_age_s < startup_grace_s:
                 await asyncio.sleep(interval_s)
