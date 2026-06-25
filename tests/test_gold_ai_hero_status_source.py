@@ -19,6 +19,11 @@ class GoldAiHeroStatusSourceTests(unittest.TestCase):
         self.assertIn("if (status.startsWith('data_quality:'))", TEMPLATE)
         self.assertIn("if (status === 'max_calls_day')", TEMPLATE)
 
+    def test_hero_in_trade_uses_latest_executed_take_outcome(self):
+        self.assertIn("const latestExecutedTake = feed.find(d =>", TEMPLATE)
+        self.assertIn("String(latestExecutedTake.execution_outcome || '').toUpperCase() === 'OPEN'", TEMPLATE)
+        self.assertIn("const openTrade = latestExecutedTake", TEMPLATE)
+
 
 if __name__ == "__main__":
     unittest.main()
