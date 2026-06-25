@@ -117,6 +117,19 @@ def _release_gold_ai_lock(conn) -> None:
         pass
 
 
+async def _sync_closed_outcomes_pass() -> None:
+    """Run close reconciliation every loop cycle, independent of scan gating."""
+    db = SessionLocal()
+    try:
+        cfg_row = seed_config_if_missing(db)
+        cfg = merge_config(cfg_row, env_defaults())
+        await sync_closed_trade_notifications(db, cfg)
+    except Exception as exc:
+        logger.warning("[gold-ai-trader] closed-outcome sync pass failed: %s", exc)
+    finally:
+        db.close()
+
+
 async def run_gold_ai_trader_loop() -> None:
     """Main scan → candidate → Claude → optional execute cycle."""
     global _prev_session
@@ -501,6 +514,10 @@ async def _locked_loop_forever() -> None:
             await run_gold_ai_trader_loop()
         except Exception as e:
             logger.error("[gold-ai-trader] lock loop: %s", e)
+        try:
+            await _sync_closed_outcomes_pass()
+        except Exception as e:
+            logger.error("[gold-ai-trader] lock loop reconcile pass: %s", e)
 
         await asyncio.sleep(delay)
 

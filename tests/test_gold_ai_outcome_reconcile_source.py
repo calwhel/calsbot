@@ -5,6 +5,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 TELEGRAM_NOTIFY = (ROOT / "app" / "gold_ai_trader" / "telegram_notify.py").read_text()
+LOOP = (ROOT / "app" / "gold_ai_trader" / "loop.py").read_text()
 
 
 class GoldAiOutcomeReconcileSourceTests(unittest.TestCase):
@@ -32,6 +33,18 @@ class GoldAiOutcomeReconcileSourceTests(unittest.TestCase):
         self.assertIn("def _decision_id_from_execution(execution) -> Optional[int]:", TELEGRAM_NOTIFY)
         self.assertIn("meta = getattr(execution, \"conditions_met\", None)", TELEGRAM_NOTIFY)
         self.assertIn("raw = meta.get(\"gold_ai_decision_id\")", TELEGRAM_NOTIFY)
+
+    def test_background_loop_runs_outcome_sync_every_cycle(self):
+        self.assertIn("async def _sync_closed_outcomes_pass() -> None:", LOOP)
+        self.assertIn("await sync_closed_trade_notifications(db, cfg)", LOOP)
+        self.assertRegex(
+            LOOP,
+            re.compile(
+                r"await run_gold_ai_trader_loop\(\).*?"
+                r"await _sync_closed_outcomes_pass\(\)",
+                re.S,
+            ),
+        )
 
 
 if __name__ == "__main__":
