@@ -58,6 +58,8 @@ class GoldAiScanHealthSourceTests(unittest.TestCase):
         self.assertIn("async def _watchdog_loop_forever() -> None:", LOOP)
         self.assertIn("GOLD_AI_WATCHDOG_STALE_AFTER_S", LOOP)
         self.assertIn("GOLD_AI_WATCHDOG_MIN_RESTART_INTERVAL_S", LOOP)
+        self.assertIn("has_local_lock = False", LOOP)
+        self.assertIn("if not has_local_lock:", LOOP)
         self.assertIn("async def _restart_background_loop(", LOOP)
         self.assertIn("await _stop_loop_task(reason)", LOOP)
         self.assertIn("_schedule_watchdog_task()", LOOP)
