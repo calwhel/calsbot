@@ -53,6 +53,17 @@ class GoldAiScanHealthSourceTests(unittest.TestCase):
         self.assertIn("GoldAiFunnelEvent.event == \"scan\"", LOOP)
         self.assertIn("await asyncio.wait_for(run_gold_ai_trader_loop()", LOOP)
 
+    def test_loop_has_watchdog_supervisor_and_restart_path(self):
+        self.assertIn("_watchdog_task: asyncio.Task | None = None", LOOP)
+        self.assertIn("async def _watchdog_loop_forever() -> None:", LOOP)
+        self.assertIn("GOLD_AI_WATCHDOG_STALE_AFTER_S", LOOP)
+        self.assertIn("GOLD_AI_WATCHDOG_MIN_RESTART_INTERVAL_S", LOOP)
+        self.assertIn("async def _restart_background_loop(", LOOP)
+        self.assertIn("await _stop_loop_task(reason)", LOOP)
+        self.assertIn("_schedule_watchdog_task()", LOOP)
+        self.assertIn("GOLD_AI_LOOP_CYCLE_TIMEOUT_S", LOOP)
+        self.assertIn("GOLD_AI_CLAUDE_DECIDE_TIMEOUT_S", LOOP)
+
 
 if __name__ == "__main__":
     unittest.main()

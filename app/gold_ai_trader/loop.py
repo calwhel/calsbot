@@ -63,8 +63,12 @@ logger = logging.getLogger(__name__)
 _LOCK_ID = 42_424_250
 _LOCK_APP_NAME = "gold-ai-trader"
 _loop_task: asyncio.Task | None = None
+_watchdog_task: asyncio.Task | None = None
 _prev_session: str | None = None
 _lock_conn = None
+_loop_task_started_mono = 0.0
+_watchdog_last_restart_mono = 0.0
+_restart_lock: asyncio.Lock | None = None
 _on_demand_lock: asyncio.Lock | None = None
 _on_demand_last_mono = 0.0
 
@@ -159,6 +163,113 @@ def _get_on_demand_lock() -> asyncio.Lock:
     if _on_demand_lock is None:
         _on_demand_lock = asyncio.Lock()
     return _on_demand_lock
+
+
+def _get_restart_lock() -> asyncio.Lock:
+    global _restart_lock
+    if _restart_lock is None:
+        _restart_lock = asyncio.Lock()
+    return _restart_lock
+
+
+def _loop_task_done(task: asyncio.Task) -> None:
+    if task.cancelled():
+        logger.warning("[gold-ai-trader] background loop task cancelled")
+        return
+    exc = task.exception()
+    if exc is None:
+        logger.warning("[gold-ai-trader] background loop task exited unexpectedly")
+    else:
+        logger.error("[gold-ai-trader] background loop task crashed: %s", exc, exc_info=exc)
+
+
+def _watchdog_task_done(task: asyncio.Task) -> None:
+    if task.cancelled():
+        logger.warning("[gold-ai-trader] watchdog task cancelled")
+        return
+    exc = task.exception()
+    if exc is None:
+        logger.warning("[gold-ai-trader] watchdog task exited unexpectedly")
+    else:
+        logger.error("[gold-ai-trader] watchdog task crashed: %s", exc, exc_info=exc)
+
+
+def _schedule_loop_task() -> None:
+    global _loop_task, _loop_task_started_mono
+    _loop_task = asyncio.create_task(_locked_loop_forever())
+    _loop_task_started_mono = time.monotonic()
+    _loop_task.add_done_callback(_loop_task_done)
+    logger.info("[gold-ai-trader] background task scheduled")
+
+
+def _schedule_watchdog_task() -> None:
+    global _watchdog_task
+    _watchdog_task = asyncio.create_task(_watchdog_loop_forever())
+    _watchdog_task.add_done_callback(_watchdog_task_done)
+    logger.info("[gold-ai-trader] watchdog task scheduled")
+
+
+def _watchdog_snapshot() -> tuple[bool, bool, str | None, float | None]:
+    """Return (enabled, kill_switch, active_session, heartbeat_age_s)."""
+    env = env_defaults()
+    cfg = env
+    db = SessionLocal()
+    try:
+        row = seed_config_if_missing(db)
+        cfg = merge_config(row, env)
+    except Exception:
+        cfg = env
+    finally:
+        db.close()
+    if not cfg.enabled:
+        return False, bool(cfg.kill_switch), None, None
+    session = active_session(datetime.utcnow(), cfg)
+    last = _freshest_scan_heartbeat_utc()
+    age_s = (datetime.utcnow() - last).total_seconds() if last else None
+    return True, bool(cfg.kill_switch), session, age_s
+
+
+async def _stop_loop_task(reason: str) -> None:
+    global _loop_task, _lock_conn
+    task = _loop_task
+    if task and not task.done():
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=8.0)
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("[gold-ai-trader] loop cancel wait failed (%s): %s", reason, exc)
+    _loop_task = None
+    conn = _lock_conn
+    _lock_conn = None
+    if conn is not None:
+        await asyncio.to_thread(_release_gold_ai_lock, conn)
+
+
+async def _restart_background_loop(reason: str, *, force_reclaim: bool) -> str:
+    global _watchdog_last_restart_mono
+    min_restart_interval_s = max(
+        30.0,
+        float(os.environ.get("GOLD_AI_WATCHDOG_MIN_RESTART_INTERVAL_S", "90")),
+    )
+    now_m = time.monotonic()
+    if now_m - _watchdog_last_restart_mono < min_restart_interval_s:
+        return "restart_throttled"
+    async with _get_restart_lock():
+        now_m = time.monotonic()
+        if now_m - _watchdog_last_restart_mono < min_restart_interval_s:
+            return "restart_throttled"
+        _watchdog_last_restart_mono = now_m
+        logger.error("[gold-ai-trader] watchdog restarting loop: %s", reason)
+        if force_reclaim:
+            try:
+                await asyncio.to_thread(_reclaim_stale_gold_ai_locks, min_idle_seconds=0.0)
+            except Exception as exc:
+                logger.warning("[gold-ai-trader] watchdog force reclaim failed: %s", exc)
+        await _stop_loop_task(reason)
+        _schedule_loop_task()
+        return "restarted"
 
 
 def _freshest_scan_heartbeat_utc() -> datetime | None:
@@ -260,6 +371,55 @@ async def ensure_scan_liveness() -> str:
             return "error"
         finally:
             await asyncio.to_thread(_release_gold_ai_lock, conn)
+
+
+async def _watchdog_loop_forever() -> None:
+    interval_s = max(
+        15.0,
+        float(os.environ.get("GOLD_AI_WATCHDOG_INTERVAL_S", "30")),
+    )
+    stale_after_s = max(
+        120.0,
+        float(os.environ.get("GOLD_AI_WATCHDOG_STALE_AFTER_S", "240")),
+    )
+    startup_grace_s = max(
+        60.0,
+        float(os.environ.get("GOLD_AI_WATCHDOG_STARTUP_GRACE_S", "90")),
+    )
+    logger.info(
+        "[gold-ai-trader] watchdog active (interval=%ss stale_after=%ss)",
+        interval_s,
+        stale_after_s,
+    )
+    while True:
+        try:
+            if not gold_ai_trader_enabled():
+                await asyncio.sleep(interval_s)
+                continue
+            if _loop_task is None or _loop_task.done():
+                await _restart_background_loop("loop_task_missing_or_done", force_reclaim=False)
+                await asyncio.sleep(interval_s)
+                continue
+            enabled, kill_switch, session, age_s = await asyncio.to_thread(_watchdog_snapshot)
+            if not enabled or kill_switch or not session:
+                await asyncio.sleep(interval_s)
+                continue
+            loop_age_s = max(0.0, time.monotonic() - _loop_task_started_mono)
+            if loop_age_s < startup_grace_s:
+                await asyncio.sleep(interval_s)
+                continue
+            if age_s is None or age_s > stale_after_s:
+                reason = (
+                    f"stale_heartbeat session={session} age_s="
+                    f"{int(age_s) if age_s is not None else -1}"
+                )
+                logger.error("[gold-ai-trader] watchdog detected %s", reason)
+                await _restart_background_loop(reason, force_reclaim=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("[gold-ai-trader] watchdog error: %s", exc, exc_info=True)
+        await asyncio.sleep(interval_s)
 
 
 async def _sync_closed_outcomes_pass() -> None:
@@ -457,11 +617,38 @@ async def run_gold_ai_trader_loop() -> None:
             cisd=candidate.raw.get("cisd"),
         )
 
-        decision, reasoning, usage = await decide(
-            context,
-            model=cfg.model,
-            confidence_threshold=cfg.confidence_threshold,
+        claude_timeout_s = max(
+            15.0,
+            float(os.environ.get("GOLD_AI_CLAUDE_DECIDE_TIMEOUT_S", "60")),
         )
+        try:
+            decision, reasoning, usage = await asyncio.wait_for(
+                decide(
+                    context,
+                    model=cfg.model,
+                    confidence_threshold=cfg.confidence_threshold,
+                ),
+                timeout=claude_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[gold-ai-trader] Claude decision timeout after %.1fs (setup=%s)",
+                claude_timeout_s,
+                candidate.type,
+            )
+            decision = {
+                "action": "skip",
+                "confidence": 0,
+                "rationale": "Claude timeout",
+            }
+            reasoning = "Claude decision timeout"
+            usage = {
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "cost_usd": 0.0,
+            }
         record_claude_invocation(candidate)
         funnel_record("claude_called", setup=candidate.type, db=db, session=session)
         action = (decision.get("action") or "skip").lower()
@@ -660,6 +847,14 @@ async def _locked_loop_forever() -> None:
 
     global _lock_conn
     delay = max(15.0, float(os.environ.get("GOLD_AI_TRADER_SCAN_INTERVAL_S", "20")))
+    cycle_timeout_s = max(
+        delay * 2.0,
+        float(os.environ.get("GOLD_AI_LOOP_CYCLE_TIMEOUT_S", "120")),
+    )
+    reconcile_timeout_s = max(
+        10.0,
+        float(os.environ.get("GOLD_AI_LOOP_RECON_TIMEOUT_S", "45")),
+    )
     reclaim_after_misses = max(
         3,
         int(os.environ.get("GOLD_AI_LOCK_RECLAIM_AFTER_MISSES", "6")),
@@ -671,60 +866,86 @@ async def _locked_loop_forever() -> None:
     miss_streak = 0
     log_executor_lock_keepalive_config("gold-ai-trader:loop")
     logger.info("[gold-ai-trader] background loop starting (interval=%ss)", delay)
-
-    while True:
-        if _lock_conn is None:
-            _lock_conn = await asyncio.to_thread(_acquire_gold_ai_lock)
+    try:
+        while True:
             if _lock_conn is None:
-                miss_streak += 1
-                if miss_streak % reclaim_after_misses == 0:
-                    try:
-                        reclaimed = await asyncio.to_thread(
-                            _reclaim_stale_gold_ai_locks,
-                            min_idle_seconds=reclaim_min_idle_s,
-                        )
-                        if reclaimed:
-                            logger.warning(
-                                "[gold-ai-trader] reclaimed %s stale lock holder(s) after %s misses",
-                                reclaimed,
-                                miss_streak,
+                try:
+                    _lock_conn = await asyncio.to_thread(_acquire_gold_ai_lock)
+                except Exception as exc:
+                    logger.error("[gold-ai-trader] lock acquire error: %s", exc, exc_info=True)
+                    _lock_conn = None
+                if _lock_conn is None:
+                    miss_streak += 1
+                    if miss_streak % reclaim_after_misses == 0:
+                        try:
+                            reclaimed = await asyncio.to_thread(
+                                _reclaim_stale_gold_ai_locks,
+                                min_idle_seconds=reclaim_min_idle_s,
                             )
-                    except Exception as exc:
-                        logger.warning("[gold-ai-trader] stale lock reclaim failed: %s", exc)
-                await asyncio.sleep(delay)
-                continue
-            miss_streak = 0
-            logger.info("[gold-ai-trader] advisory lock acquired")
+                            if reclaimed:
+                                logger.warning(
+                                    "[gold-ai-trader] reclaimed %s stale lock holder(s) after %s misses",
+                                    reclaimed,
+                                    miss_streak,
+                                )
+                        except Exception as exc:
+                            logger.warning("[gold-ai-trader] stale lock reclaim failed: %s", exc)
+                    await asyncio.sleep(delay)
+                    continue
+                miss_streak = 0
+                logger.info("[gold-ai-trader] advisory lock acquired")
 
-        if not await asyncio.to_thread(_ping_lock_connection, _lock_conn):
-            logger.warning("[gold-ai-trader] advisory lock connection lost — reconnecting")
-            _lock_conn = await asyncio.to_thread(_reconnect_gold_ai_lock, _lock_conn)
-            if _lock_conn is None:
+            if not await asyncio.to_thread(_ping_lock_connection, _lock_conn):
+                logger.warning("[gold-ai-trader] advisory lock connection lost — reconnecting")
+                _lock_conn = await asyncio.to_thread(_reconnect_gold_ai_lock, _lock_conn)
+                if _lock_conn is None:
+                    logger.error(
+                        "[gold-ai-trader] advisory lock re-claim failed — retry in %ss",
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+            try:
+                await asyncio.wait_for(run_gold_ai_trader_loop(), timeout=cycle_timeout_s)
+            except asyncio.TimeoutError:
+                runtime_state.note_error(f"scan_cycle_timeout>{int(cycle_timeout_s)}s")
                 logger.error(
-                    "[gold-ai-trader] advisory lock re-claim failed — retry in %ss",
-                    delay,
+                    "[gold-ai-trader] scan cycle timeout after %.1fs — continuing",
+                    cycle_timeout_s,
                 )
-                await asyncio.sleep(delay)
-                continue
+            except Exception as e:
+                logger.error("[gold-ai-trader] lock loop cycle error: %s", e, exc_info=True)
+            try:
+                await asyncio.wait_for(
+                    _sync_closed_outcomes_pass(), timeout=reconcile_timeout_s
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "[gold-ai-trader] reconcile pass timeout after %.1fs — continuing",
+                    reconcile_timeout_s,
+                )
+            except Exception as e:
+                logger.error("[gold-ai-trader] lock loop reconcile pass: %s", e, exc_info=True)
 
-        try:
-            await run_gold_ai_trader_loop()
-        except Exception as e:
-            logger.error("[gold-ai-trader] lock loop: %s", e)
-        try:
-            await _sync_closed_outcomes_pass()
-        except Exception as e:
-            logger.error("[gold-ai-trader] lock loop reconcile pass: %s", e)
-
-        await asyncio.sleep(delay)
+            await asyncio.sleep(delay)
+    except asyncio.CancelledError:
+        logger.warning("[gold-ai-trader] background loop cancelled")
+        raise
+    finally:
+        conn = _lock_conn
+        _lock_conn = None
+        if conn is not None:
+            await asyncio.to_thread(_release_gold_ai_lock, conn)
+        logger.warning("[gold-ai-trader] background loop stopped")
 
 
 async def maybe_start_background_loop() -> None:
-    global _loop_task
+    global _loop_task, _watchdog_task
     if not gold_ai_trader_enabled():
         logger.info("[gold-ai-trader] disabled (GOLD_AI_TRADER_ENABLED=false)")
         return
-    if _loop_task and not _loop_task.done():
-        return
-    _loop_task = asyncio.create_task(_locked_loop_forever())
-    logger.info("[gold-ai-trader] background task scheduled")
+    if _loop_task is None or _loop_task.done():
+        _schedule_loop_task()
+    if _watchdog_task is None or _watchdog_task.done():
+        _schedule_watchdog_task()
