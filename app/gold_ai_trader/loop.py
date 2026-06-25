@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime
 
 import httpx
@@ -64,6 +65,8 @@ _LOCK_APP_NAME = "gold-ai-trader"
 _loop_task: asyncio.Task | None = None
 _prev_session: str | None = None
 _lock_conn = None
+_on_demand_lock: asyncio.Lock | None = None
+_on_demand_last_mono = 0.0
 
 
 def _ping_lock_connection(conn) -> bool:
@@ -129,6 +132,93 @@ def _release_gold_ai_lock(conn) -> None:
         conn.close()
     except Exception:
         pass
+
+
+def _parse_last_scan_at(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    txt = str(raw).strip()
+    if not txt:
+        return None
+    if txt.endswith("Z"):
+        txt = txt[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(txt)
+    except Exception:
+        return None
+    if dt.tzinfo is not None:
+        try:
+            return dt.astimezone().replace(tzinfo=None)
+        except Exception:
+            return dt.replace(tzinfo=None)
+    return dt
+
+
+def _get_on_demand_lock() -> asyncio.Lock:
+    global _on_demand_lock
+    if _on_demand_lock is None:
+        _on_demand_lock = asyncio.Lock()
+    return _on_demand_lock
+
+
+async def ensure_scan_liveness() -> str:
+    """On-demand one-shot scan recovery for stale in-session runtimes."""
+    global _on_demand_last_mono
+    if not gold_ai_trader_enabled():
+        return "disabled"
+    min_interval_s = max(
+        10.0,
+        float(os.environ.get("GOLD_AI_ON_DEMAND_SCAN_MIN_INTERVAL_S", "20")),
+    )
+    stale_after_s = max(
+        60.0,
+        float(os.environ.get("GOLD_AI_ON_DEMAND_SCAN_STALE_AFTER_S", "120")),
+    )
+    timeout_s = max(
+        10.0,
+        float(os.environ.get("GOLD_AI_ON_DEMAND_SCAN_TIMEOUT_S", "35")),
+    )
+    now_m = time.monotonic()
+    if now_m - _on_demand_last_mono < min_interval_s:
+        return "throttled"
+
+    snap = runtime_state.get_status()
+    status = str(snap.get("status") or "").lower()
+    last = _parse_last_scan_at(snap.get("last_scan_at"))
+    age_s = (datetime.utcnow() - last).total_seconds() if last else None
+    if status == "scanning" and age_s is not None and age_s <= stale_after_s:
+        return "healthy"
+
+    lock = _get_on_demand_lock()
+    async with lock:
+        now_m = time.monotonic()
+        if now_m - _on_demand_last_mono < min_interval_s:
+            return "throttled"
+        _on_demand_last_mono = now_m
+
+        conn = await asyncio.to_thread(_acquire_gold_ai_lock)
+        if conn is None:
+            try:
+                await asyncio.to_thread(
+                    _reclaim_stale_gold_ai_locks,
+                    min_idle_seconds=max(stale_after_s, 120.0),
+                )
+            except Exception as exc:
+                logger.warning("[gold-ai-trader] on-demand stale lock reclaim failed: %s", exc)
+            conn = await asyncio.to_thread(_acquire_gold_ai_lock)
+        if conn is None:
+            return "lock_busy"
+        try:
+            await asyncio.wait_for(run_gold_ai_trader_loop(), timeout=timeout_s)
+            return "ran"
+        except asyncio.TimeoutError:
+            logger.warning("[gold-ai-trader] on-demand scan timeout after %.1fs", timeout_s)
+            return "timeout"
+        except Exception as exc:
+            logger.warning("[gold-ai-trader] on-demand scan failed: %s", exc)
+            return "error"
+        finally:
+            await asyncio.to_thread(_release_gold_ai_lock, conn)
 
 
 async def _sync_closed_outcomes_pass() -> None:
