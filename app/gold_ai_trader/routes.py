@@ -273,6 +273,7 @@ def _config_payload(cfg, cfg_row) -> Dict[str, Any]:
         "ny_end_hour": cfg.ny_end_hour,
         "max_calls_day": cfg.max_calls_day,
         "max_trades_day": cfg.max_trades_day,
+        "scan_interval_s": cfg.scan_interval_s,
         "no_overnight": cfg.no_overnight,
         "model": cfg.model,
         "demo_ctrader_account_id": cfg.demo_ctrader_account_id,

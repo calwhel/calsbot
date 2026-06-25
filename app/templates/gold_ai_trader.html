@@ -257,6 +257,15 @@
       color: var(--text-muted);
       margin-top: 0.375rem;
     }
+    .hero-meta.scan-health {
+      margin-top: 0.25rem;
+    }
+    .hero-meta.scan-health.ok {
+      color: var(--profit);
+    }
+    .hero-meta.scan-health.warn {
+      color: var(--danger);
+    }
 
     /* Session timeline */
     .session-timeline {
@@ -1196,6 +1205,7 @@
           <h1 class="hero-title" id="status-line">Loading…</h1>
           <p class="hero-sub" id="session-line">Connecting…</p>
           <p class="hero-meta" id="last-candidate"></p>
+          <p class="hero-meta scan-health" id="scan-health-line"></p>
         </div>
       </div>
 
@@ -1457,6 +1467,15 @@ function fmtSetup(type) {
   return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
+function parseUtcIso(iso) {
+  if (!iso) return null;
+  const raw = String(iso).trim();
+  if (!raw) return null;
+  const hasTz = /([zZ]|[+\-]\d{2}:\d{2})$/.test(raw);
+  const d = new Date(hasTz ? raw : `${raw}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 function sessionNowUtc(cfg, sharedHours) {
   const shared = sharedHours || {};
   const nowH = new Date().getUTCHours() + new Date().getUTCMinutes() / 60;
@@ -1470,6 +1489,36 @@ function sessionNowUtc(cfg, sharedHours) {
   if (nowH >= nyS && nowH < nyE) return 'new_york';
   if (nowH >= lonS && nowH < lonE) return 'london';
   return '';
+}
+
+function formatRuntimeStatus(statusRaw) {
+  const status = String(statusRaw || '').toLowerCase();
+  if (!status || status === 'dormant') return 'idle';
+  if (status === 'scanning') return 'scanning';
+  if (status === 'outside_killzone') return 'outside killzone';
+  if (status.startsWith('news:')) return 'news block';
+  if (status.startsWith('data_quality:')) return 'data quality hold';
+  return status.replace(/_/g, ' ');
+}
+
+function deriveScanHealth(rt, cfg, sessionNow) {
+  if (!sessionNow) return { text: '', tone: '' };
+  const status = String(rt.status || '').toLowerCase();
+  const last = parseUtcIso(rt.last_scan_at);
+  const ageS = last ? Math.max(0, (Date.now() - last.getTime()) / 1000) : null;
+  const intervalS = Math.max(15, Number(cfg.scan_interval_s) || 20);
+  const staleAfterS = Math.max(intervalS * 3, 90);
+  const ageLabel = ageS == null ? 'no heartbeat yet' : `${Math.round(ageS)}s ago`;
+  if (status === 'scanning') {
+    if (ageS != null && ageS <= staleAfterS) {
+      return { text: `Scanner live · heartbeat ${ageLabel}`, tone: 'ok' };
+    }
+    return { text: `Scanner stale in open session · last heartbeat ${ageLabel}`, tone: 'warn' };
+  }
+  return {
+    text: `Session open but scanner paused (${formatRuntimeStatus(status)}) · last heartbeat ${ageLabel}`,
+    tone: 'warn',
+  };
 }
 
 function showToast(msg) {
@@ -1596,6 +1645,8 @@ function renderHero(j) {
   const h = deriveHero(j);
   const rt = j.runtime || {};
   const cfg = j.config || {};
+  const sessionNow = sessionNowUtc(cfg, j.shared_session_hours);
+  const scanHealth = deriveScanHealth(rt, cfg, sessionNow);
 
   document.getElementById('status-line').textContent = h.title;
   document.getElementById('session-line').textContent = h.sub;
@@ -1603,6 +1654,9 @@ function renderHero(j) {
   document.getElementById('last-candidate').textContent = cand
     ? `Last scan · ${fmtSetup(cand.type)} ${cand.direction || ''}${cand.price != null ? ' @ ' + cand.price : ''}`
     : (rt.last_scan_at ? `Last scan · ${fmtTime(rt.last_scan_at)}` : '');
+  const scanEl = document.getElementById('scan-health-line');
+  scanEl.textContent = scanHealth.text || '';
+  scanEl.className = 'hero-meta scan-health ' + (scanHealth.tone || '');
 
   const lamp = document.getElementById('status-lamp');
   lamp.className = 'status-lamp ' + (h.lamp === 'active' ? 'active' : h.lamp === 'danger' ? 'danger' : 'dormant');
@@ -1830,6 +1884,8 @@ function showLoadError(title, sub) {
   document.getElementById('status-line').textContent = title;
   document.getElementById('session-line').textContent = sub;
   document.getElementById('last-candidate').textContent = '';
+  document.getElementById('scan-health-line').textContent = '';
+  document.getElementById('scan-health-line').className = 'hero-meta scan-health';
   document.getElementById('status-lamp').className = 'status-lamp dormant';
   document.getElementById('demo-account-display').textContent = '—';
   document.getElementById('calls-stat').textContent = '—';

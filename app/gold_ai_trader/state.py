@@ -34,7 +34,8 @@ def set_status(**kwargs) -> None:
 def note_scan(session: Optional[str]) -> None:
     _STATUS.status = "scanning" if session else "dormant"
     _STATUS.active_session = session
-    _STATUS.last_scan_at = datetime.utcnow().isoformat()
+    # Emit explicit UTC timestamp for client-side heartbeat age checks.
+    _STATUS.last_scan_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
     _STATUS.loop_iterations += 1
 
 
