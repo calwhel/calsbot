@@ -36,6 +36,9 @@ class GoldAiOutcomeReconcileSourceTests(unittest.TestCase):
 
     def test_background_loop_runs_outcome_sync_every_cycle(self):
         self.assertIn("async def _sync_closed_outcomes_pass() -> None:", LOOP)
+        self.assertIn("from app.services.strategy_executor import _reconcile_forex_closes", LOOP)
+        self.assertIn("_reconcile_forex_closes(user_id=demo_uid)", LOOP)
+        self.assertIn("await asyncio.wait_for(", LOOP)
         self.assertIn("await sync_closed_trade_notifications(db, cfg)", LOOP)
         self.assertRegex(
             LOOP,

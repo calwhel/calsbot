@@ -123,6 +123,33 @@ async def _sync_closed_outcomes_pass() -> None:
     try:
         cfg_row = seed_config_if_missing(db)
         cfg = merge_config(cfg_row, env_defaults())
+        demo_uid = int(getattr(cfg, "demo_user_id", 0) or 0)
+        if demo_uid > 0:
+            try:
+                # Gold AI depends on this OPEN→closed transition for hero/feed state.
+                # Run a targeted broker reconcile pass every cycle so missed stream
+                # events do not leave executions stuck OPEN in the dashboard.
+                from app.services.strategy_executor import _reconcile_forex_closes
+
+                timeout_s = max(
+                    8.0,
+                    min(float(getattr(cfg, "scan_interval_s", 20.0) or 20.0), 25.0),
+                )
+                await asyncio.wait_for(
+                    _reconcile_forex_closes(user_id=demo_uid),
+                    timeout=timeout_s,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[gold-ai-trader] broker close reconcile timed out uid=%s",
+                    demo_uid,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[gold-ai-trader] broker close reconcile failed uid=%s: %s",
+                    demo_uid,
+                    exc,
+                )
         await sync_closed_trade_notifications(db, cfg)
     except Exception as exc:
         logger.warning("[gold-ai-trader] closed-outcome sync pass failed: %s", exc)
