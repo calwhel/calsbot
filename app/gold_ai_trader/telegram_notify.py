@@ -240,14 +240,31 @@ def _decision_id_from_notes(notes: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
+def _decision_id_from_execution(execution) -> Optional[int]:
+    """Extract decision id from execution notes, then JSON metadata fallback."""
+    did = _decision_id_from_notes(getattr(execution, "notes", "") or "")
+    if did:
+        return did
+    meta = getattr(execution, "conditions_met", None)
+    if not isinstance(meta, dict):
+        return None
+    raw = meta.get("gold_ai_decision_id")
+    try:
+        did = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return did if did > 0 else None
+
+
 async def sync_closed_trade_notifications(db, cfg: GoldAiRuntimeConfig) -> int:
     """Record missing outcomes and notify on newly closed demo trades."""
     from app.strategy_models import StrategyExecution
-    from app.gold_ai_trader.models import GoldAiDecision, GoldAiOutcome
+    from app.gold_ai_trader.models import GoldAiDecision
     from app.gold_ai_trader.learning import record_outcome_from_execution
 
-    if not telegram_notifications_enabled():
-        return 0
+    # Reconciliation must run even when Telegram alerts are disabled; stats and
+    # setup learning depend on gold_ai_outcomes being current.
+    notifications_enabled = telegram_notifications_enabled()
 
     since = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     closed = (
@@ -265,11 +282,13 @@ async def sync_closed_trade_notifications(db, cfg: GoldAiRuntimeConfig) -> int:
     )
     sent = 0
     for ex in closed:
-        did = _decision_id_from_notes(ex.notes or "")
+        did = _decision_id_from_execution(ex)
         if not did:
             continue
         was_new = record_outcome_from_execution(db, did, ex)
         if not was_new:
+            continue
+        if not notifications_enabled:
             continue
         dec = db.query(GoldAiDecision).filter(GoldAiDecision.id == did).first()
         ok = await notify_trade_close(
