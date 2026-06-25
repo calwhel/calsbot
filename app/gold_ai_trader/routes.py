@@ -488,9 +488,15 @@ async def api_status(request: Request, uid: str = Query(...)):
 
         # Self-heal: ensure this worker schedules the background loop on demand.
         try:
-            from app.gold_ai_trader.loop import maybe_start_background_loop
+            from app.gold_ai_trader.loop import (
+                maybe_start_background_loop,
+                ensure_scan_liveness,
+            )
 
             await maybe_start_background_loop()
+            scan_kick = await ensure_scan_liveness()
+            if scan_kick not in ("healthy", "throttled"):
+                logger.info("[gold-ai-trader] status scan liveness kick: %s", scan_kick)
         except Exception as exc:
             logger.warning("[gold-ai-trader] status loop kick failed: %s", exc)
 
