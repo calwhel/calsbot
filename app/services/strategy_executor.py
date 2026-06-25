@@ -7796,6 +7796,13 @@ def _tradfi_universe_symbols(
             out.append(sym)
         if len(out) >= max_symbols:
             break
+    # Gold AI strategies are single-symbol XAUUSD systems. If a legacy/migrated
+    # row loses universe.symbols, force the canonical symbol so scans do not
+    # dead-end on empty_universe while NY session is active.
+    if not out and bool(config.get("gold_ai_trader")):
+        sym = _normalize_universe_symbol(str(config.get("symbol") or "XAUUSD"))
+        if sym:
+            out.append(sym)
     return out
 
 

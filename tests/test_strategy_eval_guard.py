@@ -59,6 +59,15 @@ class TestUniverseNormalization(unittest.TestCase):
             ["EURUSD", "GBPUSD", "XAUUSD"],
         )
 
+    def test_gold_ai_universe_falls_back_to_xauusd_when_symbols_missing(self):
+        cfg = {
+            "asset_class": "forex",
+            "gold_ai_trader": True,
+            "symbol": "XAUUSD",
+            "universe": {"type": "specific", "symbols": []},
+        }
+        self.assertEqual(_tradfi_universe_symbols(cfg), ["XAUUSD"])
+
 
 class TestCacheKeyNormalization(unittest.TestCase):
     def setUp(self):
@@ -81,6 +90,15 @@ class TestEmptyUniverseSkip(unittest.TestCase):
     def test_crypto_all_is_not_empty_specific(self):
         cfg = {"universe": {"type": "all"}}
         self.assertFalse(_has_empty_specific_universe(cfg, "crypto"))
+
+    def test_gold_ai_empty_specific_is_treated_as_non_empty(self):
+        cfg = {
+            "asset_class": "forex",
+            "gold_ai_trader": True,
+            "symbol": "XAUUSD",
+            "universe": {"type": "specific", "symbols": []},
+        }
+        self.assertFalse(_has_empty_specific_universe(cfg, "forex"))
 
     def test_pre_eval_skip_logs(self):
         snap = {
