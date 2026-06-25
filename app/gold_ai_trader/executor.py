@@ -257,10 +257,19 @@ async def execute_take_market(
         return None
 
     fill = float(result["actual_fill"])
+    broker_units = result.get("volume")
+    broker_units_i: Optional[int] = None
+    try:
+        if broker_units is not None:
+            broker_units_i = int(broker_units)
+    except Exception:
+        broker_units_i = None
     strategy_id = ensure_system_strategy(db, user.id)
     note = f"gold_ai_trader decision_id={decision_id}"
     if entry_note:
         note += f" | {entry_note}"
+    if broker_units_i and broker_units_i > 0:
+        note += f" | vol={broker_units_i}"
     ex = StrategyExecution(
         strategy_id=strategy_id,
         user_id=user.id,
@@ -277,6 +286,8 @@ async def execute_take_market(
         ctrader_account_id=str(ctid),
         ctrader_order_id=str(result.get("order_id") or ""),
         ctrader_position_id=str(result.get("position_id") or ""),
+        broker_volume_units=broker_units_i,
+        remaining_volume=float(broker_units_i) if broker_units_i and broker_units_i > 0 else None,
         notes=note,
         conditions_met={"gold_ai_decision_id": decision_id},
     )

@@ -9409,6 +9409,7 @@ async def _close_live_forex_execution_with_db_retry(
     exit_price: float,
     source: str = "ctrader-reconcile",
     note_suffix: Optional[str] = None,
+    pnl_usd: Optional[float] = None,
 ) -> bool:
     """Close+notify with fresh-session retry on Neon SSL blips."""
     from app.db_resilience import is_transient_db_error
@@ -9416,7 +9417,12 @@ async def _close_live_forex_execution_with_db_retry(
     for attempt in range(3):
         try:
             return await _close_live_forex_execution_and_notify(
-                ex_id, outcome, exit_price, source=source, note_suffix=note_suffix,
+                ex_id,
+                outcome,
+                exit_price,
+                source=source,
+                note_suffix=note_suffix,
+                pnl_usd=pnl_usd,
             )
         except Exception as exc:
             if is_transient_db_error(exc) and attempt < 2:
@@ -9436,6 +9442,7 @@ async def _close_live_forex_execution_with_db_retry(
 async def _close_live_forex_execution_and_notify(
     ex_id: int, outcome: str, exit_price: float, source: str = "ctrader-reconcile",
     note_suffix: Optional[str] = None,
+    pnl_usd: Optional[float] = None,
 ) -> bool:
     """Atomically close a LIVE forex execution whose broker position was detected
     closed by reconciliation, then fire the Telegram DM + mobile push.
@@ -9515,11 +9522,11 @@ async def _close_live_forex_execution_and_notify(
         result = db.execute(
             _text(
                 "UPDATE strategy_executions "
-                "SET outcome=:o, exit_price=:xp, pnl_pct=:p, closed_at=:ca, pips_pnl=:pp "
+                "SET outcome=:o, exit_price=:xp, pnl_pct=:p, closed_at=:ca, pips_pnl=:pp, pnl_usd=:pu "
                 "WHERE id=:id AND outcome='OPEN'"
             ),
             {"o": outcome, "xp": exit_price, "p": pnl_pct, "ca": closed_at,
-             "pp": pips_pnl, "id": ex.id},
+             "pp": pips_pnl, "pu": pnl_usd, "id": ex.id},
         )
         db.commit()
         if result.rowcount == 0:
@@ -9530,6 +9537,7 @@ async def _close_live_forex_execution_and_notify(
         ex.pnl_pct = pnl_pct
         ex.closed_at = closed_at
         ex.pips_pnl = pips_pnl
+        ex.pnl_usd = pnl_usd
 
         from app.services.close_notify_dedupe import claim_close_notification
         if not claim_close_notification(db, ex.id):
@@ -9792,6 +9800,7 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
         _clear_reconcile_missing(w["exec_id"])
         outcome = broker_close.get("outcome") or "LOSS"
         exit_price = float(broker_close["exit_price"])
+        pnl_usd = broker_close.get("gross_profit_usd")
         logger.info(
             "[FX-reconcile] %s exec#%s broker closed pos=%s @ %s → %s",
             w["symbol"],
@@ -9801,7 +9810,11 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
             outcome,
         )
         await _close_live_forex_execution_with_db_retry(
-            w["exec_id"], outcome, exit_price, source="ctrader-reconcile-broker",
+            w["exec_id"],
+            outcome,
+            exit_price,
+            source="ctrader-reconcile-broker",
+            pnl_usd=float(pnl_usd) if pnl_usd is not None else None,
         )
         stats["broker_deal_close"] += 1
         return True

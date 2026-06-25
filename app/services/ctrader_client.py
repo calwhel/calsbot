@@ -3223,6 +3223,8 @@ def _parse_close_from_deals(
         ),
         "closed_at_ms": close_ts or None,
         "gross_profit": gross,
+        # cTrader monetary fields are cents in Proto messages.
+        "gross_profit_usd": round(float(gross) / 100.0, 2),
         "deal_id": int(deal.dealId) if deal.HasField("dealId") else None,
     }
 

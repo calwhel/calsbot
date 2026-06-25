@@ -1439,7 +1439,13 @@ async def reconcile_broker_pnl_for_recent_closes(hours: int = 48) -> dict:
     from app.services.ctrader_client import get_position_close_detail_for_user
 
     cutoff = datetime.utcnow() - timedelta(hours=hours)
-    stats = {"corrected": 0, "phantom_paper": 0, "checked": 0, "broker_mismatch": 0}
+    stats = {
+        "corrected": 0,
+        "phantom_paper": 0,
+        "checked": 0,
+        "broker_mismatch": 0,
+        "pnl_usd_backfilled": 0,
+    }
 
     db = SessionLocal()
     try:
@@ -1505,6 +1511,12 @@ async def reconcile_broker_pnl_for_recent_closes(hours: int = 48) -> dict:
                 continue
             broker_exit = float(broker["exit_price"])
             broker_outcome = broker.get("outcome") or "LOSS"
+            broker_pnl_usd = broker.get("gross_profit_usd")
+            if broker_pnl_usd is None and broker.get("gross_profit") is not None:
+                try:
+                    broker_pnl_usd = round(float(broker.get("gross_profit")) / 100.0, 2)
+                except Exception:
+                    broker_pnl_usd = None
             our_pips = float(ex.pips_pnl or 0)
             entry_f = float(ex.entry_price or 0)
             our_exit = float(ex.exit_price or 0)
@@ -1545,6 +1557,14 @@ async def reconcile_broker_pnl_for_recent_closes(hours: int = 48) -> dict:
                 continue
             tol = 2.0
             cmp_our = our_recomputed if our_recomputed is not None else our_pips
+            if broker_pnl_usd is not None:
+                try:
+                    _broker_usd = float(broker_pnl_usd)
+                    if ex.pnl_usd is None or abs(float(ex.pnl_usd) - _broker_usd) > 0.01:
+                        ex.pnl_usd = _broker_usd
+                        stats["pnl_usd_backfilled"] += 1
+                except Exception:
+                    pass
             if abs(cmp_our - broker_pips) > tol or ex.outcome != broker_outcome:
                 stats["broker_mismatch"] += 1
                 logger.warning(
@@ -1586,7 +1606,7 @@ async def reconcile_broker_pnl_for_recent_closes(hours: int = 48) -> dict:
                 stats["corrected"] += 1
         bf = backfill_missing_pips_pnl(hours=hours, limit=200)
         stats["backfilled"] = bf
-        if stats["corrected"] or bf:
+        if stats["corrected"] or stats["pnl_usd_backfilled"] or bf:
             db.commit()
     except Exception as exc:
         logger.warning("[reconcile] broker P/L audit failed: %s", exc)

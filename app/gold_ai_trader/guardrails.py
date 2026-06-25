@@ -287,6 +287,18 @@ def demo_pnl_today_usd(db, user_id: int) -> float:
     for ex in rows:
         if ex.pnl_usd is not None:
             total += float(ex.pnl_usd)
+        elif (
+            ex.entry_price is not None
+            and ex.exit_price is not None
+            and getattr(ex, "broker_volume_units", None) is not None
+        ):
+            try:
+                units = float(ex.broker_volume_units)
+                move = float(ex.exit_price) - float(ex.entry_price)
+                sign = 1.0 if (ex.direction or "").upper() == "LONG" else -1.0
+                total += move * units * sign
+            except Exception:
+                pass
         elif ex.pips_pnl is not None:
             total += float(ex.pips_pnl) * 0.1  # rough USD proxy for XAUUSD demo display
     return round(total, 2)
@@ -306,6 +318,18 @@ def live_pnl_today_usd(db, user_id: int) -> float:
     for ex in rows:
         if ex.pnl_usd is not None:
             total += float(ex.pnl_usd)
+        elif (
+            ex.entry_price is not None
+            and ex.exit_price is not None
+            and getattr(ex, "broker_volume_units", None) is not None
+        ):
+            try:
+                units = float(ex.broker_volume_units)
+                move = float(ex.exit_price) - float(ex.entry_price)
+                sign = 1.0 if (ex.direction or "").upper() == "LONG" else -1.0
+                total += move * units * sign
+            except Exception:
+                pass
         elif ex.pips_pnl is not None:
             total += float(ex.pips_pnl) * 0.1
     return round(total, 2)

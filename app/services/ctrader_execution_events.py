@@ -162,6 +162,7 @@ async def handle_execution_event(
         outcome,
         float(exit_price),
         source="ctrader-execution-event",
+        pnl_usd=round(float(gross) / 100.0, 2),
     )
 
 
