@@ -305,4 +305,12 @@ def record_outcome_from_execution(db, decision_id: int, execution) -> bool:
     )
     db.add(row)
     db.commit()
+    logger.info(
+        "[gold-ai-trader] outcome recorded decision_id=%s exec_id=%s result=%s pnl_pct=%s r_multiple=%s",
+        decision_id,
+        getattr(execution, "id", None),
+        result,
+        round(pnl, 4),
+        round(float(r_mult), 4) if r_mult is not None else None,
+    )
     return True
