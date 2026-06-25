@@ -1,9 +1,11 @@
 """FastAPI routes + page for Gold AI Trader."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -43,6 +45,29 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+_STATUS_RECONCILE_LAST_RUN: Dict[int, float] = {}
+_STATUS_RECONCILE_INTERVAL_S = max(
+    5.0,
+    float(os.environ.get("GOLD_AI_STATUS_RECONCILE_INTERVAL_S", "12")),
+)
+_STATUS_RECONCILE_TIMEOUT_S = max(
+    2.0,
+    float(os.environ.get("GOLD_AI_STATUS_RECONCILE_TIMEOUT_S", "6")),
+)
+
+
+def _should_run_status_reconcile(user_id: int) -> bool:
+    now = time.monotonic()
+    last = _STATUS_RECONCILE_LAST_RUN.get(int(user_id), 0.0)
+    if now - last < _STATUS_RECONCILE_INTERVAL_S:
+        return False
+    _STATUS_RECONCILE_LAST_RUN[int(user_id)] = now
+    if len(_STATUS_RECONCILE_LAST_RUN) > 512:
+        cutoff = now - (_STATUS_RECONCILE_INTERVAL_S * 4.0)
+        for uid in list(_STATUS_RECONCILE_LAST_RUN):
+            if _STATUS_RECONCILE_LAST_RUN[uid] < cutoff:
+                _STATUS_RECONCILE_LAST_RUN.pop(uid, None)
+    return True
 
 
 def _normalize_uid(uid: str) -> str:
@@ -463,6 +488,34 @@ async def api_status(request: Request, uid: str = Query(...)):
         cfg_row, cfg, trader_uid = _load_config_for_status(db, admin)
         if cfg_row is None:
             degraded.append("config")
+
+        # Keep dashboard "IN TRADE" state in sync with broker truth. This
+        # catches missed/delayed close events quickly and avoids stale OPEN rows
+        # blocking new scans for extended periods.
+        if trader_uid:
+            try:
+                _uid = int(trader_uid)
+            except (TypeError, ValueError):
+                _uid = 0
+            if _uid > 0 and _should_run_status_reconcile(_uid):
+                try:
+                    from app.services.strategy_executor import _reconcile_forex_closes
+
+                    await asyncio.wait_for(
+                        _reconcile_forex_closes(user_id=_uid),
+                        timeout=_STATUS_RECONCILE_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[gold-ai-trader] status reconcile timed out uid=%s",
+                        _uid,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[gold-ai-trader] status reconcile failed uid=%s: %s",
+                        _uid,
+                        exc,
+                    )
 
         demo_accounts: List[Dict[str, Any]] = []
         selected = None
