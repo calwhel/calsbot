@@ -74,7 +74,7 @@ DEFAULTS = GoldAiRuntimeConfig(
     max_trades_day=6,
     no_overnight=True,
     scan_interval_s=20.0,
-    model="claude-haiku-4-5",
+    model="claude-opus-4-8",
     demo_user_id=None,
     demo_ctrader_account_id=None,
     live_mirror_enabled=False,
@@ -119,7 +119,7 @@ def env_defaults() -> GoldAiRuntimeConfig:
         max_trades_day=_env_int("GOLD_AI_TRADER_MAX_TRADES_DAY", 6),
         no_overnight=_env_bool("GOLD_AI_TRADER_NO_OVERNIGHT", True),
         scan_interval_s=_env_float("GOLD_AI_TRADER_SCAN_INTERVAL_S", 20.0),
-        model=os.environ.get("GOLD_AI_TRADER_MODEL", "claude-haiku-4-5"),
+        model=os.environ.get("GOLD_AI_TRADER_MODEL", "claude-opus-4-8"),
         demo_user_id=int(uid) if uid.isdigit() else None,
         demo_ctrader_account_id=demo_ctid,
         live_mirror_enabled=False,
@@ -137,7 +137,7 @@ def env_defaults() -> GoldAiRuntimeConfig:
 
 
 # Claude list pricing (USD per million tokens) — for cost estimates only.
-# Haiku 4.5 is the Gold AI default to keep per-call costs low.
+# Gold AI defaults to Opus unless overridden via GOLD_AI_TRADER_MODEL.
 HAIKU_INPUT_USD_PER_M = 0.25
 HAIKU_OUTPUT_USD_PER_M = 1.25
 HAIKU_CACHE_READ_USD_PER_M = 0.025

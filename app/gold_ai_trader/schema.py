@@ -155,8 +155,8 @@ def seed_config_if_missing(db) -> GoldAiConfig:
         if int(getattr(row, "max_calls_day", 0) or 0) == 22:
             row.max_calls_day = 70
             updated = True
-        if (getattr(row, "model", "") or "").strip() == "claude-opus-4-8":
-            row.model = "claude-haiku-4-5"
+        if (getattr(row, "model", "") or "").strip() == "claude-haiku-4-5":
+            row.model = "claude-opus-4-8"
             updated = True
         if updated:
             db.commit()

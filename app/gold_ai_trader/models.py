@@ -21,7 +21,7 @@ class GoldAiConfig(Base):
     max_calls_day = Column(Integer, default=70, nullable=False)
     max_trades_day = Column(Integer, default=6, nullable=False)
     no_overnight = Column(Boolean, default=True, nullable=False)
-    model = Column(String(64), default="claude-haiku-4-5", nullable=False)
+    model = Column(String(64), default="claude-opus-4-8", nullable=False)
     demo_ctrader_account_id = Column(String(40), nullable=True)
     demo_user_id = Column(Integer, nullable=True)
     live_mirror_enabled = Column(Boolean, default=False, nullable=False)

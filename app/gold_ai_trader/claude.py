@@ -135,7 +135,7 @@ def _pricing_for_model(model: str) -> Tuple[float, float, float, float]:
 def _estimate_cost(
     usage,
     *,
-    model: str = "claude-haiku-4-5",
+    model: str = "claude-opus-4-8",
 ) -> Tuple[int, int, int, int, float]:
     tin = int(getattr(usage, "input_tokens", 0) or 0)
     tout = int(getattr(usage, "output_tokens", 0) or 0)
@@ -155,7 +155,7 @@ def _estimate_cost(
 async def decide(
     context_text: str,
     *,
-    model: str = "claude-haiku-4-5",
+    model: str = "claude-opus-4-8",
     dry_run: bool = False,
     confidence_threshold: int = _DEFAULT_CONFIDENCE_THRESHOLD,
 ) -> Tuple[Dict[str, Any], str, Dict[str, Any]]:
