@@ -18,6 +18,10 @@ class GoldAiFeedOutcomeSourceTests(unittest.TestCase):
         self.assertIn("else if (execOutcome === 'LOSS')", TEMPLATE)
         self.assertIn("demo ' + (execOutcome ? execOutcome.toLowerCase() : 'order')", TEMPLATE)
 
+    def test_hero_in_trade_requires_open_execution_outcome(self):
+        self.assertIn("const openTrade = feed.find(d =>", TEMPLATE)
+        self.assertIn("String(d.execution_outcome || '').toUpperCase() === 'OPEN'", TEMPLATE)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1480,7 +1480,11 @@ function deriveHero(j) {
     return { title: 'STANDBY', sub: 'Trader is off — enable the switch when Asia, London, or NY opens', lamp: 'dormant' };
   }
 
-  const openTrade = feed.find(d => d.executed && (d.action || '').toLowerCase() === 'take');
+  const openTrade = feed.find(d =>
+    d.executed &&
+    (d.action || '').toLowerCase() === 'take' &&
+    String(d.execution_outcome || '').toUpperCase() === 'OPEN'
+  );
   if (openTrade) {
     return {
       title: 'IN TRADE',
