@@ -48,6 +48,9 @@ class GoldAiScanHealthSourceTests(unittest.TestCase):
         self.assertIn("async def ensure_scan_liveness() -> str:", LOOP)
         self.assertIn("GOLD_AI_ON_DEMAND_SCAN_MIN_INTERVAL_S", LOOP)
         self.assertIn("GOLD_AI_ON_DEMAND_SCAN_STALE_AFTER_S", LOOP)
+        self.assertIn("GOLD_AI_ON_DEMAND_FORCE_RECLAIM_AFTER_S", LOOP)
+        self.assertIn("def _freshest_scan_heartbeat_utc() -> datetime | None:", LOOP)
+        self.assertIn("GoldAiFunnelEvent.event == \"scan\"", LOOP)
         self.assertIn("await asyncio.wait_for(run_gold_ai_trader_loop()", LOOP)
 
 

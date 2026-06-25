@@ -161,6 +161,35 @@ def _get_on_demand_lock() -> asyncio.Lock:
     return _on_demand_lock
 
 
+def _freshest_scan_heartbeat_utc() -> datetime | None:
+    """Best scan heartbeat across local runtime + persisted funnel events."""
+    best = _parse_last_scan_at(runtime_state.get_status().get("last_scan_at"))
+    db = SessionLocal()
+    try:
+        from app.gold_ai_trader.models import GoldAiFunnelEvent
+
+        row = (
+            db.query(GoldAiFunnelEvent.ts)
+            .filter(GoldAiFunnelEvent.event == "scan")
+            .order_by(GoldAiFunnelEvent.ts.desc())
+            .limit(1)
+            .first()
+        )
+        ts = row[0] if row else None
+        if ts is not None and getattr(ts, "tzinfo", None) is not None:
+            try:
+                ts = ts.astimezone().replace(tzinfo=None)
+            except Exception:
+                ts = ts.replace(tzinfo=None)
+        if ts is not None and (best is None or ts > best):
+            best = ts
+    except Exception as exc:
+        logger.debug("[gold-ai-trader] heartbeat query failed: %s", exc)
+    finally:
+        db.close()
+    return best
+
+
 async def ensure_scan_liveness() -> str:
     """On-demand one-shot scan recovery for stale in-session runtimes."""
     global _on_demand_last_mono
@@ -178,15 +207,17 @@ async def ensure_scan_liveness() -> str:
         10.0,
         float(os.environ.get("GOLD_AI_ON_DEMAND_SCAN_TIMEOUT_S", "35")),
     )
+    force_reclaim_after_s = max(
+        stale_after_s,
+        float(os.environ.get("GOLD_AI_ON_DEMAND_FORCE_RECLAIM_AFTER_S", "180")),
+    )
     now_m = time.monotonic()
     if now_m - _on_demand_last_mono < min_interval_s:
         return "throttled"
 
-    snap = runtime_state.get_status()
-    status = str(snap.get("status") or "").lower()
-    last = _parse_last_scan_at(snap.get("last_scan_at"))
+    last = await asyncio.to_thread(_freshest_scan_heartbeat_utc)
     age_s = (datetime.utcnow() - last).total_seconds() if last else None
-    if status == "scanning" and age_s is not None and age_s <= stale_after_s:
+    if age_s is not None and age_s <= stale_after_s:
         return "healthy"
 
     lock = _get_on_demand_lock()
@@ -198,11 +229,21 @@ async def ensure_scan_liveness() -> str:
 
         conn = await asyncio.to_thread(_acquire_gold_ai_lock)
         if conn is None:
+            reclaim_idle_s = max(stale_after_s, 120.0)
+            if age_s is not None and age_s >= force_reclaim_after_s:
+                # Heartbeat is stale cluster-wide; force-takeover even if holder
+                # looks "live" from pg_stat_activity idle timers.
+                reclaim_idle_s = 0.0
             try:
-                await asyncio.to_thread(
+                reclaimed = await asyncio.to_thread(
                     _reclaim_stale_gold_ai_locks,
-                    min_idle_seconds=max(stale_after_s, 120.0),
+                    min_idle_seconds=reclaim_idle_s,
                 )
+                if reclaimed and reclaim_idle_s <= 0.0:
+                    logger.warning(
+                        "[gold-ai-trader] forced lock reclaim after stale heartbeat age=%.0fs",
+                        age_s or -1.0,
+                    )
             except Exception as exc:
                 logger.warning("[gold-ai-trader] on-demand stale lock reclaim failed: %s", exc)
             conn = await asyncio.to_thread(_acquire_gold_ai_lock)
