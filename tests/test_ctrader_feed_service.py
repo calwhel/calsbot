@@ -2,6 +2,7 @@
 import os
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services import ctrader_price_feed as feed
@@ -86,6 +87,30 @@ class TestCtraderFeedService(unittest.TestCase):
         st = feed.feed_status()
         self.assertTrue(st["needs_relink"])
         self.assertIn("reconnect", (st.get("note") or "").lower())
+
+    def test_prefs_rows_to_accounts_dedupes_same_ctid(self):
+        rows = [
+            SimpleNamespace(
+                ctrader_access_token="tok-u2",
+                ctrader_account_id="47516246",
+                user_id=2,
+            ),
+            SimpleNamespace(
+                ctrader_access_token="tok-u1",
+                ctrader_account_id="47516246",
+                user_id=1,
+            ),
+            SimpleNamespace(
+                ctrader_access_token="tok-u3",
+                ctrader_account_id="88888888",
+                user_id=3,
+            ),
+        ]
+        with patch.object(feed, "_is_live_for_ctid", side_effect=[False, False, True]):
+            out = feed._prefs_rows_to_accounts(rows)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0][:3], ("tok-u2", 47516246, 2))
+        self.assertEqual(out[1][:3], ("tok-u3", 88888888, 3))
 
     @unittest.skipUnless(_ctrader_client(), "ctrader_client unavailable")
     def test_refresh_terminal_codes(self):

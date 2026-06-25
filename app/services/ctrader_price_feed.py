@@ -843,6 +843,29 @@ def _is_live_for_ctid(prefs, ctid: int) -> bool:
     return True if val is None else bool(val)
 
 
+def _dedupe_accounts_by_ctid(
+    accounts: List[Tuple[str, int, int, bool]],
+) -> List[Tuple[str, int, int, bool]]:
+    """Keep one owner row per ctid (first row wins due ordered priority)."""
+    deduped: List[Tuple[str, int, int, bool]] = []
+    first_owner: Dict[int, int] = {}
+    dropped: Dict[int, List[int]] = {}
+    for at, ctid, uid, is_live in accounts:
+        if ctid in first_owner:
+            dropped.setdefault(ctid, []).append(uid)
+            continue
+        first_owner[ctid] = uid
+        deduped.append((at, ctid, uid, is_live))
+    for ctid, losers in dropped.items():
+        logger.warning(
+            "[CTraderFeed] duplicate ctid owner rows detected ctid=%s kept_uid=%s dropped_uids=%s",
+            ctid,
+            first_owner.get(ctid),
+            ",".join(str(x) for x in losers),
+        )
+    return deduped
+
+
 def _prefs_rows_to_accounts(rows) -> List[Tuple[str, int, int, bool]]:
     out: List[Tuple[str, int, int, bool]] = []
     for prefs in rows:
@@ -855,7 +878,7 @@ def _prefs_rows_to_accounts(rows) -> List[Tuple[str, int, int, bool]]:
         except (TypeError, ValueError):
             continue
         out.append((at, ctid, int(prefs.user_id), _is_live_for_ctid(prefs, ctid)))
-    return out
+    return _dedupe_accounts_by_ctid(out)
 
 
 def probe_linked_accounts_sync() -> List[Tuple[str, int, int, bool]]:
