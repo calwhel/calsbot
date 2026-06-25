@@ -24,6 +24,13 @@ class GoldAiHeroStatusSourceTests(unittest.TestCase):
         self.assertIn("String(latestExecutedTake.execution_outcome || '').toUpperCase() === 'OPEN'", TEMPLATE)
         self.assertIn("const openTrade = latestExecutedTake", TEMPLATE)
 
+    def test_session_now_prefers_new_york_over_london_in_overlap(self):
+        ny_idx = TEMPLATE.find("if (nowH >= nyS && nowH < nyE) return 'new_york';")
+        lon_idx = TEMPLATE.find("if (nowH >= lonS && nowH < lonE) return 'london';")
+        self.assertGreaterEqual(ny_idx, 0)
+        self.assertGreaterEqual(lon_idx, 0)
+        self.assertLess(ny_idx, lon_idx)
+
 
 if __name__ == "__main__":
     unittest.main()

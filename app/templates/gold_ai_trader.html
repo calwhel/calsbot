@@ -1467,8 +1467,8 @@ function sessionNowUtc(cfg, sharedHours) {
   const nyS = cfg.ny_start_hour ?? shared.new_york?.start_hour ?? 12;
   const nyE = cfg.ny_end_hour ?? shared.new_york?.end_hour ?? 21;
   if (nowH >= asiaS && nowH < asiaE) return 'asia';
-  if (nowH >= lonS && nowH < lonE) return 'london';
   if (nowH >= nyS && nowH < nyE) return 'new_york';
+  if (nowH >= lonS && nowH < lonE) return 'london';
   return '';
 }
 

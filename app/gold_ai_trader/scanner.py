@@ -60,10 +60,11 @@ def active_session(now: datetime, cfg: GoldAiRuntimeConfig) -> Optional[str]:
 
     if is_named_session_active("asia", now):
         return "asia"
-    if is_named_session_active("london", now):
-        return "london"
+    # During London/NY overlap, prefer New York session semantics.
     if is_named_session_active("new_york", now):
         return "new_york"
+    if is_named_session_active("london", now):
+        return "london"
     return None
 
 
