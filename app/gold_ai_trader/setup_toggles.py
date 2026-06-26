@@ -36,6 +36,10 @@ _DEFAULTS: Dict[str, bool] = {
     "judas_bear": False,
     "asian_sweep_bull": True,
     "asian_sweep_bear": True,
+    "trendline_bounce_long": True,
+    "trendline_bounce_short": True,
+    "trendline_break_long": True,
+    "trendline_break_short": True,
 }
 
 _ENV_KEYS: Dict[str, str] = {
@@ -61,7 +65,16 @@ _ENV_KEYS: Dict[str, str] = {
     "judas_bear": "GOLD_AI_SETUP_JUDAS_BEAR",
     "asian_sweep_bull": "GOLD_AI_SETUP_ASIAN_SWEEP_BULL",
     "asian_sweep_bear": "GOLD_AI_SETUP_ASIAN_SWEEP_BEAR",
+    "trendline_bounce_long": "GOLD_AI_SETUP_TRENDLINE_BOUNCE_LONG",
+    "trendline_bounce_short": "GOLD_AI_SETUP_TRENDLINE_BOUNCE_SHORT",
+    "trendline_break_long": "GOLD_AI_SETUP_TRENDLINE_BREAK_LONG",
+    "trendline_break_short": "GOLD_AI_SETUP_TRENDLINE_BREAK_SHORT",
 }
+
+
+def trendline_enabled() -> bool:
+    """Global gate for all trendline setups (default OFF)."""
+    return _env_bool("GOLD_AI_TRENDLINE_ENABLED", False)
 
 
 def setup_enabled(setup_key: str) -> bool:
@@ -96,6 +109,8 @@ def setup_scannable(setup_key: str, bias: Optional[dict] = None) -> bool:
     All others: follow setup_enabled() env toggles.
     """
     bias = bias or {}
+    if setup_key.startswith("trendline_") and not trendline_enabled():
+        return False
     if setup_key.startswith(("breaker_", "eqh_sweep_", "eql_sweep_")):
         if not htf_is_directional(bias):
             return False

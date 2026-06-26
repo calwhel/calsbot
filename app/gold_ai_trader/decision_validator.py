@@ -23,6 +23,11 @@ READINESS_RR_RISK_ATR = _env_float("GOLD_AI_READINESS_RR_ATR", 3.0)
 SL_BUFFER_ATR = _env_float("GOLD_AI_SL_BUFFER_ATR", 0.08)
 ORB_ENTRY_MAX_BREAK_ATR = _env_float("GOLD_AI_ORB_ENTRY_MAX_BREAK_ATR", 0.60)
 ORB_ENTRY_MAX_BREAK_RANGE_PCT = _env_float("GOLD_AI_ORB_ENTRY_MAX_BREAK_RANGE_PCT", 0.25)
+TRENDLINE_BOUNCE_ENTRY_MAX_ATR = _env_float("GOLD_AI_TRENDLINE_BOUNCE_ENTRY_MAX_ATR", 0.35)
+TRENDLINE_BREAK_ENTRY_MAX_ATR = _env_float("GOLD_AI_TRENDLINE_BREAK_ENTRY_MAX_ATR", 1.00)
+TRENDLINE_BREAK_RETEST_ENTRY_MAX_ATR = _env_float(
+    "GOLD_AI_TRENDLINE_BREAK_RETEST_ENTRY_MAX_ATR", 0.45
+)
 
 
 def sl_width_cap_enabled() -> bool:
@@ -183,6 +188,29 @@ def validate_take_decision(
                     d,
                 )
             d["validator_break_dist"] = round(break_dist, 2)
+
+    if (d.get("validator_profile") or "").strip().lower() == "trendline":
+        try:
+            line_level = float(d.get("trendline_level") or 0)
+        except (TypeError, ValueError):
+            line_level = 0.0
+        mode = (d.get("trendline_mode") or "").strip().lower()
+        used_retest = bool(d.get("trendline_used_retest"))
+        if line_level > 0 and atr > 0:
+            line_dist = abs(entry - line_level)
+            if mode == "bounce":
+                max_line_dist = TRENDLINE_BOUNCE_ENTRY_MAX_ATR * atr
+            elif used_retest:
+                max_line_dist = TRENDLINE_BREAK_RETEST_ENTRY_MAX_ATR * atr
+            else:
+                max_line_dist = TRENDLINE_BREAK_ENTRY_MAX_ATR * atr
+            if max_line_dist > 0 and line_dist > max_line_dist:
+                return (
+                    False,
+                    f"validator:entry_chasing_trendline({line_dist:.2f}>{max_line_dist:.2f})",
+                    d,
+                )
+            d["validator_trendline_dist"] = round(line_dist, 2)
 
     zone = parse_zone_from_detail(setup_detail)
     if zone and atr > 0:

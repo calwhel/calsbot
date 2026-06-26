@@ -39,6 +39,7 @@ from app.gold_ai_trader.call_gates import call_stats_today
 from app.gold_ai_trader.funnel_persist import recent_funnel_events
 from app.gold_ai_trader.models import GoldAiConfig, GoldAiDecision, GoldAiLesson
 from app.gold_ai_trader.schema import ensure_gold_ai_trader_schema, seed_config_if_missing
+from app.gold_ai_trader.setup_toggles import trendline_enabled
 from app.gold_ai_trader import state as runtime_state
 
 logger = logging.getLogger(__name__)
@@ -311,6 +312,7 @@ def _config_payload(cfg, cfg_row) -> Dict[str, Any]:
         "orb_max_trades_per_session": cfg.orb_max_trades_per_session,
         "orb_entry_max_break_atr": cfg.orb_entry_max_break_atr,
         "orb_entry_max_break_range_pct": cfg.orb_entry_max_break_range_pct,
+        "trendline_enabled": trendline_enabled(),
         "calls_reset_at": (
             cfg_row.calls_reset_at.isoformat()
             if cfg_row and getattr(cfg_row, "calls_reset_at", None)
