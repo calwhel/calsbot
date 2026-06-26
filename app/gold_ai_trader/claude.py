@@ -61,6 +61,7 @@ Trade like a skilled discretionary trader, not an ultra-conservative risk audito
 EXECUTION RULES (hard constraints)
 - ENTRY: Prefer at the zone, reclaim, or FVG — avoid obvious chase far from invalidation; moderate extension reduces confidence, not an auto-SKIP.
 - STOP: Place at logical structure invalidation (below zone / sweep low / swing point). Wider stops are fine for swing trades — size to where the thesis is wrong, not to an arbitrary ATR multiple.
+- For this XAUUSD module, enforce a minimum stop distance of 60 platform pips ($6.0). Stops tighter than that are invalid even for scalps.
 - TARGET: TP at the nearest sensible objective (session high/low, PDH/PDL, FVG fill, HTF level). No minimum R:R — scalp for 0.5R at session edge or hold for 3R+ swing is fine if the narrative supports it.
 - USE LESSONS: If lessons/history are provided, treat them as secondary context only.
   Do not treat tiny samples as predictive; prioritize current structure, displacement, confirmation, and R:R.
@@ -195,6 +196,7 @@ ORB RUBRIC
 
 RISK RULES
 - SL should invalidate the ORB thesis (typically opposite side of range or ATR-invalidated level).
+- Minimum stop distance is 60 platform pips ($6.0) for XAUUSD entries.
 - TP should be range-relative and realistic for session conditions.
 - Borderline but tradable setups can be TAKE when risk is coherent and confidence justifies it.
 
