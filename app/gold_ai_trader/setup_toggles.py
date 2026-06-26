@@ -18,8 +18,6 @@ _DEFAULTS: Dict[str, bool] = {
     "sweep_pdl": True,
     "disp_bull": True,
     "disp_bear": True,
-    "fvg_bull": False,
-    "fvg_bear": False,
     "fvg_retrace_bull": True,
     "fvg_retrace_bear": True,
     "ifvg_bull": True,
@@ -36,8 +34,8 @@ _DEFAULTS: Dict[str, bool] = {
     "eql_sweep_bull": False,
     "judas_bull": False,
     "judas_bear": False,
-    "asian_sweep_bull": False,
-    "asian_sweep_bear": False,
+    "asian_sweep_bull": True,
+    "asian_sweep_bear": True,
 }
 
 _ENV_KEYS: Dict[str, str] = {
@@ -45,8 +43,6 @@ _ENV_KEYS: Dict[str, str] = {
     "sweep_pdl": "GOLD_AI_SETUP_SWEEP_PDL",
     "disp_bull": "GOLD_AI_SETUP_DISP_BULL",
     "disp_bear": "GOLD_AI_SETUP_DISP_BEAR",
-    "fvg_bull": "GOLD_AI_SETUP_FVG_BULL",
-    "fvg_bear": "GOLD_AI_SETUP_FVG_BEAR",
     "fvg_retrace_bull": "GOLD_AI_SETUP_FVG_RETRACE_BULL",
     "fvg_retrace_bear": "GOLD_AI_SETUP_FVG_RETRACE_BEAR",
     "ifvg_bull": "GOLD_AI_SETUP_IFVG_BULL",
