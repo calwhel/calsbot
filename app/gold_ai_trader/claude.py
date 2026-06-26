@@ -21,6 +21,7 @@ from app.gold_ai_trader.config import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CONFIDENCE_THRESHOLD = 45
+_JSON_PREFILL_OPEN_BRACE = "{"
 
 
 def system_prompt(confidence_threshold: int = _DEFAULT_CONFIDENCE_THRESHOLD) -> str:
@@ -77,8 +78,9 @@ CONFLUENCE CALIBRATION (from context CONFLUENCE block)
 - ≤2 passed → usually 40–49% unless setup-specific rubric says otherwise.
 - Match your confidence number to the confluence count — do not score 35% when 4/7 passed without explaining a major disqualifier in rationale.
 
-OUTPUT
-After brief reasoning (bias → setup quality → invalidation → decision), respond with ONLY valid JSON:
+OUTPUT (STRICT FORMAT)
+Respond with ONLY ONE valid JSON object matching this schema.
+No prose. No markdown. No code fences. No commentary before or after JSON.
 {{
   "action": "take" | "skip",
   "direction": "long" | "short" | null,
@@ -88,6 +90,7 @@ After brief reasoning (bias → setup quality → invalidation → decision), re
   "confidence": 0-100,
   "rationale": "one concise paragraph"
 }}
+Do not include keys outside this schema.
 
 If action is skip, direction/entry/stop_loss/take_profit may be null.
 If confidence is below {t}, action MUST be skip.
@@ -98,22 +101,81 @@ Never invent prices far from spot. SL must be on correct side of entry for direc
 SYSTEM_PROMPT = system_prompt(_DEFAULT_CONFIDENCE_THRESHOLD)
 
 
+def _extract_first_json_object(text: str) -> Optional[str]:
+    """Return first balanced {...} object, string-aware."""
+    if not text:
+        return None
+    start = -1
+    depth = 0
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+            continue
+        if ch == "}":
+            if depth <= 0:
+                continue
+            depth -= 1
+            if depth == 0 and start >= 0:
+                return text[start : i + 1]
+    return None
+
+
 def _parse_json(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Tolerates markdown fences and leading/trailing prose around one JSON object.
+    """
     if not text:
         return None
     blob = text.strip()
-    if "```" in blob:
-        m = re.search(r"```(?:json)?\s*(.*?)\s*```", blob, re.DOTALL | re.IGNORECASE)
-        if m:
-            blob = m.group(1).strip()
-    start = blob.find("{")
-    end = blob.rfind("}")
-    if start < 0 or end <= start:
-        return None
+    # Try full payload first.
     try:
-        return json.loads(blob[start : end + 1])
+        loaded = json.loads(blob)
+        return loaded if isinstance(loaded, dict) else None
     except json.JSONDecodeError:
-        return None
+        pass
+
+    candidates = []
+    if "```" in blob:
+        for m in re.finditer(r"```(?:json)?\s*(.*?)\s*```", blob, re.DOTALL | re.IGNORECASE):
+            fenced = (m.group(1) or "").strip()
+            if fenced:
+                candidates.append(fenced)
+    candidates.append(blob)
+
+    for cand in candidates:
+        obj = _extract_first_json_object(cand)
+        if not obj:
+            continue
+        try:
+            loaded = json.loads(obj)
+            if isinstance(loaded, dict):
+                return loaded
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _json_only_user_prompt(context_text: str) -> str:
+    return (
+        "Return ONLY one valid JSON object that matches the schema in system instructions.\n"
+        "No prose, no markdown, no code fences, and no text before or after JSON.\n\n"
+        f"{context_text}"
+    )
 
 
 def orb_system_prompt(confidence_threshold: int = 55) -> str:
@@ -189,6 +251,96 @@ def _estimate_cost(
     return tin, tout, cr, cw, round(cost, 6)
 
 
+def _merge_usage_meta(
+    base: Dict[str, Any],
+    *,
+    usage,
+    model: str,
+    suffix: str = "",
+) -> Dict[str, Any]:
+    tin, tout, cr, cw, cost = _estimate_cost(usage, model=model)
+    base["tokens_in"] = int(base.get("tokens_in", 0)) + tin
+    base["tokens_out"] = int(base.get("tokens_out", 0)) + tout
+    base["cache_read_tokens"] = int(base.get("cache_read_tokens", 0)) + cr
+    base["cache_write_tokens"] = int(base.get("cache_write_tokens", 0)) + cw
+    base["cost_usd"] = round(float(base.get("cost_usd", 0.0)) + cost, 6)
+    if suffix:
+        base[f"tokens_in_{suffix}"] = tin
+        base[f"tokens_out_{suffix}"] = tout
+        base[f"cache_read_tokens_{suffix}"] = cr
+        base[f"cache_write_tokens_{suffix}"] = cw
+        base[f"cost_usd_{suffix}"] = cost
+    return base
+
+
+def _parse_with_optional_prefill(text: str, *, prefilled_open_brace: bool) -> Optional[Dict[str, Any]]:
+    parsed = _parse_json(text)
+    if parsed is not None:
+        return parsed
+    if prefilled_open_brace:
+        return _parse_json(_JSON_PREFILL_OPEN_BRACE + (text or ""))
+    return None
+
+
+async def _repair_json_once(
+    *,
+    client,
+    raw_text: str,
+    model: str,
+    threshold: int,
+) -> Tuple[Optional[Dict[str, Any]], str, Optional[Any]]:
+    """
+    One repair pass: ask Claude to convert its own prose to schema JSON.
+    """
+    repair_prompt = (
+        "Convert the following analysis into EXACTLY one JSON object matching this schema:\n"
+        "{"
+        '"action":"take|skip",'
+        '"direction":"long|short|null",'
+        '"entry":"number|null",'
+        '"stop_loss":"number|null",'
+        '"take_profit":"number|null",'
+        '"confidence":"0-100 integer",'
+        '"rationale":"string"'
+        "}\n"
+        "Rules: keep original trade intent; do not add prose/markdown/code fences.\n"
+        "If a value is missing, use null.\n\n"
+        "Analysis to convert:\n"
+        f"{raw_text}"
+    )
+    msg = await client.messages.create(
+        model=model,
+        max_tokens=250,
+        system=[
+            {
+                "type": "text",
+                "text": (
+                    "You are a strict JSON formatter. "
+                    "Return only one valid JSON object and nothing else."
+                ),
+            }
+        ],
+        messages=[
+            {"role": "user", "content": repair_prompt},
+            {"role": "assistant", "content": _JSON_PREFILL_OPEN_BRACE},
+        ],
+    )
+    repaired_text = ""
+    if msg.content:
+        repaired_text = (msg.content[0].text or "").strip()
+    parsed = _parse_with_optional_prefill(
+        repaired_text,
+        prefilled_open_brace=True,
+    )
+    if parsed and int(parsed.get("confidence") or 0) < threshold and parsed.get("action") == "take":
+        parsed["action"] = "skip"
+        parsed.setdefault(
+            "rationale",
+            f"Confidence below {threshold}% take threshold.",
+        )
+    return parsed, repaired_text, getattr(msg, "usage", None)
+
+
 async def _decide_with_prompt(
     context_text: str,
     *,
@@ -228,6 +380,21 @@ async def _decide_with_prompt(
 
         client = anthropic.AsyncAnthropic(api_key=api_key)
         threshold = max(0, min(100, int(confidence_threshold)))
+        use_json_prefill = (
+            os.environ.get("GOLD_AI_CLAUDE_JSON_PREFILL", "true").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+        prompt_body = (
+            f"{(user_intro or '').strip()}\n\n{context_text}"
+            if (user_intro or "").strip()
+            else context_text
+        )
+        user_prompt = _json_only_user_prompt(prompt_body)
+        request_messages = [{"role": "user", "content": user_prompt}]
+        if use_json_prefill:
+            request_messages.append(
+                {"role": "assistant", "content": _JSON_PREFILL_OPEN_BRACE}
+            )
         msg = await client.messages.create(
             model=model,
             max_tokens=700,
@@ -238,30 +405,51 @@ async def _decide_with_prompt(
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
-            messages=[
-                {
-                    "role": "user",
-                    "content": user_intro + "\n\n" + context_text,
-                }
-            ],
+            messages=request_messages,
         )
         text = ""
         if msg.content:
             text = (msg.content[0].text or "").strip()
-        usage = msg.usage
-        tin, tout, cr, cw, cost = _estimate_cost(usage, model=model)
         meta = {
-            "tokens_in": tin,
-            "tokens_out": tout,
-            "cache_read_tokens": cr,
-            "cache_write_tokens": cw,
-            "cost_usd": cost,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "cost_usd": 0.0,
         }
-        parsed = _parse_json(text)
+        _merge_usage_meta(meta, usage=msg.usage, model=model)
+        parsed = _parse_with_optional_prefill(
+            text,
+            prefilled_open_brace=use_json_prefill,
+        )
         if not parsed:
-            logger.warning("[gold-ai-trader] malformed Claude JSON: %s", text[:200])
-            skip = {"action": "skip", "confidence": 0, "rationale": "Malformed model output"}
-            return skip, text[:800], meta
+            logger.warning(
+                "[gold-ai-trader] malformed Claude JSON (attempting salvage): %s",
+                text[:200],
+            )
+            parsed, repaired_text, repaired_usage = await _repair_json_once(
+                client=client,
+                raw_text=text[:3000],
+                model=model,
+                threshold=threshold,
+            )
+            meta["salvage_attempted"] = True
+            if repaired_usage is not None:
+                _merge_usage_meta(meta, usage=repaired_usage, model=model, suffix="salvage")
+            if parsed:
+                meta["salvage_success"] = True
+                logger.info("[gold-ai-trader] malformed JSON salvaged via repair pass")
+            else:
+                logger.warning(
+                    "[gold-ai-trader] malformed Claude JSON (salvage failed): %s",
+                    repaired_text[:200] if repaired_text else text[:200],
+                )
+                skip = {
+                    "action": "skip",
+                    "confidence": 0,
+                    "rationale": "Malformed model output",
+                }
+                return skip, text[:800], meta
         parsed.setdefault("action", "skip")
         parsed.setdefault("confidence", 0)
         parsed.setdefault("rationale", "")
