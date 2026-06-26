@@ -43,7 +43,7 @@ from app.gold_ai_trader.decision_validator import validate_take_decision
 from app.gold_ai_trader.funnel import record as funnel_record, snapshot as funnel_snapshot
 from app.gold_ai_trader.setup_toggles import max_candidates_per_scan
 from app.gold_ai_trader.klines import get_gold_ai_klines
-from app.services.tradfi_prices import get_klines
+from app.services.tradfi_prices import get_klines, confirm_entry_price
 from app.gold_ai_trader.config import SYMBOL, ASSET_CLASS
 from app.gold_ai_trader.context import build_context_snapshot
 from app.gold_ai_trader.claude import decide
@@ -74,6 +74,68 @@ _watchdog_last_restart_mono = 0.0
 _restart_lock: asyncio.Lock | None = None
 _on_demand_lock: asyncio.Lock | None = None
 _on_demand_last_mono = 0.0
+
+
+def _utc_iso_now() -> str:
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+async def _stale_entry_recheck(
+    *,
+    decision: dict,
+    cfg,
+    decision_ts: datetime | None,
+    decision_id: int,
+    setup_type: str,
+) -> tuple[bool, str]:
+    """
+    If execution is delayed beyond threshold, reconfirm entry against live spot.
+    """
+    if decision_ts is None:
+        return True, "no_decision_ts"
+    max_delay_s = max(
+        0.0,
+        float(os.environ.get("GOLD_AI_MAX_EXEC_DELAY_S", "90")),
+    )
+    if max_delay_s <= 0:
+        return True, "delay_guard_disabled"
+    age_s = max(0.0, (datetime.utcnow() - decision_ts).total_seconds())
+    if age_s <= max_delay_s:
+        return True, f"delay_ok({age_s:.1f}s)"
+    try:
+        proposed = float(decision.get("entry") or 0.0)
+    except (TypeError, ValueError):
+        proposed = 0.0
+    if proposed <= 0:
+        reason = f"stale_guard_block:no_entry delay={age_s:.1f}s>{max_delay_s:.1f}s"
+        logger.warning("[gold-ai] %s decision_id=%s setup=%s", reason, decision_id, setup_type)
+        return False, reason
+    confirmed, confirm_reason = await confirm_entry_price(
+        SYMBOL,
+        ASSET_CLASS,
+        proposed,
+        paper_ok=False,
+        user_id=cfg.demo_user_id,
+    )
+    if confirmed is None or confirmed <= 0:
+        reason = (
+            f"stale_guard_block:{confirm_reason} "
+            f"delay={age_s:.1f}s>{max_delay_s:.1f}s"
+        )
+        logger.warning("[gold-ai] %s decision_id=%s setup=%s", reason, decision_id, setup_type)
+        return False, reason
+    decision["entry"] = float(confirmed)
+    note = f"stale_guard_reconfirmed({confirm_reason}) delay={age_s:.1f}s"
+    decision["stale_guard_note"] = note
+    logger.info(
+        "[gold-ai] stale guard recheck decision_id=%s setup=%s old_entry=%.4f new_entry=%.4f age_s=%.1f",
+        decision_id,
+        setup_type,
+        proposed,
+        float(confirmed),
+        age_s,
+    )
+    return True, note
 
 
 def _ping_lock_connection(conn) -> bool:
@@ -606,6 +668,12 @@ async def _maybe_run_orb_strategy(
     execution_id = None
     executed = False
     block_reason = None
+    timing_ctx = {
+        "decision_ts": row.ts.isoformat() + "Z" if getattr(row, "ts", None) else None,
+        "validated_ts": None,
+        "enqueued_ts": None,
+        "broker_ack_ts": None,
+    }
     if action == "take":
         k5 = await get_klines(SYMBOL, ASSET_CLASS, "5m", 60) or []
         atr = atr_from_klines(k5)
@@ -628,6 +696,7 @@ async def _maybe_run_orb_strategy(
         )
         row.decision = decision
         db.commit()
+        timing_ctx["validated_ts"] = _utc_iso_now()
         if not val_ok:
             block_reason = val_reason
             logger.info(
@@ -637,8 +706,21 @@ async def _maybe_run_orb_strategy(
                 val_reason,
             )
         elif conf >= int(getattr(cfg, "orb_confidence_threshold", 55)):
+            stale_ok, stale_reason = await _stale_entry_recheck(
+                decision=decision,
+                cfg=cfg,
+                decision_ts=getattr(row, "ts", None),
+                decision_id=row.id,
+                setup_type=signal.setup_type,
+            )
+            if not stale_ok:
+                block_reason = stale_reason
+            else:
+                row.decision = decision
+                db.commit()
             ok_exec, exec_reason = check_can_execute(db, cfg, cfg.demo_user_id or 0)
-            if ok_exec:
+            if ok_exec and stale_ok:
+                timing_ctx["enqueued_ts"] = _utc_iso_now()
                 exec_id = await execute_take(
                     db=db,
                     cfg=cfg,
@@ -646,6 +728,7 @@ async def _maybe_run_orb_strategy(
                     decision_id=row.id,
                     session=session,
                     setup_type=signal.setup_type,
+                    timing_ctx=timing_ctx,
                 )
                 if exec_id and exec_id > 0:
                     executed = True
@@ -672,7 +755,7 @@ async def _maybe_run_orb_strategy(
                 else:
                     block_reason = "demo order rejected"
             else:
-                block_reason = exec_reason
+                block_reason = block_reason or exec_reason
         else:
             block_reason = (
                 f"confidence {conf}% below "
@@ -709,6 +792,19 @@ async def _maybe_run_orb_strategy(
         row.execution_id or execution_id or "none",
         session,
     )
+    if action == "take":
+        logger.info(
+            "[gold-ai-latency] decision_id=%s setup=%s decision_ts=%s validated_ts=%s "
+            "enqueued_ts=%s broker_ack_ts=%s exec_id=%s block_reason=%s",
+            row.id,
+            signal.setup_type,
+            timing_ctx.get("decision_ts"),
+            timing_ctx.get("validated_ts"),
+            timing_ctx.get("enqueued_ts"),
+            timing_ctx.get("broker_ack_ts"),
+            row.execution_id or execution_id or "none",
+            block_reason or "",
+        )
 
     if row.execution_id:
         from app.strategy_models import StrategyExecution
@@ -1003,6 +1099,12 @@ async def run_gold_ai_trader_loop() -> None:
             executed = False
             block_reason = None
             validator_block = None
+            timing_ctx = {
+                "decision_ts": row.ts.isoformat() + "Z" if getattr(row, "ts", None) else None,
+                "validated_ts": None,
+                "enqueued_ts": None,
+                "broker_ack_ts": None,
+            }
             k1h = await get_gold_ai_klines("1h", 50, user_id=cfg.demo_user_id) or []
             k_daily = await get_gold_ai_klines("1d", 5, user_id=cfg.demo_user_id) or []
             key_levels = collect_key_levels(
@@ -1018,6 +1120,7 @@ async def run_gold_ai_trader_loop() -> None:
             )
             row.decision = decision
             db.commit()
+            timing_ctx["validated_ts"] = _utc_iso_now()
             if not val_ok:
                 validator_block = val_reason
                 funnel_record(
@@ -1038,8 +1141,21 @@ async def run_gold_ai_trader_loop() -> None:
             if validator_block:
                 block_reason = validator_block
             elif conf >= cfg.confidence_threshold:
+                stale_ok, stale_reason = await _stale_entry_recheck(
+                    decision=decision,
+                    cfg=cfg,
+                    decision_ts=getattr(row, "ts", None),
+                    decision_id=row.id,
+                    setup_type=candidate.type,
+                )
+                if not stale_ok:
+                    block_reason = stale_reason
+                else:
+                    row.decision = decision
+                    db.commit()
                 ok_exec, exec_reason = check_can_execute(db, cfg, cfg.demo_user_id or 0)
-                if ok_exec:
+                if ok_exec and stale_ok:
+                    timing_ctx["enqueued_ts"] = _utc_iso_now()
                     exec_id = await execute_take(
                         db=db,
                         cfg=cfg,
@@ -1047,6 +1163,7 @@ async def run_gold_ai_trader_loop() -> None:
                         decision_id=row.id,
                         session=session,
                         setup_type=candidate.type,
+                        timing_ctx=timing_ctx,
                     )
                     if exec_id and exec_id > 0:
                         executed = True
@@ -1097,7 +1214,7 @@ async def run_gold_ai_trader_loop() -> None:
                     else:
                         block_reason = "demo order rejected"
                 else:
-                    block_reason = exec_reason
+                    block_reason = block_reason or exec_reason
                     logger.info("[gold-ai-trader] execute blocked: %s", exec_reason)
             else:
                 block_reason = (
@@ -1112,6 +1229,18 @@ async def run_gold_ai_trader_loop() -> None:
                 executed=executed,
                 execution_id=execution_id,
                 block_reason=block_reason,
+            )
+            logger.info(
+                "[gold-ai-latency] decision_id=%s setup=%s decision_ts=%s validated_ts=%s "
+                "enqueued_ts=%s broker_ack_ts=%s exec_id=%s block_reason=%s",
+                row.id,
+                candidate.type,
+                timing_ctx.get("decision_ts"),
+                timing_ctx.get("validated_ts"),
+                timing_ctx.get("enqueued_ts"),
+                timing_ctx.get("broker_ack_ts"),
+                row.execution_id or execution_id or "none",
+                block_reason or "",
             )
 
         logger.info(

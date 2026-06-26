@@ -21,7 +21,6 @@ from app.gold_ai_trader.config import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CONFIDENCE_THRESHOLD = 45
-_JSON_PREFILL_OPEN_BRACE = "{"
 
 
 def system_prompt(confidence_threshold: int = _DEFAULT_CONFIDENCE_THRESHOLD) -> str:
@@ -273,15 +272,6 @@ def _merge_usage_meta(
     return base
 
 
-def _parse_with_optional_prefill(text: str, *, prefilled_open_brace: bool) -> Optional[Dict[str, Any]]:
-    parsed = _parse_json(text)
-    if parsed is not None:
-        return parsed
-    if prefilled_open_brace:
-        return _parse_json(_JSON_PREFILL_OPEN_BRACE + (text or ""))
-    return None
-
-
 async def _repair_json_once(
     *,
     client,
@@ -322,16 +312,12 @@ async def _repair_json_once(
         ],
         messages=[
             {"role": "user", "content": repair_prompt},
-            {"role": "assistant", "content": _JSON_PREFILL_OPEN_BRACE},
         ],
     )
     repaired_text = ""
     if msg.content:
         repaired_text = (msg.content[0].text or "").strip()
-    parsed = _parse_with_optional_prefill(
-        repaired_text,
-        prefilled_open_brace=True,
-    )
+    parsed = _parse_json(repaired_text)
     if parsed and int(parsed.get("confidence") or 0) < threshold and parsed.get("action") == "take":
         parsed["action"] = "skip"
         parsed.setdefault(
@@ -380,21 +366,12 @@ async def _decide_with_prompt(
 
         client = anthropic.AsyncAnthropic(api_key=api_key)
         threshold = max(0, min(100, int(confidence_threshold)))
-        use_json_prefill = (
-            os.environ.get("GOLD_AI_CLAUDE_JSON_PREFILL", "true").strip().lower()
-            in ("1", "true", "yes", "on")
-        )
         prompt_body = (
             f"{(user_intro or '').strip()}\n\n{context_text}"
             if (user_intro or "").strip()
             else context_text
         )
         user_prompt = _json_only_user_prompt(prompt_body)
-        request_messages = [{"role": "user", "content": user_prompt}]
-        if use_json_prefill:
-            request_messages.append(
-                {"role": "assistant", "content": _JSON_PREFILL_OPEN_BRACE}
-            )
         msg = await client.messages.create(
             model=model,
             max_tokens=700,
@@ -405,7 +382,7 @@ async def _decide_with_prompt(
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
-            messages=request_messages,
+            messages=[{"role": "user", "content": user_prompt}],
         )
         text = ""
         if msg.content:
@@ -418,10 +395,7 @@ async def _decide_with_prompt(
             "cost_usd": 0.0,
         }
         _merge_usage_meta(meta, usage=msg.usage, model=model)
-        parsed = _parse_with_optional_prefill(
-            text,
-            prefilled_open_brace=use_json_prefill,
-        )
+        parsed = _parse_json(text)
         if not parsed:
             logger.warning(
                 "[gold-ai-trader] malformed Claude JSON (attempting salvage): %s",

@@ -95,6 +95,7 @@ async def execute_take(
     decision_id: int,
     session: str = "",
     setup_type: str = "",
+    timing_ctx: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
     """Route TAKE to limit/entry-watch pending or immediate market."""
     from app.gold_ai_trader.entry_routing import use_limit_entry_for_setup
@@ -104,6 +105,7 @@ async def execute_take(
         return await execute_take_market(
             db=db, cfg=cfg, decision=decision, decision_id=decision_id,
             entry_note="use_limit_entry=false; market entry",
+            timing_ctx=timing_ctx,
         )
 
     user, prefs, ctid = _resolve_demo_trader(db, cfg)
@@ -173,6 +175,7 @@ async def execute_take(
         decision=decision,
         decision_id=decision_id,
         entry_note="pending unsupported, used market",
+        timing_ctx=timing_ctx,
     )
 
 
@@ -208,6 +211,7 @@ async def execute_take_market(
     decision: Dict[str, Any],
     decision_id: int,
     entry_note: str = "",
+    timing_ctx: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
     """Place demo market order; return StrategyExecution.id."""
     if not cfg.demo_user_id:
@@ -226,6 +230,7 @@ async def execute_take_market(
 
     from app.strategy_models import StrategyExecution
     from app.services.ctrader_client import place_market_order_resilient
+    from app.services.order_latency import new_order_latency
 
     direction = _parse_direction(decision)
     if not direction:
@@ -238,6 +243,12 @@ async def execute_take_market(
     direction, entry, sl, tp = parsed
 
     token = prefs.ctrader_access_token
+    latency = new_order_latency(
+        decision_id,
+        signal_mono=time.monotonic(),
+    )
+    latency.mark_queued()
+    latency.mark_dequeue()
     result = await place_market_order_resilient(
         user_id=user.id,
         access_token=token,
@@ -250,8 +261,17 @@ async def execute_take_market(
         take_profit_price=tp,
         entry_price=entry,
         label="GoldAITrader",
+        latency=latency,
         execution_id=decision_id,
     )
+    if timing_ctx is not None:
+        timing_ctx["broker_ack_ts"] = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    try:
+        latency.log_summary(
+            outcome="fill" if result and result.get("actual_fill") else "fail"
+        )
+    except Exception:
+        pass
     if not result or not result.get("actual_fill"):
         logger.warning("[gold-ai-trader] order failed: %s", result)
         return None
