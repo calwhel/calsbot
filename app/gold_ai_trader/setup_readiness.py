@@ -38,9 +38,9 @@ RECLAIM_BUFFER_ATR = _env_float("GOLD_AI_RECLAIM_BUFFER_ATR", 0.05)
 ZONE_TOLERANCE_ATR = _env_float("GOLD_AI_ZONE_TOLERANCE_ATR", 0.15)
 
 _SWEEP_PREFIXES = (
-    "sweep_", "liq_sweep_", "eqh_sweep_", "eql_sweep_", "asian_sweep_",
+    "sweep_", "liq_sweep_", "eqh_sweep_", "eql_sweep_", "asian_sweep_", "liquidity_grab_",
 )
-_MOMENTUM_PREFIXES = _SWEEP_PREFIXES + ("disp_", "sdp_")
+_MOMENTUM_PREFIXES = _SWEEP_PREFIXES + ("disp_", "sdp_", "momentum_")
 _ZONE_PREFIXES = ("ob_", "fvg_retrace_", "ifvg_", "breaker_")
 
 

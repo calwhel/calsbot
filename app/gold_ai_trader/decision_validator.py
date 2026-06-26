@@ -23,6 +23,11 @@ READINESS_RR_RISK_ATR = _env_float("GOLD_AI_READINESS_RR_ATR", 3.0)
 SL_BUFFER_ATR = _env_float("GOLD_AI_SL_BUFFER_ATR", 0.08)
 ORB_ENTRY_MAX_BREAK_ATR = _env_float("GOLD_AI_ORB_ENTRY_MAX_BREAK_ATR", 0.60)
 ORB_ENTRY_MAX_BREAK_RANGE_PCT = _env_float("GOLD_AI_ORB_ENTRY_MAX_BREAK_RANGE_PCT", 0.25)
+MOMENTUM_FLAG_ENTRY_MAX_ATR = _env_float("GOLD_AI_MOMENTUM_FLAG_ENTRY_MAX_ATR", 1.00)
+MOMENTUM_FLAG_RETEST_ENTRY_MAX_ATR = _env_float(
+    "GOLD_AI_MOMENTUM_FLAG_RETEST_ENTRY_MAX_ATR", 0.45
+)
+LIQ_GRAB_ENTRY_MAX_ATR = _env_float("GOLD_AI_LIQ_GRAB_ENTRY_MAX_ATR", 0.50)
 
 
 def sl_width_cap_enabled() -> bool:
@@ -183,6 +188,43 @@ def validate_take_decision(
                     d,
                 )
             d["validator_break_dist"] = round(break_dist, 2)
+
+    if (d.get("validator_profile") or "").strip().lower() == "momentum_flag":
+        try:
+            break_level = float(d.get("momentum_break_level") or 0)
+        except (TypeError, ValueError):
+            break_level = 0.0
+        used_retest = bool(d.get("momentum_used_retest"))
+        if break_level > 0 and atr > 0:
+            break_dist = abs(entry - break_level)
+            max_break_dist = (
+                MOMENTUM_FLAG_RETEST_ENTRY_MAX_ATR * atr
+                if used_retest
+                else MOMENTUM_FLAG_ENTRY_MAX_ATR * atr
+            )
+            if max_break_dist > 0 and break_dist > max_break_dist:
+                return (
+                    False,
+                    f"validator:entry_chasing_momentum_flag({break_dist:.2f}>{max_break_dist:.2f})",
+                    d,
+                )
+            d["validator_momentum_break_dist"] = round(break_dist, 2)
+
+    if (d.get("validator_profile") or "").strip().lower() == "liquidity_grab":
+        try:
+            mss_level = float(d.get("liq_grab_mss_level") or 0)
+        except (TypeError, ValueError):
+            mss_level = 0.0
+        if mss_level > 0 and atr > 0:
+            mss_dist = abs(entry - mss_level)
+            max_mss_dist = LIQ_GRAB_ENTRY_MAX_ATR * atr
+            if max_mss_dist > 0 and mss_dist > max_mss_dist:
+                return (
+                    False,
+                    f"validator:entry_chasing_liquidity_grab({mss_dist:.2f}>{max_mss_dist:.2f})",
+                    d,
+                )
+            d["validator_liq_grab_dist"] = round(mss_dist, 2)
 
     zone = parse_zone_from_detail(setup_detail)
     if zone and atr > 0:
