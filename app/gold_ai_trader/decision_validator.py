@@ -17,6 +17,7 @@ def _env_float(name: str, default: float) -> float:
 MIN_RR = _env_float("GOLD_AI_MIN_RR", 0.0)
 # 0 = no execution cap (swing/zone invalidation allowed); set e.g. 1.0 to re-enable hard scalp cap
 MAX_SL_ATR_MULT = _env_float("GOLD_AI_MAX_SL_ATR", 0.0)
+MIN_SL_PIPS = _env_float("GOLD_AI_MIN_SL_PIPS", 60.0)
 # Planning horizon for readiness R:R feasibility only (not an execution limit)
 READINESS_RR_RISK_ATR = _env_float("GOLD_AI_READINESS_RR_ATR", 3.0)
 SL_BUFFER_ATR = _env_float("GOLD_AI_SL_BUFFER_ATR", 0.08)
@@ -31,6 +32,11 @@ def sl_width_cap_enabled() -> bool:
 def min_rr_enabled() -> bool:
     """True when GOLD_AI_MIN_RR > 0 (otherwise Claude sizes TP/SL freely)."""
     return MIN_RR > 0
+
+
+def min_sl_pips_enabled() -> bool:
+    """True when GOLD_AI_MIN_SL_PIPS > 0 (minimum stop distance floor)."""
+    return MIN_SL_PIPS > 0
 
 
 def _dir_norm(d: str) -> Optional[str]:
@@ -133,6 +139,18 @@ def validate_take_decision(
             return False, "validator:short_price_order", d
 
     risk_dist = abs(entry - sl)
+    if min_sl_pips_enabled() and risk_dist > 0:
+        symbol = str(d.get("symbol") or "XAUUSD").strip().upper() or "XAUUSD"
+        try:
+            from app.services.pip_units import platform_pips_from_price_delta
+
+            sl_pips = float(platform_pips_from_price_delta(symbol, risk_dist))
+        except Exception:
+            sl_pips = 0.0
+        d["validator_sl_pips"] = round(sl_pips, 1)
+        if sl_pips > 0 and sl_pips < MIN_SL_PIPS:
+            return False, f"validator:sl_too_tight({sl_pips:.1f}<{MIN_SL_PIPS:.1f}pips)", d
+
     if sl_width_cap_enabled() and atr > 0 and risk_dist > MAX_SL_ATR_MULT * atr:
         return False, f"validator:sl_too_wide({risk_dist:.2f}>{MAX_SL_ATR_MULT}×ATR)", d
     if atr > 0 and risk_dist > 0:

@@ -21,8 +21,8 @@ class TestDecisionValidator:
         decision = {
             "direction": "LONG",
             "entry": 2650.0,
-            "stop_loss": 2648.0,
-            "take_profit": 2654.0,
+            "stop_loss": 2643.5,
+            "take_profit": 2663.0,
         }
         ok, reason, out = validate_take_decision(
             decision,
@@ -45,7 +45,7 @@ class TestDecisionValidator:
         decision = {
             "direction": "LONG",
             "entry": 2650.0,
-            "stop_loss": 2645.0,
+            "stop_loss": 2642.0,
             "take_profit": 2660.0,
         }
         ok, reason, _ = dv.validate_take_decision(
@@ -66,8 +66,8 @@ class TestDecisionValidator:
         decision = {
             "direction": "LONG",
             "entry": 4082.40,
-            "stop_loss": 4079.93,
-            "take_profit": 4090.75,
+            "stop_loss": 4076.00,
+            "take_profit": 4098.00,
         }
         ok, reason, out = validate_take_decision(
             decision,
@@ -75,19 +75,38 @@ class TestDecisionValidator:
             spot=4082.40,
             atr=1.0,
             setup_detail="IFVG zone 4080.0–4083.0",
-            key_levels=[4090.75, 4076.0],
+            key_levels=[4098.0, 4072.0],
         )
         assert ok is True
         assert reason.startswith("validator:ok")
-        assert out.get("validator_sl_atr") == 2.47
+        assert out.get("validator_sl_atr") == 6.4
+
+    def test_rejects_tight_sl_by_default_floor(self):
+        decision = {
+            "direction": "LONG",
+            "entry": 2650.0,
+            "stop_loss": 2648.0,  # 20 pips on XAUUSD (below 60-pip floor)
+            "take_profit": 2656.0,
+        }
+        ok, reason, out = validate_take_decision(
+            decision,
+            candidate_direction="LONG",
+            spot=2650.0,
+            atr=2.0,
+            setup_detail="",
+            key_levels=[],
+        )
+        assert ok is False
+        assert "sl_too_tight" in reason
+        assert out.get("validator_sl_pips") == 20.0
 
     def test_allows_low_rr_by_default(self):
         """Claude may target session edge with <2R — validator must not block."""
         decision = {
             "direction": "LONG",
             "entry": 2650.0,
-            "stop_loss": 2648.0,
-            "take_profit": 2651.0,
+            "stop_loss": 2643.8,
+            "take_profit": 2653.1,
         }
         ok, reason, out = validate_take_decision(
             decision,
@@ -110,8 +129,8 @@ class TestDecisionValidator:
         decision = {
             "direction": "LONG",
             "entry": 2650.0,
-            "stop_loss": 2649.0,
-            "take_profit": 2651.0,
+            "stop_loss": 2643.8,
+            "take_profit": 2653.1,
         }
         ok, reason, out = dv.validate_take_decision(
             decision,
@@ -119,11 +138,11 @@ class TestDecisionValidator:
             spot=2650.0,
             atr=2.0,
             setup_detail="",
-            key_levels=[2660.0],
+            key_levels=[2663.0],
         )
         assert ok is True
         assert reason == "validator:ok_tp_adjusted"
-        assert float(out["take_profit"]) == 2660.0
+        assert float(out["take_profit"]) == 2663.0
         monkeypatch.delenv("GOLD_AI_MIN_RR", raising=False)
         importlib.reload(dv)
 
