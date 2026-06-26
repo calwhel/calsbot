@@ -9101,10 +9101,32 @@ def _ctrader_position_id_from_execution(ex) -> Optional[int]:
     import re as _re
     if ex.ctrader_position_id:
         try:
-            return int(ex.ctrader_position_id)
+            return int(str(ex.ctrader_position_id).strip())
         except Exception:
-            pass
+            _m = _re.search(r"(\d+)", str(ex.ctrader_position_id))
+            if _m:
+                try:
+                    return int(_m.group(1))
+                except Exception:
+                    pass
     m = _re.search(r"pos=(\d+)", ex.notes or "")
+    return int(m.group(1)) if m else None
+
+
+def _ctrader_order_id_from_execution(ex) -> Optional[int]:
+    """Broker order id from column or ord= token in notes."""
+    import re as _re
+    if ex.ctrader_order_id:
+        try:
+            return int(str(ex.ctrader_order_id).strip())
+        except Exception:
+            _m = _re.search(r"(\d+)", str(ex.ctrader_order_id))
+            if _m:
+                try:
+                    return int(_m.group(1))
+                except Exception:
+                    pass
+    m = _re.search(r"ord=(\d+)", ex.notes or "")
     return int(m.group(1)) if m else None
 
 
@@ -9443,6 +9465,9 @@ _FX_RECONCILE_POLL_ATTEMPTS = max(
 _FX_RECONCILE_ESTIMATE_AFTER_S = float(
     _os_env.environ.get("EXECUTOR_FX_RECONCILE_ESTIMATE_AFTER_S", "180"),
 )
+_FX_RECONCILE_ORDERLESS_ESTIMATE_AFTER_S = float(
+    _os_env.environ.get("EXECUTOR_FX_RECONCILE_ORDERLESS_ESTIMATE_AFTER_S", "75"),
+)
 
 
 async def _estimate_reconcile_exit(w: dict) -> tuple:
@@ -9733,7 +9758,8 @@ def _build_forex_reconcile_worklist(user_id: Optional[int] = None) -> list:
         for ex in open_execs:
             notes = ex.notes or ""
             position_id = _ctrader_position_id_from_execution(ex)
-            if position_id is None:
+            order_id = _ctrader_order_id_from_execution(ex)
+            if position_id is None and order_id is None:
                 continue  # no broker positionId captured → can't reconcile
             uid = ex.user_id
             user = user_cache.get(uid)
@@ -9783,6 +9809,7 @@ def _build_forex_reconcile_worklist(user_id: Optional[int] = None) -> list:
                 "user_id":     uid,
                 "user":        user,
                 "position_id": position_id,
+                "order_id":    order_id,
                 "symbol":      ex.symbol,
                 "direction":   ex.direction,
                 "entry":       float(ex.entry_price),
@@ -9809,6 +9836,7 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
     from app.db_resilience import is_transient_db_error, run_with_db_retry
     from app.services.ctrader_client import (
         get_open_position_ids_for_user_with_retry,
+        get_order_close_detail_for_user,
         get_position_close_detail_for_user,
     )
 
@@ -9845,6 +9873,7 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
         "poll_ok": 0,
         "poll_fail": 0,
         "broker_deal_close": 0,
+        "broker_order_close": 0,
         "estimated_close": 0,
         "miss_pending": 0,
         "still_open": 0,
@@ -9859,6 +9888,8 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
         user_obj[w["user_id"]] = w["user"]
 
     async def _try_broker_deal_close(w: dict, uid: int) -> bool:
+        if w.get("position_id") is None:
+            return False
         broker_close = await get_position_close_detail_for_user(
             user_obj[uid],
             int(w["position_id"]),
@@ -9892,6 +9923,47 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
         stats["broker_deal_close"] += 1
         return True
 
+    async def _try_broker_order_close(w: dict, uid: int) -> bool:
+        if w.get("order_id") is None:
+            return False
+        broker_close = await get_order_close_detail_for_user(
+            user_obj[uid],
+            int(w["order_id"]),
+            entry_hint=w["entry"],
+            direction=w["direction"],
+            ctid=w["ctrader_account_id"],
+            notes=w.get("notes"),
+            fired_at=w.get("fired_at"),
+        )
+        if not broker_close or not broker_close.get("exit_price"):
+            return False
+        _clear_reconcile_missing(w["exec_id"])
+        outcome = broker_close.get("outcome") or "LOSS"
+        exit_price = float(broker_close["exit_price"])
+        pnl_usd = broker_close.get("gross_profit_usd")
+        logger.info(
+            "[FX-reconcile] %s exec#%s broker closed order=%s pos=%s @ %s → %s",
+            w["symbol"],
+            w["exec_id"],
+            w.get("order_id"),
+            broker_close.get("position_id"),
+            exit_price,
+            outcome,
+        )
+        await _close_live_forex_execution_with_db_retry(
+            w["exec_id"],
+            outcome,
+            exit_price,
+            source="ctrader-reconcile-broker-order",
+            note_suffix=(
+                f"order-close matched order={w.get('order_id')} "
+                f"pos={broker_close.get('position_id')}"
+            ),
+            pnl_usd=float(pnl_usd) if pnl_usd is not None else None,
+        )
+        stats["broker_order_close"] += 1
+        return True
+
     for (uid, acct_id), items in by_user_acct.items():
         open_ids = await get_open_position_ids_for_user_with_retry(
             user_obj[uid],
@@ -9910,6 +9982,8 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
             for w in items:
                 if await _try_broker_deal_close(w, uid):
                     continue
+                if await _try_broker_order_close(w, uid):
+                    continue
                 stats["miss_pending"] += 1
             continue
 
@@ -9924,12 +9998,18 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
 
         for w in items:
             ex_id = w["exec_id"]
-            if w["position_id"] in open_ids:
+            pos_id = w.get("position_id")
+            order_id = w.get("order_id")
+            has_pos = pos_id is not None
+
+            if has_pos and pos_id in open_ids:
                 _clear_reconcile_missing(ex_id)
                 stats["still_open"] += 1
                 continue
 
-            if await _try_broker_deal_close(w, uid):
+            if has_pos and await _try_broker_deal_close(w, uid):
+                continue
+            if (not has_pos) and await _try_broker_order_close(w, uid):
                 continue
 
             miss = _FX_RECONCILE_MISSING.get(ex_id, 0) + 1
@@ -9938,26 +10018,47 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
                 _FX_RECONCILE_MISSING_SINCE[ex_id] = time.monotonic()
             if miss < 2:
                 logger.info(
-                    "[FX-reconcile] %s exec#%s pos=%s absent from broker "
+                    "[FX-reconcile] %s exec#%s pos=%s order=%s absent from broker "
                     "(miss %s/2) — awaiting broker deal",
                     w["symbol"],
                     ex_id,
-                    w["position_id"],
+                    pos_id,
+                    order_id,
                     miss,
                 )
                 stats["miss_pending"] += 1
                 continue
 
             elapsed = time.monotonic() - _FX_RECONCILE_MISSING_SINCE.get(ex_id, time.monotonic())
-            if elapsed < _FX_RECONCILE_ESTIMATE_AFTER_S:
+            if (not has_pos) and open_ids:
+                # Missing position-id rows cannot be mapped while broker still
+                # reports open positions in this account.
                 logger.info(
-                    "[FX-reconcile] %s exec#%s pos=%s confirmed absent — "
+                    "[FX-reconcile] %s exec#%s missing position_id (order=%s) "
+                    "while acct has %s open positions — waiting for broker close detail",
+                    w["symbol"],
+                    ex_id,
+                    order_id,
+                    len(open_ids),
+                )
+                stats["miss_pending"] += 1
+                continue
+
+            estimate_after_s = (
+                _FX_RECONCILE_ESTIMATE_AFTER_S
+                if has_pos
+                else max(30.0, _FX_RECONCILE_ORDERLESS_ESTIMATE_AFTER_S)
+            )
+            if elapsed < estimate_after_s:
+                logger.info(
+                    "[FX-reconcile] %s exec#%s pos=%s order=%s confirmed absent — "
                     "retrying broker deal (%.0fs / %.0fs)",
                     w["symbol"],
                     ex_id,
-                    w["position_id"],
+                    pos_id,
+                    order_id,
                     elapsed,
-                    _FX_RECONCILE_ESTIMATE_AFTER_S,
+                    estimate_after_s,
                 )
                 stats["miss_pending"] += 1
                 continue
@@ -9965,11 +10066,12 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
             outcome, exit_price = await _estimate_reconcile_exit(w)
             if outcome is None or exit_price is None:
                 logger.warning(
-                    "[FX-reconcile] %s exec#%s pos=%s absent %.0fs — "
+                    "[FX-reconcile] %s exec#%s pos=%s order=%s absent %.0fs — "
                     "no market price for estimated close",
                     w["symbol"],
                     ex_id,
-                    w["position_id"],
+                    pos_id,
+                    order_id,
                     elapsed,
                 )
                 stats["miss_pending"] += 1
@@ -9977,11 +10079,12 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
 
             _clear_reconcile_missing(ex_id)
             logger.warning(
-                "[FX-reconcile] %s exec#%s pos=%s estimated close after %.0fs "
+                "[FX-reconcile] %s exec#%s pos=%s order=%s estimated close after %.0fs "
                 "→ %s @ %s (broker deal unavailable)",
                 w["symbol"],
                 ex_id,
-                w["position_id"],
+                pos_id,
+                order_id,
                 elapsed,
                 outcome,
                 exit_price,
@@ -9990,18 +10093,30 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
                 ex_id,
                 outcome,
                 float(exit_price),
-                source="ctrader-reconcile-estimated",
-                note_suffix="exit estimated — broker deal unavailable",
+                source=(
+                    "ctrader-reconcile-estimated"
+                    if has_pos
+                    else "ctrader-reconcile-estimated-orderless"
+                ),
+                note_suffix=(
+                    "exit estimated — broker deal unavailable"
+                    if has_pos
+                    else (
+                        "exit estimated — missing position_id and broker reported "
+                        f"account flat (order={order_id})"
+                    )
+                ),
             )
             stats["estimated_close"] += 1
 
     logger.info(
         "[FX-reconcile] sweep complete tracked=%s poll_ok=%s poll_fail=%s "
-        "deal_close=%s estimated_close=%s still_open=%s miss_pending=%s",
+        "deal_close=%s order_close=%s estimated_close=%s still_open=%s miss_pending=%s",
         stats["tracked"],
         stats["poll_ok"],
         stats["poll_fail"],
         stats["broker_deal_close"],
+        stats["broker_order_close"],
         stats["estimated_close"],
         stats["still_open"],
         stats["miss_pending"],
@@ -10022,8 +10137,8 @@ async def _reconcile_forex_closes(user_id: Optional[int] = None) -> None:
     except Exception as _aud:
         logger.debug("[FX-reconcile] broker P/L audit failed: %s", _aud)
 
-    # Untracked OPEN rows (no pos= in notes) cannot enter the reconcile worklist
-    # but still trip max_open_positions — expire when broker is flat.
+    # Untracked OPEN rows (missing both position/order references) cannot be
+    # broker-reconciled and still trip max_open_positions — expire when flat.
     try:
         from app.services.strategy_heal import expire_untracked_forex_opens_when_broker_empty
         await expire_untracked_forex_opens_when_broker_empty(min_age_minutes=30)

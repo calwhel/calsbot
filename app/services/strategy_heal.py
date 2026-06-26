@@ -199,8 +199,16 @@ def close_stale_opens_for_user(
 _POS_TOKEN_RE = re.compile(r"pos=\d+")
 
 
-def _execution_lacks_position_id(notes: Optional[str]) -> bool:
-    return not _POS_TOKEN_RE.search(notes or "")
+def _execution_lacks_position_id(execution) -> bool:
+    raw = getattr(execution, "ctrader_position_id", None)
+    if raw:
+        try:
+            if int(str(raw).strip()) > 0:
+                return False
+        except Exception:
+            if re.search(r"\d+", str(raw)):
+                return False
+    return not _POS_TOKEN_RE.search((getattr(execution, "notes", None) or ""))
 
 
 def _expire_open_executions(db, executions: List, note_suffix: str) -> int:
@@ -270,7 +278,7 @@ def list_untracked_live_forex_opens(
     rows = q.all()
     by_user: Dict[int, List] = {}
     for ex in rows:
-        if not _execution_lacks_position_id(ex.notes):
+        if not _execution_lacks_position_id(ex):
             continue
         by_user.setdefault(ex.user_id, []).append(ex)
     return by_user
