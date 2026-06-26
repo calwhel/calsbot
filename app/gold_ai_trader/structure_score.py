@@ -62,6 +62,9 @@ def compute_structure_score(
         "disp_bull": 4, "disp_bear": 4,
         "judas_bull": 7, "judas_bear": 7,
         "asian_sweep_bull": 7, "asian_sweep_bear": 7,
+        "momentum_ema_bounce_long": 6, "momentum_ema_bounce_short": 6,
+        "momentum_flag_break_long": 6, "momentum_flag_break_short": 6,
+        "liquidity_grab_long": 7, "liquidity_grab_short": 7,
     }
     prior = priors.get(candidate_type, 0)
     if prior:

@@ -26,6 +26,11 @@ from app.gold_ai_trader.setup_toggles import (
     setup_scannable,
     smt_modifier_enabled,
 )
+from app.gold_ai_trader.momentum import (
+    eval_momentum_ema_bounce,
+    eval_momentum_flag_break,
+)
+from app.gold_ai_trader.liquidity_grab import eval_liquidity_grab
 from app.gold_ai_trader.smt_modifier import assess_smt_divergence
 from app.gold_ai_trader.structure_score import compute_structure_score
 
@@ -101,6 +106,12 @@ def _priority_map() -> Dict[str, int]:
         "disp_bear": 3,
         "asian_sweep_bull": 3,
         "asian_sweep_bear": 3,
+        "momentum_ema_bounce_long": 5,
+        "momentum_ema_bounce_short": 5,
+        "momentum_flag_break_long": 4,
+        "momentum_flag_break_short": 4,
+        "liquidity_grab_long": 5,
+        "liquidity_grab_short": 5,
         "judas_bull": 2,
         "judas_bear": 2,
     }
@@ -260,6 +271,42 @@ async def scan_candidates(
         ("judas_bear", "fx_judas_swing", {"timeframe": TF_ZONE}, "SHORT"),
         ("asian_sweep_bull", "asian_sweep", {"direction": "bullish", "timeframe": TF_TIMING}, "LONG"),
         ("asian_sweep_bear", "asian_sweep", {"direction": "bearish", "timeframe": TF_TIMING}, "SHORT"),
+        (
+            "momentum_ema_bounce_long",
+            "momentum_ema_bounce",
+            {"direction": "bullish", "timeframe": TF_TIMING, "trend_timeframe": TF_ZONE},
+            "LONG",
+        ),
+        (
+            "momentum_ema_bounce_short",
+            "momentum_ema_bounce",
+            {"direction": "bearish", "timeframe": TF_TIMING, "trend_timeframe": TF_ZONE},
+            "SHORT",
+        ),
+        (
+            "momentum_flag_break_long",
+            "momentum_flag_break",
+            {"direction": "bullish", "timeframe": TF_TIMING, "trend_timeframe": TF_ZONE},
+            "LONG",
+        ),
+        (
+            "momentum_flag_break_short",
+            "momentum_flag_break",
+            {"direction": "bearish", "timeframe": TF_TIMING, "trend_timeframe": TF_ZONE},
+            "SHORT",
+        ),
+        (
+            "liquidity_grab_long",
+            "liquidity_grab",
+            {"direction": "bullish", "timeframe": TF_TIMING},
+            "LONG",
+        ),
+        (
+            "liquidity_grab_short",
+            "liquidity_grab",
+            {"direction": "bearish", "timeframe": TF_TIMING},
+            "SHORT",
+        ),
     ]
 
     for ctype, kind, cond, direction in checks:
@@ -269,6 +316,7 @@ async def scan_candidates(
         if not setup_cooldown_elapsed(key):
             continue
         cond_eval = {**cond}
+        detector_meta: Dict[str, Any] = {}
         if kind == "fx_judas_swing":
             cond_eval["session"] = session
         try:
@@ -298,6 +346,18 @@ async def scan_candidates(
                 from app.gold_ai_trader.asian_sweep import eval_asian_range_sweep
 
                 ok, msg = await eval_asian_range_sweep(cond_eval, SYMBOL, price, http, cache)
+            elif kind == "momentum_ema_bounce":
+                ok, msg, detector_meta = await eval_momentum_ema_bounce(
+                    cond_eval, SYMBOL, price, http, cache
+                )
+            elif kind == "momentum_flag_break":
+                ok, msg, detector_meta = await eval_momentum_flag_break(
+                    cond_eval, SYMBOL, price, http, cache
+                )
+            elif kind == "liquidity_grab":
+                ok, msg, detector_meta = await eval_liquidity_grab(
+                    cond_eval, SYMBOL, price, http, cache
+                )
             else:
                 continue
         except Exception as exc:
@@ -352,6 +412,8 @@ async def scan_candidates(
             "htf_align": align_reason,
             "zone_tf": cond.get("timeframe", TF_TIMING),
         }
+        if detector_meta:
+            raw.update(detector_meta)
 
         if smt_modifier_enabled():
             raw["smt"] = await assess_smt_divergence(

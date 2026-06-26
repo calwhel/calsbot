@@ -1110,6 +1110,25 @@ async def run_gold_ai_trader_loop() -> None:
             key_levels = collect_key_levels(
                 float(price), session, cfg, now, k_daily, k1h, k5,
             )
+            if candidate.type.startswith("momentum_flag_break_"):
+                decision["validator_profile"] = "momentum_flag"
+                momentum_break_level = candidate.raw.get("momentum_break_level")
+                try:
+                    if momentum_break_level is not None:
+                        decision["momentum_break_level"] = float(momentum_break_level)
+                except (TypeError, ValueError):
+                    pass
+                decision["momentum_used_retest"] = bool(
+                    candidate.raw.get("momentum_used_retest")
+                )
+            elif candidate.type.startswith("liquidity_grab_"):
+                decision["validator_profile"] = "liquidity_grab"
+                liq_grab_mss_level = candidate.raw.get("liq_grab_mss_level")
+                try:
+                    if liq_grab_mss_level is not None:
+                        decision["liq_grab_mss_level"] = float(liq_grab_mss_level)
+                except (TypeError, ValueError):
+                    pass
             val_ok, val_reason, decision = validate_take_decision(
                 decision,
                 candidate_direction=candidate.direction,

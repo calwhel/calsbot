@@ -36,6 +36,12 @@ _DEFAULTS: Dict[str, bool] = {
     "judas_bear": False,
     "asian_sweep_bull": True,
     "asian_sweep_bear": True,
+    "momentum_ema_bounce_long": False,
+    "momentum_ema_bounce_short": False,
+    "momentum_flag_break_long": False,
+    "momentum_flag_break_short": False,
+    "liquidity_grab_long": False,
+    "liquidity_grab_short": False,
 }
 
 _ENV_KEYS: Dict[str, str] = {
@@ -61,7 +67,23 @@ _ENV_KEYS: Dict[str, str] = {
     "judas_bear": "GOLD_AI_SETUP_JUDAS_BEAR",
     "asian_sweep_bull": "GOLD_AI_SETUP_ASIAN_SWEEP_BULL",
     "asian_sweep_bear": "GOLD_AI_SETUP_ASIAN_SWEEP_BEAR",
+    "momentum_ema_bounce_long": "GOLD_AI_SETUP_MOMENTUM_EMA_BOUNCE_LONG",
+    "momentum_ema_bounce_short": "GOLD_AI_SETUP_MOMENTUM_EMA_BOUNCE_SHORT",
+    "momentum_flag_break_long": "GOLD_AI_SETUP_MOMENTUM_FLAG_BREAK_LONG",
+    "momentum_flag_break_short": "GOLD_AI_SETUP_MOMENTUM_FLAG_BREAK_SHORT",
+    "liquidity_grab_long": "GOLD_AI_SETUP_LIQUIDITY_GRAB_LONG",
+    "liquidity_grab_short": "GOLD_AI_SETUP_LIQUIDITY_GRAB_SHORT",
 }
+
+
+def momentum_enabled() -> bool:
+    """Global gate for momentum setup family (default OFF)."""
+    return _env_bool("GOLD_AI_MOMENTUM_ENABLED", False)
+
+
+def liquidity_grab_enabled() -> bool:
+    """Global gate for liquidity_grab setup family (default OFF)."""
+    return _env_bool("GOLD_AI_LIQ_GRAB_ENABLED", False)
 
 
 def setup_enabled(setup_key: str) -> bool:
@@ -96,6 +118,10 @@ def setup_scannable(setup_key: str, bias: Optional[dict] = None) -> bool:
     All others: follow setup_enabled() env toggles.
     """
     bias = bias or {}
+    if setup_key.startswith("momentum_") and not momentum_enabled():
+        return False
+    if setup_key.startswith("liquidity_grab_") and not liquidity_grab_enabled():
+        return False
     if setup_key.startswith(("breaker_", "eqh_sweep_", "eql_sweep_")):
         if not htf_is_directional(bias):
             return False

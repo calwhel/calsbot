@@ -13,6 +13,9 @@ _LONDON_PRIMARY: FrozenSet[str] = frozenset({
     "eqh_sweep_bear", "eql_sweep_bull",
     "asian_sweep_bull", "asian_sweep_bear",
     "sdp_bull", "sdp_bear",
+    "momentum_ema_bounce_long", "momentum_ema_bounce_short",
+    "momentum_flag_break_long", "momentum_flag_break_short",
+    "liquidity_grab_long", "liquidity_grab_short",
 })
 
 # NY killzone: continuation structures; breakers when HTF directional.
@@ -26,6 +29,9 @@ _NY_PRIMARY: FrozenSet[str] = frozenset({
     "sweep_pdh", "sweep_pdl",
     "eqh_sweep_bear", "eql_sweep_bull",
     "sdp_bull", "sdp_bear",
+    "momentum_ema_bounce_long", "momentum_ema_bounce_short",
+    "momentum_flag_break_long", "momentum_flag_break_short",
+    "liquidity_grab_long", "liquidity_grab_short",
 })
 
 _ASIA_PRIMARY: FrozenSet[str] = frozenset({
@@ -34,6 +40,9 @@ _ASIA_PRIMARY: FrozenSet[str] = frozenset({
     "liq_sweep_bull", "liq_sweep_bear",
     "eqh_sweep_bear", "eql_sweep_bull",
     "sdp_bull", "sdp_bear",
+    "momentum_ema_bounce_long", "momentum_ema_bounce_short",
+    "momentum_flag_break_long", "momentum_flag_break_short",
+    "liquidity_grab_long", "liquidity_grab_short",
 })
 
 # Momentum setups allowed in London only when HTF aligns (no counter-trend fade).
