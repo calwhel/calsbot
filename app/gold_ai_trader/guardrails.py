@@ -62,6 +62,32 @@ def merge_config(db_row: GoldAiConfig, env: GoldAiRuntimeConfig) -> GoldAiRuntim
         ),
         confidence_threshold=env.confidence_threshold,
         include_history_in_decisions=env.include_history_in_decisions,
+        orb_enabled=env.orb_enabled,
+        orb_range_minutes=env.orb_range_minutes,
+        orb_trade_window_minutes=env.orb_trade_window_minutes,
+        orb_timeframe=env.orb_timeframe,
+        orb_confirmation=env.orb_confirmation,
+        orb_require_retest=env.orb_require_retest,
+        orb_retest_max_bars=env.orb_retest_max_bars,
+        orb_retest_tol_atr=env.orb_retest_tol_atr,
+        orb_fakeout_filter=env.orb_fakeout_filter,
+        orb_break_buffer_atr=env.orb_break_buffer_atr,
+        orb_break_buffer_range_pct=env.orb_break_buffer_range_pct,
+        orb_min_break_body_atr=env.orb_min_break_body_atr,
+        orb_min_range_atr=env.orb_min_range_atr,
+        orb_max_range_atr=env.orb_max_range_atr,
+        orb_sl_mode=env.orb_sl_mode,
+        orb_sl_atr_mult=env.orb_sl_atr_mult,
+        orb_sl_range_buffer_atr=env.orb_sl_range_buffer_atr,
+        orb_tp_mode=env.orb_tp_mode,
+        orb_tp_range_mult=env.orb_tp_range_mult,
+        orb_tp_rr=env.orb_tp_rr,
+        orb_confidence_threshold=env.orb_confidence_threshold,
+        orb_max_calls_day=env.orb_max_calls_day,
+        orb_min_global_calls_left=env.orb_min_global_calls_left,
+        orb_max_trades_per_session=env.orb_max_trades_per_session,
+        orb_entry_max_break_atr=env.orb_entry_max_break_atr,
+        orb_entry_max_break_range_pct=env.orb_entry_max_break_range_pct,
     )
 
 
@@ -362,6 +388,39 @@ def check_can_call_claude(db, cfg: GoldAiRuntimeConfig) -> Tuple[bool, str]:
         return False, "no_demo_account"
     if calls_today(db) >= cfg.max_calls_day:
         return False, "max_calls_day"
+    return True, "ok"
+
+
+def orb_calls_today(db) -> int:
+    return (
+        db.query(func.count(GoldAiDecision.id))
+        .filter(
+            GoldAiDecision.ts >= _calls_cutoff(db),
+            GoldAiDecision.candidate_type.in_(("orb_long", "orb_short")),
+        )
+        .scalar()
+        or 0
+    )
+
+
+def check_can_call_orb(db, cfg: GoldAiRuntimeConfig) -> Tuple[bool, str]:
+    if not cfg.orb_enabled:
+        return False, "orb_disabled"
+    if cfg.kill_switch:
+        return False, "kill_switch"
+    if not cfg.enabled:
+        return False, "disabled"
+    if not demo_account_configured(cfg):
+        return False, "no_demo_account"
+    total_calls = calls_today(db)
+    if total_calls >= cfg.max_calls_day:
+        return False, "max_calls_day"
+    orb_calls = orb_calls_today(db)
+    if orb_calls >= max(0, int(cfg.orb_max_calls_day)):
+        return False, "orb_max_calls_day"
+    reserve = max(0, int(cfg.orb_min_global_calls_left))
+    if reserve > 0 and (cfg.max_calls_day - total_calls) <= reserve:
+        return False, "orb_reserve_global_calls"
     return True, "ok"
 
 

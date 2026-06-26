@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text, JSON
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, Integer, String, Text, JSON, UniqueConstraint
 
 from app.database import Base
 
@@ -118,3 +118,30 @@ class GoldAiFunnelEvent(Base):
     setup_type = Column(String(64), nullable=True)
     reason = Column(String(256), nullable=True)
     decision_id = Column(Integer, nullable=True, index=True)
+
+
+class GoldAiOrbState(Base):
+    """Durable ORB lifecycle state per (UTC day, session)."""
+
+    __tablename__ = "gold_ai_orb_state"
+    __table_args__ = (
+        UniqueConstraint("trade_day_utc", "session", name="uq_gold_ai_orb_state_day_session"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    trade_day_utc = Column(Date, nullable=False, index=True)
+    session = Column(String(16), nullable=False, index=True)
+    status = Column(String(24), nullable=False, default="forming")  # forming|armed|traded|expired
+    range_start_ts = Column(DateTime, nullable=True)
+    range_end_ts = Column(DateTime, nullable=True)
+    trade_window_end_ts = Column(DateTime, nullable=True)
+    range_high = Column(Float, nullable=True)
+    range_low = Column(Float, nullable=True)
+    range_height = Column(Float, nullable=True)
+    breakout_side = Column(String(8), nullable=True)  # long|short
+    breakout_level = Column(Float, nullable=True)
+    breakout_ts = Column(DateTime, nullable=True)
+    trades_taken = Column(Integer, nullable=False, default=0)
+    decision_id = Column(Integer, nullable=True, index=True)
+    execution_id = Column(Integer, nullable=True, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

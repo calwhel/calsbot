@@ -20,6 +20,8 @@ MAX_SL_ATR_MULT = _env_float("GOLD_AI_MAX_SL_ATR", 0.0)
 # Planning horizon for readiness R:R feasibility only (not an execution limit)
 READINESS_RR_RISK_ATR = _env_float("GOLD_AI_READINESS_RR_ATR", 3.0)
 SL_BUFFER_ATR = _env_float("GOLD_AI_SL_BUFFER_ATR", 0.08)
+ORB_ENTRY_MAX_BREAK_ATR = _env_float("GOLD_AI_ORB_ENTRY_MAX_BREAK_ATR", 0.60)
+ORB_ENTRY_MAX_BREAK_RANGE_PCT = _env_float("GOLD_AI_ORB_ENTRY_MAX_BREAK_RANGE_PCT", 0.25)
 
 
 def sl_width_cap_enabled() -> bool:
@@ -136,6 +138,33 @@ def validate_take_decision(
     if atr > 0 and risk_dist > 0:
         sl_atr = risk_dist / atr
         d["validator_sl_atr"] = round(sl_atr, 2)
+
+    if (d.get("validator_profile") or "").strip().lower() == "orb":
+        try:
+            break_level = float(d.get("orb_break_level") or 0)
+        except (TypeError, ValueError):
+            break_level = 0.0
+        try:
+            range_height = float(d.get("orb_range_height") or 0)
+        except (TypeError, ValueError):
+            range_height = 0.0
+        if break_level > 0:
+            break_dist = abs(entry - break_level)
+            max_break_dist = 0.0
+            if atr > 0:
+                max_break_dist = max(max_break_dist, ORB_ENTRY_MAX_BREAK_ATR * atr)
+            if range_height > 0:
+                max_break_dist = max(
+                    max_break_dist,
+                    ORB_ENTRY_MAX_BREAK_RANGE_PCT * range_height,
+                )
+            if max_break_dist > 0 and break_dist > max_break_dist:
+                return (
+                    False,
+                    f"validator:entry_chasing_orb({break_dist:.2f}>{max_break_dist:.2f})",
+                    d,
+                )
+            d["validator_break_dist"] = round(break_dist, 2)
 
     zone = parse_zone_from_detail(setup_detail)
     if zone and atr > 0:

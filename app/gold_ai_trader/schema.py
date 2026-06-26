@@ -13,6 +13,7 @@ from app.gold_ai_trader.models import (
     GoldAiDecision,
     GoldAiFunnelEvent,
     GoldAiLesson,
+    GoldAiOrbState,
     GoldAiOutcome,
     GoldAiPendingOrder,
 )
@@ -145,6 +146,7 @@ def ensure_gold_ai_trader_schema(*, force: bool = False) -> None:
                 GoldAiLesson.__table__,
                 GoldAiPendingOrder.__table__,
                 GoldAiFunnelEvent.__table__,
+                GoldAiOrbState.__table__,
             ],
         ),
         max_attempts=_DDL_RETRY_ATTEMPTS,

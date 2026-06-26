@@ -20,6 +20,7 @@ from app.gold_ai_trader.schema import seed_config_if_missing
 from app.gold_ai_trader.guardrails import (
     merge_config,
     check_can_call_claude,
+    check_can_call_orb,
     check_can_execute,
     check_can_execute_live_mirror,
 )
@@ -46,8 +47,10 @@ from app.services.tradfi_prices import get_klines
 from app.gold_ai_trader.config import SYMBOL, ASSET_CLASS
 from app.gold_ai_trader.context import build_context_snapshot
 from app.gold_ai_trader.claude import decide
+from app.gold_ai_trader.claude import decide_orb
 from app.gold_ai_trader.executor import execute_take, execute_live_mirror_take, flatten_open_demo_positions
 from app.gold_ai_trader.learning import maybe_run_learning_review, record_outcome_from_execution, get_setup_stats
+from app.gold_ai_trader.orb import build_orb_context, detect_orb_signal
 from app.gold_ai_trader.pending_entry import sync_pending_entries
 from app.gold_ai_trader.telegram_notify import (
     maybe_send_daily_summary,
@@ -474,6 +477,247 @@ async def _sync_closed_outcomes_pass() -> None:
         db.close()
 
 
+async def _maybe_run_orb_strategy(
+    *,
+    db,
+    cfg,
+    session: str,
+    now: datetime,
+    price: float,
+    source_tag: str,
+) -> bool:
+    """Run additive ORB detector + dedicated Claude call path."""
+    if not bool(getattr(cfg, "orb_enabled", False)):
+        return False
+    try:
+        signal, orb_state, detect_reason = await detect_orb_signal(
+            db=db,
+            cfg=cfg,
+            session=session,
+            now=now,
+            user_id=cfg.demo_user_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[gold-ai-trader] setup detector error setup=%s kind=%s: %s",
+            "orb",
+            "orb_breakout",
+            exc,
+            exc_info=True,
+        )
+        return False
+    if not signal:
+        if detect_reason not in {
+            "forming_range",
+            "trade_window_expired",
+            "no_breakout",
+            "range_unavailable",
+            "breakout_already_processed",
+            "waiting_new_bar_for_retest",
+            "retest_not_confirmed",
+            "breakout_seen_wait_retest",
+            "no_post_range_bars",
+        }:
+            logger.info("[gold-ai-orb] skipped reason=%s session=%s", detect_reason, session)
+        return False
+
+    ok_orb, orb_reason = check_can_call_orb(db, cfg)
+    if not ok_orb:
+        logger.info("[gold-ai-orb] claude blocked reason=%s setup=%s", orb_reason, signal.setup_type)
+        return False
+
+    recent_tf = (getattr(cfg, "orb_timeframe", "5m") or "5m").strip().lower()
+    recent_bars = await get_gold_ai_klines(recent_tf, 64, user_id=cfg.demo_user_id) or []
+    context = build_orb_context(
+        signal,
+        session=session,
+        cfg=cfg,
+        now=now,
+        recent_bars=recent_bars,
+    )
+
+    claude_timeout_s = max(
+        15.0,
+        float(os.environ.get("GOLD_AI_CLAUDE_DECIDE_TIMEOUT_S", "60")),
+    )
+    try:
+        decision, reasoning, usage = await asyncio.wait_for(
+            decide_orb(
+                context,
+                model=cfg.model,
+                confidence_threshold=int(getattr(cfg, "orb_confidence_threshold", 55)),
+            ),
+            timeout=claude_timeout_s,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[gold-ai-orb] Claude decision timeout after %.1fs (setup=%s)",
+            claude_timeout_s,
+            signal.setup_type,
+        )
+        decision = {
+            "action": "skip",
+            "confidence": 0,
+            "rationale": "Claude timeout",
+        }
+        reasoning = "Claude decision timeout"
+        usage = {
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "cost_usd": 0.0,
+        }
+
+    action = (decision.get("action") or "skip").lower()
+    conf = int(decision.get("confidence") or 0)
+    row = GoldAiDecision(
+        session=session,
+        candidate_type=signal.setup_type,
+        context_snapshot=context,
+        reasoning=reasoning,
+        decision=decision,
+        action=action,
+        confidence=conf,
+        executed=False,
+        tokens_in=int(usage.get("tokens_in", 0)),
+        tokens_out=int(usage.get("tokens_out", 0)),
+        cache_read_tokens=int(usage.get("cache_read_tokens", 0)),
+        cache_write_tokens=int(usage.get("cache_write_tokens", 0)),
+        cost_usd=float(usage.get("cost_usd", 0)),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    if orb_state is not None:
+        orb_state.decision_id = row.id
+        db.commit()
+
+    runtime_state.note_decision(
+        {
+            "id": row.id,
+            "action": action,
+            "confidence": conf,
+            "rationale": decision.get("rationale", ""),
+        }
+    )
+
+    execution_id = None
+    executed = False
+    block_reason = None
+    if action == "take":
+        k5 = await get_klines(SYMBOL, ASSET_CLASS, "5m", 60) or []
+        atr = atr_from_klines(k5)
+        k1h = await get_gold_ai_klines("1h", 50, user_id=cfg.demo_user_id) or []
+        k_daily = await get_gold_ai_klines("1d", 5, user_id=cfg.demo_user_id) or []
+        key_levels = collect_key_levels(float(price), session, cfg, now, k_daily, k1h, k5)
+        decision["validator_profile"] = "orb"
+        decision["orb_break_level"] = signal.break_level
+        decision["orb_range_height"] = signal.range_height
+        val_ok, val_reason, decision = validate_take_decision(
+            decision,
+            candidate_direction=signal.side,
+            spot=float(price),
+            atr=atr,
+            setup_detail=(
+                f"orb breakout level={signal.break_level:.2f} "
+                f"range_high={signal.range_high:.2f} range_low={signal.range_low:.2f}"
+            ),
+            key_levels=key_levels,
+        )
+        row.decision = decision
+        db.commit()
+        if not val_ok:
+            block_reason = val_reason
+            logger.info(
+                "[gold-ai-orb] validator rejected decision_id=%s setup=%s reason=%s",
+                row.id,
+                signal.setup_type,
+                val_reason,
+            )
+        elif conf >= int(getattr(cfg, "orb_confidence_threshold", 55)):
+            ok_exec, exec_reason = check_can_execute(db, cfg, cfg.demo_user_id or 0)
+            if ok_exec:
+                exec_id = await execute_take(
+                    db=db,
+                    cfg=cfg,
+                    decision=decision,
+                    decision_id=row.id,
+                    session=session,
+                    setup_type=signal.setup_type,
+                )
+                if exec_id and exec_id > 0:
+                    executed = True
+                    execution_id = exec_id
+                    row.executed = True
+                    row.execution_id = exec_id
+                    if orb_state is not None:
+                        orb_state.execution_id = exec_id
+                        orb_state.trades_taken = int(orb_state.trades_taken or 0) + 1
+                        if orb_state.trades_taken >= max(
+                            1, int(getattr(cfg, "orb_max_trades_per_session", 1))
+                        ):
+                            orb_state.status = "traded"
+                    db.commit()
+                elif exec_id and exec_id < 0:
+                    block_reason = f"entry pending #{-exec_id} (limit/entry-watch)"
+                    if orb_state is not None:
+                        orb_state.trades_taken = int(orb_state.trades_taken or 0) + 1
+                        if orb_state.trades_taken >= max(
+                            1, int(getattr(cfg, "orb_max_trades_per_session", 1))
+                        ):
+                            orb_state.status = "traded"
+                    db.commit()
+                else:
+                    block_reason = "demo order rejected"
+            else:
+                block_reason = exec_reason
+        else:
+            block_reason = (
+                f"confidence {conf}% below "
+                f"{int(getattr(cfg, 'orb_confidence_threshold', 55))}% threshold"
+            )
+
+    if action == "take":
+        await notify_take_decision(
+            candidate_type=signal.setup_type,
+            session=session,
+            decision=decision,
+            confidence=conf,
+            executed=executed,
+            execution_id=execution_id,
+            block_reason=block_reason,
+        )
+
+    logger.info(
+        "[gold-ai] decision_id=%s confidence=%s%% setup=%s source=%s action=%s",
+        row.id,
+        conf,
+        signal.setup_type,
+        source_tag,
+        action,
+    )
+    logger.info(
+        "[gold-ai] calibration decision_id=%s confidence=%s%% setup=%s source=%s "
+        "action=%s exec_id=%s session=%s",
+        row.id,
+        conf,
+        signal.setup_type,
+        source_tag,
+        action,
+        row.execution_id or execution_id or "none",
+        session,
+    )
+
+    if row.execution_id:
+        from app.strategy_models import StrategyExecution
+
+        ex = db.query(StrategyExecution).filter_by(id=row.execution_id).first()
+        record_outcome_from_execution(db, row.id, ex)
+    return True
+
+
 async def run_gold_ai_trader_loop() -> None:
     """Main scan → candidate → Claude → optional execute cycle."""
     global _prev_session
@@ -580,6 +824,15 @@ async def run_gold_ai_trader_loop() -> None:
                 runtime_state.note_dormant(f"news:{news_reason[:80]}")
                 return
 
+        orb_logged = await _maybe_run_orb_strategy(
+            db=db,
+            cfg=cfg,
+            session=session,
+            now=now,
+            price=float(market_data["price"]),
+            source_tag=source_tag,
+        )
+
         async with httpx.AsyncClient(timeout=15) as http:
             price, candidates = await scan_candidates(
                 http,
@@ -590,6 +843,10 @@ async def run_gold_ai_trader_loop() -> None:
                 db=db,
             )
         if not candidates or price is None:
+            if orb_logged:
+                await sync_closed_trade_notifications(db, cfg)
+                await maybe_send_daily_summary(db, cfg)
+                await maybe_run_learning_review(db, session, cfg)
             runtime_state.set_funnel(funnel_snapshot())
             return
 
@@ -641,6 +898,13 @@ async def run_gold_ai_trader_loop() -> None:
             smt=candidate.raw.get("smt"),
             cisd=candidate.raw.get("cisd"),
         )
+
+        ok_call, reason = check_can_call_claude(db, cfg)
+        if not ok_call:
+            runtime_state.note_dormant(reason)
+            if reason == "max_calls_day":
+                await maybe_notify_call_cap_reached(db, cfg)
+            return
 
         claude_timeout_s = max(
             15.0,

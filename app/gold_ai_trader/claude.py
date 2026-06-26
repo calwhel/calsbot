@@ -116,6 +116,42 @@ def _parse_json(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def orb_system_prompt(confidence_threshold: int = 55) -> str:
+    """Dedicated ORB prompt (separate from ICT/SMC prompt)."""
+    t = max(0, min(100, int(confidence_threshold)))
+    return f"""You are evaluating an Opening Range Breakout (ORB) trade on XAUUSD for a DEMO strategy.
+
+OBJECTIVE
+- Judge this setup ONLY in ORB terms: opening range quality, breakout quality, fakeout risk, retest quality, and chase risk vs break level.
+- Do NOT use ICT/SMC killzone/OB language unless explicitly provided in context.
+
+ORB RUBRIC
+- Opening range should be well-defined (clear high/low, reasonable height vs ATR).
+- Breakout should show directional commitment (close/bodies/displacement), not just a thin wick.
+- Penalize fakeouts/sweeps that immediately reject back inside the range.
+- If entry is too extended from the break level, confidence must drop or SKIP.
+- Reward clean breakout + controlled pullback/retest + continuation potential.
+
+RISK RULES
+- SL should invalidate the ORB thesis (typically opposite side of range or ATR-invalidated level).
+- TP should be range-relative and realistic for session conditions.
+- Borderline but tradable setups can be TAKE when risk is coherent and confidence justifies it.
+
+OUTPUT (STRICT JSON)
+Respond with ONLY valid JSON:
+{{
+  "action": "take" | "skip",
+  "direction": "long" | "short" | null,
+  "entry": number | null,
+  "stop_loss": number | null,
+  "take_profit": number | null,
+  "confidence": 0-100,
+  "rationale": "one concise paragraph"
+}}
+
+If confidence is below {t}, action MUST be "skip"."""
+
+
 def _pricing_for_model(model: str) -> Tuple[float, float, float, float]:
     m = (model or "").strip().lower()
     if "haiku" in m:
@@ -153,12 +189,14 @@ def _estimate_cost(
     return tin, tout, cr, cw, round(cost, 6)
 
 
-async def decide(
+async def _decide_with_prompt(
     context_text: str,
     *,
     model: str = "claude-opus-4-8",
     dry_run: bool = False,
     confidence_threshold: int = _DEFAULT_CONFIDENCE_THRESHOLD,
+    system_text: str,
+    user_intro: str,
 ) -> Tuple[Dict[str, Any], str, Dict[str, Any]]:
     """
     Returns (decision_dict, reasoning_text, usage_meta).
@@ -196,17 +234,14 @@ async def decide(
             system=[
                 {
                     "type": "text",
-                    "text": system_prompt(threshold),
+                    "text": system_text,
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
             messages=[
                 {
                     "role": "user",
-                    "content": (
-                        "Evaluate this gold setup. Reason briefly, then output JSON only.\n\n"
-                        + context_text
-                    ),
+                    "content": user_intro + "\n\n" + context_text,
                 }
             ],
         )
@@ -244,3 +279,42 @@ async def decide(
         logger.error("[gold-ai-trader] Claude call failed: %s", e)
         skip = {"action": "skip", "confidence": 0, "rationale": f"API error: {e}"}
         return skip, str(e), {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
+
+
+async def decide(
+    context_text: str,
+    *,
+    model: str = "claude-opus-4-8",
+    dry_run: bool = False,
+    confidence_threshold: int = _DEFAULT_CONFIDENCE_THRESHOLD,
+) -> Tuple[Dict[str, Any], str, Dict[str, Any]]:
+    threshold = max(0, min(100, int(confidence_threshold)))
+    return await _decide_with_prompt(
+        context_text,
+        model=model,
+        dry_run=dry_run,
+        confidence_threshold=threshold,
+        system_text=system_prompt(threshold),
+        user_intro="Evaluate this gold setup. Reason briefly, then output JSON only.",
+    )
+
+
+async def decide_orb(
+    context_text: str,
+    *,
+    model: str = "claude-opus-4-8",
+    dry_run: bool = False,
+    confidence_threshold: int = 55,
+) -> Tuple[Dict[str, Any], str, Dict[str, Any]]:
+    threshold = max(0, min(100, int(confidence_threshold)))
+    return await _decide_with_prompt(
+        context_text,
+        model=model,
+        dry_run=dry_run,
+        confidence_threshold=threshold,
+        system_text=orb_system_prompt(threshold),
+        user_intro=(
+            "Evaluate this Opening Range Breakout candidate in ORB terms only. "
+            "Return JSON only."
+        ),
+    )

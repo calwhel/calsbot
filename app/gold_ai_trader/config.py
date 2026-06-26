@@ -58,6 +58,32 @@ class GoldAiRuntimeConfig:
     learning_daily_at_ny_end: bool
     confidence_threshold: int
     include_history_in_decisions: bool
+    orb_enabled: bool
+    orb_range_minutes: int
+    orb_trade_window_minutes: int
+    orb_timeframe: str
+    orb_confirmation: str
+    orb_require_retest: bool
+    orb_retest_max_bars: int
+    orb_retest_tol_atr: float
+    orb_fakeout_filter: bool
+    orb_break_buffer_atr: float
+    orb_break_buffer_range_pct: float
+    orb_min_break_body_atr: float
+    orb_min_range_atr: float
+    orb_max_range_atr: float
+    orb_sl_mode: str
+    orb_sl_atr_mult: float
+    orb_sl_range_buffer_atr: float
+    orb_tp_mode: str
+    orb_tp_range_mult: float
+    orb_tp_rr: float
+    orb_confidence_threshold: int
+    orb_max_calls_day: int
+    orb_min_global_calls_left: int
+    orb_max_trades_per_session: int
+    orb_entry_max_break_atr: float
+    orb_entry_max_break_range_pct: float
 
 
 from app.services.forex_sessions import gold_ai_session_hours
@@ -90,6 +116,32 @@ DEFAULTS = GoldAiRuntimeConfig(
     learning_daily_at_ny_end=True,
     confidence_threshold=45,
     include_history_in_decisions=False,
+    orb_enabled=False,
+    orb_range_minutes=20,
+    orb_trade_window_minutes=90,
+    orb_timeframe="5m",
+    orb_confirmation="close",
+    orb_require_retest=False,
+    orb_retest_max_bars=3,
+    orb_retest_tol_atr=0.15,
+    orb_fakeout_filter=True,
+    orb_break_buffer_atr=0.10,
+    orb_break_buffer_range_pct=0.05,
+    orb_min_break_body_atr=0.30,
+    orb_min_range_atr=0.20,
+    orb_max_range_atr=2.50,
+    orb_sl_mode="range_opposite",
+    orb_sl_atr_mult=1.2,
+    orb_sl_range_buffer_atr=0.05,
+    orb_tp_mode="range_multiple",
+    orb_tp_range_mult=1.5,
+    orb_tp_rr=1.5,
+    orb_confidence_threshold=55,
+    orb_max_calls_day=20,
+    orb_min_global_calls_left=15,
+    orb_max_trades_per_session=1,
+    orb_entry_max_break_atr=0.60,
+    orb_entry_max_break_range_pct=0.25,
 )
 
 
@@ -138,6 +190,32 @@ def env_defaults() -> GoldAiRuntimeConfig:
         include_history_in_decisions=_env_bool(
             "GOLD_AI_INCLUDE_HISTORY_IN_DECISIONS", False
         ),
+        orb_enabled=_env_bool("GOLD_AI_ORB_ENABLED", False),
+        orb_range_minutes=_env_int("GOLD_AI_ORB_RANGE_MINUTES", 20),
+        orb_trade_window_minutes=_env_int("GOLD_AI_ORB_TRADE_WINDOW_MINUTES", 90),
+        orb_timeframe=(os.environ.get("GOLD_AI_ORB_TIMEFRAME", "5m") or "5m").strip().lower(),
+        orb_confirmation=(os.environ.get("GOLD_AI_ORB_CONFIRMATION", "close") or "close").strip().lower(),
+        orb_require_retest=_env_bool("GOLD_AI_ORB_REQUIRE_RETEST", False),
+        orb_retest_max_bars=_env_int("GOLD_AI_ORB_RETEST_MAX_BARS", 3),
+        orb_retest_tol_atr=_env_float("GOLD_AI_ORB_RETEST_TOL_ATR", 0.15),
+        orb_fakeout_filter=_env_bool("GOLD_AI_ORB_FAKEOUT_FILTER", True),
+        orb_break_buffer_atr=_env_float("GOLD_AI_ORB_BREAK_BUFFER_ATR", 0.10),
+        orb_break_buffer_range_pct=_env_float("GOLD_AI_ORB_BREAK_BUFFER_RANGE_PCT", 0.05),
+        orb_min_break_body_atr=_env_float("GOLD_AI_ORB_MIN_BREAK_BODY_ATR", 0.30),
+        orb_min_range_atr=_env_float("GOLD_AI_ORB_MIN_RANGE_ATR", 0.20),
+        orb_max_range_atr=_env_float("GOLD_AI_ORB_MAX_RANGE_ATR", 2.50),
+        orb_sl_mode=(os.environ.get("GOLD_AI_ORB_SL_MODE", "range_opposite") or "range_opposite").strip().lower(),
+        orb_sl_atr_mult=_env_float("GOLD_AI_ORB_SL_ATR_MULT", 1.2),
+        orb_sl_range_buffer_atr=_env_float("GOLD_AI_ORB_SL_RANGE_BUFFER_ATR", 0.05),
+        orb_tp_mode=(os.environ.get("GOLD_AI_ORB_TP_MODE", "range_multiple") or "range_multiple").strip().lower(),
+        orb_tp_range_mult=_env_float("GOLD_AI_ORB_TP_RANGE_MULT", 1.5),
+        orb_tp_rr=_env_float("GOLD_AI_ORB_TP_RR", 1.5),
+        orb_confidence_threshold=_env_int("GOLD_AI_ORB_CONFIDENCE_THRESHOLD", 55),
+        orb_max_calls_day=_env_int("GOLD_AI_ORB_MAX_CALLS_DAY", 20),
+        orb_min_global_calls_left=_env_int("GOLD_AI_ORB_MIN_GLOBAL_CALLS_LEFT", 15),
+        orb_max_trades_per_session=_env_int("GOLD_AI_ORB_MAX_TRADES_PER_SESSION", 1),
+        orb_entry_max_break_atr=_env_float("GOLD_AI_ORB_ENTRY_MAX_BREAK_ATR", 0.60),
+        orb_entry_max_break_range_pct=_env_float("GOLD_AI_ORB_ENTRY_MAX_BREAK_RANGE_PCT", 0.25),
     )
 
 
