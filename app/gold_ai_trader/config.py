@@ -57,6 +57,7 @@ class GoldAiRuntimeConfig:
     pending_entry_timeout_min: int
     learning_daily_at_ny_end: bool
     confidence_threshold: int
+    include_history_in_decisions: bool
 
 
 from app.services.forex_sessions import gold_ai_session_hours
@@ -88,6 +89,7 @@ DEFAULTS = GoldAiRuntimeConfig(
     pending_entry_timeout_min=30,
     learning_daily_at_ny_end=True,
     confidence_threshold=45,
+    include_history_in_decisions=False,
 )
 
 
@@ -133,6 +135,9 @@ def env_defaults() -> GoldAiRuntimeConfig:
         pending_entry_timeout_min=_env_int("GOLD_AI_TRADER_PENDING_TIMEOUT_MIN", 30),
         learning_daily_at_ny_end=_env_bool("GOLD_AI_TRADER_LEARNING_DAILY", True),
         confidence_threshold=confidence_threshold(),
+        include_history_in_decisions=_env_bool(
+            "GOLD_AI_INCLUDE_HISTORY_IN_DECISIONS", False
+        ),
     )
 
 

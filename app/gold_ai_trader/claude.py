@@ -62,7 +62,8 @@ EXECUTION RULES (hard constraints)
 - ENTRY: Prefer at the zone, reclaim, or FVG — avoid obvious chase far from invalidation; moderate extension reduces confidence, not an auto-SKIP.
 - STOP: Place at logical structure invalidation (below zone / sweep low / swing point). Wider stops are fine for swing trades — size to where the thesis is wrong, not to an arbitrary ATR multiple.
 - TARGET: TP at the nearest sensible objective (session high/low, PDH/PDL, FVG fill, HTF level). No minimum R:R — scalp for 0.5R at session edge or hold for 3R+ swing is fine if the narrative supports it.
-- USE LESSONS: Weigh the recent-lessons digest — adapt to what worked/failed this session.
+- USE LESSONS: If lessons/history are provided, treat them as secondary context only.
+  Do not treat tiny samples as predictive; prioritize current structure, displacement, confirmation, and R:R.
 - London (07–10 UTC): favour liquidity sweeps + displacement reversals at range edges.
 - New York (13–16 UTC): favour continuation after ORB / structure reclaim; cautious fading strong impulses without displacement.
 - Premium/discount: longs prefer discount of dealing range; shorts prefer premium.
