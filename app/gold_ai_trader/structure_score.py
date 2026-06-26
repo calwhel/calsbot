@@ -60,7 +60,6 @@ def compute_structure_score(
         "ifvg_bull": 5, "ifvg_bear": 5,
         "fvg_retrace_bull": 4, "fvg_retrace_bear": 4,
         "disp_bull": 4, "disp_bear": 4,
-        "fvg_bull": 2, "fvg_bear": 2,
         "judas_bull": 7, "judas_bear": 7,
         "asian_sweep_bull": 7, "asian_sweep_bear": 7,
     }

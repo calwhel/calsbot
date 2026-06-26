@@ -99,8 +99,6 @@ def _priority_map() -> Dict[str, int]:
         "sdp_bear": 4,
         "disp_bull": 3,
         "disp_bear": 3,
-        "fvg_bull": 2,
-        "fvg_bear": 2,
         "asian_sweep_bull": 3,
         "asian_sweep_bear": 3,
         "judas_bull": 2,
@@ -303,7 +301,13 @@ async def scan_candidates(
             else:
                 continue
         except Exception as exc:
-            logger.debug("[gold-ai-trader] scan %s: %s", ctype, exc)
+            logger.warning(
+                "[gold-ai-trader] setup detector error setup=%s kind=%s: %s",
+                ctype,
+                kind,
+                exc,
+                exc_info=True,
+            )
             continue
 
         if not ok:

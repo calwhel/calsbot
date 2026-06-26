@@ -191,9 +191,9 @@ class TestSetupTogglesTier2:
         os.environ.pop("GOLD_AI_SETUP_JUDAS_BULL", None)
         assert setup_enabled("judas_bull") is False
 
-    def test_asian_sweep_default_off(self):
+    def test_asian_sweep_default_on(self):
         os.environ.pop("GOLD_AI_SETUP_ASIAN_SWEEP_BULL", None)
-        assert setup_enabled("asian_sweep_bull") is False
+        assert setup_enabled("asian_sweep_bull") is True
 
     def test_cisd_modifier_default_off(self):
         os.environ.pop("GOLD_AI_CISD_MODIFIER", None)

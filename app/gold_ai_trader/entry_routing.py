@@ -8,7 +8,7 @@ from app.gold_ai_trader.config import GoldAiRuntimeConfig
 
 # Retrace / zone setups — limit at Claude entry.
 _LIMIT_PREFIXES = (
-    "ob_", "fvg_retrace_", "ifvg_", "breaker_", "fvg_bull", "fvg_bear",
+    "ob_", "fvg_retrace_", "ifvg_", "breaker_",
 )
 
 # Momentum / reclaim setups — market (or tight limit fallback in executor).
