@@ -120,6 +120,10 @@ def executor_runtime_profile() -> Dict[str, object]:
         "strategy_eval_budget_s": EXECUTOR_STRATEGY_EVAL_BUDGET_S,
         "price_fetch_budget_s": EXECUTOR_PRICE_FETCH_BUDGET_S,
         "conditions_budget_s": EXECUTOR_CONDITIONS_BUDGET_S,
+        "forex_cycle_timeout_s": EXECUTOR_FOREX_CYCLE_TIMEOUT_S,
+        "forex_prefetch_timeout_s": EXECUTOR_FOREX_PREFETCH_TIMEOUT_S,
+        "forex_eval_phase_timeout_s": EXECUTOR_FOREX_EVAL_PHASE_TIMEOUT_S,
+        "gate_only_timeout_s": EXECUTOR_GATE_ONLY_TIMEOUT_S,
         "prefetch_concurrent": EXECUTOR_PREFETCH_CONCURRENT,
         "stale_sweep_timeout_s": EXECUTOR_STALE_SWEEP_TIMEOUT_S,
         "prefetch_provider_limits": {
@@ -229,6 +233,9 @@ class ExecutorCycleCtx:
     assignment_targets: Dict[int, List[dict]] = field(default_factory=dict)
     stale_sweep_ms: float = 0.0
     cycle_slow: bool = False
+    cycle_deadline_mono: float = 0.0
+    fire_blocked: bool = False
+    fire_block_reason: str = ""
 
 
 # Log per-strategy eval sub-phases when total eval exceeds this threshold.
@@ -247,6 +254,21 @@ EXECUTOR_INIT_DB_TIMEOUT_S = float(
 # Guard stale-kline rebuild sweep calls inside the prefetch phase.
 EXECUTOR_STALE_SWEEP_TIMEOUT_S = float(
     _os_env.environ.get("EXECUTOR_STALE_SWEEP_TIMEOUT_S", "6"),
+)
+# Hard wall-clock ceiling for one forex shard cycle.
+EXECUTOR_FOREX_CYCLE_TIMEOUT_S = float(
+    _os_env.environ.get("EXECUTOR_FOREX_CYCLE_TIMEOUT_S", "180"),
+)
+# Forex shard phase ceilings.
+EXECUTOR_FOREX_PREFETCH_TIMEOUT_S = float(
+    _os_env.environ.get("EXECUTOR_FOREX_PREFETCH_TIMEOUT_S", "90"),
+)
+EXECUTOR_FOREX_EVAL_PHASE_TIMEOUT_S = float(
+    _os_env.environ.get("EXECUTOR_FOREX_EVAL_PHASE_TIMEOUT_S", "120"),
+)
+# Gate-only phase timeout for tradfi split-eval.
+EXECUTOR_GATE_ONLY_TIMEOUT_S = float(
+    _os_env.environ.get("EXECUTOR_GATE_ONLY_TIMEOUT_S", "8"),
 )
 
 
@@ -462,6 +484,22 @@ def _percentile_ms(samples: List[float], percentile: float) -> float:
     rank = max(1, int(math.ceil((float(percentile) / 100.0) * len(vals))))
     idx = min(len(vals) - 1, rank - 1)
     return float(vals[idx])
+
+
+def _phase_timeout_budget_s(
+    cycle_t0: float,
+    cycle_timeout_s: float,
+    phase_default_s: float,
+) -> float:
+    """
+    Bound one phase by remaining cycle budget.
+    Raises TimeoutError when the cycle budget is already exhausted.
+    """
+    elapsed_s = max(0.0, time.monotonic() - cycle_t0)
+    remaining_s = float(cycle_timeout_s) - elapsed_s
+    if remaining_s <= 0.0:
+        raise asyncio.TimeoutError("forex_cycle_budget_exhausted")
+    return max(0.25, min(float(phase_default_s), remaining_s))
 
 
 def _log_cycle_timing(
@@ -6216,6 +6254,22 @@ async def evaluate_and_fire(
         )
         # break out of "failure tracking" — we have a real fire below
 
+        _cycle_fire_ctx = _get_cycle_ctx()
+        _cycle_deadline_hit = bool(
+            _cycle_fire_ctx
+            and _cycle_fire_ctx.cycle_deadline_mono > 0.0
+            and time.monotonic() >= _cycle_fire_ctx.cycle_deadline_mono
+        )
+        if _cycle_fire_ctx and (_cycle_fire_ctx.fire_blocked or _cycle_deadline_hit):
+            _bump("blk_cycle_timeout")
+            logger.warning(
+                "[Strategy %s] %s fire blocked — cycle timeout guard (%s)",
+                strategy.id,
+                symbol,
+                _cycle_fire_ctx.fire_block_reason or "cycle_budget_exhausted",
+            )
+            continue
+
         # ── Pre-fire entry price confirmation (metals + tradfi) ─────────────
         if asset_class in ("forex", "index", "stock"):
             from app.services.tradfi_prices import confirm_entry_price as _confirm_px
@@ -7259,23 +7313,35 @@ async def _evaluate_tradfi_split(
     db_one = SessionLocal()
     carry = None
     try:
+        _gate_timeout_s = max(0.5, float(EXECUTOR_GATE_ONLY_TIMEOUT_S))
         async with forex_db_slot():
             strategy = db_one.merge(strategy_row)
             user = db_one.merge(user_row)
-        carry = await evaluate_and_fire(
-            strategy,
-            user,
-            db_one,
-            http_client,
-            raw_tickers=[],
-            gate_stats=gate_stats,
-            prefetched_ctrader_ok=prefetched_ctrader_ok,
-            eval_diag=eval_diag,
-            tradfi_db_split=True,
-            strategy_row=strategy_row,
-            user_row=user_row,
-            gate_only=True,
-        )
+        try:
+            carry = await asyncio.wait_for(
+                evaluate_and_fire(
+                    strategy,
+                    user,
+                    db_one,
+                    http_client,
+                    raw_tickers=[],
+                    gate_stats=gate_stats,
+                    prefetched_ctrader_ok=prefetched_ctrader_ok,
+                    eval_diag=eval_diag,
+                    tradfi_db_split=True,
+                    strategy_row=strategy_row,
+                    user_row=user_row,
+                    gate_only=True,
+                ),
+                timeout=_gate_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[FX Strategy %s] gate_only timeout %.1fs — skipping cycle (no fire)",
+                snap.get("id"),
+                _gate_timeout_s,
+            )
+            return
     finally:
         _tradfi_release_db_session(db_one)
     if carry is None:
@@ -10187,6 +10253,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
 
     sem = asyncio.Semaphore(FOREX_MAX_CONCURRENT)
     _fx_hb = "forex_executor" if shard_count <= 1 else f"forex_executor_s{shard_index}"
+    _cycle_timeout_s = max(30.0, float(EXECUTOR_FOREX_CYCLE_TIMEOUT_S))
 
     # Lighter pool — yfinance calls are outbound Python HTTP, not MEXC REST;
     # a handful of concurrent connections is plenty.
@@ -10218,6 +10285,12 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
             _active_forex_scanned = 0
             _cycle_abort_count = 0
             _cycle_db_slot_wait_samples: List[float] = []
+            def _phase_budget(default_s: float) -> float:
+                return _phase_timeout_budget_s(
+                    _cycle_t0,
+                    _cycle_timeout_s,
+                    default_s,
+                )
             try:
                 from app.services.feed_diagnostics import begin_scan_metric_batch
                 begin_scan_metric_batch()
@@ -10226,7 +10299,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                 _all_snaps = await _run_db_phase_with_timeout(
                     label=f"{_fx_lbl}:snapshots",
                     fn=lambda: _load_strategy_snapshots_cached(SessionLocal, UserStrategy),
-                    timeout_s=EXECUTOR_DB_PHASE_TIMEOUT_S,
+                    timeout_s=_phase_budget(EXECUTOR_DB_PHASE_TIMEOUT_S),
                     fallback=[],
                 )
                 _log_cycle_db_phase(_fx_lbl, "snapshots", _db_t0)
@@ -10365,7 +10438,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     has_pro_by_user, ctrader_ok_by_user = await _run_db_phase_with_timeout(
                         label=f"{_fx_lbl}:ref_preload",
                         fn=_load_ref_maps_sync,
-                        timeout_s=EXECUTOR_REF_PRELOAD_TIMEOUT_S,
+                        timeout_s=_phase_budget(EXECUTOR_REF_PRELOAD_TIMEOUT_S),
                         fallback=({}, {}),
                     )
 
@@ -10383,7 +10456,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                         UserStrategy,
                         User,
                     ),
-                    timeout_s=EXECUTOR_DB_PHASE_TIMEOUT_S,
+                    timeout_s=_phase_budget(EXECUTOR_DB_PHASE_TIMEOUT_S),
                     fallback={},
                 )
                 _log_cycle_db_phase(_fx_lbl, "preload_users", _db_t0)
@@ -10395,7 +10468,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                         [s["id"] for s in open_snaps],
                         SessionLocal,
                     ),
-                    timeout_s=EXECUTOR_DB_PHASE_TIMEOUT_S,
+                    timeout_s=_phase_budget(EXECUTOR_DB_PHASE_TIMEOUT_S),
                     fallback={
                         "execution_counts": {},
                         "symbol_last_fired": {},
@@ -10408,6 +10481,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     execution_counts=_gate_prefetch["execution_counts"],
                     symbol_last_fired=_gate_prefetch["symbol_last_fired"],
                     assignment_targets=_gate_prefetch["assignment_targets"],
+                    cycle_deadline_mono=(_cycle_t0 + _cycle_timeout_s),
                 )
                 _cycle_ctx_token = _EXECUTOR_CYCLE_CTX.set(_cycle_ctx)
 
@@ -10515,6 +10589,7 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                             _stale_sweep_ms = await _run_stale_kline_sweeps(
                                 symbols=_stale_syms,
                                 executor_label=_fx_lbl,
+                                timeout_s=_phase_budget(EXECUTOR_STALE_SWEEP_TIMEOUT_S),
                             )
                             if _stale_sweep_ms >= 500:
                                 logger.info(
@@ -10523,18 +10598,37 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                                     _stale_sweep_ms,
                                     len(_stale_syms),
                                 )
+                    except asyncio.TimeoutError:
+                        raise
                     except Exception as _ks_err:
                         logger.debug("[FX Executor] kline staleness sweep: %s", _ks_err)
                 if _cycle_ctx is not None:
                     _cycle_ctx.stale_sweep_ms = _stale_sweep_ms
 
-                _prefetch_stats = await _prefetch_price_ta_for_cycle(
-                    open_snaps,
-                    http_client,
-                    set(_EXECUTOR_TRADFI_CLASSES),
-                    label=_fx_lbl,
-                    ctrader_user_id=_prefetch_ct_uid,
-                )
+                try:
+                    _prefetch_stats = await asyncio.wait_for(
+                        _prefetch_price_ta_for_cycle(
+                            open_snaps,
+                            http_client,
+                            set(_EXECUTOR_TRADFI_CLASSES),
+                            label=_fx_lbl,
+                            ctrader_user_id=_prefetch_ct_uid,
+                        ),
+                        timeout=_phase_budget(EXECUTOR_FOREX_PREFETCH_TIMEOUT_S),
+                    )
+                except asyncio.TimeoutError:
+                    _prefetch_ms = (time.monotonic() - _prefetch_t0) * 1000.0
+                    if _cycle_ctx is not None:
+                        _cycle_ctx.fire_blocked = True
+                        _cycle_ctx.fire_block_reason = "prefetch_timeout"
+                    logger.warning(
+                        "[cycle-timeout] shard=%s prefetch timed out after %.1fs "
+                        "(elapsed=%.0fms) — skipping cycle (no fire)",
+                        shard_index,
+                        EXECUTOR_FOREX_PREFETCH_TIMEOUT_S,
+                        _prefetch_ms,
+                    )
+                    continue
                 _prefetch_ms = (time.monotonic() - _prefetch_t0) * 1000.0
 
                 logger.info(
@@ -10542,9 +10636,27 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     f"(batch size {EXECUTOR_SCAN_BATCH_SIZE})…"
                 )
                 _eval_t0 = time.monotonic()
-                await _gather_eval_batches(
-                    _fx_lbl, open_snaps, _run_one_fx,
-                )
+                try:
+                    await asyncio.wait_for(
+                        _gather_eval_batches(
+                            _fx_lbl, open_snaps, _run_one_fx,
+                        ),
+                        timeout=_phase_budget(EXECUTOR_FOREX_EVAL_PHASE_TIMEOUT_S),
+                    )
+                except asyncio.TimeoutError:
+                    _eval_ms = (time.monotonic() - _eval_t0) * 1000.0
+                    if _cycle_ctx is not None:
+                        _cycle_ctx.fire_blocked = True
+                        _cycle_ctx.fire_block_reason = "eval_phase_timeout"
+                    logger.warning(
+                        "[cycle-timeout] shard=%s eval timed out after %.1fs "
+                        "(elapsed=%.0fms) — cancelling outstanding eval tasks; "
+                        "blocking further fire in this cycle",
+                        shard_index,
+                        EXECUTOR_FOREX_EVAL_PHASE_TIMEOUT_S,
+                        _eval_ms,
+                    )
+                    continue
                 _eval_ms = (time.monotonic() - _eval_t0) * 1000.0
                 _post_t0 = time.monotonic()
                 if _cycle_ctx is not None:
@@ -10675,6 +10787,25 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                         ),
                     )
 
+            except asyncio.TimeoutError as e:
+                if _cycle_ctx is not None:
+                    _cycle_ctx.fire_blocked = True
+                    if not _cycle_ctx.fire_block_reason:
+                        _cycle_ctx.fire_block_reason = "cycle_timeout"
+                logger.warning(
+                    "[cycle-timeout] forex_executor cycle timed out shard=%s/%s "
+                    "(cycle_timeout_s=%.1f): %s",
+                    shard_index,
+                    shard_count,
+                    _cycle_timeout_s,
+                    e,
+                )
+                try:
+                    from app.services.feed_diagnostics import flush_scan_metric_batch
+                    flush_scan_metric_batch(_fx_lbl)
+                except Exception:
+                    pass
+                _cycle_db_skipped.append(("__cycle__", "TimeoutError"))
             except Exception as e:
                 logger.critical(
                     f"[executor] forex_executor cycle error shard={shard_index}: {e}",

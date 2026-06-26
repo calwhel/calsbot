@@ -132,6 +132,12 @@ _TRACKED: Dict[str, str] = {
 _BROKER_TO_CANONICAL: Dict[str, str] = {v: k for k, v in _TRACKED.items()}
 
 _SPOT_TTL = float(os.environ.get("REALTIME_SPOT_MAX_AGE_FOREX_S", "5"))
+_CTRADER_ACCOUNT_LOOKUP_TIMEOUT_S = float(
+    os.environ.get("CTRADER_ACCOUNT_LOOKUP_TIMEOUT_S", "3.0")
+)
+_CTRADER_ACCOUNT_LOOKUP_CACHE_TTL_S = float(
+    os.environ.get("CTRADER_ACCOUNT_LOOKUP_CACHE_TTL_S", "2.0")
+)
 
 # ── Module-level shared state ─────────────────────────────────────────────────
 # symbol → (bid, ask, monotonic_ts)
@@ -188,6 +194,7 @@ _wake_event: Optional[asyncio.Event] = None
 _symbol_id_map: Dict[str, int] = {}   # broker_name → symbolId
 _id_to_canonical: Dict[int, str] = {} # symbolId → canonical name
 _symbol_map_ctx: Optional[Tuple[str, int]] = None  # (host, ctid) cache belongs to
+_connected_accounts_cache: Dict[int, Tuple[List[Tuple[str, int, int, bool]], float]] = {}
 
 # ── Protobuf imports ──────────────────────────────────────────────────────────
 try:
@@ -913,18 +920,37 @@ async def _list_connected_accounts(
     user_id: Optional[int] = None,
 ) -> List[Tuple[str, int, int, bool]]:
     """All linked cTrader accounts — forex-approved users first."""
-    out: List[Tuple[str, int, int, bool]] = []
-    try:
+    def _cache_key(uid: Optional[int]) -> int:
+        return int(uid) if uid is not None else 0
+
+    def _cache_get(uid: Optional[int], *, allow_stale: bool = False) -> Optional[List[Tuple[str, int, int, bool]]]:
+        item = _connected_accounts_cache.get(_cache_key(uid))
+        if not item:
+            return None
+        rows, ts_mono = item
+        if allow_stale:
+            return list(rows)
+        age_s = max(0.0, time.monotonic() - ts_mono)
+        if age_s > max(0.1, _CTRADER_ACCOUNT_LOOKUP_CACHE_TTL_S):
+            return None
+        return list(rows)
+
+    def _cache_put(uid: Optional[int], rows: List[Tuple[str, int, int, bool]]) -> None:
+        _connected_accounts_cache[_cache_key(uid)] = (list(rows), time.monotonic())
+
+    def _list_connected_accounts_sync(uid: Optional[int]) -> List[Tuple[str, int, int, bool]]:
+        out_sync: List[Tuple[str, int, int, bool]] = []
         from app.database import SessionLocal
         from app.models import UserPreference
+
         db = SessionLocal()
         try:
             q = db.query(UserPreference).filter(
                 UserPreference.ctrader_access_token.isnot(None),
                 UserPreference.ctrader_account_id.isnot(None),
             )
-            if user_id is not None:
-                q = q.filter(UserPreference.user_id == int(user_id))
+            if uid is not None:
+                q = q.filter(UserPreference.user_id == int(uid))
             rows = (
                 q.order_by(
                     UserPreference.forex_approved.desc(),
@@ -932,12 +958,45 @@ async def _list_connected_accounts(
                 )
                 .all()
             )
-            out = _prefs_rows_to_accounts(rows)
+            out_sync = _prefs_rows_to_accounts(rows)
         finally:
             db.close()
+        return out_sync
+
+    cached = _cache_get(user_id)
+    if cached is not None:
+        return cached
+
+    timeout_s = max(0.5, float(_CTRADER_ACCOUNT_LOOKUP_TIMEOUT_S))
+    try:
+        out = await asyncio.wait_for(
+            asyncio.to_thread(_list_connected_accounts_sync, user_id),
+            timeout=timeout_s,
+        )
+        _cache_put(user_id, out)
+        return out
+    except asyncio.TimeoutError:
+        stale = _cache_get(user_id, allow_stale=True)
+        if stale is not None:
+            logger.warning(
+                "[CTraderFeed] DB lookup timeout %.1fs (uid=%s) — using cached rows=%s",
+                timeout_s,
+                user_id,
+                len(stale),
+            )
+            return stale
+        logger.warning(
+            "[CTraderFeed] DB lookup timeout %.1fs (uid=%s) — no cached accounts",
+            timeout_s,
+            user_id,
+        )
+        return []
     except Exception as e:
+        stale = _cache_get(user_id, allow_stale=True)
         logger.warning("[CTraderFeed] DB lookup error: %s", e)
-    return out
+        if stale is not None:
+            return stale
+        return []
 
 
 async def _get_connected_account(
