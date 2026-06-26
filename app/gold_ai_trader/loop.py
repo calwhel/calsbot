@@ -1110,6 +1110,18 @@ async def run_gold_ai_trader_loop() -> None:
             key_levels = collect_key_levels(
                 float(price), session, cfg, now, k_daily, k1h, k5,
             )
+            if candidate.type.startswith("trendline_"):
+                decision["validator_profile"] = "trendline"
+                trendline_level = candidate.raw.get("trendline_level")
+                try:
+                    if trendline_level is not None:
+                        decision["trendline_level"] = float(trendline_level)
+                except (TypeError, ValueError):
+                    pass
+                decision["trendline_mode"] = candidate.raw.get("trendline_mode")
+                decision["trendline_used_retest"] = bool(
+                    candidate.raw.get("trendline_used_retest")
+                )
             val_ok, val_reason, decision = validate_take_decision(
                 decision,
                 candidate_direction=candidate.direction,

@@ -28,6 +28,7 @@ from app.gold_ai_trader.setup_toggles import (
 )
 from app.gold_ai_trader.smt_modifier import assess_smt_divergence
 from app.gold_ai_trader.structure_score import compute_structure_score
+from app.gold_ai_trader.trendline import eval_fx_trendline
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,10 @@ def _priority_map() -> Dict[str, int]:
         "disp_bear": 3,
         "asian_sweep_bull": 3,
         "asian_sweep_bear": 3,
+        "trendline_bounce_long": 5,
+        "trendline_bounce_short": 5,
+        "trendline_break_long": 4,
+        "trendline_break_short": 4,
         "judas_bull": 2,
         "judas_bear": 2,
     }
@@ -260,6 +265,30 @@ async def scan_candidates(
         ("judas_bear", "fx_judas_swing", {"timeframe": TF_ZONE}, "SHORT"),
         ("asian_sweep_bull", "asian_sweep", {"direction": "bullish", "timeframe": TF_TIMING}, "LONG"),
         ("asian_sweep_bear", "asian_sweep", {"direction": "bearish", "timeframe": TF_TIMING}, "SHORT"),
+        (
+            "trendline_bounce_long",
+            "fx_trendline",
+            {"mode": "bounce", "line_side": "support", "direction": "bullish", "timeframe": TF_ZONE},
+            "LONG",
+        ),
+        (
+            "trendline_bounce_short",
+            "fx_trendline",
+            {"mode": "bounce", "line_side": "resistance", "direction": "bearish", "timeframe": TF_ZONE},
+            "SHORT",
+        ),
+        (
+            "trendline_break_long",
+            "fx_trendline",
+            {"mode": "break", "line_side": "resistance", "direction": "bullish", "timeframe": TF_ZONE},
+            "LONG",
+        ),
+        (
+            "trendline_break_short",
+            "fx_trendline",
+            {"mode": "break", "line_side": "support", "direction": "bearish", "timeframe": TF_ZONE},
+            "SHORT",
+        ),
     ]
 
     for ctype, kind, cond, direction in checks:
@@ -271,6 +300,7 @@ async def scan_candidates(
         cond_eval = {**cond}
         if kind == "fx_judas_swing":
             cond_eval["session"] = session
+        trendline_meta: Dict[str, Any] = {}
         try:
             if kind in ("fvg", "ifvg"):
                 ok, msg = await eval_fvg(cond_eval, SYMBOL, price, http, cache)
@@ -298,6 +328,10 @@ async def scan_candidates(
                 from app.gold_ai_trader.asian_sweep import eval_asian_range_sweep
 
                 ok, msg = await eval_asian_range_sweep(cond_eval, SYMBOL, price, http, cache)
+            elif kind == "fx_trendline":
+                ok, msg, trendline_meta = await eval_fx_trendline(
+                    cond_eval, SYMBOL, price, http, cache
+                )
             else:
                 continue
         except Exception as exc:
@@ -352,6 +386,8 @@ async def scan_candidates(
             "htf_align": align_reason,
             "zone_tf": cond.get("timeframe", TF_TIMING),
         }
+        if trendline_meta:
+            raw.update(trendline_meta)
 
         if smt_modifier_enabled():
             raw["smt"] = await assess_smt_divergence(
