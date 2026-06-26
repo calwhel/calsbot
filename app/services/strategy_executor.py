@@ -8087,6 +8087,83 @@ def _prefetch_fallback_price_ta(
     return None, ""
 
 
+async def _prefetch_cycle_condition_klines(
+    open_snaps: list,
+    http_client: httpx.AsyncClient,
+    kline_cache: Dict[Any, Any],
+    *,
+    ctrader_user_id: Optional[int] = None,
+) -> Dict[str, int]:
+    """
+    Warm ExecutorCycleCtx.kline_cache once per (symbol, asset_class) per cycle.
+
+    Collapses duplicate SMC / ICT condition kline fetches when many strategies
+    (e.g. ~4 XAUUSD) share the same 15m+5m bar stacks.
+    """
+    from app.services.strategy_ta import (
+        collect_condition_kline_timeframes,
+        _get_klines,
+    )
+
+    jobs: Dict[Tuple[str, str], set] = {}
+    for snap in open_snaps:
+        cfg = snap.get("config") or {}
+        ac = _snap_asset_class(snap)
+        conds = (cfg.get("entry_conditions") or {}).get("conditions") or []
+        tfs = collect_condition_kline_timeframes(conds)
+        if not tfs:
+            continue
+        for sym in _symbols_for_snapshot(snap):
+            sym_u = (sym or "").upper().replace("/", "").replace("-", "").strip()
+            if not sym_u:
+                continue
+            jobs.setdefault((sym_u, ac), set()).update(tfs)
+
+    if not jobs:
+        return {"symbol_keys": 0, "timeframe_refs": 0, "cold_fetches": 0}
+
+    tf_refs = sum(len(tfs) for tfs in jobs.values())
+    cold_fetches = 0
+
+    def _cache_has(sym: str, ac: str, tf: str) -> bool:
+        ckey = (sym, tf, 200, ac)
+        if ckey in kline_cache:
+            return True
+        for ck, cv in kline_cache.items():
+            if not isinstance(ck, tuple) or len(ck) != 4 or not cv:
+                continue
+            cs, ci, cl, ca = ck
+            if cs == sym and ci == tf and ca == ac and isinstance(cl, int) and cl >= 200:
+                return True
+        return False
+
+    async def _warm_symbol(sym: str, ac: str, tfs: set) -> None:
+        nonlocal cold_fetches
+        need = [tf for tf in sorted(tfs) if not _cache_has(sym, ac, tf)]
+        if not need:
+            return
+        cache: Dict[Any, Any] = {"__asset_class__": ac}
+        if ctrader_user_id is not None:
+            cache["__ctrader_user_id__"] = int(ctrader_user_id)
+        cold_fetches += len(need)
+        await asyncio.gather(
+            *[_get_klines(sym, tf, 200, http_client, cache) for tf in need],
+            return_exceptions=True,
+        )
+        for key, val in cache.items():
+            kline_cache[key] = val
+
+    await asyncio.gather(
+        *[_warm_symbol(sym, ac, tfs) for (sym, ac), tfs in jobs.items()],
+        return_exceptions=True,
+    )
+    return {
+        "symbol_keys": len(jobs),
+        "timeframe_refs": tf_refs,
+        "cold_fetches": cold_fetches,
+    }
+
+
 async def _prefetch_price_ta_for_cycle(
     snapshots: list,
     http_client: httpx.AsyncClient,
@@ -8732,6 +8809,14 @@ async def _run_crypto_executor_shard(
     http_client: httpx.AsyncClient,
 ):
     """Crypto scan loop for strategies where ``strategy_id % shard_count == shard_index``."""
+    if crypto_executor_disabled():
+        logger.info(
+            "🤖 Crypto executor shard %s/%s not started (DISABLE_CRYPTO_EXECUTOR=1)",
+            shard_index,
+            shard_count,
+        )
+        return
+
     from app.database import BgSessionLocal as SessionLocal
     from app.models import User
     from app.strategy_models import UserStrategy
@@ -10535,6 +10620,26 @@ async def _run_forex_executor_shard(shard_index: int, shard_count: int):
                     label=_fx_lbl,
                     ctrader_user_id=_prefetch_ct_uid,
                 )
+                _cond_kline_stats: Dict[str, int] = {}
+                if _cycle_ctx is not None:
+                    _cond_kline_t0 = time.monotonic()
+                    _cond_kline_stats = await _prefetch_cycle_condition_klines(
+                        open_snaps,
+                        http_client,
+                        _cycle_ctx.kline_cache,
+                        ctrader_user_id=_prefetch_ct_uid,
+                    )
+                    _cond_kline_ms = (time.monotonic() - _cond_kline_t0) * 1000.0
+                    if _cond_kline_stats.get("cold_fetches", 0) > 0:
+                        logger.info(
+                            "[cycle-prefetch] executor=%s cond_klines sym_keys=%s "
+                            "tf_refs=%s cold_fetches=%s ms=%.0f",
+                            _fx_lbl,
+                            _cond_kline_stats.get("symbol_keys", 0),
+                            _cond_kline_stats.get("timeframe_refs", 0),
+                            _cond_kline_stats.get("cold_fetches", 0),
+                            _cond_kline_ms,
+                        )
                 _prefetch_ms = (time.monotonic() - _prefetch_t0) * 1000.0
 
                 logger.info(
