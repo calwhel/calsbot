@@ -755,7 +755,9 @@ async def run_gold_ai_trader_loop() -> None:
     _prev_session = session
     runtime_state.note_scan(session)
 
-    if killzone_only_enabled() and not in_killzone(now, session, cfg):
+    orb_enabled = bool(getattr(cfg, "orb_enabled", False))
+    killzone_blocked = killzone_only_enabled() and not in_killzone(now, session, cfg)
+    if killzone_blocked and not orb_enabled:
         runtime_state.note_dormant("outside_killzone")
         await asyncio.sleep(max(cfg.scan_interval_s, 15))
         return
@@ -766,13 +768,16 @@ async def run_gold_ai_trader_loop() -> None:
         cfg_row = db.query(GoldAiConfig).filter_by(id=1).first()
         if cfg_row:
             cfg = merge_config(cfg_row, env)
+        orb_enabled = bool(getattr(cfg, "orb_enabled", False))
+        killzone_blocked = killzone_only_enabled() and not in_killzone(now, session, cfg)
 
-        ok_call, reason = check_can_call_claude(db, cfg)
-        if not ok_call:
-            runtime_state.note_dormant(reason)
-            if reason == "max_calls_day":
-                await maybe_notify_call_cap_reached(db, cfg)
-            return
+        if not killzone_blocked:
+            ok_call, reason = check_can_call_claude(db, cfg)
+            if not ok_call:
+                runtime_state.note_dormant(reason)
+                if reason == "max_calls_day":
+                    await maybe_notify_call_cap_reached(db, cfg)
+                return
 
         market_data = await assess_gold_market_data(user_id=cfg.demo_user_id)
         data_ok, data_block = gold_data_ok_for_claude(market_data)
@@ -832,6 +837,15 @@ async def run_gold_ai_trader_loop() -> None:
             price=float(market_data["price"]),
             source_tag=source_tag,
         )
+
+        if killzone_blocked:
+            runtime_state.note_dormant("outside_killzone")
+            if orb_logged:
+                await sync_closed_trade_notifications(db, cfg)
+                await maybe_send_daily_summary(db, cfg)
+                await maybe_run_learning_review(db, session, cfg)
+            runtime_state.set_funnel(funnel_snapshot())
+            return
 
         async with httpx.AsyncClient(timeout=15) as http:
             price, candidates = await scan_candidates(
