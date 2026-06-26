@@ -5,9 +5,11 @@ import logging
 from typing import Any, Dict, Optional, Tuple
 
 from app.gold_ai_trader.config import ASSET_CLASS, SYMBOL
-from app.services.kline_staleness import check_cached_klines_stale
+from app.services.kline_staleness import check_cached_klines_stale, newest_bar_age_s
 from app.services.tradfi_prices import (
     get_klines,
+    get_metal_kline_fetched_at,
+    get_metal_kline_fetch_age_s,
     get_metal_kline_source,
     is_metal_kline_synthetic,
 )
@@ -21,6 +23,17 @@ MIN_KLINE_BARS = 20
 
 _CTRADER_PRICE_SOURCES = frozenset({"ctrader"})
 _CTRADER_KLINE_SOURCES = frozenset({"ctrader", "ctrader-user", "ctrader-cache"})
+
+
+def _ctrader_trendbar_block_state() -> Tuple[bool, str]:
+    """Return (is_blocked, reason) for cTrader trendbar fetch path."""
+    try:
+        from app.services import ctrader_price_feed as _ctf
+
+        reason = _ctf.trendbar_fetch_blocked_reason()
+        return bool(reason), str(reason or "")
+    except Exception as exc:
+        return False, f"status_unavailable:{type(exc).__name__}"
 
 
 async def _resolve_ctrader_spot(
@@ -93,9 +106,17 @@ async def assess_gold_market_data(
         SYMBOL, ASSET_CLASS, SCORING_TIMEFRAME, SCORING_KLINE_LIMIT
     ) or []
     kline_source = get_metal_kline_source(sym, SCORING_TIMEFRAME, SCORING_KLINE_LIMIT)
+    kline_fetched_at = get_metal_kline_fetched_at(
+        sym, SCORING_TIMEFRAME, SCORING_KLINE_LIMIT
+    )
+    kline_fetch_age_s = get_metal_kline_fetch_age_s(
+        sym, SCORING_TIMEFRAME, SCORING_KLINE_LIMIT
+    )
+    kline_bar_age_s = newest_bar_age_s(k5) if k5 else None
     kline_synthetic = is_metal_kline_synthetic(
         sym, SCORING_TIMEFRAME, SCORING_KLINE_LIMIT
     )
+    trendbar_blocked, trendbar_block_reason = _ctrader_trendbar_block_state()
 
     # Last resort: cTrader kline close when tick socket is cold but trendbars flow.
     if not live_px and k5 and (kline_source or "").lower() in _CTRADER_KLINE_SOURCES:
@@ -115,7 +136,7 @@ async def assess_gold_market_data(
     stale_reason = ""
     if k5:
         klines_stale, stale_reason = await check_cached_klines_stale(
-            sym, k5, SCORING_TIMEFRAME
+            sym, k5, SCORING_TIMEFRAME, cache_fetched_at=kline_fetched_at
         )
 
     price = live_px
@@ -133,6 +154,10 @@ async def assess_gold_market_data(
         "kline_synthetic": kline_synthetic,
         "klines_stale": klines_stale,
         "stale_reason": stale_reason,
+        "kline_bar_age_s": kline_bar_age_s,
+        "kline_fetch_age_s": kline_fetch_age_s,
+        "ctrader_trendbar_blocked": trendbar_blocked,
+        "ctrader_trendbar_block_reason": trendbar_block_reason,
         "kline_bars": len(k5),
         "bid": bid,
         "ask": ask,

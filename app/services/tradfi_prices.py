@@ -341,6 +341,33 @@ def get_metal_kline_source(
     return label
 
 
+def get_metal_kline_fetch_age_s(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+) -> Optional[float]:
+    """Age in seconds of last metal kline provider fetch for this key."""
+    sym = symbol.upper().replace("/", "").replace("-", "")
+    entry = _METAL_KLINE_SOURCE_CACHE.get((sym, timeframe, int(limit)))
+    if not entry:
+        return None
+    _label, fetched_at = entry
+    return max(0.0, (datetime.utcnow() - fetched_at).total_seconds())
+
+
+def get_metal_kline_fetched_at(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+) -> Optional[datetime]:
+    """Timestamp of last metal kline provider fetch for this key."""
+    sym = symbol.upper().replace("/", "").replace("-", "")
+    entry = _METAL_KLINE_SOURCE_CACHE.get((sym, timeframe, int(limit)))
+    if not entry:
+        return None
+    return entry[1]
+
+
 def is_metal_kline_synthetic(
     symbol: str,
     timeframe: str,
@@ -1114,11 +1141,24 @@ async def fetch_metal_live_candles(
                 or (_src.startswith("ctrader") and len(cached_rows) >= 3)
             )
             if cached_rows and _accept_cached:
-                logger.info(
-                    f"[tradfi] prefetch-fast cache hit {sym} {timeframe} "
-                    f"src={cached_src} → {len(cached_rows)} bars"
+                from app.services.kline_staleness import check_cached_klines_stale
+
+                stale, detail = await check_cached_klines_stale(
+                    sym, cached_rows, timeframe,
                 )
-                return cached_rows[-limit:] if len(cached_rows) > limit else cached_rows
+                if not stale:
+                    logger.info(
+                        f"[tradfi] prefetch-fast cache hit {sym} {timeframe} "
+                        f"src={cached_src} → {len(cached_rows)} bars"
+                    )
+                    return cached_rows[-limit:] if len(cached_rows) > limit else cached_rows
+                logger.warning(
+                    "[tradfi] prefetch-fast stale cache bypass %s %s (src=%s, %s)",
+                    sym,
+                    timeframe,
+                    cached_src or "unknown",
+                    detail or "stale",
+                )
     except Exception:
         pass
 

@@ -534,6 +534,19 @@ async def run_gold_ai_trader_loop() -> None:
         data_ok, data_block = gold_data_ok_for_claude(market_data)
         source_tag = format_data_source(market_data)
         if not data_ok:
+            if str(data_block).startswith("stale_klines:"):
+                bar_age_s = market_data.get("kline_bar_age_s")
+                fetch_age_s = market_data.get("kline_fetch_age_s")
+                logger.warning(
+                    "[gold-ai] stale skip source=%s bar_age_s=%s fetch_age_s=%s "
+                    "trendbar_blocked=%s trendbar_reason=%s detail=%s",
+                    source_tag,
+                    f"{float(bar_age_s):.1f}" if bar_age_s is not None else "n/a",
+                    f"{float(fetch_age_s):.1f}" if fetch_age_s is not None else "n/a",
+                    bool(market_data.get("ctrader_trendbar_blocked")),
+                    market_data.get("ctrader_trendbar_block_reason") or "",
+                    market_data.get("stale_reason") or data_block,
+                )
             logger.info(
                 "[gold-ai] confidence=N/A source=%s decision=skip reason=%s",
                 source_tag,

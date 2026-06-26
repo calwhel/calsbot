@@ -60,6 +60,10 @@ class TestDataRefresh:
             new_callable=AsyncMock,
             return_value=0,
         ), patch(
+            "app.services.ctrader_price_feed.sweep_stale_klines",
+            new_callable=AsyncMock,
+            return_value=0,
+        ), patch(
             "app.gold_ai_trader.data_refresh.get_klines",
             new_callable=AsyncMock,
             return_value=k5,
@@ -67,6 +71,7 @@ class TestDataRefresh:
             summary = await refresh_gold_scoring_klines()
         assert summary["refreshed_5m"] is False
         assert summary["cleared"] == 0
+        assert summary["ctrader_swept"] == 0
 
     @pytest.mark.asyncio
     async def test_refresh_clears_when_stale(self):
@@ -78,6 +83,10 @@ class TestDataRefresh:
             "app.gold_ai_trader.data_refresh.sweep_stale_metal_klines",
             new_callable=AsyncMock,
             return_value=1,
+        ), patch(
+            "app.services.ctrader_price_feed.sweep_stale_klines",
+            new_callable=AsyncMock,
+            return_value=2,
         ), patch(
             "app.gold_ai_trader.data_refresh.clear_metal_kline_cache",
             return_value=3,
@@ -91,6 +100,7 @@ class TestDataRefresh:
         ):
             summary = await refresh_gold_scoring_klines()
         assert summary["swept"] == 1
+        assert summary["ctrader_swept"] == 2
         assert summary["cleared"] == 3
         assert summary["refreshed_5m"] is True
 
