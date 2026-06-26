@@ -171,15 +171,24 @@ async def build_context_snapshot(
         )
         pnl_today = sum(float(x.pnl_pct or 0) for x in closed)
 
-    lesson_row = (
-        db.query(GoldAiLesson)
-        .filter(GoldAiLesson.session == session)
-        .order_by(GoldAiLesson.ts.desc())
-        .first()
-    )
-    lessons = (lesson_row.digest if lesson_row else "No session lessons yet — trade selectively.")
-
     now = datetime.utcnow()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    lesson_row = None
+    if cfg.include_history_in_decisions:
+        lesson_row = (
+            db.query(GoldAiLesson)
+            .filter(
+                GoldAiLesson.session == session,
+                GoldAiLesson.ts >= today_start,
+            )
+            .order_by(GoldAiLesson.ts.desc())
+            .first()
+        )
+    lessons = (
+        lesson_row.digest
+        if lesson_row
+        else "Fresh-day mode: historical lessons disabled; focus on live setup quality."
+    )
     mins_in_session = 0
     if session == "london":
         mins_in_session = max(0, (now.hour - cfg.london_start_hour) * 60 + now.minute)
@@ -210,7 +219,13 @@ async def build_context_snapshot(
     regime = build_regime_block(k1h, k5, k4h)
     htf_block = build_htf_bias_block(bias)
     data_quality = build_data_quality_block(market_data)
-    recent_decisions = build_recent_decisions_block(db, session=session)
+    if cfg.include_history_in_decisions:
+        recent_decisions = build_recent_decisions_block(db, session=session)
+    else:
+        recent_decisions = [
+            "=== RECENT DECISIONS ===",
+            "Fresh-day mode: prior decision/trade history is not used in this prompt.",
+        ]
     smt_block = build_smt_block(smt or candidate.raw.get("smt"))
     cisd_block = build_cisd_block(cisd or candidate.raw.get("cisd"))
     premium_discount = build_premium_discount_block(
@@ -247,7 +262,13 @@ async def build_context_snapshot(
         setup_detail=candidate.detail,
         key_levels=level_values,
     )
-    setup_stats = format_setup_stats_block(db, session=session)
+    if cfg.include_history_in_decisions:
+        setup_stats = format_setup_stats_block(db, session=session)
+    else:
+        setup_stats = [
+            "=== SETUP STATS ===",
+            "Fresh-day mode: historical setup win-rate stats suppressed.",
+        ]
 
     htf_align = candidate.raw.get("htf_align", "unknown")
 
@@ -307,7 +328,7 @@ async def build_context_snapshot(
         f"Est. API cost today: ${cost_today_usd(db):.4f}",
         f"Demo P&L today (closed, %): {pnl_today:+.2f}",
         "",
-        "=== RECENT LESSONS ===",
+        "=== LESSONS CONTEXT ===",
         lessons,
         "",
         "=== DECISION RULE REMINDER ===",
