@@ -19,6 +19,7 @@ import ssl
 import struct
 import logging
 import os
+import re
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -3164,6 +3165,21 @@ def _deal_timestamp_ms(deal) -> int:
     return 0
 
 
+def _coerce_int_id(raw) -> Optional[int]:
+    if raw is None:
+        return None
+    try:
+        return int(str(raw).strip())
+    except Exception:
+        m = re.search(r"(\d+)", str(raw))
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+
 def _outcome_from_close_detail(
     *,
     exit_price: float,
@@ -3227,6 +3243,26 @@ def _parse_close_from_deals(
         "gross_profit_usd": round(float(gross) / 100.0, 2),
         "deal_id": int(deal.dealId) if deal.HasField("dealId") else None,
     }
+
+
+def _position_id_from_order_deals(deals: list, order_id) -> Optional[int]:
+    oid = _coerce_int_id(order_id)
+    if oid is None:
+        return None
+    latest_ts = -1
+    chosen_pid: Optional[int] = None
+    for d in deals:
+        did = _coerce_int_id(getattr(d, "orderId", None))
+        if did is None or did != oid:
+            continue
+        pid = _coerce_int_id(getattr(d, "positionId", None))
+        if pid is None or pid <= 0:
+            continue
+        ts = _deal_timestamp_ms(d)
+        if ts >= latest_ts:
+            latest_ts = ts
+            chosen_pid = pid
+    return chosen_pid
 
 
 async def _fetch_deals_by_position_id(
@@ -3611,6 +3647,108 @@ async def get_position_close_detail_for_user(
         user.id,
         ctid_val,
         position_id,
+        hosts,
+    )
+    return None
+
+
+async def get_order_close_detail_for_user(
+    user,
+    order_id,
+    *,
+    entry_hint: Optional[float] = None,
+    direction: Optional[str] = None,
+    ctid: Optional[str] = None,
+    notes: Optional[str] = None,
+    fired_at=None,
+) -> Optional[dict]:
+    """Resolve broker close detail for an execution tracked by order id."""
+    from datetime import timedelta
+    from app.database import SessionLocal
+    from app.models import UserPreference
+
+    oid = _coerce_int_id(order_id)
+    if oid is None:
+        return None
+
+    db = SessionLocal()
+    try:
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.ctrader_access_token:
+            return None
+        ctid_str = resolve_ctrader_ctid(
+            execution_account_id=ctid,
+            notes=notes,
+            prefs_default=prefs.ctrader_account_id,
+        )
+        if not ctid_str:
+            logger.warning(
+                "[cTrader] order-close missing ctid user=%s order=%s notes=%s",
+                user.id,
+                oid,
+                (notes or "")[:80],
+            )
+            return None
+        access_token = prefs.ctrader_access_token
+        ctid_val = int(ctid_str)
+        hosts = _routing_hosts_for_account(prefs, ctid_val)
+    finally:
+        db.close()
+
+    now_ms = int(time.time() * 1000)
+    if fired_at is not None:
+        try:
+            from_ms = int(fired_at.timestamp() * 1000) - 3600_000
+        except Exception:
+            from_ms = now_ms - int(timedelta(days=7).total_seconds() * 1000)
+    else:
+        from_ms = now_ms - int(timedelta(days=7).total_seconds() * 1000)
+
+    for host in hosts:
+        latest = _latest_ctrader_access_token(int(user.id))
+        if latest:
+            access_token = latest
+        deals = await _fetch_deals_in_window(
+            access_token,
+            ctid_val,
+            host=host,
+            from_ms=from_ms,
+            to_ms=now_ms,
+            user_id=int(user.id),
+        )
+        if not deals:
+            continue
+        position_id = _position_id_from_order_deals(deals, oid)
+        if not position_id:
+            continue
+        parsed = _parse_close_from_deals(
+            deals,
+            int(position_id),
+            entry_hint=entry_hint,
+            direction=direction,
+        )
+        if not parsed:
+            continue
+        parsed["source"] = "deal_list_window_order_id"
+        parsed["order_id"] = int(oid)
+        parsed["position_id"] = int(position_id)
+        logger.info(
+            "[cTrader] order-close user=%s ctid=%s host=%s order=%s pos=%s "
+            "exit=%s src=%s",
+            user.id,
+            ctid_val,
+            host,
+            oid,
+            position_id,
+            parsed.get("exit_price"),
+            parsed.get("source"),
+        )
+        return parsed
+    logger.warning(
+        "[cTrader] order-close empty user=%s order=%s ctid=%s hosts=%s",
+        user.id,
+        oid,
+        ctid if ctid is not None else "?",
         hosts,
     )
     return None

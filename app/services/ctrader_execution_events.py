@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 _PT_EXECUTION_EVENT = 2126
 _RECENT_CLOSE: Dict[int, float] = {}  # position_id → monotonic
 _RECENT_CLOSE_TTL_S = 45.0
+_ID_RE = re.compile(r"(\d+)")
 
 
 def _recently_closed(position_id: int) -> bool:
@@ -36,19 +37,48 @@ def _mark_closed(position_id: int) -> None:
 
 
 def _position_id_from_execution(ex) -> Optional[int]:
-    if getattr(ex, "ctrader_position_id", None):
+    raw = getattr(ex, "ctrader_position_id", None)
+    if raw:
         try:
-            return int(ex.ctrader_position_id)
+            return int(str(raw).strip())
         except Exception:
-            pass
+            m = _ID_RE.search(str(raw))
+            if m:
+                try:
+                    return int(m.group(1))
+                except Exception:
+                    pass
     m = re.search(r"pos=(\d+)", ex.notes or "")
     return int(m.group(1)) if m else None
 
 
-def _find_open_exec(position_id: int, user_id: Optional[int] = None) -> Optional[dict]:
+def _order_id_from_execution(ex) -> Optional[int]:
+    raw = getattr(ex, "ctrader_order_id", None)
+    if raw:
+        try:
+            return int(str(raw).strip())
+        except Exception:
+            m = _ID_RE.search(str(raw))
+            if m:
+                try:
+                    return int(m.group(1))
+                except Exception:
+                    pass
+    m = re.search(r"ord=(\d+)", ex.notes or "")
+    return int(m.group(1)) if m else None
+
+
+def _find_open_exec(
+    position_id: int,
+    user_id: Optional[int] = None,
+    *,
+    ctid: Optional[int] = None,
+    order_id: Optional[int] = None,
+) -> Optional[dict]:
     from app.database import BgSessionLocal as SessionLocal
     from app.strategy_models import StrategyExecution
     from app.services.trade_management import CTRADER_LIVE_ASSET_CLASSES
+    from sqlalchemy import or_
 
     db = SessionLocal()
     try:
@@ -62,7 +92,17 @@ def _find_open_exec(position_id: int, user_id: Optional[int] = None) -> Optional
         )
         if user_id is not None:
             q = q.filter(StrategyExecution.user_id == int(user_id))
-        for ex in q.all():
+        if ctid is not None:
+            ctid_s = str(int(ctid))
+            q = q.filter(
+                or_(
+                    StrategyExecution.ctrader_account_id == ctid_s,
+                    StrategyExecution.ctrader_account_id.is_(None),
+                    StrategyExecution.ctrader_account_id == "",
+                )
+            )
+        rows = q.all()
+        for ex in rows:
             pid = _position_id_from_execution(ex)
             if pid is not None and int(pid) == int(position_id):
                 return {
@@ -71,6 +111,32 @@ def _find_open_exec(position_id: int, user_id: Optional[int] = None) -> Optional
                     "symbol": ex.symbol,
                     "direction": ex.direction,
                     "entry": float(ex.entry_price or 0),
+                    "match_basis": "position_id",
+                }
+        if order_id is not None:
+            order_matches = []
+            for ex in rows:
+                oid = _order_id_from_execution(ex)
+                if oid is None or int(oid) != int(order_id):
+                    continue
+                order_matches.append(ex)
+            if order_matches:
+                ex = sorted(
+                    order_matches,
+                    key=lambda r: (
+                        getattr(r, "fired_at", None).timestamp()
+                        if getattr(r, "fired_at", None)
+                        else 0.0
+                    ),
+                    reverse=True,
+                )[0]
+                return {
+                    "exec_id": ex.id,
+                    "user_id": ex.user_id,
+                    "symbol": ex.symbol,
+                    "direction": ex.direction,
+                    "entry": float(ex.entry_price or 0),
+                    "match_basis": "order_id",
                 }
     finally:
         db.close()
@@ -129,11 +195,17 @@ async def handle_execution_event(
         return
     if _recently_closed(position_id):
         return
+    order_id = int(deal.orderId) if getattr(deal, "orderId", 0) else None
 
     detail = deal.closePositionDetail
     entry_hint = None
     direction = "LONG"
-    match = _find_open_exec(position_id, user_id=user_id)
+    match = _find_open_exec(
+        position_id,
+        user_id=user_id,
+        ctid=ctid,
+        order_id=order_id,
+    )
     if not match:
         return
 
@@ -144,10 +216,15 @@ async def handle_execution_event(
     outcome = _classify_outcome(gross, entry_hint, exit_price, direction)
 
     _mark_closed(position_id)
+    source = "ctrader-execution-event"
+    match_basis = str(match.get("match_basis") or "position_id")
+    if match_basis == "order_id":
+        source = "ctrader-execution-event-order-fallback"
     logger.info(
-        "[ctrader-event] position close pos=%s exec#%s %s @ %s → %s (uid=%s ctid=%s)",
+        "[ctrader-event] position close pos=%s exec#%s match=%s %s @ %s → %s (uid=%s ctid=%s)",
         position_id,
         match["exec_id"],
+        match_basis,
         match["symbol"],
         exit_price,
         outcome,
@@ -161,7 +238,7 @@ async def handle_execution_event(
         match["exec_id"],
         outcome,
         float(exit_price),
-        source="ctrader-execution-event",
+        source=source,
         pnl_usd=round(float(gross) / 100.0, 2),
     )
 

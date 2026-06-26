@@ -286,8 +286,14 @@ async def execute_take_market(
         broker_units_i = None
     strategy_id = ensure_system_strategy(db, user.id)
     note = f"gold_ai_trader decision_id={decision_id}"
+    order_id = result.get("order_id")
+    position_id = result.get("position_id")
     if entry_note:
         note += f" | {entry_note}"
+    if order_id:
+        note += f" | ord={order_id}"
+    if position_id:
+        note += f" | pos={position_id}"
     if broker_units_i and broker_units_i > 0:
         note += f" | vol={broker_units_i}"
     ex = StrategyExecution(
