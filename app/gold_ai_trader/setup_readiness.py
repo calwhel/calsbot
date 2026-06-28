@@ -394,7 +394,7 @@ def format_confluence_block(
     checklist: Dict[str, bool],
     *,
     setup_type: str,
-    confidence_threshold: int = 45,
+    confidence_threshold: int = 60,
 ) -> List[str]:
     """Explicit confluence count + calibration guidance for Claude."""
     passed, total, detail = confluence_summary(checklist or {})

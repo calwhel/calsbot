@@ -20,7 +20,7 @@ from app.gold_ai_trader.config import (
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_CONFIDENCE_THRESHOLD = 45
+_DEFAULT_CONFIDENCE_THRESHOLD = 60
 
 
 def system_prompt(confidence_threshold: int = _DEFAULT_CONFIDENCE_THRESHOLD) -> str:
