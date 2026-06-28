@@ -114,7 +114,7 @@ DEFAULTS = GoldAiRuntimeConfig(
     use_limit_entry=True,
     pending_entry_timeout_min=30,
     learning_daily_at_ny_end=True,
-    confidence_threshold=45,
+    confidence_threshold=60,
     include_history_in_decisions=False,
     orb_enabled=False,
     orb_range_minutes=20,
@@ -147,7 +147,7 @@ DEFAULTS = GoldAiRuntimeConfig(
 
 def confidence_threshold() -> int:
     """Min confidence (0–100) required to fire a demo/live take."""
-    raw = _env_int("GOLD_AI_CONFIDENCE_THRESHOLD", 45)
+    raw = _env_int("GOLD_AI_CONFIDENCE_THRESHOLD", 60)
     return max(0, min(100, raw))
 
 

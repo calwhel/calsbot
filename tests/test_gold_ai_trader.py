@@ -49,10 +49,10 @@ def test_normalize_uid_adds_th_prefix():
     assert _normalize_uid("TH-YP0BADA8") == "TH-YP0BADA8"
 
 
-def test_confidence_threshold_default_45():
+def test_confidence_threshold_default_60():
     os.environ.pop("GOLD_AI_CONFIDENCE_THRESHOLD", None)
-    assert confidence_threshold() == 45
-    assert env_defaults().confidence_threshold == 45
+    assert confidence_threshold() == 60
+    assert env_defaults().confidence_threshold == 60
 
 
 def test_confidence_threshold_env_override():
