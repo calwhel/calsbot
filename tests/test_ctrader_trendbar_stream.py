@@ -1,5 +1,6 @@
 """Trendbar fetch on live spot stream (no second socket)."""
 import asyncio
+import os
 import time
 import unittest
 from unittest import mock
@@ -76,6 +77,20 @@ class TestTrendbarStreamFetch(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(feed, "ctrader_spot_ready", return_value=False):
             out = feed._synthesize_klines_on_return(rows, "XAUUSD", "5m", 60)
         self.assertEqual(out, rows)
+
+    def test_fetch_trendbars_blocked_on_portal_worker(self):
+        feed._feed_live = False
+        feed._stream_writer = None
+        with mock.patch.dict(
+            os.environ,
+            {"EXECUTOR_STANDALONE": "", "DISABLE_EXECUTOR_IN_GUNICORN": "1"},
+            clear=False,
+        ):
+            with mock.patch.object(feed, "_standalone_trendbar_fetch_allowed", return_value=False):
+                out = asyncio.get_event_loop().run_until_complete(
+                    feed._fetch_trendbars("XAUUSD", "5m", 60, "tok", 1),
+                )
+        self.assertEqual(out, [])
 
     def test_synthesize_on_return_feed_worker_idempotent(self):
         feed._feed_live = True

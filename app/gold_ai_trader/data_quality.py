@@ -90,6 +90,28 @@ async def _resolve_ctrader_spot(
     return None, None, bid, ask
 
 
+def _spot_tick_state(sym: str) -> Tuple[bool, Optional[float]]:
+    """Return (tick_cold, last_tick_age_s) from ctrader spot readiness."""
+    try:
+        from app.services.ctrader_price_feed import ctrader_spot_ready
+
+        if ctrader_spot_ready(sym):
+            return False, 0.0
+    except Exception:
+        pass
+    try:
+        from app.services.spot_price_store import get_tick
+
+        row = get_tick(sym, max_age_s=120.0)
+        if row:
+            age = row.get("age_s")
+            if age is not None:
+                return True, float(age)
+    except Exception:
+        pass
+    return True, None
+
+
 async def assess_gold_market_data(
     *,
     user_id: Optional[int] = None,
@@ -101,6 +123,10 @@ async def assess_gold_market_data(
 
     sym = SYMBOL.upper()
     live_px, live_source, bid, ask = await _resolve_ctrader_spot(sym, user_id=user_id)
+    spot_tick_cold, spot_tick_age_s = _spot_tick_state(sym)
+    if live_px and live_source == "ctrader":
+        spot_tick_cold = False
+        spot_tick_age_s = 0.0
     price_source = live_source or "unknown"
 
     k5 = await get_klines(
@@ -124,16 +150,17 @@ async def assess_gold_market_data(
     )
     trendbar_blocked, trendbar_block_reason = _ctrader_trendbar_block_state()
 
-    # Last resort: cTrader kline close when tick socket is cold but trendbars flow.
+    # Display-only fallback when ticks are cold — never passes Claude gate.
     if not live_px and k5 and (kline_source or "").lower() in _CTRADER_KLINE_SOURCES:
         try:
-            live_px = float(k5[-1][4])
-            live_source = "ctrader"
-            price_source = "ctrader"
+            kline_close_px = float(k5[-1][4])
+            live_px = kline_close_px
+            price_source = "ctrader_kline_close"
+            spot_tick_cold = True
             logger.info(
-                "[gold-ai] spot from cTrader %s close (tick cold) price=%.4f",
+                "[gold-ai] spot from cTrader %s close (tick cold) price=%.4f — gate will block",
                 SCORING_TIMEFRAME,
-                live_px,
+                kline_close_px,
             )
         except (IndexError, TypeError, ValueError):
             pass
@@ -168,6 +195,8 @@ async def assess_gold_market_data(
         "bid": bid,
         "ask": ask,
         "user_id": user_id,
+        "spot_tick_cold": spot_tick_cold,
+        "spot_tick_age_s": spot_tick_age_s,
     }
 
 
@@ -201,6 +230,12 @@ def gold_data_ok_for_claude(data: Dict[str, Any]) -> Tuple[bool, str]:
     if data.get("klines_stale"):
         reason = data.get("stale_reason") or "stale"
         return False, f"stale_klines:{reason}"
+
+    if data.get("spot_tick_cold"):
+        age = data.get("spot_tick_age_s")
+        if age is not None:
+            return False, f"tick_cold:age={float(age):.0f}s"
+        return False, "tick_cold"
 
     live_src = (data.get("live_source") or "").lower()
     if live_src not in _CTRADER_PRICE_SOURCES:

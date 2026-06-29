@@ -53,6 +53,24 @@ class TestCtraderFeedService(unittest.TestCase):
         feed._feed_live = True
         self.assertFalse(feed.broker_session_ready("XAUUSD"))
 
+    def test_standalone_trendbar_blocked_on_portal_worker(self):
+        feed._feed_live = False
+        with patch.dict(
+            os.environ,
+            {"EXECUTOR_STANDALONE": "", "DISABLE_EXECUTOR_IN_GUNICORN": "1"},
+            clear=False,
+        ):
+            self.assertFalse(feed._standalone_trendbar_fetch_allowed())
+
+    def test_standalone_trendbar_allowed_on_executor_subprocess(self):
+        feed._feed_live = False
+        with patch.dict(os.environ, {"EXECUTOR_STANDALONE": "1"}, clear=False):
+            with patch(
+                "app.ctrader_feed_lock.feed_disabled_in_executor",
+                return_value=False,
+            ):
+                self.assertTrue(feed._standalone_trendbar_fetch_allowed())
+
     def test_start_skipped_when_remote_feed(self):
         feed._feed_task = None
         with patch.dict(

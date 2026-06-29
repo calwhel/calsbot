@@ -444,6 +444,41 @@ def _remote_feed_mode() -> bool:
         )
 
 
+def _standalone_trendbar_fetch_allowed() -> bool:
+    """
+    Second authed TLS sockets on the same ctid recycle the spot stream.
+
+    Only the feed-owning process (local spot stream or dedicated feed replica /
+    standalone executor before remote-feed disable) may open trendbar sockets.
+    Portal gunicorn workers must use Postgres ticks + metal cache + synthesis.
+    """
+    if _feed_live:
+        return True
+    try:
+        from app.ctrader_feed_lock import feed_disabled_in_executor, is_feed_only_process
+
+        if is_feed_only_process():
+            return True
+        if os.environ.get("EXECUTOR_STANDALONE", "").lower() in ("1", "true", "yes"):
+            return not feed_disabled_in_executor()
+    except Exception:
+        pass
+    return False
+
+
+def _cached_klines_synthesized(
+    sym_up: str,
+    timeframe: str,
+    limit: int,
+) -> List[List[float]]:
+    """Return in-process cache rolled forward from fresh spot when available."""
+    cache_key = (sym_up, timeframe, limit)
+    cached = _kline_cache.get(cache_key)
+    if not cached:
+        return []
+    return _synthesize_klines_on_return(cached[0], sym_up, timeframe, limit)
+
+
 def trendbar_fetch_blocked_reason() -> Optional[str]:
     """Why trendbar/kline API is unavailable (None = allowed)."""
     if _is_terminal_auth_error(_last_auth_error):
@@ -1595,6 +1630,16 @@ async def _fetch_trendbars(
 
     broker_name = _TRACKED.get(symbol.upper(), symbol.upper())
 
+    # Portal workers: never open a competing authed socket on the feed ctid.
+    if not (_feed_live and _stream_writer is not None):
+        if not _standalone_trendbar_fetch_allowed():
+            logger.debug(
+                "[CTraderFeed] standalone trendbar socket blocked %s %s",
+                symbol,
+                timeframe,
+            )
+            return []
+
     # LIVE spot session: multiplex on the stream — never open a second authed socket.
     if _feed_live and _stream_writer is not None:
         return await _fetch_trendbars_on_live_stream(symbol, timeframe, limit)
@@ -1707,11 +1752,27 @@ async def get_klines(
     blocked = trendbar_fetch_blocked_reason()
     if blocked:
         logger.debug("[CTraderFeed] trendbar fetch skipped %s %s: %s", sym_up, timeframe, blocked)
-        # Still serve tick-synthesized cache while live (local or Postgres spot).
-        cache_key = (sym_up, timeframe, limit)
-        cached = _kline_cache.get(cache_key)
-        if cached and is_live():
-            return _synthesize_klines_on_return(cached[0], sym_up, timeframe, limit)
+        # Still serve tick-synthesized cache while fresh spot is available.
+        cached = _cached_klines_synthesized(sym_up, timeframe, limit)
+        if cached:
+            return cached
+        return []
+
+    if not _standalone_trendbar_fetch_allowed():
+        cached = _cached_klines_synthesized(sym_up, timeframe, limit)
+        if cached:
+            logger.debug(
+                "[CTraderFeed] trendbar API skipped (non-feed process) — cache %s %s bars=%d",
+                sym_up,
+                timeframe,
+                len(cached),
+            )
+            return cached
+        logger.debug(
+            "[CTraderFeed] trendbar API skipped (non-feed process) %s %s — no cache",
+            sym_up,
+            timeframe,
+        )
         return []
 
     cache_key = (sym_up, timeframe, limit)
