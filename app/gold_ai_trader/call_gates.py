@@ -42,6 +42,31 @@ def killzone_only_enabled() -> bool:
     raw = os.environ.get("GOLD_AI_KILLZONE_ONLY", "true")
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
+
+def killzone_override_enabled() -> bool:
+    """Allow ICT scan outside killzone; Claude only when confluence threshold met."""
+    raw = os.environ.get("GOLD_AI_KILLZONE_OVERRIDE_ENABLED", "false")
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def killzone_override_min_confluence() -> int:
+    return max(0, min(8, _env_int("GOLD_AI_KILLZONE_OVERRIDE_MIN_CONFLUENCE", 5)))
+
+
+def candidate_confluence_counts(candidate) -> Tuple[int, int]:
+    """Return (passed, total) from readiness checklist on a scanner candidate."""
+    from app.gold_ai_trader.setup_readiness import confluence_summary
+
+    checklist = (getattr(candidate, "raw", None) or {}).get("readiness_checklist") or {}
+    passed, total, _ = confluence_summary(checklist)
+    return passed, total
+
+
+def candidate_meets_killzone_override(candidate) -> bool:
+    passed, _ = candidate_confluence_counts(candidate)
+    return passed >= killzone_override_min_confluence()
+
+
 # Setups that define their own level/zone — skip redundant PDH proximity gate.
 _NEAR_LEVEL_EXEMPT_PREFIXES = (
     "sweep_", "liq_sweep", "sdp_", "eqh_sweep", "eql_sweep",

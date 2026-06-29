@@ -19,6 +19,7 @@ class FunnelCounters:
     readiness_skipped: int = 0
     candidates_passed: int = 0
     dedupe_skipped: int = 0
+    override_confluence_skipped: int = 0
     claude_called: int = 0
     claude_take: int = 0
     claude_skip: int = 0
@@ -54,6 +55,7 @@ def _maybe_roll_day() -> None:
         _COUNTERS.readiness_skipped = 0
         _COUNTERS.candidates_passed = 0
         _COUNTERS.dedupe_skipped = 0
+        _COUNTERS.override_confluence_skipped = 0
         _COUNTERS.claude_called = 0
         _COUNTERS.claude_take = 0
         _COUNTERS.claude_skip = 0
@@ -109,6 +111,12 @@ def _record_counters(
         c.dedupe_skipped += 1
         if reason:
             c.last_dedupe_reason = reason[:120]
+    elif event == "override_confluence_skipped":
+        c.override_confluence_skipped += 1
+        if reason:
+            c.last_gate_reason = reason[:120]
+            key = reason.split("(")[0].strip()[:40]
+            c.gate_reasons[key] = c.gate_reasons.get(key, 0) + 1
     elif event == "claude_called":
         c.claude_called += 1
     elif event == "claude_take":
@@ -164,6 +172,7 @@ def snapshot() -> Dict[str, Any]:
         "readiness_skipped": c.readiness_skipped,
         "candidates_passed": c.candidates_passed,
         "dedupe_skipped": c.dedupe_skipped,
+        "override_confluence_skipped": c.override_confluence_skipped,
         "claude_called": c.claude_called,
         "claude_take": c.claude_take,
         "claude_skip": c.claude_skip,
