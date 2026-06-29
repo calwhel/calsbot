@@ -167,8 +167,17 @@ class TestDecisionValidator:
 class TestEntryRouting:
     def test_zone_setup_uses_limit(self):
         cfg = env_defaults()
-        assert use_limit_entry_for_setup("ob_bull", cfg) is True
         assert use_limit_entry_for_setup("fvg_retrace_bear", cfg) is True
+
+    def test_ob_setup_uses_market_by_default(self):
+        cfg = env_defaults()
+        assert use_limit_entry_for_setup("ob_bull", cfg) is False
+        assert use_limit_entry_for_setup("ob_bear", cfg) is False
+
+    def test_ob_limit_when_disabled(self, monkeypatch):
+        monkeypatch.setenv("GOLD_AI_OB_MARKET_ENTRY", "false")
+        cfg = env_defaults()
+        assert use_limit_entry_for_setup("ob_bull", cfg) is True
 
     def test_momentum_setup_uses_market(self):
         cfg = env_defaults()

@@ -53,6 +53,7 @@ from app.gold_ai_trader.context import build_context_snapshot
 from app.gold_ai_trader.claude import decide
 from app.gold_ai_trader.claude import decide_orb
 from app.gold_ai_trader.executor import execute_take, execute_live_mirror_take, flatten_open_demo_positions
+from app.gold_ai_trader.fire_time_validation import refresh_spot_after_claude
 from app.gold_ai_trader.learning import maybe_run_learning_review, record_outcome_from_execution, get_setup_stats
 from app.gold_ai_trader.orb import build_orb_context, detect_orb_signal
 from app.gold_ai_trader.pending_entry import sync_pending_entries
@@ -82,6 +83,23 @@ _on_demand_last_mono = 0.0
 
 def _utc_iso_now() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _fire_context(
+    *,
+    setup_type: str,
+    candidate_direction: str,
+    setup_detail: str,
+    atr: float,
+    key_levels,
+) -> dict:
+    return {
+        "setup_type": setup_type,
+        "candidate_direction": candidate_direction,
+        "setup_detail": setup_detail,
+        "atr": atr,
+        "key_levels": key_levels,
+    }
 
 
 async def _stale_entry_recheck(
@@ -637,6 +655,7 @@ async def _maybe_run_orb_strategy(
 
     action = (decision.get("action") or "skip").lower()
     conf = int(decision.get("confidence") or 0)
+    price = await refresh_spot_after_claude(float(price), user_id=cfg.demo_user_id)
     row = GoldAiDecision(
         session=session,
         candidate_type=signal.setup_type,
@@ -725,6 +744,10 @@ async def _maybe_run_orb_strategy(
             ok_exec, exec_reason = check_can_execute(db, cfg, cfg.demo_user_id or 0)
             if ok_exec and stale_ok:
                 timing_ctx["enqueued_ts"] = _utc_iso_now()
+                orb_detail = (
+                    f"orb breakout level={signal.break_level:.2f} "
+                    f"range_high={signal.range_high:.2f} range_low={signal.range_low:.2f}"
+                )
                 exec_id = await execute_take(
                     db=db,
                     cfg=cfg,
@@ -733,6 +756,13 @@ async def _maybe_run_orb_strategy(
                     session=session,
                     setup_type=signal.setup_type,
                     timing_ctx=timing_ctx,
+                    fire_context=_fire_context(
+                        setup_type=signal.setup_type,
+                        candidate_direction=signal.side,
+                        setup_detail=orb_detail,
+                        atr=atr,
+                        key_levels=key_levels,
+                    ),
                 )
                 if exec_id and exec_id > 0:
                     executed = True
@@ -757,7 +787,7 @@ async def _maybe_run_orb_strategy(
                             orb_state.status = "traded"
                     db.commit()
                 else:
-                    block_reason = "demo order rejected"
+                    block_reason = timing_ctx.get("block_reason") or "demo order rejected"
             else:
                 block_reason = block_reason or exec_reason
         else:
@@ -809,6 +839,7 @@ async def _maybe_run_orb_strategy(
             row.execution_id or execution_id or "none",
             block_reason or "",
         )
+        await sync_pending_entries(db, cfg, float(price))
 
     if row.execution_id:
         from app.strategy_models import StrategyExecution
@@ -1080,6 +1111,7 @@ async def run_gold_ai_trader_loop() -> None:
         funnel_record("claude_called", setup=candidate.type, db=db, session=session)
         action = (decision.get("action") or "skip").lower()
         conf = int(decision.get("confidence") or 0)
+        price = await refresh_spot_after_claude(float(price), user_id=cfg.demo_user_id)
         if action == "take":
             funnel_record("claude_take", setup=candidate.type, db=db, session=session)
         else:
@@ -1211,6 +1243,13 @@ async def run_gold_ai_trader_loop() -> None:
                         session=session,
                         setup_type=candidate.type,
                         timing_ctx=timing_ctx,
+                        fire_context=_fire_context(
+                            setup_type=candidate.type,
+                            candidate_direction=candidate.direction,
+                            setup_detail=candidate.detail,
+                            atr=atr,
+                            key_levels=key_levels,
+                        ),
                     )
                     if exec_id and exec_id > 0:
                         executed = True
@@ -1259,7 +1298,7 @@ async def run_gold_ai_trader_loop() -> None:
                             decision_id=row.id,
                         )
                     else:
-                        block_reason = "demo order rejected"
+                        block_reason = timing_ctx.get("block_reason") or "demo order rejected"
                 else:
                     block_reason = block_reason or exec_reason
                     logger.info("[gold-ai-trader] execute blocked: %s", exec_reason)
@@ -1289,6 +1328,7 @@ async def run_gold_ai_trader_loop() -> None:
                 row.execution_id or execution_id or "none",
                 block_reason or "",
             )
+            await sync_pending_entries(db, cfg, float(price))
 
         logger.info(
             "[gold-ai] calibration decision_id=%s confidence=%s%% setup=%s source=%s "

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.gold_ai_trader.config import GoldAiRuntimeConfig, SYMBOL, ASSET_CLASS
 from app.gold_ai_trader.guardrails import (
@@ -96,6 +96,7 @@ async def execute_take(
     session: str = "",
     setup_type: str = "",
     timing_ctx: Optional[Dict[str, Any]] = None,
+    fire_context: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
     """Route TAKE to limit/entry-watch pending or immediate market."""
     from app.gold_ai_trader.entry_routing import use_limit_entry_for_setup
@@ -106,6 +107,7 @@ async def execute_take(
             db=db, cfg=cfg, decision=decision, decision_id=decision_id,
             entry_note="use_limit_entry=false; market entry",
             timing_ctx=timing_ctx,
+            fire_context=fire_context,
         )
 
     user, prefs, ctid = _resolve_demo_trader(db, cfg)
@@ -176,6 +178,7 @@ async def execute_take(
         decision_id=decision_id,
         entry_note="pending unsupported, used market",
         timing_ctx=timing_ctx,
+        fire_context=fire_context,
     )
 
 
@@ -212,6 +215,7 @@ async def execute_take_market(
     decision_id: int,
     entry_note: str = "",
     timing_ctx: Optional[Dict[str, Any]] = None,
+    fire_context: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
     """Place demo market order; return StrategyExecution.id."""
     if not cfg.demo_user_id:
@@ -231,9 +235,35 @@ async def execute_take_market(
     from app.strategy_models import StrategyExecution
     from app.services.ctrader_client import place_market_order_resilient
     from app.services.order_latency import new_order_latency
+    from app.gold_ai_trader.fire_time_validation import revalidate_before_fire
 
     direction = _parse_direction(decision)
     if not direction:
+        return None
+
+    ctx = fire_context or {}
+    setup_type = str(ctx.get("setup_type") or decision.get("setup_type") or "")
+    candidate_direction = str(
+        ctx.get("candidate_direction") or decision.get("direction") or direction
+    )
+    setup_detail = str(ctx.get("setup_detail") or "")
+    atr = ctx.get("atr")
+    key_levels = ctx.get("key_levels")
+    if key_levels is not None and not isinstance(key_levels, list):
+        key_levels = None
+
+    fire_ok, fire_reason, decision = await revalidate_before_fire(
+        decision=decision,
+        setup_type=setup_type,
+        candidate_direction=candidate_direction,
+        setup_detail=setup_detail,
+        user_id=cfg.demo_user_id,
+        atr=float(atr) if atr is not None else None,
+        key_levels=key_levels,
+    )
+    if not fire_ok:
+        if timing_ctx is not None:
+            timing_ctx["block_reason"] = fire_reason
         return None
 
     parsed = _parse_prices(decision)

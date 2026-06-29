@@ -163,8 +163,6 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
     """Expire or fill gold pending entry watches. Returns fills this pass."""
     from app.gold_ai_trader.models import GoldAiPendingOrder
     from app.gold_ai_trader.executor import execute_take_market
-    from app.gold_ai_trader.config import SYMBOL, ASSET_CLASS
-    from app.services.tradfi_prices import confirm_entry_price
 
     now = datetime.utcnow()
     pending = (
@@ -196,38 +194,10 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
             continue
 
         decision = dict(dec_row.decision)
-        max_delay_s = max(0.0, float(os.environ.get("GOLD_AI_MAX_EXEC_DELAY_S", "90")))
-        if max_delay_s > 0 and getattr(dec_row, "ts", None):
-            age_s = max(0.0, (now - dec_row.ts).total_seconds())
-            if age_s > max_delay_s:
-                proposed = float(decision.get("entry") or row.entry_price or 0.0)
-                confirmed, reason = await confirm_entry_price(
-                    SYMBOL,
-                    ASSET_CLASS,
-                    proposed,
-                    paper_ok=False,
-                    user_id=cfg.demo_user_id,
-                )
-                if not confirmed or confirmed <= 0:
-                    row.status = "cancelled"
-                    row.notes = (
-                        (row.notes or "")
-                        + f" | stale_guard_blocked delay={age_s:.1f}s reason={reason}"
-                    )
-                    db.commit()
-                    logger.warning(
-                        "[gold-ai-trader] pending stale blocked id=%s decision=%s age_s=%.1f reason=%s",
-                        row.id,
-                        row.decision_id,
-                        age_s,
-                        reason,
-                    )
-                    continue
-                decision["entry"] = float(confirmed)
-                decision["stale_guard_note"] = f"pending_reconfirmed({reason}) delay={age_s:.1f}s"
-                dec_row.decision = decision
-                db.commit()
-
+        setup_type = str(getattr(dec_row, "candidate_type", "") or "")
+        candidate_direction = str(
+            decision.get("direction") or row.direction or ""
+        )
         timing_ctx = {
             "decision_ts": dec_row.ts.isoformat() + "Z" if getattr(dec_row, "ts", None) else None,
             "validated_ts": None,
@@ -241,7 +211,27 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
             decision_id=row.decision_id,
             entry_note=f"entry-watch fill @ spot {spot:.2f} (pending #{row.id})",
             timing_ctx=timing_ctx,
+            fire_context={
+                "setup_type": setup_type,
+                "candidate_direction": candidate_direction,
+                "setup_detail": "",
+                "user_id": cfg.demo_user_id,
+            },
         )
+        if exec_id is None and timing_ctx.get("block_reason"):
+            row.status = "cancelled"
+            row.notes = (
+                (row.notes or "")
+                + f" | fire_time_blocked {timing_ctx.get('block_reason')}"
+            )
+            db.commit()
+            logger.warning(
+                "[gold-ai-trader] pending fire_time blocked id=%s decision=%s reason=%s",
+                row.id,
+                row.decision_id,
+                timing_ctx.get("block_reason"),
+            )
+            continue
         if exec_id:
             row.status = "filled"
             row.fill_execution_id = exec_id
