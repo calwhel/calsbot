@@ -76,7 +76,9 @@ def build_data_quality_block(market_data: Optional[Dict[str, Any]]) -> list:
         spread = f" | bid/ask: {float(bid):.2f}/{float(ask):.2f}"
 
     price_mode = "ctrader-live"
-    if live != "ctrader":
+    if market_data.get("spot_tick_cold"):
+        price_mode = "tick-cold (5m-close display only)"
+    elif live != "ctrader":
         price_mode = f"{live} (non-live)"
     elif market_data.get("price_source") == "ctrader" and not market_data.get("bid"):
         price_mode = "ctrader-live or 5m-close-fallback"

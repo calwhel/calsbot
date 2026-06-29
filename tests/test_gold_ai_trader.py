@@ -133,7 +133,6 @@ def test_gold_data_ok_requires_ctrader_sources():
     assert reason_syn == "synthetic_klines"
 
 
-def test_format_data_source_tag():
     tag = format_data_source(
         {"live_source": "ctrader", "kline_source": "ctrader-user"}
     )
