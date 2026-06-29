@@ -60,19 +60,29 @@ class TestTrendbarStreamFetch(unittest.IsolatedAsyncioTestCase):
         stale_ts = int(time.time() * 1000) - 10 * 60_000
         stale_bar_ts = (stale_ts // step) * step
         rows = [[stale_bar_ts, 1, 2, 0.5, 1.5, 0.0]]
-        with mock.patch.object(feed, "is_live", return_value=True), mock.patch.object(
+        with mock.patch.object(feed, "ctrader_spot_ready", return_value=True), mock.patch.object(
             feed, "get_price", return_value=2650.0,
         ):
             out = feed._synthesize_klines_on_return(rows, "XAUUSD", "5m", 60)
         self.assertGreater(len(out), 1)
         self.assertLess(feed._newest_bar_age_s(out), 400.0)
 
+    def test_synthesize_on_return_skipped_without_spot(self):
+        feed._feed_live = False
+        step = feed._TF_MINUTES["5m"] * 60_000
+        stale_ts = int(time.time() * 1000) - 10 * 60_000
+        stale_bar_ts = (stale_ts // step) * step
+        rows = [[stale_bar_ts, 1, 2, 0.5, 1.5, 0.0]]
+        with mock.patch.object(feed, "ctrader_spot_ready", return_value=False):
+            out = feed._synthesize_klines_on_return(rows, "XAUUSD", "5m", 60)
+        self.assertEqual(out, rows)
+
     def test_synthesize_on_return_feed_worker_idempotent(self):
         feed._feed_live = True
         step = feed._TF_MINUTES["5m"] * 60_000
         now_ms = (int(time.time() * 1000) // step) * step
         rows = [[now_ms, 2650.0, 2652.0, 2648.0, 2651.0, 0.0]]
-        with mock.patch.object(feed, "is_live", return_value=True), mock.patch.object(
+        with mock.patch.object(feed, "ctrader_spot_ready", return_value=True), mock.patch.object(
             feed, "get_price", return_value=2651.0,
         ):
             out = feed._synthesize_klines_on_return(

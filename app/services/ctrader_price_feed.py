@@ -616,13 +616,13 @@ def _synthesize_klines_on_return(
     log_remote: bool = True,
 ) -> List[List[float]]:
     """
-    Apply live spot to the forming bar when the market is live.
+    Apply live spot to the forming bar when a fresh cTrader mid is available.
 
-    Uses get_price() (local spot cache or Postgres tick store) so remote workers
-    without _feed_live still roll 5m/15m bars forward. Idempotent on feed workers
-    that already tick-update the cache — same mid re-applied to the forming bar.
+    Uses get_price() (local spot cache or Postgres tick store) so portal gunicorn
+    workers without _feed_live still roll 5m/15m bars forward. Idempotent on feed
+    workers that already tick-update the cache — same mid re-applied to the forming bar.
     """
-    if not rows or not is_live():
+    if not rows or not ctrader_spot_ready(sym_up):
         return rows
     before_age = _newest_bar_age_s(rows)
     out = _apply_live_tick_to_rows(rows, sym_up, timeframe, limit)

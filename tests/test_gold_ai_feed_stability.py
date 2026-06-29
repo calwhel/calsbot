@@ -49,12 +49,12 @@ class TestGoldAiKlines:
 
 
 class TestSynthesizeGoldScoringK5:
-    def test_synthesize_delegates_when_live(self):
+    def test_synthesize_delegates_when_spot_ready(self):
         stale_ts = int((__import__("time").time() - 600) * 1000)
         k5 = [[stale_ts, 1, 2, 0.5, 1.5, 10.0]] * 25
         fresh = [[int(__import__("time").time() * 1000), 1, 2, 0.5, 1.5, 10.0]] * 25
         with patch(
-            "app.services.ctrader_price_feed.is_live",
+            "app.services.ctrader_price_feed.ctrader_spot_ready",
             return_value=True,
         ), patch(
             "app.services.ctrader_price_feed.apply_live_spot_to_klines",
@@ -65,6 +65,39 @@ class TestSynthesizeGoldScoringK5:
             out = synthesize_gold_scoring_k5(k5)
         assert out == fresh
         mock_apply.assert_called_once()
+
+    def test_synthesize_skipped_when_spot_cold(self):
+        stale_ts = int((__import__("time").time() - 600) * 1000)
+        k5 = [[stale_ts, 1, 2, 0.5, 1.5, 10.0]] * 25
+        with patch(
+            "app.services.ctrader_price_feed.ctrader_spot_ready",
+            return_value=False,
+        ), patch(
+            "app.services.ctrader_price_feed.apply_live_spot_to_klines",
+        ) as mock_apply:
+            from app.gold_ai_trader.klines import synthesize_gold_scoring_k5
+
+            out = synthesize_gold_scoring_k5(k5)
+        assert out == k5
+        mock_apply.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_gold_ai_klines_synthesizes_5m(self):
+        stale_ts = int((__import__("time").time() - 600) * 1000)
+        k5 = [[stale_ts, 1, 2, 0.5, 1.5, 10.0]] * 25
+        fresh_ts = int(__import__("time").time() * 1000)
+        fresh = [[fresh_ts, 1, 2, 0.5, 1.5, 10.0]] * 25
+        with patch(
+            "app.gold_ai_trader.klines.get_klines",
+            new_callable=AsyncMock,
+            return_value=k5,
+        ), patch(
+            "app.gold_ai_trader.klines.synthesize_gold_scoring_klines",
+            return_value=fresh,
+        ) as mock_syn:
+            rows = await get_gold_ai_klines("5m", 60, user_id=7)
+        assert rows == fresh
+        mock_syn.assert_called_once_with(k5, "5m", limit=60)
 
 
 class TestDataRefresh:
