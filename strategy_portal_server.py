@@ -872,27 +872,21 @@ def _get_session_uid(request: Request) -> Optional[str]:
 
 def _resolve_portal_session_uid(request: Request) -> Optional[str]:
     """Return session UID only when that user row still exists (post-DB-rebuild safe)."""
-    uid = _get_session_uid(request)
+    from app.portal_auth import resolve_session_uid_with_user
+
+    uid = resolve_session_uid_with_user(request)
     if not uid:
+        stale_uid = _get_session_uid(request)
+        if stale_uid:
+            _invalidate_user_cache(stale_uid)
         return None
-    uid = uid.strip().upper()
-    from app.database import SessionLocal
-
-    db = SessionLocal()
-    try:
-        user = _get_user_by_uid(uid, db)
-        if not user:
-            _invalidate_user_cache(uid)
-            return None
-        return uid
-    finally:
-        db.close()
+    return uid
 
 
-def _redirect_stale_session_login() -> RedirectResponse:
-    resp = RedirectResponse(url="/login?msg=session_stale", status_code=302)
-    resp.delete_cookie(_COOKIE_NAME)
-    return resp
+def _redirect_stale_session_login(request: Request = None) -> RedirectResponse:
+    from app.portal_auth import stale_session_redirect
+
+    return stale_session_redirect(request)
 
 
 def _get_request_token_uid(request: Request) -> Optional[str]:
@@ -3686,9 +3680,11 @@ async def login_email_verify(request: Request):
 
 
 @app.get("/logout")
-async def logout():
+async def logout(request: Request):
+    from app.portal_session import delete_session_cookie
+
     resp = RedirectResponse(url="/login", status_code=302)
-    resp.delete_cookie(_COOKIE_NAME)
+    delete_session_cookie(resp, request)
     return resp
 
 
@@ -4152,7 +4148,7 @@ async def app_page(request: Request):
     """Cookie-session authenticated app entry point."""
     uid = _resolve_portal_session_uid(request)
     if not uid:
-        return _redirect_stale_session_login()
+        return _redirect_stale_session_login(request)
     return await _render_portal(request, uid)
 
 
@@ -4166,7 +4162,7 @@ async def trades_page(request: Request):
     """
     uid = _resolve_portal_session_uid(request)
     if not uid:
-        return _redirect_stale_session_login()
+        return _redirect_stale_session_login(request)
     return RedirectResponse(url="/app?p=trades", status_code=302)
 
 
@@ -7395,7 +7391,17 @@ async def public_leaderboard(
 @app.get("/strategies", response_class=HTMLResponse)
 async def portal_page(request: Request, uid: str = Query(...)):
     """Legacy URL — keeps existing Telegram bot links working."""
-    return await _render_portal(request, uid)
+    norm_uid = (uid or "").strip().upper()
+    if not norm_uid.startswith("TH-"):
+        norm_uid = f"TH-{norm_uid}" if norm_uid else ""
+    session_uid = _resolve_portal_session_uid(request)
+    if session_uid:
+        if session_uid == norm_uid:
+            return await _render_portal(request, session_uid)
+        return RedirectResponse(url="/app", status_code=302)
+    from app.portal_auth import login_redirect
+
+    return login_redirect(f"/strategies?uid={norm_uid}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
