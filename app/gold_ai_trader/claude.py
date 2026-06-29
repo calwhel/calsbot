@@ -16,6 +16,10 @@ from app.gold_ai_trader.config import (
     OPUS_CACHE_WRITE_USD_PER_M,
     OPUS_INPUT_USD_PER_M,
     OPUS_OUTPUT_USD_PER_M,
+    SONNET_CACHE_READ_USD_PER_M,
+    SONNET_CACHE_WRITE_USD_PER_M,
+    SONNET_INPUT_USD_PER_M,
+    SONNET_OUTPUT_USD_PER_M,
 )
 
 logger = logging.getLogger(__name__)
@@ -224,6 +228,13 @@ def _pricing_for_model(model: str) -> Tuple[float, float, float, float]:
             HAIKU_CACHE_READ_USD_PER_M,
             HAIKU_CACHE_WRITE_USD_PER_M,
         )
+    if "sonnet" in m:
+        return (
+            SONNET_INPUT_USD_PER_M,
+            SONNET_OUTPUT_USD_PER_M,
+            SONNET_CACHE_READ_USD_PER_M,
+            SONNET_CACHE_WRITE_USD_PER_M,
+        )
     return (
         OPUS_INPUT_USD_PER_M,
         OPUS_OUTPUT_USD_PER_M,
@@ -235,7 +246,7 @@ def _pricing_for_model(model: str) -> Tuple[float, float, float, float]:
 def _estimate_cost(
     usage,
     *,
-    model: str = "claude-opus-4-8",
+    model: str = "claude-sonnet-4-6",
 ) -> Tuple[int, int, int, int, float]:
     tin = int(getattr(usage, "input_tokens", 0) or 0)
     tout = int(getattr(usage, "output_tokens", 0) or 0)
@@ -332,7 +343,7 @@ async def _repair_json_once(
 async def _decide_with_prompt(
     context_text: str,
     *,
-    model: str = "claude-opus-4-8",
+    model: str = "claude-sonnet-4-6",
     dry_run: bool = False,
     confidence_threshold: int = _DEFAULT_CONFIDENCE_THRESHOLD,
     system_text: str,
@@ -448,7 +459,7 @@ async def _decide_with_prompt(
 async def decide(
     context_text: str,
     *,
-    model: str = "claude-opus-4-8",
+    model: str = "claude-sonnet-4-6",
     dry_run: bool = False,
     confidence_threshold: int = _DEFAULT_CONFIDENCE_THRESHOLD,
 ) -> Tuple[Dict[str, Any], str, Dict[str, Any]]:
@@ -466,7 +477,7 @@ async def decide(
 async def decide_orb(
     context_text: str,
     *,
-    model: str = "claude-opus-4-8",
+    model: str = "claude-sonnet-4-6",
     dry_run: bool = False,
     confidence_threshold: int = 55,
 ) -> Tuple[Dict[str, Any], str, Dict[str, Any]]:

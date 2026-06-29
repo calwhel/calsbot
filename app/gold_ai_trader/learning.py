@@ -223,7 +223,7 @@ async def maybe_run_learning_review(db, session: str, cfg) -> Optional[str]:
             return None
         client = anthropic.AsyncAnthropic(api_key=key)
         msg = await client.messages.create(
-            model=getattr(cfg, "model", "claude-opus-4-8"),
+            model=getattr(cfg, "model", "claude-sonnet-4-6"),
             max_tokens=500,
             system=[
                 {
@@ -240,7 +240,7 @@ async def maybe_run_learning_review(db, session: str, cfg) -> Optional[str]:
         usage = msg.usage
         tin, tout, _, _, cost = _estimate_cost(
             usage,
-            model=getattr(cfg, "model", "claude-opus-4-8"),
+            model=getattr(cfg, "model", "claude-sonnet-4-6"),
         )
         row = GoldAiLesson(
             session=session,
