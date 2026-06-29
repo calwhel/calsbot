@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 from typing import Optional
@@ -11,7 +12,9 @@ from fastapi import Request
 
 from app.deployment import request_is_https
 
-_COOKIE_NAME = "th_session"
+logger = logging.getLogger(__name__)
+
+COOKIE_NAME = "th_session"
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 30
 _cached_secret: Optional[str] = None
 
@@ -30,8 +33,16 @@ def cookie_secret() -> str:
                 or ""
             ).strip()
             if db_seed:
+                logger.critical(
+                    "SECRET_KEY/SESSION_SECRET missing; deriving session signer from DB URL. "
+                    "Set SECRET_KEY in Railway for stable sessions across deploys."
+                )
                 _cached_secret = hashlib.sha256(f"tradehub-session:{db_seed}".encode()).hexdigest()
             else:
+                logger.critical(
+                    "SECRET_KEY/SESSION_SECRET missing and no DB URL fallback; "
+                    "using per-process session signer — users will be logged out on every deploy."
+                )
                 _cached_secret = secrets.token_urlsafe(32)
     return _cached_secret
 
@@ -52,8 +63,18 @@ def verify_session_token(token: str) -> Optional[str]:
     return None
 
 
+def delete_session_cookie(response, request: Request = None) -> None:
+    response.delete_cookie(
+        key=COOKIE_NAME,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=request_is_https(request),
+    )
+
+
 def session_uid_from_request(request: Request) -> Optional[str]:
-    cookie = request.cookies.get(_COOKIE_NAME)
+    cookie = request.cookies.get(COOKIE_NAME)
     if cookie:
         uid = verify_session_token(cookie)
         if uid:
@@ -67,7 +88,7 @@ def session_uid_from_request(request: Request) -> Optional[str]:
 def set_session_cookie(response, uid: str, request: Request = None) -> None:
     uid = (uid or "").strip().upper()
     response.set_cookie(
-        key=_COOKIE_NAME,
+        key=COOKIE_NAME,
         value=make_session_token(uid),
         max_age=_COOKIE_MAX_AGE,
         httponly=True,

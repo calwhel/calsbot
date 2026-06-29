@@ -157,13 +157,13 @@ def test_gold_ai_trader_page_sends_session_auth():
     assert "showLoadError" in html
     assert "session_token" in routes
     assert "_session_token_for_page" in routes
-    assert "portal_session" in routes
-    assert "make_session_token" in routes
+    assert "portal_auth" in routes
+    assert "_gold_ai_page_auth_redirect" in routes
     assert "renderSessionTimeline(cfg, rt, j.shared_session_hours)" in html
 
 
-def test_gold_ai_page_renders_without_db():
-    """Dashboard HTML must load without hitting User table (auth on API only)."""
+def test_gold_ai_page_requires_authenticated_session():
+    """Dashboard HTML must not load without a matching portal session."""
     from unittest.mock import patch
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -172,12 +172,10 @@ def test_gold_ai_page_renders_without_db():
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
-    with patch("app.gold_ai_trader.routes.SessionLocal") as mock_sl:
-        mock_sl.side_effect = AssertionError("page load must not open DB session")
-        r = client.get("/gold-ai-trader?uid=TH-YP0BADA8")
-    assert r.status_code == 200
-    assert "Gold AI Trader" in r.text
-    assert "TH-YP0BADA8" in r.text
+    r = client.get("/gold-ai-trader?uid=TH-YP0BADA8")
+    assert r.status_code == 302
+    assert "/login" in r.headers.get("location", "")
+    assert "session_expired" in r.headers.get("location", "")
 
 
 def test_coerce_decision_dict_string_json():

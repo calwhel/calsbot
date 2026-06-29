@@ -440,30 +440,48 @@ def _sync_live_mirror_fields(db, decision: GoldAiDecision) -> None:
 
 def _session_token_for_page(request: Request, uid: str) -> Optional[str]:
     """Session token for same-origin / WebView API calls (must match requested UID)."""
-    from app.portal_session import make_session_token, session_uid_from_request
+    from app.portal_auth import session_token_from_request
 
-    uid = _normalize_uid(uid)
-    session_uid = session_uid_from_request(request)
-    if session_uid == uid:
-        auth = request.headers.get("Authorization", "")
-        if auth.lower().startswith("bearer "):
-            return auth[7:].strip()
-        hdr = request.headers.get("X-TradeHub-Session", "").strip()
-        if hdr:
-            return hdr
-        cookie = request.cookies.get("th_session")
-        if cookie:
-            return cookie
-    return make_session_token(uid)
+    return session_token_from_request(request, uid)
+
+
+def _gold_ai_page_auth_redirect(request: Request, uid: str):
+    """Require a valid portal session matching uid and admin access."""
+    from app.portal_auth import login_redirect, normalize_portal_uid, resolve_session_uid_with_user
+
+    norm_uid = normalize_portal_uid(uid)
+    session_uid = resolve_session_uid_with_user(request)
+    if not session_uid or session_uid != norm_uid:
+        return login_redirect(f"/gold-ai-trader?uid={norm_uid}", msg="session_expired")
+
+    db = SessionLocal()
+    try:
+        try:
+            _resolve_user(norm_uid, db, request=request)
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                return login_redirect(f"/gold-ai-trader?uid={norm_uid}", msg="admin_required")
+            raise
+    except Exception as exc:
+        if is_db_connection_error(exc) and _session_admin_fallback(request, norm_uid) is not None:
+            return None
+        raise
+    finally:
+        db.close()
+    return None
 
 
 @router.get("/gold-ai-trader", response_class=HTMLResponse)
 async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
-    """Serve dashboard shell — admin auth enforced on /api/gold-ai-trader/* only."""
-    from app.portal_session import make_session_token, set_session_cookie
+    """Serve dashboard shell — requires portal login + admin access."""
+    from app.portal_auth import normalize_portal_uid
 
-    norm_uid = _normalize_uid(uid)
-    session_token = _session_token_for_page(request, norm_uid) or make_session_token(norm_uid)
+    norm_uid = normalize_portal_uid(uid)
+    auth_redirect = _gold_ai_page_auth_redirect(request, norm_uid)
+    if auth_redirect is not None:
+        return auth_redirect
+
+    session_token = _session_token_for_page(request, norm_uid) or ""
     resp = templates.TemplateResponse(
         "gold_ai_trader.html",
         {
@@ -472,10 +490,9 @@ async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
             "session_token": session_token,
         },
     )
-    try:
-        set_session_cookie(resp, norm_uid, request)
-    except Exception as exc:
-        logger.warning("[gold-ai-trader] set session cookie failed: %s", exc)
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
     return resp
 
 

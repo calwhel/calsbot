@@ -1954,10 +1954,17 @@ async function refresh() {
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) {
       const detail = j.detail || j.error || `HTTP ${r.status}`;
-      if (r.status === 401 || r.status === 403) {
+      if (r.status === 401) {
         showLoadError(
           'Sign in required',
-          'Open the Strategy Portal, log in with your account, then return here — or tap Portal in the header.'
+          'Your session expired or does not match this account. Log in via the Strategy Portal, then return here.'
+        );
+      } else if (r.status === 403) {
+        showLoadError(
+          'Admin access required',
+          detail === 'Admin access required'
+            ? 'Gold AI Trader is limited to admin accounts. Ask the operator to enable admin access for your UID.'
+            : String(detail)
         );
       } else {
         showLoadError('Could not load trader data', String(detail));

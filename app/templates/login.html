@@ -401,6 +401,12 @@ window.addEventListener('load', function(){
   if (msg === 'session_stale') {
     switchTab('signin');
     showErr('si-err', 'Your previous session is no longer valid. Sign in again to continue.');
+  } else if (msg === 'session_expired') {
+    switchTab('signin');
+    showErr('si-err', 'Your session expired. Sign in again to continue.');
+  } else if (msg === 'admin_required') {
+    switchTab('signin');
+    showErr('si-err', 'Gold AI Trader requires admin access. Sign in with an authorized account.');
   } else if(!_refCode) {
     document.getElementById('reg-name').focus();
   }
