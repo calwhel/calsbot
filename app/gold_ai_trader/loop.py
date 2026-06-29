@@ -36,6 +36,10 @@ from app.gold_ai_trader.call_gates import (
     collect_key_levels,
     in_killzone,
     killzone_only_enabled,
+    killzone_override_enabled,
+    killzone_override_min_confluence,
+    candidate_confluence_counts,
+    candidate_meets_killzone_override,
     should_invoke_claude,
     call_stats_today,
 )
@@ -853,7 +857,7 @@ async def run_gold_ai_trader_loop() -> None:
 
     orb_enabled = bool(getattr(cfg, "orb_enabled", False))
     killzone_blocked = killzone_only_enabled() and not in_killzone(now, session, cfg)
-    if killzone_blocked and not orb_enabled:
+    if killzone_blocked and not orb_enabled and not killzone_override_enabled():
         runtime_state.note_dormant("outside_killzone")
         await asyncio.sleep(max(cfg.scan_interval_s, 15))
         return
@@ -866,8 +870,9 @@ async def run_gold_ai_trader_loop() -> None:
             cfg = merge_config(cfg_row, env)
         orb_enabled = bool(getattr(cfg, "orb_enabled", False))
         killzone_blocked = killzone_only_enabled() and not in_killzone(now, session, cfg)
+        killzone_override_scan = killzone_blocked and killzone_override_enabled()
 
-        if not killzone_blocked:
+        if not killzone_blocked or killzone_override_scan:
             ok_call, reason = check_can_call_claude(db, cfg)
             if not ok_call:
                 runtime_state.note_dormant(reason)
@@ -934,7 +939,7 @@ async def run_gold_ai_trader_loop() -> None:
             source_tag=source_tag,
         )
 
-        if killzone_blocked:
+        if killzone_blocked and not killzone_override_enabled():
             runtime_state.note_dormant("outside_killzone")
             if orb_logged:
                 await sync_closed_trade_notifications(db, cfg)
@@ -957,6 +962,8 @@ async def run_gold_ai_trader_loop() -> None:
                 await sync_closed_trade_notifications(db, cfg)
                 await maybe_send_daily_summary(db, cfg)
                 await maybe_run_learning_review(db, session, cfg)
+            if killzone_override_scan:
+                runtime_state.note_dormant("outside_killzone_low_confluence")
             runtime_state.set_funnel(funnel_snapshot())
             return
 
@@ -967,7 +974,25 @@ async def run_gold_ai_trader_loop() -> None:
 
         candidate = None
         dedupe_reason = ""
+        override_min_conf = killzone_override_min_confluence() if killzone_override_scan else 0
         for cand in pick_top_candidates(candidates, max_candidates_per_scan()):
+            if killzone_override_scan:
+                passed_n, total_n = candidate_confluence_counts(cand)
+                if not candidate_meets_killzone_override(cand):
+                    skip_reason = f"confluence_{passed_n}/{total_n}<{override_min_conf}"
+                    funnel_record(
+                        "override_confluence_skipped",
+                        setup=cand.type,
+                        reason=skip_reason,
+                        db=db,
+                        session=session,
+                    )
+                    logger.debug(
+                        "[gold-ai-trader] killzone override skip %s: %s",
+                        cand.type,
+                        skip_reason,
+                    )
+                    continue
             ok_dedupe, dedupe_reason = should_invoke_claude(
                 db, cand, float(price), atr, setup_cooldown_s=_setup_cooldown_s()
             )
@@ -984,7 +1009,10 @@ async def run_gold_ai_trader_loop() -> None:
             logger.debug("[gold-ai-trader] claude dedupe skip %s: %s", cand.type, dedupe_reason)
 
         if not candidate:
-            runtime_state.note_dormant(dedupe_reason or "all_candidates_deduped")
+            if killzone_override_scan:
+                runtime_state.note_dormant("outside_killzone_low_confluence")
+            else:
+                runtime_state.note_dormant(dedupe_reason or "all_candidates_deduped")
             runtime_state.set_funnel(funnel_snapshot())
             return
 
