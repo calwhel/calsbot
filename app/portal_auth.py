@@ -18,18 +18,27 @@ def normalize_portal_uid(uid: str) -> str:
 
 
 def resolve_session_uid_with_user(request: Request) -> Optional[str]:
-    """Return session UID only when the token is valid and the user row exists."""
+    """Return session UID when the token is valid and the user row exists.
+
+    When the database is temporarily unavailable, trust a valid HMAC session so
+    logged-in users are not bounced to login during Neon wake-up.
+    """
     uid = session_uid_from_request(request)
     if not uid:
         return None
     uid = uid.strip().upper()
     from app.database import SessionLocal
+    from app.db_resilience import is_db_connection_error
     from app.models import User
 
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.uid == uid).first()
         return uid if user else None
+    except Exception as exc:
+        if is_db_connection_error(exc):
+            return uid
+        raise
     finally:
         db.close()
 

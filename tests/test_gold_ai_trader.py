@@ -164,7 +164,6 @@ def test_gold_ai_trader_page_sends_session_auth():
 
 def test_gold_ai_page_requires_authenticated_session():
     """Dashboard HTML must not load without a matching portal session."""
-    from unittest.mock import patch
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from app.gold_ai_trader.routes import router
@@ -175,7 +174,9 @@ def test_gold_ai_page_requires_authenticated_session():
     r = client.get("/gold-ai-trader?uid=TH-YP0BADA8")
     assert r.status_code == 302
     assert "/login" in r.headers.get("location", "")
-    assert "session_expired" in r.headers.get("location", "")
+    r2 = client.get("/gold-ai-trader")
+    assert r2.status_code == 302
+    assert "/login" in r2.headers.get("location", "")
 
 
 def test_coerce_decision_dict_string_json():

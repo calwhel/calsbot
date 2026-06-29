@@ -3269,8 +3269,9 @@ async def landing_page(request: Request):
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
+    msg = (request.query_params.get("msg") or "").strip()
     uid = _resolve_portal_session_uid(request)
-    if uid:
+    if uid and msg not in ("session_expired", "session_stale", "admin_required"):
         # Honour ?next=/some/path so links from /trade etc. round-trip the user
         # back to the page they came from.
         target = _safe_next(request.query_params.get("next"))

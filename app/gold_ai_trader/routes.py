@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.database import SessionLocal
@@ -446,35 +446,32 @@ def _session_token_for_page(request: Request, uid: str) -> Optional[str]:
 
 
 def _gold_ai_page_auth_redirect(request: Request, uid: str):
-    """Require a valid portal session matching uid and admin access."""
+    """Require a valid portal session matching uid (admin enforced on API only)."""
     from app.portal_auth import login_redirect, normalize_portal_uid, resolve_session_uid_with_user
 
     norm_uid = normalize_portal_uid(uid)
     session_uid = resolve_session_uid_with_user(request)
-    if not session_uid or session_uid != norm_uid:
+    if not session_uid:
         return login_redirect(f"/gold-ai-trader?uid={norm_uid}", msg="session_expired")
-
-    db = SessionLocal()
-    try:
-        try:
-            _resolve_user(norm_uid, db, request=request)
-        except HTTPException as exc:
-            if exc.status_code == 403:
-                return login_redirect(f"/gold-ai-trader?uid={norm_uid}", msg="admin_required")
-            raise
-    except Exception as exc:
-        if is_db_connection_error(exc) and _session_admin_fallback(request, norm_uid) is not None:
-            return None
-        raise
-    finally:
-        db.close()
+    if session_uid != norm_uid:
+        return RedirectResponse(url=f"/gold-ai-trader?uid={session_uid}", status_code=302)
     return None
 
 
 @router.get("/gold-ai-trader", response_class=HTMLResponse)
-async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
-    """Serve dashboard shell — requires portal login + admin access."""
-    from app.portal_auth import normalize_portal_uid
+async def gold_ai_trader_page(request: Request, uid: Optional[str] = Query(None)):
+    """Serve dashboard shell — requires portal login matching uid."""
+    from app.portal_auth import login_redirect, normalize_portal_uid, resolve_session_uid_with_user
+    from app.portal_session import set_session_cookie
+
+    session_uid = resolve_session_uid_with_user(request)
+    if not uid:
+        if session_uid:
+            return RedirectResponse(
+                url=f"/gold-ai-trader?uid={session_uid}",
+                status_code=302,
+            )
+        return login_redirect("/gold-ai-trader", msg="session_expired")
 
     norm_uid = normalize_portal_uid(uid)
     auth_redirect = _gold_ai_page_auth_redirect(request, norm_uid)
@@ -490,6 +487,10 @@ async def gold_ai_trader_page(request: Request, uid: str = Query(...)):
             "session_token": session_token,
         },
     )
+    try:
+        set_session_cookie(resp, norm_uid, request)
+    except Exception as exc:
+        logger.warning("[gold-ai-trader] refresh session cookie failed: %s", exc)
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
