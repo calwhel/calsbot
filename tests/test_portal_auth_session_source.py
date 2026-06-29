@@ -22,12 +22,12 @@ class PortalAuthSessionSourceTests(unittest.TestCase):
         self.assertIn("def delete_session_cookie", PORTAL_SESSION)
         self.assertIn("COOKIE_NAME = ", PORTAL_SESSION)
 
-    def test_gold_ai_page_requires_auth_and_no_cookie_overwrite(self):
+    def test_gold_ai_page_requires_auth_and_no_token_minting(self):
         self.assertIn("_gold_ai_page_auth_redirect", GOLD_ROUTES)
         self.assertIn("login_redirect", GOLD_ROUTES)
         self.assertIn("no-cache, no-store, must-revalidate", GOLD_ROUTES)
-        self.assertNotIn("set_session_cookie", GOLD_ROUTES)
         self.assertNotIn("make_session_token", GOLD_ROUTES)
+        self.assertIn("set_session_cookie", GOLD_ROUTES)
 
     def test_gold_ai_ui_differentiates_auth_errors(self):
         self.assertIn("Admin access required", GOLD_HTML)
@@ -44,6 +44,13 @@ class PortalAuthSessionSourceTests(unittest.TestCase):
     def test_login_page_handles_session_messages(self):
         self.assertIn("session_expired", LOGIN_HTML)
         self.assertIn("admin_required", LOGIN_HTML)
+
+    def test_portal_auth_db_resilient_session(self):
+        self.assertIn("is_db_connection_error", PORTAL_AUTH)
+        self.assertIn("admin enforced on API only", GOLD_ROUTES)
+
+    def test_login_page_skips_auto_redirect_on_session_errors(self):
+        self.assertIn('msg not in ("session_expired", "session_stale", "admin_required")', PORTAL_SERVER)
 
 
 if __name__ == "__main__":
