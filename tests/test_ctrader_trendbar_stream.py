@@ -44,6 +44,44 @@ class TestTrendbarStreamFetch(unittest.IsolatedAsyncioTestCase):
         out = feed._apply_live_tick_to_rows(rows, "XAUUSD", "15m", 10)
         self.assertGreater(float(out[-1][4]), 2600.0)
 
+    def test_apply_tick_preserves_closed_bars(self):
+        step = feed._TF_MINUTES["5m"] * 60_000
+        now_ms = (int(time.time() * 1000) // step) * step
+        closed = [now_ms - 2 * step, 100.0, 110.0, 90.0, 105.0, 10.0]
+        forming = [now_ms - step, 105.0, 108.0, 104.0, 106.0, 5.0]
+        rows = [list(closed), list(forming)]
+        out = feed._apply_tick_to_bar_rows(rows, 2651.0, now_ms - step + 60_000, "5m", 10)
+        self.assertEqual(out[0], closed)
+        self.assertEqual(float(out[1][4]), 2651.0)
+
+    def test_synthesize_on_return_remote_uses_postgres_price(self):
+        feed._feed_live = False
+        step = feed._TF_MINUTES["5m"] * 60_000
+        stale_ts = int(time.time() * 1000) - 10 * 60_000
+        stale_bar_ts = (stale_ts // step) * step
+        rows = [[stale_bar_ts, 1, 2, 0.5, 1.5, 0.0]]
+        with mock.patch.object(feed, "is_live", return_value=True), mock.patch.object(
+            feed, "get_price", return_value=2650.0,
+        ):
+            out = feed._synthesize_klines_on_return(rows, "XAUUSD", "5m", 60)
+        self.assertGreater(len(out), 1)
+        self.assertLess(feed._newest_bar_age_s(out), 400.0)
+
+    def test_synthesize_on_return_feed_worker_idempotent(self):
+        feed._feed_live = True
+        step = feed._TF_MINUTES["5m"] * 60_000
+        now_ms = (int(time.time() * 1000) // step) * step
+        rows = [[now_ms, 2650.0, 2652.0, 2648.0, 2651.0, 0.0]]
+        with mock.patch.object(feed, "is_live", return_value=True), mock.patch.object(
+            feed, "get_price", return_value=2651.0,
+        ):
+            out = feed._synthesize_klines_on_return(
+                rows, "XAUUSD", "5m", 60, log_remote=False,
+            )
+        self.assertEqual(len(out), 1)
+        self.assertEqual(float(out[0][4]), 2651.0)
+        self.assertEqual(int(out[0][0]), now_ms)
+
 
 if __name__ == "__main__":
     unittest.main()

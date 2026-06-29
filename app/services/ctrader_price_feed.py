@@ -607,6 +607,53 @@ def _apply_live_tick_to_rows(
     )
 
 
+def _synthesize_klines_on_return(
+    rows: List[List[float]],
+    sym_up: str,
+    timeframe: str,
+    limit: int,
+    *,
+    log_remote: bool = True,
+) -> List[List[float]]:
+    """
+    Apply live spot to the forming bar when the market is live.
+
+    Uses get_price() (local spot cache or Postgres tick store) so remote workers
+    without _feed_live still roll 5m/15m bars forward. Idempotent on feed workers
+    that already tick-update the cache — same mid re-applied to the forming bar.
+    """
+    if not rows or not is_live():
+        return rows
+    before_age = _newest_bar_age_s(rows)
+    out = _apply_live_tick_to_rows(rows, sym_up, timeframe, limit)
+    if not _feed_live and log_remote:
+        after_age = _newest_bar_age_s(out)
+        logger.info(
+            "[CTraderFeed] live tick synthesis %s %s remote_worker "
+            "bar_age=%.0fs→%.0fs bars=%d",
+            sym_up,
+            timeframe,
+            before_age if before_age != float("inf") else -1.0,
+            after_age if after_age != float("inf") else -1.0,
+            len(out),
+        )
+    return out
+
+
+def apply_live_spot_to_klines(
+    rows: List[List[float]],
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    *,
+    log_remote: bool = True,
+) -> List[List[float]]:
+    """Public wrapper — roll forming bar from live spot when market is live."""
+    return _synthesize_klines_on_return(
+        rows, symbol.upper(), timeframe, limit, log_remote=log_remote,
+    )
+
+
 def _log_stale_kline_rebuild(sym: str, detail: str, tf: str) -> None:
     """Safety-net stale rebuild log — at most once per symbol/timeframe per 5 min."""
     key = (sym.upper(), tf)
@@ -1660,11 +1707,11 @@ async def get_klines(
     blocked = trendbar_fetch_blocked_reason()
     if blocked:
         logger.debug("[CTraderFeed] trendbar fetch skipped %s %s: %s", sym_up, timeframe, blocked)
-        # Still serve tick-updated cache while live.
+        # Still serve tick-synthesized cache while live (local or Postgres spot).
         cache_key = (sym_up, timeframe, limit)
         cached = _kline_cache.get(cache_key)
-        if cached and _feed_live:
-            return _apply_live_tick_to_rows(cached[0], sym_up, timeframe, limit)
+        if cached and is_live():
+            return _synthesize_klines_on_return(cached[0], sym_up, timeframe, limit)
         return []
 
     cache_key = (sym_up, timeframe, limit)
@@ -1680,12 +1727,9 @@ async def get_klines(
             sym_up, cached[0], timeframe, cache_mono_ts=cached[1],
         )
         if cache_age < _KLINE_TTL and not kline_stale:
-            rows = cached[0]
-            if _feed_live:
-                rows = _apply_live_tick_to_rows(rows, sym_up, timeframe, limit)
-            return rows
-        if not rate_ok and _feed_live and not kline_stale:
-            return _apply_live_tick_to_rows(cached[0], sym_up, timeframe, limit)
+            return _synthesize_klines_on_return(cached[0], sym_up, timeframe, limit)
+        if not rate_ok and is_live() and not kline_stale:
+            return _synthesize_klines_on_return(cached[0], sym_up, timeframe, limit)
         if kline_stale:
             _log_stale_kline_rebuild(sym_up, stale_detail, timeframe)
             _kline_cache.pop(cache_key, None)
@@ -1759,7 +1803,7 @@ async def get_klines(
         now = time.monotonic()
         _kline_cache[cache_key] = (rows, now)
         _last_kline_update[sym_up] = now
-    return rows
+    return _synthesize_klines_on_return(rows, sym_up, timeframe, limit)
 
 
 # ── Public price API ──────────────────────────────────────────────────────────

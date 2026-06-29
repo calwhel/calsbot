@@ -48,6 +48,25 @@ class TestGoldAiKlines:
         assert rows == fake_rows
 
 
+class TestSynthesizeGoldScoringK5:
+    def test_synthesize_delegates_when_live(self):
+        stale_ts = int((__import__("time").time() - 600) * 1000)
+        k5 = [[stale_ts, 1, 2, 0.5, 1.5, 10.0]] * 25
+        fresh = [[int(__import__("time").time() * 1000), 1, 2, 0.5, 1.5, 10.0]] * 25
+        with patch(
+            "app.services.ctrader_price_feed.is_live",
+            return_value=True,
+        ), patch(
+            "app.services.ctrader_price_feed.apply_live_spot_to_klines",
+            return_value=fresh,
+        ) as mock_apply:
+            from app.gold_ai_trader.klines import synthesize_gold_scoring_k5
+
+            out = synthesize_gold_scoring_k5(k5)
+        assert out == fresh
+        mock_apply.assert_called_once()
+
+
 class TestDataRefresh:
     @pytest.mark.asyncio
     async def test_refresh_when_fresh(self):

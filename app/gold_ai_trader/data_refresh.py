@@ -8,7 +8,7 @@ import time
 from typing import Optional
 
 from app.gold_ai_trader.config import ASSET_CLASS, SYMBOL
-from app.gold_ai_trader.klines import is_ctrader_kline_source
+from app.gold_ai_trader.klines import is_ctrader_kline_source, synthesize_gold_scoring_k5
 from app.services.kline_staleness import newest_bar_age_s
 from app.services.tradfi_prices import (
     clear_metal_kline_cache,
@@ -91,6 +91,7 @@ async def refresh_gold_scoring_klines(*, user_id: Optional[int] = None) -> dict:
     k5 = await get_klines(
         SYMBOL, ASSET_CLASS, _SCORING_TF, _SCORING_LIMIT, ctrader_user_id=user_id,
     ) or []
+    k5 = synthesize_gold_scoring_k5(k5)
     bar_age = newest_bar_age_s(k5)
     summary["bar_age_before"] = round(bar_age, 1) if bar_age != float("inf") else None
 
@@ -109,6 +110,7 @@ async def refresh_gold_scoring_klines(*, user_id: Optional[int] = None) -> dict:
     k5 = await get_klines(
         SYMBOL, ASSET_CLASS, _SCORING_TF, _SCORING_LIMIT, ctrader_user_id=user_id,
     ) or []
+    k5 = synthesize_gold_scoring_k5(k5)
     summary["refreshed_5m"] = True
     new_age = newest_bar_age_s(k5)
     summary["bar_age_after"] = round(new_age, 1) if new_age != float("inf") else None
@@ -137,6 +139,7 @@ async def refresh_gold_scoring_klines(*, user_id: Optional[int] = None) -> dict:
             k5 = await get_klines(
                 SYMBOL, ASSET_CLASS, _SCORING_TF, _SCORING_LIMIT, ctrader_user_id=user_id,
             ) or []
+            k5 = synthesize_gold_scoring_k5(k5)
             new_age = newest_bar_age_s(k5)
             summary["bar_age_after"] = (
                 round(new_age, 1) if new_age != float("inf") else None
