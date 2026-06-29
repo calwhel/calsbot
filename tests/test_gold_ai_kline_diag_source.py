@@ -21,6 +21,7 @@ class GoldAiKlineDiagSourceTests(unittest.TestCase):
         self.assertIn("\"kline_bar_age_s\": kline_bar_age_s", QUALITY)
         self.assertIn("\"kline_fetch_age_s\": kline_fetch_age_s", QUALITY)
         self.assertIn("cache_fetched_at=kline_fetched_at", QUALITY)
+        self.assertIn("ctrader_user_id=user_id", QUALITY)
 
     def test_refresh_hardening_runs_ctrader_sweep_and_restart_path(self):
         self.assertIn("sweep_stale_klines(symbols=[SYMBOL], timeframes=[\"5m\", \"15m\", \"1h\"])", REFRESH)

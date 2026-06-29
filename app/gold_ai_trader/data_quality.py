@@ -104,7 +104,11 @@ async def assess_gold_market_data(
     price_source = live_source or "unknown"
 
     k5 = await get_klines(
-        SYMBOL, ASSET_CLASS, SCORING_TIMEFRAME, SCORING_KLINE_LIMIT
+        SYMBOL,
+        ASSET_CLASS,
+        SCORING_TIMEFRAME,
+        SCORING_KLINE_LIMIT,
+        ctrader_user_id=user_id,
     ) or []
     k5 = synthesize_gold_scoring_k5(k5)
     kline_source = get_metal_kline_source(sym, SCORING_TIMEFRAME, SCORING_KLINE_LIMIT)

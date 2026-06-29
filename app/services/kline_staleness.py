@@ -55,8 +55,8 @@ async def metal_live_spot_updating(symbol: str, max_age_s: float = 30.0) -> Tupl
     except Exception:
         pass
     try:
-        from app.services.ctrader_price_feed import get_price, is_live
-        if is_live():
+        from app.services.ctrader_price_feed import ctrader_spot_ready, get_price
+        if ctrader_spot_ready(sym):
             px = get_price(sym)
             if px and px > 0:
                 return True, float(px)
