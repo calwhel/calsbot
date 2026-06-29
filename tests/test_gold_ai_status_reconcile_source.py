@@ -18,9 +18,9 @@ class GoldAiStatusReconcileSourceTests(unittest.TestCase):
             "from app.services.strategy_executor import _reconcile_forex_closes",
             ROUTES,
         )
-        self.assertIn("_reconcile_forex_closes(user_id=_uid)", ROUTES)
+        self.assertIn("_reconcile_forex_closes(user_id=uid)", ROUTES)
         self.assertIn("await asyncio.wait_for(", ROUTES)
-        self.assertIn("[gold-ai-trader] status reconcile timed out uid=%s", ROUTES)
+        self.assertIn("[gold-ai-trader] status bg reconcile timed out uid=%s", ROUTES)
 
 
 if __name__ == "__main__":

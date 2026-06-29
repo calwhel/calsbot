@@ -11,7 +11,9 @@ LOOP = (ROOT / "app" / "gold_ai_trader" / "loop.py").read_text()
 
 
 class GoldAiScanHealthSourceTests(unittest.TestCase):
-    def test_template_has_explicit_scan_health_line_and_helpers(self):
+    def test_template_retries_status_on_timeout(self):
+        self.assertIn("timeoutMs: 45000", TEMPLATE)
+        self.assertIn("return refresh(attempt + 1)", TEMPLATE)
         self.assertIn('id="scan-health-line"', TEMPLATE)
         self.assertIn("function deriveScanHealth(rt, cfg, sessionNow)", TEMPLATE)
         self.assertIn("rt._recent_events = (j.recent_funnel_events || []).slice(0, 10);", TEMPLATE)
@@ -31,12 +33,11 @@ class GoldAiScanHealthSourceTests(unittest.TestCase):
         self.assertIn("GOLD_AI_SCAN_HEARTBEAT_PERSIST_S", FUNNEL_PERSIST)
         self.assertIn("_last_scan_persist_mono", FUNNEL_PERSIST)
 
-    def test_status_endpoint_kicks_background_loop(self):
-        self.assertIn("from app.gold_ai_trader.loop import (", ROUTES)
-        self.assertIn("maybe_start_background_loop", ROUTES)
-        self.assertIn("await maybe_start_background_loop()", ROUTES)
+    def test_status_endpoint_schedules_background_healing(self):
+        self.assertIn("_schedule_status_background_healing", ROUTES)
+        self.assertIn("asyncio.create_task(_heal())", ROUTES)
         self.assertIn("ensure_scan_liveness", ROUTES)
-        self.assertIn("scan liveness kick", ROUTES)
+        self.assertIn("status bg scan kick", ROUTES)
 
     def test_loop_reclaims_stale_lock_after_repeated_misses(self):
         self.assertIn("def _reclaim_stale_gold_ai_locks(*, min_idle_seconds: float) -> int:", LOOP)

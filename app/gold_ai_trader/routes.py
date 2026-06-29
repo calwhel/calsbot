@@ -70,6 +70,50 @@ def _should_run_status_reconcile(user_id: int) -> bool:
     return True
 
 
+def _schedule_status_background_healing(trader_uid: Optional[int]) -> None:
+    """Run scan recovery + broker reconcile off the status hot path (mobile polls every few seconds)."""
+    scan_cap_s = max(
+        2.0,
+        float(os.environ.get("GOLD_AI_STATUS_SCAN_KICK_CAP_S", "8")),
+    )
+
+    async def _heal() -> None:
+        try:
+            from app.gold_ai_trader.loop import ensure_scan_liveness, maybe_start_background_loop
+
+            await maybe_start_background_loop()
+            kick = await asyncio.wait_for(ensure_scan_liveness(), timeout=scan_cap_s)
+            if kick not in ("healthy", "throttled"):
+                logger.info("[gold-ai-trader] status bg scan kick: %s", kick)
+        except asyncio.TimeoutError:
+            logger.debug("[gold-ai-trader] status bg scan kick timed out after %.1fs", scan_cap_s)
+        except Exception as exc:
+            logger.warning("[gold-ai-trader] status bg scan kick failed: %s", exc)
+
+        try:
+            uid = int(trader_uid or 0)
+        except (TypeError, ValueError):
+            uid = 0
+        if uid <= 0 or not _should_run_status_reconcile(uid):
+            return
+        try:
+            from app.services.strategy_executor import _reconcile_forex_closes
+
+            await asyncio.wait_for(
+                _reconcile_forex_closes(user_id=uid),
+                timeout=_STATUS_RECONCILE_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("[gold-ai-trader] status bg reconcile timed out uid=%s", uid)
+        except Exception as exc:
+            logger.warning("[gold-ai-trader] status bg reconcile failed uid=%s: %s", uid, exc)
+
+    try:
+        asyncio.create_task(_heal())
+    except RuntimeError:
+        logger.debug("[gold-ai-trader] status bg heal skipped (no event loop)")
+
+
 def _normalize_uid(uid: str) -> str:
     """Match Strategy Portal UID format (TH-XXXXXXXX)."""
     uid = (uid or "").strip().upper()
@@ -530,51 +574,11 @@ async def api_status(request: Request, uid: str = Query(...)):
         except Exception as exc:
             logger.warning("[gold-ai-trader] schema ensure on status: %s", exc)
 
-        # Self-heal: ensure this worker schedules the background loop on demand.
-        try:
-            from app.gold_ai_trader.loop import (
-                maybe_start_background_loop,
-                ensure_scan_liveness,
-            )
-
-            await maybe_start_background_loop()
-            scan_kick = await ensure_scan_liveness()
-            if scan_kick not in ("healthy", "throttled"):
-                logger.info("[gold-ai-trader] status scan liveness kick: %s", scan_kick)
-        except Exception as exc:
-            logger.warning("[gold-ai-trader] status loop kick failed: %s", exc)
-
         cfg_row, cfg, trader_uid = _load_config_for_status(db, admin)
         if cfg_row is None:
             degraded.append("config")
 
-        # Keep dashboard "IN TRADE" state in sync with broker truth. This
-        # catches missed/delayed close events quickly and avoids stale OPEN rows
-        # blocking new scans for extended periods.
-        if trader_uid:
-            try:
-                _uid = int(trader_uid)
-            except (TypeError, ValueError):
-                _uid = 0
-            if _uid > 0 and _should_run_status_reconcile(_uid):
-                try:
-                    from app.services.strategy_executor import _reconcile_forex_closes
-
-                    await asyncio.wait_for(
-                        _reconcile_forex_closes(user_id=_uid),
-                        timeout=_STATUS_RECONCILE_TIMEOUT_S,
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "[gold-ai-trader] status reconcile timed out uid=%s",
-                        _uid,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "[gold-ai-trader] status reconcile failed uid=%s: %s",
-                        _uid,
-                        exc,
-                    )
+        _schedule_status_background_healing(trader_uid)
 
         demo_accounts: List[Dict[str, Any]] = []
         selected = None
