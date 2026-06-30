@@ -19504,6 +19504,13 @@ try:
 except Exception as _gold_ai_mount_err:
     logger.warning("Gold AI Trader mount skipped: %s", _gold_ai_mount_err)
 
+try:
+    from app.gemini_gold_trader.portal_mount import mount_gemini_gold_trader_portal
+
+    mount_gemini_gold_trader_portal(app)
+except Exception as _gemini_gold_mount_err:
+    logger.warning("Gemini Gold Trader mount skipped: %s", _gemini_gold_mount_err)
+
 
 if __name__ == "__main__":
     import uvicorn, time, logging
