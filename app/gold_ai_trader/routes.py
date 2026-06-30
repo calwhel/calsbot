@@ -79,12 +79,11 @@ def _schedule_status_background_healing(trader_uid: Optional[int]) -> None:
 
     async def _heal() -> None:
         try:
-            from app.gold_ai_trader.loop import ensure_scan_liveness, maybe_start_background_loop
+            from app.gold_ai_trader.loop import ensure_scan_liveness
 
-            await maybe_start_background_loop()
             kick = await asyncio.wait_for(ensure_scan_liveness(), timeout=scan_cap_s)
-            if kick not in ("healthy", "throttled"):
-                logger.info("[gold-ai-trader] status bg scan kick: %s", kick)
+            if kick == "stale":
+                logger.info("[gold-ai-trader] status scan health: stale (watchdog-owned recovery)")
         except asyncio.TimeoutError:
             logger.debug("[gold-ai-trader] status bg scan kick timed out after %.1fs", scan_cap_s)
         except Exception as exc:

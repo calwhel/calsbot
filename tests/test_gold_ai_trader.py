@@ -334,6 +334,8 @@ def test_system_prompt_cached_block_present():
 
 
 def test_context_builder_shape():
+    from unittest.mock import AsyncMock, patch
+
     class _Cfg:
         london_start_hour = 7
         london_end_hour = 16
@@ -342,28 +344,20 @@ def test_context_builder_shape():
         max_calls_day = 50
         max_trades_day = 6
         confidence_threshold = 50
+        include_history_in_decisions = True
 
-    class _Db:
-        def query(self, *a, **k):
-            return self
-
-        def filter(self, *a, **k):
-            return self
-
-        def order_by(self, *a, **k):
-            return self
-
-        def limit(self, *a, **k):
-            return self
-
-        def first(self):
-            return None
-
-        def all(self):
-            return []
-
-        def scalar(self):
-            return 0
+    async def _fake_run_with_db(fn, *args, **kwargs):
+        name = getattr(fn, "__name__", "")
+        if name == "_load_context_db_fields":
+            return 0, 0.0, "Fresh-day mode: historical lessons disabled; focus on live setup quality.", 0, 0, 0.0
+        if name == "_recent_decisions_block":
+            return [
+                "=== RECENT DECISIONS (this session) ===",
+                "No prior decisions in the last 2h — first evaluation this window.",
+            ]
+        if name == "_setup_stats_block":
+            return ["=== SETUP STATS ===", "No closed outcomes yet."]
+        return None
 
     cand = Candidate(
         type="sweep_pdh",
@@ -373,16 +367,19 @@ def test_context_builder_shape():
         sig_key="sweep_pdh:SHORT",
         raw={},
     )
-    text = asyncio.run(
-        build_context_snapshot(
-            candidate=cand,
-            price=2650.5,
-            session="london",
-            db=_Db(),
-            cfg=_Cfg(),
-            user_id=None,
+    with patch("app.gold_ai_trader.context.run_with_db", side_effect=_fake_run_with_db), patch(
+        "app.gold_ai_trader.context.get_gold_ai_klines",
+        new=AsyncMock(return_value=[]),
+    ):
+        text = asyncio.run(
+            build_context_snapshot(
+                candidate=cand,
+                price=2650.5,
+                session="london",
+                cfg=_Cfg(),
+                user_id=None,
+            )
         )
-    )
     assert "TRIGGER" in text
     assert "XAUUSD" in text
     assert "sweep_pdh" in text
@@ -409,16 +406,19 @@ def test_context_builder_shape():
             },
         },
     )
-    rich = asyncio.run(
-        build_context_snapshot(
-            candidate=cand_with_readiness,
-            price=2650.5,
-            session="london",
-            db=_Db(),
-            cfg=_Cfg(),
-            user_id=None,
+    with patch("app.gold_ai_trader.context.run_with_db", side_effect=_fake_run_with_db), patch(
+        "app.gold_ai_trader.context.get_gold_ai_klines",
+        new=AsyncMock(return_value=[]),
+    ):
+        rich = asyncio.run(
+            build_context_snapshot(
+                candidate=cand_with_readiness,
+                price=2650.5,
+                session="london",
+                cfg=_Cfg(),
+                user_id=None,
+            )
         )
-    )
     assert "=== CONFLUENCE" in rich
     assert "Count: 5/5 passed" in rich
     assert "=== SETUP RUBRIC" in rich

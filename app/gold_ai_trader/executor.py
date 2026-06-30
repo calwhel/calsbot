@@ -13,6 +13,7 @@ from app.gold_ai_trader.guardrails import (
     DemoAccountRequired,
     LiveAccountRequired,
 )
+from app.gold_ai_trader.db_thread import db_commit, run_in_db_thread
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ async def execute_take(
             fire_context=fire_context,
         )
 
-    user, prefs, ctid = _resolve_demo_trader(db, cfg)
+    user, prefs, ctid = await run_in_db_thread(_resolve_demo_trader, db, cfg)
     if not user or not prefs or not ctid:
         return None
 
@@ -155,7 +156,7 @@ async def execute_take(
                 notes="broker LIMIT placed",
             )
             db.add(row)
-            db.commit()
+            await db_commit(db)
             logger.info(
                 "[gold-ai-trader] broker LIMIT pending id=%s order=%s entry=%s",
                 row.id,
@@ -222,7 +223,7 @@ async def execute_take_market(
         logger.warning("[gold-ai-trader] GOLD_AI_TRADER_USER_ID not set")
         return None
 
-    user, prefs, ctid = _resolve_demo_trader(db, cfg)
+    user, prefs, ctid = await run_in_db_thread(_resolve_demo_trader, db, cfg)
     if not user or not prefs or not ctid:
         if not user:
             logger.warning("[gold-ai-trader] demo user missing")
@@ -314,7 +315,7 @@ async def execute_take_market(
             broker_units_i = int(broker_units)
     except Exception:
         broker_units_i = None
-    strategy_id = ensure_system_strategy(db, user.id)
+    strategy_id = await run_in_db_thread(ensure_system_strategy, db, user.id)
     note = f"gold_ai_trader decision_id={decision_id}"
     order_id = result.get("order_id")
     position_id = result.get("position_id")
@@ -348,8 +349,8 @@ async def execute_take_market(
         conditions_met={"gold_ai_decision_id": decision_id},
     )
     db.add(ex)
-    db.commit()
-    db.refresh(ex)
+    await db_commit(db)
+    await run_in_db_thread(db.refresh, ex)
     logger.info(
         "[gold-ai-trader] DEMO order placed exec=%s %s %s @ %s",
         ex.id,
@@ -358,6 +359,18 @@ async def execute_take_market(
         fill,
     )
     return ex.id
+
+
+def _resolve_live_mirror_trader(db, cfg: GoldAiRuntimeConfig):
+    from app.models import User, UserPreference
+
+    if not cfg.demo_user_id:
+        return None, None
+    user = db.query(User).filter(User.id == cfg.demo_user_id).first()
+    if not user:
+        return None, None
+    prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+    return user, prefs
 
 
 async def execute_live_mirror_take(
@@ -372,14 +385,12 @@ async def execute_live_mirror_take(
     if not cfg.live_mirror_enabled or not cfg.demo_user_id:
         return None
 
-    from app.models import User, UserPreference
     from app.strategy_models import StrategyExecution
     from app.services.ctrader_order_queue import CtraderOrderJob, enqueue_ctrader_order
 
-    user = db.query(User).filter(User.id == cfg.demo_user_id).first()
+    user, prefs = await run_in_db_thread(_resolve_live_mirror_trader, db, cfg)
     if not user:
         return None
-    prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
     if not prefs or not prefs.ctrader_access_token:
         logger.warning("[gold-ai-trader] live mirror: missing cTrader token")
         return None
@@ -401,7 +412,7 @@ async def execute_live_mirror_take(
     sl_pct, tp_pct = _pct_from_prices(direction, entry, sl, tp)
     lots = max(0.01, float(cfg.live_lot_size or 0.01))
 
-    strategy_id = ensure_system_strategy(db, user.id, live_mirror=True)
+    strategy_id = await run_in_db_thread(ensure_system_strategy, db, user.id, live_mirror=True)
     ex = StrategyExecution(
         strategy_id=strategy_id,
         user_id=user.id,
@@ -424,8 +435,8 @@ async def execute_live_mirror_take(
         },
     )
     db.add(ex)
-    db.commit()
-    db.refresh(ex)
+    await db_commit(db)
+    await run_in_db_thread(db.refresh, ex)
 
     signal_mono = time.monotonic()
     job = CtraderOrderJob(
@@ -447,7 +458,7 @@ async def execute_live_mirror_take(
     ok = await enqueue_ctrader_order(job)
     if not ok:
         ex.notes = (ex.notes or "") + " | enqueue_failed"
-        db.commit()
+        await db_commit(db)
         logger.warning("[gold-ai-trader] live mirror enqueue failed exec=%s", ex.id)
         return ex.id
 
@@ -467,19 +478,23 @@ async def flatten_open_demo_positions(db, cfg: GoldAiRuntimeConfig) -> int:
     """Mark no-overnight intent — open positions rely on existing SL/TP + forex reconcile."""
     if not cfg.demo_user_id or not cfg.no_overnight:
         return 0
-    from app.strategy_models import StrategyExecution
 
-    count = (
-        db.query(StrategyExecution)
-        .filter(
-            StrategyExecution.user_id == cfg.demo_user_id,
-            StrategyExecution.symbol == SYMBOL,
-            StrategyExecution.outcome == "OPEN",
-            StrategyExecution.notes.like("%gold_ai_trader%"),
-            ~StrategyExecution.notes.like("%live_mirror%"),
+    def _count_open() -> int:
+        from app.strategy_models import StrategyExecution
+
+        return (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.user_id == cfg.demo_user_id,
+                StrategyExecution.symbol == SYMBOL,
+                StrategyExecution.outcome == "OPEN",
+                StrategyExecution.notes.like("%gold_ai_trader%"),
+                ~StrategyExecution.notes.like("%live_mirror%"),
+            )
+            .count()
         )
-        .count()
-    )
+
+    count = await run_in_db_thread(_count_open)
     if count:
         logger.info(
             "[gold-ai-trader] NY window ended — %s open demo position(s); "

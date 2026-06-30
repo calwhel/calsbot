@@ -1,4 +1,4 @@
-"""Isolated background loop with advisory lock."""
+"""Isolated background scan loop (standalone process)."""
 from __future__ import annotations
 
 import asyncio
@@ -9,13 +9,13 @@ from datetime import datetime
 
 import httpx
 
-from app.database import SessionLocal
 from app.gold_ai_trader.config import env_defaults, gold_ai_trader_enabled
 from app.gold_ai_trader.data_quality import (
     assess_gold_market_data,
     format_data_source,
     gold_data_ok_for_claude,
 )
+from app.gold_ai_trader.db_thread import db_commit, run_in_db_thread, run_with_db, with_db_session
 from app.gold_ai_trader.schema import seed_config_if_missing
 from app.gold_ai_trader.guardrails import (
     merge_config,
@@ -69,17 +69,138 @@ from app.gold_ai_trader import state as runtime_state
 
 logger = logging.getLogger(__name__)
 
-_LOCK_ID = 42_424_250
-_LOCK_APP_NAME = "gold-ai-trader"
 _loop_task: asyncio.Task | None = None
 _watchdog_task: asyncio.Task | None = None
 _prev_session: str | None = None
-_lock_conn = None
 _loop_task_started_mono = 0.0
 _watchdog_last_restart_mono = 0.0
 _restart_lock: asyncio.Lock | None = None
-_on_demand_lock: asyncio.Lock | None = None
-_on_demand_last_mono = 0.0
+
+
+def gold_ai_loop_disabled_in_gunicorn() -> bool:
+    return os.environ.get("DISABLE_GOLD_AI_IN_GUNICORN", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def is_standalone_gold_ai() -> bool:
+    return os.environ.get("GOLD_AI_STANDALONE", "").lower() in ("1", "true", "yes")
+
+
+@with_db_session
+def _load_merged_config(db, env):
+    cfg_row = seed_config_if_missing(db)
+    return merge_config(cfg_row, env)
+
+
+@with_db_session
+def _persist_scan_and_reload_cfg(db, session: str, env):
+    funnel_record("scan", db=db, session=session)
+    cfg_row = db.query(GoldAiConfig).filter_by(id=1).first()
+    if cfg_row:
+        return merge_config(cfg_row, env)
+    return None
+
+
+@with_db_session
+def _check_can_call_claude_db(db, cfg):
+    return check_can_call_claude(db, cfg)
+
+
+@with_db_session
+def _check_can_call_orb_db(db, cfg):
+    return check_can_call_orb(db, cfg)
+
+
+@with_db_session
+def _check_can_execute_db(db, cfg, user_id: int):
+    return check_can_execute(db, cfg, user_id)
+
+
+@with_db_session
+def _check_can_execute_live_mirror_db(db, cfg, user_id: int):
+    return check_can_execute_live_mirror(db, cfg, user_id)
+
+
+@with_db_session
+def _record_funnel_db(db, event: str, **kwargs):
+    funnel_record(event, db=db, **kwargs)
+
+
+@with_db_session
+def _should_invoke_claude_db(db, cand, price: float, atr: float, setup_cooldown_s: float):
+    return should_invoke_claude(db, cand, price, atr, setup_cooldown_s=setup_cooldown_s)
+
+
+@with_db_session
+def _persist_orb_state_link(db, orb_state):
+    from app.gold_ai_trader.orb import _persist_state
+
+    _persist_state(db, orb_state)
+
+
+@with_db_session
+def _update_decision_row(db, row_id: int, decision: dict, *, executed: bool | None = None, execution_id: int | None = None):
+    row = db.query(GoldAiDecision).filter_by(id=row_id).first()
+    if not row:
+        return
+    row.decision = decision
+    if executed is not None:
+        row.executed = executed
+    if execution_id is not None:
+        row.execution_id = execution_id
+    db.commit()
+
+
+@with_db_session
+def _finalize_orb_execution_state(db, row_id: int, exec_id: int, orb_state):
+    row = db.query(GoldAiDecision).filter_by(id=row_id).first()
+    if row:
+        row.executed = True
+        row.execution_id = exec_id
+    if orb_state is not None:
+        from app.gold_ai_trader.orb import _persist_state
+
+        orb_state.execution_id = exec_id
+        orb_state.trades_taken = int(orb_state.trades_taken or 0) + 1
+        if orb_state.trades_taken >= 1:
+            orb_state.status = "traded"
+        _persist_state(db, orb_state)
+    db.commit()
+
+
+@with_db_session
+def _record_outcome_for_execution(db, decision_id: int, execution_id: int):
+    from app.strategy_models import StrategyExecution
+
+    ex = db.query(StrategyExecution).filter_by(id=execution_id).first()
+    record_outcome_from_execution(db, decision_id, ex)
+
+
+async def _post_scan_tail(cfg, session: str) -> None:
+    await _call_with_db_session(sync_closed_trade_notifications, cfg=cfg)
+    await _call_with_db_session(maybe_send_daily_summary, cfg=cfg)
+    await _call_with_db_session(maybe_run_learning_review, session=session, cfg=cfg)
+    runtime_state.set_funnel(funnel_snapshot())
+
+
+async def _call_with_db_session(async_fn, /, *args, **kwargs):
+    """Open a short-lived session for one async callee, then close."""
+    from app.database import SessionLocal
+
+    holder: list = []
+
+    def _open():
+        holder.append(SessionLocal())
+
+    await run_in_db_thread(_open)
+    db = holder[0]
+    try:
+        return await async_fn(*args, db=db, **kwargs)
+    finally:
+        await run_in_db_thread(db.close)
 
 
 def _utc_iso_now() -> str:
@@ -161,71 +282,6 @@ async def _stale_entry_recheck(
     return True, note
 
 
-def _ping_lock_connection(conn) -> bool:
-    try:
-        if conn is None or getattr(conn, "closed", 0):
-            return False
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-        return True
-    except Exception:
-        return False
-
-
-def _acquire_gold_ai_lock():
-    from app.executor_lock import build_lock_connection, try_acquire_lock
-
-    conn = build_lock_connection(_LOCK_APP_NAME)
-    if try_acquire_lock(conn, _LOCK_ID):
-        return conn
-    try:
-        conn.close()
-    except Exception:
-        pass
-    return None
-
-
-def _reconnect_gold_ai_lock(old_conn):
-    from app.executor_lock import close_lock_connection, reconnect_lock_connection
-
-    return reconnect_lock_connection(
-        old_conn,
-        lock_id=_LOCK_ID,
-        application_name=_LOCK_APP_NAME,
-        max_attempts=5,
-        retry_delay=2.0,
-        silent=False,
-    )
-
-
-def _reclaim_stale_gold_ai_locks(*, min_idle_seconds: float) -> int:
-    from app.executor_lock import terminate_lock_holders
-
-    return int(
-        terminate_lock_holders(
-            _LOCK_ID,
-            min_idle_seconds=max(0.0, float(min_idle_seconds)),
-            owner_app=_LOCK_APP_NAME,
-            log_prefix="[gold-ai-trader-lock]",
-        )
-        or 0
-    )
-
-
-def _release_gold_ai_lock(conn) -> None:
-    if not conn:
-        return
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_unlock(%s)", (_LOCK_ID,))
-    except Exception:
-        pass
-    try:
-        conn.close()
-    except Exception:
-        pass
-
-
 def _parse_last_scan_at(raw: str | None) -> datetime | None:
     if not raw:
         return None
@@ -244,13 +300,6 @@ def _parse_last_scan_at(raw: str | None) -> datetime | None:
         except Exception:
             return dt.replace(tzinfo=None)
     return dt
-
-
-def _get_on_demand_lock() -> asyncio.Lock:
-    global _on_demand_lock
-    if _on_demand_lock is None:
-        _on_demand_lock = asyncio.Lock()
-    return _on_demand_lock
 
 
 def _get_restart_lock() -> asyncio.Lock:
@@ -284,7 +333,7 @@ def _watchdog_task_done(task: asyncio.Task) -> None:
 
 def _schedule_loop_task() -> None:
     global _loop_task, _loop_task_started_mono
-    _loop_task = asyncio.create_task(_locked_loop_forever())
+    _loop_task = asyncio.create_task(_scan_loop_forever())
     _loop_task_started_mono = time.monotonic()
     _loop_task.add_done_callback(_loop_task_done)
     logger.info("[gold-ai-trader] background task scheduled")
@@ -301,14 +350,7 @@ def _watchdog_snapshot() -> tuple[bool, bool, str | None, float | None]:
     """Return (enabled, kill_switch, active_session, heartbeat_age_s)."""
     env = env_defaults()
     cfg = env
-    db = SessionLocal()
-    try:
-        row = seed_config_if_missing(db)
-        cfg = merge_config(row, env)
-    except Exception:
-        cfg = env
-    finally:
-        db.close()
+    cfg = _load_merged_config(env)
     if not cfg.enabled:
         return False, bool(cfg.kill_switch), None, None
     session = active_session(datetime.utcnow(), cfg)
@@ -318,7 +360,7 @@ def _watchdog_snapshot() -> tuple[bool, bool, str | None, float | None]:
 
 
 async def _stop_loop_task(reason: str) -> None:
-    global _loop_task, _lock_conn
+    global _loop_task
     task = _loop_task
     if task and not task.done():
         task.cancel()
@@ -329,13 +371,9 @@ async def _stop_loop_task(reason: str) -> None:
         except Exception as exc:
             logger.warning("[gold-ai-trader] loop cancel wait failed (%s): %s", reason, exc)
     _loop_task = None
-    conn = _lock_conn
-    _lock_conn = None
-    if conn is not None:
-        await asyncio.to_thread(_release_gold_ai_lock, conn)
 
 
-async def _restart_background_loop(reason: str, *, force_reclaim: bool) -> str:
+async def _restart_background_loop(reason: str) -> str:
     global _watchdog_last_restart_mono
     min_restart_interval_s = max(
         30.0,
@@ -350,11 +388,6 @@ async def _restart_background_loop(reason: str, *, force_reclaim: bool) -> str:
             return "restart_throttled"
         _watchdog_last_restart_mono = now_m
         logger.error("[gold-ai-trader] watchdog restarting loop: %s", reason)
-        if force_reclaim:
-            try:
-                await asyncio.to_thread(_reclaim_stale_gold_ai_locks, min_idle_seconds=0.0)
-            except Exception as exc:
-                logger.warning("[gold-ai-trader] watchdog force reclaim failed: %s", exc)
         await _stop_loop_task(reason)
         _schedule_loop_task()
         return "restarted"
@@ -362,6 +395,8 @@ async def _restart_background_loop(reason: str, *, force_reclaim: bool) -> str:
 
 def _freshest_scan_heartbeat_utc() -> datetime | None:
     """Best scan heartbeat across local runtime + persisted funnel events."""
+    from app.database import SessionLocal
+
     best = _parse_last_scan_at(runtime_state.get_status().get("last_scan_at"))
     db = SessionLocal()
     try:
@@ -389,76 +424,26 @@ def _freshest_scan_heartbeat_utc() -> datetime | None:
     return best
 
 
+def scan_heartbeat_age_seconds() -> float | None:
+    last = _freshest_scan_heartbeat_utc()
+    if last is None:
+        return None
+    return max(0.0, (datetime.utcnow() - last).total_seconds())
+
+
 async def ensure_scan_liveness() -> str:
-    """On-demand one-shot scan recovery for stale in-session runtimes."""
-    global _on_demand_last_mono
+    """Read-only scan health for status API (recovery is watchdog-owned)."""
     if not gold_ai_trader_enabled():
         return "disabled"
-    min_interval_s = max(
-        10.0,
-        float(os.environ.get("GOLD_AI_ON_DEMAND_SCAN_MIN_INTERVAL_S", "20")),
-    )
     stale_after_s = max(
         60.0,
         float(os.environ.get("GOLD_AI_ON_DEMAND_SCAN_STALE_AFTER_S", "120")),
     )
-    timeout_s = max(
-        10.0,
-        float(os.environ.get("GOLD_AI_ON_DEMAND_SCAN_TIMEOUT_S", "35")),
-    )
-    force_reclaim_after_s = max(
-        stale_after_s,
-        float(os.environ.get("GOLD_AI_ON_DEMAND_FORCE_RECLAIM_AFTER_S", "180")),
-    )
-    now_m = time.monotonic()
-    if now_m - _on_demand_last_mono < min_interval_s:
-        return "throttled"
-
-    last = await asyncio.to_thread(_freshest_scan_heartbeat_utc)
+    last = await run_in_db_thread(_freshest_scan_heartbeat_utc)
     age_s = (datetime.utcnow() - last).total_seconds() if last else None
     if age_s is not None and age_s <= stale_after_s:
         return "healthy"
-
-    lock = _get_on_demand_lock()
-    async with lock:
-        now_m = time.monotonic()
-        if now_m - _on_demand_last_mono < min_interval_s:
-            return "throttled"
-        _on_demand_last_mono = now_m
-
-        conn = await asyncio.to_thread(_acquire_gold_ai_lock)
-        if conn is None:
-            reclaim_idle_s = max(stale_after_s, 120.0)
-            if age_s is not None and age_s >= force_reclaim_after_s:
-                # Heartbeat is stale cluster-wide; force-takeover even if holder
-                # looks "live" from pg_stat_activity idle timers.
-                reclaim_idle_s = 0.0
-            try:
-                reclaimed = await asyncio.to_thread(
-                    _reclaim_stale_gold_ai_locks,
-                    min_idle_seconds=reclaim_idle_s,
-                )
-                if reclaimed and reclaim_idle_s <= 0.0:
-                    logger.warning(
-                        "[gold-ai-trader] forced lock reclaim after stale heartbeat age=%.0fs",
-                        age_s or -1.0,
-                    )
-            except Exception as exc:
-                logger.warning("[gold-ai-trader] on-demand stale lock reclaim failed: %s", exc)
-            conn = await asyncio.to_thread(_acquire_gold_ai_lock)
-        if conn is None:
-            return "lock_busy"
-        try:
-            await asyncio.wait_for(run_gold_ai_trader_loop(), timeout=timeout_s)
-            return "ran"
-        except asyncio.TimeoutError:
-            logger.warning("[gold-ai-trader] on-demand scan timeout after %.1fs", timeout_s)
-            return "timeout"
-        except Exception as exc:
-            logger.warning("[gold-ai-trader] on-demand scan failed: %s", exc)
-            return "error"
-        finally:
-            await asyncio.to_thread(_release_gold_ai_lock, conn)
+    return "stale"
 
 
 async def _watchdog_loop_forever() -> None:
@@ -485,23 +470,11 @@ async def _watchdog_loop_forever() -> None:
                 await asyncio.sleep(interval_s)
                 continue
             if _loop_task is None or _loop_task.done():
-                await _restart_background_loop("loop_task_missing_or_done", force_reclaim=False)
+                await _restart_background_loop("loop_task_missing_or_done")
                 await asyncio.sleep(interval_s)
                 continue
-            enabled, kill_switch, session, age_s = await asyncio.to_thread(_watchdog_snapshot)
+            enabled, kill_switch, session, age_s = await run_in_db_thread(_watchdog_snapshot)
             if not enabled or kill_switch or not session:
-                await asyncio.sleep(interval_s)
-                continue
-            has_local_lock = False
-            if _lock_conn is not None:
-                try:
-                    has_local_lock = await asyncio.to_thread(_ping_lock_connection, _lock_conn)
-                except Exception:
-                    has_local_lock = False
-            # Prevent multi-worker watchdog herding: only the worker currently
-            # holding the advisory lock is allowed to force stale-heartbeat
-            # restarts/reclaims. Non-owners keep trying normal lock acquire.
-            if not has_local_lock:
                 await asyncio.sleep(interval_s)
                 continue
             loop_age_s = max(0.0, time.monotonic() - _loop_task_started_mono)
@@ -514,7 +487,7 @@ async def _watchdog_loop_forever() -> None:
                     f"{int(age_s) if age_s is not None else -1}"
                 )
                 logger.error("[gold-ai-trader] watchdog detected %s", reason)
-                await _restart_background_loop(reason, force_reclaim=True)
+                await _restart_background_loop(reason)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -524,16 +497,17 @@ async def _watchdog_loop_forever() -> None:
 
 async def _sync_closed_outcomes_pass() -> None:
     """Run close reconciliation every loop cycle, independent of scan gating."""
-    db = SessionLocal()
-    try:
+
+    @with_db_session
+    def _load_demo_uid(db):
         cfg_row = seed_config_if_missing(db)
         cfg = merge_config(cfg_row, env_defaults())
-        demo_uid = int(getattr(cfg, "demo_user_id", 0) or 0)
+        return int(getattr(cfg, "demo_user_id", 0) or 0), cfg
+
+    try:
+        demo_uid, cfg = await run_in_db_thread(_load_demo_uid)
         if demo_uid > 0:
             try:
-                # Gold AI depends on this OPEN→closed transition for hero/feed state.
-                # Run a targeted broker reconcile pass every cycle so missed stream
-                # events do not leave executions stuck OPEN in the dashboard.
                 from app.services.strategy_executor import _reconcile_forex_closes
 
                 timeout_s = max(
@@ -555,16 +529,13 @@ async def _sync_closed_outcomes_pass() -> None:
                     demo_uid,
                     exc,
                 )
-        await sync_closed_trade_notifications(db, cfg)
+        await _call_with_db_session(sync_closed_trade_notifications, cfg=cfg)
     except Exception as exc:
         logger.warning("[gold-ai-trader] closed-outcome sync pass failed: %s", exc)
-    finally:
-        db.close()
 
 
 async def _maybe_run_orb_strategy(
     *,
-    db,
     cfg,
     session: str,
     now: datetime,
@@ -576,7 +547,6 @@ async def _maybe_run_orb_strategy(
         return False
     try:
         signal, orb_state, detect_reason = await detect_orb_signal(
-            db=db,
             cfg=cfg,
             session=session,
             now=now,
@@ -606,7 +576,7 @@ async def _maybe_run_orb_strategy(
             logger.info("[gold-ai-orb] skipped reason=%s session=%s", detect_reason, session)
         return False
 
-    ok_orb, orb_reason = check_can_call_orb(db, cfg)
+    ok_orb, orb_reason = await run_with_db(_check_can_call_orb_db, cfg)
     if not ok_orb:
         logger.info("[gold-ai-orb] claude blocked reason=%s setup=%s", orb_reason, signal.setup_type)
         return False
@@ -657,28 +627,22 @@ async def _maybe_run_orb_strategy(
     action = (decision.get("action") or "skip").lower()
     conf = int(decision.get("confidence") or 0)
     price = await refresh_spot_after_claude(float(price), user_id=cfg.demo_user_id)
-    row = GoldAiDecision(
-        session=session,
-        candidate_type=signal.setup_type,
-        context_snapshot=context,
+
+    row = await run_with_db(
+        _save_orb_decision,
+        session_name=session,
+        signal=signal,
+        context=context,
         reasoning=reasoning,
         decision=decision,
         action=action,
-        confidence=conf,
-        executed=False,
-        tokens_in=int(usage.get("tokens_in", 0)),
-        tokens_out=int(usage.get("tokens_out", 0)),
-        cache_read_tokens=int(usage.get("cache_read_tokens", 0)),
-        cache_write_tokens=int(usage.get("cache_write_tokens", 0)),
-        cost_usd=float(usage.get("cost_usd", 0)),
+        conf=conf,
+        usage=usage,
     )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
 
     if orb_state is not None:
         orb_state.decision_id = row.id
-        db.commit()
+        await run_with_db(_persist_orb_state_link, orb_state)
 
     runtime_state.note_decision(
         {
@@ -719,7 +683,7 @@ async def _maybe_run_orb_strategy(
             key_levels=key_levels,
         )
         row.decision = decision
-        db.commit()
+        await run_with_db(_update_decision_row, row.id, decision)
         timing_ctx["validated_ts"] = _utc_iso_now()
         if not val_ok:
             block_reason = val_reason
@@ -740,17 +704,18 @@ async def _maybe_run_orb_strategy(
             if not stale_ok:
                 block_reason = stale_reason
             else:
-                row.decision = decision
-                db.commit()
-            ok_exec, exec_reason = check_can_execute(db, cfg, cfg.demo_user_id or 0)
+                await run_with_db(_update_decision_row, row.id, decision)
+            ok_exec, exec_reason = await run_with_db(
+                _check_can_execute_db, cfg, cfg.demo_user_id or 0
+            )
             if ok_exec and stale_ok:
                 timing_ctx["enqueued_ts"] = _utc_iso_now()
                 orb_detail = (
                     f"orb breakout level={signal.break_level:.2f} "
                     f"range_high={signal.range_high:.2f} range_low={signal.range_low:.2f}"
                 )
-                exec_id = await execute_take(
-                    db=db,
+                exec_id = await _call_with_db_session(
+                    execute_take,
                     cfg=cfg,
                     decision=decision,
                     decision_id=row.id,
@@ -770,14 +735,12 @@ async def _maybe_run_orb_strategy(
                     execution_id = exec_id
                     row.executed = True
                     row.execution_id = exec_id
-                    if orb_state is not None:
-                        orb_state.execution_id = exec_id
-                        orb_state.trades_taken = int(orb_state.trades_taken or 0) + 1
-                        if orb_state.trades_taken >= max(
-                            1, int(getattr(cfg, "orb_max_trades_per_session", 1))
-                        ):
-                            orb_state.status = "traded"
-                    db.commit()
+                    await run_with_db(
+                        _finalize_orb_execution_state,
+                        row.id,
+                        exec_id,
+                        orb_state,
+                    )
                 elif exec_id and exec_id < 0:
                     block_reason = f"entry pending #{-exec_id} (limit/entry-watch)"
                     if orb_state is not None:
@@ -786,7 +749,7 @@ async def _maybe_run_orb_strategy(
                             1, int(getattr(cfg, "orb_max_trades_per_session", 1))
                         ):
                             orb_state.status = "traded"
-                    db.commit()
+                        await run_with_db(_persist_orb_state_link, orb_state)
                 else:
                     block_reason = timing_ctx.get("block_reason") or "demo order rejected"
             else:
@@ -840,14 +803,99 @@ async def _maybe_run_orb_strategy(
             row.execution_id or execution_id or "none",
             block_reason or "",
         )
-        await sync_pending_entries(db, cfg, float(price))
+        await _call_with_db_session(sync_pending_entries, cfg=cfg, spot=float(price))
 
     if row.execution_id:
-        from app.strategy_models import StrategyExecution
-
-        ex = db.query(StrategyExecution).filter_by(id=row.execution_id).first()
-        record_outcome_from_execution(db, row.id, ex)
+        await run_with_db(_record_outcome_for_execution, row.id, row.execution_id)
     return True
+
+
+@with_db_session
+def _save_orb_decision(
+    db,
+    *,
+    session_name: str,
+    signal,
+    context: str,
+    reasoning: str,
+    decision: dict,
+    action: str,
+    conf: int,
+    usage: dict,
+):
+    row = GoldAiDecision(
+        session=session_name,
+        candidate_type=signal.setup_type,
+        context_snapshot=context,
+        reasoning=reasoning,
+        decision=decision,
+        action=action,
+        confidence=conf,
+        executed=False,
+        tokens_in=int(usage.get("tokens_in", 0)),
+        tokens_out=int(usage.get("tokens_out", 0)),
+        cache_read_tokens=int(usage.get("cache_read_tokens", 0)),
+        cache_write_tokens=int(usage.get("cache_write_tokens", 0)),
+        cost_usd=float(usage.get("cost_usd", 0)),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@with_db_session
+def _save_scan_decision(
+    db,
+    *,
+    session_name: str,
+    candidate,
+    context: str,
+    reasoning: str,
+    decision: dict,
+    action: str,
+    conf: int,
+    usage: dict,
+):
+    row = GoldAiDecision(
+        session=session_name,
+        candidate_type=candidate.type,
+        context_snapshot=context,
+        reasoning=reasoning,
+        decision=decision,
+        action=action,
+        confidence=conf,
+        executed=False,
+        tokens_in=int(usage.get("tokens_in", 0)),
+        tokens_out=int(usage.get("tokens_out", 0)),
+        cache_read_tokens=int(usage.get("cache_read_tokens", 0)),
+        cache_write_tokens=int(usage.get("cache_write_tokens", 0)),
+        cost_usd=float(usage.get("cost_usd", 0)),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@with_db_session
+def _update_live_mirror_row(
+    db,
+    row_id: int,
+    *,
+    live_exec_id: int | None,
+    status: str,
+    error: str | None = None,
+):
+    row = db.query(GoldAiDecision).filter_by(id=row_id).first()
+    if not row:
+        return
+    if live_exec_id:
+        row.live_mirror_execution_id = live_exec_id
+    row.live_mirror_status = status
+    if error is not None:
+        row.live_mirror_error = error
+    db.commit()
 
 
 async def run_gold_ai_trader_loop() -> None:
@@ -858,12 +906,7 @@ async def run_gold_ai_trader_loop() -> None:
         runtime_state.note_dormant("disabled")
         return
 
-    db = SessionLocal()
-    try:
-        cfg_row = seed_config_if_missing(db)
-        cfg = merge_config(cfg_row, env)
-    finally:
-        db.close()
+    cfg = await run_with_db(_load_merged_config, env)
 
     if cfg.kill_switch or not cfg.enabled:
         runtime_state.note_dormant("killed" if cfg.kill_switch else "disabled")
@@ -874,11 +917,7 @@ async def run_gold_ai_trader_loop() -> None:
     session = active_session(now, cfg)
     if not session:
         if _prev_session == "new_york" and cfg.no_overnight:
-            db = SessionLocal()
-            try:
-                await flatten_open_demo_positions(db, cfg)
-            finally:
-                db.close()
+            await _call_with_db_session(flatten_open_demo_positions, cfg=cfg)
         _prev_session = None
         runtime_state.note_dormant("outside_session")
         await asyncio.sleep(max(cfg.scan_interval_s, 15))
@@ -894,22 +933,20 @@ async def run_gold_ai_trader_loop() -> None:
         await asyncio.sleep(max(cfg.scan_interval_s, 15))
         return
 
-    db = SessionLocal()
     try:
-        funnel_record("scan", db=db, session=session)
-        cfg_row = db.query(GoldAiConfig).filter_by(id=1).first()
-        if cfg_row:
-            cfg = merge_config(cfg_row, env)
+        reloaded = await run_with_db(_persist_scan_and_reload_cfg, session, env)
+        if reloaded is not None:
+            cfg = reloaded
         orb_enabled = bool(getattr(cfg, "orb_enabled", False))
         killzone_blocked = killzone_only_enabled() and not in_killzone(now, session, cfg)
         killzone_override_scan = killzone_blocked and killzone_override_enabled()
 
         if not killzone_blocked or killzone_override_scan:
-            ok_call, reason = check_can_call_claude(db, cfg)
+            ok_call, reason = await run_with_db(_check_can_call_claude_db, cfg)
             if not ok_call:
                 runtime_state.note_dormant(reason)
                 if reason == "max_calls_day":
-                    await maybe_notify_call_cap_reached(db, cfg)
+                    await _call_with_db_session(maybe_notify_call_cap_reached, cfg=cfg)
                 return
 
         market_data = await assess_gold_market_data(user_id=cfg.demo_user_id)
@@ -938,8 +975,11 @@ async def run_gold_ai_trader_loop() -> None:
                 source_tag,
                 data_block,
             )
-            funnel_record(
-                "data_blocked", reason=data_block, db=db, session=session,
+            await run_with_db(
+                _record_funnel_db,
+                "data_blocked",
+                reason=data_block,
+                session=session,
             )
             runtime_state.note_dormant(f"data_quality:{data_block}")
             return
@@ -960,14 +1000,16 @@ async def run_gold_ai_trader_loop() -> None:
                     source_tag,
                     news_reason,
                 )
-                funnel_record(
-                    "news_blocked", reason=news_reason, db=db, session=session,
+                await run_with_db(
+                    _record_funnel_db,
+                    "news_blocked",
+                    reason=news_reason,
+                    session=session,
                 )
                 runtime_state.note_dormant(f"news:{news_reason[:80]}")
                 return
 
         orb_logged = await _maybe_run_orb_strategy(
-            db=db,
             cfg=cfg,
             session=session,
             now=now,
@@ -978,32 +1020,30 @@ async def run_gold_ai_trader_loop() -> None:
         if killzone_blocked and not killzone_override_enabled():
             runtime_state.note_dormant("outside_killzone")
             if orb_logged:
-                await sync_closed_trade_notifications(db, cfg)
-                await maybe_send_daily_summary(db, cfg)
-                await maybe_run_learning_review(db, session, cfg)
-            runtime_state.set_funnel(funnel_snapshot())
+                await _post_scan_tail(cfg, session)
+            else:
+                runtime_state.set_funnel(funnel_snapshot())
             return
 
         async with httpx.AsyncClient(timeout=15) as http:
-            price, candidates = await scan_candidates(
+            price, candidates = await _call_with_db_session(
+                scan_candidates,
                 http,
                 session=session,
                 cfg=cfg,
                 price=float(market_data["price"]),
                 user_id=cfg.demo_user_id,
-                db=db,
             )
         if not candidates or price is None:
             if orb_logged:
-                await sync_closed_trade_notifications(db, cfg)
-                await maybe_send_daily_summary(db, cfg)
-                await maybe_run_learning_review(db, session, cfg)
-            if killzone_override_scan:
-                runtime_state.note_dormant("outside_killzone_low_confluence")
-            runtime_state.set_funnel(funnel_snapshot())
+                await _post_scan_tail(cfg, session)
+            else:
+                if killzone_override_scan:
+                    runtime_state.note_dormant("outside_killzone_low_confluence")
+                runtime_state.set_funnel(funnel_snapshot())
             return
 
-        await sync_pending_entries(db, cfg, float(price))
+        await _call_with_db_session(sync_pending_entries, cfg=cfg, spot=float(price))
 
         k5 = await get_klines(SYMBOL, ASSET_CLASS, "5m", 60) or []
         atr = atr_from_klines(k5)
@@ -1016,11 +1056,11 @@ async def run_gold_ai_trader_loop() -> None:
                 passed_n, total_n = candidate_confluence_counts(cand)
                 if not candidate_meets_killzone_override(cand):
                     skip_reason = f"confluence_{passed_n}/{total_n}<{override_min_conf}"
-                    funnel_record(
+                    await run_with_db(
+                        _record_funnel_db,
                         "override_confluence_skipped",
                         setup=cand.type,
                         reason=skip_reason,
-                        db=db,
                         session=session,
                     )
                     logger.debug(
@@ -1029,17 +1069,21 @@ async def run_gold_ai_trader_loop() -> None:
                         skip_reason,
                     )
                     continue
-            ok_dedupe, dedupe_reason = should_invoke_claude(
-                db, cand, float(price), atr, setup_cooldown_s=_setup_cooldown_s()
+            ok_dedupe, dedupe_reason = await run_with_db(
+                _should_invoke_claude_db,
+                cand,
+                float(price),
+                atr,
+                _setup_cooldown_s(),
             )
             if ok_dedupe:
                 candidate = cand
                 break
-            funnel_record(
+            await run_with_db(
+                _record_funnel_db,
                 "dedupe_skipped",
                 setup=cand.type,
                 reason=dedupe_reason,
-                db=db,
                 session=session,
             )
             logger.debug("[gold-ai-trader] claude dedupe skip %s: %s", cand.type, dedupe_reason)
@@ -1065,7 +1109,6 @@ async def run_gold_ai_trader_loop() -> None:
             candidate=candidate,
             price=price,
             session=session,
-            db=db,
             cfg=cfg,
             user_id=cfg.demo_user_id,
             market_data=market_data,
@@ -1073,11 +1116,11 @@ async def run_gold_ai_trader_loop() -> None:
             cisd=candidate.raw.get("cisd"),
         )
 
-        ok_call, reason = check_can_call_claude(db, cfg)
+        ok_call, reason = await run_with_db(_check_can_call_claude_db, cfg)
         if not ok_call:
             runtime_state.note_dormant(reason)
             if reason == "max_calls_day":
-                await maybe_notify_call_cap_reached(db, cfg)
+                await _call_with_db_session(maybe_notify_call_cap_reached, cfg=cfg)
             return
 
         claude_timeout_s = max(
@@ -1113,33 +1156,41 @@ async def run_gold_ai_trader_loop() -> None:
                 "cost_usd": 0.0,
             }
         record_claude_invocation(candidate)
-        funnel_record("claude_called", setup=candidate.type, db=db, session=session)
+        await run_with_db(
+            _record_funnel_db,
+            "claude_called",
+            setup=candidate.type,
+            session=session,
+        )
         action = (decision.get("action") or "skip").lower()
         conf = int(decision.get("confidence") or 0)
         price = await refresh_spot_after_claude(float(price), user_id=cfg.demo_user_id)
         if action == "take":
-            funnel_record("claude_take", setup=candidate.type, db=db, session=session)
+            await run_with_db(
+                _record_funnel_db,
+                "claude_take",
+                setup=candidate.type,
+                session=session,
+            )
         else:
-            funnel_record("claude_skip", setup=candidate.type, db=db, session=session)
+            await run_with_db(
+                _record_funnel_db,
+                "claude_skip",
+                setup=candidate.type,
+                session=session,
+            )
 
-        row = GoldAiDecision(
-            session=session,
-            candidate_type=candidate.type,
-            context_snapshot=context,
+        row = await run_with_db(
+            _save_scan_decision,
+            session_name=session,
+            candidate=candidate,
+            context=context,
             reasoning=reasoning,
             decision=decision,
             action=action,
-            confidence=conf,
-            executed=False,
-            tokens_in=int(usage.get("tokens_in", 0)),
-            tokens_out=int(usage.get("tokens_out", 0)),
-            cache_read_tokens=int(usage.get("cache_read_tokens", 0)),
-            cache_write_tokens=int(usage.get("cache_write_tokens", 0)),
-            cost_usd=float(usage.get("cost_usd", 0)),
+            conf=conf,
+            usage=usage,
         )
-        db.add(row)
-        db.commit()
-        db.refresh(row)
 
         logger.info(
             "[gold-ai] decision_id=%s confidence=%s%% setup=%s source=%s action=%s",
@@ -1202,16 +1253,15 @@ async def run_gold_ai_trader_loop() -> None:
                 setup_detail=candidate.detail,
                 key_levels=key_levels,
             )
-            row.decision = decision
-            db.commit()
+            await run_with_db(_update_decision_row, row.id, decision)
             timing_ctx["validated_ts"] = _utc_iso_now()
             if not val_ok:
                 validator_block = val_reason
-                funnel_record(
+                await run_with_db(
+                    _record_funnel_db,
                     "validator_rejected",
                     setup=candidate.type,
                     reason=val_reason,
-                    db=db,
                     session=session,
                     decision_id=row.id,
                 )
@@ -1235,13 +1285,14 @@ async def run_gold_ai_trader_loop() -> None:
                 if not stale_ok:
                     block_reason = stale_reason
                 else:
-                    row.decision = decision
-                    db.commit()
-                ok_exec, exec_reason = check_can_execute(db, cfg, cfg.demo_user_id or 0)
+                    await run_with_db(_update_decision_row, row.id, decision)
+                ok_exec, exec_reason = await run_with_db(
+                    _check_can_execute_db, cfg, cfg.demo_user_id or 0
+                )
                 if ok_exec and stale_ok:
                     timing_ctx["enqueued_ts"] = _utc_iso_now()
-                    exec_id = await execute_take(
-                        db=db,
+                    exec_id = await _call_with_db_session(
+                        execute_take,
                         cfg=cfg,
                         decision=decision,
                         decision_id=row.id,
@@ -1261,44 +1312,63 @@ async def run_gold_ai_trader_loop() -> None:
                         execution_id = exec_id
                         row.executed = True
                         row.execution_id = exec_id
-                        db.commit()
-                        funnel_record(
+                        await run_with_db(
+                            _update_decision_row,
+                            row.id,
+                            decision,
+                            executed=True,
+                            execution_id=exec_id,
+                        )
+                        await run_with_db(
+                            _record_funnel_db,
                             "executed",
                             setup=candidate.type,
-                            db=db,
                             session=session,
                             decision_id=row.id,
                         )
 
-                        ok_live, live_reason = check_can_execute_live_mirror(
-                            db, cfg, cfg.demo_user_id or 0
+                        ok_live, live_reason = await run_with_db(
+                            _check_can_execute_live_mirror_db,
+                            cfg,
+                            cfg.demo_user_id or 0,
                         )
                         if ok_live:
-                            live_exec_id = await execute_live_mirror_take(
-                                db=db,
+                            live_exec_id = await _call_with_db_session(
+                                execute_live_mirror_take,
                                 cfg=cfg,
                                 decision=decision,
                                 decision_id=row.id,
                                 demo_execution_id=exec_id,
                             )
                             if live_exec_id:
-                                row.live_mirror_execution_id = live_exec_id
-                                row.live_mirror_status = "pending"
-                                db.commit()
+                                await run_with_db(
+                                    _update_live_mirror_row,
+                                    row.id,
+                                    live_exec_id=live_exec_id,
+                                    status="pending",
+                                )
                             else:
-                                row.live_mirror_status = "failed"
-                                row.live_mirror_error = "live mirror enqueue rejected"
-                                db.commit()
+                                await run_with_db(
+                                    _update_live_mirror_row,
+                                    row.id,
+                                    live_exec_id=None,
+                                    status="failed",
+                                    error="live mirror enqueue rejected",
+                                )
                         elif cfg.live_mirror_enabled:
-                            row.live_mirror_status = "skipped"
-                            row.live_mirror_error = live_reason
-                            db.commit()
+                            await run_with_db(
+                                _update_live_mirror_row,
+                                row.id,
+                                live_exec_id=None,
+                                status="skipped",
+                                error=live_reason,
+                            )
                     elif exec_id and exec_id < 0:
                         block_reason = f"entry pending #{-exec_id} (limit/entry-watch)"
-                        funnel_record(
+                        await run_with_db(
+                            _record_funnel_db,
                             "pending_entry",
                             setup=candidate.type,
-                            db=db,
                             session=session,
                             decision_id=row.id,
                         )
@@ -1333,7 +1403,7 @@ async def run_gold_ai_trader_loop() -> None:
                 row.execution_id or execution_id or "none",
                 block_reason or "",
             )
-            await sync_pending_entries(db, cfg, float(price))
+            await _call_with_db_session(sync_pending_entries, cfg=cfg, spot=float(price))
 
         logger.info(
             "[gold-ai] calibration decision_id=%s confidence=%s%% setup=%s source=%s "
@@ -1347,29 +1417,17 @@ async def run_gold_ai_trader_loop() -> None:
             session,
         )
 
-        # Sync outcomes for closed trades + Telegram close alerts
         if row.execution_id:
-            from app.strategy_models import StrategyExecution
+            await run_with_db(_record_outcome_for_execution, row.id, row.execution_id)
 
-            ex = db.query(StrategyExecution).filter_by(id=row.execution_id).first()
-            record_outcome_from_execution(db, row.id, ex)
-
-        await sync_closed_trade_notifications(db, cfg)
-        await maybe_send_daily_summary(db, cfg)
-        await maybe_run_learning_review(db, session, cfg)
-        runtime_state.set_funnel(funnel_snapshot())
+        await _post_scan_tail(cfg, session)
     except Exception as e:
         logger.error("[gold-ai-trader] loop error: %s", e, exc_info=True)
         runtime_state.note_error(str(e))
-    finally:
-        db.close()
 
 
-async def _locked_loop_forever() -> None:
-    """Advisory lock with Neon keepalive — hold lock across scan cycles."""
-    from app.executor_lock import log_executor_lock_keepalive_config
-
-    global _lock_conn
+async def _scan_loop_forever() -> None:
+    """Dedicated-process scan driver — no advisory lock."""
     delay = max(15.0, float(os.environ.get("GOLD_AI_TRADER_SCAN_INTERVAL_S", "20")))
     cycle_timeout_s = max(
         delay * 2.0,
@@ -1379,57 +1437,9 @@ async def _locked_loop_forever() -> None:
         10.0,
         float(os.environ.get("GOLD_AI_LOOP_RECON_TIMEOUT_S", "45")),
     )
-    reclaim_after_misses = max(
-        3,
-        int(os.environ.get("GOLD_AI_LOCK_RECLAIM_AFTER_MISSES", "6")),
-    )
-    reclaim_min_idle_s = max(
-        30.0,
-        float(os.environ.get("GOLD_AI_LOCK_RECLAIM_MIN_IDLE_S", "120")),
-    )
-    miss_streak = 0
-    log_executor_lock_keepalive_config("gold-ai-trader:loop")
     logger.info("[gold-ai-trader] background loop starting (interval=%ss)", delay)
     try:
         while True:
-            if _lock_conn is None:
-                try:
-                    _lock_conn = await asyncio.to_thread(_acquire_gold_ai_lock)
-                except Exception as exc:
-                    logger.error("[gold-ai-trader] lock acquire error: %s", exc, exc_info=True)
-                    _lock_conn = None
-                if _lock_conn is None:
-                    miss_streak += 1
-                    if miss_streak % reclaim_after_misses == 0:
-                        try:
-                            reclaimed = await asyncio.to_thread(
-                                _reclaim_stale_gold_ai_locks,
-                                min_idle_seconds=reclaim_min_idle_s,
-                            )
-                            if reclaimed:
-                                logger.warning(
-                                    "[gold-ai-trader] reclaimed %s stale lock holder(s) after %s misses",
-                                    reclaimed,
-                                    miss_streak,
-                                )
-                        except Exception as exc:
-                            logger.warning("[gold-ai-trader] stale lock reclaim failed: %s", exc)
-                    await asyncio.sleep(delay)
-                    continue
-                miss_streak = 0
-                logger.info("[gold-ai-trader] advisory lock acquired")
-
-            if not await asyncio.to_thread(_ping_lock_connection, _lock_conn):
-                logger.warning("[gold-ai-trader] advisory lock connection lost — reconnecting")
-                _lock_conn = await asyncio.to_thread(_reconnect_gold_ai_lock, _lock_conn)
-                if _lock_conn is None:
-                    logger.error(
-                        "[gold-ai-trader] advisory lock re-claim failed — retry in %ss",
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-
             try:
                 await asyncio.wait_for(run_gold_ai_trader_loop(), timeout=cycle_timeout_s)
             except asyncio.TimeoutError:
@@ -1439,7 +1449,7 @@ async def _locked_loop_forever() -> None:
                     cycle_timeout_s,
                 )
             except Exception as e:
-                logger.error("[gold-ai-trader] lock loop cycle error: %s", e, exc_info=True)
+                logger.error("[gold-ai-trader] scan loop cycle error: %s", e, exc_info=True)
             try:
                 await asyncio.wait_for(
                     _sync_closed_outcomes_pass(), timeout=reconcile_timeout_s
@@ -1450,26 +1460,33 @@ async def _locked_loop_forever() -> None:
                     reconcile_timeout_s,
                 )
             except Exception as e:
-                logger.error("[gold-ai-trader] lock loop reconcile pass: %s", e, exc_info=True)
+                logger.error("[gold-ai-trader] reconcile pass error: %s", e, exc_info=True)
 
             await asyncio.sleep(delay)
     except asyncio.CancelledError:
         logger.warning("[gold-ai-trader] background loop cancelled")
         raise
     finally:
-        conn = _lock_conn
-        _lock_conn = None
-        if conn is not None:
-            await asyncio.to_thread(_release_gold_ai_lock, conn)
         logger.warning("[gold-ai-trader] background loop stopped")
 
 
-async def maybe_start_background_loop() -> None:
+async def start_gold_ai_trader_loop() -> None:
+    """Start scan loop + watchdog (standalone runner only)."""
     global _loop_task, _watchdog_task
     if not gold_ai_trader_enabled():
         logger.info("[gold-ai-trader] disabled (GOLD_AI_TRADER_ENABLED=false)")
+        return
+    if gold_ai_loop_disabled_in_gunicorn() and not is_standalone_gold_ai():
+        logger.info(
+            "[gold-ai-trader] loop disabled in gunicorn (DISABLE_GOLD_AI_IN_GUNICORN=1)"
+        )
         return
     if _loop_task is None or _loop_task.done():
         _schedule_loop_task()
     if _watchdog_task is None or _watchdog_task.done():
         _schedule_watchdog_task()
+
+
+async def maybe_start_background_loop() -> None:
+    """Backward-compatible alias — prefer start_gold_ai_trader_loop."""
+    await start_gold_ai_trader_loop()

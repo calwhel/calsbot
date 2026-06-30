@@ -169,6 +169,23 @@ if [ "${DISABLE_STANDALONE_EXECUTOR}" != "1" ]; then
 fi
 export DISABLE_EXECUTOR_IN_GUNICORN="${DISABLE_EXECUTOR_IN_GUNICORN:-1}"
 
+# Gold AI Trader runs in a dedicated process (not gunicorn). Multi-worker lock
+# contention + event-loop freezes caused production scan stalls.
+if [ "${DISABLE_STANDALONE_GOLD_AI}" != "1" ]; then
+  _ga_enabled="$(python3 -c "
+import os
+v = (os.getenv('GOLD_AI_TRADER_ENABLED') or '').strip().lower()
+print('yes' if v in ('1','true','yes','on') else 'no')
+" 2>/dev/null || echo no)"
+  if [ "${_ga_enabled}" = "yes" ]; then
+    _ga_delay="${GOLD_AI_START_DELAY:-12}"
+    echo "[railway] Standalone gold-ai trader starts in ${_ga_delay}s…"
+    ( sleep "${_ga_delay}"; GOLD_AI_STANDALONE=1 DISABLE_GOLD_AI_IN_GUNICORN=1 \
+      exec python3 -m app.gold_ai_runner 2>&1 | sed 's/^/[gold-ai] /' ) &
+  fi
+fi
+export DISABLE_GOLD_AI_IN_GUNICORN="${DISABLE_GOLD_AI_IN_GUNICORN:-1}"
+
 # Gunicorn serves HTTP only; executor + feeds run in the standalone process above.
 _GUNICORN_WORKERS="${GUNICORN_WORKERS:-${_GUNICORN_WORKERS_DEFAULT}}"
 # 90 tradfi + 168 crypto strategies per cycle can exceed 120s (klines + DB +
