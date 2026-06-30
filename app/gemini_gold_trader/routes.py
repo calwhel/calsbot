@@ -80,10 +80,15 @@ def _persist_demo_user_from_admin(row, admin) -> None:
         row.demo_user_id = int(uid)
 
 
-def _config_payload(cfg, cfg_row) -> Dict[str, Any]:
+def _config_payload(cfg, cfg_row, env) -> Dict[str, Any]:
+    env_kill = bool(env.kill_switch)
+    db_kill = bool(cfg_row.kill_switch) if cfg_row else False
     return {
         "enabled": cfg.enabled,
         "kill_switch": cfg.kill_switch,
+        "kill_switch_db": db_kill,
+        "env_kill_switch": env_kill,
+        "kill_switch_env_locked": env_kill,
         "dry_run": cfg.dry_run,
         "max_calls_day": cfg.max_calls_day,
         "max_trades_day": cfg.max_trades_day,
@@ -208,7 +213,7 @@ async def api_status(uid: str = Query(...)):
             "demo_label": "[Gemini Gold] Demo",
             "runtime": runtime_state.get_status(),
             "shared_session_hours": gold_ai_session_hours(),
-            "config": _config_payload(cfg, row),
+            "config": _config_payload(cfg, row, env),
             "demo_accounts": demo_accounts,
             "demo_account_selected": selected,
             "demo_account_ready": demo_account_configured(cfg),
@@ -292,9 +297,19 @@ async def api_kill_switch(request: Request, uid: str = Query(...)):
         body = await request.json()
         on = bool(body.get("on", True))
         row = seed_config_if_missing(db)
+        env = env_defaults()
         row.kill_switch = on
+        row.updated_at = datetime.utcnow()
         db.commit()
-        runtime_state.note_dormant("kill_switch" if on else "outside_session")
-        return {"ok": True, "kill_switch": on}
+        db.refresh(row)
+        merged = merge_config(row, env)
+        runtime_state.note_dormant("kill_switch" if merged.kill_switch else "outside_session")
+        out: Dict[str, Any] = {"ok": True, "kill_switch": bool(merged.kill_switch)}
+        if not on and env.kill_switch:
+            out["warning"] = (
+                "Portal kill switch cleared, but GEMINI_GOLD_KILL_SWITCH=true in Railway "
+                "still halts scans — remove or set that env var to false and redeploy."
+            )
+        return out
     finally:
         db.close()

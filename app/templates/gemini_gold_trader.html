@@ -53,6 +53,8 @@
     .btn { border: 1px solid var(--border); background: #1a1f2a; color: var(--text); border-radius: 8px; padding: .5rem .75rem; font-size: .75rem; font-weight: 600; cursor: pointer; }
     .btn:disabled { opacity: .45; cursor: not-allowed; }
     .btn-kill { color: #ffb4b4; border-color: rgba(201,74,74,.4); }
+    .btn-kill.active { background: rgba(201,74,74,.18); }
+    .btn-resume { color: #9ed8b8; border-color: rgba(61,170,110,.45); }
     .btn-primary { background: var(--accent); border-color: var(--accent); color: #081018; }
     label { display: block; font-size: .7rem; font-weight: 600; color: var(--dim); margin-bottom: .35rem; }
     .hint { font-size: .7rem; color: var(--muted); margin: .25rem 0 .65rem; }
@@ -87,6 +89,9 @@
       <div class="chip" id="dry-chip">Dry-run</div>
     </div>
 
+    <div class="env-warn" id="kill-env-warn">
+      Railway env <code>GEMINI_GOLD_KILL_SWITCH</code> is on — scans stay halted until you set it to <code>false</code> and redeploy (portal Resume cannot override env).
+    </div>
     <div class="env-warn" id="env-warn">
       Railway env <code>GEMINI_GOLD_ENABLED</code> is off — set it to <code>true</code> and redeploy so the scan process starts.
     </div>
@@ -188,13 +193,24 @@ function escapeHtml(s) {
 
 function renderStatus(j) {
   const cfg = j.config || {};
+  window._ggLastCfg = cfg;
   const rt = j.runtime || {};
   const ready = !!j.demo_account_ready;
   const envOn = !!cfg.env_enabled;
   document.getElementById('env-warn').classList.toggle('visible', !envOn);
+  document.getElementById('kill-env-warn').classList.toggle('visible', !!cfg.kill_switch_env_locked);
 
   let title = 'STANDBY', sub = 'Enable trader during Asia, London, or NY sessions';
-  if (cfg.kill_switch) { title = 'HALTED'; sub = 'Kill switch active'; }
+  if (cfg.kill_switch) {
+    title = 'HALTED';
+    if (cfg.kill_switch_env_locked) {
+      sub = 'Kill switch active (Railway env lock)';
+    } else if (cfg.kill_switch_db) {
+      sub = 'Kill switch active — tap Resume to clear';
+    } else {
+      sub = 'Kill switch active';
+    }
+  }
   else if (!ready) { title = 'SETUP REQUIRED'; sub = 'Select a demo account below'; }
   else if (!cfg.enabled) { title = 'OFF'; sub = 'Flip the trader switch to start scanning'; }
   else if (!envOn) { title = 'ENV OFF'; sub = 'Set GEMINI_GOLD_ENABLED=true in Railway'; }
@@ -210,7 +226,15 @@ function renderStatus(j) {
   toggle.disabled = !ready || !envOn;
   document.getElementById('toggle-dry-run').checked = !!cfg.dry_run;
   document.getElementById('toggle-dry-run').disabled = false;
-  document.getElementById('btn-kill').disabled = !!cfg.kill_switch;
+  const killBtn = document.getElementById('btn-kill');
+  killBtn.disabled = false;
+  if (cfg.kill_switch) {
+    killBtn.textContent = cfg.kill_switch_env_locked ? 'Env locked' : 'Resume';
+    killBtn.className = cfg.kill_switch_env_locked ? 'btn btn-kill active' : 'btn btn-resume';
+  } else {
+    killBtn.textContent = 'Kill';
+    killBtn.className = 'btn btn-kill';
+  }
   document.getElementById('dry-chip').textContent = cfg.dry_run ? 'Dry-run ON' : 'Live demo fire';
   document.getElementById('dry-chip').classList.toggle('dry', !!cfg.dry_run);
 
@@ -316,10 +340,29 @@ document.getElementById('toggle-dry-run').onchange = async (e) => {
 };
 
 document.getElementById('btn-kill').onclick = async () => {
-  await _apiFetch(`/api/gemini-gold-trader/kill-switch?uid=${encodeURIComponent(UID)}`, {
-    method: 'POST', body: JSON.stringify({ on: true }),
+  const btn = document.getElementById('btn-kill');
+  const cfg = window._ggLastCfg || {};
+  const clearing = !!cfg.kill_switch;
+  if (clearing && cfg.kill_switch_env_locked) {
+    showToast('Clear GEMINI_GOLD_KILL_SWITCH in Railway first');
+    return;
+  }
+  btn.disabled = true;
+  const r = await _apiFetch(`/api/gemini-gold-trader/kill-switch?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST',
+    body: JSON.stringify({ on: !clearing }),
   });
-  showToast('Kill switch activated');
+  const j = await r.json().catch(() => ({}));
+  btn.disabled = false;
+  if (!r.ok || !j.ok) {
+    showToast(j.detail || 'Kill switch update failed');
+    return;
+  }
+  if (j.warning) {
+    showToast(j.warning);
+  } else {
+    showToast(clearing ? 'Kill switch cleared — scans can resume' : 'Kill switch activated');
+  }
   refresh();
 };
 
