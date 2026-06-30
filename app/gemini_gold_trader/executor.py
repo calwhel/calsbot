@@ -81,8 +81,7 @@ def _resolve_demo_trader(db, cfg: GeminiGoldRuntimeConfig):
     if not prefs or not prefs.ctrader_access_token:
         return None, None, None
     ctid_str = resolve_ctrader_ctid(
-        prefs,
-        preferred_ctid=cfg.demo_ctrader_account_id,
+        execution_account_id=cfg.demo_ctrader_account_id,
         prefs_default=prefs.ctrader_account_id,
     )
     if not ctid_str:
