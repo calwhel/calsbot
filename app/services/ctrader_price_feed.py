@@ -479,6 +479,34 @@ def _cached_klines_synthesized(
     return _synthesize_klines_on_return(cached[0], sym_up, timeframe, limit)
 
 
+def _shared_klines_from_postgres(
+    sym_up: str,
+    timeframe: str,
+    limit: int,
+) -> List[List[float]]:
+    """Cross-worker snapshot written by the executor feed (no trendbar socket)."""
+    try:
+        from app.services.kline_snapshot_store import get_klines as _pg_klines
+
+        rows = _pg_klines(sym_up, timeframe, limit, source="ctrader")
+        if rows:
+            return _synthesize_klines_on_return(rows, sym_up, timeframe, limit)
+    except Exception as exc:
+        logger.debug("[CTraderFeed] postgres kline snapshot miss %s %s: %s", sym_up, timeframe, exc)
+    return []
+
+
+def _persist_klines_for_peers(sym_up: str, timeframe: str, rows: List[List[float]]) -> None:
+    if not rows:
+        return
+    try:
+        from app.services.kline_snapshot_store import upsert_klines
+
+        upsert_klines(sym_up, timeframe, rows, source="ctrader")
+    except Exception as exc:
+        logger.debug("[CTraderFeed] kline snapshot persist skipped %s %s: %s", sym_up, timeframe, exc)
+
+
 def trendbar_fetch_blocked_reason() -> Optional[str]:
     """Why trendbar/kline API is unavailable (None = allowed)."""
     if _is_terminal_auth_error(_last_auth_error):
@@ -1752,10 +1780,12 @@ async def get_klines(
     blocked = trendbar_fetch_blocked_reason()
     if blocked:
         logger.debug("[CTraderFeed] trendbar fetch skipped %s %s: %s", sym_up, timeframe, blocked)
-        # Still serve tick-synthesized cache while fresh spot is available.
         cached = _cached_klines_synthesized(sym_up, timeframe, limit)
         if cached:
             return cached
+        shared = _shared_klines_from_postgres(sym_up, timeframe, limit)
+        if shared:
+            return shared
         return []
 
     if not _standalone_trendbar_fetch_allowed():
@@ -1768,6 +1798,15 @@ async def get_klines(
                 len(cached),
             )
             return cached
+        shared = _shared_klines_from_postgres(sym_up, timeframe, limit)
+        if shared:
+            logger.info(
+                "[CTraderFeed] postgres kline snapshot %s %s bars=%d (portal worker)",
+                sym_up,
+                timeframe,
+                len(shared),
+            )
+            return shared
         logger.debug(
             "[CTraderFeed] trendbar API skipped (non-feed process) %s %s — no cache",
             sym_up,
@@ -1864,6 +1903,7 @@ async def get_klines(
         now = time.monotonic()
         _kline_cache[cache_key] = (rows, now)
         _last_kline_update[sym_up] = now
+        _persist_klines_for_peers(sym_up, timeframe, rows)
     return _synthesize_klines_on_return(rows, sym_up, timeframe, limit)
 
 
