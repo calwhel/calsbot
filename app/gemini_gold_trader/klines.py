@@ -20,17 +20,9 @@ def _min_bars() -> int:
 
 
 def _snapshot_max_age_s(timeframe: str) -> float:
-    """Postgres snapshot row freshness — higher TFs tolerate older upserts."""
-    defaults = {"5m": 600.0, "15m": 900.0, "1h": 7200.0}
-    default = defaults.get(timeframe, 900.0)
-    env_key = f"GEMINI_GOLD_KLINE_MAX_AGE_{timeframe.upper()}_S"
-    raw = os.environ.get(env_key) or os.environ.get("GEMINI_GOLD_KLINE_MAX_AGE_S")
-    if raw:
-        try:
-            return max(60.0, float(raw))
-        except (TypeError, ValueError):
-            pass
-    return default
+    from app.services.kline_snapshot_store import snapshot_row_max_age_s
+
+    return snapshot_row_max_age_s(timeframe)
 
 
 def _synthesize_forming_bar(bars: List[List[float]], timeframe: str, limit: int) -> List[List[float]]:

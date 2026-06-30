@@ -5,13 +5,11 @@ import logging
 from typing import Any, Dict, Optional, Tuple
 
 from app.gold_ai_trader.config import ASSET_CLASS, SYMBOL
-from app.gold_ai_trader.klines import synthesize_gold_scoring_k5
+from app.gold_ai_trader.klines import fetch_gold_scoring_k5, synthesize_gold_scoring_k5
 from app.services.kline_staleness import check_cached_klines_stale, newest_bar_age_s
 from app.services.tradfi_prices import (
-    get_klines,
     get_metal_kline_fetched_at,
     get_metal_kline_fetch_age_s,
-    get_metal_kline_source,
     is_metal_kline_synthetic,
 )
 
@@ -129,15 +127,7 @@ async def assess_gold_market_data(
         spot_tick_age_s = 0.0
     price_source = live_source or "unknown"
 
-    k5 = await get_klines(
-        SYMBOL,
-        ASSET_CLASS,
-        SCORING_TIMEFRAME,
-        SCORING_KLINE_LIMIT,
-        ctrader_user_id=user_id,
-    ) or []
-    k5 = synthesize_gold_scoring_k5(k5)
-    kline_source = get_metal_kline_source(sym, SCORING_TIMEFRAME, SCORING_KLINE_LIMIT)
+    k5, kline_source = await fetch_gold_scoring_k5(user_id=user_id)
     kline_fetched_at = get_metal_kline_fetched_at(
         sym, SCORING_TIMEFRAME, SCORING_KLINE_LIMIT
     )

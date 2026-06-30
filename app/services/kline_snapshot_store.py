@@ -8,13 +8,35 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
 _TABLE_READY = False
+# Legacy default — prefer snapshot_row_max_age_s(timeframe) when max_age_s omitted.
 _DEFAULT_MAX_AGE_S = 300.0
+
+
+def snapshot_row_max_age_s(timeframe: str) -> float:
+    """Max age of snapshot upsert (updated_at) before row is ignored."""
+    defaults = {
+        "1m": 300.0,
+        "5m": 600.0,
+        "15m": 900.0,
+        "1h": 7200.0,
+        "4h": 14400.0,
+    }
+    default = defaults.get(timeframe, 900.0)
+    env_key = f"KLINE_SNAPSHOT_MAX_AGE_{timeframe.upper()}_S"
+    raw = os.environ.get(env_key) or os.environ.get("KLINE_SNAPSHOT_MAX_AGE_S")
+    if raw:
+        try:
+            return max(60.0, float(raw))
+        except (TypeError, ValueError):
+            pass
+    return default
 
 
 def _ensure_table() -> None:
@@ -92,12 +114,14 @@ def get_klines(
     timeframe: str,
     limit: int,
     *,
-    max_age_s: float = _DEFAULT_MAX_AGE_S,
+    max_age_s: Optional[float] = None,
     source: Optional[str] = None,
 ) -> List[List[float]]:
     """Fresh snapshot rows or []."""
     _ensure_table()
     sym = symbol.upper()
+    if max_age_s is None:
+        max_age_s = snapshot_row_max_age_s(timeframe)
     cutoff = datetime.utcnow() - timedelta(seconds=max_age_s)
     try:
         from sqlalchemy import text

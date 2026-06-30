@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from app.gold_ai_trader.config import ASSET_CLASS, SYMBOL
 from app.services.kline_staleness import newest_bar_age_s, stale_limit_s
@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 _CTRADER_KLINE_SOURCES = frozenset({"ctrader", "ctrader-user", "ctrader-cache"})
 _GOLD_SCORING_K5_LIMIT = 60
+_SCORING_TF = "5m"
+_MIN_SCORING_BARS = 20
 
 
 def is_ctrader_kline_source(source: Optional[str]) -> bool:
@@ -67,6 +69,54 @@ def synthesize_gold_scoring_k5(k5: List[list]) -> List[list]:
     return synthesize_gold_scoring_klines(
         k5, "5m", limit=_GOLD_SCORING_K5_LIMIT,
     )
+
+
+def _scoring_k5_usable(rows: List[list]) -> bool:
+    return len(rows) >= _MIN_SCORING_BARS and newest_bar_age_s(rows) <= stale_limit_s(_SCORING_TF)
+
+
+async def fetch_gold_scoring_k5(*, user_id: Optional[int] = None) -> Tuple[List[list], str]:
+    """
+    Scoring 5m bars with cTrader provenance — tradfi chain then postgres snapshot.
+
+    Portal workers cannot open trendbar sockets; when tradfi falls through to
+    Coinbase, re-read executor-persisted ctrader snapshots before blocking Claude.
+    """
+    rows = await get_klines(
+        SYMBOL,
+        ASSET_CLASS,
+        _SCORING_TF,
+        _GOLD_SCORING_K5_LIMIT,
+        ctrader_user_id=user_id,
+    ) or []
+    rows = synthesize_gold_scoring_k5(rows)
+    src = (get_metal_kline_source(SYMBOL, _SCORING_TF, _GOLD_SCORING_K5_LIMIT) or "").lower()
+
+    if is_ctrader_kline_source(src) and _scoring_k5_usable(rows):
+        return rows, src
+
+    from app.services.kline_snapshot_store import get_klines as snap_get
+
+    snap_rows = snap_get(
+        SYMBOL,
+        _SCORING_TF,
+        _GOLD_SCORING_K5_LIMIT,
+        source="ctrader",
+    )
+    if snap_rows:
+        snap_rows = synthesize_gold_scoring_k5(snap_rows)
+        if _scoring_k5_usable(snap_rows):
+            logger.info(
+                "[gold-ai] scoring 5m from postgres ctrader snapshot "
+                "(tradfi had %s, %d bars) → %d bars bar_age=%.0fs",
+                src or "missing",
+                len(rows),
+                len(snap_rows),
+                newest_bar_age_s(snap_rows),
+            )
+            return snap_rows, "ctrader"
+
+    return rows, src
 
 
 async def get_gold_ai_klines(
