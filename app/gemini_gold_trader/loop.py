@@ -16,14 +16,11 @@ from app.gemini_gold_trader.config import (
     gemini_gold_loop_disabled_in_gunicorn,
     is_standalone_gemini_gold,
 )
-from app.gemini_gold_trader.db_thread import run_in_db_thread, run_with_db
+from app.gemini_gold_trader.db_thread import run_in_db_thread, run_with_db, with_db_session
 from app.gemini_gold_trader.executor import execute_take_market
 from app.gemini_gold_trader.gemini import decide_from_charts
-from app.gemini_gold_trader.guardrails import (
-    _load_merged_config,
-    check_can_call_gemini,
-    check_can_execute,
-)
+from app.gemini_gold_trader.guardrails import check_can_call_gemini, check_can_execute, merge_config
+from app.gemini_gold_trader.schema import seed_config_if_missing
 from app.gemini_gold_trader.klines import get_chart_klines, klines_ready
 from app.gemini_gold_trader.models import GeminiGoldDecision
 from app.gemini_gold_trader.outcomes import record_outcome_from_execution, sync_closed_outcomes
@@ -59,6 +56,11 @@ def active_session(now: datetime) -> Optional[str]:
     if is_named_session_active("london", now):
         return "london"
     return None
+
+
+def _load_merged_config(db, env):
+    row = seed_config_if_missing(db)
+    return merge_config(row, env)
 
 
 def _parse_last_scan_at(raw: Optional[str]) -> Optional[datetime]:
@@ -122,7 +124,7 @@ async def run_gemini_gold_trader_loop() -> None:
     """One scan cycle."""
     now = datetime.utcnow()
     env = env_defaults()
-    cfg = await run_in_db_thread(_load_merged_config, env)
+    cfg = await run_with_db(_load_merged_config, env)
 
     session = active_session(now)
     runtime_state.note_scan(session)
@@ -357,7 +359,7 @@ async def run_gemini_gold_trader_loop() -> None:
 
 async def _sync_closed_outcomes_pass() -> None:
     env = env_defaults()
-    cfg = await run_in_db_thread(_load_merged_config, env)
+    cfg = await run_with_db(_load_merged_config, env)
     if not cfg.demo_user_id:
         return
 
@@ -408,7 +410,7 @@ def _schedule_watchdog_task() -> None:
 
 def _watchdog_snapshot() -> tuple[bool, bool, str | None, float | None]:
     env = env_defaults()
-    cfg = _load_merged_config(env)
+    cfg = with_db_session(_load_merged_config)(env)
     if not cfg.enabled:
         return False, bool(cfg.kill_switch), None, None
     session = active_session(datetime.utcnow())
@@ -458,7 +460,13 @@ async def _watchdog_loop_forever() -> None:
     try:
         while True:
             await asyncio.sleep(interval_s)
-            enabled, kill_switch, session, age_s = await run_in_db_thread(_watchdog_snapshot)
+            try:
+                enabled, kill_switch, session, age_s = await run_in_db_thread(
+                    _watchdog_snapshot
+                )
+            except Exception as exc:
+                logger.warning("[gemini-gold] watchdog snapshot failed: %s", exc)
+                continue
             if not enabled or kill_switch or not session:
                 continue
             if _loop_task is None or _loop_task.done():
@@ -477,8 +485,17 @@ async def _watchdog_loop_forever() -> None:
 
 async def _scan_loop_forever() -> None:
     env = env_defaults()
-    cfg = await run_in_db_thread(_load_merged_config, env)
-    delay = max(60.0, float(cfg.scan_interval_s))
+    try:
+        cfg = await run_with_db(_load_merged_config, env)
+        delay = max(60.0, float(cfg.scan_interval_s))
+    except Exception as exc:
+        delay = max(60.0, float(env.scan_interval_s))
+        logger.error(
+            "[gemini-gold] initial config load failed, using env scan interval (%.0fs): %s",
+            delay,
+            exc,
+            exc_info=True,
+        )
     cycle_timeout_s = max(delay * 2.0, float(os.environ.get("GEMINI_GOLD_LOOP_CYCLE_TIMEOUT_S", "180")))
     reconcile_timeout_s = max(10.0, float(os.environ.get("GEMINI_GOLD_LOOP_RECON_TIMEOUT_S", "45")))
     logger.info("[gemini-gold] background loop starting (interval=%ss)", delay)
