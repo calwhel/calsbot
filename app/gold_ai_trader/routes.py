@@ -601,20 +601,29 @@ async def api_status(request: Request, uid: str = Query(...)):
         user_id = cfg.demo_user_id or getattr(admin, "id", None) or 0
 
         stats_today = _empty_stats_today()
-        try:
-            stats_today = {
-                "calls": calls_today(db),
-                "trades": trades_today(db),
-                "cost_usd": round(cost_today_usd(db), 4),
-                "demo_pnl_usd": demo_pnl_today_usd(db, int(user_id)),
-                "live_pnl_usd": live_pnl_today_usd(db, int(user_id)),
-                "live_trades": live_trades_today(db),
-            }
-        except Exception as exc:
-            logger.warning("[gold-ai-trader] stats_today failed: %s", exc)
+        stats_failed = False
+
+        def _load_stat(name: str, loader, *, round_digits: Optional[int] = None) -> None:
+            nonlocal stats_failed
+            try:
+                value = loader()
+                if round_digits is not None:
+                    value = round(float(value), round_digits)
+                stats_today[name] = value
+            except Exception as exc:
+                stats_failed = True
+                logger.warning("[gold-ai-trader] stats_today %s failed: %s", name, exc)
+                if is_db_connection_error(exc):
+                    degraded.append("database")
+
+        _load_stat("calls", lambda: calls_today(db))
+        _load_stat("trades", lambda: trades_today(db))
+        _load_stat("cost_usd", lambda: cost_today_usd(db), round_digits=6)
+        _load_stat("demo_pnl_usd", lambda: demo_pnl_today_usd(db, int(user_id)), round_digits=2)
+        _load_stat("live_pnl_usd", lambda: live_pnl_today_usd(db, int(user_id)), round_digits=2)
+        _load_stat("live_trades", lambda: live_trades_today(db))
+        if stats_failed:
             degraded.append("stats")
-            if is_db_connection_error(exc):
-                degraded.append("database")
 
         setup_stats: List[Dict[str, Any]] = []
         try:

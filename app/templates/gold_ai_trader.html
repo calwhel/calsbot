@@ -1693,8 +1693,8 @@ function renderStats(j) {
   const st = j.stats_today || {};
   const calls = st.calls ?? 0;
   const trades = st.trades ?? 0;
-  const cost = st.cost_usd ?? 0;
-  const maxCalls = c.max_calls_day ?? 22;
+  const cost = Number(st.cost_usd ?? 0);
+  const maxCalls = c.max_calls_day ?? 70;
   const maxTrades = c.max_trades_day ?? 6;
 
   document.getElementById('calls-stat').textContent = `${calls}/${maxCalls}`;
@@ -1709,7 +1709,15 @@ function renderStats(j) {
   pnlEl.textContent = fmtMoney(pnl);
   pnlEl.className = 'pnl-hero-value ' + (pnl >= 0 ? 'positive' : 'negative');
 
-  document.getElementById('cost-stat').textContent = `$${cost.toFixed(2)}`;
+  let costText = '$0.00';
+  if (cost > 0 && cost < 0.0001) {
+    costText = '<$0.0001';
+  } else if (cost < 1) {
+    costText = `$${cost.toFixed(4)}`;
+  } else {
+    costText = `$${cost.toFixed(2)}`;
+  }
+  document.getElementById('cost-stat').textContent = costText;
 }
 
 function fmtMoney(n) {
@@ -2033,7 +2041,7 @@ document.getElementById('btn-refresh').onclick = refresh;
 
 document.getElementById('btn-reset-credits').onclick = async () => {
   const btn = document.getElementById('btn-reset-credits');
-  if (!confirm('Reset today\'s Claude call count to 0? History is kept.')) return;
+  if (!confirm('Reset Claude usage counters (calls + API cost since reset) to 0? History is kept.')) return;
   btn.disabled = true;
   try {
     const r = await _apiFetch(`/api/gold-ai-trader/reset-daily-credits?uid=${encodeURIComponent(UID)}`, { method: 'POST' });
