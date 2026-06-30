@@ -62,6 +62,7 @@ from app.gold_ai_trader.telegram_notify import (
     notify_take_decision,
     sync_closed_trade_notifications,
     maybe_notify_call_cap_reached,
+    maybe_notify_fallback_klines_blocked,
 )
 from app.gold_ai_trader.models import GoldAiConfig, GoldAiDecision
 from app.gold_ai_trader import state as runtime_state
@@ -915,6 +916,10 @@ async def run_gold_ai_trader_loop() -> None:
         data_ok, data_block = gold_data_ok_for_claude(market_data)
         source_tag = format_data_source(market_data)
         if not data_ok:
+            if str(data_block).startswith("fallback_klines:"):
+                await maybe_notify_fallback_klines_blocked(
+                    str(data_block), source_tag=source_tag,
+                )
             if str(data_block).startswith("stale_klines:"):
                 bar_age_s = market_data.get("kline_bar_age_s")
                 fetch_age_s = market_data.get("kline_fetch_age_s")

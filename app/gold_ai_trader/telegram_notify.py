@@ -15,12 +15,29 @@ logger = logging.getLogger(__name__)
 _PREFIX = "[DEMO] Gold AI Trader"
 _last_daily_summary_date: Optional[date] = None
 _last_call_cap_notify_date: Optional[date] = None
+_fallback_klines_since_mono: Optional[float] = None
+_fallback_klines_alert_sent: bool = False
 
 
 def clear_call_cap_notify_state() -> None:
     """Allow cap Telegram alert to fire again after a manual credits reset."""
     global _last_call_cap_notify_date
     _last_call_cap_notify_date = None
+
+
+def clear_fallback_klines_notify_state() -> None:
+    """Reset fallback-kline alert tracking (tests / manual recovery)."""
+    global _fallback_klines_since_mono, _fallback_klines_alert_sent
+    _fallback_klines_since_mono = None
+    _fallback_klines_alert_sent = False
+
+
+def _fallback_klines_alert_minutes() -> float:
+    raw = os.environ.get("GOLD_AI_FALLBACK_KLINES_ALERT_MINUTES", "5")
+    try:
+        return max(1.0, float(raw))
+    except (TypeError, ValueError):
+        return 5.0
 
 
 def _env_bool(name: str, default: bool = True) -> bool:
@@ -336,6 +353,57 @@ async def maybe_send_daily_summary(db, cfg: GoldAiRuntimeConfig) -> bool:
     ok = await _send(text, msg_type="gold_ai_daily")
     if ok:
         _last_daily_summary_date = today
+    return ok
+
+
+async def maybe_notify_fallback_klines_blocked(
+    data_block: str,
+    *,
+    source_tag: str = "",
+) -> bool:
+    """
+    One Telegram alert per incident when Claude is blocked by fallback klines
+    for longer than GOLD_AI_FALLBACK_KLINES_ALERT_MINUTES (default 5).
+    """
+    global _fallback_klines_since_mono, _fallback_klines_alert_sent
+    import time
+
+    block = str(data_block or "")
+    if not block.startswith("fallback_klines:"):
+        _fallback_klines_since_mono = None
+        _fallback_klines_alert_sent = False
+        return False
+
+    if not telegram_notifications_enabled():
+        return False
+
+    now_mono = time.monotonic()
+    if _fallback_klines_since_mono is None:
+        _fallback_klines_since_mono = now_mono
+
+    elapsed_min = (now_mono - _fallback_klines_since_mono) / 60.0
+    threshold_min = _fallback_klines_alert_minutes()
+    if elapsed_min < threshold_min or _fallback_klines_alert_sent:
+        return False
+
+    provider = block.split(":", 1)[-1] if ":" in block else "unknown"
+    text = (
+        f"<b>{_PREFIX} — cTrader klines unavailable</b>\n"
+        f"Claude has been blocked for {elapsed_min:.0f}m "
+        f"(threshold {threshold_min:.0f}m).\n"
+        f"Reason: <code>{_html_escape(block)}</code>\n"
+        f"Source: <code>{_html_escape(source_tag or 'n/a')}</code>\n"
+        f"Fallback provider: <code>{_html_escape(provider)}</code>\n"
+        "Scans continue but no trades fire until cTrader klines recover."
+    )
+    ok = await _send(text, msg_type="gold_ai_fallback_klines")
+    if ok:
+        _fallback_klines_alert_sent = True
+        logger.warning(
+            "[gold-ai-trader] fallback klines alert sent after %.1fm (%s)",
+            elapsed_min,
+            block,
+        )
     return ok
 
 
