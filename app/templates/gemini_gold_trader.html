@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+  <meta name="theme-color" content="#0B0D12"/>
+  <title>Gemini Gold Trader — TradeHub</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@600;700&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --surface: #0B0D12;
+      --raised: #12151C;
+      --text: #E8EAED;
+      --dim: #8B929E;
+      --muted: #5C6370;
+      --border: rgba(255,255,255,.08);
+      --accent: #5B9DFF;
+      --accent-dim: rgba(91,157,255,.14);
+      --danger: #C94A4A;
+      --profit: #3DAA6E;
+      --radius: 12px;
+      --font-display: "Syne", system-ui, sans-serif;
+      --font-body: "DM Sans", system-ui, sans-serif;
+      --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--font-body); background: var(--surface); color: var(--text); min-height: 100vh; font-size: .8125rem; }
+    .shell { max-width: 28rem; margin: 0 auto; padding: .75rem 1rem 2rem; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; padding: .5rem 0 1rem; }
+    .brand strong { display: block; font-family: var(--font-display); font-size: .9rem; }
+    .brand span { font-size: .625rem; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+    .topbar-link { color: var(--dim); text-decoration: none; border: 1px solid var(--border); padding: .45rem .7rem; border-radius: 999px; font-size: .75rem; }
+    .chip-row { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .75rem; }
+    .chip { display: inline-flex; align-items: center; gap: .35rem; padding: .35rem .65rem; border-radius: 999px; font-size: .625rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; border: 1px solid var(--border); color: var(--dim); }
+    .chip.gemini { color: #9ec5ff; background: var(--accent-dim); border-color: rgba(91,157,255,.25); }
+    .chip.dry { color: #f5d08a; background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.3); }
+    .card { background: var(--raised); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-bottom: .75rem; }
+    .hero-title { font-family: var(--font-display); font-size: 1.35rem; margin: .25rem 0; }
+    .hero-sub { color: var(--dim); font-size: .8rem; }
+    .hero-meta { color: var(--muted); font-size: .75rem; margin-top: .35rem; }
+    .account-strip { display: flex; justify-content: space-between; gap: .75rem; padding: .65rem .85rem; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); margin-bottom: .75rem; }
+    .account-strip.missing { border-color: rgba(201,74,74,.35); }
+    .account-strip-label { font-size: .625rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; }
+    .account-strip-value { font-family: var(--font-mono); margin-top: .15rem; }
+    .controls { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .85rem; }
+    .switch-wrap { display: flex; align-items: center; gap: .5rem; }
+    .switch { position: relative; width: 42px; height: 24px; display: inline-block; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch-track { position: absolute; inset: 0; background: #2a2f3a; border-radius: 999px; cursor: pointer; transition: .2s; }
+    .switch input:checked + .switch-track { background: var(--accent); }
+    .switch-track::after { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: white; border-radius: 50%; transition: .2s; }
+    .switch input:checked + .switch-track::after { transform: translateX(18px); }
+    .btn { border: 1px solid var(--border); background: #1a1f2a; color: var(--text); border-radius: 8px; padding: .5rem .75rem; font-size: .75rem; font-weight: 600; cursor: pointer; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-kill { color: #ffb4b4; border-color: rgba(201,74,74,.4); }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #081018; }
+    label { display: block; font-size: .7rem; font-weight: 600; color: var(--dim); margin-bottom: .35rem; }
+    .hint { font-size: .7rem; color: var(--muted); margin: .25rem 0 .65rem; }
+    select, input[type=number] { width: 100%; background: #0e1118; border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: .55rem .65rem; font-size: .8125rem; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; margin-top: .5rem; }
+    .stat { background: #0e1118; border: 1px solid var(--border); border-radius: 8px; padding: .55rem; text-align: center; }
+    .stat b { display: block; font-family: var(--font-mono); font-size: .95rem; }
+    .stat span { font-size: .625rem; color: var(--muted); text-transform: uppercase; }
+    .feed-item { border-top: 1px solid var(--border); padding: .65rem 0; }
+    .feed-item:first-child { border-top: 0; padding-top: 0; }
+    .feed-meta { font-size: .7rem; color: var(--muted); margin-bottom: .25rem; }
+    .feed-action { font-weight: 700; color: var(--accent); }
+    .feed-action.skip { color: var(--dim); }
+    .toast { position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%) translateY(120%); background: #1f2633; border: 1px solid var(--border); padding: .65rem 1rem; border-radius: 999px; font-size: .75rem; transition: .25s; z-index: 20; }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+    .env-warn { display: none; padding: .6rem .75rem; border-radius: 8px; background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3); color: #f5d08a; font-size: .75rem; margin-bottom: .75rem; }
+    .env-warn.visible { display: block; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <strong>Gemini Gold</strong>
+        <span>Vision trader</span>
+      </div>
+      <a class="topbar-link" href="/app">Portal</a>
+    </header>
+
+    <div class="chip-row">
+      <div class="chip gemini">[Gemini Gold]</div>
+      <div class="chip" id="dry-chip">Dry-run</div>
+    </div>
+
+    <div class="env-warn" id="env-warn">
+      Railway env <code>GEMINI_GOLD_ENABLED</code> is off — set it to <code>true</code> and redeploy so the scan process starts.
+    </div>
+
+    <div class="account-strip missing" id="demo-account-bar">
+      <div>
+        <div class="account-strip-label">Demo cTrader account</div>
+        <div class="account-strip-value" id="demo-account-display">Loading…</div>
+      </div>
+      <div class="hint" id="demo-account-warn" style="text-align:right;max-width:9rem"></div>
+    </div>
+
+    <section class="card">
+      <div class="hero-sub">Trader status</div>
+      <h1 class="hero-title" id="status-line">Loading…</h1>
+      <p class="hero-sub" id="session-line"></p>
+      <p class="hero-meta" id="scan-meta"></p>
+      <div class="controls">
+        <div class="switch-wrap">
+          <span>Trader</span>
+          <label class="switch"><input type="checkbox" id="toggle-enabled" disabled/><span class="switch-track"></span></label>
+        </div>
+        <div class="switch-wrap">
+          <span>Dry-run</span>
+          <label class="switch"><input type="checkbox" id="toggle-dry-run" disabled/><span class="switch-track"></span></label>
+        </div>
+        <button class="btn" id="btn-refresh" title="Refresh">↻</button>
+        <button class="btn btn-kill" id="btn-kill" disabled>Kill</button>
+      </div>
+      <div class="stats">
+        <div class="stat"><b id="stat-calls">—</b><span>Gemini calls</span></div>
+        <div class="stat"><b id="stat-trades">—</b><span>Trades</span></div>
+        <div class="stat"><b id="stat-cost">—</b><span>Cost $</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2 style="font-size:.85rem;margin-bottom:.75rem">Trading setup</h2>
+      <label for="demo-ctid-select">Demo account</label>
+      <p class="hint">Demo accounts only. New accounts? Open Live Forex once to refresh the list.</p>
+      <select id="demo-ctid-select"><option value="">Select demo account…</option></select>
+      <div style="margin-top:.65rem;display:flex;gap:.5rem">
+        <button class="btn btn-primary" id="btn-save-demo" disabled style="flex:1">Save account</button>
+      </div>
+      <div style="margin-top:1rem;display:grid;grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="demo-lot-size">Lot size</label>
+          <input id="demo-lot-size" type="number" min="0.01" max="50" step="0.01" value="0.1"/>
+        </div>
+        <div>
+          <label for="demo-max-trades">Max trades/day</label>
+          <input id="demo-max-trades" type="number" min="1" max="20" step="1" value="4"/>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btn-save-size" style="width:100%;margin-top:.65rem">Save size & limits</button>
+    </section>
+
+    <section class="card">
+      <h2 style="font-size:.85rem;margin-bottom:.5rem">Recent decisions</h2>
+      <div id="feed"></div>
+    </section>
+  </div>
+  <div class="toast" id="toast"></div>
+
+<script>
+const UID = {{ uid | tojson }};
+const SESSION_TOKEN = {{ session_token | tojson }};
+if (SESSION_TOKEN) { try { sessionStorage.setItem('th_session_token', SESSION_TOKEN); } catch (_) {} }
+
+function _authToken() {
+  return SESSION_TOKEN || (function(){ try { return sessionStorage.getItem('th_session_token')||''; } catch(_){ return ''; } })();
+}
+async function _apiFetch(url, opts={}) {
+  const h = { Accept: 'application/json' };
+  if (opts.body) h['Content-Type'] = 'application/json';
+  const tok = _authToken();
+  if (tok) { h['X-TradeHub-Session'] = tok; h['Authorization'] = 'Bearer ' + tok; }
+  return fetch(url, { credentials: 'same-origin', ...opts, headers: { ...h, ...(opts.headers||{}) } });
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => t.classList.remove('show'), 2400);
+}
+function fmtSession(s) {
+  const m = { asia:'Asia', london:'London', new_york:'New York' };
+  return m[(s||'').toLowerCase()] || (s||'—');
+}
+function fmtTime(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
+  catch(_) { return iso; }
+}
+function escapeHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderStatus(j) {
+  const cfg = j.config || {};
+  const rt = j.runtime || {};
+  const ready = !!j.demo_account_ready;
+  const envOn = !!cfg.env_enabled;
+  document.getElementById('env-warn').classList.toggle('visible', !envOn);
+
+  let title = 'STANDBY', sub = 'Enable trader during Asia, London, or NY sessions';
+  if (cfg.kill_switch) { title = 'HALTED'; sub = 'Kill switch active'; }
+  else if (!ready) { title = 'SETUP REQUIRED'; sub = 'Select a demo account below'; }
+  else if (!cfg.enabled) { title = 'OFF'; sub = 'Flip the trader switch to start scanning'; }
+  else if (!envOn) { title = 'ENV OFF'; sub = 'Set GEMINI_GOLD_ENABLED=true in Railway'; }
+  else if (rt.status === 'scanning') { title = 'SCANNING'; sub = `Session: ${fmtSession(rt.active_session)}`; }
+  else { title = String(rt.status || 'idle').toUpperCase(); sub = rt.active_session ? fmtSession(rt.active_session) : 'Outside session windows'; }
+
+  document.getElementById('status-line').textContent = title;
+  document.getElementById('session-line').textContent = sub;
+  document.getElementById('scan-meta').textContent = rt.last_scan_at ? `Last scan ${fmtTime(rt.last_scan_at)}` : '';
+
+  const toggle = document.getElementById('toggle-enabled');
+  toggle.checked = !!cfg.enabled;
+  toggle.disabled = !ready || !envOn;
+  document.getElementById('toggle-dry-run').checked = !!cfg.dry_run;
+  document.getElementById('toggle-dry-run').disabled = false;
+  document.getElementById('btn-kill').disabled = !!cfg.kill_switch;
+  document.getElementById('dry-chip').textContent = cfg.dry_run ? 'Dry-run ON' : 'Live demo fire';
+  document.getElementById('dry-chip').classList.toggle('dry', !!cfg.dry_run);
+
+  const stats = j.stats_today || {};
+  document.getElementById('stat-calls').textContent = stats.calls ?? 0;
+  document.getElementById('stat-trades').textContent = stats.trades ?? 0;
+  document.getElementById('stat-cost').textContent = (stats.cost_usd ?? 0).toFixed(4);
+}
+
+function renderDemoPicker(j) {
+  const accounts = j.demo_accounts || [];
+  const selected = j.demo_account_selected;
+  const ready = !!j.demo_account_ready;
+  const bar = document.getElementById('demo-account-bar');
+  const display = document.getElementById('demo-account-display');
+  const warn = document.getElementById('demo-account-warn');
+  const sel = document.getElementById('demo-ctid-select');
+  const saveBtn = document.getElementById('btn-save-demo');
+
+  if (ready && selected) {
+    bar.classList.remove('missing');
+    display.textContent = selected.label || ('#' + selected.ctid);
+    warn.textContent = '';
+  } else {
+    bar.classList.add('missing');
+    display.textContent = accounts.length ? 'Not selected' : 'No demo accounts';
+    warn.textContent = accounts.length ? 'Pick account below' : 'Connect cTrader in portal';
+  }
+
+  sel.innerHTML = '<option value="">Select demo account…</option>' +
+    accounts.map(a => `<option value="${escapeHtml(a.ctid)}">${escapeHtml(a.label)}</option>`).join('');
+  if (selected && selected.ctid) sel.value = String(selected.ctid);
+  saveBtn.disabled = accounts.length === 0;
+
+  const cfg = j.config || {};
+  document.getElementById('demo-lot-size').value = cfg.demo_lot_size ?? 0.1;
+  document.getElementById('demo-max-trades').value = cfg.max_trades_day ?? 4;
+}
+
+function renderFeed(j) {
+  const feed = j.decision_feed || [];
+  const el = document.getElementById('feed');
+  if (!feed.length) {
+    el.innerHTML = '<p class="hint">No Gemini decisions yet.</p>';
+    return;
+  }
+  el.innerHTML = feed.map(d => {
+    const action = (d.action || 'SKIP').toUpperCase();
+    const cls = action === 'TAKE' ? 'feed-action' : 'feed-action skip';
+  const prices = action === 'TAKE'
+      ? ` · E ${d.entry ?? '—'} SL ${d.stop_loss ?? '—'} TP ${d.take_profit ?? '—'}`
+      : '';
+    const flags = [d.dry_run ? 'dry-run' : null, d.executed ? 'executed' : null].filter(Boolean).join(' · ');
+    return `<div class="feed-item">
+      <div class="feed-meta">${fmtTime(d.ts)} · ${fmtSession(d.session)} · ${d.confidence ?? 0}% ${flags ? '· ' + flags : ''}</div>
+      <div class="${cls}">${action} ${d.direction || ''}${prices}</div>
+      <div class="hint">${escapeHtml((d.rationale || '').slice(0, 280))}</div>
+    </div>`;
+  }).join('');
+}
+
+async function refresh() {
+  const r = await _apiFetch(`/api/gemini-gold-trader/status?uid=${encodeURIComponent(UID)}`);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) {
+    showToast(j.detail || 'Could not load status');
+    return;
+  }
+  renderStatus(j);
+  renderDemoPicker(j);
+  renderFeed(j);
+}
+
+document.getElementById('btn-refresh').onclick = refresh;
+
+document.getElementById('toggle-enabled').onchange = async (e) => {
+  const en = e.target.checked;
+  if (en && document.getElementById('demo-account-bar').classList.contains('missing')) {
+    e.target.checked = false;
+    showToast('Select a demo account first');
+    return;
+  }
+  const r = await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST', body: JSON.stringify({ enabled: en }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    e.target.checked = !en;
+    showToast(err.detail || 'Could not update');
+    return;
+  }
+  showToast(en ? 'Trader enabled' : 'Trader disabled');
+  refresh();
+};
+
+document.getElementById('toggle-dry-run').onchange = async (e) => {
+  const on = e.target.checked;
+  await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST', body: JSON.stringify({ dry_run: on }),
+  });
+  showToast(on ? 'Dry-run ON — no broker orders' : 'Dry-run OFF — demo orders will fire');
+  refresh();
+};
+
+document.getElementById('btn-kill').onclick = async () => {
+  await _apiFetch(`/api/gemini-gold-trader/kill-switch?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST', body: JSON.stringify({ on: true }),
+  });
+  showToast('Kill switch activated');
+  refresh();
+};
+
+document.getElementById('btn-save-demo').onclick = async () => {
+  const ctid = document.getElementById('demo-ctid-select').value;
+  if (!ctid) { showToast('Select a demo account'); return; }
+  const r = await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST', body: JSON.stringify({ demo_ctrader_account_id: ctid }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    showToast(err.detail || 'Save failed');
+    return;
+  }
+  showToast('Demo account saved');
+  refresh();
+};
+
+document.getElementById('btn-save-size').onclick = async () => {
+  const body = {
+    demo_lot_size: +document.getElementById('demo-lot-size').value || 0.1,
+    max_trades_day: +document.getElementById('demo-max-trades').value || 4,
+  };
+  await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST', body: JSON.stringify(body),
+  });
+  showToast('Size & limits saved');
+  refresh();
+};
+
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
