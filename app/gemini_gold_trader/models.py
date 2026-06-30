@@ -39,6 +39,7 @@ class GeminiGoldDecision(Base):
     rationale = Column(Text, nullable=True)
     chart_meta = Column(JSON, nullable=True)
     executed = Column(Boolean, default=False, nullable=False)
+    execution_reserved_at = Column(DateTime, nullable=True, index=True)
     execution_id = Column(Integer, nullable=True, index=True)
     dry_run = Column(Boolean, default=True, nullable=False)
     skip_reason = Column(String(128), nullable=True)

@@ -19,7 +19,7 @@ from app.gemini_gold_trader.config import (
 from app.gemini_gold_trader.db_thread import run_in_db_thread, run_with_db, with_db_session
 from app.gemini_gold_trader.executor import execute_take_market
 from app.gemini_gold_trader.gemini import decide_from_charts
-from app.gemini_gold_trader.guardrails import check_can_call_gemini, check_can_execute, merge_config
+from app.gemini_gold_trader.guardrails import check_can_call_gemini, try_reserve_execution, merge_config
 from app.gemini_gold_trader.schema import seed_config_if_missing
 from app.gemini_gold_trader.klines import get_chart_klines, klines_ready
 from app.gemini_gold_trader.models import GeminiGoldDecision
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 _loop_task: asyncio.Task | None = None
 _watchdog_task: asyncio.Task | None = None
+_scan_cycle_lock: asyncio.Lock | None = None
 _loop_task_started_mono = 0.0
 _watchdog_last_restart_mono = 0.0
 _restart_lock: asyncio.Lock | None = None
@@ -44,6 +45,13 @@ def _get_restart_lock() -> asyncio.Lock:
     if _restart_lock is None:
         _restart_lock = asyncio.Lock()
     return _restart_lock
+
+
+def _get_scan_cycle_lock() -> asyncio.Lock:
+    global _scan_cycle_lock
+    if _scan_cycle_lock is None:
+        _scan_cycle_lock = asyncio.Lock()
+    return _scan_cycle_lock
 
 
 def active_session(now: datetime) -> Optional[str]:
@@ -305,7 +313,9 @@ async def run_gemini_gold_trader_loop() -> None:
         )
         return
 
-    can_exec, exec_reason = await run_with_db(check_can_execute, cfg, cfg.demo_user_id or 0)
+    can_exec, exec_reason = await run_with_db(
+        try_reserve_execution, cfg, cfg.demo_user_id or 0, row.id
+    )
     if not can_exec:
         block_reason = exec_reason
         await notify_decision(
@@ -345,6 +355,13 @@ async def run_gemini_gold_trader_loop() -> None:
         await run_with_db(_mark_executed)
     else:
         block_reason = block_reason or "demo order rejected"
+
+        def _clear_reservation(db):
+            from app.gemini_gold_trader.guardrails import clear_execution_reservation
+
+            clear_execution_reservation(db, row.id)
+
+        await run_with_db(_clear_reservation)
 
     await notify_decision(
         session=session,
@@ -485,6 +502,11 @@ async def _watchdog_loop_forever() -> None:
             if _loop_task is None or _loop_task.done():
                 await _restart_background_loop("loop_task_missing")
                 continue
+            if _scan_cycle_lock is not None and _scan_cycle_lock.locked():
+                logger.warning(
+                    "[gemini-gold] watchdog: scan cycle still running — skip stale restart"
+                )
+                continue
             if age_s is None:
                 if time.monotonic() - _loop_task_started_mono < startup_grace_s:
                     continue
@@ -514,22 +536,23 @@ async def _scan_loop_forever() -> None:
     logger.info("[gemini-gold] background loop starting (interval=%ss)", delay)
     try:
         while True:
-            try:
-                await asyncio.wait_for(run_gemini_gold_trader_loop(), timeout=cycle_timeout_s)
-            except asyncio.TimeoutError:
-                runtime_state.note_error(f"scan_cycle_timeout>{int(cycle_timeout_s)}s")
-                logger.error(
-                    "[gemini-gold] scan cycle timeout after %.1fs — continuing",
-                    cycle_timeout_s,
-                )
-            except Exception as exc:
-                logger.error("[gemini-gold] scan loop cycle error: %s", exc, exc_info=True)
-            try:
-                await asyncio.wait_for(_sync_closed_outcomes_pass(), timeout=reconcile_timeout_s)
-            except asyncio.TimeoutError:
-                logger.error("[gemini-gold] reconcile pass timeout after %.1fs", reconcile_timeout_s)
-            except Exception as exc:
-                logger.error("[gemini-gold] reconcile pass error: %s", exc)
+            async with _get_scan_cycle_lock():
+                try:
+                    await asyncio.wait_for(run_gemini_gold_trader_loop(), timeout=cycle_timeout_s)
+                except asyncio.TimeoutError:
+                    runtime_state.note_error(f"scan_cycle_timeout>{int(cycle_timeout_s)}s")
+                    logger.error(
+                        "[gemini-gold] scan cycle timeout after %.1fs — continuing",
+                        cycle_timeout_s,
+                    )
+                except Exception as exc:
+                    logger.error("[gemini-gold] scan loop cycle error: %s", exc, exc_info=True)
+                try:
+                    await asyncio.wait_for(_sync_closed_outcomes_pass(), timeout=reconcile_timeout_s)
+                except asyncio.TimeoutError:
+                    logger.error("[gemini-gold] reconcile pass timeout after %.1fs", reconcile_timeout_s)
+                except Exception as exc:
+                    logger.error("[gemini-gold] reconcile pass error: %s", exc)
             await asyncio.sleep(delay)
     except asyncio.CancelledError:
         logger.warning("[gemini-gold] background loop cancelled")

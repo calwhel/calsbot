@@ -63,6 +63,7 @@ class GeminiGoldRuntimeConfig:
     chart_bars: int
     min_sl_pips: float
     entry_max_drift_pct: float
+    min_trade_gap_min: int
 
 
 def env_defaults() -> GeminiGoldRuntimeConfig:
@@ -92,4 +93,5 @@ def env_defaults() -> GeminiGoldRuntimeConfig:
         chart_bars=max(20, _env_int("GEMINI_GOLD_CHART_BARS", 80)),
         min_sl_pips=_env_float("GEMINI_GOLD_MIN_SL_PIPS", 60.0),
         entry_max_drift_pct=_env_float("GEMINI_GOLD_ENTRY_MAX_DRIFT_PCT", 0.15),
+        min_trade_gap_min=max(0, _env_int("GEMINI_GOLD_MIN_TRADE_GAP_MIN", 20)),
     )

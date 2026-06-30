@@ -48,25 +48,42 @@ async def revalidate_before_fire(
     cfg: GeminiGoldRuntimeConfig,
     user_id: Optional[int] = None,
     spot_hint: float,
+    decision_id: Optional[int] = None,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     if not fire_time_revalidate_enabled():
         ok, reason, d = validate_take_decision(decision, cfg=cfg, spot=spot_hint)
-        return ok, reason, d
+        if not ok:
+            return ok, reason, d
+    else:
+        confirmed, refresh_reason = await refresh_spot(spot_hint, user_id=user_id)
+        if confirmed is None or confirmed <= 0:
+            logger.debug("[gemini-gold] fire-time spot refresh failed: %s", refresh_reason)
+            confirmed = spot_hint
 
-    confirmed, refresh_reason = await refresh_spot(spot_hint, user_id=user_id)
-    if confirmed is None or confirmed <= 0:
-        logger.debug("[gemini-gold] fire-time spot refresh failed: %s", refresh_reason)
-        confirmed = spot_hint
+        ok, reason, d = validate_take_decision(decision, cfg=cfg, spot=float(confirmed))
+        if not ok:
+            return False, reason, d
 
-    ok, reason, d = validate_take_decision(decision, cfg=cfg, spot=float(confirmed))
-    if not ok:
-        return False, reason, d
+        if abs(confirmed - spot_hint) > 0.01:
+            logger.info(
+                "[gemini-gold] fire-time spot refresh %.4f -> %.4f (%s)",
+                spot_hint,
+                float(confirmed),
+                refresh_reason,
+            )
+        decision = d
 
-    if abs(confirmed - spot_hint) > 0.01:
-        logger.info(
-            "[gemini-gold] fire-time spot refresh %.4f -> %.4f (%s)",
-            spot_hint,
-            float(confirmed),
-            refresh_reason,
-        )
-    return True, "ok", d
+    if user_id and cfg is not None:
+        from app.gemini_gold_trader.db_thread import run_with_db
+        from app.gemini_gold_trader.guardrails import check_can_execute
+
+        can_exec, exec_reason = await run_with_db(check_can_execute, cfg, user_id)
+        if not can_exec:
+            logger.warning(
+                "[gemini-gold] fire-time cap blocked decision_id=%s reason=%s",
+                decision_id,
+                exec_reason,
+            )
+            return False, f"fire_time:{exec_reason}", decision
+
+    return True, "ok", decision

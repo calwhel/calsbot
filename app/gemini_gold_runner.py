@@ -2,6 +2,8 @@
 Dedicated Gemini Vision Gold Trader process for Railway/production.
 
 Runs one scan loop + watchdog outside gunicorn (same pattern as app.gold_ai_runner).
+A Postgres advisory lock ensures only one replica runs the trader when multiple
+portal services share the same database.
 """
 from __future__ import annotations
 
@@ -21,24 +23,50 @@ logger = logging.getLogger("gemini_gold_runner")
 
 _RESTART_DELAY_SECS = 5
 _HEARTBEAT_INTERVAL_SECS = 30
+_LOCK_RETRY_SECS = 30
 
 
 async def _gemini_gold_process_heartbeat_loop() -> None:
     while True:
         try:
+            from app.gemini_gold_trader.leadership import holds_gemini_gold_trader_lock
             from app.gemini_gold_trader.loop import scan_heartbeat_age_seconds
 
             age_s = await asyncio.to_thread(scan_heartbeat_age_seconds)
+            lock_ok = holds_gemini_gold_trader_lock()
             if age_s is None:
-                logger.info("[gemini-gold] heartbeat OK (standalone process, no scan yet)")
+                logger.info(
+                    "[gemini-gold] heartbeat OK (standalone process, no scan yet, lock=%s)",
+                    lock_ok,
+                )
             else:
                 logger.info(
-                    "[gemini-gold] heartbeat OK (standalone process, scan_age=%.0fs)",
+                    "[gemini-gold] heartbeat OK (standalone process, scan_age=%.0fs, lock=%s)",
                     age_s,
+                    lock_ok,
                 )
         except Exception as exc:
             logger.warning("[gemini-gold] heartbeat check failed: %s", exc)
         await asyncio.sleep(_HEARTBEAT_INTERVAL_SECS)
+
+
+async def _wait_for_trader_lock() -> None:
+    from app.gemini_gold_trader.leadership import (
+        lock_holder_hint,
+        try_acquire_gemini_gold_trader_lock,
+    )
+
+    while True:
+        acquired = await asyncio.to_thread(try_acquire_gemini_gold_trader_lock)
+        if acquired:
+            return
+        hint = await asyncio.to_thread(lock_holder_hint)
+        logger.info(
+            "[gemini-gold] trader lock held elsewhere (%s) — retry in %ss",
+            hint or "unknown",
+            _LOCK_RETRY_SECS,
+        )
+        await asyncio.sleep(_LOCK_RETRY_SECS)
 
 
 async def _run_gemini_gold_session() -> None:
@@ -75,6 +103,7 @@ async def _run_gemini_gold_session() -> None:
 async def _run_forever() -> None:
     while True:
         try:
+            await _wait_for_trader_lock()
             await _run_gemini_gold_session()
         except asyncio.CancelledError:
             raise
@@ -86,6 +115,10 @@ async def _run_forever() -> None:
                 exc_info=True,
             )
             await asyncio.sleep(_RESTART_DELAY_SECS)
+        finally:
+            from app.gemini_gold_trader.leadership import release_gemini_gold_trader_lock
+
+            await asyncio.to_thread(release_gemini_gold_trader_lock)
 
 
 def main() -> None:
