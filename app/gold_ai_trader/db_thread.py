@@ -28,7 +28,11 @@ def with_db_session(fn: Callable[..., T]) -> Callable[..., T]:
 
 
 async def run_with_db(fn: Callable[..., T], *args, **kwargs) -> T:
-    """``await``-able helper: open session, run sync ``fn(db, ...)``, close."""
+    """``await``-able helper: open session, run sync ``fn(db, ...)``, close.
+
+    ``fn`` must accept ``db`` as its first parameter and must NOT already be
+    wrapped with ``@with_db_session`` (that would double-inject ``db``).
+    """
     return await run_in_db_thread(with_db_session(fn), *args, **kwargs)
 
 

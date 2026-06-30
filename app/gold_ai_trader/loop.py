@@ -89,13 +89,11 @@ def is_standalone_gold_ai() -> bool:
     return os.environ.get("GOLD_AI_STANDALONE", "").lower() in ("1", "true", "yes")
 
 
-@with_db_session
 def _load_merged_config(db, env):
     cfg_row = seed_config_if_missing(db)
     return merge_config(cfg_row, env)
 
 
-@with_db_session
 def _persist_scan_and_reload_cfg(db, session: str, env):
     funnel_record("scan", db=db, session=session)
     cfg_row = db.query(GoldAiConfig).filter_by(id=1).first()
@@ -104,44 +102,36 @@ def _persist_scan_and_reload_cfg(db, session: str, env):
     return None
 
 
-@with_db_session
 def _check_can_call_claude_db(db, cfg):
     return check_can_call_claude(db, cfg)
 
 
-@with_db_session
 def _check_can_call_orb_db(db, cfg):
     return check_can_call_orb(db, cfg)
 
 
-@with_db_session
 def _check_can_execute_db(db, cfg, user_id: int):
     return check_can_execute(db, cfg, user_id)
 
 
-@with_db_session
 def _check_can_execute_live_mirror_db(db, cfg, user_id: int):
     return check_can_execute_live_mirror(db, cfg, user_id)
 
 
-@with_db_session
 def _record_funnel_db(db, event: str, **kwargs):
     funnel_record(event, db=db, **kwargs)
 
 
-@with_db_session
 def _should_invoke_claude_db(db, cand, price: float, atr: float, setup_cooldown_s: float):
     return should_invoke_claude(db, cand, price, atr, setup_cooldown_s=setup_cooldown_s)
 
 
-@with_db_session
 def _persist_orb_state_link(db, orb_state):
     from app.gold_ai_trader.orb import _persist_state
 
     _persist_state(db, orb_state)
 
 
-@with_db_session
 def _update_decision_row(db, row_id: int, decision: dict, *, executed: bool | None = None, execution_id: int | None = None):
     row = db.query(GoldAiDecision).filter_by(id=row_id).first()
     if not row:
@@ -154,7 +144,6 @@ def _update_decision_row(db, row_id: int, decision: dict, *, executed: bool | No
     db.commit()
 
 
-@with_db_session
 def _finalize_orb_execution_state(db, row_id: int, exec_id: int, orb_state):
     row = db.query(GoldAiDecision).filter_by(id=row_id).first()
     if row:
@@ -171,7 +160,6 @@ def _finalize_orb_execution_state(db, row_id: int, exec_id: int, orb_state):
     db.commit()
 
 
-@with_db_session
 def _record_outcome_for_execution(db, decision_id: int, execution_id: int):
     from app.strategy_models import StrategyExecution
 
@@ -350,7 +338,7 @@ def _watchdog_snapshot() -> tuple[bool, bool, str | None, float | None]:
     """Return (enabled, kill_switch, active_session, heartbeat_age_s)."""
     env = env_defaults()
     cfg = env
-    cfg = _load_merged_config(env)
+    cfg = with_db_session(_load_merged_config)(env)
     if not cfg.enabled:
         return False, bool(cfg.kill_switch), None, None
     session = active_session(datetime.utcnow(), cfg)
@@ -498,14 +486,13 @@ async def _watchdog_loop_forever() -> None:
 async def _sync_closed_outcomes_pass() -> None:
     """Run close reconciliation every loop cycle, independent of scan gating."""
 
-    @with_db_session
     def _load_demo_uid(db):
         cfg_row = seed_config_if_missing(db)
         cfg = merge_config(cfg_row, env_defaults())
         return int(getattr(cfg, "demo_user_id", 0) or 0), cfg
 
     try:
-        demo_uid, cfg = await run_in_db_thread(_load_demo_uid)
+        demo_uid, cfg = await run_with_db(_load_demo_uid)
         if demo_uid > 0:
             try:
                 from app.services.strategy_executor import _reconcile_forex_closes
@@ -810,7 +797,6 @@ async def _maybe_run_orb_strategy(
     return True
 
 
-@with_db_session
 def _save_orb_decision(
     db,
     *,
@@ -844,7 +830,6 @@ def _save_orb_decision(
     return row
 
 
-@with_db_session
 def _save_scan_decision(
     db,
     *,
@@ -878,7 +863,6 @@ def _save_scan_decision(
     return row
 
 
-@with_db_session
 def _update_live_mirror_row(
     db,
     row_id: int,
