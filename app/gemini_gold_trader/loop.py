@@ -146,12 +146,25 @@ async def run_gemini_gold_trader_loop() -> None:
             await maybe_notify_call_cap_reached()
         return
 
-    bars_15m, meta_15m = get_chart_klines("15m", cfg.chart_bars)
-    bars_1h, meta_1h = get_chart_klines("1h", cfg.chart_bars)
+    bars_15m, meta_15m = await get_chart_klines(
+        "15m", cfg.chart_bars, user_id=cfg.demo_user_id,
+    )
+    bars_1h, meta_1h = await get_chart_klines(
+        "1h", cfg.chart_bars, user_id=cfg.demo_user_id,
+    )
     chart_meta = {"15m": meta_15m, "1h": meta_1h}
 
     if not klines_ready(bars_15m, bars_1h):
-        logger.info("[gemini-gold] skipping scan — stale/missing klines")
+        logger.info(
+            "[gemini-gold] skipping scan — stale/missing klines "
+            "(15m=%s/%s bars source=%s, 1h=%s/%s bars source=%s)",
+            len(bars_15m),
+            meta_15m.get("status"),
+            meta_15m.get("source"),
+            len(bars_1h),
+            meta_1h.get("status"),
+            meta_1h.get("source"),
+        )
         runtime_state.note_dormant("stale_klines")
         return
 

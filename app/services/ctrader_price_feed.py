@@ -828,7 +828,7 @@ async def _prefetch_key_trendbars(
 ) -> None:
     """Seed kline cache at connect — one fetch per key metal/timeframe."""
     for sym in ("XAUUSD", "XAGUSD"):
-        for tf in ("5m", "15m"):
+        for tf in ("5m", "15m", "1h"):
             rows = await _read_trendbars_inline(reader, writer, ctid, sym, tf, 80)
             if rows:
                 now = time.monotonic()
