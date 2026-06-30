@@ -81,16 +81,27 @@ class TestTrendbarStreamFetch(unittest.IsolatedAsyncioTestCase):
     def test_fetch_trendbars_blocked_on_portal_worker(self):
         feed._feed_live = False
         feed._stream_writer = None
-        with mock.patch.dict(
-            os.environ,
-            {"EXECUTOR_STANDALONE": "", "DISABLE_EXECUTOR_IN_GUNICORN": "1"},
-            clear=False,
-        ):
-            with mock.patch.object(feed, "_standalone_trendbar_fetch_allowed", return_value=False):
-                out = asyncio.get_event_loop().run_until_complete(
-                    feed._fetch_trendbars("XAUUSD", "5m", 60, "tok", 1),
-                )
+        with mock.patch.object(feed, "_standalone_trendbar_fetch_allowed", return_value=False):
+            out = asyncio.get_event_loop().run_until_complete(
+                feed._fetch_trendbars("XAUUSD", "5m", 60, "tok", 1),
+            )
         self.assertEqual(out, [])
+
+    def test_get_klines_portal_reads_postgres_snapshot(self):
+        feed._feed_live = False
+        bars = [[int(time.time() * 1000), 1, 2, 0.5, 1.5, 0.0]] * 20
+        with mock.patch.object(feed, "_PROTO_OK", True), mock.patch.object(
+            feed, "_standalone_trendbar_fetch_allowed", return_value=False,
+        ), mock.patch.object(
+            feed, "_cached_klines_synthesized", return_value=[],
+        ), mock.patch.object(
+            feed, "_shared_klines_from_postgres", return_value=bars,
+        ) as mock_shared:
+            out = asyncio.get_event_loop().run_until_complete(
+                feed.get_klines("XAUUSD", "forex", "5m", 60),
+            )
+        self.assertEqual(out, bars)
+        mock_shared.assert_called_once()
 
     def test_synthesize_on_return_feed_worker_idempotent(self):
         feed._feed_live = True
