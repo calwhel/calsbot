@@ -177,7 +177,6 @@ def _breakout_from_bar(
 
 async def detect_orb_signal(
     *,
-    db,
     cfg,
     session: str,
     now: datetime,
@@ -186,12 +185,14 @@ async def detect_orb_signal(
     """
     Returns (signal, state_row, reason).
     """
+    from app.gold_ai_trader.db_thread import run_with_db
+
     if not bool(getattr(cfg, "orb_enabled", False)):
         return None, None, "orb_disabled"
 
     tf = (getattr(cfg, "orb_timeframe", "5m") or "5m").lower().strip()
     tf_min = _tf_minutes(tf)
-    row = _ensure_state(db, now=now, session=session, cfg=cfg)
+    row = await run_with_db(_ensure_state, now=now, session=session, cfg=cfg)
     start_ts = row.range_start_ts or _session_start(now, session)
     range_end_ts = row.range_end_ts or (start_ts + timedelta(minutes=max(5, int(cfg.orb_range_minutes))))
     trade_end_ts = row.trade_window_end_ts or (
@@ -209,26 +210,26 @@ async def detect_orb_signal(
     atr = atr_from_klines(k5)
     if now < range_end_ts:
         row.status = "forming"
-        _persist_state(db, row)
+        await run_with_db(_persist_state, row)
         return None, row, "forming_range"
 
     if row.trades_taken >= max(1, int(getattr(cfg, "orb_max_trades_per_session", 1))):
         row.status = "traded"
-        _persist_state(db, row)
+        await run_with_db(_persist_state, row)
         return None, row, "max_trades_session"
 
     if now > trade_end_ts:
         row.status = "expired"
-        _persist_state(db, row)
+        await run_with_db(_persist_state, row)
         return None, row, "trade_window_expired"
 
     if not row.range_high or not row.range_low or not row.range_height or row.range_height <= 0:
         row.status = "forming"
-        _persist_state(db, row)
+        await run_with_db(_persist_state, row)
         return None, row, "range_unavailable"
 
     row.status = "armed"
-    _persist_state(db, row)
+    await run_with_db(_persist_state, row)
 
     if atr <= 0:
         return None, row, "atr_unavailable"
@@ -275,7 +276,7 @@ async def detect_orb_signal(
             row.breakout_side = side
             row.breakout_level = float(break_level)
             row.breakout_ts = last_ts
-            _persist_state(db, row)
+            await run_with_db(_persist_state, row)
             return None, row, "breakout_seen_wait_retest"
         if row.breakout_ts and last_ts <= row.breakout_ts:
             return None, row, "waiting_new_bar_for_retest"
@@ -286,7 +287,7 @@ async def detect_orb_signal(
             row.breakout_side = None
             row.breakout_level = None
             row.breakout_ts = None
-            _persist_state(db, row)
+            await run_with_db(_persist_state, row)
             return None, row, "retest_window_expired"
         staged_side = (row.breakout_side or "").lower()
         level = float(row.breakout_level or break_level)
@@ -311,14 +312,14 @@ async def detect_orb_signal(
         row.breakout_side = side
         row.breakout_level = float(break_level)
         row.breakout_ts = last_ts
-        _persist_state(db, row)
+        await run_with_db(_persist_state, row)
     else:
         if row.breakout_ts and last_ts <= row.breakout_ts:
             return None, row, "breakout_already_processed"
         row.breakout_side = side
         row.breakout_level = float(break_level)
         row.breakout_ts = last_ts
-        _persist_state(db, row)
+        await run_with_db(_persist_state, row)
 
     setup_type = "orb_long" if side == "long" else "orb_short"
     signal = OrbSignal(

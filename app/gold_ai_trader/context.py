@@ -27,6 +27,8 @@ from app.gold_ai_trader.setup_readiness import (
     format_readiness_block,
 )
 from app.gold_ai_trader.setup_rubrics import setup_rubric_block
+from app.gold_ai_trader.db_thread import run_with_db, with_db_session
+from app.gold_ai_trader.scanner import Candidate
 
 
 def _atr(closes, period: int = 14) -> float:
@@ -127,34 +129,8 @@ def build_smt_block(smt: Optional[Dict[str, Any]]) -> list:
     return lines
 
 
-async def build_context_snapshot(
-    *,
-    candidate: Candidate,
-    price: float,
-    session: str,
-    db,
-    cfg,
-    user_id: Optional[int],
-    market_data: Optional[Dict[str, Any]] = None,
-    smt: Optional[Dict[str, Any]] = None,
-    cisd: Optional[Dict[str, Any]] = None,
-) -> str:
-    k5 = await get_gold_ai_klines("5m", 60, user_id=user_id) or []
-    k15 = await get_gold_ai_klines("15m", 40, user_id=user_id) or []
-    k1h = await get_gold_ai_klines("1h", 50, user_id=user_id) or []
-    k4h = await get_gold_ai_klines("4h", 30, user_id=user_id) or []
-    k_daily = await get_gold_ai_klines("1d", 5, user_id=user_id) or []
-
-    closes = [float(r[4]) for r in k5 if r and len(r) >= 5]
-    atr = _atr(closes)
-    atr_pct = (atr / price * 100) if price and atr else 0.0
-
-    vols = [float(r[5]) for r in k5 if r and len(r) >= 6]
-    rvol = 1.0
-    if len(vols) >= 20:
-        avg = sum(vols[-21:-1]) / 20
-        rvol = (vols[-1] / avg) if avg else 1.0
-
+@with_db_session
+def _load_context_db_fields(db, *, user_id: Optional[int], session: str, cfg) -> tuple:
     open_pos = open_position_count(db, user_id) if user_id else 0
     pnl_today = 0.0
     if user_id:
@@ -191,6 +167,57 @@ async def build_context_snapshot(
         if lesson_row
         else "Fresh-day mode: historical lessons disabled; focus on live setup quality."
     )
+    trades_n = trades_today(db)
+    calls_n = calls_today(db)
+    cost_usd = cost_today_usd(db)
+    return open_pos, pnl_today, lessons, trades_n, calls_n, cost_usd
+
+
+@with_db_session
+def _recent_decisions_block(db, session: str):
+    return build_recent_decisions_block(db, session=session)
+
+
+@with_db_session
+def _setup_stats_block(db, session: str):
+    return format_setup_stats_block(db, session=session)
+
+
+async def build_context_snapshot(
+    *,
+    candidate: Candidate,
+    price: float,
+    session: str,
+    cfg,
+    user_id: Optional[int],
+    market_data: Optional[Dict[str, Any]] = None,
+    smt: Optional[Dict[str, Any]] = None,
+    cisd: Optional[Dict[str, Any]] = None,
+) -> str:
+    k5 = await get_gold_ai_klines("5m", 60, user_id=user_id) or []
+    k15 = await get_gold_ai_klines("15m", 40, user_id=user_id) or []
+    k1h = await get_gold_ai_klines("1h", 50, user_id=user_id) or []
+    k4h = await get_gold_ai_klines("4h", 30, user_id=user_id) or []
+    k_daily = await get_gold_ai_klines("1d", 5, user_id=user_id) or []
+
+    closes = [float(r[4]) for r in k5 if r and len(r) >= 5]
+    atr = _atr(closes)
+    atr_pct = (atr / price * 100) if price and atr else 0.0
+
+    vols = [float(r[5]) for r in k5 if r and len(r) >= 6]
+    rvol = 1.0
+    if len(vols) >= 20:
+        avg = sum(vols[-21:-1]) / 20
+        rvol = (vols[-1] / avg) if avg else 1.0
+
+    open_pos, pnl_today, lessons, trades_n, calls_n, cost_usd = await run_with_db(
+        _load_context_db_fields,
+        user_id=user_id,
+        session=session,
+        cfg=cfg,
+    )
+
+    now = datetime.utcnow()
     mins_in_session = 0
     if session == "london":
         mins_in_session = max(0, (now.hour - cfg.london_start_hour) * 60 + now.minute)
@@ -222,7 +249,10 @@ async def build_context_snapshot(
     htf_block = build_htf_bias_block(bias)
     data_quality = build_data_quality_block(market_data)
     if cfg.include_history_in_decisions:
-        recent_decisions = build_recent_decisions_block(db, session=session)
+        recent_decisions = await run_with_db(
+            _recent_decisions_block,
+            session=session,
+        )
     else:
         recent_decisions = [
             "=== RECENT DECISIONS ===",
@@ -265,7 +295,10 @@ async def build_context_snapshot(
         key_levels=level_values,
     )
     if cfg.include_history_in_decisions:
-        setup_stats = format_setup_stats_block(db, session=session)
+        setup_stats = await run_with_db(
+            _setup_stats_block,
+            session=session,
+        )
     else:
         setup_stats = [
             "=== SETUP STATS ===",
@@ -326,8 +359,8 @@ async def build_context_snapshot(
         "",
         "=== ACCOUNT (DEMO) ===",
         f"Open gold_ai positions: {open_pos}/1 max",
-        f"Trades today: {trades_today(db)}/{cfg.max_trades_day} | Claude calls: {calls_today(db)}/{cfg.max_calls_day}",
-        f"Est. API cost today: ${cost_today_usd(db):.4f}",
+        f"Trades today: {trades_n}/{cfg.max_trades_day} | Claude calls: {calls_n}/{cfg.max_calls_day}",
+        f"Est. API cost today: ${cost_usd:.4f}",
         f"Demo P&L today (closed, %): {pnl_today:+.2f}",
         "",
         "=== LESSONS CONTEXT ===",

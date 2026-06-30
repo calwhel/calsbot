@@ -6,6 +6,8 @@ import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Tuple
 
+from app.gold_ai_trader.db_thread import db_commit, run_in_db_thread
+
 logger = logging.getLogger(__name__)
 
 
@@ -147,8 +149,8 @@ async def create_entry_watch_pending(
         notes="broker LIMIT unavailable; gold entry-watch pending",
     )
     db.add(row)
-    db.commit()
-    db.refresh(row)
+    await db_commit(db)
+    await run_in_db_thread(db.refresh, row)
     logger.info(
         "[gold-ai-trader] entry-watch pending id=%s decision=%s entry=%s expires=%s",
         row.id,
@@ -164,28 +166,34 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
     from app.gold_ai_trader.models import GoldAiPendingOrder
     from app.gold_ai_trader.executor import execute_take_market
 
-    now = datetime.utcnow()
-    pending = (
-        db.query(GoldAiPendingOrder)
-        .filter(GoldAiPendingOrder.status == "pending")
-        .order_by(GoldAiPendingOrder.created_at.asc())
-        .all()
-    )
+    def _load_pending():
+        now = datetime.utcnow()
+        pending = (
+            db.query(GoldAiPendingOrder)
+            .filter(GoldAiPendingOrder.status == "pending")
+            .order_by(GoldAiPendingOrder.created_at.asc())
+            .all()
+        )
+        return now, pending
+
+    now, pending = await run_in_db_thread(_load_pending)
     filled = 0
     for row in pending:
         if row.expires_at and now >= row.expires_at:
             row.status = "expired"
             row.notes = (row.notes or "") + " | expired"
-            db.commit()
+            await db_commit(db)
             logger.info("[gold-ai-trader] pending expired id=%s decision=%s", row.id, row.decision_id)
             continue
 
         from app.gold_ai_trader.models import GoldAiDecision
 
-        dec_row = db.query(GoldAiDecision).filter(GoldAiDecision.id == row.decision_id).first()
+        dec_row = await run_in_db_thread(
+            lambda: db.query(GoldAiDecision).filter(GoldAiDecision.id == row.decision_id).first()
+        )
         if not dec_row or not dec_row.decision:
             row.status = "cancelled"
-            db.commit()
+            await db_commit(db)
             continue
 
         # tolerance ~0.05 ATR not available here — use 0.15 absolute gold dollars min
@@ -224,7 +232,7 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
                 (row.notes or "")
                 + f" | fire_time_blocked {timing_ctx.get('block_reason')}"
             )
-            db.commit()
+            await db_commit(db)
             logger.warning(
                 "[gold-ai-trader] pending fire_time blocked id=%s decision=%s reason=%s",
                 row.id,
@@ -238,7 +246,7 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
             row.notes = (row.notes or "") + f" | filled exec #{exec_id}"
             dec_row.executed = True
             dec_row.execution_id = exec_id
-            db.commit()
+            await db_commit(db)
             filled += 1
             logger.info(
                 "[gold-ai-trader] entry-watch filled pending=%s exec=%s", row.id, exec_id

@@ -47,6 +47,13 @@ def mount_gold_ai_trader_portal(app) -> None:
 
     @app.on_event("startup")
     async def _gold_ai_trader_startup():
+        from app.gold_ai_trader.loop import gold_ai_loop_disabled_in_gunicorn
+
+        if gold_ai_loop_disabled_in_gunicorn():
+            logger.info(
+                "[gold-ai-trader] loop disabled in gunicorn (DISABLE_GOLD_AI_IN_GUNICORN=1)"
+            )
+            return
         try:
             from app.gold_ai_trader.loop import maybe_start_background_loop
 

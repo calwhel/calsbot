@@ -37,35 +37,25 @@ class GoldAiScanHealthSourceTests(unittest.TestCase):
         self.assertIn("_schedule_status_background_healing", ROUTES)
         self.assertIn("asyncio.create_task(_heal())", ROUTES)
         self.assertIn("ensure_scan_liveness", ROUTES)
-        self.assertIn("status bg scan kick", ROUTES)
+        self.assertIn("status scan health", ROUTES)
 
-    def test_loop_reclaims_stale_lock_after_repeated_misses(self):
-        self.assertIn("def _reclaim_stale_gold_ai_locks(*, min_idle_seconds: float) -> int:", LOOP)
-        self.assertIn("terminate_lock_holders(", LOOP)
-        self.assertIn("GOLD_AI_LOCK_RECLAIM_AFTER_MISSES", LOOP)
-        self.assertIn("GOLD_AI_LOCK_RECLAIM_MIN_IDLE_S", LOOP)
-
-    def test_loop_has_on_demand_scan_recovery(self):
+    def test_loop_has_read_only_scan_liveness(self):
         self.assertIn("async def ensure_scan_liveness() -> str:", LOOP)
-        self.assertIn("GOLD_AI_ON_DEMAND_SCAN_MIN_INTERVAL_S", LOOP)
         self.assertIn("GOLD_AI_ON_DEMAND_SCAN_STALE_AFTER_S", LOOP)
-        self.assertIn("GOLD_AI_ON_DEMAND_FORCE_RECLAIM_AFTER_S", LOOP)
-        self.assertIn("def _freshest_scan_heartbeat_utc() -> datetime | None:", LOOP)
-        self.assertIn("GoldAiFunnelEvent.event == \"scan\"", LOOP)
-        self.assertIn("await asyncio.wait_for(run_gold_ai_trader_loop()", LOOP)
+        self.assertIn('return "stale"', LOOP)
+        self.assertNotIn("forced lock reclaim", LOOP)
 
     def test_loop_has_watchdog_supervisor_and_restart_path(self):
         self.assertIn("_watchdog_task: asyncio.Task | None = None", LOOP)
         self.assertIn("async def _watchdog_loop_forever() -> None:", LOOP)
         self.assertIn("GOLD_AI_WATCHDOG_STALE_AFTER_S", LOOP)
         self.assertIn("GOLD_AI_WATCHDOG_MIN_RESTART_INTERVAL_S", LOOP)
-        self.assertIn("has_local_lock = False", LOOP)
-        self.assertIn("if not has_local_lock:", LOOP)
         self.assertIn("async def _restart_background_loop(", LOOP)
         self.assertIn("await _stop_loop_task(reason)", LOOP)
         self.assertIn("_schedule_watchdog_task()", LOOP)
         self.assertIn("GOLD_AI_LOOP_CYCLE_TIMEOUT_S", LOOP)
         self.assertIn("GOLD_AI_CLAUDE_DECIDE_TIMEOUT_S", LOOP)
+        self.assertIn("async def _scan_loop_forever()", LOOP)
 
 
 if __name__ == "__main__":
