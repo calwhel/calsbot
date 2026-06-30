@@ -836,6 +836,13 @@ async def _prefetch_key_trendbars(
                 _last_kline_update[sym] = now
                 _trendbar_last_api[(sym, tf)] = now
                 _note_trendbar_ok(sym)
+                _persist_klines_for_peers(sym, tf, rows)
+                logger.info(
+                    "[CTraderFeed] prefetch kline snapshot %s %s bars=%d (postgres peers)",
+                    sym,
+                    tf,
+                    len(rows),
+                )
 
 
 async def _fetch_trendbars_on_live_stream(

@@ -78,6 +78,25 @@ class TestTrendbarStreamFetch(unittest.IsolatedAsyncioTestCase):
             out = feed._synthesize_klines_on_return(rows, "XAUUSD", "5m", 60)
         self.assertEqual(out, rows)
 
+    def test_prefetch_key_trendbars_persists_postgres_snapshots(self):
+        bars = [[int(time.time() * 1000), 1, 2, 0.5, 1.5, 0.0]] * 25
+
+        async def _run():
+            with mock.patch.object(
+                feed, "_read_trendbars_inline", new_callable=mock.AsyncMock, return_value=bars,
+            ) as mock_read, mock.patch.object(
+                feed, "_persist_klines_for_peers",
+            ) as mock_persist:
+                await feed._prefetch_key_trendbars(mock.Mock(), mock.Mock(), 123)
+            self.assertEqual(mock_read.await_count, 4)
+            self.assertEqual(mock_persist.call_count, 4)
+            mock_persist.assert_any_call("XAUUSD", "5m", bars)
+            mock_persist.assert_any_call("XAUUSD", "15m", bars)
+            mock_persist.assert_any_call("XAGUSD", "5m", bars)
+            mock_persist.assert_any_call("XAGUSD", "15m", bars)
+
+        asyncio.get_event_loop().run_until_complete(_run())
+
     def test_fetch_trendbars_blocked_on_portal_worker(self):
         feed._feed_live = False
         feed._stream_writer = None
