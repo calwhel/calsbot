@@ -40,6 +40,38 @@ def test_get_chart_klines_uses_tradfi_chain():
     asyncio.run(_run())
 
 
+def test_get_chart_klines_falls_back_to_postgres_when_tradfi_is_coinbase():
+    from app.gemini_gold_trader.klines import get_chart_klines
+
+    coinbase = _bars(30)
+    snap = _bars(30)
+
+    async def _run():
+        with patch(
+            "app.services.tradfi_prices.get_klines",
+            new_callable=AsyncMock,
+            return_value=coinbase,
+        ), patch(
+            "app.services.tradfi_prices.get_metal_kline_source",
+            return_value="coinbase",
+        ), patch(
+            "app.services.kline_snapshot_store.get_klines",
+            return_value=snap,
+        ), patch(
+            "app.gemini_gold_trader.klines.newest_bar_age_s",
+            return_value=120.0,
+        ), patch(
+            "app.gemini_gold_trader.klines.stale_limit_s",
+            return_value=1800.0,
+        ):
+            bars, meta = await get_chart_klines("15m", 80)
+        assert len(bars) == 30
+        assert meta["source"] == "ctrader"
+        assert meta["status"] == "ok"
+
+    asyncio.run(_run())
+
+
 def test_get_chart_klines_falls_back_to_postgres_snapshot():
     from app.gemini_gold_trader.klines import get_chart_klines
 
@@ -62,7 +94,7 @@ def test_get_chart_klines_falls_back_to_postgres_snapshot():
         ):
             bars, meta = await get_chart_klines("15m", 80)
         assert len(bars) == 25
-        assert meta["source"] == "postgres_snapshot"
+        assert meta["source"] == "ctrader"
         assert meta["status"] == "ok"
 
     asyncio.run(_run())

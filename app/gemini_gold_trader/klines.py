@@ -11,6 +11,8 @@ from app.services.kline_staleness import newest_bar_age_s, stale_limit_s
 
 logger = logging.getLogger(__name__)
 
+_CTRADER_KLINE_SOURCES = frozenset({"ctrader", "ctrader-user", "ctrader-cache"})
+
 
 def _min_bars() -> int:
     try:
@@ -19,10 +21,8 @@ def _min_bars() -> int:
         return 20
 
 
-def _snapshot_max_age_s(timeframe: str) -> float:
-    from app.services.kline_snapshot_store import snapshot_row_max_age_s
-
-    return snapshot_row_max_age_s(timeframe)
+def _is_ctrader_kline_source(source: Optional[str]) -> bool:
+    return (source or "").lower() in _CTRADER_KLINE_SOURCES
 
 
 def _synthesize_forming_bar(bars: List[List[float]], timeframe: str, limit: int) -> List[List[float]]:
@@ -46,6 +46,38 @@ def _bars_fresh(bars: List[List[float]], timeframe: str) -> bool:
     return newest_bar_age_s(bars) <= stale_limit_s(timeframe)
 
 
+def _try_postgres_ctrader_snapshot(
+    timeframe: str,
+    limit: int,
+    *,
+    tradfi_source: str,
+    tradfi_bars: int,
+) -> Tuple[List[List[float]], bool]:
+    from app.services.kline_snapshot_store import get_klines as get_snapshot_klines
+
+    snap_rows = get_snapshot_klines(
+        SYMBOL,
+        timeframe,
+        limit,
+        source="ctrader",
+    )
+    if not snap_rows:
+        return [], False
+    snap_rows = _synthesize_forming_bar(snap_rows, timeframe, limit)
+    if not _bars_fresh(snap_rows, timeframe):
+        return snap_rows, False
+    logger.info(
+        "[gemini-gold] %s from postgres ctrader snapshot "
+        "(tradfi had %s, %d bars) → %d bars bar_age=%.0fs",
+        timeframe,
+        tradfi_source or "missing",
+        tradfi_bars,
+        len(snap_rows),
+        newest_bar_age_s(snap_rows),
+    )
+    return snap_rows, True
+
+
 async def get_chart_klines(
     timeframe: str,
     limit: int,
@@ -62,6 +94,7 @@ async def get_chart_klines(
         "fetched_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
     }
     bars: List[List[float]] = []
+    tradfi_source = ""
 
     try:
         bars = await get_klines(
@@ -71,35 +104,37 @@ async def get_chart_klines(
             limit,
             ctrader_user_id=user_id,
         ) or []
-        meta["source"] = get_metal_kline_source(SYMBOL, timeframe, limit) or "tradfi"
+        tradfi_source = (get_metal_kline_source(SYMBOL, timeframe, limit) or "tradfi").lower()
+        meta["source"] = tradfi_source
     except Exception as exc:
         logger.warning("[gemini-gold] tradfi klines failed %s %s: %s", SYMBOL, timeframe, exc)
         meta["error"] = str(exc)
 
-    if not bars:
-        from app.services.kline_snapshot_store import get_klines as get_snapshot_klines
-
-        snap_age = _snapshot_max_age_s(timeframe)
-        bars = get_snapshot_klines(
-            SYMBOL,
-            timeframe,
-            limit,
-            max_age_s=snap_age,
-            source=None,
-        )
-        if bars:
-            meta["source"] = "postgres_snapshot"
-
     if bars:
         bars = _synthesize_forming_bar(bars, timeframe, limit)
 
-    meta["bars"] = len(bars)
-    if bars and _bars_fresh(bars, timeframe):
+    if _is_ctrader_kline_source(tradfi_source) and _bars_fresh(bars, timeframe):
+        meta["bars"] = len(bars)
         meta["status"] = "ok"
         meta["bar_age_s"] = newest_bar_age_s(bars)
         meta["last_close"] = float(bars[-1][4]) if len(bars[-1]) > 4 else None
         return bars, meta
 
+    snap_rows, ok = _try_postgres_ctrader_snapshot(
+        timeframe,
+        limit,
+        tradfi_source=tradfi_source,
+        tradfi_bars=len(bars),
+    )
+    if ok:
+        meta["source"] = "ctrader"
+        meta["bars"] = len(snap_rows)
+        meta["status"] = "ok"
+        meta["bar_age_s"] = newest_bar_age_s(snap_rows)
+        meta["last_close"] = float(snap_rows[-1][4]) if len(snap_rows[-1]) > 4 else None
+        return snap_rows, meta
+
+    meta["bars"] = len(bars)
     meta["status"] = "missing_or_stale"
     if bars:
         meta["bar_age_s"] = newest_bar_age_s(bars)
