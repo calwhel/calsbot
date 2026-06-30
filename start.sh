@@ -210,7 +210,7 @@ print('yes' if v in ('1','true','yes','on') else 'no')
         exit 1
       fi
       GEMINI_GOLD_STANDALONE=1 DISABLE_GEMINI_GOLD_IN_GUNICORN=1 PYTHONUNBUFFERED=1 \
-        python3 -u -m app.gemini_gold_runner 2>&1 | sed 's/^/[gemini-gold] /'
+        python3 -u -m app.gemini_gold_runner 2>&1 | stdbuf -oL sed 's/^/[gemini-gold] /'
     ) &
   fi
 fi
