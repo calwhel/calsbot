@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from app.gemini_gold_trader.config import GeminiGoldRuntimeConfig, env_defaults
 from app.gemini_gold_trader.models import GeminiGoldConfig, GeminiGoldDecision
 
 logger = logging.getLogger(__name__)
+
+_IN_FLIGHT_TTL_MIN = 30
 
 
 class DemoAccountRequired(Exception):
@@ -33,6 +35,7 @@ def merge_config(db_row: GeminiGoldConfig, env: GeminiGoldRuntimeConfig) -> Gemi
         chart_bars=env.chart_bars,
         min_sl_pips=env.min_sl_pips,
         entry_max_drift_pct=env.entry_max_drift_pct,
+        min_trade_gap_min=env.min_trade_gap_min,
     )
 
 
@@ -65,6 +68,10 @@ def _today_start() -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def _in_flight_cutoff() -> datetime:
+    return datetime.utcnow() - timedelta(minutes=_IN_FLIGHT_TTL_MIN)
+
+
 def _calls_cutoff(db) -> datetime:
     today = _today_start()
     row = db.query(GeminiGoldConfig).filter(GeminiGoldConfig.id == 1).first()
@@ -83,7 +90,22 @@ def calls_today(db) -> int:
     )
 
 
+def in_flight_execution_count(db) -> int:
+    """Reserved slots not yet marked executed (counts toward open + daily caps)."""
+    return (
+        db.query(func.count(GeminiGoldDecision.id))
+        .filter(
+            GeminiGoldDecision.execution_reserved_at.isnot(None),
+            GeminiGoldDecision.executed.is_(False),
+            GeminiGoldDecision.execution_reserved_at >= _in_flight_cutoff(),
+        )
+        .scalar()
+        or 0
+    )
+
+
 def trades_today(db) -> int:
+    """Executed trades since UTC midnight."""
     return (
         db.query(func.count(GeminiGoldDecision.id))
         .filter(
@@ -93,6 +115,40 @@ def trades_today(db) -> int:
         .scalar()
         or 0
     )
+
+
+def trades_today_effective(db) -> int:
+    """Executed + in-flight reservations (prevents cap races)."""
+    return (
+        db.query(func.count(GeminiGoldDecision.id))
+        .filter(
+            GeminiGoldDecision.ts >= _today_start(),
+            or_(
+                GeminiGoldDecision.executed.is_(True),
+                (
+                    (GeminiGoldDecision.execution_reserved_at.isnot(None))
+                    & (GeminiGoldDecision.execution_reserved_at >= _in_flight_cutoff())
+                ),
+            ),
+        )
+        .scalar()
+        or 0
+    )
+
+
+def last_executed_trade_at(db) -> Optional[datetime]:
+    return (
+        db.query(func.max(GeminiGoldDecision.ts))
+        .filter(GeminiGoldDecision.executed.is_(True))
+        .scalar()
+    )
+
+
+def minutes_since_last_executed_trade(db) -> Optional[float]:
+    last = last_executed_trade_at(db)
+    if last is None:
+        return None
+    return max(0.0, (datetime.utcnow() - last).total_seconds() / 60.0)
 
 
 def cost_today_usd(db) -> float:
@@ -115,6 +171,11 @@ def open_position_count(db, user_id: int) -> int:
     return int(_gemini_execution_filter(q).scalar() or 0)
 
 
+def effective_open_slots_used(db, user_id: int) -> int:
+    """Broker-open positions plus in-flight reservations."""
+    return int(open_position_count(db, user_id)) + int(in_flight_execution_count(db))
+
+
 def check_can_call_gemini(db, cfg: GeminiGoldRuntimeConfig) -> Tuple[bool, str]:
     if cfg.kill_switch:
         return False, "kill_switch"
@@ -134,10 +195,63 @@ def check_can_execute(db, cfg: GeminiGoldRuntimeConfig, user_id: int) -> Tuple[b
         return False, "no_demo_account"
     if not cfg.demo_user_id:
         return False, "no_demo_user"
-    if trades_today(db) >= cfg.max_trades_day:
+    if trades_today_effective(db) >= cfg.max_trades_day:
         return False, "max_trades_day"
-    if open_position_count(db, user_id) >= 1:
+    if effective_open_slots_used(db, user_id) >= 1:
         return False, "max_open_position"
+    gap_min = max(0, int(cfg.min_trade_gap_min or 0))
+    if gap_min > 0:
+        since = minutes_since_last_executed_trade(db)
+        if since is not None and since < float(gap_min):
+            return False, "min_trade_gap"
     return True, "ok"
 
 
+def try_reserve_execution(
+    db,
+    cfg: GeminiGoldRuntimeConfig,
+    user_id: int,
+    decision_id: int,
+) -> Tuple[bool, str]:
+    """
+    Atomically re-check caps and reserve one execution slot on the decision row.
+    Uses FOR UPDATE on config + decision to serialize concurrent scan cycles.
+    """
+    row = (
+        db.query(GeminiGoldDecision)
+        .filter(GeminiGoldDecision.id == decision_id)
+        .with_for_update()
+        .first()
+    )
+    if not row:
+        db.rollback()
+        return False, "decision_not_found"
+    if row.executed:
+        db.rollback()
+        return False, "already_executed"
+    if row.execution_reserved_at is not None:
+        db.rollback()
+        return False, "already_reserved"
+
+    _ = (
+        db.query(GeminiGoldConfig)
+        .filter(GeminiGoldConfig.id == 1)
+        .with_for_update()
+        .first()
+    )
+    can, reason = check_can_execute(db, cfg, user_id)
+    if not can:
+        db.rollback()
+        return False, reason
+
+    row.execution_reserved_at = datetime.utcnow()
+    db.commit()
+    return True, "ok"
+
+
+def clear_execution_reservation(db, decision_id: int) -> None:
+    row = db.query(GeminiGoldDecision).filter(GeminiGoldDecision.id == decision_id).first()
+    if not row or row.executed:
+        return
+    row.execution_reserved_at = None
+    db.commit()

@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional, Tuple
 from app.gemini_gold_trader.config import ASSET_CLASS, SYMBOL, GeminiGoldRuntimeConfig
 from app.gemini_gold_trader.db_thread import db_commit, run_in_db_thread
 from app.gemini_gold_trader.fire_validation import revalidate_before_fire
-from app.gemini_gold_trader.guardrails import DemoAccountRequired, assert_demo_account
+from app.gemini_gold_trader.guardrails import DemoAccountRequired, assert_demo_account, clear_execution_reservation
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +116,11 @@ async def execute_take_market(
         cfg=cfg,
         user_id=cfg.demo_user_id,
         spot_hint=spot_hint,
+        decision_id=decision_id,
     )
     if not fire_ok:
         logger.info("[gemini-gold] fire blocked: %s", fire_reason)
+        await run_in_db_thread(clear_execution_reservation, db, decision_id)
         return None
 
     parsed = _parse_prices(decision)
@@ -156,6 +158,7 @@ async def execute_take_market(
         pass
     if not result or not result.get("actual_fill"):
         logger.warning("[gemini-gold] order failed: %s", result)
+        await run_in_db_thread(clear_execution_reservation, db, decision_id)
         return None
 
     fill = float(result["actual_fill"])

@@ -32,6 +32,9 @@ CTRADER_FEED_LOCK_ID = 708_110_014
 METALS_SPOT_POLL_LOCK_ID = 708_110_015
 CTRADER_TOKEN_REFRESH_OWNER_LOCK_ID = 708_110_022
 
+# Standalone Gemini Vision Gold Trader scan loop (one runner per DB).
+GEMINI_GOLD_TRADER_LOCK_ID = 708_110_023
+
 # All lock IDs in use — handy for uniqueness audits / diagnostics.
 ALL_ADVISORY_LOCK_IDS = frozenset(
     {
@@ -45,6 +48,7 @@ ALL_ADVISORY_LOCK_IDS = frozenset(
         CTRADER_FEED_LOCK_ID,
         METALS_SPOT_POLL_LOCK_ID,
         CTRADER_TOKEN_REFRESH_OWNER_LOCK_ID,
+        GEMINI_GOLD_TRADER_LOCK_ID,
     }
 )
 
@@ -61,6 +65,7 @@ APP_NAME_FMP_POLL = "th-fmp-poll"
 APP_NAME_CTRADER_FEED = "th-ctrader-feed"
 APP_NAME_METALS_SPOT = "th-metals-spot"
 APP_NAME_CTRADER_TOKEN_REFRESH = "th-ctrader-token-refresh"
+APP_NAME_GEMINI_GOLD_TRADER = "th-gemini-gold-trader"
 
 _LOCK_APP_NAMES: dict[int, str] = {
     EXECUTOR_LOCK_ID: APP_NAME_EXECUTOR,
@@ -72,6 +77,7 @@ _LOCK_APP_NAMES: dict[int, str] = {
     CTRADER_FEED_LOCK_ID: APP_NAME_CTRADER_FEED,
     METALS_SPOT_POLL_LOCK_ID: APP_NAME_METALS_SPOT,
     CTRADER_TOKEN_REFRESH_OWNER_LOCK_ID: APP_NAME_CTRADER_TOKEN_REFRESH,
+    GEMINI_GOLD_TRADER_LOCK_ID: APP_NAME_GEMINI_GOLD_TRADER,
 }
 
 
