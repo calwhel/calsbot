@@ -186,6 +186,22 @@ print('yes' if v in ('1','true','yes','on') else 'no')
 fi
 export DISABLE_GOLD_AI_IN_GUNICORN="${DISABLE_GOLD_AI_IN_GUNICORN:-1}"
 
+# Gemini Vision Gold Trader — dedicated process (not gunicorn).
+if [ "${DISABLE_STANDALONE_GEMINI_GOLD}" != "1" ]; then
+  _gg_enabled="$(python3 -c "
+import os
+v = (os.getenv('GEMINI_GOLD_ENABLED') or '').strip().lower()
+print('yes' if v in ('1','true','yes','on') else 'no')
+" 2>/dev/null || echo no)"
+  if [ "${_gg_enabled}" = "yes" ]; then
+    _gg_delay="${GEMINI_GOLD_START_DELAY:-14}"
+    echo "[railway] Standalone gemini-gold trader starts in ${_gg_delay}s…"
+    ( sleep "${_gg_delay}"; GEMINI_GOLD_STANDALONE=1 DISABLE_GEMINI_GOLD_IN_GUNICORN=1 \
+      exec python3 -m app.gemini_gold_runner 2>&1 | sed 's/^/[gemini-gold] /' ) &
+  fi
+fi
+export DISABLE_GEMINI_GOLD_IN_GUNICORN="${DISABLE_GEMINI_GOLD_IN_GUNICORN:-1}"
+
 # Gunicorn serves HTTP only; executor + feeds run in the standalone process above.
 _GUNICORN_WORKERS="${GUNICORN_WORKERS:-${_GUNICORN_WORKERS_DEFAULT}}"
 # 90 tradfi + 168 crypto strategies per cycle can exceed 120s (klines + DB +
