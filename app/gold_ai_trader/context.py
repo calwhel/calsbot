@@ -27,7 +27,7 @@ from app.gold_ai_trader.setup_readiness import (
     format_readiness_block,
 )
 from app.gold_ai_trader.setup_rubrics import setup_rubric_block
-from app.gold_ai_trader.db_thread import run_with_db, with_db_session
+from app.gold_ai_trader.db_thread import run_with_db
 from app.gold_ai_trader.scanner import Candidate
 
 
@@ -129,7 +129,6 @@ def build_smt_block(smt: Optional[Dict[str, Any]]) -> list:
     return lines
 
 
-@with_db_session
 def _load_context_db_fields(db, *, user_id: Optional[int], session: str, cfg) -> tuple:
     open_pos = open_position_count(db, user_id) if user_id else 0
     pnl_today = 0.0
@@ -173,12 +172,10 @@ def _load_context_db_fields(db, *, user_id: Optional[int], session: str, cfg) ->
     return open_pos, pnl_today, lessons, trades_n, calls_n, cost_usd
 
 
-@with_db_session
 def _recent_decisions_block(db, session: str):
     return build_recent_decisions_block(db, session=session)
 
 
-@with_db_session
 def _setup_stats_block(db, session: str):
     return format_setup_stats_block(db, session=session)
 
