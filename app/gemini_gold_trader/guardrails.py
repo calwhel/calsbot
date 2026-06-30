@@ -141,13 +141,3 @@ def check_can_execute(db, cfg: GeminiGoldRuntimeConfig, user_id: int) -> Tuple[b
     return True, "ok"
 
 
-def _load_merged_config(env: GeminiGoldRuntimeConfig) -> GeminiGoldRuntimeConfig:
-    from app.gemini_gold_trader.schema import seed_config_if_missing
-
-    def _inner(db):
-        row = seed_config_if_missing(db)
-        return merge_config(row, env)
-
-    from app.gemini_gold_trader.db_thread import with_db_session
-
-    return with_db_session(_inner)()
