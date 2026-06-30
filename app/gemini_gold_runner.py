@@ -89,6 +89,12 @@ async def _run_forever() -> None:
 
 
 def main() -> None:
+    # Unbuffered stdout before logging/asyncio — visible through start.sh sed pipe.
+    print(
+        f"runner main() pid={os.getpid()} "
+        f"standalone={os.environ.get('GEMINI_GOLD_STANDALONE', '')}",
+        flush=True,
+    )
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -105,4 +111,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    print(f"__main__ entry pid={os.getpid()}", flush=True)
     main()

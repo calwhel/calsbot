@@ -196,8 +196,22 @@ print('yes' if v in ('1','true','yes','on') else 'no')
   if [ "${_gg_enabled}" = "yes" ]; then
     _gg_delay="${GEMINI_GOLD_START_DELAY:-14}"
     echo "[railway] Standalone gemini-gold trader starts in ${_gg_delay}s…"
-    ( sleep "${_gg_delay}"; GEMINI_GOLD_STANDALONE=1 DISABLE_GEMINI_GOLD_IN_GUNICORN=1 \
-      exec python3 -m app.gemini_gold_runner 2>&1 | sed 's/^/[gemini-gold] /' ) &
+    # No exec before the pipe — keeps shell alive so preflight failures log to Railway
+    # even when python3 is missing or the runner module is absent from the image.
+    ( sleep "${_gg_delay}"
+      echo "[railway] gemini-gold post-sleep (${_gg_delay}s): spawning app.gemini_gold_runner"
+      if ! command -v python3 >/dev/null 2>&1; then
+        echo "[railway] gemini-gold FATAL: python3 not found in PATH"
+        exit 127
+      fi
+      if ! python3 -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('app.gemini_gold_runner') else 1)" 2>/dev/null; then
+        echo "[railway] gemini-gold FATAL: app.gemini_gold_runner missing from deployed image"
+        python3 -c "import importlib.util; importlib.util.find_spec('app.gemini_gold_runner')" 2>&1 | sed 's/^/[gemini-gold] /' || true
+        exit 1
+      fi
+      GEMINI_GOLD_STANDALONE=1 DISABLE_GEMINI_GOLD_IN_GUNICORN=1 PYTHONUNBUFFERED=1 \
+        python3 -u -m app.gemini_gold_runner 2>&1 | sed 's/^/[gemini-gold] /'
+    ) &
   fi
 fi
 export DISABLE_GEMINI_GOLD_IN_GUNICORN="${DISABLE_GEMINI_GOLD_IN_GUNICORN:-1}"
