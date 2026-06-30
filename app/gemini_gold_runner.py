@@ -26,6 +26,18 @@ _HEARTBEAT_INTERVAL_SECS = 30
 _LOCK_RETRY_SECS = 30
 
 
+def _emit_runner_startup_banner() -> None:
+    """Early stdout lines before advisory-lock wait (visible through start.sh pipe)."""
+    from app.deploy_stamp import get_deploy_commit, log_deploy_stamp
+
+    log_deploy_stamp("gemini_gold_runner")
+    print(
+        "[gemini-gold] waiting for advisory lock before scan loop "
+        f"(commit={get_deploy_commit()})",
+        flush=True,
+    )
+
+
 async def _gemini_gold_process_heartbeat_loop() -> None:
     while True:
         try:
@@ -61,18 +73,16 @@ async def _wait_for_trader_lock() -> None:
         if acquired:
             return
         hint = await asyncio.to_thread(lock_holder_hint)
-        logger.info(
-            "[gemini-gold] trader lock held elsewhere (%s) — retry in %ss",
-            hint or "unknown",
-            _LOCK_RETRY_SECS,
+        retry_msg = (
+            f"[gemini-gold] trader lock held elsewhere ({hint or 'unknown'}) "
+            f"— retry in {_LOCK_RETRY_SECS}s"
         )
+        logger.info("%s", retry_msg)
+        print(retry_msg, flush=True)
         await asyncio.sleep(_LOCK_RETRY_SECS)
 
 
 async def _run_gemini_gold_session() -> None:
-    from app.deploy_stamp import log_deploy_stamp
-
-    log_deploy_stamp("gemini_gold_runner")
     os.environ["GEMINI_GOLD_STANDALONE"] = "1"
     os.environ.setdefault("DISABLE_GEMINI_GOLD_IN_GUNICORN", "1")
 
@@ -101,6 +111,7 @@ async def _run_gemini_gold_session() -> None:
 
 
 async def _run_forever() -> None:
+    _emit_runner_startup_banner()
     while True:
         try:
             await _wait_for_trader_lock()
@@ -122,7 +133,7 @@ async def _run_forever() -> None:
 
 
 def main() -> None:
-    # Unbuffered stdout before logging/asyncio — visible through start.sh sed pipe.
+    # Unbuffered stdout before logging/asyncio — visible through start.sh stdbuf|sed pipe.
     print(
         f"runner main() pid={os.getpid()} "
         f"standalone={os.environ.get('GEMINI_GOLD_STANDALONE', '')}",
