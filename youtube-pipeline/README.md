@@ -1,129 +1,115 @@
 # YouTube Video Pipeline
 
-Automated, programmatic YouTube video generation and upload pipeline built with TypeScript and designed for [Railway](https://railway.app) deployment.
+Multi-tenant automated YouTube video generation and upload pipeline built with TypeScript, Postgres (Neon), and designed for [Railway](https://railway.app) deployment. Powers a separate Next.js dashboard for managing multiple channels from one backend.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Cron[Railway Cron] --> API["/api/run-pipeline"]
-  API --> LLM[Anthropic Claude 3.5 Sonnet]
-  LLM --> Voice[ElevenLabs TTS]
-  Voice --> Video[Creatomate Render]
-  Video --> YT[YouTube Data API v3]
+  Dashboard[Next.js Dashboard] --> API[Express API]
+  Cron[node-cron per channel] --> API
+  API --> DB[(Neon Postgres)]
+  API --> Pipeline[Pipeline Orchestrator]
+  Pipeline --> LLM[Anthropic Claude]
+  Pipeline --> Voice[ElevenLabs]
+  Pipeline --> Video[Creatomate]
+  Pipeline --> YT[YouTube Data API v3]
 ```
 
-| Module | Responsibility |
-|--------|----------------|
-| `src/config/` | Strongly-typed Railway environment variable loading |
-| `src/services/llm.ts` | Script + JSON schema generation via Anthropic |
-| `src/services/voice.ts` | ElevenLabs TTS, master MP3 to `/tmp` |
-| `src/services/video.ts` | Creatomate template render + polling |
-| `src/services/youtube.ts` | OAuth2 upload (private/unlisted by default) |
-| `src/index.ts` | Express server + auth-protected cron endpoint |
+Each **channel** has its own niche prompt, voice, Creatomate template, YouTube OAuth credentials, upload schedule, and monthly budget.
 
 ## Quick Start
 
 ```bash
 cd youtube-pipeline
 cp .env.example .env
-# Fill in API keys and tokens
+# Set NEON_DATABASE_URL, ENCRYPTION_KEY, AUTH_TOKEN, and shared API keys
 npm install
 npm run build
+npm run migrate-channel   # one-time: import legacy .env channel into DB
 npm start
 ```
 
-Trigger the pipeline:
+Trigger a channel pipeline manually:
 
 ```bash
 curl -X POST http://localhost:3000/api/run-pipeline \
   -H "x-auth-token: $AUTH_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"topic":"The Hidden Physics of Black Holes"}'
+  -d '{"channel_id":"<uuid>","topic":"Optional specific topic"}'
 ```
 
-Omit `topic` to use the default: **Deep-Dive Cosmic Mysteries**.
+## Database Schema
 
-## Railway Deployment
+| Table | Purpose |
+|-------|---------|
+| `channels` | Per-channel config, encrypted OAuth secrets, cron schedule, budget |
+| `videos` | Pipeline runs, costs, YouTube IDs, publish status |
+| `topics_used` | Per-channel topic deduplication |
+| `channel_stats` | Subs, watch hours, monetization eligibility |
 
-1. Create a new Railway project and connect this repository.
-2. Set the **root directory** to `youtube-pipeline` (or deploy this folder as its own repo).
-3. Add all variables from `.env.example` in the Railway dashboard.
-4. Deploy — Railway builds via the included `Dockerfile`.
-5. Add a **Cron Job** that calls:
+Schema is bootstrapped automatically on server startup from `src/db/schema.sql`.
 
-   ```
-   POST https://<your-service>.up.railway.app/api/run-pipeline
-   Header: x-auth-token: <AUTH_TOKEN>
-   ```
+## API Endpoints
 
-## Creatomate Template
+All routes below require `x-auth-token: <AUTH_TOKEN>` (or `Authorization: Bearer`).
 
-Your Creatomate template should expose element names matching the modification keys in `src/services/video.ts`:
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/channels` | Create a channel |
+| `GET` | `/api/channels` | List channels with latest stats |
+| `GET` | `/api/channels/:id` | Channel detail |
+| `PATCH` | `/api/channels/:id` | Update settings (niche, schedule, budget, status) |
+| `DELETE` | `/api/channels/:id` | Remove a channel |
+| `POST` | `/api/run-pipeline` | Run pipeline for `{ "channel_id": "..." }` |
+| `GET` | `/api/pending` | Private videos awaiting dashboard review |
+| `POST` | `/api/publish/:video_id` | Publish a reviewed video to public |
+| `GET` | `/api/costs` | Monthly cost summary by channel |
+| `GET` | `/api/monetization` | Refresh subs/watch-hours/eligibility per channel |
 
-| Modification key | Purpose |
-|------------------|---------|
-| `Master-Audio.source` | Master voiceover track |
-| `Title-Text.text` | Video title overlay |
-| `Thumbnail-Text.text` | Thumbnail headline |
-| `Thumbnail-Image.prompt` | Thumbnail image prompt |
-| `Scene-N-Image.prompt` | Scene background (N = 1..8) |
-| `Scene-N-Overlay.text` | On-screen caption |
-| `Scene-N-Voiceover.text` | Per-scene narration text |
+## Cron Scheduling
 
-Rename elements in your template to match, or adjust `buildModifications()` in `video.ts`.
+On startup the server loads all **active** channels and registers a `node-cron` job per channel using each channel's `upload_frequency` expression. Jobs are fully re-registered every 5 minutes so API changes to schedule or status are picked up without redeploying.
 
-## YouTube OAuth Setup
+## Security
 
-This pipeline uses a **pre-refreshed OAuth2 refresh token** (not a service account — YouTube uploads require user/channel OAuth):
+- `youtube_client_secret` and `youtube_refresh_token` are encrypted at rest with AES-256-GCM (`ENCRYPTION_KEY`)
+- Secrets are decrypted in-memory only when running the pipeline or publishing
+- Channel API responses never return encrypted secrets
+- New uploads default to **private** until approved via `POST /api/publish/:video_id`
 
-1. Create a Google Cloud project and enable **YouTube Data API v3**.
-2. Create OAuth 2.0 credentials (**Desktop app** or **Web application**).
-3. Add `http://localhost:53682/oauth2callback` as an authorized redirect URI.
-4. Store `YOUTUBE_CLIENT_ID` and `YOUTUBE_CLIENT_SECRET` in `.env` (locally) and Railway.
-5. Run the one-time helper script below to obtain `YOUTUBE_REFRESH_TOKEN`.
+## Migration from Single-Channel
 
-Videos are uploaded as **`private`** by default (`YOUTUBE_PRIVACY_STATUS=private`). Change to `unlisted` only after you validate compliance workflows.
-
-### One-time OAuth setup
-
-Run this **locally** on your machine — it is not part of the deployed Railway service:
+If you previously used env-based single-channel config:
 
 ```bash
-cd youtube-pipeline
-cp .env.example .env
-# Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in .env
-npm install
+# Keep legacy vars in .env (YOUTUBE_*, ELEVENLABS_VOICE_ID, CREATOMATE_TEMPLATE_ID, DEFAULT_TOPIC)
+npm run migrate-channel
+```
+
+This inserts the first row into `channels` and sets status to `active`. After migration, per-channel settings live in the database; shared platform keys remain in Railway env vars.
+
+## One-time OAuth setup
+
+```bash
 npm run get-token
 ```
 
-The script will:
-
-1. Print a Google consent URL (`Opening consent URL...`)
-2. Wait for you to authorize in the browser (`Waiting for authorization...`)
-3. Capture the OAuth callback on `http://localhost:53682/oauth2callback`
-4. Print and save the refresh token (`Refresh token obtained. Add this to Railway as YOUTUBE_REFRESH_TOKEN:`)
-
-Authorize with the **Google account that owns the target YouTube channel**. Copy the printed refresh token into Railway's `YOUTUBE_REFRESH_TOKEN` environment variable. The token is also written to `.refresh-token.txt` (gitignored) for your records.
-
-## Ephemeral Asset Hosting
-
-Creatomate requires publicly reachable URLs for audio sources. During a pipeline run, the voiceover MP3 is registered as a **transient asset** and served from `/internal/assets/:token` until rendering completes. Set `PUBLIC_BASE_URL` to your Railway service URL (or rely on `RAILWAY_PUBLIC_DOMAIN` auto-detection).
-
-## Compliance Safety
-
-- Upload privacy is forced to `private` or `unlisted` via `status.privacyStatus` in the YouTube API payload.
-- All temporary assets are written to an ephemeral run directory under `/tmp` and deleted after each run.
-- The pipeline is stateless — no database required.
+See the OAuth section in previous docs — use the printed refresh token when creating a channel via `POST /api/channels`.
 
 ## Environment Variables
 
-See [`.env.example`](.env.example) for the full list.
+See [`.env.example`](.env.example). Required for production:
+
+- `NEON_DATABASE_URL` (or `DATABASE_URL`)
+- `ENCRYPTION_KEY`
+- `AUTH_TOKEN`
+- `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `CREATOMATE_API_KEY`
 
 ## Development
 
 ```bash
-npm run dev      # hot reload with tsx
+npm run dev
 npm run typecheck
 ```
 

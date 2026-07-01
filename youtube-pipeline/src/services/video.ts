@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { AppConfig } from "../config";
+import type { ServiceConfig } from "../config/channel-config";
 import type { VideoPayload } from "../types/video";
 import {
   assertReadableFile,
@@ -18,9 +18,9 @@ interface CreatomateRenderResponse {
 }
 
 export class VideoService {
-  private readonly config: AppConfig;
+  private readonly config: ServiceConfig;
 
-  constructor(config: AppConfig) {
+  constructor(config: ServiceConfig) {
     this.config = config;
   }
 

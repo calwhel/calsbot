@@ -1,28 +1,23 @@
-export interface AppConfig {
+export interface PlatformConfig {
   port: number;
   authToken: string;
   tmpDir: string;
-  defaultTopic: string;
+  encryptionKey: string;
   anthropic: {
     apiKey: string;
     model: string;
   };
   elevenlabs: {
     apiKey: string;
-    voiceId: string;
     modelId: string;
   };
   creatomate: {
     apiKey: string;
-    templateId: string;
     pollIntervalMs: number;
     pollTimeoutMs: number;
   };
   publicBaseUrl: string;
   youtube: {
-    clientId: string;
-    clientSecret: string;
-    refreshToken: string;
     privacyStatus: "private" | "unlisted";
     categoryId: string;
   };
@@ -59,7 +54,10 @@ function resolvePublicBaseUrl(port: number): string {
 
   const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
   if (railwayDomain) {
-    if (railwayDomain.startsWith("http://") || railwayDomain.startsWith("https://")) {
+    if (
+      railwayDomain.startsWith("http://") ||
+      railwayDomain.startsWith("https://")
+    ) {
       return railwayDomain.replace(/\/$/, "");
     }
     return `https://${railwayDomain.replace(/\/$/, "")}`;
@@ -78,9 +76,9 @@ function parsePrivacyStatus(value: string): "private" | "unlisted" {
   );
 }
 
-let cachedConfig: AppConfig | null = null;
+let cachedConfig: PlatformConfig | null = null;
 
-export function loadConfig(): AppConfig {
+export function loadConfig(): PlatformConfig {
   if (cachedConfig) {
     return cachedConfig;
   }
@@ -89,10 +87,7 @@ export function loadConfig(): AppConfig {
     port: parsePositiveInt(optionalEnv("PORT", "3000"), 3000),
     authToken: requireEnv("AUTH_TOKEN"),
     tmpDir: optionalEnv("TMP_DIR", "/tmp"),
-    defaultTopic: optionalEnv(
-      "DEFAULT_TOPIC",
-      "Deep-Dive Cosmic Mysteries",
-    ),
+    encryptionKey: requireEnv("ENCRYPTION_KEY"),
     anthropic: {
       apiKey: requireEnv("ANTHROPIC_API_KEY"),
       model: optionalEnv(
@@ -102,12 +97,10 @@ export function loadConfig(): AppConfig {
     },
     elevenlabs: {
       apiKey: requireEnv("ELEVENLABS_API_KEY"),
-      voiceId: requireEnv("ELEVENLABS_VOICE_ID"),
       modelId: optionalEnv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2"),
     },
     creatomate: {
       apiKey: requireEnv("CREATOMATE_API_KEY"),
-      templateId: requireEnv("CREATOMATE_TEMPLATE_ID"),
       pollIntervalMs: parsePositiveInt(
         optionalEnv("CREATOMATE_POLL_INTERVAL_MS", "5000"),
         5000,
@@ -121,9 +114,6 @@ export function loadConfig(): AppConfig {
       parsePositiveInt(optionalEnv("PORT", "3000"), 3000),
     ),
     youtube: {
-      clientId: requireEnv("YOUTUBE_CLIENT_ID"),
-      clientSecret: requireEnv("YOUTUBE_CLIENT_SECRET"),
-      refreshToken: requireEnv("YOUTUBE_REFRESH_TOKEN"),
       privacyStatus: parsePrivacyStatus(
         optionalEnv("YOUTUBE_PRIVACY_STATUS", "private"),
       ),
@@ -131,8 +121,14 @@ export function loadConfig(): AppConfig {
     },
     retry: {
       maxAttempts: parsePositiveInt(optionalEnv("RETRY_MAX_ATTEMPTS", "5"), 5),
-      baseDelayMs: parsePositiveInt(optionalEnv("RETRY_BASE_DELAY_MS", "1000"), 1000),
-      maxDelayMs: parsePositiveInt(optionalEnv("RETRY_MAX_DELAY_MS", "30000"), 30_000),
+      baseDelayMs: parsePositiveInt(
+        optionalEnv("RETRY_BASE_DELAY_MS", "1000"),
+        1000,
+      ),
+      maxDelayMs: parsePositiveInt(
+        optionalEnv("RETRY_MAX_DELAY_MS", "30000"),
+        30_000,
+      ),
     },
   };
 
@@ -142,3 +138,6 @@ export function loadConfig(): AppConfig {
 export function resetConfigForTests(): void {
   cachedConfig = null;
 }
+
+/** @deprecated Use PlatformConfig — kept for gradual migration in services */
+export type AppConfig = import("./channel-config").ServiceConfig;

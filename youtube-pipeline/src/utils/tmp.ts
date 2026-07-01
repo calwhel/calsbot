@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 
-import type { AppConfig } from "../config";
+import type { PlatformConfig } from "../config";
 
-export async function ensureTmpDir(config: AppConfig): Promise<string> {
+export async function ensureTmpDir(config: Pick<PlatformConfig, "tmpDir">): Promise<string> {
   const runDir = path.join(config.tmpDir, `pipeline-${randomUUID()}`);
   await mkdir(runDir, { recursive: true });
   return runDir;

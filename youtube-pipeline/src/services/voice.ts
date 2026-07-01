@@ -3,14 +3,14 @@ import { finished } from "node:stream/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 
-import type { AppConfig } from "../config";
+import type { ServiceConfig } from "../config/channel-config";
 import type { VideoPayload } from "../types/video";
 import { withRetry } from "../utils/tmp";
 
 export class VoiceService {
-  private readonly config: AppConfig;
+  private readonly config: ServiceConfig;
 
-  constructor(config: AppConfig) {
+  constructor(config: ServiceConfig) {
     this.config = config;
   }
 
