@@ -103,13 +103,22 @@ async def execute_take_market(
     order_ctx: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
     """Place demo market order; return StrategyExecution.id."""
+
+    async def _fail_async(reason: str, *, clear_reserve: bool = True) -> None:
+        if order_ctx is not None:
+            order_ctx["block_reason"] = reason
+        if clear_reserve:
+            await run_in_db_thread(clear_execution_reservation, db, decision_id)
+
     if not cfg.demo_user_id:
         logger.warning("[gemini-gold] GEMINI_GOLD_USER_ID not set")
+        await _fail_async("blocked: no_demo_user")
         return None
 
     user, prefs, ctid = await run_in_db_thread(_resolve_demo_trader, db, cfg)
     if not user or not prefs or not ctid:
         logger.warning("[gemini-gold] demo trader resolution failed")
+        await _fail_async("blocked: demo_trader_resolution_failed")
         return None
 
     fire_ok, fire_reason, decision = await revalidate_before_fire(
@@ -121,12 +130,13 @@ async def execute_take_market(
     )
     if not fire_ok:
         logger.info("[gemini-gold] fire blocked: %s", fire_reason)
-        await run_in_db_thread(clear_execution_reservation, db, decision_id)
+        await _fail_async(fire_reason)
         return None
 
     parsed = _parse_prices(decision)
     if not parsed:
         logger.warning("[gemini-gold] invalid prices entry/sl/tp")
+        await _fail_async("blocked: invalid_entry_sl_tp")
         return None
     direction, entry, sl, tp = parsed
 
@@ -159,13 +169,30 @@ async def execute_take_market(
         pass
     if not result or not result.get("actual_fill"):
         broker_err = (result or {}).get("error")
-        if order_ctx is not None and broker_err:
-            order_ctx["broker_error"] = str(broker_err)[:240]
+        if order_ctx is not None:
+            if broker_err:
+                order_ctx["broker_error"] = str(broker_err)[:240]
+                order_ctx["block_reason"] = str(broker_err)[:240]
+            elif not order_ctx.get("block_reason"):
+                order_ctx["block_reason"] = "demo order rejected"
         logger.warning(
             "[gemini-gold] order failed decision_id=%s broker_error=%s result=%s",
             decision_id,
             broker_err,
             result,
+        )
+        await run_in_db_thread(clear_execution_reservation, db, decision_id)
+        return None
+
+    position_id = result.get("position_id")
+    if not position_id or not str(position_id).strip():
+        reason = "broker fill without position_id — not recording OPEN execution"
+        if order_ctx is not None:
+            order_ctx["block_reason"] = reason
+        logger.warning(
+            "[gemini-gold] order fill missing position_id decision_id=%s order_id=%s",
+            decision_id,
+            result.get("order_id"),
         )
         await run_in_db_thread(clear_execution_reservation, db, decision_id)
         return None

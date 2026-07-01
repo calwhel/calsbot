@@ -29,7 +29,10 @@ from app.gemini_gold_trader.guardrails import (
     trades_today,
 )
 from app.gemini_gold_trader.models import GeminiGoldDecision
-from app.gemini_gold_trader.reconcile import list_open_executions
+from app.gemini_gold_trader.reconcile import (
+    list_open_executions,
+    reconcile_orphan_open_executions,
+)
 from app.gemini_gold_trader.schema import ensure_gemini_gold_trader_schema, seed_config_if_missing
 from app.services.forex_sessions import gold_ai_session_hours
 
@@ -382,8 +385,8 @@ async def api_kill_switch(request: Request, uid: str = Query(...)):
 
 
 @router.post("/api/gemini-gold-trader/reconcile")
-async def api_reconcile(uid: str = Query(...)):
-    """Admin: force broker close reconcile for stale OPEN executions."""
+async def api_reconcile(uid: str = Query(...), dry_run: bool = Query(False)):
+    """Admin: cancel orphan OPEN rows + broker close reconcile for stale executions."""
     db = SessionLocal()
     try:
         admin = _resolve_user(uid, db)
@@ -395,26 +398,35 @@ async def api_reconcile(uid: str = Query(...)):
             raise HTTPException(status_code=400, detail="No demo trader user configured")
 
         before = list_open_executions(db, int(trader_uid))
-        try:
-            from app.services.strategy_executor import _reconcile_forex_closes
+        orphan_result = await reconcile_orphan_open_executions(
+            db,
+            cfg=cfg,
+            user_id=int(trader_uid),
+            dry_run=dry_run,
+        )
+        if not dry_run:
+            try:
+                from app.services.strategy_executor import _reconcile_forex_closes
 
-            timeout_s = max(10.0, float(os.environ.get("GEMINI_GOLD_MANUAL_RECON_TIMEOUT_S", "30")))
-            await asyncio.wait_for(
-                _reconcile_forex_closes(user_id=int(trader_uid)),
-                timeout=timeout_s,
-            )
-        except asyncio.TimeoutError:
-            raise HTTPException(status_code=504, detail="Broker reconcile timed out") from None
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Reconcile failed: {exc}") from exc
+                timeout_s = max(10.0, float(os.environ.get("GEMINI_GOLD_MANUAL_RECON_TIMEOUT_S", "30")))
+                await asyncio.wait_for(
+                    _reconcile_forex_closes(user_id=int(trader_uid)),
+                    timeout=timeout_s,
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(status_code=504, detail="Broker reconcile timed out") from None
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Reconcile failed: {exc}") from exc
 
         after = list_open_executions(db, int(trader_uid))
         return {
             "ok": True,
+            "dry_run": dry_run,
             "open_before": len(before),
             "open_after": len(after),
             "open_executions_before": before,
             "open_executions_after": after,
+            "orphan_reconcile": orphan_result,
             "open_slots_used": effective_open_slots_used(db, int(trader_uid)),
         }
     finally:

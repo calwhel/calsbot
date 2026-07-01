@@ -17,6 +17,7 @@ from app.gemini_gold_trader.config import (
     is_standalone_gemini_gold,
 )
 from app.gemini_gold_trader.db_thread import run_in_db_thread, run_with_db, with_db_session
+from app.gemini_gold_trader.block_reason import format_block_reason
 from app.gemini_gold_trader.executor import execute_take_market
 from app.gemini_gold_trader.gemini import decide_from_charts
 from app.gemini_gold_trader.guardrails import check_can_call_gemini, try_reserve_execution, merge_config
@@ -317,7 +318,7 @@ async def run_gemini_gold_trader_loop() -> None:
         try_reserve_execution, cfg, cfg.demo_user_id or 0, row.id
     )
     if not can_exec:
-        block_reason = exec_reason
+        block_reason = format_block_reason(exec_reason)
         await notify_decision(
             session=session,
             decision=decision,
@@ -356,8 +357,9 @@ async def run_gemini_gold_trader_loop() -> None:
 
         await run_with_db(_mark_executed)
     else:
-        block_reason = (
-            order_ctx.get("broker_error")
+        block_reason = format_block_reason(
+            order_ctx.get("block_reason")
+            or order_ctx.get("broker_error")
             or block_reason
             or "demo order rejected"
         )
@@ -411,7 +413,7 @@ async def _call_with_db_session(async_fn, /, *args, **kwargs):
 
 
 async def _sync_closed_outcomes_pass() -> None:
-    """Broker close reconcile + outcome sync every loop cycle (matches gold-ai)."""
+    """Broker close reconcile + orphan OPEN cleanup + outcome sync every loop cycle."""
 
     def _load_demo_uid(db):
         row = seed_config_if_missing(db)
@@ -421,6 +423,28 @@ async def _sync_closed_outcomes_pass() -> None:
     try:
         demo_uid, cfg = await run_with_db(_load_demo_uid)
         if demo_uid > 0:
+            try:
+                from app.gemini_gold_trader.reconcile import reconcile_orphan_open_executions
+
+                orphan_result = await _call_with_db_session(
+                    reconcile_orphan_open_executions,
+                    cfg=cfg,
+                    user_id=demo_uid,
+                )
+                closed = (orphan_result or {}).get("orphans_closed") or []
+                if closed:
+                    logger.warning(
+                        "[gemini-gold] orphan reconcile closed %s phantom OPEN row(s): %s",
+                        len(closed),
+                        [c.get("execution_id") for c in closed],
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[gemini-gold] orphan OPEN reconcile failed uid=%s: %s",
+                    demo_uid,
+                    exc,
+                )
+
             try:
                 from app.services.strategy_executor import _reconcile_forex_closes
 
