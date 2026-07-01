@@ -20,7 +20,7 @@ class GeminiGoldConfig(Base):
     model = Column(String(64), default="gemini-2.5-flash", nullable=False)
     demo_ctrader_account_id = Column(String(40), nullable=True)
     demo_user_id = Column(Integer, nullable=True)
-    demo_lot_size = Column(Float, default=0.1, nullable=False)
+    demo_lot_size = Column(Float, default=0.01, nullable=False)
     confidence_threshold = Column(Integer, default=60, nullable=False)
     calls_reset_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

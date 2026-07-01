@@ -139,7 +139,7 @@
       <div style="margin-top:1rem;display:grid;grid-template-columns:1fr 1fr;gap:.65rem">
         <div>
           <label for="demo-lot-size">Lot size</label>
-          <input id="demo-lot-size" type="number" min="0.01" max="50" step="0.01" value="0.1"/>
+          <input id="demo-lot-size" type="number" min="0.01" max="50" step="0.01" value="0.01"/>
         </div>
         <div>
           <label for="demo-max-trades">Max trades/day</label>
@@ -270,7 +270,7 @@ function renderDemoPicker(j) {
   saveBtn.disabled = accounts.length === 0;
 
   const cfg = j.config || {};
-  document.getElementById('demo-lot-size').value = cfg.demo_lot_size ?? 0.1;
+  document.getElementById('demo-lot-size').value = cfg.demo_lot_size ?? 0.01;
   document.getElementById('demo-max-trades').value = cfg.max_trades_day ?? 4;
 }
 
@@ -383,7 +383,7 @@ document.getElementById('btn-save-demo').onclick = async () => {
 
 document.getElementById('btn-save-size').onclick = async () => {
   const body = {
-    demo_lot_size: +document.getElementById('demo-lot-size').value || 0.1,
+    demo_lot_size: +document.getElementById('demo-lot-size').value || 0.01,
     max_trades_day: +document.getElementById('demo-max-trades').value || 4,
   };
   await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {

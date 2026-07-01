@@ -330,6 +330,7 @@ async def run_gemini_gold_trader_loop() -> None:
 
     from app.database import SessionLocal
 
+    order_ctx: Dict[str, Any] = {}
     db = SessionLocal()
     try:
         execution_id = await execute_take_market(
@@ -338,6 +339,7 @@ async def run_gemini_gold_trader_loop() -> None:
             decision=decision,
             decision_id=row.id,
             spot_hint=spot,
+            order_ctx=order_ctx,
         )
     finally:
         db.close()
@@ -354,7 +356,11 @@ async def run_gemini_gold_trader_loop() -> None:
 
         await run_with_db(_mark_executed)
     else:
-        block_reason = block_reason or "demo order rejected"
+        block_reason = (
+            order_ctx.get("broker_error")
+            or block_reason
+            or "demo order rejected"
+        )
 
         def _clear_reservation(db):
             from app.gemini_gold_trader.guardrails import clear_execution_reservation

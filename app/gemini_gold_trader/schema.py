@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Optional
 
 from sqlalchemy import inspect, text
 
@@ -88,9 +89,26 @@ def ensure_gemini_gold_trader_schema(*, force: bool = False) -> None:
     _schema_ready = True
 
 
+def _migrate_legacy_demo_lot_size(db, row: Optional[GeminiGoldConfig] = None) -> None:
+    """Align stored demo lot with gold-ai default (0.1 was 10× oversized for demo margin)."""
+    if row is None:
+        row = db.query(GeminiGoldConfig).filter(GeminiGoldConfig.id == 1).first()
+    if not row:
+        return
+    try:
+        lots = float(row.demo_lot_size or 0)
+    except (TypeError, ValueError):
+        return
+    if abs(lots - 0.1) < 1e-9:
+        row.demo_lot_size = 0.01
+        db.commit()
+        logger.info("[gemini-gold] migrated demo_lot_size 0.1 → 0.01")
+
+
 def seed_config_if_missing(db) -> GeminiGoldConfig:
     row = db.query(GeminiGoldConfig).filter(GeminiGoldConfig.id == 1).first()
     if row:
+        _migrate_legacy_demo_lot_size(db, row=row)
         return row
     d = env_defaults()
     row = GeminiGoldConfig(

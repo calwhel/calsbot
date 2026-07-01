@@ -100,6 +100,7 @@ async def execute_take_market(
     decision: Dict[str, Any],
     decision_id: int,
     spot_hint: float,
+    order_ctx: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
     """Place demo market order; return StrategyExecution.id."""
     if not cfg.demo_user_id:
@@ -144,7 +145,7 @@ async def execute_take_market(
         prefs=prefs,
         symbol_name=SYMBOL,
         direction=direction,
-        volume_lots=max(0.01, float(cfg.demo_lot_size or 0.1)),
+        volume_lots=max(0.01, float(cfg.demo_lot_size or 0.01)),
         stop_loss_price=sl,
         take_profit_price=tp,
         entry_price=entry,
@@ -157,7 +158,15 @@ async def execute_take_market(
     except Exception:
         pass
     if not result or not result.get("actual_fill"):
-        logger.warning("[gemini-gold] order failed: %s", result)
+        broker_err = (result or {}).get("error")
+        if order_ctx is not None and broker_err:
+            order_ctx["broker_error"] = str(broker_err)[:240]
+        logger.warning(
+            "[gemini-gold] order failed decision_id=%s broker_error=%s result=%s",
+            decision_id,
+            broker_err,
+            result,
+        )
         await run_in_db_thread(clear_execution_reservation, db, decision_id)
         return None
 
