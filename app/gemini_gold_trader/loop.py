@@ -387,18 +387,71 @@ async def run_gemini_gold_trader_loop() -> None:
             db.close()
 
 
+async def _call_with_db_session(async_fn, /, *args, **kwargs):
+    """Open a short-lived session for one async callee, then close."""
+    from app.database import SessionLocal
+
+    holder: list = []
+
+    def _open():
+        holder.append(SessionLocal())
+
+    await run_in_db_thread(_open)
+    db = holder[0]
+    try:
+        return await async_fn(*args, db=db, **kwargs)
+    finally:
+        await run_in_db_thread(db.close)
+
+
 async def _sync_closed_outcomes_pass() -> None:
-    env = env_defaults()
-    cfg = await run_with_db(_load_merged_config, env)
-    if not cfg.demo_user_id:
-        return
+    """Broker close reconcile + outcome sync every loop cycle (matches gold-ai)."""
 
-    def _sync(db):
-        return sync_closed_outcomes(db, cfg.demo_user_id)
+    def _load_demo_uid(db):
+        row = seed_config_if_missing(db)
+        cfg = merge_config(row, env_defaults())
+        return int(getattr(cfg, "demo_user_id", 0) or 0), cfg
 
-    recorded = await run_with_db(_sync)
-    if recorded:
-        logger.info("[gemini-gold] synced %s closed outcomes", recorded)
+    try:
+        demo_uid, cfg = await run_with_db(_load_demo_uid)
+        if demo_uid > 0:
+            try:
+                from app.services.strategy_executor import _reconcile_forex_closes
+
+                timeout_s = max(
+                    8.0,
+                    min(float(getattr(cfg, "scan_interval_s", 60.0) or 60.0), 45.0),
+                )
+                await asyncio.wait_for(
+                    _reconcile_forex_closes(user_id=demo_uid),
+                    timeout=timeout_s,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[gemini-gold] broker close reconcile timed out uid=%s",
+                    demo_uid,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[gemini-gold] broker close reconcile failed uid=%s: %s",
+                    demo_uid,
+                    exc,
+                )
+
+        def _sync(db):
+            return sync_closed_outcomes(db, cfg.demo_user_id)
+
+        recorded = await run_with_db(_sync)
+        if recorded:
+            logger.info("[gemini-gold] synced %s closed outcomes", recorded)
+
+        from app.gemini_gold_trader.telegram_notify import sync_closed_trade_notifications
+
+        notified = await _call_with_db_session(sync_closed_trade_notifications, cfg=cfg)
+        if notified:
+            logger.info("[gemini-gold] sent %s close notifications", notified)
+    except Exception as exc:
+        logger.warning("[gemini-gold] closed-outcome sync pass failed: %s", exc)
 
 
 def _loop_task_done(task: asyncio.Task) -> None:
@@ -535,6 +588,11 @@ async def _scan_loop_forever() -> None:
     reconcile_timeout_s = max(10.0, float(os.environ.get("GEMINI_GOLD_LOOP_RECON_TIMEOUT_S", "45")))
     logger.info("[gemini-gold] background loop starting (interval=%ss)", delay)
     try:
+        try:
+            await asyncio.wait_for(_sync_closed_outcomes_pass(), timeout=reconcile_timeout_s)
+            logger.info("[gemini-gold] startup broker reconcile pass complete")
+        except Exception as exc:
+            logger.warning("[gemini-gold] startup reconcile pass failed: %s", exc)
         while True:
             async with _get_scan_cycle_lock():
                 try:

@@ -1,8 +1,10 @@
 """FastAPI routes + page for Gemini Vision Gold Trader."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -22,10 +24,12 @@ from app.gemini_gold_trader.guardrails import (
     calls_today,
     cost_today_usd,
     demo_account_configured,
+    effective_open_slots_used,
     merge_config,
     trades_today,
 )
 from app.gemini_gold_trader.models import GeminiGoldDecision
+from app.gemini_gold_trader.reconcile import list_open_executions
 from app.gemini_gold_trader.schema import ensure_gemini_gold_trader_schema, seed_config_if_missing
 from app.services.forex_sessions import gold_ai_session_hours
 
@@ -33,6 +37,58 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+
+_STATUS_RECONCILE_LAST_RUN: Dict[int, float] = {}
+_STATUS_RECONCILE_INTERVAL_S = max(
+    15.0,
+    float(os.environ.get("GEMINI_GOLD_STATUS_RECONCILE_INTERVAL_S", "45")),
+)
+_STATUS_RECONCILE_TIMEOUT_S = max(
+    4.0,
+    float(os.environ.get("GEMINI_GOLD_STATUS_RECONCILE_TIMEOUT_S", "8")),
+)
+
+
+def _should_run_status_reconcile(user_id: int) -> bool:
+    now = time.monotonic()
+    last = _STATUS_RECONCILE_LAST_RUN.get(int(user_id), 0.0)
+    if now - last < _STATUS_RECONCILE_INTERVAL_S:
+        return False
+    _STATUS_RECONCILE_LAST_RUN[int(user_id)] = now
+    if len(_STATUS_RECONCILE_LAST_RUN) > 512:
+        cutoff = now - (_STATUS_RECONCILE_INTERVAL_S * 4.0)
+        for uid in list(_STATUS_RECONCILE_LAST_RUN):
+            if _STATUS_RECONCILE_LAST_RUN[uid] < cutoff:
+                _STATUS_RECONCILE_LAST_RUN.pop(uid, None)
+    return True
+
+
+def _schedule_status_background_reconcile(trader_uid: Optional[int]) -> None:
+    """Broker close reconcile off the status hot path (portal polls every few seconds)."""
+
+    async def _reconcile() -> None:
+        try:
+            uid = int(trader_uid or 0)
+        except (TypeError, ValueError):
+            uid = 0
+        if uid <= 0 or not _should_run_status_reconcile(uid):
+            return
+        try:
+            from app.services.strategy_executor import _reconcile_forex_closes
+
+            await asyncio.wait_for(
+                _reconcile_forex_closes(user_id=uid),
+                timeout=_STATUS_RECONCILE_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("[gemini-gold] status bg reconcile timed out uid=%s", uid)
+        except Exception as exc:
+            logger.warning("[gemini-gold] status bg reconcile failed uid=%s: %s", uid, exc)
+
+    try:
+        asyncio.create_task(_reconcile())
+    except RuntimeError:
+        logger.debug("[gemini-gold] status bg reconcile skipped (no event loop)")
 
 
 def _normalize_uid(uid: str) -> str:
@@ -208,6 +264,14 @@ async def api_status(uid: str = Query(...)):
         demo_accounts = demo_accounts_for_user_id(db, trader_uid)
         selected = find_demo_account(demo_accounts, cfg.demo_ctrader_account_id)
 
+        _schedule_status_background_reconcile(trader_uid)
+
+        open_execs: List[Dict[str, Any]] = []
+        open_slots_used = 0
+        if trader_uid:
+            open_execs = list_open_executions(db, int(trader_uid))
+            open_slots_used = effective_open_slots_used(db, int(trader_uid))
+
         return {
             "ok": True,
             "demo_label": "[Gemini Gold] Demo",
@@ -217,6 +281,8 @@ async def api_status(uid: str = Query(...)):
             "demo_accounts": demo_accounts,
             "demo_account_selected": selected,
             "demo_account_ready": demo_account_configured(cfg),
+            "open_executions": open_execs,
+            "open_slots_used": open_slots_used,
             "stats_today": {
                 "calls": calls_today(db),
                 "trades": trades_today(db),
@@ -311,5 +377,45 @@ async def api_kill_switch(request: Request, uid: str = Query(...)):
                 "still halts scans — remove or set that env var to false and redeploy."
             )
         return out
+    finally:
+        db.close()
+
+
+@router.post("/api/gemini-gold-trader/reconcile")
+async def api_reconcile(uid: str = Query(...)):
+    """Admin: force broker close reconcile for stale OPEN executions."""
+    db = SessionLocal()
+    try:
+        admin = _resolve_user(uid, db)
+        row = seed_config_if_missing(db)
+        env = env_defaults()
+        cfg = merge_config(row, env)
+        trader_uid = _trader_user_id(cfg, admin)
+        if not trader_uid:
+            raise HTTPException(status_code=400, detail="No demo trader user configured")
+
+        before = list_open_executions(db, int(trader_uid))
+        try:
+            from app.services.strategy_executor import _reconcile_forex_closes
+
+            timeout_s = max(10.0, float(os.environ.get("GEMINI_GOLD_MANUAL_RECON_TIMEOUT_S", "30")))
+            await asyncio.wait_for(
+                _reconcile_forex_closes(user_id=int(trader_uid)),
+                timeout=timeout_s,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Broker reconcile timed out") from None
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Reconcile failed: {exc}") from exc
+
+        after = list_open_executions(db, int(trader_uid))
+        return {
+            "ok": True,
+            "open_before": len(before),
+            "open_after": len(after),
+            "open_executions_before": before,
+            "open_executions_after": after,
+            "open_slots_used": effective_open_slots_used(db, int(trader_uid)),
+        }
     finally:
         db.close()
