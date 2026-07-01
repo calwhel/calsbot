@@ -78,11 +78,33 @@ Rename elements in your template to match, or adjust `buildModifications()` in `
 This pipeline uses a **pre-refreshed OAuth2 refresh token** (not a service account — YouTube uploads require user/channel OAuth):
 
 1. Create a Google Cloud project and enable **YouTube Data API v3**.
-2. Create OAuth 2.0 credentials (Web application).
-3. Run the OAuth consent flow once to obtain a `refresh_token` for your channel.
-4. Store `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, and `YOUTUBE_REFRESH_TOKEN` in Railway.
+2. Create OAuth 2.0 credentials (**Desktop app** or **Web application**).
+3. Add `http://localhost:53682/oauth2callback` as an authorized redirect URI.
+4. Store `YOUTUBE_CLIENT_ID` and `YOUTUBE_CLIENT_SECRET` in `.env` (locally) and Railway.
+5. Run the one-time helper script below to obtain `YOUTUBE_REFRESH_TOKEN`.
 
 Videos are uploaded as **`private`** by default (`YOUTUBE_PRIVACY_STATUS=private`). Change to `unlisted` only after you validate compliance workflows.
+
+### One-time OAuth setup
+
+Run this **locally** on your machine — it is not part of the deployed Railway service:
+
+```bash
+cd youtube-pipeline
+cp .env.example .env
+# Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in .env
+npm install
+npm run get-token
+```
+
+The script will:
+
+1. Print a Google consent URL (`Opening consent URL...`)
+2. Wait for you to authorize in the browser (`Waiting for authorization...`)
+3. Capture the OAuth callback on `http://localhost:53682/oauth2callback`
+4. Print and save the refresh token (`Refresh token obtained. Add this to Railway as YOUTUBE_REFRESH_TOKEN:`)
+
+Authorize with the **Google account that owns the target YouTube channel**. Copy the printed refresh token into Railway's `YOUTUBE_REFRESH_TOKEN` environment variable. The token is also written to `.refresh-token.txt` (gitignored) for your records.
 
 ## Ephemeral Asset Hosting
 

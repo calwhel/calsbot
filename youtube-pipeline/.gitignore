@@ -2,5 +2,10 @@ node_modules/
 dist/
 .env
 .env.local
+.refresh-token.txt
+scripts/*.js
+scripts/*.js.map
+scripts/*.d.ts
+scripts/*.d.ts.map
 *.log
 .DS_Store
