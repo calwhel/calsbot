@@ -185,11 +185,76 @@ async def notify_trade_closed(
     pnl_pct: float,
     decision_id: int,
     execution_id: int,
-) -> None:
+) -> bool:
     result = outcome.upper()
     text = (
         f"<b>{_PREFIX} — CLOSED {result}</b>\n"
         f"Session: {_html_escape(session)} · {direction.upper()}\n"
         f"PnL: {pnl_pct:+.2f}% · decision #{decision_id} · exec #{execution_id}"
     )
-    await _send(text, msg_type="gemini_gold_close", exec_id=execution_id)
+    return await _send(text, msg_type="gemini_gold_close", exec_id=execution_id)
+
+
+def _decision_id_from_execution(execution) -> Optional[int]:
+    notes = getattr(execution, "notes", "") or ""
+    if "decision_id=" in notes:
+        try:
+            return int(notes.split("decision_id=")[1].split()[0].strip("|"))
+        except (ValueError, IndexError):
+            pass
+    meta = getattr(execution, "conditions_met", None)
+    if isinstance(meta, dict):
+        try:
+            did = int(meta.get("gemini_gold_decision_id"))
+            return did if did > 0 else None
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+async def sync_closed_trade_notifications(db, cfg: GeminiGoldRuntimeConfig) -> int:
+    """Record missing outcomes and notify on newly closed demo trades."""
+    from datetime import datetime, timedelta
+
+    from app.gemini_gold_trader.outcomes import record_outcome_from_execution
+    from app.strategy_models import StrategyExecution
+
+    notifications_enabled = telegram_notifications_enabled()
+    since = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    closed = (
+        db.query(StrategyExecution)
+        .filter(
+            StrategyExecution.notes.like("%gemini_gold_trader%"),
+            StrategyExecution.outcome != "OPEN",
+            StrategyExecution.closed_at.isnot(None),
+            StrategyExecution.closed_at >= since - timedelta(days=3),
+        )
+        .order_by(StrategyExecution.closed_at.desc())
+        .limit(30)
+        .all()
+    )
+    sent = 0
+    for ex in closed:
+        did = _decision_id_from_execution(ex)
+        if not did:
+            continue
+        was_new = record_outcome_from_execution(db, did, ex)
+        if not was_new:
+            continue
+        if not notifications_enabled:
+            continue
+        from app.gemini_gold_trader.models import GeminiGoldDecision
+
+        dec = db.query(GeminiGoldDecision).filter(GeminiGoldDecision.id == did).first()
+        ok = await notify_trade_closed(
+            session=getattr(dec, "session", None) or "—",
+            direction=ex.direction or "?",
+            outcome=ex.outcome or "?",
+            pnl_pct=float(ex.pnl_pct or 0),
+            decision_id=did,
+            execution_id=ex.id,
+        )
+        if ok:
+            sent += 1
+    return sent
