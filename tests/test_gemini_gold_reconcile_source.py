@@ -45,6 +45,11 @@ class GeminiGoldReconcileSourceTests(unittest.TestCase):
         self.assertIn('@router.post("/api/gemini-gold-trader/reconcile")', ROUTES)
         self.assertIn("open_before", ROUTES)
         self.assertIn("open_after", ROUTES)
+        self.assertIn("reconcile_orphan_open_executions", ROUTES)
+        self.assertIn("orphan_reconcile", ROUTES)
+
+    def test_loop_runs_orphan_reconcile(self):
+        self.assertIn("reconcile_orphan_open_executions", LOOP)
 
     def test_close_notifications_not_gated_by_telegram_for_outcome_sync(self):
         self.assertIn("async def sync_closed_trade_notifications", TELEGRAM)
