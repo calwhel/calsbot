@@ -114,7 +114,7 @@ class TestSetupToggles:
 
     def test_max_candidates_per_scan_default(self):
         os.environ.pop("GOLD_AI_TRADER_MAX_CANDIDATES_PER_SCAN", None)
-        assert max_candidates_per_scan() == 3
+        assert max_candidates_per_scan() == 1
 
     def test_breaker_env_override(self):
         os.environ["GOLD_AI_SETUP_BREAKER_BULL"] = "true"
@@ -279,9 +279,9 @@ class TestKillzoneAndGates:
         os.environ.pop("GOLD_AI_KILLZONE_ONLY", None)
         assert killzone_only_enabled() is True
 
-    def test_gate_defaults_looser(self):
-        assert MIN_BODY_ATR == 0.6
-        assert NEAR_LEVEL_ATR == 1.5
+    def test_gate_defaults_stricter(self):
+        assert MIN_BODY_ATR == 0.85
+        assert NEAR_LEVEL_ATR == 1.0
 
 
 class TestJudasDetail:

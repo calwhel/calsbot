@@ -13,9 +13,9 @@ class _Cand:
         self.raw = {"readiness_checklist": checklist}
 
 
-def test_min_confluence_default_is_five():
+def test_min_confluence_default_is_six():
     os.environ.pop("GOLD_AI_MIN_CONFLUENCE_FOR_TAKE", None)
-    assert min_confluence_for_take() == 5
+    assert min_confluence_for_take() == 6
 
 
 def test_blocks_when_confluence_below_threshold():
@@ -25,11 +25,12 @@ def test_blocks_when_confluence_below_threshold():
             "at_entry": True,
             "displacement_ok": True,
             "reclaim_held": True,
+            "momentum_ok": True,
         }
     )
     ok, reason = meets_min_confluence_for_take(cand)
     assert ok is False
-    assert "confluence_4/" in reason
+    assert "confluence_5/" in reason
 
 
 def test_passes_when_confluence_meets_threshold():
@@ -40,6 +41,7 @@ def test_passes_when_confluence_meets_threshold():
             "displacement_ok": True,
             "reclaim_held": True,
             "momentum_ok": True,
+            "rr_feasible": True,
         }
     )
     ok, reason = meets_min_confluence_for_take(cand)

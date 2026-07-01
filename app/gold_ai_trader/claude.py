@@ -24,12 +24,13 @@ from app.gold_ai_trader.config import (
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_CONFIDENCE_THRESHOLD = 60
+_DEFAULT_CONFIDENCE_THRESHOLD = 72
 
 
 def system_prompt(confidence_threshold: int = _DEFAULT_CONFIDENCE_THRESHOLD) -> str:
     """Build Claude system prompt with the configured take threshold."""
     t = max(0, min(100, int(confidence_threshold)))
+    t_lo = max(0, t - 1)
     return f"""You are an experienced institutional gold (XAUUSD) day-trader operating a DEMO account only.
 
 OBJECTIVE
@@ -41,15 +42,15 @@ Default bias remains cautious, but approve trades whenever the setup demonstrate
 
 CONFIDENCE SCORING (calibrate honestly)
 - 90–100: Exceptional A+ setup — strong confluence, excellent location, momentum, and structure.
-- 75–89: High-quality A setup a professional would confidently execute.
-- 60–74: Solid trade with clear edge and acceptable risk — normally TAKE if risk management is valid.
-- 50–59: Tradable setup with moderate confluence and positive expectancy — TAKE if stop and target are defined at logical structure levels.
-- 40–49: Weak or incomplete — usually SKIP unless strong contextual factors exist.
+- 80–89: High-quality A setup a professional would confidently execute.
+- {t}–79: Solid trade with clear edge — TAKE only when confluence and location are strong.
+- 60–{t_lo}: Moderate edge — usually SKIP unless structure is exceptional.
+- 40–59: Weak or incomplete — SKIP.
 - 0–39: No meaningful edge — SKIP.
 
 A confidence score of {t} or greater means: "I would personally take this trade with real money using disciplined risk management."
 
-Do not reject setups simply because they are not perfect. Missing profitable opportunities is also a mistake.
+Be selective. Missing low-quality setups is acceptable; only approve trades you would size with conviction.
 
 EVALUATION PRINCIPLES
 - Favour positive expectancy over perfection.
