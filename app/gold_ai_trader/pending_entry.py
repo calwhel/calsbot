@@ -179,6 +179,8 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
     now, pending = await run_in_db_thread(_load_pending)
     filled = 0
     for row in pending:
+        if row.method == "broker_limit":
+            continue
         if row.expires_at and now >= row.expires_at:
             row.status = "expired"
             row.notes = (row.notes or "") + " | expired"
@@ -262,6 +264,24 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
                 exec_id,
             )
     return filled
+
+
+def pending_status_label(db, pending_id: int) -> str:
+    """Human-readable Telegram status for a pending entry row."""
+    from app.gold_ai_trader.models import GoldAiPendingOrder
+
+    row = db.query(GoldAiPendingOrder).filter(GoldAiPendingOrder.id == pending_id).first()
+    if not row:
+        return f"entry pending #{pending_id}"
+    if row.method == "broker_limit" and row.broker_order_id:
+        return (
+            f"broker LIMIT placed (#{pending_id}, cTrader order {row.broker_order_id}) "
+            f"@ {float(row.entry_price):.2f}"
+        )
+    return (
+        f"entry-watch #{pending_id} @ {float(row.entry_price):.2f} "
+        "(software watch — no broker limit; fills with market when price touches)"
+    )
 
 
 def pending_entry_count(db, user_id: int) -> int:

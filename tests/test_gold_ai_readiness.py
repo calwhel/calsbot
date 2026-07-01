@@ -156,7 +156,7 @@ class TestReadinessScoring:
 
     def test_readiness_min_default(self):
         os.environ.pop("GOLD_AI_READINESS_MIN", None)
-        assert readiness_min_score() == 55
+        assert readiness_min_score() == 65
 
     def test_readiness_premium_discount_path_no_crash(self):
         """Regression: compute_asian_range must accept k1h as 3rd positional arg."""

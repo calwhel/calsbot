@@ -14,7 +14,7 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-MIN_RR = _env_float("GOLD_AI_MIN_RR", 0.0)
+MIN_RR = _env_float("GOLD_AI_MIN_RR", 1.3)
 # 0 = no execution cap (swing/zone invalidation allowed); set e.g. 1.0 to re-enable hard scalp cap
 MAX_SL_ATR_MULT = _env_float("GOLD_AI_MAX_SL_ATR", 0.0)
 MIN_SL_PIPS = _env_float("GOLD_AI_MIN_SL_PIPS", 60.0)

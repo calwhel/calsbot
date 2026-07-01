@@ -100,15 +100,20 @@ class TestDecisionValidator:
         assert "sl_too_tight" in reason
         assert out.get("validator_sl_pips") == 20.0
 
-    def test_allows_low_rr_by_default(self):
-        """Claude may target session edge with <2R — validator must not block."""
+    def test_allows_low_rr_when_min_rr_disabled(self, monkeypatch):
+        """Claude may target session edge with <2R when GOLD_AI_MIN_RR=0."""
+        monkeypatch.setenv("GOLD_AI_MIN_RR", "0")
+        import importlib
+        import app.gold_ai_trader.decision_validator as dv
+
+        importlib.reload(dv)
         decision = {
             "direction": "LONG",
             "entry": 2650.0,
             "stop_loss": 2643.8,
             "take_profit": 2653.1,
         }
-        ok, reason, out = validate_take_decision(
+        ok, reason, out = dv.validate_take_decision(
             decision,
             candidate_direction="LONG",
             spot=2650.0,
@@ -119,6 +124,26 @@ class TestDecisionValidator:
         assert ok is True
         assert reason.startswith("validator:ok")
         assert out.get("validator_note") == "rr=0.50"
+        monkeypatch.delenv("GOLD_AI_MIN_RR", raising=False)
+        importlib.reload(dv)
+
+    def test_rejects_low_rr_by_default(self):
+        decision = {
+            "direction": "LONG",
+            "entry": 2650.0,
+            "stop_loss": 2643.8,
+            "take_profit": 2653.1,
+        }
+        ok, reason, _ = validate_take_decision(
+            decision,
+            candidate_direction="LONG",
+            spot=2650.0,
+            atr=2.0,
+            setup_detail="",
+            key_levels=[],
+        )
+        assert ok is False
+        assert "rr_below_min" in reason
 
     def test_tp_adjusted_when_min_rr_enabled(self, monkeypatch):
         monkeypatch.setenv("GOLD_AI_MIN_RR", "2.0")

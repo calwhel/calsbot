@@ -1706,6 +1706,319 @@ async def place_market_order_resilient(
     return result
 
 
+async def _await_limit_order_accepted(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    first_payload: bytes,
+    broker_symbol: str,
+    volume_units: int,
+    *,
+    latency=None,
+) -> dict:
+    """Accept LIMIT order placement when broker acknowledges (fill may come later)."""
+    _terminal = (
+        ProtoOAExecutionType.ORDER_REJECTED,
+        ProtoOAExecutionType.ORDER_CANCELLED,
+        ProtoOAExecutionType.ORDER_EXPIRED,
+    )
+    _accepted = (
+        ProtoOAExecutionType.ORDER_ACCEPTED,
+        ProtoOAExecutionType.ORDER_REPLACED,
+        ProtoOAExecutionType.ORDER_FILLED,
+    )
+
+    def _parse_exec(_payload):
+        _e = ProtoOAExecutionEvent()
+        _e.ParseFromString(_payload)
+        return _e
+
+    ev = _parse_exec(first_payload)
+    if ev.executionType in _terminal:
+        _ec = ev.errorCode if ev.HasField("errorCode") else ""
+        _tname = ProtoOAExecutionType.Name(ev.executionType)
+        return {
+            "order_id": None,
+            "actual_fill": None,
+            "error": f"{_tname}: {_ec}" if _ec else _tname,
+        }
+
+    order_id = str(ev.order.orderId) if ev.HasField("order") else None
+    if ev.executionType in _accepted and order_id:
+        if latency is not None:
+            try:
+                latency.mark_broker_ack()
+            except Exception:
+                pass
+        actual_fill = None
+        position_id = None
+        if ev.HasField("deal") and ev.deal.executionPrice:
+            actual_fill = float(ev.deal.executionPrice)
+        if ev.HasField("deal") and ev.deal.positionId:
+            position_id = str(ev.deal.positionId)
+        logger.info(
+            "[cTrader] LIMIT order accepted order_id=%s symbol=%s vol=%s fill=%s",
+            order_id,
+            broker_symbol,
+            volume_units,
+            actual_fill,
+        )
+        return {
+            "order_id": order_id,
+            "actual_fill": actual_fill,
+            "position_id": position_id,
+            "volume": volume_units,
+            "error": None,
+        }
+
+    _deadline = time.monotonic() + float(ORDER_SUBMIT_TIMEOUT_S)
+    while time.monotonic() < _deadline:
+        _remaining = _deadline - time.monotonic()
+        _pt2, _payload2 = await _recv_until(
+            reader,
+            {_PAYLOAD_TYPES["execution_event"], _PAYLOAD_TYPES["order_error_event"]},
+            timeout=_remaining,
+        )
+        if not _payload2:
+            break
+        if _pt2 == _PAYLOAD_TYPES["order_error_event"]:
+            err = ProtoOAOrderErrorEvent()
+            err.ParseFromString(_payload2)
+            _reason = (err.description or "").strip() or (err.errorCode or "").strip() or "order rejected"
+            return {"order_id": None, "actual_fill": None, "error": _reason}
+        ev2 = _parse_exec(_payload2)
+        if ev2.executionType in _terminal:
+            _ec = ev2.errorCode if ev2.HasField("errorCode") else ""
+            _tname = ProtoOAExecutionType.Name(ev2.executionType)
+            return {
+                "order_id": None,
+                "actual_fill": None,
+                "error": f"{_tname}: {_ec}" if _ec else _tname,
+            }
+        if ev2.HasField("order") and ev2.order.orderId:
+            order_id = str(ev2.order.orderId)
+        if ev2.executionType in _accepted and order_id:
+            return {
+                "order_id": order_id,
+                "actual_fill": None,
+                "position_id": None,
+                "volume": volume_units,
+                "error": None,
+            }
+
+    if order_id:
+        return {
+            "order_id": order_id,
+            "actual_fill": None,
+            "position_id": None,
+            "volume": volume_units,
+            "error": None,
+        }
+    return {"order_id": None, "actual_fill": None, "error": "limit order not accepted"}
+
+
+async def place_limit_order(
+    access_token: str,
+    ctid_trader_account_id: int,
+    symbol_name: str,
+    direction: str,
+    limit_price: float,
+    volume_lots: float,
+    stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
+    label: str = "TradeHub",
+    host: str = CTRADER_HOST,
+    *,
+    latency=None,
+) -> dict:
+    """Place a LIMIT order on cTrader (absolute limit + SL/TP prices)."""
+    if not _PROTO_OK:
+        return {"order_id": None, "actual_fill": None, "error": "ctrader proto not available"}
+    if not CTRADER_CLIENT_ID or not CTRADER_CLIENT_SECRET:
+        return {"order_id": None, "actual_fill": None, "error": "CTRADER_CLIENT_ID/SECRET not set"}
+    if limit_price <= 0:
+        return {"order_id": None, "actual_fill": None, "error": "limit_price required"}
+
+    broker_symbol = _SYMBOL_MAP.get(symbol_name, symbol_name)
+
+    async with _get_account_lock(host, ctid_trader_account_id):
+        for attempt in (1, 2):
+            try:
+                reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
+                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                    return {"order_id": None, "actual_fill": None, "error": "account auth failed"}
+
+                symbol_id = await _resolve_symbol_id(
+                    reader, writer, ctid_trader_account_id, broker_symbol, host
+                )
+                if not symbol_id:
+                    return {
+                        "order_id": None,
+                        "actual_fill": None,
+                        "error": f"symbol {broker_symbol} not tradable on this account",
+                    }
+
+                details = await _resolve_symbol_details(
+                    reader, writer, ctid_trader_account_id, symbol_id, host
+                )
+                volume_units = _compute_volume(volume_lots, details)
+                if not volume_units or volume_units <= 0:
+                    return {
+                        "order_id": None,
+                        "actual_fill": None,
+                        "error": "could not resolve tradable volume for symbol",
+                    }
+
+                req = ProtoOANewOrderReq()
+                req.ctidTraderAccountId = ctid_trader_account_id
+                req.symbolId = symbol_id
+                req.orderType = ProtoOAOrderType.LIMIT
+                req.tradeSide = (
+                    ProtoOATradeSide.BUY if direction == "LONG" else ProtoOATradeSide.SELL
+                )
+                req.volume = volume_units
+                req.limitPrice = float(limit_price)
+                req.label = label[:20]
+                if stop_loss_price is not None and stop_loss_price > 0:
+                    req.stopLoss = float(stop_loss_price)
+                if take_profit_price is not None and take_profit_price > 0:
+                    req.takeProfit = float(take_profit_price)
+
+                if latency is not None:
+                    try:
+                        latency.mark_submitted()
+                    except Exception:
+                        pass
+
+                pt, payload = await _send_recv_any(
+                    reader,
+                    writer,
+                    req,
+                    _PAYLOAD_TYPES["new_order_req"],
+                    {_PAYLOAD_TYPES["execution_event"], _PAYLOAD_TYPES["order_error_event"]},
+                    timeout=ORDER_SUBMIT_TIMEOUT_S,
+                )
+                if latency is not None and payload:
+                    try:
+                        latency.mark_broker_ack()
+                    except Exception:
+                        pass
+                if not payload:
+                    return {"order_id": None, "actual_fill": None, "error": "no execution event"}
+
+                _touch_conn(host, ctid_trader_account_id)
+
+                if pt == _PAYLOAD_TYPES["order_error_event"]:
+                    err = ProtoOAOrderErrorEvent()
+                    err.ParseFromString(payload)
+                    _reason = (
+                        (err.description or "").strip()
+                        or (err.errorCode or "").strip()
+                        or "order rejected"
+                    )
+                    return {"order_id": None, "actual_fill": None, "error": _reason}
+
+                return await _await_limit_order_accepted(
+                    reader,
+                    writer,
+                    payload,
+                    broker_symbol,
+                    volume_units,
+                    latency=latency,
+                )
+            except asyncio.TimeoutError:
+                _invalidate_persistent_connection(host, ctid_trader_account_id)
+                if attempt == 1:
+                    continue
+                return {"order_id": None, "actual_fill": None, "error": "timeout"}
+            except Exception as e:
+                if attempt == 1:
+                    logger.warning(f"[cTrader] place_limit_order retry after: {e}")
+                    _invalidate_persistent_connection(host, ctid_trader_account_id)
+                    continue
+                logger.error(f"[cTrader] place_limit_order failed: {e}")
+                return {"order_id": None, "actual_fill": None, "error": str(e)}
+    return {"order_id": None, "actual_fill": None, "error": "unexpected exit"}
+
+
+async def place_limit_order_resilient(
+    *,
+    user_id: Optional[int],
+    access_token: str,
+    ctid: int,
+    prefs,
+    symbol_name: str,
+    direction: str,
+    limit_price: float,
+    volume_lots: Optional[float] = None,
+    stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
+    entry_price: Optional[float] = None,
+    label: str = "TradeHub",
+    latency=None,
+    execution_id: Optional[int] = None,
+) -> dict:
+    """Place a LIMIT order with token refresh and live/demo host routing."""
+    hosts = _routing_hosts_for_account(prefs, ctid) if prefs else [CTRADER_HOST_LIVE]
+    known_account_type = _account_is_live(prefs, ctid) is not None if prefs else False
+    _acct_is_live = _account_is_live(prefs, ctid) if prefs else None
+    at = access_token
+    price = float(limit_price or entry_price or 0)
+
+    async def _place_on(h: str) -> dict:
+        return await place_limit_order(
+            access_token=at,
+            ctid_trader_account_id=ctid,
+            symbol_name=symbol_name,
+            direction=direction,
+            limit_price=price,
+            volume_lots=volume_lots or 0.01,
+            stop_loss_price=stop_loss_price,
+            take_profit_price=take_profit_price,
+            label=label,
+            host=h,
+            latency=latency,
+        )
+
+    async def _try_hosts(token: str) -> dict:
+        last: dict = {"order_id": None, "actual_fill": None, "error": "no host succeeded"}
+        for idx, h in enumerate(hosts):
+            result = await _place_on(h)
+            _log_order_route(
+                execution_id=execution_id,
+                ctid=ctid,
+                host=h,
+                result=result,
+                volume_units=result.get("volume"),
+                lots=volume_lots,
+                is_live=_acct_is_live if _acct_is_live is not None else (h == CTRADER_HOST_LIVE),
+            )
+            if result.get("order_id"):
+                if user_id:
+                    _persist_account_host_metadata(user_id, ctid, h)
+                out = dict(result)
+                out["host"] = h
+                return out
+            err = result.get("error")
+            if err == "account auth failed":
+                last = result
+                if idx < len(hosts) - 1:
+                    continue
+                return result
+            if _should_try_alternate_order_host(err, known_account_type=known_account_type):
+                last = result
+                if idx < len(hosts) - 1:
+                    continue
+            return result
+        return last
+
+    result = await _try_hosts(at)
+    if result.get("error") == "account auth failed" and user_id:
+        fresh = _latest_ctrader_access_token(int(user_id))
+        if fresh and fresh != at:
+            result = await _try_hosts(fresh)
+    return result
+
+
 async def _resolve_symbol_id(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,

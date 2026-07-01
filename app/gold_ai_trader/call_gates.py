@@ -30,12 +30,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-MIN_BODY_ATR = _env_float("GOLD_AI_TRADER_MIN_BODY_ATR", 0.6)
-NEAR_LEVEL_ATR = _env_float("GOLD_AI_TRADER_NEAR_LEVEL_ATR", 1.5)
-MIN_RVOL = _env_float("GOLD_AI_TRADER_MIN_RVOL", 1.15)
-KILLZONE_MINUTES = _env_int("GOLD_AI_TRADER_KILLZONE_MINUTES", 90)
+MIN_BODY_ATR = _env_float("GOLD_AI_TRADER_MIN_BODY_ATR", 0.75)
+NEAR_LEVEL_ATR = _env_float("GOLD_AI_TRADER_NEAR_LEVEL_ATR", 1.2)
+MIN_RVOL = _env_float("GOLD_AI_TRADER_MIN_RVOL", 1.25)
+KILLZONE_MINUTES = _env_int("GOLD_AI_TRADER_KILLZONE_MINUTES", 75)
 MIN_CLAUDE_GAP_S = _env_int("GOLD_AI_TRADER_MIN_CLAUDE_GAP_S", 120)
 DEDUPE_PRICE_ATR = _env_float("GOLD_AI_TRADER_DEDUPE_PRICE_ATR", 0.35)
+MIN_CONFLUENCE_FOR_TAKE = _env_int("GOLD_AI_MIN_CONFLUENCE_FOR_TAKE", 5)
 
 
 def killzone_only_enabled() -> bool:
@@ -65,6 +66,21 @@ def candidate_confluence_counts(candidate) -> Tuple[int, int]:
 def candidate_meets_killzone_override(candidate) -> bool:
     passed, _ = candidate_confluence_counts(candidate)
     return passed >= killzone_override_min_confluence()
+
+
+def min_confluence_for_take() -> int:
+    return max(0, min(8, MIN_CONFLUENCE_FOR_TAKE))
+
+
+def meets_min_confluence_for_take(candidate) -> Tuple[bool, str]:
+    """Hard gate before execute_take — stricter than Claude confidence alone."""
+    need = min_confluence_for_take()
+    if need <= 0:
+        return True, ""
+    passed, total = candidate_confluence_counts(candidate)
+    if passed < need:
+        return False, f"confluence_{passed}/{total}<{need}"
+    return True, ""
 
 
 # Setups that define their own level/zone — skip redundant PDH proximity gate.
