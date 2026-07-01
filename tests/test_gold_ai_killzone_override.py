@@ -52,9 +52,9 @@ class KillzoneOverrideEnvTests(unittest.TestCase):
         os.environ["GOLD_AI_KILLZONE_OVERRIDE_ENABLED"] = "true"
         self.assertTrue(killzone_override_enabled())
 
-    def test_min_confluence_default_five(self):
+    def test_min_confluence_default_six(self):
         os.environ.pop("GOLD_AI_KILLZONE_OVERRIDE_MIN_CONFLUENCE", None)
-        self.assertEqual(killzone_override_min_confluence(), 5)
+        self.assertEqual(killzone_override_min_confluence(), 6)
 
     def test_candidate_meets_threshold_passed_gte_min(self):
         os.environ["GOLD_AI_KILLZONE_OVERRIDE_MIN_CONFLUENCE"] = "5"

@@ -12,30 +12,30 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-# Existing setups default ON. Tier-1 additions default ON (user requested more flow).
+# Core ICT only by default — noisy families off unless explicitly enabled in env.
 _DEFAULTS: Dict[str, bool] = {
     "sweep_pdh": True,
     "sweep_pdl": True,
-    "disp_bull": True,
-    "disp_bear": True,
+    "disp_bull": False,
+    "disp_bear": False,
     "fvg_retrace_bull": True,
     "fvg_retrace_bear": True,
     "ifvg_bull": True,
     "ifvg_bear": True,
     "ob_bull": True,
     "ob_bear": True,
-    "liq_sweep_bull": True,
-    "liq_sweep_bear": True,
-    "sdp_bull": True,
-    "sdp_bear": True,
+    "liq_sweep_bull": False,
+    "liq_sweep_bear": False,
+    "sdp_bull": False,
+    "sdp_bear": False,
     "breaker_bull": False,
     "breaker_bear": False,
     "eqh_sweep_bear": False,
     "eql_sweep_bull": False,
     "judas_bull": False,
     "judas_bear": False,
-    "asian_sweep_bull": True,
-    "asian_sweep_bear": True,
+    "asian_sweep_bull": False,
+    "asian_sweep_bear": False,
     "momentum_ema_bounce_long": False,
     "momentum_ema_bounce_short": False,
     "momentum_flag_break_long": False,
@@ -134,6 +134,6 @@ def setup_scannable(setup_key: str, bias: Optional[dict] = None) -> bool:
 
 def max_candidates_per_scan() -> int:
     try:
-        return max(1, min(int(os.environ.get("GOLD_AI_TRADER_MAX_CANDIDATES_PER_SCAN", "3")), 5))
+        return max(1, min(int(os.environ.get("GOLD_AI_TRADER_MAX_CANDIDATES_PER_SCAN", "1")), 5))
     except (TypeError, ValueError):
-        return 3
+        return 1

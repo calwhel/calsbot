@@ -97,8 +97,8 @@ DEFAULTS = GoldAiRuntimeConfig(
     london_end_hour=_SHARED_SESSION_HOURS["london"]["end_hour"],
     ny_start_hour=_SHARED_SESSION_HOURS["new_york"]["start_hour"],
     ny_end_hour=_SHARED_SESSION_HOURS["new_york"]["end_hour"],
-    max_calls_day=70,
-    max_trades_day=3,
+    max_calls_day=45,
+    max_trades_day=2,
     no_overnight=True,
     scan_interval_s=20.0,
     model="claude-sonnet-4-6",
@@ -114,7 +114,7 @@ DEFAULTS = GoldAiRuntimeConfig(
     use_limit_entry=True,
     pending_entry_timeout_min=30,
     learning_daily_at_ny_end=True,
-    confidence_threshold=68,
+    confidence_threshold=72,
     include_history_in_decisions=False,
     orb_enabled=False,
     orb_range_minutes=20,
@@ -136,7 +136,7 @@ DEFAULTS = GoldAiRuntimeConfig(
     orb_tp_mode="range_multiple",
     orb_tp_range_mult=1.5,
     orb_tp_rr=1.5,
-    orb_confidence_threshold=55,
+    orb_confidence_threshold=65,
     orb_max_calls_day=20,
     orb_min_global_calls_left=15,
     orb_max_trades_per_session=1,
@@ -147,7 +147,7 @@ DEFAULTS = GoldAiRuntimeConfig(
 
 def confidence_threshold() -> int:
     """Min confidence (0–100) required to fire a demo/live take."""
-    raw = _env_int("GOLD_AI_CONFIDENCE_THRESHOLD", 68)
+    raw = _env_int("GOLD_AI_CONFIDENCE_THRESHOLD", 72)
     return max(0, min(100, raw))
 
 
@@ -169,8 +169,8 @@ def env_defaults() -> GoldAiRuntimeConfig:
         ny_end_hour=_env_int(
             "GOLD_AI_TRADER_NY_END", _SHARED_SESSION_HOURS["new_york"]["end_hour"]
         ),
-        max_calls_day=_env_int("GOLD_AI_TRADER_MAX_CALLS_DAY", 70),
-        max_trades_day=_env_int("GOLD_AI_TRADER_MAX_TRADES_DAY", 3),
+        max_calls_day=_env_int("GOLD_AI_TRADER_MAX_CALLS_DAY", 45),
+        max_trades_day=_env_int("GOLD_AI_TRADER_MAX_TRADES_DAY", 2),
         no_overnight=_env_bool("GOLD_AI_TRADER_NO_OVERNIGHT", True),
         scan_interval_s=_env_float("GOLD_AI_TRADER_SCAN_INTERVAL_S", 20.0),
         model=os.environ.get("GOLD_AI_TRADER_MODEL", "claude-sonnet-4-6"),
@@ -210,7 +210,7 @@ def env_defaults() -> GoldAiRuntimeConfig:
         orb_tp_mode=(os.environ.get("GOLD_AI_ORB_TP_MODE", "range_multiple") or "range_multiple").strip().lower(),
         orb_tp_range_mult=_env_float("GOLD_AI_ORB_TP_RANGE_MULT", 1.5),
         orb_tp_rr=_env_float("GOLD_AI_ORB_TP_RR", 1.5),
-        orb_confidence_threshold=_env_int("GOLD_AI_ORB_CONFIDENCE_THRESHOLD", 55),
+        orb_confidence_threshold=_env_int("GOLD_AI_ORB_CONFIDENCE_THRESHOLD", 65),
         orb_max_calls_day=_env_int("GOLD_AI_ORB_MAX_CALLS_DAY", 20),
         orb_min_global_calls_left=_env_int("GOLD_AI_ORB_MIN_GLOBAL_CALLS_LEFT", 15),
         orb_max_trades_per_session=_env_int("GOLD_AI_ORB_MAX_TRADES_PER_SESSION", 1),

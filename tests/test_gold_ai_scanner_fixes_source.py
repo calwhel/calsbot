@@ -25,9 +25,11 @@ class GoldAiScannerFixesSourceTests(unittest.TestCase):
         self.assertNotIn('"fvg_bull"', ROUTING)
         self.assertNotIn('"fvg_bear"', ROUTING)
 
-    def test_asian_sweep_defaults_enabled(self):
-        self.assertIn('"asian_sweep_bull": True', TOGGLES)
-        self.assertIn('"asian_sweep_bear": True', TOGGLES)
+    def test_asian_sweep_defaults_disabled(self):
+        self.assertIn('"asian_sweep_bull": False', TOGGLES)
+        self.assertIn('"asian_sweep_bear": False', TOGGLES)
+        self.assertIn('"disp_bull": False', TOGGLES)
+        self.assertIn('"liq_sweep_bull": False', TOGGLES)
         self.assertIn('"judas_bull": False', TOGGLES)
         self.assertIn('"judas_bear": False', TOGGLES)
 
