@@ -98,7 +98,7 @@ DEFAULTS = GoldAiRuntimeConfig(
     ny_start_hour=_SHARED_SESSION_HOURS["new_york"]["start_hour"],
     ny_end_hour=_SHARED_SESSION_HOURS["new_york"]["end_hour"],
     max_calls_day=70,
-    max_trades_day=6,
+    max_trades_day=3,
     no_overnight=True,
     scan_interval_s=20.0,
     model="claude-sonnet-4-6",
@@ -114,7 +114,7 @@ DEFAULTS = GoldAiRuntimeConfig(
     use_limit_entry=True,
     pending_entry_timeout_min=30,
     learning_daily_at_ny_end=True,
-    confidence_threshold=60,
+    confidence_threshold=68,
     include_history_in_decisions=False,
     orb_enabled=False,
     orb_range_minutes=20,
@@ -147,7 +147,7 @@ DEFAULTS = GoldAiRuntimeConfig(
 
 def confidence_threshold() -> int:
     """Min confidence (0–100) required to fire a demo/live take."""
-    raw = _env_int("GOLD_AI_CONFIDENCE_THRESHOLD", 60)
+    raw = _env_int("GOLD_AI_CONFIDENCE_THRESHOLD", 68)
     return max(0, min(100, raw))
 
 
@@ -170,7 +170,7 @@ def env_defaults() -> GoldAiRuntimeConfig:
             "GOLD_AI_TRADER_NY_END", _SHARED_SESSION_HOURS["new_york"]["end_hour"]
         ),
         max_calls_day=_env_int("GOLD_AI_TRADER_MAX_CALLS_DAY", 70),
-        max_trades_day=_env_int("GOLD_AI_TRADER_MAX_TRADES_DAY", 6),
+        max_trades_day=_env_int("GOLD_AI_TRADER_MAX_TRADES_DAY", 3),
         no_overnight=_env_bool("GOLD_AI_TRADER_NO_OVERNIGHT", True),
         scan_interval_s=_env_float("GOLD_AI_TRADER_SCAN_INTERVAL_S", 20.0),
         model=os.environ.get("GOLD_AI_TRADER_MODEL", "claude-sonnet-4-6"),

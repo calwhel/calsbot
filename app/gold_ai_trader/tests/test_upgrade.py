@@ -92,5 +92,10 @@ def test_get_setup_stats_empty():
     assert get_setup_stats(_Db()) == []
 
 
-def test_broker_limit_not_supported_by_default():
-    assert broker_limit_supported() is False
+def test_limit_order_helper_defined_in_ctrader_client():
+    from pathlib import Path
+
+    text = Path(__file__).resolve().parents[3] / "app" / "services" / "ctrader_client.py"
+    src = text.read_text(encoding="utf-8")
+    assert "async def place_limit_order_resilient" in src
+    assert "ProtoOAOrderType.LIMIT" in src

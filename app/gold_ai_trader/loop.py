@@ -40,6 +40,7 @@ from app.gold_ai_trader.call_gates import (
     killzone_override_min_confluence,
     candidate_confluence_counts,
     candidate_meets_killzone_override,
+    meets_min_confluence_for_take,
     should_invoke_claude,
     call_stats_today,
 )
@@ -56,7 +57,7 @@ from app.gold_ai_trader.executor import execute_take, execute_live_mirror_take, 
 from app.gold_ai_trader.fire_time_validation import refresh_spot_after_claude
 from app.gold_ai_trader.learning import maybe_run_learning_review, record_outcome_from_execution, get_setup_stats
 from app.gold_ai_trader.orb import build_orb_context, detect_orb_signal
-from app.gold_ai_trader.pending_entry import sync_pending_entries
+from app.gold_ai_trader.pending_entry import sync_pending_entries, pending_status_label
 from app.gold_ai_trader.telegram_notify import (
     maybe_send_daily_summary,
     notify_take_decision,
@@ -729,7 +730,7 @@ async def _maybe_run_orb_strategy(
                         orb_state,
                     )
                 elif exec_id and exec_id < 0:
-                    block_reason = f"entry pending #{-exec_id} (limit/entry-watch)"
+                    block_reason = await run_with_db(pending_status_label, -exec_id)
                     if orb_state is not None:
                         orb_state.trades_taken = int(orb_state.trades_taken or 0) + 1
                         if orb_state.trades_taken >= max(
@@ -1273,7 +1274,18 @@ async def run_gold_ai_trader_loop() -> None:
                 ok_exec, exec_reason = await run_with_db(
                     _check_can_execute_db, cfg, cfg.demo_user_id or 0
                 )
-                if ok_exec and stale_ok:
+                conf_ok, conf_reason = meets_min_confluence_for_take(candidate)
+                if not conf_ok:
+                    block_reason = conf_reason
+                    await run_with_db(
+                        _record_funnel_db,
+                        "confluence_blocked",
+                        setup=candidate.type,
+                        reason=conf_reason,
+                        session=session,
+                        decision_id=row.id,
+                    )
+                if ok_exec and stale_ok and conf_ok:
                     timing_ctx["enqueued_ts"] = _utc_iso_now()
                     exec_id = await _call_with_db_session(
                         execute_take,
@@ -1348,7 +1360,7 @@ async def run_gold_ai_trader_loop() -> None:
                                 error=live_reason,
                             )
                     elif exec_id and exec_id < 0:
-                        block_reason = f"entry pending #{-exec_id} (limit/entry-watch)"
+                        block_reason = await run_with_db(pending_status_label, -exec_id)
                         await run_with_db(
                             _record_funnel_db,
                             "pending_entry",

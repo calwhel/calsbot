@@ -32,7 +32,7 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-READINESS_MIN = _env_int("GOLD_AI_READINESS_MIN", 55)
+READINESS_MIN = _env_int("GOLD_AI_READINESS_MIN", 65)
 SWEEP_MIN_BODY_ATR = _env_float("GOLD_AI_SWEEP_MIN_BODY_ATR", 0.8)
 RECLAIM_BUFFER_ATR = _env_float("GOLD_AI_RECLAIM_BUFFER_ATR", 0.05)
 ZONE_TOLERANCE_ATR = _env_float("GOLD_AI_ZONE_TOLERANCE_ATR", 0.15)
