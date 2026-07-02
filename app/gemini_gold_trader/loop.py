@@ -314,6 +314,8 @@ async def run_gemini_gold_trader_loop() -> None:
         )
         return
 
+    await _preflight_execution_caps(cfg)
+
     can_exec, exec_reason = await run_with_db(
         try_reserve_execution, cfg, cfg.demo_user_id or 0, row.id
     )
@@ -412,6 +414,34 @@ async def _call_with_db_session(async_fn, /, *args, **kwargs):
         await run_in_db_thread(db.close)
 
 
+async def _preflight_execution_caps(cfg) -> None:
+    """Clear phantom OPEN rows and stale reservations before reserving a new slot."""
+    demo_uid = int(getattr(cfg, "demo_user_id", 0) or 0)
+    if demo_uid <= 0:
+        return
+    try:
+        from app.gemini_gold_trader.guardrails import clear_stale_execution_reservations
+        from app.gemini_gold_trader.reconcile import reconcile_orphan_open_executions
+
+        cleared = await run_with_db(clear_stale_execution_reservations)
+        if cleared:
+            logger.info("[gemini-gold] cleared %s stale execution reservation(s)", cleared)
+        orphan_result = await _call_with_db_session(
+            reconcile_orphan_open_executions,
+            cfg=cfg,
+            user_id=demo_uid,
+        )
+        closed = (orphan_result or {}).get("orphans_closed") or []
+        if closed:
+            logger.warning(
+                "[gemini-gold] preflight cancelled %s phantom OPEN row(s): %s",
+                len(closed),
+                [c.get("execution_id") for c in closed],
+            )
+    except Exception as exc:
+        logger.warning("[gemini-gold] preflight cap cleanup failed: %s", exc)
+
+
 async def _sync_closed_outcomes_pass() -> None:
     """Broker close reconcile + orphan OPEN cleanup + outcome sync every loop cycle."""
 
@@ -423,6 +453,18 @@ async def _sync_closed_outcomes_pass() -> None:
     try:
         demo_uid, cfg = await run_with_db(_load_demo_uid)
         if demo_uid > 0:
+            try:
+                from app.gemini_gold_trader.guardrails import clear_stale_execution_reservations
+
+                cleared = await run_with_db(clear_stale_execution_reservations)
+                if cleared:
+                    logger.info(
+                        "[gemini-gold] cleared %s stale execution reservation(s)",
+                        cleared,
+                    )
+            except Exception as exc:
+                logger.warning("[gemini-gold] stale reservation cleanup failed: %s", exc)
+
             try:
                 from app.gemini_gold_trader.reconcile import reconcile_orphan_open_executions
 

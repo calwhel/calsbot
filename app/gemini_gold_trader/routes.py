@@ -272,8 +272,10 @@ async def api_status(uid: str = Query(...)):
         open_execs: List[Dict[str, Any]] = []
         open_slots_used = 0
         if trader_uid:
-            open_execs = list_open_executions(db, int(trader_uid))
-            open_slots_used = effective_open_slots_used(db, int(trader_uid))
+            open_execs = list_open_executions(
+                db, int(trader_uid), demo_ctid=cfg.demo_ctrader_account_id
+            )
+            open_slots_used = effective_open_slots_used(db, int(trader_uid), cfg)
 
         return {
             "ok": True,
@@ -427,7 +429,7 @@ async def api_reconcile(uid: str = Query(...), dry_run: bool = Query(False)):
             "open_executions_before": before,
             "open_executions_after": after,
             "orphan_reconcile": orphan_result,
-            "open_slots_used": effective_open_slots_used(db, int(trader_uid)),
+            "open_slots_used": effective_open_slots_used(db, int(trader_uid), cfg),
         }
     finally:
         db.close()

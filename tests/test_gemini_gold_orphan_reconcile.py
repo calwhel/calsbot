@@ -43,7 +43,7 @@ def test_cancels_open_row_without_broker_position_id():
     assert len(closed) == 1
     assert ex.outcome == "CANCELLED"
     assert ex.closed_at is not None
-    assert "no broker position_id" in (ex.notes or "")
+    assert "broker flat on demo ctid" in (ex.notes or "")
     db.commit.assert_called()
 
 
@@ -80,7 +80,27 @@ def test_cancels_row_when_broker_position_missing():
 
     assert len(closed) == 1
     assert ex.outcome == "CANCELLED"
-    assert "broker position 555002 absent" in (ex.notes or "")
+    assert "broker flat on demo ctid" in (ex.notes or "")
+
+
+def test_cancels_all_open_rows_when_broker_flat():
+    db = MagicMock()
+    ex1 = _make_ex(id=105, ctrader_position_id="555003")
+    ex2 = _make_ex(id=106, ctrader_account_id="47516246", ctrader_position_id="555004")
+    db.query.return_value.filter.return_value.order_by.return_value.all.return_value = [ex1, ex2]
+
+    before, closed = reconcile_orphan_open_executions_sync(
+        db,
+        user_id=42,
+        demo_ctid="47664720",
+        broker_open_position_ids=set(),
+        dry_run=False,
+    )
+
+    assert len(before) == 2
+    assert len(closed) == 2
+    assert ex1.outcome == "CANCELLED"
+    assert ex2.outcome == "CANCELLED"
 
 
 def test_dry_run_lists_without_mutating():

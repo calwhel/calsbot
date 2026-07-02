@@ -105,10 +105,26 @@ def _migrate_legacy_demo_lot_size(db, row: Optional[GeminiGoldConfig] = None) ->
         logger.info("[gemini-gold] migrated demo_lot_size 0.1 → 0.01")
 
 
+def _migrate_legacy_confidence_threshold(db, row: Optional[GeminiGoldConfig] = None) -> None:
+    if row is None:
+        row = db.query(GeminiGoldConfig).filter(GeminiGoldConfig.id == 1).first()
+    if not row:
+        return
+    try:
+        threshold = int(row.confidence_threshold or 0)
+    except (TypeError, ValueError):
+        return
+    if threshold == 60:
+        row.confidence_threshold = 90
+        db.commit()
+        logger.info("[gemini-gold] migrated confidence_threshold 60 → 90")
+
+
 def seed_config_if_missing(db) -> GeminiGoldConfig:
     row = db.query(GeminiGoldConfig).filter(GeminiGoldConfig.id == 1).first()
     if row:
         _migrate_legacy_demo_lot_size(db, row=row)
+        _migrate_legacy_confidence_threshold(db, row=row)
         return row
     d = env_defaults()
     row = GeminiGoldConfig(

@@ -10,10 +10,11 @@ from app.gemini_gold_trader.config import GeminiGoldRuntimeConfig
 logger = logging.getLogger(__name__)
 
 
-def _gemini_open_query(db, user_id: int):
+def _gemini_open_query(db, user_id: int, demo_ctid: Optional[str] = None):
     from app.strategy_models import StrategyExecution
+    from sqlalchemy import or_
 
-    return (
+    q = (
         db.query(StrategyExecution)
         .filter(
             StrategyExecution.user_id == user_id,
@@ -21,13 +22,26 @@ def _gemini_open_query(db, user_id: int):
             StrategyExecution.outcome == "OPEN",
             StrategyExecution.notes.like("%gemini_gold_trader%"),
         )
-        .order_by(StrategyExecution.fired_at.desc())
     )
+    if demo_ctid:
+        ctid = str(demo_ctid).strip()
+        q = q.filter(
+            or_(
+                StrategyExecution.ctrader_account_id == ctid,
+                StrategyExecution.ctrader_account_id.is_(None),
+                StrategyExecution.ctrader_account_id == "",
+            )
+        )
+    return q.order_by(StrategyExecution.fired_at.desc())
 
 
-def list_open_executions(db, user_id: int) -> List[Dict[str, Any]]:
+def list_open_executions(
+    db,
+    user_id: int,
+    demo_ctid: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """OPEN gemini_gold StrategyExecution rows (used for cap diagnostics)."""
-    rows = _gemini_open_query(db, user_id).all()
+    rows = _gemini_open_query(db, user_id, demo_ctid=demo_ctid).all()
     out: List[Dict[str, Any]] = []
     for ex in rows:
         out.append(_execution_snapshot(ex))
@@ -102,10 +116,27 @@ def reconcile_orphan_open_executions_sync(
 
     ctid_str = str(demo_ctid or "").strip()
 
-    for ex in rows:
-        if ctid_str and ex.ctrader_account_id and str(ex.ctrader_account_id) != ctid_str:
-            continue
+    # Broker account is flat — every gemini OPEN row is a phantom cap blocker.
+    if open_ids is not None and len(open_ids) == 0 and rows:
+        for ex in rows:
+            if dry_run:
+                closed.append(
+                    {
+                        **_execution_snapshot(ex),
+                        "cancel_reason": f"broker flat on demo ctid {ctid_str or '?'}",
+                    }
+                )
+                continue
+            closed.append(
+                _cancel_orphan_execution(
+                    db,
+                    ex,
+                    reason=f"broker flat on demo ctid {ctid_str or '?'}",
+                )
+            )
+        return before, closed
 
+    for ex in rows:
         pos_id = _ctrader_position_id_from_execution(ex)
 
         if pos_id is None:
