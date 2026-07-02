@@ -174,8 +174,8 @@ def test_check_can_execute_blocks_second_open_slot_from_reservation(
     cfg = _cfg()
     ok, reason = check_can_execute(db_session, cfg, 42)
     assert ok is False
-    assert reason == "max_open_position"
-    assert effective_open_slots_used(db_session, 42) == 1
+    assert reason.startswith("blocked: max_open_position")
+    assert effective_open_slots_used(db_session, 42, cfg) == 1
 
 
 @patch("app.gemini_gold_trader.guardrails.open_position_count", return_value=0)
@@ -230,7 +230,7 @@ def test_try_reserve_execution_blocks_second_concurrent_take(_mock_open, db_sess
     cfg = _cfg()
     ok, reason = try_reserve_execution(db_session, cfg, 42, 2)
     assert ok is False
-    assert reason == "max_open_position"
+    assert reason.startswith("blocked: max_open_position")
 
 
 @patch("app.gemini_gold_trader.guardrails.open_position_count", return_value=0)
@@ -252,5 +252,5 @@ def test_check_can_execute_blocks_when_broker_position_open(_mock_open, db_sessi
     cfg = _cfg()
     ok, reason = check_can_execute(db_session, cfg, 42)
     assert ok is False
-    assert reason == "max_open_position"
+    assert reason.startswith("blocked: max_open_position")
     _mock_open.assert_called()

@@ -160,7 +160,12 @@ def cost_today_usd(db) -> float:
     return float(val or 0.0)
 
 
-def open_position_count(db, user_id: int) -> int:
+def open_position_count(
+    db,
+    user_id: int,
+    *,
+    demo_ctid: Optional[str] = None,
+) -> int:
     from app.strategy_models import StrategyExecution
 
     q = db.query(func.count(StrategyExecution.id)).filter(
@@ -168,12 +173,79 @@ def open_position_count(db, user_id: int) -> int:
         StrategyExecution.symbol == "XAUUSD",
         StrategyExecution.outcome == "OPEN",
     )
-    return int(_gemini_execution_filter(q).scalar() or 0)
+    q = _gemini_execution_filter(q)
+    if demo_ctid:
+        ctid = str(demo_ctid).strip()
+        q = q.filter(
+            or_(
+                StrategyExecution.ctrader_account_id == ctid,
+                StrategyExecution.ctrader_account_id.is_(None),
+                StrategyExecution.ctrader_account_id == "",
+            )
+        )
+    return int(q.scalar() or 0)
 
 
-def effective_open_slots_used(db, user_id: int) -> int:
+def clear_stale_execution_reservations(db) -> int:
+    """Drop expired in-flight slots so they stop counting toward caps."""
+    cutoff = _in_flight_cutoff()
+    rows = (
+        db.query(GeminiGoldDecision)
+        .filter(
+            GeminiGoldDecision.execution_reserved_at.isnot(None),
+            GeminiGoldDecision.executed.is_(False),
+            GeminiGoldDecision.execution_reserved_at < cutoff,
+        )
+        .all()
+    )
+    if not rows:
+        return 0
+    for row in rows:
+        row.execution_reserved_at = None
+    db.commit()
+    return len(rows)
+
+
+def describe_open_cap_block(
+    db,
+    user_id: int,
+    cfg: GeminiGoldRuntimeConfig,
+) -> str:
+    """Human-readable cap block for Telegram/logs."""
+    from app.gemini_gold_trader.reconcile import list_open_executions
+
+    demo_ctid = str(cfg.demo_ctrader_account_id or "").strip() or None
+    opens = open_position_count(db, user_id, demo_ctid=demo_ctid)
+    inflight = in_flight_execution_count(db)
+    ids: list[str] = []
+    try:
+        rows = list_open_executions(db, user_id, demo_ctid=demo_ctid)
+        ids = [str(r.get("execution_id")) for r in rows[:3] if r.get("execution_id")]
+    except Exception:
+        rows = []
+    detail = f"{opens} open row(s), {inflight} in-flight"
+    if ids:
+        detail += f" (exec #{', #'.join(ids)}"
+        if len(rows) > 3:
+            detail += f", +{len(rows) - 3} more"
+        detail += ")"
+    return f"blocked: max_open_position — {detail}"
+
+
+def effective_open_slots_used(
+    db,
+    user_id: int,
+    cfg: Optional[GeminiGoldRuntimeConfig] = None,
+) -> int:
     """Broker-open positions plus in-flight reservations."""
-    return int(open_position_count(db, user_id)) + int(in_flight_execution_count(db))
+    demo_ctid = (
+        str(cfg.demo_ctrader_account_id).strip()
+        if cfg and cfg.demo_ctrader_account_id
+        else None
+    )
+    return int(open_position_count(db, user_id, demo_ctid=demo_ctid)) + int(
+        in_flight_execution_count(db)
+    )
 
 
 def check_can_call_gemini(db, cfg: GeminiGoldRuntimeConfig) -> Tuple[bool, str]:
@@ -197,8 +269,8 @@ def check_can_execute(db, cfg: GeminiGoldRuntimeConfig, user_id: int) -> Tuple[b
         return False, "no_demo_user"
     if trades_today_effective(db) >= cfg.max_trades_day:
         return False, "max_trades_day"
-    if effective_open_slots_used(db, user_id) >= 1:
-        return False, "max_open_position"
+    if effective_open_slots_used(db, user_id, cfg) >= 1:
+        return False, describe_open_cap_block(db, user_id, cfg)
     gap_min = max(0, int(cfg.min_trade_gap_min or 0))
     if gap_min > 0:
         since = minutes_since_last_executed_trade(db)

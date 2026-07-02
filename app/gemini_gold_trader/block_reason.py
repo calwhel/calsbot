@@ -21,6 +21,8 @@ def format_block_reason(reason: Optional[str]) -> Optional[str]:
     if not reason:
         return reason
     raw = str(reason).strip()
+    if raw.startswith("blocked: max_open_position"):
+        return raw
     if raw.startswith("fire_time:"):
         raw = raw[len("fire_time:") :]
     if raw in _LABELS:

@@ -48,7 +48,8 @@ class GeminiGoldReconcileSourceTests(unittest.TestCase):
         self.assertIn("reconcile_orphan_open_executions", ROUTES)
         self.assertIn("orphan_reconcile", ROUTES)
 
-    def test_loop_runs_orphan_reconcile(self):
+    def test_loop_runs_preflight_cap_cleanup(self):
+        self.assertIn("_preflight_execution_caps", LOOP)
         self.assertIn("reconcile_orphan_open_executions", LOOP)
 
     def test_close_notifications_not_gated_by_telegram_for_outcome_sync(self):
