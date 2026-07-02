@@ -17,6 +17,15 @@ def _dir_norm(d: str) -> Optional[str]:
     return None
 
 
+def _platform_pips(distance: float) -> float:
+    try:
+        from app.services.pip_units import platform_pips_from_price_delta
+
+        return float(platform_pips_from_price_delta("XAUUSD", distance))
+    except Exception:
+        return 0.0
+
+
 def validate_take_decision(
     decision: Dict[str, Any],
     *,
@@ -52,15 +61,27 @@ def validate_take_decision(
             return False, "validator:short_price_order", d
 
     risk_dist = abs(entry - sl)
-    if cfg.min_sl_pips > 0 and risk_dist > 0:
-        try:
-            from app.services.pip_units import platform_pips_from_price_delta
+    reward_dist = abs(tp - entry)
+    sl_pips = _platform_pips(risk_dist) if risk_dist > 0 else 0.0
 
-            sl_pips = float(platform_pips_from_price_delta("XAUUSD", risk_dist))
-        except Exception:
-            sl_pips = 0.0
-        if sl_pips > 0 and sl_pips < cfg.min_sl_pips:
-            return False, f"validator:sl_too_tight({sl_pips:.1f}<{cfg.min_sl_pips:.1f}pips)", d
+    if cfg.min_sl_pips > 0 and sl_pips > 0 and sl_pips < cfg.min_sl_pips:
+        return False, f"validator:sl_too_tight({sl_pips:.1f}<{cfg.min_sl_pips:.1f}pips)", d
+
+    if cfg.max_sl_pips > 0 and sl_pips > cfg.max_sl_pips:
+        return (
+            False,
+            f"validator:sl_too_wide({sl_pips:.1f}>{cfg.max_sl_pips:.1f}pips)",
+            d,
+        )
+
+    if risk_dist > 0 and reward_dist > 0:
+        rr = reward_dist / risk_dist
+        min_rr = max(1.0, float(cfg.min_rr or 1.0))
+        max_rr = min(2.0, max(min_rr, float(cfg.max_rr or 2.0)))
+        if rr < min_rr - 1e-9:
+            return False, f"validator:rr_too_low({rr:.2f}<{min_rr:.1f})", d
+        if rr > max_rr + 1e-9:
+            return False, f"validator:rr_too_high({rr:.2f}>{max_rr:.1f})", d
 
     if spot > 0 and cfg.entry_max_drift_pct > 0:
         drift_pct = abs(spot - entry) / spot * 100.0

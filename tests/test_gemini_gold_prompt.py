@@ -4,9 +4,17 @@ from __future__ import annotations
 from app.gemini_gold_trader.gemini import _build_prompt
 
 
+def test_build_prompt_includes_day_trade_risk_rules():
+    p = _build_prompt(session="london", spot=3342.5, bars_15m=80, bars_1h=60)
+    assert "DAY-TRADE RISK RULES" in p
+    assert "30 platform pips" in p
+    assert "150 platform pips" in p
+    assert "1:1 to 2:1" in p
+
+
 def test_build_prompt_includes_persona_and_price_anchoring():
     p = _build_prompt(session="london", spot=3342.5, bars_15m=80, bars_1h=60)
-    assert "experienced discretionary XAUUSD day trader" in p
+    assert "experienced discretionary XAUUSD INTRADAY day trader" in p
     assert "PRICE ANCHORING" in p
     assert "risk-first" in p
     assert "2000-3500" not in p
