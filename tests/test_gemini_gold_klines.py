@@ -103,5 +103,5 @@ def test_get_chart_klines_falls_back_to_postgres_snapshot():
 def test_klines_ready_requires_min_bars():
     from app.gemini_gold_trader.klines import klines_ready
 
-    assert klines_ready(_bars(25), _bars(25)) is True
-    assert klines_ready(_bars(5), _bars(25)) is False
+    assert klines_ready(_bars(25), _bars(25), _bars(25), _bars(25)) is True
+    assert klines_ready(_bars(5), _bars(25), _bars(25), _bars(25)) is False

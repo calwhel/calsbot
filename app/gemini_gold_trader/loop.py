@@ -155,18 +155,30 @@ async def run_gemini_gold_trader_loop() -> None:
             await maybe_notify_call_cap_reached()
         return
 
-    bars_15m, meta_15m = await get_chart_klines(
-        "15m", cfg.chart_bars, user_id=cfg.demo_user_id,
+    (
+        (bars_1m, meta_1m),
+        (bars_5m, meta_5m),
+        (bars_15m, meta_15m),
+        (bars_1h, meta_1h),
+    ) = await asyncio.gather(
+        get_chart_klines("1m", cfg.chart_bars_1m, user_id=cfg.demo_user_id),
+        get_chart_klines("5m", cfg.chart_bars, user_id=cfg.demo_user_id),
+        get_chart_klines("15m", cfg.chart_bars, user_id=cfg.demo_user_id),
+        get_chart_klines("1h", cfg.chart_bars, user_id=cfg.demo_user_id),
     )
-    bars_1h, meta_1h = await get_chart_klines(
-        "1h", cfg.chart_bars, user_id=cfg.demo_user_id,
-    )
-    chart_meta = {"15m": meta_15m, "1h": meta_1h}
+    chart_meta = {"1m": meta_1m, "5m": meta_5m, "15m": meta_15m, "1h": meta_1h}
 
-    if not klines_ready(bars_15m, bars_1h):
+    if not klines_ready(bars_1m, bars_5m, bars_15m, bars_1h):
         logger.info(
             "[gemini-gold] skipping scan — stale/missing klines "
-            "(15m=%s/%s bars source=%s, 1h=%s/%s bars source=%s)",
+            "(1m=%s/%s source=%s, 5m=%s/%s source=%s, "
+            "15m=%s/%s source=%s, 1h=%s/%s source=%s)",
+            len(bars_1m),
+            meta_1m.get("status"),
+            meta_1m.get("source"),
+            len(bars_5m),
+            meta_5m.get("status"),
+            meta_5m.get("source"),
             len(bars_15m),
             meta_15m.get("status"),
             meta_15m.get("source"),
@@ -177,7 +189,7 @@ async def run_gemini_gold_trader_loop() -> None:
         runtime_state.note_dormant("stale_klines")
         return
 
-    spot = float(bars_15m[-1][4])
+    spot = float(bars_5m[-1][4])
     try:
         from app.services.tradfi_prices import get_price_fresh
 
@@ -189,19 +201,33 @@ async def run_gemini_gold_trader_loop() -> None:
     except Exception:
         pass
 
-    png_15m = await asyncio.to_thread(
-        render_candlestick_chart,
-        bars_15m,
-        timeframe="15m",
-        session=session,
+    png_1m, png_5m, png_15m, png_1h = await asyncio.gather(
+        asyncio.to_thread(
+            render_candlestick_chart,
+            bars_1m,
+            timeframe="1m",
+            session=session,
+        ),
+        asyncio.to_thread(
+            render_candlestick_chart,
+            bars_5m,
+            timeframe="5m",
+            session=session,
+        ),
+        asyncio.to_thread(
+            render_candlestick_chart,
+            bars_15m,
+            timeframe="15m",
+            session=session,
+        ),
+        asyncio.to_thread(
+            render_candlestick_chart,
+            bars_1h,
+            timeframe="1h",
+            session=session,
+        ),
     )
-    png_1h = await asyncio.to_thread(
-        render_candlestick_chart,
-        bars_1h,
-        timeframe="1h",
-        session=session,
-    )
-    if not png_15m or not png_1h:
+    if not png_1m or not png_5m or not png_15m or not png_1h:
         logger.warning("[gemini-gold] chart render failed")
         runtime_state.note_error("chart_render_failed")
         return
@@ -210,8 +236,12 @@ async def run_gemini_gold_trader_loop() -> None:
         cfg=cfg,
         session=session,
         spot=spot,
+        png_1m=png_1m,
+        png_5m=png_5m,
         png_15m=png_15m,
         png_1h=png_1h,
+        bars_1m=len(bars_1m),
+        bars_5m=len(bars_5m),
         bars_15m=len(bars_15m),
         bars_1h=len(bars_1h),
     )

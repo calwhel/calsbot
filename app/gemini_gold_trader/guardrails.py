@@ -33,6 +33,7 @@ def merge_config(db_row: GeminiGoldConfig, env: GeminiGoldRuntimeConfig) -> Gemi
         demo_lot_size=float(db_row.demo_lot_size or env.demo_lot_size),
         confidence_threshold=int(db_row.confidence_threshold or env.confidence_threshold),
         chart_bars=env.chart_bars,
+        chart_bars_1m=env.chart_bars_1m,
         min_sl_pips=env.min_sl_pips,
         max_sl_pips=env.max_sl_pips,
         min_rr=env.min_rr,

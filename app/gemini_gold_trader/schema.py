@@ -115,9 +115,14 @@ def _migrate_legacy_confidence_threshold(db, row: Optional[GeminiGoldConfig] = N
     except (TypeError, ValueError):
         return
     if threshold == 60:
-        row.confidence_threshold = 90
+        row.confidence_threshold = 85
         db.commit()
-        logger.info("[gemini-gold] migrated confidence_threshold 60 → 90")
+        logger.info("[gemini-gold] migrated confidence_threshold 60 → 85")
+        return
+    if threshold == 90:
+        row.confidence_threshold = 85
+        db.commit()
+        logger.info("[gemini-gold] migrated confidence_threshold 90 → 85")
 
 
 def seed_config_if_missing(db) -> GeminiGoldConfig:
