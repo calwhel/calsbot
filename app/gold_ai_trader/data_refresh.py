@@ -8,7 +8,10 @@ import time
 from typing import Optional
 
 from app.gold_ai_trader.config import ASSET_CLASS, SYMBOL
-from app.gold_ai_trader.klines import fetch_gold_scoring_k5, is_ctrader_kline_source, synthesize_gold_scoring_k5
+from app.gold_ai_trader.klines import (
+    fetch_gold_scoring_k5,
+    is_ctrader_kline_source,
+)
 from app.services.kline_staleness import newest_bar_age_s
 from app.services.tradfi_prices import (
     clear_metal_kline_cache,
@@ -51,9 +54,48 @@ async def _maybe_restart_ctrader_builder(reason: str) -> bool:
     return True
 
 
+async def _hard_refresh_scoring_k5(
+    *,
+    user_id: Optional[int] = None,
+    reason: str,
+) -> tuple[list, str, float, bool]:
+    """Clear caches, optionally restart cTrader builder, refetch scoring 5m."""
+    cleared = clear_metal_kline_cache([SYMBOL])
+    block_reason = ""
+    restarted = False
+    try:
+        from app.services.ctrader_price_feed import (
+            sweep_stale_klines,
+            trendbar_fetch_blocked_reason,
+        )
+
+        block_reason = trendbar_fetch_blocked_reason() or ""
+        restarted = await _maybe_restart_ctrader_builder(reason)
+        if restarted:
+            await sweep_stale_klines(symbols=[SYMBOL], timeframes=["5m", "15m", "1h"])
+    except Exception as exc:
+        logger.warning("[gold-ai] ctrader builder restart failed: %s", exc)
+
+    k5, src = await fetch_gold_scoring_k5(user_id=user_id)
+    new_age = newest_bar_age_s(k5)
+    logger.warning(
+        "[gold-ai] 5m hard refresh (%s); restarted=%s trendbar_block=%s "
+        "cleared=%s bar_age=%.0fs source=%s bars=%s",
+        reason,
+        restarted,
+        block_reason or "none",
+        cleared,
+        new_age if new_age != float("inf") else -1.0,
+        src or "unknown",
+        len(k5),
+    )
+    return k5, src or "", float(cleared), restarted
+
+
 async def refresh_gold_scoring_klines(*, user_id: Optional[int] = None) -> dict:
     """
-    Sweep stale metal caches and force-refresh 5m when last bar is too old.
+    Sweep stale metal caches and force-refresh 5m when last bar is too old
+    or when scoring klines are on a non-cTrader fallback provider.
 
     Returns a small summary dict for logging/diagnostics.
     """
@@ -64,7 +106,10 @@ async def refresh_gold_scoring_klines(*, user_id: Optional[int] = None) -> dict:
         "refreshed_5m": False,
         "bar_age_before": None,
         "bar_age_after": None,
+        "kline_source_before": None,
+        "kline_source_after": None,
         "ctrader_restarted": False,
+        "fallback_recovery": False,
     }
 
     try:
@@ -86,63 +131,53 @@ async def refresh_gold_scoring_klines(*, user_id: Optional[int] = None) -> dict:
     except Exception as exc:
         logger.debug("[gold-ai] kline sweep: %s", exc)
 
-    k5, _src = await fetch_gold_scoring_k5(user_id=user_id)
+    k5, src = await fetch_gold_scoring_k5(user_id=user_id)
     bar_age = newest_bar_age_s(k5)
     summary["bar_age_before"] = round(bar_age, 1) if bar_age != float("inf") else None
+    summary["kline_source_before"] = src or None
 
-    if bar_age <= _refresh_age_s():
+    stale = bar_age > _refresh_age_s()
+    fallback = not is_ctrader_kline_source(src)
+    if not stale and not fallback:
+        summary["kline_source_after"] = src or None
         return summary
 
-    cleared = clear_metal_kline_cache([SYMBOL])
-    summary["cleared"] = cleared
-    logger.info(
-        "[gold-ai] 5m klines stale (bar_age=%.0fs > %.0fs) — cache cleared (%s keys)",
-        bar_age,
-        _refresh_age_s(),
-        cleared,
-    )
+    if fallback:
+        summary["fallback_recovery"] = True
+        logger.warning(
+            "[gold-ai] 5m on fallback source=%s (bar_age=%.0fs) — forcing cTrader recovery",
+            src or "missing",
+            bar_age if bar_age != float("inf") else -1.0,
+        )
+    else:
+        logger.info(
+            "[gold-ai] 5m klines stale (bar_age=%.0fs > %.0fs) — cache clearing",
+            bar_age,
+            _refresh_age_s(),
+        )
 
-    k5, src = await fetch_gold_scoring_k5(user_id=user_id)
+    k5, src, cleared, restarted = await _hard_refresh_scoring_k5(
+        user_id=user_id,
+        reason="gold_ai_fallback_klines" if fallback else "gold_ai_5m_stale_refresh",
+    )
+    summary["cleared"] = int(cleared)
     summary["refreshed_5m"] = True
+    summary["ctrader_restarted"] = restarted
     new_age = newest_bar_age_s(k5)
     summary["bar_age_after"] = round(new_age, 1) if new_age != float("inf") else None
-    logger.info(
-        "[gold-ai] 5m refresh done bar_age=%.0fs→%.0fs source=%s bars=%s",
-        bar_age,
-        new_age if new_age != float("inf") else -1,
-        src or "unknown",
-        len(k5),
-    )
-    if new_age > _refresh_age_s():
-        block_reason = ""
-        try:
-            from app.services.ctrader_price_feed import (
-                sweep_stale_klines,
-                trendbar_fetch_blocked_reason,
-            )
+    summary["kline_source_after"] = src or None
 
-            block_reason = trendbar_fetch_blocked_reason() or ""
-            restarted = await _maybe_restart_ctrader_builder("gold_ai_5m_stale_refresh")
-            summary["ctrader_restarted"] = restarted
-            if restarted:
-                await sweep_stale_klines(symbols=[SYMBOL], timeframes=["5m", "15m", "1h"])
-            clear_metal_kline_cache([SYMBOL])
-            k5, src = await fetch_gold_scoring_k5(user_id=user_id)
-            new_age = newest_bar_age_s(k5)
-            summary["bar_age_after"] = (
-                round(new_age, 1) if new_age != float("inf") else None
-            )
-            logger.warning(
-                "[gold-ai] 5m stale persisted; %s cTrader builder (trendbar_block=%s) "
-                "→ bar_age=%.0fs source=%s bars=%s",
-                "restarted" if restarted else "restart-throttled",
-                block_reason or "none",
-                new_age if new_age != float("inf") else -1.0,
-                src or "unknown",
-                len(k5),
-            )
-        except Exception as exc:
-            logger.warning("[gold-ai] 5m stale hard refresh failed: %s", exc)
+    if not is_ctrader_kline_source(src) and fallback:
+        k5, src, cleared, restarted = await _hard_refresh_scoring_k5(
+            user_id=user_id,
+            reason="gold_ai_fallback_persisted",
+        )
+        summary["cleared"] += int(cleared)
+        summary["ctrader_restarted"] = summary["ctrader_restarted"] or restarted
+        new_age = newest_bar_age_s(k5)
+        summary["bar_age_after"] = round(new_age, 1) if new_age != float("inf") else None
+        summary["kline_source_after"] = src or None
+
     if not is_ctrader_kline_source(src):
         logger.warning(
             "[gold-ai] 5m refresh still non-cTrader source=%s — data gate may block",

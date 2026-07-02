@@ -102,7 +102,7 @@ class TestSynthesizeGoldScoringK5:
 
 class TestDataRefresh:
     @pytest.mark.asyncio
-    async def test_refresh_when_fresh(self):
+    async def test_refresh_when_fresh_ctrader(self):
         import time
 
         fresh_ts = int(time.time() * 1000)
@@ -116,14 +116,44 @@ class TestDataRefresh:
             new_callable=AsyncMock,
             return_value=0,
         ), patch(
-            "app.gold_ai_trader.data_refresh.get_klines",
+            "app.gold_ai_trader.data_refresh.fetch_gold_scoring_k5",
             new_callable=AsyncMock,
-            return_value=k5,
+            return_value=(k5, "ctrader"),
         ):
             summary = await refresh_gold_scoring_klines()
         assert summary["refreshed_5m"] is False
         assert summary["cleared"] == 0
-        assert summary["ctrader_swept"] == 0
+        assert summary["fallback_recovery"] is False
+
+    @pytest.mark.asyncio
+    async def test_refresh_forces_recovery_on_fallback_even_when_fresh(self):
+        import time
+
+        fresh_ts = int(time.time() * 1000)
+        k5_coinbase = [[fresh_ts, 1, 2, 0.5, 1.5, 10.0]] * 25
+        k5_ctrader = [[fresh_ts, 1, 2, 0.5, 1.5, 10.0]] * 25
+        with patch(
+            "app.gold_ai_trader.data_refresh.sweep_stale_metal_klines",
+            new_callable=AsyncMock,
+            return_value=0,
+        ), patch(
+            "app.services.ctrader_price_feed.sweep_stale_klines",
+            new_callable=AsyncMock,
+            return_value=0,
+        ), patch(
+            "app.gold_ai_trader.data_refresh.fetch_gold_scoring_k5",
+            new_callable=AsyncMock,
+            side_effect=[(k5_coinbase, "coinbase"), (k5_ctrader, "ctrader")],
+        ), patch(
+            "app.gold_ai_trader.data_refresh._hard_refresh_scoring_k5",
+            new_callable=AsyncMock,
+            return_value=(k5_ctrader, "ctrader", 2.0, True),
+        ):
+            summary = await refresh_gold_scoring_klines()
+        assert summary["fallback_recovery"] is True
+        assert summary["refreshed_5m"] is True
+        assert summary["kline_source_before"] == "coinbase"
+        assert summary["kline_source_after"] == "ctrader"
 
     @pytest.mark.asyncio
     async def test_refresh_clears_when_stale(self):
@@ -140,15 +170,13 @@ class TestDataRefresh:
             new_callable=AsyncMock,
             return_value=2,
         ), patch(
-            "app.gold_ai_trader.data_refresh.clear_metal_kline_cache",
-            return_value=3,
-        ), patch(
-            "app.gold_ai_trader.data_refresh.get_klines",
+            "app.gold_ai_trader.data_refresh.fetch_gold_scoring_k5",
             new_callable=AsyncMock,
-            side_effect=[k5_stale, k5_fresh],
+            side_effect=[(k5_stale, "ctrader"), (k5_fresh, "ctrader")],
         ), patch(
-            "app.gold_ai_trader.data_refresh.get_metal_kline_source",
-            return_value="ctrader",
+            "app.gold_ai_trader.data_refresh._hard_refresh_scoring_k5",
+            new_callable=AsyncMock,
+            return_value=(k5_fresh, "ctrader", 3.0, True),
         ):
             summary = await refresh_gold_scoring_klines()
         assert summary["swept"] == 1

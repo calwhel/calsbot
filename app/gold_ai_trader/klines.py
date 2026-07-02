@@ -75,6 +75,34 @@ def _scoring_k5_usable(rows: List[list]) -> bool:
     return len(rows) >= _MIN_SCORING_BARS and newest_bar_age_s(rows) <= stale_limit_s(_SCORING_TF)
 
 
+async def _fetch_ctrader_scoring_k5_direct(
+    *,
+    user_id: Optional[int] = None,
+) -> Tuple[List[list], str]:
+    """Bypass tradfi metal cache and hit cTrader trendbars directly."""
+    try:
+        from app.services import ctrader_price_feed as ctf
+
+        block = ctf.trendbar_fetch_blocked_reason()
+        if block:
+            logger.debug("[gold-ai] direct ctrader 5m skipped: %s", block)
+            return [], ""
+        ct_rows = await ctf.get_klines(
+            SYMBOL,
+            ASSET_CLASS,
+            _SCORING_TF,
+            _GOLD_SCORING_K5_LIMIT,
+            user_id=user_id,
+        )
+        ct_rows = synthesize_gold_scoring_k5(ct_rows or [])
+        if _scoring_k5_usable(ct_rows):
+            label = "ctrader-user" if user_id else "ctrader"
+            return ct_rows, label
+    except Exception as exc:
+        logger.debug("[gold-ai] direct ctrader 5m failed: %s", exc)
+    return [], ""
+
+
 async def fetch_gold_scoring_k5(*, user_id: Optional[int] = None) -> Tuple[List[list], str]:
     """
     Scoring 5m bars with cTrader provenance — tradfi chain then postgres snapshot.
@@ -94,6 +122,16 @@ async def fetch_gold_scoring_k5(*, user_id: Optional[int] = None) -> Tuple[List[
 
     if is_ctrader_kline_source(src) and _scoring_k5_usable(rows):
         return rows, src
+
+    if not is_ctrader_kline_source(src):
+        ct_rows, ct_src = await _fetch_ctrader_scoring_k5_direct(user_id=user_id)
+        if ct_rows:
+            logger.info(
+                "[gold-ai] scoring 5m direct ctrader recovered (tradfi had %s, %d bars)",
+                src or "missing",
+                len(rows),
+            )
+            return ct_rows, ct_src
 
     from app.services.kline_snapshot_store import get_klines as snap_get
 
