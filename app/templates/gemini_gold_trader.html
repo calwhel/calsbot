@@ -147,7 +147,7 @@
         </div>
         <div>
           <label for="confidence-threshold">Min confidence %</label>
-          <input id="confidence-threshold" type="number" min="50" max="99" step="1" value="90"/>
+          <input id="confidence-threshold" type="number" min="50" max="99" step="1" value="85"/>
         </div>
       </div>
       <button class="btn btn-primary" id="btn-save-size" style="width:100%;margin-top:.65rem">Save size & limits</button>
@@ -276,7 +276,7 @@ function renderDemoPicker(j) {
   const cfg = j.config || {};
   document.getElementById('demo-lot-size').value = cfg.demo_lot_size ?? 0.01;
   document.getElementById('demo-max-trades').value = cfg.max_trades_day ?? 4;
-  document.getElementById('confidence-threshold').value = cfg.confidence_threshold ?? 90;
+  document.getElementById('confidence-threshold').value = cfg.confidence_threshold ?? 85;
 }
 
 function renderFeed(j) {
@@ -390,7 +390,7 @@ document.getElementById('btn-save-size').onclick = async () => {
   const body = {
     demo_lot_size: +document.getElementById('demo-lot-size').value || 0.01,
     max_trades_day: +document.getElementById('demo-max-trades').value || 4,
-    confidence_threshold: +document.getElementById('confidence-threshold').value || 90,
+    confidence_threshold: +document.getElementById('confidence-threshold').value || 85,
   };
   await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
     method: 'POST', body: JSON.stringify(body),
