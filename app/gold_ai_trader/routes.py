@@ -851,6 +851,33 @@ async def api_disconnect_live(uid: str = Query(...)):
         db.close()
 
 
+@router.post("/api/gold-ai-trader/refresh-klines")
+async def api_refresh_klines(request: Request, uid: str = Query(...)):
+    """Admin: force cTrader 5m kline recovery (clears fallback caches)."""
+    db = SessionLocal()
+    try:
+        admin = _resolve_user(uid, db, request=request)
+        row = seed_config_if_missing(db)
+        cfg = merge_config(row, env_defaults())
+        trader_uid = _trader_user_id(cfg, admin)
+        from app.gold_ai_trader.data_refresh import refresh_gold_scoring_klines
+        from app.gold_ai_trader.data_quality import assess_gold_market_data, gold_data_ok_for_claude
+
+        summary = await refresh_gold_scoring_klines(user_id=trader_uid)
+        market_data = await assess_gold_market_data(user_id=trader_uid)
+        data_ok, data_block = gold_data_ok_for_claude(market_data)
+        return {
+            "ok": True,
+            "refresh": summary,
+            "data_ok": data_ok,
+            "data_block": data_block,
+            "source": market_data.get("kline_source"),
+            "trendbar_block": market_data.get("ctrader_trendbar_block_reason"),
+        }
+    finally:
+        db.close()
+
+
 @router.post("/api/gold-ai-trader/kill-switch")
 async def api_kill_switch(request: Request, uid: str = Query(...)):
     db = SessionLocal()

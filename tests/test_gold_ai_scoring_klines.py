@@ -14,6 +14,32 @@ def _bars(n: int = 40) -> list:
     return [[ts, 2650.0, 2652.0, 2648.0, 2651.0, 0.0] for _ in range(n)]
 
 
+def test_fetch_gold_scoring_k5_direct_ctrader_when_tradfi_is_coinbase():
+    from app.gold_ai_trader.klines import fetch_gold_scoring_k5
+
+    snap = _bars()
+    coinbase = _bars(10)
+
+    async def _run():
+        with patch(
+            "app.gold_ai_trader.klines.get_klines",
+            new_callable=AsyncMock,
+            return_value=coinbase,
+        ), patch(
+            "app.gold_ai_trader.klines.get_metal_kline_source",
+            return_value="coinbase",
+        ), patch(
+            "app.gold_ai_trader.klines._fetch_ctrader_scoring_k5_direct",
+            new_callable=AsyncMock,
+            return_value=(snap, "ctrader"),
+        ):
+            rows, src = await fetch_gold_scoring_k5(user_id=1)
+        assert src == "ctrader"
+        assert len(rows) == 40
+
+    asyncio.run(_run())
+
+
 def test_fetch_gold_scoring_k5_uses_postgres_when_tradfi_is_coinbase():
     from app.gold_ai_trader.klines import fetch_gold_scoring_k5
 
@@ -27,6 +53,10 @@ def test_fetch_gold_scoring_k5_uses_postgres_when_tradfi_is_coinbase():
         ), patch(
             "app.gold_ai_trader.klines.get_metal_kline_source",
             return_value="coinbase",
+        ), patch(
+            "app.gold_ai_trader.klines._fetch_ctrader_scoring_k5_direct",
+            new_callable=AsyncMock,
+            return_value=([], ""),
         ), patch(
             "app.services.kline_snapshot_store.get_klines",
             return_value=snap,
