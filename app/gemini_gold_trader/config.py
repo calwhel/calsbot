@@ -61,6 +61,7 @@ class GeminiGoldRuntimeConfig:
     demo_lot_size: float
     confidence_threshold: int
     chart_bars: int
+    chart_bars_1m: int
     min_sl_pips: float
     max_sl_pips: float
     min_rr: float
@@ -94,6 +95,7 @@ def env_defaults() -> GeminiGoldRuntimeConfig:
         demo_lot_size=max(0.01, _env_float("GEMINI_GOLD_DEMO_LOT", 0.01)),
         confidence_threshold=_env_int("GEMINI_GOLD_CONFIDENCE_THRESHOLD", 85),
         chart_bars=max(20, _env_int("GEMINI_GOLD_CHART_BARS", 80)),
+        chart_bars_1m=max(20, _env_int("GEMINI_GOLD_CHART_BARS_1M", 60)),
         min_sl_pips=_env_float("GEMINI_GOLD_MIN_SL_PIPS", 30.0),
         max_sl_pips=_env_float("GEMINI_GOLD_MAX_SL_PIPS", 150.0),
         min_rr=max(1.0, _env_float("GEMINI_GOLD_MIN_RR", 1.0)),

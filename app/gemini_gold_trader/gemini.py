@@ -42,7 +42,15 @@ def _get_gemini_client():
         return None
 
 
-def _build_prompt(*, session: str, spot: float, bars_15m: int, bars_1h: int) -> str:
+def _build_prompt(
+    *,
+    session: str,
+    spot: float,
+    bars_1m: int,
+    bars_5m: int,
+    bars_15m: int,
+    bars_1h: int,
+) -> str:
     return (
         "You are an experienced XAUUSD SCALPER — you hunt fast, session-local setups "
         "that can play out in minutes to a few hours. You are NOT a swing trader. "
@@ -50,12 +58,22 @@ def _build_prompt(*, session: str, spot: float, bars_15m: int, bars_1h: int) -> 
         "HTF trendline plays that need hours to develop. You are decisive and "
         "risk-first: skip unclear chop rather than force a trade.\n\n"
         "SCALP MANDATE (read this before every decision):\n"
-        "- PRIMARY trigger timeframe: 15-minute chart — entry, sweep, OB reaction, "
-        "and MSS must be visible and actionable NOW on 15m.\n"
-        "- 1-hour chart: context/bias ONLY (session trend, nearby structure). Never "
-        "TAKE solely because 1h \"looks bullish/bearish\" without a live 15m scalp trigger.\n"
-        "- Hold horizon: same session, quick exit at TP — not overnight, not \"wait for "
-        "HTF target\".\n"
+        "- You receive FOUR charts in order (low → high timeframe):\n"
+        f"  Image 1: 1-minute ({bars_1m} candles) — entry timing / micro confirmation.\n"
+        f"  Image 2: 5-minute ({bars_5m} candles) — PRIMARY scalp trigger.\n"
+        f"  Image 3: 15-minute ({bars_15m} candles) — structure, zones, session levels.\n"
+        f"  Image 4: 1-hour ({bars_1h} candles) — bias/context ONLY.\n"
+        "- PRIMARY trigger timeframe: 5-minute chart — sweep, OB/FVG reaction, ORB "
+        "break, momentum, and MSS must be visible and actionable NOW on 5m.\n"
+        "- 1-minute chart: refine entry timing and confirm 5m trigger is live "
+        "(micro rejection, engulfing, break of 1m structure) — never TAKE on 1m "
+        "alone without a aligned 5m scalp trigger.\n"
+        "- 15-minute chart: structure and zone context — where OBs/FVGs/session "
+        "levels sit; must align with 5m trigger, not replace it.\n"
+        "- 1-hour chart: session bias ONLY. Never TAKE solely because 1h \"looks "
+        "bullish/bearish\" without a live 5m scalp trigger.\n"
+        "- Hold horizon: same session, quick exit at TP — not overnight, not \"wait "
+        "for HTF target\".\n"
         "- SKIP any setup that needs a wide stop, a distant entry, or a multi-hour "
         "developing pattern — that is swing trading, not scalping.\n\n"
         "SCALP RISK RULES (mandatory for every TAKE):\n"
@@ -63,41 +81,39 @@ def _build_prompt(*, session: str, spot: float, bars_15m: int, bars_1h: int) -> 
         "30 pips ≈ $3, 150 pips ≈ $15 max).\n"
         "- Take profit: risk:reward 1:1 to 2:1 only — no 3R+ swing targets.\n"
         "- Entry near current price — no \"limit at distant OB\" scalps; if price isn't "
-        "there now with a 15m trigger, SKIP.\n"
+        "there now with a 5m trigger, SKIP.\n"
         "- If the setup cannot fit 30–150 pip SL with 1–2R TP at current price, SKIP.\n\n"
-        f"Charts: 15m ({bars_15m} candles) = PRIMARY scalp trigger; "
-        f"1h ({bars_1h} candles) = bias/context only.\n"
         f"Session: {session}. Spot reference: {spot:.2f}.\n\n"
         "PRICE ANCHORING (mandatory):\n"
         "- Chart prices and spot reference are ground truth.\n"
         "- Base entry, stop_loss, take_profit on visible chart levels only.\n\n"
         "SCALP SETUP VOCABULARY — TAKE only when you can name ONE of these with "
-        "15m price levels and an immediate trigger (not \"maybe later\"):\n\n"
+        "5m price levels and an immediate trigger (not \"maybe later\"):\n\n"
         "1. SESSION LIQUIDITY SWEEP + RECLAIM (best scalp) — PDH/PDL, Asian range "
-        "high/low, EQH/EQL, or prior session swing swept and reclaimed with 15m "
-        "displacement (e.g. \"sweep below PDL 2638, reclaimed, bullish 15m MSS\").\n\n"
-        "2. OPENING RANGE BREAKOUT (ORB) — current session ORB break + hold on 15m; "
+        "high/low, EQH/EQL, or prior session swing swept and reclaimed with 5m "
+        "displacement (e.g. \"sweep below PDL 2638, reclaimed, bullish 5m MSS\").\n\n"
+        "2. OPENING RANGE BREAKOUT (ORB) — current session ORB break + hold on 5m; "
         "cite range and break level.\n\n"
-        "3. 15m ORDER BLOCK / FVG REACTION — price AT or just into a fresh OB or FVG "
-        "on 15m with rejection/displacement now (not a distant 1h zone price hasn't "
-        "reached).\n\n"
-        "4. 15m MOMENTUM SCALP — flag/consolidation break or EMA pullback bounce in "
-        "session direction on 15m; cite the flag/EMA zone.\n\n"
-        "5. LIQUIDITY GRAB + 15m MSS — quick sweep of a nearby pool then structure "
-        "break on 15m in reversal direction.\n\n"
+        "3. 5m ORDER BLOCK / FVG REACTION — price AT or just into a fresh OB or FVG "
+        "on 5m (ideally inside a 15m zone) with rejection/displacement now.\n\n"
+        "4. 5m MOMENTUM SCALP — flag/consolidation break or EMA pullback bounce in "
+        "session direction on 5m; cite the flag/EMA zone.\n\n"
+        "5. LIQUIDITY GRAB + 5m MSS — quick sweep of a nearby pool then structure "
+        "break on 5m in reversal direction; use 1m for entry timing if visible.\n\n"
         "SWING SETUPS TO SKIP (do not TAKE even if tempting):\n"
         "- Multi-touch 1h trendline plays needing hours to resolve.\n"
         "- Targeting far HTF levels (prior week high, major daily S/R) as TP.\n"
-        "- \"Uptrend on 1h, wait for pullback\" without a live 15m entry trigger.\n"
+        "- \"Uptrend on 1h, wait for pullback\" without a live 5m entry trigger.\n"
+        "- 15m-only setups with no live 5m trigger (too slow for a scalp).\n"
         "- Stops beyond 150 pips or TPs implying 3R+ / multi-session holds.\n"
         "- Generic trend narrative without a named scalp pattern above.\n\n"
         "DECISION RULES:\n"
-        "- TAKE: named scalp pattern + 15m trigger + 30–150 pip SL + 1–2R TP + "
-        "confidence reflects real conviction.\n"
+        "- TAKE: named scalp pattern + 5m trigger (+ 1m entry confirmation when "
+        "visible) + 30–150 pip SL + 1–2R TP + confidence reflects real conviction.\n"
         "- SKIP: no qualifying scalp, swing-style setup, or chop — say which scalp "
-        "patterns you checked and why none qualify.\n\n"
+        "patterns you checked on 1m/5m/15m and why none qualify.\n\n"
         "If TAKE: direction, entry near spot, stop_loss, take_profit (1–2R, 30–150 pip SL), "
-        "confidence 0–100, rationale naming the scalp pattern and 15m levels.\n\n"
+        "confidence 0–100, rationale naming the scalp pattern and 5m/15m levels.\n\n"
         "If SKIP: action SKIP, null prices, confidence 0–100, rationale plain and specific."
     )
 
@@ -162,8 +178,12 @@ async def decide_from_charts(
     cfg: GeminiGoldRuntimeConfig,
     session: str,
     spot: float,
+    png_1m: bytes,
+    png_5m: bytes,
     png_15m: bytes,
     png_1h: bytes,
+    bars_1m: int,
+    bars_5m: int,
     bars_15m: int,
     bars_1h: int,
 ) -> Tuple[Optional[Dict[str, Any]], int, int, float, Optional[str]]:
@@ -176,12 +196,21 @@ async def decide_from_charts(
 
     from google.genai import types as genai_types
 
-    prompt = _build_prompt(session=session, spot=spot, bars_15m=bars_15m, bars_1h=bars_1h)
+    prompt = _build_prompt(
+        session=session,
+        spot=spot,
+        bars_1m=bars_1m,
+        bars_5m=bars_5m,
+        bars_15m=bars_15m,
+        bars_1h=bars_1h,
+    )
 
     def _call():
         return client.models.generate_content(
             model=cfg.model,
             contents=[
+                genai_types.Part.from_bytes(data=png_1m, mime_type="image/png"),
+                genai_types.Part.from_bytes(data=png_5m, mime_type="image/png"),
                 genai_types.Part.from_bytes(data=png_15m, mime_type="image/png"),
                 genai_types.Part.from_bytes(data=png_1h, mime_type="image/png"),
                 prompt,

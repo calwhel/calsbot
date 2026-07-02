@@ -26,8 +26,8 @@ def _is_ctrader_kline_source(source: Optional[str]) -> bool:
 
 
 def _synthesize_forming_bar(bars: List[List[float]], timeframe: str, limit: int) -> List[List[float]]:
-    """Roll forming 5m/15m bar from live cTrader spot when available."""
-    if not bars or timeframe not in ("5m", "15m"):
+    """Roll forming 1m/5m/15m bar from live cTrader spot when available."""
+    if not bars or timeframe not in ("1m", "5m", "15m"):
         return bars
     try:
         from app.services.ctrader_price_feed import apply_live_spot_to_klines, ctrader_spot_ready
@@ -149,6 +149,13 @@ async def get_chart_klines(
     return [], meta
 
 
-def klines_ready(bars_15m: List, bars_1h: List, *, min_bars: Optional[int] = None) -> bool:
+def klines_ready(
+    bars_1m: List,
+    bars_5m: List,
+    bars_15m: List,
+    bars_1h: List,
+    *,
+    min_bars: Optional[int] = None,
+) -> bool:
     mb = min_bars if min_bars is not None else _min_bars()
-    return len(bars_15m) >= mb and len(bars_1h) >= mb
+    return all(len(bars) >= mb for bars in (bars_1m, bars_5m, bars_15m, bars_1h))
