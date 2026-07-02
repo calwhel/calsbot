@@ -24,6 +24,54 @@ def test_validate_long_ok():
     assert d["entry"] == 2650.0
 
 
+def test_validate_sl_too_wide():
+    decision = {
+        "direction": "LONG",
+        "entry": 2650.0,
+        "stop_loss": 2630.0,
+        "take_profit": 2670.0,
+    }
+    ok, reason, _ = validate_take_decision(decision, cfg=_cfg(), spot=2650.0)
+    assert ok is False
+    assert "sl_too_wide" in reason
+
+
+def test_validate_rr_too_high():
+    decision = {
+        "direction": "LONG",
+        "entry": 2650.0,
+        "stop_loss": 2640.0,
+        "take_profit": 2680.0,
+    }
+    ok, reason, _ = validate_take_decision(decision, cfg=_cfg(), spot=2650.0)
+    assert ok is False
+    assert "rr_too_high" in reason
+
+
+def test_validate_rr_too_low():
+    decision = {
+        "direction": "LONG",
+        "entry": 2650.0,
+        "stop_loss": 2640.0,
+        "take_profit": 2655.0,
+    }
+    ok, reason, _ = validate_take_decision(decision, cfg=_cfg(), spot=2650.0)
+    assert ok is False
+    assert "rr_too_low" in reason
+
+
+def test_validate_one_to_one_rr_ok():
+    decision = {
+        "direction": "LONG",
+        "entry": 2650.0,
+        "stop_loss": 2647.0,
+        "take_profit": 2653.0,
+    }
+    ok, reason, _ = validate_take_decision(decision, cfg=_cfg(), spot=2650.0)
+    assert ok is True
+    assert reason == "ok"
+
+
 def test_validate_sl_too_tight():
     decision = {
         "direction": "LONG",
@@ -54,8 +102,8 @@ def test_validate_entry_chasing():
     decision = {
         "direction": "LONG",
         "entry": 2650.0,
-        "stop_loss": 2630.0,
-        "take_profit": 2690.0,
+        "stop_loss": 2640.0,
+        "take_profit": 2660.0,
     }
     ok, reason, _ = validate_take_decision(decision, cfg=cfg, spot=2665.0)
     assert ok is False

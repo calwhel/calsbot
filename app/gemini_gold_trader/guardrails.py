@@ -34,6 +34,9 @@ def merge_config(db_row: GeminiGoldConfig, env: GeminiGoldRuntimeConfig) -> Gemi
         confidence_threshold=int(db_row.confidence_threshold or env.confidence_threshold),
         chart_bars=env.chart_bars,
         min_sl_pips=env.min_sl_pips,
+        max_sl_pips=env.max_sl_pips,
+        min_rr=env.min_rr,
+        max_rr=env.max_rr,
         entry_max_drift_pct=env.entry_max_drift_pct,
         min_trade_gap_min=env.min_trade_gap_min,
     )
