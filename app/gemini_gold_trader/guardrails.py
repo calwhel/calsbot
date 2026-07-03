@@ -64,6 +64,8 @@ def merge_config(db_row: GeminiGoldConfig, env: GeminiGoldRuntimeConfig) -> Gemi
         execution_mode=mode,
         live_ctrader_account_id=getattr(db_row, "live_ctrader_account_id", None) or env.live_ctrader_account_id,
         live_lot_size=float(getattr(db_row, "live_lot_size", None) or env.live_lot_size or 0.01),
+        live_mirror_enabled=bool(getattr(db_row, "live_mirror_enabled", False)),
+        max_live_trades_day=int(getattr(db_row, "max_live_trades_day", None) or env.max_live_trades_day or 3),
         confidence_threshold=int(db_row.confidence_threshold or env.confidence_threshold),
         chart_bars=env.chart_bars,
         chart_bars_1m=env.chart_bars_1m,
@@ -128,7 +130,16 @@ def assert_execution_account(prefs, ctid: int, cfg: GeminiGoldRuntimeConfig) -> 
 def _gemini_execution_filter(q):
     from app.strategy_models import StrategyExecution
 
-    return q.filter(StrategyExecution.notes.like("%gemini_gold_trader%"))
+    return q.filter(
+        StrategyExecution.notes.like("%gemini_gold_trader%"),
+        ~StrategyExecution.notes.like("%live_mirror%"),
+    )
+
+
+def _live_mirror_execution_filter(q):
+    from app.strategy_models import StrategyExecution
+
+    return q.filter(StrategyExecution.notes.like("%gemini_gold_trader_live_mirror%"))
 
 
 def _today_start() -> datetime:
@@ -252,6 +263,94 @@ def open_position_count(
             )
         )
     return int(q.scalar() or 0)
+
+
+def live_trades_today(db) -> int:
+    return (
+        db.query(func.count(GeminiGoldDecision.id))
+        .filter(
+            GeminiGoldDecision.ts >= _today_start(),
+            GeminiGoldDecision.live_mirror_execution_id.isnot(None),
+        )
+        .scalar()
+        or 0
+    )
+
+
+def live_open_position_count(db, user_id: int) -> int:
+    from app.strategy_models import StrategyExecution
+
+    q = db.query(func.count(StrategyExecution.id)).filter(
+        StrategyExecution.user_id == user_id,
+        StrategyExecution.symbol == "XAUUSD",
+        StrategyExecution.outcome == "OPEN",
+    )
+    return int(_live_mirror_execution_filter(q).scalar() or 0)
+
+
+def live_pnl_today_usd(db, user_id: int) -> float:
+    from app.strategy_models import StrategyExecution
+
+    q = db.query(StrategyExecution).filter(
+        StrategyExecution.user_id == user_id,
+        StrategyExecution.closed_at.isnot(None),
+        StrategyExecution.closed_at >= _today_start(),
+        StrategyExecution.outcome.in_(("WIN", "LOSS", "BREAKEVEN")),
+    )
+    rows = _live_mirror_execution_filter(q).all()
+    total = 0.0
+    for ex in rows:
+        if ex.pnl_usd is not None:
+            total += float(ex.pnl_usd)
+        elif (
+            ex.entry_price is not None
+            and ex.exit_price is not None
+            and getattr(ex, "broker_volume_units", None) is not None
+        ):
+            try:
+                units = float(ex.broker_volume_units)
+                move = float(ex.exit_price) - float(ex.entry_price)
+                sign = 1.0 if (ex.direction or "").upper() == "LONG" else -1.0
+                total += move * units * sign
+            except Exception:
+                pass
+        elif ex.pips_pnl is not None:
+            total += float(ex.pips_pnl) * 0.1
+    return round(total, 2)
+
+
+def resolve_live_mirror_status(execution) -> tuple[str, Optional[str]]:
+    if not execution:
+        return "skipped", None
+    notes = execution.notes or ""
+    if execution.outcome == "OPEN" and execution.ctrader_position_id:
+        return "filled", None
+    if execution.outcome == "OPEN" and not execution.ctrader_position_id:
+        return "pending", None
+    if "Live→Paper fallback" in notes or "live failed" in notes.lower():
+        err = notes.split(":", 1)[-1].strip() if ":" in notes else notes
+        return "failed", err[:500]
+    if execution.outcome in ("WIN", "LOSS", "BREAKEVEN"):
+        return "filled", None
+    return "failed", notes[:500] if notes else "order failed"
+
+
+def check_can_execute_live_mirror(db, cfg: GeminiGoldRuntimeConfig, user_id: int) -> Tuple[bool, str]:
+    if cfg.kill_switch:
+        return False, "kill_switch"
+    if is_live_execution_mode(cfg):
+        return False, "live_execution_mode"
+    if not cfg.live_mirror_enabled:
+        return False, "live_mirror_disabled"
+    if cfg.dry_run:
+        return False, "dry_run"
+    if not live_account_configured(cfg):
+        return False, "live_account_not_configured"
+    if live_trades_today(db) >= cfg.max_live_trades_day:
+        return False, "max_live_trades_day"
+    if live_open_position_count(db, user_id) >= 1:
+        return False, "max_live_open_position"
+    return True, "ok"
 
 
 def clear_stale_execution_reservations(db) -> int:

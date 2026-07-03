@@ -18,9 +18,15 @@ from app.gemini_gold_trader.config import (
 )
 from app.gemini_gold_trader.db_thread import run_in_db_thread, run_with_db, with_db_session
 from app.gemini_gold_trader.block_reason import format_block_reason
-from app.gemini_gold_trader.executor import execute_take_market
+from app.gemini_gold_trader.executor import execute_live_mirror_take, execute_take_market
 from app.gemini_gold_trader.gemini import decide_from_charts
-from app.gemini_gold_trader.guardrails import check_can_call_gemini, try_reserve_execution, merge_config
+from app.gemini_gold_trader.guardrails import (
+    check_can_call_gemini,
+    check_can_execute_live_mirror,
+    is_live_execution_mode,
+    try_reserve_execution,
+    merge_config,
+)
 from app.gemini_gold_trader.schema import seed_config_if_missing
 from app.gemini_gold_trader.klines import (
     get_chart_klines,
@@ -58,6 +64,25 @@ def _get_scan_cycle_lock() -> asyncio.Lock:
     if _scan_cycle_lock is None:
         _scan_cycle_lock = asyncio.Lock()
     return _scan_cycle_lock
+
+
+def _update_live_mirror_row(
+    db,
+    row_id: int,
+    *,
+    live_exec_id: int | None,
+    status: str,
+    error: str | None = None,
+):
+    row = db.query(GeminiGoldDecision).filter_by(id=row_id).first()
+    if not row:
+        return
+    if live_exec_id:
+        row.live_mirror_execution_id = live_exec_id
+    row.live_mirror_status = status
+    if error is not None:
+        row.live_mirror_error = error
+    db.commit()
 
 
 def active_session(now: datetime) -> Optional[str]:
@@ -431,6 +456,42 @@ async def run_gemini_gold_trader_loop() -> None:
                 db.commit()
 
         await run_with_db(_mark_executed)
+
+        if not is_live_execution_mode(cfg) and cfg.live_mirror_enabled:
+            ok_live, live_reason = await run_with_db(
+                check_can_execute_live_mirror, cfg, cfg.demo_user_id or 0
+            )
+            if ok_live:
+                live_exec_id = await _call_with_db_session(
+                    execute_live_mirror_take,
+                    cfg=cfg,
+                    decision=decision,
+                    decision_id=row.id,
+                    demo_execution_id=execution_id,
+                )
+                if live_exec_id:
+                    await run_with_db(
+                        _update_live_mirror_row,
+                        row.id,
+                        live_exec_id=live_exec_id,
+                        status="pending",
+                    )
+                else:
+                    await run_with_db(
+                        _update_live_mirror_row,
+                        row.id,
+                        live_exec_id=None,
+                        status="failed",
+                        error="live mirror enqueue rejected",
+                    )
+            else:
+                await run_with_db(
+                    _update_live_mirror_row,
+                    row.id,
+                    live_exec_id=None,
+                    status="skipped",
+                    error=live_reason,
+                )
     else:
         block_reason = format_block_reason(
             order_ctx.get("block_reason")

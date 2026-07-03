@@ -18,6 +18,7 @@ from app.gemini_gold_trader.guardrails import (
     assert_live_account,
     check_can_call_gemini,
     check_can_execute,
+    check_can_execute_live_mirror,
     demo_account_configured,
     live_account_configured,
     trading_account_configured,
@@ -26,6 +27,7 @@ from app.gemini_gold_trader.guardrails import (
     merge_config,
     minutes_since_last_executed_trade,
     open_position_count,
+    resolve_live_mirror_status,
     trades_today_effective,
     try_reserve_execution,
 )
@@ -142,6 +144,37 @@ def test_check_can_execute_blocks_no_trading_account_in_live_mode():
     ok, reason = check_can_execute(db, cfg, 42)
     assert ok is False
     assert reason == "no_trading_account"
+
+
+def test_check_can_execute_live_mirror_requires_enabled():
+    db = MagicMock()
+    cfg = _cfg()
+    cfg.live_mirror_enabled = False
+    cfg.live_ctrader_account_id = "67890"
+    ok, reason = check_can_execute_live_mirror(db, cfg, 42)
+    assert ok is False
+    assert reason == "live_mirror_disabled"
+
+
+def test_check_can_execute_live_mirror_blocks_dry_run():
+    db = MagicMock()
+    cfg = _cfg(dry_run=True)
+    cfg.live_mirror_enabled = True
+    cfg.live_ctrader_account_id = "67890"
+    ok, reason = check_can_execute_live_mirror(db, cfg, 42)
+    assert ok is False
+    assert reason == "dry_run"
+
+
+def test_resolve_live_mirror_status_pending_and_filled():
+    class _Ex:
+        outcome = "OPEN"
+        ctrader_position_id = None
+        notes = ""
+
+    assert resolve_live_mirror_status(_Ex())[0] == "pending"
+    _Ex.ctrader_position_id = "123"
+    assert resolve_live_mirror_status(_Ex())[0] == "filled"
 
 
 def test_check_can_call_gemini_respects_cap():

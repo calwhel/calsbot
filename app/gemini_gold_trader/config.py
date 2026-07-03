@@ -66,6 +66,8 @@ class GeminiGoldRuntimeConfig:
     execution_mode: str
     live_ctrader_account_id: Optional[str]
     live_lot_size: float
+    live_mirror_enabled: bool
+    max_live_trades_day: int
     confidence_threshold: int
     chart_bars: int
     chart_bars_1m: int
@@ -107,6 +109,8 @@ def env_defaults() -> GeminiGoldRuntimeConfig:
         execution_mode=exec_mode,
         live_ctrader_account_id=live_ctid,
         live_lot_size=max(0.01, _env_float("GEMINI_GOLD_LIVE_LOT", 0.01)),
+        live_mirror_enabled=False,
+        max_live_trades_day=max(1, _env_int("GEMINI_GOLD_MAX_LIVE_TRADES_DAY", 3)),
         confidence_threshold=_env_int("GEMINI_GOLD_CONFIDENCE_THRESHOLD", 85),
         chart_bars=max(20, _env_int("GEMINI_GOLD_CHART_BARS", 80)),
         chart_bars_1m=max(20, _env_int("GEMINI_GOLD_CHART_BARS_1M", 60)),

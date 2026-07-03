@@ -39,6 +39,8 @@ def test_executor_records_broker_error_in_order_ctx():
     assert 'order_ctx["block_reason"]' in EXECUTOR
     assert "active_lot_size(cfg)" in EXECUTOR
     assert "broker fill without position_id" in EXECUTOR
+    assert "execute_live_mirror_take" in EXECUTOR
+    assert "gemini_gold_trader_live_mirror" in EXECUTOR
 
 
 def test_loop_uses_format_block_reason():

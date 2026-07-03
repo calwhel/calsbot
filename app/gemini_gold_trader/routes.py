@@ -31,7 +31,10 @@ from app.gemini_gold_trader.guardrails import (
     effective_open_slots_used,
     is_live_execution_mode,
     live_account_configured,
+    live_pnl_today_usd,
+    live_trades_today,
     merge_config,
+    resolve_live_mirror_status,
     trades_today,
     trading_account_configured,
 )
@@ -165,6 +168,8 @@ def _config_payload(cfg, cfg_row, env) -> Dict[str, Any]:
         "execution_mode": cfg.execution_mode,
         "live_ctrader_account_id": cfg.live_ctrader_account_id,
         "live_lot_size": cfg.live_lot_size,
+        "live_mirror_enabled": cfg.live_mirror_enabled,
+        "max_live_trades_day": cfg.max_live_trades_day,
         "min_sl_pips": cfg.min_sl_pips,
         "max_sl_pips": cfg.max_sl_pips,
         "confidence_threshold": cfg.confidence_threshold,
@@ -177,6 +182,19 @@ def _config_payload(cfg, cfg_row, env) -> Dict[str, Any]:
     }
 
 
+def _sync_live_mirror_fields(db, decision: GeminiGoldDecision) -> None:
+    if not decision.live_mirror_execution_id:
+        return
+    from app.strategy_models import StrategyExecution
+
+    ex = db.query(StrategyExecution).filter_by(id=decision.live_mirror_execution_id).first()
+    status, err = resolve_live_mirror_status(ex)
+    if status != decision.live_mirror_status or err != decision.live_mirror_error:
+        decision.live_mirror_status = status
+        decision.live_mirror_error = err
+        db.commit()
+
+
 def _decision_feed(db, *, limit: int = 30) -> List[Dict[str, Any]]:
     rows = (
         db.query(GeminiGoldDecision)
@@ -186,6 +204,7 @@ def _decision_feed(db, *, limit: int = 30) -> List[Dict[str, Any]]:
     )
     out: List[Dict[str, Any]] = []
     for row in rows:
+        _sync_live_mirror_fields(db, row)
         d = row.decision if isinstance(row.decision, dict) else {}
         out.append(
             {
@@ -198,6 +217,9 @@ def _decision_feed(db, *, limit: int = 30) -> List[Dict[str, Any]]:
                 "rationale": row.rationale or d.get("rationale"),
                 "executed": bool(row.executed),
                 "execution_id": row.execution_id,
+                "live_mirror_execution_id": getattr(row, "live_mirror_execution_id", None),
+                "live_mirror_status": getattr(row, "live_mirror_status", None),
+                "live_mirror_error": getattr(row, "live_mirror_error", None),
                 "dry_run": bool(row.dry_run),
                 "skip_reason": row.skip_reason,
                 "cost_usd": float(row.cost_usd or 0),
@@ -313,6 +335,8 @@ async def api_status(uid: str = Query(...)):
                 "calls": calls_today(db),
                 "trades": trades_today(db),
                 "cost_usd": round(cost_today_usd(db), 6),
+                "live_trades": live_trades_today(db),
+                "live_pnl_usd": live_pnl_today_usd(db, int(trader_uid)) if trader_uid else 0.0,
             },
             "decision_feed": _decision_feed(db),
         }
@@ -340,6 +364,23 @@ async def api_update_config(request: Request, uid: str = Query(...)):
                 status_code=400,
                 detail="confirm_real_money required to switch to live execution",
             )
+
+        enabling_mirror = (
+            body.get("live_mirror_enabled") is True
+            and not bool(getattr(row, "live_mirror_enabled", False))
+        )
+        if enabling_mirror:
+            if not body.get("confirm_real_money"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="confirm_real_money required to enable live mirror",
+                )
+            live_ctid = body.get("live_ctrader_account_id") or row.live_ctrader_account_id
+            if not live_ctid:
+                raise HTTPException(
+                    status_code=400,
+                    detail="live_ctrader_account_id required to enable live mirror",
+                )
 
         if "execution_mode" in body:
             mode = str(body.get("execution_mode") or EXECUTION_MODE_DEMO).strip().lower()
@@ -385,10 +426,17 @@ async def api_update_config(request: Request, uid: str = Query(...)):
             "max_trades_day",
             "demo_lot_size",
             "live_lot_size",
+            "live_mirror_enabled",
+            "max_live_trades_day",
             "confidence_threshold",
         ):
             if field in body:
                 setattr(row, field, body[field])
+
+        if enabling_mirror:
+            row.live_mirror_confirmed_at = datetime.utcnow()
+        if body.get("live_mirror_enabled") is False:
+            row.live_mirror_confirmed_at = None
 
         cfg_after = merge_config(row, env)
         if body.get("enabled") is True and not trading_account_configured(cfg_after):
@@ -414,6 +462,22 @@ async def api_update_config(request: Request, uid: str = Query(...)):
         row.updated_at = datetime.utcnow()
         db.commit()
         return {"ok": True}
+    finally:
+        db.close()
+
+
+@router.post("/api/gemini-gold-trader/disconnect-live")
+async def api_disconnect_live(uid: str = Query(...)):
+    """Disable live mirror only — demo trader keeps running."""
+    db = SessionLocal()
+    try:
+        _resolve_user(uid, db)
+        row = seed_config_if_missing(db)
+        row.live_mirror_enabled = False
+        row.live_mirror_confirmed_at = None
+        row.updated_at = datetime.utcnow()
+        db.commit()
+        return {"ok": True, "live_mirror_enabled": False}
     finally:
         db.close()
 

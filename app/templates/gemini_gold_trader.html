@@ -76,6 +76,12 @@
     .mode-pill button { border: 0; background: transparent; color: var(--dim); padding: .35rem .7rem; border-radius: 999px; font-size: .7rem; font-weight: 700; cursor: pointer; }
     .mode-pill button.active { background: var(--accent-dim); color: #cfe3ff; }
     .live-warn { color: #ffb4b4; font-size: .7rem; margin-top: .35rem; }
+    .mirror-badge { display: inline-block; padding: .2rem .5rem; border-radius: 999px; font-size: .625rem; font-weight: 700; text-transform: uppercase; border: 1px solid var(--border); color: var(--dim); }
+    .mirror-badge.on { color: #ffb4b4; border-color: rgba(201,74,74,.4); background: rgba(201,74,74,.12); }
+    .mirror-pill { display: inline-block; margin-left: .35rem; padding: .15rem .45rem; border-radius: 999px; font-size: .6rem; font-weight: 700; }
+    .mirror-pill.pending { color: #f5d08a; background: rgba(245,158,11,.15); }
+    .mirror-pill.filled { color: #9ed8b8; background: rgba(61,170,110,.15); }
+    .mirror-pill.failed, .mirror-pill.skipped { color: #ffb4b4; background: rgba(201,74,74,.12); }
   </style>
 </head>
 <body>
@@ -139,7 +145,8 @@
         <button type="button" data-mode="demo" id="mode-demo">Demo</button>
         <button type="button" data-mode="live" id="mode-live">Live</button>
       </div>
-      <p class="live-warn" id="live-mode-warn" style="display:none">Live mode places real-money orders when dry-run is off.</p>
+      <p class="hint" style="margin-top:.5rem">For demo + live together, stay on <strong>Demo</strong> and enable Live mirror below.</p>
+      <p class="live-warn" id="live-mode-warn" style="display:none">Live-only mode places real-money orders when dry-run is off (no demo).</p>
       <div style="margin-top:.85rem">
         <label for="demo-ctid-select">Demo account</label>
         <p class="hint">Demo accounts only (isLive=false). Refresh via Live Forex in portal if missing.</p>
@@ -150,7 +157,7 @@
       </div>
       <div style="margin-top:.85rem">
         <label for="live-ctid-select">Live account</label>
-        <p class="hint">Live accounts only (isLive=true). Required when execution mode is Live.</p>
+        <p class="hint">Live accounts only (isLive=true). Used for Live-only mode or Live mirror.</p>
         <select id="live-ctid-select"><option value="">Select live account…</option></select>
         <div style="margin-top:.5rem;display:flex;gap:.5rem">
           <button class="btn btn-primary" id="btn-save-live" disabled style="flex:1">Save live account</button>
@@ -175,6 +182,26 @@
         <input id="confidence-threshold" type="number" min="50" max="99" step="1" value="85"/>
       </div>
       <button class="btn btn-primary" id="btn-save-size" style="width:100%;margin-top:.65rem">Save size & limits</button>
+    </section>
+
+    <section class="card" id="live-mirror-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+        <h2 style="font-size:.85rem">Live mirror · real money</h2>
+        <span class="mirror-badge" id="live-mirror-badge">Off</span>
+      </div>
+      <p class="hint" id="live-mirror-status-line">Copy demo TAKE orders to your live account. Demo stays primary.</p>
+      <div style="margin-top:.65rem">
+        <label for="max-live-trades">Max live trades/day</label>
+        <input id="max-live-trades" type="number" min="1" max="20" step="1" value="3"/>
+      </div>
+      <div class="stats" style="margin-top:.65rem">
+        <div class="stat"><b id="live-trades-stat">0</b><span>Live trades</span></div>
+        <div class="stat"><b id="live-pnl-stat">0</b><span>Live P&L $</span></div>
+      </div>
+      <div style="margin-top:.65rem;display:flex;gap:.5rem;flex-wrap:wrap">
+        <button class="btn btn-primary" id="btn-live-enable" style="flex:1">Enable live mirror</button>
+        <button class="btn" id="btn-live-disconnect" style="display:none">Disconnect</button>
+      </div>
     </section>
 
     <section class="card">
@@ -336,6 +363,49 @@ function renderTradingSetup(j) {
   document.getElementById('live-lot-size').value = cfg.live_lot_size ?? 0.01;
   document.getElementById('demo-max-trades').value = cfg.max_trades_day ?? 4;
   document.getElementById('confidence-threshold').value = cfg.confidence_threshold ?? 85;
+  renderLiveMirror(j);
+}
+
+function renderLiveMirror(j) {
+  const cfg = j.config || {};
+  const st = j.stats_today || {};
+  const live = isLiveMode(j);
+  const enabled = !!cfg.live_mirror_enabled;
+  const badge = document.getElementById('live-mirror-badge');
+  badge.textContent = enabled ? 'Live ON' : 'Off';
+  badge.classList.toggle('on', enabled);
+
+  const card = document.getElementById('live-mirror-card');
+  card.style.opacity = live ? '0.55' : '1';
+
+  const statusLine = document.getElementById('live-mirror-status-line');
+  if (live) {
+    statusLine.textContent = 'Switch to Demo mode to use live mirror (demo + live together).';
+  } else if (enabled) {
+    statusLine.textContent = `Mirroring to #${cfg.live_ctrader_account_id || '?'} · ${cfg.live_lot_size || 0.01} lots · max ${cfg.max_live_trades_day || 3}/day`;
+  } else if (!(j.live_accounts || []).length) {
+    statusLine.textContent = 'Save a live account above, then enable mirror when ready.';
+  } else {
+    statusLine.textContent = 'Copy demo TAKE orders to your live account. Demo stays primary.';
+  }
+
+  document.getElementById('max-live-trades').value = cfg.max_live_trades_day ?? 3;
+  document.getElementById('live-trades-stat').textContent = String(st.live_trades ?? 0);
+  const pnl = st.live_pnl_usd ?? 0;
+  const pnlEl = document.getElementById('live-pnl-stat');
+  pnlEl.textContent = (pnl >= 0 ? '' : '-') + Math.abs(pnl).toFixed(2);
+  pnlEl.style.color = pnl >= 0 ? 'var(--profit)' : '#ffb4b4';
+
+  document.getElementById('btn-live-enable').style.display = (enabled || live) ? 'none' : 'inline-flex';
+  document.getElementById('btn-live-disconnect').style.display = enabled ? 'inline-flex' : 'none';
+  document.getElementById('btn-live-enable').disabled = live;
+}
+
+function mirrorPill(d) {
+  if (!d.live_mirror_status && !d.live_mirror_execution_id) return '';
+  const st = (d.live_mirror_status || 'pending').toLowerCase();
+  const label = st === 'filled' ? 'LIVE OK' : st === 'failed' ? 'LIVE FAIL' : st === 'skipped' ? 'LIVE SKIP' : 'LIVE PEND';
+  return `<span class="mirror-pill ${st === 'filled' ? 'filled' : st === 'failed' || st === 'skipped' ? 'failed' : 'pending'}">${label}</span>`;
 }
 
 async function setExecutionMode(mode) {
@@ -381,7 +451,7 @@ function renderFeed(j) {
     const flags = [d.dry_run ? 'dry-run' : null, d.executed ? 'executed' : null].filter(Boolean).join(' · ');
     return `<div class="feed-item">
       <div class="feed-meta">${fmtTime(d.ts)} · ${fmtSession(d.session)} · ${d.confidence ?? 0}% ${flags ? '· ' + flags : ''}</div>
-      <div class="${cls}">${action} ${d.direction || ''}${prices}</div>
+      <div class="${cls}">${action} ${d.direction || ''}${prices}${mirrorPill(d)}</div>
       <div class="hint">${escapeHtml((d.rationale || '').slice(0, 280))}</div>
     </div>`;
   }).join('');
@@ -504,12 +574,52 @@ document.getElementById('btn-save-size').onclick = async () => {
     demo_lot_size: +document.getElementById('demo-lot-size').value || 0.01,
     live_lot_size: +document.getElementById('live-lot-size').value || 0.01,
     max_trades_day: +document.getElementById('demo-max-trades').value || 4,
+    max_live_trades_day: +document.getElementById('max-live-trades').value || 3,
     confidence_threshold: +document.getElementById('confidence-threshold').value || 85,
   };
   await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
     method: 'POST', body: JSON.stringify(body),
   });
   showToast('Size & limits saved');
+  refresh();
+};
+
+document.getElementById('btn-live-enable').onclick = async () => {
+  const ctid = document.getElementById('live-ctid-select').value;
+  if (!ctid) {
+    showToast('Select and save a live account first');
+    return;
+  }
+  const ok = window.confirm(
+    `Enable live mirror on account #${ctid}? Real trades will copy every demo TAKE when dry-run is OFF. You can lose money.`
+  );
+  if (!ok) return;
+  const r = await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      live_mirror_enabled: true,
+      live_ctrader_account_id: ctid,
+      live_lot_size: +document.getElementById('live-lot-size').value || 0.01,
+      max_live_trades_day: +document.getElementById('max-live-trades').value || 3,
+      confirm_real_money: true,
+    }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    showToast(err.detail || 'Failed to enable live mirror');
+    return;
+  }
+  showToast('Live mirror enabled');
+  refresh();
+};
+
+document.getElementById('btn-live-disconnect').onclick = async () => {
+  const r = await _apiFetch(`/api/gemini-gold-trader/disconnect-live?uid=${encodeURIComponent(UID)}`, { method: 'POST' });
+  if (!r.ok) {
+    showToast('Could not disconnect live mirror');
+    return;
+  }
+  showToast('Live mirror disconnected — demo keeps running');
   refresh();
 };
 

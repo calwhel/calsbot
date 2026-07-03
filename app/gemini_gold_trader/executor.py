@@ -15,6 +15,7 @@ from app.gemini_gold_trader.guardrails import (
     active_ctrader_account_id,
     active_lot_size,
     assert_execution_account,
+    assert_live_account,
     clear_execution_reservation,
     is_live_execution_mode,
 )
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 GEMINI_GOLD_STRATEGY_NAME_DEMO = "Gemini Gold Trader (Demo)"
 GEMINI_GOLD_STRATEGY_NAME_LIVE = "Gemini Gold Trader (Live)"
+GEMINI_GOLD_STRATEGY_NAME_LIVE_MIRROR = "Gemini Gold Trader (Live Mirror)"
 
 
 def _parse_direction(decision: Dict[str, Any]) -> Optional[str]:
@@ -47,10 +49,37 @@ def _parse_prices(decision: Dict[str, Any]) -> Optional[Tuple[str, float, float,
     return direction, entry, sl, tp
 
 
-def ensure_system_strategy(db, user_id: int, *, live: bool = False) -> int:
+def _pct_from_prices(direction: str, entry: float, sl: float, tp: float) -> Tuple[float, float]:
+    if direction == "LONG":
+        sl_pct = abs(entry - sl) / entry * 100.0
+        tp_pct = abs(tp - entry) / entry * 100.0
+    else:
+        sl_pct = abs(sl - entry) / entry * 100.0
+        tp_pct = abs(entry - tp) / entry * 100.0
+    return max(sl_pct, 0.01), max(tp_pct, 0.01)
+
+
+def ensure_system_strategy(
+    db,
+    user_id: int,
+    *,
+    live: bool = False,
+    live_mirror: bool = False,
+) -> int:
     from app.strategy_models import UserStrategy
 
-    name = GEMINI_GOLD_STRATEGY_NAME_LIVE if live else GEMINI_GOLD_STRATEGY_NAME_DEMO
+    if live_mirror:
+        name = GEMINI_GOLD_STRATEGY_NAME_LIVE_MIRROR
+        description = "Gemini Vision XAUUSD live mirror (isolated module)"
+        config_extra = {"gemini_gold_live_mirror": True}
+    elif live:
+        name = GEMINI_GOLD_STRATEGY_NAME_LIVE
+        description = "Gemini Vision XAUUSD live trader (isolated module)"
+        config_extra = {"gemini_gold_live": True}
+    else:
+        name = GEMINI_GOLD_STRATEGY_NAME_DEMO
+        description = "Gemini Vision XAUUSD demo trader (isolated module)"
+        config_extra = {"gemini_gold_live": False}
     row = (
         db.query(UserStrategy)
         .filter(
@@ -64,16 +93,12 @@ def ensure_system_strategy(db, user_id: int, *, live: bool = False) -> int:
     row = UserStrategy(
         user_id=user_id,
         name=name,
-        description=(
-            "Gemini Vision XAUUSD live trader (isolated module)"
-            if live
-            else "Gemini Vision XAUUSD demo trader (isolated module)"
-        ),
+        description=description,
         config={
             "asset_class": ASSET_CLASS,
             "symbol": SYMBOL,
             "gemini_gold_trader": True,
-            "gemini_gold_live": live,
+            **config_extra,
         },
         is_active=True,
     )
@@ -268,5 +293,124 @@ async def execute_take_market(
         SYMBOL,
         fill,
         ctid,
+    )
+    return ex.id
+
+
+def _resolve_live_mirror_trader(db, cfg: GeminiGoldRuntimeConfig):
+    from app.models import User, UserPreference
+
+    if not cfg.demo_user_id:
+        return None, None
+    user = db.query(User).filter(User.id == cfg.demo_user_id).first()
+    if not user:
+        return None, None
+    prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+    return user, prefs
+
+
+async def execute_live_mirror_take(
+    *,
+    db,
+    cfg: GeminiGoldRuntimeConfig,
+    decision: Dict[str, Any],
+    decision_id: int,
+    demo_execution_id: int,
+) -> Optional[int]:
+    """Queue live mirror order after a successful demo TAKE."""
+    if not cfg.live_mirror_enabled or not cfg.demo_user_id:
+        return None
+    if is_live_execution_mode(cfg):
+        return None
+
+    from app.strategy_models import StrategyExecution
+    from app.services.ctrader_order_queue import CtraderOrderJob, enqueue_ctrader_order
+
+    user, prefs = await run_in_db_thread(_resolve_live_mirror_trader, db, cfg)
+    if not user:
+        return None
+    if not prefs or not prefs.ctrader_access_token:
+        logger.warning("[gemini-gold] live mirror: missing cTrader token")
+        return None
+
+    if not cfg.live_ctrader_account_id:
+        logger.warning("[gemini-gold] live mirror: no live ctid configured")
+        return None
+    ctid = int(cfg.live_ctrader_account_id)
+    try:
+        assert_live_account(prefs, ctid, cfg)
+    except LiveAccountRequired as e:
+        logger.error("[gemini-gold] LIVE MIRROR LOCK: %s", e)
+        return None
+
+    parsed = _parse_prices(decision)
+    if not parsed:
+        return None
+    direction, entry, sl, tp = parsed
+    sl_pct, tp_pct = _pct_from_prices(direction, entry, sl, tp)
+    lots = max(0.01, float(cfg.live_lot_size or 0.01))
+
+    strategy_id = await run_in_db_thread(
+        ensure_system_strategy, db, user.id, live_mirror=True
+    )
+    ex = StrategyExecution(
+        strategy_id=strategy_id,
+        user_id=user.id,
+        symbol=SYMBOL,
+        direction=direction,
+        entry_price=entry,
+        tp_price=tp,
+        sl_price=sl,
+        current_sl=sl,
+        outcome="OPEN",
+        fired_at=datetime.utcnow(),
+        is_paper=False,
+        asset_class=ASSET_CLASS,
+        ctrader_account_id=str(ctid),
+        notes=(
+            f"gemini_gold_trader_live_mirror decision_id={decision_id} "
+            f"demo_exec={demo_execution_id}"
+        ),
+        conditions_met={
+            "gemini_gold_decision_id": decision_id,
+            "gemini_gold_live_mirror": True,
+            "demo_execution_id": demo_execution_id,
+        },
+    )
+    db.add(ex)
+    await db_commit(db)
+    await run_in_db_thread(db.refresh, ex)
+
+    job = CtraderOrderJob(
+        user_id=user.id,
+        strategy_id=strategy_id,
+        execution_id=ex.id,
+        symbol=SYMBOL,
+        direction=direction,
+        entry_price=entry,
+        tp_pct=tp_pct,
+        sl_pct=sl_pct,
+        fixed_lots=lots,
+        asset_class=ASSET_CLASS,
+        ctrader_account_id=str(ctid),
+        signal_mono=time.monotonic(),
+        signal_generated_at=time.time(),
+        signal_price_source="gemini_gold_trader",
+    )
+    ok = await enqueue_ctrader_order(job)
+    if not ok:
+        ex.notes = (ex.notes or "") + " | enqueue_failed"
+        await db_commit(db)
+        logger.warning("[gemini-gold] live mirror enqueue failed exec=%s", ex.id)
+        return ex.id
+
+    logger.info(
+        "[gemini-gold] LIVE MIRROR queued exec=%s ctid=%s %s %s lots=%s decision=%s",
+        ex.id,
+        ctid,
+        direction,
+        SYMBOL,
+        lots,
+        decision_id,
     )
     return ex.id

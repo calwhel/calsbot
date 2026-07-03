@@ -28,15 +28,29 @@ _GEMINI_GOLD_COLUMN_ALTERS: tuple[tuple[str, str, str], ...] = (
     ("gemini_gold_config", "live_ctrader_account_id", "VARCHAR(40)"),
     ("gemini_gold_config", "live_lot_size", "FLOAT DEFAULT 0.01 NOT NULL"),
     ("gemini_gold_config", "live_confirmed_at", "TIMESTAMP"),
+    ("gemini_gold_config", "live_mirror_enabled", "BOOLEAN DEFAULT FALSE NOT NULL"),
+    ("gemini_gold_config", "max_live_trades_day", "INTEGER DEFAULT 3 NOT NULL"),
+    ("gemini_gold_config", "live_mirror_confirmed_at", "TIMESTAMP"),
+    ("gemini_gold_decisions", "live_mirror_execution_id", "INTEGER"),
+    ("gemini_gold_decisions", "live_mirror_status", "VARCHAR(24)"),
+    ("gemini_gold_decisions", "live_mirror_error", "TEXT"),
 )
 
 _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
-    "gemini_gold_decisions": ("execution_reserved_at",),
+    "gemini_gold_decisions": (
+        "execution_reserved_at",
+        "live_mirror_execution_id",
+        "live_mirror_status",
+        "live_mirror_error",
+    ),
     "gemini_gold_config": (
         "execution_mode",
         "live_ctrader_account_id",
         "live_lot_size",
         "live_confirmed_at",
+        "live_mirror_enabled",
+        "max_live_trades_day",
+        "live_mirror_confirmed_at",
     ),
 }
 
@@ -156,6 +170,8 @@ def seed_config_if_missing(db) -> GeminiGoldConfig:
         execution_mode=EXECUTION_MODE_DEMO,
         live_ctrader_account_id=d.live_ctrader_account_id,
         live_lot_size=d.live_lot_size,
+        live_mirror_enabled=False,
+        max_live_trades_day=d.max_live_trades_day,
         confidence_threshold=d.confidence_threshold,
     )
     db.add(row)
