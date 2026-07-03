@@ -11,13 +11,16 @@ from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
-from app.gemini_gold_trader.config import env_defaults, gemini_gold_enabled, gemini_gold_dry_run
+from app.gemini_gold_trader.config import EXECUTION_MODE_LIVE, env_defaults, gemini_gold_enabled, gemini_gold_dry_run
 from app.gemini_gold_trader.guardrails import (
     DemoAccountRequired,
     assert_demo_account,
+    assert_live_account,
     check_can_call_gemini,
     check_can_execute,
     demo_account_configured,
+    live_account_configured,
+    trading_account_configured,
     effective_open_slots_used,
     in_flight_execution_count,
     merge_config,
@@ -93,6 +96,52 @@ def test_demo_account_configured():
     assert demo_account_configured(cfg) is False
     cfg.demo_ctrader_account_id = "12345"
     assert demo_account_configured(cfg) is True
+
+
+def test_live_account_configured():
+    cfg = env_defaults()
+    cfg.live_ctrader_account_id = None
+    assert live_account_configured(cfg) is False
+    cfg.live_ctrader_account_id = "67890"
+    assert live_account_configured(cfg) is True
+
+
+def test_trading_account_configured_follows_execution_mode():
+    cfg = env_defaults()
+    cfg.demo_ctrader_account_id = "12345"
+    cfg.live_ctrader_account_id = "67890"
+    cfg.execution_mode = "demo"
+    assert trading_account_configured(cfg) is True
+    cfg.demo_ctrader_account_id = None
+    assert trading_account_configured(cfg) is False
+    cfg.execution_mode = EXECUTION_MODE_LIVE
+    cfg.live_ctrader_account_id = "67890"
+    assert trading_account_configured(cfg) is True
+    cfg.live_ctrader_account_id = None
+    assert trading_account_configured(cfg) is False
+
+
+def test_assert_live_account_rejects_demo_ctid():
+    cfg = env_defaults()
+    cfg.live_ctrader_account_id = "22222"
+    cfg.execution_mode = EXECUTION_MODE_LIVE
+    from app.gemini_gold_trader.guardrails import LiveAccountRequired
+
+    try:
+        assert_live_account(_FakePrefs(), 11111, cfg)
+        assert False, "expected LiveAccountRequired"
+    except LiveAccountRequired:
+        pass
+
+
+def test_check_can_execute_blocks_no_trading_account_in_live_mode():
+    db = MagicMock()
+    cfg = _cfg()
+    cfg.execution_mode = EXECUTION_MODE_LIVE
+    cfg.live_ctrader_account_id = None
+    ok, reason = check_can_execute(db, cfg, 42)
+    assert ok is False
+    assert reason == "no_trading_account"
 
 
 def test_check_can_call_gemini_respects_cap():

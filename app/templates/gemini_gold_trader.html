@@ -72,6 +72,10 @@
     .toast.show { transform: translateX(-50%) translateY(0); }
     .env-warn { display: none; padding: .6rem .75rem; border-radius: 8px; background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3); color: #f5d08a; font-size: .75rem; margin-bottom: .75rem; }
     .env-warn.visible { display: block; }
+    .mode-pill { display: inline-flex; gap: .35rem; padding: .2rem; border-radius: 999px; border: 1px solid var(--border); background: #0e1118; }
+    .mode-pill button { border: 0; background: transparent; color: var(--dim); padding: .35rem .7rem; border-radius: 999px; font-size: .7rem; font-weight: 700; cursor: pointer; }
+    .mode-pill button.active { background: var(--accent-dim); color: #cfe3ff; }
+    .live-warn { color: #ffb4b4; font-size: .7rem; margin-top: .35rem; }
   </style>
 </head>
 <body>
@@ -96,12 +100,12 @@
       Railway env <code>GEMINI_GOLD_ENABLED</code> is off — set it to <code>true</code> and redeploy so the scan process starts.
     </div>
 
-    <div class="account-strip missing" id="demo-account-bar">
+    <div class="account-strip missing" id="account-bar">
       <div>
-        <div class="account-strip-label">Demo cTrader account</div>
-        <div class="account-strip-value" id="demo-account-display">Loading…</div>
+        <div class="account-strip-label" id="account-bar-label">Trading account</div>
+        <div class="account-strip-value" id="account-display">Loading…</div>
       </div>
-      <div class="hint" id="demo-account-warn" style="text-align:right;max-width:9rem"></div>
+      <div class="hint" id="account-warn" style="text-align:right;max-width:9rem"></div>
     </div>
 
     <section class="card">
@@ -130,25 +134,45 @@
 
     <section class="card">
       <h2 style="font-size:.85rem;margin-bottom:.75rem">Trading setup</h2>
-      <label for="demo-ctid-select">Demo account</label>
-      <p class="hint">Demo accounts only. New accounts? Open Live Forex once to refresh the list.</p>
-      <select id="demo-ctid-select"><option value="">Select demo account…</option></select>
-      <div style="margin-top:.65rem;display:flex;gap:.5rem">
-        <button class="btn btn-primary" id="btn-save-demo" disabled style="flex:1">Save account</button>
+      <label>Execution mode</label>
+      <div class="mode-pill" id="execution-mode-pill">
+        <button type="button" data-mode="demo" id="mode-demo">Demo</button>
+        <button type="button" data-mode="live" id="mode-live">Live</button>
+      </div>
+      <p class="live-warn" id="live-mode-warn" style="display:none">Live mode places real-money orders when dry-run is off.</p>
+      <div style="margin-top:.85rem">
+        <label for="demo-ctid-select">Demo account</label>
+        <p class="hint">Demo accounts only (isLive=false). Refresh via Live Forex in portal if missing.</p>
+        <select id="demo-ctid-select"><option value="">Select demo account…</option></select>
+        <div style="margin-top:.5rem;display:flex;gap:.5rem">
+          <button class="btn btn-primary" id="btn-save-demo" disabled style="flex:1">Save demo account</button>
+        </div>
+      </div>
+      <div style="margin-top:.85rem">
+        <label for="live-ctid-select">Live account</label>
+        <p class="hint">Live accounts only (isLive=true). Required when execution mode is Live.</p>
+        <select id="live-ctid-select"><option value="">Select live account…</option></select>
+        <div style="margin-top:.5rem;display:flex;gap:.5rem">
+          <button class="btn btn-primary" id="btn-save-live" disabled style="flex:1">Save live account</button>
+        </div>
       </div>
       <div style="margin-top:1rem;display:grid;grid-template-columns:1fr 1fr 1fr;gap:.65rem">
         <div>
-          <label for="demo-lot-size">Lot size</label>
+          <label for="demo-lot-size">Demo lot size</label>
           <input id="demo-lot-size" type="number" min="0.01" max="50" step="0.01" value="0.01"/>
+        </div>
+        <div>
+          <label for="live-lot-size">Live lot size</label>
+          <input id="live-lot-size" type="number" min="0.01" max="50" step="0.01" value="0.01"/>
         </div>
         <div>
           <label for="demo-max-trades">Max trades/day</label>
           <input id="demo-max-trades" type="number" min="1" max="20" step="1" value="4"/>
         </div>
-        <div>
-          <label for="confidence-threshold">Min confidence %</label>
-          <input id="confidence-threshold" type="number" min="50" max="99" step="1" value="85"/>
-        </div>
+      </div>
+      <div style="margin-top:.65rem">
+        <label for="confidence-threshold">Min confidence %</label>
+        <input id="confidence-threshold" type="number" min="50" max="99" step="1" value="85"/>
       </div>
       <button class="btn btn-primary" id="btn-save-size" style="width:100%;margin-top:.65rem">Save size & limits</button>
     </section>
@@ -195,11 +219,16 @@ function escapeHtml(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+function isLiveMode(j) {
+  return String(j.execution_mode || j.config?.execution_mode || 'demo').toLowerCase() === 'live';
+}
+
 function renderStatus(j) {
   const cfg = j.config || {};
   window._ggLastCfg = cfg;
   const rt = j.runtime || {};
-  const ready = !!j.demo_account_ready;
+  const live = isLiveMode(j);
+  const ready = !!j.trading_account_ready;
   const envOn = !!cfg.env_enabled;
   document.getElementById('env-warn').classList.toggle('visible', !envOn);
   document.getElementById('kill-env-warn').classList.toggle('visible', !!cfg.kill_switch_env_locked);
@@ -215,10 +244,13 @@ function renderStatus(j) {
       sub = 'Kill switch active';
     }
   }
-  else if (!ready) { title = 'SETUP REQUIRED'; sub = 'Select a demo account below'; }
+  else if (!ready) {
+    title = 'SETUP REQUIRED';
+    sub = live ? 'Select a live account below' : 'Select a demo account below';
+  }
   else if (!cfg.enabled) { title = 'OFF'; sub = 'Flip the trader switch to start scanning'; }
   else if (!envOn) { title = 'ENV OFF'; sub = 'Set GEMINI_GOLD_ENABLED=true in Railway'; }
-  else if (rt.status === 'scanning') { title = 'SCANNING'; sub = `Session: ${fmtSession(rt.active_session)}`; }
+  else if (rt.status === 'scanning') { title = 'SCANNING'; sub = `Session: ${fmtSession(rt.active_session)} · ${live ? 'Live' : 'Demo'}`; }
   else { title = String(rt.status || 'idle').toUpperCase(); sub = rt.active_session ? fmtSession(rt.active_session) : 'Outside session windows'; }
 
   document.getElementById('status-line').textContent = title;
@@ -239,8 +271,17 @@ function renderStatus(j) {
     killBtn.textContent = 'Kill';
     killBtn.className = 'btn btn-kill';
   }
-  document.getElementById('dry-chip').textContent = cfg.dry_run ? 'Dry-run ON' : 'Live demo fire';
-  document.getElementById('dry-chip').classList.toggle('dry', !!cfg.dry_run);
+  const dryChip = document.getElementById('dry-chip');
+  if (cfg.dry_run) {
+    dryChip.textContent = 'Dry-run ON';
+    dryChip.classList.add('dry');
+  } else if (live) {
+    dryChip.textContent = 'Live fire';
+    dryChip.classList.remove('dry');
+  } else {
+    dryChip.textContent = 'Demo fire';
+    dryChip.classList.remove('dry');
+  }
 
   const stats = j.stats_today || {};
   document.getElementById('stat-calls').textContent = stats.calls ?? 0;
@@ -248,35 +289,80 @@ function renderStatus(j) {
   document.getElementById('stat-cost').textContent = (stats.cost_usd ?? 0).toFixed(4);
 }
 
-function renderDemoPicker(j) {
-  const accounts = j.demo_accounts || [];
-  const selected = j.demo_account_selected;
-  const ready = !!j.demo_account_ready;
-  const bar = document.getElementById('demo-account-bar');
-  const display = document.getElementById('demo-account-display');
-  const warn = document.getElementById('demo-account-warn');
-  const sel = document.getElementById('demo-ctid-select');
-  const saveBtn = document.getElementById('btn-save-demo');
+function renderTradingSetup(j) {
+  const cfg = j.config || {};
+  const live = isLiveMode(j);
+  const demoAccounts = j.demo_accounts || [];
+  const liveAccounts = j.live_accounts || [];
+  const selectedDemo = j.demo_account_selected;
+  const selectedLive = j.live_account_selected;
+  const activeSelected = live ? selectedLive : selectedDemo;
+  const activeAccounts = live ? liveAccounts : demoAccounts;
+  const ready = !!j.trading_account_ready;
 
-  if (ready && selected) {
+  const bar = document.getElementById('account-bar');
+  const barLabel = document.getElementById('account-bar-label');
+  const display = document.getElementById('account-display');
+  const warn = document.getElementById('account-warn');
+  barLabel.textContent = live ? 'Trading account (Live)' : 'Trading account (Demo)';
+
+  if (ready && activeSelected) {
     bar.classList.remove('missing');
-    display.textContent = selected.label || ('#' + selected.ctid);
+    display.textContent = activeSelected.label || ('#' + activeSelected.ctid);
     warn.textContent = '';
   } else {
     bar.classList.add('missing');
-    display.textContent = accounts.length ? 'Not selected' : 'No demo accounts';
-    warn.textContent = accounts.length ? 'Pick account below' : 'Connect cTrader in portal';
+    display.textContent = activeAccounts.length ? 'Not selected' : (live ? 'No live accounts' : 'No demo accounts');
+    warn.textContent = activeAccounts.length ? 'Pick account below' : 'Connect cTrader in portal';
   }
 
-  sel.innerHTML = '<option value="">Select demo account…</option>' +
-    accounts.map(a => `<option value="${escapeHtml(a.ctid)}">${escapeHtml(a.label)}</option>`).join('');
-  if (selected && selected.ctid) sel.value = String(selected.ctid);
-  saveBtn.disabled = accounts.length === 0;
+  document.getElementById('mode-demo').classList.toggle('active', !live);
+  document.getElementById('mode-live').classList.toggle('active', live);
+  document.getElementById('live-mode-warn').style.display = live ? 'block' : 'none';
 
-  const cfg = j.config || {};
+  const demoSel = document.getElementById('demo-ctid-select');
+  demoSel.innerHTML = '<option value="">Select demo account…</option>' +
+    demoAccounts.map(a => `<option value="${escapeHtml(a.ctid)}">${escapeHtml(a.label)}</option>`).join('');
+  if (selectedDemo && selectedDemo.ctid) demoSel.value = String(selectedDemo.ctid);
+  document.getElementById('btn-save-demo').disabled = demoAccounts.length === 0;
+
+  const liveSel = document.getElementById('live-ctid-select');
+  liveSel.innerHTML = '<option value="">Select live account…</option>' +
+    liveAccounts.map(a => `<option value="${escapeHtml(a.ctid)}">${escapeHtml(a.label)}</option>`).join('');
+  if (selectedLive && selectedLive.ctid) liveSel.value = String(selectedLive.ctid);
+  document.getElementById('btn-save-live').disabled = liveAccounts.length === 0;
+
   document.getElementById('demo-lot-size').value = cfg.demo_lot_size ?? 0.01;
+  document.getElementById('live-lot-size').value = cfg.live_lot_size ?? 0.01;
   document.getElementById('demo-max-trades').value = cfg.max_trades_day ?? 4;
   document.getElementById('confidence-threshold').value = cfg.confidence_threshold ?? 85;
+}
+
+async function setExecutionMode(mode) {
+  const live = mode === 'live';
+  if (live) {
+    const ctid = document.getElementById('live-ctid-select').value;
+    if (!ctid) {
+      showToast('Select and save a live account first');
+      return;
+    }
+    const ok = window.confirm(
+      'Switch to LIVE execution? Real-money orders will fire when dry-run is OFF. You can lose money.'
+    );
+    if (!ok) return;
+  }
+  const body = { execution_mode: mode };
+  if (live) body.confirm_real_money = true;
+  const r = await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST', body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    showToast(err.detail || 'Could not change execution mode');
+    return;
+  }
+  showToast(live ? 'Live execution enabled' : 'Demo execution enabled');
+  refresh();
 }
 
 function renderFeed(j) {
@@ -308,18 +394,29 @@ async function refresh() {
     showToast(j.detail || 'Could not load status');
     return;
   }
+  window._ggLastStatus = j;
   renderStatus(j);
-  renderDemoPicker(j);
+  renderTradingSetup(j);
   renderFeed(j);
 }
 
 document.getElementById('btn-refresh').onclick = refresh;
 
+document.getElementById('mode-demo').onclick = () => {
+  if (!isLiveMode(window._ggLastStatus || {})) return;
+  setExecutionMode('demo');
+};
+document.getElementById('mode-live').onclick = () => {
+  if (isLiveMode(window._ggLastStatus || {})) return;
+  setExecutionMode('live');
+};
+
 document.getElementById('toggle-enabled').onchange = async (e) => {
   const en = e.target.checked;
-  if (en && document.getElementById('demo-account-bar').classList.contains('missing')) {
+  if (en && document.getElementById('account-bar').classList.contains('missing')) {
     e.target.checked = false;
-    showToast('Select a demo account first');
+    const live = isLiveMode(window._ggLastStatus || {});
+    showToast(live ? 'Select a live account first' : 'Select a demo account first');
     return;
   }
   const r = await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
@@ -340,7 +437,8 @@ document.getElementById('toggle-dry-run').onchange = async (e) => {
   await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
     method: 'POST', body: JSON.stringify({ dry_run: on }),
   });
-  showToast(on ? 'Dry-run ON — no broker orders' : 'Dry-run OFF — demo orders will fire');
+  const live = isLiveMode(window._ggLastStatus || {});
+  showToast(on ? 'Dry-run ON — no broker orders' : (live ? 'Dry-run OFF — live orders will fire' : 'Dry-run OFF — demo orders will fire'));
   refresh();
 };
 
@@ -386,9 +484,25 @@ document.getElementById('btn-save-demo').onclick = async () => {
   refresh();
 };
 
+document.getElementById('btn-save-live').onclick = async () => {
+  const ctid = document.getElementById('live-ctid-select').value;
+  if (!ctid) { showToast('Select a live account'); return; }
+  const r = await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST', body: JSON.stringify({ live_ctrader_account_id: ctid }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    showToast(err.detail || 'Save failed');
+    return;
+  }
+  showToast('Live account saved');
+  refresh();
+};
+
 document.getElementById('btn-save-size').onclick = async () => {
   const body = {
     demo_lot_size: +document.getElementById('demo-lot-size').value || 0.01,
+    live_lot_size: +document.getElementById('live-lot-size').value || 0.01,
     max_trades_day: +document.getElementById('demo-max-trades').value || 4,
     confidence_threshold: +document.getElementById('confidence-threshold').value || 85,
   };

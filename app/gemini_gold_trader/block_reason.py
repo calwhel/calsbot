@@ -10,6 +10,7 @@ _LABELS = {
     "kill_switch": "blocked: kill_switch",
     "dry_run": "blocked: dry_run",
     "no_demo_account": "blocked: no_demo_account",
+    "no_trading_account": "blocked: no_trading_account",
     "no_demo_user": "blocked: no_demo_user",
     "already_reserved": "blocked: already_reserved",
     "already_executed": "blocked: already_executed",

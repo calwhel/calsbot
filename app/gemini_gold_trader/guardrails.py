@@ -7,7 +7,12 @@ from typing import Optional, Tuple
 
 from sqlalchemy import func, or_
 
-from app.gemini_gold_trader.config import GeminiGoldRuntimeConfig, env_defaults
+from app.gemini_gold_trader.config import (
+    EXECUTION_MODE_DEMO,
+    EXECUTION_MODE_LIVE,
+    GeminiGoldRuntimeConfig,
+    env_defaults,
+)
 from app.gemini_gold_trader.models import GeminiGoldConfig, GeminiGoldDecision
 
 logger = logging.getLogger(__name__)
@@ -19,7 +24,32 @@ class DemoAccountRequired(Exception):
     """Raised when order routing would not use the configured demo account."""
 
 
+class LiveAccountRequired(Exception):
+    """Raised when live execution routing would not use the configured live account."""
+
+
+def is_live_execution_mode(cfg: GeminiGoldRuntimeConfig) -> bool:
+    return (cfg.execution_mode or EXECUTION_MODE_DEMO).strip().lower() == EXECUTION_MODE_LIVE
+
+
+def active_ctrader_account_id(cfg: GeminiGoldRuntimeConfig) -> Optional[str]:
+    if is_live_execution_mode(cfg):
+        raw = cfg.live_ctrader_account_id
+    else:
+        raw = cfg.demo_ctrader_account_id
+    return str(raw).strip() if raw and str(raw).strip() else None
+
+
+def active_lot_size(cfg: GeminiGoldRuntimeConfig) -> float:
+    if is_live_execution_mode(cfg):
+        return max(0.01, float(cfg.live_lot_size or 0.01))
+    return max(0.01, float(cfg.demo_lot_size or 0.01))
+
+
 def merge_config(db_row: GeminiGoldConfig, env: GeminiGoldRuntimeConfig) -> GeminiGoldRuntimeConfig:
+    mode = str(getattr(db_row, "execution_mode", None) or env.execution_mode or EXECUTION_MODE_DEMO)
+    if mode not in (EXECUTION_MODE_DEMO, EXECUTION_MODE_LIVE):
+        mode = EXECUTION_MODE_DEMO
     return GeminiGoldRuntimeConfig(
         enabled=bool(db_row.enabled) and env.enabled,
         kill_switch=bool(db_row.kill_switch) or env.kill_switch,
@@ -31,6 +61,9 @@ def merge_config(db_row: GeminiGoldConfig, env: GeminiGoldRuntimeConfig) -> Gemi
         demo_user_id=db_row.demo_user_id or env.demo_user_id,
         demo_ctrader_account_id=db_row.demo_ctrader_account_id or env.demo_ctrader_account_id,
         demo_lot_size=float(db_row.demo_lot_size or env.demo_lot_size),
+        execution_mode=mode,
+        live_ctrader_account_id=getattr(db_row, "live_ctrader_account_id", None) or env.live_ctrader_account_id,
+        live_lot_size=float(getattr(db_row, "live_lot_size", None) or env.live_lot_size or 0.01),
         confidence_threshold=int(db_row.confidence_threshold or env.confidence_threshold),
         chart_bars=env.chart_bars,
         chart_bars_1m=env.chart_bars_1m,
@@ -47,6 +80,16 @@ def demo_account_configured(cfg: GeminiGoldRuntimeConfig) -> bool:
     return bool(cfg.demo_ctrader_account_id and str(cfg.demo_ctrader_account_id).strip())
 
 
+def live_account_configured(cfg: GeminiGoldRuntimeConfig) -> bool:
+    return bool(cfg.live_ctrader_account_id and str(cfg.live_ctrader_account_id).strip())
+
+
+def trading_account_configured(cfg: GeminiGoldRuntimeConfig) -> bool:
+    if is_live_execution_mode(cfg):
+        return live_account_configured(cfg)
+    return demo_account_configured(cfg)
+
+
 def assert_demo_account(prefs, ctid: int, cfg: GeminiGoldRuntimeConfig) -> None:
     if cfg.demo_ctrader_account_id and str(ctid) != str(cfg.demo_ctrader_account_id):
         raise DemoAccountRequired(
@@ -59,6 +102,27 @@ def assert_demo_account(prefs, ctid: int, cfg: GeminiGoldRuntimeConfig) -> None:
         raise DemoAccountRequired(
             f"Account {ctid} is not confirmed demo (isLive={live}) — order blocked"
         )
+
+
+def assert_live_account(prefs, ctid: int, cfg: GeminiGoldRuntimeConfig) -> None:
+    if cfg.live_ctrader_account_id and str(ctid) != str(cfg.live_ctrader_account_id):
+        raise LiveAccountRequired(
+            f"ctid {ctid} != configured live GEMINI_GOLD_LIVE_ACCOUNT_ID"
+        )
+    from app.services.ctrader_client import _account_is_live
+
+    live = _account_is_live(prefs, ctid)
+    if live is not True:
+        raise LiveAccountRequired(
+            f"Account {ctid} is not confirmed live (isLive={live}) — order blocked"
+        )
+
+
+def assert_execution_account(prefs, ctid: int, cfg: GeminiGoldRuntimeConfig) -> None:
+    if is_live_execution_mode(cfg):
+        assert_live_account(prefs, ctid, cfg)
+    else:
+        assert_demo_account(prefs, ctid, cfg)
 
 
 def _gemini_execution_filter(q):
@@ -218,7 +282,7 @@ def describe_open_cap_block(
     """Human-readable cap block for Telegram/logs."""
     from app.gemini_gold_trader.reconcile import list_open_executions
 
-    demo_ctid = str(cfg.demo_ctrader_account_id or "").strip() or None
+    demo_ctid = active_ctrader_account_id(cfg)
     opens = open_position_count(db, user_id, demo_ctid=demo_ctid)
     inflight = in_flight_execution_count(db)
     ids: list[str] = []
@@ -242,12 +306,8 @@ def effective_open_slots_used(
     cfg: Optional[GeminiGoldRuntimeConfig] = None,
 ) -> int:
     """Broker-open positions plus in-flight reservations."""
-    demo_ctid = (
-        str(cfg.demo_ctrader_account_id).strip()
-        if cfg and cfg.demo_ctrader_account_id
-        else None
-    )
-    return int(open_position_count(db, user_id, demo_ctid=demo_ctid)) + int(
+    ctid = active_ctrader_account_id(cfg) if cfg else None
+    return int(open_position_count(db, user_id, demo_ctid=ctid)) + int(
         in_flight_execution_count(db)
     )
 
@@ -267,8 +327,8 @@ def check_can_execute(db, cfg: GeminiGoldRuntimeConfig, user_id: int) -> Tuple[b
         return False, "kill_switch"
     if cfg.dry_run:
         return False, "dry_run"
-    if not demo_account_configured(cfg):
-        return False, "no_demo_account"
+    if not trading_account_configured(cfg):
+        return False, "no_trading_account" if is_live_execution_mode(cfg) else "no_demo_account"
     if not cfg.demo_user_id:
         return False, "no_demo_user"
     if trades_today_effective(db) >= cfg.max_trades_day:

@@ -53,6 +53,8 @@ def _build_prompt(
     bars_1h: int,
     entry_timeframe: str = "1m",
     entry_5m_fallback: bool = False,
+    min_sl_pips: float = 10.0,
+    max_sl_pips: float = 150.0,
 ) -> str:
     entry_label = "1-minute" if entry_timeframe == "1m" else "5-minute (1m unavailable)"
     entry_note = (
@@ -63,6 +65,9 @@ def _build_prompt(
         "(micro rejection, engulfing, break of 1m structure) — never TAKE on 1m "
         "alone without a aligned 5m scalp trigger.\n"
     )
+    min_sl = max(1.0, float(min_sl_pips))
+    max_sl = max(min_sl, float(max_sl_pips))
+    sl_range = f"{min_sl:.0f}–{max_sl:.0f}"
     return (
         "You are an experienced XAUUSD SCALPER — you hunt fast, session-local setups "
         "that can play out in minutes to a few hours. You are NOT a swing trader. "
@@ -89,12 +94,12 @@ def _build_prompt(
         "- SKIP any setup that needs a wide stop, a distant entry, or a multi-hour "
         "developing pattern — that is swing trading, not scalping.\n\n"
         "SCALP RISK RULES (mandatory for every TAKE):\n"
-        "- Stop loss: 30–150 platform pips from entry (XAUUSD: 1 pip = $0.10 → "
-        "30 pips ≈ $3, 150 pips ≈ $15 max).\n"
+        f"- Stop loss: {sl_range} platform pips from entry (XAUUSD: 1 pip = $0.10 → "
+        f"{min_sl:.0f} pips ≈ ${min_sl * 0.1:.1f}, {max_sl:.0f} pips ≈ ${max_sl * 0.1:.1f} max).\n"
         "- Take profit: risk:reward 1:1 to 2:1 only — no 3R+ swing targets.\n"
         "- Entry near current price — no \"limit at distant OB\" scalps; if price isn't "
         "there now with a 5m trigger, SKIP.\n"
-        "- If the setup cannot fit 30–150 pip SL with 1–2R TP at current price, SKIP.\n\n"
+        f"- If the setup cannot fit {sl_range} pip SL with 1–2R TP at current price, SKIP.\n\n"
         f"Session: {session}. Spot reference: {spot:.2f}.\n\n"
         "PRICE ANCHORING (mandatory):\n"
         "- Chart prices and spot reference are ground truth.\n"
@@ -120,11 +125,11 @@ def _build_prompt(
         "- Stops beyond 150 pips or TPs implying 3R+ / multi-session holds.\n"
         "- Generic trend narrative without a named scalp pattern above.\n\n"
         "DECISION RULES:\n"
-        "- TAKE: named scalp pattern + 5m trigger (+ 1m entry confirmation when "
-        "visible) + 30–150 pip SL + 1–2R TP + confidence reflects real conviction.\n"
+        f"- TAKE: named scalp pattern + 5m trigger (+ 1m entry confirmation when "
+        f"visible) + {sl_range} pip SL + 1–2R TP + confidence reflects real conviction.\n"
         "- SKIP: no qualifying scalp, swing-style setup, or chop — say which scalp "
         "patterns you checked on 1m/5m/15m and why none qualify.\n\n"
-        "If TAKE: direction, entry near spot, stop_loss, take_profit (1–2R, 30–150 pip SL), "
+        f"If TAKE: direction, entry near spot, stop_loss, take_profit (1–2R, {sl_range} pip SL), "
         "confidence 0–100, rationale naming the scalp pattern and 5m/15m levels.\n\n"
         "If SKIP: action SKIP, null prices, confidence 0–100, rationale plain and specific."
     )
@@ -268,6 +273,8 @@ async def decide_from_charts(
         bars_1h=len(bars_1h),
         entry_timeframe=entry_timeframe,
         entry_5m_fallback=entry_5m_fallback,
+        min_sl_pips=cfg.min_sl_pips,
+        max_sl_pips=cfg.max_sl_pips,
     )
     ohlc_block = _build_ohlc_context(
         entry_bars=entry_bars,

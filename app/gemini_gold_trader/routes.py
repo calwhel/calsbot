@@ -17,16 +17,23 @@ from app.gemini_gold_trader import state as runtime_state
 from app.gemini_gold_trader.accounts import (
     demo_accounts_for_user_id,
     find_demo_account,
+    find_live_account,
+    live_accounts_for_user_id,
     validate_demo_ctid_allowed,
+    validate_live_ctid_allowed,
 )
-from app.gemini_gold_trader.config import env_defaults, gemini_gold_enabled
+from app.gemini_gold_trader.config import EXECUTION_MODE_DEMO, EXECUTION_MODE_LIVE, env_defaults, gemini_gold_enabled
 from app.gemini_gold_trader.guardrails import (
+    active_ctrader_account_id,
     calls_today,
     cost_today_usd,
     demo_account_configured,
     effective_open_slots_used,
+    is_live_execution_mode,
+    live_account_configured,
     merge_config,
     trades_today,
+    trading_account_configured,
 )
 from app.gemini_gold_trader.models import GeminiGoldDecision
 from app.gemini_gold_trader.reconcile import (
@@ -155,6 +162,11 @@ def _config_payload(cfg, cfg_row, env) -> Dict[str, Any]:
         "model": cfg.model,
         "demo_ctrader_account_id": cfg.demo_ctrader_account_id,
         "demo_lot_size": cfg.demo_lot_size,
+        "execution_mode": cfg.execution_mode,
+        "live_ctrader_account_id": cfg.live_ctrader_account_id,
+        "live_lot_size": cfg.live_lot_size,
+        "min_sl_pips": cfg.min_sl_pips,
+        "max_sl_pips": cfg.max_sl_pips,
         "confidence_threshold": cfg.confidence_threshold,
         "env_enabled": gemini_gold_enabled(),
         "calls_reset_at": (
@@ -265,7 +277,10 @@ async def api_status(uid: str = Query(...)):
         trader_uid = _trader_user_id(cfg, admin)
 
         demo_accounts = demo_accounts_for_user_id(db, trader_uid)
-        selected = find_demo_account(demo_accounts, cfg.demo_ctrader_account_id)
+        live_accounts = live_accounts_for_user_id(db, trader_uid)
+        selected_demo = find_demo_account(demo_accounts, cfg.demo_ctrader_account_id)
+        selected_live = find_live_account(live_accounts, cfg.live_ctrader_account_id)
+        active_ctid = active_ctrader_account_id(cfg)
 
         _schedule_status_background_reconcile(trader_uid)
 
@@ -273,19 +288,25 @@ async def api_status(uid: str = Query(...)):
         open_slots_used = 0
         if trader_uid:
             open_execs = list_open_executions(
-                db, int(trader_uid), demo_ctid=cfg.demo_ctrader_account_id
+                db, int(trader_uid), demo_ctid=active_ctid
             )
             open_slots_used = effective_open_slots_used(db, int(trader_uid), cfg)
 
+        mode_label = "Live" if is_live_execution_mode(cfg) else "Demo"
         return {
             "ok": True,
-            "demo_label": "[Gemini Gold] Demo",
+            "demo_label": f"[Gemini Gold] {mode_label}",
             "runtime": runtime_state.get_status(),
             "shared_session_hours": gold_ai_session_hours(),
             "config": _config_payload(cfg, row, env),
             "demo_accounts": demo_accounts,
-            "demo_account_selected": selected,
+            "live_accounts": live_accounts,
+            "demo_account_selected": selected_demo,
+            "live_account_selected": selected_live,
             "demo_account_ready": demo_account_configured(cfg),
+            "live_account_ready": live_account_configured(cfg),
+            "trading_account_ready": trading_account_configured(cfg),
+            "execution_mode": cfg.execution_mode,
             "open_executions": open_execs,
             "open_slots_used": open_slots_used,
             "stats_today": {
@@ -309,6 +330,27 @@ async def api_update_config(request: Request, uid: str = Query(...)):
         env = env_defaults()
         trader_uid = _trader_user_id(merge_config(row, env), admin)
 
+        switching_to_live = (
+            body.get("execution_mode") == EXECUTION_MODE_LIVE
+            and str(getattr(row, "execution_mode", EXECUTION_MODE_DEMO) or EXECUTION_MODE_DEMO)
+            != EXECUTION_MODE_LIVE
+        )
+        if switching_to_live and not body.get("confirm_real_money"):
+            raise HTTPException(
+                status_code=400,
+                detail="confirm_real_money required to switch to live execution",
+            )
+
+        if "execution_mode" in body:
+            mode = str(body.get("execution_mode") or EXECUTION_MODE_DEMO).strip().lower()
+            if mode not in (EXECUTION_MODE_DEMO, EXECUTION_MODE_LIVE):
+                raise HTTPException(status_code=400, detail="execution_mode must be demo or live")
+            row.execution_mode = mode
+            if mode == EXECUTION_MODE_LIVE:
+                row.live_confirmed_at = datetime.utcnow()
+            else:
+                row.live_confirmed_at = None
+
         if "demo_ctrader_account_id" in body:
             raw = body.get("demo_ctrader_account_id")
             ctid = str(raw).strip() if raw not in (None, "") else ""
@@ -322,6 +364,19 @@ async def api_update_config(request: Request, uid: str = Query(...)):
             else:
                 row.demo_ctrader_account_id = None
 
+        if "live_ctrader_account_id" in body:
+            raw = body.get("live_ctrader_account_id")
+            ctid = str(raw).strip() if raw not in (None, "") else ""
+            if ctid:
+                live_list = live_accounts_for_user_id(db, trader_uid)
+                try:
+                    validate_live_ctid_allowed(live_list, ctid)
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e)) from e
+                row.live_ctrader_account_id = ctid
+            else:
+                row.live_ctrader_account_id = None
+
         for field in (
             "enabled",
             "kill_switch",
@@ -329,16 +384,17 @@ async def api_update_config(request: Request, uid: str = Query(...)):
             "max_calls_day",
             "max_trades_day",
             "demo_lot_size",
+            "live_lot_size",
             "confidence_threshold",
         ):
             if field in body:
                 setattr(row, field, body[field])
 
         cfg_after = merge_config(row, env)
-        if body.get("enabled") is True and not demo_account_configured(cfg_after):
+        if body.get("enabled") is True and not trading_account_configured(cfg_after):
             raise HTTPException(
                 status_code=400,
-                detail="Select a demo cTrader account before enabling the trader",
+                detail="Select a demo or live cTrader account before enabling the trader",
             )
         if body.get("enabled") is True and not gemini_gold_enabled():
             raise HTTPException(
@@ -349,6 +405,8 @@ async def api_update_config(request: Request, uid: str = Query(...)):
         if (
             body.get("enabled") is True
             or "demo_ctrader_account_id" in body
+            or "live_ctrader_account_id" in body
+            or "execution_mode" in body
             or not row.demo_user_id
         ):
             _persist_demo_user_from_admin(row, admin)

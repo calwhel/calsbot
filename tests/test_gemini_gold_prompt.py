@@ -48,7 +48,7 @@ def test_build_prompt_includes_scalp_risk_rules():
         session="london", spot=3342.5, bars_1m=60, bars_5m=80, bars_15m=80, bars_1h=60,
     )
     assert "SCALP RISK RULES" in p
-    assert "30–150 platform pips" in p
+    assert "10–150 platform pips" in p
     assert "1:1 to 2:1" in p
 
 

@@ -47,6 +47,10 @@ def gemini_gold_loop_disabled_in_gunicorn() -> bool:
     return _env_bool("DISABLE_GEMINI_GOLD_IN_GUNICORN", True)
 
 
+EXECUTION_MODE_DEMO = "demo"
+EXECUTION_MODE_LIVE = "live"
+
+
 @dataclass
 class GeminiGoldRuntimeConfig:
     enabled: bool
@@ -59,6 +63,9 @@ class GeminiGoldRuntimeConfig:
     demo_user_id: Optional[int]
     demo_ctrader_account_id: Optional[str]
     demo_lot_size: float
+    execution_mode: str
+    live_ctrader_account_id: Optional[str]
+    live_lot_size: float
     confidence_threshold: int
     chart_bars: int
     chart_bars_1m: int
@@ -80,6 +87,10 @@ def env_defaults() -> GeminiGoldRuntimeConfig:
             demo_uid = None
 
     demo_ctid = os.environ.get("GEMINI_GOLD_DEMO_ACCOUNT_ID", "").strip() or None
+    live_ctid = os.environ.get("GEMINI_GOLD_LIVE_ACCOUNT_ID", "").strip() or None
+    exec_mode = os.environ.get("GEMINI_GOLD_EXECUTION_MODE", EXECUTION_MODE_DEMO).strip().lower()
+    if exec_mode not in (EXECUTION_MODE_DEMO, EXECUTION_MODE_LIVE):
+        exec_mode = EXECUTION_MODE_DEMO
 
     return GeminiGoldRuntimeConfig(
         enabled=gemini_gold_enabled(),
@@ -93,10 +104,13 @@ def env_defaults() -> GeminiGoldRuntimeConfig:
         demo_user_id=demo_uid,
         demo_ctrader_account_id=demo_ctid,
         demo_lot_size=max(0.01, _env_float("GEMINI_GOLD_DEMO_LOT", 0.01)),
+        execution_mode=exec_mode,
+        live_ctrader_account_id=live_ctid,
+        live_lot_size=max(0.01, _env_float("GEMINI_GOLD_LIVE_LOT", 0.01)),
         confidence_threshold=_env_int("GEMINI_GOLD_CONFIDENCE_THRESHOLD", 85),
         chart_bars=max(20, _env_int("GEMINI_GOLD_CHART_BARS", 80)),
         chart_bars_1m=max(20, _env_int("GEMINI_GOLD_CHART_BARS_1M", 60)),
-        min_sl_pips=_env_float("GEMINI_GOLD_MIN_SL_PIPS", 30.0),
+        min_sl_pips=_env_float("GEMINI_GOLD_MIN_SL_PIPS", 10.0),
         max_sl_pips=_env_float("GEMINI_GOLD_MAX_SL_PIPS", 150.0),
         min_rr=max(1.0, _env_float("GEMINI_GOLD_MIN_RR", 1.0)),
         max_rr=min(2.0, max(1.0, _env_float("GEMINI_GOLD_MAX_RR", 2.0))),

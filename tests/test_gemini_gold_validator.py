@@ -76,8 +76,8 @@ def test_validate_sl_too_tight():
     decision = {
         "direction": "LONG",
         "entry": 2650.0,
-        "stop_loss": 2649.0,
-        "take_profit": 2660.0,
+        "stop_loss": 2649.5,
+        "take_profit": 2651.0,
     }
     ok, reason, _ = validate_take_decision(decision, cfg=_cfg(), spot=2650.0)
     assert ok is False

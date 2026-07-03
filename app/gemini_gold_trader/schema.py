@@ -9,7 +9,7 @@ from sqlalchemy import inspect, text
 
 from app.database import Base, engine
 from app.db_resilience import run_with_db_retry
-from app.gemini_gold_trader.config import env_defaults
+from app.gemini_gold_trader.config import EXECUTION_MODE_DEMO, env_defaults
 from app.gemini_gold_trader.models import (
     GeminiGoldConfig,
     GeminiGoldDecision,
@@ -24,10 +24,20 @@ _DDL_RETRY_DELAY_S = max(0.1, float(os.environ.get("GEMINI_GOLD_SCHEMA_DDL_RETRY
 
 _GEMINI_GOLD_COLUMN_ALTERS: tuple[tuple[str, str, str], ...] = (
     ("gemini_gold_decisions", "execution_reserved_at", "TIMESTAMP"),
+    ("gemini_gold_config", "execution_mode", "VARCHAR(16) DEFAULT 'demo' NOT NULL"),
+    ("gemini_gold_config", "live_ctrader_account_id", "VARCHAR(40)"),
+    ("gemini_gold_config", "live_lot_size", "FLOAT DEFAULT 0.01 NOT NULL"),
+    ("gemini_gold_config", "live_confirmed_at", "TIMESTAMP"),
 )
 
 _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     "gemini_gold_decisions": ("execution_reserved_at",),
+    "gemini_gold_config": (
+        "execution_mode",
+        "live_ctrader_account_id",
+        "live_lot_size",
+        "live_confirmed_at",
+    ),
 }
 
 
@@ -143,6 +153,9 @@ def seed_config_if_missing(db) -> GeminiGoldConfig:
         demo_ctrader_account_id=d.demo_ctrader_account_id,
         demo_user_id=d.demo_user_id,
         demo_lot_size=d.demo_lot_size,
+        execution_mode=EXECUTION_MODE_DEMO,
+        live_ctrader_account_id=d.live_ctrader_account_id,
+        live_lot_size=d.live_lot_size,
         confidence_threshold=d.confidence_threshold,
     )
     db.add(row)

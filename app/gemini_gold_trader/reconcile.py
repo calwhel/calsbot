@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.gemini_gold_trader.config import GeminiGoldRuntimeConfig
+from app.gemini_gold_trader.guardrails import active_ctrader_account_id
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ async def reconcile_orphan_open_executions(
     if not user:
         return {"ok": False, "error": "user_not_found", "before": [], "closed": []}
 
-    ctid = str(cfg.demo_ctrader_account_id or "").strip() or None
+    ctid = active_ctrader_account_id(cfg)
     open_ids = await get_open_position_ids_for_user_with_retry(
         user,
         ctid=ctid,

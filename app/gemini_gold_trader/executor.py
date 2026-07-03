@@ -1,4 +1,4 @@
-"""Demo order execution for Gemini Gold Trader."""
+"""Demo and live order execution for Gemini Gold Trader."""
 from __future__ import annotations
 
 import logging
@@ -9,11 +9,20 @@ from typing import Any, Dict, Optional, Tuple
 from app.gemini_gold_trader.config import ASSET_CLASS, SYMBOL, GeminiGoldRuntimeConfig
 from app.gemini_gold_trader.db_thread import db_commit, run_in_db_thread
 from app.gemini_gold_trader.fire_validation import revalidate_before_fire
-from app.gemini_gold_trader.guardrails import DemoAccountRequired, assert_demo_account, clear_execution_reservation
+from app.gemini_gold_trader.guardrails import (
+    DemoAccountRequired,
+    LiveAccountRequired,
+    active_ctrader_account_id,
+    active_lot_size,
+    assert_execution_account,
+    clear_execution_reservation,
+    is_live_execution_mode,
+)
 
 logger = logging.getLogger(__name__)
 
-GEMINI_GOLD_STRATEGY_NAME = "Gemini Gold Trader (Demo)"
+GEMINI_GOLD_STRATEGY_NAME_DEMO = "Gemini Gold Trader (Demo)"
+GEMINI_GOLD_STRATEGY_NAME_LIVE = "Gemini Gold Trader (Live)"
 
 
 def _parse_direction(decision: Dict[str, Any]) -> Optional[str]:
@@ -38,14 +47,15 @@ def _parse_prices(decision: Dict[str, Any]) -> Optional[Tuple[str, float, float,
     return direction, entry, sl, tp
 
 
-def ensure_system_strategy(db, user_id: int) -> int:
+def ensure_system_strategy(db, user_id: int, *, live: bool = False) -> int:
     from app.strategy_models import UserStrategy
 
+    name = GEMINI_GOLD_STRATEGY_NAME_LIVE if live else GEMINI_GOLD_STRATEGY_NAME_DEMO
     row = (
         db.query(UserStrategy)
         .filter(
             UserStrategy.user_id == user_id,
-            UserStrategy.name == GEMINI_GOLD_STRATEGY_NAME,
+            UserStrategy.name == name,
         )
         .first()
     )
@@ -53,12 +63,17 @@ def ensure_system_strategy(db, user_id: int) -> int:
         return row.id
     row = UserStrategy(
         user_id=user_id,
-        name=GEMINI_GOLD_STRATEGY_NAME,
-        description="Gemini Vision XAUUSD demo trader (isolated module)",
+        name=name,
+        description=(
+            "Gemini Vision XAUUSD live trader (isolated module)"
+            if live
+            else "Gemini Vision XAUUSD demo trader (isolated module)"
+        ),
         config={
             "asset_class": ASSET_CLASS,
             "symbol": SYMBOL,
             "gemini_gold_trader": True,
+            "gemini_gold_live": live,
         },
         is_active=True,
     )
@@ -68,7 +83,7 @@ def ensure_system_strategy(db, user_id: int) -> int:
     return row.id
 
 
-def _resolve_demo_trader(db, cfg: GeminiGoldRuntimeConfig):
+def _resolve_trader(db, cfg: GeminiGoldRuntimeConfig):
     from app.models import User, UserPreference
     from app.services.ctrader_client import resolve_ctrader_ctid
 
@@ -81,14 +96,14 @@ def _resolve_demo_trader(db, cfg: GeminiGoldRuntimeConfig):
     if not prefs or not prefs.ctrader_access_token:
         return None, None, None
     ctid_str = resolve_ctrader_ctid(
-        execution_account_id=cfg.demo_ctrader_account_id,
+        execution_account_id=active_ctrader_account_id(cfg),
         prefs_default=prefs.ctrader_account_id,
     )
     if not ctid_str:
         return None, None, None
     try:
-        assert_demo_account(prefs, int(ctid_str), cfg)
-    except DemoAccountRequired:
+        assert_execution_account(prefs, int(ctid_str), cfg)
+    except (DemoAccountRequired, LiveAccountRequired):
         return None, None, None
     return user, prefs, int(ctid_str)
 
@@ -102,7 +117,7 @@ async def execute_take_market(
     spot_hint: float,
     order_ctx: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
-    """Place demo market order; return StrategyExecution.id."""
+    """Place market order on configured demo or live account."""
 
     async def _fail_async(reason: str, *, clear_reserve: bool = True) -> None:
         if order_ctx is not None:
@@ -115,10 +130,10 @@ async def execute_take_market(
         await _fail_async("blocked: no_demo_user")
         return None
 
-    user, prefs, ctid = await run_in_db_thread(_resolve_demo_trader, db, cfg)
+    user, prefs, ctid = await run_in_db_thread(_resolve_trader, db, cfg)
     if not user or not prefs or not ctid:
-        logger.warning("[gemini-gold] demo trader resolution failed")
-        await _fail_async("blocked: demo_trader_resolution_failed")
+        logger.warning("[gemini-gold] trader resolution failed mode=%s", cfg.execution_mode)
+        await _fail_async("blocked: trader_resolution_failed")
         return None
 
     fire_ok, fire_reason, decision = await revalidate_before_fire(
@@ -148,6 +163,7 @@ async def execute_take_market(
     latency = new_order_latency(decision_id, signal_mono=time.monotonic())
     latency.mark_queued()
     latency.mark_dequeue()
+    live_mode = is_live_execution_mode(cfg)
     result = await place_market_order_resilient(
         user_id=user.id,
         access_token=token,
@@ -155,7 +171,7 @@ async def execute_take_market(
         prefs=prefs,
         symbol_name=SYMBOL,
         direction=direction,
-        volume_lots=max(0.01, float(cfg.demo_lot_size or 0.01)),
+        volume_lots=active_lot_size(cfg),
         stop_loss_price=sl,
         take_profit_price=tp,
         entry_price=entry,
@@ -174,10 +190,11 @@ async def execute_take_market(
                 order_ctx["broker_error"] = str(broker_err)[:240]
                 order_ctx["block_reason"] = str(broker_err)[:240]
             elif not order_ctx.get("block_reason"):
-                order_ctx["block_reason"] = "demo order rejected"
+                order_ctx["block_reason"] = "order rejected"
         logger.warning(
-            "[gemini-gold] order failed decision_id=%s broker_error=%s result=%s",
+            "[gemini-gold] order failed decision_id=%s mode=%s broker_error=%s result=%s",
             decision_id,
+            cfg.execution_mode,
             broker_err,
             result,
         )
@@ -206,8 +223,10 @@ async def execute_take_market(
     except Exception:
         broker_units_i = None
 
-    strategy_id = await run_in_db_thread(ensure_system_strategy, db, user.id)
+    strategy_id = await run_in_db_thread(ensure_system_strategy, db, user.id, live=live_mode)
     note = f"gemini_gold_trader decision_id={decision_id}"
+    if live_mode:
+        note += " | live"
     order_id = result.get("order_id")
     position_id = result.get("position_id")
     if order_id:
@@ -242,10 +261,12 @@ async def execute_take_market(
     await db_commit(db)
     await run_in_db_thread(db.refresh, ex)
     logger.info(
-        "[gemini-gold] DEMO order placed exec=%s %s %s @ %s",
+        "[gemini-gold] %s order placed exec=%s %s %s @ %s ctid=%s",
+        "LIVE" if live_mode else "DEMO",
         ex.id,
         direction,
         SYMBOL,
         fill,
+        ctid,
     )
     return ex.id

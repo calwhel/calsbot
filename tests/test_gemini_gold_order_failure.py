@@ -37,7 +37,7 @@ def test_loop_surfaces_broker_error_in_block_reason():
 
 def test_executor_records_broker_error_in_order_ctx():
     assert 'order_ctx["block_reason"]' in EXECUTOR
-    assert "cfg.demo_lot_size or 0.01" in EXECUTOR
+    assert "active_lot_size(cfg)" in EXECUTOR
     assert "broker fill without position_id" in EXECUTOR
 
 
