@@ -55,6 +55,10 @@ def test_get_chart_klines_falls_back_to_postgres_when_tradfi_is_coinbase():
             "app.services.tradfi_prices.get_metal_kline_source",
             return_value="coinbase",
         ), patch(
+            "app.gemini_gold_trader.klines._fetch_ctrader_chart_klines",
+            new_callable=AsyncMock,
+            return_value=([], ""),
+        ), patch(
             "app.services.kline_snapshot_store.get_klines",
             return_value=snap,
         ), patch(
@@ -100,8 +104,18 @@ def test_get_chart_klines_falls_back_to_postgres_snapshot():
     asyncio.run(_run())
 
 
-def test_klines_ready_requires_min_bars():
+def test_klines_ready_requires_core_timeframes_only():
     from app.gemini_gold_trader.klines import klines_ready
 
-    assert klines_ready(_bars(25), _bars(25), _bars(25), _bars(25)) is True
-    assert klines_ready(_bars(5), _bars(25), _bars(25), _bars(25)) is False
+    assert klines_ready(_bars(25), _bars(25), _bars(25)) is True
+    assert klines_ready(_bars(5), _bars(25), _bars(25)) is False
+
+
+def test_resolve_entry_chart_falls_back_to_5m():
+    from app.gemini_gold_trader.klines import resolve_entry_chart
+
+    k5 = _bars(40)
+    entry, tf, fb = resolve_entry_chart([], k5)
+    assert fb is True
+    assert tf == "5m"
+    assert len(entry) == 40

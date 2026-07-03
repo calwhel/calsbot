@@ -241,7 +241,7 @@ def _ctrader_unavailable_reason(symbol: str) -> str:
         ):
             return "oauth expired — relink cTrader"
         st = _ctf.feed_status()
-        if not st.get("subscribed") and not st.get("remote_live"):
+        if not st.get("subscribed") and not st.get("remote_live") and not st.get("live"):
             return "feed task not running"
         if st.get("needs_relink"):
             return "needs relink"
@@ -1113,6 +1113,39 @@ async def _fetch_kraken_metals_klines(
     return []
 
 
+def _metal_klines_from_postgres_snapshot(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+) -> List[List[float]]:
+    """Cross-worker cTrader OHLC from Postgres before Coinbase/Kraken fallback."""
+    try:
+        from app.services.kline_snapshot_store import get_klines as snap_get
+        from app.services.kline_staleness import newest_bar_age_s, stale_limit_s
+        from app.services.ctrader_price_feed import apply_live_spot_to_klines
+
+        rows = snap_get(symbol.upper(), timeframe, limit, source="ctrader")
+        if not rows:
+            return []
+        rows = apply_live_spot_to_klines(
+            rows, symbol.upper(), timeframe, limit, log_remote=False,
+        )
+        min_need = min(_metal_kline_min_bars(limit), 15)
+        if len(rows) < min_need:
+            return []
+        if newest_bar_age_s(rows) > stale_limit_s(timeframe):
+            return []
+        return rows
+    except Exception as exc:
+        logger.debug(
+            "[tradfi] postgres kline snapshot miss %s %s: %s",
+            symbol,
+            timeframe,
+            exc,
+        )
+        return []
+
+
 async def fetch_metal_live_candles(
     symbol: str,
     timeframe: str,
@@ -1224,6 +1257,24 @@ async def fetch_metal_live_candles(
                     f"[tradfi] metal-live cTrader empty {sym} {timeframe} "
                     f"— falling back to externals"
                 )
+
+        if ctrader_tried:
+            snap_rows = _metal_klines_from_postgres_snapshot(sym, timeframe, limit)
+            if snap_rows:
+                label = "ctrader-cache"
+                out = snap_rows[-limit:] if len(snap_rows) > limit else snap_rows
+                _METAL_KLINE_SOURCE_CACHE[(sym, timeframe, int(limit))] = (
+                    label, datetime.utcnow(),
+                )
+                logger.info(
+                    "[prices] %s kline_source=%s %s → %d bars (postgres snapshot)",
+                    sym,
+                    label,
+                    timeframe,
+                    len(out),
+                )
+                _log_metal_kline_trace(sym, timeframe, trace)
+                return out
 
         _kraken_pair = _KRAKEN_METAL_MAP.get(sym, "")
         _kraken_iv = _KRAKEN_INTERVAL.get(timeframe, "")

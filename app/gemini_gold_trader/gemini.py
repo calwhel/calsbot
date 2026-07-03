@@ -50,7 +50,18 @@ def _build_prompt(
     bars_5m: int,
     bars_15m: int,
     bars_1h: int,
+    entry_timeframe: str = "1m",
+    entry_5m_fallback: bool = False,
 ) -> str:
+    entry_label = "1-minute" if entry_timeframe == "1m" else "5-minute (1m unavailable)"
+    entry_note = (
+        "- Image 1 is recent 5m bars (broker 1m unavailable) — use it for entry "
+        "timing only; still require a live 5m trigger on Image 2.\n"
+        if entry_5m_fallback
+        else "- 1-minute chart: refine entry timing and confirm 5m trigger is live "
+        "(micro rejection, engulfing, break of 1m structure) — never TAKE on 1m "
+        "alone without a aligned 5m scalp trigger.\n"
+    )
     return (
         "You are an experienced XAUUSD SCALPER — you hunt fast, session-local setups "
         "that can play out in minutes to a few hours. You are NOT a swing trader. "
@@ -59,15 +70,13 @@ def _build_prompt(
         "risk-first: skip unclear chop rather than force a trade.\n\n"
         "SCALP MANDATE (read this before every decision):\n"
         "- You receive FOUR charts in order (low → high timeframe):\n"
-        f"  Image 1: 1-minute ({bars_1m} candles) — entry timing / micro confirmation.\n"
+        f"  Image 1: {entry_label} ({bars_1m} candles) — entry timing / micro confirmation.\n"
         f"  Image 2: 5-minute ({bars_5m} candles) — PRIMARY scalp trigger.\n"
         f"  Image 3: 15-minute ({bars_15m} candles) — structure, zones, session levels.\n"
         f"  Image 4: 1-hour ({bars_1h} candles) — bias/context ONLY.\n"
         "- PRIMARY trigger timeframe: 5-minute chart — sweep, OB/FVG reaction, ORB "
         "break, momentum, and MSS must be visible and actionable NOW on 5m.\n"
-        "- 1-minute chart: refine entry timing and confirm 5m trigger is live "
-        "(micro rejection, engulfing, break of 1m structure) — never TAKE on 1m "
-        "alone without a aligned 5m scalp trigger.\n"
+        f"{entry_note}"
         "- 15-minute chart: structure and zone context — where OBs/FVGs/session "
         "levels sit; must align with 5m trigger, not replace it.\n"
         "- 1-hour chart: session bias ONLY. Never TAKE solely because 1h \"looks "
@@ -186,6 +195,8 @@ async def decide_from_charts(
     bars_5m: int,
     bars_15m: int,
     bars_1h: int,
+    entry_timeframe: str = "1m",
+    entry_5m_fallback: bool = False,
 ) -> Tuple[Optional[Dict[str, Any]], int, int, float, Optional[str]]:
     """
     Call Gemini vision. Returns (decision_dict, tokens_in, tokens_out, cost_usd, error).
@@ -203,6 +214,8 @@ async def decide_from_charts(
         bars_5m=bars_5m,
         bars_15m=bars_15m,
         bars_1h=bars_1h,
+        entry_timeframe=entry_timeframe,
+        entry_5m_fallback=entry_5m_fallback,
     )
 
     def _call():

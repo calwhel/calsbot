@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from app.gold_ai_trader.config import ASSET_CLASS, SYMBOL
 from app.gold_ai_trader.klines import fetch_gold_scoring_k5, synthesize_gold_scoring_k5
-from app.services.kline_staleness import check_cached_klines_stale, newest_bar_age_s
+from app.services.kline_staleness import check_cached_klines_stale, newest_bar_age_s, stale_limit_s
 from app.services.tradfi_prices import (
     get_metal_kline_fetched_at,
     get_metal_kline_fetch_age_s,
@@ -33,6 +33,24 @@ def _ctrader_trendbar_block_state() -> Tuple[bool, str]:
         return bool(reason), str(reason or "")
     except Exception as exc:
         return False, f"status_unavailable:{type(exc).__name__}"
+
+
+def _fresh_ctrader_snapshot_klines(data: Dict[str, Any]) -> bool:
+    """True when broker klines are fresh enough to score without a live tick socket."""
+    ks = (data.get("kline_source") or "").lower()
+    if ks not in _CTRADER_KLINE_SOURCES:
+        return False
+    if data.get("kline_synthetic"):
+        return False
+    if int(data.get("kline_bars") or 0) < MIN_KLINE_BARS:
+        return False
+    bar_age = data.get("kline_bar_age_s")
+    if bar_age is None:
+        return False
+    try:
+        return float(bar_age) <= stale_limit_s(SCORING_TIMEFRAME)
+    except (TypeError, ValueError):
+        return False
 
 
 async def _resolve_ctrader_spot(
@@ -128,6 +146,7 @@ async def assess_gold_market_data(
     price_source = live_source or "unknown"
 
     k5, kline_source = await fetch_gold_scoring_k5(user_id=user_id)
+    k5 = synthesize_gold_scoring_k5(k5)
     kline_fetched_at = get_metal_kline_fetched_at(
         sym, SCORING_TIMEFRAME, SCORING_KLINE_LIMIT
     )
@@ -140,15 +159,25 @@ async def assess_gold_market_data(
     )
     trendbar_blocked, trendbar_block_reason = _ctrader_trendbar_block_state()
 
-    # Display-only fallback when ticks are cold — never passes Claude gate.
-    if not live_px and k5 and (kline_source or "").lower() in _CTRADER_KLINE_SOURCES:
+    snapshot_fresh = False
+    if k5 and (kline_source or "").lower() in _CTRADER_KLINE_SOURCES:
+        try:
+            snapshot_fresh = (
+                kline_bar_age_s is not None
+                and float(kline_bar_age_s) <= stale_limit_s(SCORING_TIMEFRAME)
+            )
+        except (TypeError, ValueError):
+            snapshot_fresh = False
+
+    if not live_px and k5 and snapshot_fresh:
         try:
             kline_close_px = float(k5[-1][4])
             live_px = kline_close_px
             price_source = "ctrader_kline_close"
             spot_tick_cold = True
             logger.info(
-                "[gold-ai] spot from cTrader %s close (tick cold) price=%.4f — gate will block",
+                "[gold-ai] spot from cTrader %s close (tick cold) price=%.4f — "
+                "snapshot fresh, scoring allowed",
                 SCORING_TIMEFRAME,
                 kline_close_px,
             )
@@ -158,9 +187,13 @@ async def assess_gold_market_data(
     klines_stale = False
     stale_reason = ""
     if k5:
-        klines_stale, stale_reason = await check_cached_klines_stale(
-            sym, k5, SCORING_TIMEFRAME, cache_fetched_at=kline_fetched_at
-        )
+        if snapshot_fresh:
+            klines_stale = False
+            stale_reason = ""
+        else:
+            klines_stale, stale_reason = await check_cached_klines_stale(
+                sym, k5, SCORING_TIMEFRAME, cache_fetched_at=kline_fetched_at
+            )
 
     price = live_px
     if not price and k5:
@@ -187,6 +220,7 @@ async def assess_gold_market_data(
         "user_id": user_id,
         "spot_tick_cold": spot_tick_cold,
         "spot_tick_age_s": spot_tick_age_s,
+        "snapshot_fresh": snapshot_fresh,
     }
 
 
@@ -221,7 +255,9 @@ def gold_data_ok_for_claude(data: Dict[str, Any]) -> Tuple[bool, str]:
         reason = data.get("stale_reason") or "stale"
         return False, f"stale_klines:{reason}"
 
-    if data.get("spot_tick_cold"):
+    snapshot_ok = _fresh_ctrader_snapshot_klines(data)
+
+    if data.get("spot_tick_cold") and not snapshot_ok:
         age = data.get("spot_tick_age_s")
         if age is not None:
             return False, f"tick_cold:age={float(age):.0f}s"
@@ -230,7 +266,10 @@ def gold_data_ok_for_claude(data: Dict[str, Any]) -> Tuple[bool, str]:
     live_src = (data.get("live_source") or "").lower()
     if live_src not in _CTRADER_PRICE_SOURCES:
         ps = (data.get("price_source") or "").lower()
-        return False, f"non_ctrader_price:{live_src or ps or 'unknown'}"
+        if ps == "ctrader_kline_close" and snapshot_ok:
+            pass
+        else:
+            return False, f"non_ctrader_price:{live_src or ps or 'unknown'}"
 
     return True, "ok"
 

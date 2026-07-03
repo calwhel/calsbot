@@ -1,4 +1,4 @@
-"""Kline access for Gemini Vision charts — tradfi chain + postgres snapshot fallback."""
+"""Gemini Gold kline + scan chart resolution."""
 from __future__ import annotations
 
 import logging
@@ -44,6 +44,35 @@ def _bars_fresh(bars: List[List[float]], timeframe: str) -> bool:
     if len(bars) < _min_bars():
         return False
     return newest_bar_age_s(bars) <= stale_limit_s(timeframe)
+
+
+async def _fetch_ctrader_chart_klines(
+    timeframe: str,
+    limit: int,
+    *,
+    user_id: Optional[int] = None,
+) -> Tuple[List[List[float]], str]:
+    """Direct cTrader trendbars — bypasses tradfi metal cache."""
+    try:
+        from app.services import ctrader_price_feed as ctf
+
+        block = ctf.trendbar_fetch_blocked_reason()
+        if block:
+            return [], ""
+        rows = await ctf.get_klines(
+            SYMBOL,
+            ASSET_CLASS,
+            timeframe,
+            limit,
+            user_id=user_id,
+        )
+        rows = _synthesize_forming_bar(rows or [], timeframe, limit)
+        if _bars_fresh(rows, timeframe):
+            label = "ctrader-user" if user_id else "ctrader"
+            return rows, label
+    except Exception as exc:
+        logger.debug("[gemini-gold] direct ctrader %s failed: %s", timeframe, exc)
+    return [], ""
 
 
 def _try_postgres_ctrader_snapshot(
@@ -120,6 +149,18 @@ async def get_chart_klines(
         meta["last_close"] = float(bars[-1][4]) if len(bars[-1]) > 4 else None
         return bars, meta
 
+    if not _is_ctrader_kline_source(tradfi_source):
+        ct_rows, ct_src = await _fetch_ctrader_chart_klines(
+            timeframe, limit, user_id=user_id,
+        )
+        if ct_rows:
+            meta["source"] = ct_src
+            meta["bars"] = len(ct_rows)
+            meta["status"] = "ok"
+            meta["bar_age_s"] = newest_bar_age_s(ct_rows)
+            meta["last_close"] = float(ct_rows[-1][4]) if len(ct_rows[-1]) > 4 else None
+            return ct_rows, meta
+
     snap_rows, ok = _try_postgres_ctrader_snapshot(
         timeframe,
         limit,
@@ -150,12 +191,41 @@ async def get_chart_klines(
 
 
 def klines_ready(
-    bars_1m: List,
     bars_5m: List,
     bars_15m: List,
     bars_1h: List,
     *,
     min_bars: Optional[int] = None,
 ) -> bool:
+    """Core scalp stack — 5m trigger, 15m structure, 1h bias."""
     mb = min_bars if min_bars is not None else _min_bars()
-    return all(len(bars) >= mb for bars in (bars_1m, bars_5m, bars_15m, bars_1h))
+    return all(len(bars) >= mb for bars in (bars_5m, bars_15m, bars_1h))
+
+
+def has_1m_chart(bars_1m: List, *, min_bars: Optional[int] = None) -> bool:
+    mb = min_bars if min_bars is not None else _min_bars()
+    return len(bars_1m) >= mb
+
+
+def resolve_entry_chart(
+    bars_1m: List[List[float]],
+    bars_5m: List[List[float]],
+    *,
+    min_bars: Optional[int] = None,
+) -> Tuple[List[List[float]], str, bool]:
+    """
+    Return (entry_bars, entry_timeframe_label, used_5m_fallback).
+
+    When broker 1m is unavailable, use recent 5m bars for entry timing.
+    """
+    mb = min_bars if min_bars is not None else _min_bars()
+    if len(bars_1m) >= mb:
+        return bars_1m, "1m", False
+    if len(bars_5m) >= mb:
+        window = min(len(bars_5m), max(mb, 40))
+        logger.info(
+            "[gemini-gold] 1m unavailable — using recent %d×5m bars for entry timing",
+            window,
+        )
+        return bars_5m[-window:], "5m", True
+    return [], "1m", False
