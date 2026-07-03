@@ -335,17 +335,18 @@ def _schedule_watchdog_task() -> None:
     logger.info("[gold-ai-trader] watchdog task scheduled")
 
 
-def _watchdog_snapshot() -> tuple[bool, bool, str | None, float | None]:
-    """Return (enabled, kill_switch, active_session, heartbeat_age_s)."""
+def _watchdog_snapshot() -> tuple[bool, bool, str | None, float | None, float | None]:
+    """Return (enabled, kill_switch, active_session, scan_age_s, loop_age_s)."""
     env = env_defaults()
     cfg = env
     cfg = with_db_session(_load_merged_config)(env)
     if not cfg.enabled:
-        return False, bool(cfg.kill_switch), None, None
+        return False, bool(cfg.kill_switch), None, None, None
     session = active_session(datetime.utcnow(), cfg)
-    last = _freshest_scan_heartbeat_utc()
-    age_s = (datetime.utcnow() - last).total_seconds() if last else None
-    return True, bool(cfg.kill_switch), session, age_s
+    last_scan = _freshest_scan_heartbeat_utc()
+    scan_age_s = (datetime.utcnow() - last_scan).total_seconds() if last_scan else None
+    loop_age_s = loop_heartbeat_age_seconds()
+    return True, bool(cfg.kill_switch), session, scan_age_s, loop_age_s
 
 
 async def _stop_loop_task(reason: str) -> None:
@@ -420,6 +421,13 @@ def scan_heartbeat_age_seconds() -> float | None:
     return max(0.0, (datetime.utcnow() - last).total_seconds())
 
 
+def loop_heartbeat_age_seconds() -> float | None:
+    last = _parse_last_scan_at(runtime_state.get_status().get("last_loop_at"))
+    if last is None:
+        return None
+    return max(0.0, (datetime.utcnow() - last).total_seconds())
+
+
 async def ensure_scan_liveness() -> str:
     """Read-only scan health for status API (recovery is watchdog-owned)."""
     if not gold_ai_trader_enabled():
@@ -462,14 +470,26 @@ async def _watchdog_loop_forever() -> None:
                 await _restart_background_loop("loop_task_missing_or_done")
                 await asyncio.sleep(interval_s)
                 continue
-            enabled, kill_switch, session, age_s = await run_in_db_thread(_watchdog_snapshot)
-            if not enabled or kill_switch or not session:
+            enabled, kill_switch, session, scan_age_s, loop_age_s = await run_in_db_thread(
+                _watchdog_snapshot
+            )
+            if not enabled or kill_switch:
                 await asyncio.sleep(interval_s)
                 continue
-            loop_age_s = max(0.0, time.monotonic() - _loop_task_started_mono)
-            if loop_age_s < startup_grace_s:
+            loop_age_s = loop_age_s if loop_age_s is not None else -1.0
+            loop_age_s = max(0.0, float(loop_age_s))
+            if not session:
+                if loop_age_s > stale_after_s:
+                    reason = f"stale_loop outside_session loop_age_s={int(loop_age_s)}"
+                    logger.error("[gold-ai-trader] watchdog detected %s", reason)
+                    await _restart_background_loop(reason)
                 await asyncio.sleep(interval_s)
                 continue
+            loop_task_age_s = max(0.0, time.monotonic() - _loop_task_started_mono)
+            if loop_task_age_s < startup_grace_s:
+                await asyncio.sleep(interval_s)
+                continue
+            age_s = scan_age_s
             if age_s is None or age_s > stale_after_s:
                 reason = (
                     f"stale_heartbeat session={session} age_s="
@@ -888,13 +908,16 @@ async def run_gold_ai_trader_loop() -> None:
     global _prev_session
     env = env_defaults()
     if not env.enabled:
+        runtime_state.note_loop_tick(dormant_reason="disabled")
         runtime_state.note_dormant("disabled")
         return
 
     cfg = await run_with_db(_load_merged_config, env)
 
     if cfg.kill_switch or not cfg.enabled:
-        runtime_state.note_dormant("killed" if cfg.kill_switch else "disabled")
+        reason = "killed" if cfg.kill_switch else "disabled"
+        runtime_state.note_loop_tick(dormant_reason=reason)
+        runtime_state.note_dormant(reason)
         await asyncio.sleep(max(cfg.scan_interval_s, 15))
         return
 
@@ -904,6 +927,7 @@ async def run_gold_ai_trader_loop() -> None:
         if _prev_session == "new_york" and cfg.no_overnight:
             await _call_with_db_session(flatten_open_demo_positions, cfg=cfg)
         _prev_session = None
+        runtime_state.note_loop_tick(dormant_reason="outside_session")
         runtime_state.note_dormant("outside_session")
         await asyncio.sleep(max(cfg.scan_interval_s, 15))
         return
@@ -914,6 +938,7 @@ async def run_gold_ai_trader_loop() -> None:
     orb_enabled = bool(getattr(cfg, "orb_enabled", False))
     killzone_blocked = killzone_only_enabled() and not in_killzone(now, session, cfg)
     if killzone_blocked and not orb_enabled and not killzone_override_enabled():
+        runtime_state.note_loop_tick(dormant_reason="outside_killzone")
         runtime_state.note_dormant("outside_killzone")
         await asyncio.sleep(max(cfg.scan_interval_s, 15))
         return
@@ -929,6 +954,7 @@ async def run_gold_ai_trader_loop() -> None:
         if not killzone_blocked or killzone_override_scan:
             ok_call, reason = await run_with_db(_check_can_call_claude_db, cfg)
             if not ok_call:
+                runtime_state.note_loop_tick(dormant_reason=reason)
                 runtime_state.note_dormant(reason)
                 if reason == "max_calls_day":
                     await _call_with_db_session(maybe_notify_call_cap_reached, cfg=cfg)

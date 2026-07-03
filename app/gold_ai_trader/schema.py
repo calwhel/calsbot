@@ -102,6 +102,22 @@ def _alter_sql(dialect: str, table: str, column: str, col_def: str) -> str:
     return f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_def}"
 
 
+def _column_exists(conn, table: str, column: str) -> bool:
+    dialect = engine.dialect.name
+    if dialect == "sqlite":
+        existing = {c["name"] for c in inspect(conn).get_columns(table)}
+        return column in existing
+    row = conn.execute(
+        text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = :table_name "
+            "AND column_name = :column_name LIMIT 1"
+        ),
+        {"table_name": table, "column_name": column},
+    ).first()
+    return row is not None
+
+
 def _apply_alters() -> None:
     """Run each ALTER in its own transaction — PG aborts the whole txn on one failure."""
     dialect = engine.dialect.name
@@ -111,8 +127,7 @@ def _apply_alters() -> None:
                 with engine.begin() as conn:
                     if not inspect(conn).has_table(table):
                         return
-                    existing = {c["name"] for c in inspect(conn).get_columns(table)}
-                    if column in existing:
+                    if _column_exists(conn, table, column):
                         return
                     sql = _alter_sql(dialect, table, column, col_def)
                     conn.execute(text(sql))
