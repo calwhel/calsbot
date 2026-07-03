@@ -28,6 +28,21 @@ def test_build_prompt_includes_four_chart_timeframes():
     assert "1-minute chart: refine entry timing" in p
 
 
+def test_build_prompt_entry_5m_fallback_note():
+    p = _build_prompt(
+        session="london",
+        spot=3342.5,
+        bars_1m=40,
+        bars_5m=80,
+        bars_15m=80,
+        bars_1h=60,
+        entry_timeframe="5m",
+        entry_5m_fallback=True,
+    )
+    assert "5-minute (1m unavailable)" in p
+    assert "broker 1m unavailable" in p
+
+
 def test_build_prompt_includes_scalp_risk_rules():
     p = _build_prompt(
         session="london", spot=3342.5, bars_1m=60, bars_5m=80, bars_15m=80, bars_1h=60,

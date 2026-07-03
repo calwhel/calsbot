@@ -72,7 +72,7 @@ async def _hard_refresh_scoring_k5(
         block_reason = trendbar_fetch_blocked_reason() or ""
         restarted = await _maybe_restart_ctrader_builder(reason)
         if restarted:
-            await sweep_stale_klines(symbols=[SYMBOL], timeframes=["5m", "15m", "1h"])
+            await sweep_stale_klines(symbols=[SYMBOL], timeframes=["1m", "5m", "15m", "1h"])
     except Exception as exc:
         logger.warning("[gold-ai] ctrader builder restart failed: %s", exc)
 
@@ -116,8 +116,8 @@ async def refresh_gold_scoring_klines(*, user_id: Optional[int] = None) -> dict:
         from app.services.ctrader_price_feed import sweep_stale_klines
 
         m_res, c_res = await asyncio.gather(
-            sweep_stale_metal_klines([SYMBOL], timeframes=["5m", "15m", "1h"]),
-            sweep_stale_klines(symbols=[SYMBOL], timeframes=["5m", "15m", "1h"]),
+            sweep_stale_metal_klines([SYMBOL], timeframes=["1m", "5m", "15m", "1h"]),
+            sweep_stale_klines(symbols=[SYMBOL], timeframes=["1m", "5m", "15m", "1h"]),
             return_exceptions=True,
         )
         if isinstance(m_res, Exception):

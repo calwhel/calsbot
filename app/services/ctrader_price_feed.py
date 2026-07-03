@@ -828,11 +828,12 @@ async def _prefetch_key_trendbars(
 ) -> None:
     """Seed kline cache at connect — one fetch per key metal/timeframe."""
     for sym in ("XAUUSD", "XAGUSD"):
-        for tf in ("5m", "15m", "1h"):
-            rows = await _read_trendbars_inline(reader, writer, ctid, sym, tf, 80)
+        for tf in ("1m", "5m", "15m", "1h"):
+            lim = 60 if tf == "1m" else 80
+            rows = await _read_trendbars_inline(reader, writer, ctid, sym, tf, lim)
             if rows:
                 now = time.monotonic()
-                _kline_cache[(sym, tf, 80)] = (rows, now)
+                _kline_cache[(sym, tf, lim)] = (rows, now)
                 _last_kline_update[sym] = now
                 _trendbar_last_api[(sym, tf)] = now
                 _note_trendbar_ok(sym)
@@ -967,10 +968,28 @@ def _is_live_for_ctid(prefs, ctid: int) -> bool:
     return True if val is None else bool(val)
 
 
+def _preferred_feed_user_id() -> Optional[int]:
+    for env_name in (
+        "CTRADER_FEED_PREFERRED_USER_ID",
+        "GOLD_AI_USER_ID",
+        "GEMINI_GOLD_USER_ID",
+    ):
+        raw = (os.environ.get(env_name) or "").strip()
+        if raw.isdigit():
+            return int(raw)
+    return None
+
+
 def _dedupe_accounts_by_ctid(
     accounts: List[Tuple[str, int, int, bool]],
 ) -> List[Tuple[str, int, int, bool]]:
-    """Keep one owner row per ctid (first row wins due ordered priority)."""
+    """Keep one owner row per ctid (preferred trader uid wins, else first row)."""
+    preferred = _preferred_feed_user_id()
+    if preferred is not None:
+        accounts = sorted(
+            accounts,
+            key=lambda row: (0 if row[2] == preferred else 1, -int(row[2])),
+        )
     deduped: List[Tuple[str, int, int, bool]] = []
     first_owner: Dict[int, int] = {}
     dropped: Dict[int, List[int]] = {}
