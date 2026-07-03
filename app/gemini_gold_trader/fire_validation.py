@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
-from app.gemini_gold_trader.config import ASSET_CLASS, SYMBOL
+from app.gemini_gold_trader.config import ASSET_CLASS, SYMBOL, GeminiGoldRuntimeConfig
 from app.gemini_gold_trader.validator import validate_take_decision
-from app.gemini_gold_trader.config import GeminiGoldRuntimeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,78 @@ async def refresh_spot(
     )
 
 
+async def refresh_spot_after_gemini(
+    spot_hint: float,
+    *,
+    user_id: Optional[int] = None,
+) -> float:
+    try:
+        proposed = float(spot_hint or 0.0)
+    except (TypeError, ValueError):
+        return spot_hint
+    if proposed <= 0:
+        return spot_hint
+    confirmed, reason = await refresh_spot(proposed, user_id=user_id)
+    if confirmed is None or confirmed <= 0:
+        logger.debug("[gemini-gold] post-gemini spot refresh skipped: %s", reason)
+        return proposed
+    if abs(confirmed - proposed) > 0.01:
+        logger.info(
+            "[gemini-gold] post-gemini spot refresh %.4f -> %.4f (%s)",
+            proposed,
+            float(confirmed),
+            reason,
+        )
+    return float(confirmed)
+
+
+async def stale_entry_recheck(
+    *,
+    decision: Dict[str, Any],
+    cfg: GeminiGoldRuntimeConfig,
+    decision_ts: Optional[datetime],
+    decision_id: int,
+    setup_type: str = "",
+) -> Tuple[bool, str]:
+    if decision_ts is None:
+        return True, "no_decision_ts"
+    max_delay_s = max(0.0, float(os.environ.get("GEMINI_GOLD_MAX_EXEC_DELAY_S", "90")))
+    if max_delay_s <= 0:
+        return True, "delay_guard_disabled"
+    age_s = max(0.0, (datetime.utcnow() - decision_ts).total_seconds())
+    if age_s <= max_delay_s:
+        return True, f"delay_ok({age_s:.1f}s)"
+    try:
+        proposed = float(decision.get("entry") or 0.0)
+    except (TypeError, ValueError):
+        proposed = 0.0
+    if proposed <= 0:
+        reason = f"stale_guard_block:no_entry delay={age_s:.1f}s>{max_delay_s:.1f}s"
+        return False, reason
+    from app.services.tradfi_prices import confirm_entry_price
+
+    confirmed, confirm_reason = await confirm_entry_price(
+        SYMBOL,
+        ASSET_CLASS,
+        proposed,
+        paper_ok=False,
+        user_id=cfg.demo_user_id,
+    )
+    if confirmed is None or confirmed <= 0:
+        return False, f"stale_guard_block:{confirm_reason} delay={age_s:.1f}s>{max_delay_s:.1f}s"
+    decision["entry"] = float(confirmed)
+    note = f"stale_guard_reconfirmed({confirm_reason}) delay={age_s:.1f}s"
+    decision["stale_guard_note"] = note
+    logger.info(
+        "[gemini-gold] stale guard decision_id=%s setup=%s entry=%.4f age_s=%.1f",
+        decision_id,
+        setup_type,
+        float(confirmed),
+        age_s,
+    )
+    return True, note
+
+
 async def revalidate_before_fire(
     *,
     decision: Dict[str, Any],
@@ -49,9 +121,10 @@ async def revalidate_before_fire(
     user_id: Optional[int] = None,
     spot_hint: float,
     decision_id: Optional[int] = None,
+    atr: float = 0.0,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     if not fire_time_revalidate_enabled():
-        ok, reason, d = validate_take_decision(decision, cfg=cfg, spot=spot_hint)
+        ok, reason, d = validate_take_decision(decision, cfg=cfg, spot=spot_hint, atr=atr)
         if not ok:
             return ok, reason, d
     else:
@@ -60,7 +133,7 @@ async def revalidate_before_fire(
             logger.debug("[gemini-gold] fire-time spot refresh failed: %s", refresh_reason)
             confirmed = spot_hint
 
-        ok, reason, d = validate_take_decision(decision, cfg=cfg, spot=float(confirmed))
+        ok, reason, d = validate_take_decision(decision, cfg=cfg, spot=float(confirmed), atr=atr)
         if not ok:
             return False, reason, d
 

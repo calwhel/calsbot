@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
@@ -67,6 +68,18 @@ def merge_config(db_row: GeminiGoldConfig, env: GeminiGoldRuntimeConfig) -> Gemi
         live_mirror_enabled=bool(getattr(db_row, "live_mirror_enabled", False)),
         max_live_trades_day=int(getattr(db_row, "max_live_trades_day", None) or env.max_live_trades_day or 3),
         confidence_threshold=int(db_row.confidence_threshold or env.confidence_threshold),
+        use_limit_entry=bool(getattr(db_row, "use_limit_entry", env.use_limit_entry)),
+        pending_entry_timeout_min=int(
+            getattr(db_row, "pending_entry_timeout_min", None) or env.pending_entry_timeout_min or 30
+        ),
+        orb_enabled=bool(getattr(db_row, "orb_enabled", env.orb_enabled)),
+        orb_confidence_threshold=int(
+            getattr(db_row, "orb_confidence_threshold", None) or env.orb_confidence_threshold or 65
+        ),
+        orb_max_calls_day=int(getattr(db_row, "orb_max_calls_day", None) or env.orb_max_calls_day or 20),
+        orb_max_trades_per_session=int(
+            getattr(db_row, "orb_max_trades_per_session", None) or env.orb_max_trades_per_session or 1
+        ),
         chart_bars=env.chart_bars,
         chart_bars_1m=env.chart_bars_1m,
         min_sl_pips=env.min_sl_pips,
@@ -418,6 +431,31 @@ def check_can_call_gemini(db, cfg: GeminiGoldRuntimeConfig) -> Tuple[bool, str]:
         return False, "disabled"
     if calls_today(db) >= cfg.max_calls_day:
         return False, "max_calls_day"
+    return True, "ok"
+
+
+def orb_calls_today(db) -> int:
+    return (
+        db.query(func.count(GeminiGoldDecision.id))
+        .filter(
+            GeminiGoldDecision.ts >= _today_start(),
+            GeminiGoldDecision.setup_type.like("orb_%"),
+        )
+        .scalar()
+        or 0
+    )
+
+
+def check_can_call_orb(db, cfg: GeminiGoldRuntimeConfig) -> Tuple[bool, str]:
+    if not cfg.orb_enabled:
+        return False, "orb_disabled"
+    if cfg.kill_switch:
+        return False, "kill_switch"
+    if orb_calls_today(db) >= cfg.orb_max_calls_day:
+        return False, "orb_max_calls_day"
+    reserve = max(0, int(os.environ.get("GEMINI_GOLD_ORB_MIN_GLOBAL_CALLS_LEFT", "15")))
+    if reserve > 0 and (cfg.max_calls_day - calls_today(db)) <= reserve:
+        return False, "orb_reserve_global_calls"
     return True, "ok"
 
 

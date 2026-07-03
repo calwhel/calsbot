@@ -14,6 +14,7 @@ class RuntimeStatus:
     last_decision: Optional[Dict[str, Any]] = None
     last_error: Optional[str] = None
     loop_iterations: int = 0
+    funnel: Optional[Dict[str, Any]] = None
 
 
 _STATUS = RuntimeStatus()
@@ -41,3 +42,7 @@ def note_decision(decision: Dict[str, Any]) -> None:
 
 def note_error(msg: str) -> None:
     _STATUS.last_error = msg[:500]
+
+
+def set_funnel(funnel: Dict[str, Any]) -> None:
+    _STATUS.funnel = funnel

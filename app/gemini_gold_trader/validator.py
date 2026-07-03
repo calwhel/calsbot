@@ -1,9 +1,16 @@
 """Lightweight post-Gemini validation before execution."""
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional, Tuple
 
 from app.gemini_gold_trader.config import GeminiGoldRuntimeConfig
+
+ORB_ENTRY_MAX_BREAK_ATR = float(os.environ.get("GEMINI_GOLD_ORB_ENTRY_MAX_BREAK_ATR", "0.60"))
+ORB_ENTRY_MAX_BREAK_RANGE_PCT = float(os.environ.get("GEMINI_GOLD_ORB_ENTRY_MAX_BREAK_RANGE_PCT", "0.25"))
+MOMENTUM_FLAG_ENTRY_MAX_ATR = float(os.environ.get("GEMINI_GOLD_MOMENTUM_FLAG_ENTRY_MAX_ATR", "1.00"))
+MOMENTUM_FLAG_RETEST_ENTRY_MAX_ATR = float(os.environ.get("GEMINI_GOLD_MOMENTUM_FLAG_RETEST_ENTRY_MAX_ATR", "0.45"))
+LIQ_GRAB_ENTRY_MAX_ATR = float(os.environ.get("GEMINI_GOLD_LIQ_GRAB_ENTRY_MAX_ATR", "0.50"))
 
 
 def _dir_norm(d: str) -> Optional[str]:
@@ -26,14 +33,27 @@ def _platform_pips(distance: float) -> float:
         return 0.0
 
 
+def apply_validator_profile(decision: Dict[str, Any]) -> Dict[str, Any]:
+    d = decision.copy()
+    setup = str(d.get("setup_type") or "").lower()
+    if setup.startswith("orb_"):
+        d["validator_profile"] = "orb"
+    elif "momentum" in setup:
+        d["validator_profile"] = "momentum_flag"
+    elif "liquidity" in setup or "liq" in setup or "sweep" in setup:
+        d["validator_profile"] = "liquidity_grab"
+    return d
+
+
 def validate_take_decision(
     decision: Dict[str, Any],
     *,
     cfg: GeminiGoldRuntimeConfig,
     spot: float,
+    atr: float = 0.0,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """Validate TAKE prices. Returns (ok, reason, decision_copy)."""
-    d = decision.copy()
+    d = apply_validator_profile(decision)
     direction = _dir_norm(d.get("direction") or "")
     if not direction:
         return False, "validator:no_direction", d
@@ -73,6 +93,62 @@ def validate_take_decision(
             f"validator:sl_too_wide({sl_pips:.1f}>{cfg.max_sl_pips:.1f}pips)",
             d,
         )
+
+    profile = (d.get("validator_profile") or "").strip().lower()
+    if profile == "orb":
+        try:
+            break_level = float(d.get("orb_break_level") or 0)
+            range_height = float(d.get("orb_range_height") or 0)
+        except (TypeError, ValueError):
+            break_level = range_height = 0.0
+        if break_level > 0:
+            break_dist = abs(entry - break_level)
+            max_break = 0.0
+            if atr > 0:
+                max_break = max(max_break, ORB_ENTRY_MAX_BREAK_ATR * atr)
+            if range_height > 0:
+                max_break = max(max_break, ORB_ENTRY_MAX_BREAK_RANGE_PCT * range_height)
+            if max_break > 0 and break_dist > max_break:
+                return (
+                    False,
+                    f"validator:entry_chasing_orb({break_dist:.2f}>{max_break:.2f})",
+                    d,
+                )
+
+    if profile == "momentum_flag":
+        try:
+            break_level = float(d.get("momentum_break_level") or 0)
+        except (TypeError, ValueError):
+            break_level = 0.0
+        used_retest = bool(d.get("momentum_used_retest"))
+        if break_level > 0 and atr > 0:
+            break_dist = abs(entry - break_level)
+            max_break = (
+                MOMENTUM_FLAG_RETEST_ENTRY_MAX_ATR * atr
+                if used_retest
+                else MOMENTUM_FLAG_ENTRY_MAX_ATR * atr
+            )
+            if max_break > 0 and break_dist > max_break:
+                return (
+                    False,
+                    f"validator:entry_chasing_momentum({break_dist:.2f}>{max_break:.2f})",
+                    d,
+                )
+
+    if profile == "liquidity_grab":
+        try:
+            mss_level = float(d.get("liq_grab_mss_level") or 0)
+        except (TypeError, ValueError):
+            mss_level = 0.0
+        if mss_level > 0 and atr > 0:
+            mss_dist = abs(entry - mss_level)
+            max_mss = LIQ_GRAB_ENTRY_MAX_ATR * atr
+            if max_mss > 0 and mss_dist > max_mss:
+                return (
+                    False,
+                    f"validator:entry_chasing_liquidity_grab({mss_dist:.2f}>{max_mss:.2f})",
+                    d,
+                )
 
     if risk_dist > 0 and reward_dist > 0:
         rr = reward_dist / risk_dist

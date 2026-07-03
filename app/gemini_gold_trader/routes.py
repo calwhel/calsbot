@@ -38,7 +38,9 @@ from app.gemini_gold_trader.guardrails import (
     trades_today,
     trading_account_configured,
 )
-from app.gemini_gold_trader.models import GeminiGoldDecision
+from app.gemini_gold_trader.learning import call_stats_today, get_setup_stats
+from app.gemini_gold_trader.funnel import snapshot as funnel_snapshot
+from app.gemini_gold_trader.funnel_persist import recent_funnel_events
 from app.gemini_gold_trader.reconcile import (
     list_open_executions,
     reconcile_orphan_open_executions,
@@ -149,6 +151,18 @@ def _persist_demo_user_from_admin(row, admin) -> None:
         row.demo_user_id = int(uid)
 
 
+def _safe_funnel_events(db, *, limit: int = 50) -> list:
+    try:
+        return recent_funnel_events(db, limit=limit)
+    except Exception as exc:
+        logger.warning("[gemini-gold] funnel events load failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return []
+
+
 def _config_payload(cfg, cfg_row, env) -> Dict[str, Any]:
     env_kill = bool(env.kill_switch)
     db_kill = bool(cfg_row.kill_switch) if cfg_row else False
@@ -173,6 +187,12 @@ def _config_payload(cfg, cfg_row, env) -> Dict[str, Any]:
         "min_sl_pips": cfg.min_sl_pips,
         "max_sl_pips": cfg.max_sl_pips,
         "confidence_threshold": cfg.confidence_threshold,
+        "use_limit_entry": cfg.use_limit_entry,
+        "pending_entry_timeout_min": cfg.pending_entry_timeout_min,
+        "orb_enabled": cfg.orb_enabled,
+        "orb_confidence_threshold": cfg.orb_confidence_threshold,
+        "orb_max_calls_day": cfg.orb_max_calls_day,
+        "orb_max_trades_per_session": cfg.orb_max_trades_per_session,
         "env_enabled": gemini_gold_enabled(),
         "calls_reset_at": (
             cfg_row.calls_reset_at.isoformat()
@@ -339,6 +359,8 @@ async def api_status(uid: str = Query(...)):
                 "live_pnl_usd": live_pnl_today_usd(db, int(trader_uid)) if trader_uid else 0.0,
             },
             "decision_feed": _decision_feed(db),
+            "funnel": runtime_state.get_status().get("funnel") or funnel_snapshot(),
+            "recent_funnel_events": _safe_funnel_events(db, limit=40),
         }
     finally:
         db.close()
@@ -429,6 +451,12 @@ async def api_update_config(request: Request, uid: str = Query(...)):
             "live_mirror_enabled",
             "max_live_trades_day",
             "confidence_threshold",
+            "use_limit_entry",
+            "pending_entry_timeout_min",
+            "orb_enabled",
+            "orb_confidence_threshold",
+            "orb_max_calls_day",
+            "orb_max_trades_per_session",
         ):
             if field in body:
                 setattr(row, field, body[field])
@@ -478,6 +506,77 @@ async def api_disconnect_live(uid: str = Query(...)):
         row.updated_at = datetime.utcnow()
         db.commit()
         return {"ok": True, "live_mirror_enabled": False}
+    finally:
+        db.close()
+
+
+@router.get("/api/gemini-gold-trader/setup-stats")
+async def api_setup_stats(uid: str = Query(...), days: int = Query(14)):
+    ensure_gemini_gold_trader_schema()
+    db = SessionLocal()
+    try:
+        _resolve_user(uid, db)
+        return {"ok": True, "days": days, "stats": get_setup_stats(db, days=days)}
+    finally:
+        db.close()
+
+
+@router.get("/api/gemini-gold-trader/funnel-events")
+async def api_funnel_events(uid: str = Query(...), limit: int = Query(50)):
+    ensure_gemini_gold_trader_schema()
+    db = SessionLocal()
+    try:
+        _resolve_user(uid, db)
+        return {
+            "ok": True,
+            "funnel": funnel_snapshot(),
+            "events": _safe_funnel_events(db, limit=min(limit, 200)),
+        }
+    finally:
+        db.close()
+
+
+@router.get("/api/gemini-gold-trader/calibration")
+async def api_calibration(uid: str = Query(...), days: int = Query(14)):
+    """Funnel + setup stats for pipeline tuning."""
+    ensure_gemini_gold_trader_schema()
+    db = SessionLocal()
+    try:
+        _resolve_user(uid, db)
+        return {
+            "ok": True,
+            "funnel": funnel_snapshot(),
+            "setup_stats": get_setup_stats(db, days=days),
+            "call_stats_today": call_stats_today(db),
+            "recent_funnel_events": _safe_funnel_events(db, limit=60),
+        }
+    finally:
+        db.close()
+
+
+@router.post("/api/gemini-gold-trader/refresh-klines")
+async def api_refresh_klines(uid: str = Query(...)):
+    """Admin: force cTrader kline recovery (clears fallback caches)."""
+    db = SessionLocal()
+    try:
+        admin = _resolve_user(uid, db)
+        row = seed_config_if_missing(db)
+        cfg = merge_config(row, env_defaults())
+        trader_uid = _trader_user_id(cfg, admin)
+        from app.gold_ai_trader.data_refresh import refresh_gold_scoring_klines
+        from app.gemini_gold_trader.data_quality import assess_gemini_market_data, gemini_data_ok_for_scan
+
+        summary = await refresh_gold_scoring_klines(user_id=trader_uid)
+        market_data = await assess_gemini_market_data(user_id=trader_uid)
+        data_ok, data_block = gemini_data_ok_for_scan(market_data)
+        return {
+            "ok": True,
+            "refresh": summary,
+            "data_ok": data_ok,
+            "data_block": data_block,
+            "source": market_data.get("kline_source"),
+            "price_source": market_data.get("price_source"),
+        }
     finally:
         db.close()
 

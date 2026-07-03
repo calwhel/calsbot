@@ -133,6 +133,89 @@ def _resolve_trader(db, cfg: GeminiGoldRuntimeConfig):
     return user, prefs, int(ctid_str)
 
 
+async def execute_take(
+    *,
+    db,
+    cfg: GeminiGoldRuntimeConfig,
+    decision: Dict[str, Any],
+    decision_id: int,
+    spot_hint: float,
+    session: str = "",
+    order_ctx: Optional[Dict[str, Any]] = None,
+    atr: float = 0.0,
+) -> Optional[int]:
+    """Route market vs limit entry based on setup_type."""
+    from app.gemini_gold_trader.entry_routing import use_limit_entry_for_setup
+    from app.gemini_gold_trader.pending_entry import (
+        create_entry_watch_pending,
+        try_place_broker_limit,
+    )
+
+    setup_type = str(decision.get("setup_type") or "")
+    if not use_limit_entry_for_setup(setup_type, cfg):
+        return await execute_take_market(
+            db=db,
+            cfg=cfg,
+            decision=decision,
+            decision_id=decision_id,
+            spot_hint=spot_hint,
+            order_ctx=order_ctx,
+            atr=atr,
+        )
+
+    user, prefs, ctid = await run_in_db_thread(_resolve_trader, db, cfg)
+    if not user or not prefs or not ctid:
+        if order_ctx is not None:
+            order_ctx["block_reason"] = "blocked: trader_resolution_failed"
+        return None
+
+    lots = active_lot_size(cfg)
+    result, err = await try_place_broker_limit(
+        user=user,
+        prefs=prefs,
+        ctid=ctid,
+        cfg=cfg,
+        decision=decision,
+        decision_id=decision_id,
+        volume_lots=lots,
+    )
+    if result and result.get("actual_fill"):
+        return await execute_take_market(
+            db=db,
+            cfg=cfg,
+            decision=decision,
+            decision_id=decision_id,
+            spot_hint=spot_hint,
+            order_ctx=order_ctx,
+            atr=atr,
+        )
+
+    pending_id = await create_entry_watch_pending(
+        db,
+        cfg=cfg,
+        decision=decision,
+        decision_id=decision_id,
+        session=session,
+    )
+    if pending_id:
+        logger.info(
+            "[gemini-gold] limit entry-watch pending id=%s decision=%s err=%s",
+            pending_id,
+            decision_id,
+            err,
+        )
+        return -int(pending_id)
+    return await execute_take_market(
+        db=db,
+        cfg=cfg,
+        decision=decision,
+        decision_id=decision_id,
+        spot_hint=spot_hint,
+        order_ctx=order_ctx,
+        atr=atr,
+    )
+
+
 async def execute_take_market(
     *,
     db,
@@ -141,6 +224,7 @@ async def execute_take_market(
     decision_id: int,
     spot_hint: float,
     order_ctx: Optional[Dict[str, Any]] = None,
+    atr: float = 0.0,
 ) -> Optional[int]:
     """Place market order on configured demo or live account."""
 
@@ -167,6 +251,7 @@ async def execute_take_market(
         user_id=cfg.demo_user_id,
         spot_hint=spot_hint,
         decision_id=decision_id,
+        atr=atr,
     )
     if not fire_ok:
         logger.info("[gemini-gold] fire blocked: %s", fire_reason)

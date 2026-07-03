@@ -82,6 +82,14 @@
     .mirror-pill.pending { color: #f5d08a; background: rgba(245,158,11,.15); }
     .mirror-pill.filled { color: #9ed8b8; background: rgba(61,170,110,.15); }
     .mirror-pill.failed, .mirror-pill.skipped { color: #ffb4b4; background: rgba(201,74,74,.12); }
+    .funnel-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .45rem; margin-top: .5rem; }
+    .funnel-cell { background: #0e1118; border: 1px solid var(--border); border-radius: 8px; padding: .45rem; text-align: center; }
+    .funnel-cell b { display: block; font-family: var(--font-mono); font-size: .85rem; }
+    .funnel-cell span { font-size: .6rem; color: var(--muted); text-transform: uppercase; }
+    .setup-row { display: flex; justify-content: space-between; gap: .5rem; padding: .35rem 0; border-top: 1px solid var(--border); font-size: .75rem; }
+    .setup-row:first-child { border-top: 0; }
+    .event-row { font-size: .7rem; color: var(--dim); padding: .25rem 0; border-top: 1px solid var(--border); }
+    .event-row:first-child { border-top: 0; }
   </style>
 </head>
 <body>
@@ -204,6 +212,33 @@
       </div>
     </section>
 
+    <section class="card" id="calibration-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+        <h2 style="font-size:.85rem">Pipeline calibration</h2>
+        <button class="btn" id="btn-refresh-klines" title="Force cTrader kline refresh">↻ Klines</button>
+      </div>
+      <p class="hint">Today's scan funnel — where cycles drop before execution.</p>
+      <div class="funnel-grid" id="funnel-grid"></div>
+      <p class="hint" id="funnel-meta" style="margin-top:.5rem"></p>
+      <div style="margin-top:.85rem;display:grid;grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label><input type="checkbox" id="toggle-limit-entry"/> Limit entry (retests)</label>
+        </div>
+        <div>
+          <label><input type="checkbox" id="toggle-orb"/> ORB path</label>
+        </div>
+      </div>
+      <div style="margin-top:.65rem">
+        <label for="orb-confidence">ORB min confidence %</label>
+        <input id="orb-confidence" type="number" min="50" max="99" step="1" value="65"/>
+      </div>
+      <button class="btn btn-primary" id="btn-save-intelligence" style="width:100%;margin-top:.65rem">Save intelligence settings</button>
+      <h3 style="font-size:.75rem;margin:1rem 0 .35rem;color:var(--dim)">Setup outcomes (14d)</h3>
+      <div id="setup-stats"></div>
+      <h3 style="font-size:.75rem;margin:1rem 0 .35rem;color:var(--dim)">Recent funnel events</h3>
+      <div id="funnel-events"></div>
+    </section>
+
     <section class="card">
       <h2 style="font-size:.85rem;margin-bottom:.5rem">Recent decisions</h2>
       <div id="feed"></div>
@@ -314,6 +349,61 @@ function renderStatus(j) {
   document.getElementById('stat-calls').textContent = stats.calls ?? 0;
   document.getElementById('stat-trades').textContent = stats.trades ?? 0;
   document.getElementById('stat-cost').textContent = (stats.cost_usd ?? 0).toFixed(4);
+
+  const funnel = rt.funnel || j.funnel || {};
+  renderFunnel(funnel, j.recent_funnel_events || []);
+}
+
+function renderFunnel(funnel, events) {
+  const cells = [
+    ['scans', 'Scans'],
+    ['data_blocked', 'Data blocked'],
+    ['gemini_called', 'Gemini'],
+    ['gemini_take', 'Takes'],
+    ['validator_rejected', 'Validator'],
+    ['executed', 'Executed'],
+    ['pending_entry', 'Pending'],
+    ['orb_detected', 'ORB det'],
+    ['orb_executed', 'ORB exec'],
+  ];
+  document.getElementById('funnel-grid').innerHTML = cells.map(([k, label]) =>
+    `<div class="funnel-cell"><b>${funnel[k] ?? 0}</b><span>${label}</span></div>`
+  ).join('');
+  const parts = [];
+  if (funnel.last_data_block) parts.push(`Last data block: ${funnel.last_data_block}`);
+  if (funnel.last_validator_reason) parts.push(`Last validator: ${funnel.last_validator_reason}`);
+  document.getElementById('funnel-meta').textContent = parts.join(' · ') || 'No blocks recorded today';
+
+  const evEl = document.getElementById('funnel-events');
+  if (!events.length) {
+    evEl.innerHTML = '<p class="hint">No funnel events yet.</p>';
+  } else {
+    evEl.innerHTML = events.slice(0, 12).map(e =>
+      `<div class="event-row">${fmtTime(e.ts)} · <b>${escapeHtml(e.event||'')}</b>${e.setup_type ? ' · '+escapeHtml(e.setup_type) : ''}${e.reason ? ' · '+escapeHtml(e.reason) : ''}</div>`
+    ).join('');
+  }
+}
+
+function renderCalibration(cfg) {
+  document.getElementById('toggle-limit-entry').checked = cfg.use_limit_entry !== false;
+  document.getElementById('toggle-orb').checked = !!cfg.orb_enabled;
+  document.getElementById('orb-confidence').value = cfg.orb_confidence_threshold ?? 65;
+}
+
+async function loadCalibration() {
+  const r = await _apiFetch(`/api/gemini-gold-trader/calibration?uid=${encodeURIComponent(UID)}`);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) return;
+  renderFunnel(j.funnel || {}, j.recent_funnel_events || []);
+  const statsEl = document.getElementById('setup-stats');
+  const stats = j.setup_stats || [];
+  if (!stats.length) {
+    statsEl.innerHTML = '<p class="hint">No closed trades in window.</p>';
+  } else {
+    statsEl.innerHTML = stats.map(s =>
+      `<div class="setup-row"><span>${escapeHtml(s.setup_type)} · ${fmtSession(s.session)}</span><span>${s.trades} trades · ${s.win_rate}% WR${s.avg_r != null ? ' · R '+s.avg_r : ''}</span></div>`
+    ).join('');
+  }
 }
 
 function renderTradingSetup(j) {
@@ -363,6 +453,7 @@ function renderTradingSetup(j) {
   document.getElementById('live-lot-size').value = cfg.live_lot_size ?? 0.01;
   document.getElementById('demo-max-trades').value = cfg.max_trades_day ?? 4;
   document.getElementById('confidence-threshold').value = cfg.confidence_threshold ?? 85;
+  renderCalibration(cfg);
   renderLiveMirror(j);
 }
 
@@ -468,6 +559,7 @@ async function refresh() {
   renderStatus(j);
   renderTradingSetup(j);
   renderFeed(j);
+  loadCalibration();
 }
 
 document.getElementById('btn-refresh').onclick = refresh;
@@ -581,6 +673,41 @@ document.getElementById('btn-save-size').onclick = async () => {
     method: 'POST', body: JSON.stringify(body),
   });
   showToast('Size & limits saved');
+  refresh();
+};
+
+document.getElementById('btn-save-intelligence').onclick = async () => {
+  const body = {
+    use_limit_entry: document.getElementById('toggle-limit-entry').checked,
+    orb_enabled: document.getElementById('toggle-orb').checked,
+    orb_confidence_threshold: +document.getElementById('orb-confidence').value || 65,
+  };
+  const r = await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST', body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    showToast(err.detail || 'Save failed');
+    return;
+  }
+  showToast('Intelligence settings saved');
+  refresh();
+};
+
+document.getElementById('btn-refresh-klines').onclick = async () => {
+  const btn = document.getElementById('btn-refresh-klines');
+  btn.disabled = true;
+  const r = await _apiFetch(`/api/gemini-gold-trader/refresh-klines?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST',
+  });
+  const j = await r.json().catch(() => ({}));
+  btn.disabled = false;
+  if (!r.ok || !j.ok) {
+    showToast(j.detail || 'Kline refresh failed');
+    return;
+  }
+  const msg = j.data_ok ? `Klines OK (${j.source||'ctrader'})` : `Still blocked: ${j.data_block||'unknown'}`;
+  showToast(msg);
   refresh();
 };
 

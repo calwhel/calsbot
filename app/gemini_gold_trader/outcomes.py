@@ -59,6 +59,7 @@ def record_outcome_from_execution(db, decision_id: int, execution) -> bool:
     row = GeminiGoldOutcome(
         decision_id=decision_id,
         session=getattr(dec, "session", None) if dec else None,
+        setup_type=str(d.get("setup_type") or getattr(dec, "setup_type", None) or "") or None,
         result=result,
         pnl=pnl,
         r_multiple=r_mult,

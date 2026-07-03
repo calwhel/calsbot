@@ -258,3 +258,25 @@ async def sync_closed_trade_notifications(db, cfg: GeminiGoldRuntimeConfig) -> i
         if ok:
             sent += 1
     return sent
+
+
+_last_fallback_alert: Optional[str] = None
+
+
+async def maybe_notify_fallback_klines(block_reason: str, market_data: dict) -> None:
+    global _last_fallback_alert
+    if not telegram_notifications_enabled():
+        return
+    if not block_reason or block_reason == _last_fallback_alert:
+        return
+    if "fallback_klines" not in block_reason and "non_ctrader" not in block_reason:
+        return
+    _last_fallback_alert = block_reason
+    ks = market_data.get("kline_source") or "unknown"
+    ps = market_data.get("price_source") or "unknown"
+    await _send(
+        f"{_PREFIX} <b>Data gate</b>\n"
+        f"Scan blocked: <code>{_html_escape(block_reason)}</code>\n"
+        f"price={_html_escape(str(ps))} kline={_html_escape(str(ks))}",
+        msg_type="gemini_gold_data_gate",
+    )

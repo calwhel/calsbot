@@ -13,7 +13,10 @@ from app.gemini_gold_trader.config import EXECUTION_MODE_DEMO, env_defaults
 from app.gemini_gold_trader.models import (
     GeminiGoldConfig,
     GeminiGoldDecision,
+    GeminiGoldFunnelEvent,
+    GeminiGoldOrbState,
     GeminiGoldOutcome,
+    GeminiGoldPendingOrder,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,6 +37,13 @@ _GEMINI_GOLD_COLUMN_ALTERS: tuple[tuple[str, str, str], ...] = (
     ("gemini_gold_decisions", "live_mirror_execution_id", "INTEGER"),
     ("gemini_gold_decisions", "live_mirror_status", "VARCHAR(24)"),
     ("gemini_gold_decisions", "live_mirror_error", "TEXT"),
+    ("gemini_gold_config", "use_limit_entry", "BOOLEAN DEFAULT TRUE NOT NULL"),
+    ("gemini_gold_config", "pending_entry_timeout_min", "INTEGER DEFAULT 30 NOT NULL"),
+    ("gemini_gold_config", "orb_enabled", "BOOLEAN DEFAULT FALSE NOT NULL"),
+    ("gemini_gold_config", "orb_confidence_threshold", "INTEGER DEFAULT 65 NOT NULL"),
+    ("gemini_gold_config", "orb_max_calls_day", "INTEGER DEFAULT 20 NOT NULL"),
+    ("gemini_gold_config", "orb_max_trades_per_session", "INTEGER DEFAULT 1 NOT NULL"),
+    ("gemini_gold_decisions", "setup_type", "VARCHAR(64)"),
 )
 
 _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -42,6 +52,7 @@ _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "live_mirror_execution_id",
         "live_mirror_status",
         "live_mirror_error",
+        "setup_type",
     ),
     "gemini_gold_config": (
         "execution_mode",
@@ -51,6 +62,12 @@ _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "live_mirror_enabled",
         "max_live_trades_day",
         "live_mirror_confirmed_at",
+        "use_limit_entry",
+        "pending_entry_timeout_min",
+        "orb_enabled",
+        "orb_confidence_threshold",
+        "orb_max_calls_day",
+        "orb_max_trades_per_session",
     ),
 }
 
@@ -98,6 +115,9 @@ def ensure_gemini_gold_trader_schema(*, force: bool = False) -> None:
                 GeminiGoldConfig.__table__,
                 GeminiGoldDecision.__table__,
                 GeminiGoldOutcome.__table__,
+                GeminiGoldFunnelEvent.__table__,
+                GeminiGoldOrbState.__table__,
+                GeminiGoldPendingOrder.__table__,
             ],
         ),
         max_attempts=_DDL_RETRY_ATTEMPTS,
@@ -172,6 +192,12 @@ def seed_config_if_missing(db) -> GeminiGoldConfig:
         live_lot_size=d.live_lot_size,
         live_mirror_enabled=False,
         max_live_trades_day=d.max_live_trades_day,
+        use_limit_entry=d.use_limit_entry,
+        pending_entry_timeout_min=d.pending_entry_timeout_min,
+        orb_enabled=d.orb_enabled,
+        orb_confidence_threshold=d.orb_confidence_threshold,
+        orb_max_calls_day=d.orb_max_calls_day,
+        orb_max_trades_per_session=d.orb_max_trades_per_session,
         confidence_threshold=d.confidence_threshold,
     )
     db.add(row)

@@ -18,7 +18,10 @@ from app.gemini_gold_trader.config import (
 )
 from app.gemini_gold_trader.db_thread import run_in_db_thread, run_with_db, with_db_session
 from app.gemini_gold_trader.block_reason import format_block_reason
-from app.gemini_gold_trader.executor import execute_live_mirror_take, execute_take_market
+from app.gemini_gold_trader.executor import execute_live_mirror_take, execute_take
+from app.gemini_gold_trader.fire_validation import refresh_spot_after_gemini, stale_entry_recheck
+from app.gemini_gold_trader.data_quality import assess_gemini_market_data, format_data_source, gemini_data_ok_for_scan
+from app.gemini_gold_trader.funnel import record as funnel_record, snapshot as funnel_snapshot
 from app.gemini_gold_trader.gemini import decide_from_charts
 from app.gemini_gold_trader.guardrails import (
     check_can_call_gemini,
@@ -38,9 +41,12 @@ from app.gemini_gold_trader.models import GeminiGoldDecision
 from app.gemini_gold_trader.outcomes import record_outcome_from_execution, sync_closed_outcomes
 from app.gemini_gold_trader.telegram_notify import (
     maybe_notify_call_cap_reached,
+    maybe_notify_fallback_klines,
     notify_decision,
 )
+from app.gemini_gold_trader.pending_entry import pending_status_label, sync_pending_entries
 from app.gemini_gold_trader.validator import validate_take_decision
+from app.gold_ai_trader.call_gates import atr_from_klines
 
 logger = logging.getLogger(__name__)
 
@@ -133,17 +139,22 @@ def _persist_decision_db(
     cost_usd: float,
     dry_run: bool,
     skip_reason: Optional[str] = None,
+    setup_type: Optional[str] = None,
 ) -> GeminiGoldDecision:
     direction = None
+    st = setup_type
     if decision:
         direction = (decision.get("direction") or None)
         if direction:
             direction = str(direction).upper()
+        if not st:
+            st = str(decision.get("setup_type") or "") or None
     row = GeminiGoldDecision(
         session=session,
         decision=decision,
         action=action,
         direction=direction,
+        setup_type=st,
         confidence=confidence,
         rationale=rationale,
         chart_meta=chart_meta,
@@ -178,11 +189,103 @@ async def run_gemini_gold_trader_loop() -> None:
         runtime_state.note_dormant("outside_session")
         return
 
+    def _funnel_db(db, *args, **kwargs):
+        funnel_record(*args, **kwargs, db=db)
+
+    market_data = await assess_gemini_market_data(user_id=cfg.demo_user_id)
+    data_ok, data_block = gemini_data_ok_for_scan(market_data)
+    await run_with_db(_funnel_db, "scan", session=session)
+
+    if not data_ok:
+        logger.info("[gemini-gold] data gate blocked: %s", data_block)
+        await run_with_db(_funnel_db, "data_blocked", reason=data_block, session=session)
+        await maybe_notify_fallback_klines(data_block, market_data)
+        runtime_state.note_dormant(data_block)
+        runtime_state.set_funnel(funnel_snapshot())
+        return
+
+    spot = float(market_data.get("price") or 0)
+    source_tag = format_data_source(market_data)
+    await _call_with_db_session(sync_pending_entries, cfg=cfg, spot=spot)
+
+    from app.gemini_gold_trader.orb_strategy import maybe_run_orb_strategy
+
+    async def _execute_take(**kwargs):
+        return await execute_take(**kwargs)
+
+    async def _mark_executed_row(decision_id: int, exec_id: int):
+        def _mark(db):
+            r = db.query(GeminiGoldDecision).filter(GeminiGoldDecision.id == decision_id).first()
+            if r:
+                r.executed = True
+                r.execution_id = exec_id
+                db.commit()
+
+        await run_with_db(_mark)
+
+    async def _live_mirror_after_demo(cfg_, decision_, decision_id_, demo_exec_id_):
+        if is_live_execution_mode(cfg_):
+            return
+        if not cfg_.live_mirror_enabled:
+            return
+        ok_live, live_reason = await run_with_db(
+            check_can_execute_live_mirror, cfg_, cfg_.demo_user_id or 0
+        )
+        if ok_live:
+            live_exec_id = await _call_with_db_session(
+                execute_live_mirror_take,
+                cfg=cfg_,
+                decision=decision_,
+                decision_id=decision_id_,
+                demo_execution_id=demo_exec_id_,
+            )
+            if live_exec_id:
+                await run_with_db(
+                    _update_live_mirror_row,
+                    decision_id_,
+                    live_exec_id=live_exec_id,
+                    status="pending",
+                )
+            else:
+                await run_with_db(
+                    _update_live_mirror_row,
+                    decision_id_,
+                    live_exec_id=None,
+                    status="failed",
+                    error="live mirror enqueue rejected",
+                )
+        elif cfg_.live_mirror_enabled:
+            await run_with_db(
+                _update_live_mirror_row,
+                decision_id_,
+                live_exec_id=None,
+                status="skipped",
+                error=live_reason,
+            )
+
+    orb_handled = await maybe_run_orb_strategy(
+        cfg=cfg,
+        session=session,
+        now=now,
+        price=spot,
+        run_with_db_fn=run_with_db,
+        call_with_db_session=_call_with_db_session,
+        persist_decision_fn=_persist_decision_db,
+        execute_take_fn=_execute_take,
+        notify_fn=notify_decision,
+        mark_executed_fn=_mark_executed_row,
+        live_mirror_fn=_live_mirror_after_demo,
+    )
+    if orb_handled:
+        runtime_state.set_funnel(funnel_snapshot())
+        return
+
     can_call, call_reason = await run_with_db(check_can_call_gemini, cfg)
     if not can_call:
         runtime_state.note_dormant(call_reason)
         if call_reason == "max_calls_day":
             await maybe_notify_call_cap_reached()
+        runtime_state.set_funnel(funnel_snapshot())
         return
 
     (
@@ -196,7 +299,13 @@ async def run_gemini_gold_trader_loop() -> None:
         get_chart_klines("15m", cfg.chart_bars, user_id=cfg.demo_user_id),
         get_chart_klines("1h", cfg.chart_bars, user_id=cfg.demo_user_id),
     )
-    chart_meta = {"1m": meta_1m, "5m": meta_5m, "15m": meta_15m, "1h": meta_1h}
+    chart_meta = {
+        "data_source": source_tag,
+        "1m": meta_1m,
+        "5m": meta_5m,
+        "15m": meta_15m,
+        "1h": meta_1h,
+    }
 
     if not klines_ready(bars_5m, bars_15m, bars_1h):
         logger.info(
@@ -217,12 +326,14 @@ async def run_gemini_gold_trader_loop() -> None:
             meta_1h.get("source"),
         )
         runtime_state.note_dormant("stale_klines")
+        runtime_state.set_funnel(funnel_snapshot())
         return
 
     entry_bars, entry_tf, entry_5m_fallback = resolve_entry_chart(bars_1m, bars_5m)
     if not entry_bars:
         logger.info("[gemini-gold] skipping scan — no entry chart (1m or 5m fallback)")
         runtime_state.note_dormant("stale_klines")
+        runtime_state.set_funnel(funnel_snapshot())
         return
 
     chart_meta["1m"] = {
@@ -272,7 +383,9 @@ async def run_gemini_gold_trader_loop() -> None:
     )
     if not png_entry or not png_5m or not png_15m or not png_1h:
         logger.warning("[gemini-gold] chart render failed")
+        await run_with_db(_funnel_db, "chart_failed", session=session)
         runtime_state.note_error("chart_render_failed")
+        runtime_state.set_funnel(funnel_snapshot())
         return
 
     for name, png in (
@@ -288,6 +401,8 @@ async def run_gemini_gold_trader_loop() -> None:
                 len(png) if png else 0,
             )
             runtime_state.note_error("chart_png_invalid")
+            await run_with_db(_funnel_db, "chart_failed", session=session)
+            runtime_state.set_funnel(funnel_snapshot())
             return
 
     logger.info(
@@ -330,7 +445,13 @@ async def run_gemini_gold_trader_loop() -> None:
             skip_reason=api_error or "no_decision",
         )
         logger.warning("[gemini-gold] Gemini call failed: %s (decision_id=%s)", api_error, row.id)
+        runtime_state.set_funnel(funnel_snapshot())
         return
+
+    setup_type = str(decision.get("setup_type") or "")
+    await run_with_db(_funnel_db, "gemini_called", setup=setup_type or None, session=session)
+
+    spot = await refresh_spot_after_gemini(spot, user_id=cfg.demo_user_id)
 
     action = str(decision.get("action") or "SKIP").upper()
     confidence = int(decision.get("confidence") or 0)
@@ -348,13 +469,15 @@ async def run_gemini_gold_trader_loop() -> None:
         tokens_out=tokens_out,
         cost_usd=cost_usd,
         dry_run=cfg.dry_run,
+        setup_type=setup_type or None,
     )
     runtime_state.note_decision(decision)
     logger.info(
-        "[gemini-gold] decision_id=%s action=%s confidence=%s%% session=%s cost=$%.4f",
+        "[gemini-gold] decision_id=%s action=%s confidence=%s%% setup=%s session=%s cost=$%.4f",
         row.id,
         action,
         confidence,
+        setup_type or "—",
         session,
         cost_usd,
     )
@@ -364,6 +487,7 @@ async def run_gemini_gold_trader_loop() -> None:
     block_reason: Optional[str] = None
 
     if action == "SKIP":
+        await run_with_db(_funnel_db, "gemini_skip", setup=setup_type or None, session=session, decision_id=row.id)
         await notify_decision(
             session=session,
             decision=decision,
@@ -371,6 +495,7 @@ async def run_gemini_gold_trader_loop() -> None:
             confidence=confidence,
             dry_run=cfg.dry_run,
         )
+        runtime_state.set_funnel(funnel_snapshot())
         return
 
     if action != "TAKE":
@@ -383,12 +508,14 @@ async def run_gemini_gold_trader_loop() -> None:
             block_reason=block_reason,
             dry_run=cfg.dry_run,
         )
+        runtime_state.set_funnel(funnel_snapshot())
         return
 
     if confidence < cfg.confidence_threshold:
         block_reason = (
             f"confidence {confidence}% below {cfg.confidence_threshold}% threshold"
         )
+        await run_with_db(_funnel_db, "gemini_skip", setup=setup_type or None, session=session, decision_id=row.id)
         await notify_decision(
             session=session,
             decision=decision,
@@ -397,11 +524,23 @@ async def run_gemini_gold_trader_loop() -> None:
             block_reason=block_reason,
             dry_run=cfg.dry_run,
         )
+        runtime_state.set_funnel(funnel_snapshot())
         return
 
-    ok, val_reason, decision = validate_take_decision(decision, cfg=cfg, spot=spot)
+    await run_with_db(_funnel_db, "gemini_take", setup=setup_type or None, session=session, decision_id=row.id)
+
+    atr = float(atr_from_klines(bars_5m) or 0.0)
+    ok, val_reason, decision = validate_take_decision(decision, cfg=cfg, spot=spot, atr=atr)
     if not ok:
         block_reason = val_reason
+        await run_with_db(
+            _funnel_db,
+            "validator_rejected",
+            setup=setup_type or None,
+            reason=val_reason,
+            session=session,
+            decision_id=row.id,
+        )
         await notify_decision(
             session=session,
             decision=decision,
@@ -410,6 +549,35 @@ async def run_gemini_gold_trader_loop() -> None:
             block_reason=block_reason,
             dry_run=cfg.dry_run,
         )
+        runtime_state.set_funnel(funnel_snapshot())
+        return
+
+    stale_ok, stale_reason = await stale_entry_recheck(
+        decision=decision,
+        cfg=cfg,
+        decision_ts=getattr(row, "ts", None),
+        decision_id=row.id,
+        setup_type=setup_type,
+    )
+    if not stale_ok:
+        block_reason = stale_reason
+        await run_with_db(
+            _funnel_db,
+            "stale_entry_blocked",
+            setup=setup_type or None,
+            reason=stale_reason,
+            session=session,
+            decision_id=row.id,
+        )
+        await notify_decision(
+            session=session,
+            decision=decision,
+            action=action,
+            confidence=confidence,
+            block_reason=block_reason,
+            dry_run=cfg.dry_run,
+        )
+        runtime_state.set_funnel(funnel_snapshot())
         return
 
     await _preflight_execution_caps(cfg)
@@ -427,6 +595,7 @@ async def run_gemini_gold_trader_loop() -> None:
             block_reason=block_reason,
             dry_run=cfg.dry_run,
         )
+        runtime_state.set_funnel(funnel_snapshot())
         return
 
     from app.database import SessionLocal
@@ -434,19 +603,28 @@ async def run_gemini_gold_trader_loop() -> None:
     order_ctx: Dict[str, Any] = {}
     db = SessionLocal()
     try:
-        execution_id = await execute_take_market(
+        execution_id = await execute_take(
             db=db,
             cfg=cfg,
             decision=decision,
             decision_id=row.id,
             spot_hint=spot,
+            session=session,
             order_ctx=order_ctx,
+            atr=atr,
         )
     finally:
         db.close()
 
-    if execution_id:
+    if execution_id and execution_id > 0:
         executed = True
+        await run_with_db(
+            _funnel_db,
+            "executed",
+            setup=setup_type or None,
+            session=session,
+            decision_id=row.id,
+        )
 
         def _mark_executed(db):
             r = db.query(GeminiGoldDecision).filter(GeminiGoldDecision.id == row.id).first()
@@ -456,42 +634,16 @@ async def run_gemini_gold_trader_loop() -> None:
                 db.commit()
 
         await run_with_db(_mark_executed)
-
-        if not is_live_execution_mode(cfg) and cfg.live_mirror_enabled:
-            ok_live, live_reason = await run_with_db(
-                check_can_execute_live_mirror, cfg, cfg.demo_user_id or 0
-            )
-            if ok_live:
-                live_exec_id = await _call_with_db_session(
-                    execute_live_mirror_take,
-                    cfg=cfg,
-                    decision=decision,
-                    decision_id=row.id,
-                    demo_execution_id=execution_id,
-                )
-                if live_exec_id:
-                    await run_with_db(
-                        _update_live_mirror_row,
-                        row.id,
-                        live_exec_id=live_exec_id,
-                        status="pending",
-                    )
-                else:
-                    await run_with_db(
-                        _update_live_mirror_row,
-                        row.id,
-                        live_exec_id=None,
-                        status="failed",
-                        error="live mirror enqueue rejected",
-                    )
-            else:
-                await run_with_db(
-                    _update_live_mirror_row,
-                    row.id,
-                    live_exec_id=None,
-                    status="skipped",
-                    error=live_reason,
-                )
+        await _live_mirror_after_demo(cfg, decision, row.id, execution_id)
+    elif execution_id and execution_id < 0:
+        block_reason = pending_status_label(-execution_id)
+        await run_with_db(
+            _funnel_db,
+            "pending_entry",
+            setup=setup_type or None,
+            session=session,
+            decision_id=row.id,
+        )
     else:
         block_reason = format_block_reason(
             order_ctx.get("block_reason")
@@ -513,12 +665,12 @@ async def run_gemini_gold_trader_loop() -> None:
         action=action,
         confidence=confidence,
         executed=executed,
-        execution_id=execution_id,
+        execution_id=execution_id if execution_id and execution_id > 0 else None,
         block_reason=block_reason,
         dry_run=cfg.dry_run,
     )
 
-    if execution_id:
+    if execution_id and execution_id > 0:
         from app.database import SessionLocal
         from app.strategy_models import StrategyExecution
 
@@ -529,6 +681,8 @@ async def run_gemini_gold_trader_loop() -> None:
                 await run_with_db(record_outcome_from_execution, row.id, ex)
         finally:
             db.close()
+
+    runtime_state.set_funnel(funnel_snapshot())
 
 
 async def _call_with_db_session(async_fn, /, *args, **kwargs):

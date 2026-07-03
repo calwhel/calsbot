@@ -21,12 +21,20 @@ _CALL_TIMEOUT_S = max(15.0, float(os.environ.get("GEMINI_GOLD_DECIDE_TIMEOUT_S",
 
 class GeminiGoldDecisionSchema(BaseModel):
     action: str = Field(description="TAKE or SKIP")
+    setup_type: Optional[str] = Field(
+        default=None,
+        description="Scalp pattern id e.g. session_liquidity_sweep, orb_long, fvg_retrace, momentum_scalp",
+    )
     direction: Optional[str] = Field(
         default=None, description="LONG or SHORT when action is TAKE, else null"
     )
     entry: Optional[float] = Field(default=None, description="Planned entry price for TAKE")
     stop_loss: Optional[float] = Field(default=None, description="Stop loss price for TAKE")
     take_profit: Optional[float] = Field(default=None, description="Take profit price for TAKE")
+    orb_break_level: Optional[float] = Field(default=None, description="ORB break level when setup is ORB")
+    orb_range_height: Optional[float] = Field(default=None, description="ORB range height when setup is ORB")
+    liq_grab_mss_level: Optional[float] = Field(default=None, description="Liquidity grab MSS level")
+    momentum_break_level: Optional[float] = Field(default=None, description="Momentum break level")
     confidence: int = Field(ge=0, le=100, description="Confidence 0-100")
     rationale: str = Field(description="What you see on the charts and why you chose this action")
 
@@ -127,9 +135,11 @@ def _build_prompt(
         "DECISION RULES:\n"
         f"- TAKE: named scalp pattern + 5m trigger (+ 1m entry confirmation when "
         f"visible) + {sl_range} pip SL + 1–2R TP + confidence reflects real conviction.\n"
+        "- setup_type: required on TAKE — one of session_liquidity_sweep, orb_long, "
+        "orb_short, fvg_retrace, order_block, momentum_scalp, liquidity_grab.\n"
         "- SKIP: no qualifying scalp, swing-style setup, or chop — say which scalp "
         "patterns you checked on 1m/5m/15m and why none qualify.\n\n"
-        f"If TAKE: direction, entry near spot, stop_loss, take_profit (1–2R, {sl_range} pip SL), "
+        f"If TAKE: setup_type, direction, entry near spot, stop_loss, take_profit (1–2R, {sl_range} pip SL), "
         "confidence 0–100, rationale naming the scalp pattern and 5m/15m levels.\n\n"
         "If SKIP: action SKIP, null prices, confidence 0–100, rationale plain and specific."
     )
@@ -180,10 +190,15 @@ def _normalize_decision(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "action": action,
+        "setup_type": str(raw.get("setup_type") or "").strip().lower() or None,
         "direction": direction,
         "entry": _f("entry"),
         "stop_loss": _f("stop_loss"),
         "take_profit": _f("take_profit"),
+        "orb_break_level": _f("orb_break_level"),
+        "orb_range_height": _f("orb_range_height"),
+        "liq_grab_mss_level": _f("liq_grab_mss_level"),
+        "momentum_break_level": _f("momentum_break_level"),
         "confidence": confidence,
         "rationale": str(raw.get("rationale") or "").strip(),
         "symbol": SYMBOL,
@@ -341,4 +356,62 @@ async def decide_from_charts(
         except json.JSONDecodeError:
             return None, tokens_in, tokens_out, cost, "invalid_json"
 
+    return _normalize_decision(raw), tokens_in, tokens_out, cost, None
+
+
+async def decide_orb_text(
+    context_text: str,
+    *,
+    cfg: GeminiGoldRuntimeConfig,
+    confidence_threshold: int = 65,
+) -> Tuple[Optional[Dict[str, Any]], int, int, float, Optional[str]]:
+    """Text-only Gemini call for ORB confirmation (no charts)."""
+    client = _get_gemini_client()
+    if not client:
+        return None, 0, 0, 0.0, "no_gemini_api_key"
+
+    from google.genai import types as genai_types
+
+    prompt = (
+        "You are an XAUUSD ORB scalper. Evaluate ONLY the opening range breakout context below.\n"
+        f"Minimum confidence to TAKE: {confidence_threshold}%.\n"
+        "Return JSON with action TAKE or SKIP, setup_type orb_long or orb_short, direction, "
+        "entry, stop_loss, take_profit, orb_break_level, orb_range_height, confidence, rationale.\n\n"
+        f"{context_text}"
+    )
+
+    def _call():
+        return client.models.generate_content(
+            model=cfg.model,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                temperature=0.1,
+                max_output_tokens=400,
+                response_mime_type="application/json",
+                response_schema=GeminiGoldDecisionSchema,
+            ),
+        )
+
+    try:
+        response = await asyncio.wait_for(asyncio.to_thread(_call), timeout=_CALL_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        return None, 0, 0, 0.0, "gemini_timeout"
+    except Exception as exc:
+        return None, 0, 0, 0.0, f"gemini_error:{exc}"
+
+    tokens_in, tokens_out = _parse_usage(response)
+    cost = _estimate_cost(tokens_in, tokens_out)
+    parsed = getattr(response, "parsed", None)
+    if parsed is not None:
+        raw = parsed.model_dump() if hasattr(parsed, "model_dump") else dict(parsed)
+    else:
+        import json
+
+        text = (getattr(response, "text", None) or "").strip()
+        if not text:
+            return None, tokens_in, tokens_out, cost, "empty_response"
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError:
+            return None, tokens_in, tokens_out, cost, "invalid_json"
     return _normalize_decision(raw), tokens_in, tokens_out, cost, None
