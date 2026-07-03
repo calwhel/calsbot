@@ -29,15 +29,24 @@ async def _gold_ai_process_heartbeat_loop() -> None:
     """30s heartbeat log so a silent runner death is visible in deploy logs."""
     while True:
         try:
-            from app.gold_ai_trader.loop import scan_heartbeat_age_seconds
+            from app.gold_ai_trader import state as runtime_state
+            from app.gold_ai_trader.loop import loop_heartbeat_age_seconds, scan_heartbeat_age_seconds
 
-            age_s = await asyncio.to_thread(scan_heartbeat_age_seconds)
-            if age_s is None:
-                logger.info("[gold-ai] heartbeat OK (standalone process, no scan yet)")
+            scan_age_s = await asyncio.to_thread(scan_heartbeat_age_seconds)
+            loop_age_s = await asyncio.to_thread(loop_heartbeat_age_seconds)
+            st = runtime_state.get_status()
+            dormant = st.get("dormant_reason") or st.get("status")
+            session = st.get("active_session")
+            if loop_age_s is None and scan_age_s is None:
+                logger.info("[gold-ai] heartbeat OK (standalone process, starting up)")
             else:
                 logger.info(
-                    "[gold-ai] heartbeat OK (standalone process, scan_age=%.0fs)",
-                    age_s,
+                    "[gold-ai] heartbeat OK (standalone process, loop_age=%.0fs "
+                    "scan_age=%s session=%s dormant=%s)",
+                    loop_age_s if loop_age_s is not None else -1.0,
+                    f"{scan_age_s:.0f}s" if scan_age_s is not None else "n/a",
+                    session or "none",
+                    dormant or "n/a",
                 )
         except Exception as exc:
             logger.warning("[gold-ai] heartbeat check failed: %s", exc)
