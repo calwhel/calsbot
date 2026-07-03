@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
+from app.gemini_gold_trader.chart_renderer import summarize_bars_for_prompt
 from app.gemini_gold_trader.config import GeminiGoldRuntimeConfig, SYMBOL
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,9 @@ def _build_prompt(
         "HTF trendline plays that need hours to develop. You are decisive and "
         "risk-first: skip unclear chop rather than force a trade.\n\n"
         "SCALP MANDATE (read this before every decision):\n"
-        "- You receive FOUR charts in order (low → high timeframe):\n"
+        "- You receive FOUR charts in order (low → high timeframe). Each chart is a "
+        "white-background candlestick image: green candles = bullish, red = bearish, "
+        "with price on the Y-axis and bar index on the X-axis.\n"
         f"  Image 1: {entry_label} ({bars_1m} candles) — entry timing / micro confirmation.\n"
         f"  Image 2: 5-minute ({bars_5m} candles) — PRIMARY scalp trigger.\n"
         f"  Image 3: 15-minute ({bars_15m} candles) — structure, zones, session levels.\n"
@@ -182,6 +185,55 @@ def _normalize_decision(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _build_ohlc_context(
+    *,
+    entry_bars: list,
+    bars_5m: list,
+    bars_15m: list,
+    bars_1h: list,
+    entry_timeframe: str,
+) -> str:
+    entry_label = "1m" if entry_timeframe == "1m" else "5m-entry"
+    parts = [
+        "NUMERIC OHLC SUMMARY (cross-check against the chart images):",
+        summarize_bars_for_prompt(entry_bars, label=f"Entry {entry_label}"),
+        summarize_bars_for_prompt(bars_5m, label="5m"),
+        summarize_bars_for_prompt(bars_15m, label="15m"),
+        summarize_bars_for_prompt(bars_1h, label="1h"),
+    ]
+    return "\n".join(parts)
+
+
+def _chart_contents(
+    genai_types,
+    *,
+    png_entry: bytes,
+    png_5m: bytes,
+    png_15m: bytes,
+    png_1h: bytes,
+    entry_timeframe: str,
+    entry_5m_fallback: bool,
+    bars_1m: int,
+    bars_5m: int,
+    bars_15m: int,
+    bars_1h: int,
+    prompt: str,
+):
+    entry_label = "5m entry (1m unavailable)" if entry_5m_fallback else "1m entry"
+    labels = [
+        (f"CHART 1 — {entry_label} timing ({bars_1m} candles):", png_entry),
+        (f"CHART 2 — 5-minute scalp trigger ({bars_5m} candles):", png_5m),
+        (f"CHART 3 — 15-minute structure ({bars_15m} candles):", png_15m),
+        (f"CHART 4 — 1-hour session bias ({bars_1h} candles):", png_1h),
+    ]
+    parts = []
+    for text, png in labels:
+        parts.append(text)
+        parts.append(genai_types.Part.from_bytes(data=png, mime_type="image/png"))
+    parts.append(prompt)
+    return parts
+
+
 async def decide_from_charts(
     *,
     cfg: GeminiGoldRuntimeConfig,
@@ -191,10 +243,10 @@ async def decide_from_charts(
     png_5m: bytes,
     png_15m: bytes,
     png_1h: bytes,
-    bars_1m: int,
-    bars_5m: int,
-    bars_15m: int,
-    bars_1h: int,
+    entry_bars: list,
+    bars_5m: list,
+    bars_15m: list,
+    bars_1h: list,
     entry_timeframe: str = "1m",
     entry_5m_fallback: bool = False,
 ) -> Tuple[Optional[Dict[str, Any]], int, int, float, Optional[str]]:
@@ -210,24 +262,39 @@ async def decide_from_charts(
     prompt = _build_prompt(
         session=session,
         spot=spot,
-        bars_1m=bars_1m,
+        bars_1m=len(entry_bars),
+        bars_5m=len(bars_5m),
+        bars_15m=len(bars_15m),
+        bars_1h=len(bars_1h),
+        entry_timeframe=entry_timeframe,
+        entry_5m_fallback=entry_5m_fallback,
+    )
+    ohlc_block = _build_ohlc_context(
+        entry_bars=entry_bars,
         bars_5m=bars_5m,
         bars_15m=bars_15m,
         bars_1h=bars_1h,
         entry_timeframe=entry_timeframe,
-        entry_5m_fallback=entry_5m_fallback,
     )
+    full_prompt = f"{prompt}\n\n{ohlc_block}"
 
     def _call():
         return client.models.generate_content(
             model=cfg.model,
-            contents=[
-                genai_types.Part.from_bytes(data=png_1m, mime_type="image/png"),
-                genai_types.Part.from_bytes(data=png_5m, mime_type="image/png"),
-                genai_types.Part.from_bytes(data=png_15m, mime_type="image/png"),
-                genai_types.Part.from_bytes(data=png_1h, mime_type="image/png"),
-                prompt,
-            ],
+            contents=_chart_contents(
+                genai_types,
+                png_entry=png_1m,
+                png_5m=png_5m,
+                png_15m=png_15m,
+                png_1h=png_1h,
+                entry_timeframe=entry_timeframe,
+                entry_5m_fallback=entry_5m_fallback,
+                bars_1m=len(entry_bars),
+                bars_5m=len(bars_5m),
+                bars_15m=len(bars_15m),
+                bars_1h=len(bars_1h),
+                prompt=full_prompt,
+            ),
             config=genai_types.GenerateContentConfig(
                 temperature=0.2,
                 max_output_tokens=512,

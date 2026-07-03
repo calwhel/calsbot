@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from app.gemini_gold_trader import state as runtime_state
-from app.gemini_gold_trader.chart_renderer import render_candlestick_chart
+from app.gemini_gold_trader.chart_renderer import chart_png_is_valid, render_candlestick_chart
 from app.gemini_gold_trader.config import (
     env_defaults,
     gemini_gold_enabled,
@@ -250,6 +250,29 @@ async def run_gemini_gold_trader_loop() -> None:
         runtime_state.note_error("chart_render_failed")
         return
 
+    for name, png in (
+        ("entry", png_entry),
+        ("5m", png_5m),
+        ("15m", png_15m),
+        ("1h", png_1h),
+    ):
+        if not chart_png_is_valid(png):
+            logger.warning(
+                "[gemini-gold] chart PNG invalid tf=%s bytes=%s — skipping Gemini call",
+                name,
+                len(png) if png else 0,
+            )
+            runtime_state.note_error("chart_png_invalid")
+            return
+
+    logger.info(
+        "[gemini-gold] chart PNGs ok entry=%s 5m=%s 15m=%s 1h=%s bytes",
+        len(png_entry),
+        len(png_5m),
+        len(png_15m),
+        len(png_1h),
+    )
+
     decision, tokens_in, tokens_out, cost_usd, api_error = await decide_from_charts(
         cfg=cfg,
         session=session,
@@ -258,10 +281,10 @@ async def run_gemini_gold_trader_loop() -> None:
         png_5m=png_5m,
         png_15m=png_15m,
         png_1h=png_1h,
-        bars_1m=len(entry_bars),
-        bars_5m=len(bars_5m),
-        bars_15m=len(bars_15m),
-        bars_1h=len(bars_1h),
+        entry_bars=entry_bars,
+        bars_5m=bars_5m,
+        bars_15m=bars_15m,
+        bars_1h=bars_1h,
         entry_timeframe=entry_tf,
         entry_5m_fallback=entry_5m_fallback,
     )
