@@ -38,9 +38,10 @@ from app.gemini_gold_trader.guardrails import (
     trades_today,
     trading_account_configured,
 )
-from app.gemini_gold_trader.learning import call_stats_today, get_setup_stats
 from app.gemini_gold_trader.funnel import snapshot as funnel_snapshot
 from app.gemini_gold_trader.funnel_persist import recent_funnel_events
+from app.gemini_gold_trader.learning import call_stats_today, get_setup_stats
+from app.gemini_gold_trader.models import GeminiGoldDecision
 from app.gemini_gold_trader.reconcile import (
     list_open_executions,
     reconcile_orphan_open_executions,

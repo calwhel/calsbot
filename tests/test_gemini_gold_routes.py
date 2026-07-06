@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.gemini_gold_trader.config import env_defaults
 from app.gemini_gold_trader.guardrails import merge_config
 from app.gemini_gold_trader.models import GeminiGoldConfig
-from app.gemini_gold_trader.routes import _config_payload, router
+from app.gemini_gold_trader.routes import _config_payload, _decision_feed, router
 
 app = FastAPI()
 app.include_router(router)
@@ -32,3 +32,12 @@ def test_config_payload_exposes_kill_switch_sources():
     assert payload["kill_switch_db"] is False
     assert payload["env_kill_switch"] is True
     assert payload["kill_switch_env_locked"] is True
+
+
+def test_decision_feed_imports_model():
+    """Regression: _decision_feed must not NameError on GeminiGoldDecision."""
+    from unittest.mock import MagicMock
+
+    db = MagicMock()
+    db.query.return_value.order_by.return_value.limit.return_value.all.return_value = []
+    assert _decision_feed(db) == []
