@@ -17,6 +17,7 @@ from app.gemini_gold_trader.guardrails import (
     assert_demo_account,
     assert_live_account,
     check_can_call_gemini,
+    clear_phantom_inflight_reservations,
     check_can_execute,
     check_can_execute_live_mirror,
     demo_account_configured,
@@ -258,6 +259,49 @@ def test_check_can_execute_blocks_second_open_slot_from_reservation(
     assert ok is False
     assert reason.startswith("blocked: max_open_position")
     assert effective_open_slots_used(db_session, 42, cfg) == 1
+
+
+@patch("app.gemini_gold_trader.guardrails.open_position_count", return_value=0)
+def test_check_can_execute_allows_own_reservation_at_fire_time(_mock_open, db_session):
+    now = datetime.utcnow()
+    db_session.add(
+        GeminiGoldDecision(
+            id=10,
+            action="TAKE",
+            executed=False,
+            execution_reserved_at=now,
+            ts=now,
+        )
+    )
+    db_session.commit()
+    cfg = _cfg()
+    ok, reason = check_can_execute(db_session, cfg, 42, exclude_decision_id=10)
+    assert ok is True
+    assert reason == "ok"
+
+
+@patch("app.gemini_gold_trader.guardrails.open_position_count", return_value=0)
+def test_clear_phantom_inflight_clears_other_reservation(_mock_open, db_session):
+    now = datetime.utcnow()
+    db_session.add_all(
+        [
+            GeminiGoldDecision(
+                id=1,
+                action="TAKE",
+                executed=False,
+                execution_reserved_at=now,
+                ts=now,
+            ),
+            GeminiGoldDecision(id=2, action="TAKE", executed=False, ts=now),
+        ]
+    )
+    db_session.commit()
+    cfg = _cfg()
+    cleared = clear_phantom_inflight_reservations(db_session, 42, cfg, keep_decision_id=2)
+    assert cleared == 1
+    assert in_flight_execution_count(db_session) == 0
+    ok, _ = try_reserve_execution(db_session, cfg, 42, 2)
+    assert ok is True
 
 
 @patch("app.gemini_gold_trader.guardrails.open_position_count", return_value=0)

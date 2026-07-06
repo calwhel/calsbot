@@ -11,6 +11,43 @@ from app.gemini_gold_trader.config import env_defaults
 from app.gemini_gold_trader.fire_validation import revalidate_before_fire
 
 
+def test_fire_time_passes_own_reservation_with_exclude():
+    cfg = env_defaults()
+    cfg.demo_user_id = 42
+    decision = {
+        "action": "TAKE",
+        "direction": "LONG",
+        "entry": 2650.0,
+        "stop_loss": 2640.0,
+        "take_profit": 2670.0,
+        "confidence": 80,
+    }
+
+    async def _run():
+        mock_run = AsyncMock(return_value=(True, "ok"))
+        with patch(
+            "app.gemini_gold_trader.fire_validation.refresh_spot",
+            new=AsyncMock(return_value=(2650.0, "ok")),
+        ), patch(
+            "app.gemini_gold_trader.db_thread.run_with_db",
+            new=mock_run,
+        ):
+            result = await revalidate_before_fire(
+                decision=decision,
+                cfg=cfg,
+                user_id=42,
+                spot_hint=2650.0,
+                decision_id=99,
+            )
+            return result, mock_run
+
+    (ok, reason, _), mock_run = asyncio.run(_run())
+    assert ok is True
+    assert reason == "ok"
+    mock_run.assert_awaited_once()
+    assert mock_run.await_args.kwargs.get("exclude_decision_id") == 99
+
+
 def test_fire_time_blocks_when_caps_fail():
     cfg = env_defaults()
     cfg.demo_user_id = 42

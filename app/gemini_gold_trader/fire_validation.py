@@ -150,7 +150,12 @@ async def revalidate_before_fire(
         from app.gemini_gold_trader.db_thread import run_with_db
         from app.gemini_gold_trader.guardrails import check_can_execute
 
-        can_exec, exec_reason = await run_with_db(check_can_execute, cfg, user_id)
+        can_exec, exec_reason = await run_with_db(
+            check_can_execute,
+            cfg,
+            user_id,
+            exclude_decision_id=decision_id,
+        )
         if not can_exec:
             logger.warning(
                 "[gemini-gold] fire-time cap blocked decision_id=%s reason=%s",

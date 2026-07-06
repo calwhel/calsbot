@@ -182,18 +182,16 @@ def calls_today(db) -> int:
     )
 
 
-def in_flight_execution_count(db) -> int:
+def in_flight_execution_count(db, *, exclude_decision_id: Optional[int] = None) -> int:
     """Reserved slots not yet marked executed (counts toward open + daily caps)."""
-    return (
-        db.query(func.count(GeminiGoldDecision.id))
-        .filter(
-            GeminiGoldDecision.execution_reserved_at.isnot(None),
-            GeminiGoldDecision.executed.is_(False),
-            GeminiGoldDecision.execution_reserved_at >= _in_flight_cutoff(),
-        )
-        .scalar()
-        or 0
+    q = db.query(func.count(GeminiGoldDecision.id)).filter(
+        GeminiGoldDecision.execution_reserved_at.isnot(None),
+        GeminiGoldDecision.executed.is_(False),
+        GeminiGoldDecision.execution_reserved_at >= _in_flight_cutoff(),
     )
+    if exclude_decision_id is not None:
+        q = q.filter(GeminiGoldDecision.id != int(exclude_decision_id))
+    return int(q.scalar() or 0)
 
 
 def trades_today(db) -> int:
@@ -390,13 +388,15 @@ def describe_open_cap_block(
     db,
     user_id: int,
     cfg: GeminiGoldRuntimeConfig,
+    *,
+    exclude_decision_id: Optional[int] = None,
 ) -> str:
     """Human-readable cap block for Telegram/logs."""
     from app.gemini_gold_trader.reconcile import list_open_executions
 
     demo_ctid = active_ctrader_account_id(cfg)
     opens = open_position_count(db, user_id, demo_ctid=demo_ctid)
-    inflight = in_flight_execution_count(db)
+    inflight = in_flight_execution_count(db, exclude_decision_id=exclude_decision_id)
     ids: list[str] = []
     try:
         rows = list_open_executions(db, user_id, demo_ctid=demo_ctid)
@@ -416,12 +416,41 @@ def effective_open_slots_used(
     db,
     user_id: int,
     cfg: Optional[GeminiGoldRuntimeConfig] = None,
+    *,
+    exclude_decision_id: Optional[int] = None,
 ) -> int:
     """Broker-open positions plus in-flight reservations."""
     ctid = active_ctrader_account_id(cfg) if cfg else None
     return int(open_position_count(db, user_id, demo_ctid=ctid)) + int(
-        in_flight_execution_count(db)
+        in_flight_execution_count(db, exclude_decision_id=exclude_decision_id)
     )
+
+
+def clear_phantom_inflight_reservations(
+    db,
+    user_id: int,
+    cfg: GeminiGoldRuntimeConfig,
+    *,
+    keep_decision_id: Optional[int] = None,
+) -> int:
+    """Clear orphan in-flight holds on other decisions when broker is flat."""
+    ctid = active_ctrader_account_id(cfg)
+    if open_position_count(db, user_id, demo_ctid=ctid) > 0:
+        return 0
+    q = db.query(GeminiGoldDecision).filter(
+        GeminiGoldDecision.execution_reserved_at.isnot(None),
+        GeminiGoldDecision.executed.is_(False),
+    )
+    if keep_decision_id is not None:
+        q = q.filter(GeminiGoldDecision.id != int(keep_decision_id))
+    rows = q.all()
+    if not rows:
+        return 0
+    for row in rows:
+        row.execution_reserved_at = None
+    db.commit()
+    logger.info("[gemini-gold] cleared %s phantom in-flight reservation(s)", len(rows))
+    return len(rows)
 
 
 def check_can_call_gemini(db, cfg: GeminiGoldRuntimeConfig) -> Tuple[bool, str]:
@@ -459,7 +488,13 @@ def check_can_call_orb(db, cfg: GeminiGoldRuntimeConfig) -> Tuple[bool, str]:
     return True, "ok"
 
 
-def check_can_execute(db, cfg: GeminiGoldRuntimeConfig, user_id: int) -> Tuple[bool, str]:
+def check_can_execute(
+    db,
+    cfg: GeminiGoldRuntimeConfig,
+    user_id: int,
+    *,
+    exclude_decision_id: Optional[int] = None,
+) -> Tuple[bool, str]:
     if cfg.kill_switch:
         return False, "kill_switch"
     if cfg.dry_run:
@@ -470,8 +505,12 @@ def check_can_execute(db, cfg: GeminiGoldRuntimeConfig, user_id: int) -> Tuple[b
         return False, "no_demo_user"
     if trades_today_effective(db) >= cfg.max_trades_day:
         return False, "max_trades_day"
-    if effective_open_slots_used(db, user_id, cfg) >= 1:
-        return False, describe_open_cap_block(db, user_id, cfg)
+    if effective_open_slots_used(
+        db, user_id, cfg, exclude_decision_id=exclude_decision_id
+    ) >= 1:
+        return False, describe_open_cap_block(
+            db, user_id, cfg, exclude_decision_id=exclude_decision_id
+        )
     gap_min = max(0, int(cfg.min_trade_gap_min or 0))
     if gap_min > 0:
         since = minutes_since_last_executed_trade(db)
@@ -512,6 +551,8 @@ def try_reserve_execution(
         .with_for_update()
         .first()
     )
+    clear_stale_execution_reservations(db)
+    clear_phantom_inflight_reservations(db, user_id, cfg, keep_decision_id=decision_id)
     can, reason = check_can_execute(db, cfg, user_id)
     if not can:
         db.rollback()
