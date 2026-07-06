@@ -1102,6 +1102,73 @@ async def request_ctrader_token_refresh(
     return _latest_ctrader_access_token(uid)
 
 
+async def ensure_ctrader_access_token_for_order(
+    user_id: Optional[int],
+    access_token: str,
+    *,
+    prefs=None,
+) -> str:
+    """Refresh near-expiry OAuth tokens before broker order placement."""
+    if not user_id:
+        return (access_token or "").strip()
+    uid = int(user_id)
+    at = (access_token or "").strip()
+    remaining: Optional[int] = None
+    if prefs is not None:
+        remaining = _token_seconds_remaining_from_prefs(prefs)
+        if not at:
+            at = (getattr(prefs, "ctrader_access_token", None) or "").strip()
+    if remaining is None:
+        from app.database import SessionLocal
+        from app.models import UserPreference
+
+        db = SessionLocal()
+        try:
+            row = db.query(UserPreference).filter(UserPreference.user_id == uid).first()
+            if row:
+                remaining = _token_seconds_remaining_from_prefs(row)
+                if not at:
+                    at = (row.ctrader_access_token or "").strip()
+        finally:
+            db.close()
+    needs_refresh = not at or remaining is None or remaining <= _REFRESH_NEAR_EXPIRY_S
+    if not needs_refresh:
+        return at
+    logger.info(
+        "[cTrader] pre-order token refresh user=%s remaining=%s",
+        uid,
+        remaining if remaining is not None else "unknown",
+    )
+    fresh = await request_ctrader_token_refresh(uid, wait_s=15.0)
+    return (fresh or at or _latest_ctrader_access_token(uid) or "").strip()
+
+
+async def _retry_order_after_account_auth_failure(
+    *,
+    user_id: Optional[int],
+    access_token: str,
+    try_hosts,
+) -> tuple[dict, str]:
+    """Re-read DB token, then wake OAuth refresh owner if auth still fails."""
+    at = (access_token or "").strip()
+    result = await try_hosts(at)
+    if result.get("error") != "account auth failed" or not user_id:
+        return result, at
+    uid = int(user_id)
+    fresh = _latest_ctrader_access_token(uid)
+    if fresh and fresh != at:
+        at = fresh
+        logger.info("[cTrader] retrying order for user %s with re-read token", uid)
+        result = await try_hosts(at)
+    if result.get("error") == "account auth failed":
+        refreshed = await request_ctrader_token_refresh(uid, wait_s=15.0)
+        if refreshed and refreshed != at:
+            at = refreshed
+            logger.info("[cTrader] retrying order for user %s after OAuth refresh", uid)
+            result = await try_hosts(refreshed)
+    return result, at
+
+
 def _log_ctrader_token_startup(
     user_id: int,
     access_token: str,
@@ -1588,6 +1655,8 @@ async def place_market_order_resilient(
     )
     _acct_is_live = _account_is_live(prefs, ctid) if prefs else None
     at = access_token
+    if user_id:
+        at = await ensure_ctrader_access_token_for_order(user_id, at, prefs=prefs)
 
     async def _place_on(h: str) -> dict:
         if volume_units is not None:
@@ -1623,6 +1692,8 @@ async def place_market_order_resilient(
         )
 
     async def _try_hosts(token: str) -> dict:
+        nonlocal at
+        at = token
         last: dict = {"order_id": None, "actual_fill": None, "error": "no host succeeded"}
         for idx, h in enumerate(hosts):
             result = await _place_on(h)
@@ -1661,17 +1732,11 @@ async def place_market_order_resilient(
             return result
         return last
 
-    result = await _try_hosts(at)
-
-    if result.get("error") == "account auth failed" and user_id:
-        fresh = _latest_ctrader_access_token(int(user_id))
-        if fresh and fresh != at:
-            at = fresh
-            logger.info(
-                "[cTrader] retrying order for user %s with re-read token",
-                user_id,
-            )
-            result = await _try_hosts(fresh)
+    result, at = await _retry_order_after_account_auth_failure(
+        user_id=user_id,
+        access_token=at,
+        try_hosts=_try_hosts,
+    )
 
     if is_ambiguous_order_error(result.get("error")):
         vol = volume_units
@@ -1962,6 +2027,8 @@ async def place_limit_order_resilient(
     known_account_type = _account_is_live(prefs, ctid) is not None if prefs else False
     _acct_is_live = _account_is_live(prefs, ctid) if prefs else None
     at = access_token
+    if user_id:
+        at = await ensure_ctrader_access_token_for_order(user_id, at, prefs=prefs)
     price = float(limit_price or entry_price or 0)
 
     async def _place_on(h: str) -> dict:
@@ -1980,6 +2047,8 @@ async def place_limit_order_resilient(
         )
 
     async def _try_hosts(token: str) -> dict:
+        nonlocal at
+        at = token
         last: dict = {"order_id": None, "actual_fill": None, "error": "no host succeeded"}
         for idx, h in enumerate(hosts):
             result = await _place_on(h)
@@ -2011,11 +2080,11 @@ async def place_limit_order_resilient(
             return result
         return last
 
-    result = await _try_hosts(at)
-    if result.get("error") == "account auth failed" and user_id:
-        fresh = _latest_ctrader_access_token(int(user_id))
-        if fresh and fresh != at:
-            result = await _try_hosts(fresh)
+    result, _ = await _retry_order_after_account_auth_failure(
+        user_id=user_id,
+        access_token=at,
+        try_hosts=_try_hosts,
+    )
     return result
 
 

@@ -100,16 +100,33 @@ class TestCtraderTokenRefresh(unittest.TestCase):
         req_src = inspect.getsource(cc.request_ctrader_token_refresh)
         self.assertNotIn("force", req_src)
 
-    def test_order_auth_failure_rereads_db_only(self):
+    def test_order_auth_failure_rereads_db_and_requests_refresh(self):
         import app.services.ctrader_client as cc
 
         src = inspect.getsource(cc.place_market_order_resilient)
-        self.assertIn("_latest_ctrader_access_token", src)
+        self.assertIn("ensure_ctrader_access_token_for_order", src)
+        self.assertIn("_retry_order_after_account_auth_failure", src)
+        self.assertIn("request_ctrader_token_refresh", inspect.getsource(cc._retry_order_after_account_auth_failure))
         self.assertNotIn("_singleflight_forced_refresh", src)
         self.assertNotIn("_notify_ctrader_relink_needed", src)
 
 
 class TestNearExpiryAutoRecovery(unittest.IsolatedAsyncioTestCase):
+    async def test_ensure_token_requests_refresh_when_near_expiry(self):
+        from app.services import ctrader_client as cc
+
+        prefs = MagicMock()
+        prefs.ctrader_access_token = "old-access"
+        prefs.ctrader_access_token_expires_at = datetime.utcnow() + timedelta(minutes=5)
+
+        with patch.object(
+            cc, "request_ctrader_token_refresh", new_callable=AsyncMock, return_value="new-access"
+        ) as mock_refresh:
+            token = await cc.ensure_ctrader_access_token_for_order(42, "old-access", prefs=prefs)
+
+        self.assertEqual(token, "new-access")
+        mock_refresh.assert_awaited_once()
+
     async def test_near_expiry_refresh_persists_rotated_tokens(self):
         from app.services import ctrader_client as cc
 

@@ -24,6 +24,11 @@ def format_block_reason(reason: Optional[str]) -> Optional[str]:
     raw = str(reason).strip()
     if raw.startswith("blocked: max_open_position"):
         return raw
+    if "account auth failed" in raw.lower():
+        return (
+            f"{raw} — OAuth auto-refresh runs on deploy; "
+            "re-link cTrader in portal only if this persists after the next scan"
+        )
     if raw.startswith("fire_time:"):
         raw = raw[len("fire_time:") :]
     if raw in _LABELS:

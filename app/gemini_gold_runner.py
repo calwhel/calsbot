@@ -100,6 +100,18 @@ async def _run_gemini_gold_session() -> None:
     except Exception as exc:
         logger.warning("[gemini-gold] schema ensure failed (non-fatal): %s", exc)
 
+    try:
+        from app.services.ctrader_token_scheduler import (
+            start_ctrader_token_scheduler,
+            wake_token_scheduler,
+        )
+
+        start_ctrader_token_scheduler()
+        wake_token_scheduler()
+        logger.info("[gemini-gold] cTrader token scheduler started or woken")
+    except Exception as exc:
+        logger.warning("[gemini-gold] token scheduler start failed (non-fatal): %s", exc)
+
     from app.gemini_gold_trader.loop import start_gemini_gold_trader_loop
 
     logger.info("Standalone gemini-gold trader starting — scan loop + watchdog")
