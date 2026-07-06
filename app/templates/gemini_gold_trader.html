@@ -285,6 +285,58 @@ function isLiveMode(j) {
   return String(j.execution_mode || j.config?.execution_mode || 'demo').toLowerCase() === 'live';
 }
 
+const _SETUP_INPUT_IDS = [
+  'demo-lot-size', 'live-lot-size', 'demo-max-trades',
+  'confidence-threshold', 'max-live-trades',
+];
+const _CALIBRATION_INPUT_IDS = ['toggle-limit-entry', 'toggle-orb', 'orb-confidence'];
+const _dirtyFields = new Set();
+let _demoCtidDirty = false;
+let _liveCtidDirty = false;
+
+function _markFieldDirty(id) {
+  _dirtyFields.add(id);
+}
+
+function _shouldBindField(id) {
+  const el = document.getElementById(id);
+  if (!el) return true;
+  if (_dirtyFields.has(id)) return false;
+  if (document.activeElement === el) return false;
+  return true;
+}
+
+function _bindNumberInput(id, value) {
+  if (!_shouldBindField(id)) return;
+  const el = document.getElementById(id);
+  if (el) el.value = value;
+}
+
+function _bindCheckbox(id, checked) {
+  if (!_shouldBindField(id)) return;
+  const el = document.getElementById(id);
+  if (el) el.checked = checked;
+}
+
+function _clearSetupDirty() {
+  _dirtyFields.clear();
+  _demoCtidDirty = false;
+  _liveCtidDirty = false;
+}
+
+_SETUP_INPUT_IDS.forEach((id) => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('input', () => _markFieldDirty(id));
+});
+_CALIBRATION_INPUT_IDS.forEach((id) => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('input', () => _markFieldDirty(id));
+  el.addEventListener('change', () => _markFieldDirty(id));
+});
+document.getElementById('demo-ctid-select')?.addEventListener('change', () => { _demoCtidDirty = true; });
+document.getElementById('live-ctid-select')?.addEventListener('change', () => { _liveCtidDirty = true; });
+
 function renderStatus(j) {
   const cfg = j.config || {};
   window._ggLastCfg = cfg;
@@ -385,9 +437,9 @@ function renderFunnel(funnel, events) {
 }
 
 function renderCalibration(cfg) {
-  document.getElementById('toggle-limit-entry').checked = cfg.use_limit_entry !== false;
-  document.getElementById('toggle-orb').checked = !!cfg.orb_enabled;
-  document.getElementById('orb-confidence').value = cfg.orb_confidence_threshold ?? 65;
+  _bindCheckbox('toggle-limit-entry', cfg.use_limit_entry !== false);
+  _bindCheckbox('toggle-orb', !!cfg.orb_enabled);
+  _bindNumberInput('orb-confidence', cfg.orb_confidence_threshold ?? 65);
 }
 
 async function loadCalibration() {
@@ -406,7 +458,7 @@ async function loadCalibration() {
   }
 }
 
-function renderTradingSetup(j) {
+function renderTradingSetup(j, { bindInputs = true } = {}) {
   const cfg = j.config || {};
   const live = isLiveMode(j);
   const demoAccounts = j.demo_accounts || [];
@@ -438,26 +490,30 @@ function renderTradingSetup(j) {
   document.getElementById('live-mode-warn').style.display = live ? 'block' : 'none';
 
   const demoSel = document.getElementById('demo-ctid-select');
+  const prevDemo = _demoCtidDirty ? demoSel.value : (selectedDemo?.ctid ? String(selectedDemo.ctid) : '');
   demoSel.innerHTML = '<option value="">Select demo account…</option>' +
     demoAccounts.map(a => `<option value="${escapeHtml(a.ctid)}">${escapeHtml(a.label)}</option>`).join('');
-  if (selectedDemo && selectedDemo.ctid) demoSel.value = String(selectedDemo.ctid);
+  if (prevDemo) demoSel.value = prevDemo;
   document.getElementById('btn-save-demo').disabled = demoAccounts.length === 0;
 
   const liveSel = document.getElementById('live-ctid-select');
+  const prevLive = _liveCtidDirty ? liveSel.value : (selectedLive?.ctid ? String(selectedLive.ctid) : '');
   liveSel.innerHTML = '<option value="">Select live account…</option>' +
     liveAccounts.map(a => `<option value="${escapeHtml(a.ctid)}">${escapeHtml(a.label)}</option>`).join('');
-  if (selectedLive && selectedLive.ctid) liveSel.value = String(selectedLive.ctid);
+  if (prevLive) liveSel.value = prevLive;
   document.getElementById('btn-save-live').disabled = liveAccounts.length === 0;
 
-  document.getElementById('demo-lot-size').value = cfg.demo_lot_size ?? 0.01;
-  document.getElementById('live-lot-size').value = cfg.live_lot_size ?? 0.01;
-  document.getElementById('demo-max-trades').value = cfg.max_trades_day ?? 4;
-  document.getElementById('confidence-threshold').value = cfg.confidence_threshold ?? 85;
-  renderCalibration(cfg);
-  renderLiveMirror(j);
+  if (bindInputs) {
+    _bindNumberInput('demo-lot-size', cfg.demo_lot_size ?? 0.01);
+    _bindNumberInput('live-lot-size', cfg.live_lot_size ?? 0.01);
+    _bindNumberInput('demo-max-trades', cfg.max_trades_day ?? 4);
+    _bindNumberInput('confidence-threshold', cfg.confidence_threshold ?? 85);
+    renderCalibration(cfg);
+  }
+  renderLiveMirror(j, { bindInputs });
 }
 
-function renderLiveMirror(j) {
+function renderLiveMirror(j, { bindInputs = true } = {}) {
   const cfg = j.config || {};
   const st = j.stats_today || {};
   const live = isLiveMode(j);
@@ -480,7 +536,9 @@ function renderLiveMirror(j) {
     statusLine.textContent = 'Copy demo TAKE orders to your live account. Demo stays primary.';
   }
 
-  document.getElementById('max-live-trades').value = cfg.max_live_trades_day ?? 3;
+  if (bindInputs) {
+    _bindNumberInput('max-live-trades', cfg.max_live_trades_day ?? 3);
+  }
   document.getElementById('live-trades-stat').textContent = String(st.live_trades ?? 0);
   const pnl = st.live_pnl_usd ?? 0;
   const pnlEl = document.getElementById('live-pnl-stat');
@@ -548,7 +606,7 @@ function renderFeed(j) {
   }).join('');
 }
 
-async function refresh() {
+async function refresh({ bindInputs = true } = {}) {
   const r = await _apiFetch(`/api/gemini-gold-trader/status?uid=${encodeURIComponent(UID)}`);
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.ok) {
@@ -557,9 +615,13 @@ async function refresh() {
   }
   window._ggLastStatus = j;
   renderStatus(j);
-  renderTradingSetup(j);
+  renderTradingSetup(j, { bindInputs });
   renderFeed(j);
   loadCalibration();
+}
+
+async function refreshStatusOnly() {
+  await refresh({ bindInputs: false });
 }
 
 document.getElementById('btn-refresh').onclick = refresh;
@@ -643,6 +705,7 @@ document.getElementById('btn-save-demo').onclick = async () => {
     return;
   }
   showToast('Demo account saved');
+  _demoCtidDirty = false;
   refresh();
 };
 
@@ -658,6 +721,7 @@ document.getElementById('btn-save-live').onclick = async () => {
     return;
   }
   showToast('Live account saved');
+  _liveCtidDirty = false;
   refresh();
 };
 
@@ -669,9 +733,15 @@ document.getElementById('btn-save-size').onclick = async () => {
     max_live_trades_day: +document.getElementById('max-live-trades').value || 3,
     confidence_threshold: +document.getElementById('confidence-threshold').value || 85,
   };
-  await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
+  const r = await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
     method: 'POST', body: JSON.stringify(body),
   });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    showToast(err.detail || 'Save failed');
+    return;
+  }
+  _clearSetupDirty();
   showToast('Size & limits saved');
   refresh();
 };
@@ -690,6 +760,7 @@ document.getElementById('btn-save-intelligence').onclick = async () => {
     showToast(err.detail || 'Save failed');
     return;
   }
+  _CALIBRATION_INPUT_IDS.forEach((id) => _dirtyFields.delete(id));
   showToast('Intelligence settings saved');
   refresh();
 };
@@ -737,6 +808,7 @@ document.getElementById('btn-live-enable').onclick = async () => {
     return;
   }
   showToast('Live mirror enabled');
+  _clearSetupDirty();
   refresh();
 };
 
@@ -751,7 +823,7 @@ document.getElementById('btn-live-disconnect').onclick = async () => {
 };
 
 refresh();
-setInterval(refresh, 15000);
+setInterval(refreshStatusOnly, 15000);
 </script>
 </body>
 </html>
