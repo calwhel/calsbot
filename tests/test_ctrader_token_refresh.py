@@ -106,9 +106,30 @@ class TestCtraderTokenRefresh(unittest.TestCase):
         src = inspect.getsource(cc.place_market_order_resilient)
         self.assertIn("ensure_ctrader_access_token_for_order", src)
         self.assertIn("_retry_order_after_account_auth_failure", src)
+        self.assertIn("is_reconcile_worthy_order_error", src)
+        self.assertIn("reconcile_order_fill_after_miss", src)
         self.assertIn("request_ctrader_token_refresh", inspect.getsource(cc._retry_order_after_account_auth_failure))
         self.assertNotIn("_singleflight_forced_refresh", src)
         self.assertNotIn("_notify_ctrader_relink_needed", src)
+
+    def test_place_order_retries_account_auth_with_fresh_connection(self):
+        import app.services.ctrader_client as cc
+
+        for fn_name in ("place_order", "place_order_units", "place_limit_order"):
+            src = inspect.getsource(getattr(cc, fn_name))
+            self.assertIn("_auth_failed_order_result", src, fn_name)
+
+    def test_reconcile_worthy_includes_account_auth_failed(self):
+        from app.services.ctrader_client import (
+            is_ambiguous_order_error,
+            is_reconcile_worthy_order_error,
+        )
+
+        self.assertTrue(is_reconcile_worthy_order_error("account auth failed"))
+        self.assertTrue(is_reconcile_worthy_order_error("timeout"))
+        self.assertFalse(is_reconcile_worthy_order_error("order rejected"))
+        self.assertTrue(is_ambiguous_order_error("timeout"))
+        self.assertFalse(is_ambiguous_order_error("account auth failed"))
 
 
 class TestNearExpiryAutoRecovery(unittest.IsolatedAsyncioTestCase):
@@ -123,6 +144,30 @@ class TestNearExpiryAutoRecovery(unittest.IsolatedAsyncioTestCase):
             cc, "request_ctrader_token_refresh", new_callable=AsyncMock, return_value="new-access"
         ) as mock_refresh:
             token = await cc.ensure_ctrader_access_token_for_order(42, "old-access", prefs=prefs)
+
+        self.assertEqual(token, "new-access")
+        mock_refresh.assert_awaited_once()
+
+    async def test_ensure_token_requests_refresh_when_jwt_near_expiry(self):
+        from app.services import ctrader_client as cc
+        import base64
+        import json
+        import time
+
+        exp = int(time.time()) + 120
+        payload = base64.urlsafe_b64encode(
+            json.dumps({"exp": exp}).encode()
+        ).decode().rstrip("=")
+        jwt_token = f"hdr.{payload}.sig"
+
+        prefs = MagicMock()
+        prefs.ctrader_access_token = jwt_token
+        prefs.ctrader_access_token_expires_at = datetime.utcnow() + timedelta(hours=12)
+
+        with patch.object(
+            cc, "request_ctrader_token_refresh", new_callable=AsyncMock, return_value="new-access"
+        ) as mock_refresh:
+            token = await cc.ensure_ctrader_access_token_for_order(42, jwt_token, prefs=prefs)
 
         self.assertEqual(token, "new-access")
         mock_refresh.assert_awaited_once()

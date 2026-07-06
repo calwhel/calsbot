@@ -505,6 +505,15 @@ def is_ambiguous_order_error(err: Optional[str]) -> bool:
     return any(tok in low for tok in _AMBIGUOUS_ORDER_ERRORS)
 
 
+def is_reconcile_worthy_order_error(err: Optional[str]) -> bool:
+    """Errors where the broker may have filled despite a failed submit ack."""
+    if not err:
+        return False
+    if str(err).lower() == "account auth failed":
+        return True
+    return is_ambiguous_order_error(err)
+
+
 def _acct_conn_key(host: str, ctid: int = 0) -> tuple:
     return (host, int(ctid))
 
@@ -571,6 +580,25 @@ def _invalidate_persistent_connection(host: str = CTRADER_HOST, ctid: int = 0) -
                 st["writer"].close()
             except Exception:
                 pass
+
+
+def _invalidate_routing_connections(ctid: int, hosts: Optional[list] = None) -> None:
+    """Drop cached sockets for an account across live/demo routing hosts."""
+    for h in hosts or (CTRADER_HOST_LIVE, CTRADER_HOST_DEMO):
+        _invalidate_persistent_connection(h, int(ctid))
+
+
+def _auth_failed_order_result(host: str, ctid: int, attempt: int) -> Optional[dict]:
+    """Invalidate stale socket and retry once; otherwise return auth error."""
+    _invalidate_persistent_connection(host, ctid)
+    if attempt == 1:
+        logger.warning(
+            "[cTrader] account auth failed host=%s ctid=%s — retry with fresh connection",
+            host,
+            ctid,
+        )
+        return None
+    return {"order_id": None, "actual_fill": None, "error": "account auth failed"}
 
 
 async def _account_auth(
@@ -1131,6 +1159,13 @@ async def ensure_ctrader_access_token_for_order(
                     at = (row.ctrader_access_token or "").strip()
         finally:
             db.close()
+    jwt_remaining = _access_token_ttl_seconds(at) if at else None
+    if jwt_remaining is not None:
+        remaining = (
+            min(remaining, jwt_remaining)
+            if remaining is not None
+            else jwt_remaining
+        )
     needs_refresh = not at or remaining is None or remaining <= _REFRESH_NEAR_EXPIRY_S
     if not needs_refresh:
         return at
@@ -1148,6 +1183,8 @@ async def _retry_order_after_account_auth_failure(
     user_id: Optional[int],
     access_token: str,
     try_hosts,
+    ctid: Optional[int] = None,
+    hosts: Optional[list] = None,
 ) -> tuple[dict, str]:
     """Re-read DB token, then wake OAuth refresh owner if auth still fails."""
     at = (access_token or "").strip()
@@ -1155,6 +1192,8 @@ async def _retry_order_after_account_auth_failure(
     if result.get("error") != "account auth failed" or not user_id:
         return result, at
     uid = int(user_id)
+    if ctid is not None:
+        _invalidate_routing_connections(int(ctid), hosts)
     fresh = _latest_ctrader_access_token(uid)
     if fresh and fresh != at:
         at = fresh
@@ -1162,10 +1201,19 @@ async def _retry_order_after_account_auth_failure(
         result = await try_hosts(at)
     if result.get("error") == "account auth failed":
         refreshed = await request_ctrader_token_refresh(uid, wait_s=15.0)
-        if refreshed and refreshed != at:
-            at = refreshed
-            logger.info("[cTrader] retrying order for user %s after OAuth refresh", uid)
-            result = await try_hosts(refreshed)
+        if refreshed:
+            if ctid is not None:
+                _invalidate_routing_connections(int(ctid), hosts)
+            if refreshed != at:
+                at = refreshed
+                logger.info("[cTrader] retrying order for user %s after OAuth refresh", uid)
+                result = await try_hosts(refreshed)
+            elif result.get("error") == "account auth failed":
+                logger.info(
+                    "[cTrader] retrying order for user %s after OAuth refresh (same token, fresh socket)",
+                    uid,
+                )
+                result = await try_hosts(refreshed)
     return result, at
 
 
@@ -1715,6 +1763,7 @@ async def place_market_order_resilient(
                 return out
             err = result.get("error")
             if err == "account auth failed":
+                _invalidate_persistent_connection(h, ctid)
                 last = result
                 if idx < len(hosts) - 1:
                     continue
@@ -1736,9 +1785,11 @@ async def place_market_order_resilient(
         user_id=user_id,
         access_token=at,
         try_hosts=_try_hosts,
+        ctid=ctid,
+        hosts=hosts,
     )
 
-    if is_ambiguous_order_error(result.get("error")):
+    if is_reconcile_worthy_order_error(result.get("error")):
         vol = volume_units
         if vol is None and volume_lots is not None:
             vol = int(round(float(volume_lots) * 100_000))
@@ -1910,7 +1961,10 @@ async def place_limit_order(
             try:
                 reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
-                    return {"order_id": None, "actual_fill": None, "error": "account auth failed"}
+                    auth_err = _auth_failed_order_result(host, ctid_trader_account_id, attempt)
+                    if auth_err is None:
+                        continue
+                    return auth_err
 
                 symbol_id = await _resolve_symbol_id(
                     reader, writer, ctid_trader_account_id, broker_symbol, host
@@ -2069,6 +2123,7 @@ async def place_limit_order_resilient(
                 return out
             err = result.get("error")
             if err == "account auth failed":
+                _invalidate_persistent_connection(h, ctid)
                 last = result
                 if idx < len(hosts) - 1:
                     continue
@@ -2084,6 +2139,8 @@ async def place_limit_order_resilient(
         user_id=user_id,
         access_token=at,
         try_hosts=_try_hosts,
+        ctid=ctid,
+        hosts=hosts,
     )
     return result
 
@@ -2381,7 +2438,10 @@ async def place_order(
             try:
                 reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
-                    return {"order_id": None, "actual_fill": None, "error": "account auth failed"}
+                    auth_err = _auth_failed_order_result(host, ctid_trader_account_id, attempt)
+                    if auth_err is None:
+                        continue
+                    return auth_err
 
                 broker_symbol = _SYMBOL_MAP.get(symbol_name, symbol_name)
                 symbol_id = await _resolve_symbol_id(
@@ -2551,7 +2611,10 @@ async def place_order_units(
             try:
                 reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
                 if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
-                    return {"order_id": None, "actual_fill": None, "error": "account auth failed"}
+                    auth_err = _auth_failed_order_result(host, ctid_trader_account_id, attempt)
+                    if auth_err is None:
+                        continue
+                    return auth_err
 
                 symbol_id = await _resolve_symbol_id(
                     reader, writer, ctid_trader_account_id, broker_symbol, host
