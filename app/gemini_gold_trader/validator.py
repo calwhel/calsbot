@@ -155,7 +155,18 @@ def validate_take_decision(
         min_rr = max(1.0, float(cfg.min_rr or 1.0))
         max_rr = min(2.0, max(min_rr, float(cfg.max_rr or 2.0)))
         if rr < min_rr - 1e-9:
-            return False, f"validator:rr_too_low({rr:.2f}<{min_rr:.1f})", d
+            if direction == "LONG":
+                adj_tp = entry + risk_dist * min_rr
+            else:
+                adj_tp = entry - risk_dist * min_rr
+            adj_reward = abs(adj_tp - entry)
+            adj_rr = adj_reward / risk_dist
+            if adj_rr >= min_rr - 1e-9 and adj_rr <= max_rr + 1e-9:
+                d["take_profit"] = round(adj_tp, 2)
+                d["validator_note"] = f"tp_adjusted_for_min_rr({rr:.2f}->{adj_rr:.2f})"
+                rr = adj_rr
+            else:
+                return False, f"validator:rr_too_low({rr:.2f}<{min_rr:.1f})", d
         if rr > max_rr + 1e-9:
             return False, f"validator:rr_too_high({rr:.2f}>{max_rr:.1f})", d
 

@@ -48,16 +48,31 @@ def test_validate_rr_too_high():
     assert "rr_too_high" in reason
 
 
-def test_validate_rr_too_low():
+def test_validate_nudges_low_rr_up_to_minimum():
     decision = {
         "direction": "LONG",
         "entry": 2650.0,
         "stop_loss": 2640.0,
         "take_profit": 2655.0,
     }
-    ok, reason, _ = validate_take_decision(decision, cfg=_cfg(), spot=2650.0)
-    assert ok is False
-    assert "rr_too_low" in reason
+    ok, reason, d = validate_take_decision(decision, cfg=_cfg(), spot=2650.0)
+    assert ok is True
+    assert reason == "ok"
+    assert d["take_profit"] == 2660.0
+
+
+def test_validate_nudges_tp_when_gemini_rounds_rr_slightly_low():
+    decision = {
+        "direction": "LONG",
+        "entry": 4157.65,
+        "stop_loss": 4150.00,
+        "take_profit": 4165.00,
+    }
+    ok, reason, d = validate_take_decision(decision, cfg=_cfg(), spot=4157.65)
+    assert ok is True
+    assert reason == "ok"
+    assert d["take_profit"] == 4165.30
+    assert "tp_adjusted_for_min_rr" in (d.get("validator_note") or "")
 
 
 def test_validate_one_to_one_rr_ok():
