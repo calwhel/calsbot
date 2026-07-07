@@ -123,3 +123,37 @@ def test_validate_entry_chasing():
     ok, reason, _ = validate_take_decision(decision, cfg=cfg, spot=2665.0)
     assert ok is False
     assert "entry_chasing" in reason
+
+
+def test_high_confidence_skips_liquidity_grab_chasing():
+    cfg = _cfg()
+    cfg.confidence_threshold = 80
+    decision = {
+        "direction": "LONG",
+        "entry": 4138.52,
+        "stop_loss": 4136.52,
+        "take_profit": 4141.52,
+        "setup_type": "liquidity_grab",
+        "liq_grab_mss_level": 4134.67,
+        "confidence": 80,
+    }
+    ok, reason, _ = validate_take_decision(decision, cfg=cfg, spot=4138.52, atr=1.58)
+    assert ok is True
+    assert reason == "ok"
+
+
+def test_low_confidence_blocks_liquidity_grab_chasing():
+    cfg = _cfg()
+    cfg.confidence_threshold = 80
+    decision = {
+        "direction": "LONG",
+        "entry": 4138.52,
+        "stop_loss": 4136.52,
+        "take_profit": 4141.52,
+        "setup_type": "liquidity_grab",
+        "liq_grab_mss_level": 4134.67,
+        "confidence": 75,
+    }
+    ok, reason, _ = validate_take_decision(decision, cfg=cfg, spot=4138.52, atr=1.58)
+    assert ok is False
+    assert "entry_chasing_liquidity_grab" in reason
