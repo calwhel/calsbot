@@ -193,4 +193,26 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
             dec_row.execution_id = exec_id
             await db_commit(db)
             filled += 1
+            try:
+                from app.gemini_gold_trader.guardrails import is_live_execution_mode
+                from app.gemini_gold_trader.telegram_notify import notify_decision
+
+                await notify_decision(
+                    session=str(row.session or getattr(dec_row, "session", None) or ""),
+                    decision=decision,
+                    action="TAKE",
+                    confidence=int(getattr(dec_row, "confidence", None) or 0),
+                    executed=True,
+                    execution_id=exec_id,
+                    dry_run=bool(getattr(cfg, "dry_run", False)),
+                    execution_mode="live" if is_live_execution_mode(cfg) else "demo",
+                    fill_kind="entry_watch",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[gemini-gold] entry-watch fill notify failed decision=%s: %s",
+                    row.decision_id,
+                    exc,
+                )
+            break
     return filled
