@@ -95,7 +95,14 @@ def validate_take_decision(
         )
 
     profile = (d.get("validator_profile") or "").strip().lower()
-    if profile == "orb":
+    try:
+        confidence = int(d.get("confidence") or 0)
+    except (TypeError, ValueError):
+        confidence = 0
+    confidence = max(0, min(100, confidence))
+    high_conviction = confidence >= int(cfg.confidence_threshold or 85)
+
+    if profile == "orb" and not high_conviction:
         try:
             break_level = float(d.get("orb_break_level") or 0)
             range_height = float(d.get("orb_range_height") or 0)
@@ -115,7 +122,7 @@ def validate_take_decision(
                     d,
                 )
 
-    if profile == "momentum_flag":
+    if profile == "momentum_flag" and not high_conviction:
         try:
             break_level = float(d.get("momentum_break_level") or 0)
         except (TypeError, ValueError):
@@ -135,7 +142,7 @@ def validate_take_decision(
                     d,
                 )
 
-    if profile == "liquidity_grab":
+    if profile == "liquidity_grab" and not high_conviction:
         try:
             mss_level = float(d.get("liq_grab_mss_level") or 0)
         except (TypeError, ValueError):
