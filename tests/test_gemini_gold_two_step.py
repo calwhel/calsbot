@@ -53,9 +53,38 @@ def test_build_prompt_includes_prior_observation_when_two_step():
     assert "focus on the decision" in p
 
 
+def test_build_prompt_includes_early_fade_guidance():
+    p = _build_prompt(
+        session="new_york", spot=3380.0, bars_1m=60, bars_5m=80, bars_15m=80, bars_1h=60,
+    )
+    assert "EARLY OPPORTUNITY" in p
+    assert "SESSION FADE" in p
+    assert "fade-short" in p.lower() or "EXTENDED UP" in p
+    assert "liquidity_grab_short" in p
+
+
+def test_build_observe_prompt_includes_early_opportunity_fields():
+    p = _build_observe_prompt(
+        session="london", spot=3380.0, bars_1m=60, bars_5m=80, bars_15m=80, bars_1h=60,
+    )
+    assert "session_extension" in p
+    assert "early_opportunity" in p
+    assert "SESSION FADE" in p
+
+
+def test_summarize_session_extension_extended_high():
+    from app.gemini_gold_trader.gemini import summarize_session_extension
+
+    bars = [[0, 3370, 3385, 3368, 3382]] * 20 + [[0, 3380, 3390, 3378, 3388]] * 20
+    text = summarize_session_extension(bars, bars, spot=3387.0)
+    assert "EXTENDED HIGH" in text
+    assert "fade-short" in text
+
+
 def test_build_prompt_without_observation_unchanged_scalp_rules():
     p = _build_prompt(
         session="london", spot=3342.5, bars_1m=60, bars_5m=80, bars_15m=80, bars_1h=60,
     )
     assert "TWO-STEP DECISION" not in p
     assert "SCALP MANDATE" in p
+

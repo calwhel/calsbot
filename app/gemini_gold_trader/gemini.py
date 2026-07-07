@@ -38,6 +38,18 @@ class GeminiGoldChartObservationSchema(BaseModel):
     market_state: str = Field(
         description="Chop vs trend, session character, what matters right now at spot"
     )
+    session_extension: str = Field(
+        description=(
+            "Where spot sits in today's visible range: extended HIGH/LOW/mid, "
+            "% from range low, distance to session high/low — fade-short or fade-long zone?"
+        )
+    )
+    early_opportunity: str = Field(
+        description=(
+            "EARLY scalp forming NOW: pumped-and-fade-short, dump-and-bounce-long, "
+            "or fresh momentum — first 5m trigger live or not, with prices"
+        )
+    )
     setups_checked: str = Field(
         description="Each scalp pattern family checked: live trigger yes/no and brief why"
     )
@@ -78,6 +90,70 @@ def _get_gemini_client():
         return None
 
 
+def _early_opportunity_guidance() -> str:
+    return (
+        "EARLY OPPORTUNITY & SESSION FADE (priority XAUUSD scalps):\n"
+        "- Gold often pumps or dumps hard intraday, then snaps back — hunt these EARLY.\n"
+        "- EXTENDED UP (upper ~25% of session range, near day/session high, premium): "
+        "best scalp is SHORT on the FIRST 5m bearish shift — liq grab above highs, "
+        "bearish MSS, rejection wick, bear displacement. Do NOT wait for a full retrace "
+        "or perfect OB; enter when reversal STARTS.\n"
+        "- EXTENDED DOWN (lower ~25% of range, near day/session low, discount): "
+        "mirror for EARLY LONG on first 5m bullish shift.\n"
+        "- TP on fades: session mid, Asian mid, nearest 5m/15m structure — quick 1–2R, "
+        "not a distant HTF target.\n"
+        "- Fade setup_type: liquidity_grab_short/long, liq_sweep_bear/bull, "
+        "eqh_sweep_bear, eql_sweep_bull, sdp_bear/sdp_bull, disp_bear/disp_bull.\n"
+        "- Proactive beats perfect: clear extension + live 5m flip = TAKE at 75–85%. "
+        "Waiting for more confirmation often misses the scalp.\n"
+    )
+
+
+def summarize_session_extension(
+    bars_5m: list,
+    bars_15m: list,
+    spot: float,
+) -> str:
+    """Numeric session-range position for prompt context (not a trade gate)."""
+    highs: list[float] = []
+    lows: list[float] = []
+    for bars in (bars_5m, bars_15m):
+        for bar in bars:
+            if len(bar) < 5:
+                continue
+            try:
+                h = float(bar[2])
+                l = float(bar[3])
+            except (TypeError, ValueError):
+                continue
+            if h > 0 and l > 0:
+                highs.append(h)
+                lows.append(l)
+    if not highs or not lows or spot <= 0:
+        return ""
+    session_high = max(highs)
+    session_low = min(lows)
+    rng = session_high - session_low
+    if rng <= 0:
+        return ""
+    pct_from_low = (spot - session_low) / rng * 100.0
+    below_high = session_high - spot
+    above_low = spot - session_low
+    if pct_from_low >= 75.0:
+        zone = "EXTENDED HIGH — fade-short zone (pumped, look for early bearish 5m trigger)"
+    elif pct_from_low <= 25.0:
+        zone = "EXTENDED LOW — fade-long zone (dumped, look for early bullish 5m trigger)"
+    else:
+        zone = "MID-RANGE — prefer sweep/ORB/momentum; fades need clearer extension"
+    return (
+        "SESSION RANGE POSITION (visible 5m+15m bars):\n"
+        f"- Range high {session_high:.2f} | low {session_low:.2f} | spot {spot:.2f}\n"
+        f"- Spot is {pct_from_low:.0f}% up from range low "
+        f"(${above_low:.2f} above low, ${below_high:.2f} below high)\n"
+        f"- {zone}"
+    )
+
+
 def format_chart_observation(obs: Dict[str, Any]) -> str:
     """Format step-1 observation dict as text for step-2 decision prompt."""
     if not obs:
@@ -89,6 +165,8 @@ def format_chart_observation(obs: Dict[str, Any]) -> str:
         ("1-hour bias", obs.get("chart_1h")),
         ("Key levels", obs.get("key_levels")),
         ("Market state", obs.get("market_state")),
+        ("Session extension", obs.get("session_extension")),
+        ("Early opportunity", obs.get("early_opportunity")),
         ("Setups checked", obs.get("setups_checked")),
     ]
     lines = []
@@ -128,6 +206,7 @@ def _build_observe_prompt(
         f"{entry_note}"
         "Shaded zones on 5m/15m (if present) mark FVG, IFVG, and OB — cite them with prices.\n\n"
         f"Session: {session}. Spot reference: {spot:.2f}.\n\n"
+        f"{_early_opportunity_guidance()}\n"
         "For each field, be specific with price levels visible on the charts:\n"
         "- entry_chart: last few candles, micro structure, entry-timing cues.\n"
         "- chart_5m: sweeps, FVG/OB/IFVG reactions, momentum, ORB, MSS — actionable NOW or not.\n"
@@ -135,8 +214,12 @@ def _build_observe_prompt(
         "- chart_1h: directional bias only (not an entry trigger).\n"
         "- key_levels: PDH/PDL, Asian range, EQH/EQL, session opens, recent swing H/L with prices.\n"
         "- market_state: trending vs chop, session character, what matters at spot now.\n"
-        "- setups_checked: go through liquidity sweep, ORB, FVG/OB/IFVG, momentum, liq grab+MSS — "
-        "each yes/no for a live 5m trigger and one-line why.\n"
+        "- session_extension: is price pumped (near range high) or dumped (near range low)? "
+        "Cite % in range and distance to high/low.\n"
+        "- early_opportunity: BEST early scalp forming NOW — fade after pump, bounce after dump, "
+        "or fresh momentum — is first 5m trigger live? cite prices.\n"
+        "- setups_checked: liquidity sweep, ORB, FVG/OB/IFVG, momentum, liq grab+MSS, "
+        "SESSION FADE (extended up/down) — each yes/no for live 5m trigger and one-line why.\n"
     )
 
 
@@ -170,8 +253,8 @@ def _build_prompt(
         "You are an experienced XAUUSD SCALPER — you hunt fast, session-local setups "
         "that can play out in minutes to a few hours. You are NOT a swing trader. "
         "You do not target multi-day moves, distant daily/weekly levels, or slow "
-        "HTF trendline plays that need hours to develop. You are decisive and "
-        "risk-first: skip unclear chop rather than force a trade.\n\n"
+        "You are decisive and risk-first: skip unclear chop rather than force a trade, "
+        "but ACT on clear early fades and first 5m reversal triggers when price is extended.\n\n"
     )
     if chart_observation:
         prompt += (
@@ -202,6 +285,7 @@ def _build_prompt(
         "for HTF target\".\n"
         "- SKIP any setup that needs a wide stop, a distant entry, or a multi-hour "
         "developing pattern — that is swing trading, not scalping.\n\n"
+        f"{_early_opportunity_guidance()}\n"
         "SCALP RISK RULES (mandatory for every TAKE):\n"
         f"- Stop loss: {sl_range} platform pips from entry (XAUUSD: 1 pip = $0.10 → "
         f"{min_sl:.0f} pips ≈ ${min_sl * 0.1:.1f}, {max_sl:.0f} pips ≈ ${max_sl * 0.1:.1f} max).\n"
@@ -228,6 +312,10 @@ def _build_prompt(
         "session direction on 5m; cite the flag/EMA zone.\n\n"
         "5. LIQUIDITY GRAB + 5m MSS — quick sweep of a nearby pool then structure "
         "break on 5m in reversal direction; use 1m for entry timing if visible.\n\n"
+        "6. SESSION FADE / EARLY REVERSAL — price extended in today's range (pumped near "
+        "highs or dumped near lows) and FIRST 5m trigger flips against the extension; "
+        "enter early for snap-back toward mid-range (liquidity_grab_short/long, "
+        "liq_sweep_bear/bull, sdp_bear/sdp_bull, eqh_sweep_bear, eql_sweep_bull).\n\n"
         "SWING SETUPS TO SKIP (do not TAKE even if tempting):\n"
         "- Multi-touch 1h trendline plays needing hours to resolve.\n"
         "- Targeting far HTF levels (prior week high, major daily S/R) as TP.\n"
@@ -238,6 +326,8 @@ def _build_prompt(
         "DECISION RULES:\n"
         f"- TAKE: named scalp pattern + 5m trigger (+ 1m entry confirmation when "
         f"visible) + {sl_range} pip SL + 1–2R TP + confidence reflects real conviction.\n"
+        "- On SESSION FADE / extended range: TAKE early when first 5m reversal is live — "
+        "do not skip just because HTF still looks trending; fades are valid scalps.\n"
         f"- {setup_vocabulary_prompt_block()}\n"
         "- SKIP: no qualifying scalp, swing-style setup, or chop — say which scalp "
         "patterns you checked on 1m/5m/15m and why none qualify.\n\n"
@@ -279,6 +369,8 @@ def _normalize_observation(raw: Dict[str, Any]) -> Dict[str, Any]:
         "chart_1h": _s("chart_1h"),
         "key_levels": _s("key_levels"),
         "market_state": _s("market_state"),
+        "session_extension": _s("session_extension"),
+        "early_opportunity": _s("early_opportunity"),
         "setups_checked": _s("setups_checked"),
     }
 
@@ -334,6 +426,7 @@ def _build_ohlc_context(
     bars_1h: list,
     entry_timeframe: str,
     zone_summary: Optional[str] = None,
+    spot: Optional[float] = None,
 ) -> str:
     entry_label = "1m" if entry_timeframe == "1m" else "5m-entry"
     parts = [
@@ -343,6 +436,10 @@ def _build_ohlc_context(
         summarize_bars_for_prompt(bars_15m, label="15m"),
         summarize_bars_for_prompt(bars_1h, label="1h"),
     ]
+    if spot and spot > 0:
+        ext = summarize_session_extension(bars_5m, bars_15m, spot)
+        if ext:
+            parts.append(ext)
     if zone_summary:
         parts.append(zone_summary)
     return "\n".join(parts)
@@ -502,6 +599,7 @@ async def describe_charts(
         bars_1h=bars_1h,
         entry_timeframe=entry_timeframe,
         zone_summary=zone_summary,
+        spot=spot,
     )
     full_prompt = f"{prompt}\n\n{ohlc_block}"
 
@@ -578,6 +676,7 @@ async def decide_from_charts(
         bars_1h=bars_1h,
         entry_timeframe=entry_timeframe,
         zone_summary=zone_summary,
+        spot=spot,
     )
     full_prompt = f"{prompt}\n\n{ohlc_block}"
 
