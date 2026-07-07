@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import logging
 from io import BytesIO
-from typing import List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.gemini_gold_trader.chart_zones import ChartZone
 
 _MIN_PNG_BYTES = 2_500
 _MIN_PIXEL_STD = 8.0
@@ -15,12 +18,14 @@ try:
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
     from matplotlib.ticker import MaxNLocator
 
     HAS_MATPLOTLIB = True
 except ImportError:
     HAS_MATPLOTLIB = False
     MaxNLocator = None  # type: ignore
+    Rectangle = None  # type: ignore
 
 
 def _parse_ohlc(bars: Sequence[Sequence[float]]) -> Tuple[List[float], List[float], List[float], List[float]]:
@@ -88,12 +93,59 @@ def chart_png_is_valid(png: Optional[bytes]) -> bool:
         return len(png) >= 8_000
 
 
+def _zone_style(zone: "ChartZone") -> tuple[str, float, str]:
+    """Fill color, alpha, edge color for a chart zone."""
+    if zone.kind == "ifvg":
+        if zone.side == "bull":
+            return "#90caf9", 0.35, "#1565c0"
+        return "#ffcc80", 0.35, "#e65100"
+    if zone.kind == "ob":
+        if zone.side == "bull":
+            return "#a5d6a7", 0.30, "#2e7d32"
+        return "#ef9a9a", 0.30, "#c62828"
+    # fvg
+    if zone.side == "bull":
+        return "#c8e6c9", 0.40, "#388e3c"
+    return "#ffcdd2", 0.40, "#d32f2f"
+
+
+def _draw_zones(ax, zones: Sequence["ChartZone"], n_bars: int) -> None:
+    if not zones or Rectangle is None:
+        return
+    width = max(4.0, min(12.0, n_bars * 0.15))
+    for zone in zones:
+        fill, alpha, edge = _zone_style(zone)
+        x = max(0, int(zone.bar_idx) - 1)
+        rect = Rectangle(
+            (x - 0.5, zone.bottom),
+            width,
+            zone.top - zone.bottom,
+            facecolor=fill,
+            edgecolor=edge,
+            linewidth=1.0,
+            alpha=alpha,
+            zorder=1,
+        )
+        ax.add_patch(rect)
+        ax.text(
+            x + width * 0.05,
+            zone.top,
+            zone.label,
+            fontsize=7,
+            color=edge,
+            va="bottom",
+            ha="left",
+            zorder=4,
+        )
+
+
 def render_candlestick_chart(
     bars: List[List[float]],
     *,
     timeframe: str,
     session: Optional[str] = None,
     symbol: str = "XAUUSD",
+    zones: Optional[Sequence["ChartZone"]] = None,
 ) -> Optional[bytes]:
     """Return PNG bytes for the last N OHLC bars (light theme for vision models)."""
     if not HAS_MATPLOTLIB or not bars:
@@ -113,7 +165,8 @@ def render_candlestick_chart(
     text = "#222222"
     last_close = closes[-1]
     sess = (session or "—").upper()
-    title = f"{symbol} {timeframe} {sess} close={last_close:.2f}"
+    zone_note = f" | zones={len(zones or [])}" if zones else ""
+    title = f"{symbol} {timeframe} {sess} close={last_close:.2f}{zone_note}"
 
     fig, ax = plt.subplots(figsize=(10, 6), facecolor=bg, dpi=120)
     ax.set_facecolor(bg)
@@ -126,6 +179,8 @@ def render_candlestick_chart(
     ax.set_ylabel("Price (USD)", color=text, fontsize=9)
 
     xs = list(range(len(closes)))
+    if zones:
+        _draw_zones(ax, zones, len(closes))
     for i, (o, h, l, c) in enumerate(zip(opens, highs, lows, closes)):
         col = "#1b8f3a" if c >= o else "#c62828"
         ax.plot([i, i], [l, h], color=col, linewidth=1.0, zorder=2, solid_capstyle="round")

@@ -5,11 +5,9 @@ import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
-from app.gemini_gold_trader.chart_renderer import (
-    chart_png_is_valid,
-    render_candlestick_chart,
-    summarize_bars_for_prompt,
-)
+import pytest
+
+from app.gemini_gold_trader.chart_renderer import HAS_MATPLOTLIB, chart_png_is_valid, render_candlestick_chart, summarize_bars_for_prompt
 from app.gemini_gold_trader.gemini import _build_ohlc_context, _chart_contents
 
 
@@ -27,6 +25,7 @@ def _gold_bars(n: int, base: float = 3380.0) -> list:
     ]
 
 
+@pytest.mark.skipif(not HAS_MATPLOTLIB, reason="matplotlib not installed")
 def test_render_produces_valid_png():
     bars = _gold_bars(40)
     png = render_candlestick_chart(bars, timeframe="5m", session="london")
@@ -59,6 +58,7 @@ def test_ohlc_context_has_all_timeframes():
     assert "1h" in ctx
 
 
+@pytest.mark.skipif(not HAS_MATPLOTLIB, reason="matplotlib not installed")
 def test_chart_contents_labels_each_image():
     bars = _gold_bars(20)
     png = render_candlestick_chart(bars, timeframe="5m", session="london")

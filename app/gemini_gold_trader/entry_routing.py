@@ -20,8 +20,13 @@ _MARKET_PREFIXES = (
     "liq_sweep",
     "session_liquidity_sweep",
     "liquidity_grab",
+    "eqh_sweep",
+    "eql_sweep",
+    "asian_sweep",
     "momentum_scalp",
     "momentum_flag",
+    "disp_",
+    "sdp_",
     "orb_",
     "opening_range",
 )
