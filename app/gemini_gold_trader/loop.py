@@ -22,7 +22,7 @@ from app.gemini_gold_trader.executor import execute_live_mirror_take, execute_ta
 from app.gemini_gold_trader.fire_validation import refresh_spot_after_gemini, stale_entry_recheck
 from app.gemini_gold_trader.data_quality import assess_gemini_market_data, format_data_source, gemini_data_ok_for_scan
 from app.gemini_gold_trader.funnel import record as funnel_record, snapshot as funnel_snapshot
-from app.gemini_gold_trader.gemini import decide_from_charts
+from app.gemini_gold_trader.gemini import decide_from_charts, describe_charts, format_chart_observation
 from app.gemini_gold_trader.guardrails import (
     check_can_call_gemini,
     check_can_execute_live_mirror,
@@ -443,6 +443,47 @@ async def run_gemini_gold_trader_loop() -> None:
         len(png_1h),
     )
 
+    observation_text: Optional[str] = None
+    observe_tokens_in = 0
+    observe_tokens_out = 0
+    observe_cost_usd = 0.0
+    if cfg.two_step_scan:
+        chart_meta["two_step_scan"] = True
+        observation_dict, observe_tokens_in, observe_tokens_out, observe_cost_usd, observe_err = (
+            await describe_charts(
+                cfg=cfg,
+                session=session,
+                spot=spot,
+                png_1m=png_entry,
+                png_5m=png_5m,
+                png_15m=png_15m,
+                png_1h=png_1h,
+                entry_bars=entry_bars,
+                bars_5m=bars_5m,
+                bars_15m=bars_15m,
+                bars_1h=bars_1h,
+                entry_timeframe=entry_tf,
+                entry_5m_fallback=entry_5m_fallback,
+                zone_summary=zone_summary,
+            )
+        )
+        if observation_dict:
+            observation_text = format_chart_observation(observation_dict)
+            chart_meta["chart_observation"] = observation_dict
+            chart_meta["observe_tokens_in"] = observe_tokens_in
+            chart_meta["observe_tokens_out"] = observe_tokens_out
+            chart_meta["observe_cost_usd"] = round(observe_cost_usd, 6)
+            logger.info(
+                "[gemini-gold] step-1 observation ok market_state=%s",
+                str(observation_dict.get("market_state") or "")[:120],
+            )
+        else:
+            chart_meta["observe_error"] = observe_err
+            logger.warning(
+                "[gemini-gold] step-1 observation failed: %s — continuing to decide",
+                observe_err,
+            )
+
     decision, tokens_in, tokens_out, cost_usd, api_error = await decide_from_charts(
         cfg=cfg,
         session=session,
@@ -458,7 +499,12 @@ async def run_gemini_gold_trader_loop() -> None:
         entry_timeframe=entry_tf,
         entry_5m_fallback=entry_5m_fallback,
         zone_summary=zone_summary,
+        chart_observation=observation_text,
     )
+
+    tokens_in += observe_tokens_in
+    tokens_out += observe_tokens_out
+    cost_usd = round(float(cost_usd or 0) + float(observe_cost_usd or 0), 6)
 
     if api_error or not decision:
         row = await run_with_db(

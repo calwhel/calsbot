@@ -83,6 +83,11 @@ class GeminiGoldRuntimeConfig:
     max_rr: float
     entry_max_drift_pct: float
     min_trade_gap_min: int
+    two_step_scan: bool
+
+
+def gemini_gold_two_step_scan() -> bool:
+    return _env_bool("GEMINI_GOLD_TWO_STEP_SCAN", True)
 
 
 def env_defaults() -> GeminiGoldRuntimeConfig:
@@ -132,4 +137,5 @@ def env_defaults() -> GeminiGoldRuntimeConfig:
         max_rr=min(2.0, max(1.0, _env_float("GEMINI_GOLD_MAX_RR", 2.0))),
         entry_max_drift_pct=_env_float("GEMINI_GOLD_ENTRY_MAX_DRIFT_PCT", 0.15),
         min_trade_gap_min=max(0, _env_int("GEMINI_GOLD_MIN_TRADE_GAP_MIN", 20)),
+        two_step_scan=gemini_gold_two_step_scan(),
     )

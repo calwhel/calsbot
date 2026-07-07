@@ -18,6 +18,29 @@ logger = logging.getLogger(__name__)
 _INPUT_COST_PER_M = 0.30
 _OUTPUT_COST_PER_M = 2.50
 _CALL_TIMEOUT_S = max(15.0, float(os.environ.get("GEMINI_GOLD_DECIDE_TIMEOUT_S", "45")))
+_OBSERVE_TIMEOUT_S = max(20.0, float(os.environ.get("GEMINI_GOLD_OBSERVE_TIMEOUT_S", "50")))
+
+
+class GeminiGoldChartObservationSchema(BaseModel):
+    entry_chart: str = Field(
+        description="1m/entry timing: micro structure, last candles, entry-timing cues"
+    )
+    chart_5m: str = Field(
+        description="5m primary: sweeps, FVG/OB/IFVG, momentum, ORB, MSS with price levels"
+    )
+    chart_15m: str = Field(
+        description="15m structure: zones, session levels, premium/discount alignment"
+    )
+    chart_1h: str = Field(description="1h session bias only — trend/context, not an entry trigger")
+    key_levels: str = Field(
+        description="Named levels with prices: PDH/PDL, Asian H/L, EQH/EQL, recent swings"
+    )
+    market_state: str = Field(
+        description="Chop vs trend, session character, what matters right now at spot"
+    )
+    setups_checked: str = Field(
+        description="Each scalp pattern family checked: live trigger yes/no and brief why"
+    )
 
 
 class GeminiGoldDecisionSchema(BaseModel):
@@ -55,6 +78,68 @@ def _get_gemini_client():
         return None
 
 
+def format_chart_observation(obs: Dict[str, Any]) -> str:
+    """Format step-1 observation dict as text for step-2 decision prompt."""
+    if not obs:
+        return ""
+    sections = [
+        ("Entry / timing", obs.get("entry_chart")),
+        ("5-minute (primary)", obs.get("chart_5m")),
+        ("15-minute structure", obs.get("chart_15m")),
+        ("1-hour bias", obs.get("chart_1h")),
+        ("Key levels", obs.get("key_levels")),
+        ("Market state", obs.get("market_state")),
+        ("Setups checked", obs.get("setups_checked")),
+    ]
+    lines = []
+    for title, body in sections:
+        text = str(body or "").strip()
+        if text:
+            lines.append(f"{title}:\n{text}")
+    return "\n\n".join(lines)
+
+
+def _build_observe_prompt(
+    *,
+    session: str,
+    spot: float,
+    bars_1m: int,
+    bars_5m: int,
+    bars_15m: int,
+    bars_1h: int,
+    entry_timeframe: str = "1m",
+    entry_5m_fallback: bool = False,
+) -> str:
+    entry_label = "1-minute" if entry_timeframe == "1m" else "5-minute (1m unavailable)"
+    entry_note = (
+        "Image 1 is recent 5m bars (1m unavailable) — describe entry-timing cues only; "
+        "primary trigger remains Image 2.\n"
+        if entry_5m_fallback
+        else "Image 1 is 1m entry timing — micro structure and confirmation vs 5m trigger.\n"
+    )
+    return (
+        "You are an experienced XAUUSD chart analyst preparing a structured read for a "
+        "scalper. OBSERVE ONLY — do NOT decide TAKE or SKIP and do NOT recommend a trade.\n\n"
+        "You receive FOUR candlestick charts (green=bullish, red=bearish) plus numeric OHLC:\n"
+        f"  Image 1: {entry_label} ({bars_1m} candles) — entry timing.\n"
+        f"  Image 2: 5-minute ({bars_5m} candles) — PRIMARY scalp trigger timeframe.\n"
+        f"  Image 3: 15-minute ({bars_15m} candles) — structure and zones.\n"
+        f"  Image 4: 1-hour ({bars_1h} candles) — session bias/context ONLY.\n"
+        f"{entry_note}"
+        "Shaded zones on 5m/15m (if present) mark FVG, IFVG, and OB — cite them with prices.\n\n"
+        f"Session: {session}. Spot reference: {spot:.2f}.\n\n"
+        "For each field, be specific with price levels visible on the charts:\n"
+        "- entry_chart: last few candles, micro structure, entry-timing cues.\n"
+        "- chart_5m: sweeps, FVG/OB/IFVG reactions, momentum, ORB, MSS — actionable NOW or not.\n"
+        "- chart_15m: higher structure, zones, premium/discount vs range.\n"
+        "- chart_1h: directional bias only (not an entry trigger).\n"
+        "- key_levels: PDH/PDL, Asian range, EQH/EQL, session opens, recent swing H/L with prices.\n"
+        "- market_state: trending vs chop, session character, what matters at spot now.\n"
+        "- setups_checked: go through liquidity sweep, ORB, FVG/OB/IFVG, momentum, liq grab+MSS — "
+        "each yes/no for a live 5m trigger and one-line why.\n"
+    )
+
+
 def _build_prompt(
     *,
     session: str,
@@ -67,6 +152,7 @@ def _build_prompt(
     entry_5m_fallback: bool = False,
     min_sl_pips: float = 10.0,
     max_sl_pips: float = 150.0,
+    chart_observation: Optional[str] = None,
 ) -> str:
     entry_label = "1-minute" if entry_timeframe == "1m" else "5-minute (1m unavailable)"
     entry_note = (
@@ -80,12 +166,23 @@ def _build_prompt(
     min_sl = max(1.0, float(min_sl_pips))
     max_sl = max(min_sl, float(max_sl_pips))
     sl_range = f"{min_sl:.0f}–{max_sl:.0f}"
-    return (
+    prompt = (
         "You are an experienced XAUUSD SCALPER — you hunt fast, session-local setups "
         "that can play out in minutes to a few hours. You are NOT a swing trader. "
         "You do not target multi-day moves, distant daily/weekly levels, or slow "
         "HTF trendline plays that need hours to develop. You are decisive and "
         "risk-first: skip unclear chop rather than force a trade.\n\n"
+    )
+    if chart_observation:
+        prompt += (
+            "TWO-STEP DECISION:\n"
+            "- You already completed a structured chart observation (below).\n"
+            "- Verify it against the images, then decide TAKE or SKIP only.\n"
+            "- In rationale, focus on the decision — do not repeat the full observation.\n\n"
+            "PRIOR CHART OBSERVATION:\n"
+            f"{chart_observation}\n\n"
+        )
+    prompt += (
         "SCALP MANDATE (read this before every decision):\n"
         "- You receive FOUR charts in order (low → high timeframe). Each chart is a "
         "white-background candlestick image: green candles = bullish, red = bearish, "
@@ -149,6 +246,7 @@ def _build_prompt(
         "confidence 0–100, rationale naming the scalp pattern and 5m/15m levels.\n\n"
         "If SKIP: action SKIP, null prices, confidence 0–100, rationale plain and specific."
     )
+    return prompt
 
 
 def _estimate_cost(tokens_in: int, tokens_out: int) -> float:
@@ -168,6 +266,21 @@ def _parse_usage(response) -> Tuple[int, int]:
     if tout == 0:
         tout = int(getattr(usage, "total_token_count", 0) or 0) - tin
     return max(0, tin), max(0, tout)
+
+
+def _normalize_observation(raw: Dict[str, Any]) -> Dict[str, Any]:
+    def _s(key: str) -> str:
+        return str(raw.get(key) or "").strip()
+
+    return {
+        "entry_chart": _s("entry_chart"),
+        "chart_5m": _s("chart_5m"),
+        "chart_15m": _s("chart_15m"),
+        "chart_1h": _s("chart_1h"),
+        "key_levels": _s("key_levels"),
+        "market_state": _s("market_state"),
+        "setups_checked": _s("setups_checked"),
+    }
 
 
 def _normalize_decision(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -265,60 +378,33 @@ def _chart_contents(
     return parts
 
 
-async def decide_from_charts(
+async def _invoke_gemini_vision(
     *,
+    client,
     cfg: GeminiGoldRuntimeConfig,
-    session: str,
-    spot: float,
-    png_1m: bytes,
+    genai_types,
+    png_entry: bytes,
     png_5m: bytes,
     png_15m: bytes,
     png_1h: bytes,
     entry_bars: list,
+    entry_timeframe: str,
+    entry_5m_fallback: bool,
     bars_5m: list,
     bars_15m: list,
     bars_1h: list,
-    entry_timeframe: str = "1m",
-    entry_5m_fallback: bool = False,
-    zone_summary: Optional[str] = None,
-) -> Tuple[Optional[Dict[str, Any]], int, int, float, Optional[str]]:
-    """
-    Call Gemini vision. Returns (decision_dict, tokens_in, tokens_out, cost_usd, error).
-    """
-    client = _get_gemini_client()
-    if not client:
-        return None, 0, 0, 0.0, "no_gemini_api_key"
-
-    from google.genai import types as genai_types
-
-    prompt = _build_prompt(
-        session=session,
-        spot=spot,
-        bars_1m=len(entry_bars),
-        bars_5m=len(bars_5m),
-        bars_15m=len(bars_15m),
-        bars_1h=len(bars_1h),
-        entry_timeframe=entry_timeframe,
-        entry_5m_fallback=entry_5m_fallback,
-        min_sl_pips=cfg.min_sl_pips,
-        max_sl_pips=cfg.max_sl_pips,
-    )
-    ohlc_block = _build_ohlc_context(
-        entry_bars=entry_bars,
-        bars_5m=bars_5m,
-        bars_15m=bars_15m,
-        bars_1h=bars_1h,
-        entry_timeframe=entry_timeframe,
-        zone_summary=zone_summary,
-    )
-    full_prompt = f"{prompt}\n\n{ohlc_block}"
-
+    prompt: str,
+    response_schema: type[BaseModel],
+    max_output_tokens: int,
+    timeout_s: float,
+    temperature: float = 0.2,
+):
     def _call():
         return client.models.generate_content(
             model=cfg.model,
             contents=_chart_contents(
                 genai_types,
-                png_entry=png_1m,
+                png_entry=png_entry,
                 png_5m=png_5m,
                 png_15m=png_15m,
                 png_1h=png_1h,
@@ -328,19 +414,19 @@ async def decide_from_charts(
                 bars_5m=len(bars_5m),
                 bars_15m=len(bars_15m),
                 bars_1h=len(bars_1h),
-                prompt=full_prompt,
+                prompt=prompt,
             ),
             config=genai_types.GenerateContentConfig(
-                temperature=0.2,
-                max_output_tokens=512,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
                 response_mime_type="application/json",
-                response_schema=GeminiGoldDecisionSchema,
+                response_schema=response_schema,
                 thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
             ),
         )
 
     try:
-        response = await asyncio.wait_for(asyncio.to_thread(_call), timeout=_CALL_TIMEOUT_S)
+        response = await asyncio.wait_for(asyncio.to_thread(_call), timeout=timeout_s)
     except asyncio.TimeoutError:
         return None, 0, 0, 0.0, "gemini_timeout"
     except Exception as exc:
@@ -369,6 +455,154 @@ async def decide_from_charts(
         except json.JSONDecodeError:
             return None, tokens_in, tokens_out, cost, "invalid_json"
 
+    return raw, tokens_in, tokens_out, cost, None
+
+
+async def describe_charts(
+    *,
+    cfg: GeminiGoldRuntimeConfig,
+    session: str,
+    spot: float,
+    png_1m: bytes,
+    png_5m: bytes,
+    png_15m: bytes,
+    png_1h: bytes,
+    entry_bars: list,
+    bars_5m: list,
+    bars_15m: list,
+    bars_1h: list,
+    entry_timeframe: str = "1m",
+    entry_5m_fallback: bool = False,
+    zone_summary: Optional[str] = None,
+) -> Tuple[Optional[Dict[str, Any]], int, int, float, Optional[str]]:
+    """
+    Step 1: structured chart observation (no TAKE/SKIP).
+    Returns (observation_dict, tokens_in, tokens_out, cost_usd, error).
+    """
+    client = _get_gemini_client()
+    if not client:
+        return None, 0, 0, 0.0, "no_gemini_api_key"
+
+    from google.genai import types as genai_types
+
+    prompt = _build_observe_prompt(
+        session=session,
+        spot=spot,
+        bars_1m=len(entry_bars),
+        bars_5m=len(bars_5m),
+        bars_15m=len(bars_15m),
+        bars_1h=len(bars_1h),
+        entry_timeframe=entry_timeframe,
+        entry_5m_fallback=entry_5m_fallback,
+    )
+    ohlc_block = _build_ohlc_context(
+        entry_bars=entry_bars,
+        bars_5m=bars_5m,
+        bars_15m=bars_15m,
+        bars_1h=bars_1h,
+        entry_timeframe=entry_timeframe,
+        zone_summary=zone_summary,
+    )
+    full_prompt = f"{prompt}\n\n{ohlc_block}"
+
+    raw, tokens_in, tokens_out, cost, err = await _invoke_gemini_vision(
+        client=client,
+        cfg=cfg,
+        genai_types=genai_types,
+        png_entry=png_1m,
+        png_5m=png_5m,
+        png_15m=png_15m,
+        png_1h=png_1h,
+        entry_bars=entry_bars,
+        entry_timeframe=entry_timeframe,
+        entry_5m_fallback=entry_5m_fallback,
+        bars_5m=bars_5m,
+        bars_15m=bars_15m,
+        bars_1h=bars_1h,
+        prompt=full_prompt,
+        response_schema=GeminiGoldChartObservationSchema,
+        max_output_tokens=900,
+        timeout_s=_OBSERVE_TIMEOUT_S,
+        temperature=0.15,
+    )
+    if err or not raw:
+        return None, tokens_in, tokens_out, cost, err or "no_observation"
+    return _normalize_observation(raw), tokens_in, tokens_out, cost, None
+
+
+async def decide_from_charts(
+    *,
+    cfg: GeminiGoldRuntimeConfig,
+    session: str,
+    spot: float,
+    png_1m: bytes,
+    png_5m: bytes,
+    png_15m: bytes,
+    png_1h: bytes,
+    entry_bars: list,
+    bars_5m: list,
+    bars_15m: list,
+    bars_1h: list,
+    entry_timeframe: str = "1m",
+    entry_5m_fallback: bool = False,
+    zone_summary: Optional[str] = None,
+    chart_observation: Optional[str] = None,
+) -> Tuple[Optional[Dict[str, Any]], int, int, float, Optional[str]]:
+    """
+    Step 2 (or single-step): TAKE/SKIP decision from chart images.
+    Returns (decision_dict, tokens_in, tokens_out, cost_usd, error).
+    """
+    client = _get_gemini_client()
+    if not client:
+        return None, 0, 0, 0.0, "no_gemini_api_key"
+
+    from google.genai import types as genai_types
+
+    prompt = _build_prompt(
+        session=session,
+        spot=spot,
+        bars_1m=len(entry_bars),
+        bars_5m=len(bars_5m),
+        bars_15m=len(bars_15m),
+        bars_1h=len(bars_1h),
+        entry_timeframe=entry_timeframe,
+        entry_5m_fallback=entry_5m_fallback,
+        min_sl_pips=cfg.min_sl_pips,
+        max_sl_pips=cfg.max_sl_pips,
+        chart_observation=chart_observation,
+    )
+    ohlc_block = _build_ohlc_context(
+        entry_bars=entry_bars,
+        bars_5m=bars_5m,
+        bars_15m=bars_15m,
+        bars_1h=bars_1h,
+        entry_timeframe=entry_timeframe,
+        zone_summary=zone_summary,
+    )
+    full_prompt = f"{prompt}\n\n{ohlc_block}"
+
+    raw, tokens_in, tokens_out, cost, err = await _invoke_gemini_vision(
+        client=client,
+        cfg=cfg,
+        genai_types=genai_types,
+        png_entry=png_1m,
+        png_5m=png_5m,
+        png_15m=png_15m,
+        png_1h=png_1h,
+        entry_bars=entry_bars,
+        entry_timeframe=entry_timeframe,
+        entry_5m_fallback=entry_5m_fallback,
+        bars_5m=bars_5m,
+        bars_15m=bars_15m,
+        bars_1h=bars_1h,
+        prompt=full_prompt,
+        response_schema=GeminiGoldDecisionSchema,
+        max_output_tokens=512,
+        timeout_s=_CALL_TIMEOUT_S,
+        temperature=0.2,
+    )
+    if err or not raw:
+        return None, tokens_in, tokens_out, cost, err or "no_decision"
     return _normalize_decision(raw), tokens_in, tokens_out, cost, None
 
 

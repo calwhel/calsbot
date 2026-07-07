@@ -23,6 +23,7 @@ from app.gemini_gold_trader.accounts import (
     validate_live_ctid_allowed,
 )
 from app.gemini_gold_trader.config import EXECUTION_MODE_DEMO, EXECUTION_MODE_LIVE, env_defaults, gemini_gold_enabled
+from app.gemini_gold_trader.gemini import format_chart_observation
 from app.gemini_gold_trader.guardrails import (
     active_ctrader_account_id,
     calls_today,
@@ -227,6 +228,13 @@ def _decision_feed(db, *, limit: int = 30) -> List[Dict[str, Any]]:
     for row in rows:
         _sync_live_mirror_fields(db, row)
         d = row.decision if isinstance(row.decision, dict) else {}
+        meta = row.chart_meta if isinstance(row.chart_meta, dict) else {}
+        obs = meta.get("chart_observation") if isinstance(meta.get("chart_observation"), dict) else {}
+        obs_preview = ""
+        if obs:
+            obs_preview = format_chart_observation(obs)[:320]
+        elif meta.get("observe_error"):
+            obs_preview = f"Observation failed: {meta.get('observe_error')}"
         out.append(
             {
                 "id": row.id,
@@ -236,6 +244,8 @@ def _decision_feed(db, *, limit: int = 30) -> List[Dict[str, Any]]:
                 "direction": row.direction or d.get("direction"),
                 "confidence": row.confidence,
                 "rationale": row.rationale or d.get("rationale"),
+                "chart_observation": obs_preview or None,
+                "two_step_scan": bool(meta.get("two_step_scan")),
                 "executed": bool(row.executed),
                 "execution_id": row.execution_id,
                 "live_mirror_execution_id": getattr(row, "live_mirror_execution_id", None),

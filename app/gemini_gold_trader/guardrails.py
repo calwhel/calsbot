@@ -88,6 +88,7 @@ def merge_config(db_row: GeminiGoldConfig, env: GeminiGoldRuntimeConfig) -> Gemi
         max_rr=env.max_rr,
         entry_max_drift_pct=env.entry_max_drift_pct,
         min_trade_gap_min=env.min_trade_gap_min,
+        two_step_scan=env.two_step_scan,
     )
 
 

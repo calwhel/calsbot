@@ -597,10 +597,14 @@ function renderFeed(j) {
   const prices = action === 'TAKE'
       ? ` · E ${d.entry ?? '—'} SL ${d.stop_loss ?? '—'} TP ${d.take_profit ?? '—'}`
       : '';
-    const flags = [d.dry_run ? 'dry-run' : null, d.executed ? 'executed' : null].filter(Boolean).join(' · ');
+    const flags = [d.dry_run ? 'dry-run' : null, d.executed ? 'executed' : null, d.two_step_scan ? '2-step' : null].filter(Boolean).join(' · ');
+    const obs = d.chart_observation
+      ? `<div class="hint" style="margin-top:4px;opacity:0.85"><strong>See:</strong> ${escapeHtml(d.chart_observation)}</div>`
+      : '';
     return `<div class="feed-item">
       <div class="feed-meta">${fmtTime(d.ts)} · ${fmtSession(d.session)} · ${d.confidence ?? 0}% ${flags ? '· ' + flags : ''}</div>
       <div class="${cls}">${action} ${d.direction || ''}${prices}${mirrorPill(d)}</div>
+      ${obs}
       <div class="hint">${escapeHtml((d.rationale || '').slice(0, 280))}</div>
     </div>`;
   }).join('');
