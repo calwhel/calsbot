@@ -38,10 +38,19 @@ def apply_validator_profile(decision: Dict[str, Any]) -> Dict[str, Any]:
     setup = str(d.get("setup_type") or "").lower()
     if setup.startswith("orb_"):
         d["validator_profile"] = "orb"
-    elif "momentum" in setup:
+    elif "momentum" in setup or setup.startswith("disp_") or setup.startswith("sdp_"):
         d["validator_profile"] = "momentum_flag"
-    elif "liquidity" in setup or "liq" in setup or "sweep" in setup:
+    elif (
+        "liquidity" in setup
+        or "liq" in setup
+        or setup.startswith("sweep")
+        or setup.startswith("eqh")
+        or setup.startswith("eql")
+        or setup.startswith("asian_sweep")
+    ):
         d["validator_profile"] = "liquidity_grab"
+    elif setup.startswith(("fvg", "ifvg", "ob_", "breaker", "order_block")):
+        d["validator_profile"] = "zone_retrace"
     return d
 
 

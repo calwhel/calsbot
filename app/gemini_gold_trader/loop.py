@@ -371,6 +371,18 @@ async def run_gemini_gold_trader_loop() -> None:
     except Exception:
         pass
 
+    from app.gemini_gold_trader.chart_zones import detect_chart_zones, format_zones_for_prompt
+
+    zones_5m = detect_chart_zones(bars_5m, spot, timeframe="5m")
+    zones_15m = detect_chart_zones(bars_15m, spot, timeframe="15m")
+    zone_summary = format_zones_for_prompt({"5m": zones_5m, "15m": zones_15m}, spot)
+    if zones_5m or zones_15m:
+        logger.info(
+            "[gemini-gold] chart zones 5m=%s 15m=%s",
+            [z.label for z in zones_5m],
+            [z.label for z in zones_15m],
+        )
+
     png_entry, png_5m, png_15m, png_1h = await asyncio.gather(
         asyncio.to_thread(
             render_candlestick_chart,
@@ -383,12 +395,14 @@ async def run_gemini_gold_trader_loop() -> None:
             bars_5m,
             timeframe="5m",
             session=session,
+            zones=zones_5m,
         ),
         asyncio.to_thread(
             render_candlestick_chart,
             bars_15m,
             timeframe="15m",
             session=session,
+            zones=zones_15m,
         ),
         asyncio.to_thread(
             render_candlestick_chart,
@@ -443,6 +457,7 @@ async def run_gemini_gold_trader_loop() -> None:
         bars_1h=bars_1h,
         entry_timeframe=entry_tf,
         entry_5m_fallback=entry_5m_fallback,
+        zone_summary=zone_summary,
     )
 
     if api_error or not decision:

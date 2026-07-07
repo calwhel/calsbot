@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.gemini_gold_trader.chart_renderer import summarize_bars_for_prompt
 from app.gemini_gold_trader.config import GeminiGoldRuntimeConfig, SYMBOL
+from app.gemini_gold_trader.setup_types import normalize_setup_type, setup_vocabulary_prompt_block
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,10 @@ class GeminiGoldDecisionSchema(BaseModel):
     action: str = Field(description="TAKE or SKIP")
     setup_type: Optional[str] = Field(
         default=None,
-        description="Scalp pattern id e.g. session_liquidity_sweep, orb_long, fvg_retrace, momentum_scalp",
+        description=(
+            "Scalp pattern id e.g. fvg_retrace_bull, ifvg_bear, ob_bull, liq_sweep_bull, "
+            "liquidity_grab_long, momentum_flag_break_long, orb_long"
+        ),
     )
     direction: Optional[str] = Field(
         default=None, description="LONG or SHORT when action is TAKE, else null"
@@ -119,8 +123,10 @@ def _build_prompt(
         "displacement (e.g. \"sweep below PDL 2638, reclaimed, bullish 5m MSS\").\n\n"
         "2. OPENING RANGE BREAKOUT (ORB) — current session ORB break + hold on 5m; "
         "cite range and break level.\n\n"
-        "3. 5m ORDER BLOCK / FVG REACTION — price AT or just into a fresh OB or FVG "
-        "on 5m (ideally inside a 15m zone) with rejection/displacement now.\n\n"
+        "3. 5m ORDER BLOCK / FVG / IFVG REACTION — price AT or just into a fresh OB, "
+        "FVG, or inverted FVG (IFVG) on 5m (ideally inside a 15m zone) with "
+        "rejection/displacement now. Shaded zones on charts mark engine-detected "
+        "FVG (green/red), IFVG (blue/orange), and OB zones.\n\n"
         "4. 5m MOMENTUM SCALP — flag/consolidation break or EMA pullback bounce in "
         "session direction on 5m; cite the flag/EMA zone.\n\n"
         "5. LIQUIDITY GRAB + 5m MSS — quick sweep of a nearby pool then structure "
@@ -135,11 +141,11 @@ def _build_prompt(
         "DECISION RULES:\n"
         f"- TAKE: named scalp pattern + 5m trigger (+ 1m entry confirmation when "
         f"visible) + {sl_range} pip SL + 1–2R TP + confidence reflects real conviction.\n"
-        "- setup_type: required on TAKE — one of session_liquidity_sweep, orb_long, "
-        "orb_short, fvg_retrace, order_block, momentum_scalp, liquidity_grab.\n"
+        f"- {setup_vocabulary_prompt_block()}\n"
         "- SKIP: no qualifying scalp, swing-style setup, or chop — say which scalp "
         "patterns you checked on 1m/5m/15m and why none qualify.\n\n"
-        f"If TAKE: setup_type, direction, entry near spot, stop_loss, take_profit (1–2R, {sl_range} pip SL), "
+        f"If TAKE: setup_type (exact id), direction, entry near spot, stop_loss, "
+        f"take_profit (1–2R, {sl_range} pip SL), "
         "confidence 0–100, rationale naming the scalp pattern and 5m/15m levels.\n\n"
         "If SKIP: action SKIP, null prices, confidence 0–100, rationale plain and specific."
     )
@@ -173,6 +179,8 @@ def _normalize_decision(raw: Dict[str, Any]) -> Dict[str, Any]:
         direction = str(direction).strip().upper()
         if direction not in ("LONG", "SHORT"):
             direction = None
+    setup_raw = str(raw.get("setup_type") or "").strip().lower() or None
+    setup_type = normalize_setup_type(setup_raw, direction)
     try:
         confidence = int(raw.get("confidence") or 0)
     except (TypeError, ValueError):
@@ -190,7 +198,7 @@ def _normalize_decision(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "action": action,
-        "setup_type": str(raw.get("setup_type") or "").strip().lower() or None,
+        "setup_type": setup_type,
         "direction": direction,
         "entry": _f("entry"),
         "stop_loss": _f("stop_loss"),
@@ -212,6 +220,7 @@ def _build_ohlc_context(
     bars_15m: list,
     bars_1h: list,
     entry_timeframe: str,
+    zone_summary: Optional[str] = None,
 ) -> str:
     entry_label = "1m" if entry_timeframe == "1m" else "5m-entry"
     parts = [
@@ -221,6 +230,8 @@ def _build_ohlc_context(
         summarize_bars_for_prompt(bars_15m, label="15m"),
         summarize_bars_for_prompt(bars_1h, label="1h"),
     ]
+    if zone_summary:
+        parts.append(zone_summary)
     return "\n".join(parts)
 
 
@@ -269,6 +280,7 @@ async def decide_from_charts(
     bars_1h: list,
     entry_timeframe: str = "1m",
     entry_5m_fallback: bool = False,
+    zone_summary: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], int, int, float, Optional[str]]:
     """
     Call Gemini vision. Returns (decision_dict, tokens_in, tokens_out, cost_usd, error).
@@ -297,6 +309,7 @@ async def decide_from_charts(
         bars_15m=bars_15m,
         bars_1h=bars_1h,
         entry_timeframe=entry_timeframe,
+        zone_summary=zone_summary,
     )
     full_prompt = f"{prompt}\n\n{ohlc_block}"
 
