@@ -43,6 +43,7 @@ from app.gemini_gold_trader.telegram_notify import (
     maybe_notify_call_cap_reached,
     maybe_notify_fallback_klines,
     notify_decision,
+    notify_live_mirror_filled,
 )
 from app.gemini_gold_trader.pending_entry import pending_status_label, sync_pending_entries
 from app.gemini_gold_trader.validator import validate_take_decision
@@ -246,6 +247,21 @@ async def run_gemini_gold_trader_loop() -> None:
                     live_exec_id=live_exec_id,
                     status="pending",
                 )
+                try:
+                    await notify_live_mirror_filled(
+                        session=str(session or ""),
+                        decision=decision_,
+                        confidence=int(decision_.get("confidence") or 0),
+                        decision_id=decision_id_,
+                        live_execution_id=live_exec_id,
+                        demo_execution_id=demo_exec_id_,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[gemini-gold] live mirror notify failed decision=%s: %s",
+                        decision_id_,
+                        exc,
+                    )
             else:
                 await run_with_db(
                     _update_live_mirror_row,
@@ -668,6 +684,7 @@ async def run_gemini_gold_trader_loop() -> None:
         execution_id=execution_id if execution_id and execution_id > 0 else None,
         block_reason=block_reason,
         dry_run=cfg.dry_run,
+        execution_mode="live" if is_live_execution_mode(cfg) else "demo",
     )
 
     if execution_id and execution_id > 0:

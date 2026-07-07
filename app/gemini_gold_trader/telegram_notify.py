@@ -65,7 +65,7 @@ async def _send(text: str, *, msg_type: str = "gemini_gold_trader", exec_id: int
     if not telegram_notifications_enabled():
         return False
     try:
-        from app.services.telegram_dm import bot_tokens_for_asset, send_dm
+        from app.services.telegram_dm import bot_tokens_for_asset, deliver_trade_telegram
         from app.gemini_gold_trader.config import env_defaults
         from app.gemini_gold_trader.guardrails import merge_config
         from app.gemini_gold_trader.schema import seed_config_if_missing
@@ -79,8 +79,9 @@ async def _send(text: str, *, msg_type: str = "gemini_gold_trader", exec_id: int
         finally:
             db.close()
         if not chat_id:
+            logger.warning("[gemini-gold] telegram skipped: no chat_id for user")
             return False
-        return await send_dm(
+        ok = await deliver_trade_telegram(
             chat_id,
             text,
             parse_mode="HTML",
@@ -88,7 +89,15 @@ async def _send(text: str, *, msg_type: str = "gemini_gold_trader", exec_id: int
             msg_type=msg_type,
             symbol=SYMBOL,
             exec_id=exec_id,
+            asset_class="forex",
         )
+        if not ok:
+            logger.warning(
+                "[gemini-gold] telegram delivery failed msg_type=%s exec_id=%s",
+                msg_type,
+                exec_id,
+            )
+        return ok
     except Exception as exc:
         logger.warning("[gemini-gold] telegram send failed: %s", exc)
         return False
@@ -104,10 +113,13 @@ def format_decision_message(
     execution_id: Optional[int] = None,
     block_reason: Optional[str] = None,
     dry_run: bool = False,
+    execution_mode: str = "demo",
+    fill_kind: Optional[str] = None,
 ) -> str:
     direction = (decision.get("direction") or "—").upper()
     rationale = _html_escape(decision.get("rationale") or "—")
     sess = _html_escape(session or "—")
+    setup = str(decision.get("setup_type") or "").strip()
     action_up = (action or "SKIP").upper()
     title = f"{_PREFIX} — {action_up}"
     if dry_run and action_up == "TAKE":
@@ -116,6 +128,8 @@ def format_decision_message(
         f"<b>{title}</b>",
         f"Session: {sess}",
     ]
+    if setup:
+        lines.append(f"Setup: <b>{_html_escape(setup)}</b>")
     if action_up == "TAKE":
         lines.extend(
             [
@@ -132,12 +146,60 @@ def format_decision_message(
         lines.append(f"Confidence: <b>{confidence}%</b>")
     lines.append(f"Rationale: {rationale}")
     if executed and execution_id:
-        lines.append(f"Status: ✅ Demo order placed (exec #{execution_id})")
+        mode = (execution_mode or "demo").lower()
+        if fill_kind == "entry_watch":
+            status = f"✅ Entry-watch filled ({mode} exec #{execution_id})"
+        elif mode == "live":
+            status = f"✅ Live order placed (exec #{execution_id})"
+        else:
+            status = f"✅ Demo order placed (exec #{execution_id})"
+        lines.append(f"Status: {status}")
     elif block_reason:
         lines.append(f"Status: ⚠️ Not executed — {_html_escape(block_reason)}")
     elif dry_run and action_up == "TAKE":
         lines.append("Status: 🔍 Dry-run — no broker order")
     return "\n".join(lines)
+
+
+async def notify_live_mirror_filled(
+    *,
+    session: str,
+    decision: Dict[str, Any],
+    confidence: int,
+    decision_id: int,
+    live_execution_id: int,
+    demo_execution_id: int,
+) -> bool:
+    """Alert when live mirror copies a demo fill to the live account."""
+    direction = (decision.get("direction") or "—").upper()
+    setup = str(decision.get("setup_type") or "").strip()
+    lines = [
+        f"<b>{_PREFIX} — LIVE MIRROR</b>",
+        f"Session: {_html_escape(session or '—')}",
+    ]
+    if setup:
+        lines.append(f"Setup: <b>{_html_escape(setup)}</b>")
+    lines.extend(
+        [
+            f"Direction: <b>{direction}</b>",
+            (
+                f"Entry: {_fmt_price(decision.get('entry'))} | "
+                f"SL: {_fmt_price(decision.get('stop_loss'))} | "
+                f"TP: {_fmt_price(decision.get('take_profit'))}"
+            ),
+            f"Confidence: <b>{confidence}%</b>",
+            (
+                f"Status: ✅ Live mirror order placed "
+                f"(live exec #{live_execution_id}, demo exec #{demo_execution_id}, "
+                f"decision #{decision_id})"
+            ),
+        ]
+    )
+    return await _send(
+        "\n".join(lines),
+        msg_type="gemini_gold_live_mirror",
+        exec_id=live_execution_id,
+    )
 
 
 async def notify_decision(
@@ -150,7 +212,9 @@ async def notify_decision(
     execution_id: Optional[int] = None,
     block_reason: Optional[str] = None,
     dry_run: bool = False,
-) -> None:
+    execution_mode: str = "demo",
+    fill_kind: Optional[str] = None,
+) -> bool:
     text = format_decision_message(
         session=session,
         decision=decision,
@@ -160,8 +224,10 @@ async def notify_decision(
         execution_id=execution_id,
         block_reason=block_reason,
         dry_run=dry_run,
+        execution_mode=execution_mode,
+        fill_kind=fill_kind,
     )
-    await _send(text, msg_type="gemini_gold_decision", exec_id=execution_id or 0)
+    return await _send(text, msg_type="gemini_gold_decision", exec_id=execution_id or 0)
 
 
 async def maybe_notify_call_cap_reached() -> None:
