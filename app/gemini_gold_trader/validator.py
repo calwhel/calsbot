@@ -184,7 +184,22 @@ def validate_take_decision(
             else:
                 return False, f"validator:rr_too_low({rr:.2f}<{min_rr:.1f})", d
         if rr > max_rr + 1e-9:
-            return False, f"validator:rr_too_high({rr:.2f}>{max_rr:.1f})", d
+            if direction == "LONG":
+                adj_tp = entry + risk_dist * max_rr
+            else:
+                adj_tp = entry - risk_dist * max_rr
+            adj_reward = abs(adj_tp - entry)
+            adj_rr = adj_reward / risk_dist
+            if adj_rr >= min_rr - 1e-9 and adj_rr <= max_rr + 1e-9:
+                d["take_profit"] = round(adj_tp, 2)
+                note = f"tp_adjusted_for_max_rr({rr:.2f}->{adj_rr:.2f})"
+                if d.get("validator_note"):
+                    d["validator_note"] = f"{d['validator_note']};{note}"
+                else:
+                    d["validator_note"] = note
+                rr = adj_rr
+            else:
+                return False, f"validator:rr_too_high({rr:.2f}>{max_rr:.1f})", d
 
     if spot > 0 and cfg.entry_max_drift_pct > 0:
         drift_pct = abs(spot - entry) / spot * 100.0

@@ -36,16 +36,35 @@ def test_validate_sl_too_wide():
     assert "sl_too_wide" in reason
 
 
-def test_validate_rr_too_high():
+def test_validate_rr_too_high_caps_tp_to_max_rr():
     decision = {
         "direction": "LONG",
         "entry": 2650.0,
         "stop_loss": 2640.0,
         "take_profit": 2680.0,
     }
-    ok, reason, _ = validate_take_decision(decision, cfg=_cfg(), spot=2650.0)
-    assert ok is False
-    assert "rr_too_high" in reason
+    ok, reason, d = validate_take_decision(decision, cfg=_cfg(), spot=2650.0)
+    assert ok is True
+    assert reason == "ok"
+    assert d["take_profit"] == 2670.0
+    assert "tp_adjusted_for_max_rr" in (d.get("validator_note") or "")
+
+
+def test_validate_caps_slightly_high_rr_from_gemini():
+    """Real NY fade-long: Gemini TP implied ~2.002R — should cap to 2.0R, not reject."""
+    decision = {
+        "direction": "LONG",
+        "entry": 4101.20,
+        "stop_loss": 4092.22,
+        "take_profit": 4119.18,
+        "setup_type": "fvg_retrace_bull",
+        "confidence": 80,
+    }
+    ok, reason, d = validate_take_decision(decision, cfg=_cfg(), spot=4101.20)
+    assert ok is True
+    assert reason == "ok"
+    assert d["take_profit"] == 4119.16
+    assert "tp_adjusted_for_max_rr" in (d.get("validator_note") or "")
 
 
 def test_validate_nudges_low_rr_up_to_minimum():
