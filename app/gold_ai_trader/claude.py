@@ -77,9 +77,10 @@ EXECUTION RULES (hard constraints)
 
 CONFLUENCE CALIBRATION (from context CONFLUENCE block)
 - Use the explicit "Count: N/M passed" line — it is the primary confluence score.
+- Execution requires ≥4/6 confluence checks passed AND confidence ≥ configured threshold (both required).
 - 5+ passed with HTF + Entry → 75–89% is appropriate when SL/TP are valid.
-- 4+ passed → 60–74% solid; lean TAKE with valid risk.
-- 3 passed → 50–59% tradable band if setup rubric floor is met (e.g. sweep+reclaim+disp).
+- 4+ passed → 60–74% solid; lean TAKE with valid risk when at or above threshold.
+- 3 passed → 50–59% tradable band if setup rubric floor is met (e.g. sweep+reclaim+disp) — usually below execute bar.
 - ≤2 passed → usually 40–49% unless setup-specific rubric says otherwise.
 - Match your confidence number to the confluence count — do not score 35% when 4/7 passed without explaining a major disqualifier in rationale.
 

@@ -17,7 +17,7 @@ from app.gold_ai_trader.context_levels import build_key_levels_block, build_prem
 from app.gold_ai_trader.context_regime import build_regime_block, build_htf_bias_block
 from app.gold_ai_trader.context_history import build_recent_decisions_block, parse_zone_from_detail
 from app.gold_ai_trader.context_bands import build_trade_bands_block
-from app.gold_ai_trader.call_gates import collect_key_levels
+from app.gold_ai_trader.call_gates import collect_key_levels, min_confluence_for_take
 from app.gold_ai_trader.learning import format_setup_stats_block
 from app.gold_ai_trader.cisd_modifier import build_cisd_block
 from app.gold_ai_trader.htf_bias import htf_bias_summary
@@ -277,6 +277,7 @@ async def build_context_snapshot(
             checklist,
             setup_type=candidate.type,
             confidence_threshold=cfg.confidence_threshold,
+            min_confluence_required=min_confluence_for_take(),
         )
         rubric_block = setup_rubric_block(candidate.type)
     else:

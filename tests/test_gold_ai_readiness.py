@@ -220,6 +220,7 @@ class TestConfluenceBlock:
         text = "\n".join(block)
         assert "=== CONFLUENCE" in text
         assert "Count: 4/5 passed" in text
+        assert "Execution gate: need ≥4/" in text
         assert "60–74%" in text
         assert "Sweep core" in text
 

@@ -36,7 +36,7 @@ MIN_RVOL = _env_float("GOLD_AI_TRADER_MIN_RVOL", 1.35)
 KILLZONE_MINUTES = _env_int("GOLD_AI_TRADER_KILLZONE_MINUTES", 60)
 MIN_CLAUDE_GAP_S = _env_int("GOLD_AI_TRADER_MIN_CLAUDE_GAP_S", 120)
 DEDUPE_PRICE_ATR = _env_float("GOLD_AI_TRADER_DEDUPE_PRICE_ATR", 0.35)
-MIN_CONFLUENCE_FOR_TAKE = _env_int("GOLD_AI_MIN_CONFLUENCE_FOR_TAKE", 6)
+MIN_CONFLUENCE_FOR_TAKE = _env_int("GOLD_AI_MIN_CONFLUENCE_FOR_TAKE", 4)
 
 
 def killzone_only_enabled() -> bool:
@@ -51,7 +51,7 @@ def killzone_override_enabled() -> bool:
 
 
 def killzone_override_min_confluence() -> int:
-    return max(0, min(8, _env_int("GOLD_AI_KILLZONE_OVERRIDE_MIN_CONFLUENCE", 6)))
+    return max(0, min(8, _env_int("GOLD_AI_KILLZONE_OVERRIDE_MIN_CONFLUENCE", 4)))
 
 
 def candidate_confluence_counts(candidate) -> Tuple[int, int]:

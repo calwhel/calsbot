@@ -395,12 +395,15 @@ def format_confluence_block(
     *,
     setup_type: str,
     confidence_threshold: int = 60,
+    min_confluence_required: int = 4,
 ) -> List[str]:
     """Explicit confluence count + calibration guidance for Claude."""
     passed, total, detail = confluence_summary(checklist or {})
+    need = max(0, int(min_confluence_required or 0))
     lines = [
         "=== CONFLUENCE (engine checklist — use for confidence calibration) ===",
         f"Count: {passed}/{total} passed — {detail}",
+        f"Execution gate: need ≥{need}/{total or 6} confluence checks AND confidence ≥{confidence_threshold}%.",
     ]
     if total == 0:
         lines.append("No checklist items recorded — score from full context.")
