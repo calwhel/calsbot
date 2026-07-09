@@ -24,13 +24,17 @@ def test_schema_idempotent():
 
 
 def test_schema_review_columns_required():
-    from app.gemini_gold_trader.schema import _REQUIRED_COLUMNS
+    from app.gemini_gold_trader.schema import _REQUIRED_COLUMNS, gemini_gold_postgres_migrations
 
     assert "gemini_gold_reviews" in _REQUIRED_COLUMNS
     cols = _REQUIRED_COLUMNS["gemini_gold_reviews"]
     assert "timing_insights" in cols
     assert "aggressiveness_insights" in cols
     assert "ctrader_account_notes" in cols
+    assert "gemini_gold_outcomes" in _REQUIRED_COLUMNS
+    assert "setup_type" in _REQUIRED_COLUMNS["gemini_gold_outcomes"]
+    mig_tables = {t for t, _, _ in gemini_gold_postgres_migrations()}
+    assert "gemini_gold_outcomes" in mig_tables
 
     db = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
     existing = GeminiGoldConfig(id=1, max_calls_day=340, dry_run=True)
