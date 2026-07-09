@@ -444,7 +444,26 @@ def _aggressiveness_block(db, *, cfg: GeminiGoldRuntimeConfig, days: int) -> Lis
     takes = sum(1 for d in decisions if (d.action or "").upper() == "TAKE")
     executed = sum(1 for d in decisions if d.executed)
     skips = sum(1 for d in decisions if (d.action or "").upper() == "SKIP")
-    min_gap_blocks = sum(1 for d in decisions if (d.skip_reason or "") == "min_trade_gap")
+    min_gap_blocks = sum(
+        1 for d in decisions
+        if d.action == "TAKE" and not d.executed and "min_trade_gap" in (d.skip_reason or "")
+    )
+    dry_run_blocks = sum(
+        1 for d in decisions
+        if d.action == "TAKE" and not d.executed and "dry_run" in (d.skip_reason or "")
+    )
+    pending_blocks = sum(
+        1 for d in decisions
+        if d.action == "TAKE" and not d.executed and "pending entry watch" in (d.skip_reason or "")
+    )
+    broker_blocks = sum(
+        1 for d in decisions
+        if d.action == "TAKE" and not d.executed
+        and any(
+            tok in (d.skip_reason or "").lower()
+            for tok in ("trader_resolution", "account auth", "broker", "not_enough_money")
+        )
+    )
     validator_blocks = sum(
         1 for d in decisions
         if d.action == "TAKE" and not d.executed and "validator" in (d.skip_reason or "")
@@ -490,7 +509,10 @@ def _aggressiveness_block(db, *, cfg: GeminiGoldRuntimeConfig, days: int) -> Lis
         f"take_rate={round(100*takes/calls,1) if calls else 0}% "
         f"execute_rate={round(100*executed/takes,1) if takes else 0}%"
     )
-    lines.append(f"Blocks: min_trade_gap={min_gap_blocks} validator={validator_blocks}")
+    lines.append(
+        f"Blocks: dry_run={dry_run_blocks} pending_watch={pending_blocks} "
+        f"broker={broker_blocks} min_trade_gap={min_gap_blocks} validator={validator_blocks}"
+    )
     lines.append(
         "Confidence distribution (all decisions): "
         + ", ".join(f"{k}={v}" for k, v in conf_buckets.items())

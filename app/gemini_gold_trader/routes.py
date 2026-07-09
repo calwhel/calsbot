@@ -378,6 +378,24 @@ async def api_status(uid: str = Query(...)):
             )
             open_slots_used = effective_open_slots_used(db, int(trader_uid), cfg)
 
+        execution_readiness: Dict[str, Any] = {}
+        if trader_uid:
+            try:
+                from app.gemini_gold_trader.execution_diagnostics import build_execution_readiness
+                from app.gemini_gold_trader.review import _fetch_ctrader_account_snapshot
+
+                account_snap = await _fetch_ctrader_account_snapshot(
+                    db, user_id=int(trader_uid), cfg=cfg, days=14
+                )
+                execution_readiness = build_execution_readiness(
+                    db,
+                    cfg=cfg,
+                    user_id=int(trader_uid),
+                    account_snap=account_snap,
+                )
+            except Exception as exc:
+                logger.warning("[gemini-gold] execution readiness failed: %s", exc)
+
         mode_label = "Live" if is_live_execution_mode(cfg) else "Demo"
         return {
             "ok": True,
@@ -406,6 +424,7 @@ async def api_status(uid: str = Query(...)):
             "closed_trades": closed_trades,
             "funnel": runtime_state.get_status().get("funnel") or funnel_snapshot(),
             "recent_funnel_events": _safe_funnel_events(db, limit=40),
+            "execution_readiness": execution_readiness,
         }
     finally:
         db.close()

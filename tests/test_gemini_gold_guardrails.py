@@ -93,6 +93,15 @@ def test_demo_account_lock_rejects_wrong_ctid():
         pass
 
 
+def test_demo_account_allows_configured_ctid_when_islive_unknown():
+    class _PrefsUnknown:
+        ctrader_accounts = '[{"ctidTraderAccountId": 47782488}]'
+
+    cfg = env_defaults()
+    cfg.demo_ctrader_account_id = "47782488"
+    assert_demo_account(_PrefsUnknown(), 47782488, cfg)
+
+
 def test_demo_account_configured():
     cfg = env_defaults()
     cfg.demo_ctrader_account_id = None

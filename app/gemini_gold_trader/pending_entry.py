@@ -178,6 +178,11 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
         if not entry_price_touched(row.direction, spot, float(row.entry_price), tol):
             continue
 
+        if getattr(cfg, "dry_run", False):
+            row.notes = (row.notes or "") + " | fill blocked: dry_run"
+            await db_commit(db)
+            continue
+
         decision = dict(dec_row.decision)
         exec_id = await execute_take_market(
             db=db,

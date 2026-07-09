@@ -72,6 +72,8 @@ async def assess_gemini_market_data(
     if not price and bars:
         try:
             price = float(bars[-1][4])
+            if price > 0 and (not price_source or price_source == "unknown"):
+                price_source = "ctrader_kline_close"
         except (IndexError, TypeError, ValueError):
             price = None
 
@@ -124,7 +126,12 @@ def gemini_data_ok_for_scan(data: Dict[str, Any]) -> Tuple[bool, str]:
 
     ps = (data.get("price_source") or "").lower()
     live_src = (data.get("live_source") or "").lower()
-    if live_src not in _CTRADER_PRICE_SOURCES and ps != "ctrader_kline_close":
+    ks = (data.get("kline_source") or "").lower()
+    if (
+        live_src not in _CTRADER_PRICE_SOURCES
+        and ps != "ctrader_kline_close"
+        and not _is_ctrader_kline_source(ks)
+    ):
         return False, f"non_ctrader_price:{live_src or ps or 'unknown'}"
 
     return True, "ok"
