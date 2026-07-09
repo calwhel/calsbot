@@ -45,6 +45,9 @@ _GEMINI_GOLD_COLUMN_ALTERS: tuple[tuple[str, str, str], ...] = (
     ("gemini_gold_config", "orb_max_calls_day", "INTEGER DEFAULT 20 NOT NULL"),
     ("gemini_gold_config", "orb_max_trades_per_session", "INTEGER DEFAULT 1 NOT NULL"),
     ("gemini_gold_decisions", "setup_type", "VARCHAR(64)"),
+    ("gemini_gold_reviews", "timing_insights", "JSON"),
+    ("gemini_gold_reviews", "aggressiveness_insights", "JSON"),
+    ("gemini_gold_reviews", "ctrader_account_notes", "TEXT"),
 )
 
 _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
