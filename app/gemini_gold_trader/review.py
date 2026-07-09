@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _REVIEW_INPUT_COST_PER_M = 1.25
 _REVIEW_OUTPUT_COST_PER_M = 10.00
 _REVIEW_TIMEOUT_S = max(30.0, float(os.environ.get("GEMINI_GOLD_REVIEW_TIMEOUT_S", "90")))
+_CTRADER_REVIEW_TIMEOUT_S = max(5.0, float(os.environ.get("GEMINI_GOLD_REVIEW_CTRADER_TIMEOUT_S", "12")))
 
 APPLYABLE_CONFIG_FIELDS = frozenset(
     {
@@ -58,13 +59,16 @@ class GeminiGoldReviewResultSchema(BaseModel):
     whats_not_working: List[str] = Field(description="Failure patterns with specifics")
     setup_insights: List[str] = Field(description="Per-setup-type notes with win rate references")
     timing_insights: List[str] = Field(
-        description="Hour-of-day, session timing, hold duration, and time-between-trade patterns"
+        default_factory=list,
+        description="Hour-of-day, session timing, hold duration, and time-between-trade patterns",
     )
     aggressiveness_insights: List[str] = Field(
-        description="Trade frequency vs caps, confidence distribution, lot sizing, take/execute rates"
+        default_factory=list,
+        description="Trade frequency vs caps, confidence distribution, lot sizing, take/execute rates",
     )
     ctrader_account_notes: str = Field(
-        description="cTrader broker account health: balance/equity, open positions, recent closes, reconciliation"
+        default="",
+        description="cTrader broker account health: balance/equity, open positions, recent closes, reconciliation",
     )
     funnel_diagnosis: str = Field(description="Where the pipeline loses edge before execution")
     lesson_for_next_sessions: str = Field(
@@ -121,9 +125,9 @@ def recent_reviews(db, *, limit: int = 5) -> List[Dict[str, Any]]:
                 "whats_working": row.whats_working or [],
                 "whats_not_working": row.whats_not_working or [],
                 "setup_insights": row.setup_insights or [],
-                "timing_insights": row.timing_insights or [],
-                "aggressiveness_insights": row.aggressiveness_insights or [],
-                "ctrader_account_notes": row.ctrader_account_notes,
+                "timing_insights": getattr(row, "timing_insights", None) or [],
+                "aggressiveness_insights": getattr(row, "aggressiveness_insights", None) or [],
+                "ctrader_account_notes": getattr(row, "ctrader_account_notes", None),
                 "funnel_diagnosis": row.funnel_diagnosis,
                 "lesson_for_next_sessions": row.lesson_for_next_sessions,
                 "config_suggestions": row.config_suggestions or [],
@@ -276,11 +280,14 @@ async def _fetch_ctrader_account_snapshot(
             snap["balance_error"] = "no_ctrader_token"
             return snap
 
-        acct = await get_account_reconcile_resilient(
-            str(token),
-            int(ctid),
-            prefs=prefs,
-            user_id=int(user_id),
+        acct = await asyncio.wait_for(
+            get_account_reconcile_resilient(
+                str(token),
+                int(ctid),
+                prefs=prefs,
+                user_id=int(user_id),
+            ),
+            timeout=_CTRADER_REVIEW_TIMEOUT_S,
         )
         if acct:
             snap["balance"] = acct.get("balance")
@@ -288,10 +295,13 @@ async def _fetch_ctrader_account_snapshot(
         else:
             snap["balance_error"] = "balance_unavailable"
 
-        broker_ids = await get_open_position_ids_for_user_with_retry(
-            user,
-            ctid=ctid,
-            attempts=2,
+        broker_ids = await asyncio.wait_for(
+            get_open_position_ids_for_user_with_retry(
+                user,
+                ctid=ctid,
+                attempts=1,
+            ),
+            timeout=_CTRADER_REVIEW_TIMEOUT_S,
         )
         if broker_ids is None:
             snap["broker_unreachable"] = True
@@ -315,6 +325,8 @@ async def _fetch_ctrader_account_snapshot(
                 snap["position_reconciliation"] = "mismatch"
                 snap["broker_only_positions"] = sorted(broker_ids - tracked_ids)
                 snap["tracked_only_positions"] = sorted(tracked_ids - broker_ids)
+    except asyncio.TimeoutError:
+        snap["balance_error"] = "ctrader_poll_timeout"
     except Exception as exc:
         snap["balance_error"] = str(exc)[:120]
     return snap
@@ -713,7 +725,7 @@ async def run_performance_review(
             contents=f"{system}\n\n{prompt}",
             config=genai_types.GenerateContentConfig(
                 temperature=0.25,
-                max_output_tokens=2500,
+                max_output_tokens=4096,
                 response_mime_type="application/json",
                 response_schema=GeminiGoldReviewResultSchema,
             ),
@@ -767,9 +779,14 @@ async def run_performance_review(
         cost_usd=cost,
         account_snapshot=account_snap,
     )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
+    try:
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    except Exception as exc:
+        db.rollback()
+        logger.exception("[gemini-gold] review persist failed")
+        return None, f"review_persist:{exc}"
 
     result = {
         "id": row.id,
