@@ -752,6 +752,23 @@ function renderClosedTrades(trades) {
   }).join('') + `<p class="hint" style="margin-top:.5rem">${wins}W / ${losses}L · sum $${pnlSum.toFixed(2)}</p>`;
 }
 
+function ctraderStatusLabel(acct) {
+  if (acct.broker_unreachable) {
+    if (acct.balance_error === 'auth_cooldown') {
+      const s = acct.auth_cooldown_s != null ? ` (${acct.auth_cooldown_s}s)` : '';
+      return `Broker cooling down${s} — retry shortly`;
+    }
+    if (acct.balance_error === 'no_ctrader_token') return 'Link cTrader in portal settings';
+    if (acct.balance_error === 'ctrader_poll_timeout') return 'cTrader timed out — tap refresh';
+    return 'Broker unreachable — check link & demo/live host';
+  }
+  if (acct.balance_error) {
+    if (acct.balance_error === 'no_ctrader_token') return 'Link cTrader in portal settings';
+    return String(acct.balance_error);
+  }
+  return 'Connected';
+}
+
 function renderCtraderAccount(acct) {
   const el = document.getElementById('ctrader-account-panel');
   if (!el) return;
@@ -761,10 +778,13 @@ function renderCtraderAccount(acct) {
   }
   const ok = !acct.broker_unreachable && !acct.balance_error;
   const statusCls = ok ? 'ctrader-ok' : 'ctrader-bad';
-  const status = acct.broker_unreachable ? 'Broker unreachable' : (acct.balance_error || 'Connected');
+  const status = ctraderStatusLabel(acct);
+  const bal = acct.balance != null ? '$'+Number(acct.balance).toFixed(2) : '—';
+  const eq = acct.equity != null ? '$'+Number(acct.equity).toFixed(2) : '—';
+  const cachedHint = acct.balance_cached ? ' <span class="hint">(cached)</span>' : '';
   const lines = [
     `<div><span class="hint">Account</span> <span class="account-strip-value">#${escapeHtml(acct.ctrader_account_id || '?')}</span></div>`,
-    `<div style="margin-top:.35rem">Balance <b style="font-family:var(--font-mono)">${acct.balance != null ? '$'+Number(acct.balance).toFixed(2) : '—'}</b> · Equity <b style="font-family:var(--font-mono)">${acct.equity != null ? '$'+Number(acct.equity).toFixed(2) : '—'}</b></div>`,
+    `<div style="margin-top:.35rem">Balance <b style="font-family:var(--font-mono)">${bal}</b>${cachedHint} · Equity <b style="font-family:var(--font-mono)">${eq}</b></div>`,
     `<div style="margin-top:.35rem" class="${statusCls}">${escapeHtml(status)}</div>`,
     `<div class="hint" style="margin-top:.35rem">Broker open: ${acct.broker_open_position_count ?? '?'} · Tracked open: ${acct.open_position_count ?? 0} · ${escapeHtml(acct.position_reconciliation || 'unknown')}</div>`,
   ];

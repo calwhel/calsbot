@@ -126,6 +126,24 @@ def find_live_account(accounts: List[Dict[str, Any]], ctid: Optional[str]) -> Op
     return find_account(accounts, ctid)
 
 
+def cached_balance_for_ctid(prefs, ctid: Optional[str]) -> Optional[float]:
+    """Last-known balance from linked ctrader_accounts JSON (portal sync)."""
+    if not ctid:
+        return None
+    want = str(ctid).strip()
+    for acct in parse_ctrader_accounts(getattr(prefs, "ctrader_accounts", None) if prefs else None):
+        if str(acct.get("ctidTraderAccountId") or "").strip() != want:
+            continue
+        raw = acct.get("balance")
+        if raw is None:
+            return None
+        try:
+            return round(float(raw), 2)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def validate_demo_ctid_allowed(accounts: List[Dict[str, Any]], ctid: str) -> None:
     if not find_demo_account(accounts, ctid):
         raise ValueError(f"ctid {ctid} is not a connected demo account (isLive=false)")

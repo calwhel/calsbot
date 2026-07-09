@@ -21,7 +21,7 @@ import logging
 import os
 import re
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.ctrader_sltp import (
     compute_sltp_prices,
@@ -107,6 +107,24 @@ def _parse_reconcile_balance(res) -> Optional[float]:
     """Extract USD balance/equity from ProtoOAReconcileRes (cents → dollars)."""
     acct = _parse_reconcile_account(res)
     return acct.get("balance") or acct.get("equity")
+
+
+def _parse_reconcile_position_ids(res) -> set:
+    """Open broker positionIds from ProtoOAReconcileRes."""
+    try:
+        return {int(p.positionId) for p in res.position}
+    except Exception:
+        return set()
+
+
+def _parse_reconcile_snapshot(res) -> Dict[str, Any]:
+    """Balance, equity, and open position IDs from one ProtoOAReconcileRes."""
+    acct = _parse_reconcile_account(res)
+    return {
+        "balance": acct.get("balance"),
+        "equity": acct.get("equity"),
+        "position_ids": _parse_reconcile_position_ids(res),
+    }
 
 
 def _host_for_account(prefs, ctid: int) -> str:
@@ -3302,28 +3320,179 @@ async def get_account_reconcile_resilient(
     user_id: Optional[int] = None,
 ) -> Optional[Dict[str, Optional[float]]]:
     """Fetch balance and equity with live/demo host routing and token refresh."""
+    snap = await get_broker_reconcile_snapshot_resilient(
+        access_token,
+        ctid_trader_account_id,
+        prefs=prefs,
+        user_id=user_id,
+    )
+    if snap.get("position_ids") is None:
+        return None
+    bal = snap.get("balance")
+    eq = snap.get("equity")
+    if bal is None and eq is None:
+        return None
+    return {"balance": bal, "equity": eq}
+
+
+async def _get_broker_reconcile_snapshot(
+    access_token: str,
+    ctid_trader_account_id: int,
+    host: str = CTRADER_HOST,
+    *,
+    user_id: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """Single ProtoOAReconcileReq — balance, equity, and open position IDs."""
+    if not _PROTO_OK:
+        return None
+    uid = int(user_id) if user_id else None
+    if uid and _account_auth_in_cooldown(uid, host, ctid_trader_account_id):
+        return None
+    token = (access_token or "").strip()
+    for auth_attempt in (1, 2):
+        auth_failed = False
+        try:
+            async with _get_account_lock(host, ctid_trader_account_id):
+                try:
+                    reader, writer = await _get_persistent_connection(
+                        host,
+                        ctid_trader_account_id,
+                        connect_timeout=BALANCE_CONNECT_TIMEOUT_S,
+                    )
+                    if not await _account_auth(
+                        reader,
+                        writer,
+                        token,
+                        ctid_trader_account_id,
+                        timeout=BALANCE_REQ_TIMEOUT_S,
+                    ):
+                        auth_failed = True
+                    else:
+                        _touch_conn(host, ctid_trader_account_id)
+                        req = ProtoOAReconcileReq()
+                        req.ctidTraderAccountId = ctid_trader_account_id
+                        payload = await _send_recv(
+                            reader,
+                            writer,
+                            req,
+                            _PAYLOAD_TYPES["reconcile_req"],
+                            _PAYLOAD_TYPES["reconcile_res"],
+                            timeout=BALANCE_REQ_TIMEOUT_S,
+                        )
+                        if not payload:
+                            return None
+                        res = ProtoOAReconcileRes()
+                        res.ParseFromString(payload)
+                        snap = _parse_reconcile_snapshot(res)
+                        if (
+                            snap.get("balance") is not None
+                            or snap.get("equity") is not None
+                            or snap.get("position_ids") is not None
+                        ):
+                            if uid:
+                                _clear_account_auth_unhealthy(uid, host, ctid_trader_account_id)
+                            _touch_conn(host, ctid_trader_account_id)
+                            snap["host"] = host
+                            return snap
+                except asyncio.CancelledError:
+                    _invalidate_persistent_connection(host, ctid_trader_account_id)
+                    raise
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug(
+                "[cTrader] reconcile snapshot error host=%s ctid=%s: %s",
+                host,
+                ctid_trader_account_id,
+                e,
+            )
+            return None
+
+        if auth_failed:
+            if auth_attempt == 1:
+                new_at = await _reread_token_for_auth_retry(
+                    user_id=user_id,
+                    ctid_trader_account_id=ctid_trader_account_id,
+                    host=host,
+                    operation="reconcile snapshot",
+                    current_token=token,
+                )
+                if new_at:
+                    token = new_at
+                    _invalidate_persistent_connection(host, ctid_trader_account_id)
+                    continue
+            if uid:
+                _mark_account_auth_unhealthy(
+                    uid,
+                    host,
+                    ctid_trader_account_id,
+                    reason="reconcile_snapshot_auth_failed",
+                )
+            return None
+    return None
+
+
+async def get_broker_reconcile_snapshot_resilient(
+    access_token: str,
+    ctid_trader_account_id: int,
+    *,
+    prefs=None,
+    user_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Balance, equity, and open positions in one reconcile call (host routing + token refresh).
+
+    position_ids is None when the broker is unreachable; an empty set means flat.
+    """
+    out: Dict[str, Any] = {
+        "balance": None,
+        "equity": None,
+        "position_ids": None,
+        "error": None,
+        "host": None,
+    }
     at = (access_token or "").strip()
     if not at:
-        return None
-    hosts = _balance_hosts_for_account(prefs, ctid_trader_account_id)
+        out["error"] = "no_ctrader_token"
+        return out
+    ctid = int(ctid_trader_account_id)
+    uid = int(user_id) if user_id else None
+    if uid and _user_ctid_has_auth_backoff(uid, ctid):
+        rem = _account_auth_cooldown_remaining(uid, CTRADER_HOST_LIVE, ctid)
+        if rem <= 0:
+            rem = _account_auth_cooldown_remaining(uid, CTRADER_HOST_DEMO, ctid)
+        out["error"] = "auth_cooldown"
+        out["auth_cooldown_s"] = max(0, int(rem))
+        return out
 
-    async def _try_hosts(token: str) -> Optional[Dict[str, Optional[float]]]:
+    hosts = _balance_hosts_for_account(prefs, ctid)
+
+    async def _try_hosts(token: str) -> Optional[Dict[str, Any]]:
         for h in hosts:
-            acct = await _get_account_reconcile(token, ctid_trader_account_id, host=h)
-            if acct is not None:
-                return acct
+            snap = await _get_broker_reconcile_snapshot(
+                token,
+                ctid,
+                host=h,
+                user_id=uid,
+            )
+            if snap is not None:
+                return snap
         return None
 
-    acct = await _try_hosts(at)
-    if acct is not None:
-        return acct
-    if user_id:
-        fresh = _latest_ctrader_access_token(user_id)
+    snap = await _try_hosts(at)
+    if snap is None and uid:
+        fresh = _latest_ctrader_access_token(uid)
         if fresh and fresh != at:
-            acct = await _try_hosts(fresh)
-            if acct is not None:
-                return acct
-    return None
+            snap = await _try_hosts(fresh)
+
+    if snap is None:
+        out["error"] = "broker_unreachable"
+        return out
+
+    out["balance"] = snap.get("balance")
+    out["equity"] = snap.get("equity")
+    out["position_ids"] = snap.get("position_ids")
+    out["host"] = snap.get("host")
+    return out
 
 
 async def _get_open_position_ids(
