@@ -73,6 +73,11 @@ _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "orb_max_calls_day",
         "orb_max_trades_per_session",
     ),
+    "gemini_gold_reviews": (
+        "timing_insights",
+        "aggressiveness_insights",
+        "ctrader_account_notes",
+    ),
 }
 
 
@@ -110,25 +115,27 @@ def _apply_column_alters() -> None:
 
 def ensure_gemini_gold_trader_schema(*, force: bool = False) -> None:
     global _schema_ready
-    if _schema_ready and not force:
-        return
-    run_with_db_retry(
-        lambda: Base.metadata.create_all(
-            bind=engine,
-            tables=[
-                GeminiGoldConfig.__table__,
-                GeminiGoldDecision.__table__,
-                GeminiGoldOutcome.__table__,
-                GeminiGoldFunnelEvent.__table__,
-                GeminiGoldOrbState.__table__,
-                GeminiGoldPendingOrder.__table__,
-                GeminiGoldReview.__table__,
-            ],
-        ),
-        max_attempts=_DDL_RETRY_ATTEMPTS,
-        retry_delay=_DDL_RETRY_DELAY_S,
-        label="gemini-gold-schema-create-all",
-    )
+    if not _schema_ready or force:
+        run_with_db_retry(
+            lambda: Base.metadata.create_all(
+                bind=engine,
+                tables=[
+                    GeminiGoldConfig.__table__,
+                    GeminiGoldDecision.__table__,
+                    GeminiGoldOutcome.__table__,
+                    GeminiGoldFunnelEvent.__table__,
+                    GeminiGoldOrbState.__table__,
+                    GeminiGoldPendingOrder.__table__,
+                    GeminiGoldReview.__table__,
+                ],
+            ),
+            max_attempts=_DDL_RETRY_ATTEMPTS,
+            retry_delay=_DDL_RETRY_DELAY_S,
+            label="gemini-gold-schema-create-all",
+        )
+        if not _schema_ready or force:
+            logger.info("[gemini-gold] schema create_all done")
+    # Always re-check alters — new columns may ship without process restart.
     _apply_column_alters()
     insp = inspect(engine)
     if not insp.has_table("gemini_gold_config"):

@@ -508,7 +508,7 @@ async function runAiScan() {
   btn.disabled = false;
   if (!r.ok || !j.ok) {
     status.textContent = '';
-    showToast(j.detail || 'AI scan failed');
+    showToast(j.detail || j.error || 'AI scan failed');
     return;
   }
   status.textContent = 'Scan complete — lesson applied to future chart scans automatically.';

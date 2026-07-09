@@ -627,6 +627,11 @@ async def api_run_review(request: Request, uid: str = Query(...)):
         if err or not result:
             raise HTTPException(status_code=502, detail=err or "review_failed")
         return {"ok": True, "review": result, "review_model": gemini_gold_review_model()}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[gemini-gold] review endpoint error uid=%s", uid)
+        raise HTTPException(status_code=500, detail=str(exc)[:200])
     finally:
         db.close()
 
