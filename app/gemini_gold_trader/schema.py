@@ -45,6 +45,7 @@ _GEMINI_GOLD_COLUMN_ALTERS: tuple[tuple[str, str, str], ...] = (
     ("gemini_gold_config", "orb_max_calls_day", "INTEGER DEFAULT 20 NOT NULL"),
     ("gemini_gold_config", "orb_max_trades_per_session", "INTEGER DEFAULT 1 NOT NULL"),
     ("gemini_gold_decisions", "setup_type", "VARCHAR(64)"),
+    ("gemini_gold_outcomes", "setup_type", "VARCHAR(64)"),
     ("gemini_gold_reviews", "timing_insights", "JSON"),
     ("gemini_gold_reviews", "aggressiveness_insights", "JSON"),
     ("gemini_gold_reviews", "ctrader_account_notes", "TEXT"),
@@ -77,6 +78,9 @@ _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "timing_insights",
         "aggressiveness_insights",
         "ctrader_account_notes",
+    ),
+    "gemini_gold_outcomes": (
+        "setup_type",
     ),
 }
 
@@ -123,6 +127,23 @@ def _apply_column_alters() -> None:
                 logger.info("[gemini-gold] schema alter: %s.%s", table, column)
 
     run_with_db_retry(_run, label="gemini-gold-schema-alter")
+
+
+def _postgres_typedef(typedef: str) -> str:
+    td = typedef
+    if "JSON" in td.upper() and "JSONB" not in td.upper():
+        td = td.replace("JSON", "JSONB")
+    return td
+
+
+def gemini_gold_postgres_migrations() -> list[tuple[str, str, str]]:
+    """(table, column, ddl) tuples for strategy_portal _ensure_additive_columns."""
+    out: list[tuple[str, str, str]] = []
+    for table, column, typedef in _GEMINI_GOLD_COLUMN_ALTERS:
+        pg_type = _postgres_typedef(typedef)
+        ddl = f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {pg_type}"
+        out.append((table, column, ddl))
+    return out
 
 
 def ensure_gemini_gold_trader_schema(*, force: bool = False) -> None:
