@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -53,25 +54,46 @@ async def _fetch_ctrader_chart_klines(
     user_id: Optional[int] = None,
 ) -> Tuple[List[List[float]], str]:
     """Direct cTrader trendbars — bypasses tradfi metal cache."""
-    try:
-        from app.services import ctrader_price_feed as ctf
+    attempts = max(1, int(os.environ.get("GEMINI_GOLD_CTRADER_KLINE_RETRIES", "3")))
+    delay_s = max(0.1, float(os.environ.get("GEMINI_GOLD_CTRADER_KLINE_RETRY_DELAY_S", "0.4")))
+    last_exc: Optional[Exception] = None
 
-        block = ctf.trendbar_fetch_blocked_reason()
-        if block:
-            return [], ""
-        rows = await ctf.get_klines(
-            SYMBOL,
-            ASSET_CLASS,
-            timeframe,
-            limit,
-            user_id=user_id,
-        )
-        rows = _synthesize_forming_bar(rows or [], timeframe, limit)
-        if _bars_fresh(rows, timeframe):
-            label = "ctrader-user" if user_id else "ctrader"
-            return rows, label
-    except Exception as exc:
-        logger.debug("[gemini-gold] direct ctrader %s failed: %s", timeframe, exc)
+    for attempt in range(1, attempts + 1):
+        try:
+            from app.services import ctrader_price_feed as ctf
+
+            block = ctf.trendbar_fetch_blocked_reason()
+            if block:
+                if attempt < attempts:
+                    await asyncio.sleep(delay_s)
+                    continue
+                return [], ""
+            rows = await ctf.get_klines(
+                SYMBOL,
+                ASSET_CLASS,
+                timeframe,
+                limit,
+                user_id=user_id,
+            )
+            rows = _synthesize_forming_bar(rows or [], timeframe, limit)
+            if _bars_fresh(rows, timeframe):
+                label = "ctrader-user" if user_id else "ctrader"
+                return rows, label
+            if attempt < attempts:
+                await asyncio.sleep(delay_s)
+        except Exception as exc:
+            last_exc = exc
+            logger.debug(
+                "[gemini-gold] direct ctrader %s attempt %s/%s failed: %s",
+                timeframe,
+                attempt,
+                attempts,
+                exc,
+            )
+            if attempt < attempts:
+                await asyncio.sleep(delay_s)
+    if last_exc:
+        logger.debug("[gemini-gold] direct ctrader %s exhausted retries: %s", timeframe, last_exc)
     return [], ""
 
 

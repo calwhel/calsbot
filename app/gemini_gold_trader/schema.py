@@ -38,7 +38,7 @@ _GEMINI_GOLD_COLUMN_ALTERS: tuple[tuple[str, str, str], ...] = (
     ("gemini_gold_decisions", "live_mirror_execution_id", "INTEGER"),
     ("gemini_gold_decisions", "live_mirror_status", "VARCHAR(24)"),
     ("gemini_gold_decisions", "live_mirror_error", "TEXT"),
-    ("gemini_gold_config", "use_limit_entry", "BOOLEAN DEFAULT TRUE NOT NULL"),
+    ("gemini_gold_config", "use_limit_entry", "BOOLEAN DEFAULT FALSE NOT NULL"),
     ("gemini_gold_config", "pending_entry_timeout_min", "INTEGER DEFAULT 30 NOT NULL"),
     ("gemini_gold_config", "orb_enabled", "BOOLEAN DEFAULT FALSE NOT NULL"),
     ("gemini_gold_config", "orb_confidence_threshold", "INTEGER DEFAULT 65 NOT NULL"),
@@ -194,6 +194,18 @@ def _migrate_legacy_demo_lot_size(db, row: Optional[GeminiGoldConfig] = None) ->
         logger.info("[gemini-gold] migrated demo_lot_size 0.1 → 0.01")
 
 
+def _migrate_legacy_use_limit_entry(db, row: Optional[GeminiGoldConfig] = None) -> None:
+    """Production rows still had use_limit_entry=true — force market-first execution."""
+    if row is None:
+        row = db.query(GeminiGoldConfig).filter(GeminiGoldConfig.id == 1).first()
+    if not row:
+        return
+    if bool(getattr(row, "use_limit_entry", False)):
+        row.use_limit_entry = False
+        db.commit()
+        logger.info("[gemini-gold] migrated use_limit_entry true → false (market-first)")
+
+
 def _migrate_legacy_confidence_threshold(db, row: Optional[GeminiGoldConfig] = None) -> None:
     if row is None:
         row = db.query(GeminiGoldConfig).filter(GeminiGoldConfig.id == 1).first()
@@ -219,6 +231,7 @@ def seed_config_if_missing(db) -> GeminiGoldConfig:
     if row:
         _migrate_legacy_demo_lot_size(db, row=row)
         _migrate_legacy_confidence_threshold(db, row=row)
+        _migrate_legacy_use_limit_entry(db, row=row)
         return row
     d = env_defaults()
     row = GeminiGoldConfig(

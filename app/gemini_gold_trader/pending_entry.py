@@ -142,8 +142,74 @@ def pending_status_label(pending_id: int) -> str:
     return f"pending entry watch #{pending_id}"
 
 
+async def _try_market_fill_from_pending(
+    db,
+    *,
+    cfg,
+    row,
+    dec_row,
+    spot: float,
+    reason: str,
+) -> bool:
+    """Attempt market entry when entry-watch expired or near-missed."""
+    from app.gemini_gold_trader.executor import execute_take_market
+
+    if getattr(cfg, "dry_run", False):
+        row.notes = (row.notes or "") + f" | {reason} blocked: dry_run"
+        await db_commit(db)
+        return False
+
+    decision = dict(dec_row.decision or {})
+    exec_id = await execute_take_market(
+        db=db,
+        cfg=cfg,
+        decision=decision,
+        decision_id=row.decision_id,
+        spot_hint=spot,
+    )
+    if exec_id and exec_id > 0:
+        row.status = "filled"
+        row.fill_execution_id = exec_id
+        row.notes = (row.notes or "") + f" | {reason}"
+        dec_row.executed = True
+        dec_row.execution_id = exec_id
+        dec_row.skip_reason = None
+        await db_commit(db)
+        try:
+            from app.gemini_gold_trader.guardrails import is_live_execution_mode
+            from app.gemini_gold_trader.telegram_notify import notify_decision
+
+            await notify_decision(
+                session=str(row.session or getattr(dec_row, "session", None) or ""),
+                decision=decision,
+                action="TAKE",
+                confidence=int(getattr(dec_row, "confidence", None) or 0),
+                executed=True,
+                execution_id=exec_id,
+                dry_run=bool(getattr(cfg, "dry_run", False)),
+                execution_mode="live" if is_live_execution_mode(cfg) else "demo",
+                fill_kind="entry_watch_market",
+            )
+        except Exception as exc:
+            logger.warning(
+                "[gemini-gold] entry-watch market fill notify failed decision=%s: %s",
+                row.decision_id,
+                exc,
+            )
+        return True
+
+    row.notes = (row.notes or "") + f" | {reason} broker failed"
+    dec_row.skip_reason = "pending entry market fallback failed"
+    await db_commit(db)
+    return False
+
+
 async def sync_pending_entries(db, cfg, spot: float) -> int:
     """Expire or fill entry-watch pending rows. Returns fills this pass."""
+    from app.gemini_gold_trader.entry_routing import (
+        entry_touch_tolerance,
+        market_fallback_on_pending_expire,
+    )
     from app.gemini_gold_trader.executor import execute_take_market
     from app.gemini_gold_trader.models import GeminiGoldDecision, GeminiGoldPendingOrder
 
@@ -160,12 +226,6 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
     now, pending = await run_in_db_thread(_load_pending)
     filled = 0
     for row in pending:
-        if row.expires_at and now >= row.expires_at:
-            row.status = "expired"
-            row.notes = (row.notes or "") + " | expired"
-            await db_commit(db)
-            continue
-
         dec_row = await run_in_db_thread(
             lambda: db.query(GeminiGoldDecision).filter(GeminiGoldDecision.id == row.decision_id).first()
         )
@@ -174,7 +234,29 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
             await db_commit(db)
             continue
 
-        tol = max(0.15, abs(row.entry_price) * 0.00005)
+        decision = dict(dec_row.decision)
+        setup_type = str(decision.get("setup_type") or getattr(dec_row, "setup_type", "") or "")
+        tol = entry_touch_tolerance(float(row.entry_price), setup_type)
+
+        if row.expires_at and now >= row.expires_at:
+            if market_fallback_on_pending_expire(setup_type, cfg):
+                if await _try_market_fill_from_pending(
+                    db,
+                    cfg=cfg,
+                    row=row,
+                    dec_row=dec_row,
+                    spot=spot,
+                    reason="expired market fallback",
+                ):
+                    filled += 1
+                    break
+            row.status = "expired"
+            row.notes = (row.notes or "") + " | expired"
+            if not dec_row.executed:
+                dec_row.skip_reason = "pending entry watch expired"
+            await db_commit(db)
+            continue
+
         if not entry_price_touched(row.direction, spot, float(row.entry_price), tol):
             continue
 

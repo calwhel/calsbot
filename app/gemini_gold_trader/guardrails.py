@@ -79,7 +79,11 @@ def merge_config(db_row: GeminiGoldConfig, env: GeminiGoldRuntimeConfig) -> Gemi
         live_mirror_enabled=bool(getattr(db_row, "live_mirror_enabled", False)),
         max_live_trades_day=int(getattr(db_row, "max_live_trades_day", None) or env.max_live_trades_day or 3),
         confidence_threshold=int(db_row.confidence_threshold or env.confidence_threshold),
-        use_limit_entry=bool(getattr(db_row, "use_limit_entry", env.use_limit_entry)),
+        use_limit_entry=(
+            env.use_limit_entry
+            if os.environ.get("GEMINI_GOLD_USE_LIMIT_ENTRY") is not None
+            else bool(getattr(db_row, "use_limit_entry", env.use_limit_entry))
+        ),
         pending_entry_timeout_min=int(
             getattr(db_row, "pending_entry_timeout_min", None) or env.pending_entry_timeout_min or 30
         ),

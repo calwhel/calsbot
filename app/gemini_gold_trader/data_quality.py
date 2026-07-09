@@ -46,6 +46,13 @@ async def assess_gemini_market_data(
     *,
     user_id: Optional[int] = None,
 ) -> Dict[str, Any]:
+    from app.gold_ai_trader.data_refresh import refresh_gold_scoring_klines
+
+    try:
+        await refresh_gold_scoring_klines(user_id=user_id)
+    except Exception as exc:
+        logger.warning("[gemini-gold] kline refresh before scan failed: %s", exc)
+
     bars, meta = await get_chart_klines(SCORING_TIMEFRAME, 60, user_id=user_id)
     kline_source = (meta.get("source") or "").lower()
     kline_bars = len(bars or [])
