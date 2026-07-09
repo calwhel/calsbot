@@ -22,7 +22,7 @@ from app.gemini_gold_trader.accounts import (
     validate_demo_ctid_allowed,
     validate_live_ctid_allowed,
 )
-from app.gemini_gold_trader.config import EXECUTION_MODE_DEMO, EXECUTION_MODE_LIVE, env_defaults, gemini_gold_enabled
+from app.gemini_gold_trader.config import EXECUTION_MODE_DEMO, EXECUTION_MODE_LIVE, env_defaults, gemini_gold_enabled, gemini_gold_review_model
 from app.gemini_gold_trader.gemini import format_chart_observation
 from app.gemini_gold_trader.guardrails import (
     active_ctrader_account_id,
@@ -46,6 +46,12 @@ from app.gemini_gold_trader.models import GeminiGoldDecision
 from app.gemini_gold_trader.reconcile import (
     list_open_executions,
     reconcile_orphan_open_executions,
+)
+from app.gemini_gold_trader.review import (
+    filter_applyable_changes,
+    recent_reviews,
+    run_performance_review,
+    suggestions_to_changes,
 )
 from app.gemini_gold_trader.schema import ensure_gemini_gold_trader_schema, seed_config_if_missing
 from app.services.forex_sessions import gold_ai_session_hours
@@ -179,6 +185,7 @@ def _config_payload(cfg, cfg_row, env) -> Dict[str, Any]:
         "max_trades_day": cfg.max_trades_day,
         "scan_interval_s": cfg.scan_interval_s,
         "model": cfg.model,
+        "review_model": gemini_gold_review_model(),
         "demo_ctrader_account_id": cfg.demo_ctrader_account_id,
         "demo_lot_size": cfg.demo_lot_size,
         "execution_mode": cfg.execution_mode,
@@ -560,6 +567,8 @@ async def api_calibration(uid: str = Query(...), days: int = Query(14)):
             "setup_stats": get_setup_stats(db, days=days),
             "call_stats_today": call_stats_today(db),
             "recent_funnel_events": _safe_funnel_events(db, limit=60),
+            "review_model": gemini_gold_review_model(),
+            "latest_review": recent_reviews(db, limit=1),
         }
     finally:
         db.close()
@@ -588,6 +597,137 @@ async def api_refresh_klines(uid: str = Query(...)):
             "source": market_data.get("kline_source"),
             "price_source": market_data.get("price_source"),
         }
+    finally:
+        db.close()
+
+
+@router.post("/api/gemini-gold-trader/review")
+async def api_run_review(request: Request, uid: str = Query(...)):
+    """Run Gemini Pro performance review over trades, funnel, and cTrader account."""
+    ensure_gemini_gold_trader_schema()
+    db = SessionLocal()
+    try:
+        admin = _resolve_user(uid, db)
+        row = seed_config_if_missing(db)
+        env = env_defaults()
+        cfg = merge_config(row, env)
+        trader_uid = _trader_user_id(cfg, admin)
+        if not trader_uid:
+            raise HTTPException(status_code=400, detail="No trader user configured")
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        days = max(3, min(30, int(body.get("days") or 14)))
+
+        result, err = await run_performance_review(
+            db, cfg=cfg, user_id=int(trader_uid), days=days
+        )
+        if err or not result:
+            raise HTTPException(status_code=502, detail=err or "review_failed")
+        return {"ok": True, "review": result, "review_model": gemini_gold_review_model()}
+    finally:
+        db.close()
+
+
+@router.get("/api/gemini-gold-trader/reviews")
+async def api_list_reviews(uid: str = Query(...), limit: int = Query(5)):
+    ensure_gemini_gold_trader_schema()
+    db = SessionLocal()
+    try:
+        _resolve_user(uid, db)
+        return {
+            "ok": True,
+            "reviews": recent_reviews(db, limit=min(limit, 20)),
+            "review_model": gemini_gold_review_model(),
+        }
+    finally:
+        db.close()
+
+
+def _apply_config_changes_to_row(row, body: Dict[str, Any], *, trader_uid: int, db) -> None:
+    """Apply whitelisted config fields (shared by config + apply-review)."""
+    if "demo_ctrader_account_id" in body:
+        raw = body.get("demo_ctrader_account_id")
+        ctid = str(raw).strip() if raw not in (None, "") else ""
+        if ctid:
+            demo_list = demo_accounts_for_user_id(db, trader_uid)
+            validate_demo_ctid_allowed(demo_list, ctid)
+            row.demo_ctrader_account_id = ctid
+        else:
+            row.demo_ctrader_account_id = None
+
+    if "live_ctrader_account_id" in body:
+        raw = body.get("live_ctrader_account_id")
+        ctid = str(raw).strip() if raw not in (None, "") else ""
+        if ctid:
+            live_list = live_accounts_for_user_id(db, trader_uid)
+            validate_live_ctid_allowed(live_list, ctid)
+            row.live_ctrader_account_id = ctid
+        else:
+            row.live_ctrader_account_id = None
+
+    for field in (
+        "enabled",
+        "kill_switch",
+        "dry_run",
+        "max_calls_day",
+        "max_trades_day",
+        "demo_lot_size",
+        "live_lot_size",
+        "live_mirror_enabled",
+        "max_live_trades_day",
+        "confidence_threshold",
+        "use_limit_entry",
+        "pending_entry_timeout_min",
+        "orb_enabled",
+        "orb_confidence_threshold",
+        "orb_max_calls_day",
+        "orb_max_trades_per_session",
+    ):
+        if field in body:
+            setattr(row, field, body[field])
+
+
+@router.post("/api/gemini-gold-trader/apply-review")
+async def api_apply_review(request: Request, uid: str = Query(...)):
+    """Apply config changes from an AI review (or explicit changes dict)."""
+    ensure_gemini_gold_trader_schema()
+    db = SessionLocal()
+    try:
+        admin = _resolve_user(uid, db)
+        row = seed_config_if_missing(db)
+        env = env_defaults()
+        cfg = merge_config(row, env)
+        trader_uid = _trader_user_id(cfg, admin)
+        if not trader_uid:
+            raise HTTPException(status_code=400, detail="No trader user configured")
+
+        body = await request.json()
+        changes = filter_applyable_changes(body.get("changes") or {})
+        review_id = body.get("review_id")
+        if review_id and not changes:
+            from app.gemini_gold_trader.models import GeminiGoldReview
+
+            rev = db.query(GeminiGoldReview).filter(GeminiGoldReview.id == int(review_id)).first()
+            if rev and rev.config_suggestions:
+                changes = suggestions_to_changes(rev.config_suggestions)
+
+        if not changes:
+            raise HTTPException(status_code=400, detail="No applyable changes")
+
+        if changes.get("live_mirror_enabled") is True and not body.get("confirm_real_money"):
+            raise HTTPException(
+                status_code=400,
+                detail="confirm_real_money required for live mirror changes",
+            )
+
+        _apply_config_changes_to_row(row, changes, trader_uid=int(trader_uid), db=db)
+        row.updated_at = datetime.utcnow()
+        db.commit()
+        cfg_after = merge_config(row, env)
+        return {"ok": True, "applied": changes, "config": _config_payload(cfg_after, row, env)}
     finally:
         db.close()
 

@@ -236,6 +236,7 @@ def _build_prompt(
     min_sl_pips: float = 10.0,
     max_sl_pips: float = 150.0,
     chart_observation: Optional[str] = None,
+    review_lesson: Optional[str] = None,
 ) -> str:
     entry_label = "1-minute" if entry_timeframe == "1m" else "5-minute (1m unavailable)"
     entry_note = (
@@ -256,6 +257,11 @@ def _build_prompt(
         "You are decisive and risk-first: skip unclear chop rather than force a trade, "
         "but ACT on clear early fades and first 5m reversal triggers when price is extended.\n\n"
     )
+    if review_lesson:
+        prompt += (
+            "LATEST AI PERFORMANCE REVIEW (from your last full trade audit — follow these rules):\n"
+            f"{review_lesson.strip()}\n\n"
+        )
     if chart_observation:
         prompt += (
             "TWO-STEP DECISION:\n"
@@ -645,6 +651,7 @@ async def decide_from_charts(
     entry_5m_fallback: bool = False,
     zone_summary: Optional[str] = None,
     chart_observation: Optional[str] = None,
+    review_lesson: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], int, int, float, Optional[str]]:
     """
     Step 2 (or single-step): TAKE/SKIP decision from chart images.
@@ -668,6 +675,7 @@ async def decide_from_charts(
         min_sl_pips=cfg.min_sl_pips,
         max_sl_pips=cfg.max_sl_pips,
         chart_observation=chart_observation,
+        review_lesson=review_lesson,
     )
     ohlc_block = _build_ohlc_context(
         entry_bars=entry_bars,

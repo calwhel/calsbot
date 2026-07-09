@@ -128,3 +128,23 @@ class GeminiGoldPendingOrder(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)
     notes = Column(Text, nullable=True)
+
+
+class GeminiGoldReview(Base):
+    __tablename__ = "gemini_gold_reviews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ts = Column(DateTime, default=datetime.utcnow, index=True)
+    summary = Column(Text, nullable=True)
+    whats_working = Column(JSON, nullable=True)
+    whats_not_working = Column(JSON, nullable=True)
+    setup_insights = Column(JSON, nullable=True)
+    funnel_diagnosis = Column(Text, nullable=True)
+    lesson_for_next_sessions = Column(Text, nullable=True)
+    config_suggestions = Column(JSON, nullable=True)
+    model = Column(String(64), nullable=True)
+    days_window = Column(Integer, default=14, nullable=False)
+    tokens_in = Column(Integer, default=0)
+    tokens_out = Column(Integer, default=0)
+    cost_usd = Column(Float, default=0.0)
+    account_snapshot = Column(JSON, nullable=True)

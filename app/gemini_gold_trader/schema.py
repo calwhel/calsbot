@@ -17,6 +17,7 @@ from app.gemini_gold_trader.models import (
     GeminiGoldOrbState,
     GeminiGoldOutcome,
     GeminiGoldPendingOrder,
+    GeminiGoldReview,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,7 @@ def ensure_gemini_gold_trader_schema(*, force: bool = False) -> None:
                 GeminiGoldFunnelEvent.__table__,
                 GeminiGoldOrbState.__table__,
                 GeminiGoldPendingOrder.__table__,
+                GeminiGoldReview.__table__,
             ],
         ),
         max_attempts=_DDL_RETRY_ATTEMPTS,

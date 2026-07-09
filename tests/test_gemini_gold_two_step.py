@@ -81,10 +81,16 @@ def test_summarize_session_extension_extended_high():
     assert "fade-short" in text
 
 
-def test_build_prompt_without_observation_unchanged_scalp_rules():
+def test_build_prompt_includes_review_lesson():
     p = _build_prompt(
-        session="london", spot=3342.5, bars_1m=60, bars_5m=80, bars_15m=80, bars_1h=60,
+        session="london",
+        spot=3342.5,
+        bars_1m=60,
+        bars_5m=80,
+        bars_15m=80,
+        bars_1h=60,
+        review_lesson="- Avoid IFVG longs when extended high without 5m MSS.",
     )
-    assert "TWO-STEP DECISION" not in p
-    assert "SCALP MANDATE" in p
+    assert "LATEST AI PERFORMANCE REVIEW" in p
+    assert "Avoid IFVG longs" in p
 

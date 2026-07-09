@@ -484,6 +484,15 @@ async def run_gemini_gold_trader_loop() -> None:
                 observe_err,
             )
 
+    def _review_lesson_db(db):
+        from app.gemini_gold_trader.review import get_latest_review_lesson
+
+        return get_latest_review_lesson(db)
+
+    review_lesson = await run_with_db(_review_lesson_db)
+    if review_lesson:
+        chart_meta["review_lesson_applied"] = True
+
     decision, tokens_in, tokens_out, cost_usd, api_error = await decide_from_charts(
         cfg=cfg,
         session=session,
@@ -500,6 +509,7 @@ async def run_gemini_gold_trader_loop() -> None:
         entry_5m_fallback=entry_5m_fallback,
         zone_summary=zone_summary,
         chart_observation=observation_text,
+        review_lesson=review_lesson,
     )
 
     tokens_in += observe_tokens_in

@@ -90,6 +90,13 @@ def gemini_gold_two_step_scan() -> bool:
     return _env_bool("GEMINI_GOLD_TWO_STEP_SCAN", True)
 
 
+def gemini_gold_review_model() -> str:
+    return (
+        os.environ.get("GEMINI_GOLD_REVIEW_MODEL", "gemini-2.5-pro").strip()
+        or "gemini-2.5-pro"
+    )
+
+
 def env_defaults() -> GeminiGoldRuntimeConfig:
     demo_uid_raw = os.environ.get("GEMINI_GOLD_USER_ID", "").strip()
     demo_uid: Optional[int] = None
