@@ -220,4 +220,13 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
                     exc,
                 )
             break
+        row.status = "failed"
+        row.notes = (row.notes or "") + " | broker fill failed"
+        dec_row.skip_reason = "pending entry fill failed (broker)"
+        await db_commit(db)
+        logger.warning(
+            "[gemini-gold] entry-watch fill failed pending=%s decision=%s",
+            row.id,
+            row.decision_id,
+        )
     return filled

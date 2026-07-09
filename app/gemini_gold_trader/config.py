@@ -143,7 +143,7 @@ def env_defaults() -> GeminiGoldRuntimeConfig:
         live_mirror_enabled=False,
         max_live_trades_day=max(1, _env_int("GEMINI_GOLD_MAX_LIVE_TRADES_DAY", 3)),
         confidence_threshold=_env_int("GEMINI_GOLD_CONFIDENCE_THRESHOLD", 85),
-        use_limit_entry=_env_bool("GEMINI_GOLD_USE_LIMIT_ENTRY", True),
+        use_limit_entry=_env_bool("GEMINI_GOLD_USE_LIMIT_ENTRY", False),
         pending_entry_timeout_min=max(5, _env_int("GEMINI_GOLD_PENDING_TIMEOUT_MIN", 30)),
         orb_enabled=_env_bool("GEMINI_GOLD_ORB_ENABLED", False),
         orb_confidence_threshold=_env_int("GEMINI_GOLD_ORB_CONFIDENCE_THRESHOLD", 65),

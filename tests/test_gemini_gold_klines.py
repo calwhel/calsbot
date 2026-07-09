@@ -104,6 +104,35 @@ def test_get_chart_klines_falls_back_to_postgres_snapshot():
     asyncio.run(_run())
 
 
+def test_get_chart_klines_marks_ctrader_unavailable_when_coinbase_and_no_fallback():
+    from app.gemini_gold_trader.klines import get_chart_klines
+
+    coinbase = _bars(30)
+
+    async def _run():
+        with patch(
+            "app.services.tradfi_prices.get_klines",
+            new_callable=AsyncMock,
+            return_value=coinbase,
+        ), patch(
+            "app.services.tradfi_prices.get_metal_kline_source",
+            return_value="coinbase",
+        ), patch(
+            "app.gemini_gold_trader.klines._fetch_ctrader_chart_klines",
+            new_callable=AsyncMock,
+            return_value=([], ""),
+        ), patch(
+            "app.services.kline_snapshot_store.get_klines",
+            return_value=[],
+        ):
+            bars, meta = await get_chart_klines("5m", 80)
+        assert bars == []
+        assert meta["source"] == "ctrader_unavailable"
+        assert meta["status"] == "missing_or_stale"
+
+    asyncio.run(_run())
+
+
 def test_klines_ready_requires_core_timeframes_only():
     from app.gemini_gold_trader.klines import klines_ready
 
