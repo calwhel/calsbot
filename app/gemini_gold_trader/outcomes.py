@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from app.gemini_gold_trader.models import GeminiGoldDecision, GeminiGoldOutcome
 
@@ -110,3 +110,75 @@ def sync_closed_outcomes(db, user_id: int) -> int:
         if decision_id and record_outcome_from_execution(db, decision_id, ex):
             recorded += 1
     return recorded
+
+
+def recent_closed_trades_feed(db, user_id: int, *, limit: int = 25) -> List[Dict[str, Any]]:
+    """Closed gemini gold trades for portal — broker execution rows + outcome stats."""
+    from app.strategy_models import StrategyExecution
+
+    rows = (
+        db.query(StrategyExecution)
+        .filter(
+            StrategyExecution.user_id == user_id,
+            StrategyExecution.symbol == "XAUUSD",
+            StrategyExecution.notes.like("%gemini_gold_trader%"),
+            StrategyExecution.closed_at.isnot(None),
+            StrategyExecution.outcome.in_(("WIN", "LOSS", "BREAKEVEN", "CANCELLED")),
+        )
+        .order_by(StrategyExecution.closed_at.desc())
+        .limit(max(1, min(limit, 50)))
+        .all()
+    )
+    outcome_by_decision: Dict[int, Any] = {}
+    if rows:
+        decision_ids: List[int] = []
+        for ex in rows:
+            notes = ex.notes or ""
+            if "decision_id=" in notes:
+                try:
+                    decision_ids.append(int(notes.split("decision_id=")[1].split()[0].strip("|")))
+                except (ValueError, IndexError):
+                    pass
+        if decision_ids:
+            from app.gemini_gold_trader.models import GeminiGoldOutcome
+
+            for o in (
+                db.query(GeminiGoldOutcome)
+                .filter(GeminiGoldOutcome.decision_id.in_(decision_ids))
+                .all()
+            ):
+                outcome_by_decision[int(o.decision_id)] = o
+
+    out: List[Dict[str, Any]] = []
+    for ex in rows:
+        decision_id = None
+        notes = ex.notes or ""
+        if "decision_id=" in notes:
+            try:
+                decision_id = int(notes.split("decision_id=")[1].split()[0].strip("|"))
+            except (ValueError, IndexError):
+                pass
+        setup_type = None
+        if decision_id and decision_id in outcome_by_decision:
+            setup_type = outcome_by_decision[decision_id].setup_type
+        hold_min = None
+        if ex.fired_at and ex.closed_at:
+            hold_min = round((ex.closed_at - ex.fired_at).total_seconds() / 60.0, 1)
+        out.append(
+            {
+                "execution_id": ex.id,
+                "decision_id": decision_id,
+                "setup_type": setup_type,
+                "fired_at": ex.fired_at.isoformat() if ex.fired_at else None,
+                "closed_at": ex.closed_at.isoformat() if ex.closed_at else None,
+                "direction": ex.direction,
+                "outcome": ex.outcome,
+                "entry_price": float(ex.entry_price) if ex.entry_price else None,
+                "exit_price": float(ex.exit_price) if ex.exit_price else None,
+                "pnl_pct": float(ex.pnl_pct) if ex.pnl_pct is not None else None,
+                "pnl_usd": float(ex.pnl_usd) if ex.pnl_usd is not None else None,
+                "hold_min": hold_min,
+                "broker_position_id": ex.ctrader_position_id,
+            }
+        )
+    return out

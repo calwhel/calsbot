@@ -98,6 +98,14 @@
     .suggestion-row { display: flex; gap: .5rem; align-items: flex-start; padding: .4rem 0; border-top: 1px solid var(--border); font-size: .72rem; }
     .suggestion-row:first-child { border-top: 0; }
     .btn-scan { width: 100%; margin-top: .5rem; padding: .65rem; font-size: .8rem; }
+    .trade-row { display: flex; justify-content: space-between; gap: .5rem; padding: .4rem 0; border-top: 1px solid var(--border); font-size: .72rem; align-items: flex-start; }
+    .trade-row:first-child { border-top: 0; }
+    .trade-outcome { font-weight: 700; font-family: var(--font-mono); font-size: .68rem; }
+    .trade-outcome.win { color: var(--profit); }
+    .trade-outcome.loss { color: var(--danger); }
+    .block-reason { color: #f5a8a8; font-size: .68rem; margin-top: .2rem; }
+    .ctrader-ok { color: var(--profit); }
+    .ctrader-bad { color: #ffb4b4; }
   </style>
 </head>
 <body>
@@ -120,6 +128,9 @@
     </div>
     <div class="env-warn" id="env-warn">
       Railway env <code>GEMINI_GOLD_ENABLED</code> is off — set it to <code>true</code> and redeploy so the scan process starts.
+    </div>
+    <div class="env-warn" id="dry-run-warn">
+      <strong>Dry-run is ON</strong> — Gemini will call TAKE but <em>no orders</em> reach cTrader. Turn off Dry-run above to execute trades.
     </div>
 
     <div class="account-strip missing" id="account-bar">
@@ -200,6 +211,15 @@
       <button class="btn btn-primary" id="btn-save-size" style="width:100%;margin-top:.65rem">Save size & limits</button>
     </section>
 
+    <section class="card" id="ctrader-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.35rem">
+        <h2 style="font-size:.85rem">cTrader account</h2>
+        <button class="btn" id="btn-refresh-account" type="button" title="Poll broker">↻</button>
+      </div>
+      <p class="hint">Live balance, equity, and open positions from your cTrader broker.</p>
+      <div id="ctrader-account-panel"><p class="hint">Loading…</p></div>
+    </section>
+
     <section class="card" id="live-mirror-card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
         <h2 style="font-size:.85rem">Live mirror · real money</h2>
@@ -257,6 +277,12 @@
       <div id="setup-stats"></div>
       <h3 style="font-size:.75rem;margin:1rem 0 .35rem;color:var(--dim)">Recent funnel events</h3>
       <div id="funnel-events"></div>
+    </section>
+
+    <section class="card">
+      <h2 style="font-size:.85rem;margin-bottom:.5rem">Closed trades</h2>
+      <p class="hint">Wins and losses from your cTrader account (last 14 days).</p>
+      <div id="closed-trades"></div>
     </section>
 
     <section class="card">
@@ -366,6 +392,7 @@ function renderStatus(j) {
   const envOn = !!cfg.env_enabled;
   document.getElementById('env-warn').classList.toggle('visible', !envOn);
   document.getElementById('kill-env-warn').classList.toggle('visible', !!cfg.kill_switch_env_locked);
+  document.getElementById('dry-run-warn').classList.toggle('visible', !!cfg.dry_run);
 
   let title = 'STANDBY', sub = 'Enable trader during Asia, London, or NY sessions';
   if (cfg.kill_switch) {
@@ -701,6 +728,64 @@ async function setExecutionMode(mode) {
   refresh();
 }
 
+function renderClosedTrades(trades) {
+  const el = document.getElementById('closed-trades');
+  if (!el) return;
+  const rows = trades || [];
+  if (!rows.length) {
+    el.innerHTML = '<p class="hint">No closed trades yet — turn off dry-run and ensure cTrader is connected.</p>';
+    return;
+  }
+  let wins = 0, losses = 0, pnlSum = 0;
+  el.innerHTML = rows.map(t => {
+    const oc = (t.outcome || '').toUpperCase();
+    if (oc === 'WIN') wins++;
+    if (oc === 'LOSS') losses++;
+    if (t.pnl_usd != null) pnlSum += Number(t.pnl_usd) || 0;
+    const cls = oc === 'WIN' ? 'win' : (oc === 'LOSS' ? 'loss' : '');
+    const pnl = t.pnl_usd != null ? `$${Number(t.pnl_usd).toFixed(2)}` : (t.pnl_pct != null ? `${Number(t.pnl_pct).toFixed(2)}%` : '—');
+    return `<div class="trade-row">
+      <div><span class="trade-outcome ${cls}">${escapeHtml(oc || '—')}</span> ${escapeHtml(t.direction || '')} · ${escapeHtml(t.setup_type || 'setup?')}
+        <div class="hint">${fmtTime(t.closed_at)} · entry ${t.entry_price ?? '—'} → ${t.exit_price ?? '—'}${t.hold_min != null ? ' · '+t.hold_min+'m' : ''}</div></div>
+      <div style="text-align:right;font-family:var(--font-mono)">${pnl}</div>
+    </div>`;
+  }).join('') + `<p class="hint" style="margin-top:.5rem">${wins}W / ${losses}L · sum $${pnlSum.toFixed(2)}</p>`;
+}
+
+function renderCtraderAccount(acct) {
+  const el = document.getElementById('ctrader-account-panel');
+  if (!el) return;
+  if (!acct) {
+    el.innerHTML = '<p class="hint">Could not load account.</p>';
+    return;
+  }
+  const ok = !acct.broker_unreachable && !acct.balance_error;
+  const statusCls = ok ? 'ctrader-ok' : 'ctrader-bad';
+  const status = acct.broker_unreachable ? 'Broker unreachable' : (acct.balance_error || 'Connected');
+  const lines = [
+    `<div><span class="hint">Account</span> <span class="account-strip-value">#${escapeHtml(acct.ctrader_account_id || '?')}</span></div>`,
+    `<div style="margin-top:.35rem">Balance <b style="font-family:var(--font-mono)">${acct.balance != null ? '$'+Number(acct.balance).toFixed(2) : '—'}</b> · Equity <b style="font-family:var(--font-mono)">${acct.equity != null ? '$'+Number(acct.equity).toFixed(2) : '—'}</b></div>`,
+    `<div style="margin-top:.35rem" class="${statusCls}">${escapeHtml(status)}</div>`,
+    `<div class="hint" style="margin-top:.35rem">Broker open: ${acct.broker_open_position_count ?? '?'} · Tracked open: ${acct.open_position_count ?? 0} · ${escapeHtml(acct.position_reconciliation || 'unknown')}</div>`,
+  ];
+  if (acct.recent_broker_pnl_usd != null) {
+    lines.push(`<div class="hint">Recent closes PnL: $${Number(acct.recent_broker_pnl_usd).toFixed(2)}</div>`);
+  }
+  el.innerHTML = lines.join('');
+}
+
+async function loadCtraderAccount() {
+  const el = document.getElementById('ctrader-account-panel');
+  if (el) el.innerHTML = '<p class="hint">Polling cTrader…</p>';
+  const r = await _apiFetch(`/api/gemini-gold-trader/account?uid=${encodeURIComponent(UID)}`);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) {
+    if (el) el.innerHTML = `<p class="ctrader-bad">${escapeHtml(j.detail || 'Account poll failed')}</p>`;
+    return;
+  }
+  renderCtraderAccount(j.account);
+}
+
 function renderFeed(j) {
   const feed = j.decision_feed || [];
   const el = document.getElementById('feed');
@@ -715,12 +800,21 @@ function renderFeed(j) {
       ? ` · E ${d.entry ?? '—'} SL ${d.stop_loss ?? '—'} TP ${d.take_profit ?? '—'}`
       : '';
     const flags = [d.dry_run ? 'dry-run' : null, d.executed ? 'executed' : null, d.two_step_scan ? '2-step' : null].filter(Boolean).join(' · ');
+    const block = (!d.executed && d.skip_reason)
+      ? `<div class="block-reason">Blocked: ${escapeHtml(d.skip_reason)}</div>`
+      : '';
+    const result = d.outcome
+      ? `<div class="hint" style="color:${d.outcome==='win'?'var(--profit)':'var(--danger)'}">Closed: ${escapeHtml(d.outcome)}${d.pnl_pct!=null?' · '+Number(d.pnl_pct).toFixed(2)+'%':''}${d.r_multiple!=null?' · R '+d.r_multiple:''}</div>`
+      : '';
+    const setup = d.setup_type ? ` · ${escapeHtml(d.setup_type)}` : '';
     const obs = d.chart_observation
       ? `<div class="hint" style="margin-top:4px;opacity:0.85"><strong>See:</strong> ${escapeHtml(d.chart_observation)}</div>`
       : '';
     return `<div class="feed-item">
       <div class="feed-meta">${fmtTime(d.ts)} · ${fmtSession(d.session)} · ${d.confidence ?? 0}% ${flags ? '· ' + flags : ''}</div>
-      <div class="${cls}">${action} ${d.direction || ''}${prices}${mirrorPill(d)}</div>
+      <div class="${cls}">${action} ${d.direction || ''}${setup}${prices}${mirrorPill(d)}</div>
+      ${block}
+      ${result}
       ${obs}
       <div class="hint">${escapeHtml((d.rationale || '').slice(0, 280))}</div>
     </div>`;
@@ -741,8 +835,12 @@ async function refresh({ bindInputs = true } = {}) {
   const chip = document.getElementById('review-model-chip');
   if (chip && cfg.review_model) chip.textContent = cfg.review_model.replace('gemini-', '');
   renderFeed(j);
+  renderClosedTrades(j.closed_trades || []);
   loadCalibration();
+  loadCtraderAccount();
 }
+
+document.getElementById('btn-refresh-account')?.addEventListener('click', loadCtraderAccount);
 
 async function refreshStatusOnly() {
   await refresh({ bindInputs: false });

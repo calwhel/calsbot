@@ -171,6 +171,23 @@ def _persist_decision_db(
     return row
 
 
+def _set_decision_skip_reason(db, decision_id: int, reason: Optional[str]) -> None:
+    """Persist why a TAKE did not execute (portal feed + AI review)."""
+    if not reason:
+        return
+    row = db.query(GeminiGoldDecision).filter(GeminiGoldDecision.id == int(decision_id)).first()
+    if not row or row.executed:
+        return
+    row.skip_reason = str(reason)[:128]
+    db.commit()
+
+
+async def _persist_skip_reason(decision_id: int, reason: Optional[str]) -> None:
+    if not reason:
+        return
+    await run_with_db(_set_decision_skip_reason, int(decision_id), reason)
+
+
 async def run_gemini_gold_trader_loop() -> None:
     """One scan cycle."""
     now = datetime.utcnow()
@@ -603,6 +620,7 @@ async def run_gemini_gold_trader_loop() -> None:
             f"confidence {confidence}% below {cfg.confidence_threshold}% threshold"
         )
         await run_with_db(_funnel_db, "gemini_skip", setup=setup_type or None, session=session, decision_id=row.id)
+        await _persist_skip_reason(row.id, block_reason)
         await notify_decision(
             session=session,
             decision=decision,
@@ -628,6 +646,7 @@ async def run_gemini_gold_trader_loop() -> None:
             session=session,
             decision_id=row.id,
         )
+        await _persist_skip_reason(row.id, block_reason)
         await notify_decision(
             session=session,
             decision=decision,
@@ -656,6 +675,7 @@ async def run_gemini_gold_trader_loop() -> None:
             session=session,
             decision_id=row.id,
         )
+        await _persist_skip_reason(row.id, block_reason)
         await notify_decision(
             session=session,
             decision=decision,
@@ -674,6 +694,15 @@ async def run_gemini_gold_trader_loop() -> None:
     )
     if not can_exec:
         block_reason = format_block_reason(exec_reason)
+        await run_with_db(
+            _funnel_db,
+            "execution_blocked",
+            setup=setup_type or None,
+            reason=exec_reason,
+            session=session,
+            decision_id=row.id,
+        )
+        await _persist_skip_reason(row.id, block_reason)
         await notify_decision(
             session=session,
             decision=decision,
@@ -731,6 +760,7 @@ async def run_gemini_gold_trader_loop() -> None:
             session=session,
             decision_id=row.id,
         )
+        await _persist_skip_reason(row.id, block_reason)
     else:
         block_reason = format_block_reason(
             order_ctx.get("block_reason")
@@ -745,6 +775,7 @@ async def run_gemini_gold_trader_loop() -> None:
             clear_execution_reservation(db, row.id)
 
         await run_with_db(_clear_reservation)
+        await _persist_skip_reason(row.id, block_reason)
 
     await notify_decision(
         session=session,

@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 _REVIEW_INPUT_COST_PER_M = 1.25
 _REVIEW_OUTPUT_COST_PER_M = 10.00
 _REVIEW_TIMEOUT_S = max(30.0, float(os.environ.get("GEMINI_GOLD_REVIEW_TIMEOUT_S", "90")))
-_CTRADER_REVIEW_TIMEOUT_S = max(5.0, float(os.environ.get("GEMINI_GOLD_REVIEW_CTRADER_TIMEOUT_S", "12")))
+_CTRADER_REVIEW_TIMEOUT_S = max(12.0, float(os.environ.get("GEMINI_GOLD_REVIEW_CTRADER_TIMEOUT_S", "20")))
 
 APPLYABLE_CONFIG_FIELDS = frozenset(
     {
@@ -299,7 +299,7 @@ async def _fetch_ctrader_account_snapshot(
             get_open_position_ids_for_user_with_retry(
                 user,
                 ctid=ctid,
-                attempts=1,
+                attempts=3,
             ),
             timeout=_CTRADER_REVIEW_TIMEOUT_S,
         )
@@ -327,6 +327,8 @@ async def _fetch_ctrader_account_snapshot(
                 snap["tracked_only_positions"] = sorted(tracked_ids - broker_ids)
     except asyncio.TimeoutError:
         snap["balance_error"] = "ctrader_poll_timeout"
+        snap["broker_unreachable"] = True
+        snap["position_reconciliation"] = "unknown"
     except Exception as exc:
         snap["balance_error"] = str(exc)[:120]
     return snap
