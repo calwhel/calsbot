@@ -66,9 +66,15 @@ def call_stats_today(db) -> List[Dict[str, Any]]:
     )
     buckets: Dict[str, Dict[str, int]] = {}
     for d in rows:
-        setup = "unknown"
-        if isinstance(d.decision, dict):
-            setup = str(d.decision.get("setup_type") or "unknown")
+        setup = "skip_unlabeled"
+        if d.setup_type:
+            setup = str(d.setup_type)
+        elif isinstance(d.decision, dict):
+            raw = d.decision.get("setup_type")
+            if raw:
+                setup = str(raw)
+            elif (d.action or "").upper() != "SKIP":
+                setup = "unknown"
         b = buckets.setdefault(setup, {"setup_type": setup, "calls": 0, "takes": 0, "executed": 0})
         b["calls"] += 1
         if (d.action or "").upper() == "TAKE":

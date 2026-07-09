@@ -65,6 +65,19 @@ _LEGACY_BY_DIRECTION: dict[str, dict[str, str]] = {
 }
 
 
+_CANONICAL_SETUP_TYPES = frozenset(
+    t for t in GEMINI_GOLD_SETUP_TYPES if t not in _LEGACY_BY_DIRECTION
+)
+
+
+def is_approved_setup_type(setup_type: Optional[str]) -> bool:
+    """True when setup_type is a known directional id (required for TAKE)."""
+    raw = (setup_type or "").strip().lower()
+    if not raw or raw in ("unknown", "none", "skip", "skip_no_setup"):
+        return False
+    return raw in _CANONICAL_SETUP_TYPES
+
+
 def normalize_setup_type(
     setup_type: Optional[str],
     direction: Optional[str] = None,

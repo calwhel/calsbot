@@ -10,7 +10,11 @@ from pydantic import BaseModel, Field
 
 from app.gemini_gold_trader.chart_renderer import summarize_bars_for_prompt
 from app.gemini_gold_trader.config import GeminiGoldRuntimeConfig, SYMBOL
-from app.gemini_gold_trader.setup_types import normalize_setup_type, setup_vocabulary_prompt_block
+from app.gemini_gold_trader.setup_types import (
+    is_approved_setup_type,
+    normalize_setup_type,
+    setup_vocabulary_prompt_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +156,29 @@ def summarize_session_extension(
         f"(${above_low:.2f} above low, ${below_high:.2f} below high)\n"
         f"- {zone}"
     )
+
+
+def observation_blocks_decide(obs: Optional[Dict[str, Any]]) -> Tuple[bool, str]:
+    """
+    Step-1 gate: skip expensive decide call when observation says no live setup.
+    Conservative — only blocks explicit 'no live trigger' phrasing.
+    """
+    if not obs:
+        return False, ""
+    sc = str(obs.get("setups_checked") or "").lower()
+    early = str(obs.get("early_opportunity") or "").lower()
+    combined = f"{sc} {early}"
+    block_phrases = (
+        "no live trigger",
+        "none qualify",
+        "no qualifying scalp",
+        "no clear setup",
+        "nothing live",
+        "no early opportunity",
+    )
+    if any(p in combined for p in block_phrases):
+        return True, "observation_no_live_setup"
+    return False, ""
 
 
 def format_chart_observation(obs: Dict[str, Any]) -> str:
@@ -336,7 +363,8 @@ def _build_prompt(
         "do not skip just because HTF still looks trending; fades are valid scalps.\n"
         f"- {setup_vocabulary_prompt_block()}\n"
         "- SKIP: no qualifying scalp, swing-style setup, or chop — say which scalp "
-        "patterns you checked on 1m/5m/15m and why none qualify.\n\n"
+        "patterns you checked on 1m/5m/15m and why none qualify. Never use "
+        'setup_type "unknown" — omit setup_type on SKIP.\n\n'
         f"If TAKE: setup_type (exact id), direction, entry near spot, stop_loss, "
         f"take_profit (1–2R, {sl_range} pip SL), "
         "confidence 0–100, rationale naming the scalp pattern and 5m/15m levels.\n\n"
@@ -397,6 +425,15 @@ def _normalize_decision(raw: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         confidence = 0
     confidence = max(0, min(100, confidence))
+    if action == "TAKE":
+        if not direction:
+            action = "SKIP"
+        elif not is_approved_setup_type(setup_type):
+            action = "SKIP"
+            setup_type = None
+            confidence = min(confidence, 40)
+    elif action == "SKIP" and not setup_type:
+        setup_type = None
 
     def _f(key: str) -> Optional[float]:
         v = raw.get(key)

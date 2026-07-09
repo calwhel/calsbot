@@ -22,7 +22,12 @@ from app.gemini_gold_trader.executor import execute_live_mirror_take, execute_ta
 from app.gemini_gold_trader.fire_validation import refresh_spot_after_gemini, stale_entry_recheck
 from app.gemini_gold_trader.data_quality import assess_gemini_market_data, format_data_source, gemini_data_ok_for_scan
 from app.gemini_gold_trader.funnel import record as funnel_record, snapshot as funnel_snapshot
-from app.gemini_gold_trader.gemini import decide_from_charts, describe_charts, format_chart_observation
+from app.gemini_gold_trader.gemini import (
+    decide_from_charts,
+    describe_charts,
+    format_chart_observation,
+    observation_blocks_decide,
+)
 from app.gemini_gold_trader.guardrails import (
     check_can_call_gemini,
     check_can_execute_live_mirror,
@@ -224,6 +229,25 @@ async def run_gemini_gold_trader_loop() -> None:
 
     spot = float(market_data.get("price") or 0)
     source_tag = format_data_source(market_data)
+
+    async def _broker_gate_db(db):
+        from app.gemini_gold_trader.broker_preflight import broker_reachable_for_execution
+
+        return await broker_reachable_for_execution(db, cfg, user_id=cfg.demo_user_id or 0)
+
+    broker_ok, broker_reason, _ = await _call_with_db_session(_broker_gate_db)
+    if not broker_ok:
+        logger.info("[gemini-gold] broker gate blocked scan: %s", broker_reason)
+        await run_with_db(
+            _funnel_db,
+            "data_blocked",
+            reason=f"broker_unreachable:{broker_reason}",
+            session=session,
+        )
+        runtime_state.note_dormant(f"broker_unreachable:{broker_reason}")
+        runtime_state.set_funnel(funnel_snapshot())
+        return
+
     await _call_with_db_session(sync_pending_entries, cfg=cfg, spot=spot)
 
     from app.gemini_gold_trader.orb_strategy import maybe_run_orb_strategy
@@ -500,6 +524,17 @@ async def run_gemini_gold_trader_loop() -> None:
                 "[gemini-gold] step-1 observation failed: %s — continuing to decide",
                 observe_err,
             )
+        if observation_dict:
+            blocked, block_reason = observation_blocks_decide(observation_dict)
+            if blocked:
+                logger.info(
+                    "[gemini-gold] step-2 skipped — %s (saved Gemini decide call)",
+                    block_reason,
+                )
+                await run_with_db(_funnel_db, "gemini_skip", reason=block_reason, session=session)
+                runtime_state.note_dormant(block_reason)
+                runtime_state.set_funnel(funnel_snapshot())
+                return
 
     def _review_lesson_db(db):
         from app.gemini_gold_trader.review import get_latest_review_lesson
@@ -688,6 +723,36 @@ async def run_gemini_gold_trader_loop() -> None:
         return
 
     await _preflight_execution_caps(cfg)
+
+    async def _broker_preflight_db(db):
+        from app.gemini_gold_trader.broker_preflight import broker_reachable_for_execution
+
+        return await broker_reachable_for_execution(
+            db, cfg, user_id=cfg.demo_user_id or 0
+        )
+
+    broker_ok, broker_reason, _broker_snap = await _call_with_db_session(_broker_preflight_db)
+    if not broker_ok:
+        block_reason = f"broker_unreachable:{broker_reason}"
+        await run_with_db(
+            _funnel_db,
+            "execution_blocked",
+            setup=setup_type or None,
+            reason=broker_reason,
+            session=session,
+            decision_id=row.id,
+        )
+        await _persist_skip_reason(row.id, block_reason)
+        await notify_decision(
+            session=session,
+            decision=decision,
+            action=action,
+            confidence=confidence,
+            block_reason=block_reason,
+            dry_run=cfg.dry_run,
+        )
+        runtime_state.set_funnel(funnel_snapshot())
+        return
 
     can_exec, exec_reason = await run_with_db(
         try_reserve_execution, cfg, cfg.demo_user_id or 0, row.id

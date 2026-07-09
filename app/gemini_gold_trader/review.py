@@ -31,7 +31,11 @@ logger = logging.getLogger(__name__)
 _REVIEW_INPUT_COST_PER_M = 1.25
 _REVIEW_OUTPUT_COST_PER_M = 10.00
 _REVIEW_TIMEOUT_S = max(30.0, float(os.environ.get("GEMINI_GOLD_REVIEW_TIMEOUT_S", "90")))
-_CTRADER_REVIEW_TIMEOUT_S = max(12.0, float(os.environ.get("GEMINI_GOLD_REVIEW_CTRADER_TIMEOUT_S", "20")))
+_CTRADER_REVIEW_TIMEOUT_S = max(20.0, float(os.environ.get("GEMINI_GOLD_REVIEW_CTRADER_TIMEOUT_S", "35")))
+_CTRADER_ACCOUNT_POLL_TIMEOUT_S = max(
+    25.0,
+    float(os.environ.get("GEMINI_GOLD_ACCOUNT_POLL_TIMEOUT_S", "45")),
+)
 
 APPLYABLE_CONFIG_FIELDS = frozenset(
     {
@@ -234,12 +238,34 @@ def _recent_broker_closes_block(db, *, user_id: int, days: int, limit: int = 15)
     return out
 
 
+async def _poll_ctrader_reconcile(
+    *,
+    token: str,
+    ctid: int,
+    prefs,
+    user_id: int,
+    timeout_s: float,
+) -> Dict[str, Any]:
+    from app.services.ctrader_client import get_broker_reconcile_snapshot_resilient
+
+    return await asyncio.wait_for(
+        get_broker_reconcile_snapshot_resilient(
+            str(token),
+            int(ctid),
+            prefs=prefs,
+            user_id=int(user_id),
+        ),
+        timeout=timeout_s,
+    )
+
+
 async def _fetch_ctrader_account_snapshot(
     db,
     *,
     user_id: int,
     cfg: GeminiGoldRuntimeConfig,
     days: int = 14,
+    timeout_s: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Best-effort cTrader account equity, broker positions, and recent closes."""
     from app.gemini_gold_trader.reconcile import list_open_executions
@@ -272,7 +298,7 @@ async def _fetch_ctrader_account_snapshot(
     try:
         from app.models import User, UserPreference
         from app.gemini_gold_trader.accounts import cached_balance_for_ctid
-        from app.services.ctrader_client import get_broker_reconcile_snapshot_resilient
+        from app.services.ctrader_client import request_ctrader_token_refresh
 
         user = db.query(User).filter(User.id == int(user_id)).first()
         if not user:
@@ -284,15 +310,36 @@ async def _fetch_ctrader_account_snapshot(
             snap["balance_error"] = "no_ctrader_token"
             return snap
 
-        reconcile = await asyncio.wait_for(
-            get_broker_reconcile_snapshot_resilient(
-                str(token),
-                int(ctid),
-                prefs=prefs,
-                user_id=int(user_id),
-            ),
-            timeout=_CTRADER_REVIEW_TIMEOUT_S,
-        )
+        poll_timeout = float(timeout_s or _CTRADER_ACCOUNT_POLL_TIMEOUT_S)
+        reconcile: Dict[str, Any] = {}
+        last_timeout = False
+        for attempt in (1, 2):
+            try:
+                reconcile = await _poll_ctrader_reconcile(
+                    token=str(token),
+                    ctid=int(ctid),
+                    prefs=prefs,
+                    user_id=int(user_id),
+                    timeout_s=poll_timeout,
+                )
+                last_timeout = False
+                break
+            except asyncio.TimeoutError:
+                last_timeout = True
+                if attempt == 1:
+                    logger.warning(
+                        "[gemini-gold] cTrader account poll timeout ctid=%s — refreshing OAuth",
+                        ctid,
+                    )
+                    refreshed = await request_ctrader_token_refresh(int(user_id), wait_s=10.0)
+                    if refreshed:
+                        token = refreshed
+                    continue
+                raise
+
+        if last_timeout:
+            raise asyncio.TimeoutError()
+
         broker_ids = reconcile.get("position_ids")
         if broker_ids is not None:
             snap["balance"] = reconcile.get("balance")

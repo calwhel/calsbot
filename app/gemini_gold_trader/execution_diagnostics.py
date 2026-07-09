@@ -9,8 +9,8 @@ from sqlalchemy import func
 
 from app.gemini_gold_trader.config import GeminiGoldRuntimeConfig
 from app.gemini_gold_trader.guardrails import (
+    active_ctrader_account_id,
     check_can_execute,
-    demo_account_configured,
     trading_account_configured,
 )
 from app.gemini_gold_trader.models import GeminiGoldDecision, GeminiGoldPendingOrder
@@ -115,48 +115,67 @@ def build_execution_readiness(
     issues: List[str] = []
     checks: List[Dict[str, Any]] = []
 
-    def _check(name: str, ok: bool, detail: str) -> None:
-        checks.append({"name": name, "ok": ok, "detail": detail})
+    def _check(name: str, ok: bool, ok_detail: str, fail_detail: str) -> None:
+        checks.append({"name": name, "ok": ok, "detail": ok_detail if ok else fail_detail})
         if not ok:
-            issues.append(detail)
+            issues.append(fail_detail)
 
     _check(
         "trading_account",
         trading_account_configured(cfg),
+        f"Account #{active_ctrader_account_id(cfg) or '?'} configured",
         "Demo/live cTrader account not configured",
     )
-    _check("demo_user", bool(cfg.demo_user_id), "Trader user not linked (GEMINI_GOLD_USER_ID)")
+    _check(
+        "demo_user",
+        bool(cfg.demo_user_id),
+        f"Trader user #{cfg.demo_user_id} linked",
+        "Trader user not linked (GEMINI_GOLD_USER_ID)",
+    )
     if cfg.dry_run:
-        _check("dry_run_off", False, "Dry-run is ON — orders blocked before broker")
+        _check("dry_run_off", False, "Dry-run OFF", "Dry-run is ON — orders blocked before broker")
     else:
-        _check("dry_run_off", True, "Dry-run OFF — orders allowed to broker")
-    _check("kill_switch_off", not cfg.kill_switch, "Kill switch is ON")
+        _check("dry_run_off", True, "Dry-run OFF — orders allowed to broker", "Dry-run is ON")
+    _check(
+        "kill_switch_off",
+        not cfg.kill_switch,
+        "Kill switch off",
+        "Kill switch is ON",
+    )
 
     if user_id:
         can_exec, reason = check_can_execute(db, cfg, int(user_id))
-        _check("caps_ok", can_exec, f"Execution caps: {reason}" if not can_exec else "Caps OK")
+        _check(
+            "caps_ok",
+            can_exec,
+            "Caps OK",
+            f"Execution caps: {reason}",
+        )
     else:
-        _check("caps_ok", False, "No trader user for cap check")
+        _check("caps_ok", False, "Caps OK", "No trader user for cap check")
 
     broker_ok = True
-    broker_detail = "Broker poll not run"
+    broker_ok_detail = "Broker connected"
+    broker_fail_detail = "Broker poll not run"
     if account_snap:
         broker_ok = not account_snap.get("broker_unreachable")
         if account_snap.get("balance_error") == "no_ctrader_token":
-            broker_detail = "cTrader OAuth token missing — re-link in portal"
+            broker_fail_detail = "cTrader OAuth token missing — re-link in portal"
             broker_ok = False
         elif account_snap.get("broker_unreachable"):
-            broker_detail = account_snap.get("balance_error") or "Broker unreachable"
+            broker_fail_detail = account_snap.get("balance_error") or "Broker unreachable"
             broker_ok = False
         elif account_snap.get("balance") is not None or account_snap.get("equity") is not None:
-            broker_detail = "Broker connected"
+            bal = account_snap.get("balance")
+            eq = account_snap.get("equity")
+            broker_ok_detail = f"Broker connected (bal={bal}, eq={eq})"
         elif account_snap.get("balance_cached"):
-            broker_detail = "Broker poll failed — showing cached balance"
+            broker_fail_detail = "Broker poll failed — showing cached balance"
             broker_ok = False
         else:
-            broker_detail = "Broker balance unavailable"
+            broker_fail_detail = "Broker balance unavailable"
             broker_ok = False
-    _check("broker_reachable", broker_ok, broker_detail)
+    _check("broker_reachable", broker_ok, broker_ok_detail, broker_fail_detail)
 
     stats = execution_stats(db, days=14)
     blockers = skip_reason_breakdown(db, days=14, limit=12)
