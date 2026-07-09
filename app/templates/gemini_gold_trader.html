@@ -794,7 +794,7 @@ function ctraderStatusLabel(acct) {
   if (acct.broker_unreachable) {
     if (acct.balance_error === 'auth_cooldown') {
       const s = acct.auth_cooldown_s != null ? ` (${acct.auth_cooldown_s}s)` : '';
-      return `Broker cooling down${s} — retry shortly`;
+      return `Broker reconnecting${s} — tap refresh`;
     }
     if (acct.balance_error === 'no_ctrader_token') return 'Link cTrader in portal settings';
     if (acct.balance_error === 'ctrader_poll_timeout') return 'cTrader timed out — tap refresh';

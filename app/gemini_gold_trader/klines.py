@@ -177,6 +177,8 @@ async def get_chart_klines(
 
     meta["bars"] = len(bars)
     meta["status"] = "missing_or_stale"
+    if not _is_ctrader_kline_source(tradfi_source):
+        meta["source"] = "ctrader_unavailable"
     if bars:
         meta["bar_age_s"] = newest_bar_age_s(bars)
     logger.info(

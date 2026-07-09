@@ -70,6 +70,32 @@ _STATUS_RECONCILE_TIMEOUT_S = max(
     12.0,
     float(os.environ.get("GEMINI_GOLD_STATUS_RECONCILE_TIMEOUT_S", "15")),
 )
+_ACCOUNT_SNAP_CACHE: Dict[int, tuple] = {}
+_ACCOUNT_SNAP_CACHE_TTL_S = max(
+    15.0,
+    float(os.environ.get("GEMINI_GOLD_ACCOUNT_SNAP_CACHE_TTL_S", "45")),
+)
+
+
+async def _account_snapshot_cached(
+    db,
+    *,
+    user_id: int,
+    cfg,
+    days: int = 14,
+    force: bool = False,
+) -> Dict[str, Any]:
+    from app.gemini_gold_trader.review import _fetch_ctrader_account_snapshot
+
+    uid = int(user_id)
+    now = time.monotonic()
+    if not force:
+        cached = _ACCOUNT_SNAP_CACHE.get(uid)
+        if cached and (now - cached[0]) < _ACCOUNT_SNAP_CACHE_TTL_S:
+            return dict(cached[1])
+    snap = await _fetch_ctrader_account_snapshot(db, user_id=uid, cfg=cfg, days=days)
+    _ACCOUNT_SNAP_CACHE[uid] = (now, snap)
+    return snap
 
 
 def _should_run_status_reconcile(user_id: int) -> bool:
@@ -382,10 +408,9 @@ async def api_status(uid: str = Query(...)):
         if trader_uid:
             try:
                 from app.gemini_gold_trader.execution_diagnostics import build_execution_readiness
-                from app.gemini_gold_trader.review import _fetch_ctrader_account_snapshot
 
-                account_snap = await _fetch_ctrader_account_snapshot(
-                    db, user_id=int(trader_uid), cfg=cfg, days=14
+                account_snap = await _account_snapshot_cached(
+                    db, user_id=int(trader_uid), cfg=cfg, days=14, force=False
                 )
                 execution_readiness = build_execution_readiness(
                     db,
@@ -444,8 +469,8 @@ async def api_account(uid: str = Query(...)):
             raise HTTPException(status_code=400, detail="No trader user configured")
         from app.gemini_gold_trader.review import _fetch_ctrader_account_snapshot
 
-        snap = await _fetch_ctrader_account_snapshot(
-            db, user_id=int(trader_uid), cfg=cfg, days=14
+        snap = await _account_snapshot_cached(
+            db, user_id=int(trader_uid), cfg=cfg, days=14, force=True
         )
         return {"ok": True, "account": snap}
     finally:

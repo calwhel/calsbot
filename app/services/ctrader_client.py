@@ -793,10 +793,13 @@ _WARN_WHEN_REMAINING_S = int(
     os.environ.get("CTRADER_REFRESH_WARN_REMAINING_S", str(2 * 86400))
 )
 _AUTH_UNHEALTHY_COOLDOWN_S = float(
-    os.environ.get("CTRADER_AUTH_UNHEALTHY_COOLDOWN_S", "90")
+    os.environ.get("CTRADER_AUTH_UNHEALTHY_COOLDOWN_S", "30")
 )
 _AUTH_TIMEOUT_COOLDOWN_S = float(
-    os.environ.get("CTRADER_AUTH_TIMEOUT_COOLDOWN_S", "45")
+    os.environ.get("CTRADER_AUTH_TIMEOUT_COOLDOWN_S", "20")
+)
+_RECONCILE_AUTH_COOLDOWN_S = float(
+    os.environ.get("CTRADER_RECONCILE_AUTH_COOLDOWN_S", "12")
 )
 _REFRESH_TERMINAL_CODES = frozenset({
     "ACCESS_DENIED",
@@ -3346,8 +3349,6 @@ async def _get_broker_reconcile_snapshot(
     if not _PROTO_OK:
         return None
     uid = int(user_id) if user_id else None
-    if uid and _account_auth_in_cooldown(uid, host, ctid_trader_account_id):
-        return None
     token = (access_token or "").strip()
     for auth_attempt in (1, 2):
         auth_failed = False
@@ -3427,6 +3428,7 @@ async def _get_broker_reconcile_snapshot(
                     host,
                     ctid_trader_account_id,
                     reason="reconcile_snapshot_auth_failed",
+                    cooldown_s=_RECONCILE_AUTH_COOLDOWN_S,
                 )
             return None
     return None
@@ -3456,13 +3458,6 @@ async def get_broker_reconcile_snapshot_resilient(
         return out
     ctid = int(ctid_trader_account_id)
     uid = int(user_id) if user_id else None
-    if uid and _user_ctid_has_auth_backoff(uid, ctid):
-        rem = _account_auth_cooldown_remaining(uid, CTRADER_HOST_LIVE, ctid)
-        if rem <= 0:
-            rem = _account_auth_cooldown_remaining(uid, CTRADER_HOST_DEMO, ctid)
-        out["error"] = "auth_cooldown"
-        out["auth_cooldown_s"] = max(0, int(rem))
-        return out
 
     hosts = _balance_hosts_for_account(prefs, ctid)
 
@@ -3485,6 +3480,14 @@ async def get_broker_reconcile_snapshot_resilient(
             snap = await _try_hosts(fresh)
 
     if snap is None:
+        if uid and _user_ctid_has_auth_backoff(uid, ctid):
+            rem = _account_auth_cooldown_remaining(uid, CTRADER_HOST_LIVE, ctid)
+            if rem <= 0:
+                rem = _account_auth_cooldown_remaining(uid, CTRADER_HOST_DEMO, ctid)
+            if rem > 0:
+                out["error"] = "auth_cooldown"
+                out["auth_cooldown_s"] = max(0, int(rem))
+                return out
         out["error"] = "broker_unreachable"
         return out
 

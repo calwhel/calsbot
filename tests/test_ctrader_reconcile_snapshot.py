@@ -80,12 +80,41 @@ class TestBrokerReconcileSnapshotResilient(unittest.TestCase):
         ), patch(
             "app.services.ctrader_client._latest_ctrader_access_token",
             return_value=None,
+        ), patch(
+            "app.services.ctrader_client._user_ctid_has_auth_backoff",
+            return_value=False,
         ):
             out = asyncio.run(
-                get_broker_reconcile_snapshot_resilient("tok", 1, prefs=prefs)
+                get_broker_reconcile_snapshot_resilient("tok", 1, prefs=prefs, user_id=1)
             )
         self.assertIsNone(out["position_ids"])
         self.assertEqual(out["error"], "broker_unreachable")
+
+    def test_attempts_reconcile_even_when_auth_backoff_active(self):
+        prefs = SimpleNamespace(
+            ctrader_accounts='[{"ctidTraderAccountId":47782488,"isLive":false}]'
+        )
+        with patch(
+            "app.services.ctrader_client._user_ctid_has_auth_backoff",
+            return_value=True,
+        ), patch(
+            "app.services.ctrader_client._get_broker_reconcile_snapshot",
+            new_callable=AsyncMock,
+            return_value={
+                "balance": 1000.0,
+                "equity": 1000.0,
+                "position_ids": set(),
+                "host": CTRADER_HOST_DEMO,
+            },
+        ) as mock_snap:
+            out = asyncio.run(
+                get_broker_reconcile_snapshot_resilient(
+                    "tok", 47782488, prefs=prefs, user_id=1
+                )
+            )
+        self.assertEqual(out["balance"], 1000.0)
+        self.assertIsNotNone(out["position_ids"])
+        mock_snap.assert_awaited()
 
     def test_account_reconcile_resilient_delegates(self):
         with patch(
