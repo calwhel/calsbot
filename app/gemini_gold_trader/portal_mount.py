@@ -12,9 +12,19 @@ def mount_gemini_gold_trader_portal(app) -> None:
     app.include_router(router)
     logger.info("[gemini-gold] routes mounted at /gemini-gold-trader")
 
-    try:
-        from app.gemini_gold_trader.schema import ensure_gemini_gold_trader_schema
+    @app.on_event("startup")
+    async def _gemini_gold_schema_startup():
+        """Run schema in startup background (after _ensure_tables on Railway)."""
+        import asyncio
 
-        ensure_gemini_gold_trader_schema()
-    except Exception as exc:
-        logger.warning("[gemini-gold] schema startup skipped (routes still live): %s", exc)
+        async def _run():
+            await asyncio.sleep(2)
+            try:
+                from app.gemini_gold_trader.schema import ensure_gemini_gold_trader_schema
+
+                ensure_gemini_gold_trader_schema(force=True)
+                logger.info("[gemini-gold] schema startup complete")
+            except Exception as exc:
+                logger.error("[gemini-gold] schema startup failed: %s", exc, exc_info=True)
+
+        asyncio.create_task(_run())

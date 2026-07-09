@@ -1618,6 +1618,24 @@ _CTRADER_COLUMN_MIGRATIONS = [
     ),
 ]
 
+_GEMINI_GOLD_REVIEW_COLUMN_MIGRATIONS = [
+    (
+        "gemini_gold_reviews",
+        "timing_insights",
+        "ALTER TABLE gemini_gold_reviews ADD COLUMN IF NOT EXISTS timing_insights JSONB",
+    ),
+    (
+        "gemini_gold_reviews",
+        "aggressiveness_insights",
+        "ALTER TABLE gemini_gold_reviews ADD COLUMN IF NOT EXISTS aggressiveness_insights JSONB",
+    ),
+    (
+        "gemini_gold_reviews",
+        "ctrader_account_notes",
+        "ALTER TABLE gemini_gold_reviews ADD COLUMN IF NOT EXISTS ctrader_account_notes TEXT",
+    ),
+]
+
 
 def _ensure_tables():
     import sqlalchemy as sa
@@ -1756,6 +1774,20 @@ def _ensure_tables():
         label="ctrader_columns",
     )
     logger.info("_ensure_tables: ctrader columns ready")
+    try:
+        from app.gemini_gold_trader.schema import ensure_gemini_gold_trader_schema
+
+        ensure_gemini_gold_trader_schema(force=True)
+        logger.info("_ensure_tables: gemini gold base schema ready")
+    except Exception as e:
+        logger.error("_ensure_tables(gemini-gold-schema): %s", e, exc_info=True)
+    _ensure_additive_columns(
+        engine,
+        lock_id=_SCHEMA_MIGRATION_LOCK_ID,
+        migrations=_GEMINI_GOLD_REVIEW_COLUMN_MIGRATIONS,
+        label="gemini_gold_review_columns",
+    )
+    logger.info("_ensure_tables: gemini gold review columns ready")
     from app.trade_mgmt_schema import ensure_trade_mgmt_columns
     if not ensure_trade_mgmt_columns(engine, wait_seconds=15.0):
         logger.error("_ensure_tables: trade management columns NOT ready after wait")

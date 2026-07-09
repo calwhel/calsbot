@@ -97,6 +97,17 @@ def _missing_columns() -> dict[str, list[str]]:
     return run_with_db_retry(_scan, label="gemini-gold-schema-inspect")
 
 
+def _alter_column_ddl(table: str, column: str, typedef: str) -> str:
+    """Dialect-safe ADD COLUMN — Postgres/SQLite support IF NOT EXISTS."""
+    dialect = getattr(getattr(engine, "dialect", None), "name", "") or ""
+    td = typedef
+    if dialect == "postgresql" and "JSON" in td.upper() and "JSONB" not in td.upper():
+        td = td.replace("JSON", "JSONB")
+    if dialect in ("postgresql", "sqlite"):
+        return f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {td}"
+    return f"ALTER TABLE {table} ADD COLUMN {column} {td}"
+
+
 def _apply_column_alters() -> None:
     missing = _missing_columns()
     if not missing:
@@ -107,7 +118,8 @@ def _apply_column_alters() -> None:
             for table, column, typedef in _GEMINI_GOLD_COLUMN_ALTERS:
                 if table not in missing or column not in missing[table]:
                     continue
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}"))
+                ddl = _alter_column_ddl(table, column, typedef)
+                conn.execute(text(ddl))
                 logger.info("[gemini-gold] schema alter: %s.%s", table, column)
 
     run_with_db_retry(_run, label="gemini-gold-schema-alter")
