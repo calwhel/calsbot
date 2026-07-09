@@ -225,7 +225,7 @@
         <h2 style="font-size:.85rem">AI performance scan</h2>
         <span class="chip gemini" id="review-model-chip" style="font-size:.55rem">Pro</span>
       </div>
-      <p class="hint">Gemini Pro reviews every trade, funnel drops, and your cTrader account — then suggests fixes you can apply instantly.</p>
+      <p class="hint">Gemini Pro reviews every trade, funnel drops, timing, aggressiveness, and your live cTrader account — then suggests fixes you can apply instantly.</p>
       <button class="btn btn-primary btn-scan" id="btn-ai-scan" type="button">Run AI scan</button>
       <p class="hint" id="review-status" style="margin-top:.5rem"></p>
       <div id="review-results" style="display:none"></div>
@@ -482,6 +482,9 @@ function renderReview(review) {
     <h4>Working</h4>${list(review.whats_working, '—')}
     <h4>Not working</h4>${list(review.whats_not_working, '—')}
     <h4>Setup insights</h4>${list(review.setup_insights, '—')}
+    <h4>Timing</h4>${list(review.timing_insights, '—')}
+    <h4>Aggressiveness</h4>${list(review.aggressiveness_insights, '—')}
+    <h4>cTrader account</h4><p>${escapeHtml(review.ctrader_account_notes || '—')}</p>
     <h4>Funnel</h4><p>${escapeHtml(review.funnel_diagnosis || '')}</p>
     <h4>Rules for next scans</h4><p>${escapeHtml(review.lesson_for_next_sessions || '')}</p>
     ${sug ? `<h4>Suggested changes</h4>${sug}` : ''}
@@ -496,7 +499,7 @@ async function runAiScan() {
   const btn = document.getElementById('btn-ai-scan');
   const status = document.getElementById('review-status');
   btn.disabled = true;
-  status.textContent = 'Scanning trades & cTrader account with Gemini Pro…';
+  status.textContent = 'Scanning trades, timing, aggressiveness & cTrader account with Gemini Pro…';
   const r = await _apiFetch(`/api/gemini-gold-trader/review?uid=${encodeURIComponent(UID)}`, {
     method: 'POST',
     body: JSON.stringify({ days: 14 }),

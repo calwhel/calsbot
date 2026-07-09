@@ -57,6 +57,15 @@ class GeminiGoldReviewResultSchema(BaseModel):
     whats_working: List[str] = Field(description="Patterns and setups that are profitable")
     whats_not_working: List[str] = Field(description="Failure patterns with specifics")
     setup_insights: List[str] = Field(description="Per-setup-type notes with win rate references")
+    timing_insights: List[str] = Field(
+        description="Hour-of-day, session timing, hold duration, and time-between-trade patterns"
+    )
+    aggressiveness_insights: List[str] = Field(
+        description="Trade frequency vs caps, confidence distribution, lot sizing, take/execute rates"
+    )
+    ctrader_account_notes: str = Field(
+        description="cTrader broker account health: balance/equity, open positions, recent closes, reconciliation"
+    )
     funnel_diagnosis: str = Field(description="Where the pipeline loses edge before execution")
     lesson_for_next_sessions: str = Field(
         description="Short rules Gemini should follow on future scans (4–8 bullets in one string)"
@@ -112,6 +121,9 @@ def recent_reviews(db, *, limit: int = 5) -> List[Dict[str, Any]]:
                 "whats_working": row.whats_working or [],
                 "whats_not_working": row.whats_not_working or [],
                 "setup_insights": row.setup_insights or [],
+                "timing_insights": row.timing_insights or [],
+                "aggressiveness_insights": row.aggressiveness_insights or [],
+                "ctrader_account_notes": row.ctrader_account_notes,
                 "funnel_diagnosis": row.funnel_diagnosis,
                 "lesson_for_next_sessions": row.lesson_for_next_sessions,
                 "config_suggestions": row.config_suggestions or [],
@@ -169,13 +181,57 @@ def suggestions_to_changes(suggestions: List[Dict[str, Any]]) -> Dict[str, Any]:
     return changes
 
 
+def _recent_broker_closes_block(db, *, user_id: int, days: int, limit: int = 15) -> List[Dict[str, Any]]:
+    """Recent gemini gold closes from StrategyExecution (cTrader ground truth)."""
+    from app.strategy_models import StrategyExecution
+
+    since = datetime.utcnow() - timedelta(days=days)
+    rows = (
+        db.query(StrategyExecution)
+        .filter(
+            StrategyExecution.user_id == user_id,
+            StrategyExecution.symbol == "XAUUSD",
+            StrategyExecution.notes.like("%gemini_gold_trader%"),
+            StrategyExecution.closed_at.isnot(None),
+            StrategyExecution.closed_at >= since,
+            StrategyExecution.outcome.in_(("WIN", "LOSS", "BREAKEVEN", "CANCELLED")),
+        )
+        .order_by(StrategyExecution.closed_at.desc())
+        .limit(limit)
+        .all()
+    )
+    out: List[Dict[str, Any]] = []
+    for ex in rows:
+        hold_min = None
+        if ex.fired_at and ex.closed_at:
+            hold_min = round((ex.closed_at - ex.fired_at).total_seconds() / 60.0, 1)
+        out.append(
+            {
+                "execution_id": ex.id,
+                "fired_at": ex.fired_at.isoformat() if ex.fired_at else None,
+                "closed_at": ex.closed_at.isoformat() if ex.closed_at else None,
+                "direction": ex.direction,
+                "outcome": ex.outcome,
+                "entry_price": float(ex.entry_price) if ex.entry_price else None,
+                "exit_price": float(ex.exit_price) if ex.exit_price else None,
+                "pnl_pct": float(ex.pnl_pct) if ex.pnl_pct is not None else None,
+                "pnl_usd": float(ex.pnl_usd) if ex.pnl_usd is not None else None,
+                "hold_min": hold_min,
+                "ctrader_account_id": ex.ctrader_account_id,
+                "broker_position_id": ex.ctrader_position_id,
+            }
+        )
+    return out
+
+
 async def _fetch_ctrader_account_snapshot(
     db,
     *,
     user_id: int,
     cfg: GeminiGoldRuntimeConfig,
+    days: int = 14,
 ) -> Dict[str, Any]:
-    """Best-effort cTrader account equity + open gemini positions."""
+    """Best-effort cTrader account equity, broker positions, and recent closes."""
     from app.gemini_gold_trader.reconcile import list_open_executions
 
     ctid = active_ctrader_account_id(cfg)
@@ -183,18 +239,32 @@ async def _fetch_ctrader_account_snapshot(
         "ctrader_account_id": ctid,
         "execution_mode": cfg.execution_mode,
         "balance": None,
+        "equity": None,
         "balance_error": None,
+        "broker_open_position_count": None,
+        "broker_unreachable": False,
+        "position_reconciliation": "unknown",
+        "broker_open_position_ids": [],
     }
     open_execs = list_open_executions(db, user_id, demo_ctid=ctid) if user_id else []
+    snap["tracked_open_positions"] = open_execs
     snap["open_positions"] = open_execs
     snap["open_position_count"] = len(open_execs)
+    snap["recent_broker_closes"] = _recent_broker_closes_block(db, user_id=user_id, days=days) if user_id else []
+
+    if user_id and snap["recent_broker_closes"]:
+        pnl_usd = sum(float(r.get("pnl_usd") or 0) for r in snap["recent_broker_closes"])
+        snap["recent_broker_pnl_usd"] = round(pnl_usd, 2)
 
     if not user_id or not ctid:
         return snap
 
     try:
         from app.models import User, UserPreference
-        from app.services.ctrader_client import get_account_balance_resilient
+        from app.services.ctrader_client import (
+            get_account_reconcile_resilient,
+            get_open_position_ids_for_user_with_retry,
+        )
 
         user = db.query(User).filter(User.id == int(user_id)).first()
         if not user:
@@ -205,19 +275,253 @@ async def _fetch_ctrader_account_snapshot(
         if not token:
             snap["balance_error"] = "no_ctrader_token"
             return snap
-        bal = await get_account_balance_resilient(
+
+        acct = await get_account_reconcile_resilient(
             str(token),
             int(ctid),
             prefs=prefs,
             user_id=int(user_id),
         )
-        if bal is not None and float(bal) > 0:
-            snap["balance"] = round(float(bal), 2)
+        if acct:
+            snap["balance"] = acct.get("balance")
+            snap["equity"] = acct.get("equity")
         else:
             snap["balance_error"] = "balance_unavailable"
+
+        broker_ids = await get_open_position_ids_for_user_with_retry(
+            user,
+            ctid=ctid,
+            attempts=2,
+        )
+        if broker_ids is None:
+            snap["broker_unreachable"] = True
+            snap["position_reconciliation"] = "unknown"
+        else:
+            snap["broker_open_position_count"] = len(broker_ids)
+            snap["broker_open_position_ids"] = sorted(int(x) for x in broker_ids)[:20]
+            tracked_ids = set()
+            for pos in open_execs:
+                raw = pos.get("broker_position_id") or pos.get("ctrader_position_id")
+                if raw is not None:
+                    try:
+                        tracked_ids.add(int(str(raw).strip()))
+                    except (TypeError, ValueError):
+                        pass
+            if len(broker_ids) == len(tracked_ids) and broker_ids == tracked_ids:
+                snap["position_reconciliation"] = "match"
+            elif len(broker_ids) == 0 and len(tracked_ids) == 0:
+                snap["position_reconciliation"] = "flat"
+            else:
+                snap["position_reconciliation"] = "mismatch"
+                snap["broker_only_positions"] = sorted(broker_ids - tracked_ids)
+                snap["tracked_only_positions"] = sorted(tracked_ids - broker_ids)
     except Exception as exc:
         snap["balance_error"] = str(exc)[:120]
     return snap
+
+
+def _timing_analysis_block(db, *, days: int) -> List[str]:
+    """Hour/session timing, hold duration, and inter-trade gaps."""
+    since = datetime.utcnow() - timedelta(days=days)
+    rows = (
+        db.query(GeminiGoldOutcome, GeminiGoldDecision)
+        .join(GeminiGoldDecision, GeminiGoldDecision.id == GeminiGoldOutcome.decision_id)
+        .filter(
+            GeminiGoldOutcome.closed_ts.isnot(None),
+            GeminiGoldOutcome.closed_ts >= since,
+            GeminiGoldDecision.executed.is_(True),
+        )
+        .order_by(GeminiGoldDecision.ts.asc())
+        .all()
+    )
+    lines = [f"=== TIMING ANALYSIS ({days}d) ==="]
+    if not rows:
+        lines.append("No executed closed trades for timing stats.")
+        return lines
+
+    hour_buckets: Dict[int, Dict[str, int]] = {}
+    session_buckets: Dict[str, Dict[str, int]] = {}
+    hold_mins: List[float] = []
+    gaps_min: List[float] = []
+    last_exec_ts: Optional[datetime] = None
+
+    for out, dec in rows:
+        ts = dec.ts or out.closed_ts
+        if ts:
+            h = int(ts.hour)
+            b = hour_buckets.setdefault(h, {"trades": 0, "wins": 0, "losses": 0})
+            b["trades"] += 1
+            if out.result == "win":
+                b["wins"] += 1
+            elif out.result == "loss":
+                b["losses"] += 1
+        sess = (out.session or dec.session or "unknown").lower()
+        sb = session_buckets.setdefault(sess, {"trades": 0, "wins": 0, "losses": 0})
+        sb["trades"] += 1
+        if out.result == "win":
+            sb["wins"] += 1
+        elif out.result == "loss":
+            sb["losses"] += 1
+        if dec.ts and out.closed_ts:
+            hold_mins.append((out.closed_ts - dec.ts).total_seconds() / 60.0)
+        if dec.ts and last_exec_ts:
+            gaps_min.append((dec.ts - last_exec_ts).total_seconds() / 60.0)
+        if dec.ts:
+            last_exec_ts = dec.ts
+
+    lines.append("Win rate by UTC hour (executed closes):")
+    for h in sorted(hour_buckets):
+        b = hour_buckets[h]
+        wr = round(100.0 * b["wins"] / b["trades"], 1) if b["trades"] else 0
+        lines.append(f"  {h:02d}:00 UTC — {b['trades']} trades, WR {wr}%")
+
+    lines.append("Win rate by session:")
+    for sess in sorted(session_buckets):
+        b = session_buckets[sess]
+        wr = round(100.0 * b["wins"] / b["trades"], 1) if b["trades"] else 0
+        lines.append(f"  {sess}: {b['trades']} trades, WR {wr}%")
+
+    if hold_mins:
+        hold_mins.sort()
+        med = hold_mins[len(hold_mins) // 2]
+        lines.append(
+            f"Hold time (entry→close): median {med:.0f}m, "
+            f"min {hold_mins[0]:.0f}m, max {hold_mins[-1]:.0f}m, n={len(hold_mins)}"
+        )
+    if gaps_min:
+        gaps_min.sort()
+        med_gap = gaps_min[len(gaps_min) // 2]
+        lines.append(
+            f"Gap between executed trades: median {med_gap:.0f}m, "
+            f"min {gaps_min[0]:.0f}m, max {gaps_min[-1]:.0f}m"
+        )
+    return lines
+
+
+def _aggressiveness_block(db, *, cfg: GeminiGoldRuntimeConfig, days: int) -> List[str]:
+    """Trade frequency, confidence, caps usage, and block patterns."""
+    since = datetime.utcnow() - timedelta(days=days)
+    decisions = (
+        db.query(GeminiGoldDecision)
+        .filter(GeminiGoldDecision.ts >= since)
+        .order_by(GeminiGoldDecision.ts.asc())
+        .all()
+    )
+    lines = [f"=== AGGRESSIVENESS ({days}d) ==="]
+    if not decisions:
+        lines.append("No Gemini decisions in window.")
+        return lines
+
+    calls = len(decisions)
+    takes = sum(1 for d in decisions if (d.action or "").upper() == "TAKE")
+    executed = sum(1 for d in decisions if d.executed)
+    skips = sum(1 for d in decisions if (d.action or "").upper() == "SKIP")
+    min_gap_blocks = sum(1 for d in decisions if (d.skip_reason or "") == "min_trade_gap")
+    validator_blocks = sum(
+        1 for d in decisions
+        if d.action == "TAKE" and not d.executed and "validator" in (d.skip_reason or "")
+    )
+
+    conf_buckets = {"<70": 0, "70-79": 0, "80-89": 0, "90+": 0}
+    conf_wins: List[int] = []
+    conf_losses: List[int] = []
+    trades_by_day: Dict[str, int] = {}
+
+    for d in decisions:
+        c = int(d.confidence or 0)
+        if c < 70:
+            conf_buckets["<70"] += 1
+        elif c < 80:
+            conf_buckets["70-79"] += 1
+        elif c < 90:
+            conf_buckets["80-89"] += 1
+        else:
+            conf_buckets["90+"] += 1
+        if d.executed and d.ts:
+            day = d.ts.date().isoformat()
+            trades_by_day[day] = trades_by_day.get(day, 0) + 1
+
+    closed = (
+        db.query(GeminiGoldOutcome, GeminiGoldDecision)
+        .join(GeminiGoldDecision, GeminiGoldDecision.id == GeminiGoldOutcome.decision_id)
+        .filter(GeminiGoldOutcome.closed_ts.isnot(None), GeminiGoldOutcome.closed_ts >= since)
+        .all()
+    )
+    for out, dec in closed:
+        c = int(dec.confidence or 0)
+        if out.result == "win":
+            conf_wins.append(c)
+        elif out.result == "loss":
+            conf_losses.append(c)
+
+    lines.append(f"min_trade_gap_min={cfg.min_trade_gap_min}")
+    lines.append(f"max_trades_day={cfg.max_trades_day} max_calls_day={cfg.max_calls_day}")
+    lines.append(f"demo_lot_size={cfg.demo_lot_size} live_lot_size={cfg.live_lot_size}")
+    lines.append(
+        f"Pipeline: calls={calls} takes={takes} executed={executed} skips={skips} "
+        f"take_rate={round(100*takes/calls,1) if calls else 0}% "
+        f"execute_rate={round(100*executed/takes,1) if takes else 0}%"
+    )
+    lines.append(f"Blocks: min_trade_gap={min_gap_blocks} validator={validator_blocks}")
+    lines.append(
+        "Confidence distribution (all decisions): "
+        + ", ".join(f"{k}={v}" for k, v in conf_buckets.items())
+    )
+    if conf_wins:
+        lines.append(f"Avg confidence on wins: {round(sum(conf_wins)/len(conf_wins), 1)}% (n={len(conf_wins)})")
+    if conf_losses:
+        lines.append(f"Avg confidence on losses: {round(sum(conf_losses)/len(conf_losses), 1)}% (n={len(conf_losses)})")
+    if trades_by_day:
+        avg_day = sum(trades_by_day.values()) / len(trades_by_day)
+        peak = max(trades_by_day.values())
+        lines.append(
+            f"Executed trades/day: avg {avg_day:.1f}, peak {peak}, "
+            f"cap {cfg.max_trades_day} ({round(100*peak/cfg.max_trades_day,0) if cfg.max_trades_day else 0}% of cap on busiest day)"
+        )
+    return lines
+
+
+def _ctrader_account_block(account_snap: Dict[str, Any]) -> List[str]:
+    lines = ["=== CTRADER BROKER ACCOUNT (live poll) ==="]
+    lines.append(f"account_id={account_snap.get('ctrader_account_id')}")
+    lines.append(f"execution_mode={account_snap.get('execution_mode')}")
+    lines.append(f"balance_usd={account_snap.get('balance')}")
+    lines.append(f"equity_usd={account_snap.get('equity')}")
+    if account_snap.get("balance_error"):
+        lines.append(f"account_fetch_note={account_snap.get('balance_error')}")
+    lines.append(f"broker_open_positions={account_snap.get('broker_open_position_count')}")
+    lines.append(f"tracked_open_positions={account_snap.get('open_position_count')}")
+    lines.append(f"position_reconciliation={account_snap.get('position_reconciliation')}")
+    if account_snap.get("broker_unreachable"):
+        lines.append("broker_status=unreachable (could not poll open positions)")
+    broker_ids = account_snap.get("broker_open_position_ids") or []
+    if broker_ids:
+        lines.append(f"broker_position_ids={broker_ids[:10]}")
+    if account_snap.get("broker_only_positions"):
+        lines.append(f"broker_only (not tracked)={account_snap.get('broker_only_positions')}")
+    if account_snap.get("tracked_only_positions"):
+        lines.append(f"tracked_only (phantom?)={account_snap.get('tracked_only_positions')}")
+
+    for pos in (account_snap.get("tracked_open_positions") or [])[:5]:
+        lines.append(
+            f"  tracked open: {pos.get('direction')} entry={pos.get('entry_price')} "
+            f"pos_id={pos.get('broker_position_id')} fired={pos.get('fired_at')}"
+        )
+
+    closes = account_snap.get("recent_broker_closes") or []
+    if closes:
+        lines.append(f"recent_broker_closes ({len(closes)} rows, StrategyExecution):")
+        if account_snap.get("recent_broker_pnl_usd") is not None:
+            lines.append(f"  sum_pnl_usd={account_snap.get('recent_broker_pnl_usd')}")
+        for c in closes[:8]:
+            lines.append(
+                f"  - {c.get('closed_at')} | {c.get('direction')} {c.get('outcome')} | "
+                f"pnl_usd={c.get('pnl_usd')} pnl_pct={c.get('pnl_pct')} | hold={c.get('hold_min')}m | "
+                f"pos={c.get('broker_position_id')}"
+            )
+    else:
+        lines.append("recent_broker_closes=none in window")
+    return lines
 
 
 def _recent_closed_trades_block(db, *, days: int, limit: int = 25) -> List[str]:
@@ -299,6 +603,7 @@ def build_review_prompt(
         f"use_limit_entry={cfg.use_limit_entry}",
         f"orb_enabled={cfg.orb_enabled}",
         f"orb_confidence_threshold={cfg.orb_confidence_threshold}",
+        f"min_trade_gap_min={cfg.min_trade_gap_min}",
         f"dry_run={cfg.dry_run}",
         f"execution_mode={cfg.execution_mode}",
         "",
@@ -307,18 +612,8 @@ def build_review_prompt(
         f"trades_executed_today={trades_today(db)}",
         f"api_cost_today_usd={cost_today_usd(db):.4f}",
         "",
-        "=== CTRADER ACCOUNT ===",
-        f"account_id={account_snap.get('ctrader_account_id')}",
-        f"balance={account_snap.get('balance')}",
-        f"balance_note={account_snap.get('balance_error')}",
-        f"open_positions={account_snap.get('open_position_count')}",
     ]
-    for pos in (account_snap.get("open_positions") or [])[:5]:
-        lines.append(
-            f"  open: {pos.get('direction')} entry={pos.get('entry_price')} "
-            f"pos_id={pos.get('broker_position_id')}"
-        )
-
+    lines.extend(_ctrader_account_block(account_snap))
     lines.append("")
     lines.append("=== SETUP STATS ===")
     for s in stats[:12]:
@@ -363,10 +658,16 @@ def build_review_prompt(
 
     lines.extend(_recent_closed_trades_block(db, days=days))
     lines.extend(_blocked_takes_block(db, days=days))
+    lines.extend(_timing_analysis_block(db, days=days))
+    lines.extend(_aggressiveness_block(db, cfg=cfg, days=days))
 
     lines.append("")
     lines.append(
-        "Produce a structured review. config_suggestions.field must be one of: "
+        "Produce a structured review. You MUST analyze timing (hours/sessions/hold times) "
+        "and aggressiveness (frequency vs caps, confidence, min_trade_gap). "
+        "ctrader_account_notes must summarize the cTrader broker account section "
+        "(balance/equity, open positions, reconciliation, recent closes). "
+        "config_suggestions.field must be one of: "
         + ", ".join(sorted(APPLYABLE_CONFIG_FIELDS))
         + ". Only suggest changes backed by the trade data above."
     )
@@ -390,7 +691,7 @@ async def run_performance_review(
     if not client:
         return None, "no_gemini_api_key"
 
-    account_snap = await _fetch_ctrader_account_snapshot(db, user_id=user_id, cfg=cfg)
+    account_snap = await _fetch_ctrader_account_snapshot(db, user_id=user_id, cfg=cfg, days=days)
     prompt = build_review_prompt(db, cfg=cfg, user_id=user_id, days=days, account_snap=account_snap)
     model = review_model_name()
 
@@ -398,7 +699,10 @@ async def run_performance_review(
 
     system = (
         "You are a senior XAUUSD trading systems analyst reviewing an AI vision scalper.\n"
-        "Be specific — cite setup types, sessions, win rates, and blocked TAKE patterns.\n"
+        "Be specific — cite setup types, sessions, win rates, blocked TAKE patterns, "
+        "timing (UTC hours, hold duration), and aggressiveness (trade frequency vs caps).\n"
+        "Always comment on the cTrader broker account: balance/equity, open positions, "
+        "tracked vs broker reconciliation, and recent broker closes.\n"
         "config_suggestions must use exact field names and realistic values for gold scalping.\n"
         "lesson_for_next_sessions will be injected into every future Gemini scan prompt — make it actionable."
     )
@@ -450,6 +754,9 @@ async def run_performance_review(
         whats_working=list(raw.get("whats_working") or []),
         whats_not_working=list(raw.get("whats_not_working") or []),
         setup_insights=list(raw.get("setup_insights") or []),
+        timing_insights=list(raw.get("timing_insights") or []),
+        aggressiveness_insights=list(raw.get("aggressiveness_insights") or []),
+        ctrader_account_notes=str(raw.get("ctrader_account_notes") or "").strip(),
         funnel_diagnosis=str(raw.get("funnel_diagnosis") or "").strip(),
         lesson_for_next_sessions=str(raw.get("lesson_for_next_sessions") or "").strip(),
         config_suggestions=suggestions,
@@ -471,6 +778,9 @@ async def run_performance_review(
         "whats_working": row.whats_working,
         "whats_not_working": row.whats_not_working,
         "setup_insights": row.setup_insights,
+        "timing_insights": row.timing_insights,
+        "aggressiveness_insights": row.aggressiveness_insights,
+        "ctrader_account_notes": row.ctrader_account_notes,
         "funnel_diagnosis": row.funnel_diagnosis,
         "lesson_for_next_sessions": row.lesson_for_next_sessions,
         "config_suggestions": row.config_suggestions,

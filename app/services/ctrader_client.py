@@ -92,14 +92,21 @@ def normalize_account_lot(lots) -> Optional[float]:
     return snapped
 
 
-def _parse_reconcile_balance(res) -> Optional[float]:
-    """Extract USD balance/equity from ProtoOAReconcileRes (cents → dollars)."""
+def _parse_reconcile_account(res) -> Dict[str, Optional[float]]:
+    """Extract USD balance and equity from ProtoOAReconcileRes (cents → dollars)."""
+    out: Dict[str, Optional[float]] = {"balance": None, "equity": None}
     for attr in ("balance", "equity"):
         if hasattr(res, attr):
             raw = getattr(res, attr, None)
             if raw is not None:
-                return float(raw) / 100.0
-    return None
+                out[attr] = round(float(raw) / 100.0, 2)
+    return out
+
+
+def _parse_reconcile_balance(res) -> Optional[float]:
+    """Extract USD balance/equity from ProtoOAReconcileRes (cents → dollars)."""
+    acct = _parse_reconcile_account(res)
+    return acct.get("balance") or acct.get("equity")
 
 
 def _host_for_account(prefs, ctid: int) -> str:
@@ -3234,6 +3241,88 @@ async def get_account_balance_resilient(
             bal = await _try_hosts(fresh)
             if bal is not None:
                 return bal
+    return None
+
+
+async def _get_account_reconcile(
+    access_token: str,
+    ctid_trader_account_id: int,
+    host: str = CTRADER_HOST,
+) -> Optional[Dict[str, Optional[float]]]:
+    """Fetch balance + equity from ProtoOAReconcileReq."""
+    if not _PROTO_OK:
+        return None
+    try:
+        async with _get_account_lock(host, ctid_trader_account_id):
+            try:
+                reader, writer = await _get_persistent_connection(
+                    host,
+                    ctid_trader_account_id,
+                    connect_timeout=BALANCE_CONNECT_TIMEOUT_S,
+                )
+                if not await _account_auth(
+                    reader, writer, access_token, ctid_trader_account_id,
+                    timeout=BALANCE_REQ_TIMEOUT_S,
+                ):
+                    return None
+                _touch_conn(host, ctid_trader_account_id)
+                req = ProtoOAReconcileReq()
+                req.ctidTraderAccountId = ctid_trader_account_id
+                payload = await _send_recv(
+                    reader, writer, req,
+                    _PAYLOAD_TYPES["reconcile_req"],
+                    _PAYLOAD_TYPES["reconcile_res"],
+                    timeout=BALANCE_REQ_TIMEOUT_S,
+                )
+                if not payload:
+                    return None
+                res = ProtoOAReconcileRes()
+                res.ParseFromString(payload)
+                acct = _parse_reconcile_account(res)
+                if acct.get("balance") is not None or acct.get("equity") is not None:
+                    _touch_conn(host, ctid_trader_account_id)
+                    return acct
+            except asyncio.CancelledError:
+                _invalidate_persistent_connection(host, ctid_trader_account_id)
+                raise
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.debug(
+            f"[cTrader] reconcile fetch error host={host} ctid={ctid_trader_account_id}: {e}"
+        )
+    return None
+
+
+async def get_account_reconcile_resilient(
+    access_token: str,
+    ctid_trader_account_id: int,
+    *,
+    prefs=None,
+    user_id: Optional[int] = None,
+) -> Optional[Dict[str, Optional[float]]]:
+    """Fetch balance and equity with live/demo host routing and token refresh."""
+    at = (access_token or "").strip()
+    if not at:
+        return None
+    hosts = _balance_hosts_for_account(prefs, ctid_trader_account_id)
+
+    async def _try_hosts(token: str) -> Optional[Dict[str, Optional[float]]]:
+        for h in hosts:
+            acct = await _get_account_reconcile(token, ctid_trader_account_id, host=h)
+            if acct is not None:
+                return acct
+        return None
+
+    acct = await _try_hosts(at)
+    if acct is not None:
+        return acct
+    if user_id:
+        fresh = _latest_ctrader_access_token(user_id)
+        if fresh and fresh != at:
+            acct = await _try_hosts(fresh)
+            if acct is not None:
+                return acct
     return None
 
 
