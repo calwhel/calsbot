@@ -9,7 +9,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from app.gemini_gold_trader.config import GeminiGoldRuntimeConfig
+from app.gemini_gold_trader.config import (
+    GEMINI_GOLD_REVIEW_MODEL_DEFAULT,
+    GeminiGoldRuntimeConfig,
+    gemini_gold_review_model,
+)
 from app.gemini_gold_trader.funnel import snapshot as funnel_snapshot
 from app.gemini_gold_trader.funnel_persist import recent_funnel_events
 from app.gemini_gold_trader.guardrails import (
@@ -81,10 +85,12 @@ class GeminiGoldReviewResultSchema(BaseModel):
 
 
 def review_model_name() -> str:
-    return (
-        os.environ.get("GEMINI_GOLD_REVIEW_MODEL", "gemini-2.5-pro").strip()
-        or "gemini-2.5-pro"
-    )
+    return gemini_gold_review_model()
+
+
+def _is_review_model_not_found(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "404" in msg and ("not_found" in msg or "no longer available" in msg)
 
 
 def _estimate_review_cost(tokens_in: int, tokens_out: int) -> float:
@@ -716,6 +722,10 @@ async def run_performance_review(
     account_snap = await _fetch_ctrader_account_snapshot(db, user_id=user_id, cfg=cfg, days=days)
     prompt = build_review_prompt(db, cfg=cfg, user_id=user_id, days=days, account_snap=account_snap)
     model = review_model_name()
+    models_to_try: List[str] = []
+    for candidate in (model, GEMINI_GOLD_REVIEW_MODEL_DEFAULT):
+        if candidate and candidate not in models_to_try:
+            models_to_try.append(candidate)
 
     from google.genai import types as genai_types
 
@@ -729,9 +739,9 @@ async def run_performance_review(
         "lesson_for_next_sessions will be injected into every future Gemini scan prompt — make it actionable."
     )
 
-    def _call():
+    def _call(use_model: str):
         return client.models.generate_content(
-            model=model,
+            model=use_model,
             contents=f"{system}\n\n{prompt}",
             config=genai_types.GenerateContentConfig(
                 temperature=0.25,
@@ -741,13 +751,31 @@ async def run_performance_review(
             ),
         )
 
-    try:
-        response = await asyncio.wait_for(asyncio.to_thread(_call), timeout=_REVIEW_TIMEOUT_S)
-    except asyncio.TimeoutError:
-        return None, "review_timeout"
-    except Exception as exc:
-        logger.warning("[gemini-gold] review API error: %s", exc)
-        return None, f"review_error:{exc}"
+    response = None
+    last_exc: Optional[Exception] = None
+    for idx, use_model in enumerate(models_to_try):
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(_call, use_model), timeout=_REVIEW_TIMEOUT_S
+            )
+            model = use_model
+            break
+        except asyncio.TimeoutError:
+            return None, "review_timeout"
+        except Exception as exc:
+            last_exc = exc
+            if idx + 1 < len(models_to_try) and _is_review_model_not_found(exc):
+                logger.warning(
+                    "[gemini-gold] review model %s unavailable, retrying with %s",
+                    use_model,
+                    models_to_try[idx + 1],
+                )
+                continue
+            logger.warning("[gemini-gold] review API error: %s", exc)
+            return None, f"review_error:{exc}"
+
+    if response is None:
+        return None, f"review_error:{last_exc or 'unknown'}"
 
     tokens_in, tokens_out = _parse_usage(response)
     cost = _estimate_review_cost(tokens_in, tokens_out)
