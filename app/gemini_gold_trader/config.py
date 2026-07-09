@@ -90,11 +90,24 @@ def gemini_gold_two_step_scan() -> bool:
     return _env_bool("GEMINI_GOLD_TWO_STEP_SCAN", True)
 
 
+GEMINI_GOLD_REVIEW_MODEL_DEFAULT = "gemini-3.1-pro-preview"
+
+# Google shut down gemini-2.5-pro early on the consumer API — remap legacy env values.
+_DEPRECATED_GEMINI_REVIEW_MODELS = {
+    "gemini-2.5-pro": GEMINI_GOLD_REVIEW_MODEL_DEFAULT,
+    "gemini-2.5-pro-preview-03-25": GEMINI_GOLD_REVIEW_MODEL_DEFAULT,
+    "gemini-2.5-pro-preview-05-06": GEMINI_GOLD_REVIEW_MODEL_DEFAULT,
+    "gemini-2.5-pro-preview-06-05": GEMINI_GOLD_REVIEW_MODEL_DEFAULT,
+    "gemini-3-pro-preview": GEMINI_GOLD_REVIEW_MODEL_DEFAULT,
+}
+
+
 def gemini_gold_review_model() -> str:
-    return (
-        os.environ.get("GEMINI_GOLD_REVIEW_MODEL", "gemini-2.5-pro").strip()
-        or "gemini-2.5-pro"
+    raw = (
+        os.environ.get("GEMINI_GOLD_REVIEW_MODEL", GEMINI_GOLD_REVIEW_MODEL_DEFAULT).strip()
+        or GEMINI_GOLD_REVIEW_MODEL_DEFAULT
     )
+    return _DEPRECATED_GEMINI_REVIEW_MODELS.get(raw, raw)
 
 
 def env_defaults() -> GeminiGoldRuntimeConfig:
