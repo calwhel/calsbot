@@ -265,10 +265,8 @@ async def _fetch_ctrader_account_snapshot(
 
     try:
         from app.models import User, UserPreference
-        from app.services.ctrader_client import (
-            get_account_reconcile_resilient,
-            get_open_position_ids_for_user_with_retry,
-        )
+        from app.gemini_gold_trader.accounts import cached_balance_for_ctid
+        from app.services.ctrader_client import get_broker_reconcile_snapshot_resilient
 
         user = db.query(User).filter(User.id == int(user_id)).first()
         if not user:
@@ -280,8 +278,8 @@ async def _fetch_ctrader_account_snapshot(
             snap["balance_error"] = "no_ctrader_token"
             return snap
 
-        acct = await asyncio.wait_for(
-            get_account_reconcile_resilient(
+        reconcile = await asyncio.wait_for(
+            get_broker_reconcile_snapshot_resilient(
                 str(token),
                 int(ctid),
                 prefs=prefs,
@@ -289,24 +287,12 @@ async def _fetch_ctrader_account_snapshot(
             ),
             timeout=_CTRADER_REVIEW_TIMEOUT_S,
         )
-        if acct:
-            snap["balance"] = acct.get("balance")
-            snap["equity"] = acct.get("equity")
-        else:
-            snap["balance_error"] = "balance_unavailable"
-
-        broker_ids = await asyncio.wait_for(
-            get_open_position_ids_for_user_with_retry(
-                user,
-                ctid=ctid,
-                attempts=3,
-            ),
-            timeout=_CTRADER_REVIEW_TIMEOUT_S,
-        )
-        if broker_ids is None:
-            snap["broker_unreachable"] = True
-            snap["position_reconciliation"] = "unknown"
-        else:
+        broker_ids = reconcile.get("position_ids")
+        if broker_ids is not None:
+            snap["balance"] = reconcile.get("balance")
+            snap["equity"] = reconcile.get("equity")
+            if reconcile.get("host"):
+                snap["ctrader_host"] = reconcile.get("host")
             snap["broker_open_position_count"] = len(broker_ids)
             snap["broker_open_position_ids"] = sorted(int(x) for x in broker_ids)[:20]
             tracked_ids = set()
@@ -325,10 +311,32 @@ async def _fetch_ctrader_account_snapshot(
                 snap["position_reconciliation"] = "mismatch"
                 snap["broker_only_positions"] = sorted(broker_ids - tracked_ids)
                 snap["tracked_only_positions"] = sorted(tracked_ids - broker_ids)
+        else:
+            err = reconcile.get("error") or "broker_unreachable"
+            snap["balance_error"] = err
+            snap["broker_unreachable"] = True
+            snap["position_reconciliation"] = "unknown"
+            if reconcile.get("auth_cooldown_s") is not None:
+                snap["auth_cooldown_s"] = reconcile.get("auth_cooldown_s")
+            cached = cached_balance_for_ctid(prefs, str(ctid))
+            if cached is not None:
+                snap["balance"] = cached
+                snap["balance_cached"] = True
     except asyncio.TimeoutError:
         snap["balance_error"] = "ctrader_poll_timeout"
         snap["broker_unreachable"] = True
         snap["position_reconciliation"] = "unknown"
+        try:
+            from app.models import UserPreference
+            from app.gemini_gold_trader.accounts import cached_balance_for_ctid
+
+            prefs = db.query(UserPreference).filter(UserPreference.user_id == int(user_id)).first()
+            cached = cached_balance_for_ctid(prefs, str(ctid))
+            if cached is not None:
+                snap["balance"] = cached
+                snap["balance_cached"] = True
+        except Exception:
+            pass
     except Exception as exc:
         snap["balance_error"] = str(exc)[:120]
     return snap
