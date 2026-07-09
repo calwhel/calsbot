@@ -17,6 +17,7 @@ _PERSIST_EVENTS = frozenset({
     "gemini_skip",
     "validator_rejected",
     "stale_entry_blocked",
+    "execution_blocked",
     "executed",
     "pending_entry",
     "orb_detected",

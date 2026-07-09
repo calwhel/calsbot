@@ -67,8 +67,8 @@ _STATUS_RECONCILE_INTERVAL_S = max(
     float(os.environ.get("GEMINI_GOLD_STATUS_RECONCILE_INTERVAL_S", "45")),
 )
 _STATUS_RECONCILE_TIMEOUT_S = max(
-    4.0,
-    float(os.environ.get("GEMINI_GOLD_STATUS_RECONCILE_TIMEOUT_S", "8")),
+    12.0,
+    float(os.environ.get("GEMINI_GOLD_STATUS_RECONCILE_TIMEOUT_S", "15")),
 )
 
 
@@ -225,12 +225,23 @@ def _sync_live_mirror_fields(db, decision: GeminiGoldDecision) -> None:
 
 
 def _decision_feed(db, *, limit: int = 30) -> List[Dict[str, Any]]:
+    from app.gemini_gold_trader.models import GeminiGoldOutcome
+
     rows = (
         db.query(GeminiGoldDecision)
         .order_by(GeminiGoldDecision.ts.desc())
         .limit(limit)
         .all()
     )
+    decision_ids = [r.id for r in rows]
+    outcomes: Dict[int, GeminiGoldOutcome] = {}
+    if decision_ids:
+        for o in (
+            db.query(GeminiGoldOutcome)
+            .filter(GeminiGoldOutcome.decision_id.in_(decision_ids))
+            .all()
+        ):
+            outcomes[int(o.decision_id)] = o
     out: List[Dict[str, Any]] = []
     for row in rows:
         _sync_live_mirror_fields(db, row)
@@ -242,12 +253,14 @@ def _decision_feed(db, *, limit: int = 30) -> List[Dict[str, Any]]:
             obs_preview = format_chart_observation(obs)[:320]
         elif meta.get("observe_error"):
             obs_preview = f"Observation failed: {meta.get('observe_error')}"
+        outcome = outcomes.get(int(row.id))
         out.append(
             {
                 "id": row.id,
                 "ts": row.ts.isoformat() if row.ts else None,
                 "session": row.session,
                 "action": row.action,
+                "setup_type": row.setup_type or d.get("setup_type"),
                 "direction": row.direction or d.get("direction"),
                 "confidence": row.confidence,
                 "rationale": row.rationale or d.get("rationale"),
@@ -260,6 +273,9 @@ def _decision_feed(db, *, limit: int = 30) -> List[Dict[str, Any]]:
                 "live_mirror_error": getattr(row, "live_mirror_error", None),
                 "dry_run": bool(row.dry_run),
                 "skip_reason": row.skip_reason,
+                "outcome": outcome.result if outcome else None,
+                "pnl_pct": float(outcome.pnl) if outcome and outcome.pnl is not None else None,
+                "r_multiple": float(outcome.r_multiple) if outcome and outcome.r_multiple is not None else None,
                 "cost_usd": float(row.cost_usd or 0),
                 "entry": d.get("entry"),
                 "stop_loss": d.get("stop_loss"),
@@ -344,6 +360,16 @@ async def api_status(uid: str = Query(...)):
 
         _schedule_status_background_reconcile(trader_uid)
 
+        closed_trades: List[Dict[str, Any]] = []
+        if trader_uid:
+            try:
+                from app.gemini_gold_trader.outcomes import recent_closed_trades_feed, sync_closed_outcomes
+
+                sync_closed_outcomes(db, int(trader_uid))
+                closed_trades = recent_closed_trades_feed(db, int(trader_uid), limit=25)
+            except Exception as exc:
+                logger.warning("[gemini-gold] closed trades feed failed: %s", exc)
+
         open_execs: List[Dict[str, Any]] = []
         open_slots_used = 0
         if trader_uid:
@@ -377,9 +403,32 @@ async def api_status(uid: str = Query(...)):
                 "live_pnl_usd": live_pnl_today_usd(db, int(trader_uid)) if trader_uid else 0.0,
             },
             "decision_feed": _decision_feed(db),
+            "closed_trades": closed_trades,
             "funnel": runtime_state.get_status().get("funnel") or funnel_snapshot(),
             "recent_funnel_events": _safe_funnel_events(db, limit=40),
         }
+    finally:
+        db.close()
+
+
+@router.get("/api/gemini-gold-trader/account")
+async def api_account(uid: str = Query(...)):
+    """Live cTrader account snapshot — balance, equity, broker positions."""
+    ensure_gemini_gold_trader_schema()
+    db = SessionLocal()
+    try:
+        admin = _resolve_user(uid, db)
+        row = seed_config_if_missing(db)
+        cfg = merge_config(row, env_defaults())
+        trader_uid = _trader_user_id(cfg, admin)
+        if not trader_uid:
+            raise HTTPException(status_code=400, detail="No trader user configured")
+        from app.gemini_gold_trader.review import _fetch_ctrader_account_snapshot
+
+        snap = await _fetch_ctrader_account_snapshot(
+            db, user_id=int(trader_uid), cfg=cfg, days=14
+        )
+        return {"ok": True, "account": snap}
     finally:
         db.close()
 
