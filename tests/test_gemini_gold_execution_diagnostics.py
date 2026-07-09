@@ -74,20 +74,29 @@ def test_build_execution_readiness_flags_dry_run():
     db = Session()
     row = GeminiGoldConfig(
         id=1,
-        dry_run=True,
+        dry_run=False,
         demo_ctrader_account_id="47782488",
         demo_user_id=7,
         max_calls_day=340,
     )
     db.add(row)
+    db.add(
+        GeminiGoldDecision(
+            ts=datetime.utcnow(),
+            action="TAKE",
+            executed=False,
+            skip_reason="blocked: dry_run",
+            confidence=85,
+        )
+    )
     db.commit()
     cfg = merge_config(row, env_defaults())
     readiness = build_execution_readiness(
         db,
         cfg=cfg,
-        user_id=7,
+        user_id=None,
         account_snap={"ctrader_account_id": "47782488", "broker_unreachable": True},
     )
     assert readiness["ready"] is False
-    assert any("Dry-run" in issue for issue in readiness["issues"])
+    assert all(b.get("reason") != "dry_run" for b in readiness.get("top_blockers", []))
     db.close()

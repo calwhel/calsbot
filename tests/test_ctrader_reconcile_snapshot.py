@@ -49,6 +49,10 @@ class TestBrokerReconcileSnapshotResilient(unittest.TestCase):
             ctrader_accounts='[{"ctidTraderAccountId":47782488,"isLive":false}]'
         )
         with patch(
+            "app.services.ctrader_client.ensure_ctrader_access_token_for_order",
+            new_callable=AsyncMock,
+            return_value="tok",
+        ), patch(
             "app.services.ctrader_client._get_broker_reconcile_snapshot",
             new_callable=AsyncMock,
             return_value={
@@ -74,7 +78,15 @@ class TestBrokerReconcileSnapshotResilient(unittest.TestCase):
     def test_unreachable_returns_error(self):
         prefs = SimpleNamespace(ctrader_accounts="[]")
         with patch(
+            "app.services.ctrader_client.ensure_ctrader_access_token_for_order",
+            new_callable=AsyncMock,
+            return_value="tok",
+        ), patch(
             "app.services.ctrader_client._get_broker_reconcile_snapshot",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "app.services.ctrader_client.request_ctrader_token_refresh",
             new_callable=AsyncMock,
             return_value=None,
         ), patch(
@@ -98,6 +110,10 @@ class TestBrokerReconcileSnapshotResilient(unittest.TestCase):
             "app.services.ctrader_client._user_ctid_has_auth_backoff",
             return_value=True,
         ), patch(
+            "app.services.ctrader_client.ensure_ctrader_access_token_for_order",
+            new_callable=AsyncMock,
+            return_value="tok",
+        ), patch(
             "app.services.ctrader_client._get_broker_reconcile_snapshot",
             new_callable=AsyncMock,
             return_value={
@@ -115,6 +131,30 @@ class TestBrokerReconcileSnapshotResilient(unittest.TestCase):
         self.assertEqual(out["balance"], 1000.0)
         self.assertIsNotNone(out["position_ids"])
         mock_snap.assert_awaited()
+
+    def test_reconcile_refreshes_oauth_before_hosts(self):
+        prefs = SimpleNamespace(ctrader_accounts="[]")
+        with patch(
+            "app.services.ctrader_client.ensure_ctrader_access_token_for_order",
+            new_callable=AsyncMock,
+            return_value="fresh-tok",
+        ) as mock_ensure, patch(
+            "app.services.ctrader_client._get_broker_reconcile_snapshot",
+            new_callable=AsyncMock,
+            return_value={
+                "balance": 500.0,
+                "equity": 500.0,
+                "position_ids": set(),
+                "host": CTRADER_HOST_DEMO,
+            },
+        ):
+            out = asyncio.run(
+                get_broker_reconcile_snapshot_resilient(
+                    "stale-tok", 1, prefs=prefs, user_id=7
+                )
+            )
+        mock_ensure.assert_awaited_once()
+        self.assertEqual(out["balance"], 500.0)
 
     def test_account_reconcile_resilient_delegates(self):
         with patch(

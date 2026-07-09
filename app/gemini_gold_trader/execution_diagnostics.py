@@ -126,7 +126,10 @@ def build_execution_readiness(
         "Demo/live cTrader account not configured",
     )
     _check("demo_user", bool(cfg.demo_user_id), "Trader user not linked (GEMINI_GOLD_USER_ID)")
-    _check("dry_run_off", not cfg.dry_run, "Dry-run is ON — orders blocked before broker")
+    if cfg.dry_run:
+        _check("dry_run_off", False, "Dry-run is ON — orders blocked before broker")
+    else:
+        _check("dry_run_off", True, "Dry-run OFF — orders allowed to broker")
     _check("kill_switch_off", not cfg.kill_switch, "Kill switch is ON")
 
     if user_id:
@@ -156,7 +159,9 @@ def build_execution_readiness(
     _check("broker_reachable", broker_ok, broker_detail)
 
     stats = execution_stats(db, days=14)
-    blockers = skip_reason_breakdown(db, days=14, limit=8)
+    blockers = skip_reason_breakdown(db, days=14, limit=12)
+    if not cfg.dry_run:
+        blockers = [b for b in blockers if b.get("reason") != "dry_run"]
     pending = pending_entry_summary(db)
 
     ready = len(issues) == 0
