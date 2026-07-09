@@ -198,8 +198,16 @@ def _safe_funnel_events(db, *, limit: int = 50) -> list:
 
 
 def _config_payload(cfg, cfg_row, env) -> Dict[str, Any]:
+    import os
+
     env_kill = bool(env.kill_switch)
     db_kill = bool(cfg_row.kill_switch) if cfg_row else False
+    env_dry_raw = os.environ.get("GEMINI_GOLD_DRY_RUN")
+    env_dry = (
+        env_dry_raw.strip().lower() in ("1", "true", "yes", "on")
+        if env_dry_raw is not None
+        else None
+    )
     return {
         "enabled": cfg.enabled,
         "kill_switch": cfg.kill_switch,
@@ -207,6 +215,8 @@ def _config_payload(cfg, cfg_row, env) -> Dict[str, Any]:
         "env_kill_switch": env_kill,
         "kill_switch_env_locked": env_kill,
         "dry_run": cfg.dry_run,
+        "dry_run_db": bool(cfg_row.dry_run) if cfg_row and cfg_row.dry_run is not None else None,
+        "dry_run_env": env_dry,
         "max_calls_day": cfg.max_calls_day,
         "max_trades_day": cfg.max_trades_day,
         "scan_interval_s": cfg.scan_interval_s,

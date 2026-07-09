@@ -138,6 +138,9 @@
     <div class="env-warn" id="dry-run-warn">
       <strong>Dry-run is ON</strong> — Gemini will call TAKE but <em>no orders</em> reach cTrader. Turn off Dry-run above to execute trades.
     </div>
+    <div class="env-warn" id="dry-run-env-warn" style="display:none">
+      Railway <code>GEMINI_GOLD_DRY_RUN=true</code> overrides portal — set env to <code>false</code> and redeploy.
+    </div>
 
     <div class="account-strip missing" id="account-bar">
       <div>
@@ -406,10 +409,13 @@ function renderExecutionReadiness(er) {
     ? blockers.map(b => `<li>${escapeHtml(b.reason)}: <b>${b.count}</b></li>`).join('')
     : '<li class="hint">No blocked TAKEs in window</li>';
   const pending = er.pending_entries || {};
+  const cfg = window._ggLastCfg || {};
   const cls = er.ready ? 'exec-blocker ok' : 'exec-blocker';
   const headline = er.ready
     ? 'Execution pipeline ready'
-    : `Execution blocked — ${escapeHtml(er.primary_blocker || 'see checks')}`;
+    : (cfg.dry_run
+      ? `Execution blocked — dry-run ON`
+      : `Execution blocked — ${escapeHtml(er.primary_blocker || 'broker / pending entry')}`);
   el.innerHTML = `<div class="${cls}">
     <div style="font-weight:600;margin-bottom:.35rem">${headline}</div>
     <div class="hint">14d: ${stats.takes ?? 0} takes · ${stats.executed ?? 0} executed (${stats.execute_rate_pct ?? 0}%)</div>
@@ -430,6 +436,13 @@ function renderStatus(j) {
   document.getElementById('env-warn').classList.toggle('visible', !envOn);
   document.getElementById('kill-env-warn').classList.toggle('visible', !!cfg.kill_switch_env_locked);
   document.getElementById('dry-run-warn').classList.toggle('visible', !!cfg.dry_run);
+  const envDry = cfg.dry_run_env;
+  const dryEnvWarn = document.getElementById('dry-run-env-warn');
+  if (dryEnvWarn) {
+    const showEnvDry = envDry === true && cfg.dry_run_db === false;
+    dryEnvWarn.style.display = showEnvDry ? 'block' : 'none';
+    dryEnvWarn.classList.toggle('visible', showEnvDry);
+  }
 
   let title = 'STANDBY', sub = 'Enable trader during Asia, London, or NY sessions';
   if (cfg.kill_switch) {

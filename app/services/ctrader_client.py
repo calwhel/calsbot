@@ -1518,6 +1518,18 @@ async def _reread_token_for_auth_retry(
             uid,
         )
         return fresh
+    refreshed = await request_ctrader_token_refresh(uid, wait_s=10.0)
+    if refreshed and refreshed.strip() and refreshed.strip() != cur:
+        _clear_account_auth_unhealthy(uid, host, ctid_trader_account_id)
+        logger.info(
+            "[cTrader] %s auth failed ctid=%s host=%s user=%s — "
+            "OAuth refresh ok, retrying",
+            operation,
+            ctid_trader_account_id,
+            host,
+            uid,
+        )
+        return refreshed.strip()
     _mark_account_auth_unhealthy(
         uid,
         host,
@@ -3459,6 +3471,12 @@ async def get_broker_reconcile_snapshot_resilient(
     ctid = int(ctid_trader_account_id)
     uid = int(user_id) if user_id else None
 
+    if uid:
+        at = await ensure_ctrader_access_token_for_order(uid, at, prefs=prefs)
+        if not at:
+            out["error"] = "no_ctrader_token"
+            return out
+
     hosts = _balance_hosts_for_account(prefs, ctid)
 
     async def _try_hosts(token: str) -> Optional[Dict[str, Any]]:
@@ -3475,9 +3493,13 @@ async def get_broker_reconcile_snapshot_resilient(
 
     snap = await _try_hosts(at)
     if snap is None and uid:
-        fresh = _latest_ctrader_access_token(uid)
-        if fresh and fresh != at:
-            snap = await _try_hosts(fresh)
+        refreshed = await request_ctrader_token_refresh(uid, wait_s=12.0)
+        if refreshed and refreshed.strip() and refreshed.strip() != at:
+            snap = await _try_hosts(refreshed.strip())
+        else:
+            fresh = _latest_ctrader_access_token(uid)
+            if fresh and fresh != at:
+                snap = await _try_hosts(fresh)
 
     if snap is None:
         if uid and _user_ctid_has_auth_backoff(uid, ctid):
