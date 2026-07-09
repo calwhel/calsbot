@@ -48,13 +48,24 @@ def active_lot_size(cfg: GeminiGoldRuntimeConfig) -> float:
 
 
 def merge_config(db_row: GeminiGoldConfig, env: GeminiGoldRuntimeConfig) -> GeminiGoldRuntimeConfig:
+    import os
+
     mode = str(getattr(db_row, "execution_mode", None) or env.execution_mode or EXECUTION_MODE_DEMO)
     if mode not in (EXECUTION_MODE_DEMO, EXECUTION_MODE_LIVE):
         mode = EXECUTION_MODE_DEMO
+
+    env_dry_raw = os.environ.get("GEMINI_GOLD_DRY_RUN")
+    if env_dry_raw is not None:
+        dry_run = env_dry_raw.strip().lower() in ("1", "true", "yes", "on")
+    elif db_row.dry_run is not None:
+        dry_run = bool(db_row.dry_run)
+    else:
+        dry_run = env.dry_run
+
     return GeminiGoldRuntimeConfig(
         enabled=bool(db_row.enabled) and env.enabled,
         kill_switch=bool(db_row.kill_switch) or env.kill_switch,
-        dry_run=bool(db_row.dry_run) if db_row.dry_run is not None else env.dry_run,
+        dry_run=dry_run,
         max_calls_day=int(db_row.max_calls_day or env.max_calls_day),
         max_trades_day=int(db_row.max_trades_day or env.max_trades_day),
         scan_interval_s=env.scan_interval_s,
@@ -111,13 +122,30 @@ def assert_demo_account(prefs, ctid: int, cfg: GeminiGoldRuntimeConfig) -> None:
         raise DemoAccountRequired(
             f"ctid {ctid} != configured demo GEMINI_GOLD_DEMO_ACCOUNT_ID"
         )
+    from app.gemini_gold_trader.accounts import find_demo_account, demo_accounts_from_prefs
     from app.services.ctrader_client import _account_is_live
 
     live = _account_is_live(prefs, ctid)
-    if live is not False:
+    if live is True:
         raise DemoAccountRequired(
-            f"Account {ctid} is not confirmed demo (isLive={live}) — order blocked"
+            f"Account {ctid} is confirmed live (isLive=true) — demo order blocked"
         )
+    if live is False:
+        return
+    demo_list = demo_accounts_from_prefs(prefs)
+    if find_demo_account(demo_list, str(ctid)):
+        return
+    if cfg.demo_ctrader_account_id and str(ctid) == str(cfg.demo_ctrader_account_id):
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "[gemini-gold] account %s missing isLive=false metadata — allowing configured demo ctid",
+            ctid,
+        )
+        return
+    raise DemoAccountRequired(
+        f"Account {ctid} is not confirmed demo (isLive={live}) — order blocked"
+    )
 
 
 def assert_live_account(prefs, ctid: int, cfg: GeminiGoldRuntimeConfig) -> None:

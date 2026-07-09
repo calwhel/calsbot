@@ -95,6 +95,12 @@
     .review-box h4:first-child { margin-top: 0; }
     .review-box ul { margin: 0; padding-left: 1.1rem; color: var(--text); }
     .review-box li { margin: .2rem 0; }
+    .exec-blocker { background:#1a1218;border:1px solid #4a2030;border-radius:8px;padding:.65rem;margin-top:.65rem;font-size:.75rem }
+    .exec-blocker.ok { background:#101a14;border-color:#204a30 }
+    .exec-check { display:flex;justify-content:space-between;gap:.5rem;padding:.2rem 0;border-bottom:1px solid var(--border) }
+    .exec-check:last-child { border-bottom:none }
+    .exec-check-bad { color:var(--danger) }
+    .exec-check-ok { color:var(--profit) }
     .suggestion-row { display: flex; gap: .5rem; align-items: flex-start; padding: .4rem 0; border-top: 1px solid var(--border); font-size: .72rem; }
     .suggestion-row:first-child { border-top: 0; }
     .btn-scan { width: 100%; margin-top: .5rem; padding: .65rem; font-size: .8rem; }
@@ -163,6 +169,7 @@
         <div class="stat"><b id="stat-trades">—</b><span>Trades</span></div>
         <div class="stat"><b id="stat-cost">—</b><span>Cost $</span></div>
       </div>
+      <div id="execution-readiness"></div>
     </section>
 
     <section class="card">
@@ -383,6 +390,36 @@ _CALIBRATION_INPUT_IDS.forEach((id) => {
 document.getElementById('demo-ctid-select')?.addEventListener('change', () => { _demoCtidDirty = true; });
 document.getElementById('live-ctid-select')?.addEventListener('change', () => { _liveCtidDirty = true; });
 
+function renderExecutionReadiness(er) {
+  const el = document.getElementById('execution-readiness');
+  if (!el) return;
+  if (!er || !Object.keys(er).length) {
+    el.innerHTML = '';
+    return;
+  }
+  const stats = er.stats_14d || {};
+  const blockers = er.top_blockers || [];
+  const checks = (er.checks || []).map(c =>
+    `<div class="exec-check"><span>${escapeHtml(c.name)}</span><span class="${c.ok ? 'exec-check-ok' : 'exec-check-bad'}">${escapeHtml(c.detail)}</span></div>`
+  ).join('');
+  const blockerLines = blockers.length
+    ? blockers.map(b => `<li>${escapeHtml(b.reason)}: <b>${b.count}</b></li>`).join('')
+    : '<li class="hint">No blocked TAKEs in window</li>';
+  const pending = er.pending_entries || {};
+  const cls = er.ready ? 'exec-blocker ok' : 'exec-blocker';
+  const headline = er.ready
+    ? 'Execution pipeline ready'
+    : `Execution blocked — ${escapeHtml(er.primary_blocker || 'see checks')}`;
+  el.innerHTML = `<div class="${cls}">
+    <div style="font-weight:600;margin-bottom:.35rem">${headline}</div>
+    <div class="hint">14d: ${stats.takes ?? 0} takes · ${stats.executed ?? 0} executed (${stats.execute_rate_pct ?? 0}%)</div>
+    ${checks}
+    <h4 style="margin:.65rem 0 .25rem;font-size:.65rem;color:var(--dim)">TOP BLOCK REASONS</h4>
+    <ul style="margin:0;padding-left:1.1rem">${blockerLines}</ul>
+    ${pending.active ? `<p class="hint" style="margin-top:.35rem">${pending.active} pending entry watch(es) waiting for fill</p>` : ''}
+  </div>`;
+}
+
 function renderStatus(j) {
   const cfg = j.config || {};
   window._ggLastCfg = cfg;
@@ -451,6 +488,7 @@ function renderStatus(j) {
 
   const funnel = rt.funnel || j.funnel || {};
   renderFunnel(funnel, j.recent_funnel_events || []);
+  renderExecutionReadiness(j.execution_readiness);
 }
 
 function renderFunnel(funnel, events) {
