@@ -144,6 +144,45 @@ def test_validate_entry_chasing():
     assert "entry_chasing" in reason
 
 
+def test_fvg_retrace_allows_marginal_drift_or_nudges_entry():
+    """Real NY FVG long blocked at 0.16%>0.15% — zone retrace should pass or nudge."""
+    cfg = _cfg()
+    cfg.entry_max_drift_pct = 0.15
+    decision = {
+        "direction": "LONG",
+        "setup_type": "fvg_retrace_bull",
+        "entry": 4105.35,
+        "stop_loss": 4103.50,
+        "take_profit": 4108.50,
+        "confidence": 80,
+    }
+    # ~0.16% above entry (4111.92 spot)
+    spot = 4111.92
+    ok, reason, d = validate_take_decision(decision, cfg=cfg, spot=spot)
+    assert ok is True
+    assert reason == "ok"
+    assert d["entry"] == round(spot, 2) or d["entry"] == 4105.35
+
+
+def test_zone_retrace_wider_drift_without_nudge():
+    cfg = _cfg()
+    cfg.entry_max_drift_pct = 0.15
+    decision = {
+        "direction": "LONG",
+        "setup_type": "fvg_retrace_bull",
+        "entry": 4105.35,
+        "stop_loss": 4103.50,
+        "take_profit": 4108.50,
+        "confidence": 80,
+    }
+    # 0.20% drift — within 0.30% zone_retrace cap
+    spot = 4105.35 * 1.0020
+    ok, reason, d = validate_take_decision(decision, cfg=cfg, spot=spot)
+    assert ok is True
+    assert reason == "ok"
+    assert d["entry"] == 4105.35
+
+
 def test_high_confidence_skips_liquidity_grab_chasing():
     cfg = _cfg()
     cfg.confidence_threshold = 80

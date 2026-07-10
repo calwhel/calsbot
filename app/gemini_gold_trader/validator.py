@@ -11,6 +11,11 @@ ORB_ENTRY_MAX_BREAK_RANGE_PCT = float(os.environ.get("GEMINI_GOLD_ORB_ENTRY_MAX_
 MOMENTUM_FLAG_ENTRY_MAX_ATR = float(os.environ.get("GEMINI_GOLD_MOMENTUM_FLAG_ENTRY_MAX_ATR", "1.00"))
 MOMENTUM_FLAG_RETEST_ENTRY_MAX_ATR = float(os.environ.get("GEMINI_GOLD_MOMENTUM_FLAG_RETEST_ENTRY_MAX_ATR", "0.45"))
 LIQ_GRAB_ENTRY_MAX_ATR = float(os.environ.get("GEMINI_GOLD_LIQ_GRAB_ENTRY_MAX_ATR", "0.50"))
+ZONE_RETRACE_ENTRY_MAX_DRIFT_PCT = float(
+    os.environ.get("GEMINI_GOLD_ZONE_RETRACE_MAX_DRIFT_PCT", "0.30")
+)
+ENTRY_NUDGE_DRIFT_MULT = float(os.environ.get("GEMINI_GOLD_ENTRY_NUDGE_DRIFT_MULT", "1.5"))
+ENTRY_NUDGE_MAX_ATR = float(os.environ.get("GEMINI_GOLD_ENTRY_NUDGE_MAX_ATR", "0.25"))
 
 
 def _dir_norm(d: str) -> Optional[str]:
@@ -52,6 +57,56 @@ def apply_validator_profile(decision: Dict[str, Any]) -> Dict[str, Any]:
     elif setup.startswith(("fvg", "ifvg", "ob_", "breaker", "order_block")):
         d["validator_profile"] = "zone_retrace"
     return d
+
+
+def _effective_entry_max_drift_pct(
+    cfg: GeminiGoldRuntimeConfig,
+    profile: str,
+    *,
+    atr: float = 0.0,
+    spot: float = 0.0,
+) -> float:
+    base = max(0.0, float(cfg.entry_max_drift_pct or 0))
+    if profile == "zone_retrace":
+        base = max(base, ZONE_RETRACE_ENTRY_MAX_DRIFT_PCT)
+    if atr > 0 and spot > 0:
+        atr_pct = (atr / spot) * 100.0 * 0.35
+        base = max(base, atr_pct)
+    return base
+
+
+def _try_nudge_entry_to_spot(
+    d: Dict[str, Any],
+    *,
+    direction: str,
+    entry: float,
+    sl: float,
+    tp: float,
+    spot: float,
+    drift_pct: float,
+    max_drift_pct: float,
+    atr: float,
+) -> bool:
+    """Snap entry to spot when drift is only marginally over the chasing cap."""
+    if spot <= 0 or entry <= 0:
+        return False
+    nudge_cap = max(max_drift_pct * ENTRY_NUDGE_DRIFT_MULT, max_drift_pct + 0.08)
+    within_pct = drift_pct <= nudge_cap
+    within_atr = atr > 0 and abs(spot - entry) <= ENTRY_NUDGE_MAX_ATR * atr
+    if not (within_pct or within_atr):
+        return False
+    new_entry = round(float(spot), 2)
+    if direction == "LONG" and not (sl < new_entry < tp):
+        return False
+    if direction == "SHORT" and not (tp < new_entry < sl):
+        return False
+    d["entry"] = new_entry
+    note = f"entry_nudged_to_spot(drift={drift_pct:.2f}%>{max_drift_pct:.2f}%)"
+    if d.get("validator_note"):
+        d["validator_note"] = f"{d['validator_note']};{note}"
+    else:
+        d["validator_note"] = note
+    return True
 
 
 def validate_take_decision(
@@ -109,7 +164,7 @@ def validate_take_decision(
     except (TypeError, ValueError):
         confidence = 0
     confidence = max(0, min(100, confidence))
-    high_conviction = confidence >= int(cfg.confidence_threshold or 85)
+    high_conviction = confidence >= int(cfg.confidence_threshold or 80)
 
     if profile == "orb" and not high_conviction:
         try:
@@ -202,11 +257,35 @@ def validate_take_decision(
                 return False, f"validator:rr_too_high({rr:.2f}>{max_rr:.1f})", d
 
     if spot > 0 and cfg.entry_max_drift_pct > 0:
+        profile_for_drift = (d.get("validator_profile") or "").strip().lower()
+        max_drift = _effective_entry_max_drift_pct(
+            cfg, profile_for_drift, atr=atr, spot=spot
+        )
         drift_pct = abs(spot - entry) / spot * 100.0
-        if drift_pct > cfg.entry_max_drift_pct:
-            if direction == "LONG" and spot > entry * (1 + cfg.entry_max_drift_pct / 100.0):
-                return False, f"validator:entry_chasing({drift_pct:.2f}%>{cfg.entry_max_drift_pct}%)", d
-            if direction == "SHORT" and spot < entry * (1 - cfg.entry_max_drift_pct / 100.0):
-                return False, f"validator:entry_chasing({drift_pct:.2f}%>{cfg.entry_max_drift_pct}%)", d
+        chasing = False
+        if drift_pct > max_drift:
+            if direction == "LONG" and spot > entry * (1 + max_drift / 100.0):
+                chasing = True
+            elif direction == "SHORT" and spot < entry * (1 - max_drift / 100.0):
+                chasing = True
+        if chasing:
+            if _try_nudge_entry_to_spot(
+                d,
+                direction=direction,
+                entry=entry,
+                sl=sl,
+                tp=tp,
+                spot=spot,
+                drift_pct=drift_pct,
+                max_drift_pct=max_drift,
+                atr=atr,
+            ):
+                entry = float(d["entry"])
+            else:
+                return (
+                    False,
+                    f"validator:entry_chasing({drift_pct:.2f}%>{max_drift:.2f}%)",
+                    d,
+                )
 
     return True, "ok", d
